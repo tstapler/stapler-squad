@@ -127,3 +127,143 @@ func TestAbortNativeMerge_should_ReturnError_When_PreMergeIndexSnapshotMissing(t
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pre-merge index snapshot")
 }
+
+// TestNativeMergeMainIntoWorktree_UpToDate covers Task 3.4.1a's up-to-date short-circuit:
+// a branch that already contains origin/main's tip must be reported UpToDate with no ref
+// change, matching legacyMergeMainIntoWorktree's existing semantics exactly.
+func TestNativeMergeMainIntoWorktree_UpToDate(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	beforeSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	result, err := nativeMergeMainIntoWorktree(work, "main")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.UpToDate)
+	assert.False(t, result.Merged)
+	assert.False(t, result.Conflicted)
+
+	afterSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+	assert.Equal(t, beforeSHA, afterSHA, "an up-to-date merge must not touch the branch ref")
+}
+
+// TestNativeMergeMainIntoWorktree_FastForward covers Task 3.4.1a's fast-forward
+// short-circuit: a strict-ancestor branch must be reported Merged with its ref advanced
+// to origin/main's exact SHA (subprocess-verified per the acceptance criteria), and its
+// working tree updated to match.
+func TestNativeMergeMainIntoWorktree_FastForward(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "main-fix.txt"), []byte("fix on main\n"), 0o644))
+	runGit(t, origin, "add", "main-fix.txt")
+	runGit(t, origin, "commit", "-m", "fix landed on main")
+
+	result, err := nativeMergeMainIntoWorktree(work, "main")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.Merged)
+	assert.False(t, result.UpToDate)
+	assert.False(t, result.Conflicted)
+
+	wantSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "origin/main"))
+	gotSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "feature"))
+	assert.Equal(t, wantSHA, gotSHA, "the checked-out branch ref must now match origin/main's SHA exactly")
+
+	assert.FileExists(t, filepath.Join(work, "main-fix.txt"))
+	status := runGit(t, work, "status", "--porcelain")
+	assert.Empty(t, strings.TrimSpace(status), "a real git status must see the fast-forward as clean")
+}
+
+// TestNativeMergeMainIntoWorktree_CleanThreeWayMerge covers Task 3.4.1b: a divergence
+// with no overlapping edits must produce a real two-parent merge commit (subprocess-
+// verified via `git log -1 --format=%P`), with both sides' files present and the
+// worktree left clean.
+func TestNativeMergeMainIntoWorktree_CleanThreeWayMerge(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	require.NoError(t, os.WriteFile(filepath.Join(work, "feature.txt"), []byte("feature work\n"), 0o644))
+	runGit(t, work, "add", "feature.txt")
+	runGit(t, work, "commit", "-m", "feature work")
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "main-fix.txt"), []byte("fix on main\n"), 0o644))
+	runGit(t, origin, "add", "main-fix.txt")
+	runGit(t, origin, "commit", "-m", "fix landed on main")
+
+	result, err := nativeMergeMainIntoWorktree(work, "main")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.Merged)
+	assert.False(t, result.UpToDate)
+	assert.False(t, result.Conflicted)
+
+	assert.FileExists(t, filepath.Join(work, "feature.txt"))
+	assert.FileExists(t, filepath.Join(work, "main-fix.txt"))
+
+	parents := strings.Fields(runGit(t, work, "log", "-1", "--format=%P"))
+	assert.Len(t, parents, 2, "a native clean merge must produce a real two-parent commit")
+
+	status := runGit(t, work, "status", "--porcelain")
+	assert.Empty(t, strings.TrimSpace(status), "a real git status must see the merge as clean")
+}
+
+// TestNativeMergeMainIntoWorktree_Conflicted_LeavesWorktreeClean covers Task 3.4.1c: an
+// overlapping edit must be reported Conflicted with the correct file list, and — per
+// materializeConflictAndAbort's "always materialize, then abort" decision — leave the
+// worktree exactly as clean as a real `git merge --abort` would, verified via a real `git
+// status --porcelain` subprocess, not just internal state.
+func TestNativeMergeMainIntoWorktree_Conflicted_LeavesWorktreeClean(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("# Feature Edit\n"), 0o644))
+	runGit(t, work, "add", "README.md")
+	runGit(t, work, "commit", "-m", "feature edits README")
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# Main Edit\n"), 0o644))
+	runGit(t, origin, "add", "README.md")
+	runGit(t, origin, "commit", "-m", "main edits README")
+
+	beforeSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	result, err := nativeMergeMainIntoWorktree(work, "main")
+	require.NoError(t, err, "a real conflict must be reported via the result, not returned as an error")
+	require.NotNil(t, result)
+	assert.True(t, result.Conflicted)
+	assert.False(t, result.UpToDate)
+	assert.False(t, result.Merged)
+	assert.Equal(t, []string{"README.md"}, result.ConflictedFiles)
+
+	afterSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+	assert.Equal(t, beforeSHA, afterSHA, "a conflicted native merge must leave HEAD untouched")
+	assert.NoFileExists(t, filepath.Join(work, ".git", "MERGE_HEAD"))
+
+	status := runGit(t, work, "status", "--porcelain")
+	assert.Empty(t, strings.TrimSpace(status), "worktree must be exactly as clean as a real git merge --abort would leave it")
+}
+
+// TestNativeMergeMainIntoWorktree_should_ReturnError_When_FetchFails mirrors the existing
+// legacy-path test of the same shape: an unreachable origin must surface as an error, not
+// any MergeMainResult state, and must leave no partial merge state on disk.
+func TestNativeMergeMainIntoWorktree_should_ReturnError_When_FetchFails(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	result, err := nativeMergeMainIntoWorktree(work, "main")
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.NoFileExists(t, filepath.Join(work, ".git", "MERGE_HEAD"))
+}

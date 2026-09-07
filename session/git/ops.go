@@ -806,11 +806,27 @@ type MergeMainResult struct {
 
 // MergeMainIntoWorktree fetches mainBranch from origin and merges it into whatever
 // branch is currently checked out in worktreePath. It never leaves the worktree in a
-// conflicted state: on conflict it aborts the merge immediately (via `git merge
-// --abort`) and reports the conflicting paths, so the caller can hand that context to
-// whoever resolves it rather than leaving a half-merged working tree behind for the
-// next thing that touches it.
+// conflicted state: on conflict it aborts the merge immediately and reports the
+// conflicting paths, so the caller can hand that context to whoever resolves it rather
+// than leaving a half-merged working tree behind for the next thing that touches it.
+//
+// Dispatches to nativeMergeMainIntoWorktree (Epic 3.4) or legacyMergeMainIntoWorktree
+// (the original subprocess-based implementation below) based on useNativeMerge, keyed by
+// worktreePath per ADR-002 — every real call site (drift.go's EnsureBranchSyncedWithMain,
+// backlog_service_triage.go's syncPRBranchWithMain, session/backlog_lifecycle.go's
+// branchReconciler, which is assigned this exact function value) gets flag coverage with
+// no changes of its own.
 func MergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
+	if useNativeMerge(worktreePath) {
+		return nativeMergeMainIntoWorktree(worktreePath, mainBranch)
+	}
+	return legacyMergeMainIntoWorktree(worktreePath, mainBranch)
+}
+
+// legacyMergeMainIntoWorktree is MergeMainIntoWorktree's original subprocess-based
+// implementation (`git fetch` + `git merge` + `git merge --abort` on conflict), unchanged
+// by Epic 3.4's dispatch seam.
+func legacyMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
 	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer fetchCancel()
 	fetchCmd := safeexec.CommandContext(fetchCtx, "git", "-C", worktreePath, "fetch", "origin", mainBranch)
