@@ -2460,8 +2460,17 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 	// Also resize the tmux window itself to ensure the dimensions are applied.
 	colsStr := fmt.Sprintf("%d", cols)
 	rowsStr := fmt.Sprintf("%d", rows)
-	if t.cmEnabledForBackground() {
-		ctx, cancel := cmCtx()
+	// Bounded to fastLaneCMAttemptTimeout (not cmCtx's 3s) and skipped entirely
+	// when the queue is already backed up -- same fix as GetPaneDimensionsPriority
+	// (see its doc comment). SetWindowSizeContext's caller (StreamHub.applyNegotiatedSize)
+	// shares ONE deadline across this call and the CapturePaneContentRawContext call
+	// that follows it; the old cmCtx() 3s budget here, on a backed-up control-mode
+	// queue, could burn nearly all of that shared deadline on a doomed resize-window
+	// response, leaving the subsequent capture no budget at all (confirmed live:
+	// "streamhub: resize caller disconnected or timed out" immediately followed by
+	// "exec gate: context deadline exceeded" on the capture, for staplersquad_tymux).
+	if t.cmEnabledForBackground() && t.pendingCommandDepth() < controlModeQueueBackpressureThreshold {
+		ctx, cancel := context.WithTimeout(context.Background(), fastLaneCMAttemptTimeout)
 		defer cancel()
 		if _, cmErr := t.sendCMCommand(ctx,
 			"resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr); cmErr == nil {
