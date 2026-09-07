@@ -158,32 +158,17 @@ func (s *tymuxGRPCSession) teardownStandingStream() {
 	}
 }
 
-// readAttachLoop is the standing stream's reader goroutine (Task 2.3.1b,
-// restructured by Story 2.5.1/2.5.2; Task 2.1.1b). On every AttachEvent it
-// delegates to handleAttachEvent. On a Receive() error it calls
-// classifyStreamEnd(ctx) to decide whether this is an intentional/known end
-// (ReasonDeliberateClose/ReasonDeliberateSupersede/ReasonCleanExit — close
-// done and return, unblocking Attach()'s callers and
-// teardownStandingStream's bounded wait) or a genuine unexpected drop
-// (ReasonTransportDrop). Without the clean-exit check, a clean pane exit
-// gets misclassified as a transport drop: ReconnectLoop's reattach dial
-// fails with errPaneDead (the pane really is dead, just not because tymuxd
-// restarted), which daemonRestarted's errors.Is check can't tell apart from
-// an actual daemon restart, so it spawns a needless replacement process via
-// ReviveSession and falsely reports BackendRestarted() == true (incident
-// #1, commit 477eacd6a). Without the ctx.Err() check, openStandingStream's
-// own tear-down-before-reopen (teardownStandingStream, not a Close()/
-// DetachSafely()) is misclassified the same way: the old reader falls
-// through to ReconnectLoop instead of exiting, and since nothing ever
-// closes its abortReconnect channel for a mere reopen, its dial blocks
-// indefinitely — wedging teardownStandingStream's wait on `done` (incident
-// #2). A genuine ReasonTransportDrop — ReconnectLoop (Story 2.5.1's
-// acceptance criteria: "any other stream-end triggers ReconnectLoop")
-// either splices in a freshly reattached stream, which this same goroutine
-// resumes reading (so s.streamDone/Attach()'s channel never fires for a
-// transient drop that successfully reconnects — the whole point is
-// transparency), or exhausts its retry budget, in which case it closes done
-// itself and this goroutine returns.
+// readAttachLoop is the standing stream's reader goroutine. On every
+// AttachEvent it delegates to handleAttachEvent. On a Receive() error it
+// calls classifyStreamEnd(ctx), which distinguishes a deliberate/known end
+// (close done and return) from a genuine ReasonTransportDrop and hands the
+// latter to ReconnectLoop — a transient drop reconnects transparently
+// (done stays open), while exhaustion closes done itself.
+// classifyStreamEnd's clean-exit and ctx.Err() checks are load-bearing, not
+// redundant: dropping either one misclassifies a clean exit or a mere
+// reopen as a transport drop, which has broken production before — see
+// project_plans/session-lifecycle-state-machine/decisions/ for that
+// history.
 func (s *tymuxGRPCSession) readAttachLoop(ctx context.Context, paneID string, stream attachStream, done chan struct{}) lifecycle.Reason {
 	for {
 		event, err := stream.Receive()
@@ -192,10 +177,10 @@ func (s *tymuxGRPCSession) readAttachLoop(ctx context.Context, paneID string, st
 				close(done)
 				return reason
 			}
-			newStream, first, ok := s.ReconnectLoop(ctx, paneID, "error")
+			newStream, first, ok, reason := s.ReconnectLoop(ctx, paneID, "error")
 			if !ok {
 				close(done)
-				return s.reasonForReconnectFailure()
+				return reason
 			}
 			stream = newStream
 			if first != nil {
@@ -230,16 +215,6 @@ func (s *tymuxGRPCSession) classifyStreamEnd(ctx context.Context) lifecycle.Reas
 		return lifecycle.ReasonDeliberateSupersede
 	}
 	return lifecycle.ReasonTransportDrop
-}
-
-// reasonForReconnectFailure classifies ReconnectLoop's ok=false outcome
-// (Task 2.1.1c): "interrupted by a deliberate close" vs "genuinely
-// exhausted" — the caller previously only had a bare bool to go on.
-func (s *tymuxGRPCSession) reasonForReconnectFailure() lifecycle.Reason {
-	if s.closing.Load() {
-		return lifecycle.ReasonDeliberateClose
-	}
-	return lifecycle.ReasonReconnectExhausted
 }
 
 // handleAttachEvent is readAttachLoop's per-event switch, pulled out into
@@ -509,35 +484,29 @@ func (s *tymuxGRPCSession) reviveAfterRestart(ctx context.Context) error {
 	return nil
 }
 
-// ReconnectLoop re-opens Attach{pane_id} with jittered exponential
-// backoff after readAttachLoop observes a non-deliberate stream end
-// (Story 2.5.1/2.5.2). Runs entirely within readAttachLoop's own reader
-// goroutine — blocking here is fine since nothing else waits on this
-// goroutine except via s.streamDone, which only a permanent outcome
-// (successful handoff, or exhaustion) touches.
+// ReconnectLoop re-opens Attach{pane_id} with jittered exponential backoff
+// after readAttachLoop observes a non-deliberate stream end. Runs on
+// readAttachLoop's own reader goroutine; blocking here is fine since
+// nothing else waits on it except via s.streamDone.
 //
-// Each attempt: dial Attach{pane_id} (Task 2.5.2a); if the pane is
-// reported Dead (errPaneDead, Task 2.5.3a — the daemon-restart case),
-// call ReviveSession (Story 2.5.3) and dial once more before giving up on
-// this attempt. On any successful dial, run the shared resync path (Task
-// 2.5.2b, resync.go) exactly once, clear ReconnectState (Task 2.5.2e),
-// and return the new stream for readAttachLoop to resume reading from —
-// s.streamDone is never touched on a successful reconnect, so a
-// transient drop that recovers is invisible to Attach()'s callers.
+// Each attempt dials Attach{pane_id}; a pane reported Dead (errPaneDead)
+// triggers one ReviveSession + redial before giving up on that attempt. A
+// successful dial resyncs once and returns the new stream — s.streamDone
+// stays untouched, so a transient drop that recovers is invisible to
+// Attach()'s callers.
 //
-// If every attempt up to reconnectMaxAttempts fails (or a deliberate
-// Close()/DetachSafely() interrupts a backoff wait), it returns
-// (nil, nil, false); on true exhaustion (not a deliberate interrupt) it
-// also delivers a distinguishable failure via the existing exit-callback
-// plumbing (deliverExit, Epic 2.4) — reusing "one mechanism, not two"
-// (pitfalls.md §5) rather than inventing a second notification path.
-//
-// genCtx is the generation context readAttachLoop runs under (from
-// lifecycle.StartGeneration in openStandingStream's goroutine) — passed
-// through to the two give-up branches' lifecycle.RecordEnd calls so the
-// span event lands on the generation's own span rather than on
-// context.Background(), which never carries one.
-func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, cause string) (attachStream, *v1.AttachEvent, bool) {
+// On giving up (attempts exhausted, or a deliberate Close()/
+// DetachSafely() interrupts a backoff wait) it returns ok=false along with
+// the lifecycle.Reason (ReasonDeliberateClose vs ReasonReconnectExhausted)
+// it already determined internally from the same s.closing.Load() check —
+// callers must reuse that returned Reason rather than re-deriving it via a
+// second, later s.closing.Load() call, which races against
+// Close()/DetachSafely() setting it from another goroutine (see
+// project_plans/session-lifecycle-state-machine/decisions/). genCtx (the
+// generation context from openStandingStream's lifecycle.StartGeneration)
+// is used to record that Reason via lifecycle.RecordEnd; true exhaustion
+// also delivers a distinguishable failure via deliverExit.
+func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, cause string) (attachStream, *v1.AttachEvent, bool, lifecycle.Reason) {
 	recordReconnect(cause)
 	sessionID := s.GetSessionIdentifier()
 	log.Info("tymux: standing Attach stream reconnect starting", "session_id", sessionID, "pane_id", paneID, "cause", cause)
@@ -606,7 +575,7 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		s.mu.Unlock()
 
 		log.Info("tymux: standing Attach stream reconnect succeeded", "session_id", sessionID, "pane_id", paneID, "cause", cause, "attempt", attempt)
-		return stream, first, true
+		return stream, first, true, lifecycle.ReasonUnknown
 	}
 
 	s.mu.Lock()
@@ -616,11 +585,11 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 	if s.closing.Load() {
 		lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonDeliberateClose)
 		log.Info("tymux: standing Attach stream reconnect abandoned (deliberate close)", "session_id", sessionID, "pane_id", paneID, "cause", cause)
-		return nil, nil, false
+		return nil, nil, false, lifecycle.ReasonDeliberateClose
 	}
 
 	lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonReconnectExhausted)
 	log.Warn("tymux: standing Attach stream reconnect exhausted, giving up", "session_id", sessionID, "pane_id", paneID, "cause", cause, "max_attempts", maxAttempts)
 	s.deliverExit(fmt.Sprintf("reconnect failed: tymuxd unreachable after %d attempts", maxAttempts))
-	return nil, nil, false
+	return nil, nil, false, lifecycle.ReasonReconnectExhausted
 }
