@@ -280,6 +280,26 @@ func TestBroadcast_NoSendOnClosedPanic(t *testing.T) {
 	sess.UnsubscribeFromControlModeUpdates(id1)
 }
 
+// waitForSlowSendResolved blocks until subscriberID's drainSlowSubscriber goroutine (if any)
+// has finished, bounded by timeout.
+func waitForSlowSendResolved(t *testing.T, sess *TmuxSession, subscriberID string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		sess.controlModeSubMu.RLock()
+		inFlight := sess.slowSendInFlight[subscriberID]
+		sess.controlModeSubMu.RUnlock()
+		if !inFlight {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("drainSlowSubscriber never finished")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 // TestBroadcastControlModeUpdate_ClosesSlowSubscriber_When_ChannelFull is the regression
 // test for the bug this fix addresses: a subscriber whose channel is full used to have its
 // update silently dropped, which can strip partial escape sequences (cursor positioning,
@@ -310,9 +330,21 @@ func TestBroadcastControlModeUpdate_ClosesSlowSubscriber_When_ChannelFull(t *tes
 	}
 
 	// The slow subscriber must be closed and removed, not left silently missing bytes.
-	// Every receive is bounded by its own timeout so pre-fix code (which never closes the
-	// channel) fails fast with a clear message instead of hanging the test run.
-	deadline := time.After(time.Second)
+	// The close happens on a background goroutine (drainSlowSubscriber) after its own
+	// bounded wait, not inline within broadcastControlModeUpdate anymore — see that
+	// function's doc comment for why. Wait for that goroutine to finish (bounded, well
+	// past its grace period) WITHOUT reading from slowCh first: draining it here would
+	// itself free room for the goroutine's held send to succeed, masking the exact
+	// "consumer genuinely never drains" case this test exists to cover.
+	waitForSlowSendResolved(t, sess, slowID, time.Second)
+
+	// Now that the goroutine has resolved, its decision (close, since nothing drained
+	// the channel above) is already locked in — safe to drain the 100 buffered items
+	// still sitting ahead of the close signal without risking the earlier "reading here
+	// masks a should-have-timed-out send" race, since there's nothing left in flight to
+	// influence. Every receive is individually bounded so a regression (channel left
+	// open) fails fast instead of hanging the test run.
+	drainDeadline := time.After(time.Second)
 drain:
 	for {
 		select {
@@ -320,7 +352,7 @@ drain:
 			if !ok {
 				break drain
 			}
-		case <-deadline:
+		case <-drainDeadline:
 			t.Fatal("slow subscriber's channel was never closed")
 		}
 	}
@@ -374,9 +406,14 @@ func TestBroadcastControlModeUpdate_KeepsBurstySubscriberOpen_When_ConsumerCatch
 		}
 	}()
 
-	// This call observes the channel full and must wait for the drain above, not
-	// immediately close the subscriber.
+	// This call observes the channel full and hands the grace-period wait off to a
+	// background goroutine (drainSlowSubscriber) rather than blocking here — see
+	// broadcastControlModeUpdate's doc comment for why. So this returns immediately;
+	// wait for that goroutine to finish (bounded, well past the 250ms grace period)
+	// before asserting on the outcome.
 	sess.broadcastControlModeUpdate([]byte("y"))
+
+	waitForSlowSendResolved(t, sess, id, time.Second)
 
 	sess.controlModeSubMu.RLock()
 	_, exists := sess.controlModeSubscribers[id]
@@ -387,4 +424,154 @@ func TestBroadcastControlModeUpdate_KeepsBurstySubscriberOpen_When_ConsumerCatch
 	}
 
 	sess.UnsubscribeFromControlModeUpdates(id)
+}
+
+// TestBroadcastControlModeUpdate_DoesNotBlockCallerOnSlowSubscriber is the regression test
+// for the actual bug this file's async rework fixes: broadcastControlModeUpdate is called
+// synchronously, in-line, from the tmux control-mode read loop for every line tmux writes
+// (readControlModeOutput's scanner.Scan() loop). Blocking that call for up to
+// controlModeSlowSubscriberGrace (250ms) per stalled subscriber — the pre-fix behavior —
+// stopped the read loop from calling scanner.Scan() again, which stopped it draining tmux's
+// stdout. A tmux control-mode process blocked mid-write() (because nobody's reading its
+// stdout) can't simultaneously notice its stdin was closed, which was forcing
+// StopControlMode's 2-second wait-then-kill path on every single teardown of a busy session
+// (confirmed empirically against a real tmux process: a plain `tmux -C attach-session` with
+// no output backlog exits within ~1s of stdin EOF). The fix must make the caller return
+// promptly regardless of how slow (or entirely absent) the subscriber's consumer is.
+func TestBroadcastControlModeUpdate_DoesNotBlockCallerOnSlowSubscriber(t *testing.T) {
+	t.Parallel()
+	sess := newRefcountTestSession(t)
+
+	// Subscribe a client and never drain it — the worst case, a completely stuck consumer.
+	id, _ := sess.SubscribeToControlModeUpdates()
+
+	// Fill its buffer.
+	for i := 0; i < 100; i++ {
+		sess.broadcastControlModeUpdate([]byte("x"))
+	}
+
+	// One more call now observes the channel full. Pre-fix, this blocked synchronously for
+	// up to controlModeSlowSubscriberGrace (250ms) waiting for room that will never come.
+	// Post-fix, it must return in negligible time regardless — the wait moved to a
+	// background goroutine.
+	start := time.Now()
+	sess.broadcastControlModeUpdate([]byte("y"))
+	elapsed := time.Since(start)
+
+	const mustReturnWithin = 50 * time.Millisecond // well under controlModeSlowSubscriberGrace's 250ms
+	if elapsed > mustReturnWithin {
+		t.Errorf("broadcastControlModeUpdate blocked for %v on a stuck subscriber; must return within %v regardless of subscriber drain state", elapsed, mustReturnWithin)
+	}
+
+	sess.UnsubscribeFromControlModeUpdates(id)
+}
+
+// TestBroadcastControlModeUpdate_NeverSendsWhileOlderFrameStillDraining is the regression
+// test for the CRITICAL frame-reordering fix: broadcastControlModeUpdate must check
+// slowSendInFlight for a subscriber BEFORE ever attempting the fast-path send, so a newer
+// frame can never win a freed buffer slot ahead of an older frame's still-in-flight
+// drainSlowSubscriber goroutine. Deterministically simulates the race window (frame A's
+// drain already marked in flight, one buffer slot freed, as if a consumer had drained one
+// message) rather than relying on real goroutine scheduling timing, which would make the
+// test itself flaky.
+func TestBroadcastControlModeUpdate_NeverSendsWhileOlderFrameStillDraining(t *testing.T) {
+	t.Parallel()
+	sess := newRefcountTestSession(t)
+
+	id, ch := sess.SubscribeToControlModeUpdates()
+
+	// Fill to capacity, then free exactly one slot -- simulating a consumer having drained
+	// one message while frame A's drainSlowSubscriber goroutine hasn't yet retried its send.
+	for i := 0; i < 100; i++ {
+		ch <- []byte("filler")
+	}
+	<-ch
+
+	sess.controlModeSubMu.Lock()
+	if sess.slowSendInFlight == nil {
+		sess.slowSendInFlight = make(map[string]bool)
+	}
+	sess.slowSendInFlight[id] = true // simulates frame A's drain still in flight
+	sess.controlModeSubMu.Unlock()
+
+	// Frame B arrives while frame A is still draining. The freed slot exists -- pre-fix,
+	// the fast-path select would grab it and deliver B ahead of A.
+	sess.broadcastControlModeUpdate([]byte("B"))
+
+	sess.controlModeSubMu.RLock()
+	_, stillSubscribed := sess.controlModeSubscribers[id]
+	sess.controlModeSubMu.RUnlock()
+
+	if stillSubscribed {
+		t.Fatal("subscriber with an in-flight drain should have been closed, not sent a new frame")
+	}
+
+	var received [][]byte
+readLoop:
+	for {
+		select {
+		case data := <-ch:
+			received = append(received, data)
+		case <-time.After(50 * time.Millisecond):
+			break readLoop
+		}
+	}
+
+	for _, data := range received {
+		if string(data) == "B" {
+			t.Fatal("frame B was delivered while an older frame was still draining -- reordering bug")
+		}
+	}
+	if len(received) != 99 {
+		t.Fatalf("expected exactly 99 buffered filler messages remaining, got %d", len(received))
+	}
+}
+
+// TestBroadcastControlModeUpdate_UnsubscribeDuringSlowDrainDefersClose is the regression test
+// for pendingCloseAfterDrain: Unsubscribe calling closeSubscriberLocked while a
+// drainSlowSubscriber goroutine is still parked on `ch <- data` must defer the close to that
+// goroutine, not close ch directly (which would race the blocked send and panic).
+func TestBroadcastControlModeUpdate_UnsubscribeDuringSlowDrainDefersClose(t *testing.T) {
+	t.Parallel()
+	sess := newRefcountTestSession(t)
+
+	id, ch := sess.SubscribeToControlModeUpdates()
+	for i := 0; i < 100; i++ {
+		sess.broadcastControlModeUpdate([]byte("x"))
+	}
+	sess.broadcastControlModeUpdate([]byte("y")) // spawns drainSlowSubscriber, returns immediately
+
+	sess.controlModeSubMu.RLock()
+	inFlight := sess.slowSendInFlight[id]
+	sess.controlModeSubMu.RUnlock()
+	if !inFlight {
+		t.Fatal("expected drainSlowSubscriber still in flight right after broadcast returned")
+	}
+
+	sess.UnsubscribeFromControlModeUpdates(id) // must defer, not close ch here
+
+	sess.controlModeSubMu.RLock()
+	_, stillSubscribed := sess.controlModeSubscribers[id]
+	_, deferred := sess.pendingCloseAfterDrain[id]
+	sess.controlModeSubMu.RUnlock()
+	if stillSubscribed {
+		t.Error("Unsubscribe did not remove the subscriber immediately")
+	}
+	if !deferred {
+		t.Error("Unsubscribe closed ch directly instead of deferring to the in-flight drainSlowSubscriber goroutine")
+	}
+
+	// drainSlowSubscriber must perform exactly one close(ch); a double-close would panic.
+	deadline := time.After(time.Second)
+drain:
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				break drain
+			}
+		case <-deadline:
+			t.Fatal("deferred close was never performed")
+		}
+	}
 }
