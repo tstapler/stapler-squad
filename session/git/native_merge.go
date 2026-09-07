@@ -694,90 +694,9 @@ func resolveMergePaths(byPath map[string]*PathChange) (*mergePathResolution, err
 	res := &mergePathResolution{}
 	renamedAway := map[string]bool{}
 	for _, p := range paths {
-		pc := byPath[p]
-		for _, c := range [...]*object.Change{pc.Ours, pc.Theirs} {
-			if c != nil && c.From.Name != "" && c.From.Name != p {
-				renamedAway[c.From.Name] = true
-			}
+		if err := resolveOnePathMerge(p, byPath[p], &merger, renamedAway, res); err != nil {
+			return nil, err
 		}
-
-		deleted, err := pathChangeIsDelete(pc)
-		if err != nil {
-			return nil, fmt.Errorf("resolveMergePaths: failed to classify %q: %w", p, err)
-		}
-		if deleted {
-			res.resolved = append(res.resolved, resolvedPathMerge{path: p, deleted: true})
-			continue
-		}
-
-		mode, err := pathChangeMode(pc)
-		if err != nil {
-			return nil, fmt.Errorf("resolveMergePaths: failed to determine mode for %q: %w", p, err)
-		}
-
-		// A real two-sided change (both ours and theirs touched this path, neither as a
-		// delete) runs through MergeFile's mode/binary/gitlink short-circuits before any
-		// content-level diff3 merge — the wiring gap this project's own Phase 6 review
-		// caught: MergeFile existed and passed its own isolated unit tests, but this
-		// pipeline called ReconcilePathChange directly, which never invokes MergeFile at
-		// all, so a mode/binary/gitlink mismatch could reach a real merge undetected.
-		// Every other shape (single-sided change, or one side deleted) has no second side
-		// to conflict against, so it still goes straight to ReconcilePathChange, unchanged.
-		bothModified, err := bothSidesNonDeleteChanged(pc)
-		if err != nil {
-			return nil, fmt.Errorf("resolveMergePaths: failed to classify %q: %w", p, err)
-		}
-
-		var result *MergeResult
-		if bothModified {
-			in, buildErr := buildFileMergeInput(pc)
-			if buildErr != nil {
-				return nil, fmt.Errorf("resolveMergePaths: failed to read three-way content for %q: %w", p, buildErr)
-			}
-			outcome, mergeErr := merger.MergeFile(in)
-			if mergeErr != nil {
-				return nil, fmt.Errorf("resolveMergePaths: failed to reconcile %q: %w", p, mergeErr)
-			}
-			if outcome.Reason != ReasonNone {
-				base, ours, theirs, hashErr := conflictHashes(pc)
-				if hashErr != nil {
-					return nil, fmt.Errorf("resolveMergePaths: failed to resolve conflict blob hashes for %q: %w", p, hashErr)
-				}
-				res.conflicts = append(res.conflicts, conflictedPathMerge{
-					path: p, mode: mode,
-					baseHash: base, oursHash: ours, theirsHash: theirs,
-					hunks: nonTextConflictHunks(outcome.Reason, in),
-				})
-				continue
-			}
-			result = outcome.Result
-			// A one-sided mode change (the other side's mode still matches base) auto-
-			// resolves to the changed side's mode (resolveFileMode) rather than always
-			// preferring ours the way pathChangeMode does for the plain both-changed-content
-			// case — pathChangeMode has no base to compare against, so it can't tell "only
-			// theirs changed the mode" from "both changed it identically."
-			mode = outcome.ResolvedMode
-		} else {
-			result, err = merger.ReconcilePathChange(pc)
-			if err != nil {
-				return nil, fmt.Errorf("resolveMergePaths: failed to reconcile %q: %w", p, err)
-			}
-		}
-
-		if result.Conflicted {
-			base, ours, theirs, hashErr := conflictHashes(pc)
-			if hashErr != nil {
-				return nil, fmt.Errorf("resolveMergePaths: failed to resolve conflict blob hashes for %q: %w", p, hashErr)
-			}
-			res.conflicts = append(res.conflicts, conflictedPathMerge{
-				path: p, mode: mode,
-				baseHash: base, oursHash: ours, theirsHash: theirs,
-				hunks: result.Hunks,
-			})
-			continue
-		}
-
-		res.resolved = append(res.resolved, resolvedPathMerge{path: p, mode: mode, content: []byte(result.Content)})
 	}
 
 	oldPaths := make([]string, 0, len(renamedAway))
@@ -793,6 +712,98 @@ func resolveMergePaths(byPath map[string]*PathChange) (*mergePathResolution, err
 	}
 
 	return res, nil
+}
+
+// resolveOnePathMerge resolves a single path's three-way merge outcome, appending the
+// result to res.resolved or res.conflicts and recording any rename source in renamedAway.
+// Split out of resolveMergePaths (which now just loops over paths in sorted order) to keep
+// each function's cognitive complexity within this repo's gocognit gate — this is the exact
+// per-path body resolveMergePaths ran inline before the split, with no behavioral change.
+func resolveOnePathMerge(p string, pc *PathChange, merger *ThreeWayFileMerger, renamedAway map[string]bool, res *mergePathResolution) error {
+	for _, c := range [...]*object.Change{pc.Ours, pc.Theirs} {
+		if c != nil && c.From.Name != "" && c.From.Name != p {
+			renamedAway[c.From.Name] = true
+		}
+	}
+
+	deleted, err := pathChangeIsDelete(pc)
+	if err != nil {
+		return fmt.Errorf("resolveMergePaths: failed to classify %q: %w", p, err)
+	}
+	if deleted {
+		res.resolved = append(res.resolved, resolvedPathMerge{path: p, deleted: true})
+		return nil
+	}
+
+	mode, err := pathChangeMode(pc)
+	if err != nil {
+		return fmt.Errorf("resolveMergePaths: failed to determine mode for %q: %w", p, err)
+	}
+
+	// A real two-sided change (both ours and theirs touched this path, neither as a
+	// delete) runs through MergeFile's mode/binary/gitlink short-circuits before any
+	// content-level diff3 merge — the wiring gap this project's own Phase 6 review
+	// caught: MergeFile existed and passed its own isolated unit tests, but this
+	// pipeline called ReconcilePathChange directly, which never invokes MergeFile at
+	// all, so a mode/binary/gitlink mismatch could reach a real merge undetected.
+	// Every other shape (single-sided change, or one side deleted) has no second side
+	// to conflict against, so it still goes straight to ReconcilePathChange, unchanged.
+	bothModified, err := bothSidesNonDeleteChanged(pc)
+	if err != nil {
+		return fmt.Errorf("resolveMergePaths: failed to classify %q: %w", p, err)
+	}
+
+	var result *MergeResult
+	if bothModified {
+		in, buildErr := buildFileMergeInput(pc)
+		if buildErr != nil {
+			return fmt.Errorf("resolveMergePaths: failed to read three-way content for %q: %w", p, buildErr)
+		}
+		outcome, mergeErr := merger.MergeFile(in)
+		if mergeErr != nil {
+			return fmt.Errorf("resolveMergePaths: failed to reconcile %q: %w", p, mergeErr)
+		}
+		if outcome.Reason != ReasonNone {
+			base, ours, theirs, hashErr := conflictHashes(pc)
+			if hashErr != nil {
+				return fmt.Errorf("resolveMergePaths: failed to resolve conflict blob hashes for %q: %w", p, hashErr)
+			}
+			res.conflicts = append(res.conflicts, conflictedPathMerge{
+				path: p, mode: mode,
+				baseHash: base, oursHash: ours, theirsHash: theirs,
+				hunks: nonTextConflictHunks(outcome.Reason, in),
+			})
+			return nil
+		}
+		result = outcome.Result
+		// A one-sided mode change (the other side's mode still matches base) auto-
+		// resolves to the changed side's mode (resolveFileMode) rather than always
+		// preferring ours the way pathChangeMode does for the plain both-changed-content
+		// case — pathChangeMode has no base to compare against, so it can't tell "only
+		// theirs changed the mode" from "both changed it identically."
+		mode = outcome.ResolvedMode
+	} else {
+		result, err = merger.ReconcilePathChange(pc)
+		if err != nil {
+			return fmt.Errorf("resolveMergePaths: failed to reconcile %q: %w", p, err)
+		}
+	}
+
+	if result.Conflicted {
+		base, ours, theirs, hashErr := conflictHashes(pc)
+		if hashErr != nil {
+			return fmt.Errorf("resolveMergePaths: failed to resolve conflict blob hashes for %q: %w", p, hashErr)
+		}
+		res.conflicts = append(res.conflicts, conflictedPathMerge{
+			path: p, mode: mode,
+			baseHash: base, oursHash: ours, theirsHash: theirs,
+			hunks: result.Hunks,
+		})
+		return nil
+	}
+
+	res.resolved = append(res.resolved, resolvedPathMerge{path: p, mode: mode, content: []byte(result.Content)})
+	return nil
 }
 
 // pathChangeIsDelete reports whether pc's resolution is an outright deletion: the side(s)
