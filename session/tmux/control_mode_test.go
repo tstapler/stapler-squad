@@ -14,6 +14,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/tstapler/stapler-squad/session/lifecycle"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -371,7 +372,14 @@ func TestReadControlModeOutput_LifecycleV2Enabled_EndsGenerationExactlyOnceAcros
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			before := sumTmuxControlModeMetric(t, collectLifecycleMetric(t, "session_lifecycle_ends_total"), "")
+			// Every case here ends its generation with no StartControlMode/
+			// StopControlMode ever setting intentionalStop, so
+			// classifyControlModeExit() always reports ReasonTransportDrop
+			// ("transport_drop") for these scenarios -- filtering on that specific
+			// reason (rather than "") also verifies the recorded label is correct,
+			// not just that the counter moved.
+			const wantReason = "transport_drop"
+			before := sumTmuxControlModeMetric(t, collectLifecycleMetric(t, "session_lifecycle_ends_total"), wantReason)
 
 			sess, pw, _ := newControlModeOutputTestSession(t)
 			readerDone := startReader(sess)
@@ -383,9 +391,37 @@ func TestReadControlModeOutput_LifecycleV2Enabled_EndsGenerationExactlyOnceAcros
 			}
 			waitReaderDone(t, readerDone)
 
-			after := sumTmuxControlModeMetric(t, collectLifecycleMetric(t, "session_lifecycle_ends_total"), "")
+			after := sumTmuxControlModeMetric(t, collectLifecycleMetric(t, "session_lifecycle_ends_total"), wantReason)
 			if after != before+1 {
-				t.Errorf("session_lifecycle_ends_total{subsystem=tmux_control_mode} delta = %d, want exactly 1", after-before)
+				t.Errorf("session_lifecycle_ends_total{subsystem=tmux_control_mode,reason=%s} delta = %d, want exactly 1", wantReason, after-before)
+			}
+		})
+	}
+}
+
+// TestClassifyControlModeExit_BothOrigins is a direct table-driven unit test of
+// classifyControlModeExit(), covering both intentionalStop origins. Every existing
+// test that reaches this function via readControlModeOutput does so with
+// intentionalStop==false; the one scenario that does set it true
+// (StopControlMode's own doneCh branch) classifies inline without calling this
+// function at all, so the intentionalStop==true branch (-> ReasonDeliberateClose)
+// had no direct coverage before this test.
+func TestClassifyControlModeExit_BothOrigins(t *testing.T) {
+	tests := []struct {
+		name            string
+		intentionalStop bool
+		want            lifecycle.Reason
+	}{
+		{"intentional stop set", true, lifecycle.ReasonDeliberateClose},
+		{"intentional stop unset", false, lifecycle.ReasonTransportDrop},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := &TmuxSession{}
+			sess.intentionalStop.Store(tt.intentionalStop)
+			got := sess.classifyControlModeExit()
+			if got != tt.want {
+				t.Errorf("classifyControlModeExit() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -408,8 +444,8 @@ func TestReadControlModeOutput_GoroutineNeverReachesExitSites_ActiveGenerationsG
 	// t.Cleanup (registered by newControlModeOutputTestSession) closes the
 	// pipe at the end of this test so the leaked goroutine can finally exit
 	// instead of leaking for the rest of the test binary's run.
-	sess, _, _ := newControlModeOutputTestSession(t)
-	startReader(sess)
+	sess, pw, _ := newControlModeOutputTestSession(t)
+	readerDone := startReader(sess)
 
 	if err := wait.WaitForCondition(func() bool {
 		after := sumTmuxControlModeMetric(t, collectLifecycleMetric(t, gaugeName), "")
@@ -426,6 +462,16 @@ func TestReadControlModeOutput_GoroutineNeverReachesExitSites_ActiveGenerationsG
 	if after != baseline+1 {
 		t.Errorf("gauge = baseline+%d, want baseline+1 (still elevated for the abandoned generation)", after-baseline)
 	}
+
+	// Unblock the wedged goroutine and join it within this test's own body,
+	// rather than leaving it to t.Cleanup's unordered pipe close -- otherwise
+	// its delayed endControlModeGenerationV2 decrement of this same
+	// process-global gauge can land after this test returns and leak into the
+	// NEXT test's before/after delta assertion on the identical gauge.
+	if err := pw.Close(); err != nil {
+		t.Fatalf("closing pipe: %v", err)
+	}
+	waitReaderDone(t, readerDone)
 }
 
 // closeDoneOnReadReader is a custom io.ReadCloser whose first Read call closes
