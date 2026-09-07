@@ -110,6 +110,24 @@ describe('useTerminalFlowControl', () => {
 
       expect(pushMessageFn).not.toHaveBeenCalled();
     });
+
+    // Regression: this early return used to be completely silent (no
+    // console output at all), making a disconnected terminal that still
+    // showed "Connected" in the UI indistinguishable from a working one at
+    // the browser console — exactly the "shows Connected, nothing happens
+    // when typing" symptom. resize()'s equivalent disconnected-path warning
+    // was the only one of the two dispatch functions that logged anything.
+    it('warns when input is dropped because the stream is not connected', () => {
+      const { options, isConnectedRef } = createTestOptions();
+      isConnectedRef.current = false;
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.sendInput('hello');
+      });
+
+      expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/not connected/i));
+    });
   });
 
   describe('resize', () => {
@@ -124,6 +142,19 @@ describe('useTerminalFlowControl', () => {
       expect(pushMessageFn).toHaveBeenCalled();
       const msg = pushMessageFn.mock.calls[0][0];
       expect(msg.data.case).toBe('resize');
+    });
+
+    it('warns and does not send when disconnected', () => {
+      const { options, pushMessageFn, isConnectedRef } = createTestOptions();
+      isConnectedRef.current = false;
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.resize(120, 40);
+      });
+
+      expect(pushMessageFn).not.toHaveBeenCalled();
+      expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/not connected/i));
     });
 
     it('should throttle to 200ms', () => {
@@ -260,6 +291,73 @@ describe('useTerminalFlowControl', () => {
       });
 
       expect(pushMessageFn.mock.calls.length).toBeGreaterThan(beforeThird);
+    });
+
+    // Regression: the original bounce detection only compared against the
+    // size sent exactly two sends ago, so a 3-value cycle (A -> B -> C -> A)
+    // sailed straight through — observed live (session staplersquad_stelekit,
+    // mobile client) wandering across 10x6 -> 67x38 -> 67x22 before repeating
+    // 67x38, none of which is a clean two-value flip-flop.
+    it('holds a repeat of a size from 3 sends ago (a wider oscillation than a direct A -> B -> A bounce)', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      const sizes: [number, number][] = [[10, 6], [67, 38], [67, 22]];
+      for (const [cols, rows] of sizes) {
+        act(() => {
+          result.current.resize(cols, rows);
+        });
+        act(() => {
+          jest.advanceTimersByTime(201);
+        });
+      }
+
+      const beforeRepeat = pushMessageFn.mock.calls.length;
+
+      act(() => {
+        // Repeats the size from 3 sends ago -- not caught by a 2-back-only check.
+        result.current.resize(10, 6);
+      });
+
+      expect(pushMessageFn.mock.calls.length).toBe(beforeRepeat);
+
+      act(() => {
+        jest.advanceTimersByTime(3001);
+      });
+
+      expect(pushMessageFn.mock.calls.length).toBeGreaterThan(beforeRepeat);
+      const sent = pushMessageFn.mock.calls.find((c) => c[0].data.case === 'resize' && c[0].data.value.cols === 10);
+      expect(sent).toBeDefined();
+    });
+
+    // Regression: a viewport still oscillating WHILE a bounce is already
+    // being held should back off further on each consecutive re-trigger
+    // instead of retrying at a flat 3s cadence forever — otherwise a
+    // sustained oscillation just keeps re-arming the same 3s hold and never
+    // actually settles. The streak resets once a hold genuinely resolves
+    // (doSend runs), so this only escalates while bounces keep re-firing
+    // before the previous hold elapses.
+    it('escalates the hold duration when a bounce re-triggers before the previous hold elapses', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => { result.current.resize(100, 30); }); // A -- sends immediately
+      act(() => { jest.advanceTimersByTime(201); });
+      act(() => { result.current.resize(120, 40); }); // B -- sends immediately, history now [A]
+      act(() => { jest.advanceTimersByTime(201); });
+
+      const beforeBounces = pushMessageFn.mock.calls.length;
+
+      act(() => { result.current.resize(100, 30); }); // bounce 1: matches history -- holds 3000ms
+      act(() => { jest.advanceTimersByTime(1000); }); // well before the 3000ms hold elapses
+
+      act(() => { result.current.resize(100, 30); }); // bounce 2: re-triggers before bounce 1 resolved -- escalates to 6000ms, restarts from now
+
+      act(() => { jest.advanceTimersByTime(3001); }); // 3001ms since bounce 2 -- the old 3000ms hold would have fired by now
+      expect(pushMessageFn.mock.calls.length).toBe(beforeBounces); // still held -- proves escalation took effect
+
+      act(() => { jest.advanceTimersByTime(3000); }); // total 6001ms since bounce 2 -- escalated hold elapses
+      expect(pushMessageFn.mock.calls.length).toBeGreaterThan(beforeBounces);
     });
 
     // Task 4.3.2, AC4: force:true bypasses both value-dedup and the time
@@ -542,6 +640,51 @@ describe('useTerminalFlowControl', () => {
       expect(pushMessageFn).toHaveBeenCalled();
       const msg = pushMessageFn.mock.calls[0][0];
       expect(msg.data.case).toBe('flowControl');
+    });
+
+    // Regression: every dispatch function shares one ensureConnected() gate now instead
+    // of independently reimplementing the connectivity check — this and the equivalent
+    // requestScrollback test below prove that consolidation actually reaches every call
+    // site, not just the one (sendInput) originally missing its warning.
+    it('warns and does not send when disconnected', () => {
+      const { options, pushMessageFn, isConnectedRef } = createTestOptions();
+      isConnectedRef.current = false;
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.sendFlowControl(true, 50000);
+      });
+
+      expect(pushMessageFn).not.toHaveBeenCalled();
+      expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/not connected/i));
+    });
+  });
+
+  describe('requestScrollback', () => {
+    it('should send correct ScrollbackRequest message', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.requestScrollback(100, 50);
+      });
+
+      expect(pushMessageFn).toHaveBeenCalled();
+      const msg = pushMessageFn.mock.calls[0][0];
+      expect(msg.data.case).toBe('scrollbackRequest');
+    });
+
+    it('warns and does not send when disconnected', () => {
+      const { options, pushMessageFn, isConnectedRef } = createTestOptions();
+      isConnectedRef.current = false;
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.requestScrollback(100, 50);
+      });
+
+      expect(pushMessageFn).not.toHaveBeenCalled();
+      expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/not connected/i));
     });
   });
 });

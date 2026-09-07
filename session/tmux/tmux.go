@@ -172,10 +172,21 @@ type TmuxSession struct {
 	controlModeStdin       io.WriteCloser         // stdin pipe for control mode commands
 	controlModeDone        chan struct{}          // Signal channel for control mode termination
 	controlModeSubscribers map[string]chan []byte // WebSocket clients subscribed to control mode updates
-	controlModeSubMu       sync.RWMutex           // Protects controlModeSubscribers, controlModeExited, pendingCmds, and controlModeRefCount
-	controlModeExited      bool                   // True after readControlModeOutput exits; new subscribers get pre-closed channel
-	controlModeStartMu     sync.Mutex             // Serializes Start/Stop so only one process starts at a time
-	controlModeRefCount    int                    // Number of active Start/Stop pairs; protected by controlModeSubMu
+	// slowSendInFlight tracks, per subscriber ID, whether a background
+	// goroutine is already waiting out controlModeSlowSubscriberGrace to
+	// deliver a frame to that subscriber's channel (see
+	// broadcastControlModeUpdate). At most one such waiter may exist per
+	// subscriber at a time -- see that function's doc comment for why.
+	slowSendInFlight map[string]bool
+	// pendingCloseAfterDrain holds a channel a close was requested for while
+	// slowSendInFlight[id] was true -- closing it immediately would race the
+	// in-flight drainSlowSubscriber goroutine's blocked send and panic. See
+	// closeSubscriberLocked and drainSlowSubscriber.
+	pendingCloseAfterDrain map[string]chan []byte
+	controlModeSubMu       sync.RWMutex // Protects controlModeSubscribers, slowSendInFlight, pendingCloseAfterDrain, controlModeExited, pendingCmds, and controlModeRefCount
+	controlModeExited      bool         // True after readControlModeOutput exits; new subscribers get pre-closed channel
+	controlModeStartMu     sync.Mutex   // Serializes Start/Stop so only one process starts at a time
+	controlModeRefCount    int          // Number of active Start/Stop pairs; protected by controlModeSubMu
 
 	// Control mode command dispatch — priority queue
 	// A dedicated sender goroutine owns the stdin write path so that high-priority
