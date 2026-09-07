@@ -91,6 +91,11 @@ Do **not** adopt `qmuntal/stateless`, `looplab/fsm`, or generalize
 - **If a future subsystem's needs genuinely outgrow this shape** (multi-state graphs, guarded
   transitions, hierarchical states), that is new information this ADR did not have — revisit the
   library options above at that time rather than retrofitting `Reason` into something it isn't.
-- **Follow-on**: `session/actor.go`'s command-execution-SLA/preemption gap (the actual mechanism
-  behind incident #2/#3's actor-wide wedge) is tracked separately, not solved by this project —
-  see plan.md Epic 5.3.
+- **Follow-on**: two tracked issues from Epic 5.3, filed against `tstapler/stapler-squad`
+  (2026-09-06), neither solved by this project:
+  - [`tstapler/stapler-squad#715`](https://github.com/tstapler/stapler-squad/issues/715) —
+    `session/actor.go`'s command-execution-SLA/preemption gap (the actual mechanism suspected
+    behind the actor-wide wedge incidents; Task 5.3.1a).
+  - [`tstapler/stapler-squad#716`](https://github.com/tstapler/stapler-squad/issues/716) —
+    removing `STAPLER_SQUAD_TMUX_LIFECYCLE_V2` once its dashboarded, staged bake-then-delete
+    gate (not a vague "N weeks, no incidents" criterion) is satisfied (Task 5.3.2a).

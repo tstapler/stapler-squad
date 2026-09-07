@@ -672,6 +672,15 @@ live `pprof` dump (the exact gap incident #2 exposed).
   the counter fires. Threading a real `ctx` through `ReconnectLoop`'s signature would touch 3+
   call sites for a span-only benefit not required by Success Metrics.)
 - Files: `session/tymux/stream.go`
+- **Superseded during implementation (code review, PR #720)**: `context.Background()`'s
+  span-event-is-a-no-op consequence turned out to matter — it silently dropped the entire
+  point of instrumenting these two branches with a span event, not just a documented
+  trade-off to accept. The shipped code threads a `genCtx context.Context` parameter through
+  `ReconnectLoop`'s signature instead (sourced from `readAttachLoop`'s own `ctx`, itself
+  `lifecycle.StartGeneration`'s returned context), so `RecordEnd`'s span event actually
+  attaches to the generation's span. The "3+ call sites" estimate above was also inflated —
+  only 2 exist repo-wide (`readAttachLoop` and one test), confirmed via
+  `grep -rn '\.ReconnectLoop\('`.
 
 #### Story 2.2.2: Prove the active-generations gauge actually catches incident #3's exact shape
 **As an** operator, **I want** the wedged-reader scenario this project already reproduced live

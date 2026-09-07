@@ -413,6 +413,10 @@ func (r *TmuxServerRegistry) startControlMode() (*exec.Cmd, *bufio.Scanner, io.W
 
 // reconnectLoop starts the control-mode process and reconnects with exponential
 // backoff whenever it exits. It exits when the registry context is cancelled.
+//
+// Audited (session-lifecycle-state-machine project, 2026-09): no lifecycle.Reason
+// migration needed — its only stop-vs-continue signal is ctx.Done(), a single
+// unambiguous cause with nothing to misclassify.
 func (r *TmuxServerRegistry) reconnectLoop() {
 	const (
 		backoffBase = 100 * time.Millisecond
