@@ -256,22 +256,33 @@ func (w *hunkWalker) step() {
 	case oursStarts && theirsStarts:
 		w.mergeAndAdvance(oursNext, theirsNext)
 
-	case oursStarts && (theirsNext == nil || theirsNext.baseStart >= oursNext.baseEnd):
+	case oursStarts && (theirsNext == nil || theirsNext.baseStart > oursNext.baseEnd):
 		w.appendOneSided(RegionOursOnly, w.pos, oursNext.baseEnd, oursNext.newLines)
 		w.pos = oursNext.baseEnd
 		w.oi++
 
 	case oursStarts:
-		// theirsNext overlaps ours' range without starting at the same pos.
+		// theirsNext overlaps ours' range, or merely touches it with zero lines of
+		// unchanged base context between them — real git's own xdl_merge/diff3
+		// algorithm requires at least one shared context line to treat two sides'
+		// edits as independent (confirmed against real `git merge`: base "a b c d",
+		// ours editing line 2 and theirs editing the immediately adjacent line 3
+		// with no unchanged line between them still conflicts, even though neither
+		// side touched the other's exact line — FuzzNativeMerge's regression corpus
+		// entry). A bare `>=`-adjacency check here silently auto-resolved that case
+		// instead of conflicting, which is the more dangerous failure mode for a
+		// merge tool: over-eager auto-resolution a human/real-git reviewer would
+		// never have seen.
 		w.mergeAndAdvance(oursNext, theirsNext)
 
-	case theirsStarts && (oursNext == nil || oursNext.baseStart >= theirsNext.baseEnd):
+	case theirsStarts && (oursNext == nil || oursNext.baseStart > theirsNext.baseEnd):
 		w.appendOneSided(RegionTheirsOnly, w.pos, theirsNext.baseEnd, theirsNext.newLines)
 		w.pos = theirsNext.baseEnd
 		w.ti++
 
 	default:
-		// theirsStarts, overlapping with a later ours edit.
+		// theirsStarts, overlapping or touching a later ours edit — see the
+		// oursStarts branch above for why touching also routes here.
 		w.mergeAndAdvance(oursNext, theirsNext)
 	}
 }
