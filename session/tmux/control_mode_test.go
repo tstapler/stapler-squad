@@ -427,3 +427,89 @@ func TestReadControlModeOutput_GoroutineNeverReachesExitSites_ActiveGenerationsG
 		t.Errorf("gauge = baseline+%d, want baseline+1 (still elevated for the abandoned generation)", after-baseline)
 	}
 }
+
+// closeDoneOnReadReader is a custom io.ReadCloser whose first Read call closes
+// doneCh from *inside* the call, before returning line's bytes. That
+// establishes a happens-before between doneCh's close and scanner.Scan()
+// returning true for that line, deterministically reproducing (rather than
+// racing the scheduler for) the scan loop's doneCh branch: a control-mode
+// line arriving in the narrow window between StopControlMode() closing
+// doneCh and it closing controlModeStdout. Any Read after the first blocks on
+// block until Close is called, simulating the pipe staying open a little
+// longer -- the fix path must return without needing a second Scan().
+type closeDoneOnReadReader struct {
+	line    []byte
+	doneCh  chan struct{}
+	readOne bool
+	block   chan struct{}
+}
+
+func (r *closeDoneOnReadReader) Read(p []byte) (int, error) {
+	if r.readOne {
+		<-r.block
+		return 0, io.EOF
+	}
+	r.readOne = true
+	close(r.doneCh)
+	return copy(p, r.line), nil
+}
+
+func (r *closeDoneOnReadReader) Close() error {
+	select {
+	case <-r.block:
+	default:
+		close(r.block)
+	}
+	return nil
+}
+
+// TestControlMode_ScanLoopDoneChRace_EndsGenerationWithoutFiringOnExit is the
+// regression test for the readControlModeOutput doneCh-return leak: a
+// control-mode line is read successfully exactly in the narrow window between
+// StopControlMode() closing doneCh and it closing controlModeStdout. Before
+// the fix, the scan loop's `case <-doneCh: return` branch returned without
+// ever reaching the post-loop cleanup, so with the v2 lifecycle flag enabled
+// the span opened at the top of readControlModeOutput was never .End()'d and
+// session_lifecycle_active_generations{subsystem="tmux_control_mode"} was
+// never decremented -- a false-positive "stuck generation" signal for an
+// entirely ordinary shutdown race, not a real wedge. onExit must still never
+// fire here (deliberate close), matching every other StopControlMode path.
+func TestControlMode_ScanLoopDoneChRace_EndsGenerationWithoutFiringOnExit(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TMUX_LIFECYCLE_V2", "true")
+
+	beforeEnds := sumTmuxControlModeMetric(t, collectLifecycleMetric(t, "session_lifecycle_ends_total"), "deliberate_close")
+	beforeActive := sumTmuxControlModeMetric(t, collectLifecycleMetric(t, "session_lifecycle_active_generations"), "")
+
+	rec := &exitRecorder{}
+	doneCh := make(chan struct{})
+	reader := &closeDoneOnReadReader{
+		line:   []byte("%session-changed $0 sync\n"),
+		doneCh: doneCh,
+		block:  make(chan struct{}),
+	}
+	sess := &TmuxSession{
+		sanitizedName:          "cm_donech_race_test",
+		controlModeStdout:      reader,
+		controlModeDone:        doneCh,
+		controlModeSubscribers: make(map[string]chan []byte),
+		onExit:                 rec.record,
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+
+	readerDone := startReader(sess)
+	waitReaderDone(t, readerDone)
+
+	if count := rec.count(); count != 0 {
+		t.Errorf("onExit call count = %d, want 0 (deliberate close never fires onExit)", count)
+	}
+
+	afterEnds := sumTmuxControlModeMetric(t, collectLifecycleMetric(t, "session_lifecycle_ends_total"), "deliberate_close")
+	if afterEnds != beforeEnds+1 {
+		t.Errorf("session_lifecycle_ends_total{reason=deliberate_close} delta = %d, want 1 (generation never ended -- the leak this test guards against)", afterEnds-beforeEnds)
+	}
+
+	afterActive := sumTmuxControlModeMetric(t, collectLifecycleMetric(t, "session_lifecycle_active_generations"), "")
+	if afterActive != beforeActive {
+		t.Errorf("session_lifecycle_active_generations delta = %d, want 0 (gauge must return to baseline, not stay elevated by the leaked generation)", afterActive-beforeActive)
+	}
+}
