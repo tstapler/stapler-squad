@@ -265,11 +265,19 @@ func secureWorktreeJoin(worktreePath, relPath string) (string, error) {
 // (worktree.go in the pinned v5.19.2): a symlink planted in a leading path component of
 // fullPath (e.g. "s" while writing "s/config", where "s" links outside worktreePath) would
 // otherwise be transparently followed by the caller's subsequent os.MkdirAll/os.WriteFile/
-// os.Symlink, defeating secureWorktreeJoin's path-string containment check even though the
-// string itself is clean. Removing it is always correct: a symlink can never legitimately
-// be an intermediate directory of a tracked path. Only walks between worktreePath and
-// fullPath's parent, never above worktreePath — secureWorktreeJoin already guarantees
-// fullPath is a lexical descendant of worktreePath before this is ever called.
+// os.Symlink/os.ReadFile, defeating secureWorktreeJoin's path-string containment check even
+// though the string itself is clean. Removing it is always correct: a symlink can never
+// legitimately be an intermediate directory of a tracked path. Only walks between
+// worktreePath and fullPath's parent, never above worktreePath — secureWorktreeJoin already
+// guarantees fullPath is a lexical descendant of worktreePath before this is ever called.
+//
+// Every one of writeWorkingTreeFile/removeWorkingTreeFile/restoreWorkingTreeFile/
+// capturePreMergeSnapshot calls this immediately after secureWorktreeJoin and before
+// touching disk — capturePreMergeSnapshot's os.ReadFile is a read, not a write, but a
+// blocking symlink there is just as dangerous: it would read (and then, via
+// abortNativeMerge's restoreWorkingTreeFile, write straight back into the worktree)
+// arbitrary content from outside worktreePath, an information-disclosure primitive on top
+// of the write-side escape the other three functions close.
 func clearBlockingSymlinksInPath(worktreePath, fullPath string) error {
 	rel, err := filepath.Rel(worktreePath, filepath.Dir(fullPath))
 	if err != nil {
@@ -1035,6 +1043,9 @@ func capturePreMergeSnapshot(worktreePath string, conflicts []conflictedPathMerg
 		fullPath, joinErr := secureWorktreeJoin(worktreePath, c.path)
 		if joinErr != nil {
 			return nil, fmt.Errorf("capturePreMergeSnapshot: %w", joinErr)
+		}
+		if err := clearBlockingSymlinksInPath(worktreePath, fullPath); err != nil {
+			return nil, fmt.Errorf("capturePreMergeSnapshot: %w", err)
 		}
 		content, readErr := os.ReadFile(fullPath)
 		if readErr != nil {

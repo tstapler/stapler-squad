@@ -710,3 +710,100 @@ func TestNativeMergeMainIntoWorktree_MaliciousSymlinkEntry_DoesNotEscapeViaBlock
 	_, statErr := os.Stat(escapedTarget)
 	assert.True(t, os.IsNotExist(statErr), "the payload must never be written outside the worktree via the planted symlink, regardless of the merge's overall outcome (err=%v)", mergeErr)
 }
+
+// TestNativeMergeMainIntoWorktree_ConflictReadThroughBlockingSymlink_IsSafelyBlocked
+// covers the gap a re-review of MUST FIX 1 found: capturePreMergeSnapshot's
+// os.ReadFile(fullPath) — used to snapshot a CONFLICTED path's pre-merge working-tree
+// content, for abortNativeMerge to later restore — went through secureWorktreeJoin but
+// not clearBlockingSymlinksInPath, unlike the other three write-side functions. If a
+// blocking symlink already sits on disk at a leading path component of a conflicted path
+// (here, "link" pointing outside the worktree, planted before the merge runs — this is
+// the read-side, information-disclosure half of the bug: a query fails without the
+// containment fix, this test would silently read a real secret file living outside the
+// worktree (planted at outsideDir/evil.txt) into the merge's pre-merge snapshot, which
+// materializeConflictOnAbort/abortNativeMerge would then write straight back into the
+// worktree.
+//
+// "link/evil.txt" is constructed as one flat, non-nested tree entry (mirroring the
+// symlink-escape test above) so it can be a real MODIFY/MODIFY (add/add) conflict without
+// requiring git's normal directory nesting — both "ours" (work's own feature-branch tip)
+// and "theirs" (origin/main) independently add this path with different content, via raw
+// go-git object construction against each repo directly (not the real `git` CLI, which
+// cannot create such a tree shape), so the actual on-disk symlink governs what
+// capturePreMergeSnapshot reads, not whatever real git's checkout would have written.
+func TestNativeMergeMainIntoWorktree_ConflictReadThroughBlockingSymlink_IsSafelyBlocked(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	outsideDir := filepath.Join(t.TempDir(), "outside-target")
+	require.NoError(t, os.MkdirAll(outsideDir, 0o750))
+	const secretContent = "SECRET-OUTSIDE-CONTENT\n"
+	require.NoError(t, os.WriteFile(filepath.Join(outsideDir, "evil.txt"), []byte(secretContent), 0o600))
+
+	addFlatEntry := func(t *testing.T, repoPath, branchRefName, content string) {
+		t.Helper()
+		repo, err := git.PlainOpen(repoPath)
+		require.NoError(t, err)
+
+		headRef, err := repo.Reference(plumbing.ReferenceName(branchRefName), true)
+		require.NoError(t, err)
+		headCommit, err := repo.CommitObject(headRef.Hash())
+		require.NoError(t, err)
+		headTree, err := headCommit.Tree()
+		require.NoError(t, err)
+
+		blobObj := repo.Storer.NewEncodedObject()
+		blobObj.SetType(plumbing.BlobObject)
+		bw, err := blobObj.Writer()
+		require.NoError(t, err)
+		_, err = bw.Write([]byte(content))
+		require.NoError(t, err)
+		require.NoError(t, bw.Close())
+		blobHash, err := repo.Storer.SetEncodedObject(blobObj)
+		require.NoError(t, err)
+
+		entries := append([]object.TreeEntry(nil), headTree.Entries...)
+		entries = append(entries, object.TreeEntry{Name: "link/evil.txt", Mode: filemode.Regular, Hash: blobHash})
+		sort.Slice(entries, func(i, j int) bool { return treeEntrySortKey(entries[i]) < treeEntrySortKey(entries[j]) })
+
+		treeObj := repo.Storer.NewEncodedObject()
+		require.NoError(t, (&object.Tree{Entries: entries}).Encode(treeObj))
+		treeHash, err := repo.Storer.SetEncodedObject(treeObj)
+		require.NoError(t, err)
+
+		sig := object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()}
+		commit := &object.Commit{
+			Author: sig, Committer: sig,
+			Message:      "add link/evil.txt\n",
+			TreeHash:     treeHash,
+			ParentHashes: []plumbing.Hash{headRef.Hash()},
+		}
+		commitObj := repo.Storer.NewEncodedObject()
+		require.NoError(t, commit.Encode(commitObj))
+		commitHash, err := repo.Storer.SetEncodedObject(commitObj)
+		require.NoError(t, err)
+
+		require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(plumbing.ReferenceName(branchRefName), commitHash)))
+	}
+
+	// ours: work's own "feature" branch tip adds link/evil.txt with one content.
+	addFlatEntry(t, work, "refs/heads/feature", "ours content for link/evil.txt\n")
+	// theirs: origin's "main" adds the same flat path with different content — a real
+	// modify/modify (add/add) conflict once merged.
+	addFlatEntry(t, origin, "refs/heads/main", "theirs content for link/evil.txt\n")
+
+	// Plant the blocking symlink directly on disk — not through git at all, exactly the
+	// "already exists on disk" precondition the re-review's finding describes.
+	require.NoError(t, os.Symlink(outsideDir, filepath.Join(work, "link")))
+
+	_, mergeErr := nativeMergeMainIntoWorktree(work, "main")
+	require.Error(t, mergeErr, "capturePreMergeSnapshot must fail safely once the blocking symlink is cleared, not silently read through it")
+
+	leakedPath := filepath.Join(work, "link", "evil.txt")
+	content, readErr := os.ReadFile(leakedPath)
+	if readErr == nil {
+		assert.NotEqual(t, secretContent, string(content), "content from outside the worktree must never leak into the worktree via capturePreMergeSnapshot's read")
+	}
+}
