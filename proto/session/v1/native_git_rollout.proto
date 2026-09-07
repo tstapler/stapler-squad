@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package session.v1;
+
+// NativeGitRolloutService is the operator-facing RPC surface for the
+// go-git-worktree-and-merge rollout, mirroring TymuxRolloutService's shape
+// (proto/session/v1/tymux_rollout.proto) exactly, but covering both native-git
+// feature flags (worktree and merge) in one service since they share no
+// legacy env var to deprecate and no rollback-rehearsal gate (ADR-002).
+service NativeGitRolloutService {
+  // GetNativeGitRolloutStatus reports the current rollout status for both
+  // flags: their effective global overrides and per-session/per-path
+  // overrides.
+  rpc GetNativeGitRolloutStatus(GetNativeGitRolloutStatusRequest) returns (NativeGitRolloutStatus) {}
+
+  // SetNativeWorktreeGlobalOverride sets or clears the "native_git_worktree"
+  // feature flag. Takes effect immediately for worktrees set up after this
+  // call — no process restart required.
+  rpc SetNativeWorktreeGlobalOverride(SetNativeWorktreeGlobalOverrideRequest) returns (NativeGitRolloutStatus) {}
+
+  // SetNativeWorktreeSessionOverride sets or clears a per-session override
+  // for the native-worktree flag.
+  rpc SetNativeWorktreeSessionOverride(SetNativeWorktreeSessionOverrideRequest) returns (NativeGitRolloutStatus) {}
+
+  // SetNativeMergeGlobalOverride sets or clears the "native_git_merge"
+  // feature flag. Takes effect immediately for merges performed after this
+  // call — no process restart required.
+  rpc SetNativeMergeGlobalOverride(SetNativeMergeGlobalOverrideRequest) returns (NativeGitRolloutStatus) {}
+
+  // SetNativeMergeWorktreeOverride sets or clears a per-worktree-path
+  // override for the native-merge flag.
+  rpc SetNativeMergeWorktreeOverride(SetNativeMergeWorktreeOverrideRequest) returns (NativeGitRolloutStatus) {}
+}
+
+message GetNativeGitRolloutStatusRequest {}
+
+message NativeWorktreeSessionOverrideEntry {
+  string session_name = 1;
+  bool force_native = 2;
+}
+
+message NativeMergeWorktreeOverrideEntry {
+  string worktree_path = 1;
+  bool force_native = 2;
+}
+
+message NativeGitRolloutStatus {
+  // The live, config.json-backed "native_git_worktree" feature flag override
+  // (config.GetNativeWorktreeGlobalOverride), settable via
+  // SetNativeWorktreeGlobalOverride with no restart required. Unset means no
+  // explicit override — the flag defaults to false.
+  optional bool worktree_global_override = 1;
+  // The current per-session native-worktree overrides
+  // (config.NativeWorktreeSessionOverrides).
+  repeated NativeWorktreeSessionOverrideEntry worktree_session_overrides = 2;
+  // The live, config.json-backed "native_git_merge" feature flag override
+  // (config.GetNativeMergeGlobalOverride), settable via
+  // SetNativeMergeGlobalOverride with no restart required. Unset means no
+  // explicit override — the flag defaults to false.
+  optional bool merge_global_override = 3;
+  // The current per-worktree-path native-merge overrides
+  // (config.NativeMergeWorktreeOverrides).
+  repeated NativeMergeWorktreeOverrideEntry merge_worktree_overrides = 4;
+}
+
+message SetNativeWorktreeGlobalOverrideRequest {
+  // Unset clears the global override, reverting to the "native_git_worktree"
+  // feature flag's default (false). true/false forces the global default for
+  // every worktree set up from now on.
+  optional bool force_native = 1;
+}
+
+message SetNativeWorktreeSessionOverrideRequest {
+  string session_name = 1;
+  // Unset clears any existing override for session_name (falls back to the
+  // global default). true pins the session onto the native (go-git) path;
+  // false pins it onto the legacy subprocess path — either way, regardless
+  // of the global default.
+  optional bool force_native = 2;
+}
+
+message SetNativeMergeGlobalOverrideRequest {
+  // Unset clears the global override, reverting to the "native_git_merge"
+  // feature flag's default (false). true/false forces the global default for
+  // every merge performed from now on.
+  optional bool force_native = 1;
+}
+
+message SetNativeMergeWorktreeOverrideRequest {
+  string worktree_path = 1;
+  // Unset clears any existing override for worktree_path (falls back to the
+  // global default). true pins that worktree's merges onto the native
+  // (go-git) path; false pins it onto the legacy subprocess path — either
+  // way, regardless of the global default.
+  optional bool force_native = 2;
+}

@@ -515,6 +515,19 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered TymuxRolloutService handler", "path", tymuxRolloutAPIPath)
 	}
 
+	// Register NativeGitRolloutService handler (go-git-worktree-and-merge
+	// Epic 4.2: operator-facing controls for the staged native-worktree/
+	// native-merge rollout, mirroring TymuxRolloutService's registration).
+	// Config-backed with no external deps, so it's constructed inline rather
+	// than threaded through ServerDependencies.
+	{
+		nativeGitRolloutSvc := services.NewNativeGitRolloutService()
+		nativeGitRolloutPath, nativeGitRolloutHandler := sessionv1connect.NewNativeGitRolloutServiceHandler(nativeGitRolloutSvc, ConnectOptions(deps.ErrorRegistry)...)
+		nativeGitRolloutAPIPath := "/api" + nativeGitRolloutPath
+		srv.RegisterConnectHandler(nativeGitRolloutAPIPath, http.StripPrefix("/api", nativeGitRolloutHandler))
+		log.Info("Registered NativeGitRolloutService handler", "path", nativeGitRolloutAPIPath)
+	}
+
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
 	// host-key confirmation flow for configured SSH remotes). KnownHostsStore
 	// construction is the only fallible step (it touches disk under
