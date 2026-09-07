@@ -1193,9 +1193,16 @@ func (t *TmuxSession) UnsubscribeFromControlModeUpdates(subscriberID string) {
 // control mode connection. Uses the HIGH-PRIORITY queue so user keystrokes always
 // jump ahead of any queued background operations (capture-pane, resize, etc.).
 //
-// Fire-and-forget: enqueues the send-keys command and returns immediately without
-// waiting for the tmux %begin/%end ack. The ack is consumed by the reader goroutine
-// and discarded. This eliminates one CM round-trip from the interactive input path.
+// Waits for the tmux %begin/%end ack (bounded by ctx) rather than firing-and-forgetting
+// the enqueue: every caller already wraps this in a short timeout and falls back to a
+// subprocess send-keys on error (see connectrpc_websocket.go's three input call sites).
+// A silently wedged control-mode pipe accepts the enqueue and the stdin write without
+// ever erroring, so the old fire-and-forget version returned nil and the fallback never
+// ran -- keystrokes vanished with the UI still showing "Connected" (root-caused via a
+// live repro: a bare tmux -C attach-session pipe that never completes even a
+// capture-pane/resize round trip, which CapturePaneContentRaw/SetWindowSize already
+// tolerate via their own ack-then-fallback pattern; this brings input in line with
+// that same pattern instead of being the one path with no failure detection at all).
 func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) error {
 	if len(data) == 0 {
 		return nil
@@ -1210,15 +1217,6 @@ func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) 
 	for _, b := range data {
 		args = append(args, fmt.Sprintf("%02x", b))
 	}
-	// resultCh is buffered(1): the reader goroutine delivers the ack into it and
-	// moves on; nobody reads it, and Go GCs it. Safe because all send sites use
-	// `select { case ch <- result: default: }` (non-blocking).
-	resultCh := make(chan cmdResult, 1)
-	req := cmSendReq{line: strings.Join(args, " "), resultCh: resultCh}
-	select {
-	case ch <- req:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	_, err := t.enqueueCMCommand(ctx, ch, args...)
+	return err
 }
