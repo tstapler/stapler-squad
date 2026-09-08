@@ -2181,7 +2181,7 @@ func TestReconcilePendingApprovals_CapsAtMaxPerPass(t *testing.T) {
 	// Second pass: simulate the next rebuild seeing only what pass one left behind, and
 	// assert it resolves exactly the remainder — pinning that repeated capped passes are
 	// monotonic instead of touching an arbitrary subset each time.
-	var remaining []*PendingApproval
+	remaining := make([]*PendingApproval, 0, len(sortedIdx)-maxReconcileAutoResolvesPerPass)
 	for _, idx := range sortedIdx[maxReconcileAutoResolvesPerPass:] {
 		remaining = append(remaining, items[idx])
 	}
