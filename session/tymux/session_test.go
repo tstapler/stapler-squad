@@ -359,14 +359,69 @@ func TestTymuxGRPCSession_CaptureMethods_ErrorBeforeStart(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestTymuxGRPCSession_GetPTY_ReturnsNotSupportedError(t *testing.T) {
+func TestTymuxGRPCSession_GetPTY_ErrorsBeforeStart(t *testing.T) {
 	sess := NewTymuxGRPCSession(&fakeTransport{})
 
 	f, err := sess.GetPTY()
 
 	assert.Nil(t, f)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotSupportedOnTymuxBackend)
+	assert.ErrorIs(t, err, errSessionNotStarted)
+}
+
+// TestTymuxGRPCSession_GetPTY_BridgesOutputAndInput exercises the
+// socketpair adapter (pty_adapter.go) end to end against a fake standing
+// stream: pane output pushed through the stream must show up on GetPTY()'s
+// returned file, and bytes written to that file must arrive on the stream
+// as AttachRequest_Input — the two directions ClaudeController/PTYAccess
+// and CommandExecutor each depend on.
+func TestTymuxGRPCSession_GetPTY_BridgesOutputAndInput(t *testing.T) {
+	sess, stream, _ := startedSessionWithStream(t)
+
+	f, err := sess.GetPTY()
+	require.NoError(t, err)
+	require.NotNil(t, f)
+
+	// Second call must reuse the same adapter/file, not build a new one.
+	f2, err := sess.GetPTY()
+	require.NoError(t, err)
+	assert.Same(t, f, f2)
+
+	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Output{Output: []byte("hello from pane")}})
+
+	require.NoError(t, f.SetReadDeadline(time.Now().Add(2*time.Second)))
+	buf := make([]byte, 64)
+	n, err := f.Read(buf)
+	require.NoError(t, err)
+	assert.Equal(t, "hello from pane", string(buf[:n]))
+
+	_, err = f.Write([]byte("echo hi\n"))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		for _, req := range stream.sentRequests() {
+			if in, ok := req.Payload.(*v1.AttachRequest_Input); ok && string(in.Input) == "echo hi\n" {
+				return true
+			}
+		}
+		return false
+	}, time.Second, 10*time.Millisecond)
+}
+
+// TestTymuxGRPCSession_GetPTY_ClosedByClose confirms Close() tears the
+// adapter down: the returned file must no longer be usable afterward, so a
+// caller that kept a reference (PTYAccess does, for the controller's
+// lifetime) can't read/write into a dead session.
+func TestTymuxGRPCSession_GetPTY_ClosedByClose(t *testing.T) {
+	sess, _, _ := startedSessionWithStream(t)
+
+	f, err := sess.GetPTY()
+	require.NoError(t, err)
+
+	require.NoError(t, sess.Close())
+
+	_, err = f.Write([]byte("x"))
+	assert.Error(t, err)
 }
 
 func TestTymuxGRPCSession_GetPanePID_ReturnsNotSupportedError(t *testing.T) {
