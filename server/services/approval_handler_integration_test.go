@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil"
 )
@@ -641,6 +642,12 @@ func (s *spyStamper) SetMetadata(id, key, val string) error {
 func (s *spyStamper) MarkRead(ids []string) (int, error) {
 	s.markReadCalls = append(s.markReadCalls, ids)
 	return len(ids), nil
+}
+
+// GetByID is a fixed stub — ApprovalHandler never calls GetByID itself (only
+// ApprovalService does), so this only needs to satisfy the interface.
+func (s *spyStamper) GetByID(id string) (*notifications.NotificationRecord, bool) {
+	return nil, false
 }
 
 // TestHandlePermissionRequest_TimeoutPublishesApprovalResponseEvent verifies that

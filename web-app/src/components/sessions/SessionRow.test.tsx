@@ -1,7 +1,7 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { SessionRow } from "./SessionRow";
-import { ReviveOutcome, SessionStatus } from "@/gen/session/v1/types_pb";
+import { ReviveOutcome, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 
 jest.mock("@connectrpc/connect", () => ({
@@ -202,5 +202,24 @@ describe("SessionRow — stale badge", () => {
     render(<SessionRow session={session} staleThresholdMinutes={30} />);
 
     expect(screen.queryByText("Stale", { exact: false })).toBeNull();
+  });
+});
+
+describe("SessionRow — IDLE substatus chip (Epic 3.2.2)", () => {
+  it("SessionRow_should_RenderIdleChip_When_ActiveSessionSubStatusIsIdle", () => {
+    // Flip of the pre-Epic-3.2.2 suppression: idle-reason items were removed from the
+    // Review Queue entirely, so this chip is now the Sessions-list's only "ready for
+    // next task" signal (SessionRow.tsx no longer excludes SubStatus.IDLE at :352).
+    const session = {
+      ...minimalSession,
+      status: SessionStatus.ACTIVE,
+      subStatus: SubStatus.IDLE,
+    } as unknown as Session;
+    render(<SessionRow session={session} />);
+
+    const chip = screen.getByText("Idle", { exact: false });
+    expect(chip).toBeInTheDocument();
+    expect(chip).toHaveAttribute("role", "status");
+    expect(chip).toHaveAttribute("aria-label", "Session is idle");
   });
 });
