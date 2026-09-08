@@ -3942,6 +3942,24 @@ func TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable(t *testing.T) 
 	assert.NotNil(t, svc.GetClaudeSettingsWatcher())
 }
 
+// TestNewSessionService_WiresApprovalServiceIntoRulesService is the
+// construction-order regression guard for Task 2.1.2b (validation.md Scope 4 /
+// Epic 2.1.2 — "gap — add"): after NewSessionService returns, rulesSvc's
+// approvalSvc field must be non-nil, so a future edit can't silently drop the
+// rulesSvc.SetApprovalService(approvalSvc) call without a test noticing.
+func TestNewSessionService_WiresApprovalServiceIntoRulesService(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	require.NotNil(t, svc.rulesSvc)
+	assert.NotNil(t, svc.rulesSvc.approvalSvc, "rulesSvc.approvalSvc must be wired by NewSessionService")
+}
+
 // TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules is the
 // Blocker 2 end-to-end regression test: the live deployed systemd unit runs with
 // WorkingDirectory=$HOME (see scripts/install-service.sh), so the server's own cwd equals

@@ -76,6 +76,20 @@ const (
 	BackendTymux  ProcessManagerBackend = "tymux"
 )
 
+// pushesLivenessEvents lists backends that report liveness push-style
+// (instanceOnExitCallback) instead of being independently pollable by name
+// — the single place to add a future backend instead of touching every
+// poll site that needs to skip it.
+var pushesLivenessEvents = map[ProcessManagerBackend]bool{
+	BackendTymux: true,
+}
+
+// SkipsPollBasedLiveness reports whether tmux-socket-based liveness polling
+// (reconcileSessions, health.go) has anything correct to add for this backend.
+func (b ProcessManagerBackend) SkipsPollBasedLiveness() bool {
+	return pushesLivenessEvents[b]
+}
+
 // ProcessManagerOptions holds constructor parameters for NewProcessManager.
 type ProcessManagerOptions struct {
 	SessionName  string

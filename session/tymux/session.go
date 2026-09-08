@@ -24,13 +24,9 @@ import (
 // implemented.
 var ErrNotImplemented = errors.New("tymux: not implemented")
 
-// ErrNotSupportedOnTymuxBackend is returned by GetPTY/GetPanePID (Story
-// 2.2.5, Pattern Decisions): tymux has no local PTY file descriptor or OS
-// pane PID to hand back — every terminal I/O path goes over gRPC, not a
-// local file/process the caller could read or signal directly. Returning
-// this explicit, typed error (never a bare nil/zero value or a panic) lets
-// a generic ProcessManager caller distinguish "not supported by this
-// backend" from "supported but currently unavailable."
+// ErrNotSupportedOnTymuxBackend is returned by GetPanePID: tymux has no OS
+// pane PID to hand back, only a remote gRPC process. GetPTY() no longer
+// returns this — see its own doc comment.
 var ErrNotSupportedOnTymuxBackend = errors.New("not supported by the tymux backend")
 
 // errSessionNotStarted is returned by methods that need a live pane_id
@@ -93,6 +89,11 @@ type tymuxGRPCSession struct {
 	// one upstream standing stream, N independently-paced local
 	// subscribers, rather than one Attach call per subscriber.
 	fanout *ClientFanout
+
+	// pty lazily backs GetPTY() (pty_adapter.go), created once per session
+	// object and torn down by Close() — not reset per reconnect generation,
+	// since the adapter tolerates a stream reconnect transparently.
+	pty *tymuxPTYAdapter
 
 	// outputGapCount is a per-session running total of OutputGap events
 	// received on the standing stream (Observability Plan: "output_gap
@@ -377,6 +378,13 @@ func (s *tymuxGRPCSession) Close() error {
 	// leaving teardownStandingStream's <-done wait blocked.
 	s.beginClosing()
 	s.teardownStandingStream()
+	s.mu.Lock()
+	pty := s.pty
+	s.pty = nil
+	s.mu.Unlock()
+	if pty != nil {
+		pty.close()
+	}
 	if sessionID == "" {
 		return nil
 	}
@@ -474,9 +482,30 @@ func (s *tymuxGRPCSession) GetCurrentWorkingDirectory() (string, error) {
 
 // --- Terminal I/O ---
 
-// GetPTY always returns ErrNotSupportedOnTymuxBackend — see that var's doc
-// comment (Story 2.2.5).
-func (s *tymuxGRPCSession) GetPTY() (*os.File, error) { return nil, ErrNotSupportedOnTymuxBackend }
+// GetPTY returns a synthetic *os.File backed by the standing Attach stream
+// (pty_adapter.go), lazily created on first call and reused thereafter —
+// tymux has no local PTY of its own, but ClaudeController etc. need
+// something Read/Write-shaped to treat as one.
+func (s *tymuxGRPCSession) GetPTY() (*os.File, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// s.closed, not just s.stream == nil: Close() never resets s.stream (only
+	// reconnects/opens do), so without this a GetPTY() call racing a
+	// concurrent Close() would build and leak a fresh adapter — subscribed
+	// to the fanout, its pump goroutines running — that Close() has already
+	// passed its own one-shot pty.close() call and will never clean up.
+	if s.closed || s.stream == nil {
+		return nil, errSessionNotStarted
+	}
+	if s.pty == nil {
+		pty, err := newTymuxPTYAdapter(s.fanout, s.sendOnStream)
+		if err != nil {
+			return nil, err
+		}
+		s.pty = pty
+	}
+	return s.pty.file(), nil
+}
 
 // SendKeys, TapEnter, SendPromptWithEnter, and SendInputViaControlMode
 // (Story 2.3.3) all collapse onto one AttachRequest{Input(...)} send over

@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -52,6 +53,7 @@ type ReviewQueueChecker interface {
 type approvalNotificationStamper interface {
 	SetMetadata(id, key, value string) error
 	MarkRead(ids []string) (int, error)
+	GetByID(id string) (*notifications.NotificationRecord, bool)
 }
 
 // autoApprovalLogger is a narrow interface for writing silent auto-approval records

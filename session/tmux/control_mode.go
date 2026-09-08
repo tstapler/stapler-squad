@@ -1212,16 +1212,10 @@ func (t *TmuxSession) UnsubscribeFromControlModeUpdates(subscriberID string) {
 // control mode connection. Uses the HIGH-PRIORITY queue so user keystrokes always
 // jump ahead of any queued background operations (capture-pane, resize, etc.).
 //
-// Waits for the tmux %begin/%end ack (bounded by ctx) rather than firing-and-forgetting
-// the enqueue: every caller already wraps this in a short timeout and falls back to a
-// subprocess send-keys on error (see connectrpc_websocket.go's three input call sites).
-// A silently wedged control-mode pipe accepts the enqueue and the stdin write without
-// ever erroring, so the old fire-and-forget version returned nil and the fallback never
-// ran -- keystrokes vanished with the UI still showing "Connected" (root-caused via a
-// live repro: a bare tmux -C attach-session pipe that never completes even a
-// capture-pane/resize round trip, which CapturePaneContentRaw/SetWindowSize already
-// tolerate via their own ack-then-fallback pattern; this brings input in line with
-// that same pattern instead of being the one path with no failure detection at all).
+// Waits for the tmux %begin/%end ack (bounded by ctx) instead of firing-and-forgetting:
+// a wedged control-mode pipe can accept the enqueue and stdin write without ever
+// erroring, so callers rely on this returning an error to trigger their subprocess
+// send-keys fallback instead of silently dropping the keystroke.
 func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) error {
 	if len(data) == 0 {
 		return nil

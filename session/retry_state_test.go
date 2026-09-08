@@ -332,6 +332,47 @@ func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPerma
 	}
 }
 
+// TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromFailed
+// is TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPermanentlyFailedWithDeadSession's
+// sibling for the Failed status (the stale-creation sweeper's terminal
+// status, distinct from PermanentlyFailed — see instance.go's Failed doc
+// comment and state_machine.go's registered Failed→Creating edge).
+// restartForRetry's cold-recovery branch used to check only
+// Stopped/PermanentlyFailed, so RetryNow()/"Retry now" against a Failed
+// session fell into the Restart()-in-place branch instead and always
+// returned ErrCannotRestart ("session cannot be restarted in current
+// state") — the session could never be revived, only deleted and
+// recreated. This proves the fix: restartForRetry must treat Failed the
+// same as PermanentlyFailed/Stopped.
+func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromFailed(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:  "t",
+		Status: Failed,
+		// alive: false simulates the bootstrap failures that led to Failed
+		// (e.g. tymuxd unresolvable) never having left a live session behind.
+		processManager: &fakeLivenessProcessManager{alive: false},
+	}
+	inst.LastFailureReason = "cold restore Start failed: executable file not found in $PATH"
+	// started is left at its zero value (false): if the bug regresses and
+	// Restart() is wrongly taken, Restart() bails out immediately with
+	// ErrCannotRestart and Status is left untouched at Failed.
+
+	err := inst.RetryNow("/tmp")
+	if errors.Is(err, ErrCannotRestart) {
+		t.Fatalf("RetryNow() err = %v: took the Restart()-in-place path instead of RecoverFromStopped()+Start() — the Failed/dead-session branch-selection bug has regressed", err)
+	}
+	if err != nil {
+		t.Fatalf("RetryNow() err = %v, want nil (cold-recovery Start() should succeed against the fake ProcessManager)", err)
+	}
+	if inst.Status != Active {
+		t.Errorf("Status = %v, want Active — RecoverFromStopped()+Start() should have advanced Creating→Active", inst.Status)
+	}
+	if !inst.Started() {
+		t.Error("Started() = false, want true after a successful cold-recovery Start()")
+	}
+}
+
 // TestRestartForRetry_should_RecreateMissingWorktree_When_DirectoryWasDeleted
 // is the regression test for the "aimee crash loop" fix: a session whose git
 // worktree directory was deleted from disk (e.g. a pruned worktree) used to

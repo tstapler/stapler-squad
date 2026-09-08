@@ -1709,6 +1709,14 @@ message MarkNotificationReadResponse {
 }
 
 // ClearNotificationHistoryRequest removes notifications from history.
+//
+// This request carries no per-item exclusion or ID list — Clear() applies
+// before_timestamp (or clears everything, if unset) across the entire store.
+// The server-side NotificationHistoryStore.Clear() guarantees it never
+// removes a record that is unread and actionable (approval_needed/question/
+// error/task_failed/warning), regardless of this cutoff — that guarantee is
+// unconditional and not expressible/overridable via this request (Task
+// 3.1.5c; see design/ux.md Surface 11).
 message ClearNotificationHistoryRequest {
   // Optional: Clear notifications older than this timestamp (RFC3339 string).
   optional string before_timestamp = 1;

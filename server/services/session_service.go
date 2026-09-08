@@ -682,6 +682,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	notificationSvc := NewNotificationService(NewNotificationRateLimiter(10, 20), eventBus)
 	approvalSvc := NewApprovalService(approvalStore)
 	approvalSvc.SetEventBus(eventBus)
+	approvalSvc.SetReviewQueueRemover(reviewQueue)
 	utilitySvc := NewUtilityService(approvalStore)
 
 	// Build rules store, analytics store, and classifier for approval rules service.
@@ -755,6 +756,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			fmt.Sprintf("%d claude-settings rule(s) reloaded (%s).", len(rules), origin), origin)
 	})
 	rulesSvc.SetClaudeSettingsWatcher(claudeSettingsWatcher)
+	rulesSvc.SetApprovalService(approvalSvc)
 
 	// Initialize capacity monitor.
 	var capCfg config.CapacityConfig
