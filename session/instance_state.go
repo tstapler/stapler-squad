@@ -469,6 +469,28 @@ func markStartedIfTmuxAliveLocked(s *instanceState) {
 	i.fireLifecycleEvent(EventStarted, "streamhub-self-heal-tmux-alive")
 }
 
+// IsHotRestoreRecoverable reports whether the instance's current status is
+// one RecoverFromStopped will actually reset (Stopped, PermanentlyFailed, or
+// Failed) — the single source of truth for "which terminal statuses can be
+// cold-recovered via RecoverFromStopped()+Start(false)". Every caller that
+// needs to decide whether an instance is a RecoverFromStopped candidate
+// (rather than duplicating the Stopped/PermanentlyFailed/Failed status list
+// inline) must go through this method: BUG (2026-09-08) was a boot-time
+// reconcile loop in server/dependencies.go that only checked Stopped,
+// independently of this same status list already duplicated in
+// restartForRetry (retry_state.go) — a session that reached
+// PermanentlyFailed/Failed before a restart, with its tmux session still
+// alive, was left permanently stuck because the boot path's copy of the list
+// silently drifted out of sync with RecoverFromStopped's actual behavior.
+func (i *Instance) IsHotRestoreRecoverable() bool {
+	switch i.GetLifecycleStatus() {
+	case Stopped, PermanentlyFailed, Failed:
+		return true
+	default:
+		return false
+	}
+}
+
 // RecoverFromStopped resets a stale Stopped, PermanentlyFailed, or Failed
 // status to Creating so the instance can be hot-restored via Start(false).
 // Stopped/PermanentlyFailed have no registered edge to Creating, so this
@@ -476,6 +498,9 @@ func markStartedIfTmuxAliveLocked(s *instanceState) {
 // (state_machine.go's Failed→Creating, "the retry path") but is included
 // here too so every RetryNow-reachable status shares one recovery path.
 // Deprecated: prefer transitionTo(ctx, Active) on the Stopped→Active path.
+//
+// The status set checked here MUST match IsHotRestoreRecoverable's switch —
+// that method exists so callers never need their own copy of this list.
 func (i *Instance) RecoverFromStopped() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
