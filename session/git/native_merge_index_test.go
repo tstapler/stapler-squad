@@ -109,7 +109,7 @@ type indexTestRepo struct {
 func newIndexTestRepo(t *testing.T) *indexTestRepo {
 	t.Helper()
 	path := setupTestRepo(t)
-	repo, err := git.PlainOpen(path)
+	repo, err := OpenRepo(path)
 	require.NoError(t, err)
 	wt, err := repo.Worktree()
 	require.NoError(t, err)
