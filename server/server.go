@@ -1577,7 +1577,7 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 	// Bind eagerly so the caller gets a port-in-use error immediately.
 	ln, err := net.Listen("tcp", remoteAddr)
 	if err != nil {
-		return fmt.Errorf("bind remote server on %s: %w", remoteAddr, err)
+		return newRemoteBindError(remoteAddr, err)
 	}
 	log.Info("Remote HTTPS server listening", "addr", remoteAddr)
 
