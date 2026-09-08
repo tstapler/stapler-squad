@@ -78,7 +78,7 @@ func materializeFixtureConflict(t *testing.T, f mergeAbortFixture) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(f.repoPath, "a.txt"), []byte(markerText), 0o644))
 
-	require.NoError(t, writeMergeStateFiles(f.repoPath, f.theirsSHA, "main"))
+	require.NoError(t, writeMergeStateFiles(WorktreePath(f.repoPath), f.theirsSHA, "main"))
 }
 
 // TestWriteMergeStateFiles_RealGitMergeAbortSucceeds covers Story 3.3.3's first
@@ -107,7 +107,7 @@ func TestAbortNativeMerge_ClearsStateAndResetsWorkingTree(t *testing.T) {
 		Entries: []*index.Entry{f.preMergeEntry},
 		Content: map[string][]byte{"a.txt": f.preMergeContent},
 	}
-	require.NoError(t, abortNativeMerge(f.repoPath, snapshot))
+	require.NoError(t, abortNativeMerge(WorktreePath(f.repoPath), snapshot))
 
 	gitDir := filepath.Join(f.repoPath, ".git")
 	for _, name := range []string{mergeHeadFile, mergeMsgFile, mergeModeFile} {
@@ -128,7 +128,7 @@ func TestAbortNativeMerge_should_ReturnError_When_PreMergeIndexSnapshotMissing(t
 	f := buildMergeAbortFixture(t)
 	materializeFixtureConflict(t, f)
 
-	err := abortNativeMerge(f.repoPath, nil)
+	err := abortNativeMerge(WorktreePath(f.repoPath), nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pre-merge index snapshot")
@@ -655,7 +655,7 @@ func TestWriteWorkingTreeFile_RejectsEscapingRelPath_DoesNotWriteOutsideWorktree
 	require.NoError(t, os.MkdirAll(worktreePath, 0o750))
 
 	outsideTarget := filepath.Join(parent, "escaped.txt")
-	err := writeWorkingTreeFile(worktreePath, "../escaped.txt", filemode.Regular, []byte("pwned\n"))
+	err := writeWorkingTreeFile(WorktreePath(worktreePath), "../escaped.txt", filemode.Regular, []byte("pwned\n"))
 	require.Error(t, err)
 	_, statErr := os.Stat(outsideTarget)
 	assert.True(t, os.IsNotExist(statErr), "a rejected relPath must never reach disk outside worktreePath")

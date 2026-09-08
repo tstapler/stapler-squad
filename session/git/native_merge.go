@@ -54,12 +54,27 @@ const (
 	mergeModeFile = "MERGE_MODE"
 )
 
+// WorktreePath and BranchName exist to eliminate this file's internal same-typed-string
+// parameter pairs (primitive-obsession-checklist skill) — worktreePath/mainBranch,
+// worktreePath/theirsCommitSHA, and mainBranch/refPath pairs used to compile a silent
+// argument swap with no error. Deliberately NOT applied to the file's two true external
+// boundaries — nativeMergeMainIntoWorktreeLocked (called from ops.go) and
+// nativeMergeMainIntoWorktree (called from native_merge_differential_test.go) — both stay
+// plain strings so callers outside this file need no changes; each converts to these types
+// internally on its very first line instead.
+type (
+	// WorktreePath is an absolute filesystem path to a worktree's working directory.
+	WorktreePath string
+	// BranchName is a git branch name (e.g. "main"), never a path or a commit SHA.
+	BranchName string
+)
+
 // worktreeGitDir returns the .git admin directory that applies to worktreePath (a real
 // directory for the main working copy, or a linked worktree's private admin dir) — the
 // same directory resolveWorktreeIndexPath resolves the index file into, minus the
 // "index" filename itself.
-func worktreeGitDir(worktreePath string) (string, error) {
-	indexPath, err := resolveWorktreeIndexPath(worktreePath)
+func worktreeGitDir(worktreePath WorktreePath) (string, error) {
+	indexPath, err := resolveWorktreeIndexPath(string(worktreePath))
 	if err != nil {
 		return "", fmt.Errorf("worktreeGitDir: %w", err)
 	}
@@ -70,7 +85,7 @@ func worktreeGitDir(worktreePath string) (string, error) {
 // (MERGE_HEAD/MERGE_MSG/MERGE_MODE) so a worktree mid-native-merge is recognizable by,
 // and abortable via, a real `git merge --abort` fallback (Story 3.3.3,
 // architecture.md §3's abort-compatibility gap).
-func writeMergeStateFiles(worktreePath, theirsCommitSHA, mainBranch string) error {
+func writeMergeStateFiles(worktreePath WorktreePath, theirsCommitSHA string, mainBranch BranchName) error {
 	dir, err := worktreeGitDir(worktreePath)
 	if err != nil {
 		return fmt.Errorf("writeMergeStateFiles: %w", err)
@@ -94,7 +109,7 @@ func writeMergeStateFiles(worktreePath, theirsCommitSHA, mainBranch string) erro
 // writeMergeStateFiles, ignoring not-exist — this project's own abort path
 // (abortNativeMerge) calls it last, after restoring the pre-merge index and working
 // tree.
-func clearMergeStateFiles(worktreePath string) error {
+func clearMergeStateFiles(worktreePath WorktreePath) error {
 	dir, err := worktreeGitDir(worktreePath)
 	if err != nil {
 		return fmt.Errorf("clearMergeStateFiles: %w", err)
@@ -127,7 +142,7 @@ type PreMergeIndexSnapshot struct {
 // bytes, then clears the merge-state files. Returns an error rather than resetting to a
 // wrong/empty index when snapshot is nil (a defensive check — this is a programmer
 // error, not a real inbound state).
-func abortNativeMerge(worktreePath string, snapshot *PreMergeIndexSnapshot) error {
+func abortNativeMerge(worktreePath WorktreePath, snapshot *PreMergeIndexSnapshot) error {
 	if snapshot == nil {
 		return errors.New("abortNativeMerge: pre-merge index snapshot is required")
 	}
@@ -136,7 +151,7 @@ func abortNativeMerge(worktreePath string, snapshot *PreMergeIndexSnapshot) erro
 	for _, e := range snapshot.Entries {
 		touched[e.Name] = true
 	}
-	if err := writeIndexEntries(worktreePath, touched, snapshot.Entries); err != nil {
+	if err := writeIndexEntries(string(worktreePath), touched, snapshot.Entries); err != nil {
 		return fmt.Errorf("abortNativeMerge: restore index: %w", err)
 	}
 
@@ -254,11 +269,11 @@ func validateTreeEntryRelPath(relPath string) error {
 // a git tree entry (rather than an already-trusted, program-controlled constant) must go
 // through this rather than a bare filepath.Join — the sole containment point for
 // writeWorkingTreeFile/removeWorkingTreeFile/restoreWorkingTreeFile/capturePreMergeSnapshot.
-func secureWorktreeJoin(worktreePath, relPath string) (string, error) {
+func secureWorktreeJoin(worktreePath WorktreePath, relPath string) (string, error) {
 	if err := validateTreeEntryRelPath(relPath); err != nil {
 		return "", fmt.Errorf("secureWorktreeJoin: %w", err)
 	}
-	return filepath.Join(worktreePath, relPath), nil
+	return filepath.Join(string(worktreePath), relPath), nil
 }
 
 // clearBlockingSymlinksInPath mirrors go-git's own Worktree.clearBlockingSymlinks
@@ -278,8 +293,8 @@ func secureWorktreeJoin(worktreePath, relPath string) (string, error) {
 // abortNativeMerge's restoreWorkingTreeFile, write straight back into the worktree)
 // arbitrary content from outside worktreePath, an information-disclosure primitive on top
 // of the write-side escape the other three functions close.
-func clearBlockingSymlinksInPath(worktreePath, fullPath string) error {
-	rel, err := filepath.Rel(worktreePath, filepath.Dir(fullPath))
+func clearBlockingSymlinksInPath(worktreePath WorktreePath, fullPath string) error {
+	rel, err := filepath.Rel(string(worktreePath), filepath.Dir(fullPath))
 	if err != nil {
 		return fmt.Errorf("clearBlockingSymlinksInPath: %w", err)
 	}
@@ -287,7 +302,7 @@ func clearBlockingSymlinksInPath(worktreePath, fullPath string) error {
 		return nil
 	}
 
-	dir := worktreePath
+	dir := string(worktreePath)
 	for _, seg := range strings.Split(rel, string(filepath.Separator)) {
 		dir = filepath.Join(dir, seg)
 		info, err := os.Lstat(dir)
@@ -314,7 +329,7 @@ func clearBlockingSymlinksInPath(worktreePath, fullPath string) error {
 // preserving the file's existing permission bits if it still exists (falling back to
 // 0o644 otherwise — e.g. if materializeConflictOnAbort's marker write itself failed
 // part-way through and the file is missing).
-func restoreWorkingTreeFile(worktreePath, path string, content []byte) error {
+func restoreWorkingTreeFile(worktreePath WorktreePath, path string, content []byte) error {
 	fullPath, err := secureWorktreeJoin(worktreePath, path)
 	if err != nil {
 		return fmt.Errorf("restoreWorkingTreeFile: %w", err)
@@ -342,7 +357,7 @@ func restoreWorkingTreeFile(worktreePath, path string, content []byte) error {
 // several times across this call tree instead of threading one already-open
 // *git.Repository through — real but a larger refactor, tracked as a follow-up.
 func nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch string) (*MergeMainResult, error) {
-	repoPath, err := repoPathForWorktree(worktreePath)
+	repoPath, err := repoPathForWorktree(WorktreePath(worktreePath))
 	if err != nil {
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktreeLocked: %w", err)
 	}
@@ -361,7 +376,7 @@ func nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch string) (*MergeM
 // internally and locks worktree lifecycle operations against — by taking the parent of
 // worktreeCommonGitDir's shared `.git` admin directory. Needed because
 // MergeMainIntoWorktree only ever receives worktreePath, never a separate repoPath.
-func repoPathForWorktree(worktreePath string) (string, error) {
+func repoPathForWorktree(worktreePath WorktreePath) (string, error) {
 	commonGitDir, err := worktreeCommonGitDir(worktreePath)
 	if err != nil {
 		return "", fmt.Errorf("repoPathForWorktree: %w", err)
@@ -456,7 +471,7 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: %q at %s has local changes that would be overwritten; refusing to merge %s (matches legacy git merge's refusal)", conflictPath, worktreePath, mainBranch)
 	}
 
-	refPath, err := checkedOutBranchRefPath(worktreePath, repo)
+	refPath, err := checkedOutBranchRefPath(WorktreePath(worktreePath), repo)
 	if err != nil {
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to resolve checked-out branch ref: %w", err)
 	}
@@ -469,14 +484,14 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to check ancestry (fast-forward): %w", err)
 	}
 	if fastForward {
-		if err := nativeFastForwardMerge(worktreePath, ours, theirs, refPath); err != nil {
+		if err := nativeFastForwardMerge(WorktreePath(worktreePath), ours, theirs, refPath); err != nil {
 			return nil, fmt.Errorf("nativeMergeMainIntoWorktree: fast-forward: %w", err)
 		}
 		recordMergeOutcome(mergeOutcomeFastForward)
 		return &MergeMainResult{Merged: true}, nil
 	}
 
-	return nativeThreeWayMerge(worktreePath, repo, ours, theirs, mainBranch, refPath)
+	return nativeThreeWayMerge(WorktreePath(worktreePath), repo, ours, theirs, BranchName(mainBranch), refPath)
 }
 
 // worktreeBlocksMerge reports whether status has any dirty entry at a path changes
@@ -518,7 +533,7 @@ func worktreeBlocksMerge(status git.Status, changes object.Changes) (path string
 // real call site (drift.go, backlog_service_triage.go, branchReconciler) always operates
 // on a named branch a backlog work session or fix agent has checked out, never a detached
 // commit.
-func checkedOutBranchRefPath(worktreePath string, repo *git.Repository) (string, error) {
+func checkedOutBranchRefPath(worktreePath WorktreePath, repo *git.Repository) (string, error) {
 	head, err := repo.Reference(plumbing.HEAD, false)
 	if err != nil {
 		return "", fmt.Errorf("checkedOutBranchRefPath: failed to resolve HEAD: %w", err)
@@ -539,7 +554,7 @@ func checkedOutBranchRefPath(worktreePath string, repo *git.Repository) (string,
 // admin dir's "commondir" file (written by nativeSetupNewWorktree, always "../..") for a
 // linked worktree — refs/heads is shared across every worktree of a repo, unlike a
 // worktree's own private admin dir.
-func worktreeCommonGitDir(worktreePath string) (string, error) {
+func worktreeCommonGitDir(worktreePath WorktreePath) (string, error) {
 	gitDir, err := worktreeGitDir(worktreePath)
 	if err != nil {
 		return "", fmt.Errorf("worktreeCommonGitDir: %w", err)
@@ -561,7 +576,7 @@ func worktreeCommonGitDir(worktreePath string) (string, error) {
 // branch ref to theirs via writeRefWithLockSentinel (Task 3.4.1b) rather than any bare
 // go-git SetReference — see that function's doc comment for why this ref specifically
 // requires it.
-func nativeFastForwardMerge(worktreePath string, ours, theirs *object.Commit, refPath string) error {
+func nativeFastForwardMerge(worktreePath WorktreePath, ours, theirs *object.Commit, refPath string) error {
 	oursTree, err := ours.Tree()
 	if err != nil {
 		return fmt.Errorf("nativeFastForwardMerge: failed to resolve ours tree: %w", err)
@@ -593,7 +608,7 @@ func nativeFastForwardMerge(worktreePath string, ours, theirs *object.Commit, re
 // Modify whose From/To names differ is a detected rename (Tree.Diff runs with
 // DetectRenames on by default) — the old path is removed too, or fast-forwarding would
 // leave a stale duplicate file behind.
-func materializeTreeChanges(worktreePath string, changes object.Changes) error {
+func materializeTreeChanges(worktreePath WorktreePath, changes object.Changes) error {
 	touched := make(map[string]bool, len(changes))
 	var newEntries []*index.Entry
 
@@ -641,7 +656,7 @@ func materializeTreeChanges(worktreePath string, changes object.Changes) error {
 		}
 	}
 
-	return writeIndexEntries(worktreePath, touched, newEntries)
+	return writeIndexEntries(string(worktreePath), touched, newEntries)
 }
 
 // writeWorkingTreeFile writes content to relPath (relative to worktreePath) with the
@@ -654,7 +669,7 @@ func materializeTreeChanges(worktreePath string, changes object.Changes) error {
 // go-git's own Worktree.Checkout, this function writes through raw os.* calls with no
 // chrooted filesystem underneath it, so secureWorktreeJoin/clearBlockingSymlinksInPath are
 // this function's only containment.
-func writeWorkingTreeFile(worktreePath, relPath string, mode filemode.FileMode, content []byte) error {
+func writeWorkingTreeFile(worktreePath WorktreePath, relPath string, mode filemode.FileMode, content []byte) error {
 	fullPath, err := secureWorktreeJoin(worktreePath, relPath)
 	if err != nil {
 		return fmt.Errorf("writeWorkingTreeFile: %w", err)
@@ -690,7 +705,7 @@ func writeWorkingTreeFile(worktreePath, relPath string, mode filemode.FileMode, 
 // secureWorktreeJoin/clearBlockingSymlinksInPath before ever touching disk: a leading
 // symlink planted by an earlier malicious entry in the same tree would otherwise let this
 // delete a file outside worktreePath entirely.
-func removeWorkingTreeFile(worktreePath, relPath string) error {
+func removeWorkingTreeFile(worktreePath WorktreePath, relPath string) error {
 	fullPath, err := secureWorktreeJoin(worktreePath, relPath)
 	if err != nil {
 		return fmt.Errorf("removeWorkingTreeFile: %w", err)
@@ -1000,7 +1015,7 @@ func nonTextConflictHunks(reason FileConflictReason, in FileMergeInput) []MergeH
 // nativeThreeWayMerge runs the diff3 pipeline over every path base/ours/theirs disagree
 // on and either produces a real merge commit (no conflicts) or materializes conflict
 // markers and aborts (Tasks 3.4.1b/3.4.1c).
-func nativeThreeWayMerge(worktreePath string, repo *git.Repository, ours, theirs *object.Commit, mainBranch, refPath string) (*MergeMainResult, error) {
+func nativeThreeWayMerge(worktreePath WorktreePath, repo *git.Repository, ours, theirs *object.Commit, mainBranch BranchName, refPath string) (*MergeMainResult, error) {
 	base, err := MergeBaseResolver(ours, theirs)
 	if err != nil {
 		return nil, fmt.Errorf("nativeThreeWayMerge: failed to resolve merge base: %w", err)
@@ -1046,20 +1061,20 @@ func nativeThreeWayMerge(worktreePath string, repo *git.Repository, ours, theirs
 // as a real `git merge --abort` would leave it, verified in
 // TestNativeMergeMainIntoWorktree_Conflicted_LeavesWorktreeClean via a real `git status
 // --porcelain` subprocess.
-func materializeConflictOnAbort(worktreePath string, conflicts []conflictedPathMerge, theirsHash plumbing.Hash, mainBranch string) (*MergeMainResult, error) {
+func materializeConflictOnAbort(worktreePath WorktreePath, conflicts []conflictedPathMerge, theirsHash plumbing.Hash, mainBranch BranchName) (*MergeMainResult, error) {
 	snapshot, err := capturePreMergeSnapshot(worktreePath, conflicts)
 	if err != nil {
 		return nil, fmt.Errorf("materializeConflictOnAbort: failed to capture pre-merge snapshot: %w", err)
 	}
 
-	theirsLabel := "origin/" + mainBranch
+	theirsLabel := "origin/" + string(mainBranch)
 	conflictedFiles := make([]string, 0, len(conflicts))
 	var conflictEntries []*index.Entry
 	for _, c := range conflicts {
 		conflictedFiles = append(conflictedFiles, c.path)
 		conflictEntries = append(conflictEntries, NewConflictEntries(c.path, c.baseHash, c.oursHash, c.theirsHash, c.mode)...)
 	}
-	if err := writeConflictedIndex(worktreePath, conflictEntries); err != nil {
+	if err := writeConflictedIndex(string(worktreePath), conflictEntries); err != nil {
 		return nil, fmt.Errorf("materializeConflictOnAbort: failed to write conflicted index: %w", err)
 	}
 
@@ -1099,8 +1114,8 @@ func materializeConflictOnAbort(worktreePath string, conflicts []conflictedPathM
 // such a path's conflict-stage entries would not be cleared from the index by this call —
 // out of scope here since no real call site's tested scenarios (modify/modify conflicts)
 // exercise it, but worth naming rather than silently mishandling.
-func capturePreMergeSnapshot(worktreePath string, conflicts []conflictedPathMerge) (*PreMergeIndexSnapshot, error) {
-	repo, err := openWorktreeRepo(worktreePath)
+func capturePreMergeSnapshot(worktreePath WorktreePath, conflicts []conflictedPathMerge) (*PreMergeIndexSnapshot, error) {
+	repo, err := openWorktreeRepo(string(worktreePath))
 	if err != nil {
 		return nil, fmt.Errorf("capturePreMergeSnapshot: failed to open repo: %w", err)
 	}
@@ -1180,7 +1195,7 @@ func assembleConflictedFileContent(hunks []MergeHunk, oursLabel, theirsLabel str
 // two-parent merge commit, and advances the checked-out branch ref to it via
 // writeRefWithLockSentinel — never go-git's bare SetReference (see that function's doc
 // comment).
-func commitThreeWayMerge(worktreePath string, repo *git.Repository, oursHash, theirsHash plumbing.Hash, resolved []resolvedPathMerge, refPath, mainBranch string) (*MergeMainResult, error) {
+func commitThreeWayMerge(worktreePath WorktreePath, repo *git.Repository, oursHash, theirsHash plumbing.Hash, resolved []resolvedPathMerge, refPath string, mainBranch BranchName) (*MergeMainResult, error) {
 	touched := make(map[string]bool, len(resolved))
 	var newEntries []*index.Entry
 	for _, r := range resolved {
@@ -1202,7 +1217,7 @@ func commitThreeWayMerge(worktreePath string, repo *git.Repository, oursHash, th
 		newEntries = append(newEntries, &index.Entry{Name: r.path, Hash: hash, Mode: r.mode})
 	}
 
-	if err := writeIndexEntries(worktreePath, touched, newEntries); err != nil {
+	if err := writeIndexEntries(string(worktreePath), touched, newEntries); err != nil {
 		return nil, fmt.Errorf("commitThreeWayMerge: failed to update index: %w", err)
 	}
 
@@ -1335,7 +1350,7 @@ func treeEntrySortKey(te object.TreeEntry) string {
 // createMergeCommit builds and stores a real two-parent merge commit object over
 // treeHash, with commit identity resolved from the repo's git config exactly the way
 // go-git's own CommitOptions.Validate does for a normal commit.
-func createMergeCommit(repo *git.Repository, treeHash plumbing.Hash, oursHash, theirsHash plumbing.Hash, mainBranch string) (plumbing.Hash, error) {
+func createMergeCommit(repo *git.Repository, treeHash plumbing.Hash, oursHash, theirsHash plumbing.Hash, mainBranch BranchName) (plumbing.Hash, error) {
 	opts := &git.CommitOptions{Parents: []plumbing.Hash{oursHash, theirsHash}}
 	if err := opts.Validate(repo); err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("createMergeCommit: failed to resolve commit identity: %w", err)
