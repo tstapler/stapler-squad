@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor"
 )
 
 // newRefcountTestSession builds a TmuxSession that looks like it has a running control mode
@@ -31,6 +33,13 @@ func newRefcountTestSession(t *testing.T) *TmuxSession {
 		highPriSendCh:          make(chan cmSendReq, 64),
 		normPriSendCh:          make(chan cmSendReq, 256),
 		cmSenderExited:         make(chan struct{}),
+		// StartControlMode's checkControlModeVersionMatchOnce needs a real
+		// cmdExec — left unset (nil interface), it panics the first time a
+		// test in this file reaches the uncached branch (real bug found via
+		// PR #739 CI: nil cmdExec, not a flake — reproduces deterministically
+		// once versionCheckedSockets hasn't already memoized this test's
+		// empty-string socket from an earlier test in the same run).
+		cmdExec: executor.MakeExecutor(),
 	}
 	// Close cmSenderExited immediately so StopControlMode won't block waiting for the sender.
 	close(sess.cmSenderExited)
