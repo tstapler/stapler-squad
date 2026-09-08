@@ -807,6 +807,8 @@ func TestClaudeMCPConfigArgs_HTTPFormat(t *testing.T) {
 	if got := entry["url"]; got != "http://localhost:8543/mcp" {
 		t.Errorf("url = %q, want http://localhost:8543/mcp", got)
 	}
+	// ok ignored: a failed assertion leaves headers nil, and the lookup below
+	// still fails with a clear mismatch message.
 	headers, _ := entry["headers"].(map[string]interface{})
 	if headers["X-Stapler-Session-UUID"] != "test-uuid-123" {
 		t.Errorf("X-Stapler-Session-UUID = %q, want test-uuid-123", headers["X-Stapler-Session-UUID"])

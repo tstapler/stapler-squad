@@ -162,26 +162,10 @@ func sanitizeInitialContent(content string) string {
 	return rePositionCodes.ReplaceAllString(content, "")
 }
 
-// prepareSnapshotContent sanitizes and normalizes capture-pane output for use as a
-// full-screen snapshot in xterm.js.
-//
-// capture-pane -p separates rows with bare \n (LF). In xterm.js, a bare LF only
-// moves the cursor DOWN — it does not return to column 0 — unless convertEol/LNM
-// is enabled. Since LNM state is uncertain (DECSTR in ansiSnapshotPrefix resets it
-// to OFF), we normalize every \n to \r\n so rows always start at column 0
-// regardless of terminal mode state.
-// content must be streamhub.RawPaneContent — capture-pane output taken
-// WITHOUT -J (CapturePaneContentRaw/CapturePaneContentRawPriority) — not the
-// -J "joined" variant (CapturePaneContent/CapturePaneContentPriority): -J
-// merges soft-wrapped continuation rows back into their source line and
-// strips cursor-positioning codes as a side effect, which is fine for
-// plain-text uses but destroys the visual row structure a terminal emulator
-// needs to redraw correctly. Requiring the type here, rather than a plain
-// string, is what makes passing the joined variant a compile error instead
-// of the silent reflow-scrambling bug that motivated this doc comment (see
-// streamhub's identically-purposed prepareSnapshotContent for the full
-// history — server/services can't import that one, so this copy exists
-// separately, but the type it now requires is imported from there).
+// prepareSnapshotContent normalizes bare \n to \r\n (xterm.js only moves the
+// cursor down, not to column 0, on LF once DECSTR resets LNM off) and requires
+// the non-"-J" RawPaneContent variant, since "-J" strips cursor codes and
+// merges wrapped rows in a way that breaks redraw.
 func prepareSnapshotContent(content streamhub.RawPaneContent) string {
 	sanitized := sanitizeInitialContent(string(content))
 	// Avoid creating \r\r\n from any pre-existing \r\n pairs.
@@ -219,6 +203,21 @@ type cursorPositioner interface {
 // the resync always meeting the client's deadline.
 const withCursorSyncTimeout = 300 * time.Millisecond
 
+// newTerminalOutputData wraps content in the TerminalData_Output frame sent for
+// sessionID. Shared by the initial-snapshot send paths (hub, control mode, and
+// tmux capture-pane), which all build this identical envelope around whatever
+// content each has just prepared.
+func newTerminalOutputData(sessionID string, content string) *sessionv1.TerminalData {
+	return &sessionv1.TerminalData{
+		SessionId: sessionID,
+		Data: &sessionv1.TerminalData_Output{
+			Output: &sessionv1.TerminalOutput{
+				Data: []byte(content),
+			},
+		},
+	}
+}
+
 // startupWaitTimeout bounds streamViaHub's wait for a concurrently-starting
 // Instance to finish before attaching. Observed real-world gap was ~1.26s.
 const startupWaitTimeout = 2 * time.Second
@@ -232,7 +231,8 @@ func waitForEvent(bus *events.EventBus, timeout time.Duration, match func(*event
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	ch, _ := bus.Subscribe(ctx)
+	ch, subID := bus.Subscribe(ctx)
+	defer bus.Unsubscribe(subID) // redundant with Subscribe's own ctx.Done() cleanup goroutine, but drops the wait for that goroutine to run
 	for {
 		select {
 		case ev, ok := <-ch:
@@ -421,9 +421,12 @@ func (r *hubRegistry) GetOrCreate(sessionName string, controller streamhub.Sessi
 	// call for the same session name, per the AC in plan.md's Story 3.1.2.
 	var hub *streamhub.StreamHub
 	if err := streamhub.AcquireOwnershipLock(sessionName).AcquireAndResolveExpecting(true, streamhub.PathHubOwned, func() error {
-		h, _ := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
+		h, loaded := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
 			return streamhub.NewStreamHub(sessionName, controller), false
 		})
+		if loaded {
+			log.Debug("[hubRegistry] reusing existing StreamHub", "session", sessionName)
+		}
 		hub = h
 		// Covers both a fresh hub (never had a pump) and a reactivated one
 		// whose pump already exited when it fully tore down — LoadOrCompute's
@@ -437,7 +440,7 @@ func (r *hubRegistry) GetOrCreate(sessionName string, controller streamhub.Sessi
 		}
 		return nil
 	}); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("hubRegistry.GetOrCreate: %w", err)
 	}
 
 	// OverlapInvariant (Epic 3.2): xsync.Map.LoadOrCompute guarantees the
@@ -585,19 +588,11 @@ func init() {
 	})
 }
 
-// streamHubSessionKey computes the StreamOwnershipLock/HubRegistry key for a
-// session from its title and TmuxPrefix (empty meaning the default). Both
-// tmuxSessionNameForStreamPath (the live per-connection resolution below) and
-// StreamHubRolloutService.SetStreamHubSessionOverride (the config-write
-// boundary, stream_hub_rollout_service.go) must derive this identically, or
-// a canary override silently never matches the key Resolve actually queries
-// with -- exactly the bug this shared helper closes: the two call sites used
-// to duplicate this derivation independently, and the config-write side
-// stored per-session overrides keyed by the bare session title while
-// Resolve/AcquireOwnershipLock always queried by this tmux-prefixed form, so
-// every override ever set (by hand or otherwise) silently no-opped and
-// StreamHub never actually served a single connection despite the rollout
-// looking "on" (2026-09-01).
+// streamHubSessionKey computes the StreamOwnershipLock/HubRegistry key from a
+// session's title and TmuxPrefix (empty meaning "staplersquad_").
+// tmuxSessionNameForStreamPath and SetStreamHubSessionOverride must derive it
+// identically — they used to duplicate this independently and diverged,
+// silently no-opping every canary override (2026-09-01).
 func streamHubSessionKey(title, tmuxPrefix string) string {
 	if tmuxPrefix == "" {
 		tmuxPrefix = "staplersquad_"
@@ -710,7 +705,7 @@ func (h *ConnectRPCWebSocketHandler) getOrRefreshSnapshot(
 
 	content, err := captureFn()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("getOrRefreshSnapshot: %w", err)
 	}
 
 	h.snapshotCache.Store(sessionID, sessionSnapshot{
@@ -905,10 +900,11 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 
 	// Resolve session using unified resolution strategy
 	// This checks ReviewQueuePoller, Storage, and ExternalDiscovery in priority order
-	instance, _ := h.resolveSession(sessionID)
+	instance, isExternal := h.resolveSession(sessionID)
 	if instance == nil {
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
+	log.Debug("[streamTerminal] resolved session", "session", sessionID, "external", isExternal)
 
 	// Shell tabs are independent sibling tmux sessions (see instance_shells.go), not the
 	// main session's PTY, so they need their own control-mode session rather than reusing
@@ -980,25 +976,13 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	return h.streamViaTmuxCapturePane(stream, instance, "")
 }
 
-// handleTmuxRestoreFailure is the single place both restore-before-stream
-// call sites (streamViaControlMode and streamViaHub) route a
-// TmuxSession.RestoreWithWorkDir failure through, so the
-// ErrWorkDirMissing-specific handling below lives in exactly one spot
-// instead of being duplicated at each call site.
-//
-// When the failure is specifically a missing/deleted working directory
-// (e.g. a pruned git worktree — see tmux.ErrWorkDirMissing), the session is
-// moved to PermanentlyFailed rather than left "Active" with a terminal that
-// can never reconnect. PermanentlyFailed (unlike Stopped) already has full
-// UI wiring for a manual "Retry now" action (SessionActionsOverflow), and
-// restartForRetry's retry choke point re-creates a missing worktree before
-// restarting — so "Retry now" can actually recover from this, not just
-// repeat the same failure. The returned error still wraps
-// tmux.ErrWorkDirMissing via %w so sendEndStreamError can surface a
-// distinct, non-retriable error code to the browser instead of the generic
-// "internal" every other stream error gets — that stops the terminal from
-// burning its 5-attempt reconnect budget against a directory that isn't
-// coming back on its own.
+// handleTmuxRestoreFailure centralizes RestoreWithWorkDir failure handling for
+// streamViaControlMode and streamViaHub. A missing working directory (a pruned
+// git worktree, tmux.ErrWorkDirMissing) moves the session to PermanentlyFailed
+// rather than Stopped, since only PermanentlyFailed has a "Retry now" UI action
+// (restartForRetry re-creates the worktree), and the wrapped error lets
+// sendEndStreamError give the browser a non-retriable code instead of burning
+// the reconnect budget against a directory that isn't coming back.
 func handleTmuxRestoreFailure(instance *session.Instance, restoreErr error) error {
 	if errors.Is(restoreErr, tmux.ErrWorkDirMissing) {
 		instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", restoreErr.Error()))
@@ -1335,14 +1319,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		// Colors (SGR) are preserved; only context-dependent positioning is removed.
 		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(streamhub.RawPaneContent(initialContent)), instance)
 
-		terminalData := &sessionv1.TerminalData{
-			SessionId: sessionID,
-			Data: &sessionv1.TerminalData_Output{
-				Output: &sessionv1.TerminalOutput{
-					Data: []byte(fullContent),
-				},
-			},
-		}
+		terminalData := newTerminalOutputData(sessionID, fullContent)
 
 		dataBytes, err := proto.Marshal(terminalData)
 		if err != nil {
@@ -1516,14 +1493,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 					// via the onCurrentPaneRequest callback registered below, which already echoes
 					// resync_id (Task 3.2.1.1). There is no "triggering request" with a resync_id in
 					// scope at this call site to thread through.
-					snapMsg := &sessionv1.TerminalData{
-						SessionId: sessionID,
-						Data: &sessionv1.TerminalData_Output{
-							Output: &sessionv1.TerminalOutput{
-								Data: []byte(fullContent),
-							},
-						},
-					}
+					snapMsg := newTerminalOutputData(sessionID, fullContent)
 					if snapBytes, merr := proto.Marshal(snapMsg); merr != nil {
 						log.Error("[streamViaControlMode] failed to marshal post-resize snapshot", "session", sessionID, "err", merr)
 					} else {
@@ -3173,14 +3143,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	}
 	if initialContent != "" {
 		fullContent := withCursorSync(clearAndHome+prepareSnapshotContent(streamhub.RawPaneContent(initialContent)), target)
-		terminalData := &sessionv1.TerminalData{
-			SessionId: sessionID,
-			Data: &sessionv1.TerminalData_Output{
-				Output: &sessionv1.TerminalOutput{
-					Data: []byte(fullContent),
-				},
-			},
-		}
+		terminalData := newTerminalOutputData(sessionID, fullContent)
 
 		dataBytes, err := proto.Marshal(terminalData)
 		if err != nil {
@@ -3403,9 +3366,8 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 					}
 				}
 
-				// Handle current pane request - capture current tmux content via the shared
-				// handleCurrentPaneRequest helper (also used by streamViaControlMode and
-				// streamShellViaControlMode's mid-stream CurrentPaneRequest dispatch).
+				// Handle current pane request - capture current tmux content via the
+				// shared handleCurrentPaneRequest helper.
 				if currentPaneReq := incomingData.GetCurrentPaneRequest(); currentPaneReq != nil {
 					paneCaptureSettling.Store(true)
 					paneCtx, paneSpan := telemetry.StartSpan(context.Background(), "terminal.mid_stream_current_pane_request")
@@ -3611,7 +3573,13 @@ func sendEndStreamError(stream *connectWebSocketStream, err error) {
 	// ConnectRPC protocol requires JSON-encoded EndStream payload (not protobuf)
 	// Error EndStream uses the ConnectRPC error JSON format.
 	code := endStreamErrorCode(err)
-	errMsg, _ := json.Marshal(endStreamErrorMessage(err))
+	errMsg, marshalErr := json.Marshal(endStreamErrorMessage(err))
+	if marshalErr != nil {
+		// json.Marshal of a plain string can't actually fail today, but fall back
+		// defensively rather than send truncated/invalid JSON if that ever changes.
+		log.Error("[sendEndStreamError] failed to marshal error message", "err", marshalErr)
+		errMsg = []byte(`"internal error"`)
+	}
 	dataBytes := fmt.Appendf(nil, `{"error":{"code":%q,"message":%s}}`, code, errMsg)
 
 	envelope := protocol.CreateEnvelope(protocol.EndStreamFlag, dataBytes)

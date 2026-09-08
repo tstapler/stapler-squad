@@ -152,21 +152,7 @@ func TestTymuxGRPCSession_Start_RejectsNonexistentWorkDir(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_StartThenIsAlive_ReturnsTrueImmediately(t *testing.T) {
-	dir := t.TempDir()
-	transport := &fakeTransport{
-		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
-			return connect.NewResponse(fakeSession("sess-1", "pane-1", dir, v1.Liveness_LIVENESS_LIVE)), nil
-		},
-		capturePaneFn: func(_ context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
-			assert.Equal(t, "pane-1", req.Msg.GetPaneId())
-			return connect.NewResponse(&v1.PaneSnapshot{
-				PaneId:   "pane-1",
-				Liveness: v1.Liveness_LIVENESS_LIVE,
-			}), nil
-		},
-	}
-	sess := NewTymuxGRPCSession(transport)
-	require.NoError(t, sess.Start(dir))
+	sess := startedSession(t, &v1.PaneSnapshot{PaneId: "pane-1", Liveness: v1.Liveness_LIVENESS_LIVE})
 
 	assert.True(t, sess.IsAlive())
 }
@@ -377,7 +363,7 @@ func TestTymuxGRPCSession_GetPTY_ErrorsBeforeStart(t *testing.T) {
 // as AttachRequest_Input — the two directions ClaudeController/PTYAccess
 // and CommandExecutor each depend on.
 func TestTymuxGRPCSession_GetPTY_BridgesOutputAndInput(t *testing.T) {
-	sess, stream, _ := startedSessionWithStream(t)
+	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	f, err := sess.GetPTY()
 	require.NoError(t, err)
@@ -414,7 +400,7 @@ func TestTymuxGRPCSession_GetPTY_BridgesOutputAndInput(t *testing.T) {
 // caller that kept a reference (PTYAccess does, for the controller's
 // lifetime) can't read/write into a dead session.
 func TestTymuxGRPCSession_GetPTY_ClosedByClose(t *testing.T) {
-	sess, _, _ := startedSessionWithStream(t)
+	sess, _, _ := startedSessionWithStream(t) // stream and transport (2nd/3rd returns) unused here
 
 	f, err := sess.GetPTY()
 	require.NoError(t, err)
@@ -433,7 +419,7 @@ func TestTymuxGRPCSession_GetPTY_ClosedByClose(t *testing.T) {
 // pty.close(), rather than pty.close() being self-sufficient).
 func TestTymuxGRPCSession_GetPTY_CloseTerminatesPumpGoroutines(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
-	sess, _, _ := startedSessionWithStream(t)
+	sess, _, _ := startedSessionWithStream(t) // stream and transport (2nd/3rd returns) unused here
 
 	_, err := sess.GetPTY()
 	require.NoError(t, err)
@@ -453,7 +439,7 @@ func TestTymuxGRPCSession_GetPTY_CloseTerminatesPumpGoroutines(t *testing.T) {
 // down — a session-lifetime leak on every such race.
 func TestTymuxGRPCSession_GetPTY_AfterClose_DoesNotLeakANewAdapter(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
-	sess, _, _ := startedSessionWithStream(t)
+	sess, _, _ := startedSessionWithStream(t) // stream and transport (2nd/3rd returns) unused here
 
 	require.NoError(t, sess.Close())
 
@@ -585,20 +571,7 @@ func TestTymuxGRPCSession_IsAlive_OrdinaryRPCError_FallsBackToCachedLiveness(t *
 }
 
 func TestTymuxGRPCSession_IsAlive_GenuineDeadResponse_ReturnsFalse(t *testing.T) {
-	dir := t.TempDir()
-	transport := &fakeTransport{
-		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
-			return connect.NewResponse(fakeSession("sess-1", "pane-1", dir, v1.Liveness_LIVENESS_LIVE)), nil
-		},
-		capturePaneFn: func(_ context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
-			return connect.NewResponse(&v1.PaneSnapshot{
-				PaneId:   req.Msg.GetPaneId(),
-				Liveness: v1.Liveness_LIVENESS_DEAD,
-			}), nil
-		},
-	}
-	sess := NewTymuxGRPCSession(transport)
-	require.NoError(t, sess.Start(dir))
+	sess := startedSession(t, &v1.PaneSnapshot{PaneId: "pane-1", Liveness: v1.Liveness_LIVENESS_DEAD})
 	t.Cleanup(func() { _ = sess.Close() })
 
 	// A real, error-free response reporting LIVENESS_DEAD is the one case
@@ -628,7 +601,7 @@ func TestTymuxGRPCSession_SendInputViaControlMode_CancelledContext_ReturnsEarlyW
 }
 
 func TestTymuxGRPCSession_SendInputViaControlMode_ValidContext_SendsOnStream(t *testing.T) {
-	sess, stream, _ := startedSessionWithStream(t)
+	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	err := sess.SendInputViaControlMode(context.Background(), []byte("hello"))
 
@@ -646,7 +619,7 @@ func TestTymuxGRPCSession_SendInputViaControlMode_ValidContext_SendsOnStream(t *
 // pane is still live must fire exactly once when the standing stream later
 // delivers Exited.
 func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredBeforePaneExits(t *testing.T) {
-	sess, stream, _ := startedSessionWithStream(t)
+	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	var calls int32
 	reasons := make(chan string, 4)
@@ -679,7 +652,7 @@ func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredBeforePaneExits(t
 // exactly once — not zero times, which is what a naive
 // store-only-for-future-events implementation would do.
 func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredAfterPaneAlreadyExited(t *testing.T) {
-	sess, stream, _ := startedSessionWithStream(t)
+	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 	concrete := sess.(*tymuxGRPCSession)
 
 	code := int32(7)
@@ -716,7 +689,7 @@ func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredAfterPaneAlreadyE
 // once, the assertion ResetExitOnce is checked against is that calling it
 // with no subsequent exit never spuriously invokes the callback again.
 func TestResetExitOnce_WithoutANewExit_DoesNotFireSpuriously(t *testing.T) {
-	sess, stream, _ := startedSessionWithStream(t)
+	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	var calls int32
 	sess.SetOnExitCallback(func(string) { atomic.AddInt32(&calls, 1) })

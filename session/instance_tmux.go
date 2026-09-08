@@ -130,7 +130,7 @@ func (b *piLaunchBuilder) StderrRedirect(i *Instance) string {
 func piStderrLogPath(i *Instance) (string, error) {
 	logDir, err := log.GetLogDir(log.ConfigToLogConfig(config.LoadConfig()))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to resolve log dir: %w", err)
 	}
 	safeTitle := strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
@@ -375,35 +375,15 @@ func (i *Instance) buildPiCommand(base, piSessionID string) string {
 }
 
 // promptArg returns the shell syntax used to supply i.Prompt as the trailing
-// positional argument to claude. Short prompts are embedded directly
-// (shell-quoted), as before. Prompts at or above maxInlinePromptBytes are
-// written to a temp file and referenced via a `"$(cat '<path>')"` command
-// substitution instead.
-//
-// This distinction matters because tmux's new-session command-length limit
-// (see maxInlinePromptBytes) applies to the literal command string handed to
-// tmux, which tmux inspects before any shell ever runs -- so a large prompt
-// embedded inline blows that budget outright, regardless of how carefully it
-// is quoted. Routing it through a file keeps the string tmux sees short; the
-// substitution -- and the real prompt content -- is only expanded later, by
-// the shell tmux spawns to actually run the command, which is not subject to
-// tmux's own limit. This was verified empirically: a `tmux new-session`
-// command referencing a 20KB file via `$(cat ...)` succeeds and the spawned
-// process receives the full, unmodified 20KB content, while the same 20KB
-// embedded inline is rejected outright with "command too long".
-//
-// On temp-file write failure this falls back to the inline (shell-quoted)
-// form so a filesystem hiccup degrades to the pre-existing behavior (which
-// works fine for prompts under the tmux limit) rather than silently dropping
-// the prompt.
-//
-// Caveat: POSIX command substitution strips ALL trailing newlines from its
-// output, so if i.Prompt ends in one or more "\n" characters, the claude
-// process receives the prompt with that trailing whitespace removed (content
-// is otherwise byte-identical). This is semantically inert for an LLM prompt
-// and is a world apart from the bug being fixed here (the entire tail of the
-// prompt being dropped or the spawn failing outright), so it's accepted
-// rather than worked around with a fragile shell trim-guard hack.
+// positional argument to claude. Short prompts are shell-quoted inline;
+// prompts at or above maxInlinePromptBytes are written to a temp file and
+// referenced via `"$(cat '<path>')"` instead, because tmux's new-session
+// command-length limit applies to the literal command string before any
+// shell runs -- a large inline prompt blows that budget regardless of
+// quoting, while the substitution (and the real content) only expands later,
+// in the shell tmux spawns. Falls back to the inline form on temp-file
+// failure. Note: command substitution strips trailing newlines from the
+// prompt, which is semantically inert for an LLM prompt and accepted as-is.
 // promptFileDir resolves config.Config.PromptCacheDirOrDefault()
 // (~/.stapler-squad/prompt-cache) and ensures it exists. Falls back to "" (the
 // OS default temp dir, via os.CreateTemp's own behavior) if resolution or
@@ -682,24 +662,21 @@ func (i *Instance) RestoreProcess(workDir string) error {
 	return i.pm().RestoreWithWorkDir(workDir)
 }
 
-// PaneProcessDead reports whether the tmux session is alive (TmuxAlive()==true)
-// but the wrapped program running in the pane has already exited. remain-on-exit
-// keeps the tmux session/pane around as a "Pane is dead (signal N, ...)"
-// placeholder after the wrapped program is killed (e.g. OOM SIGKILL) or crashes,
-// rather than tearing the session down -- so TmuxAlive() alone reports this
-// session as healthy forever. Health checks must consult this in addition to
-// TmuxAlive() to detect that failure mode. Returns false for non-tmux backends
-// (e.g. native process manager), which have no equivalent placeholder state.
+// PaneProcessDead reports whether tmux is alive but the wrapped program has
+// exited. remain-on-exit leaves a dead-pane placeholder after the program is
+// killed or crashes rather than tearing the session down, so TmuxAlive()
+// alone can't detect that failure mode. False for non-tmux backends.
 func (i *Instance) PaneProcessDead() bool {
+	// code/signal aren't errors -- PaneProcessDead only needs liveness.
 	dead, _, _ := i.PaneExitInfo()
 	return dead
 }
 
 // PaneExitInfo reports whether the wrapped program's pane has exited
 // (PaneProcessDead), along with its exit code and signal (empty string if
-// none) when available. Used by SessionHealthChecker to distinguish a normal
-// completion (exit code 0, no signal) from a genuine crash. code/signal are
-// zero-valued when dead is false.
+// none) when available, to distinguish a normal completion (exit code 0, no
+// signal) from a genuine crash. code/signal are zero-valued when dead is
+// false.
 func (i *Instance) PaneExitInfo() (dead bool, code int, signal string) {
 	if !i.TmuxAlive() {
 		return false, 0, ""
@@ -772,7 +749,7 @@ func (i *Instance) GetPTYSession(ctx context.Context, cols, rows int) (tmux.PtyS
 	if !i.executionTarget().IsRemote() {
 		ptyFile, err := i.GetPTYReader()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get PTY reader: %w", err)
 		}
 		return &localPTYSession{File: ptyFile}, nil
 	}
@@ -1044,32 +1021,20 @@ func (i *Instance) GetTmuxSession() *tmux.TmuxSession {
 // the concrete *tmux.TmuxSession type to the server layer.
 
 // StartControlMode starts the control mode stream on the underlying tmux
-// session.
-//
-// Story 3.1.2 (correctness gap fix): this is the actual point where
-// control-mode ownership is acquired, so every caller — today's two RPC
-// handler entry points (streamViaControlMode, streamViaHub) plus any future
-// direct caller — is protected, not just the ones that remember to call
-// streamhub.AcquireOwnershipLock themselves first. Before this fix, the
-// ownership lock was only acquired from server/services/connectrpc_websocket.go,
-// so a caller reaching StartControlMode by any other path bypassed mutual
-// exclusion entirely. StartControlMode does not assert a specific expected
-// StreamPath the way the RPC handlers' own ResolveExpecting calls do — it is
-// legitimately called unconditionally by both the legacy and hub-owned
-// paths (the underlying subprocess start is refcounted either way, see
-// streamViaHub's comment at its own StartControlMode call site) — but it
-// still runs inside AcquireOwnershipLock's real critical section
-// (AcquireAndResolve), so a concurrent HubRegistry.GetOrCreate for the same
-// session genuinely blocks on it rather than racing to resolve first.
+// session. This is the actual point where control-mode ownership is
+// acquired, so every caller -- RPC handlers today, any future direct caller
+// -- is protected even without calling streamhub.AcquireOwnershipLock
+// itself. It doesn't assert an expected StreamPath because both the legacy
+// and hub-owned paths call it unconditionally (the underlying subprocess
+// start is refcounted either way); running inside AcquireAndResolve's
+// critical section still makes a concurrent HubRegistry.GetOrCreate for the
+// same session block on it rather than race.
 func (i *Instance) StartControlMode() error {
 	name := i.GetTmuxSessionName()
 	if name == "" {
-		// No tmux session identity yet (uninitialized instance, or a
-		// non-tmux backend such as NativeProcessManager on Windows) — there
-		// is no session name to key an ownership lock on, and every such
-		// instance sharing the same "" key would otherwise be serialized
-		// against each other for no reason. Fall back to the pre-3.1.2
-		// unconditional call.
+		// No session name (uninitialized instance, or non-tmux backend) means
+		// no key to lock on -- every such instance would otherwise serialize
+		// against each other under the same "" key for no reason.
 		return i.pm().StartControlMode()
 	}
 	return streamhub.AcquireOwnershipLock(name).AcquireAndResolve(effectiveStreamHubFlag(), func(streamhub.StreamPath) error {
@@ -1177,17 +1142,22 @@ func (i *Instance) RefreshTmuxClient() error {
 const EnterKeySequence = "\r"
 
 // BuildSubmittableInput appends EnterKeySequence to input when pressEnter is
-// true, producing the exact string that must be handed to SendKeys for the
-// receiving program to treat it as a submitted line rather than unsubmitted
-// text sitting in the input buffer. Centralizing this (rather than each
-// caller appending its own terminator) is what BUG-047 was missing: three of
-// six SendKeys-with-enter call sites had independently picked '\n' instead of
-// '\r'.
+// true, so SendKeys submits the line instead of leaving it unsubmitted in
+// the input buffer. pressEnter stays a parameter because some callers
+// forward a caller-supplied runtime choice (an MCP tool arg, an RPC field);
+// callers that always want Enter pressed should use
+// BuildSubmittableInputAndSubmit instead.
 func BuildSubmittableInput(input string, pressEnter bool) string {
 	if pressEnter {
 		return input + EnterKeySequence
 	}
 	return input
+}
+
+// BuildSubmittableInputAndSubmit is BuildSubmittableInput with pressEnter
+// always true, for call sites that unconditionally want Enter pressed.
+func BuildSubmittableInputAndSubmit(input string) string {
+	return BuildSubmittableInput(input, true)
 }
 
 // SendKeys sends keys to the tmux session.

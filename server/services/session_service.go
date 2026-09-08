@@ -3309,7 +3309,7 @@ func (s *SessionService) steerInstance(ctx context.Context, instance *session.In
 	// Non-autonomous sessions get the same PTY send primitive the MCP
 	// steer_session tool falls back to, bounded with a timeout so a browser
 	// click against a wedged/dead session can't hang this goroutine forever.
-	text := session.BuildSubmittableInput(message, true)
+	text := session.BuildSubmittableInputAndSubmit(message)
 	errCh := make(chan error, 1)
 	go func() { errCh <- instance.SendKeys(text) }()
 

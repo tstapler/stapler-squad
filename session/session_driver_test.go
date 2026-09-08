@@ -527,6 +527,20 @@ func TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough(t *testing.T) {
 // sanitizeInitialPromptForTmux — extracting it to a standalone helper was judged
 // too invasive given the minimal complexity.
 
+// resolveInitialPromptForTest re-implements the prompt-selection logic from
+// runSessionDriver (see NOTE M-14 above) so the three prompt-selection tests
+// below share one copy instead of repeating it.
+func resolveInitialPromptForTest(inst *Instance) string {
+	initialPrompt := driverInitialPrompt
+	if inst.InitialPrompt != "" {
+		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
+		if sanitized != "" {
+			initialPrompt = sanitized
+		}
+	}
+	return initialPrompt
+}
+
 func TestRunSessionDriver_selectsInitialPromptWhenNonEmpty(t *testing.T) {
 	t.Parallel()
 	// Verify the selection logic directly: if InitialPrompt is set, it should
@@ -536,15 +550,7 @@ func TestRunSessionDriver_selectsInitialPromptWhenNonEmpty(t *testing.T) {
 		InitialPrompt: "do the thing",
 		Status:        Stopped,
 	}
-	// Simulate the selection logic from runSessionDriver.
-	initialPrompt := driverInitialPrompt
-	if inst.InitialPrompt != "" {
-		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
-		if sanitized != "" {
-			initialPrompt = sanitized
-		}
-	}
-	if initialPrompt != "do the thing" {
+	if initialPrompt := resolveInitialPromptForTest(inst); initialPrompt != "do the thing" {
 		t.Errorf("expected initialPrompt = %q, got %q", "do the thing", initialPrompt)
 	}
 }
@@ -558,14 +564,7 @@ func TestRunSessionDriver_fallsBackToStaticPromptWhenEmpty(t *testing.T) {
 		InitialPrompt: "",
 		Status:        Stopped,
 	}
-	initialPrompt := driverInitialPrompt
-	if inst.InitialPrompt != "" {
-		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
-		if sanitized != "" {
-			initialPrompt = sanitized
-		}
-	}
-	if initialPrompt != driverInitialPrompt {
+	if initialPrompt := resolveInitialPromptForTest(inst); initialPrompt != driverInitialPrompt {
 		t.Errorf("expected driverInitialPrompt fallback, got %q", initialPrompt)
 	}
 }
@@ -579,14 +578,7 @@ func TestRunSessionDriver_fallsBackToStaticPromptWhenWhitespace(t *testing.T) {
 		InitialPrompt: "   ",
 		Status:        Stopped,
 	}
-	initialPrompt := driverInitialPrompt
-	if inst.InitialPrompt != "" {
-		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
-		if sanitized != "" {
-			initialPrompt = sanitized
-		}
-	}
-	if initialPrompt != driverInitialPrompt {
+	if initialPrompt := resolveInitialPromptForTest(inst); initialPrompt != driverInitialPrompt {
 		t.Errorf("expected driverInitialPrompt fallback for whitespace-only InitialPrompt, got %q", initialPrompt)
 	}
 }
@@ -1134,30 +1126,6 @@ func TestAnswerDialogOnce(t *testing.T) {
 	})
 }
 
-// TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation proves the
-// Task 1.1.3 control-flow fix actually reaches the pre-existing
-// inactivity-timeout -> handleDriverFailure -> ReviewQueue escalation path
-// once the startup-dialog latch reaches dialogGaveUp, not just that resends
-// stay bounded (Task 1.2.2 only proves the latter).
-//
-// The fake ProcessManager's SendKeys fails exactly maxDialogAnswerAttempts
-// times, forcing the startup-dialog latch to dialogGaveUp after 3 ticks.
-// LastMeaningfulOutput is set far enough in the past that
-// driverInactivityTimeout has already elapsed by wall-clock time — no real
-// multi-minute wait is needed, since the inactivity check compares
-// time.Since(LastMeaningfulOutputTime()) against the constant, not elapsed
-// driver runtime. retried is pre-set to true so handleDriverFailure takes its
-// "already retried, mark for attention" branch directly (observable via a
-// ReviewQueue entry) rather than exercising the real Restart()/RecoverFromStopped
-// path, which needs no faking for what this test is proving.
-// TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation is the
-// narrower unit test on the post-latch branch logic, per Task 1.2.5's
-// explicit fallback clause (plan.md, mirroring Task 1.2.4's fallback
-// convention): a full-duration ticker test proved impractical here.
-//
-// Root cause: the driver's activityRef logic (session_driver.go) always uses
-// the *later* of LastMeaningfulOutput and initialPromptSentAt as the
-// inactivity reference — specifically to avoid false inactivity fires right
 // startSessionDriverForTest replicates StartSessionDriver's goroutine/WaitGroup
 // wiring exactly, but calls runSessionDriverWithPrompt with a caller-supplied
 // RetryPolicy instead of runSessionDriver's config-resolved one.
@@ -1187,35 +1155,26 @@ func startSessionDriverForTest(inst *Instance, allowedPath, initialPrompt string
 	}()
 }
 
-// after startup. Once the dialogGaveUp fall-through reaches the
-// initial-prompt-send step (which it does almost immediately, since the
-// fake ProcessManager's failCount is exhausted by the dialog-answer
-// attempts and the very next SendKeys call succeeds), initialPromptSentAt
-// becomes "now" and permanently wins over any artificially-stale
-// LastMeaningfulOutput seeded by the test — so the real
-// driverInactivityTimeout (10 minutes) can never be reached in test time.
+// TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation proves
+// that once the startup-dialog latch reaches dialogGaveUp, the driver loop
+// falls through to the code after the dialog-answer branch (the
+// initial-prompt send) instead of getting stuck in the `continue` — the
+// regression this test guards against.
 //
-// What this test proves instead: dialogGaveUp's fall-through actually
-// reaches the code *after* the dialog-answer branch (the initial-prompt
-// send), rather than being trapped in the `continue` this fix's Blocker 1
-// exists to close. That control-flow escape is the real regression surface;
-// the inactivity-timeout branch is exercised by ordinary code review of
-// the shared `if idle > graceTimeout` path (also covered indirectly by
-// TestSessionDriver_SecondFailure_MarksNeedsAttention's similar shape).
+// It can't also exercise the inactivity-timeout escalation that follows:
+// activityRef always uses the later of LastMeaningfulOutput and
+// initialPromptSentAt, so once the fall-through sends the initial prompt,
+// initialPromptSentAt becomes "now" and permanently outweighs the
+// artificially-stale LastMeaningfulOutput seeded below. So this test proves
+// only the control-flow escape (via SendKeys count); the inactivity-timeout
+// branch itself is covered by TestSessionDriver_SecondFailure_MarksNeedsAttention.
 func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testing.T) {
-	// Not t.Parallel(): this test needs t.Setenv("HOME", ...) below, and
-	// t.Setenv panics if called on (or after) a parallel test.
-	// FindConversationFilePath (called by sendInitialPromptTick when deciding
-	// whether the initial prompt was already delivered) walks $HOME/.claude/projects
-	// on real disk. On a real dev machine that directory holds genuine, large
-	// session history, which can stall this search for real wall-clock seconds
-	// per driver-loop tick — long enough to burn through this test's entire
-	// deadline before sendInitialPromptTick ever reaches its SendKeys call,
-	// producing the exact "SendKeys count never exceeded" failure this test
-	// guards against, for a reason unrelated to the dialogGaveUp fall-through
-	// logic under test. Pointing HOME at an empty temp dir makes the walk
-	// resolve instantly and deterministically to "not found," independent of
-	// whatever real session history exists on the machine running the test.
+	// Not t.Parallel(): needs t.Setenv below, which panics on/after a
+	// parallel test. HOME points at an empty temp dir so
+	// FindConversationFilePath's walk of $HOME/.claude/projects resolves
+	// instantly instead of scanning real (possibly large) session history
+	// and stalling long enough to trip this test's deadline for an unrelated
+	// reason.
 	t.Setenv("HOME", t.TempDir())
 	fakePM := &stuckDialogProcessManager{
 		dialogText: trustDialogText,
@@ -1235,32 +1194,10 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	inst.RetryMaxAttempts = 1 // already at cap — simulates "already retried once" so the second-failure path fires directly
 	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
 
-	// This test needs the "already retried once" precondition pre-seeded
-	// above (RetryAttempt already at RetryMaxAttempts, so the second-failure
-	// path fires directly) — a precondition StartSessionDriver cannot express
-	// through its public API — its wrapper always resolves the policy fresh
-	// from config, and extending its signature to accept a pre-seeded
-	// RetryPolicy for a single test call site would leak an implementation
-	// detail into production code for no other caller's benefit.
-	//
-	// Considered and rejected: driving the "already retried once" state
-	// organically through StartSessionDriver by forcing one real
-	// failure/restart cycle first. handleDriverFailure's first call
-	// (session_driver.go) doesn't just bump RetryAttempt — it restarts the
-	// whole session and spawns a fresh driver goroutine for the continuation.
-	// Routing through that path here would conflate two independent
-	// mechanisms under one test (the dialogGaveUp fall-through this test
-	// exists to prove, and the separate failure-restart machinery covered by
-	// TestSessionDriver_SecondFailure_MarksNeedsAttention), doubling the
-	// real wall-clock cost and adding a second independent timing-flakiness
-	// surface on top of the driverReadyTimeout margin already documented
-	// below (two recorded near-miss recurrences on this test alone).
-	//
-	// Instead this test uses startSessionDriverForTest (below), a test-only
-	// helper that replicates StartSessionDriver's exact goroutine/WaitGroup
-	// wiring but accepts a pre-resolved RetryPolicy — so cleanup goes
-	// through the real StopSessionDriver, identically to every other
-	// SessionDriver test, rather than a bespoke stop/done channel pair.
+	// startSessionDriverForTest (below) exists because StartSessionDriver
+	// always resolves RetryPolicy fresh from config, so it can't express the
+	// pre-seeded "already retried once" precondition needed here — see its
+	// doc comment for why.
 	baseline := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
 
@@ -1268,27 +1205,15 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	defer StopSessionDriver(inst)
 
 	// maxDialogAnswerAttempts failed dialog-answer sends drive the latch to
-	// dialogGaveUp; the 4th SendKeys call (initial-prompt send, unblocked by
-	// the fall-through) is the direct proof the loop escaped the `continue`.
-	// The fake pane's content never satisfies claudeAtPrompt (it's always
-	// the same trust-dialog text), so the initial-prompt-send branch is only
-	// reached via its timedOut fallback once driverReadyTimeout (30s)
-	// elapses — the deadline below must clear that, not just the dialog
-	// latch's own ~6s give-up window.
-	//
-	// The extra driverReadyTimeout term is deliberate slack, not just the
-	// ~6s dialog-latch window plus a token second: this goroutine genuinely
-	// blocks on the real 30s driverReadyTimeout wall-clock wait, so under
-	// heavy scheduler/CPU contention (go test -race -p 1 for the full
-	// suite, or session's own t.Parallel() fan-out within a single package)
-	// that wait alone can occasionally overrun a razor-thin margin. Two
-	// documented recurrences of exactly this: an isolated run once passed
-	// in 34s of a 37s (1x) budget and failed under -race package load; a
-	// later run passed in 68.52s against a since-widened 67s (2x) budget
-	// under session's own -p 1 in-package parallel load (see BUG-051's
-	// recurrence log). Each time, widening the margin (not retrying) is the
-	// fix, since the 30s block is inherent to the code path under test —
-	// bumped to 3x here for more headroom against the same contention.
+	// dialogGaveUp; the next SendKeys call (the initial-prompt send) is the
+	// proof the loop escaped the `continue`. The fake pane never satisfies
+	// claudeAtPrompt, so that send only fires via the timedOut fallback once
+	// driverReadyTimeout (30s) elapses — the deadline below must clear that,
+	// not just the dialog latch's own ~6s give-up window. The 3x margin
+	// (rather than 1x) is deliberate: this wait blocks on real wall-clock
+	// time, so under heavy scheduler contention (e.g. -race, or this
+	// package's own parallel tests) it can overrun a tighter budget —
+	// confirmed by prior flaky-timeout recurrences at smaller margins.
 	deadline := time.After(3*driverReadyTimeout + driverPollInterval*3 + time.Second)
 	for fakePM.sendKeysCount.Load() <= maxDialogAnswerAttempts {
 		select {

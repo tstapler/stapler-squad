@@ -80,7 +80,7 @@ func (n *NativeProcessManager) Start(dir string) error {
 	}
 
 	if err := n.launchPTY(dir); err != nil {
-		return err
+		return fmt.Errorf("NativeProcessManager: Start failed: %w", err)
 	}
 	go n.supervise(dir)
 	return nil

@@ -56,8 +56,7 @@ func (tm *TmuxProcessManager) Session() *tmux.TmuxSession {
 	return tm.session.Load()
 }
 
-// SetSession replaces the underlying tmux session.  Used by tests and by
-// Instance.start() when reusing a pre-created session.
+// SetSession replaces the underlying tmux session.
 func (tm *TmuxProcessManager) SetSession(s *tmux.TmuxSession) {
 	tm.session.Store(s)
 	// Invalidate the capture-pane cache and PID cache under mu.
@@ -178,6 +177,17 @@ func (tm *TmuxProcessManager) Attach() (chan struct{}, error) {
 	return s.Attach()
 }
 
+// cacheCaptureContent stores content in the capture-pane cache under mu and
+// returns it, so CapturePaneContent's cache-populating variants share one
+// implementation of the lock/store/unlock sequence.
+func (tm *TmuxProcessManager) cacheCaptureContent(content string) string {
+	tm.mu.Lock()
+	tm.captureContent = content
+	tm.captureContentAt = time.Now()
+	tm.mu.Unlock()
+	return content
+}
+
 // CapturePaneContent returns the current visible pane content.
 // Results are cached for capturePaneCacheTTL to reduce subprocess/forkLock
 // contention when called per-session on every poll tick.
@@ -197,14 +207,10 @@ func (tm *TmuxProcessManager) CapturePaneContent() (string, error) {
 	}
 	content, err := s.CapturePaneContent()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to capture pane content: %w", err)
 	}
 
-	tm.mu.Lock()
-	tm.captureContent = content
-	tm.captureContentAt = time.Now()
-	tm.mu.Unlock()
-	return content, nil
+	return tm.cacheCaptureContent(content), nil
 }
 
 // CapturePaneContentContext mirrors CapturePaneContent (including its
@@ -229,14 +235,10 @@ func (tm *TmuxProcessManager) CapturePaneContentContext(ctx context.Context) (st
 	}
 	content, err := s.CapturePaneContentContext(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to capture pane content via context: %w", err)
 	}
 
-	tm.mu.Lock()
-	tm.captureContent = content
-	tm.captureContentAt = time.Now()
-	tm.mu.Unlock()
-	return content, nil
+	return tm.cacheCaptureContent(content), nil
 }
 
 // CapturePaneContentPriority mirrors CapturePaneContent but routes the
@@ -252,14 +254,10 @@ func (tm *TmuxProcessManager) CapturePaneContentPriority() (string, error) {
 	}
 	content, err := s.CapturePaneContentPriority()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to capture pane content with priority: %w", err)
 	}
 
-	tm.mu.Lock()
-	tm.captureContent = content
-	tm.captureContentAt = time.Now()
-	tm.mu.Unlock()
-	return content, nil
+	return tm.cacheCaptureContent(content), nil
 }
 
 // CapturePaneContentRaw returns pane content with ANSI escape codes preserved.
@@ -483,7 +481,7 @@ func (tm *TmuxProcessManager) GetPanePID() (int32, error) {
 	}
 	pid, err := s.GetPanePID()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to get pane pid: %w", err)
 	}
 	tm.panePIDCached.Store(pid)
 	tm.panePIDSet.Store(true)
@@ -553,8 +551,8 @@ func (tm *TmuxProcessManager) UnsubscribeFromControlModeUpdates(id string) {
 }
 
 // TmuxManager is the interface satisfied by *TmuxProcessManager.
-// It covers all tmux session operations used by Instance and can be implemented
-// by test doubles to avoid requiring a real tmux server.
+// It covers all tmux session operations and can be implemented by test
+// doubles to avoid requiring a real tmux server.
 type TmuxManager interface {
 	HasSession() bool
 	Session() *tmux.TmuxSession

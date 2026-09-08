@@ -68,7 +68,7 @@ func (b *TymuxBackend) ensureDaemonReady() error {
 // regress RPC latency.
 func (b *TymuxBackend) Start(dir string) error {
 	if err := b.ensureDaemonReady(); err != nil {
-		return err
+		return fmt.Errorf("start: %w", err)
 	}
 	return b.mgr.Start(dir)
 }
@@ -77,7 +77,7 @@ func (b *TymuxBackend) Start(dir string) error {
 // for the restore path.
 func (b *TymuxBackend) RestoreWithWorkDir(w string) error {
 	if err := b.ensureDaemonReady(); err != nil {
-		return err
+		return fmt.Errorf("restore: %w", err)
 	}
 	return b.mgr.RestoreWithWorkDir(w)
 }
