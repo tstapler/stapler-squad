@@ -1959,6 +1959,62 @@ func TestReconcilePendingApprovals_AutoAllowResolves(t *testing.T) {
 	assert.Equal(t, "true", rec.Metadata["reconciled"])
 }
 
+// upsertDenyRule is upsertAllowRule's AutoDeny counterpart — same real-RPC-path caveats apply.
+func upsertDenyRule(t *testing.T, svc *RulesService, id, name, commandPattern string) {
+	t.Helper()
+	_, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:             id,
+			Name:           name,
+			ToolName:       "Bash",
+			CommandPattern: commandPattern,
+			Decision:       sessionv1.AutoDecision_AUTO_DECISION_DENY,
+			Enabled:        true,
+			Source:         "user",
+			Priority:       999,
+		},
+	}))
+	require.NoError(t, err)
+}
+
+// TestReconcilePendingApprovals_AutoDenyResolves is review finding #5: every existing
+// reconciliation test only installs an AutoAllow-classifying rule, leaving the deny-resolution
+// branch (rules_service.go's `decision := "deny"` fallback) completely uncovered. Parallels
+// TestReconcilePendingApprovals_AutoAllowResolves's structure with an AutoDeny rule instead.
+func TestReconcilePendingApprovals_AutoDenyResolves(t *testing.T) {
+	store := NewApprovalStore("")
+	notifStore := newTestNotificationStore(t)
+	approvalSvc := NewApprovalService(store)
+	approvalSvc.SetNotificationStore(notifStore)
+
+	rulesSvc := newRulesService(t)
+	rulesSvc.SetApprovalService(approvalSvc)
+
+	a := bashApproval("appr-7g8h9i", "sess-d4e5f6", "rm -rf /tmp/scratch", time.Now())
+	require.NoError(t, store.Create(a))
+	require.NoError(t, notifStore.Append(&notifications.NotificationRecord{
+		ID:               "appr-7g8h9i",
+		SessionID:        "sess-d4e5f6",
+		NotificationType: 1, // NOTIFICATION_TYPE_APPROVAL_NEEDED
+		CreatedAt:        time.Now(),
+	}))
+
+	doneCh := make(chan struct{})
+	rulesSvc.reconcileDoneHook = func() { close(doneCh) }
+
+	upsertDenyRule(t, rulesSvc, "auto-deny-rm-rf", "Auto-deny destructive rm -rf", "^rm -rf")
+	<-doneCh
+
+	_, stillPending := store.Get("appr-7g8h9i")
+	assert.False(t, stillPending, "resolved approval must be removed from ApprovalStore")
+
+	rec, ok := notifStore.GetByID("appr-7g8h9i")
+	require.True(t, ok)
+	assert.Equal(t, "deny", rec.Metadata["approval_decision"])
+	assert.Equal(t, "Auto-deny destructive rm -rf", rec.Metadata["classifier_rule_name"])
+	assert.Equal(t, "true", rec.Metadata["reconciled"])
+}
+
 // TestReconcilePendingApprovals_StillEscalates_LeftUntouched is Task 2.2.2b: a rule that
 // doesn't match the pending item's tool call must never call ResolveApprovalReconciled, and
 // the item remains unresolved.

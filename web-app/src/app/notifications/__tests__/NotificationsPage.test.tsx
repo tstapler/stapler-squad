@@ -71,7 +71,6 @@ jest.mock("@/lib/contexts/NotificationContext", () => ({
   useNotifications: () => ({
     notificationHistory: mockHistory,
     markAsRead: mockMarkAsRead,
-    markAllAsRead: jest.fn(),
     removeFromHistory: jest.fn(),
     acknowledgeNotification: jest.fn(),
     clearHistory: mockClearHistory,
@@ -506,6 +505,33 @@ describe("NotificationsPage — reconciled items in AutoHandledSection (Task 3.1
     expect(screen.queryByText("Bash: git status")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Auto-handled/ }));
     expect(screen.getByText("Bash: git status")).toBeInTheDocument();
+  });
+});
+
+describe("NotificationsPage — Info filter excludes auto_approved (review finding #3)", () => {
+  beforeEach(resetSharedMocks);
+
+  it("never renders an auto_approved notification under the Info filter, in Recent Activity or elsewhere", () => {
+    mockHistory = [
+      makeNotification({
+        id: "notif-auto",
+        sessionName: "Auto Approved Session",
+        notificationType: "auto_approved",
+      }),
+      makeNotification({
+        id: "notif-info",
+        sessionName: "Informational Session",
+        notificationType: "info",
+        isRead: true,
+      }),
+    ];
+
+    render(<NotificationsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Info" }));
+    expandRecentActivity();
+
+    expect(screen.queryByText("Auto Approved Session")).not.toBeInTheDocument();
+    expect(screen.getByText("Informational Session")).toBeInTheDocument();
   });
 });
 

@@ -83,7 +83,6 @@ interface NotificationContextValue {
    * so the toast disappears even if auto-minimize hasn't fired yet.
    */
   removeToastBySessionId: (sessionId: string | string[]) => void;
-  markAllAsRead: () => void;
   removeFromHistory: (id: string) => void;
   clearHistory: () => void;
   getUnreadCount: () => number;
@@ -425,15 +424,6 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     setNotifications((prev) => prev.filter((n) => !sessionIds.has(n.sessionId ?? "")));
   }, []);
 
-  const markAllAsRead = useCallback(() => {
-    setNotificationHistory((prev) => {
-      const unreadCount = prev.filter((n) => !n.isRead).length;
-      if (unreadCount > 0) auditLog.logNotificationMarkedAllRead(unreadCount);
-      return prev.map((n) => ({ ...n, isRead: true }));
-    });
-    history.markAllAsRead();
-  }, [auditLog, history]);
-
   const removeFromHistory = useCallback((id: string) => {
     setNotificationHistory((prev) => {
       const notification = prev.find((n) => n.id === id);
@@ -474,7 +464,6 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         markAsRead,
         markAsReadBySessionId,
         removeToastBySessionId,
-        markAllAsRead,
         removeFromHistory,
         clearHistory,
         getUnreadCount,

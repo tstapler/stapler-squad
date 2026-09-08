@@ -162,6 +162,13 @@ export function useReviewQueue(
   const errorStr = useAppSelector(selectReviewQueueError);
   const lastUpdatedAt = useAppSelector(selectReviewQueueLastUpdatedAt);
 
+  // Always-fresh refs for fetchReviewQueue (declared with a stable [dispatch]
+  // dep array below) to read current queue/window state without a stale closure.
+  const reviewQueueRef = useRef(reviewQueue);
+  reviewQueueRef.current = reviewQueue;
+  const autoResolvedRulesRef = useRef(autoResolvedRules);
+  autoResolvedRulesRef.current = autoResolvedRules;
+
   // Idle-reason items no longer occupy review-queue slots (Epic 3.2.2, ADR-002) — filtered
   // once here so every consumer (ReviewQueuePanel, ReviewQueueNavBadge, BottomNav, DrawerNav)
   // sees the same list, and totalItems (below) is derived from this same filtered array
@@ -210,7 +217,32 @@ export function useReviewQueue(
 
         const response = await clientRef.current.getReviewQueue(request);
 
-        dispatch(setReviewQueueAction(response.reviewQueue ?? null));
+        // A REST fetch (including the fallback poll) fully replaces the queue, but
+        // an item in its ~5s post-reconciliation display window (autoResolvedRules)
+        // has already been deleted backend-side — a poll landing mid-window would
+        // otherwise evict the row early while its banner lingers. Re-splice any such
+        // item back in from the current store state before replacing (finding #2).
+        let reviewQueueToStore = response.reviewQueue ?? null;
+        const preserveIds = Object.keys(autoResolvedRulesRef.current);
+        if (preserveIds.length > 0 && reviewQueueToStore) {
+          const existingItems = reviewQueueRef.current?.items ?? [];
+          const incomingIds = new Set(
+            reviewQueueToStore.items.map((item) => item.sessionId)
+          );
+          const toPreserve = existingItems.filter(
+            (item) =>
+              preserveIds.includes(item.sessionId) && !incomingIds.has(item.sessionId)
+          );
+          if (toPreserve.length > 0) {
+            reviewQueueToStore = {
+              ...reviewQueueToStore,
+              items: [...reviewQueueToStore.items, ...toPreserve],
+              totalItems: reviewQueueToStore.totalItems + toPreserve.length,
+            };
+          }
+        }
+
+        dispatch(setReviewQueueAction(reviewQueueToStore));
         dispatch(setError(null));
       } catch (err) {
         const error =

@@ -552,4 +552,56 @@ describe("useReviewQueue — auto-resolved-by-rule item_removed (Epic 2.3.2, ux.
 
     expect(onAutoResolved).toHaveBeenCalledWith("s1", "Some rule");
   });
+
+  // Review finding #2: the fallback poll fires unconditionally (not gated on the WS stream
+  // being alive), and its REST response fully replaces state.reviewQueue. A poll landing
+  // inside the ~5s display window — after the backend has already deleted the reconciled
+  // item — must not evict the row early while its banner is still showing.
+  it("does not evict an item during its ~5s display window when the fallback poll lands mid-window", async () => {
+    async function* fakeStream() {
+      yield { event: { case: "itemAdded", value: { item: makeItem("s1") } } };
+      yield {
+        event: {
+          case: "itemRemoved",
+          value: { sessionId: "s1", autoResolvedByRule: "Auto-allow safe git status checks" },
+        },
+      };
+      await new Promise(() => {});
+    }
+    mockWatchReviewQueue.mockReturnValue(fakeStream());
+
+    // Initial mount fetch still sees s1; by the time the fallback poll below fires,
+    // the backend has already removed it (simulating the real reconciliation race).
+    mockGetReviewQueue
+      .mockResolvedValueOnce({ reviewQueue: makeQueue([makeItem("s1")]) })
+      .mockResolvedValue({ reviewQueue: makeQueue([]) });
+
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useReviewQueue({ useWebSocketPush: true, autoRefresh: false, fallbackPollInterval: 2000 }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await act(async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+    expect(result.current.autoResolvedRules).toEqual({ s1: "Auto-allow safe git status checks" });
+
+    // Fallback poll fires at t=2s (well inside the 5s window) with a REST response
+    // that no longer contains s1 — the row must survive the full-queue replace.
+    await act(async () => {
+      jest.advanceTimersByTime(2000);
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+    expect(selectReviewQueueItems(store.getState() as never).map((i) => i.sessionId)).toEqual(["s1"]);
+    expect(result.current.autoResolvedRules).toEqual({ s1: "Auto-allow safe git status checks" });
+
+    // After the full ~5s window elapses, the deferred removal still fires as normal.
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+      await Promise.resolve();
+    });
+    expect(selectReviewQueueItems(store.getState() as never)).toHaveLength(0);
+    expect(result.current.autoResolvedRules).toEqual({});
+  });
 });

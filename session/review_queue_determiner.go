@@ -174,7 +174,7 @@ func (d *DefaultStatusDeterminer) Determine(
 			// StatusWaitingForAgent as evidence of real background activity only while
 			// recently updated, so a stuck/orphaned background task doesn't exclude an
 			// actually-idle session from the review queue indefinitely.
-			if time.Since(inst.UpdatedAt) < waitingForAgentStuckThreshold {
+			if time.Since(inst.Snapshot().UpdatedAt) < waitingForAgentStuckThreshold {
 				return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
 			}
 			// Stale background task — fall through to idle-state handling below.

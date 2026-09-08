@@ -606,11 +606,9 @@ func (rs *RulesService) rebuildClaudeSettingsRules(newClaudeRules []classifier.R
 
 // reconcilePendingApprovalsSafe wraps reconcilePendingApprovals with panic
 // recovery, matching ReviewQueuePoller.checkSessionsSafe's house idiom for
-// background goroutines (session/review_queue_poller.go:408-418). The "pass
-// complete" summary log lives here, not in reconcilePendingApprovals,
-// specifically so a mid-loop panic still logs whatever partial progress
-// counts had reached — the audit trail for a pass must never disappear
-// silently.
+// background goroutines. The summary log lives here (not in
+// reconcilePendingApprovals) so a mid-loop panic still logs whatever partial
+// progress counts had reached — see adversarial-review.md for the analysis.
 func (rs *RulesService) reconcilePendingApprovalsSafe() {
 	counts := &reconcileCounts{}
 	defer func() {
@@ -641,32 +639,20 @@ func (rs *RulesService) reconcilePendingApprovalsSafe() {
 // resolves any that now decide via ApprovalService.ResolveApprovalReconciled.
 // counts is owned by the caller (reconcilePendingApprovalsSafe) and
 // incremented in place so its summary log survives a panic here. Called
-// after rebuildMu releases (see rebuildClassifier/rebuildClaudeSettingsRules) —
-// Classify() itself is a pure, side-effect-free read, so this needs no lock
-// of its own. Always call via reconcilePendingApprovalsSafe, never directly,
-// outside of tests that intentionally exercise the panic path.
+// after rebuildMu releases — Classify() is a pure read, so this needs no
+// lock of its own. Always call via reconcilePendingApprovalsSafe, never
+// directly, outside of tests that intentionally exercise the panic path.
 //
-// Accepted limitation (adversarial-review.md Minor 3): a pass reads
-// rs.classifier fresh on every item, with no rule-generation snapshot taken
-// at pass start. If a second rule edit lands while this pass is still
-// running (ADR-004 explicitly permits concurrent passes and takes no lock
-// here), later items in this same pass may be classified against a newer
-// ruleset than earlier items were, so one pass-complete summary log line
-// isn't always "one ruleset." Each item's own audit log line still
-// correctly attributes the rule that actually resolved it, so this doesn't
-// lose any per-item accuracy — only the pass-level summary's framing is
-// imprecise.
+// Accepted limitation: no rule-generation snapshot is taken at pass start, so
+// a concurrent rule edit mid-pass (ADR-004 permits this) can classify later
+// items in the same pass against a newer ruleset than earlier ones — see
+// adversarial-review.md Minor 3 for why this is only a summary-log framing
+// issue, not a per-item accuracy one.
 //
-// Accepted gap: SessionIdleMinutes is left at its zero value below (rather
-// than populated via a live-instance idle-minutes lookup) because no such
-// seam exists on RulesService yet — ApprovalHandler is the only place that
-// populates ClassificationContext.SessionIdleMinutes today, via a dependency
-// edge RulesService doesn't have. A MinSessionIdleMinutes > 0 rule therefore
-// never reconciles a pending item during this pass (fail-closed per
-// ClassificationContext.SessionIdleMinutes's own doc comment) — it still
-// gets picked up on the item's next natural classification, just not by
-// reconciliation. Wiring a live-instance lookup into RulesService is
-// deferred rather than invented ad hoc here.
+// Accepted gap: SessionIdleMinutes is left at its zero value below because
+// RulesService has no live-instance idle-minutes lookup (only ApprovalHandler
+// does); a MinSessionIdleMinutes > 0 rule fails closed here and is picked up
+// on the item's next natural classification instead. See adversarial-review.md.
 func (rs *RulesService) reconcilePendingApprovals(counts *reconcileCounts) {
 	if rs.approvalSvc == nil {
 		return

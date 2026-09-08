@@ -54,7 +54,6 @@ jest.mock("@/lib/contexts/NotificationContext", () => ({
     isPanelOpen: true,
     togglePanel: jest.fn(),
     markAsRead: mockMarkAsRead,
-    markAllAsRead: jest.fn(),
     removeFromHistory: mockRemoveFromHistory,
     acknowledgeNotification: jest.fn(),
     clearHistory: mockClearHistory,
@@ -121,6 +120,33 @@ describe("NotificationPanel — no ✕ control for an unread actionable item (Ta
     const removeButtons = screen.getAllByLabelText("Remove notification");
     // Only the read/informational item gets a ✕ — the unread actionable one doesn't.
     expect(removeButtons).toHaveLength(1);
+  });
+});
+
+describe("NotificationPanel — Info filter excludes auto_approved (review finding #3)", () => {
+  beforeEach(() => {
+    mockHistory = [];
+  });
+
+  it("never renders an auto_approved notification under the Info filter", () => {
+    mockHistory = [
+      makeNotification({
+        id: "notif-auto",
+        sessionName: "Auto Approved Session",
+        notificationType: "auto_approved",
+      }),
+      makeNotification({
+        id: "notif-info",
+        sessionName: "Informational Session",
+        notificationType: "info",
+      }),
+    ];
+
+    render(<NotificationPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "Info" }));
+
+    expect(screen.queryByText("Auto Approved Session")).not.toBeInTheDocument();
+    expect(screen.getByText("Informational Session")).toBeInTheDocument();
   });
 });
 
