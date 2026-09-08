@@ -2,8 +2,10 @@ package tmux
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -12,14 +14,23 @@ import (
 // already been compared once (LoadOrStore key: string(Socket)). The answer
 // cannot change without a server restart, and --tmux-keep-server deliberately
 // keeps the server alive across this process's own restarts, so re-checking
-// on every StartControlMode call would be pure waste.
+// on every StartControlMode call would be pure waste. RestartTmuxServer
+// deletes the entry for its socket so the next StartControlMode re-checks.
 var versionCheckedSockets sync.Map
 
+// VersionMismatch describes one socket where this process's tmux client
+// version disagrees with the already-running server's version.
+type VersionMismatch struct {
+	ServerSocket  string
+	ClientVersion string
+	ServerVersion string
+}
+
 // controlModeDisabledSockets holds every socket where a client/server tmux
-// version mismatch was detected. StartControlMode consults this to skip
-// spawning a doomed control-mode client for the rest of this process's
-// lifetime, rather than re-discovering the same mismatch (and paying its
-// ctx-timeout cost) on every single command.
+// version mismatch was detected (value type VersionMismatch). StartControlMode
+// consults this to skip spawning a doomed control-mode client for the rest of
+// this process's lifetime, rather than re-discovering the same mismatch (and
+// paying its ctx-timeout cost) on every single command.
 var controlModeDisabledSockets sync.Map
 
 // normalizeTmuxVersion strips `tmux -V`'s "tmux " prefix (display-message's
@@ -77,7 +88,11 @@ func (t *TmuxSession) checkControlModeVersionMatchOnce(ctx context.Context) {
 		return
 	}
 
-	controlModeDisabledSockets.Store(socketKey, struct{}{})
+	controlModeDisabledSockets.Store(socketKey, VersionMismatch{
+		ServerSocket:  socketKey,
+		ClientVersion: clientVer,
+		ServerVersion: serverVer,
+	})
 	log.Error("tmux control-mode client/server version mismatch detected -- control mode disabled for this server, falling back to slower per-command subprocess calls",
 		"session", t.sanitizedName,
 		"client_version", clientVer,
@@ -90,4 +105,48 @@ func (t *TmuxSession) checkControlModeVersionMatchOnce(ctx context.Context) {
 func (t *TmuxSession) controlModeDisabledForSocket() bool {
 	_, disabled := controlModeDisabledSockets.Load(string(t.serverSocket))
 	return disabled
+}
+
+// GetVersionMismatches returns every currently-known tmux client/server
+// version mismatch, across every socket any TmuxSession in this process has
+// checked.
+func GetVersionMismatches() []VersionMismatch {
+	var out []VersionMismatch
+	controlModeDisabledSockets.Range(func(_, value any) bool {
+		if vm, ok := value.(VersionMismatch); ok {
+			out = append(out, vm)
+		}
+		return true
+	})
+	return out
+}
+
+// RestartTmuxServer kills the tmux server on serverSocket (killing every
+// session currently attached to it) and clears this process's cached
+// version-check/disabled state for that socket, so the next StartControlMode
+// call re-checks against whatever server starts next -- expected to succeed
+// since a fresh server will be started by this same process's own Binary().
+//
+// DESTRUCTIVE. Callers must obtain explicit user confirmation first; this
+// function does not ask.
+func RestartTmuxServer(serverSocket string) error {
+	args := prependSocket(serverSocket, []string{"kill-server"})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := runGated(ctx, serverSocket, func() ([]byte, error) {
+		return (LocalRunner{}).Run(ctx, "", Binary(), args...)
+	})
+	if err != nil {
+		// Combine err+out the same way ListAllSessions does: LocalRunner.Run's
+		// combined stdout+stderr (the actual "no server running" text) comes
+		// back via out, not err.Error() -- checking err alone here always
+		// missed this and treated "server already gone" as a real failure.
+		combinedOutput := append([]byte(err.Error()), out...)
+		if !serverNotRunning(combinedOutput) {
+			return fmt.Errorf("failed to kill tmux server on socket %q: %w", serverSocket, err)
+		}
+	}
+	versionCheckedSockets.Delete(serverSocket)
+	controlModeDisabledSockets.Delete(serverSocket)
+	return nil
 }

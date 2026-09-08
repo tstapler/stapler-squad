@@ -92,6 +92,26 @@ full-suite runs must not reproduce the `TempDir RemoveAll cleanup` failure for t
 
 ## Related
 
+- **2026-09-08: `TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo` instance
+  root-caused and fixed** (unlike this bug's own still-unconfirmed ClaudeSettingsWatcher hypothesis).
+  Hit during `make quick-check` on PR #735 (`fix-control-mode-input-silent-drop`, an unrelated
+  control-mode diff) after merging `main`. Confirmed root cause via reading
+  `server/services/backlog_service_triage.go`'s `TriggerTriage`: the test's only synchronization was
+  `require.Eventually(pool.callCount() == 1)`, which only proves `CallBlocking` was *invoked* — the
+  background goroutine keeps running past that point (commit + `retitleTriageWorktreeToFinalBranch`
+  writing into the worktree under `repoPath/.git/worktrees/`, i.e. exactly the `t.TempDir()` the test
+  is about to tear down), so the test could return — starting `RemoveAll` — while that goroutine was
+  still writing files. This is the *general* mechanism this bug's title names ("something outlives
+  test teardown and still touches the TempDir"), now confirmed for one concrete instance instead of
+  hypothesized. Fixed both this test and its sibling `TestTriggerTriage_FallsBackToRepoPathDirectly_When_RepoPathIsNotAGitRepo`
+  by polling `storage.ListItemSessions(...)[0].EndedAt != nil` instead (the trailing write that lands
+  after all worktree file writes are done) — the same pattern `TestTriggerTriage_Success` already used
+  for the identical reason. Did not use the package's `testTriageCompleteHook` (used by other tests for
+  this same wait) because both fixed tests call `t.Parallel()`, and that hook is a single
+  package-global function var — a sibling parallel test's own registration would silently clobber this
+  test's, dropping its completion signal (see the hook's own doc comment warning). This closes the
+  TriggerTriage instance specifically; BUG-091 stays open for the still-unconfirmed
+  ClaudeSettingsWatcher root cause below.
 - **2026-09-07 sighting (second, same day)**: the identical `TempDir RemoveAll cleanup: unlinkat ...
   directory not empty` symptom recurred again on the *same* test,
   `TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo` (`server/services`), CI run

@@ -573,6 +573,23 @@ service SessionService {
   // ~/.claude/settings.json. Idempotent per hook.
   // +api: hooks:install
   rpc InstallHooks(InstallHooksRequest) returns (InstallHooksResponse) {}
+
+  // GetTmuxVersionStatus reports any detected tmux client/server version
+  // mismatch (see session/tmux/version_check.go) -- a mismatch disables
+  // control mode for the affected socket, degrading terminal input/output to
+  // slower per-command subprocess calls instead of failing outright.
+  // +api: tmux:version-status
+  rpc GetTmuxVersionStatus(GetTmuxVersionStatusRequest) returns (GetTmuxVersionStatusResponse) {}
+
+  // RestartTmuxServer kills the tmux server backing the given socket so it
+  // restarts on this process's own tmux binary, resolving a version
+  // mismatch. DESTRUCTIVE: every session currently attached to that socket
+  // loses its live terminal (running processes, scrollback) -- their
+  // underlying git worktrees/work directories are untouched, and sessions
+  // reconnect to a fresh tmux session lazily on next access. Callers must
+  // obtain explicit user confirmation before calling this.
+  // +api: tmux:restart-server
+  rpc RestartTmuxServer(RestartTmuxServerRequest) returns (RestartTmuxServerResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -2842,6 +2859,37 @@ message InstallHooksResponse {
   GetHookStatusResponse status = 1;
   // Human-readable per-hook result messages (e.g. a manual fallback command when a binary is missing).
   repeated string messages = 2;
+}
+
+message GetTmuxVersionStatusRequest {}
+
+// TmuxVersionMismatch describes one socket where the client and the
+// already-running server disagree on tmux version.
+message TmuxVersionMismatch {
+  // The tmux server socket affected ("" means the default/shared server).
+  string server_socket = 1;
+  // This process's own tmux client version (Binary() -V).
+  string client_version = 2;
+  // The running server's reported version (display-message -p '#{version}').
+  string server_version = 3;
+  // Number of sessions currently on this socket, for the confirmation UI.
+  int32 affected_session_count = 4;
+}
+
+message GetTmuxVersionStatusResponse {
+  // Empty when no mismatch has been detected on any socket.
+  repeated TmuxVersionMismatch mismatches = 1;
+}
+
+message RestartTmuxServerRequest {
+  // Which server socket to restart ("" for the default/shared server) --
+  // must match a server_socket from a prior GetTmuxVersionStatus response.
+  string server_socket = 1;
+}
+
+message RestartTmuxServerResponse {
+  // Number of sessions that were attached to the killed server.
+  int32 sessions_affected = 1;
 }
 
 message UpdateFeatureFlagRequest {
