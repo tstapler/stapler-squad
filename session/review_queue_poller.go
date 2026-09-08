@@ -449,8 +449,24 @@ func (rqp *ReviewQueuePoller) ForceReconcile() {
 // - Stopped instances whose tmux session is found alive are revived to Active.
 func (rqp *ReviewQueuePoller) reconcileSessions() {
 	rqp.mu.RLock()
-	instances := make([]*Instance, len(rqp.instances))
-	copy(instances, rqp.instances)
+	instances := make([]*Instance, 0, len(rqp.instances))
+	for _, inst := range rqp.instances {
+		// A tymux-backed instance has no tmux server socket at all, so it can
+		// never appear in a ListSessions result -- every branch below would
+		// misread it as dead moments after creation. tymux liveness is
+		// push-based instead: the standing Attach stream's
+		// exit/reconnect-exhaustion events already drive the same
+		// Active->Stopped transition via instanceOnExitCallback
+		// (instance.go). Filtered here, before grouping/querying, so a
+		// socket populated only by tymux instances triggers no ListSessions
+		// call at all -- not just a no-op once the result comes back (see
+		// instance_serialization.go's archived-session comment for why
+		// needless tmux subprocess spawns matter at scale).
+		if inst.Backend == BackendTymux {
+			continue
+		}
+		instances = append(instances, inst)
+	}
 	rqp.mu.RUnlock()
 
 	if len(instances) == 0 {

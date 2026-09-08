@@ -892,6 +892,40 @@ func TestReviewQueuePoller_ReconcileSessions_ActiveInstancesOnDifferentSockets_S
 	}
 }
 
+// TestReviewQueuePoller_ReconcileSessions_TymuxBackend_NeverQueriedOrFlipped is
+// the regression test for a real incident (tymux-validation-test,
+// 2026-09-06/07): a tymux-backed instance has no tmux server socket at all,
+// so it can never appear in a ListSessions result — reconcileSessions used to
+// treat that as "not found in live sessions" and transition every tymux
+// session to Stopped within one poll cycle, moments after creation. tymux
+// liveness is push-based instead (the standing Attach stream's
+// exit/reconnect-exhaustion callback), so reconcileSessions must skip tymux
+// instances entirely — not just leave them Active, but never even query a
+// socket on their behalf.
+func TestReviewQueuePoller_ReconcileSessions_TymuxBackend_NeverQueriedOrFlipped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	tymuxInst := makeSocketTestInstance("tymux-session", "session-tymux", "tymux-only-socket", Active)
+	tymuxInst.Backend = BackendTymux
+	poller.SetInstances([]*Instance{tymuxInst})
+
+	// Deliberately do NOT call querier.setLiveSessions for "tymux-only-socket"
+	// — if reconcileSessions ever queries it, ListSessions returns an empty
+	// live set and the old bug (flip to Stopped) would reproduce immediately.
+
+	poller.reconcileSessions()
+
+	if tymuxInst.Status != Active {
+		t.Errorf("tymux instance: got status %v, want Active (untouched — tymux liveness isn't polled here)", tymuxInst.Status)
+	}
+	if sockets := querier.socketsQueried(); len(sockets) != 0 {
+		t.Errorf("expected reconcileSessions to never query a tymux-backed instance's socket, got %v", sockets)
+	}
+}
+
 // TestReviewQueuePoller_ReconcileSessions_StoppedInstancesOnDifferentSockets_ReviveIndependently
 // covers the Stopped→Active direction: only the instance actually alive on its own
 // socket should revive; the other must stay Stopped.
