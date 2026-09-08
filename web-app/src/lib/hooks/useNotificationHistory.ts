@@ -23,6 +23,8 @@ interface UseNotificationHistoryReturn {
   loading: boolean;
   error: Error | null;
   hasMore: boolean;
+  /** Timestamp (Date.now()) of the last *successful* fetchHistory completion — null until the first one. Never touched on failure, so it always reflects the last-known-good data (Task 3.1.2h, AC38). */
+  lastUpdatedAt: number | null;
   markAsRead: (ids: string[]) => Promise<void>;
   markAllAsRead: () => Promise<void>;
   clearHistory: (beforeTimestamp?: string) => Promise<void>;
@@ -43,6 +45,7 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
   const [error, setError] = useState<Error | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [offset, setOffset] = useState(0);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
@@ -84,6 +87,7 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
 
       setUnreadCount(response.unreadCount);
       setHasMore(response.hasMore);
+      setLastUpdatedAt(Date.now());
     } catch (err) {
       const fetchError =
         err instanceof Error
@@ -189,6 +193,7 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
     loading,
     error,
     hasMore,
+    lastUpdatedAt,
     markAsRead,
     markAllAsRead,
     clearHistory,

@@ -88,7 +88,7 @@ export function NotificationsPage() {
   const liveSessions = useAppSelector(selectAllSessions);
   const liveSessionIds = useMemo(() => new Set(liveSessions.map((s) => s.id)), [liveSessions]);
 
-  const { resolvedApprovals, pendingApprovals, blockedApprovals, resolveApproval } = useApprovalResolution({
+  const { resolvedApprovals, pendingApprovals, blockedApprovals, failedApprovals, resolveApproval } = useApprovalResolution({
     notificationHistory,
     acknowledgeNotification,
   });
@@ -244,6 +244,7 @@ export function NotificationsPage() {
             resolvedApprovals={resolvedApprovals}
             pendingApprovals={pendingApprovals}
             blockedApprovals={blockedApprovals}
+            failedApprovals={failedApprovals}
             resolveApproval={resolveApproval}
             removeFromHistory={removeFromHistory}
             handleNotificationClick={handleNotificationClick}
@@ -372,6 +373,7 @@ export function NotificationsPage() {
               resolvedApprovals={resolvedApprovals}
               pendingApprovals={pendingApprovals}
               blockedApprovals={blockedApprovals}
+              failedApprovals={failedApprovals}
               resolveApproval={resolveApproval}
               handleNotificationClick={handleNotificationClick}
               getSessionHref={getSessionHref}
@@ -402,6 +404,7 @@ export function NotificationsPage() {
               resolvedApprovals={resolvedApprovals}
               pendingApprovals={pendingApprovals}
               blockedApprovals={blockedApprovals}
+              failedApprovals={failedApprovals}
               resolveApproval={resolveApproval}
               handleNotificationClick={handleNotificationClick}
               getSessionHref={getSessionHref}

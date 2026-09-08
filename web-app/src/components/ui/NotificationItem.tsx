@@ -89,6 +89,8 @@ export interface NotificationItemProps {
   resolvedApprovals: Record<string, "allow" | "deny" | "expired">;
   pendingApprovals: Record<string, boolean>;
   blockedApprovals: Record<string, string>;
+  /** Transient resolveApproval failures (not the CI-block/reconciliation-race case) — the item stays actionable and this message renders next to the still-enabled Approve/Deny buttons. */
+  failedApprovals: Record<string, string>;
   resolveApproval: (
     approvalId: string,
     decision: "allow" | "deny",
@@ -131,6 +133,7 @@ export function NotificationItem({
   resolvedApprovals,
   pendingApprovals,
   blockedApprovals,
+  failedApprovals,
   resolveApproval,
   removeFromHistory,
   handleNotificationClick,
@@ -230,6 +233,7 @@ export function NotificationItem({
               const resolved = resolvedApprovals[approvalId];
               const isPending = !!pendingApprovals[approvalId];
               const blockedMessage = blockedApprovals[approvalId];
+              const failedMessage = failedApprovals[approvalId];
               if (resolved === "allow" || resolved === "deny") {
                 if (isReconciledNotification(notification)) {
                   const ruleName = notification.metadata?.["classifier_rule_name"] ?? "a rule";
@@ -285,6 +289,11 @@ export function NotificationItem({
               }
               return (
                 <>
+                  {failedMessage && (
+                    <span className={ciBlockedText} data-testid="approval-retry-message">
+                      {failedMessage}
+                    </span>
+                  )}
                   <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds)} disabled={isPending} title="Approve this tool use">
                     {isPending ? "…" : "✓ Approve"}
                   </button>
@@ -391,6 +400,7 @@ export interface NeedsDecisionSectionProps
     | "resolvedApprovals"
     | "pendingApprovals"
     | "blockedApprovals"
+    | "failedApprovals"
     | "resolveApproval"
     | "handleNotificationClick"
     | "getSessionHref"
@@ -426,6 +436,7 @@ export function NeedsDecisionSection({
   resolvedApprovals,
   pendingApprovals,
   blockedApprovals,
+  failedApprovals,
   resolveApproval,
   handleNotificationClick,
   getSessionHref,
@@ -527,6 +538,7 @@ export function NeedsDecisionSection({
               resolvedApprovals={resolvedApprovals}
               pendingApprovals={pendingApprovals}
               blockedApprovals={blockedApprovals}
+              failedApprovals={failedApprovals}
               resolveApproval={resolveApproval}
               handleNotificationClick={handleNotificationClick}
               getSessionHref={getSessionHref}

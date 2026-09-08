@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback, useRef, useMemo } from "react";
+import { useEffect, useCallback, useRef, useMemo, useState } from "react";
 import type { AsyncResult } from "@/lib/types/asyncResult";
 import { createClient } from "@connectrpc/connect";
 import { getWatchTransport } from "@/lib/api/transport";
@@ -33,8 +33,14 @@ import {
   selectReviewQueue,
   selectReviewQueueLoading,
   selectReviewQueueError,
+  selectReviewQueueLastUpdatedAt,
   selectReviewQueueItemsWithLiveStatus,
 } from "@/lib/store/reviewQueueSlice";
+import { isReviewQueueVisible } from "@/lib/utils/reviewQueueVisibility";
+
+// How long a reconciled row stays visible-but-disabled (ux.md Surface 9) before the
+// deferred removeItem dispatch actually removes it from the store.
+const AUTO_RESOLVED_DISPLAY_WINDOW_MS = 5000;
 
 interface UseReviewQueueOptions {
   autoRefresh?: boolean;
@@ -43,12 +49,30 @@ interface UseReviewQueueOptions {
   reasonFilter?: AttentionReason;
   useWebSocketPush?: boolean; // Enable WebSocket push updates
   fallbackPollInterval?: number; // Fallback polling interval (default: 30000ms)
+  /**
+   * Called when an `item_removed` event carries `autoResolvedByRule` (Epic 2.3.1) —
+   * i.e. rule-reconciliation resolved this item while it may still be visible.
+   * Fires immediately, before the ~5s display window elapses and the item is
+   * actually removed (see `autoResolvedRules` below for the same information as
+   * hook state, which most consumers should prefer over this callback).
+   */
+  onAutoResolved?: (sessionId: string, ruleName: string) => void;
 }
 
 interface UseReviewQueueReturn extends AsyncResult {
   // State
   reviewQueue: ReviewQueue | null;
   items: ReviewItem[];
+  // Set on every successful fetch (GetReviewQueue or WatchReviewQueue's initial snapshot
+  // arriving via a later refresh); null means "never completed a successful fetch." Drives
+  // the staleness indicator / narrowed error-takeover condition (Task 3.2.1d, AC38).
+  lastUpdatedAt: number | null;
+  // Session ID -> rule display name, for any item currently in its ~5s
+  // "disable, don't hide" display window after a reconciliation-driven removal
+  // (Epic 2.3.2, ux.md Surface 9). The item stays present in `items` for the
+  // whole window; consumers use this map to render it disabled with a banner
+  // instead of removing the row immediately.
+  autoResolvedRules: Record<string, string>;
 
   // Statistics
   totalItems: number;
@@ -109,13 +133,43 @@ export function useReviewQueue(
     reasonFilter,
     useWebSocketPush = true, // Enable WebSocket push by default
     fallbackPollInterval = 30000, // 30 second fallback polling
+    onAutoResolved,
   } = options;
+
+  // Ref'd so the itemRemoved handler (set once, see handleReviewQueueEventRef below)
+  // always calls the latest callback without needing it in that effect's deps.
+  const onAutoResolvedRef = useRef(onAutoResolved);
+  useEffect(() => {
+    onAutoResolvedRef.current = onAutoResolved;
+  }, [onAutoResolved]);
+
+  // sessionId -> rule name for items in their post-reconciliation display window
+  // (ux.md Surface 9's "disable, don't hide"). See autoResolvedRules on the return type.
+  const [autoResolvedRules, setAutoResolvedRules] = useState<Record<string, string>>({});
+  // Pending deferred-removal timers, keyed by sessionId, so they can be cleared on unmount.
+  const autoResolveTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  useEffect(() => {
+    const timeouts = autoResolveTimeoutsRef.current;
+    return () => {
+      for (const id of Object.values(timeouts)) clearTimeout(id);
+    };
+  }, []);
 
   const dispatch = useAppDispatch();
   const reviewQueue = useAppSelector(selectReviewQueue);
   const liveItems = useAppSelector(selectReviewQueueItemsWithLiveStatus);
   const loading = useAppSelector(selectReviewQueueLoading);
   const errorStr = useAppSelector(selectReviewQueueError);
+  const lastUpdatedAt = useAppSelector(selectReviewQueueLastUpdatedAt);
+
+  // Idle-reason items no longer occupy review-queue slots (Epic 3.2.2, ADR-002) — filtered
+  // once here so every consumer (ReviewQueuePanel, ReviewQueueNavBadge, BottomNav, DrawerNav)
+  // sees the same list, and totalItems (below) is derived from this same filtered array
+  // rather than the raw backend stat, avoiding a count-vs-list mismatch.
+  const filteredItems = useMemo(
+    () => liveItems.filter(isReviewQueueVisible),
+    [liveItems]
+  );
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -236,11 +290,34 @@ export function useReviewQueue(
           }
           break;
 
-        case "itemRemoved":
-          if (event.event.value.sessionId) {
-            dispatch(removeItem(event.event.value.sessionId));
+        case "itemRemoved": {
+          const sessionId = event.event.value.sessionId;
+          if (!sessionId) break;
+
+          const ruleName = event.event.value.autoResolvedByRule;
+          if (ruleName) {
+            // Reconciliation-driven removal (Epic 2.3.1): disable the row in place
+            // rather than removing it immediately (ux.md Surface 9) — surface the
+            // rule name now, defer the actual removeItem dispatch for ~5s so the
+            // disabled state + banner is visible first.
+            setAutoResolvedRules((prev) => ({ ...prev, [sessionId]: ruleName }));
+            onAutoResolvedRef.current?.(sessionId, ruleName);
+
+            const timeoutId = setTimeout(() => {
+              dispatch(removeItem(sessionId));
+              setAutoResolvedRules((prev) => {
+                const next = { ...prev };
+                delete next[sessionId];
+                return next;
+              });
+              delete autoResolveTimeoutsRef.current[sessionId];
+            }, AUTO_RESOLVED_DISPLAY_WINDOW_MS);
+            autoResolveTimeoutsRef.current[sessionId] = timeoutId;
+          } else {
+            dispatch(removeItem(sessionId));
           }
           break;
+        }
 
         case "itemUpdated":
           if (event.event.value.item && event.event.value.sessionId) {
@@ -467,7 +544,12 @@ export function useReviewQueue(
 
   // Extract statistics from review queue
   const statistics = {
-    totalItems: reviewQueue?.totalItems ?? 0,
+    // Filtered items.length, not the raw backend stat (reviewQueue?.totalItems counts ALL
+    // items including idle ones — session/queue/queue.go's TotalItems is deliberately
+    // unchanged per ADR-002's scope boundary). Every ReviewQueuePanel headline-count read
+    // sources totalItems from this hook, so fixing it here fixes every read site at once
+    // (adversarial-review.md Blocker 2).
+    totalItems: filteredItems.length,
     byPriority: new Map<Priority, number>(
       Object.entries(reviewQueue?.byPriority ?? {}).map(([key, value]) => [
         parseInt(key) as Priority,
@@ -491,7 +573,9 @@ export function useReviewQueue(
 
   return {
     reviewQueue,
-    items: liveItems,
+    items: filteredItems,
+    lastUpdatedAt,
+    autoResolvedRules,
     loading,
     error,
     ...statistics,

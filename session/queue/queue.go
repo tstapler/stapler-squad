@@ -192,10 +192,40 @@ type ReviewItem struct {
 	Score *Score `json:"score,omitempty"`
 }
 
+// RemovalInfo carries why a review item was removed, beyond the plain
+// sessionID Remove() gives observers today. Constructed only via
+// UserActionRemoval() or AutoResolvedByRuleRemoval(ruleName) so a
+// Reason/RuleName mismatch (e.g. "user_action" paired with a non-empty
+// RuleName) is not representable.
+type RemovalInfo struct {
+	reason   string
+	ruleName string
+}
+
+// Reason reports why the item was removed (e.g. "user_action",
+// "auto_resolved_by_rule").
+func (r RemovalInfo) Reason() string { return r.reason }
+
+// RuleName reports the display name of the rule that auto-resolved the
+// item, or "" for any removal not driven by rule-reconciliation.
+func (r RemovalInfo) RuleName() string { return r.ruleName }
+
+// UserActionRemoval is the RemovalInfo for a normal, human-driven removal.
+func UserActionRemoval() RemovalInfo {
+	return RemovalInfo{reason: "user_action"}
+}
+
+// AutoResolvedByRuleRemoval is the RemovalInfo for a removal driven by
+// rule-reconciliation resolving the underlying approval. ruleName must be
+// non-empty — it is always available at this call site.
+func AutoResolvedByRuleRemoval(ruleName string) RemovalInfo {
+	return RemovalInfo{reason: "auto_resolved_by_rule", ruleName: ruleName}
+}
+
 // ReviewQueueObserver is notified when the review queue changes.
 type ReviewQueueObserver interface {
 	OnItemAdded(item *ReviewItem)
-	OnItemRemoved(sessionID string)
+	OnItemRemoved(sessionID string, info RemovalInfo)
 	OnQueueUpdated(items []*ReviewItem)
 }
 
@@ -276,9 +306,17 @@ func (rq *ReviewQueue) Add(item *ReviewItem) bool {
 	return !exists
 }
 
-// Remove removes a session from the review queue.
-// Returns true if the item was present and removed.
+// Remove removes a session from the review queue as a normal, human-driven
+// removal. Returns true if the item was present and removed.
 func (rq *ReviewQueue) Remove(sessionID string) bool {
+	return rq.RemoveWithInfo(sessionID, UserActionRemoval())
+}
+
+// RemoveWithInfo removes a session from the review queue, notifying
+// observers with the given RemovalInfo (e.g. distinguishing a
+// rule-reconciliation removal from a normal one). Returns true if the item
+// was present and removed.
+func (rq *ReviewQueue) RemoveWithInfo(sessionID string, info RemovalInfo) bool {
 	rq.mu.Lock()
 
 	if _, exists := rq.items[sessionID]; !exists {
@@ -296,7 +334,7 @@ func (rq *ReviewQueue) Remove(sessionID string) bool {
 
 	// Notify observers AFTER releasing lock to avoid re-entrancy deadlock
 	for _, observer := range observersCopy {
-		observer.OnItemRemoved(sessionID)
+		observer.OnItemRemoved(sessionID, info)
 	}
 
 	return true

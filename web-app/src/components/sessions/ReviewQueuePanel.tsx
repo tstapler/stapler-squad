@@ -689,12 +689,15 @@ export function ReviewQueuePanel({
     [informationalItems, groupingStrategy, sessionByItemId]
   );
 
-  // Items eligible for bulk skip — approval requests are excluded because they need an
-  // explicit Approve/Deny decision, not a blanket dismissal (mirrors the single-item Skip
-  // button's own exclusion below).
+  // Items eligible for bulk skip — scoped to the "Needs a decision" tier only, never the
+  // Informational tier below it (Priority.LOW): "Skip all" is meant to clear urgent/high/
+  // medium items awaiting a decision, not to blanket-dismiss lower-priority informational
+  // items a user hasn't chosen to act on. Approval requests are further excluded because
+  // they need an explicit Approve/Deny decision, not a blanket dismissal (mirrors the
+  // single-item Skip button's own exclusion below).
   const skippableItems = useMemo(
-    () => items.filter((it) => !it.metadata?.["pending_approval_id"]),
-    [items]
+    () => needsDecisionItems.filter((it) => !it.metadata?.["pending_approval_id"]),
+    [needsDecisionItems]
   );
   const [isBulkSkipping, setIsBulkSkipping] = useState(false);
 
@@ -1458,8 +1461,8 @@ export function ReviewQueuePanel({
               size="md"
               onClick={handleSkipAllVisible}
               disabled={isBulkSkipping || skippableItems.length === 0}
-              title={`Skip every item currently shown${hasActiveFilter ? " by the active filter" : ""} (excludes approval requests)`}
-              aria-label={`Skip all ${skippableItems.length} visible item${skippableItems.length === 1 ? "" : "s"}`}
+              title={`Skip every Needs a Decision item currently shown${hasActiveFilter ? " by the active filter" : ""} (excludes approval requests and Informational items)`}
+              aria-label={`Skip all ${skippableItems.length} visible Needs a Decision item${skippableItems.length === 1 ? "" : "s"}`}
               data-testid="skip-all-visible"
             >
               {isBulkSkipping ? "Skipping…" : `⏭ Skip all (${skippableItems.length})`}

@@ -89,6 +89,10 @@ interface NotificationContextValue {
   getUnreadCount: () => number;
   historyLoading: boolean;
   historyHasMore: boolean;
+  /** Set when the most recent history fetch failed; cleared on the next successful one. Last-known-good `notificationHistory` is left untouched either way (Task 3.1.2h, AC38). */
+  historyError: Error | null;
+  /** Date.now() of the last successful history fetch; null until the first one completes. */
+  historyLastUpdatedAt: number | null;
   loadMoreHistory: () => Promise<void>;
   /** Re-fetch the full notification history from the server (e.g. after a stream reconnect). */
   refreshHistory: () => Promise<void>;
@@ -476,6 +480,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         getUnreadCount,
         historyLoading: history.loading,
         historyHasMore: history.hasMore,
+        historyError: history.error,
+        historyLastUpdatedAt: history.lastUpdatedAt,
         loadMoreHistory: history.loadMore,
         refreshHistory: history.refresh,
         showUndoToast,
