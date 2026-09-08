@@ -332,7 +332,7 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 
 	st := inst.GetEffectiveStatus()
 	var restartErr error
-	if st == Stopped || st == PermanentlyFailed {
+	if st == Stopped || st == PermanentlyFailed || st == Failed {
 		inst.RecoverFromStopped()
 		// A prior failure may have been the session's worktree directory
 		// vanishing from disk (e.g. a pruned/deleted git worktree — see
