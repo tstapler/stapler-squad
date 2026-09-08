@@ -390,21 +390,6 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to open repo at %s: %w", worktreePath, err)
 	}
 
-	// Refuse a dirty worktree before touching anything else — matching legacy's `git
-	// merge`, which fails with "local changes would be overwritten by merge" rather than
-	// silently discarding uncommitted edits in any path the merge touches.
-	wt, err := repo.Worktree()
-	if err != nil {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to get worktree at %s: %w", worktreePath, err)
-	}
-	status, err := wt.Status()
-	if err != nil {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to check worktree status at %s: %w", worktreePath, err)
-	}
-	if !status.IsClean() {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: worktree at %s has uncommitted changes; refusing to merge %s (matches legacy git merge's \"local changes would be overwritten\" refusal)", worktreePath, mainBranch)
-	}
-
 	oursSHA, err := getHeadCommitSHA(worktreePath)
 	if err != nil {
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to resolve HEAD: %w", err)
@@ -425,7 +410,11 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 
 	// Up to date: everything on mainBranch is already reachable from ours (including the
 	// trivial ours == theirs case — IsAncestor's preorder walk visits its starting commit
-	// first, per plumbing/object/merge_base.go).
+	// first, per plumbing/object/merge_base.go). Checked before any dirty-worktree
+	// validation — matching real git, an up-to-date merge touches nothing on disk and
+	// succeeds regardless of how dirty the working tree is (verified empirically: `git
+	// merge` on an already-current branch reports "Already up to date." even with
+	// uncommitted tracked and untracked changes present).
 	upToDate, err := theirs.IsAncestor(ours)
 	if err != nil {
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to check ancestry (up-to-date): %w", err)
@@ -433,6 +422,38 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 	if upToDate {
 		recordMergeOutcome(mergeOutcomeUpToDate)
 		return &MergeMainResult{UpToDate: true}, nil
+	}
+
+	// Refuse only if the merge would actually overwrite something — matching legacy's
+	// `git merge`, which fails with "local changes would be overwritten by merge"/"The
+	// following untracked working tree files would be overwritten by merge" only for
+	// paths the merge itself needs to touch, not the whole worktree (verified
+	// empirically: an unrelated untracked file never blocks a real `git merge`). A
+	// blanket status.IsClean() check here was a false-positive trap: every real session
+	// worktree carries incidental untracked files (.mcp.json, .claude/settings.local.json)
+	// that have nothing to do with the paths being merged.
+	oursTree, err := ours.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to resolve ours tree: %w", err)
+	}
+	theirsTree, err := theirs.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to resolve theirs tree: %w", err)
+	}
+	changes, err := oursTree.Diff(theirsTree)
+	if err != nil {
+		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to diff ours..theirs: %w", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to get worktree at %s: %w", worktreePath, err)
+	}
+	status, err := wt.Status()
+	if err != nil {
+		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to check worktree status at %s: %w", worktreePath, err)
+	}
+	if conflictPath, blocked := worktreeBlocksMerge(status, changes); blocked {
+		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: %q at %s has local changes that would be overwritten; refusing to merge %s (matches legacy git merge's refusal)", conflictPath, worktreePath, mainBranch)
 	}
 
 	refPath, err := checkedOutBranchRefPath(worktreePath, repo)
@@ -456,6 +477,39 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 	}
 
 	return nativeThreeWayMerge(worktreePath, repo, ours, theirs, mainBranch, refPath)
+}
+
+// worktreeBlocksMerge reports whether status has any dirty entry at a path changes
+// touches — the exact condition real git's own merge refuses on ("local changes ... would
+// be overwritten" for a tracked modification, "untracked working tree files would be
+// overwritten" for an untracked one). changes is ours..theirs (an Insert/Delete/Modify at
+// path p means the merge is about to write or remove p's content), which is a safe
+// superset of what a three-way merge can touch too: if ours and theirs already agree at a
+// path, nothing needs to move regardless of algorithm, so it's absent from changes and
+// correctly never checked. Any status entry NOT on a touched path — the common case for a
+// real session worktree's incidental untracked files (.mcp.json, .claude/settings.local.json)
+// — is intentionally ignored, unlike a blanket status.IsClean() check.
+func worktreeBlocksMerge(status git.Status, changes object.Changes) (path string, blocked bool) {
+	touched := make(map[string]bool, len(changes)*2)
+	for _, c := range changes {
+		if c.From.Name != "" {
+			touched[c.From.Name] = true
+		}
+		if c.To.Name != "" {
+			touched[c.To.Name] = true
+		}
+	}
+
+	for p := range touched {
+		fileStatus, hasEntry := status[p]
+		if !hasEntry {
+			continue
+		}
+		if fileStatus.Staging != git.Unmodified || fileStatus.Worktree != git.Unmodified {
+			return p, true
+		}
+	}
+	return "", false
 }
 
 // checkedOutBranchRefPath resolves the on-disk file path of the branch ref currently
