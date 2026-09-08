@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +16,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // mergeAbortFixture builds a repo where HEAD (branch "feature") has a.txt = "line1\nours\n",
@@ -75,7 +78,7 @@ func materializeFixtureConflict(t *testing.T, f mergeAbortFixture) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(f.repoPath, "a.txt"), []byte(markerText), 0o644))
 
-	require.NoError(t, writeMergeStateFiles(f.repoPath, f.theirsSHA, "main"))
+	require.NoError(t, writeMergeStateFiles(WorktreePath(f.repoPath), f.theirsSHA, "main"))
 }
 
 // TestWriteMergeStateFiles_RealGitMergeAbortSucceeds covers Story 3.3.3's first
@@ -104,7 +107,7 @@ func TestAbortNativeMerge_ClearsStateAndResetsWorkingTree(t *testing.T) {
 		Entries: []*index.Entry{f.preMergeEntry},
 		Content: map[string][]byte{"a.txt": f.preMergeContent},
 	}
-	require.NoError(t, abortNativeMerge(f.repoPath, snapshot))
+	require.NoError(t, abortNativeMerge(WorktreePath(f.repoPath), snapshot))
 
 	gitDir := filepath.Join(f.repoPath, ".git")
 	for _, name := range []string{mergeHeadFile, mergeMsgFile, mergeModeFile} {
@@ -125,7 +128,7 @@ func TestAbortNativeMerge_should_ReturnError_When_PreMergeIndexSnapshotMissing(t
 	f := buildMergeAbortFixture(t)
 	materializeFixtureConflict(t, f)
 
-	err := abortNativeMerge(f.repoPath, nil)
+	err := abortNativeMerge(WorktreePath(f.repoPath), nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pre-merge index snapshot")
@@ -225,15 +228,20 @@ func TestNativeMergeMainIntoWorktree_CleanThreeWayMerge(t *testing.T) {
 // instead. A divergence exists here (main-fix.txt on main) so the merge would otherwise
 // have real work to do, proving the refusal fires before any merge computation, not just
 // because there was nothing to merge.
+// TestNativeMergeMainIntoWorktree_RefusesOnDirtyWorktree_PreservesUncommittedChanges covers
+// real git's actual refusal condition (verified empirically against `git merge`): a merge
+// refuses only when it would overwrite a path that's locally dirty. Here main's incoming
+// change touches the same README.md path the worktree has dirtied, so a real `git merge`
+// would refuse too ("Your local changes ... would be overwritten by merge").
 func TestNativeMergeMainIntoWorktree_RefusesOnDirtyWorktree_PreservesUncommittedChanges(t *testing.T) {
 	t.Parallel()
 	origin := setupTestRepo(t)
 	work := cloneTestRepo(t, origin)
 	runGit(t, work, "checkout", "-b", "feature")
 
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "main-fix.txt"), []byte("fix on main\n"), 0o644))
-	runGit(t, origin, "add", "main-fix.txt")
-	runGit(t, origin, "commit", "-m", "fix landed on main")
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("main's README edit\n"), 0o644))
+	runGit(t, origin, "add", "README.md")
+	runGit(t, origin, "commit", "-m", "README changed on main")
 
 	beforeSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
 	const dirtyContent = "uncommitted local edit\n"
@@ -241,7 +249,7 @@ func TestNativeMergeMainIntoWorktree_RefusesOnDirtyWorktree_PreservesUncommitted
 
 	result, err := nativeMergeMainIntoWorktree(work, "main")
 
-	require.Error(t, err, "a dirty worktree must refuse the merge, matching legacy git merge's own refusal")
+	require.Error(t, err, "a merge that would overwrite a locally dirty path must refuse, matching legacy git merge's own refusal")
 	assert.Nil(t, result)
 
 	afterSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
@@ -250,6 +258,63 @@ func TestNativeMergeMainIntoWorktree_RefusesOnDirtyWorktree_PreservesUncommitted
 	content, readErr := os.ReadFile(filepath.Join(work, "README.md"))
 	require.NoError(t, readErr)
 	assert.Equal(t, dirtyContent, string(content), "the uncommitted edit must survive the refused merge untouched")
+}
+
+// TestNativeMergeMainIntoWorktree_UnrelatedDirtyFile_DoesNotBlockMerge_AndSurvives is the
+// regression guard for the false-positive a blanket status.IsClean() check used to produce
+// (found via a live canary of a real stapler-squad session worktree: an incidental
+// untracked .mcp.json blocked every merge attempt). Verified empirically against real
+// `git merge`: an uncommitted change to a path the incoming merge never touches does not
+// block the merge, tracked or untracked, and survives it untouched.
+func TestNativeMergeMainIntoWorktree_UnrelatedDirtyFile_DoesNotBlockMerge_AndSurvives(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "main-fix.txt"), []byte("fix on main\n"), 0o644))
+	runGit(t, origin, "add", "main-fix.txt")
+	runGit(t, origin, "commit", "-m", "fix landed on main, unrelated to README.md or untracked.txt")
+
+	const dirtyContent = "uncommitted local edit\n"
+	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte(dirtyContent), 0o644))
+	const untrackedContent = "session-generated scratch file, e.g. .mcp.json\n"
+	require.NoError(t, os.WriteFile(filepath.Join(work, "untracked.txt"), []byte(untrackedContent), 0o644))
+
+	result, err := nativeMergeMainIntoWorktree(work, "main")
+
+	require.NoError(t, err, "a dirty/untracked path the merge never touches must not block it")
+	require.NotNil(t, result)
+	assert.True(t, result.Merged)
+	assert.FileExists(t, filepath.Join(work, "main-fix.txt"))
+
+	readmeContent, readErr := os.ReadFile(filepath.Join(work, "README.md"))
+	require.NoError(t, readErr)
+	assert.Equal(t, dirtyContent, string(readmeContent), "the unrelated dirty tracked file must survive the merge untouched")
+
+	untrackedFileContent, readErr := os.ReadFile(filepath.Join(work, "untracked.txt"))
+	require.NoError(t, readErr)
+	assert.Equal(t, untrackedContent, string(untrackedFileContent), "the unrelated untracked file must survive the merge untouched")
+}
+
+// TestNativeMergeMainIntoWorktree_UpToDate_IgnoresDirtyWorktree is the regression guard for
+// the other half of the same false-positive: real git's "Already up to date." outcome never
+// even inspects the working tree, so it succeeds regardless of how dirty the worktree is.
+func TestNativeMergeMainIntoWorktree_UpToDate_IgnoresDirtyWorktree(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+	runGit(t, work, "fetch", "origin", "main")
+
+	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("uncommitted local edit\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "untracked.txt"), []byte("scratch\n"), 0o644))
+
+	result, err := nativeMergeMainIntoWorktree(work, "main")
+
+	require.NoError(t, err, "an up-to-date merge must succeed regardless of worktree dirtiness")
+	require.NotNil(t, result)
+	assert.True(t, result.UpToDate)
 }
 
 // TestNativeMergeMainIntoWorktree_CleanWorktree_StillMerges is the regression guard for
@@ -590,7 +655,7 @@ func TestWriteWorkingTreeFile_RejectsEscapingRelPath_DoesNotWriteOutsideWorktree
 	require.NoError(t, os.MkdirAll(worktreePath, 0o750))
 
 	outsideTarget := filepath.Join(parent, "escaped.txt")
-	err := writeWorkingTreeFile(worktreePath, "../escaped.txt", filemode.Regular, []byte("pwned\n"))
+	err := writeWorkingTreeFile(WorktreePath(worktreePath), "../escaped.txt", filemode.Regular, []byte("pwned\n"))
 	require.Error(t, err)
 	_, statErr := os.Stat(outsideTarget)
 	assert.True(t, os.IsNotExist(statErr), "a rejected relPath must never reach disk outside worktreePath")
@@ -868,13 +933,14 @@ func TestNativeMergeMainIntoWorktree_ConflictReadThroughBlockingSymlink_IsSafely
 
 	leakedPath := filepath.Join(work, "link", "evil.txt")
 	content, readErr := os.ReadFile(leakedPath)
-	if strings.Contains(mergeErr.Error(), "uncommitted changes") {
-		// Gate 2 Blocker 1's dirty-worktree guard fires first here: the planted symlink
-		// is an untracked worktree entry, so the merge refuses before ever reaching
-		// capturePreMergeSnapshot's tree-writing logic at all — an even safer outcome
-		// than clearing the symlink mid-merge, since no worktree write of any kind
-		// happens. The symlink is therefore left exactly as the test planted it, still
-		// resolving to its original (pre-merge) target.
+	if strings.Contains(mergeErr.Error(), "would be overwritten") {
+		// worktreeBlocksMerge fires first here: "link/evil.txt" is one of the paths the
+		// merge is about to touch (per addFlatEntry's tree rewrite) and the on-disk
+		// state at that path doesn't match the index, so the merge refuses before ever
+		// reaching capturePreMergeSnapshot's tree-writing logic at all — an even safer
+		// outcome than clearing the symlink mid-merge, since no worktree write of any
+		// kind happens. The symlink is therefore left exactly as the test planted it,
+		// still resolving to its original (pre-merge) target.
 		if readErr == nil {
 			assert.Equal(t, secretContent, string(content), "a merge refused before touching the worktree must leave the planted symlink completely untouched")
 		}
@@ -882,5 +948,136 @@ func TestNativeMergeMainIntoWorktree_ConflictReadThroughBlockingSymlink_IsSafely
 	}
 	if readErr == nil {
 		assert.NotEqual(t, secretContent, string(content), "content from outside the worktree must never leak into the worktree via capturePreMergeSnapshot's read")
+	}
+}
+
+// runGitAllowError is runGit without the require.NoError — for the one case in this file
+// where a non-zero exit is the scenario under test (a real `git merge` refusal), not a
+// fixture-setup failure.
+func runGitAllowError(t *testing.T, dir string, args ...string) error {
+	t.Helper()
+	cmd := safeexec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	_, err := cmd.CombinedOutput()
+	return err
+}
+
+// TestNativeMergeMainIntoWorktree_DirtyWorktreeBehavior_MatchesRealGit is the differential
+// regression guard for the dirty-worktree false positive found via a live canary of a real
+// stapler-squad session worktree (an incidental untracked .mcp.json blocked every merge
+// attempt): rather than hand-asserting what nativeMergeMainIntoWorktree "should" do, this
+// runs each scenario through a REAL `git merge` subprocess and through
+// nativeMergeMainIntoWorktree against two independently cloned, identically-seeded repos,
+// and asserts the two AGREE on outcome — the same interop bar the rest of this package's
+// differential/cross-implementation tests hold native to (DifferentialMergeHarness,
+// native_interop_test.go), applied here to the refusal decision itself rather than just
+// merge output content.
+func TestNativeMergeMainIntoWorktree_DirtyWorktreeBehavior_MatchesRealGit(t *testing.T) {
+	t.Parallel()
+
+	type scenario struct {
+		name string
+		// seedOrigin advances origin's main branch before either clone is taken, so both
+		// the oracle and native worktrees start from an identical divergence.
+		seedOrigin func(t *testing.T, origin string)
+		// dirtyWorktree applies identical uncommitted/untracked state to a freshly
+		// cloned "feature" worktree — called once per clone (oracle and native).
+		dirtyWorktree func(t *testing.T, work string)
+		wantRefuse    bool
+	}
+
+	scenarios := []scenario{
+		{
+			name: "unrelated_untracked_file_does_not_block",
+			seedOrigin: func(t *testing.T, origin string) {
+				require.NoError(t, os.WriteFile(filepath.Join(origin, "main-fix.txt"), []byte("fix on main\n"), 0o644))
+				runGit(t, origin, "add", "main-fix.txt")
+				runGit(t, origin, "commit", "-m", "fix on main")
+			},
+			dirtyWorktree: func(t *testing.T, work string) {
+				require.NoError(t, os.WriteFile(filepath.Join(work, "untracked.txt"), []byte("session-generated scratch file\n"), 0o644))
+			},
+			wantRefuse: false,
+		},
+		{
+			name: "unrelated_tracked_modification_does_not_block",
+			seedOrigin: func(t *testing.T, origin string) {
+				require.NoError(t, os.WriteFile(filepath.Join(origin, "main-fix.txt"), []byte("fix on main\n"), 0o644))
+				runGit(t, origin, "add", "main-fix.txt")
+				runGit(t, origin, "commit", "-m", "fix on main")
+			},
+			dirtyWorktree: func(t *testing.T, work string) {
+				require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("local edit\n"), 0o644))
+			},
+			wantRefuse: false,
+		},
+		{
+			name: "colliding_tracked_modification_blocks",
+			seedOrigin: func(t *testing.T, origin string) {
+				require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("main's edit\n"), 0o644))
+				runGit(t, origin, "add", "README.md")
+				runGit(t, origin, "commit", "-m", "README changed on main")
+			},
+			dirtyWorktree: func(t *testing.T, work string) {
+				require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("local edit\n"), 0o644))
+			},
+			wantRefuse: true,
+		},
+		{
+			name: "colliding_untracked_file_blocks",
+			seedOrigin: func(t *testing.T, origin string) {
+				require.NoError(t, os.WriteFile(filepath.Join(origin, "newfile.txt"), []byte("incoming content\n"), 0o644))
+				runGit(t, origin, "add", "newfile.txt")
+				runGit(t, origin, "commit", "-m", "adds newfile.txt on main")
+			},
+			dirtyWorktree: func(t *testing.T, work string) {
+				require.NoError(t, os.WriteFile(filepath.Join(work, "newfile.txt"), []byte("local unstaged content\n"), 0o644))
+			},
+			wantRefuse: true,
+		},
+		{
+			name:       "up_to_date_ignores_dirty_worktree",
+			seedOrigin: func(t *testing.T, origin string) {},
+			dirtyWorktree: func(t *testing.T, work string) {
+				require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("local edit\n"), 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(work, "untracked.txt"), []byte("scratch\n"), 0o644))
+			},
+			wantRefuse: false,
+		},
+	}
+
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			t.Parallel()
+
+			origin := setupTestRepo(t)
+
+			// Both clones are taken BEFORE origin advances, so "feature" starts
+			// identical to (and diverges from) "main" the same way in both — cloning
+			// after seedOrigin would make feature already contain the seeded commit,
+			// collapsing every scenario into a no-op "already up to date" merge.
+			oracleWork := cloneTestRepo(t, origin)
+			runGit(t, oracleWork, "checkout", "-b", "feature")
+
+			nativeWork := cloneTestRepo(t, origin)
+			runGit(t, nativeWork, "checkout", "-b", "feature")
+
+			sc.seedOrigin(t, origin)
+
+			sc.dirtyWorktree(t, oracleWork)
+			runGit(t, oracleWork, "fetch", "origin", "main")
+			oracleErr := runGitAllowError(t, oracleWork, "merge", "--no-edit", "origin/main")
+
+			sc.dirtyWorktree(t, nativeWork)
+			_, nativeErr := nativeMergeMainIntoWorktree(nativeWork, "main")
+
+			if sc.wantRefuse {
+				assert.Error(t, oracleErr, "test bug: real git was expected to refuse this scenario but didn't")
+				assert.Error(t, nativeErr, "native must refuse exactly when real git refuses")
+			} else {
+				assert.NoError(t, oracleErr, "test bug: real git was expected to succeed on this scenario but refused")
+				assert.NoError(t, nativeErr, "native must succeed exactly when real git succeeds")
+			}
+		})
 	}
 }
