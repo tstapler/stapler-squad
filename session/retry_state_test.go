@@ -25,7 +25,8 @@ type fakeLivenessProcessManager struct {
 	restoreDelay time.Duration
 }
 
-func (m *fakeLivenessProcessManager) IsAlive() bool { return m.alive }
+func (m *fakeLivenessProcessManager) IsAlive() bool               { return m.alive }
+func (m *fakeLivenessProcessManager) HasLiveSessionNoCache() bool { return m.alive }
 
 func (m *fakeLivenessProcessManager) RestoreWithWorkDir(dir string) error {
 	if m.restoreDelay > 0 {

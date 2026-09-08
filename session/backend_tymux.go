@@ -82,8 +82,16 @@ func (b *TymuxBackend) RestoreWithWorkDir(w string) error {
 	return b.mgr.RestoreWithWorkDir(w)
 }
 
-func (b *TymuxBackend) Close() error     { return b.mgr.Close() }
-func (b *TymuxBackend) IsAlive() bool    { return b.mgr.IsAlive() }
+func (b *TymuxBackend) Close() error  { return b.mgr.Close() }
+func (b *TymuxBackend) IsAlive() bool { return b.mgr.IsAlive() }
+
+// HasLiveSessionNoCache is just IsAlive(): tymux's IsAlive() already does a
+// live CapturePane RPC on every call (session/tymux/session.go), falling
+// back to a cached flag only when tymuxd itself is unreachable — there is
+// no separate cached fast path to bypass the way tmux's DoesSessionExist()
+// has one.
+func (b *TymuxBackend) HasLiveSessionNoCache() bool { return b.mgr.IsAlive() }
+
 func (b *TymuxBackend) HasSession() bool { return b.mgr.HasSession() }
 
 // GetSessionIdentifier implements ProcessManager by delegating to the underlying

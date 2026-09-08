@@ -475,6 +475,20 @@ func TestTymuxGRPCSession_GetPanePID_ReturnsNotSupportedError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotSupportedOnTymuxBackend)
 }
 
+// TestTymuxGRPCSession_StartStopControlMode_AreNoOps is the regression test
+// for a real production gap: these used to return ErrNotImplemented, which
+// made streamhub.SessionController's contract-required no-op fail instead,
+// aborting the browser terminal's WebSocket stream (server/services'
+// streamViaHub/streamViaControlMode both call StartControlMode before
+// attaching) for every tymux-backed session — the interactive terminal
+// never rendered and typing had nowhere to go.
+func TestTymuxGRPCSession_StartStopControlMode_AreNoOps(t *testing.T) {
+	sess := NewTymuxGRPCSession(&fakeTransport{})
+
+	assert.NoError(t, sess.StartControlMode())
+	assert.NoError(t, sess.StopControlMode())
+}
+
 // --- Story 2.2.6: ErrTymuxdUnreachable classification ---
 
 func TestTymuxGRPCSession_Start_TransportUnavailable_ClassifiesAsErrTymuxdUnreachable(t *testing.T) {

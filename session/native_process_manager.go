@@ -228,6 +228,12 @@ func (n *NativeProcessManager) HasSession() bool {
 	return n.IsAlive()
 }
 
+// HasLiveSessionNoCache is just IsAlive(): it already checks live OS process
+// state directly on every call, with nothing cached to bypass.
+func (n *NativeProcessManager) HasLiveSessionNoCache() bool {
+	return n.IsAlive()
+}
+
 // RestoreWithWorkDir is a no-op for the native backend; the process is already
 // running after Start() and does not need re-attachment.
 func (n *NativeProcessManager) RestoreWithWorkDir(_ string) error {

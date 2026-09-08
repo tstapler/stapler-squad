@@ -128,6 +128,15 @@ func (tm *TmuxProcessManager) DoesSessionExist() bool {
 	return s.DoesSessionExist()
 }
 
+// DoesSessionExistNoCache is DoesSessionExist with any cached answer bypassed.
+func (tm *TmuxProcessManager) DoesSessionExistNoCache() bool {
+	s := tm.session.Load()
+	if s == nil {
+		return false
+	}
+	return s.DoesSessionExistNoCache()
+}
+
 // SetDetachedSize updates the tmux window dimensions without attaching.
 // Rate-limits PTY-not-initialized warnings to avoid log spam.
 func (tm *TmuxProcessManager) SetDetachedSize(width, height int, instanceTitle string) error {
@@ -555,6 +564,7 @@ type TmuxManager interface {
 	Close() error
 	DetachSafely() error
 	DoesSessionExist() bool
+	DoesSessionExistNoCache() bool
 	SetDetachedSize(width, height int, instanceTitle string) error
 	Attach() (chan struct{}, error)
 	CapturePaneContent() (string, error)

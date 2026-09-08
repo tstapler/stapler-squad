@@ -46,6 +46,7 @@ func (b *TmuxBackend) Start(dir string) error            { return b.mgr.Start(di
 func (b *TmuxBackend) RestoreWithWorkDir(w string) error { return b.mgr.RestoreWithWorkDir(w) }
 func (b *TmuxBackend) Close() error                      { return b.mgr.Close() }
 func (b *TmuxBackend) IsAlive() bool                     { return b.mgr.IsAlive() }
+func (b *TmuxBackend) HasLiveSessionNoCache() bool       { return b.mgr.DoesSessionExistNoCache() }
 func (b *TmuxBackend) HasSession() bool                  { return b.mgr.HasSession() }
 
 // --- Terminal I/O ---

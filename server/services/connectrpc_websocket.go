@@ -1100,18 +1100,17 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	// *tmux.TmuxSession type. *Instance satisfies this interface via delegation methods.
 	var streamer SessionStreamer = instance
 
-	// Check if the tmux session exists BEFORE starting control mode.
+	// Check the backend process is alive BEFORE starting control mode.
 	// StartControlMode() only returns an error if the process fails to launch — it does
-	// NOT return an error when tmux can't find the session, because that error arrives
+	// NOT return an error when the session can't be found, because that error arrives
 	// asynchronously via the output reader goroutine. We must check existence first so
-	// the restore path actually runs.
-	tmuxSession := instance.GetTmuxSession()
-	// Use no-cache check: a stale positive (cache still true after session died) causes
-	// control mode to attach to a dead session and immediately receive %exit.
-	if tmuxSession != nil && !tmuxSession.DoesSessionExistNoCache() {
-		log.Info("[streamViaControlMode] session not in tmux, restoring before control mode", "session", sessionID)
+	// the restore path actually runs. No-cache: a stale positive (cache still true after
+	// the session died) causes control mode to attach to a dead session and immediately
+	// receive %exit.
+	if !instance.IsBackendProcessAlive() {
+		log.Info("[streamViaControlMode] session not alive, restoring before control mode", "session", sessionID)
 		workDir := instance.GetWorkingDirectory()
-		if restoreErr := tmuxSession.RestoreWithWorkDir(workDir); restoreErr != nil {
+		if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
 			return handleTmuxRestoreFailure(instance, restoreErr)
 		}
 	}
@@ -1708,24 +1707,23 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		return fmt.Errorf("handshake missing CurrentPaneRequest - client may need update")
 	}
 
-	tmuxSession := instance.GetTmuxSession()
-	tmuxAlive := tmuxSession != nil && tmuxSession.DoesSessionExistNoCache()
-	if tmuxSession != nil && !tmuxAlive {
-		log.Info("[streamViaHub] session not in tmux, restoring before control mode", "session", sessionID)
+	processAlive := instance.IsBackendProcessAlive()
+	if !processAlive {
+		log.Info("[streamViaHub] session not alive, restoring before control mode", "session", sessionID)
 		workDir := instance.GetWorkingDirectory()
-		if restoreErr := tmuxSession.RestoreWithWorkDir(workDir); restoreErr != nil {
+		if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
 			return handleTmuxRestoreFailure(instance, restoreErr)
 		}
-		// RestoreWithWorkDir always returns nil even on PTY attach failure
-		// (see the identical comment on session/instance.go's own
-		// RestoreWithWorkDir call site) — a nil error alone does not prove the
-		// tmux session is genuinely ready to serve capture/resize traffic.
+		// RestoreProcess always returns nil even on PTY attach failure (see
+		// the identical comment on session/instance.go's own
+		// RestoreWithWorkDir call site) — a nil error alone does not prove
+		// the session is genuinely ready to serve capture/resize traffic.
 		// Confirm a real PTY attached before treating it (and, below, the
 		// self-heal decision that depends on it) as alive.
-		if _, ptyErr := tmuxSession.GetPTY(); ptyErr != nil {
-			log.Warn("[streamViaHub] restored tmux session but PTY attach failed, not treating as alive", "session", sessionID, "err", ptyErr)
+		if _, ptyErr := instance.GetPTYReader(); ptyErr != nil {
+			log.Warn("[streamViaHub] restored session but PTY attach failed, not treating as alive", "session", sessionID, "err", ptyErr)
 		} else {
-			tmuxAlive = true
+			processAlive = true
 		}
 	}
 
@@ -1735,7 +1733,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	if !instance.Started() {
 		log.Info("[streamViaHub] instance not started yet, waiting briefly before attaching", "session", sessionID)
 		if !waitForInstanceStartedEvent(h.sessionService.GetEventBus(), instance, startupWaitTimeout) {
-			if tmuxAlive {
+			if processAlive {
 				// Instance.Start() never ran for this instance (or raced/failed in
 				// server/dependencies.go's boot-time restart loop) even though tmux
 				// itself is confirmed alive. Self-heal instead of leaving Started()

@@ -15,6 +15,58 @@ import (
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
+// TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive is the
+// regression test for a bug caught reviewing this exact refactor: the
+// generic replacement for connectrpc_websocket.go's GetTmuxSession()+
+// DoesSessionExistNoCache() reach-in must call the ProcessManager's no-cache
+// check, not the cached IsAlive() TmuxAlive() itself uses — a stale cached
+// positive there causes control mode to attach to a dead session and
+// immediately receive %exit (see the two callers' own comments). Also
+// confirms IsBackendProcessAlive() bypasses Status/started gating, unlike
+// TmuxAlive(), since streamViaHub/streamViaControlMode call it before that
+// gating would even apply.
+func TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive(t *testing.T) {
+	// isAliveReturn (cached) says dead; existsNoCacheReturn (fresh) says
+	// alive — a stale-cache-vs-fresh-check divergence. If
+	// IsBackendProcessAlive() used the cached path, it would wrongly
+	// report false here.
+	mock := &mockTmuxManager{hasSessionReturn: true, isAliveReturn: false, existsNoCacheReturn: true}
+	inst := &Instance{
+		Title:          "t",
+		Status:         Creating,
+		processManager: NewTmuxBackend(mock),
+	}
+	// started deliberately left false: TmuxAlive() would report false here,
+	// but IsBackendProcessAlive() must not gate on it.
+
+	if !inst.IsBackendProcessAlive() {
+		t.Error("IsBackendProcessAlive() = false, want true (must use the no-cache check, and must not gate on Status/started like TmuxAlive())")
+	}
+	if inst.TmuxAlive() {
+		t.Error("test setup invalid: TmuxAlive() should be false here (started==false) to prove the two diverge")
+	}
+}
+
+// TestRestoreProcess_DelegatesToProcessManager confirms RestoreProcess is a
+// thin, backend-agnostic pass-through to ProcessManager.RestoreWithWorkDir —
+// the replacement for reaching into a concrete *tmux.TmuxSession via
+// GetTmuxSession().RestoreWithWorkDir().
+func TestRestoreProcess_DelegatesToProcessManager(t *testing.T) {
+	mock := &mockTmuxManager{restoreReturn: errRestoreFailedForTest}
+	inst := &Instance{Title: "t", processManager: NewTmuxBackend(mock)}
+
+	err := inst.RestoreProcess("/some/dir")
+
+	if mock.restoreCalls != 1 {
+		t.Errorf("RestoreWithWorkDir calls = %d, want 1", mock.restoreCalls)
+	}
+	if !errors.Is(err, errRestoreFailedForTest) {
+		t.Errorf("RestoreProcess() error = %v, want the ProcessManager's own error propagated", err)
+	}
+}
+
+var errRestoreFailedForTest = errors.New("restore failed (test)")
+
 // TestBuildSubmittableInput_UsesCarriageReturnNotNewline is a regression test
 // for BUG-047: WriteToSession (the ConnectRPC handler backing the web UI's
 // session chat box) and the write_to_session/run_command MCP tools appended

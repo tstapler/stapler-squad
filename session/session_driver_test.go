@@ -50,6 +50,7 @@ func (m *stuckDialogProcessManager) Start(dir string) error              { retur
 func (m *stuckDialogProcessManager) RestoreWithWorkDir(dir string) error { return nil }
 func (m *stuckDialogProcessManager) Close() error                        { return nil }
 func (m *stuckDialogProcessManager) IsAlive() bool                       { return true }
+func (m *stuckDialogProcessManager) HasLiveSessionNoCache() bool         { return true }
 func (m *stuckDialogProcessManager) GetSessionIdentifier() string        { return "phase0-repro" }
 func (m *stuckDialogProcessManager) HasSession() bool                    { return true }
 func (m *stuckDialogProcessManager) GetCurrentWorkingDirectory() (string, error) {

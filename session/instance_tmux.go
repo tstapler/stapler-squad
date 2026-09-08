@@ -668,6 +668,20 @@ func (i *Instance) TmuxAlive() bool {
 	return i.pm().IsAlive()
 }
 
+// IsBackendProcessAlive reports raw process liveness with no Status/started
+// gating (unlike TmuxAlive()) and no cached liveness flag — the
+// backend-agnostic replacement for reaching into a concrete
+// *tmux.TmuxSession's DoesSessionExistNoCache().
+func (i *Instance) IsBackendProcessAlive() bool {
+	return i.pm().HasSession() && i.pm().HasLiveSessionNoCache()
+}
+
+// RestoreProcess is the backend-agnostic replacement for reaching into a
+// concrete *tmux.TmuxSession's RestoreWithWorkDir().
+func (i *Instance) RestoreProcess(workDir string) error {
+	return i.pm().RestoreWithWorkDir(workDir)
+}
+
 // PaneProcessDead reports whether the tmux session is alive (TmuxAlive()==true)
 // but the wrapped program running in the pane has already exited. remain-on-exit
 // keeps the tmux session/pane around as a "Pane is dead (signal N, ...)"

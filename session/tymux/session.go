@@ -19,11 +19,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// ErrNotImplemented is returned by tymuxGRPCSession methods that a later
-// epic (2.3+, standing Attach stream / control-mode) has not yet
-// implemented.
-var ErrNotImplemented = errors.New("tymux: not implemented")
-
 // ErrNotSupportedOnTymuxBackend is returned by GetPanePID: tymux has no OS
 // pane PID to hand back, only a remote gRPC process. GetPTY() no longer
 // returns this — see its own doc comment.
@@ -711,8 +706,11 @@ func (s *tymuxGRPCSession) HasMeaningfulContent(content string) bool   { return 
 
 // --- Streaming (control mode) ---
 
-func (s *tymuxGRPCSession) StartControlMode() error { return ErrNotImplemented }
-func (s *tymuxGRPCSession) StopControlMode() error  { return ErrNotImplemented }
+// StartControlMode/StopControlMode are no-ops: the standing Attach stream
+// is already running for the session's whole lifetime, unlike tmux's
+// on-demand `tmux -C attach-session` client process.
+func (s *tymuxGRPCSession) StartControlMode() error { return nil }
+func (s *tymuxGRPCSession) StopControlMode() error  { return nil }
 
 // SubscribeToControlModeUpdates/UnsubscribeFromControlModeUpdates (Story
 // 2.3.2) delegate to ClientFanout — every subscriber shares the one

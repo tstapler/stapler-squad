@@ -13,6 +13,12 @@ type ProcessManager interface {
 	RestoreWithWorkDir(workDir string) error
 	Close() error
 	IsAlive() bool
+	// HasLiveSessionNoCache is IsAlive() with any cached liveness flag
+	// bypassed — always a fresh check. Callers use this before an action
+	// whose cost of a stale positive is high (e.g. attaching control-mode
+	// to what turns out to be a dead session and immediately receiving
+	// %exit).
+	HasLiveSessionNoCache() bool
 
 	// Identification
 	GetSessionIdentifier() string
