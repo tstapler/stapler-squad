@@ -412,27 +412,9 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to fetch %s: %w", mainBranch, err)
 	}
 
-	repo, err := openWorktreeRepo(worktreePath)
+	repo, ours, theirs, err := resolveMergeEndpoints(WorktreePath(worktreePath), BranchName(mainBranch))
 	if err != nil {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to open repo at %s: %w", worktreePath, err)
-	}
-
-	oursSHA, err := getHeadCommitSHA(worktreePath)
-	if err != nil {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to resolve HEAD: %w", err)
-	}
-	ours, err := repo.CommitObject(plumbing.NewHash(oursSHA))
-	if err != nil {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to resolve ours commit %s: %w", oursSHA, err)
-	}
-
-	theirsRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", mainBranch), true)
-	if err != nil {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to resolve origin/%s: %w", mainBranch, err)
-	}
-	theirs, err := repo.CommitObject(theirsRef.Hash())
-	if err != nil {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to resolve theirs commit %s: %w", theirsRef.Hash(), err)
+		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: %w", err)
 	}
 
 	// Up to date: everything on mainBranch is already reachable from ours (including the
@@ -451,36 +433,11 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 		return &MergeMainResult{UpToDate: true}, nil
 	}
 
-	// Refuse only if the merge would actually overwrite something — matching legacy's
-	// `git merge`, which fails with "local changes would be overwritten by merge"/"The
-	// following untracked working tree files would be overwritten by merge" only for
-	// paths the merge itself needs to touch, not the whole worktree (verified
-	// empirically: an unrelated untracked file never blocks a real `git merge`). A
-	// blanket status.IsClean() check here was a false-positive trap: every real session
-	// worktree carries incidental untracked files (.mcp.json, .claude/settings.local.json)
-	// that have nothing to do with the paths being merged.
-	oursTree, err := ours.Tree()
-	if err != nil {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to resolve ours tree: %w", err)
-	}
-	theirsTree, err := theirs.Tree()
-	if err != nil {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to resolve theirs tree: %w", err)
-	}
-	changes, err := oursTree.Diff(theirsTree)
-	if err != nil {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to diff ours..theirs: %w", err)
-	}
-	wt, err := repo.Worktree()
-	if err != nil {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to get worktree at %s: %w", worktreePath, err)
-	}
-	status, err := wt.Status()
-	if err != nil {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to check worktree status at %s: %w", worktreePath, err)
-	}
-	if conflictPath, blocked := worktreeBlocksMerge(status, changes); blocked {
-		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: %q at %s has local changes that would be overwritten; refusing to merge %s (matches legacy git merge's refusal)", conflictPath, worktreePath, mainBranch)
+	// Refuse only if the merge would actually overwrite something — see
+	// refuseIfMergeWouldOverwriteWorkingTree's doc comment for why this isn't a blanket
+	// status.IsClean() check.
+	if err := refuseIfMergeWouldOverwriteWorkingTree(repo, ours, theirs, WorktreePath(worktreePath), BranchName(mainBranch)); err != nil {
+		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: %w", err)
 	}
 
 	refPath, err := checkedOutBranchRefPath(WorktreePath(worktreePath), repo)
@@ -510,6 +467,71 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 		refPath:      refPath,
 	}
 	return nativeThreeWayMerge(mc, ours, theirs)
+}
+
+// resolveMergeEndpoints opens worktreePath's repo and resolves the two commits
+// nativeMergeMainIntoWorktree compares: ours (the checked-out HEAD) and theirs (mainBranch's
+// freshly-fetched origin tip). Split out of nativeMergeMainIntoWorktree purely to keep that
+// function's own body under this repo's long-function guideline — no behavioral change.
+func resolveMergeEndpoints(worktreePath WorktreePath, mainBranch BranchName) (repo *git.Repository, ours, theirs *object.Commit, err error) {
+	repo, err = openWorktreeRepo(string(worktreePath))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to open repo at %s: %w", worktreePath, err)
+	}
+
+	oursSHA, err := getHeadCommitSHA(string(worktreePath))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to resolve HEAD: %w", err)
+	}
+	ours, err = repo.CommitObject(plumbing.NewHash(oursSHA))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to resolve ours commit %s: %w", oursSHA, err)
+	}
+
+	theirsRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", string(mainBranch)), true)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to resolve origin/%s: %w", mainBranch, err)
+	}
+	theirs, err = repo.CommitObject(theirsRef.Hash())
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to resolve theirs commit %s: %w", theirsRef.Hash(), err)
+	}
+	return repo, ours, theirs, nil
+}
+
+// refuseIfMergeWouldOverwriteWorkingTree matches real git merge's own refusal semantics
+// (verified empirically against a real `git merge` subprocess) — refuses only if a path
+// the ours..theirs diff touches is also dirty/untracked in the working tree, never on
+// unrelated dirty state elsewhere in the worktree. A blanket status.IsClean() check here
+// used to be a false-positive trap: every real session worktree carries incidental
+// untracked files (.mcp.json, .claude/settings.local.json) that have nothing to do with
+// the paths being merged. Split out of nativeMergeMainIntoWorktree purely to keep that
+// function's own body under this repo's long-function guideline — no behavioral change.
+func refuseIfMergeWouldOverwriteWorkingTree(repo *git.Repository, ours, theirs *object.Commit, worktreePath WorktreePath, mainBranch BranchName) error {
+	oursTree, err := ours.Tree()
+	if err != nil {
+		return fmt.Errorf("failed to resolve ours tree: %w", err)
+	}
+	theirsTree, err := theirs.Tree()
+	if err != nil {
+		return fmt.Errorf("failed to resolve theirs tree: %w", err)
+	}
+	changes, err := oursTree.Diff(theirsTree)
+	if err != nil {
+		return fmt.Errorf("failed to diff ours..theirs: %w", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree at %s: %w", worktreePath, err)
+	}
+	status, err := wt.Status()
+	if err != nil {
+		return fmt.Errorf("failed to check worktree status at %s: %w", worktreePath, err)
+	}
+	if conflictPath, blocked := worktreeBlocksMerge(status, changes); blocked {
+		return fmt.Errorf("%q at %s has local changes that would be overwritten; refusing to merge %s (matches legacy git merge's refusal)", conflictPath, worktreePath, mainBranch)
+	}
+	return nil
 }
 
 // worktreeBlocksMerge reports whether status has any dirty entry at a path changes
