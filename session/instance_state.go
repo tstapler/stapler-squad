@@ -469,21 +469,17 @@ func markStartedIfTmuxAliveLocked(s *instanceState) {
 	i.fireLifecycleEvent(EventStarted, "streamhub-self-heal-tmux-alive")
 }
 
-// RecoverFromStopped resets a stale Stopped or PermanentlyFailed status to
-// Creating so the instance can be hot-restored via Start(false). Only call
-// this during startup reconciliation (Stopped case) or from restartForRetry's
-// PermanentlyFailed/Stopped recovery branch when the tmux session is confirmed
-// alive or being cold-restored; it bypasses the state machine intentionally.
-// The PermanentlyFailed case backs RetryNow()'s manual "Retry now" recovery
-// (AC6) — without it, RecoverFromStopped silently no-op'd for a
-// PermanentlyFailed instance (it only ever checked Status == Stopped), and
-// startLocked's later `if i.Status != Active` transition would then be
-// attempted from PermanentlyFailed, which has no entry in transitionIndex.
+// RecoverFromStopped resets a stale Stopped, PermanentlyFailed, or Failed
+// status to Creating so the instance can be hot-restored via Start(false).
+// Stopped/PermanentlyFailed have no registered edge to Creating, so this
+// bypasses the state machine intentionally; Failed does have one
+// (state_machine.go's Failed→Creating, "the retry path") but is included
+// here too so every RetryNow-reachable status shares one recovery path.
 // Deprecated: prefer transitionTo(ctx, Active) on the Stopped→Active path.
 func (i *Instance) RecoverFromStopped() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.Status == Stopped || i.Status == PermanentlyFailed {
+	if i.Status == Stopped || i.Status == PermanentlyFailed || i.Status == Failed {
 		i.loadStatus(Creating)
 		i.touchUpdatedAt()
 		i.started.Store(false)

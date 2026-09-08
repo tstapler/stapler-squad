@@ -628,7 +628,7 @@ func TestNativeMergeMainIntoWorktree_MaliciousTreeEntry_RejectedNotWrittenOutsid
 	work := cloneTestRepo(t, origin)
 	runGit(t, work, "checkout", "-b", "feature")
 
-	repo, err := git.PlainOpen(origin)
+	repo, err := OpenRepo(origin)
 	require.NoError(t, err)
 
 	headRef, err := repo.Reference(plumbing.NewBranchReferenceName("main"), true)
@@ -713,7 +713,7 @@ func TestNativeMergeMainIntoWorktree_MaliciousSymlinkEntry_DoesNotEscapeViaBlock
 	outsideDir := filepath.Join(t.TempDir(), "outside-target")
 	require.NoError(t, os.MkdirAll(outsideDir, 0o750))
 
-	repo, err := git.PlainOpen(origin)
+	repo, err := OpenRepo(origin)
 	require.NoError(t, err)
 
 	headRef, err := repo.Reference(plumbing.NewBranchReferenceName("main"), true)
@@ -809,7 +809,7 @@ func TestNativeMergeMainIntoWorktree_ConflictReadThroughBlockingSymlink_IsSafely
 
 	addFlatEntry := func(t *testing.T, repoPath, branchRefName, content string) {
 		t.Helper()
-		repo, err := git.PlainOpen(repoPath)
+		repo, err := OpenRepo(repoPath)
 		require.NoError(t, err)
 
 		headRef, err := repo.Reference(plumbing.ReferenceName(branchRefName), true)

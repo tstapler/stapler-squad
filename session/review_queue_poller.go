@@ -449,8 +449,16 @@ func (rqp *ReviewQueuePoller) ForceReconcile() {
 // - Stopped instances whose tmux session is found alive are revived to Active.
 func (rqp *ReviewQueuePoller) reconcileSessions() {
 	rqp.mu.RLock()
-	instances := make([]*Instance, len(rqp.instances))
-	copy(instances, rqp.instances)
+	instances := make([]*Instance, 0, len(rqp.instances))
+	for _, inst := range rqp.instances {
+		// Filtered before grouping/querying so a socket populated only by
+		// push-liveness instances triggers no ListSessions call at all --
+		// see ProcessManagerBackend.SkipsPollBasedLiveness's doc comment.
+		if inst.Backend.SkipsPollBasedLiveness() {
+			continue
+		}
+		instances = append(instances, inst)
+	}
 	rqp.mu.RUnlock()
 
 	if len(instances) == 0 {

@@ -561,10 +561,20 @@ func TestControlMode_ScanLoopDoneChRace_EndsGenerationWithoutFiringOnExit(t *tes
 	}
 }
 
-// TestSendInputViaControlMode_ReturnsError_When_PipeAcceptsWritesButNeverAcks guards
-// against the input-silent-drop bug: a wedged control-mode pipe that accepts writes
-// but never acks must surface as an error, not nil, so the caller's subprocess
-// fallback runs instead of silently dropping the keystroke.
+// TestSendInputViaControlMode_ReturnsError_When_PipeAcceptsWritesButNeverAcks
+// guards against the input-silent-drop bug (fixed alongside this test): a
+// wedged control-mode pipe that accepts the enqueue and the stdin write
+// without ever erroring used to make SendInputViaControlMode return nil
+// immediately (its old "fire-and-forget" contract), so the caller's
+// subprocess fallback (sendInputToTmux, in connectrpc_websocket.go) never
+// ran -- keystrokes vanished with the UI still showing "Connected".
+//
+// highPriSendCh here is a live, buffered channel with nothing ever draining
+// it -- the enqueue succeeds (room in the buffer), but no %begin/%end ack
+// can ever arrive, faithfully modeling a real wedged tmux -C attach-session
+// pipe (confirmed live: one that accepts stdin writes but never completes
+// even a capture-pane/resize round trip) without needing a real tmux
+// process.
 func TestSendInputViaControlMode_ReturnsError_When_PipeAcceptsWritesButNeverAcks(t *testing.T) {
 	sess := &TmuxSession{
 		sanitizedName: "cm_wedged_input_test",
@@ -604,4 +614,69 @@ func TestSendInputViaControlMode_ReturnsNil_When_AckArrives(t *testing.T) {
 		t.Fatalf("SendInputViaControlMode() error = %v, want nil when ack arrives", err)
 	}
 	<-done
+}
+
+func TestNormalizeTmuxVersion(t *testing.T) {
+	cases := map[string]string{
+		"tmux 3.6a\n": "3.6a",
+		"tmux 3.4":    "3.4",
+		"  3.6a  \n":  "3.6a", // display-message's #{version} has no "tmux " prefix
+		"":            "",
+	}
+	for input, want := range cases {
+		if got := normalizeTmuxVersion(input); got != want {
+			t.Errorf("normalizeTmuxVersion(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+// TestCheckControlModeVersionMatchOnce_DisablesControlMode_When_ClientServerVersionsDiffer
+// guards the root cause of a confirmed, previously-invisible production
+// incident: a tmux client mismatched with the already-running server's
+// version makes control mode's %begin/%end handshake never complete, so
+// every command silently times out at its ctx deadline for as long as that
+// server lives (see version_check.go's doc comment). This asserts the
+// detection+short-circuit half; StartControlMode's own use of it is exercised
+// live by the production incident this guards against, not re-mocked here.
+func TestCheckControlModeVersionMatchOnce_DisablesControlMode_When_ClientServerVersionsDiffer(t *testing.T) {
+	socket := "version_mismatch_test_socket"
+	sess := &TmuxSession{
+		sanitizedName: "version_mismatch_test",
+		serverSocket:  socket,
+		cmdExec: MockCmdExec{
+			OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+				for _, arg := range cmd.Args {
+					if arg == "-V" {
+						return []byte("tmux 3.6a\n"), nil
+					}
+				}
+				return []byte("3.4\n"), nil // display-message -p '#{version}'
+			},
+		},
+	}
+
+	sess.checkControlModeVersionMatchOnce(context.Background())
+
+	if !sess.controlModeDisabledForSocket() {
+		t.Fatal("controlModeDisabledForSocket() = false, want true after detecting a client/server version mismatch")
+	}
+}
+
+func TestCheckControlModeVersionMatchOnce_LeavesControlModeEnabled_When_VersionsMatch(t *testing.T) {
+	socket := "version_match_test_socket"
+	sess := &TmuxSession{
+		sanitizedName: "version_match_test",
+		serverSocket:  socket,
+		cmdExec: MockCmdExec{
+			OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+				return []byte("tmux 3.6a\n"), nil
+			},
+		},
+	}
+
+	sess.checkControlModeVersionMatchOnce(context.Background())
+
+	if sess.controlModeDisabledForSocket() {
+		t.Fatal("controlModeDisabledForSocket() = true, want false when client and server versions match")
+	}
 }

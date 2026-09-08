@@ -118,6 +118,25 @@ func (t *TmuxSession) StartControlMode() error {
 		return t.startRemoteControlMode()
 	}
 
+	// A tmux client/server version mismatch (see version_check.go's doc
+	// comment) makes control mode's %begin/%end handshake never complete,
+	// silently timing out every command for as long as the server lives.
+	// Detect it once per socket and skip straight to "not running" so every
+	// existing caller's already-correct subprocess fallback fires
+	// immediately instead of each command separately discovering the same
+	// dead end. controlModeCmd/highPriSendCh/normPriSendCh are left nil
+	// (their zero value), which is exactly what every downstream caller
+	// already treats as "control mode unavailable" -- refcount is still
+	// bumped so the paired StopControlMode() call stays balanced instead of
+	// logging a spurious "called with refcount already 0" warning.
+	t.checkControlModeVersionMatchOnce(context.Background())
+	if t.controlModeDisabledForSocket() {
+		t.controlModeSubMu.Lock()
+		t.controlModeRefCount++
+		t.controlModeSubMu.Unlock()
+		return nil
+	}
+
 	// Build tmux -C attach command
 	cmd := t.buildTmuxCommand("-C", "attach-session", "-t", t.sanitizedName)
 

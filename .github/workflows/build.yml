@@ -303,7 +303,23 @@ jobs:
 
           echo "Affected packages:"
           echo "$PKGS"
-          TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=8m \
+          # 12m, not the original 8m: a change to a foundational, heavily-imported
+          # package (e.g. session/tmux) makes test-affected.py conservatively pull
+          # in every transitive importer -- observed 2026-09-07 pulling in ~27
+          # packages including server/services' ~2857-test suite, which alone
+          # already runs at ~84% of an 8m budget in isolation (405s/480s, PR #733).
+          # Bundled with 26 sibling packages under -race on a shared runner, that
+          # margin reliably tipped over into a whole-run "test timed out after
+          # 8m0s" (confirmed twice in a row, PR #735 CI runs 34164579438 attempts
+          # 1-2 -- each kill caught an unrelated, normally-fast subtest still
+          # "running", not a hang/deadlock, ruling out a real code regression).
+          # 12m keeps meaningful margin below the 22m full-suite fallback while
+          # covering this wide-but-not-__ALL__ blast-radius case.
+          # PKGS is deliberately unquoted below: it's a space-separated list
+          # of package paths that must word-split into separate `go test`
+          # arguments, not one quoted string.
+          # shellcheck disable=SC2086
+          TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=12m \
             -coverprofile=coverage.affected.out -covermode=atomic $PKGS
 
       # Advisory only -- a global-threshold-style gate doesn't make sense
@@ -391,9 +407,9 @@ jobs:
           OUTPUT=$(npx ts-node feature-coverage.ts ../../docs/registry/backend-features.json '../../tests/e2e/**/*.spec.ts' 2>&1)
           echo "$OUTPUT"
           SUMMARY=$(echo "$OUTPUT" | grep 'Feature E2E coverage:' | head -1 || echo "Feature E2E coverage: N/A")
-          echo "summary=${SUMMARY}" >> $GITHUB_OUTPUT
+          echo "summary=${SUMMARY}" >> "$GITHUB_OUTPUT"
           PCT=$(SUMMARY="$SUMMARY" node -e "console.log(require('../ci-gates/coverage-delta.js').parseCoveragePct(process.env.SUMMARY) ?? '')")
-          echo "pct=${PCT:-}" >> $GITHUB_OUTPUT
+          echo "pct=${PCT:-}" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
       - name: Post feature coverage PR comment
@@ -625,6 +641,10 @@ jobs:
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
           run_test_suite() {
             REST_TEST_PKGS="$(go list ./server/... ./session/... ./config/... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux)$')"
+            # REST_TEST_PKGS is deliberately unquoted below: it's a
+            # newline/space-separated list of package paths that must
+            # word-split into separate `go test` arguments.
+            # shellcheck disable=SC2086
             TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -timeout=28m -coverprofile=coverage.rest.out \
               -covermode=atomic $REST_TEST_PKGS \
               || (TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format standard-verbose -- -race -timeout=28m $REST_TEST_PKGS; exit 1)
