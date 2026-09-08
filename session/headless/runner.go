@@ -47,6 +47,28 @@ var (
 	// failure is bucketed as "subprocess_start_error" in logs instead of falling
 	// through to an undiagnosable "other".
 	ErrSubprocessStart = errors.New("headless subprocess failed to start")
+	// ErrPoolSaturated is returned when a call never got a shot at running the LLM
+	// subprocess at all: it waited for a concurrency-pool slot until maxQueueWait
+	// (caller.go) elapsed, without ever acquiring one and without the caller's own
+	// ctx expiring first. Distinct from a genuine subprocess timeout (ctx expiring
+	// while the LLM call is actually running) so classifyHeadlessCallError
+	// (server/services/backlog_service_triage.go) can bucket "starved behind other
+	// concurrent calls" separately from "ran and hung" — see caller.go's call() and
+	// docs/tasks/backlog-feature-improvement.md's 2026-09-08 entry for the incident
+	// this closes: a burst of near-simultaneous backlog-item creation could
+	// silently exhaust an item's entire 30-minute triage call budget just waiting
+	// for one of the pool's 5 slots, misreported identically to a real 30-minute
+	// LLM hang.
+	ErrPoolSaturated = errors.New("headless pool: timed out waiting for a concurrency slot")
+	// ErrIdleTimeout is returned when a first-call (--output-format stream-json)
+	// subprocess produced no new output line for idleTimeout (pool.go) — a real
+	// progress signal, unlike the caller's own overall ctx deadline, which bounds
+	// total call duration regardless of whether the subprocess is actively
+	// producing output. Distinct from a plain ctx.Err() timeout so
+	// classifyHeadlessCallError (server/services/backlog_service_triage.go) can
+	// bucket "genuinely stalled" separately from "hit the caller's absolute
+	// ceiling while still active" — see caller.go's call().
+	ErrIdleTimeout = errors.New("headless pool: no output for the idle timeout window")
 )
 
 // ProcessRunner implements ClaudeRunner using executor.StartProcess.

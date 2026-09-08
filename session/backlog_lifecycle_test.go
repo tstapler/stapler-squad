@@ -2817,7 +2817,7 @@ func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
 	is := ItemSessionSummary{ID: itemSession.ID, SessionUUID: sessionUUID, BacklogItemID: item.ID}
 
 	const draftedBody = "## Summary\nThis change adds the missing dedup check.\n\n## Test plan\n- [x] Ran the new regression test\n"
-	runner := headless.NewFakeRunner(fmt.Sprintf(`{"session_id":"s1","result":%q,"cost_usd":0.001}`, draftedBody))
+	runner := headless.NewFakeRunner(fmt.Sprintf(`{"type":"result","session_id":"s1","result":%q,"total_cost_usd":0.001}`, draftedBody))
 	pool := headless.NewPoolWithRunner(headless.PoolConfig{}, runner)
 
 	listener := NewBacklogLifecycleListener(storage)

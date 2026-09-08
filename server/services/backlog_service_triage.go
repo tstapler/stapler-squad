@@ -425,13 +425,23 @@ const (
 )
 
 // triageCallBudget bounds a single headless triage LLM call (TriggerTriage's own
-// triageCtx). session.maxHeadlessTriageSessionStaleness (session/backlog_lifecycle.go)
+// triageCtx) — now the backstop for a call that never stops producing output,
+// not the primary defense against a hung call: headless.idleTimeout
+// (session/headless/pool.go, 10 minutes) kills a genuinely stalled call far
+// faster than this. Raised from 30 minutes to 3 hours 2026-09-08: BUG-055 had
+// already shown legitimate triage calls running right up against the old
+// 30-minute ceiling while still actively working, and with idle detection now
+// catching true hangs quickly, this only needs to bound "produces output
+// forever, never finishes" — start generous, tune down if that case is ever
+// actually observed.
+//
+// session.maxHeadlessTriageSessionStaleness (session/backlog_lifecycle_triage.go)
 // — the periodic sweep's threshold for treating a still-open triage session as
 // dead — MUST stay strictly greater than this, with enough margin that a call
 // finishing at (or timing out at) its own full budget has already ended by the
 // time the sweep's next tick considers it stale; otherwise the sweep and this
 // call's own natural completion/timeout race on every slow call. See BUG-055.
-const triageCallBudget = 30 * time.Minute
+const triageCallBudget = 3 * time.Hour
 
 // The auto-rework iteration cap bounds how many automated work sessions can be
 // spawned for a single backlog item by the auto-reopen loop. When this ceiling
@@ -2416,8 +2426,26 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 // investigation) can answer "how often does each failure mode happen" from log history alone,
 // without re-deriving it by hand from raw error text and process timing.
 //
+//   - "pool_saturated": the call never got a shot at running at all — it waited for a
+//     concurrency-pool slot until headless.ErrPoolSaturated's own short queue-wait cap
+//     elapsed (session/headless/caller.go), well before this call's own budget did.
+//     Checked before "timeout" below: without this bucket, a burst of concurrent calls
+//     that all lose the race for the pool's limited slots reports identically to a
+//     genuine 30-minute LLM hang, even though the LLM was never invoked — confirmed live
+//     2026-09-08 parking bulk-imported backlog items this way (see
+//     docs/tasks/backlog-feature-improvement.md).
+//   - "idle": the call started but produced no new stream-json output line for
+//     headless.idleTimeout (session/headless/pool.go) — a real "this call is stalled"
+//     signal, distinct from "timeout" below (which now means the call kept producing
+//     output but still hit the caller's much larger absolute ceiling). Also checked
+//     before "timeout" for the same reason as "pool_saturated": without this bucket a
+//     genuinely stalled call and a legitimately long-but-active one would be
+//     indistinguishable in logs, which is the whole problem idle detection replaces —
+//     see headless.idleTimeout's doc comment.
 //   - "timeout": ctx deadline exceeded, or elapsed is within 5s of budget (covers a
-//     hang whose error got wrapped/lost before reaching context.DeadlineExceeded).
+//     hang whose error got wrapped/lost before reaching context.DeadlineExceeded). With
+//     idle detection now the primary defense against a truly stuck call, this bucket
+//     should mostly mean "actively producing output for the full budget," not "hung."
 //   - "shutdown": server shutdown context cancelled mid-call, not a call failure.
 //   - "claude_not_found": the claude binary itself is missing from PATH — an environment
 //     problem, not a per-call one.
@@ -2445,6 +2473,10 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 // call sites, so it takes budget as a parameter rather than hardcoding one.
 func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string {
 	switch {
+	case errors.Is(err, headless.ErrPoolSaturated):
+		return "pool_saturated"
+	case errors.Is(err, headless.ErrIdleTimeout):
+		return "idle"
 	case errors.Is(err, context.DeadlineExceeded), budget-elapsed < 5*time.Second:
 		return "timeout"
 	case errors.Is(err, context.Canceled):

@@ -10,12 +10,14 @@ import (
 // FakeRunner is a test double for ClaudeRunner. It returns scripted responses
 // and records call arguments for inspection.
 //
-// When the args contain "--output-format" followed by "json", the response must
-// be valid JSON matching firstCallJSONResult schema:
+// For a first call (args contain "--output-format" "stream-json"), the
+// response is scanned line by line looking for a "type":"result" line
+// matching firstCallJSONResult's schema — a single such line is a valid
+// (degenerate) stream:
 //
-//	{"session_id":"...","result":"...","cost_usd":0.0}
+//	{"type":"result","session_id":"...","result":"...","total_cost_usd":0.0}
 //
-// Otherwise the response is returned as plain text, line by line.
+// Otherwise (a resumed call) the response is returned as plain text, line by line.
 type FakeRunner struct {
 	mu        sync.Mutex
 	responses []string
