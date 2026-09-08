@@ -69,6 +69,20 @@ type (
 	BranchName string
 )
 
+// threeWayMergeContext bundles the repo-level context nativeThreeWayMerge threads through
+// to materializeConflictOnAbort/commitThreeWayMerge — introduced to keep all three
+// functions under this repo's 5-parameter guideline (syntax-rules-go's long-parameter-list
+// check) without losing which fields are shared, always-together context (worktreePath,
+// repo, refPath, mainBranch) versus which are call-specific (ours/theirs, resolved paths).
+type threeWayMergeContext struct {
+	worktreePath WorktreePath
+	repo         *git.Repository
+	mainBranch   BranchName
+	// refPath is the on-disk file path of the branch ref being advanced — see
+	// checkedOutBranchRefPath's doc comment.
+	refPath string
+}
+
 // worktreeGitDir returns the .git admin directory that applies to worktreePath (a real
 // directory for the main working copy, or a linked worktree's private admin dir) — the
 // same directory resolveWorktreeIndexPath resolves the index file into, minus the
@@ -491,7 +505,13 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 		return &MergeMainResult{Merged: true}, nil
 	}
 
-	return nativeThreeWayMerge(WorktreePath(worktreePath), repo, ours, theirs, BranchName(mainBranch), refPath)
+	mc := threeWayMergeContext{
+		worktreePath: WorktreePath(worktreePath),
+		repo:         repo,
+		mainBranch:   BranchName(mainBranch),
+		refPath:      refPath,
+	}
+	return nativeThreeWayMerge(mc, ours, theirs)
 }
 
 // worktreeBlocksMerge reports whether status has any dirty entry at a path changes
@@ -764,7 +784,7 @@ func resolveMergePaths(byPath map[string]*PathChange) (*mergePathResolution, err
 	renamedAway := map[string]bool{}
 	for _, p := range paths {
 		if err := resolveOnePathMerge(p, byPath[p], &merger, renamedAway, res); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("resolveMergePaths: %w", err)
 		}
 	}
 
@@ -1015,7 +1035,7 @@ func nonTextConflictHunks(reason FileConflictReason, in FileMergeInput) []MergeH
 // nativeThreeWayMerge runs the diff3 pipeline over every path base/ours/theirs disagree
 // on and either produces a real merge commit (no conflicts) or materializes conflict
 // markers and aborts (Tasks 3.4.1b/3.4.1c).
-func nativeThreeWayMerge(worktreePath WorktreePath, repo *git.Repository, ours, theirs *object.Commit, mainBranch BranchName, refPath string) (*MergeMainResult, error) {
+func nativeThreeWayMerge(mc threeWayMergeContext, ours, theirs *object.Commit) (*MergeMainResult, error) {
 	base, err := MergeBaseResolver(ours, theirs)
 	if err != nil {
 		return nil, fmt.Errorf("nativeThreeWayMerge: failed to resolve merge base: %w", err)
@@ -1049,9 +1069,9 @@ func nativeThreeWayMerge(worktreePath WorktreePath, repo *git.Repository, ours, 
 	}
 
 	if len(resolution.conflicts) > 0 {
-		return materializeConflictOnAbort(worktreePath, resolution.conflicts, theirs.Hash, mainBranch)
+		return materializeConflictOnAbort(mc, resolution.conflicts, theirs.Hash)
 	}
-	return commitThreeWayMerge(worktreePath, repo, ours.Hash, theirs.Hash, resolution.resolved, refPath, mainBranch)
+	return commitThreeWayMerge(mc, ours.Hash, theirs.Hash, resolution.resolved)
 }
 
 // materializeConflictOnAbort writes every conflicted path's stage-1/2/3 index entries
@@ -1061,20 +1081,20 @@ func nativeThreeWayMerge(worktreePath WorktreePath, repo *git.Repository, ours, 
 // as a real `git merge --abort` would leave it, verified in
 // TestNativeMergeMainIntoWorktree_Conflicted_LeavesWorktreeClean via a real `git status
 // --porcelain` subprocess.
-func materializeConflictOnAbort(worktreePath WorktreePath, conflicts []conflictedPathMerge, theirsHash plumbing.Hash, mainBranch BranchName) (*MergeMainResult, error) {
-	snapshot, err := capturePreMergeSnapshot(worktreePath, conflicts)
+func materializeConflictOnAbort(mc threeWayMergeContext, conflicts []conflictedPathMerge, theirsHash plumbing.Hash) (*MergeMainResult, error) {
+	snapshot, err := capturePreMergeSnapshot(mc.worktreePath, conflicts)
 	if err != nil {
 		return nil, fmt.Errorf("materializeConflictOnAbort: failed to capture pre-merge snapshot: %w", err)
 	}
 
-	theirsLabel := "origin/" + string(mainBranch)
+	theirsLabel := "origin/" + string(mc.mainBranch)
 	conflictedFiles := make([]string, 0, len(conflicts))
 	var conflictEntries []*index.Entry
 	for _, c := range conflicts {
 		conflictedFiles = append(conflictedFiles, c.path)
 		conflictEntries = append(conflictEntries, NewConflictEntries(c.path, c.baseHash, c.oursHash, c.theirsHash, c.mode)...)
 	}
-	if err := writeConflictedIndex(string(worktreePath), conflictEntries); err != nil {
+	if err := writeConflictedIndex(string(mc.worktreePath), conflictEntries); err != nil {
 		return nil, fmt.Errorf("materializeConflictOnAbort: failed to write conflicted index: %w", err)
 	}
 
@@ -1089,16 +1109,16 @@ func materializeConflictOnAbort(worktreePath WorktreePath, conflicts []conflicte
 		if renderErr != nil {
 			return nil, fmt.Errorf("materializeConflictOnAbort: failed to render markers for %q: %w", c.path, renderErr)
 		}
-		if writeErr := writeWorkingTreeFile(worktreePath, c.path, c.mode, []byte(content)); writeErr != nil {
+		if writeErr := writeWorkingTreeFile(mc.worktreePath, c.path, c.mode, []byte(content)); writeErr != nil {
 			return nil, fmt.Errorf("materializeConflictOnAbort: failed to write markers for %q: %w", c.path, writeErr)
 		}
 	}
 
-	if err := writeMergeStateFiles(worktreePath, theirsHash.String(), mainBranch); err != nil {
+	if err := writeMergeStateFiles(mc.worktreePath, theirsHash.String(), mc.mainBranch); err != nil {
 		return nil, fmt.Errorf("materializeConflictOnAbort: failed to write merge-state files: %w", err)
 	}
 
-	if err := abortNativeMerge(worktreePath, snapshot); err != nil {
+	if err := abortNativeMerge(mc.worktreePath, snapshot); err != nil {
 		return nil, fmt.Errorf("materializeConflictOnAbort: failed to abort: %w", err)
 	}
 
@@ -1195,47 +1215,47 @@ func assembleConflictedFileContent(hunks []MergeHunk, oursLabel, theirsLabel str
 // two-parent merge commit, and advances the checked-out branch ref to it via
 // writeRefWithLockSentinel — never go-git's bare SetReference (see that function's doc
 // comment).
-func commitThreeWayMerge(worktreePath WorktreePath, repo *git.Repository, oursHash, theirsHash plumbing.Hash, resolved []resolvedPathMerge, refPath string, mainBranch BranchName) (*MergeMainResult, error) {
+func commitThreeWayMerge(mc threeWayMergeContext, oursHash, theirsHash plumbing.Hash, resolved []resolvedPathMerge) (*MergeMainResult, error) {
 	touched := make(map[string]bool, len(resolved))
 	var newEntries []*index.Entry
 	for _, r := range resolved {
 		touched[r.path] = true
 		if r.deleted {
-			if err := removeWorkingTreeFile(worktreePath, r.path); err != nil {
+			if err := removeWorkingTreeFile(mc.worktreePath, r.path); err != nil {
 				return nil, fmt.Errorf("commitThreeWayMerge: failed to remove %q: %w", r.path, err)
 			}
 			continue
 		}
 
-		hash, err := storeBlobObject(repo, r.content)
+		hash, err := storeBlobObject(mc.repo, r.content)
 		if err != nil {
 			return nil, fmt.Errorf("commitThreeWayMerge: failed to store blob for %q: %w", r.path, err)
 		}
-		if err := writeWorkingTreeFile(worktreePath, r.path, r.mode, r.content); err != nil {
+		if err := writeWorkingTreeFile(mc.worktreePath, r.path, r.mode, r.content); err != nil {
 			return nil, fmt.Errorf("commitThreeWayMerge: failed to write %q: %w", r.path, err)
 		}
 		newEntries = append(newEntries, &index.Entry{Name: r.path, Hash: hash, Mode: r.mode})
 	}
 
-	if err := writeIndexEntries(string(worktreePath), touched, newEntries); err != nil {
+	if err := writeIndexEntries(string(mc.worktreePath), touched, newEntries); err != nil {
 		return nil, fmt.Errorf("commitThreeWayMerge: failed to update index: %w", err)
 	}
 
-	idx, err := repo.Storer.Index()
+	idx, err := mc.repo.Storer.Index()
 	if err != nil {
 		return nil, fmt.Errorf("commitThreeWayMerge: failed to reload index: %w", err)
 	}
-	treeHash, err := buildTreeFromIndex(repo, idx)
+	treeHash, err := buildTreeFromIndex(mc.repo, idx)
 	if err != nil {
 		return nil, fmt.Errorf("commitThreeWayMerge: failed to build tree: %w", err)
 	}
 
-	commitHash, err := createMergeCommit(repo, treeHash, oursHash, theirsHash, mainBranch)
+	commitHash, err := createMergeCommit(mc.repo, treeHash, oursHash, theirsHash, mc.mainBranch)
 	if err != nil {
 		return nil, fmt.Errorf("commitThreeWayMerge: failed to create merge commit: %w", err)
 	}
 
-	if err := writeRefWithLockSentinel(refPath, commitHash); err != nil {
+	if err := writeRefWithLockSentinel(mc.refPath, commitHash); err != nil {
 		return nil, fmt.Errorf("commitThreeWayMerge: failed to advance branch ref: %w", err)
 	}
 	recordMergeOutcome(mergeOutcomeCleanMerge)
