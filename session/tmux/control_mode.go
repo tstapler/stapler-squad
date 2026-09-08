@@ -1193,9 +1193,10 @@ func (t *TmuxSession) UnsubscribeFromControlModeUpdates(subscriberID string) {
 // control mode connection. Uses the HIGH-PRIORITY queue so user keystrokes always
 // jump ahead of any queued background operations (capture-pane, resize, etc.).
 //
-// Fire-and-forget: enqueues the send-keys command and returns immediately without
-// waiting for the tmux %begin/%end ack. The ack is consumed by the reader goroutine
-// and discarded. This eliminates one CM round-trip from the interactive input path.
+// Waits for the tmux %begin/%end ack (bounded by ctx) instead of firing-and-forgetting:
+// a wedged control-mode pipe can accept the enqueue and stdin write without ever
+// erroring, so callers rely on this returning an error to trigger their subprocess
+// send-keys fallback instead of silently dropping the keystroke.
 func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) error {
 	if len(data) == 0 {
 		return nil
@@ -1210,15 +1211,6 @@ func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) 
 	for _, b := range data {
 		args = append(args, fmt.Sprintf("%02x", b))
 	}
-	// resultCh is buffered(1): the reader goroutine delivers the ack into it and
-	// moves on; nobody reads it, and Go GCs it. Safe because all send sites use
-	// `select { case ch <- result: default: }` (non-blocking).
-	resultCh := make(chan cmdResult, 1)
-	req := cmSendReq{line: strings.Join(args, " "), resultCh: resultCh}
-	select {
-	case ch <- req:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	_, err := t.enqueueCMCommand(ctx, ch, args...)
+	return err
 }
