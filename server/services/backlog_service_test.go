@@ -3476,10 +3476,21 @@ func TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo(t *tes
 	}))
 	require.NoError(t, trigErr)
 
+	// TriggerTriage's background goroutine keeps touching the isolated worktree
+	// (commit, retitleTriageWorktreeToFinalBranch) after CallBlocking returns —
+	// waiting only on pool.callCount() let this test return, racing t.TempDir()'s
+	// cleanup RemoveAll against those writes ("directory not empty" under
+	// full-suite load). Poll for the trailing EndedAt write instead (same
+	// ordering rationale as TestTriggerTriage_Success): that write lands after
+	// the worktree commit/retitle step, so seeing it confirms those file writes
+	// are done. Not testTriageCompleteHook — this test's t.Parallel() would race
+	// that single shared hook against sibling tests' own registrations.
 	require.Eventually(t, func() bool {
-		return pool.callCount() == 1
-	}, 5*time.Second, 50*time.Millisecond)
+		sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+		return listErr == nil && len(sessions) == 1 && sessions[0].EndedAt != nil
+	}, 5*time.Second, 50*time.Millisecond, "triage item session should be marked ended on success")
 
+	require.Equal(t, 1, pool.callCount())
 	workDir := pool.firstCall().workDir
 	assert.NotEqual(t, repoPath, workDir, "triage must not run directly in repo_path when repo_path is a real git repo")
 	assert.NotEmpty(t, workDir)
@@ -3513,10 +3524,15 @@ func TestTriggerTriage_FallsBackToRepoPathDirectly_When_RepoPathIsNotAGitRepo(t 
 	}))
 	require.NoError(t, trigErr)
 
+	// Wait for the trailing EndedAt write, not just pool.callCount() — see
+	// TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo's
+	// identical comment.
 	require.Eventually(t, func() bool {
-		return pool.callCount() == 1
-	}, 5*time.Second, 50*time.Millisecond)
+		sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+		return listErr == nil && len(sessions) == 1 && sessions[0].EndedAt != nil
+	}, 5*time.Second, 50*time.Millisecond, "triage item session should be marked ended on success")
 
+	require.Equal(t, 1, pool.callCount())
 	assert.Equal(t, repoPath, pool.firstCall().workDir,
 		"a non-git repo_path must fall back to running triage directly there, same as before this change")
 }
