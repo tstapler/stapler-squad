@@ -13,15 +13,10 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// tymuxPTYAdapter bridges the standing Attach stream to a single
-// bidirectional *os.File — the shape session.GetPTY() promises every
-// ProcessManager caller (ClaudeController/PTYAccess chief among them).
-// tymux has no local PTY of its own (Story 2.2.5's ErrNotSupportedOnTymuxBackend
-// rationale, still true for GetPanePID); this adapter fakes one with a
-// Unix-domain socketpair: the external half is handed to the caller to
-// Read (pane output) and Write (keystrokes), the internal half is what the
-// two pump goroutines below use to bridge that traffic to the
-// already-running fanout (output) and sendOnStream (input).
+// tymuxPTYAdapter fakes a PTY master fd with a Unix-domain socketpair: the
+// external half goes to ProcessManager callers for Read/Write, the internal
+// half is what the two pump goroutines below bridge to the fanout (output)
+// and sendOnStream (input).
 type tymuxPTYAdapter struct {
 	external *os.File
 	internal *os.File
@@ -62,14 +57,8 @@ func newTymuxPTYAdapter(fanout *ClientFanout, send func(*v1.AttachRequest) error
 	return a, nil
 }
 
-// pumpOutput copies every fanout broadcast (pane output, Story 2.3.2) into
-// the internal socket half, so the external half's Read (PTYAccess.Read)
-// sees exactly what a real PTY master would produce. A broadcast this
-// subscriber can't keep up with is simply dropped upstream (ClientFanout's
-// existing non-blocking-send/lossy-broadcast contract) rather than
-// stalling here. Exits once the subscription channel closes (Unsubscribe,
-// from close()) or the internal half stops accepting writes (external
-// half closed by the caller).
+// pumpOutput copies fanout broadcasts into the internal socket half until
+// outCh closes (Unsubscribe) or the external half is closed by the caller.
 func (a *tymuxPTYAdapter) pumpOutput(outCh chan []byte) {
 	for data := range outCh {
 		if _, err := a.internal.Write(data); err != nil {
@@ -78,11 +67,11 @@ func (a *tymuxPTYAdapter) pumpOutput(outCh chan []byte) {
 	}
 }
 
-// pumpInput forwards every byte the caller writes to the external half
-// (PTYAccess.Write / CommandExecutor keystrokes) onto the standing stream
-// as an AttachRequest_Input, via the same send func SendKeys/TapEnter use
-// (sendOnStream — reconnect-safe, always targets the current stream
-// generation). Exits on the first read error (external half closed).
+// pumpInput forwards bytes written to the external half onto the standing
+// stream via send (sendOnStream). Exits on the next Read error after
+// close() closes the internal half — except mid-flight in send() itself,
+// which close() cannot interrupt (same limitation sendOnStream's other
+// callers already have).
 func (a *tymuxPTYAdapter) pumpInput(send func(*v1.AttachRequest) error) {
 	buf := make([]byte, 4096)
 	for {
@@ -107,10 +96,9 @@ func (a *tymuxPTYAdapter) pumpInput(send func(*v1.AttachRequest) error) {
 // satisfy the same call from session.go's platform-agnostic GetPTY().
 func (a *tymuxPTYAdapter) file() *os.File { return a.external }
 
-// close unsubscribes from the fanout and closes both socket halves,
-// unblocking both pump goroutines. Safe to call more than once (Close()
-// must tolerate repeated calls, matching tymuxGRPCSession.Close()'s own
-// idempotence contract).
+// close unsubscribes from the fanout and closes both socket halves. Safe to
+// call more than once. Unblocks pumpOutput and a pumpInput parked in Read;
+// a pumpInput mid-send() only exits once that call returns (see its doc).
 func (a *tymuxPTYAdapter) close() {
 	a.closeOnce.Do(func() {
 		a.fanout.Unsubscribe(a.subID)

@@ -13,6 +13,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 
@@ -422,6 +423,46 @@ func TestTymuxGRPCSession_GetPTY_ClosedByClose(t *testing.T) {
 
 	_, err = f.Write([]byte("x"))
 	assert.Error(t, err)
+}
+
+// TestTymuxGRPCSession_GetPTY_CloseTerminatesPumpGoroutines proves Close()
+// alone (no caller-supplied worktree cleanup, no re-entrant GetPTY() calls)
+// is sufficient to unblock and terminate both of the adapter's pump
+// goroutines — the property a code review flagged as merely coincidental
+// (Close() happens to cancel the standing stream before calling
+// pty.close(), rather than pty.close() being self-sufficient).
+func TestTymuxGRPCSession_GetPTY_CloseTerminatesPumpGoroutines(t *testing.T) {
+	baseline := goleak.IgnoreCurrent()
+	sess, _, _ := startedSessionWithStream(t)
+
+	_, err := sess.GetPTY()
+	require.NoError(t, err)
+
+	require.NoError(t, sess.Close())
+
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestTymuxGRPCSession_GetPTY_AfterClose_DoesNotLeakANewAdapter is the
+// regression test for a code-review-caught bug: Close() resets s.pty to nil
+// but never resets s.stream, so GetPTY() called after Close() (a real race
+// window — instance.go calls GetPTY() from several lifecycle branches that
+// can run concurrently with a health-check/retry-triggered Close()) saw
+// s.stream still non-nil, built a brand-new adapter, subscribed it to the
+// fanout, and started two more pump goroutines that would never be torn
+// down — a session-lifetime leak on every such race.
+func TestTymuxGRPCSession_GetPTY_AfterClose_DoesNotLeakANewAdapter(t *testing.T) {
+	baseline := goleak.IgnoreCurrent()
+	sess, _, _ := startedSessionWithStream(t)
+
+	require.NoError(t, sess.Close())
+
+	f, err := sess.GetPTY()
+	assert.Nil(t, f)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errSessionNotStarted)
+
+	goleak.VerifyNone(t, baseline)
 }
 
 func TestTymuxGRPCSession_GetPanePID_ReturnsNotSupportedError(t *testing.T) {
