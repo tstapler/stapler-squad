@@ -613,6 +613,75 @@ func TestReviewQueuePoller_AcknowledgedSession_ResurfacesAfterNewOutput(t *testi
 	}
 }
 
+// TestReviewQueuePoller_SkipIdleSession_StaysSuppressedAcrossPolls is the integration-level
+// regression test for review_queue_determiner.go's suppressedByAck helper (wrapping
+// IsAcknowledgedAfterOutput()): a session the user has "Skip"ped must not reappear in the
+// review queue on the very next poll tick, or any subsequent tick, as long as no new
+// terminal output arrives. Mirrors
+// TestDefaultStatusDeterminer_IdleAckSuppression_StaysOutUntilNewOutput's scenario but
+// drives it through a real ReviewQueuePoller + Instance across multiple checkSessionsSafe()
+// ticks instead of calling Determine() directly — this is the actual "doesn't reappear on
+// the very next poll tick" success metric, not just the pure-function unit test.
+func TestReviewQueuePoller_SkipIdleSession_StaysSuppressedAcrossPolls(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+
+	inst := &Instance{
+		Title:  "skip-idle-session",
+		UUID:   "uuid-skip-idle",
+		Status: Running,
+	}
+	inst.started.Store(true)
+
+	// Idle long enough to cross the no-controller basicIdleThreshold (5s), but recent
+	// enough to stay well under the default StalenessThreshold (5m) so ReasonStale never fires.
+	past := time.Now().Add(-10 * time.Second)
+	inst.CreatedAt = past
+	inst.UpdatedAt = past
+	inst.LastMeaningfulOutput = past
+	inst.SyncAtomicTimestamps()
+
+	// Pre-warm the content cache so GetContent() returns "" without needing a live tmux
+	// session — same pattern as makeStaleInstance.
+	poller.injectCachedContent(inst.Title, "")
+
+	poller.AddInstance(inst)
+
+	// Tick 1: the session is genuinely idle with no acknowledgment — must be added.
+	if err := poller.checkSessionsSafe(); err != nil {
+		t.Fatalf("checkSessionsSafe (tick 1) returned error: %v", err)
+	}
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("expected idle session to be added to the review queue on tick 1")
+	}
+	if item.Reason != ReasonIdle {
+		t.Errorf("expected ReasonIdle on tick 1, got %v", item.Reason)
+	}
+
+	// Simulate the user clicking "Skip". The real skip handler
+	// (server/services/review_queue_service.go's AcknowledgeSession) calls exactly this
+	// method on the live instance — reuse it rather than reinventing the acknowledgment
+	// mechanism by poking timestamp fields directly.
+	inst.MarkAcknowledged()
+
+	// Tick 2 (the very next poll after Skip): must not reappear.
+	if err := poller.checkSessionsSafe(); err != nil {
+		t.Fatalf("checkSessionsSafe (tick 2) returned error: %v", err)
+	}
+	if _, exists := poller.queue.Get(inst.Title); exists {
+		t.Error("session must not reappear in the queue on the very next poll tick after Skip")
+	}
+
+	// Tick 3: still no new output — must remain suppressed.
+	if err := poller.checkSessionsSafe(); err != nil {
+		t.Fatalf("checkSessionsSafe (tick 3) returned error: %v", err)
+	}
+	if _, exists := poller.queue.Get(inst.Title); exists {
+		t.Error("session must remain suppressed across a second subsequent poll tick with no new output")
+	}
+}
+
 // TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue verifies
 // that sessions with GetController() != nil (controller wired but not yet started) are
 // evaluated by the poller rather than skipped. When approval-prompt content is present in

@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // startRemoteTestSSHServer starts a minimal in-process SSH server on an
@@ -199,6 +200,73 @@ func TestTrustRemoteHostKey_RejectsMismatchedFingerprint(t *testing.T) {
 	require.Error(t, unknownErr)
 	var unknownHostErr *sshremote.ErrUnknownHostKey
 	require.ErrorAs(t, unknownErr, &unknownHostErr)
+}
+
+// TestTestRemoteConnection_PoolHit_SkipsHostKeyCallback_When_NameReused
+// reproduces the root cause behind the CI flake tracked by backlog item
+// 09e91e3e-e13d-4166-a5f2-447242447f77: tmux.SSHClientPool.GetOrDial's Peek
+// fast path returns whatever *ssh.Client is already pooled for a name
+// WITHOUT re-checking the caller's HostKeyCallback or dialed address at
+// all. If some other caller has already pooled a live (or merely
+// not-yet-evicted) connection under the same remote name against a
+// DIFFERENT server, TestRemoteConnection's own dial against its real
+// target is skipped entirely, and it reports Success:true even though the
+// real target's host key was never verified. This is a property of the
+// pool itself, independent of timing -- svc.sshClientPool() is the
+// isolated per-test pool the fix (RemoteService.testSSHClientPool) gives
+// this service, and simulating "another caller already pooled a
+// connection under this name" against it demonstrates the exact hazard
+// that isolation exists to keep two different RemoteService instances
+// from inflicting on each other via the process-wide default pool.
+func TestTestRemoteConnection_PoolHit_SkipsHostKeyCallback_When_NameReused(t *testing.T) {
+	remoteName := uniqueRemoteName(t)
+	addrA, _ := startRemoteTestSSHServer(t)
+	addrB, _ := startRemoteTestSSHServer(t)
+
+	cfg := &config.Config{Remotes: []config.RemoteConfig{
+		{Name: remoteName, Host: addrB, User: "testuser"},
+	}}
+	svc, _, _ := newTestRemoteService(t, cfg)
+
+	// Pool a connection under remoteName against addrA -- standing in for
+	// another caller (a previous test, or a live session) that already
+	// dialed this name against an entirely different server. The test
+	// server accepts any client public key, so any signer authenticates.
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	signer, err := ssh.NewSignerFromSigner(priv)
+	require.NoError(t, err)
+	staleClient, err := svc.sshClientPool().GetOrDial(context.Background(), tmux.SSHTarget{Name: remoteName, Addr: addrA}, &ssh.ClientConfig{
+		User:            "testuser",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	})
+	require.NoError(t, err)
+	// Left open deliberately: closing it here would race the pool's async
+	// eviction watcher (register's Client.Wait() goroutine) against the
+	// Peek below, making the repro flaky. Peek doesn't check liveness
+	// either way -- an evicted-later entry demonstrates the same bug once
+	// this pool is torn down with the test.
+	t.Cleanup(func() { _ = staleClient.Close() })
+
+	// Confirm the precondition explicitly before relying on it: the pool
+	// entry must still be live going into TestRemoteConnection. If it were
+	// ever evicted early (e.g. the connection genuinely died), the
+	// assertion below fails fast with a clear cause instead of the
+	// TestRemoteConnection call below failing with a confusing
+	// Success:false that looks like the fix regressed.
+	_, ok := svc.sshClientPool().Peek(remoteName)
+	require.True(t, ok, "pool entry for %q was evicted before TestRemoteConnection ran", remoteName)
+
+	// addrB's host key was NEVER trusted -- a real dial would report
+	// HostKeyUnknown. If the pool hit for remoteName instead short-circuits
+	// straight to success, the bug reproduces.
+	resp, err := svc.TestRemoteConnection(context.Background(), connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{
+		RemoteName: remoteName,
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success, "pool-by-name hit for %q masked the real dial to untrusted addrB", remoteName)
+	require.False(t, resp.Msg.HostKeyUnknown)
 }
 
 func TestTestRemoteConnection_ReportsMismatch_NotHostKeyUnknown_When_TrustedKeyChanged(t *testing.T) {

@@ -1,14 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { GroupedNotification } from "@/lib/utils/notificationGrouping";
+import { useCallback, useMemo, useRef } from "react";
+import { useFocusRestoreOnRemoval } from "@/lib/hooks/useFocusRestoreOnRemoval";
+import { GroupedNotification, groupNotifications } from "@/lib/utils/notificationGrouping";
 import { formatRelativeTime } from "@/lib/utils/datetime";
 import { NotificationData, NotificationHistoryItem } from "@/lib/types/notification";
+import { visuallyHidden } from "@/styles/a11y.css";
 import {
   notificationTypeIcon,
   notificationTypeLabel,
   priorityColor,
   splitCIBlockMessage,
+  isReconciledNotification,
 } from "@/lib/utils/notificationMapping";
 import {
   item,
@@ -53,6 +57,17 @@ import {
   autoHandledTitle,
   autoHandledMeta,
   autoHandledTimestamp,
+  needsDecisionSection,
+  needsDecisionHeadingRow,
+  needsDecisionHeading,
+  stalenessIndicator,
+  stalenessRetry,
+  needsDecisionEmpty,
+  needsDecisionEmptyIcon,
+  needsDecisionEmptyText,
+  needsDecisionEmptySubtext,
+  needsDecisionClearFilterButton,
+  list,
 } from "./NotificationPanel.css";
 
 const GENERIC_TITLES = new Set(["Claude Notification", "Notification", "Alert", "claude notification"]);
@@ -74,13 +89,22 @@ export interface NotificationItemProps {
   resolvedApprovals: Record<string, "allow" | "deny" | "expired">;
   pendingApprovals: Record<string, boolean>;
   blockedApprovals: Record<string, string>;
+  /** Transient resolveApproval failures (not the CI-block/reconciliation-race case) — the item stays actionable and this message renders next to the still-enabled Approve/Deny buttons. */
+  failedApprovals: Record<string, string>;
   resolveApproval: (
     approvalId: string,
     decision: "allow" | "deny",
     notificationIds: string | string[],
     overrideCiBlock?: boolean
   ) => void;
-  removeFromHistory: (id: string) => void;
+  /**
+   * Removes the record from local history. Optional: `NeedsDecisionSection`
+   * (Task 3.1.2b) omits this prop so no ✕ control renders for an unread
+   * actionable item — dismissing one would silently leave the underlying
+   * decision unresolved server-side. Every other caller (Recent Activity,
+   * Auto-handled, NotificationPanel) still passes it unchanged.
+   */
+  removeFromHistory?: (id: string) => void;
   handleNotificationClick: (ids: string | string[], onView?: () => void, sessionId?: string) => void;
   /**
    * Computes the href for the "View Session" link. Defaults to the live-session
@@ -109,6 +133,7 @@ export function NotificationItem({
   resolvedApprovals,
   pendingApprovals,
   blockedApprovals,
+  failedApprovals,
   resolveApproval,
   removeFromHistory,
   handleNotificationClick,
@@ -158,13 +183,15 @@ export function NotificationItem({
             </span>
           )}
         </div>
-        <button
-          className={removeButton}
-          onClick={() => removeFromHistory(notification.id)}
-          aria-label="Remove notification"
-        >
-          ✕
-        </button>
+        {removeFromHistory && (
+          <button
+            className={removeButton}
+            onClick={() => removeFromHistory(notification.id)}
+            aria-label="Remove notification"
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       {subtitleText && <div className={itemSubtitle}>{subtitleText}</div>}
@@ -206,8 +233,26 @@ export function NotificationItem({
               const resolved = resolvedApprovals[approvalId];
               const isPending = !!pendingApprovals[approvalId];
               const blockedMessage = blockedApprovals[approvalId];
-              if (resolved === "allow") return <span className={resolvedBadge} data-decision="allow">✓ Approved</span>;
-              if (resolved === "deny") return <span className={resolvedBadge} data-decision="deny">✗ Denied</span>;
+              const failedMessage = failedApprovals[approvalId];
+              if (resolved === "allow" || resolved === "deny") {
+                if (isReconciledNotification(notification)) {
+                  const ruleName = notification.metadata?.["classifier_rule_name"] ?? "a rule";
+                  return (
+                    <span
+                      className={resolvedBadge}
+                      data-decision={`${resolved}-reconciled`}
+                      title="Re-evaluated with current context (e.g. CI status, session idle time) at resolution time, which may have changed since this was first escalated."
+                    >
+                      {resolved === "allow" ? "✓" : "✗"} Auto-resolved by rule: {ruleName}
+                    </span>
+                  );
+                }
+                return (
+                  <span className={resolvedBadge} data-decision={resolved}>
+                    {resolved === "allow" ? "✓ Approved" : "✗ Denied"}
+                  </span>
+                );
+              }
               if (resolved === "expired") return <span className={resolvedBadge} data-decision="expired">Expired</span>;
               if (blockedMessage) {
                 // AC5/Story 2.2.4: visible inline explanation (not a silent no-op or
@@ -228,9 +273,13 @@ export function NotificationItem({
                       </a>
                     )}
                     <div className={itemActions}>
-                      <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds, true)} disabled={isPending} title="Approve despite failing CI">
-                        {isPending ? "…" : "Approve anyway"}
-                      </button>
+                      {/* No CI-checks URL (e.g. a reconciliation-race message) means there is
+                          nothing left to "approve anyway" against — only Deny still applies. */}
+                      {checksUrl && (
+                        <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds, true)} disabled={isPending} title="Approve despite failing CI">
+                          {isPending ? "…" : "Approve anyway"}
+                        </button>
+                      )}
                       <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending} title="Deny this tool use">
                         {isPending ? "…" : "✗ Deny"}
                       </button>
@@ -240,6 +289,11 @@ export function NotificationItem({
               }
               return (
                 <>
+                  {failedMessage && (
+                    <span className={ciBlockedText} data-testid="approval-retry-message">
+                      {failedMessage}
+                    </span>
+                  )}
                   <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds)} disabled={isPending} title="Approve this tool use">
                     {isPending ? "…" : "✓ Approve"}
                   </button>
@@ -330,6 +384,168 @@ export function AutoHandledSection({ notifications, isOpen, onToggle }: AutoHand
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+export interface NeedsDecisionStaleness {
+  /** "Last updated <label> ago" — already minute-rounded/formatted by the caller. */
+  label: string;
+  onRetry: () => void;
+}
+
+export interface NeedsDecisionSectionProps
+  extends Pick<
+    NotificationItemProps,
+    | "resolvedApprovals"
+    | "pendingApprovals"
+    | "blockedApprovals"
+    | "failedApprovals"
+    | "resolveApproval"
+    | "handleNotificationClick"
+    | "getSessionHref"
+  > {
+  /** Already-filtered (unread + actionable) notifications to render — never the unfiltered set. */
+  notifications: NotificationHistoryItem[];
+  /**
+   * The unread + actionable count over the *unfiltered* notification history
+   * (Task 3.1.2c) — used only to distinguish "genuinely nothing needs a
+   * decision" from "a filter is hiding something that does." Must never be
+   * derived from `notifications.length`.
+   */
+  totalActionableCount: number;
+  /** Resets the page's active filters. Only called from the "hidden by filter" empty state. */
+  onClearFilter: () => void;
+  /** Background poll/fetch-failure staleness indicator (Task 3.1.2h, AC38) — omitted when there has been no failure. */
+  staleness?: NeedsDecisionStaleness;
+}
+
+/**
+ * "Needs a decision" — always-expanded top tier of unread actionable
+ * notifications (approval_needed/question/error/task_failed/warning). See
+ * design/ux.md Surface 1 and Surface 4.
+ *
+ * Deliberately does not pass `removeFromHistory` to its `NotificationItem`s —
+ * an item here leaves only by being resolved (Approve/Deny/Open session) or
+ * by its underlying state resolving elsewhere, never via the ✕ control.
+ */
+export function NeedsDecisionSection({
+  notifications,
+  totalActionableCount,
+  onClearFilter,
+  resolvedApprovals,
+  pendingApprovals,
+  blockedApprovals,
+  failedApprovals,
+  resolveApproval,
+  handleNotificationClick,
+  getSessionHref,
+  staleness,
+}: NeedsDecisionSectionProps) {
+  // Focus management on removal (design/ux.md AC34): when the item that held
+  // keyboard focus leaves the section (resolved elsewhere or acted on),
+  // move focus to the item now at the same list position, or to the
+  // section heading if none remain. Mirrors ReviewQueuePanel.tsx's identical
+  // pattern for the Review Queue's own needs-decision tier (Task 3.2.1's
+  // Surface 9 focus handling).
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const notificationIds = useMemo(() => notifications.map((n) => n.id), [notifications]);
+  const resolveNeedsDecisionElement = useCallback(
+    (id: string) => document.querySelector<HTMLElement>(`[data-testid="needs-decision-item-${id}"]`),
+    []
+  );
+  const focusedIdRef = useFocusRestoreOnRemoval(notificationIds, resolveNeedsDecisionElement, headingRef);
+
+  const count = notifications.length;
+  const announcement =
+    count === 0 ? "" : count === 1 ? "1 item needs a decision" : `${count} items need a decision`;
+
+  const heading = (
+    <div className={needsDecisionHeadingRow}>
+      <h3 className={needsDecisionHeading} ref={headingRef} tabIndex={-1} data-testid="needs-decision-heading">
+        Needs a decision · {count}
+      </h3>
+      {staleness && (
+        <span className={stalenessIndicator} role="status" data-testid="needs-decision-staleness">
+          Last updated {staleness.label} ago ·{" "}
+          <button type="button" className={stalenessRetry} onClick={staleness.onRetry}>
+            Retry
+          </button>
+        </span>
+      )}
+    </div>
+  );
+
+  // Filter-aware empty state (Product Triad Review round-4 blocker fix):
+  // never render the calm "All caught up" copy when a filter — not a lack
+  // of actionable items — is what emptied the filtered list.
+  if (count === 0) {
+    const hiddenByFilter = totalActionableCount > 0;
+    return (
+      <div className={needsDecisionSection} data-testid="needs-decision-section">
+        {heading}
+        <div aria-live="polite" className={visuallyHidden} data-testid="needs-decision-announcement">
+          {hiddenByFilter
+            ? totalActionableCount === 1
+              ? "1 item needs a decision, but is hidden by your filter"
+              : `${totalActionableCount} items need a decision, but are hidden by your filter`
+            : "All caught up"}
+        </div>
+        {hiddenByFilter ? (
+          <div className={needsDecisionEmpty} data-testid="needs-decision-hidden-by-filter">
+            <div className={needsDecisionEmptyIcon} aria-hidden="true">⚠️</div>
+            <p className={needsDecisionEmptyText}>
+              {totalActionableCount === 1
+                ? "1 item needs a decision, but is hidden by your filter"
+                : `${totalActionableCount} items need a decision, but are hidden by your filter`}
+            </p>
+            <button type="button" className={needsDecisionClearFilterButton} onClick={onClearFilter}>
+              Clear filter
+            </button>
+          </div>
+        ) : (
+          <div className={needsDecisionEmpty} data-testid="needs-decision-empty">
+            <div className={needsDecisionEmptyIcon} aria-hidden="true">✓</div>
+            <p className={needsDecisionEmptyText}>All caught up</p>
+            <p className={needsDecisionEmptySubtext}>Nothing needs your attention right now</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className={needsDecisionSection} data-testid="needs-decision-section">
+      {heading}
+      <div aria-live="polite" className={visuallyHidden} data-testid="needs-decision-announcement">
+        {announcement}
+      </div>
+      <div className={list}>
+        {groupNotifications(notifications).map((group) => (
+          <div
+            key={group.notification.id}
+            data-testid={`needs-decision-item-${group.notification.id}`}
+            tabIndex={-1}
+            onFocus={() => {
+              focusedIdRef.current = group.notification.id;
+            }}
+            onBlur={() => {
+              if (focusedIdRef.current === group.notification.id) focusedIdRef.current = null;
+            }}
+          >
+            <NotificationItem
+              group={group}
+              resolvedApprovals={resolvedApprovals}
+              pendingApprovals={pendingApprovals}
+              blockedApprovals={blockedApprovals}
+              failedApprovals={failedApprovals}
+              resolveApproval={resolveApproval}
+              handleNotificationClick={handleNotificationClick}
+              getSessionHref={getSessionHref}
+            />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

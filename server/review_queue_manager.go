@@ -601,14 +601,18 @@ func (rqm *ReactiveQueueManager) baseContext() context.Context {
 }
 
 // OnItemRemoved is called when an item is removed from the queue.
-func (rqm *ReactiveQueueManager) OnItemRemoved(sessionID string) {
+func (rqm *ReactiveQueueManager) OnItemRemoved(sessionID string, info session.RemovalInfo) {
+	itemRemoved := &sessionv1.ReviewQueueItemRemovedEvent{
+		SessionId: sessionID,
+		Reason:    info.Reason(),
+	}
+	if ruleName := info.RuleName(); ruleName != "" {
+		itemRemoved.AutoResolvedByRule = &ruleName
+	}
 	event := &sessionv1.ReviewQueueEvent{
 		Timestamp: timestamppb.Now(),
 		Event: &sessionv1.ReviewQueueEvent_ItemRemoved{
-			ItemRemoved: &sessionv1.ReviewQueueItemRemovedEvent{
-				SessionId: sessionID,
-				Reason:    "user_action",
-			},
+			ItemRemoved: itemRemoved,
 		},
 	}
 	rqm.publishToClients(event)

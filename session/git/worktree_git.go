@@ -4,11 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -29,11 +34,10 @@ var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
 // executor.Executor test-injection seam, never circuit-breaker-wrapped
 // anywhere in this package, unlike session/tmux's genuinely orthogonal
 // cmdExec), which made it dead code for all ~25 production callers of this
-// method (IsDirtyWithHint, RenameBranch, stageAndCommit,
-// StageAllExceptScaffolding, HasStagedChanges, plus every worktree_ops.go
-// worktree add/remove/prune/list call). IsDirtyWithHint's race/error-
-// injection tests now inject a tmux.CommandRunner spy via WithCommandRunner
-// instead of an executor.Executor mock.
+// method. IsDirtyWithHint, stageAndCommit, StageAllExceptScaffolding, and
+// HasStagedChanges have since moved onto go-git directly (no subprocess —
+// the `prefer-go-git-over-subshells` skill); RenameBranch and every
+// worktree_ops.go worktree add/remove/prune/list call remain on this seam.
 func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -149,11 +153,60 @@ func (g *GitWorktree) stageAndCommit(commitMessage string) error {
 		return nil
 	}
 
-	if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
+	repo, err := OpenRepo(g.worktreePath)
+	if err != nil {
+		return fmt.Errorf("failed to open git repo at %s: %w", g.worktreePath, err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree at %s: %w", g.worktreePath, err)
+	}
+	author, err := resolveCommitAuthorIdentity(repo)
+	if err != nil {
+		log.Error("failed to resolve commit author identity", "err", err)
+		return fmt.Errorf("failed to resolve commit author identity: %w", err)
+	}
+	// go-git never runs hooks, so there's no equivalent needed for the
+	// subprocess call's --no-verify.
+	if _, err := worktree.Commit(commitMessage, &git.CommitOptions{Author: author}); err != nil {
 		log.Error("failed to commit changes", "err", err)
 		return fmt.Errorf("failed to commit changes: %w", err)
 	}
 	return nil
+}
+
+// resolveCommitAuthorIdentity resolves the author identity for a commit made
+// via go-git's Worktree.Commit, mirroring real `git commit`'s own resolution
+// order: GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL env vars first (checked
+// independently per field, matching git's own ident resolution — one can be
+// set without the other), then the repo's config (local `user.name`/
+// `user.email` in .git/config, falling back per-field to global
+// ~/.gitconfig via ConfigScoped). Deliberately does not hardcode a
+// placeholder identity — unlike util.go's createInitialCommit, which is a
+// special-case bootstrap commit for a brand-new empty repo, this commit
+// represents real session work and must be attributed to whoever actually
+// configured this environment.
+func resolveCommitAuthorIdentity(repo *git.Repository) (*object.Signature, error) {
+	name := os.Getenv("GIT_AUTHOR_NAME")
+	email := os.Getenv("GIT_AUTHOR_EMAIL")
+	if name != "" && email != "" {
+		return &object.Signature{Name: name, Email: email, When: time.Now()}, nil
+	}
+
+	cfg, err := repo.ConfigScoped(config.GlobalScope)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read git config: %w", err)
+	}
+	if name == "" {
+		name = cfg.User.Name
+	}
+	if email == "" {
+		email = cfg.User.Email
+	}
+	if name == "" || email == "" {
+		return nil, fmt.Errorf("no git author identity configured (set GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL or git config user.name/user.email)")
+	}
+	return &object.Signature{Name: name, Email: email, When: time.Now()}, nil
 }
 
 // StageAllExceptScaffolding stages all worktree changes (`git add .`) and then
@@ -167,7 +220,18 @@ func (g *GitWorktree) stageAndCommit(commitMessage string) error {
 // (.github/workflows/backlog-scaffolding-guard.yml) is the second, independent
 // layer for the rare case where the untrack step itself errors.
 func (g *GitWorktree) StageAllExceptScaffolding() error {
-	if _, err := g.runGitCommand(g.worktreePath, "add", "."); err != nil {
+	repo, err := OpenRepo(g.worktreePath)
+	if err != nil {
+		return fmt.Errorf("failed to stage changes: %w", err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to stage changes: %w", err)
+	}
+	// AddOptions{All: true} is the `git add -A` equivalent — it stages
+	// deletions as well as new/modified files (verified against
+	// TestStageAllExceptScaffolding_StagesDeletedFiles).
+	if err := worktree.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		return fmt.Errorf("failed to stage changes: %w", err)
 	}
 
@@ -186,11 +250,31 @@ func (g *GitWorktree) StageAllExceptScaffolding() error {
 // just-untracked scaffolding file is skipped gracefully instead of failing on
 // "nothing to commit".
 func (g *GitWorktree) HasStagedChanges() (bool, error) {
-	out, err := g.runGitCommand(g.worktreePath, "diff", "--cached", "--name-only")
+	repo, err := OpenRepo(g.worktreePath)
 	if err != nil {
 		return false, fmt.Errorf("failed to check staged changes: %w", err)
 	}
-	return strings.TrimSpace(out) != "", nil
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("failed to check staged changes: %w", err)
+	}
+	status, err := worktree.Status()
+	if err != nil {
+		return false, fmt.Errorf("failed to check staged changes: %w", err)
+	}
+	for _, fileStatus := range status {
+		// git.Untracked is go-git's Staging code for a plain untracked file
+		// (present in the worktree, absent from both the index and HEAD) — it
+		// is not a staged change (`git diff --cached` reports nothing for it),
+		// so it must be excluded alongside Unmodified. Missing this excludes
+		// exactly the "brand-new scaffolding file added, then untracked again"
+		// case CommitChanges must skip as a no-op (see
+		// TestCommitChanges_SkipsCommitGracefully_WhenOnlyScaffoldingStaged).
+		if fileStatus.Staging != git.Unmodified && fileStatus.Staging != git.Untracked {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // PrimeDirtyCacheAt sets the dirty-cache timestamp to t without running git status.
@@ -248,16 +332,17 @@ func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
 		return false, nil
 	}
 
-	// Slow path: run git status --porcelain via subprocess, wrapped in singleflight
-	// so concurrent callers coalesce onto a single status check rather than each
-	// spawning their own git process.
+	// Slow path: check via go-git's Worktree.Status() (no subprocess — the
+	// `prefer-go-git-over-subshells` skill), wrapped in singleflight so
+	// concurrent callers coalesce onto a single status check rather than each
+	// paying their own status-computation cost.
 	type dirtyResult struct {
 		dirty bool
 		err   error
 	}
 	v, _, _ := g.isDirtySF.Do(g.worktreePath, func() (interface{}, error) {
-		out, subErr := g.runGitCommand(g.worktreePath, "status", "--porcelain")
-		return dirtyResult{len(out) > 0, subErr}, nil
+		dirty, subErr := g.dirtyCheckerFunc()(g.worktreePath)
+		return dirtyResult{dirty, subErr}, nil
 	})
 	res := v.(dirtyResult)
 	if res.err != nil {
@@ -277,6 +362,28 @@ func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
 	// is harmless — the next call will re-run git status when TTL expires.
 	g.isDirtyCache.Store(dirtyCacheState{dirty: dirty, time: time.Now()})
 	return dirty, nil
+}
+
+// worktreeIsDirty reports whether the worktree at path has any staged or
+// unstaged change, via go-git's Worktree.Status() — no subprocess (the
+// `prefer-go-git-over-subshells` skill). status.IsClean() is true iff there
+// are zero entries at all, staged or unstaged, matching `git status
+// --porcelain` producing empty output. This is IsDirtyWithHint's default
+// dirtyChecker; see dirtyCheckerFunc in worktree.go.
+func worktreeIsDirty(path string) (bool, error) {
+	repo, err := OpenRepo(path)
+	if err != nil {
+		return false, fmt.Errorf("failed to open git repo at %s: %w", path, err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("failed to get worktree at %s: %w", path, err)
+	}
+	status, err := worktree.Status()
+	if err != nil {
+		return false, fmt.Errorf("failed to get worktree status at %s: %w", path, err)
+	}
+	return !status.IsClean(), nil
 }
 
 // IsBranchCheckedOut checks if the instance branch is currently checked out.
