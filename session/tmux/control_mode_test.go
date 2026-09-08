@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -560,20 +561,10 @@ func TestControlMode_ScanLoopDoneChRace_EndsGenerationWithoutFiringOnExit(t *tes
 	}
 }
 
-// TestSendInputViaControlMode_ReturnsError_When_PipeAcceptsWritesButNeverAcks
-// guards against the input-silent-drop bug (fixed alongside this test): a
-// wedged control-mode pipe that accepts the enqueue and the stdin write
-// without ever erroring used to make SendInputViaControlMode return nil
-// immediately (its old "fire-and-forget" contract), so the caller's
-// subprocess fallback (sendInputToTmux, in connectrpc_websocket.go) never
-// ran -- keystrokes vanished with the UI still showing "Connected".
-//
-// highPriSendCh here is a live, buffered channel with nothing ever draining
-// it -- the enqueue succeeds (room in the buffer), but no %begin/%end ack
-// can ever arrive, faithfully modeling a real wedged tmux -C attach-session
-// pipe (confirmed live: one that accepts stdin writes but never completes
-// even a capture-pane/resize round trip) without needing a real tmux
-// process.
+// TestSendInputViaControlMode_ReturnsError_When_PipeAcceptsWritesButNeverAcks guards
+// against the input-silent-drop bug: a wedged control-mode pipe that accepts writes
+// but never acks must surface as an error, not nil, so the caller's subprocess
+// fallback runs instead of silently dropping the keystroke.
 func TestSendInputViaControlMode_ReturnsError_When_PipeAcceptsWritesButNeverAcks(t *testing.T) {
 	sess := &TmuxSession{
 		sanitizedName: "cm_wedged_input_test",
@@ -587,4 +578,30 @@ func TestSendInputViaControlMode_ReturnsError_When_PipeAcceptsWritesButNeverAcks
 	if err == nil {
 		t.Fatal("SendInputViaControlMode() error = nil, want a timeout error -- a wedged CM pipe must be reported as a failure so the caller's subprocess fallback runs, not silently swallowed")
 	}
+}
+
+// TestSendInputViaControlMode_ReturnsNil_When_AckArrives is the happy-path companion:
+// it asserts SendInputViaControlMode builds the correct "send-keys -t <name> -H <hex>"
+// line and returns nil once the %begin/%end ack arrives, guarding against a broken
+// args-construction mutation slipping past the wedged-pipe test alone.
+func TestSendInputViaControlMode_ReturnsNil_When_AckArrives(t *testing.T) {
+	ch := make(chan cmSendReq, 64)
+	sess := &TmuxSession{sanitizedName: "cm_ack_test", highPriSendCh: ch}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := <-ch
+		if !strings.HasPrefix(req.line, "send-keys -t cm_ack_test -H ") {
+			t.Errorf("enqueued line = %q, want send-keys -t <name> -H <hex>", req.line)
+		}
+		req.resultCh <- cmdResult{body: ""}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := sess.SendInputViaControlMode(ctx, []byte("x")); err != nil {
+		t.Fatalf("SendInputViaControlMode() error = %v, want nil when ack arrives", err)
+	}
+	<-done
 }
