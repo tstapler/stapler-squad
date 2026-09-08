@@ -471,21 +471,10 @@ func markStartedIfTmuxAliveLocked(s *instanceState) {
 
 // RecoverFromStopped resets a stale Stopped, PermanentlyFailed, or Failed
 // status to Creating so the instance can be hot-restored via Start(false).
-// Only call this during startup reconciliation (Stopped case) or from
-// restartForRetry's PermanentlyFailed/Stopped/Failed recovery branch when
-// the tmux session is confirmed alive or being cold-restored; it bypasses
-// the state machine intentionally for Stopped/PermanentlyFailed, neither of
-// which has a registered edge to Creating (state_machine.go's table has no
-// Stopped→Creating or PermanentlyFailed→Creating entry — see startLocked's
-// later `if i.Status != Active` transition, which would fail from either).
-// The PermanentlyFailed case backs RetryNow()'s manual "Retry now" recovery
-// (AC6) — without it, RecoverFromStopped silently no-op'd for a
-// PermanentlyFailed instance (it only ever checked Status == Stopped).
-// The Failed case does have a registered Failed→Creating edge
-// (state_machine.go, "the retry path") but going through it here anyway
-// costs nothing (that entry carries no Guard/After hook) and keeps every
-// RetryNow-reachable status on the one recovery path instead of splitting
-// Failed onto transitionTo while Stopped/PermanentlyFailed stay here.
+// Stopped/PermanentlyFailed have no registered edge to Creating, so this
+// bypasses the state machine intentionally; Failed does have one
+// (state_machine.go's Failed→Creating, "the retry path") but is included
+// here too so every RetryNow-reachable status shares one recovery path.
 // Deprecated: prefer transitionTo(ctx, Active) on the Stopped→Active path.
 func (i *Instance) RecoverFromStopped() {
 	i.mu.Lock()

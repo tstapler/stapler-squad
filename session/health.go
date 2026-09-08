@@ -274,23 +274,11 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 	}
 
 	// Check if instance thinks it's started but tmux session doesn't exist.
-	// Skipped for the tymux backend: checkTmuxHealth's HasSession()/IsAlive()
-	// probe only works because fromInstanceData wires the tmux branches'
-	// throwaway LoadInstances() copy with a TmuxSession object addressable
-	// by name against the real, externally-running tmux server -- no RPC
-	// needed. tymux has no such by-name-only local wiring (its session/pane
-	// IDs only exist after a real ListSessions round-trip, which
-	// fromInstanceData deliberately never does, matching deferStart's
-	// "don't block LoadInstances() on network calls" contract), so every
-	// tymux instance's throwaway copy always reports HasSession()==false --
-	// recoverMissingSession would then call Start(false) on this
-	// disconnected copy and spawn a real, orphaned duplicate tymux session
-	// on tymuxd, on a debounce timer, forever. tymux liveness is already
-	// covered on the live instance by the standing Attach stream's
-	// push-based exit/reconnect-exhaustion callback
-	// (instanceOnExitCallback, instance.go) -- this poll-based check has
-	// nothing correct to add for this backend.
-	if instance.Started() && instance.Backend != BackendTymux {
+	// Skipped for push-liveness backends (ProcessManagerBackend.SkipsPollBasedLiveness) --
+	// their throwaway LoadInstances() copy can never populate real session
+	// state without an RPC round-trip fromInstanceData deliberately skips,
+	// so this probe would only ever misreport them as missing.
+	if instance.Started() && !instance.Backend.SkipsPollBasedLiveness() {
 		h.checkTmuxHealth(instance, paneStatus, &result)
 	}
 

@@ -926,6 +926,37 @@ func TestReviewQueuePoller_ReconcileSessions_TymuxBackend_NeverQueriedOrFlipped(
 	}
 }
 
+// TestReviewQueuePoller_ReconcileSessions_MixedBackends_TmuxStillReconciled
+// covers the actual rollout scenario the all-tymux test above doesn't:
+// tmux and tymux instances coexisting, including sharing a socket string.
+// The tymux instance must never be queried/flipped and the tmux instance
+// must still be reconciled normally against its own real socket data.
+func TestReviewQueuePoller_ReconcileSessions_MixedBackends_TmuxStillReconciled(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	tmuxInst := makeSocketTestInstance("tmux-session", "session-tmux", "shared-socket", Active)
+	tymuxInst := makeSocketTestInstance("tymux-session", "session-tymux-name", "shared-socket", Active)
+	tymuxInst.Backend = BackendTymux
+	poller.SetInstances([]*Instance{tmuxInst, tymuxInst})
+
+	// tmux session genuinely alive; the tymux instance's name is deliberately
+	// absent -- if it leaked into the query, this socket's live set wouldn't
+	// contain it and it would wrongly flip to Stopped.
+	querier.setLiveSessions("shared-socket", "session-tmux")
+
+	poller.reconcileSessions()
+
+	if tmuxInst.Status != Active {
+		t.Errorf("tmux instance: got status %v, want Active", tmuxInst.Status)
+	}
+	if tymuxInst.Status != Active {
+		t.Errorf("tymux instance: got status %v, want Active (never touched)", tymuxInst.Status)
+	}
+}
+
 // TestReviewQueuePoller_ReconcileSessions_StoppedInstancesOnDifferentSockets_ReviveIndependently
 // covers the Stopped→Active direction: only the instance actually alive on its own
 // socket should revive; the other must stay Stopped.
