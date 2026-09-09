@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.53.1](https://github.com/tstapler/stapler-squad/compare/v1.53.0...v1.53.1) (2026-09-09)
+
+
+### Bug Fixes
+
+* **web-app:** show startup state instead of Disconnected on new sessions ([#756](https://github.com/tstapler/stapler-squad/issues/756)) ([a6ad5d5](https://github.com/tstapler/stapler-squad/commit/a6ad5d52c50dae7ec9e637767a0d306328749538))
+
 ## [1.53.0](https://github.com/tstapler/stapler-squad/compare/v1.52.0...v1.53.0) (2026-09-09)
 
 
