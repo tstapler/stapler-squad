@@ -70,15 +70,11 @@ func TestFileScrollbackStorage_Read_RejectsSessionIDEscapingBasePath(t *testing.
 // TestFileScrollbackStorage_Truncate_AbortsOnCompressorCloseFailure covers
 // the fix where a failed compressor/temp-file Close() during Truncate now
 // aborts before the os.Rename that would otherwise silently replace the
-// original file with truncated/corrupt data. It forces the zstd encoder's
-// Close() specifically (not an earlier Write()) to fail by making tempPath a
-// FIFO whose only reader closes immediately: the klauspost/compress zstd
-// encoder buffers all Write() calls client-side and only performs its first
-// real write to the underlying writer on Close() (verified empirically --
-// unlike compress/gzip, whose Writer flushes on every Write call, which
-// would fail at the write-entry step instead of the Close step this test
-// targets), so every Encode() call during Truncate succeeds and only the
-// final zstdWriter.Close() hits the closed pipe and fails.
+// original file with truncated/corrupt data. It targets the zstd encoder
+// specifically because klauspost/compress's zstd Writer buffers all Write()
+// calls client-side and only flushes on Close(), so every Encode() call
+// during Truncate succeeds and only the final Close() can observe the FIFO
+// failure below (unlike compress/gzip, which flushes per-Write).
 func TestFileScrollbackStorage_Truncate_AbortsOnCompressorCloseFailure(t *testing.T) {
 	basePath := t.TempDir()
 	storage := NewFileScrollbackStorage(basePath, "zstd", 3)
@@ -100,48 +96,19 @@ func TestFileScrollbackStorage_Truncate_AbortsOnCompressorCloseFailure(t *testin
 	require.NoError(t, err)
 	require.NotEmpty(t, originalContent)
 
-	// Open the FIFO for reading (which unblocks Truncate's os.OpenFile on the
-	// write side) and close the read end immediately without consuming any
-	// data, so the write side's eventual write fails with EPIPE. Truncate
-	// runs synchronously on this goroutine, matching how it's actually
-	// called in production -- empirically, running the writer on a spawned
-	// goroutine instead (with the reader on the caller's goroutine) made the
-	// write far more likely to slip into the kernel's pipe buffer before the
-	// close was processed, rather than less.
-	//
-	// keepBytes is derived from the real compressed file size rather than a
-	// hardcoded magic number, and deliberately kept strictly between two
-	// failure zones observed empirically against this fixture:
-	//   - too large (>= the compressed file size) and Truncate's own
-	//     `stat.Size() <= keepBytes` early-return fires before ever opening
-	//     tempPath, so the FIFO reader below blocks forever with no writer
-	//     ever showing up -- a hang, not a fast failure, until Go's test
-	//     timeout kills the whole package's test run.
-	//   - too small (small enough that keepCount computes to 0) and the
-	//     entry-encode loop below never calls Encode(), so the zstd encoder
-	//     never buffers anything and its Close() may write nothing at all to
-	//     the pipe -- no write, no EPIPE, and the test flakes (observed
-	//     ~1-in-5 failures with a hardcoded keepBytes=10 against this
-	//     50-entry fixture).
-	// Halving the real compressed size keeps comfortably clear of both ends:
-	// well below the file size (forces truncation) while still large enough
-	// to keep several real entries (Close() has actual buffered data to
-	// flush).
+	// keepBytes must stay strictly between two failure zones: >= the real
+	// compressed size makes Truncate's stat.Size() <= keepBytes early-return
+	// fire before ever opening tempPath (hanging the FIFO reader below with
+	// no writer); too small makes keepCount compute to 0, so the encode loop
+	// never calls Encode() and Close() has nothing buffered to flush (no
+	// EPIPE). Halving the real compressed size stays clear of both.
 	keepBytes := int64(len(originalContent)) / 2
 	require.Greater(t, keepBytes, int64(0), "fixture must compress to more than 2 bytes for this test to be meaningful")
 
-	// Whether a write to an already-closed FIFO read end actually surfaces
-	// as EPIPE depends on OS-level scheduling of the reader's close() versus
-	// the writer's write() syscall -- empirically, even with the reader
-	// closing as its very first instruction after the FIFO's blocking
-	// open() calls rendezvous with Truncate's, the write still occasionally
-	// (~1 in 10 runs observed on macOS) lands in the kernel's pipe buffer
-	// before the close is processed and succeeds anyway. That's an
-	// inherent property of the OS-level race this test depends on to
-	// exercise Close()-failure handling, not a defect in the setup below,
-	// so retry a bounded number of times rather than treating one spurious
-	// "the write raced ahead and succeeded" outcome as a real failure --
-	// same rationale as retrying a network-timing-dependent test.
+	// Whether a write to an already-closed FIFO read end surfaces as EPIPE
+	// is a genuine OS-level race (the write can land in the kernel's pipe
+	// buffer before the close is processed) -- retry a bounded number of
+	// times rather than treating one spurious success as a failure.
 	const maxAttempts = 8
 	tempPath := filePath + ".tmp"
 	for attempt := 1; attempt <= maxAttempts; attempt++ {

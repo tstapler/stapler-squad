@@ -17,6 +17,7 @@ require (
 	connectrpc.com/connect v1.20.0
 	connectrpc.com/otelconnect v0.8.0
 	entgo.io/ent v0.14.5
+	github.com/DATA-DOG/go-sqlmock v1.5.0
 	github.com/Netflix/go-expect v0.0.0-20220104043353-73e0943537d2
 	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/atotto/clipboard v0.1.4
@@ -66,7 +67,6 @@ require (
 )
 
 require (
-	github.com/DATA-DOG/go-sqlmock v1.5.0 // indirect
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
