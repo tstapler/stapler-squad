@@ -279,8 +279,10 @@ func (t *TmuxSession) StopControlMode() error {
 	t.controlModeStartMu.Lock()
 	defer t.controlModeStartMu.Unlock()
 
-	// Decrement refcount under the lock. Only proceed to teardown when the count
-	// reaches zero (i.e., this is the last caller).
+	// Decrement refcount and snapshot the cmd/remoteProc pointers under the same
+	// lock readControlModeOutput's unilateral-exit teardown path (control_mode.go's
+	// %exit/EOF handlers) nils them under -- re-reading the bare t.controlModeCmd/
+	// t.controlModeRemoteProc fields after unlocking here raced with that write.
 	t.controlModeSubMu.Lock()
 	if t.controlModeRefCount > 0 {
 		t.controlModeRefCount--
@@ -288,13 +290,15 @@ func (t *TmuxSession) StopControlMode() error {
 		log.Warn("StopControlMode called with refcount already 0", "session", t.sanitizedName)
 	}
 	remaining := t.controlModeRefCount
+	cmd := t.controlModeCmd
+	remoteProc := t.controlModeRemoteProc
 	t.controlModeSubMu.Unlock()
 
 	if remaining > 0 {
 		return nil // Other callers still active; leave the process running.
 	}
 
-	if t.controlModeCmd == nil && t.controlModeRemoteProc == nil {
+	if cmd == nil && remoteProc == nil {
 		return nil // Not running (or already stopped by a prior call).
 	}
 
@@ -343,21 +347,21 @@ func (t *TmuxSession) StopControlMode() error {
 	}
 	t.cmdSendMu.Unlock()
 
-	// Wait for process to exit (with timeout). Exactly one of
-	// t.controlModeCmd/t.controlModeRemoteProc is non-nil here (guarded by
-	// the early-return above); wait/kill are resolved to the matching
-	// local (*exec.Cmd) or remote (SSH-channel) implementation.
+	// Wait for process to exit (with timeout). Exactly one of cmd/remoteProc
+	// is non-nil here (guarded by the early-return above) -- use the pointers
+	// snapshotted under the lock earlier rather than re-reading t.controlModeCmd/
+	// t.controlModeRemoteProc, which raced with readControlModeOutput's teardown
+	// write. wait/kill are resolved to the matching local (*exec.Cmd) or remote
+	// (SSH-channel) implementation.
 	var wait func() error
 	var kill func()
-	if t.controlModeCmd != nil {
-		UntrackChildPID(t.controlModeCmd.Process.Pid)
-		cmd := t.controlModeCmd
+	if cmd != nil {
+		UntrackChildPID(cmd.Process.Pid)
 		wait = cmd.Wait
 		kill = func() { _ = cmd.Process.Kill() }
 	} else {
-		proc := t.controlModeRemoteProc
-		wait = proc.wait
-		kill = proc.kill
+		wait = remoteProc.wait
+		kill = remoteProc.kill
 	}
 
 	done := make(chan error, 1)

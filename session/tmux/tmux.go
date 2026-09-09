@@ -183,7 +183,7 @@ type TmuxSession struct {
 	// in-flight drainSlowSubscriber goroutine's blocked send and panic. See
 	// closeSubscriberLocked and drainSlowSubscriber.
 	pendingCloseAfterDrain map[string]chan []byte
-	controlModeSubMu       sync.RWMutex // Protects controlModeSubscribers, slowSendInFlight, pendingCloseAfterDrain, controlModeExited, pendingCmds, and controlModeRefCount
+	controlModeSubMu       sync.RWMutex // Protects controlModeSubscribers, slowSendInFlight, pendingCloseAfterDrain, controlModeExited, pendingCmds, controlModeRefCount, controlModeCmd, and controlModeRemoteProc
 	controlModeExited      bool         // True after readControlModeOutput exits; new subscribers get pre-closed channel
 	controlModeStartMu     sync.Mutex   // Serializes Start/Stop so only one process starts at a time
 	controlModeRefCount    int          // Number of active Start/Stop pairs; protected by controlModeSubMu

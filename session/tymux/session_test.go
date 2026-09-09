@@ -152,21 +152,7 @@ func TestTymuxGRPCSession_Start_RejectsNonexistentWorkDir(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_StartThenIsAlive_ReturnsTrueImmediately(t *testing.T) {
-	dir := t.TempDir()
-	transport := &fakeTransport{
-		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
-			return connect.NewResponse(fakeSession("sess-1", "pane-1", dir, v1.Liveness_LIVENESS_LIVE)), nil
-		},
-		capturePaneFn: func(_ context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
-			assert.Equal(t, "pane-1", req.Msg.GetPaneId())
-			return connect.NewResponse(&v1.PaneSnapshot{
-				PaneId:   "pane-1",
-				Liveness: v1.Liveness_LIVENESS_LIVE,
-			}), nil
-		},
-	}
-	sess := NewTymuxGRPCSession(transport)
-	require.NoError(t, sess.Start(dir))
+	sess := startedSession(t, &v1.PaneSnapshot{PaneId: "pane-1", Liveness: v1.Liveness_LIVENESS_LIVE})
 
 	assert.True(t, sess.IsAlive())
 }
@@ -377,7 +363,7 @@ func TestTymuxGRPCSession_GetPTY_ErrorsBeforeStart(t *testing.T) {
 // as AttachRequest_Input — the two directions ClaudeController/PTYAccess
 // and CommandExecutor each depend on.
 func TestTymuxGRPCSession_GetPTY_BridgesOutputAndInput(t *testing.T) {
-	sess, stream, _ := startedSessionWithStream(t)
+	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	f, err := sess.GetPTY()
 	require.NoError(t, err)
@@ -414,7 +400,7 @@ func TestTymuxGRPCSession_GetPTY_BridgesOutputAndInput(t *testing.T) {
 // caller that kept a reference (PTYAccess does, for the controller's
 // lifetime) can't read/write into a dead session.
 func TestTymuxGRPCSession_GetPTY_ClosedByClose(t *testing.T) {
-	sess, _, _ := startedSessionWithStream(t)
+	sess, _, _ := startedSessionWithStream(t) // stream and transport (2nd/3rd returns) unused here
 
 	f, err := sess.GetPTY()
 	require.NoError(t, err)
@@ -433,7 +419,7 @@ func TestTymuxGRPCSession_GetPTY_ClosedByClose(t *testing.T) {
 // pty.close(), rather than pty.close() being self-sufficient).
 func TestTymuxGRPCSession_GetPTY_CloseTerminatesPumpGoroutines(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
-	sess, _, _ := startedSessionWithStream(t)
+	sess, _, _ := startedSessionWithStream(t) // stream and transport (2nd/3rd returns) unused here
 
 	_, err := sess.GetPTY()
 	require.NoError(t, err)
@@ -453,7 +439,7 @@ func TestTymuxGRPCSession_GetPTY_CloseTerminatesPumpGoroutines(t *testing.T) {
 // down — a session-lifetime leak on every such race.
 func TestTymuxGRPCSession_GetPTY_AfterClose_DoesNotLeakANewAdapter(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
-	sess, _, _ := startedSessionWithStream(t)
+	sess, _, _ := startedSessionWithStream(t) // stream and transport (2nd/3rd returns) unused here
 
 	require.NoError(t, sess.Close())
 
@@ -473,6 +459,20 @@ func TestTymuxGRPCSession_GetPanePID_ReturnsNotSupportedError(t *testing.T) {
 	assert.Zero(t, pid)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNotSupportedOnTymuxBackend)
+}
+
+// TestTymuxGRPCSession_StartStopControlMode_AreNoOps is the regression test
+// for a real production gap: these used to return ErrNotImplemented, which
+// made streamhub.SessionController's contract-required no-op fail instead,
+// aborting the browser terminal's WebSocket stream (server/services'
+// streamViaHub/streamViaControlMode both call StartControlMode before
+// attaching) for every tymux-backed session — the interactive terminal
+// never rendered and typing had nowhere to go.
+func TestTymuxGRPCSession_StartStopControlMode_AreNoOps(t *testing.T) {
+	sess := NewTymuxGRPCSession(&fakeTransport{})
+
+	assert.NoError(t, sess.StartControlMode())
+	assert.NoError(t, sess.StopControlMode())
 }
 
 // --- Story 2.2.6: ErrTymuxdUnreachable classification ---
@@ -571,20 +571,7 @@ func TestTymuxGRPCSession_IsAlive_OrdinaryRPCError_FallsBackToCachedLiveness(t *
 }
 
 func TestTymuxGRPCSession_IsAlive_GenuineDeadResponse_ReturnsFalse(t *testing.T) {
-	dir := t.TempDir()
-	transport := &fakeTransport{
-		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
-			return connect.NewResponse(fakeSession("sess-1", "pane-1", dir, v1.Liveness_LIVENESS_LIVE)), nil
-		},
-		capturePaneFn: func(_ context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
-			return connect.NewResponse(&v1.PaneSnapshot{
-				PaneId:   req.Msg.GetPaneId(),
-				Liveness: v1.Liveness_LIVENESS_DEAD,
-			}), nil
-		},
-	}
-	sess := NewTymuxGRPCSession(transport)
-	require.NoError(t, sess.Start(dir))
+	sess := startedSession(t, &v1.PaneSnapshot{PaneId: "pane-1", Liveness: v1.Liveness_LIVENESS_DEAD})
 	t.Cleanup(func() { _ = sess.Close() })
 
 	// A real, error-free response reporting LIVENESS_DEAD is the one case
@@ -614,7 +601,7 @@ func TestTymuxGRPCSession_SendInputViaControlMode_CancelledContext_ReturnsEarlyW
 }
 
 func TestTymuxGRPCSession_SendInputViaControlMode_ValidContext_SendsOnStream(t *testing.T) {
-	sess, stream, _ := startedSessionWithStream(t)
+	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	err := sess.SendInputViaControlMode(context.Background(), []byte("hello"))
 
@@ -632,7 +619,7 @@ func TestTymuxGRPCSession_SendInputViaControlMode_ValidContext_SendsOnStream(t *
 // pane is still live must fire exactly once when the standing stream later
 // delivers Exited.
 func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredBeforePaneExits(t *testing.T) {
-	sess, stream, _ := startedSessionWithStream(t)
+	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	var calls int32
 	reasons := make(chan string, 4)
@@ -665,7 +652,7 @@ func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredBeforePaneExits(t
 // exactly once — not zero times, which is what a naive
 // store-only-for-future-events implementation would do.
 func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredAfterPaneAlreadyExited(t *testing.T) {
-	sess, stream, _ := startedSessionWithStream(t)
+	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 	concrete := sess.(*tymuxGRPCSession)
 
 	code := int32(7)
@@ -702,7 +689,7 @@ func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredAfterPaneAlreadyE
 // once, the assertion ResetExitOnce is checked against is that calling it
 // with no subsequent exit never spuriously invokes the callback again.
 func TestResetExitOnce_WithoutANewExit_DoesNotFireSpuriously(t *testing.T) {
-	sess, stream, _ := startedSessionWithStream(t)
+	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	var calls int32
 	sess.SetOnExitCallback(func(string) { atomic.AddInt32(&calls, 1) })
@@ -722,33 +709,27 @@ func TestResetExitOnce_WithoutANewExit_DoesNotFireSpuriously(t *testing.T) {
 
 // --- REQ-6 (validation.md): fake-transport-driven unit-level happy path ---
 
-// TestBackendTymux_ShouldRoundTripStartSendKeysCapture_WhenDrivenWithAgentShapedByteSequences
-// is validation.md's REQ-6 happy-path test: a fake-rpcTransport-driven UNIT
-// test (no live tymuxd) exercising the full lifecycle — start, input,
-// capture, clean exit — with content shaped like a real Claude-Code-style
-// agent session (a braille spinner glyph with color/bold attributes typical
-// of a "thinking" indicator, and a full-screen box-drawn redraw typical of
-// an alt-screen toggle), complementing (not replacing)
-// TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose's live-daemon
-// integration coverage (integration_test.go), which used a plain echo
-// marker and can't assert on rendered ANSI/SGR content the way this test
-// does via a real ANSI-aware parser (parseSGRSequences, render_test.go).
-func TestBackendTymux_ShouldRoundTripStartSendKeysCapture_WhenDrivenWithAgentShapedByteSequences(t *testing.T) {
-	sess, stream, transport := startedSessionWithStream(t)
-
-	// --- input: send an agent-shaped prompt over the standing stream ---
-	prompt := "explain the reconnect backoff schedule\n"
+// assertAgentPromptSentOverStream sends prompt through sess.SendKeys and
+// checks it reached the standing stream as the second Send call (the first
+// being the pane_id handshake startedSessionWithStream's caller already
+// opened).
+func assertAgentPromptSentOverStream(t *testing.T, sess TymuxManager, stream *fakeAttachStream, prompt string) {
+	t.Helper()
 	n, err := sess.SendKeys(prompt)
 	require.NoError(t, err)
 	assert.Equal(t, len(prompt), n)
 	sent := stream.sentRequests()
 	require.Len(t, sent, 2) // [0] = pane_id, [1] = this Input
 	assert.Equal(t, []byte(prompt), sent[1].GetInput())
+}
 
-	// --- capture: a Claude-Code-shaped screen — a bold, 256-color braille
-	// spinner glyph ("thinking" indicator) on row 0, and a box-drawn
-	// full-screen redraw (alt-screen-toggle-shaped) border on row 1.
-	transport.capturePaneFn = func(_ context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+// agentShapedCapturePane returns a fakeTransport.capturePaneFn rendering a
+// Claude-Code-shaped screen: a bold, 256-color braille spinner glyph
+// ("thinking" indicator) on row 0, and a box-drawn full-screen redraw
+// (alt-screen-toggle-shaped) border on row 1.
+func agentShapedCapturePane(t *testing.T) func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+	t.Helper()
+	return func(_ context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
 		assert.Equal(t, "pane-1", req.Msg.GetPaneId())
 		return connect.NewResponse(&v1.PaneSnapshot{
 			PaneId:   "pane-1",
@@ -770,21 +751,25 @@ func TestBackendTymux_ShouldRoundTripStartSendKeysCapture_WhenDrivenWithAgentSha
 			},
 		}), nil
 	}
+}
 
-	out, err := sess.CapturePaneContent()
-	require.NoError(t, err)
-
-	// Real ANSI-aware assertions (not substring-only): the spinner glyph is
-	// preceded by exactly one bold+256-color-indexed SGR escape, and the
-	// box-drawing row is preceded by exactly one bold+truecolor escape.
+// assertAgentShapedCaptureRendered checks the ANSI-rendered capture output
+// carries exactly the expected bold+256-color spinner and bold+truecolor
+// box-drawing SGR escapes (real ANSI-aware assertions, not substring-only).
+func assertAgentShapedCaptureRendered(t *testing.T, out string) {
+	t.Helper()
 	require.True(t, strings.HasPrefix(out, "\x1b[1;38;5;6m⠋"), "got %q", out)
 	assert.Contains(t, out, "Thinking")
 	assert.Contains(t, out, "╭──╮")
 	seqs := parseSGRSequences(t, out)
 	assert.Contains(t, seqs, []int{1, 38, 5, 6}, "expected the bold+256-color spinner SGR sequence")
 	assert.Contains(t, seqs, []int{1, 38, 2, 80, 200, 255}, "expected the bold+truecolor box-drawing SGR sequence")
+}
 
-	// --- clean exit: the standing stream delivers Exited{code: 0} ---
+// assertCleanExitFires pushes a clean Exited{code:0} event onto stream and
+// waits for sess's exit callback to fire with the expected reason.
+func assertCleanExitFires(t *testing.T, sess TymuxManager, stream *fakeAttachStream) {
+	t.Helper()
 	reasons := make(chan string, 1)
 	sess.SetOnExitCallback(func(reason string) { reasons <- reason })
 	code := int32(0)
@@ -796,6 +781,30 @@ func TestBackendTymux_ShouldRoundTripStartSendKeysCapture_WhenDrivenWithAgentSha
 	case <-time.After(time.Second):
 		t.Fatal("exit callback never fired for a clean agent exit")
 	}
+}
+
+// TestBackendTymux_ShouldRoundTripStartSendKeysCapture_WhenDrivenWithAgentShapedByteSequences
+// is validation.md's REQ-6 happy-path test: a fake-rpcTransport-driven UNIT
+// test (no live tymuxd) exercising the full lifecycle — start, input,
+// capture, clean exit — with content shaped like a real Claude-Code-style
+// agent session (a braille spinner glyph with color/bold attributes typical
+// of a "thinking" indicator, and a full-screen box-drawn redraw typical of
+// an alt-screen toggle), complementing (not replacing)
+// TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose's live-daemon
+// integration coverage (integration_test.go), which used a plain echo
+// marker and can't assert on rendered ANSI/SGR content the way this test
+// does via a real ANSI-aware parser (parseSGRSequences, render_test.go).
+func TestBackendTymux_ShouldRoundTripStartSendKeysCapture_WhenDrivenWithAgentShapedByteSequences(t *testing.T) {
+	sess, stream, transport := startedSessionWithStream(t)
+
+	assertAgentPromptSentOverStream(t, sess, stream, "explain the reconnect backoff schedule\n")
+
+	transport.capturePaneFn = agentShapedCapturePane(t)
+	out, err := sess.CapturePaneContent()
+	require.NoError(t, err)
+	assertAgentShapedCaptureRendered(t, out)
+
+	assertCleanExitFires(t, sess, stream)
 }
 
 // TestParseScrollbackOffset covers parseScrollbackOffset end to end: the

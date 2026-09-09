@@ -19,11 +19,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// ErrNotImplemented is returned by tymuxGRPCSession methods that a later
-// epic (2.3+, standing Attach stream / control-mode) has not yet
-// implemented.
-var ErrNotImplemented = errors.New("tymux: not implemented")
-
 // ErrNotSupportedOnTymuxBackend is returned by GetPanePID: tymux has no OS
 // pane PID to hand back, only a remote gRPC process. GetPTY() no longer
 // returns this — see its own doc comment.
@@ -711,8 +706,11 @@ func (s *tymuxGRPCSession) HasMeaningfulContent(content string) bool   { return 
 
 // --- Streaming (control mode) ---
 
-func (s *tymuxGRPCSession) StartControlMode() error { return ErrNotImplemented }
-func (s *tymuxGRPCSession) StopControlMode() error  { return ErrNotImplemented }
+// StartControlMode/StopControlMode are no-ops: the standing Attach stream
+// is already running for the session's whole lifetime, unlike tmux's
+// on-demand `tmux -C attach-session` client process.
+func (s *tymuxGRPCSession) StartControlMode() error { return nil }
+func (s *tymuxGRPCSession) StopControlMode() error  { return nil }
 
 // SubscribeToControlModeUpdates/UnsubscribeFromControlModeUpdates (Story
 // 2.3.2) delegate to ClientFanout — every subscriber shares the one
@@ -818,16 +816,11 @@ func (s *tymuxGRPCSession) ReconnectState() (reconnecting bool, attempt int, cau
 	return s.reconnecting, s.reconnectAttempt, s.reconnectCause
 }
 
-// BackendRestarted reports whether tymuxd was detected to have restarted
-// out from under this session's standing stream (Story 2.5.3) — i.e. the
-// currently-live pane is a fresh ReviveSession-spawned replacement
-// process, not the one Start()/RestoreWithWorkDir() originally attached
-// to, and any in-flight work in the original process (if it survived at
-// all as an orphan) is not recovered. Task 2.5.3b: deliberately not
-// folded into IsAlive()/SetOnExitCallback — "still alive" and "alive, but
-// it's not the same process anymore" are different facts a caller needs
-// to tell apart. since is the zero time if no restart has been observed
-// in this generation.
+// BackendRestarted reports whether tymuxd restarted out from under this
+// session's standing stream, replacing the pane with a fresh process —
+// kept separate from IsAlive()/SetOnExitCallback since "still alive" and
+// "alive, but not the same process" are different facts a caller needs to
+// tell apart. since is the zero time if no restart has been observed.
 func (s *tymuxGRPCSession) BackendRestarted() (restarted bool, since time.Time) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

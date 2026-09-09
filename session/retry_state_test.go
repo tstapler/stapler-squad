@@ -25,7 +25,8 @@ type fakeLivenessProcessManager struct {
 	restoreDelay time.Duration
 }
 
-func (m *fakeLivenessProcessManager) IsAlive() bool { return m.alive }
+func (m *fakeLivenessProcessManager) IsAlive() bool               { return m.alive }
+func (m *fakeLivenessProcessManager) HasLiveSessionNoCache() bool { return m.alive }
 
 func (m *fakeLivenessProcessManager) RestoreWithWorkDir(dir string) error {
 	if m.restoreDelay > 0 {
@@ -539,6 +540,67 @@ func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetr
 	}
 }
 
+// newCrashLoopInstance builds the Instance/ReviewQueue/notifier fixture shared
+// by the crash-loop test's escalating-retry and exhaustion phases.
+func newCrashLoopInstance() (*Instance, *ReviewQueue, *fakeNotifier) {
+	rq := NewReviewQueue()
+	notifier := &fakeNotifier{}
+	inst := &Instance{
+		Title:       "crash-loop",
+		UUID:        "test-uuid-crash-loop",
+		reviewQueue: rq,
+		Status:      Active,
+	}
+	inst.RetryMaxAttempts = 3
+	inst.SetNotifier(notifier)
+	return inst, rq, notifier
+}
+
+// assertCrashRetryScheduled drives handleDriverFailure for one simulated
+// crash and checks the resulting attempt count/status/history, plus that the
+// scheduled backoff delay falls within the jittered window and grew over the
+// previous attempt's delay. It returns the delay so the caller can feed it
+// back in as prevDelay for the next attempt.
+func assertCrashRetryScheduled(t *testing.T, inst *Instance, attempt int, policy RetryPolicy, prevDelay time.Duration) time.Duration {
+	t.Helper()
+	before := time.Now()
+	handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
+
+	if inst.RetryAttempt != attempt {
+		t.Fatalf("after crash #%d: RetryAttempt = %d, want %d", attempt, inst.RetryAttempt, attempt)
+	}
+	if inst.Status == PermanentlyFailed {
+		t.Fatalf("after crash #%d: session marked PermanentlyFailed too early (max_attempts=3)", attempt)
+	}
+	if len(inst.RetryHistory) != attempt {
+		t.Fatalf("after crash #%d: len(RetryHistory) = %d, want %d", attempt, len(inst.RetryHistory), attempt)
+	}
+
+	delay := inst.NextRetryAt.Sub(before)
+	base := policy.InitialDelay * time.Duration(int64(1)<<uint(attempt-1))
+	if base > policy.MaxDelay {
+		base = policy.MaxDelay
+	}
+	// backoffDelay applies +/-10% jitter (defaultJitterFraction); allow a
+	// generous slop on top for wall-clock scheduling noise between
+	// `before` and handleDriverFailure's own now.
+	lower := time.Duration(float64(base)*0.9) - time.Second
+	upper := time.Duration(float64(base)*1.1) + time.Second
+	if delay < lower || delay > upper {
+		t.Errorf("after crash #%d: backoff delay = %v, want in [%v, %v] (base %v)", attempt, delay, lower, upper, base)
+	}
+	if attempt > 1 && delay <= prevDelay/2 {
+		t.Errorf("after crash #%d: backoff delay %v did not increase over previous attempt's %v", attempt, delay, prevDelay)
+	}
+
+	// The real driver poll loop clears NextRetryAt once it consumes a
+	// pending retry and restarts the session (clearNextRetryAt, called
+	// from the restart path) — simulate that here so the next simulated
+	// crash starts from a clean pending-retry state.
+	inst.NextRetryAt = time.Time{}
+	return delay
+}
+
 // TestSessionDriver_should_RetryThreeTimesWithIncreasingBackoffThenPermanentlyFail_When_SessionCrashesRepeatedly
 // is AC1's full-assembly test: the per-function unit tests above (evaluateSessionRetry,
 // backoffDelay, markSessionPermanentlyFailed) each pass in isolation, but nothing
@@ -551,16 +613,7 @@ func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetr
 // again on a later tick.
 func TestSessionDriver_should_RetryThreeTimesWithIncreasingBackoffThenPermanentlyFail_When_SessionCrashesRepeatedly(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
-	notifier := &fakeNotifier{}
-	inst := &Instance{
-		Title:       "crash-loop",
-		UUID:        "test-uuid-crash-loop",
-		reviewQueue: rq,
-		Status:      Active,
-	}
-	inst.RetryMaxAttempts = 3
-	inst.SetNotifier(notifier)
+	inst, rq, notifier := newCrashLoopInstance()
 
 	policy := RetryPolicy{
 		Enabled:      true,
@@ -572,42 +625,7 @@ func TestSessionDriver_should_RetryThreeTimesWithIncreasingBackoffThenPermanentl
 
 	var prevDelay time.Duration
 	for attempt := 1; attempt <= 3; attempt++ {
-		before := time.Now()
-		handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
-
-		if inst.RetryAttempt != attempt {
-			t.Fatalf("after crash #%d: RetryAttempt = %d, want %d", attempt, inst.RetryAttempt, attempt)
-		}
-		if inst.Status == PermanentlyFailed {
-			t.Fatalf("after crash #%d: session marked PermanentlyFailed too early (max_attempts=3)", attempt)
-		}
-		if len(inst.RetryHistory) != attempt {
-			t.Fatalf("after crash #%d: len(RetryHistory) = %d, want %d", attempt, len(inst.RetryHistory), attempt)
-		}
-
-		delay := inst.NextRetryAt.Sub(before)
-		base := policy.InitialDelay * time.Duration(int64(1)<<uint(attempt-1))
-		if base > policy.MaxDelay {
-			base = policy.MaxDelay
-		}
-		// backoffDelay applies +/-10% jitter (defaultJitterFraction); allow a
-		// generous slop on top for wall-clock scheduling noise between
-		// `before` and handleDriverFailure's own now.
-		lower := time.Duration(float64(base)*0.9) - time.Second
-		upper := time.Duration(float64(base)*1.1) + time.Second
-		if delay < lower || delay > upper {
-			t.Errorf("after crash #%d: backoff delay = %v, want in [%v, %v] (base %v)", attempt, delay, lower, upper, base)
-		}
-		if attempt > 1 && delay <= prevDelay/2 {
-			t.Errorf("after crash #%d: backoff delay %v did not increase over previous attempt's %v", attempt, delay, prevDelay)
-		}
-		prevDelay = delay
-
-		// The real driver poll loop clears NextRetryAt once it consumes a
-		// pending retry and restarts the session (clearNextRetryAt, called
-		// from the restart path) — simulate that here so the next simulated
-		// crash starts from a clean pending-retry state.
-		inst.NextRetryAt = time.Time{}
+		prevDelay = assertCrashRetryScheduled(t, inst, attempt, policy, prevDelay)
 	}
 
 	// A 4th crash arrives with RetryAttempt already at the resolved cap (3):
