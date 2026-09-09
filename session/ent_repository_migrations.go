@@ -31,7 +31,12 @@ package session
 // repeated restarts drove the stored value arbitrarily high (observed
 // status=66707 in production), which then failed every subsequent
 // transition-to-Active check. See git history for the removed file if the
-// original migration logic is ever needed for reference.
+// original migration logic is ever needed for reference. Removing it
+// stopped further corruption but left already-corrupted rows behind
+// (confirmed still occurring after the removal: status 207/334507/384507,
+// all ≡7 mod 100) — the "status corruption repair" entry below
+// (status_corruption_repair.go) is the one-time cleanup for exactly those
+// rows.
 
 import "context"
 
@@ -44,16 +49,38 @@ type Migration interface {
 	Run(ctx context.Context, er *EntRepository) error
 }
 
+// funcMigration adapts a plain `func(ctx, *EntRepository) error` to the
+// Migration interface. Every migration below is this same shape — a name
+// plus a run function — so a hand-written adapter type with its own
+// Name()/Run() methods per migration (the pattern every migration file used
+// before this) was pure duplication with nothing migration-specific in it.
+// Adding a new migration is now: write `func runXBackfill(ctx
+// context.Context, er *EntRepository) error` (plus its test), and append
+// `funcMigration{"x backfill", runXBackfill}` to startupMigrations below —
+// no new type, no boilerplate methods.
+type funcMigration struct {
+	name string
+	fn   func(ctx context.Context, er *EntRepository) error
+}
+
+func (m funcMigration) Name() string { return m.name }
+
+func (m funcMigration) Run(ctx context.Context, er *EntRepository) error {
+	return m.fn(ctx, er)
+}
+
 // startupMigrations lists every Migration NewEntRepository runs, in the
 // (here, non-load-bearing — each is independent) order they were added.
-// Adding a new uniform-shaped migration means writing its file exactly like
-// today (a small `run...Backfill(ctx, er) error` function plus tests) and
-// appending one adapter value here — NewEntRepository's body itself never
-// needs to change.
+// NewEntRepository's body itself never needs to change when adding one —
+// see funcMigration's doc comment above for what adding a migration
+// actually takes.
 var startupMigrations = []Migration{ //nolint:gochecknoglobals
-	backlogItemUpdatedAtUTCMigration{},
-	workflowUpdatedAtUTCMigration{},
-	gitHubPRURLBackfillMigration{},
-	backlogItemPublicIDMigration{},
-	backlogItemRepoPathCanonicalizationMigration{},
+	funcMigration{"backlog item updated_at UTC backfill", runBacklogItemUpdatedAtUTCBackfill},
+	funcMigration{"workflow updated_at UTC backfill", runWorkflowUpdatedAtUTCBackfill},
+	funcMigration{"github pr url backfill", runGitHubPRURLBackfill},
+	funcMigration{"backlog item public id backfill", func(ctx context.Context, er *EntRepository) error {
+		return er.BackfillBacklogItemPublicIDs(ctx)
+	}},
+	funcMigration{"backlog item repo_path canonicalization", runBacklogItemRepoPathCanonicalizationBackfill},
+	funcMigration{"status corruption repair", runStatusCorruptionRepair},
 }
