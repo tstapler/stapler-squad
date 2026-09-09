@@ -67,6 +67,56 @@ prompt: |
   make restart-web PROFILE_FLAGS="--profile"
   ```
 
+  ### Phase 0a — If `:6060` returns "cpu profiling already in use"
+
+  Go's CPU profiler is a single process-wide lock — if the local observability stack
+  (`~/dotfiles/stapler-scripts/observability/`, see the `observability-grafana-dashboards`
+  skill) is running, its Grafana Alloy container continuously scrapes `:6060`'s CPU profile
+  on its own schedule, which holds that lock more or less permanently. `go tool pprof
+  http://localhost:6060/debug/pprof/profile` will then fail every time, indefinitely — this
+  is not a stuck/leaked lock to work around by restarting the app (verified: restarting via
+  `launchctl kickstart -k` produces a fresh PID that hits the same "already in use" within
+  seconds, because Alloy immediately reconnects to the new process).
+
+  Check whether the stack is up before assuming the app itself is broken:
+  ```bash
+  docker ps | grep -E "observability-(alloy|pyroscope|grafana)-1"
+  ```
+
+  If it's running, pull the CPU/heap/goroutine data from Pyroscope's query API instead of
+  `:6060` directly — this is real production data (Alloy has been scraping continuously),
+  which is *better* for judging a fix's live steady-state impact than a single manual
+  `-seconds=10` snapshot would be anyway:
+  ```bash
+  # Confirm stapler-squad is a known service in Pyroscope
+  curl -s -X POST http://localhost:4040/querier.v1.QuerierService/LabelValues \
+    -H "Content-Type: application/json" -d '{"name":"service_name"}'
+
+  # Pull a merged CPU profile over a time window (epoch millis) as pprof-proto-shaped JSON
+  NOW=$(date +%s)000; FROM=$(( $(date +%s) - 1800 ))000
+  curl -s -X POST http://localhost:4040/querier.v1.QuerierService/SelectMergeProfile \
+    -H "Content-Type: application/json" \
+    -d "{\"profileTypeID\":\"process_cpu:samples:count:cpu:nanoseconds\",\"labelSelector\":\"{service_name=\\\"stapler-squad\\\"}\",\"start\":$FROM,\"end\":$NOW}" \
+    -o /tmp/pyro_profile.json
+  ```
+
+  The response is a real `pprof.Profile` proto (fields: `function`, `location`, `mapping`,
+  `sample`, `stringTable`) encoded as protojson — **every int64 field is a JSON string**
+  (`"id": "1"`, not `1`), and proto3 omits any field at its zero value, so a function/location
+  with id/name index 0 has the key missing entirely, not present-as-zero. Write a small script
+  rather than reaching for `jq` alone: build `function_id → name` from `stringTable`, walk each
+  `location`'s `line[].functionId` to get a location's function chain, then for each `sample`
+  sum `value[0]` into both a flat map (leaf function only) and a cum map (every function
+  appearing anywhere in that sample's `locationId` chain) — this reproduces `go tool pprof
+  -top`'s flat/cum% columns. Divide by the total summed `value[0]` across all samples for the
+  percentages. `sampleType`/`periodType` are themselves index-into-`stringTable` pairs, not
+  literal strings — decode those the same way if you need to report units.
+
+  Prefer Grafana's own UI (`http://localhost:48300`, the `pprof-profiles` dashboard, default
+  creds `admin`/`admin`) over the raw API when a human will be looking at the result — it
+  renders an actual flamegraph. Use the raw `QuerierService` API above only when the agent
+  itself needs the numbers to reason about (as in this workflow).
+
   ---
 
   ## Phase 1 — Read the Profiles
@@ -203,6 +253,10 @@ prompt: |
   4. A prioritised "what to tackle first" recommendation (2–3 sentences)
 
   Do **not** implement the fixes — this command produces proposals for agent hand-off.
+  Hand each `[PerfFix-N]` block to **`/go:optimize`**, which walks its own decision tree
+  (atomic shadow, RWMutex, TTL cache, direct SQL update, etc.) to pick and implement the
+  matching pattern plus its enforcement test — pass it the profile type, file:line, cycles,
+  and one-sentence description from the block.
   Do **not** add a CLAUDE.md note unless every other enforcement level is unreachable.
 
   ---
@@ -352,6 +406,7 @@ make restart-web PROFILE_FLAGS="--profile"
 
 # Locate the binary once (needed for go tool pprof symbolization)
 systemctl --user show stapler-squad -p ExecStart | grep -oP '(?<=path=)\S+'
+# macOS (launchd): launchctl list com.stapler-squad | grep -A1 '"Program" ='
 
 # Ranked, symbolized, pre-aggregated — no raw-text capture or manual parsing needed
 BIN=./stapler-squad  # path from above
@@ -367,6 +422,15 @@ grep "^goroutine" /tmp/ss-goroutine.txt | sed 's/goroutine [0-9]* //' | sort | u
 # Then drill into the top hit's exact line:
 go tool pprof -list='FunctionName$' -alloc_space -unit=mb $BIN http://localhost:6060/debug/pprof/allocs
 ```
+
+If any of the above returns "cpu profiling already in use" instead of data, the local
+observability stack's Grafana Alloy container is continuously scraping `:6060` — see
+Phase 0a above for pulling the same data from Pyroscope's query API instead (`:4040`) or
+viewing it as a flamegraph in Grafana (`:48300`, `pprof-profiles` dashboard) rather than
+fighting the lock (a service restart does not free it — Alloy just reconnects).
+
+Once you have ranked `[PerfFix-N]` findings, hand each one to **`/go:optimize`** to
+implement the fix and its enforcement test — this command only produces proposals.
 
 Avoid `curl ... ?debug=1 > /tmp/ss-<profile>.txt` for mutex/block/heap/allocs — those files run
 100K+ lines on a long-running process and force manual grep/awk/python symbolization that
