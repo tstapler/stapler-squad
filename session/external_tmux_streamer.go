@@ -193,6 +193,7 @@ func (s *ExternalTmuxStreamer) startControlMode() bool {
 	// Targets a user-created external session, which by definition lives on the real
 	// ambient tmux socket wherever the user created it -- there is no isolated variant
 	// of an external session to target instead.
+	// #nosec G204 -- tmux.Binary() is this repo's own tmux binary; s.tmuxSessionName is passed as a literal argv element to tmux, never through a shell, so it cannot inject additional commands regardless of content.
 	//nolint:norawexec,tmuxsocketscope long-running control-mode process; pipes set up before cmd.Start(), WaitDelay not applicable; external session has no isolated variant
 	cmd := exec.CommandContext(s.ctx, tmux.Binary(), "-C", "attach-session", "-t", s.tmuxSessionName, "-r")
 	// Backs up ctx-based cleanup at the kernel level in case this process is

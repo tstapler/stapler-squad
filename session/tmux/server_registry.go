@@ -389,6 +389,7 @@ func (r *TmuxServerRegistry) startControlMode() (*exec.Cmd, *bufio.Scanner, io.W
 	// cancellation never runs if this process is SIGKILLed (e.g. a
 	// `--mcp` invocation killed by its parent), so EnsurePdeathsig backs
 	// that up at the kernel level.
+	// #nosec G204 -- Binary() resolves this repo's own bundled/PATH tmux binary; args are a fixed argv slice plus internal session/socket names, never a shell string.
 	cmd := exec.CommandContext(r.ctx, Binary(), args...) //nolint:norawexec long-running cmd.Start() process
 	safeexec.EnsurePdeathsig(cmd)
 

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 const portOwnerLookupTimeout = 2 * time.Second
@@ -49,7 +51,9 @@ func lookupPortOwner(port string) string {
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), portOwnerLookupTimeout)
-		output, err := exec.CommandContext(ctx, command.name, command.args...).CombinedOutput()
+		// #nosec G204 -- command.name/args are hardcoded literals above except for `port`, which is
+		// interpolated into a single argv element (e.g. "-iTCP:8543"), never a shell string.
+		output, err := safeexec.CommandContext(ctx, command.name, command.args...).CombinedOutput()
 		lookupErr := ctx.Err()
 		cancel()
 

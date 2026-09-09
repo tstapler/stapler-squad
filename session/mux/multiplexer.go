@@ -286,6 +286,7 @@ func (m *Multiplexer) Start() error {
 	// EnsurePdeathsig backs that up at the kernel level in case this process is
 	// SIGKILLed before ctx cancellation can run (see safeexec_pdeathsig_linux.go).
 	// Must be set before pty.Start(), which fills in the rest of SysProcAttr.
+	// #nosec G204 -- tmux.Binary() resolves this repo's own bundled/PATH tmux binary; args are fixed literals plus internal socket/session names, never a shell string.
 	m.cmd = exec.CommandContext(m.ctx, tmux.Binary(), m.serverSocket.Args("attach-session", "-t", m.tmuxSession)...) //nolint:norawexec long-running cmd.Start() process
 	safeexec.EnsurePdeathsig(m.cmd)
 
