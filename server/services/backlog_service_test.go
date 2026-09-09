@@ -45,12 +45,20 @@ import (
 // and collectAllTokens reads both env vars straight from the environment, so
 // a developer machine or CI runner with either set would otherwise leak a
 // real token into the cache and dial the real GitHub API mid-suite.
+//
+// It also clears STAPLER_SQUAD_TEST_DIR/STAPLER_SQUAD_INSTANCE for the whole
+// test run — see envtest.ClearAmbientStaplerSquadStateEnv's doc comment for
+// why an ambient value of either silently defeats config.GetConfigDirForDir's
+// own per-PID test isolation and fails session creation with an unrelated
+// "Session.program" validator error.
 func TestMain(m *testing.M) {
 	headless.DefaultCapabilitySelfCheck = headless.NewPassedCapabilitySelfCheckForTesting()
 	restore := envtest.ClearAmbientGitHubTokenEnv()
+	restoreState := envtest.ClearAmbientStaplerSquadStateEnv()
 	reapLeakedTmuxTestServers()
 	startTmuxTestServerWatchdog()
 	code := m.Run()
+	restoreState()
 	restore()
 	os.Exit(code)
 }
