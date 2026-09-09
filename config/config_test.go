@@ -1314,7 +1314,7 @@ func TestFeatureFlag_PiSupport_DefaultsFalseAndPersists(t *testing.T) {
 	})
 
 	t.Run("SetFeatureFlag persists and is re-readable, including on disk", func(t *testing.T) {
-		t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+		envtest.NewIsolatedStateDir(t)
 
 		cfg := LoadConfig()
 		require.NoError(t, cfg.SetFeatureFlag(FeaturePiSupport, true))

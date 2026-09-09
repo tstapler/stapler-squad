@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 )
 
@@ -16,7 +17,7 @@ import (
 // tests (same isolation pattern as newIsolatedStreamHubRolloutService).
 func newIsolatedTymuxRolloutService(t *testing.T) *TymuxRolloutService {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	return NewTymuxRolloutService()
 }
 

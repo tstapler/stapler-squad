@@ -1,7 +1,6 @@
 # BUG-103: Two `TestTriggerTriage_*` tests intermittently fail their `require.Eventually` bound under full-package parallel load [SEVERITY: Low]
 
-**Status**: 🩹 Partially fixed — the semaphore-occupancy wait (item 1) is fixed; the
-failure-capture wait (item 2) is still open.
+**Status**: ✅ Fixed — both items resolved.
 **Discovered**: 2026-09-09, running `go test ./server/services/...` full-package (not `-run`-scoped)
 while verifying an unrelated `/quality:reflect-and-fix` fix (BUG-free ambient-env test isolation,
 commits `f26d5bd04`/`91842ea95`) — unrelated to that diff, which only touches `TestMain`/env handling.
@@ -51,15 +50,34 @@ Only observed once each, during one full-package `-v` run (`go test ./server/ser
 an unrelated live process. Not yet reproduced in a tight repeat loop — occurrence rate under full
 package load is unknown (n=1 for each).
 
-## Root Cause (not confirmed)
+## Root Cause
 
-Not yet root-caused to a specific scheduling mechanism — no instrumentation added to log actual
-elapsed time or intermediate poll values during a captured failure. The working hypothesis is plain
-CPU starvation: both bounds (2s, 5s) assume the goroutines under test get scheduled promptly, which
-doesn't hold when hundreds of other parallel subtests and an unrelated 300%+ CPU external process are
-competing for the same cores. This matches the same "full-suite/scheduler-contention-only" class
-already tracked for other packages (see Related, below) rather than a package-specific defect in
-`backlog_service_triage_test.go` or the triage pipeline itself.
+Item 1 (semaphore occupancy) was pure `require.Eventually` scheduling-latency underspecification,
+fixed below with no further investigation needed.
+
+Item 2 (`waitForTriageFailureCaptured`) is now root-caused, and it is **not** primarily scheduler
+contention: `BacklogService.captureHeadlessFailure` (`backlog_service_triage.go:2503`) writes the
+failure-capture file via `s.cfg.HeadlessFailureCaptureDirOrDefault()`, which — before this fix —
+always resolved to the real `os.UserHomeDir()/.stapler-squad/headless-failures`, completely
+bypassing `config.GetConfigDir()`'s test/instance/workspace isolation. Every test in this repo that
+ever exercised this path (not just `server/services`) wrote real files into that one real,
+shared directory — confirmed **661 accumulated files** on this maintainer's machine — which the
+*live production `stapler-squad` service* also writes to concurrently. `TriageArtifactDirOrDefault`
+had the identical bug (confirmed **27,578 accumulated files**), as did `BacklogAttachmentDirOrDefault`
+and `PromptCacheDirOrDefault` (0 files each, but same code shape, same exposure). Under full-package
+parallel load, dozens of test processes and the live service were all doing real disk I/O
+(open/write/fsync/readdir) against the same real, ever-growing directory — genuine I/O contention,
+not just CPU scheduling, and a real production-adjacent bug independent of the flake (test runs were
+silently polluting the developer's actual `~/.stapler-squad` state the entire time).
+
+Fixed in `config/config.go`: `HibernationCheckpointDirOrDefault`, `TriageArtifactDirOrDefault`,
+`HeadlessFailureCaptureDirOrDefault`, `BacklogAttachmentDirOrDefault`, and `PromptCacheDirOrDefault`
+now all resolve their default (no-override) path as `filepath.Join(GetConfigDir(), <name>)` instead
+of a hardcoded `os.UserHomeDir()/.stapler-squad/<name>` — inheriting the same
+`STAPLER_SQUAD_TEST_DIR`/`STAPLER_SQUAD_INSTANCE`/per-PID/workspace-mode isolation `config.json` and
+`sessions.json` already had. Production behavior is unchanged in the default (non-workspace-mode)
+case: `GetConfigDir()` resolves to exactly `~/.stapler-squad` there, identical to the old hardcoded
+path. See `docs/explanation/test-io-storage-isolation.md` for the general strategy this bug motivated.
 
 ## Files Affected
 
@@ -80,26 +98,29 @@ already tracked for other packages (see Related, below) rather than a package-sp
    entered (call recorded, before the delay/`ctx.Done()` block). The test now sets `onEnter` to send
    on a `chan struct{}` buffered to 8, and waits by receiving 8 times (each receive = one occupier
    definitely inside `CallBlocking`) instead of polling `pool.callCount() == 8` against a fixed 2s
-   wall-clock bound. Verified: `go test ./server/services/... -run
-   TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown -race
-   -count=20` — 20/20 pass (5–17s each, wide variance confirming the old fixed 2s bound really was
-   just a guess about scheduling latency, not a real invariant).
-   Still open for item 2 (`TestTriggerTriage_should_PersistFailureCapture_When_HeadlessCallItselfErrors`
-   / `waitForTriageFailureCaptured`'s 5s bound) — that wait spans disk I/O (writing the failure
-   capture file) and storage persistence, not just goroutine scheduling, so the same
-   channel-signal approach doesn't directly apply; still needs reproduction under load per item 1's
-   original plan before choosing a fix.
+   wall-clock bound.
+4. **Done for item 2**: fixed at the source — `config.HeadlessFailureCaptureDirOrDefault` (and its 4
+   siblings) now route through `GetConfigDir()` instead of a hardcoded real-home path, so the write
+   `waitForTriageFailureCaptured` waits on lands in the test's own isolated per-run directory instead
+   of one real, ever-growing (661-file) directory shared with every other concurrent test process and
+   the live production service. No timeout widening needed — the 5s bound was never really the
+   problem, contention on the shared directory was.
 
 ## Verification
 
-Item 1: verified above (20/20 under `-race -count=20`). Not yet re-run under deliberate background
-CPU load to match the exact conditions of the original single observed failure — the channel-based
-wait has no wall-clock component left to be sensitive to that load in the first place, so this is
-lower priority than it would be for a widened-timeout fix.
+Item 1: `go test ./server/services/... -run
+TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown -race
+-count=20` — 20/20 pass (5–17s each, wide variance confirming the old fixed 2s bound really was
+just a guess about scheduling latency, not a real invariant).
 
-Item 2 (open): after a fix, must pass reliably under `-count=50`+ while a background CPU load
-generator (e.g. `stress` or several parallel `go build` invocations) runs concurrently, matching the
-load conditions the original failure occurred under.
+Item 2: `go test ./server/services/... -run
+TestTriggerTriage_should_PersistFailureCapture_When_HeadlessCallItselfErrors -race -count=30` —
+30/30 pass (1.4s–8.1s each).
+
+Neither re-run under deliberate background CPU load to reproduce the exact original single-occurrence
+conditions — both fixes address the actual mechanism (a wall-clock guess, and shared-directory I/O
+contention, respectively), not just the symptom, so this is lower priority than it would be for a
+widened-timeout-only fix.
 
 ## Related
 

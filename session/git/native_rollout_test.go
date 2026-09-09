@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 )
 
 // rolloutBoolPtr is this file's local copy of config's unexported test helper
@@ -205,7 +206,7 @@ func TestWithOperationSpan_AppliesCallerAttrsFromContext(t *testing.T) {
 // precedence rule: a session override must win over the global default regardless of which
 // way each is set, and a session with no override must fall back to the global default.
 func TestUseNativeWorktree_should_PreferSessionOverride_OverGlobalDefault(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	cfg := config.LoadConfig()
 	require.NoError(t, cfg.SetNativeWorktreeGlobalOverride(rolloutBoolPtr(true)))
@@ -219,7 +220,7 @@ func TestUseNativeWorktree_should_PreferSessionOverride_OverGlobalDefault(t *tes
 // safe-off default: with no session override and no global override persisted at all,
 // native worktree must resolve to false.
 func TestUseNativeWorktree_should_UseSafeOffDefault_When_NothingConfigured(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	assert.False(t, useNativeWorktree("sess-unconfigured"), "native worktree must default off when nothing is configured")
 }
@@ -228,7 +229,7 @@ func TestUseNativeWorktree_should_UseSafeOffDefault_When_NothingConfigured(t *te
 // TestUseNativeWorktree_should_PreferSessionOverride_OverGlobalDefault's merge equivalent:
 // per ADR-002, useNativeMerge is keyed by worktreePath, not sessionName.
 func TestUseNativeMerge_should_PreferPathOverride_OverGlobalDefault(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	cfg := config.LoadConfig()
 	require.NoError(t, cfg.SetNativeMergeGlobalOverride(rolloutBoolPtr(true)))
@@ -241,7 +242,7 @@ func TestUseNativeMerge_should_PreferPathOverride_OverGlobalDefault(t *testing.T
 // TestUseNativeMerge_should_UseSafeOffDefault_When_NothingConfigured is
 // TestUseNativeWorktree_should_UseSafeOffDefault_When_NothingConfigured's merge equivalent.
 func TestUseNativeMerge_should_UseSafeOffDefault_When_NothingConfigured(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	assert.False(t, useNativeMerge("/tmp/wt-unconfigured"), "native merge must default off when nothing is configured")
 }

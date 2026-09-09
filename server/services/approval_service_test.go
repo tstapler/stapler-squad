@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
@@ -531,7 +532,7 @@ func failingCIInstance(sessionID string) *session.Instance {
 }
 
 func TestResolveApproval_BlocksOnFailingCI_WhenFlagEnabled(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")
@@ -555,7 +556,7 @@ func TestResolveApproval_BlocksOnFailingCI_WhenFlagEnabled(t *testing.T) {
 }
 
 func TestResolveApproval_AllowsOnFailingCI_WhenFlagDisabled(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	// Flag intentionally left unset (defaults false).
 
 	store := NewApprovalStore("")
@@ -573,7 +574,7 @@ func TestResolveApproval_AllowsOnFailingCI_WhenFlagDisabled(t *testing.T) {
 }
 
 func TestResolveApproval_UnaffectedWhenNoPR(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")
@@ -602,7 +603,7 @@ func TestResolveApproval_UnaffectedWhenNoPR(t *testing.T) {
 // actually uses (see plan.md's Implementation Deviations) rather than a *session.Storage
 // lookup error, since GitHubCheckConclusion is not persisted.
 func TestResolveApproval_FailsOpen_WhenLiveInstanceNotFound(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")
@@ -624,7 +625,7 @@ func TestResolveApproval_FailsOpen_WhenLiveInstanceNotFound(t *testing.T) {
 // TestResolveApproval_NilLiveFinder_FailsOpen covers the nil-liveFinder case (feature
 // never wired, e.g. an older deployment) — must behave exactly as if the flag were off.
 func TestResolveApproval_NilLiveFinder_FailsOpen(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")
@@ -641,7 +642,7 @@ func TestResolveApproval_NilLiveFinder_FailsOpen(t *testing.T) {
 }
 
 func TestResolveApproval_OverrideCiBlock_SkipsGuard_AndLogsDistinctly(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")
@@ -667,7 +668,7 @@ func TestResolveApproval_OverrideCiBlock_SkipsGuard_AndLogsDistinctly(t *testing
 // preconditions) when the block would not have fired anyway — it is a no-op flag in
 // this case, not a second code path (Story 2.2.4's second Given/When/Then).
 func TestResolveApproval_OverrideCiBlock_NoOp_WhenBlockWouldNotHaveFired(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	// Flag off — block would never have fired regardless of OverrideCiBlock.
 
 	store := NewApprovalStore("")

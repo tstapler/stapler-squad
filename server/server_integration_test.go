@@ -19,6 +19,7 @@ import (
 	"go.uber.org/goleak"
 	"golang.org/x/net/http2"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil"
@@ -430,7 +431,7 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 	// below: without a per-test SQLite file, this test contends on the shared PID-scoped store
 	// with every other concurrently-running test in this package during a full-suite run, which
 	// can push the 60s hook-write poll in waitForPermissionRequestHookCommand past its budget.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	deps, err := BuildDependencies()
 	if err != nil {
@@ -534,7 +535,7 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 //	kill %1 %2 %3
 func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testing.T) {
 	installFakeClaudeBinary(t)
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	deps, err := BuildDependencies()
 	if err != nil {
@@ -604,7 +605,7 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 // under -race's slowdown can exceed the 5s busy_timeout ("database is locked").
 func TestSessionService_CreateThenImmediateDelete_NoDataRace(t *testing.T) {
 	installFakeClaudeBinary(t)
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	deps, err := BuildDependencies()
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)

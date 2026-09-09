@@ -7,6 +7,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -79,7 +80,7 @@ func TestCreateSession_should_LeaveInstanceExtraArgsEmpty_When_RequestOmitsExtra
 // composition at launch time (profile flags first, preset args last) is the intended, tested
 // behavior rather than an untested emergent property.
 func TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	cfg := config.DefaultConfig()
 	cfg.SessionDefaults.Profiles = map[string]config.ProfileDefaults{
