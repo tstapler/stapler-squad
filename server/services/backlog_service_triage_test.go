@@ -4927,7 +4927,14 @@ func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirect
 func TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
-	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: time.Hour}
+	// entered signals deterministically, once per occupier, the instant that
+	// occupier's CallBlocking is entered -- replaces a require.Eventually poll
+	// on pool.callCount(), which raced scheduler contention under full-suite
+	// parallel load rather than the actual condition (BUG-103): a fixed 2s
+	// wall-clock bound isn't a real guarantee that 8 freshly-spawned goroutines
+	// all got scheduled, only a guess at how long that usually takes.
+	entered := make(chan struct{}, 8)
+	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: time.Hour, onEnter: func() { entered <- struct{}{} }}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
@@ -4944,8 +4951,16 @@ func TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphore
 		_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
 		require.NoError(t, trigErr)
 	}
-	require.Eventually(t, func() bool { return pool.callCount() == 8 }, 2*time.Second, 10*time.Millisecond,
-		"all 8 occupiers must have actually entered CallBlocking before the 9th is triggered")
+	// Wait on the channel, not a poll interval -- each receive corresponds to
+	// exactly one occupier having actually entered CallBlocking. The timeout
+	// here is a safety net against a genuine hang, not the pacing mechanism.
+	for i := 0; i < 8; i++ {
+		select {
+		case <-entered:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("occupier %d did not enter CallBlocking within 10s", i)
+		}
+	}
 
 	queuedItem, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
 		Title:    "queued-item",

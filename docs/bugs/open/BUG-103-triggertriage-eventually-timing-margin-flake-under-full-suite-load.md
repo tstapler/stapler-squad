@@ -1,6 +1,7 @@
 # BUG-103: Two `TestTriggerTriage_*` tests intermittently fail their `require.Eventually` bound under full-package parallel load [SEVERITY: Low]
 
-**Status**: 🐛 Open
+**Status**: 🩹 Partially fixed — the semaphore-occupancy wait (item 1) is fixed; the
+failure-capture wait (item 2) is still open.
 **Discovered**: 2026-09-09, running `go test ./server/services/...` full-package (not `-run`-scoped)
 while verifying an unrelated `/quality:reflect-and-fix` fix (BUG-free ambient-env test isolation,
 commits `f26d5bd04`/`91842ea95`) — unrelated to that diff, which only touches `TestMain`/env handling.
@@ -69,24 +70,36 @@ already tracked for other packages (see Related, below) rather than a package-sp
 
 ## Fix Approach
 
-1. Reproduce reliably first, ideally under deliberate background CPU load (mirrors BUG-090/091/102's
-   own reproduction notes for this flake class) rather than widening bounds on a single observed
-   failure — one occurrence each isn't enough to confirm a wider bound actually fixes it (BUG-102's
-   own investigation found a 5x-wider bound still failed once).
-2. If confirmed as pure scheduling contention (not a real synchronization gap), the fix is most likely
-   widening both `require.Eventually` timeouts to a value proportional to the operation's real cost
-   under load (e.g. 5s→15s, 2s→10s) rather than a structural change — but confirm via step 1 first.
-3. Consider whether `TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown`'s
-   first wait (8 goroutines reaching `CallBlocking`) could instead synchronize on a channel/WaitGroup
-   the fake pool signals directly, removing the wall-clock guess entirely per the
-   `deterministic-fast-tests` skill — likely the more robust fix if practical without a larger
-   `fakeHeadlessPool` API change.
+1. ~~Reproduce reliably first...~~ — superseded for item 1 by the deterministic fix below, which
+   removes the wall-clock guess entirely rather than needing to first reproduce it under load.
+2. ~~If confirmed as pure scheduling contention, widen both `require.Eventually` timeouts...~~ — not
+   taken for item 1 (see below); still the fallback approach for item 2 if reproduction confirms
+   pure scheduling contention there too.
+3. **Done for item 1** (`TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown`):
+   added `fakeHeadlessPool.onEnter func()`, invoked synchronously the instant `CallBlocking` is
+   entered (call recorded, before the delay/`ctx.Done()` block). The test now sets `onEnter` to send
+   on a `chan struct{}` buffered to 8, and waits by receiving 8 times (each receive = one occupier
+   definitely inside `CallBlocking`) instead of polling `pool.callCount() == 8` against a fixed 2s
+   wall-clock bound. Verified: `go test ./server/services/... -run
+   TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown -race
+   -count=20` — 20/20 pass (5–17s each, wide variance confirming the old fixed 2s bound really was
+   just a guess about scheduling latency, not a real invariant).
+   Still open for item 2 (`TestTriggerTriage_should_PersistFailureCapture_When_HeadlessCallItselfErrors`
+   / `waitForTriageFailureCaptured`'s 5s bound) — that wait spans disk I/O (writing the failure
+   capture file) and storage persistence, not just goroutine scheduling, so the same
+   channel-signal approach doesn't directly apply; still needs reproduction under load per item 1's
+   original plan before choosing a fix.
 
 ## Verification
 
-After fix: both tests must pass reliably under `-count=50`+ while a background CPU load generator
-(e.g. `stress` or several parallel `go build` invocations) runs concurrently, matching the load
-conditions the original failure occurred under.
+Item 1: verified above (20/20 under `-race -count=20`). Not yet re-run under deliberate background
+CPU load to match the exact conditions of the original single observed failure — the channel-based
+wait has no wall-clock component left to be sensitive to that load in the first place, so this is
+lower priority than it would be for a widened-timeout fix.
+
+Item 2 (open): after a fix, must pass reliably under `-count=50`+ while a background CPU load
+generator (e.g. `stress` or several parallel `go build` invocations) runs concurrently, matching the
+load conditions the original failure occurred under.
 
 ## Related
 
