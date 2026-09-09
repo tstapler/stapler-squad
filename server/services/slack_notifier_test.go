@@ -22,6 +22,7 @@ import (
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // slackTestEncryptionKey is a fixed 32-byte key used to pre-populate
@@ -506,7 +507,7 @@ func TestSlackNotifier_SendFailure_DoesNotBlockCaller(t *testing.T) {
 	// Drain the background dispatch (bounded by the 5s http client timeout)
 	// before the test returns, so it can't outlive this test and race with a
 	// later test's use of the global slog default via log.Warn.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		attempted, _, _, _ := n.GetDeliveryStatus()
 		return attempted
 	}, 7*time.Second, 50*time.Millisecond, "background send never completed")

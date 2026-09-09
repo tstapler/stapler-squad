@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // ─── ResolveApproval — event bus broadcasting ────────────────────────────────
@@ -408,7 +409,7 @@ func TestGetApprovalAnalytics_IncludesEscalationReasonCounts(t *testing.T) {
 		analyticsStore.Record(e)
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		loaded, loadErr := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		return loadErr == nil && len(loaded) >= len(entries)
 	}, 2*time.Second, 10*time.Millisecond, "all analytics entries must persist within 2s")

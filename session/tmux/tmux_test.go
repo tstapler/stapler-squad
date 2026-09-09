@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
 )
 
@@ -1750,7 +1751,7 @@ func TestAttachToExisting_ConcurrentCalls_ExactlyOnePTYSurvives(t *testing.T) {
 		}(i)
 	}
 
-	require.Eventually(t, func() bool { return factory.waiting.Load() == callers }, 2*time.Second, time.Millisecond,
+	wait.RequireEventually(t, func() bool { return factory.waiting.Load() == callers }, 2*time.Second, time.Millisecond,
 		"both AttachToExisting() calls must reach the blocking ptyFactory.Start call")
 	close(factory.release)
 
@@ -1812,7 +1813,7 @@ func TestRestoreWithWorkDir_RacingClose_NoPTYInstalledAfterTeardown(t *testing.T
 		restoreDone <- session.RestoreWithWorkDir(t.TempDir())
 	}()
 
-	require.Eventually(t, func() bool { return factory.waiting.Load() == 1 }, 2*time.Second, time.Millisecond,
+	wait.RequireEventually(t, func() bool { return factory.waiting.Load() == 1 }, 2*time.Second, time.Millisecond,
 		"RestoreWithWorkDir must reach the blocking ptyFactory.StartWithSize call")
 
 	// Close() must fully complete -- including flipping ptyClosed -- before the gated
@@ -1855,7 +1856,7 @@ func TestAttachToExisting_RacingClose_NoPTYInstalledAfterTeardown(t *testing.T) 
 		attachDone <- session.AttachToExisting()
 	}()
 
-	require.Eventually(t, func() bool { return factory.waiting.Load() == 1 }, 2*time.Second, time.Millisecond,
+	wait.RequireEventually(t, func() bool { return factory.waiting.Load() == 1 }, 2*time.Second, time.Millisecond,
 		"AttachToExisting must reach the blocking ptyFactory.Start call")
 
 	// Close() must fully complete -- including flipping ptyClosed -- before the gated

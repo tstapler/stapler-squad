@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/binaries"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
 )
 
@@ -4401,7 +4402,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 
 		inst := fix.svc.FindLiveInstance(id)
 		require.NotNil(t, inst)
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			return session.Status(inst.GetStatus()) == session.Active
 		}, awaitTimeout, pollInterval, "precondition: fixture instance must reach Active before being forced to Failed")
 
@@ -4411,7 +4412,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 				Id: id,
 			}))
 			require.NoError(t, retryErr)
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				status := session.Status(inst.GetStatus())
 				return status == session.Active || status == session.Failed
 			}, awaitTimeout, pollInterval, "retried pipeline must reach a terminal status")
@@ -4451,7 +4452,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 		// well-defined to clean up.
 		inst := fix.svc.FindLiveInstance(id)
 		if inst != nil {
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				return session.Status(inst.GetStatus()) == session.Failed
 			}, awaitTimeout, pollInterval, "pipeline must still reach Failed after losing the cancel race")
 		}
@@ -4479,7 +4480,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 		// The pipeline's Active write won the race instead.
 		inst := fix.svc.FindLiveInstance(id)
 		if inst != nil {
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				return session.Status(inst.GetStatus()) == session.Active
 			}, awaitTimeout, pollInterval, "pipeline must still reach Active after winning the cancel race")
 		}

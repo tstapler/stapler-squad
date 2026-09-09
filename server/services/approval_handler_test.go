@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSitesInvoked
@@ -456,7 +457,7 @@ func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.
 	}
 
 	var entries []AnalyticsEntry
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		var err error
 		entries, err = analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		return err == nil && len(entries) >= 1
@@ -556,7 +557,7 @@ func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNo
 	}
 	h.broadcastApprovalNotification("sess-1", approval)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return requestCount.Load() >= 1
 	}, 3*time.Second, 10*time.Millisecond, "expected NotifyApprovalPending to POST to the configured webhook")
 
