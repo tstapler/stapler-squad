@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.53.0](https://github.com/tstapler/stapler-squad/compare/v1.52.0...v1.53.0) (2026-09-09)
+
+
+### Features
+
+* **git:** custom go-git worktree lifecycle and three-way merge ([#730](https://github.com/tstapler/stapler-squad/issues/730)) ([0084660](https://github.com/tstapler/stapler-squad/commit/0084660dad9f122c62b8c47ce500388967d35b10))
+* **notification-revamp:** backend correctness fixes, rule-reconciliation, and IA reboot ([#738](https://github.com/tstapler/stapler-squad/issues/738)) ([a19bc76](https://github.com/tstapler/stapler-squad/commit/a19bc769b8071fbff81edd6b3d4fd970b49820ed))
+
+
+### Bug Fixes
+
+* **backlog:** populate worktree data on WatchBacklogItems snapshot/live events ([#733](https://github.com/tstapler/stapler-squad/issues/733)) ([4686d06](https://github.com/tstapler/stapler-squad/commit/4686d063e023ab56fb6fb792700d2ae70b1013a0))
+* **ci:** install buf in ux-analysis workflow, unblocking the E2E rebuild step ([#732](https://github.com/tstapler/stapler-squad/issues/732)) ([6c06ebb](https://github.com/tstapler/stapler-squad/commit/6c06ebb29ff54b4f07cd5679eefd17711748f007))
+* **git:** native merge dirty-worktree check false-positives on unrelated changes ([#742](https://github.com/tstapler/stapler-squad/issues/742)) ([2588b93](https://github.com/tstapler/stapler-squad/commit/2588b932866e3de63f706850b570dc5331174be8))
+* **remote:** isolate SSHClientPool per RemoteService in test mode ([#734](https://github.com/tstapler/stapler-squad/issues/734)) ([193325b](https://github.com/tstapler/stapler-squad/commit/193325bba8c0516b790b2549f6a4a881fdc4e4bd))
+* **security:** resolve gosec G204 subprocess-taint findings (13 sites) ([#744](https://github.com/tstapler/stapler-squad/issues/744)) ([cc31acf](https://github.com/tstapler/stapler-squad/commit/cc31acf8c5e57befb91892c800d0d46c6dbe3279))
+* **server:** report the port owner when remote-access bind fails with EADDRINUSE ([9c51fc1](https://github.com/tstapler/stapler-squad/commit/9c51fc1b8944b39c0d9e4bcb2bbf43b4e3adb5af))
+* **session:** control-mode input ack fallback + session package split analysis ([#737](https://github.com/tstapler/stapler-squad/issues/737)) ([44b0822](https://github.com/tstapler/stapler-squad/commit/44b082222cbd8fa83f5ca30df481636f35b1ea6a))
+* **session:** don't revive a Stopped session whose pane process is dead ([#729](https://github.com/tstapler/stapler-squad/issues/729)) ([cc3719b](https://github.com/tstapler/stapler-squad/commit/cc3719b354ffa04ae06f286db07fa5480b97cfb0))
+* **session:** recover PermanentlyFailed/Failed sessions with live tmux at boot ([74f2c3a](https://github.com/tstapler/stapler-squad/commit/74f2c3a4b45913ee6b933c0d6e8b82270e19b170))
+* **session:** remove status_remap migration, stops corrupting persisted status on restart ([#727](https://github.com/tstapler/stapler-squad/issues/727)) ([341f858](https://github.com/tstapler/stapler-squad/commit/341f8585fa5fe027d32e7f3401f39a2ac92dda10))
+* **session:** tmux control-mode input silently dropped + version-mismatch surfacing ([#735](https://github.com/tstapler/stapler-squad/issues/735)) ([1f37495](https://github.com/tstapler/stapler-squad/commit/1f37495f026a879e15abcb59f635840d284d0347))
+* **terminal:** coalesce oscillating resize votes into one settled resize ([#728](https://github.com/tstapler/stapler-squad/issues/728)) ([b5dba38](https://github.com/tstapler/stapler-squad/commit/b5dba385e693ff14cade9534b8b1823d69ee92cc))
+* **terminal:** generalize resize bounce detection, stop control-mode broadcast from blocking the tmux read loop ([#731](https://github.com/tstapler/stapler-squad/issues/731)) ([b3bec98](https://github.com/tstapler/stapler-squad/commit/b3bec98994b91c079503300db5e0ab2ba8aff488))
+* **tmux:** bound SetWindowSize's control-mode attempt to the shared resync budget ([#725](https://github.com/tstapler/stapler-squad/issues/725)) ([41658c3](https://github.com/tstapler/stapler-squad/commit/41658c3700ad90b3f74b1a1e9e29ef8e8fee0dec))
+* **tymux:** make the real browser terminal work, not just RPC-level I/O ([#741](https://github.com/tstapler/stapler-squad/issues/741)) ([017ea9f](https://github.com/tstapler/stapler-squad/commit/017ea9f0162a573a6937ad855c60768c1a845f39))
+* **tymux:** make the tymux backend actually usable — PTY reader, liveness checks, retry recovery ([#739](https://github.com/tstapler/stapler-squad/issues/739)) ([fa5d4f7](https://github.com/tstapler/stapler-squad/commit/fa5d4f79e40249fd4aaa80ac2b2dc57b52ff04a7))
+
 ## [1.52.0](https://github.com/tstapler/stapler-squad/compare/v1.51.0...v1.52.0) (2026-09-07)
 
 
