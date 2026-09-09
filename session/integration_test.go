@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/tmuxreap"
@@ -36,6 +37,18 @@ func TestMain(m *testing.M) {
 	// Settings > GitHub Accounts) returns a real token instead of "", making
 	// those tests fail non-deterministically depending on local machine state.
 	keyring.MockInit()
+
+	// See envtest.ClearAmbientStaplerSquadStateEnv's doc comment: an ambient
+	// STAPLER_SQUAD_TEST_DIR/STAPLER_SQUAD_INSTANCE left set in the shell (e.g.
+	// by an earlier e2e run) silently wins over this package's own per-PID test
+	// isolation, so tests that call config.LoadConfig() (e.g. SwitchProgram's
+	// empty-string default resolution) read someone else's shared config.json
+	// instead of a fresh default. Previously worked around ad hoc per-test via
+	// t.Setenv (see TestSwitchProgram_EmptyString_ResolvesToConfigDefault's
+	// comment) — this closes the gap for every other test in the package that
+	// never got that treatment.
+	restoreStaplerSquadEnv := envtest.ClearAmbientStaplerSquadStateEnv()
+	defer restoreStaplerSquadEnv()
 
 	tmuxreap.ReapLeakedTestServers()
 	tmuxreap.StartTestServerWatchdog(os.Getpid())
