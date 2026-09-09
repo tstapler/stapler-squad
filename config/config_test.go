@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config/workspacepath"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -25,6 +26,18 @@ func TestMain(m *testing.M) {
 	// Initialize the logger for tests with ERROR level to reduce noise
 	log.InitializeForTests(log.ERROR, log.ERROR)
 	defer log.Close()
+
+	// See envtest.ClearAmbientStaplerSquadStateEnv's doc comment: an ambient
+	// STAPLER_SQUAD_TEST_DIR wins over GetConfigDirForDir's other priorities
+	// (including a test's own explicit STAPLER_SQUAD_INSTANCE/HOME override —
+	// Priority 1 is checked before Priority 2), so a value left set in the
+	// shell silently redirects config saves/loads to someone else's shared
+	// directory. Confirmed to break TestSetFeatureFlag_InitializesMap and
+	// TestSetFeatureFlag_UpdatesExistingMap, which set HOME + a "shared"
+	// STAPLER_SQUAD_INSTANCE but don't know to also guard against
+	// STAPLER_SQUAD_TEST_DIR.
+	restoreStaplerSquadEnv := envtest.ClearAmbientStaplerSquadStateEnv()
+	defer restoreStaplerSquadEnv()
 
 	exitCode := m.Run()
 	os.Exit(exitCode)
