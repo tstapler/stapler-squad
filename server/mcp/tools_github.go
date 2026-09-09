@@ -275,9 +275,6 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 			fmt.Sprintf("session %q reached Active but is no longer findable", sessionID), ""), nil
 	}
 
-	if injErr := injectMCPConfig(inst.GetEffectiveRootDir()); injErr != nil {
-		log.Warn("mcp MCP injection failed for PR session", "title", title, "err", injErr)
-	}
 	if err := services.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, nil); err != nil {
 		log.Warn("mcp hook injection failed for PR session", "title", title, "err", err)
 	}
