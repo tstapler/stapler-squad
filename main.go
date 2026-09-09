@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/daemon"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/buildinfo"
 	"github.com/tstapler/stapler-squad/pkg/warren"
 	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server"
@@ -32,6 +33,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"syscall"
@@ -42,8 +44,19 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
+// version is normally overridden via -X main.version=... (see Makefile's
+// LDFLAGS / GoReleaser's .goreleaser.yaml). "dev" is a placeholder, not a
+// real fallback: resolveDevVersion() below replaces it at startup using
+// Go's own automatic VCS build-info stamping (populated by a plain
+// `go build`/`go install` run from inside this git checkout — no ldflags
+// needed), rather than a hardcoded version string that silently goes stale
+// forever. That staleness was a real, live bug: a binary this repo
+// documents building via a bare `go build`/`go install` (no Makefile, no
+// ldflags) reported "1.1.2" regardless of what commit it actually
+// contained, because that was the last value anyone happened to hardcode
+// here — verified in the field on a machine's actual ~/.local/bin install.
 var (
-	version                 = "1.1.2"
+	version                 = "dev"
 	daemonFlag              bool
 	mcpFlag                 bool
 	testModeFlag            bool
@@ -548,6 +561,13 @@ var (
 		Short: "Print the version number of stapler-squad",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("stapler-squad version %s\n", version)
+			if buildinfo.Branch != "" || buildinfo.Commit != "" {
+				worktreeNote := ""
+				if buildinfo.Worktree == "true" {
+					worktreeNote = " (worktree checkout)"
+				}
+				fmt.Printf("  branch: %s  commit: %s%s\n", orUnknown(buildinfo.Branch), orUnknown(buildinfo.Commit), worktreeNote)
+			}
 			fmt.Printf("https://github.com/TylerStaplerAtFanatics/stapler-squad/releases/tag/v%s\n", version)
 		},
 	}
@@ -771,6 +791,13 @@ var (
 	}
 )
 
+func orUnknown(s string) string {
+	if s == "" {
+		return "unknown"
+	}
+	return s
+}
+
 func init() {
 	rootCmd.Flags().BoolVar(&mcpFlag, "mcp", false,
 		"Run as an MCP server (stdio transport). Reads MCP JSON-RPC from stdin, writes to stdout. "+
@@ -841,6 +868,7 @@ func init() {
 	rootCmd.AddCommand(listSessionsCmd)
 	rootCmd.AddCommand(printQRCodesCmd)
 	rootCmd.AddCommand(commands.GetSessionCmd)
+	rootCmd.AddCommand(commands.EnsurePortsFreeCmd)
 }
 
 // tymuxNeeded reports whether tymuxd supervision should run for this process
@@ -1458,9 +1486,63 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 }
 
 func main() {
+	if version == "dev" {
+		resolveDevVersion()
+	}
+	// GoReleaser's release build only sets main.version (`-X
+	// main.version={{.Version}}`, kept as its own ldflag target deliberately
+	// — see Makefile's LDFLAGS comment), never buildinfo.Version. Fill it in
+	// here so the web UI's /api/server-info still reports a version on a
+	// released binary instead of an empty string.
+	if buildinfo.Version == "" {
+		buildinfo.Version = version
+	}
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
+		// Every invocation of this binary exited 0 regardless of success or
+		// failure before this line existed — verified: `./stapler-squad
+		// nonexistent-command; echo $?` printed the cobra error and still
+		// exited 0. That silently defeated install-service.sh's new
+		// ensure-ports-free capability probe and its primary safety check
+		// (macos_stop_service): both branch on this process's exit code to
+		// tell "subcommand missing" / "genuinely failed to free the port"
+		// apart from "succeeded", and all three looked identical to the
+		// caller without this.
+		os.Exit(1)
 	}
+}
+
+// resolveDevVersion replaces the "dev" placeholder with real VCS info from
+// Go's own automatic build-info stamping (present on any `go build`/
+// `go install` run from inside a git checkout, no ldflags required) — see
+// the version var's doc comment for why a hardcoded fallback string isn't
+// good enough. No-ops (leaves "dev") if build info or a revision genuinely
+// isn't available, e.g. building from a source tarball with no .git dir.
+func resolveDevVersion() {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	var revision string
+	var modified bool
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+		case "vcs.modified":
+			modified = s.Value == "true"
+		}
+	}
+	if revision == "" {
+		return
+	}
+	if len(revision) > 12 {
+		revision = revision[:12]
+	}
+	if modified {
+		revision += "-dirty"
+	}
+	version = revision
 }
 
 // buildLogConfig converts application config to a log.LogConfig. consoleEnabled

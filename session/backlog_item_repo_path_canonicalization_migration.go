@@ -88,16 +88,3 @@ func runBacklogItemRepoPathCanonicalizationBackfill(ctx context.Context, er *Ent
 	}
 	return nil
 }
-
-// backlogItemRepoPathCanonicalizationMigration adapts
-// runBacklogItemRepoPathCanonicalizationBackfill to the Migration interface
-// (session/ent_repository_migrations.go).
-type backlogItemRepoPathCanonicalizationMigration struct{}
-
-func (backlogItemRepoPathCanonicalizationMigration) Name() string {
-	return "backlog item repo_path canonicalization"
-}
-
-func (backlogItemRepoPathCanonicalizationMigration) Run(ctx context.Context, er *EntRepository) error {
-	return runBacklogItemRepoPathCanonicalizationBackfill(ctx, er)
-}
