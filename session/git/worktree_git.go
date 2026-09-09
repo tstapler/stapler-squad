@@ -249,33 +249,26 @@ func (g *GitWorktree) StageAllExceptScaffolding() error {
 // StageAllExceptScaffolding so a commit whose only staged change was a
 // just-untracked scaffolding file is skipped gracefully instead of failing on
 // "nothing to commit".
+//
+// Uses worktreeStagedDirty (see worktree_dirty_fast.go) instead of go-git's
+// Worktree.Status() — untracked files are never in the index by definition, so
+// they're naturally excluded from this comparison exactly like go-git's own
+// git.Untracked exclusion was (see TestCommitChanges_SkipsCommitGracefully_WhenOnlyScaffoldingStaged,
+// the "brand-new scaffolding file added, then untracked again" case).
 func (g *GitWorktree) HasStagedChanges() (bool, error) {
 	repo, err := OpenRepo(g.worktreePath)
 	if err != nil {
 		return false, fmt.Errorf("failed to check staged changes: %w", err)
 	}
-	worktree, err := repo.Worktree()
+	idx, err := repo.Storer.Index()
 	if err != nil {
 		return false, fmt.Errorf("failed to check staged changes: %w", err)
 	}
-	worktree.Filesystem = newCachedFilesystem(worktree.Filesystem, &g.gitignoreFS)
-	status, err := worktree.Status()
+	headHashes, err := headTreeHashes(repo)
 	if err != nil {
 		return false, fmt.Errorf("failed to check staged changes: %w", err)
 	}
-	for _, fileStatus := range status {
-		// git.Untracked is go-git's Staging code for a plain untracked file
-		// (present in the worktree, absent from both the index and HEAD) — it
-		// is not a staged change (`git diff --cached` reports nothing for it),
-		// so it must be excluded alongside Unmodified. Missing this excludes
-		// exactly the "brand-new scaffolding file added, then untracked again"
-		// case CommitChanges must skip as a no-op (see
-		// TestCommitChanges_SkipsCommitGracefully_WhenOnlyScaffoldingStaged).
-		if fileStatus.Staging != git.Unmodified && fileStatus.Staging != git.Untracked {
-			return true, nil
-		}
-	}
-	return false, nil
+	return worktreeStagedDirty(idx, headHashes), nil
 }
 
 // PrimeDirtyCacheAt sets the dirty-cache timestamp to t without running git status.

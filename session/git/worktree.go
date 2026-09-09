@@ -398,12 +398,13 @@ func (g *GitWorktree) commandRunner() tmux.CommandRunner {
 	return g.runner
 }
 
-// dirtyCheckerFunc returns g.dirtyChecker, defaulting to a worktreeIsDirty variant
-// backed by g.gitignoreFS when unset (see worktreeIsDirtyWithFS).
+// dirtyCheckerFunc returns g.dirtyChecker, defaulting to worktreeIsDirtyFast (mtime/hash
+// short-circuit, no go-git Worktree.Status() tree-diff — see its doc comment) backed by
+// g.gitignoreFS when unset.
 func (g *GitWorktree) dirtyCheckerFunc() func(string) (bool, error) {
 	if g.dirtyChecker == nil {
 		return func(path string) (bool, error) {
-			return worktreeIsDirtyWithFS(path, &g.gitignoreFS)
+			return worktreeIsDirtyFast(path, &g.gitignoreFS)
 		}
 	}
 	return g.dirtyChecker
