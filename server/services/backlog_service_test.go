@@ -75,6 +75,13 @@ type fakeHeadlessPool struct {
 	cost      float64       // returned as CallBlocking's cost; see TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession
 	calls     []fakePoolCall
 	onCall    func(workDir string) // optional: simulates the LLM writing files into WorkDir before the response returns
+	// onEnter, if set, is invoked synchronously the moment CallBlocking is entered
+	// (call recorded, before delay/ctx.Done blocking) -- lets a test observe "N
+	// concurrent callers have actually started blocking" deterministically via a
+	// channel/WaitGroup instead of polling callCount() with a wall-clock
+	// require.Eventually, which is a scheduler-contention-sensitive flake under
+	// full-suite parallel load (BUG-103).
+	onEnter func()
 }
 
 type fakePoolCall struct {
@@ -108,7 +115,11 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 		resp = f.responses[callIndex]
 	}
 	onCall := f.onCall
+	onEnter := f.onEnter
 	f.mu.Unlock()
+	if onEnter != nil {
+		onEnter()
+	}
 	if delay > 0 {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
