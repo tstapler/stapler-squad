@@ -4,7 +4,10 @@
 // without risking an import cycle back into the package under test.
 package envtest
 
-import "os"
+import (
+	"os"
+	"testing"
+)
 
 // ClearAmbientGitHubTokenEnv clears GITHUB_TOKEN/GH_TOKEN for the life of a
 // TestMain run and returns a func to restore their original values
@@ -56,4 +59,18 @@ func ClearAmbientStaplerSquadStateEnv() (restore func()) {
 			_ = os.Setenv("STAPLER_SQUAD_INSTANCE", origInstance)
 		}
 	}
+}
+
+// NewIsolatedStateDir gives the calling test its own STAPLER_SQUAD_TEST_DIR
+// via t.Setenv (auto-restored at cleanup) and returns the directory. Named,
+// reusable form of the `t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())`
+// one-liner duplicated at 130+ call sites across this repo's tests — not a
+// required migration, just the pattern to reach for in new tests. Like
+// t.Setenv, must be called before t.Parallel() on the same t (see
+// testing.T.Setenv's doc comment) — it panics otherwise.
+func NewIsolatedStateDir(t testing.TB) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", dir)
+	return dir
 }
