@@ -17,6 +17,7 @@ require (
 	connectrpc.com/connect v1.20.0
 	connectrpc.com/otelconnect v0.8.0
 	entgo.io/ent v0.14.5
+	github.com/DATA-DOG/go-sqlmock v1.5.0
 	github.com/Netflix/go-expect v0.0.0-20220104043353-73e0943537d2
 	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/atotto/clipboard v0.1.4
