@@ -1,6 +1,6 @@
 ---
 name: observability-victoriametrics-tempo
-description: Use when investigating a live stapler-squad performance/latency/error question ("why is X slow", "is Y timing out", "find the outlier") — query the local VictoriaMetrics + Tempo stack directly instead of guessing or re-instrumenting from scratch. Covers exact endpoints, the OTel-to-Prometheus metric-name mangling gotcha, PromQL patterns for this repo's existing `tmux_control_mode_*` and `http.server.*`/`rpc.server_streams.*` metrics, and the Tempo search/trace API.
+description: Use when investigating a live stapler-squad performance/latency/error question ("why is X slow", "is Y timing out", "find the outlier") — query the local VictoriaMetrics + Tempo + Pyroscope stack directly instead of guessing or re-instrumenting from scratch. Covers exact endpoints, the OTel-to-Prometheus metric-name mangling gotcha, PromQL patterns for this repo's existing `tmux_control_mode_*` and `http.server.*`/`rpc.server_streams.*` metrics, the Tempo search/trace API, and pulling CPU/heap/goroutine flamegraphs from Pyroscope. For building or editing the Grafana dashboards themselves, see `observability-grafana-dashboards`.
 ---
 
 # Reading stapler-squad's Observability Stack (VictoriaMetrics + Tempo)
@@ -14,12 +14,18 @@ stapler-squad (OTEL_ENABLED=true)
        traces  --otlp exporter-->      Tempo        (localhost:3200, no auth)
        metrics --prometheus_remote_write--> VictoriaMetrics (localhost:8428, no auth)
        logs    --> debug exporter only (no log backend wired up — check the app's own log file instead)
+
+stapler-squad --profile (pprof HTTP endpoint, :6060, independent of OTEL_ENABLED)
+  <--pull scrape-- Grafana Alloy (alloy-config.alloy) --> Pyroscope (localhost:4040, no auth)
 ```
 
 Collector config (if you need to check the pipeline itself, not just query it):
-`~/dotfiles/stapler-scripts/observability/otel-collector-config.yaml`. Grafana itself runs at
-`localhost:48300` (container's internal `:3000` mapped out) with VictoriaMetrics + Tempo as
-datasources, but for agent use, query the backends directly — faster, no auth, no UI to screenshot.
+`~/dotfiles/stapler-scripts/observability/otel-collector-config.yaml`; profiling scrape config:
+`~/dotfiles/stapler-scripts/observability/alloy-config.alloy`. Grafana itself runs at
+`localhost:48300` (container's internal `:3000` mapped out) with VictoriaMetrics + Tempo + Pyroscope
+as datasources and a provisioned `stapler-squad` dashboard folder, but for agent use, query the
+backends directly — faster, no auth, no UI to screenshot. For building/editing the dashboards
+themselves (not just querying live data), see the `observability-grafana-dashboards` skill.
 
 **Before querying anything**: confirm the live service actually has `OTEL_ENABLED=true` —
 check `~/.stapler-squad/service.env`. If it's not set, these backends will be empty/stale for
