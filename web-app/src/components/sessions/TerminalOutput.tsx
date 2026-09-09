@@ -1001,10 +1001,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       return;
     }
 
-    // Never connected, or connected but dropped before any content arrived (the
-    // startup-overlay case handled above) — don't show the reconnect banner; the
-    // "Starting session..." overlay already covers that state on its own.
-    if (!hasEverConnectedRef.current || !isInitialScrollbackDoneRef.current) return;
+    if (!hasEverConnectedRef.current) return; // never connected — don't show banner
 
     bannerTimerRef.current = setTimeout(() => {
       if (!isConnected) {
