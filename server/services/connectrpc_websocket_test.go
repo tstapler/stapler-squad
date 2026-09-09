@@ -1791,7 +1791,17 @@ func TestRunInputReadLoopExitsPromptlyOnConnectionClose(t *testing.T) {
 	done := make(chan struct{})
 	var resizeSettling atomic.Bool
 	go func() {
-		runInputReadLoop(serverStream, doneChan, errChan, "test-session", onInput, onResize, onScrollbackRequest, onCurrentPaneRequest, &resizeSettling)
+		runInputReadLoop(inputReadLoopParams{
+			stream:               serverStream,
+			doneChan:             doneChan,
+			errChan:              errChan,
+			sessionID:            "test-session",
+			onInput:              onInput,
+			onResize:             onResize,
+			onScrollbackRequest:  onScrollbackRequest,
+			onCurrentPaneRequest: onCurrentPaneRequest,
+			resizeSettling:       &resizeSettling,
+		})
 		close(done)
 	}()
 
@@ -2204,7 +2214,17 @@ func TestRunInputReadLoop_should_InvokeOnCurrentPaneRequestOnce_When_CurrentPane
 	done := make(chan struct{})
 	var resizeSettling atomic.Bool
 	go func() {
-		runInputReadLoop(serverStream, doneChan, errChan, "test-session", onInput, onResize, onScrollbackRequest, onCurrentPaneRequest, &resizeSettling)
+		runInputReadLoop(inputReadLoopParams{
+			stream:               serverStream,
+			doneChan:             doneChan,
+			errChan:              errChan,
+			sessionID:            "test-session",
+			onInput:              onInput,
+			onResize:             onResize,
+			onScrollbackRequest:  onScrollbackRequest,
+			onCurrentPaneRequest: onCurrentPaneRequest,
+			resizeSettling:       &resizeSettling,
+		})
 		close(done)
 	}()
 	defer func() {

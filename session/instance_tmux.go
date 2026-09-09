@@ -242,42 +242,59 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 	// observe two different values if a mutation lands in between.
 	program := i.Program
 
-	var cmd string
-	var matched launchCommandBuilder
+	matched := matchLaunchBuilder(program)
+	cmd := i.buildBaseLaunchCommand(program, claudeSessionID, matched)
+	cmd = appendLaunchExtras(cmd, i.CLIFlags, i.ExtraArgs)
+	if matched != nil {
+		cmd = cmd + matched.StderrRedirect(i)
+	}
+	return cmd
+}
+
+// matchLaunchBuilder returns the first launchBuilders entry that recognizes
+// program, or nil if none does.
+func matchLaunchBuilder(program string) launchCommandBuilder {
 	for _, b := range launchBuilders {
 		if b.Matches(program) {
-			matched = b
-			break
+			return b
 		}
 	}
-	switch {
-	case matched != nil:
-		cmd = matched.Build(i, program, claudeSessionID)
-	default:
-		// shellQuoteFields (not one whole-string shellQuote) preserves legitimate multi-word
-		// Program values like "sleep 300" that rely on shell word-splitting, while still
-		// preventing a metacharacter-bearing token -- e.g. a preset's argv[0] of "true; touch
-		// /tmp/pwned" -- from terminating the command and injecting a second one.
-		cmd = shellQuoteFields(program)
-		if i.AutoApprove {
-			if flag := yoloFlagFor(program); flag != "" {
-				cmd = cmd + " " + flag
-				log.ForSession(i.Title).Debug("auto-approve flag injected", "program", program, "flag", flag)
-			}
+	return nil
+}
+
+// buildBaseLaunchCommand returns the program invocation before CLIFlags,
+// ExtraArgs, and StderrRedirect are appended: matched.Build's output, or --
+// when no builder recognizes program -- the default shell-quote-and-run-as-is
+// path with AutoApprove's yolo-flag lookup.
+func (i *Instance) buildBaseLaunchCommand(program, claudeSessionID string, matched launchCommandBuilder) string {
+	if matched != nil {
+		return matched.Build(i, program, claudeSessionID)
+	}
+	// shellQuoteFields (not one whole-string shellQuote) preserves legitimate multi-word
+	// Program values like "sleep 300" that rely on shell word-splitting, while still
+	// preventing a metacharacter-bearing token -- e.g. a preset's argv[0] of "true; touch
+	// /tmp/pwned" -- from terminating the command and injecting a second one.
+	cmd := shellQuoteFields(program)
+	if i.AutoApprove {
+		if flag := yoloFlagFor(program); flag != "" {
+			cmd = cmd + " " + flag
+			log.ForSession(i.Title).Debug("auto-approve flag injected", "program", program, "flag", flag)
 		}
 	}
-	if flags := shellQuoteFields(i.CLIFlags); flags != "" {
+	return cmd
+}
+
+// appendLaunchExtras appends cliFlags and each extraArgs element to cmd.
+func appendLaunchExtras(cmd, cliFlags string, extraArgs []string) string {
+	if flags := shellQuoteFields(cliFlags); flags != "" {
 		cmd = cmd + " " + flags
 	}
 	// ExtraArgs elements are appended after CLIFlags, each independently shell-quoted as one
 	// unit — never whitespace-split — so a multi-word element (e.g. a remote-exec fragment
 	// like "cd ~/repo && exec claude") survives intact instead of being re-split into several
 	// argv positions.
-	for _, a := range i.ExtraArgs {
+	for _, a := range extraArgs {
 		cmd = cmd + " " + shellQuote(a)
-	}
-	if matched != nil {
-		cmd = cmd + matched.StderrRedirect(i)
 	}
 	return cmd
 }
@@ -326,6 +343,14 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 	if i.AllowedTools != "" {
 		parts = append(parts, "--allowedTools", shellQuote(i.AllowedTools))
 	}
+	parts = i.appendClaudePermissionFlags(parts, base)
+	parts = i.appendClaudeOutputAndPromptFlags(parts, claudeSessionID)
+	return strings.Join(parts, " ")
+}
+
+// appendClaudePermissionFlags appends the PermissionMode/AutoYes/AutoApprove
+// permission-bypass flags to parts.
+func (i *Instance) appendClaudePermissionFlags(parts []string, base string) []string {
 	if i.PermissionMode != "" {
 		parts = append(parts, "--permission-mode", shellQuote(i.PermissionMode))
 	}
@@ -333,19 +358,26 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 		parts = append(parts, "--permission-mode", PermissionModeBypassPermissions)
 	}
 	if i.AutoApprove {
-		// Must be appended here, before the "--" prompt separator below --
-		// once "--" is emitted, claude treats every subsequent token as
-		// positional, so appending this after the separator (e.g. in
-		// buildLaunchCommand, post-switch) would be silently ignored as
-		// prompt text rather than parsed as a real flag. Verified empirically
-		// that Claude CLI accepts this alongside AutoYes's --permission-mode
-		// bypassPermissions on the same command line without error (both
-		// bypass in the same direction; harmless if both are set).
+		// Must be appended here, before the "--" prompt separator emitted by
+		// appendClaudeOutputAndPromptFlags -- once "--" is emitted, claude
+		// treats every subsequent token as positional, so appending this
+		// after the separator (e.g. in buildLaunchCommand, post-switch) would
+		// be silently ignored as prompt text rather than parsed as a real
+		// flag. Verified empirically that Claude CLI accepts this alongside
+		// AutoYes's --permission-mode bypassPermissions on the same command
+		// line without error (both bypass in the same direction; harmless if
+		// both are set).
 		if flag := yoloFlagFor(base); flag != "" {
 			parts = append(parts, flag)
 			log.ForSession(i.Title).Debug("auto-approve flag injected", "program", i.Program, "flag", flag)
 		}
 	}
+	return parts
+}
+
+// appendClaudeOutputAndPromptFlags appends OneShot's output-format flags and,
+// when applicable, the trailing "-- <prompt>" positional argument.
+func (i *Instance) appendClaudeOutputAndPromptFlags(parts []string, claudeSessionID string) []string {
 	if i.OneShot {
 		parts = append(parts, "-p", "--output-format", "json")
 	}
@@ -354,7 +386,7 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 		// backlog prompt's "--- BACKLOG ITEM DATA ---") as CLI flags.
 		parts = append(parts, "--", i.promptArg())
 	}
-	return strings.Join(parts, " ")
+	return parts
 }
 
 // buildPiCommand assembles the pi invocation, injecting the resume flag when a
