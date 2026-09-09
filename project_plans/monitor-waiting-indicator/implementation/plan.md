@@ -223,7 +223,8 @@ matching the precision the short footer form already has.
     test still passes unchanged.
 
 **Files**: `session/detection/binaries/claude.go`, `session/detection/pattern_set.go`,
-`session/detection/bug_regression_test.go`
+`session/detection/bug_regression_test.go`, `session/detection/pattern_set_test.go` (Task
+1.1.1c), `session/detection/detector.go` (Task 1.1.1e)
 
 ##### Task 1.1.1a: Fix the `shells_still_running` regex and correct the stale comment (~5 min)
 - In `session/detection/binaries/claude.go`, change the `shells_still_running` pattern
@@ -377,6 +378,10 @@ per that review's recommendation rather than left unconsidered. Neither is fixed
   patterns this plan touches. **Disposition**: accepted, pre-existing limitation, not fixed here —
   defer a general fix (e.g. widening the tail window, or a dedicated "was a terminal/idle line ever
   seen at all" fallback) to a future ticket rather than scope-creeping it into this bug fix.
+  Per adversarial-review's concern that "defer to a future ticket" was prose-only: no dedicated
+  tracking ticket is filed as part of this change (this plan's own backlog item tracks only the
+  comma-joined undercount fix, not this pre-existing tail-window property) — recorded here as the
+  authoritative pointer for whoever picks up a general fix to `detectFromLines`'s backward scan.
 - **Wrapped/split status lines are not detected (CONCERN #1, pre-existing, shared by every
   single-line pattern in this file)**: `MatchLines` matches one physical line at a time
   (`session/detection/detector.go:616`). If a narrow terminal pane wraps

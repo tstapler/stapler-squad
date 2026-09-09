@@ -653,6 +653,144 @@ func TestBug_ShellsStillRunning(t *testing.T) {
 	}
 }
 
+// TestBug_ShellsAndMonitorsStillRunning verifies that the turn-completion long form's
+// comma-joined "N shell, M monitor still running" suffix is detected as
+// StatusWaitingForAgent with the correctly SUMMED count (shells + monitors), not just the
+// monitor count alone.
+//
+// Observed: "✻ Cogitated for 1m 6s · done 3:06 PM · 1 shell, 1 monitor still running" was
+// undercounted to 1 (monitor only) because shells_still_running required "running"
+// immediately after the shell count/word, so it never matched a comma-joined monitor
+// suffix; the loop fell through to monitors_still_running, discarding the shell.
+func TestBug_ShellsAndMonitorsStillRunning(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	cases := []struct {
+		name  string
+		input string
+		want  DetectedStatus
+		count int
+	}{
+		{
+			name:  "1 shell, 1 monitor combined",
+			input: "✻ Cogitated for 1m 6s · done 3:06 PM · 1 shell, 1 monitor still running",
+			want:  StatusWaitingForAgent,
+			count: 2,
+		},
+		{
+			name:  "2 shells, 3 monitors combined (plural)",
+			input: "✻ Baked for 3m · 2 shells, 3 monitors still running",
+			want:  StatusWaitingForAgent,
+			count: 5,
+		},
+		{
+			name:  "monitor-only, no shell mention (regression guard)",
+			input: "✻ Churned for 52s · 1 monitor still running",
+			want:  StatusWaitingForAgent,
+			count: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, _, count := sd.DetectWithContextAndCountFromLines([]string{tc.input})
+			if status != tc.want {
+				t.Errorf("DetectWithContextAndCountFromLines(%q) status = %s, want %s", tc.input, status, tc.want)
+			}
+			if count != tc.count {
+				t.Errorf("DetectWithContextAndCountFromLines(%q) count = %d, want %d", tc.input, count, tc.count)
+			}
+		})
+	}
+}
+
+// TestBug_ShellsAndMonitorsStillRunning_ClearsOnRealisticIdleScreen verifies AC3: once a
+// realistic idle screen (prompt line + the "? for shortcuts" footer hint that appears on
+// every real Claude Code idle screen) follows the "still running" line, the indicator
+// clears to StatusIdle with count 0. A bare "❯ " prompt alone is NOT sufficient — see
+// project_plans/monitor-waiting-indicator/implementation/plan.md's Known Limitations.
+func TestBug_ShellsAndMonitorsStillRunning_ClearsOnRealisticIdleScreen(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"✻ Cogitated for 1m 6s · done 3:06 PM · 1 shell, 1 monitor still running",
+		"❯ ",
+		"  ? for shortcuts",
+	}
+
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusIdle {
+		t.Errorf("DetectWithContextAndCountFromLines(still-running followed by realistic idle screen) status = %s, want StatusIdle", status)
+	}
+	if count != 0 {
+		t.Errorf("DetectWithContextAndCountFromLines(still-running followed by realistic idle screen) count = %d, want 0", count)
+	}
+}
+
+// TestBug_MatchWaitingForAgent_ZeroCountFallsThrough verifies the zero-count guard added to
+// matchWaitingForAgent: a WaitingForAgent pattern whose captured groups all resolve to a
+// non-positive count must fall through to no-match (ok=false) rather than returning
+// ok=true with count=0 — mirrors footerAgentCount's existing total<=0 contract, exercised
+// here for a monitors_still_running-shaped line with an explicit "0 monitors".
+func TestBug_MatchWaitingForAgent_ZeroCountFallsThrough(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	status := sd.Detect([]byte("✻ Churned for 52s · 0 monitors still running"))
+	if status == StatusWaitingForAgent {
+		t.Errorf("Detect(%q) = StatusWaitingForAgent, want fallthrough (zero count is nothing to wait for)", "✻ Churned for 52s · 0 monitors still running")
+	}
+}
+
+// TestBug_ShellsAndMonitorsStillRunning_WrappedLineNotDetected documents a known,
+// pre-existing, accepted limitation (not fixed by this change): MatchLines matches one
+// physical line at a time, so if a narrow terminal pane wraps the turn-completion line
+// across two physical lines, neither shells_still_running nor monitors_still_running
+// matches either fragment. See plan.md's Known Limitations — CONCERN #1.
+func TestBug_ShellsAndMonitorsStillRunning_WrappedLineNotDetected(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	// The real single line "✻ Cogitated for 1m 6s · done 3:06 PM · 1 shell, 1 monitor
+	// still running" wrapped mid-word inside "monitor", so neither fragment contains a
+	// complete "shell...running" or "monitor...running" phrase. A wrap that instead splits
+	// cleanly before "1 shell" would leave "1 shell, 1 monitor still running" intact on the
+	// second fragment, which does match — this case specifically exercises a split that
+	// breaks the phrase itself.
+	lines := []string{
+		"✻ Cogitated for 1m 6s · done 3:06 PM · 1 shell, 1 mon",
+		"itor still running",
+	}
+
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status == StatusWaitingForAgent {
+		t.Errorf("DetectWithContextAndCountFromLines(wrapped still-running line) = StatusWaitingForAgent (count=%d); "+
+			"documented as undetected today — if this now passes, update plan.md's Known Limitations", count)
+	}
+}
+
+// TestBug_ReversedOrderShellsAndMonitors_KnownUndercount documents today's known,
+// accepted-as-out-of-scope undercount for a reversed-order comma-joined phrase ("N monitor,
+// M shell still running" instead of "N shell, M monitor still running") — no live evidence
+// this format exists yet (see plan.md's Out of Scope), but pins the current behavior
+// explicitly rather than leaving it undocumented, per pre-mortem finding #1.
+func TestBug_ReversedOrderShellsAndMonitors_KnownUndercount(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	status, _, count := sd.DetectWithContextAndCountFromLines([]string{
+		"✻ Cogitated for 1m 6s · done 3:06 PM · 1 monitor, 1 shell still running",
+	})
+	if status != StatusWaitingForAgent {
+		t.Fatalf("DetectWithContextAndCountFromLines(reversed-order) status = %s, want StatusWaitingForAgent", status)
+	}
+	if count != 1 {
+		t.Errorf("DetectWithContextAndCountFromLines(reversed-order) count = %d, want 1 (documented undercount — "+
+			"only the monitor is matched today; if this now returns 2, add a real fix and update this test/plan.md)", count)
+	}
+}
+
 // TestBug_ThinkingWithStillThinkingSuffix documents that a Claude Code spinner line
 // with a "· still thinking" suffix in the duration annotation is still detected as
 // StatusExecuting, not silently dropped.
