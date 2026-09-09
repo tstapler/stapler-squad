@@ -187,7 +187,6 @@ func TestBackgroundResolutionPipeline_should_CompleteWithoutNetworkIO_When_Plain
 		return "", nil, fmt.Errorf("githubResolver must not be called for a plain directory session")
 	}
 
-	start := time.Now()
 	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title: "epic22-plain-directory",
 		Path:  t.TempDir(),
@@ -199,14 +198,42 @@ func TestBackgroundResolutionPipeline_should_CompleteWithoutNetworkIO_When_Plain
 		inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
 		return inst != nil && session.Status(inst.GetStatus()) == session.Active
 	}, pipelineEventuallyTimeout, 5*time.Millisecond)
-	elapsed := time.Since(start)
 
 	assert.False(t, resolverCalled.Load(), "githubResolver must never be invoked for a plain directory session")
-	// 3s (not the network-I/O-absent case's realistic sub-100ms) tolerates CPU
-	// scheduling contention on a heavily loaded shared dev machine while still
-	// catching a genuine network-I/O regression, which would push this into the
-	// 10s+ range from a real DNS/TLS attempt. See BUG-092.
-	assert.Less(t, elapsed, 3*time.Second, "a plain directory session's pipeline must complete with no network I/O latency")
+}
+
+// BenchmarkBackgroundResolutionPipeline_PlainDirectorySession tracks how long
+// a plain-directory (no GitHub URL) session takes to reach Active. This used
+// to be a 3s assert.Less bound embedded in the correctness test above --
+// under load-average contention that timing threshold is inherently noisy
+// (see BUG-092/BUG-104), so it doesn't belong in a pass/fail correctness
+// assertion. The actual correctness invariant (githubResolver never called)
+// is still asserted above; this benchmark exists purely to let a human
+// compare wall-clock numbers across runs, e.g. to catch a real regression
+// that reintroduces network I/O into this path.
+func BenchmarkBackgroundResolutionPipeline_PlainDirectorySession(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		fix := setupForkTestFixture(b)
+
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title: fmt.Sprintf("epic22-plain-directory-bench-%d", i),
+			Path:  b.TempDir(),
+		}))
+		if err != nil {
+			b.Fatalf("CreateSession: %v", err)
+		}
+
+		for {
+			inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
+			if inst != nil && session.Status(inst.GetStatus()) == session.Active {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+
+		destroyCreatedSession(b, fix.svc, resp.Msg.Session.Id)
+		fix.cleanup()
+	}
 }
 
 // TestBackgroundResolutionPipeline_should_WriteFailedAndNotCrashProcess_When_PhaseFuncPanics

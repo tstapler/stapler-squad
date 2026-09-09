@@ -681,7 +681,7 @@ func newCreateTestService(t *testing.T, storage *session.Storage) *SessionServic
 // polling Preview() — which resolves the tmux exec-gate directory via the process-wide
 // HOME/config dir — after waitForPendingCleanup returns and the test's t.TempDir() is
 // removed, intermittently producing "directory not empty" from RemoveAll.
-func destroyCreatedSession(t *testing.T, svc *SessionService, id string) {
+func destroyCreatedSession(t testing.TB, svc *SessionService, id string) {
 	t.Helper()
 	inst := svc.FindLiveInstance(id)
 	_, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: id}))
