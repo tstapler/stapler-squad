@@ -258,6 +258,7 @@ func (g *GitWorktree) HasStagedChanges() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to check staged changes: %w", err)
 	}
+	worktree.Filesystem = newCachedFilesystem(worktree.Filesystem, &g.gitignoreFS)
 	status, err := worktree.Status()
 	if err != nil {
 		return false, fmt.Errorf("failed to check staged changes: %w", err)
@@ -289,6 +290,7 @@ func (g *GitWorktree) PrimeDirtyCacheAt(t time.Time) {
 // manual commit, after running git operations, or in tests after writing files directly).
 func (g *GitWorktree) InvalidateDirtyCache() {
 	g.isDirtyCache.Store(dirtyCacheState{}) // zero time signals "cache invalid"
+	g.gitignoreFS.reset()
 }
 
 // IsDirty checks if the worktree has uncommitted changes.
@@ -368,9 +370,19 @@ func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
 // unstaged change, via go-git's Worktree.Status() — no subprocess (the
 // `prefer-go-git-over-subshells` skill). status.IsClean() is true iff there
 // are zero entries at all, staged or unstaged, matching `git status
-// --porcelain` producing empty output. This is IsDirtyWithHint's default
-// dirtyChecker; see dirtyCheckerFunc in worktree.go.
+// --porcelain` producing empty output. Uncached — kept for direct callers/tests
+// that want a guaranteed-fresh read; dirtyCheckerFunc's default instead calls
+// worktreeIsDirtyWithFS with the owning GitWorktree's gitignoreFS.
 func worktreeIsDirty(path string) (bool, error) {
+	return worktreeIsDirtyWithFS(path, nil)
+}
+
+// worktreeIsDirtyWithFS is worktreeIsDirty with the worktree's gitignore-pattern
+// filesystem reads served from cache (see gitignoreFSCache) when cache is non-nil.
+// go-git recomputes the full gitignore pattern set from scratch on every
+// Worktree.Status() call — profiling showed this dominating CPU/allocations under
+// load — so this is the fast path IsDirtyWithHint's cache-miss branch actually takes.
+func worktreeIsDirtyWithFS(path string, cache *gitignoreFSCache) (bool, error) {
 	repo, err := OpenRepo(path)
 	if err != nil {
 		return false, fmt.Errorf("failed to open git repo at %s: %w", path, err)
@@ -379,6 +391,7 @@ func worktreeIsDirty(path string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to get worktree at %s: %w", path, err)
 	}
+	worktree.Filesystem = newCachedFilesystem(worktree.Filesystem, cache)
 	status, err := worktree.Status()
 	if err != nil {
 		return false, fmt.Errorf("failed to get worktree status at %s: %w", path, err)
