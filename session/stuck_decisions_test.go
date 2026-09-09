@@ -90,24 +90,24 @@ func TestAbandonedReview_should_returnFalse_When_WithinGrace(t *testing.T) {
 func TestStaleWork_should_returnTrue_When_LastProgressOlderThan2h(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	assert.True(t, staleWork(now.Add(-3*time.Hour), now))
+	assert.True(t, staleWork(now.Add(-3*time.Hour), now, maxWorkSessionStaleness))
 }
 
 func TestStaleWork_should_returnFalse_When_ProgressWithin2h(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	assert.False(t, staleWork(now.Add(-1*time.Hour), now))
+	assert.False(t, staleWork(now.Add(-1*time.Hour), now, maxWorkSessionStaleness))
 }
 
 func TestIsBouncing_should_returnTrue_When_ThreeCyclesNoPass(t *testing.T) {
 	t.Parallel()
-	assert.True(t, isBouncing(3, false))
+	assert.True(t, isBouncing(3, bounceThreshold, false))
 }
 
 func TestIsBouncing_should_returnFalse_When_TwoCyclesOrHasPass(t *testing.T) {
 	t.Parallel()
-	assert.False(t, isBouncing(2, false), "below threshold must not flag")
-	assert.False(t, isBouncing(3, true), "a recorded PASS must not flag even at/above threshold")
+	assert.False(t, isBouncing(2, bounceThreshold, false), "below threshold must not flag")
+	assert.False(t, isBouncing(3, bounceThreshold, true), "a recorded PASS must not flag even at/above threshold")
 }
 
 func TestIsMultiReasonEscalated_should_returnTrue_When_CountAtOrAboveThreshold(t *testing.T) {

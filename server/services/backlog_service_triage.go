@@ -18,6 +18,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
@@ -1007,6 +1008,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if active := findActiveWorkSession(priorSessions); active != nil {
 		return nil, connect.NewError(connect.CodeAlreadyExists, s.activeWorkSessionBlockedError(active))
 	}
+	// 8b (Jules). Guard against starting a competing local session while a Jules
+	// session for this item is already running on Google's infrastructure — see
+	// session.HasActiveJulesSession's doc comment.
+	if activeJules := findActiveJulesSession(priorSessions); activeJules != nil {
+		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("a Jules session (%s) is already running for this item; wait for it to finish before starting a local session", activeJules.SessionUUID))
+	}
 
 	// 8. Build agent prompt. Routed through PipelineEngine (Epic 1.5, Story 1.5.5) so a
 	// non-default PipelineMode changes what inst.Prompt / AutonomousDriver's goal sees.
@@ -1041,7 +1048,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// self-heals that specific error, but serializing here closes the race at the
 	// source instead of just recovering from it after the fact).
 	s.worktreeMu.Lock()
-	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle))
+	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle), item.BaseBranch)
 	if resolveErr != nil {
 		s.worktreeMu.Unlock()
 		return nil, resolveErr
@@ -1264,6 +1271,20 @@ func hasActiveWorkSession(priorSessions []session.ItemSessionSummary) bool {
 func findActiveWorkSession(priorSessions []session.ItemSessionSummary) *session.ItemSessionSummary {
 	for i := range priorSessions {
 		if priorSessions[i].Role == session.SessionRoleWork && priorSessions[i].EndedAt == nil {
+			return &priorSessions[i]
+		}
+	}
+	return nil
+}
+
+// findActiveJulesSession returns the open (not yet ended) jules_work-role
+// ItemSession, if any — the Jules-specific counterpart to findActiveWorkSession,
+// used alongside it (not instead of it — see Story 2.1.3's design note on why
+// findActiveWorkSession itself is left unwidened) so a caller can log/notify with
+// the actual session UUID rather than a bare "already active."
+func findActiveJulesSession(priorSessions []session.ItemSessionSummary) *session.ItemSessionSummary {
+	for i := range priorSessions {
+		if priorSessions[i].Role == session.SessionRoleJulesWork && priorSessions[i].EndedAt == nil {
 			return &priorSessions[i]
 		}
 	}
@@ -1637,8 +1658,8 @@ func buildRevisionTitle(baseTitle string, isReopen bool, priorSessions []session
 // included — instead of failing loudly. Confirmed: this is the shape that
 // left session-resume-fix work committed directly on stapler-squad's own
 // main branch outside a worktree.
-func resolveSessionPath(repoPath, slug string) (worktreePath string, useWorktree bool, err error) {
-	wt, wtErr := session.CreateBacklogWorktree(repoPath, slug)
+func resolveSessionPath(repoPath, slug, baseBranch string) (worktreePath string, useWorktree bool, err error) {
+	wt, wtErr := session.CreateBacklogWorktree(repoPath, slug, baseBranch)
 	if wtErr == nil {
 		return wt, true, nil
 	}
@@ -1910,6 +1931,10 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnAutonomousWork", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
 		return nil
 	}
+	if activeJules := findActiveJulesSession(sessions); activeJules != nil {
+		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnAutonomousWork", itemID, item.Title, session.BacklogStatus(item.Status), activeJules.SessionUUID)
+		return nil
+	}
 	s.resolveRespawnBlockedActiveLogged(ctx, "AutoRespawnAutonomousWork", itemID)
 
 	workCount := 0
@@ -2121,7 +2146,7 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 		active = knownActive
 	}
 	if active != nil {
-		s.steerActiveSessionForPRFix(ctx, itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID, fixContext)
+		s.steerActiveSessionForPRFix(ctx, itemID, item.Title, session.BacklogStatus(item.Status), active, fixContext)
 		return nil
 	}
 	s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)
@@ -2261,6 +2286,9 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	if active == nil {
 		active = findActiveReviewSession(sessions)
 	}
+	if active == nil {
+		active = findActiveJulesSession(sessions)
+	}
 	if active != nil {
 		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnReview", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
 		return nil
@@ -2338,6 +2366,10 @@ func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) e
 		// Already moved on by the time this async call runs (e.g. a human already
 		// re-triggered triage manually, or the item was otherwise resolved) —
 		// nothing to do. Mirrors AutoRespawnReview's identical staleness guard.
+		// Also correctly covers a custom stage: this function only knows how to
+		// retriage from idea/queued, so a custom-status item falling here and
+		// no-oping is intentional, not merely non-crashing (Epic 2.1, Story
+		// 2.1.3e's "BacklogStatus becomes the open stage-slug type" decision).
 		return nil
 	}
 
@@ -2767,7 +2799,24 @@ func (s *BacklogService) TriggerTriage(
 		}
 		defer func() { <-s.triageSem }()
 
-		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, triageCallBudget)
+		// Shape A (session.LivenessKindDurationBudget), keyed session.BacklogStatusIdea —
+		// the same key reconcileOrphanedTriageItems' staleness gate resolves against
+		// (session/backlog_lifecycle_triage.go), so ExpectedDuration and StalenessThreshold
+		// can never independently drift apart for the same item (BUG-055's actual
+		// invariant — Epic 1.4, Story 1.4.2). BacklogStatusIdea is used rather than
+		// item.Status directly: by this point item.Status may still hold its pre-3b-transition
+		// value ("ready") in this closure's captured struct even though the item's real status
+		// is idea for the duration of this call — an unresolved "ready" key would fall through
+		// to NoTimeoutLiveness (0 ExpectedDuration), an immediate-timeout regression. Nil-guarded:
+		// an unwired/unresolvable engine falls back to the literal triageCallBudget constant,
+		// byte-for-byte unchanged from before.
+		callBudget := triageCallBudget
+		if s.livenessEngine != nil {
+			if def, defErr := s.livenessEngine.LivenessFor(session.BacklogStatusIdea, session.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+				callBudget = def.ExpectedDuration
+			}
+		}
+		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, callBudget)
 		defer cancel()
 
 		// Run triage in a dedicated worktree, not itemRepoPath directly. SDD-mode
@@ -2787,7 +2836,40 @@ func (s *BacklogService) TriggerTriage(
 		// legitimately target a plain directory).
 		triageWorkDir := itemRepoPath
 		var triageWorktree *git.GitWorktree
-		if wt, _, wtErr := git.NewGitWorktree(itemRepoPath, "triage-"+itemID); wtErr != nil {
+		// Anchor to the main repo root and branch from its default branch tip,
+		// exactly like session.CreateBacklogWorktree does for the real work
+		// session — not from itemRepoPath's ambient HEAD. Without this, an item
+		// filed by an agent that passed its own in-progress worktree as repo_path
+		// forked triage (and, via retitleTriageWorktreeToFinalBranch below, the
+		// item's eventual work branch too) from that agent's feature branch
+		// instead of main. item.BaseBranch is the deliberate opt-out of that
+		// default: when set, triage forks from that named branch instead (still
+		// origin-first, falling back to local). Best-effort at every step: any
+		// resolution failure falls back to the pre-fix behavior (branch from
+		// ambient HEAD), and any worktree-creation failure falls back to running
+		// triage directly in itemRepoPath, both unchanged from before — a bad
+		// BaseBranch is still caught loudly later, when the real work session is
+		// spawned via CreateBacklogWorktree, which hard-errors instead.
+		triageRepoRoot, mainRepoErr := session.ResolveMainRepoRoot(itemRepoPath)
+		if mainRepoErr != nil {
+			triageRepoRoot = itemRepoPath
+		}
+		triageBranchName := config.LoadConfig().BranchPrefix + git.SanitizeBranchName("triage-"+itemID)
+		var triageBaseSHA string
+		var baseErr error
+		if item.BaseBranch != "" {
+			triageBaseSHA, baseErr = git.ResolveExplicitBranchSHA(triageRepoRoot, item.BaseBranch)
+		} else {
+			_, triageBaseSHA, baseErr = git.ResolveWorktreeBaseCommit(triageRepoRoot)
+		}
+		var wt *git.GitWorktree
+		var wtErr error
+		if baseErr == nil && triageBaseSHA != "" {
+			wt, _, wtErr = git.NewGitWorktreeFromCommitSHA(triageRepoRoot, "triage-"+itemID, triageBranchName, triageBaseSHA)
+		} else {
+			wt, _, wtErr = git.NewGitWorktree(triageRepoRoot, "triage-"+itemID)
+		}
+		if wtErr != nil {
 			log.WarningLog().Printf("[TriggerTriage] failed to create isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, wtErr)
 		} else if setupErr := wt.Setup(); setupErr != nil {
 			log.WarningLog().Printf("[TriggerTriage] failed to set up isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, setupErr)

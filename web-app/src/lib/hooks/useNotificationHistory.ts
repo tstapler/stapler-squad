@@ -23,8 +23,9 @@ interface UseNotificationHistoryReturn {
   loading: boolean;
   error: Error | null;
   hasMore: boolean;
+  /** Timestamp (Date.now()) of the last *successful* fetchHistory completion — null until the first one. Never touched on failure, so it always reflects the last-known-good data (Task 3.1.2h, AC38). */
+  lastUpdatedAt: number | null;
   markAsRead: (ids: string[]) => Promise<void>;
-  markAllAsRead: () => Promise<void>;
   clearHistory: (beforeTimestamp?: string) => Promise<void>;
   loadMore: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -43,6 +44,7 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
   const [error, setError] = useState<Error | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [offset, setOffset] = useState(0);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
@@ -84,6 +86,7 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
 
       setUnreadCount(response.unreadCount);
       setHasMore(response.hasMore);
+      setLastUpdatedAt(Date.now());
     } catch (err) {
       const fetchError =
         err instanceof Error
@@ -138,28 +141,6 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
     }
   }, [fetchHistory]);
 
-  // Mark all notifications as read
-  const markAllAsRead = useCallback(async () => {
-    if (!clientRef.current) return;
-
-    // Optimistic update
-    setNotifications((prev) =>
-      prev.map((n) => ({ ...n, isRead: true }) as unknown as NotificationHistoryRecord)
-    );
-    setUnreadCount(0);
-
-    try {
-      const request = create(MarkNotificationReadRequestSchema, {
-        notificationIds: [], // empty = mark all
-      });
-      await clientRef.current.markNotificationRead(request);
-    } catch (err) {
-      console.error("Failed to mark all notifications as read:", err);
-      // Rollback on failure
-      await fetchHistory(true);
-    }
-  }, [fetchHistory]);
-
   // Clear notification history
   const clearHistory = useCallback(async (beforeTimestamp?: string) => {
     if (!clientRef.current) return;
@@ -189,8 +170,8 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
     loading,
     error,
     hasMore,
+    lastUpdatedAt,
     markAsRead,
-    markAllAsRead,
     clearHistory,
     loadMore,
     refresh,

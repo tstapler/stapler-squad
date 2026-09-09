@@ -804,6 +804,10 @@ func handleApprovalDialogTick(inst *Instance, hasOutput bool, tailed string, all
 // without relying on branch-name discovery (which fails when the omnibar
 // branch name differs from the PR head branch). It returns the prURLLinked
 // value the caller should keep for subsequent ticks.
+//
+// Republishes the snapshot after its raw write: GitHub()/CurrentBranch()
+// and instance_adapter.go's API responses read GitHubPRURL/GitHubPRNumber
+// via Snapshot(), which would otherwise never observe this write.
 func scanAndLinkPRURL(inst *Instance, sentInitial bool, prURLLinked bool, previewErr error, output string) bool {
 	if prURLLinked || !sentInitial || inst.GitHubOwner == "" || previewErr != nil || output == "" {
 		return prURLLinked
@@ -815,7 +819,9 @@ func scanAndLinkPRURL(inst *Instance, sentInitial bool, prURLLinked bool, previe
 	inst.mu.Lock()
 	inst.GitHubPRURL = prURL
 	inst.GitHubPRNumber = prNum
+	snap := buildSnapshot(inst)
 	inst.mu.Unlock()
+	inst.snapshot.Store(snap)
 	log.Info("SessionDriver: auto-linked PR from terminal push output",
 		"session", inst.Title, "pr", prNum, "url", prURL)
 	return true

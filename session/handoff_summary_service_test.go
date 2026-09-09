@@ -45,6 +45,24 @@ func getHandoffRow(t *testing.T, client *ent.Client, sessionID string) *ent.Hand
 	return row
 }
 
+// beginAndGenerate calls BeginGeneration then, synchronously,
+// GenerateAndPersist — mirroring TriggerHandoffSummary's real call shape
+// (minus the async dispatch) for tests that exercise GenerateAndPersist's
+// pipeline directly rather than the dedup guard itself. Fails the test if
+// BeginGeneration does not start a new generation; tests asserting on the
+// already-in-flight case call BeginGeneration directly instead.
+func beginAndGenerate(t *testing.T, gen *HandoffSummaryGenerator, ctx context.Context, sessionID, title string) {
+	t.Helper()
+	release, startedAt, started, err := gen.BeginGeneration(ctx, sessionID, title)
+	if err != nil {
+		t.Fatalf("BeginGeneration failed: %v", err)
+	}
+	if !started {
+		t.Fatal("expected BeginGeneration to start a new generation")
+	}
+	gen.GenerateAndPersist(ctx, sessionID, title, release, startedAt)
+}
+
 // writeHandoffConversationFixture points $HOME at a fresh temp directory and
 // writes a per-session conversation JSONL file at the exact path
 // findConversationFilePath (session/history.go) walks: $HOME/.claude/projects/<any-dir>/<file>.jsonl,
@@ -157,10 +175,18 @@ func TestGenerateAndPersist_DedupsConcurrentCallsForSameSession(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	release, startedAt, started, err := gen.BeginGeneration(ctx, sessionID, "title")
+	if err != nil {
+		t.Fatalf("BeginGeneration failed: %v", err)
+	}
+	if !started {
+		t.Fatal("expected BeginGeneration to start a new generation")
+	}
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		gen.GenerateAndPersist(ctx, sessionID, "title")
+		gen.GenerateAndPersist(ctx, sessionID, "title", release, startedAt)
 	}()
 
 	select {
@@ -169,9 +195,16 @@ func TestGenerateAndPersist_DedupsConcurrentCallsForSameSession(t *testing.T) {
 		t.Fatal("first call never reached the pool")
 	}
 
-	// Second concurrent call: must return immediately without writing a row
-	// or calling the pool, since the first call still holds the guard.
-	gen.GenerateAndPersist(context.Background(), sessionID, "title")
+	// Second concurrent call: must be rejected by the dedup guard immediately,
+	// writing no row and never reaching the pool, since the first call still
+	// holds it.
+	_, _, startedSecond, err := gen.BeginGeneration(context.Background(), sessionID, "title")
+	if err != nil {
+		t.Fatalf("BeginGeneration failed: %v", err)
+	}
+	if startedSecond {
+		t.Fatal("expected the second concurrent BeginGeneration to be rejected by the dedup guard")
+	}
 
 	cancel()
 	select {
@@ -194,6 +227,62 @@ func TestGenerateAndPersist_DedupsConcurrentCallsForSameSession(t *testing.T) {
 	}
 }
 
+// TestBeginGeneration_ReleasesGuardAndReturnsError_When_InterimWriteFails
+// covers BeginGeneration's write-failure branch: if the interim GENERATING
+// upsert itself fails, the dedup guard must still be released (so the
+// session isn't permanently stuck unable to retry) and started must be
+// false with a nil release, not a stale one the caller might mistakenly
+// invoke.
+func TestBeginGeneration_ReleasesGuardAndReturnsError_When_InterimWriteFails(t *testing.T) {
+	sessionID := "sess-begin-write-failure"
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	writeErr := errors.New("simulated interim write failure")
+	repo.client.HandoffSummary.Use(func(next ent.Mutator) ent.Mutator {
+		return hook.HandoffSummaryFunc(func(ctx context.Context, m *ent.HandoffSummaryMutation) (ent.Value, error) {
+			if status, ok := m.Status(); ok && status == string(HandoffSummaryStatusGenerating) {
+				return nil, writeErr
+			}
+			return next.Mutate(ctx, m)
+		})
+	})
+
+	gen := NewHandoffSummaryGenerator(repo.client, &fakePoolClient{})
+
+	release, _, started, err := gen.BeginGeneration(context.Background(), sessionID, "title")
+	if started {
+		t.Fatal("expected started=false when the interim write fails")
+	}
+	if release != nil {
+		t.Fatal("expected a nil release on write failure")
+	}
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("expected the write error to be returned, got %v", err)
+	}
+
+	if _, ok := gen.tryAcquire(sessionID); !ok {
+		t.Fatal("expected the in-flight guard to be released after the interim write failed")
+	}
+}
+
+// TestGenerateAndPersist_PanicsOnNilRelease documents and enforces
+// GenerateAndPersist's contract: it must only ever be called with the
+// release func returned by a successful BeginGeneration call. release's
+// unconditional `defer release()` turns a caller bug (e.g. skipping
+// BeginGeneration, or passing nil) into a loud panic rather than a silent
+// no-op that leaves the dedup guard never acquired in the first place.
+func TestGenerateAndPersist_PanicsOnNilRelease(t *testing.T) {
+	gen, _, _ := newTestHandoffSummaryGenerator(t)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected GenerateAndPersist to panic when called with a nil release")
+		}
+	}()
+	gen.GenerateAndPersist(context.Background(), "sess-nil-release", "title", nil, time.Now())
+}
+
 // TestGenerateAndPersist_SuccessTransitionsToReadyWithSummaryText covers the
 // happy path: PENDING -> GENERATING -> READY, with summary_text/active_task
 // populated from a successful pool call.
@@ -204,7 +293,7 @@ func TestGenerateAndPersist_SuccessTransitionsToReadyWithSummaryText(t *testing.
 
 	gen, client, _ := newTestHandoffSummaryGenerator(t)
 
-	gen.GenerateAndPersist(context.Background(), sessionID, "title")
+	beginAndGenerate(t, gen, context.Background(), sessionID, "title")
 
 	row := getHandoffRow(t, client, sessionID)
 	if row.Status != string(HandoffSummaryStatusReady) {
@@ -236,7 +325,7 @@ func TestGenerateAndPersist_PoolFailureTransitionsToError(t *testing.T) {
 	poolErr := context.DeadlineExceeded
 	pool.err = poolErr
 
-	gen.GenerateAndPersist(context.Background(), sessionID, "title")
+	beginAndGenerate(t, gen, context.Background(), sessionID, "title")
 
 	row := getHandoffRow(t, client, sessionID)
 	if row.Status != string(HandoffSummaryStatusError) {
@@ -267,7 +356,7 @@ func TestGenerateAndPersist_TranscriptFailureTransitionsToError(t *testing.T) {
 
 	gen, client, _ := newTestHandoffSummaryGenerator(t)
 
-	gen.GenerateAndPersist(context.Background(), sessionID, "title")
+	beginAndGenerate(t, gen, context.Background(), sessionID, "title")
 
 	row := getHandoffRow(t, client, sessionID)
 	if row.Status != string(HandoffSummaryStatusError) {
@@ -303,7 +392,7 @@ func TestGenerateAndPersist_PersistFailureTransitionsToError(t *testing.T) {
 		})
 	})
 
-	gen.GenerateAndPersist(context.Background(), sessionID, "title")
+	beginAndGenerate(t, gen, context.Background(), sessionID, "title")
 
 	row := getHandoffRow(t, client, sessionID)
 	if row.Status != string(HandoffSummaryStatusError) {
@@ -329,10 +418,18 @@ func TestGenerateAndPersist_PanicIsRecoveredAndGuardIsReleased(t *testing.T) {
 	gen, _, pool := newTestHandoffSummaryGenerator(t)
 	pool.panics = true
 
+	release, startedAt, started, err := gen.BeginGeneration(context.Background(), sessionID, "title")
+	if err != nil {
+		t.Fatalf("BeginGeneration failed: %v", err)
+	}
+	if !started {
+		t.Fatal("expected BeginGeneration to start a new generation")
+	}
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		gen.GenerateAndPersist(context.Background(), sessionID, "title")
+		gen.GenerateAndPersist(context.Background(), sessionID, "title", release, startedAt)
 	}()
 
 	select {
@@ -365,10 +462,18 @@ func TestGenerateAndPersist_TimesOutAndTransitionsToError_When_PoolCallExceedsDe
 	gen, client, pool := newTestHandoffSummaryGenerator(t)
 	pool.block = true
 
+	release, startedAt, started, err := gen.BeginGeneration(context.Background(), sessionID, "title")
+	if err != nil {
+		t.Fatalf("BeginGeneration failed: %v", err)
+	}
+	if !started {
+		t.Fatal("expected BeginGeneration to start a new generation")
+	}
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		gen.GenerateAndPersist(context.Background(), sessionID, "title")
+		gen.GenerateAndPersist(context.Background(), sessionID, "title", release, startedAt)
 	}()
 
 	select {
@@ -434,7 +539,7 @@ func TestGenerateAndPersist_TruncatesOversizedHeadAndTailMessages(t *testing.T) 
 	pool := &capturingPoolClient{fakePoolClient: fakePoolClient{response: "A narrative.\n\n## Active Task\nnext step"}}
 	gen := NewHandoffSummaryGenerator(repo.client, pool)
 
-	gen.GenerateAndPersist(context.Background(), sessionID, "title")
+	beginAndGenerate(t, gen, context.Background(), sessionID, "title")
 
 	row := getHandoffRow(t, repo.client, sessionID)
 	if row.Status != string(HandoffSummaryStatusReady) {

@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/lifecycle"
 	"github.com/tstapler/stapler-squad/session/mux"
 )
 
@@ -404,29 +403,9 @@ func (s *ExternalStreamer) readLoop() {
 
 		msg, err := mux.DecodeMessage(conn)
 		if err != nil {
-			// Check for timeout errors (may be wrapped by DecodeMessage)
-			// The error can come in several forms:
-			// 1. Direct net.Error with Timeout()
-			// 2. Wrapped in "failed to read message header: %w"
-			// 3. os.ErrDeadlineExceeded
-			// 4. io.ErrUnexpectedEOF when partial read before timeout
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				// Timeout is expected, continue loop
-				continue
-			}
-			// Check for os.ErrDeadlineExceeded which is common with wrapped timeouts
-			if errors.Is(err, os.ErrDeadlineExceeded) {
-				continue
-			}
-			// Check for io.ErrUnexpectedEOF which happens when partial data read before timeout
-			// This is NOT a real connection close - it's a timeout during io.ReadFull
-			if errors.Is(err, io.ErrUnexpectedEOF) {
-				continue
-			}
-			// Check error message for timeout indicators (fallback for wrapped errors)
-			errStr := err.Error()
-			if strings.Contains(errStr, "i/o timeout") || strings.Contains(errStr, "deadline exceeded") {
+			// Expected poll-timeout (may be wrapped by DecodeMessage); not a
+			// real disconnect.
+			if lifecycle.IsBenignTimeout(err) {
 				continue
 			}
 

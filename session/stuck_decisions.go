@@ -77,17 +77,22 @@ func abandonedReview(lastReviewAt, now time.Time) bool {
 }
 
 // staleWork reports whether an in_progress item's active work session has
-// gone quiet long enough (> maxWorkSessionStaleness, reused unchanged — no
-// new threshold introduced) to be flagged stale_work.
-func staleWork(lastProgress, now time.Time) bool {
-	return now.Sub(lastProgress) > maxWorkSessionStaleness
+// gone quiet longer than maxNoProgress to be flagged stale_work. maxNoProgress
+// is resolved by the caller (session/backlog_lifecycle_stale.go's
+// reconcileStaleWorkSessions) — from LivenessEngine when wired, falling back
+// to maxWorkSessionStaleness otherwise (Epic 1.4, Story 1.4.3).
+func staleWork(lastProgress, now time.Time, maxNoProgress time.Duration) bool {
+	return now.Sub(lastProgress) > maxNoProgress
 }
 
 // isBouncing reports whether cycleCount in_progress->review round trips
 // within the lookback window, with no recorded PASS verdict, constitute a
-// non-converging "bouncing" cycle (>= bounceThreshold and !hasPass).
-func isBouncing(cycleCount int, hasPass bool) bool {
-	return cycleCount >= bounceThreshold && !hasPass
+// non-converging "bouncing" cycle (>= cycleThreshold and !hasPass).
+// cycleThreshold is resolved by the caller (session/backlog_lifecycle.go's
+// reconcileBouncingItems) — from LivenessEngine when wired, falling back to
+// bounceThreshold otherwise (Epic 1.4, Story 1.4.3).
+func isBouncing(cycleCount, cycleThreshold int, hasPass bool) bool {
+	return cycleCount >= cycleThreshold && !hasPass
 }
 
 // isMultiReasonEscalated reports whether openNonEscalationCount — the number

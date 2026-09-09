@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -24,7 +25,13 @@ import (
 func FetchBranch(repoPath, branchName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "origin", branchName)
+	// "--" forces every remaining argument to be treated as positional, not an
+	// option — without it, a branchName starting with "-" (e.g.
+	// "--upload-pack=...") is parsed by git itself as a flag rather than a ref
+	// name, a documented git argument-injection vector (same class as
+	// CVE-2017-1000117) when branchName originates from caller input, as it
+	// does via BacklogItem.BaseBranch (session.ResolveExplicitBranchSHA).
+	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "origin", "--", branchName)
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("failed to fetch branch: %s", string(exitErr.Stderr))
@@ -68,7 +75,7 @@ func ResolveDefaultBranchSHA(repoPath string) (branch, sha string, err error) {
 // repoPath's own checkout, this always fetches first, so the returned SHA reflects
 // origin's true current tip rather than whatever repoPath happened to have checked
 // out last — the gap that let a new backlog work session's worktree branch from a
-// days-stale local checkout instead of the real main tip (see setupNewWorktree's
+// days-stale local checkout instead of the real main tip (see legacySetupNewWorktree's
 // "branch from current HEAD" comment, and CreateBacklogWorktree's use of this func).
 func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
 	if err := FetchBranch(repoPath, mainBranch); err != nil {
@@ -115,6 +122,53 @@ func ResolveDefaultLocalBranchSHA(repoPath string) (branch, sha string, err erro
 		}
 	}
 	return "", "", fmt.Errorf("no candidate default branch (%v) exists locally: %w", CandidateDefaultBranches, errors.Join(errs...))
+}
+
+// ResolveWorktreeBaseCommit resolves the commit new backlog-item worktrees
+// should fork from: origin's default branch tip, falling back to a local
+// default branch when the origin fetch fails (offline, no origin remote).
+// baseSHA == "" (with err == nil) means repoPath has no commits yet
+// (IsUnbornRepo) — the only case it's safe for a caller to fall back to
+// branching from ambient HEAD, since no other branch can exist to
+// accidentally fork from instead. Any other resolution failure is returned
+// as an error rather than silently falling back to ambient HEAD, which is
+// what let new work fork from whatever branch repoPath's checkout happened
+// to be sitting on (e.g. an agent's own in-progress feature branch) instead
+// of main. Shared by session.CreateBacklogWorktree and TriggerTriage's
+// isolated triage worktree (server/services/backlog_service_triage.go).
+func ResolveWorktreeBaseCommit(repoPath string) (defaultBranch, baseSHA string, err error) {
+	defaultBranch, baseSHA, fetchErr := ResolveDefaultBranchSHA(repoPath)
+	if fetchErr == nil {
+		return defaultBranch, baseSHA, nil
+	}
+	defaultBranch, baseSHA, localErr := ResolveDefaultLocalBranchSHA(repoPath)
+	if localErr == nil {
+		return defaultBranch, baseSHA, nil
+	}
+	if IsUnbornRepo(repoPath) {
+		return "", "", nil
+	}
+	return "", "", fmt.Errorf("resolve default branch (origin fetch failed: %w, local lookup failed: %v)", fetchErr, localErr)
+}
+
+// ResolveExplicitBranchSHA resolves branchName's tip commit SHA for a caller
+// that deliberately opted out of the default-branch behavior (BacklogItem.
+// BaseBranch) — origin's copy first (fresh fetch), falling back to a local
+// branch of the same name when the origin fetch fails (offline, no origin
+// remote). Unlike ResolveWorktreeBaseCommit, there is no unborn-repo/ambient-
+// HEAD fallback here: an explicitly requested branch that doesn't exist
+// anywhere is always a hard error, never silently substituted.
+func ResolveExplicitBranchSHA(repoPath, branchName string) (string, error) {
+	if err := ValidateBranchName(branchName); err != nil {
+		return "", fmt.Errorf("resolve branch: %w", err)
+	}
+	if sha, err := ResolveOriginBranchSHA(repoPath, branchName); err == nil {
+		return sha, nil
+	} else if sha, localErr := ResolveLocalBranchSHA(repoPath, branchName); localErr == nil {
+		return sha, nil
+	} else {
+		return "", fmt.Errorf("resolve branch %q (origin fetch failed: %w, local lookup failed: %v)", branchName, err, localErr)
+	}
 }
 
 // IsUnbornRepo reports whether repoPath is a git repository with zero commits (HEAD
@@ -470,9 +524,10 @@ func DiffStatBetween(ctx context.Context, repoPath, baseSHA, headSHA string) (Ag
 // working tree — equivalent to `git diff baseSHA..headSHA`), using go-git's
 // typed diff API instead of a safeexec shell-out (the
 // `prefer-go-git-over-subshells` skill). Distinct from GitWorktree.Diff
-// (session/git/diff.go), which diffs the working tree against a single ref
-// (via `git add -N .` + `git diff <sha>`) and has no go-git equivalent —
-// see that function's doc comment for why the shell-out stays there.
+// (session/git/diff.go), which diffs the working tree (uncommitted changes and
+// untracked files) against a single base commit — GitWorktree.Diff now has a
+// go-git implementation too, built from lower-level tree/gitignore/line-diff
+// primitives rather than a single library call; see its doc comment.
 func DiffContentBetween(repoPath, baseSHA, headSHA string) (*DiffStats, error) {
 	if baseSHA == headSHA {
 		return &DiffStats{}, nil
@@ -696,33 +751,48 @@ func diffHashFromFilePatches(filePatches []fdiff.FilePatch) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// CheckoutBranch checks out a branch in an existing repository.
+// CheckoutBranch checks out a branch in an existing repository. Uses go-git
+// (no subprocess — the `prefer-go-git-over-subshells` skill); ValidateBranchName
+// is still the defense against a flag-like branchName (unlike FetchBranch's "--"
+// guard, go-git's Checkout takes a typed plumbing.ReferenceName, not a raw CLI
+// argument, so there's no equivalent injection surface here to guard beyond that).
 func CheckoutBranch(repoPath, branchName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "checkout", branchName)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to checkout branch: %s", string(exitErr.Stderr))
-		}
+	if err := ValidateBranchName(branchName); err != nil {
+		return fmt.Errorf("failed to checkout branch: %w", err)
+	}
+	repo, err := OpenRepo(repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to checkout branch: %w", err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to checkout branch: %w", err)
+	}
+	if err := worktree.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(branchName)}); err != nil {
 		return fmt.Errorf("failed to checkout branch: %w", err)
 	}
 	return nil
 }
 
-// RemoteURL returns the URL of the named remote (usually "origin") for a local repo.
+// RemoteURL returns the URL of the named remote (usually "origin") for a local
+// repo, matching `git remote get-url <remote>`'s single-URL output — uses
+// go-git (no subprocess — the `prefer-go-git-over-subshells` skill). Fetch
+// always uses the first configured URL (see config.RemoteConfig.URLs' doc
+// comment), so this returns urls[0] the same way the CLI does.
 func RemoteURL(repoPath, remote string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "remote", "get-url", remote)
-	out, err := cmd.Output()
+	repo, err := OpenRepo(repoPath)
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("failed to get remote URL: %s", string(exitErr.Stderr))
-		}
 		return "", fmt.Errorf("failed to get remote URL: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	r, err := repo.Remote(remote)
+	if err != nil {
+		return "", fmt.Errorf("failed to get remote URL: %w", err)
+	}
+	urls := r.Config().URLs
+	if len(urls) == 0 {
+		return "", fmt.Errorf("failed to get remote URL: remote %q has no configured URL", remote)
+	}
+	return urls[0], nil
 }
 
 // MergeMainResult describes the outcome of MergeMainIntoWorktree.
@@ -744,11 +814,57 @@ type MergeMainResult struct {
 
 // MergeMainIntoWorktree fetches mainBranch from origin and merges it into whatever
 // branch is currently checked out in worktreePath. It never leaves the worktree in a
-// conflicted state: on conflict it aborts the merge immediately (via `git merge
-// --abort`) and reports the conflicting paths, so the caller can hand that context to
-// whoever resolves it rather than leaving a half-merged working tree behind for the
-// next thing that touches it.
+// conflicted state: on conflict it aborts the merge immediately and reports the
+// conflicting paths, so the caller can hand that context to whoever resolves it rather
+// than leaving a half-merged working tree behind for the next thing that touches it.
+//
+// Dispatches to nativeMergeMainIntoWorktree (Epic 3.4) or legacyMergeMainIntoWorktree
+// (the original subprocess-based implementation below) based on useNativeMerge, keyed by
+// worktreePath per ADR-002 — every real call site (drift.go's EnsureBranchSyncedWithMain,
+// backlog_service_triage.go's syncPRBranchWithMain, session/backlog_lifecycle.go's
+// branchReconciler, which is assigned this exact function value) gets flag coverage with
+// no changes of its own.
 func MergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
+	var result *MergeMainResult
+	ctx := withOperationAttrs(context.Background(), attribute.String("worktree_path", worktreePath))
+	err := withOperationSpan(ctx, "git.merge.main", func() (string, string, error) {
+		native := useNativeMerge(worktreePath)
+		var mergeErr error
+		if native {
+			result, mergeErr = nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch)
+		} else {
+			result, mergeErr = legacyMergeMainIntoWorktree(worktreePath, mainBranch)
+		}
+		return implementationLabel(native), mergeOutcomeLabel(result, mergeErr), mergeErr
+	})
+	return result, err
+}
+
+// mergeOutcomeLabel is MergeMainIntoWorktree's outer-span outcome value: a coarser
+// up_to_date/merged/conflicted breakdown than git_merge_outcome_total's native-only
+// four-way UpToDate/FastForward/CleanMerge/Conflicted split (native_merge.go), since
+// MergeMainResult itself (shared by both the native and legacy implementations) doesn't
+// distinguish a fast-forward from a three-way clean merge — both just set Merged: true.
+func mergeOutcomeLabel(result *MergeMainResult, err error) string {
+	if err != nil || result == nil {
+		return outcomeError
+	}
+	switch {
+	case result.Conflicted:
+		return "conflicted"
+	case result.UpToDate:
+		return "up_to_date"
+	case result.Merged:
+		return "merged"
+	default:
+		return outcomeSuccess
+	}
+}
+
+// legacyMergeMainIntoWorktree is MergeMainIntoWorktree's original subprocess-based
+// implementation (`git fetch` + `git merge` + `git merge --abort` on conflict), unchanged
+// by Epic 3.4's dispatch seam.
+func legacyMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
 	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer fetchCancel()
 	fetchCmd := safeexec.CommandContext(fetchCtx, "git", "-C", worktreePath, "fetch", "origin", mainBranch)

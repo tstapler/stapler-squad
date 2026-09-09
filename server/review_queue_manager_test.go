@@ -526,6 +526,81 @@ func TestReactiveQueueManagerEventTypes(t *testing.T) {
 	reactiveQueueMgr.Stop()
 }
 
+// newAutoResolvedRemovalTestFixture builds the queue/poller/eventBus/storage
+// fixture for TestOnItemRemoved_AutoResolvedByRule_SetsReasonAndRuleName as a
+// helper rather than a literal copy of the setup block already repeated across
+// this file's other ReactiveQueueManager tests.
+func newAutoResolvedRemovalTestFixture(t *testing.T) (*session.ReviewQueue, *session.ReviewQueuePoller, *events.EventBus, *session.InstanceStatusManager, *session.Storage) {
+	t.Helper()
+	queue := session.NewReviewQueue()
+	statusManager := session.NewInstanceStatusManager()
+	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
+	eventBus := events.NewEventBus(10)
+	repo := session.NewTestEntRepository(t)
+	storage, err := session.NewStorageWithRepository(repo)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	return queue, reviewQueuePoller, eventBus, statusManager, storage
+}
+
+// TestOnItemRemoved_AutoResolvedByRule_SetsReasonAndRuleName is the regression test for
+// review finding #4: OnItemRemoved's Reason/AutoResolvedByRule field-setting logic had no
+// assertion on the actual field values, only that an ItemRemoved event fired at all. This
+// exercises the auto-resolved-by-rule removal path specifically (session.RemoveWithInfo with
+// session.AutoResolvedByRuleRemoval) and asserts both fields on the emitted proto event.
+func TestOnItemRemoved_AutoResolvedByRule_SetsReasonAndRuleName(t *testing.T) {
+	queue, reviewQueuePoller, eventBus, statusManager, storage := newAutoResolvedRemovalTestFixture(t)
+
+	reactiveQueueMgr := NewReactiveQueueManager(
+		queue,
+		reviewQueuePoller,
+		eventBus,
+		statusManager,
+		storage,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go reactiveQueueMgr.Start(ctx)
+
+	if err := testutil.WaitForCondition(func() bool {
+		return reviewQueuePoller.IsRunning()
+	}, testutil.FastWaitConfig()); err != nil {
+		t.Fatalf("manager failed to initialize: %v", err)
+	}
+
+	clientCtx, clientCancel := context.WithCancel(context.Background())
+	defer clientCancel()
+
+	filters := &WatchReviewQueueFilters{
+		IncludeStatistics: true,
+		InitialSnapshot:   false,
+	}
+
+	eventCh, clientID := reactiveQueueMgr.AddStreamClient(clientCtx, filters)
+	defer reactiveQueueMgr.RemoveStreamClient(clientID)
+
+	item := &session.ReviewItem{
+		SessionID:  "test-auto-resolved",
+		Priority:   session.PriorityHigh,
+		Reason:     session.ReasonApprovalPending,
+		DetectedAt: time.Now(),
+	}
+	queue.Add(item)
+	waitForEvent(t, eventCh, "ItemAdded", 500*time.Millisecond)
+
+	queue.RemoveWithInfo("test-auto-resolved", session.AutoResolvedByRuleRemoval("auto_resolved_by_rule"))
+
+	event := waitForEvent(t, eventCh, "ItemRemoved", 500*time.Millisecond)
+	removed, ok := event.Event.(*sessionv1.ReviewQueueEvent_ItemRemoved)
+	require.True(t, ok, "expected ItemRemoved, got %T", event.Event)
+	require.Equal(t, "auto_resolved_by_rule", removed.ItemRemoved.GetReason())
+	require.Equal(t, "auto_resolved_by_rule", removed.ItemRemoved.GetAutoResolvedByRule())
+
+	reactiveQueueMgr.Stop()
+}
+
 // Helper function to wait for an event with timeout
 func waitForEvent(t *testing.T, eventCh <-chan *sessionv1.ReviewQueueEvent, eventType string, timeout time.Duration) *sessionv1.ReviewQueueEvent {
 	t.Helper()

@@ -331,14 +331,18 @@ func (i *Instance) GetStatusIconForType() string {
 // instance_adapter.go and serialization (ToInstanceData/FromInstanceData).
 
 // GitHub returns a read-only view of the GitHub metadata for this instance.
+// Reads through Snapshot() rather than the raw fields: setGitHubResolutionLocked
+// writes these under i.mu from the actor goroutine, so an unguarded read here
+// races it exactly like the pre-fix GetEffectiveRootDir did (backlog 10fc3913).
 func (i *Instance) GitHub() GitHubMetadataView {
+	gh := i.Snapshot().GitHub
 	return GitHubMetadataView{
-		PRNumber:       i.GitHubPRNumber,
-		PRURL:          i.GitHubPRURL,
-		Owner:          i.GitHubOwner,
-		Repo:           i.GitHubRepo,
-		SourceRef:      i.GitHubSourceRef,
-		ClonedRepoPath: i.ClonedRepoPath,
+		PRNumber:       gh.GitHubPRNumber,
+		PRURL:          gh.GitHubPRURL,
+		Owner:          gh.GitHubOwner,
+		Repo:           gh.GitHubRepo,
+		SourceRef:      gh.GitHubSourceRef,
+		ClonedRepoPath: gh.ClonedRepoPath,
 	}
 }
 
@@ -369,8 +373,8 @@ type prUpdateResult struct {
 // changes). For directory sessions, Branch is never stored, so it reads the branch live
 // from the working directory via git. Returns "" if the branch cannot be determined.
 func (i *Instance) CurrentBranch() string {
-	if i.Branch != "" {
-		return i.Branch
+	if branch := i.Snapshot().Branch; branch != "" {
+		return branch
 	}
 	workDir := i.GetWorkingDirectory()
 	if workDir == "" {

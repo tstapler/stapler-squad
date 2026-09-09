@@ -168,17 +168,13 @@ var (
 			// Load config first so we can configure logging properly
 			cfg := config.LoadConfig()
 
-			// Register the process manager backend before any session is created.
-			// Empty string defaults to "tmux" for backwards-compatibility.
-			// resolveStartupBackend is the single source of truth for the
-			// effective backend, routing both the config value and the env var
-			// through the same rollback-rehearsal gate (ADR-002) so hand-editing
-			// process_manager_backend: "tymux" in config.json can never bypass it.
-			resolvedBackend, err := resolveStartupBackend(cfg, os.Getenv("STAPLER_SQUAD_USE_TYMUX") == "true")
-			if err != nil {
-				log.Warn("tymux: global default requested but rollback rehearsal not completed; falling back to tmux", "err", err)
-			}
-			session.RegisterBackendProvider(resolvedBackend)
+			// The process-wide default backend is resolved live per session
+			// (session.getSelectedBackend, via config.EffectiveTymuxEnabled) —
+			// no startup-time registration needed. resolvedBackend here is only
+			// for tymuxNeeded's startup-supervision decision below: whether
+			// tymuxd needs to be running *right now*, given the flag's value at
+			// this instant.
+			resolvedBackend := session.ResolveSessionBackend(cfg, "", "")
 
 			// Load discovery config
 			discoveryCfg := config.LoadDiscoveryConfig()
@@ -845,32 +841,6 @@ func init() {
 	rootCmd.AddCommand(listSessionsCmd)
 	rootCmd.AddCommand(printQRCodesCmd)
 	rootCmd.AddCommand(commands.GetSessionCmd)
-}
-
-// resolveStartupBackend is the single source of truth for the effective
-// process-manager backend at startup (ADR-002, Epic 3.2, Story 3.2.1). It
-// routes both cfg.ProcessManagerBackend and tymuxEnvRequested (the
-// STAPLER_SQUAD_USE_TYMUX env var) through the same
-// config.ResolveGlobalTymuxDefault rollback-rehearsal gate, so hand-editing
-// process_manager_backend: "tymux" directly in config.json cannot bypass the
-// gate the way it could if the config value were honored independently of
-// the env var (research/pitfalls.md §3). Requesting tymux without a
-// completed rehearsal is not fatal — the caller is expected to log the
-// returned error and continue with the tmux fallback this function already
-// returns.
-func resolveStartupBackend(cfg *config.Config, tymuxEnvRequested bool) (session.ProcessManagerBackend, error) {
-	backend := session.ProcessManagerBackend(cfg.ProcessManagerBackend)
-	if backend == "" {
-		backend = session.BackendTmux
-	}
-	tymuxRequested := backend == session.BackendTymux || tymuxEnvRequested
-	tymuxEffective, err := config.ResolveGlobalTymuxDefault(cfg, tymuxRequested)
-	if tymuxEffective {
-		backend = session.BackendTymux
-	} else if backend == session.BackendTymux {
-		backend = session.BackendTmux
-	}
-	return backend, err
 }
 
 // tymuxNeeded reports whether tymuxd supervision should run for this process

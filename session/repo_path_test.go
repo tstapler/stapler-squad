@@ -519,6 +519,76 @@ func TestGetMainRepoPath_ResolvesWorktreeToMainRepo(t *testing.T) {
 	}
 }
 
+// TestResolveMainRepoRoot_RedirectsWorktreeToMainRepo verifies the helper
+// CreateBacklogWorktree and TriggerTriage's isolated triage worktree both
+// call before creating anything: given a linked worktree's path, it must
+// redirect to the main checkout, not the worktree itself.
+func TestResolveMainRepoRoot_RedirectsWorktreeToMainRepo(t *testing.T) {
+	t.Parallel()
+	mainDir := t.TempDir()
+	repo, err := git.PlainInit(mainDir, false)
+	if err != nil {
+		t.Fatalf("PlainInit failed: %v", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mainDir, "f.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if _, err := wt.Add("f.txt"); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	if _, err := wt.Commit("init", &git.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.com"}}); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	worktreeDir := filepath.Join(t.TempDir(), "extra-worktree")
+	runGitOrFail(t, mainDir, "worktree", "add", "-b", "extra-branch", worktreeDir)
+
+	resolved, err := ResolveMainRepoRoot(worktreeDir)
+	if err != nil {
+		t.Fatalf("ResolveMainRepoRoot(worktreeDir) failed: %v", err)
+	}
+
+	wantMain, err := filepath.EvalSymlinks(mainDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(mainDir) failed: %v", err)
+	}
+	gotMain, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(resolved) failed: %v", err)
+	}
+	if gotMain != wantMain {
+		t.Errorf("ResolveMainRepoRoot(%q) = %q, want %q (the main repo, not the worktree itself)", worktreeDir, gotMain, wantMain)
+	}
+}
+
+// TestResolveMainRepoRoot_ReturnsInputUnchanged_When_NotAGitRepo covers the
+// best-effort fallback: a plain (non-git) directory is returned as-is rather
+// than erroring, matching resolveSessionPath's own directory-mode fallback.
+func TestResolveMainRepoRoot_ReturnsInputUnchanged_When_NotAGitRepo(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	resolved, err := ResolveMainRepoRoot(dir)
+	if err != nil {
+		t.Fatalf("ResolveMainRepoRoot(dir) failed: %v", err)
+	}
+	wantDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(dir) failed: %v", err)
+	}
+	gotDir, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(resolved) failed: %v", err)
+	}
+	if gotDir != wantDir {
+		t.Errorf("ResolveMainRepoRoot(%q) = %q, want input unchanged (not a git repo)", dir, resolved)
+	}
+}
+
 // TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree verifies
 // CreateBacklogWorktree end-to-end when given a worktree's path (rather than the main
 // checkout) as repoPath: it must still succeed, branching from the main repo's default
@@ -554,7 +624,7 @@ func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *tes
 	// Simulate a backlog item whose RepoPath got stored as a worktree's own directory —
 	// an agent running inside one filed the item using its own CWD instead of the main
 	// checkout. First create a stand-in worktree via a real backlog spawn.
-	anchorWorktree, err := CreateBacklogWorktree(mainRepo, "anchor-item")
+	anchorWorktree, err := CreateBacklogWorktree(mainRepo, "anchor-item", "")
 	if err != nil {
 		t.Fatalf("CreateBacklogWorktree(mainRepo) failed: %v", err)
 	}
@@ -576,7 +646,7 @@ func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *tes
 	prevLogger := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	defer ssqlog.SetSlogDefaultForTest(prevLogger)
 
-	childWorktree, err := CreateBacklogWorktree(anchorWorktree, "child-item")
+	childWorktree, err := CreateBacklogWorktree(anchorWorktree, "child-item", "")
 	if err != nil {
 		t.Fatalf("CreateBacklogWorktree(anchorWorktree) failed: %v", err)
 	}
@@ -598,6 +668,83 @@ func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *tes
 	}
 }
 
+// TestCreateBacklogWorktree_UsesExplicitBaseBranch_When_Set is the opt-in
+// override's end-to-end test: with baseBranch set, the new worktree must
+// fork from that branch's tip, not the repo's default branch.
+func TestCreateBacklogWorktree_UsesExplicitBaseBranch_When_Set(t *testing.T) {
+	t.Parallel()
+	origin := t.TempDir()
+	originRepo, err := git.PlainInit(origin, false)
+	if err != nil {
+		t.Fatalf("PlainInit(origin) failed: %v", err)
+	}
+	originWT, err := originRepo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(origin, "f.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if _, err := originWT.Add("f.txt"); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	if _, err := originWT.Commit("init", &git.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.com"}}); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	runGitOrFail(t, origin, "branch", "-M", "main")
+	runGitOrFail(t, origin, "checkout", "-b", "release-2.0")
+	runGitOrFail(t, origin, "commit", "--allow-empty", "-m", "release commit")
+	releaseTip := strings.TrimSpace(runGitOutputOrFail(t, origin, "rev-parse", "release-2.0"))
+	runGitOrFail(t, origin, "checkout", "main")
+
+	mainRepo := cloneWithOrigin(t, origin)
+
+	worktreePath, err := CreateBacklogWorktree(mainRepo, "explicit-base-item", "release-2.0")
+	if err != nil {
+		t.Fatalf("CreateBacklogWorktree(baseBranch=release-2.0) failed: %v", err)
+	}
+
+	head := strings.TrimSpace(runGitOutputOrFail(t, worktreePath, "rev-parse", "HEAD"))
+	if head != releaseTip {
+		t.Errorf("worktree HEAD = %s, want release-2.0's tip %s (must fork from the explicit base_branch override, not the default branch)", head, releaseTip)
+	}
+}
+
+// TestCreateBacklogWorktree_ErrorsLoudly_When_ExplicitBaseBranchDoesNotExist
+// verifies a nonexistent explicit base_branch is a hard error rather than a
+// silent fallback to the default branch — the caller opted out on purpose.
+func TestCreateBacklogWorktree_ErrorsLoudly_When_ExplicitBaseBranchDoesNotExist(t *testing.T) {
+	t.Parallel()
+	origin := t.TempDir()
+	originRepo, err := git.PlainInit(origin, false)
+	if err != nil {
+		t.Fatalf("PlainInit(origin) failed: %v", err)
+	}
+	originWT, err := originRepo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(origin, "f.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if _, err := originWT.Add("f.txt"); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	if _, err := originWT.Commit("init", &git.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.com"}}); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	runGitOrFail(t, origin, "branch", "-M", "main")
+	mainRepo := cloneWithOrigin(t, origin)
+
+	_, err = CreateBacklogWorktree(mainRepo, "bad-base-item", "does-not-exist-anywhere")
+	if err == nil {
+		t.Fatal("CreateBacklogWorktree(baseBranch=does-not-exist-anywhere) succeeded; want an error")
+	}
+	if !strings.Contains(err.Error(), "does-not-exist-anywhere") {
+		t.Errorf("error = %q, want it to name the missing base_branch", err.Error())
+	}
+}
+
 // TestCreateBacklogWorktree_should_Error_When_RepoPathIsEmpty guards the production
 // (not test-only) mechanism that can reach this exact corruption: a BacklogItem can
 // legitimately have an empty RepoPath (CreateBacklogItem never requires one, and
@@ -610,11 +757,58 @@ func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *tes
 // guard returns before ResolveSessionPath is ever called, so no real cwd interaction
 // happens for it to observe.
 func TestCreateBacklogWorktree_should_Error_When_RepoPathIsEmpty(t *testing.T) {
-	_, err := CreateBacklogWorktree("", "empty-repopath-item")
+	_, err := CreateBacklogWorktree("", "empty-repopath-item", "")
 	if err == nil {
 		t.Fatal("CreateBacklogWorktree(\"\", ...) succeeded; want an error rather than silently operating against cwd")
 	}
 	if !strings.Contains(err.Error(), "repoPath must not be empty") {
 		t.Errorf("CreateBacklogWorktree(\"\", ...) error = %q, want it to mention repoPath must not be empty", err.Error())
+	}
+}
+
+// TestEnsureRepoCloned_GitSubprocesses_should_SetGitTerminalPromptDisabled
+// guards against a real CI hang: without GIT_TERMINAL_PROMPT=0, a git
+// clone/fetch that can't auto-authenticate (a nonexistent or private repo,
+// or an ambient credential.helper/http.extraheader left over from another
+// checkout in the same environment) blocks on a credential prompt with no
+// TTY to answer it, silently consuming the full per-operation context
+// timeout instead of failing fast — observed in this repo's own CI as a
+// single nonexistent-repo clone attempt in an e2e test eating the entire
+// job budget (tests/e2e/accessibility.spec.ts's "Cancel and Retry controls"
+// test). Not reproducible hermetically (it depends on real network/auth
+// conditions), so this is a source-scan regression guard instead, matching
+// this repo's existing convention (e.g. jules/secrets_guard_test.go) for
+// invariants a unit test can't otherwise pin down.
+func TestEnsureRepoCloned_GitSubprocesses_should_SetGitTerminalPromptDisabled(t *testing.T) {
+	src, err := os.ReadFile("repo_path.go")
+	if err != nil {
+		t.Fatalf("reading repo_path.go: %v", err)
+	}
+	text := string(src)
+
+	for _, marker := range []string{
+		`"git", "-C", repoPath, "fetch", "--all", "--prune"`,
+		`"git", "clone", cloneURL, repoPath`,
+	} {
+		idx := strings.Index(text, marker)
+		if idx < 0 {
+			t.Fatalf("expected to find git subprocess construction %q in repo_path.go", marker)
+		}
+		// The env-setting line is expected on the very next statement after
+		// the cmd := safeexec.CommandContext(...) line containing marker.
+		rest := text[idx:]
+		nextNewline := strings.Index(rest, "\n")
+		if nextNewline < 0 {
+			t.Fatalf("malformed source around %q", marker)
+		}
+		afterCmdLine := rest[nextNewline+1:]
+		nextLineEnd := strings.Index(afterCmdLine, "\n")
+		if nextLineEnd < 0 {
+			nextLineEnd = len(afterCmdLine)
+		}
+		nextLine := afterCmdLine[:nextLineEnd]
+		if !strings.Contains(nextLine, `GIT_TERMINAL_PROMPT=0`) {
+			t.Errorf("git subprocess %q: expected the very next line to set GIT_TERMINAL_PROMPT=0 on cmd.Env, got: %q", marker, strings.TrimSpace(nextLine))
+		}
 	}
 }

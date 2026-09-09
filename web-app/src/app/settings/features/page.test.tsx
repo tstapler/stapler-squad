@@ -18,10 +18,18 @@ jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
   useFeatureFlags: jest.fn(),
 }));
 
-// Out of scope for this file (covered by StreamHubRolloutPanel.test.tsx) — stub it out so
-// this suite doesn't also need to mock the RPC client it calls on mount.
+// Out of scope for this file (covered by StreamHubRolloutPanel.test.tsx /
+// TymuxRolloutPanel.test.tsx / NativeGitRolloutPanel.test.tsx) — stub them
+// out so this suite doesn't also need to mock the RPC clients/hooks they
+// call on mount.
 jest.mock("@/components/settings/StreamHubRolloutPanel", () => ({
   StreamHubRolloutPanel: () => null,
+}));
+jest.mock("@/components/settings/TymuxRolloutPanel", () => ({
+  TymuxRolloutPanel: () => null,
+}));
+jest.mock("@/components/settings/NativeGitRolloutPanel", () => ({
+  NativeGitRolloutPanel: () => null,
 }));
 
 const mockUseFeatureFlags = useFeatureFlags as jest.MockedFunction<typeof useFeatureFlags>;

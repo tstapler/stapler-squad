@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"os"
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
@@ -20,12 +19,9 @@ import (
 // implementation, so a concrete type per
 // the `interface-pollution-checklist` skill.
 //
-// The global STAPLER_SQUAD_USE_STREAM_HUB env var remains the default
-// source when no override is set, and still requires a process restart to
-// change — but SetStreamHubGlobalOverride (Story 3.3.4) now lets the global
-// effective value be flipped live from the browser too, no restart
-// required, still subject to the same rollback-rehearsal gate
-// (config.ResolveGlobalStreamHubDefault) as the env var path.
+// The global default is the "stream_hub" feature flag
+// (config.StreamHubFeatureFlag, on by default) — SetStreamHubGlobalOverride
+// sets or clears that flag live from the browser, no restart required.
 type StreamHubRolloutService struct {
 	// findInstance looks up a live managed/external instance by title, the
 	// same lookup SessionService.findInstance provides. Used only to derive
@@ -61,9 +57,8 @@ func (s *StreamHubRolloutService) resolveSessionOverrideKey(title string) string
 	return streamHubSessionKey(title, "")
 }
 
-// status builds the current StreamHubRolloutStatus from live config plus the
-// process environment — shared by all three RPCs since each returns the
-// post-mutation status.
+// status builds the current StreamHubRolloutStatus from live config —
+// shared by all three RPCs since each returns the post-mutation status.
 func (s *StreamHubRolloutService) status() *sessionv1.StreamHubRolloutStatus {
 	cfg := config.LoadConfig()
 
@@ -80,11 +75,19 @@ func (s *StreamHubRolloutService) status() *sessionv1.StreamHubRolloutStatus {
 		})
 	}
 
+	var globalOverride *bool
+	if v, ok := cfg.GetStreamHubGlobalOverride(); ok {
+		globalOverride = &v
+	}
+
 	return &sessionv1.StreamHubRolloutStatus{
-		GlobalEnvVarSet:              os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB") == "true",
+		// The STAPLER_SQUAD_USE_STREAM_HUB env var was removed in favor of
+		// the "stream_hub" feature flag (GlobalOverride below) — always
+		// false now.
+		GlobalEnvVarSet:              false,
 		RollbackRehearsalCompletedAt: rehearsalCompletedAt,
 		SessionOverrides:             overrides,
-		GlobalOverride:               cfg.StreamHubGlobalOverride,
+		GlobalOverride:               globalOverride,
 	}
 }
 
@@ -98,7 +101,8 @@ func (s *StreamHubRolloutService) GetStreamHubRolloutStatus(
 }
 
 // CompleteStreamHubRollbackRehearsal records that the rollback rehearsal has
-// been performed, unblocking the global default from resolving to true.
+// been performed. Historical record only — the global default no longer
+// gates on it (see config.EffectiveStreamHubEnabled).
 // +api: stream-hub-rollout:complete-rehearsal
 func (s *StreamHubRolloutService) CompleteStreamHubRollbackRehearsal(
 	ctx context.Context,
@@ -125,10 +129,9 @@ func (s *StreamHubRolloutService) SetStreamHubSessionOverride(
 	return connect.NewResponse(s.status()), nil
 }
 
-// SetStreamHubGlobalOverride sets or clears the live global stream-hub
-// override (Story 3.3.4). Takes effect immediately for session connections
-// resolved after this call — no process restart required. Forcing it on is
-// still gated behind the rollback rehearsal, mirroring the env var path.
+// SetStreamHubGlobalOverride sets or clears the "stream_hub" feature flag.
+// Takes effect immediately for session connections resolved after this
+// call — no process restart required.
 // +api: stream-hub-rollout:set-global-override
 func (s *StreamHubRolloutService) SetStreamHubGlobalOverride(
 	ctx context.Context,

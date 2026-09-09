@@ -524,6 +524,43 @@ func TestHealthCheckerRecovery_PermanentlyFailedInstance_SkippedNotAutoRestarted
 	}
 }
 
+// TestHealthCheckerRecovery_TymuxBackend_SkipsPollBasedLivenessCheck pins the
+// fix for a real incident (tymux-validation-test, 2026-09-07): a tymux-backed
+// instance's throwaway LoadInstances() copy always reports HasSession()==false
+// (fromInstanceData never wires tymux session/pane IDs the way it wires a
+// TmuxSession by name for the tmux backend — that would need a real
+// ListSessions RPC, which deferStart's "don't block LoadInstances()" contract
+// rules out). Without the Backend != BackendTymux guard, checkTmuxHealth
+// treated every tymux session as missing, forever, and eventually called
+// Start(false) on a disconnected copy — silently spawning an orphaned
+// duplicate session on tymuxd instead of ever reporting the real instance as
+// healthy.
+func TestHealthCheckerRecovery_TymuxBackend_SkipsPollBasedLivenessCheck(t *testing.T) {
+	t.Parallel()
+	checker := NewSessionHealthChecker(nil)
+
+	mock := &mockTmuxManager{hasSessionReturn: false} // would fail TmuxAlive() if ever consulted
+	inst := &Instance{Title: "tymux-backend-test", Status: Active, Backend: BackendTymux}
+	inst.started.Store(true)
+	inst.processManager = NewTmuxBackend(mock)
+
+	// Call past the debounce threshold -- if the skip didn't fire, the second
+	// call would reach recoverMissingSession and invoke Start().
+	for i := 0; i < 2; i++ {
+		result := checker.checkSingleSession(inst, nil)
+		if !result.IsHealthy {
+			t.Errorf("call %d: expected IsHealthy=true (tymux backend skips the poll-based check), got issues=%v", i+1, result.Issues)
+		}
+		if result.RecoveryAttempted {
+			t.Errorf("call %d: expected RecoveryAttempted=false for a tymux-backed instance", i+1)
+		}
+	}
+
+	if mock.startCalls != 0 {
+		t.Errorf("expected instance.Start to never be called for a tymux-backed instance's throwaway health-check copy, got %d Start() calls", mock.startCalls)
+	}
+}
+
 // --- checkInstances multi-socket regression tests ---
 //
 // CheckAllSessions previously derived a single socket from the first instance that

@@ -385,8 +385,8 @@ type Instance struct {
 	// cannot be persisted or reconstructed -- so an instance loaded from
 	// storage without a live pipeline goroutine spawned in the current
 	// process has this nil (Task 3.2.1b's documented nil-guard case, not an
-	// edge case to special-case away). Not part of InstanceSnapshot; like
-	// creationEpoch, actor-goroutine confinement alone serializes access.
+	// edge case to special-case away). Not part of InstanceSnapshot; guarded
+	// by i.mu like creationEpoch (see instance_actor_setters.go).
 	creationCancelFunc context.CancelFunc
 
 	// LaunchCommand is the full command passed to tmux on session start, including

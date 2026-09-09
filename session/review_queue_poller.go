@@ -449,8 +449,16 @@ func (rqp *ReviewQueuePoller) ForceReconcile() {
 // - Stopped instances whose tmux session is found alive are revived to Active.
 func (rqp *ReviewQueuePoller) reconcileSessions() {
 	rqp.mu.RLock()
-	instances := make([]*Instance, len(rqp.instances))
-	copy(instances, rqp.instances)
+	instances := make([]*Instance, 0, len(rqp.instances))
+	for _, inst := range rqp.instances {
+		// Filtered before grouping/querying so a socket populated only by
+		// push-liveness instances triggers no ListSessions call at all --
+		// see ProcessManagerBackend.SkipsPollBasedLiveness's doc comment.
+		if inst.Backend.SkipsPollBasedLiveness() {
+			continue
+		}
+		instances = append(instances, inst)
+	}
 	rqp.mu.RUnlock()
 
 	if len(instances) == 0 {
@@ -521,8 +529,22 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					inst.fireLifecycleEvent(EventExited, "reconcile-session-missing")
 				}
 			case Stopped:
-				// Stopped but tmux session is alive — revive to Active.
+				// Stopped but tmux session is alive — revive to Active only if
+				// the wrapped program is genuinely still running. liveSessions
+				// only proves the tmux pane object exists; remain-on-exit keeps
+				// that true even after the wrapped program has exited (a dead
+				// "Pane is dead (signal N, ...)" placeholder, see
+				// PaneProcessDead's doc comment) — blindly reviving on pane
+				// existence alone previously left such sessions stuck showing
+				// Active with no live process behind them (frozen terminal, no
+				// response to input, confirmed 2026-09-06 via a restart that
+				// raced a controller's PTY-EOF transition to Stopped against
+				// this poller's next tick).
 				if liveSessions[sessionName] {
+					if dead, _, _ := inst.paneExitInfoIgnoringStatus(); dead {
+						log.Info("reconcileSessions: stopped session's pane exists but wrapped program has exited, leaving Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
+						continue
+					}
 					log.Info("reconcileSessions: stopped session found alive, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {

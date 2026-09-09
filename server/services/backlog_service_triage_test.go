@@ -275,7 +275,7 @@ func TestResolveSessionPath_should_ErrorNotFallBackToRepoPath_When_GitManagedWor
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "worktrees"), []byte("not a directory"), 0o644))
 
-	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug", "")
 
 	require.Error(t, err)
 	assert.False(t, useWorktree)
@@ -289,7 +289,7 @@ func TestResolveSessionPath_should_FallBackToDirectory_When_RepoIsNotGitManaged(
 	t.Parallel()
 	repoPath := t.TempDir()
 
-	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug", "")
 
 	require.NoError(t, err)
 	assert.False(t, useWorktree)
@@ -310,7 +310,7 @@ func TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit(t 
 	repoPath := t.TempDir()
 	initGitRepoForTest(t, repoPath) // git-initialized, but zero commits
 
-	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug", "")
 
 	require.NoError(t, err)
 	assert.True(t, useWorktree)
@@ -3610,6 +3610,96 @@ func TestTriggerTriage_should_PersistFailureCapture_When_HeadlessCallItselfError
 	assert.Contains(t, string(content), "partial output before the call errored out")
 }
 
+// fakeTriageLivenessEngine is a minimal test double implementing
+// session.LivenessEngine for TriggerTriage's call-budget regression tests
+// below (Epic 1.4, Story 1.4.2) — always returns the same definition
+// regardless of stage/mode, sufficient for these narrow single-item tests.
+type fakeTriageLivenessEngine struct {
+	def session.LivenessDefinition
+}
+
+func (f *fakeTriageLivenessEngine) LivenessFor(_ session.BacklogStatus, _ session.PipelineMode) (session.LivenessDefinition, error) {
+	return f.def, nil
+}
+
+// TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsNil
+// is Story 1.4.2's fallback path: with no LivenessEngine wired (the zero value of
+// BacklogService.livenessEngine, matching every pre-Epic-1.4 construction), the
+// headless call's context.WithTimeout must use the flat triageCallBudget constant
+// (30m), byte-for-byte unchanged from before.
+func TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsNil(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+	// svc.livenessEngine intentionally left nil.
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "nil-liveness-engine triage item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
+
+	call := pool.firstCall()
+	require.True(t, call.hasDeadline, "the headless call's context must carry a deadline")
+	remaining := time.Until(call.ctxDeadline)
+	assert.Greater(t, remaining, 25*time.Minute, "remaining budget must be close to the flat 30m triageCallBudget constant, not a shorter resolved value")
+	assert.LessOrEqual(t, remaining, 30*time.Minute, "remaining budget must not exceed the flat 30m triageCallBudget constant")
+}
+
+// TestTriggerTriage_should_UseResolvedFortyFiveMinuteTimeout_When_SddModeOverrideConfigured
+// is Story 1.4.2's concrete fix: with a LivenessEngine resolving
+// ("idea","sdd") to ExpectedDuration=45m, an sdd-mode item's headless triage call gets a
+// 45m context timeout, not the flat 30m triageCallBudget constant.
+func TestTriggerTriage_should_UseResolvedFortyFiveMinuteTimeout_When_SddModeOverrideConfigured(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+	svc.livenessEngine = &fakeTriageLivenessEngine{def: session.LivenessDefinition{
+		Kind:             session.LivenessKindDurationBudget,
+		ExpectedDuration: 45 * time.Minute,
+		StalenessMargin:  10 * time.Minute,
+	}}
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "sdd-mode override triage item",
+		Status:       string(session.BacklogStatusIdea),
+		Priority:     3,
+		RepoPath:     t.TempDir(),
+		PipelineMode: "sdd",
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
+
+	call := pool.firstCall()
+	require.True(t, call.hasDeadline, "the headless call's context must carry a deadline")
+	remaining := time.Until(call.ctxDeadline)
+	assert.Greater(t, remaining, 40*time.Minute, "remaining budget must be close to the resolved 45m ExpectedDuration, not the flat 30m constant")
+	assert.LessOrEqual(t, remaining, 45*time.Minute, "remaining budget must not exceed the resolved 45m ExpectedDuration")
+}
+
 func TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefaultPipelineModeAndFirstTriageBranch(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
@@ -5003,12 +5093,167 @@ func TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree(t *t
 	slugB := backlogWorkBranchSlug(repoDir, titleB)
 	require.Equal(t, slugA, slugB, "fixture requires titleA/titleB to collide on the same slug")
 
-	pathA, err := session.CreateBacklogWorktree(repoDir, slugA)
+	pathA, err := session.CreateBacklogWorktree(repoDir, slugA, "")
 	require.NoError(t, err)
 
-	pathB, err := session.CreateBacklogWorktree(repoDir, slugB)
+	pathB, err := session.CreateBacklogWorktree(repoDir, slugB, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, pathA, pathB,
 		"colliding title slugs currently resolve to the exact same worktree — a known, tracked limitation, not fixed by this bug fix")
+}
+
+// --- Story 2.1.3: an open Jules session blocks local respawn/reopen the same
+// way an open work session does ---
+
+// TestSpawnSessionAfterGates_should_ReturnAlreadyExistsNamingJulesSession_When_OpenJulesSessionPresent
+// guards the 8b duplicate-spawn guard: an item with an open jules_work
+// ItemSession and no work session must reject a fresh local spawn with
+// CodeAlreadyExists naming a Jules session, and the local tmux creation path
+// must never be invoked.
+func TestSpawnSessionAfterGates_should_ReturnAlreadyExistsNamingJulesSession_When_OpenJulesSessionPresent(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with an open jules session")
+	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "jules-sessions/spawn-guard",
+		SessionRole: session.SessionRoleJulesWork,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	connectErr := new(connect.Error)
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeAlreadyExists, connectErr.Code())
+	assert.Contains(t, connectErr.Message(), "Jules session", "error must name a Jules session, distinguishing it from the ordinary active-work-session block")
+	assert.Empty(t, creator.calls, "the local tmux creation path must never be invoked while a Jules session is active")
+}
+
+// TestAutoRespawnAutonomousWork_should_SkipRespawn_When_OpenJulesSessionPresent
+// guards the default-on autonomous sweep (reachable with no user action via
+// autoSpawnReadyItemsEnabled): it must not start a competing local session
+// while a Jules session is already open for the item.
+func TestAutoRespawnAutonomousWork_should_SkipRespawn_When_OpenJulesSessionPresent(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "in_progress item with an open jules session",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "jules-sessions/autonomous-guard",
+		SessionRole: session.SessionRoleJulesWork,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.AutoRespawnAutonomousWork(t.Context(), item.ID))
+
+	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1, "no new ItemSession row must be created while the Jules session is active")
+	assert.Equal(t, session.SessionRoleJulesWork, sessions[0].Role)
+}
+
+// TestAutoRespawnReview_should_SkipRespawn_When_OpenJulesSessionPresent guards
+// AutoRespawnReview's abandoned-review respawn path: it must not spawn a new
+// review session while a Jules session is already open for the item, mirroring
+// the existing findActiveWorkSession/findActiveReviewSession block.
+func TestAutoRespawnReview_should_SkipRespawn_When_OpenJulesSessionPresent(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "review item with an open jules session",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "jules-sessions/review-guard",
+		SessionRole: session.SessionRoleJulesWork,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.AutoRespawnReview(t.Context(), item.ID))
+
+	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, err)
+	for _, is := range sessions {
+		assert.NotEqual(t, session.SessionRoleReview, is.Role, "no review session must be spawned while a Jules session is active")
+	}
+}
+
+// TestSteerActiveSessionForPRFix_should_LogErrorAndSkipTmuxWrite_When_ActiveSessionIsJulesWork
+// guards Story 2.1.3's steering exception: findActiveWorkSession never matches a
+// jules_work row, so AutoReopenForPRFix cannot naturally reach this branch with
+// one today (the poller ends the Jules session before pr_pending) — this test
+// constructs the violation directly to prove the defensive guard fires instead
+// of silently attempting a tmux write to a session that has no pane.
+func TestSteerActiveSessionForPRFix_should_LogErrorAndSkipTmuxWrite_When_ActiveSessionIsJulesWork(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	steerer := &mockSessionSteerer{
+		programs: map[string]string{"jules-sessions/invariant-violation": "claude"},
+		steerErr: map[string]error{},
+	}
+	svc.SetSessionSteerer(steerer)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "invariant-violation test item",
+		Status: string(session.BacklogStatusPRPending),
+	})
+	require.NoError(t, err)
+
+	active := &session.ItemSessionSummary{
+		SessionUUID: "jules-sessions/invariant-violation",
+		Role:        session.SessionRoleJulesWork,
+	}
+
+	svc.steerActiveSessionForPRFix(t.Context(), item.ID, item.Title, session.BacklogStatusPRPending, active, "some fix context")
+
+	assert.Empty(t, steerer.calls(), "a jules_work session must never receive a tmux write, even though SessionProgram/IsReadyForSteer would otherwise report it ready")
+}
+
+// TestCountLiveBacklogWorkSessions_should_ExcludeJulesWorkRows_When_MixedRolesPresent
+// documents the explicit out-of-scope carve-out: countLiveBacklogWorkSessions feeds
+// MaxConcurrentBacklogWorkItems, a separate WIP pool from MaxConcurrentJulesSessions
+// (Story 2.2.2) — an open jules_work row alone must not shrink local capacity.
+func TestCountLiveBacklogWorkSessions_should_ExcludeJulesWorkRows_When_MixedRolesPresent(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "review item with only an open jules session",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "jules-sessions/wip-carveout",
+		SessionRole: session.SessionRoleJulesWork,
+	})
+	require.NoError(t, err)
+
+	count, err := svc.countLiveBacklogWorkSessions(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "an open jules_work row alone must not count toward MaxConcurrentBacklogWorkItems")
 }

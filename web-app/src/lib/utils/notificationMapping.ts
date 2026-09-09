@@ -33,6 +33,7 @@ export function mapNotificationType(protoType: number): NotificationData["notifi
       return "progress";
     case NotificationType.AUTO_APPROVED:
       return "auto_approved";
+    case NotificationType.UNSPECIFIED:
     case NotificationType.INFO:
     case NotificationType.DEBUG:
     case NotificationType.STATUS_CHANGE:
@@ -40,7 +41,17 @@ export function mapNotificationType(protoType: number): NotificationData["notifi
     case NotificationType.CUSTOM:
       return "custom";
     default:
-      return "info";
+      // Fail-safe: an unmapped backend NotificationType must not silently
+      // land in the informational bucket — that's the exact bug Task 3.1.1a
+      // fixes one stage downstream. Warn for triage and default to an
+      // actionable type so it surfaces in NeedsDecisionSection instead of
+      // disappearing into collapsed informational activity. "warning" is
+      // used (not "approval_needed") since it carries no approve/deny
+      // button assumptions elsewhere in the rendering pipeline.
+      console.warn(
+        `[notificationMapping] Unmapped NotificationType ${protoType}; defaulting to "warning" (actionable fail-safe)`
+      );
+      return "warning";
   }
 }
 
@@ -102,8 +113,52 @@ export function priorityColor(priority: UIPriority): string {
 }
 
 /**
+ * Notification types that represent something the user must actively decide on
+ * (approve/deny a tool-use request, answer a question, or triage a failure) —
+ * the single source of truth for "needs a decision" membership. `"info"`'s
+ * allow-list below is defined as this set's literal complement so a type can
+ * never fall into neither bucket (see Epic 3.1.1's regression: a second,
+ * independently-maintained exclusion list let "task_complete" fall through
+ * both).
+ */
+const ACTIONABLE_TYPES = new Set<UIType>([
+  "approval_needed",
+  "question",
+  "error",
+  "task_failed",
+  "warning",
+]);
+
+export function isActionableNotification(type: UIType): boolean {
+  return ACTIONABLE_TYPES.has(type);
+}
+
+/**
+ * Returns the unread notification IDs that are safe for a bulk "mark read"
+ * action to touch — i.e. everything except an unread actionable item, which
+ * must only leave "needs a decision" by being resolved. Shared by
+ * NotificationsPage's "Mark activity read" and NotificationPanel's bulk-read
+ * button so the scoping rule is defined once (Task 3.1.2e / 3.1.5a).
+ */
+export function computeScopedMarkReadIds(
+  notifications: Array<{ id: string; isRead: boolean; notificationType?: UIType }>
+): string[] {
+  return notifications
+    .filter((n) => !n.isRead && !isActionableNotification(n.notificationType))
+    .map((n) => n.id);
+}
+
+/**
+ * Caps a raw badge count at "99+", matching NavBadge.tsx's convention.
+ */
+export function capBadgeCount(n: number): string {
+  return n > 99 ? "99+" : String(n);
+}
+
+/**
  * Returns the set of UI notification types that belong to a given filter category.
- * The "error" pill covers task_failed and warning; "info" covers everything else.
+ * The "error" pill covers task_failed and warning; "info" is the allow-list
+ * complement of ACTIONABLE_TYPES so a new UI type always lands somewhere.
  */
 export function notificationTypeFilter(
   category: "all" | "approval_needed" | "error" | "task_complete" | "info",
@@ -117,15 +172,7 @@ export function notificationTypeFilter(
     case "task_complete":
       return types.filter((t) => t === "task_complete");
     case "info":
-      return types.filter(
-        (t) =>
-          t !== "approval_needed" &&
-          t !== "auto_approved" &&
-          t !== "error" &&
-          t !== "task_failed" &&
-          t !== "warning" &&
-          t !== "task_complete"
-      );
+      return types.filter((t) => !isActionableNotification(t));
     default:
       return types;
   }
@@ -142,4 +189,15 @@ export function splitCIBlockMessage(message: string): { text: string; checksUrl?
     return { text: message };
   }
   return { text: message.slice(0, match.index), checksUrl: match[1] };
+}
+
+/**
+ * Whether a notification's resolution came from rule-reconciliation rather than a
+ * live human decision (Epic 2.1's `IsReconciled()` on the Go side — this is the
+ * single shared TS accessor for the same `metadata.reconciled` check, used by every
+ * UI branch that needs to distinguish the two instead of each inlining its own
+ * `metadata?.reconciled === "true"` comparison.
+ */
+export function isReconciledNotification(n: { metadata?: Record<string, string> }): boolean {
+  return n.metadata?.reconciled === "true";
 }

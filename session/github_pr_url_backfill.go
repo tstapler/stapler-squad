@@ -80,3 +80,13 @@ func runGitHubPRURLBackfill(ctx context.Context, er *EntRepository) error {
 	}
 	return nil
 }
+
+// gitHubPRURLBackfillMigration adapts runGitHubPRURLBackfill to the
+// Migration interface (session/ent_repository_migrations.go).
+type gitHubPRURLBackfillMigration struct{}
+
+func (gitHubPRURLBackfillMigration) Name() string { return "github pr url backfill" }
+
+func (gitHubPRURLBackfillMigration) Run(ctx context.Context, er *EntRepository) error {
+	return runGitHubPRURLBackfill(ctx, er)
+}

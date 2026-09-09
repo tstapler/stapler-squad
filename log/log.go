@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config/workspacepath"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -428,12 +429,19 @@ func (sl *StructuredLogger) Fatal(message string, fields ...map[string]interface
 }
 
 // GetConfigDir returns the path to the application's configuration directory,
-// honoring the same STAPLER_SQUAD_TEST_DIR / STAPLER_SQUAD_INSTANCE precedence as
-// config.GetConfigDirForDir (Priorities 1-2 only; see that function's doc comment
-// for the full 6-priority list — Priorities 3-6 are DB/session-state concerns with
-// no log-directory analogue). Duplicated here rather than imported because config
-// already imports log, and importing back would create a cycle.
+// mirroring config.GetConfigDirForDir("")'s full 6-priority precedence so log
+// paths never drift from where DB/session state lands (via the shared
+// config/workspacepath leaf package — config already imports log, so log
+// can't import config back without a cycle).
 func GetConfigDir() (string, error) {
+	return GetConfigDirForDir("")
+}
+
+// GetConfigDirForDir mirrors config.GetConfigDirForDir(dir), see that
+// function's doc comment for the full 6-priority list. Kept here so any
+// future caller with an explicit dir (e.g. a hooks binary) needs no extra
+// plumbing.
+func GetConfigDirForDir(dir string) (string, error) {
 	// Priority 1: Test directory override (from --test-mode flag) wins outright.
 	if testDir := os.Getenv(envTestDir); testDir != "" {
 		if err := os.MkdirAll(testDir, 0750); err != nil {
@@ -448,9 +456,16 @@ func GetConfigDir() (string, error) {
 	}
 	baseDir := filepath.Join(homeDir, ".stapler-squad")
 
-	// Priority 2: Explicit instance ID. "shared" (or unset) keeps the shared,
-	// pre-fix path so the live default instance needs no migration.
-	if instanceID := os.Getenv(envInstanceID); instanceID != "" && instanceID != sharedInstanceID {
+	// Priority 2: Explicit instance ID (tests, named instances, backward
+	// compat). "shared" short-circuits straight to baseDir — same as
+	// config.GetConfigDirForDir — rather than falling through to Priority 3-6;
+	// it must NOT be treated as "unset", since that would silently land
+	// test/workspace-mode/preferred-workspace logic on a directory the caller
+	// explicitly opted out of.
+	if instanceID := os.Getenv(envInstanceID); instanceID != "" {
+		if instanceID == sharedInstanceID {
+			return baseDir, nil
+		}
 		// Reject path separators/".." so a stray or malicious instance ID can't
 		// escape baseDir via filepath.Join's lexical Clean() — same gap as
 		// config.GetConfigDirForDir, closed here first since this is the one
@@ -461,7 +476,31 @@ func GetConfigDir() (string, error) {
 		return filepath.Join(baseDir, "instances", instanceID), nil
 	}
 
-	return baseDir, nil
+	// Priority 3: Test mode auto-detection — must be checked before the
+	// preferred workspace file, same reasoning as config.GetConfigDirForDir.
+	if workspacepath.IsTestMode() {
+		pid := os.Getpid()
+		return filepath.Join(baseDir, "test", fmt.Sprintf("test-%d", pid)), nil
+	}
+
+	return resolveDefaultConfigDir(dir, baseDir)
+}
+
+// resolveDefaultConfigDir implements Priority 4-6 of GetConfigDirForDir,
+// mirroring config.resolveDefaultConfigDir exactly (see its doc comment).
+// Split out so it can be tested directly — Priority 3 (test mode
+// auto-detection) is always true inside a `go test` binary, which would
+// otherwise make this logic unreachable in tests.
+func resolveDefaultConfigDir(dir, baseDir string) (string, error) {
+	result := workspacepath.ResolveDefaultDir(dir, baseDir)
+	if result.WithinStateDir {
+		Warn("cwd is inside stapler-squad state directory; this process will use a different workspace than usual and may appear to have no sessions",
+			"cwd", result.WorkDir, "state_dir", baseDir)
+	}
+	if result.GetwdErr != nil {
+		Warn("failed to get working directory for workspace isolation", "err", result.GetwdErr)
+	}
+	return result.Dir, nil
 }
 
 // GetLogDir returns the directory where logs should be stored

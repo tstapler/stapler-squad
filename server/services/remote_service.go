@@ -50,6 +50,14 @@ type RemoteService struct {
 	knownHosts *sshremote.KnownHostsStore
 	keyStore   *sshremote.KeyStore
 	loadConfig func() *config.Config
+
+	// testSSHClientPool, when non-nil, is the isolated pool
+	// TestRemoteConnection's SSHRunner shares instead of the process-wide
+	// tmux.DefaultSSHClientPool() -- see SSHTarget's doc comment for why an
+	// isolated pool matters across tests reusing a remote name (name-keyed,
+	// not address-keyed). Set by NewRemoteService under
+	// config.IsTestMode(), mirroring SessionService.testSSHClientPool.
+	testSSHClientPool *tmux.SSHClientPool
 }
 
 // NewRemoteService constructs a RemoteService. loadConfig is called fresh on
@@ -57,7 +65,24 @@ type RemoteService struct {
 // re-read-every-request pattern in server/server.go) so a remote added or
 // edited in Settings is visible immediately, without restarting the server.
 func NewRemoteService(knownHosts *sshremote.KnownHostsStore, keyStore *sshremote.KeyStore, loadConfig func() *config.Config) *RemoteService {
-	return &RemoteService{knownHosts: knownHosts, keyStore: keyStore, loadConfig: loadConfig}
+	svc := &RemoteService{knownHosts: knownHosts, keyStore: keyStore, loadConfig: loadConfig}
+	if config.IsTestMode() {
+		svc.testSSHClientPool = tmux.NewSSHClientPool()
+	}
+	return svc
+}
+
+// sshClientPool returns the SSHClientPool TestRemoteConnection's SSHRunner
+// must share -- s.testSSHClientPool under test (see its doc comment),
+// otherwise the process-wide production default. Never construct a
+// tmux.SSHRunner directly against tmux.DefaultSSHClientPool() for a
+// connection test; use this instead so tests stay isolated from each other
+// and from production.
+func (s *RemoteService) sshClientPool() *tmux.SSHClientPool {
+	if s.testSSHClientPool != nil {
+		return s.testSSHClientPool
+	}
+	return tmux.DefaultSSHClientPool()
 }
 
 // +api: remote:test-connection
@@ -87,7 +112,7 @@ func (s *RemoteService) TestRemoteConnection(
 		Auth:            resolveIdentityAuthMethods(ctx, s.keyStore, target.identityRef),
 		HostKeyCallback: s.knownHosts.HostKeyCallback(),
 	}
-	runner := tmux.NewSSHRunner(sshTarget, clientConfig)
+	runner := tmux.NewSSHRunner(sshTarget, clientConfig, tmux.WithSSHClientPool(s.sshClientPool()))
 
 	if err := runner.Dial(ctx); err != nil {
 		var unknownErr *tmux.ErrUnknownHostKey

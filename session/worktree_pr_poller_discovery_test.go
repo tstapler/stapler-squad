@@ -9,9 +9,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
 )
 
@@ -25,7 +25,7 @@ func newDiscoveryTestRepo(t *testing.T) string {
 		{"init", "-q", dir},
 		{"-C", dir, "remote", "add", "origin", "https://github.com/acme/widgets.git"},
 	} {
-		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+		if out, err := safeexec.CommandContext(context.Background(), "git", args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}

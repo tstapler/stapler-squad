@@ -3,9 +3,8 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
 
 export interface FeatureFlagMeta {
   name: string;
@@ -37,7 +36,7 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   const client = useMemo(
-    () => createClient(SessionService, createConnectTransport({ baseUrl: getApiBaseUrl() })),
+    () => createClient(SessionService, getConnectTransport()),
     []
   );
 

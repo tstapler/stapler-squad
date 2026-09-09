@@ -101,6 +101,25 @@ func sanitizeBranchName(s string) string {
 	return cleaned
 }
 
+// ValidateBranchName rejects a branch name before it ever reaches a git
+// subprocess call, closing a git argument-injection class (same family as
+// CVE-2017-1000117): git's own argument parser treats any positional value
+// starting with "-" as an option rather than a ref name, so an unvalidated
+// caller-supplied branch name (BacklogItem.BaseBranch) reaching e.g. `git
+// fetch origin <name>` could smuggle in a flag like "--upload-pack=<cmd>".
+// FetchBranch also guards with "--" (safe for fetch's refspec argument);
+// CheckoutBranch cannot use the same "--" guard (it puts checkout into
+// path-restore mode instead, verified empirically), so this validation is
+// its only defense. Deliberately conservative: rejects empty, anything
+// starting with "-", and ".." (a valid git ref name is never required to use
+// either).
+func ValidateBranchName(name string) error {
+	if name == "" || strings.HasPrefix(name, "-") || strings.Contains(name, "..") {
+		return fmt.Errorf("invalid branch name %q", name)
+	}
+	return nil
+}
+
 // SanitizeBranchName exports sanitizeBranchName for callers outside this
 // package that need the same safe-subset transform for a remote worktree
 // directory name (server/services/session_service.go's CreateSession

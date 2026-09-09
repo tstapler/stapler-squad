@@ -36,12 +36,12 @@ beforeEach(() => {
 });
 
 describe("StreamHubRolloutPanel", () => {
-  it("renders the global env var status and no-overrides state", async () => {
+  it("renders the default global-override status and no-overrides state", async () => {
     mockClient.getStreamHubRolloutStatus.mockResolvedValue(emptyStatus());
     render(<StreamHubRolloutPanel />);
 
     await waitFor(() => expect(screen.getByTestId("stream-hub-rollout-panel")).toBeInTheDocument());
-    expect(screen.getByText("Off")).toBeInTheDocument();
+    expect(screen.getByText("Not set (default: on)")).toBeInTheDocument();
     expect(screen.getByText("No sessions are currently overridden.")).toBeInTheDocument();
     expect(screen.getByTestId("stream-hub-complete-rehearsal")).toBeInTheDocument();
   });
@@ -124,7 +124,7 @@ describe("StreamHubRolloutPanel", () => {
     await waitFor(() => screen.getByTestId("stream-hub-global-override-clear"));
     fireEvent.click(screen.getByTestId("stream-hub-global-override-clear"));
 
-    await waitFor(() => expect(screen.getByText("Not set (using env var)")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Not set (default: on)")).toBeInTheDocument());
     expect(mockClient.setStreamHubGlobalOverride).toHaveBeenCalledWith({ forceHub: undefined });
   });
 });

@@ -3,7 +3,9 @@ package vc
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -780,6 +782,104 @@ func TestGitProviderGetStatus(t *testing.T) {
 			t.Errorf("status.UntrackedFiles has %d items, want 1", len(status.UntrackedFiles))
 		}
 	})
+
+	// Regression coverage for applyBranchHeader: mutation testing during
+	// review showed removing its truncation/detached-format/"(initial)"
+	// logic entirely left every prior test passing silently, because no
+	// test drove GetStatus() through these branches and asserted on the
+	// exact resulting string.
+	t.Run("detached HEAD truncates and formats HeadCommit", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		initGitRepoWithCommit(t, tmpDir)
+
+		cmd := safeexec.CommandContext(context.Background(), "git", "rev-parse", "HEAD")
+		cmd.Dir = tmpDir
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("rev-parse HEAD: %v", err)
+		}
+		fullSHA := strings.TrimSpace(string(out))
+
+		cmd = safeexec.CommandContext(context.Background(), "git", "checkout", "--detach", "HEAD")
+		cmd.Dir = tmpDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("checkout --detach: %v", err)
+		}
+
+		provider, err := NewGitProvider(tmpDir)
+		if err != nil {
+			t.Fatalf("NewGitProvider() error = %v", err)
+		}
+		status, err := provider.GetStatus()
+		if err != nil {
+			t.Fatalf("GetStatus() error = %v", err)
+		}
+
+		wantShort := fullSHA[:shortHashLen]
+		wantBranch := "(detached: " + wantShort + ")"
+		if status.Branch != wantBranch {
+			t.Errorf("status.Branch = %q, want %q", status.Branch, wantBranch)
+		}
+		if status.HeadCommit != wantShort {
+			t.Errorf("status.HeadCommit = %q (len %d), want %q (len %d)", status.HeadCommit, len(status.HeadCommit), wantShort, shortHashLen)
+		}
+	})
+
+	t.Run("no commits yet leaves HeadCommit empty", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cmd := safeexec.CommandContext(context.Background(), "git", "init", "-b", "main")
+		cmd.Dir = tmpDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git init: %v", err)
+		}
+
+		provider, err := NewGitProvider(tmpDir)
+		if err != nil {
+			t.Fatalf("NewGitProvider() error = %v", err)
+		}
+		status, err := provider.GetStatus()
+		if err != nil {
+			t.Fatalf("GetStatus() error = %v", err)
+		}
+
+		if status.HeadCommit != "" {
+			t.Errorf("status.HeadCommit = %q, want empty before the initial commit", status.HeadCommit)
+		}
+		if status.Branch != "main" {
+			t.Errorf("status.Branch = %q, want %q", status.Branch, "main")
+		}
+	})
+
+	// Regression coverage for the clean-repo fast path: with --branch in
+	// gitStatusPorcelainArgs, the raw status output is never empty (the
+	// "# branch.*" header lines are always present), so
+	// changedFilesFromTokens must check the PARSED file list, not the raw
+	// output string, before deciding whether to spawn the two numstat
+	// calls -- otherwise a clean repo spawns them unconditionally on every
+	// poll, defeating this PR's own subprocess-reduction goal.
+	t.Run("clean repository skips numstat spawns", func(t *testing.T) {
+		skipOnWindows(t)
+
+		tmpDir := t.TempDir()
+		initGitRepoWithCommit(t, tmpDir)
+
+		provider, err := NewGitProvider(tmpDir)
+		if err != nil {
+			t.Fatalf("NewGitProvider() error = %v", err)
+		}
+
+		logPath := writeGitCallLogShim(t)
+
+		if _, err := provider.GetStatus(); err != nil {
+			t.Fatalf("GetStatus() error = %v", err)
+		}
+
+		for _, call := range readGitCallLog(t, logPath) {
+			if strings.Contains(call, "diff") && strings.Contains(call, "numstat") {
+				t.Errorf("clean repo spawned a numstat call it should have skipped: %q", call)
+			}
+		}
+	})
 }
 
 func TestGitProviderGetDiff(t *testing.T) {
@@ -1182,6 +1282,211 @@ func TestGitProviderGetChangedFiles_PathWithSpace(t *testing.T) {
 	if files[0].Status != FileModified {
 		t.Errorf("files[0].Status = %v, want %v", files[0].Status, FileModified)
 	}
+}
+
+func TestParseBranchHeader(t *testing.T) {
+	tests := []struct {
+		name   string
+		tokens []string
+		want   branchHeaderInfo
+	}{
+		{
+			name:   "branch with upstream and ahead/behind",
+			tokens: []string{"# branch.oid abc123def456", "# branch.head main", "# branch.upstream origin/main", "# branch.ab +2 -3"},
+			want:   branchHeaderInfo{headOID: "abc123def456", headBranch: "main", upstream: "origin/main", aheadBy: 2, behindBy: 3, hasAheadBehind: true},
+		},
+		{
+			name:   "detached HEAD, no upstream",
+			tokens: []string{"# branch.oid abc123def456", "# branch.head (detached)"},
+			want:   branchHeaderInfo{headOID: "abc123def456", headBranch: "(detached)"},
+		},
+		{
+			name:   "initial commit, no HEAD yet",
+			tokens: []string{"# branch.oid (initial)", "# branch.head main"},
+			want:   branchHeaderInfo{headOID: "(initial)", headBranch: "main"},
+		},
+		{
+			name:   "file records mixed in are ignored",
+			tokens: []string{"# branch.oid abc123", "# branch.head main", "1 M. N... 100644 100644 100644 hash1 hash2 file.txt"},
+			want:   branchHeaderInfo{headOID: "abc123", headBranch: "main"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseBranchHeader(tt.tokens)
+			if got != tt.want {
+				t.Errorf("parseBranchHeader() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestGitProviderGetStatus_UpstreamAndAheadBehind is the regression test for
+// PerfFix-1: GetStatus must still report branch/HEAD/upstream/ahead-behind
+// correctly now that they come from one `git status --branch` spawn's
+// header instead of four separate branch/rev-parse/rev-list calls.
+func TestGitProviderGetStatus_UpstreamAndAheadBehind(t *testing.T) {
+	remoteDir := t.TempDir()
+	cmd := safeexec.CommandContext(context.Background(), "git", "init", "--bare", remoteDir)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to init bare remote: %v", err)
+	}
+
+	localDir := t.TempDir()
+	initGitRepoWithCommit(t, localDir)
+	configureGitUser(t, localDir)
+
+	for _, args := range [][]string{
+		{"remote", "add", "origin", remoteDir},
+		{"push", "-u", "origin", "main"},
+	} {
+		cmd := safeexec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = localDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v: %s", args, err, out)
+		}
+	}
+
+	// Diverge: one local commit ahead of the pushed upstream.
+	if err := os.WriteFile(filepath.Join(localDir, "extra.txt"), []byte("extra"), 0644); err != nil {
+		t.Fatalf("Failed to create extra file: %v", err)
+	}
+	for _, args := range [][]string{
+		{"add", "extra.txt"},
+		{"commit", "-m", "second commit"},
+	} {
+		cmd := safeexec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = localDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v: %s", args, err, out)
+		}
+	}
+
+	provider, err := NewGitProvider(localDir)
+	if err != nil {
+		t.Fatalf("NewGitProvider() error = %v", err)
+	}
+
+	status, err := provider.GetStatus()
+	if err != nil {
+		t.Fatalf("GetStatus() error = %v", err)
+	}
+
+	if status.Branch != "main" {
+		t.Errorf("status.Branch = %q, want %q", status.Branch, "main")
+	}
+	if status.Upstream != "origin/main" {
+		t.Errorf("status.Upstream = %q, want %q", status.Upstream, "origin/main")
+	}
+	if status.AheadBy != 1 {
+		t.Errorf("status.AheadBy = %d, want 1", status.AheadBy)
+	}
+	if status.BehindBy != 0 {
+		t.Errorf("status.BehindBy = %d, want 0", status.BehindBy)
+	}
+	if status.HeadCommit == "" {
+		t.Error("status.HeadCommit is empty, want a short SHA")
+	}
+	if status.Description != "second commit" {
+		t.Errorf("status.Description = %q, want %q", status.Description, "second commit")
+	}
+
+	// GetBranch should now be a cache hit populated by GetStatus, not a
+	// fresh subprocess spawn.
+	if branch, err := provider.GetBranch(); err != nil || branch != "main" {
+		t.Errorf("GetBranch() = (%q, %v), want (%q, nil)", branch, err, "main")
+	}
+}
+
+// TestGitProviderGetStatus_SubprocessSpawnCount is the enforcement gate for
+// PerfFix-1: shims `git` on PATH to log every invocation, so a regression
+// back to GetStatus's pre-fix 8-subprocess-spawn shape fails loudly instead
+// of silently reintroducing the syscall.ForkLock mutex contention the fix
+// was written to eliminate.
+func TestGitProviderGetStatus_SubprocessSpawnCount(t *testing.T) {
+	skipOnWindows(t) // PATH-shim mechanism below relies on a /bin/sh script
+
+	tmpDir := t.TempDir()
+	initGitRepoWithCommit(t, tmpDir)
+
+	provider, err := NewGitProvider(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitProvider() error = %v", err)
+	}
+
+	logPath := writeGitCallLogShim(t)
+
+	const wantMaxSpawns = 4 // status(+branch), log, diff --numstat, diff --numstat --cached
+	if _, err := provider.GetStatus(); err != nil {
+		t.Fatalf("GetStatus() error = %v", err)
+	}
+
+	calls := readGitCallLog(t, logPath)
+	if len(calls) > wantMaxSpawns {
+		t.Errorf("GetStatus() spawned %d git subprocesses, want <= %d: %v", len(calls), wantMaxSpawns, calls)
+	}
+}
+
+// skipOnWindows skips t when running on Windows: the PATH-shim helpers below
+// write a `#!/bin/sh` script and rely on POSIX executable bits, which have
+// no equivalent through a bare os.WriteFile on Windows (would need a
+// separate .bat/.exe shim strategy). This repo has no Windows CI runner
+// today (no matching entries in .github/workflows/*.yml), but the skip
+// keeps these tests from breaking silently if that ever changes.
+func skipOnWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("PATH-shim git-call-logging mechanism is POSIX-only (/bin/sh script)")
+	}
+}
+
+// writeGitCallLogShim puts a fake `git` first on PATH (via t.Setenv, scoped
+// to this test) that appends its args to a log file and then execs the real
+// git, and returns the log file's path. Every git subprocess spawn made for
+// the rest of the test is recorded there.
+func writeGitCallLogShim(t *testing.T) string {
+	t.Helper()
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("LookPath(git) error = %v", err)
+	}
+
+	fakeDir := t.TempDir()
+	logPath := filepath.Join(fakeDir, "calls.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + shellQuote(logPath) + "\nexec " + shellQuote(realGit) + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(fakeDir, "git"), []byte(script), 0o755); err != nil {
+		t.Fatalf("Failed to write git shim: %v", err)
+	}
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	return logPath
+}
+
+// readGitCallLog reads logPath (written by writeGitCallLogShim) and returns
+// one entry per logged git invocation. Returns an empty (not one-element)
+// slice when the log is empty or whitespace-only -- strings.Split on an
+// empty string returns []string{""}, which would otherwise silently miscount
+// zero spawns as one.
+func readGitCallLog(t *testing.T, logPath string) []string {
+	t.Helper()
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("Failed to read call log: %v", err)
+	}
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "\n")
+}
+
+// shellQuote wraps s in single quotes for embedding in a /bin/sh script,
+// escaping any literal single quotes it contains.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // Helper functions
