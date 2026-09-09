@@ -899,6 +899,56 @@ func TestOneOffBaseDirOrDefault_CustomAbsolutePath(t *testing.T) {
 	assert.Equal(t, "/tmp/my-custom-oneoffs", result)
 }
 
+// TestStateSubdirsOrDefault_should_RouteThroughGetConfigDir_When_NoOverride is a
+// regression test for the bug fixed alongside BUG-103 item 2: these five helpers
+// used to always resolve against os.UserHomeDir() + a hardcoded ".stapler-squad"
+// prefix, ignoring GetConfigDir()'s test/instance/workspace isolation entirely —
+// every `go test` run that exercised one wrote real files into the developer's
+// actual ~/.stapler-squad, and concurrent test processes shared that one real
+// directory with each other and the live production service. Setting
+// STAPLER_SQUAD_TEST_DIR here must be enough to redirect every one of them; if any
+// helper still resolves under t's real home directory, this fails.
+func TestStateSubdirsOrDefault_should_RouteThroughGetConfigDir_When_NoOverride(t *testing.T) {
+	testDir := envtest.NewIsolatedStateDir(t)
+	cfg := &Config{}
+
+	tests := []struct {
+		name    string
+		fn      func() (string, error)
+		subpath string
+	}{
+		{"HibernationCheckpointDirOrDefault", cfg.HibernationCheckpointDirOrDefault, "checkpoints"},
+		{"TriageArtifactDirOrDefault", cfg.TriageArtifactDirOrDefault, "triage-artifacts"},
+		{"HeadlessFailureCaptureDirOrDefault", cfg.HeadlessFailureCaptureDirOrDefault, "headless-failures"},
+		{"BacklogAttachmentDirOrDefault", cfg.BacklogAttachmentDirOrDefault, "backlog-attachments"},
+		{"PromptCacheDirOrDefault", cfg.PromptCacheDirOrDefault, "prompt-cache"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := tt.fn()
+			require.NoError(t, err)
+			assert.Equal(t, filepath.Join(testDir, tt.subpath), result,
+				"%s must resolve under STAPLER_SQUAD_TEST_DIR, not the real home directory", tt.name)
+		})
+	}
+}
+
+// TestHibernationCheckpointDirOrDefault_CustomOverride_StillExpandsRealHomeTilde
+// verifies HibernationCheckpointDirOrDefault's one behavioral difference from its
+// four siblings above: an explicit CheckpointDir override is a user-configured
+// absolute/tilde path, not app state, so it deliberately expands "~" against the
+// real home directory even under STAPLER_SQUAD_TEST_DIR isolation.
+func TestHibernationCheckpointDirOrDefault_CustomOverride_StillExpandsRealHomeTilde(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	cfg := &Config{Hibernation: HibernationConfig{CheckpointDir: "~/my-checkpoints"}}
+
+	result, err := cfg.HibernationCheckpointDirOrDefault()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "my-checkpoints"), result)
+}
+
 // TestMaxConcurrentJulesSessionsOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange
 // verifies Story 2.2.2's clamp table: an out-of-range value never reaches the
 // spend-guard check raw.
