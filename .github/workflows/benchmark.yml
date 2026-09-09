@@ -91,14 +91,14 @@ jobs:
         run: |
           set -o pipefail
           go test \
-            -bench='BenchmarkEventBus|BenchmarkDeltaGenerat|BenchmarkCircularBuffer|BenchmarkGetTimeSinceLastMeaningfulOutput|BenchmarkStripANSI|BenchmarkStripANSICodes|BenchmarkIsBanner|BenchmarkProcessOutput|BenchmarkDiffShortstat|BenchmarkReviewQueue|BenchmarkDetectCommandsInText|BenchmarkTokenParser' \
+            -bench='BenchmarkEventBus|BenchmarkDeltaGenerat|BenchmarkCircularBuffer|BenchmarkGetTimeSinceLastMeaningfulOutput|BenchmarkStripANSI|BenchmarkStripANSICodes|BenchmarkIsBanner|BenchmarkProcessOutput|BenchmarkDiffShortstat|BenchmarkReviewQueue|BenchmarkDetectCommandsInText|BenchmarkTokenParser|BenchmarkListShippedCommitsWithCap' \
             -run='^$' \
             -benchmem \
             -count=8 \
             -timeout=10m \
             ./server/events ./server/terminal ./session/scrollback \
             ./session ./session/detection/ratelimit ./session/tmux \
-            ./session/unfinished ./session/queue ./session/tokens | tee tier1-bench.txt
+            ./session/unfinished ./session/queue ./session/tokens ./session/git | tee tier1-bench.txt
 
       - name: Restore benchmark baseline (PR only)
         if: github.event_name == 'pull_request'
