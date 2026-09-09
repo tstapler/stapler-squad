@@ -1,4 +1,4 @@
-# BUG-103: session/git Dirty-Check Uses go-git's Full Merkletrie Tree-Diff for a Boolean Question [SEVERITY: Medium]
+# BUG-104: session/git Dirty-Check Uses go-git's Full Merkletrie Tree-Diff for a Boolean Question [SEVERITY: Medium]
 
 **Status**: Fixed
 **Discovered**: 2026-09-09 (live Pyroscope CPU profiling, 30-minute production window)
