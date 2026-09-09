@@ -1,0 +1,17 @@
+{
+  "id": "insights-session-detail-route",
+  "type": "frontend",
+  "component": "SessionDetailPageClient",
+  "path": "web-app/src/app/insights/session-detail/SessionDetailPageClient.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "SessionDetailPageClient > SessionDetailPageClient_should_fetchByBothFiltersAndRenderContent_when_mountedWithNoParentState",
+    "SessionDetailPageClient > SessionDetailPageClient_should_showSessionNotFoundMessage_when_sessionIdMatchesNoSession",
+    "SessionDetailPageClient > SessionDetailPageClient_should_showLoadingState_when_stillFetching",
+    "SessionDetailPageClient > SessionDetailPageClient_should_showErrorMessage_when_fetchFails",
+    "SessionDetailPageClient > SessionDetailPageClient_should_offerBackToDashboardLink_when_sessionNotFound",
+    "SessionDetailPageClient > SessionDetailPageClient_should_moveFocusToHeading_when_routeMounts"
+  ],
+  "lastModified": "2026-09-03T00:00:00.000Z"
+}

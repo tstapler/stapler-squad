@@ -349,7 +349,6 @@ function SessionRowInner({
           {session.status === SessionStatus.ACTIVE &&
             session.subStatus !== SubStatus.UNSPECIFIED &&
             session.subStatus !== SubStatus.READY &&
-            session.subStatus !== SubStatus.IDLE &&
             !(
               suppressApprovalSubStatus &&
               (session.subStatus === SubStatus.NEEDS_APPROVAL ||

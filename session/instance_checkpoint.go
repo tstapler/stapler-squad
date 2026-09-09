@@ -69,14 +69,32 @@ func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64
 				} else if err := os.MkdirAll(cpDir, 0700); err == nil {
 					cpPath := filepath.Join(cpDir, cpID+".jsonl")
 					if f, err := os.Create(cpPath); err == nil { // #nosec G304 -- cpDir verified contained under configDir above
+						var writeErr error
 						for _, turn := range turns {
 							if b, err := json.Marshal(turn); err == nil {
-								f.Write(b)
-								f.Write([]byte("\n"))
+								if _, werr := f.Write(b); werr != nil {
+									writeErr = werr
+									break
+								}
+								if _, werr := f.Write([]byte("\n")); werr != nil {
+									writeErr = werr
+									break
+								}
 							}
 						}
-						f.Close()
-						canonicalPath = cpPath
+						if closeErr := f.Close(); closeErr != nil && writeErr == nil {
+							writeErr = closeErr
+						}
+						if writeErr != nil {
+							// A silently-truncated file here would later be read back as
+							// this checkpoint's canonical transcript (see the CanonicalPath
+							// restore path below), so a write/close failure must not leave
+							// canonicalPath pointing at it.
+							log.Warn("checkpoint: failed writing canonical transcript file", "session", i.Title, "path", cpPath, "err", writeErr)
+							_ = os.Remove(cpPath)
+						} else {
+							canonicalPath = cpPath
+						}
 					}
 				}
 			}

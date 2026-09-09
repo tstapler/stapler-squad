@@ -260,9 +260,14 @@ type BacklogItemData struct {
 	Priority           int
 	Status             string
 	RepoPath           string
-	SkipReviewGate     bool
-	SkipPlanning       bool
-	AutoSpawnSession   bool
+	// BaseBranch is an explicit opt-in override for the branch new worktrees
+	// (triage's isolated worktree, and the eventual work session) fork from.
+	// Empty means the default: origin's default branch tip (see
+	// git.ResolveWorktreeBaseCommit), not RepoPath's own ambient HEAD.
+	BaseBranch       string
+	SkipReviewGate   bool
+	SkipPlanning     bool
+	AutoSpawnSession bool
 	// AutoCreatePR, when true, automatically runs the same one-shot PR-creation
 	// prompt the Review Queue's manual "Create PR" button uses, once a work
 	// session for this item reaches TASK_COMPLETE (see
@@ -476,10 +481,14 @@ type BacklogItemUpdate struct {
 	AcceptanceCriteria *AcCriteriaJSON
 	Priority           *int
 	RepoPath           *string
-	SkipReviewGate     *bool
-	SkipPlanning       *bool
-	AutoSpawnSession   *bool
-	AutoCreatePR       *bool
+	// BaseBranch follows the same partial-update-presence convention as
+	// Category: nil means "leave untouched", a non-nil pointer (including one
+	// pointing at "") explicitly sets/clears it. See BacklogItemData.BaseBranch.
+	BaseBranch       *string
+	SkipReviewGate   *bool
+	SkipPlanning     *bool
+	AutoSpawnSession *bool
+	AutoCreatePR     *bool
 	// PipelineMode is a pointer for partial-update presence: nil means "leave
 	// the item's stored pipeline_mode untouched", while a non-nil pointer
 	// (including one pointing at "") explicitly sets/resets it. See

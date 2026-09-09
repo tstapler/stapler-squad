@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 )
 
@@ -172,7 +173,9 @@ func (i *Instance) GetLifecycleStatus() Status {
 func (i *Instance) FailureReason() string {
 	var reason string
 	_ = i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
 		reason = s.inst.failureReason
+		s.inst.mu.Unlock()
 		return nil
 	})
 	return reason
@@ -189,8 +192,10 @@ func (i *Instance) FailureReason() string {
 // to build its CreationOutcome snapshot atomically.
 func (i *Instance) StatusAndFailureReason() (status Status, failureReason string) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
 		status = s.inst.Status
 		failureReason = s.inst.failureReason
+		s.inst.mu.Unlock()
 		return nil
 	})
 	return status, failureReason
@@ -202,7 +207,9 @@ func (i *Instance) StatusAndFailureReason() (status Status, failureReason string
 func (i *Instance) CreationProgressUpdatedAt() time.Time {
 	var t time.Time
 	_ = i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
 		t = s.inst.creationProgressUpdatedAt
+		s.inst.mu.Unlock()
 		return nil
 	})
 	return t
@@ -369,21 +376,135 @@ func (i *Instance) Started() bool {
 	return i.started.Load()
 }
 
-// RecoverFromStopped resets a stale Stopped or PermanentlyFailed status to
-// Creating so the instance can be hot-restored via Start(false). Only call
-// this during startup reconciliation (Stopped case) or from restartForRetry's
-// PermanentlyFailed/Stopped recovery branch when the tmux session is confirmed
-// alive or being cold-restored; it bypasses the state machine intentionally.
-// The PermanentlyFailed case backs RetryNow()'s manual "Retry now" recovery
-// (AC6) — without it, RecoverFromStopped silently no-op'd for a
-// PermanentlyFailed instance (it only ever checked Status == Stopped), and
-// startLocked's later `if i.Status != Active` transition would then be
-// attempted from PermanentlyFailed, which has no entry in transitionIndex.
+// MarkStartedIfTmuxAlive flips started to true outside the normal
+// Start()/Resume()/Restart() actor flow, for a caller that has already
+// confirmed the underlying tmux session is alive AND has a genuine PTY
+// attached (e.g. streamViaHub's DoesSessionExistNoCache + GetPTY check).
+// Instance.Start() never running for an instance — a panicking sibling in
+// the boot-time restart loop, a HotRestore error, or a slow multi-second
+// stagger — otherwise wedges started at false forever: every capture/resize
+// call on the hub streaming path checks Started() directly and returns
+// streamhub.ErrSessionNotStarted on every single frame, indefinitely, even
+// though the session the viewer is looking at is fully functional.
+//
+// Routes through the actor mailbox (sendSyncErr), so it fully serializes
+// with any Start()/Resume()/Restart() actor command already in flight on
+// this instance: runActor drains the mailbox on a single goroutine, so this
+// command can only run strictly before or strictly after a concurrent
+// Start() — never interleaved with it. If Start() is still mid-flight when
+// this is called, this call blocks until Start() finishes (success or
+// failure) and only then inspects Started()/Status, so it can never stomp on
+// a Start() that is still running or that already completed successfully.
+//
+// Only proceeds from Status Creating (the state a Start() that panicked or
+// errored mid-flight leaves the instance in) or Active (already active,
+// just missing the started flag); every other status — Paused, Stopped,
+// PermanentlyFailed, Hibernated, Crashed, Failed — is left completely
+// untouched. Those either mean the instance was deliberately taken out of
+// service (silently overriding that to "started" would hide a real
+// stop/pause/failure) or have transition side effects (process
+// resume/relaunch in transitionDefs' After hooks) that assume a deliberate
+// Resume()/RetryNow() call, not a passive "tmux happens to still be alive"
+// observation.
+//
+// Mirrors startLocked's Status transition, snapshot publish, and
+// EventStarted firing (so backlog lifecycle / notification listeners still
+// see this instance start — see backlog_lifecycle.go's onSessionStarted) to
+// keep the Started()+Status invariant consistent the same way startLocked
+// does. Deliberately skips VNC/CDP bring-up, unlike startLocked: those are
+// for a session's initial launch, and here tmux and the agent process are
+// already confirmed running, so starting a second VNC/CDP server would be
+// redundant, not corrective. This is a known, accepted narrower limitation
+// than the endless-retry bug this self-heal fixes: a session whose VNC/CDP
+// setup was also skipped by that same failure will not get it retroactively.
+func (i *Instance) MarkStartedIfTmuxAlive() {
+	if err := i.sendSyncErr(func(s *instanceState) error {
+		markStartedIfTmuxAliveLocked(s)
+		return nil
+	}); err != nil {
+		// sendSyncErr itself failed (e.g. the actor mailbox is shut down) --
+		// markStartedIfTmuxAliveLocked never ran, so this self-heal was a
+		// silent no-op. Log so that's observable instead of the caller (a
+		// capture/resize path) just seeing the stale Started()==false state
+		// persist with no clue why the self-heal didn't take effect.
+		log.Warn("MarkStartedIfTmuxAlive: sendSyncErr failed, self-heal did not run", "session", i.Title, "err", err)
+	}
+}
+
+// markStartedIfTmuxAliveLocked is MarkStartedIfTmuxAlive's actor-safe body.
+// Called only from within a sendSyncErr closure.
+func markStartedIfTmuxAliveLocked(s *instanceState) {
+	i := s.inst
+	i.mu.Lock()
+	if i.started.Load() {
+		// A concurrent Start() (or an earlier self-heal call already
+		// serialized ahead of this one via the actor mailbox) already got
+		// here first — nothing to do.
+		i.mu.Unlock()
+		return
+	}
+	switch i.Status {
+	case Creating:
+		if err := i.transitionTo(context.Background(), Active); err != nil {
+			// Shouldn't happen: Creating -> Active is always a valid edge
+			// (state_machine.go's transitionDefs). Bail without flipping
+			// started if it somehow fails anyway — setting started=true with
+			// an inconsistent Status is exactly the invariant violation this
+			// method exists to avoid.
+			i.mu.Unlock()
+			log.Warn("MarkStartedIfTmuxAlive: Creating -> Active transition failed, not self-healing", "session", i.Title, "err", err)
+			return
+		}
+	case Active:
+		// Already Active; only the started flag is missing.
+	default:
+		// Paused/Stopped/PermanentlyFailed/Hibernated/Crashed/Failed: leave
+		// untouched, see doc comment above.
+		i.mu.Unlock()
+		return
+	}
+	i.started.Store(true)
+	i.snapshot.Store(buildSnapshot(i))
+	i.mu.Unlock()
+	i.fireLifecycleEvent(EventStarted, "streamhub-self-heal-tmux-alive")
+}
+
+// IsHotRestoreRecoverable reports whether the instance's current status is
+// one RecoverFromStopped will actually reset (Stopped, PermanentlyFailed, or
+// Failed) — the single source of truth for "which terminal statuses can be
+// cold-recovered via RecoverFromStopped()+Start(false)". Every caller that
+// needs to decide whether an instance is a RecoverFromStopped candidate
+// (rather than duplicating the Stopped/PermanentlyFailed/Failed status list
+// inline) must go through this method: BUG (2026-09-08) was a boot-time
+// reconcile loop in server/dependencies.go that only checked Stopped,
+// independently of this same status list already duplicated in
+// restartForRetry (retry_state.go) — a session that reached
+// PermanentlyFailed/Failed before a restart, with its tmux session still
+// alive, was left permanently stuck because the boot path's copy of the list
+// silently drifted out of sync with RecoverFromStopped's actual behavior.
+func (i *Instance) IsHotRestoreRecoverable() bool {
+	switch i.GetLifecycleStatus() {
+	case Stopped, PermanentlyFailed, Failed:
+		return true
+	default:
+		return false
+	}
+}
+
+// RecoverFromStopped resets a stale Stopped, PermanentlyFailed, or Failed
+// status to Creating so the instance can be hot-restored via Start(false).
+// Stopped/PermanentlyFailed have no registered edge to Creating, so this
+// bypasses the state machine intentionally; Failed does have one
+// (state_machine.go's Failed→Creating, "the retry path") but is included
+// here too so every RetryNow-reachable status shares one recovery path.
 // Deprecated: prefer transitionTo(ctx, Active) on the Stopped→Active path.
+//
+// The status set checked here MUST match IsHotRestoreRecoverable's switch —
+// that method exists so callers never need their own copy of this list.
 func (i *Instance) RecoverFromStopped() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.Status == Stopped || i.Status == PermanentlyFailed {
+	if i.Status == Stopped || i.Status == PermanentlyFailed || i.Status == Failed {
 		i.loadStatus(Creating)
 		i.touchUpdatedAt()
 		i.started.Store(false)

@@ -95,6 +95,8 @@ type SessionController interface {
 	// UnsubscribeControlModeUpdates removes a subscription by the ID
 	// returned from SubscribeControlModeUpdates. Implementations must close
 	// the corresponding channel so a range loop reading from it can exit
-	// without leaking.
+	// without leaking. That close may be deferred past this call's return
+	// (up to controlModeSlowSubscriberGrace) if a slow-drain is in flight
+	// for this subscriber when Unsubscribe is called.
 	UnsubscribeControlModeUpdates(id string)
 }

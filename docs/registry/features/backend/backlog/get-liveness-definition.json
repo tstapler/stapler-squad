@@ -1,0 +1,12 @@
+{
+  "id": "backlog:get-liveness-definition",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "GetLivenessDefinition",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_liveness.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-04T10:04:45.755274291-07:00"
+}

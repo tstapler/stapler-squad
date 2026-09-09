@@ -249,19 +249,19 @@ func (s *IndexStore) saveGob(filename string, data interface{}) error {
 
 	encoder := gob.NewEncoder(tempFile)
 	if err := encoder.Encode(data); err != nil {
-		tempFile.Close()
-		os.Remove(tempPath)
+		_ = tempFile.Close()
+		_ = os.Remove(tempPath) // best-effort cleanup; we're already returning the real encode error
 		return err
 	}
 
 	if err := tempFile.Close(); err != nil {
-		os.Remove(tempPath)
+		_ = os.Remove(tempPath) // best-effort cleanup; we're already returning the real close error
 		return err
 	}
 
 	// Atomic rename
 	if err := os.Rename(tempPath, finalPath); err != nil {
-		os.Remove(tempPath)
+		_ = os.Remove(tempPath) // best-effort cleanup; we're already returning the real rename error
 		return err
 	}
 
@@ -334,7 +334,7 @@ func (s *IndexStore) SaveSyncMetadata(meta *IndexSyncMetadata) error {
 	}
 
 	if err := os.Rename(tempPath, path); err != nil {
-		os.Remove(tempPath)
+		_ = os.Remove(tempPath) // best-effort cleanup; we're already returning the real rename error
 		return fmt.Errorf("failed to rename sync metadata file: %w", err)
 	}
 

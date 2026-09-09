@@ -798,7 +798,7 @@ func TestConvertEventToBacklogItemEvent_should_buildMatchingOneofVariant_When_Ki
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			evt := &events.Event{Type: events.EventBacklogItemChanged, Timestamp: fixedTime, BacklogItemPayload: tc.payload}
-			out := convertEventToBacklogItemEvent(evt, nil)
+			out := convertEventToBacklogItemEvent(context.Background(), nil, evt, nil)
 			require.NotNil(t, out)
 			tc.check(t, out)
 		})

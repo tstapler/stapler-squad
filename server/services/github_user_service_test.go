@@ -80,8 +80,8 @@ func TestListGitHubAccounts_AccountOnUnconfiguredEnterpriseHost_IncludesHostInEn
 	ts := httptest.NewServer(http.HandlerFunc(fakeGitHubEnterpriseHandler))
 	defer ts.Close()
 	const enterpriseHost = "github.netflix.net"
-	gh.EnterpriseBaseURLOverride[enterpriseHost] = ts.URL + "/"
-	defer delete(gh.EnterpriseBaseURLOverride, enterpriseHost)
+	gh.SetEnterpriseBaseURLOverride(enterpriseHost, ts.URL+"/")
+	defer gh.SetEnterpriseBaseURLOverride(enterpriseHost, "")
 
 	// svc has no statically configured enterprise hosts (newTestGitHubUserService
 	// passes nil), mirroring an account added via AddGitHubAccountFromCLI/
@@ -116,8 +116,8 @@ func TestListGitHubAccounts_AccountOnUnconfiguredEnterpriseHost_IncludesHostInEn
 func TestListGitHubAccounts_LinkedHostUnreachable_StillIncludesHostInEnterpriseHosts(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(fakeGitHubEnterpriseHandler))
 	const enterpriseHost = "github.netflix.net"
-	gh.EnterpriseBaseURLOverride[enterpriseHost] = ts.URL + "/"
-	defer delete(gh.EnterpriseBaseURLOverride, enterpriseHost)
+	gh.SetEnterpriseBaseURLOverride(enterpriseHost, ts.URL+"/")
+	defer gh.SetEnterpriseBaseURLOverride(enterpriseHost, "")
 
 	svc := newTestGitHubUserService(t)
 

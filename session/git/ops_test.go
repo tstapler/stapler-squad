@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -185,6 +186,144 @@ func TestMergeMainIntoWorktree_should_ReturnError_When_MergeFailsForNonConflictR
 	assert.Equal(t, "uncommitted local edit\n", string(content))
 }
 
+// findRealGitBinary scans PATH for the first "git" candidate that is a real ELF binary,
+// skipping any shell-script wrapper along the way (this dev environment's own `git`
+// resolves through ~/.local/bin/git, a git-ssh-fallback wrapper script that re-invokes
+// "git" via PATH internally — exec'ing that wrapper from installGitSubcommandLogger's own
+// script would have it resolve back to the shadowed PATH and recurse into itself forever,
+// confirmed by reproducing the hang directly against this repo's real git-ssh-fallback
+// script before writing this scan).
+func findRealGitBinary(t *testing.T) string {
+	t.Helper()
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		candidate := filepath.Join(dir, "git")
+		resolved, err := filepath.EvalSymlinks(candidate)
+		if err != nil {
+			continue
+		}
+		if isELFBinary(resolved) {
+			return resolved
+		}
+	}
+	t.Fatal("findRealGitBinary: no real (non-script) git binary found on PATH")
+	return ""
+}
+
+// isELFBinary reports whether path's first 4 bytes are the ELF magic number.
+func isELFBinary(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
+		return false
+	}
+	return string(magic[:]) == "\x7fELF"
+}
+
+// installGitSubcommandLogger prepends a fake "git" wrapper script to PATH that appends
+// its first argument (the git subcommand, e.g. "fetch"/"merge") to logPath, one per line,
+// then execs a real git binary (found via findRealGitBinary, never a PATH-following
+// wrapper) — every existing fixture helper (runGit, cloneTestRepo, FetchBranch) keeps
+// working unmodified, since only the subcommand name is recorded, not its behavior. This
+// gives TestMergeMainIntoWorktree_NativeFlagOn_UsesNativePipeline a real subprocess-level
+// assertion that no `git merge`/`git merge --abort` ran, without needing a command-runner
+// DI seam for this package-level free function (unlike GitWorktree's own
+// gitSpyCommandRunner, which only instruments that struct's methods).
+func installGitSubcommandLogger(t *testing.T, logPath string) {
+	t.Helper()
+	realGit := findRealGitBinary(t)
+
+	binDir := t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\necho \"$1\" >> %q\nexec %q \"$@\"\n", logPath, realGit)
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "git"), []byte(script), 0o755))
+
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// assertNoGitMergeSubcommand asserts logPath (written by installGitSubcommandLogger)
+// never recorded a "merge" invocation.
+func assertNoGitMergeSubcommand(t *testing.T, logPath string) {
+	t.Helper()
+	logged, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	for _, line := range strings.Split(strings.TrimSpace(string(logged)), "\n") {
+		assert.NotEqual(t, "merge", strings.TrimSpace(line), "native flag on must never invoke `git merge`; full log: %s", logged)
+	}
+}
+
+// TestMergeMainIntoWorktree_NativeFlagOn_UsesNativePipeline covers Story 3.4.2's
+// acceptance criterion: with the merge flag on for worktreePath, the public
+// MergeMainIntoWorktree dispatches to the native pipeline instead of shelling out to
+// `git merge`/`git merge --abort` (`git fetch` may still run) — verified at the real
+// subprocess level via installGitSubcommandLogger, not just by checking the outcome.
+func TestMergeMainIntoWorktree_NativeFlagOn_UsesNativePipeline(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "main-fix.txt"), []byte("fix on main\n"), 0o644))
+	runGit(t, origin, "add", "main-fix.txt")
+	runGit(t, origin, "commit", "-m", "fix landed on main")
+
+	logPath := filepath.Join(t.TempDir(), "git-invocations.log")
+	installGitSubcommandLogger(t, logPath)
+
+	prevUseNativeMerge := useNativeMerge
+	useNativeMerge = func(worktreePath string) bool { return worktreePath == work }
+	t.Cleanup(func() { useNativeMerge = prevUseNativeMerge })
+
+	result, err := MergeMainIntoWorktree(work, "main")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.Merged)
+
+	assertNoGitMergeSubcommand(t, logPath)
+}
+
+// TestMergeMainIntoWorktree_NativeFlagOn_TransitivelyUsedByRealCallSites covers Story
+// 3.4.2's second acceptance criterion: drift.go's EnsureBranchSyncedWithMain calls the
+// exact same package-level MergeMainIntoWorktree the dispatch test above exercises
+// directly, and session/backlog_lifecycle.go's branchReconciler field is assigned this
+// exact function value (git.MergeMainIntoWorktree, session/backlog_lifecycle.go:672)
+// with no wrapper of its own — so proving EnsureBranchSyncedWithMain picks up the native
+// flag here, in-package, is sufficient: neither real call site has a separate code path
+// left unexercised.
+func TestMergeMainIntoWorktree_NativeFlagOn_TransitivelyUsedByRealCallSites(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	// Drift past DefaultBranchDriftThreshold so EnsureBranchSyncedWithMain actually
+	// attempts a sync instead of short-circuiting on "not drifted yet".
+	for i := 0; i <= DefaultBranchDriftThreshold; i++ {
+		fname := fmt.Sprintf("main-fix-%d.txt", i)
+		require.NoError(t, os.WriteFile(filepath.Join(origin, fname), []byte("fix\n"), 0o644))
+		runGit(t, origin, "add", fname)
+		runGit(t, origin, "commit", "-m", fmt.Sprintf("fix %d", i))
+	}
+
+	beforeSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+	wantSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "main"))
+
+	prevUseNativeMerge := useNativeMerge
+	var nativeCalledFor string
+	useNativeMerge = func(worktreePath string) bool {
+		nativeCalledFor = worktreePath
+		return true
+	}
+	t.Cleanup(func() { useNativeMerge = prevUseNativeMerge })
+
+	_, _ = EnsureBranchSyncedWithMain(work, "feature", "main", DefaultBranchDriftThreshold)
+
+	assert.Equal(t, work, nativeCalledFor, "EnsureBranchSyncedWithMain must dispatch through the shared MergeMainIntoWorktree seam that branchReconciler is also assigned directly")
+	afterSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "feature"))
+	assert.NotEqual(t, beforeSHA, afterSHA, "the native pipeline must have actually merged, regardless of the subsequent push outcome")
+	assert.Equal(t, wantSHA, afterSHA, "native merge must fast-forward to main's tip")
+}
+
 // TestResolveOriginBranchSHA_ReturnsFetchedTip_When_OriginHasAdvanced is the regression
 // test for the stale-HEAD backlog-spawn bug's fetch primitive: it must return origin's
 // true current tip, not whatever repoPath's cached origin/main ref happened to be at
@@ -269,6 +408,161 @@ func TestResolveDefaultLocalBranchSHA_FindsNonMainDefaultBranchOffline(t *testin
 	assert.Equal(t, "master", branch)
 	wantSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "master"))
 	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveWorktreeBaseCommit_UsesOriginDefaultBranch is the same
+// regression as TestResolveDefaultBranchSHA_FindsNonMainDefaultBranch, one
+// level up: the combined resolver (as used by CreateBacklogWorktree and
+// TriggerTriage's isolated triage worktree) must still branch from origin's
+// tip when work's own checked-out branch (e.g. a feature branch) is
+// something else entirely.
+func TestResolveWorktreeBaseCommit_UsesOriginDefaultBranch(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "some-other-feature-branch")
+
+	branch, sha, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+	assert.Equal(t, "main", branch)
+	wantSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "main"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveWorktreeBaseCommit_FallsBackToLocal_When_OriginFetchFails covers
+// the offline/no-remote fallback chain end to end.
+func TestResolveWorktreeBaseCommit_FallsBackToLocal_When_OriginFetchFails(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	branch, sha, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+	assert.Equal(t, "main", branch)
+	wantSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "main"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn verifies the
+// one case callers should still fall back to ambient HEAD for: a repo with no
+// commits anywhere has no other branch to accidentally fork from instead.
+func TestResolveWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+
+	branch, sha, err := ResolveWorktreeBaseCommit(dir)
+	require.NoError(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// TestResolveWorktreeBaseCommit_ReturnsError_When_NoCandidateAndNotUnborn
+// verifies a repo with real history but no known-name default branch surfaces
+// a loud error instead of silently falling back to ambient HEAD.
+func TestResolveWorktreeBaseCommit_ReturnsError_When_NoCandidateAndNotUnborn(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "branch", "-m", "main", "release")
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	branch, sha, err := ResolveWorktreeBaseCommit(work)
+	require.Error(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// TestResolveExplicitBranchSHA_UsesOrigin verifies the explicit-override
+// resolver (BacklogItem.BaseBranch) fetches the named branch from origin
+// rather than assuming it's already fresh locally.
+func TestResolveExplicitBranchSHA_UsesOrigin(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "checkout", "-b", "release-2.0")
+	runGit(t, origin, "commit", "--allow-empty", "-m", "release commit")
+	work := cloneTestRepo(t, origin)
+
+	sha, err := ResolveExplicitBranchSHA(work, "release-2.0")
+	require.NoError(t, err)
+	wantSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "release-2.0"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveExplicitBranchSHA_FallsBackToLocal_When_OriginFetchFails covers
+// the offline/no-remote fallback.
+func TestResolveExplicitBranchSHA_FallsBackToLocal_When_OriginFetchFails(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "my-feature")
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	sha, err := ResolveExplicitBranchSHA(work, "my-feature")
+	require.NoError(t, err)
+	wantSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "my-feature"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveExplicitBranchSHA_ReturnsError_When_BranchDoesNotExistAnywhere
+// verifies an explicitly requested branch that doesn't exist anywhere is a
+// hard error, never silently substituted with the default branch or ambient
+// HEAD — the caller opted out of the default on purpose.
+func TestResolveExplicitBranchSHA_ReturnsError_When_BranchDoesNotExistAnywhere(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	sha, err := ResolveExplicitBranchSHA(work, "does-not-exist-anywhere")
+	require.Error(t, err)
+	assert.Empty(t, sha)
+}
+
+// TestResolveExplicitBranchSHA_RejectsFlagLikeBranchName is the regression
+// test for a git argument-injection class (same family as CVE-2017-1000117):
+// BacklogItem.BaseBranch is a caller-controlled string that used to reach
+// `git fetch origin <branchName>` with no "--" separator, so a value like
+// "--upload-pack=..." would be parsed by git as an option rather than a ref
+// name. Verifies ResolveExplicitBranchSHA rejects such input before it ever
+// reaches a git subprocess, rather than passing it through.
+func TestResolveExplicitBranchSHA_RejectsFlagLikeBranchName(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	sha, err := ResolveExplicitBranchSHA(work, "--upload-pack=touch /tmp/pwned")
+	require.Error(t, err)
+	assert.Empty(t, sha)
+}
+
+// TestCheckoutBranch_RejectsFlagLikeBranchName is CheckoutBranch's sibling
+// regression test — see TestResolveExplicitBranchSHA_RejectsFlagLikeBranchName.
+// CheckoutBranch can't use FetchBranch's "--" guard (verified empirically:
+// `git checkout -- <name>` puts checkout into path-restore mode instead of
+// switching branches), so ValidateBranchName is its only defense.
+func TestCheckoutBranch_RejectsFlagLikeBranchName(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+
+	err := CheckoutBranch(origin, "--upload-pack=touch /tmp/pwned")
+	require.Error(t, err)
+}
+
+// TestCheckoutBranch_SwitchesToRealBranch is the companion positive case:
+// a normal branch name must still check out successfully after the
+// ValidateBranchName guard was added (the guard must not reject legitimate
+// names).
+func TestCheckoutBranch_SwitchesToRealBranch(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "checkout", "-b", "feature-x")
+	runGit(t, origin, "checkout", "main")
+
+	err := CheckoutBranch(origin, "feature-x")
+	require.NoError(t, err)
+	branch := strings.TrimSpace(runGit(t, origin, "branch", "--show-current"))
+	assert.Equal(t, "feature-x", branch)
 }
 
 // TestIsUnbornRepo_should_ReturnTrue_When_RepoHasZeroCommits verifies the case

@@ -2,11 +2,11 @@
 
 import { useCallback, useRef, useEffect, useState, useMemo } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { getErrorMessage } from "@/lib/utils/connectError";
+import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
 import {
   BacklogService,
   BacklogItem as BacklogItemProto,
@@ -712,11 +712,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
   const clearError = useCallback(() => setLastError(null), []);
 
   useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
-    clientRef.current = createClient(BacklogService, transport);
+    clientRef.current = createClient(BacklogService, getConnectTransport());
   }, []);
 
   const listBacklogItems = useCallback(
@@ -1291,41 +1287,30 @@ export function useBacklogSessionIndex(): UseBacklogSessionIndexReturn {
   const [index, setIndex] = useState<Map<string, BacklogIndexEntry>>(new Map());
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
-    const client = createClient(BacklogService, transport);
+  useAbortableEffect(async (signal) => {
+    const client = createClient(BacklogService, getConnectTransport());
 
-    let cancelled = false;
-    client
-      .getSessionBacklogIndex({})
-      .then((resp) => {
-        if (cancelled) return;
-        const map = new Map<string, BacklogIndexEntry>();
-        for (const e of resp.entries ?? []) {
-          if (e.sessionUuid) {
-            map.set(e.sessionUuid, {
-              itemId: e.itemId,
-              itemTitle: e.itemTitle,
-              itemStatus: e.itemStatus,
-              sessionRole: e.sessionRole,
-            });
-          }
+    try {
+      const resp = await client.getSessionBacklogIndex({}, { signal });
+      if (signal.aborted) return;
+      const map = new Map<string, BacklogIndexEntry>();
+      for (const e of resp.entries ?? []) {
+        if (e.sessionUuid) {
+          map.set(e.sessionUuid, {
+            itemId: e.itemId,
+            itemTitle: e.itemTitle,
+            itemStatus: e.itemStatus,
+            sessionRole: e.sessionRole,
+          });
         }
-        setIndex(map);
-      })
-      .catch((err) => {
-        console.error("[useBacklogSessionIndex] failed:", err);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+      }
+      setIndex(map);
+    } catch (err) {
+      if (signal.aborted) return;
+      console.error("[useBacklogSessionIndex] failed:", err);
+    } finally {
+      if (!signal.aborted) setLoading(false);
+    }
   }, []);
 
   return { index, loading };

@@ -69,3 +69,13 @@ func runBacklogItemUpdatedAtUTCBackfill(ctx context.Context, er *EntRepository) 
 	}
 	return nil
 }
+
+// backlogItemUpdatedAtUTCMigration adapts runBacklogItemUpdatedAtUTCBackfill
+// to the Migration interface (session/ent_repository_migrations.go).
+type backlogItemUpdatedAtUTCMigration struct{}
+
+func (backlogItemUpdatedAtUTCMigration) Name() string { return "backlog item updated_at UTC backfill" }
+
+func (backlogItemUpdatedAtUTCMigration) Run(ctx context.Context, er *EntRepository) error {
+	return runBacklogItemUpdatedAtUTCBackfill(ctx, er)
+}

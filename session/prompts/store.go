@@ -88,16 +88,16 @@ func (s *PromptStore) save(entries []PromptEntry) error {
 	tmpName := tmp.Name()
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName) // best-effort cleanup; we're already returning the real write error
 		return fmt.Errorf("prompts: write temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName) // best-effort cleanup; we're already returning the real close error
 		return fmt.Errorf("prompts: close temp file: %w", err)
 	}
 	if err := os.Rename(tmpName, s.filePath); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName) // best-effort cleanup; we're already returning the real rename error
 		return fmt.Errorf("prompts: rename temp file: %w", err)
 	}
 	return nil

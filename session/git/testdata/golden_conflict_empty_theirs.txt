@@ -1,0 +1,5 @@
+<<<<<<< HEAD
+line1
+ours change
+=======
+>>>>>>> origin/main

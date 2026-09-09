@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport, getWatchTransport } from "@/lib/api/transport";
 import { InsightsService } from "@/gen/session/v1/insights_pb";
 import type {
   GetInsightsSummaryResponse,
@@ -17,7 +17,6 @@ import {
 } from "@/gen/session/v1/insights_pb";
 import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 
 export interface InsightsFilters {
   from?: Date;
@@ -47,13 +46,7 @@ export function useInsightsSummary(
   const abortWatchRef = useRef<AbortController | null>(null);
   const fetchCountRef = useRef(0);
 
-  const baseUrl = getApiBaseUrl();
-  const transport = useMemo(
-    () => createConnectTransport({ baseUrl, interceptors: [createAuthInterceptor()] }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseUrl]
-  );
-  const client = useMemo(() => createClient(InsightsService, transport), [transport]);
+  const client = useMemo(() => createClient(InsightsService, getWatchTransport()), []);
 
   const fetchSummary = useCallback(async () => {
     const fetchId = ++fetchCountRef.current;
@@ -169,6 +162,69 @@ export function useInsightsSummary(
   };
 }
 
+export interface UseSessionDetailReturn {
+  summary: SessionTokenSummary | null;
+  loading: boolean;
+  error: string | null;
+}
+
+/**
+ * Hook that fetches a single session's SessionTokenSummary by ID, for the
+ * deep-linkable /insights/session-detail?sessionId= route (Epic 1.4, Story
+ * 1.4.3).
+ * Sets both sessionIdFilter and conversationIdFilter to the same value so an
+ * orphan session (empty sessionId) is still reachable, and includeOrphans so
+ * it isn't filtered out. Deliberately omits from/to — the route must resolve
+ * regardless of the dashboard's global date range at the time the link was
+ * created (bookmarkability, per research/features.md §5).
+ */
+export function useSessionDetail(sessionId: string): UseSessionDetailReturn {
+  const [summary, setSummary] = useState<SessionTokenSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const client = useMemo(() => createClient(InsightsService, getConnectTransport()), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!sessionId) {
+      // An empty sessionId (e.g. "?sessionId=" absent) is not "no filter" to
+      // this hook, unlike the server's GetInsightsSummary RPC, which treats an
+      // empty sessionIdFilter as unset and would return every session,
+      // making res.sessions[0] an arbitrary session's data. Short-circuit to
+      // a not-found state instead of issuing the request.
+      setSummary(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    (async () => {
+      try {
+        const req = create(GetInsightsSummaryRequestSchema, {
+          sessionIdFilter: sessionId,
+          conversationIdFilter: sessionId,
+          includeOrphans: true,
+        });
+        const res = await client.getInsightsSummary(req);
+        if (!cancelled) setSummary(res.sessions[0] ?? null);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load session");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, client]);
+
+  return { summary, loading, error };
+}
+
 export interface UseSessionTurnTimelineReturn {
   turns: TurnTokenStat[];
   loading: boolean;
@@ -188,13 +244,7 @@ export function useSessionTurnTimeline(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const baseUrl = getApiBaseUrl();
-  const transport = useMemo(
-    () => createConnectTransport({ baseUrl, interceptors: [createAuthInterceptor()] }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseUrl]
-  );
-  const client = useMemo(() => createClient(InsightsService, transport), [transport]);
+  const client = useMemo(() => createClient(InsightsService, getConnectTransport()), []);
 
   useEffect(() => {
     if (!conversationId) {

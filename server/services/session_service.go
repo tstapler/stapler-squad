@@ -157,6 +157,23 @@ type SessionService struct {
 	// slackConfigSvc handles GetSlackConfig/UpdateSlackConfig/TestSlackWebhook RPCs.
 	slackConfigSvc *SlackConfigService
 
+	// julesConfigSvc handles GetJulesConfig/UpdateJulesConfig/
+	// TestJulesConnection/ConfirmEgressConsent RPCs (google-jules-integration
+	// Epic 2.4). Constructed with nil dependencies here — real ones (keychain,
+	// source registry, poller) are wired post-construction via
+	// SetJulesConfigDependencies once server/dependencies.go builds them
+	// (Task 2.4.4a), since Jules-enablement is only known after config load.
+	julesConfigSvc *JulesConfigService
+
+	// credChain resolves AI-provider credentials (Anthropic, Google, Jules)
+	// for capacityMonitor's limits clients. Its JulesCredentialSource starts
+	// with its own *jules.KeyringTokenSource (built by NewDefaultChain, which
+	// runs before server/dependencies.go has one to share); SetJulesKeyringTokenSource
+	// swaps that for the process-wide instance once dependencies.go builds it,
+	// so this chain never resolves the Jules OS-keychain entry through a
+	// second, independent cache/circuit-breaker.
+	credChain *CredentialChain
+
 	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
 	// (webhook-triggers Phase 5, FR7).
 	callbackConfigSvc *CallbackConfigService
@@ -665,6 +682,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	notificationSvc := NewNotificationService(NewNotificationRateLimiter(10, 20), eventBus)
 	approvalSvc := NewApprovalService(approvalStore)
 	approvalSvc.SetEventBus(eventBus)
+	approvalSvc.SetReviewQueueRemover(reviewQueue)
 	utilitySvc := NewUtilityService(approvalStore)
 
 	// Build rules store, analytics store, and classifier for approval rules service.
@@ -738,6 +756,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			fmt.Sprintf("%d claude-settings rule(s) reloaded (%s).", len(rules), origin), origin)
 	})
 	rulesSvc.SetClaudeSettingsWatcher(claudeSettingsWatcher)
+	rulesSvc.SetApprovalService(approvalSvc)
 
 	// Initialize capacity monitor.
 	var capCfg config.CapacityConfig
@@ -788,6 +807,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		slashCommandSvc:             NewSlashCommandService(),
 		defaultsSvc:                 NewDefaultsService(),
 		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
+		julesConfigSvc:              NewJulesConfigService(nil, nil, nil),
 		callbackConfigSvc:           NewCallbackConfigService(),
 		streamHubRolloutSvc:         NewStreamHubRolloutService(nil),
 		launcherPresetsSvc:          NewLauncherPresetsService(),
@@ -798,6 +818,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		promptStore:                 newPromptStore(),
 		capacityMonitor:             capacityMonitor,
 		deleteSessionCleanupTimeout: defaultDeleteSessionCleanupTimeout,
+		credChain:                   credChain,
 		githubResolver:              testModeGitHubResolver(),
 		creationResolutionTimeout:   maxCreationResolutionTimeout,
 	}
@@ -1771,6 +1792,39 @@ func (s *SessionService) SlackNotifierForTest() *SlackNotifier {
 	return s.slackConfigSvc.slackNotifier
 }
 
+// SetJulesConfigDependencies rewires julesConfigSvc onto the real Jules
+// keychain/source-registry/poller dependencies once server/dependencies.go
+// has constructed them (Task 2.4.4a). keys and sources are nil when Jules
+// is disabled or its key is unresolvable at startup — julesConfigSvc stays
+// nil-safe for both (UpdateJulesConfig's api_key path and TestJulesConnection
+// then return CodeUnavailable rather than panicking). poller is nil unless
+// the poller was actually started.
+func (s *SessionService) SetJulesConfigDependencies(keys julesKeyManager, sources julesSourceResolver, poller julesAuthReconnectReporter) {
+	s.julesConfigSvc = NewJulesConfigService(keys, sources, poller)
+}
+
+// SetJulesKeyringTokenSource rewires credChain's JulesCredentialSource onto
+// the single process-wide *jules.KeyringTokenSource server/dependencies.go
+// constructs (the same instance passed to SetJulesConfigDependencies and
+// wired into the Jules client/poller), so credential-chain resolution never
+// spins up a second, independent cache/circuit-breaker/singleflight-group
+// over the same OS keychain entry. A no-op if credChain is nil (should not
+// happen outside tests that bypass NewSessionServiceWithSearchEngine).
+func (s *SessionService) SetJulesKeyringTokenSource(tokens julesKeyringTokenSource) {
+	if s.credChain != nil {
+		s.credChain.SetJulesTokenSource(tokens)
+	}
+}
+
+// SetJulesUsageCounter wires the process-wide *JulesUsageCounter (Task
+// 4.1.1a) onto julesConfigSvc so GetJulesConfig's response carries a live
+// usage snapshot. Constructed unconditionally in server/dependencies.go
+// (cheap, no I/O) regardless of whether Jules itself is enabled, so this
+// should be called once at startup alongside SetJulesConfigDependencies.
+func (s *SessionService) SetJulesUsageCounter(usage julesUsageSnapshotter) {
+	s.julesConfigSvc.SetUsageCounter(usage)
+}
+
 // SetFeatureController wires a runtime controller for the named feature flag.
 // Delegates to FeatureFlagService which owns the controller registry.
 func (s *SessionService) SetFeatureController(name string, c FeatureController) {
@@ -1983,6 +2037,56 @@ func (s *SessionService) resolveRestartSource(req *sessionv1.CreateSessionReques
 		fmt.Errorf("restart source session %q not found", req.RestartFromSessionId))
 }
 
+// requiresExplicitPath reports whether msg.Path being empty is a validation
+// error for this request. Extracted from CreateSession's inline check so it
+// can be tested directly (pure function, no I/O) rather than only through a
+// full CreateSession -> tmux -> SessionDriver round trip -- see
+// TestRequiresExplicitPath.
+func requiresExplicitPath(msg *sessionv1.CreateSessionRequest) bool {
+	return msg.SessionType != sessionv1.SessionType_SESSION_TYPE_ONE_OFF &&
+		// AutonomousMode: the omnibar always submits an empty path for autonomous
+		// sessions; see CreateSession's directory-generation block.
+		!msg.AutonomousMode &&
+		msg.AliasName == "" &&
+		msg.SessionType != sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT &&
+		// restart_from_session_id (Story 2.3.1) derives the path from the source
+		// session in CreateSession when Path is left empty -- see the
+		// restart-source resolution block ahead of "Resolve GitHub URLs to local
+		// paths". An empty Path is only a validation error here when there's no
+		// such source to derive one from.
+		msg.RestartFromSessionId == "" &&
+		msg.Path == ""
+}
+
+// needsGeneratedOneOffPath reports whether CreateSession must generate a
+// fresh scratch directory for this request: an explicit one-off session, or
+// an autonomous session created without an explicit path (the omnibar's
+// normal flow — the agent needs somewhere to run). Extracted so it's
+// directly testable (pure function, no I/O) rather than only through a full
+// CreateSession -> tmux -> SessionDriver round trip -- see
+// TestNeedsGeneratedOneOffPath.
+func needsGeneratedOneOffPath(msg *sessionv1.CreateSessionRequest, resolvedPath string) bool {
+	return msg.SessionType == sessionv1.SessionType_SESSION_TYPE_ONE_OFF ||
+		(msg.AutonomousMode && resolvedPath == "")
+}
+
+// generateOneOffPath creates and returns a fresh scratch directory under
+// cfg's configured (or default) one-off base directory. Extracted from
+// CreateSession so the directory-generation side effect can be tested
+// directly against a real filesystem without any tmux/storage/SessionDriver
+// machinery -- see TestGenerateOneOffPath.
+func generateOneOffPath(cfg *config.Config) (string, error) {
+	baseDir, err := cfg.OneOffBaseDirOrDefault()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve one_off_base_dir: %w", err)
+	}
+	generatedPath, err := namegen.GenerateAndCreate(baseDir, 10)
+	if err != nil {
+		return "", fmt.Errorf("failed to create one-off directory: %w", err)
+	}
+	return generatedPath, nil
+}
+
 // CreateSession initializes a new AI agent session with tmux and git worktree.
 // +api: session:create
 func (s *SessionService) CreateSession(
@@ -1996,19 +2100,7 @@ func (s *SessionService) CreateSession(
 	if req.Msg.Title == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
 	}
-	if req.Msg.SessionType != sessionv1.SessionType_SESSION_TYPE_ONE_OFF &&
-		// AutonomousMode: the omnibar always submits an empty path for autonomous
-		// sessions; see the directory-generation block below.
-		!req.Msg.AutonomousMode &&
-		req.Msg.AliasName == "" &&
-		req.Msg.SessionType != sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT &&
-		// restart_from_session_id (Story 2.3.1) derives the path from the
-		// source session below when Path is left empty -- see the
-		// restart-source resolution block ahead of "Resolve GitHub URLs to
-		// local paths". An empty Path is only a validation error here when
-		// there's no such source to derive one from.
-		req.Msg.RestartFromSessionId == "" &&
-		req.Msg.Path == "" {
+	if requiresExplicitPath(req.Msg) {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is required"))
 	}
 
@@ -2135,15 +2227,10 @@ func (s *SessionService) CreateSession(
 	// One-off session: generate a fresh directory and override resolvedPath.
 	// Autonomous sessions created without an explicit path (the omnibar's normal
 	// flow) get the same treatment — the agent needs somewhere to run.
-	if req.Msg.SessionType == sessionv1.SessionType_SESSION_TYPE_ONE_OFF ||
-		(req.Msg.AutonomousMode && resolvedPath == "") {
-		baseDir, err := cfg.OneOffBaseDirOrDefault()
+	if needsGeneratedOneOffPath(req.Msg, resolvedPath) {
+		generatedPath, err := generateOneOffPath(cfg)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resolve one_off_base_dir: %w", err))
-		}
-		generatedPath, err := namegen.GenerateAndCreate(baseDir, 10)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create one-off directory: %w", err))
+			return nil, connect.NewError(connect.CodeInternal, err)
 		}
 		resolvedPath = generatedPath
 	}
@@ -2567,11 +2654,12 @@ func (s *SessionService) CreateSession(
 	// 1.2.0a). This does NOT start tmux/the process; that happens in the
 	// async goroutine below, exactly as before this extraction.
 	instance, err := session.CreateManagedInstance(ctx, session.CreateManagedInstanceParams{
-		Options:         instanceOpts,
-		Storage:         s.storage,
-		Registry:        s.registry,
-		CreateIfMissing: req.Msg.CreateIfMissing,
-		ResumeID:        req.Msg.ResumeId,
+		Options:                instanceOpts,
+		Storage:                s.storage,
+		Registry:               s.registry,
+		CreateIfMissing:        req.Msg.CreateIfMissing,
+		ResumeID:               req.Msg.ResumeId,
+		DeferredPathResolution: deferredGitHubURL,
 	})
 	if err != nil {
 		switch {
@@ -2601,7 +2689,9 @@ func (s *SessionService) CreateSession(
 	// Record initial_prompt (typed into the session terminal once the session reaches Ready state)
 	// in prompt history so it appears in the recent-prompts dropdown.
 	if req.Msg.InitialPrompt != "" {
-		s.promptStore.RecordUsage(req.Msg.InitialPrompt)
+		if _, err := s.promptStore.RecordUsage(req.Msg.InitialPrompt); err != nil {
+			log.Warn("failed to record initial prompt usage", "err", err)
+		}
 	}
 
 	// Publish SessionCreated event so watchers see the Creating-status session immediately.
@@ -3219,7 +3309,7 @@ func (s *SessionService) steerInstance(ctx context.Context, instance *session.In
 	// Non-autonomous sessions get the same PTY send primitive the MCP
 	// steer_session tool falls back to, bounded with a timeout so a browser
 	// click against a wedged/dead session can't hang this goroutine forever.
-	text := session.BuildSubmittableInput(message, true)
+	text := session.BuildSubmittableInputAndSubmit(message)
 	errCh := make(chan error, 1)
 	go func() { errCh <- instance.SendKeys(text) }()
 
@@ -3432,6 +3522,24 @@ func cleanupPartialCreation(instance *session.Instance) error {
 		return instance.Destroy()
 	}
 
+	// BUG-099: this branch never called Destroy(), so it never called
+	// StopSessionDriver — leaving a SessionDriver goroutine the async
+	// creation pipeline was still racing to start completely unstoppable.
+	// Call it unconditionally, mirroring Destroy()'s own top-of-function
+	// call, so any StartSessionDriver arriving after this point refuses to
+	// start (driverDestroyed). See docs/bugs/fixed/BUG-099-*.md.
+	session.StopSessionDriver(instance)
+
+	// Re-check Started() immediately after StopSessionDriver: if a
+	// concurrent Instance.Start() completed while we were stopping the
+	// driver, the instance is now fully started and must go through
+	// Destroy()'s full teardown (VNC/CDP, diff-stats, EventStopped) instead
+	// of falling through to the defense-in-depth guard below, which is only
+	// safe for an instance that never finished starting.
+	if instance.Started() {
+		return instance.Destroy()
+	}
+
 	// Task 3.1.1d: defense-in-depth liveness guard. instance.Started() is
 	// only flipped true at the very end of Instance.Start() (session/instance.go's
 	// startLocked, i.started.Store(true)) -- well after the worktree is set up
@@ -3533,6 +3641,20 @@ func (s *SessionService) DeleteSession(
 	// that without reopening the race the ordering comment below is about (that
 	// race is between removeFromAllPollers and storage.DeleteInstance, not this).
 	liveInst := s.FindLiveInstance(sessionTitle)
+
+	// Fence out an in-flight Background Resolution Pipeline before cleanup,
+	// bumping the epoch before re-reading status exactly like
+	// CancelSessionCreation (see its doc comment for why that order, not the
+	// reverse, is what resolves the race deterministically). Narrows, but
+	// doesn't replace, the Snapshot()-based read fix.
+	if liveInst != nil {
+		liveInst.BumpCreationEpoch()
+		if status, _ := liveInst.StatusAndFailureReason(); status == session.Creating {
+			if cancelFunc := liveInst.CreationCancelFunc(); cancelFunc != nil {
+				cancelFunc()
+			}
+		}
+	}
 
 	// Remove from all pollers BEFORE deleting from storage. This is atomic from the
 	// poller's perspective and closes the race window where external discovery could
@@ -3815,6 +3937,9 @@ func (s *SessionService) WatchSessions(
 	req *connect.Request[sessionv1.WatchSessionsRequest],
 	stream *connect.ServerStream[sessionv1.SessionEvent],
 ) error {
+	done := TrackOpenStream("WatchSessions")
+	defer done()
+
 	// Subscribe before building the snapshot so no events are lost between the
 	// two phases (snapshot races are resolved by client-side upsert semantics).
 	eventCh, subID := s.eventBus.Subscribe(ctx)
@@ -5327,6 +5452,35 @@ func (s *SessionService) UpdateSlackConfig(ctx context.Context, req *connect.Req
 // TestSlackWebhook sends a synchronous test message and reports the outcome.
 func (s *SessionService) TestSlackWebhook(ctx context.Context, req *connect.Request[sessionv1.TestSlackWebhookRequest]) (*connect.Response[sessionv1.TestSlackWebhookResponse], error) {
 	return s.slackConfigSvc.TestSlackWebhook(ctx, req)
+}
+
+// GetJulesConfig returns the current Jules dispatch-and-poll configuration.
+func (s *SessionService) GetJulesConfig(ctx context.Context, req *connect.Request[sessionv1.GetJulesConfigRequest]) (*connect.Response[sessionv1.GetJulesConfigResponse], error) {
+	return s.julesConfigSvc.GetJulesConfig(ctx, req)
+}
+
+// UpdateJulesConfig updates the Jules configuration.
+func (s *SessionService) UpdateJulesConfig(ctx context.Context, req *connect.Request[sessionv1.UpdateJulesConfigRequest]) (*connect.Response[sessionv1.UpdateJulesConfigResponse], error) {
+	return s.julesConfigSvc.UpdateJulesConfig(ctx, req)
+}
+
+// TestJulesConnection checks whether a repo is registered as a Jules source.
+func (s *SessionService) TestJulesConnection(ctx context.Context, req *connect.Request[sessionv1.TestJulesConnectionRequest]) (*connect.Response[sessionv1.TestJulesConnectionResponse], error) {
+	return s.julesConfigSvc.TestJulesConnection(ctx, req)
+}
+
+// ConfirmEgressConsent is the only RPC that may grant Jules cloud-egress
+// consent for a repo — see JulesConfigService.ConfirmEgressConsent's doc
+// comment.
+func (s *SessionService) ConfirmEgressConsent(ctx context.Context, req *connect.Request[sessionv1.ConfirmEgressConsentRequest]) (*connect.Response[sessionv1.ConfirmEgressConsentResponse], error) {
+	return s.julesConfigSvc.ConfirmEgressConsent(ctx, req)
+}
+
+// RevokeEgressConsent is the only RPC that may remove Jules cloud-egress
+// consent for a repo — see JulesConfigService.RevokeEgressConsent's doc
+// comment.
+func (s *SessionService) RevokeEgressConsent(ctx context.Context, req *connect.Request[sessionv1.RevokeEgressConsentRequest]) (*connect.Response[sessionv1.RevokeEgressConsentResponse], error) {
+	return s.julesConfigSvc.RevokeEgressConsent(ctx, req)
 }
 
 // GetStreamHubRolloutStatus returns the current stream-hub rollout status.

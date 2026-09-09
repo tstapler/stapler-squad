@@ -419,18 +419,30 @@ func (s *FileScrollbackStorage) Truncate(sessionID string, keepBytes int64) erro
 	encoder := json.NewEncoder(writer)
 	for _, entry := range keptEntries {
 		if err := encoder.Encode(entry); err != nil {
-			tempFile.Close()
+			_ = tempFile.Close()
 			return fmt.Errorf("failed to write entry: %w", err)
 		}
 	}
 
+	// A failed Close here can mean the compressed stream was never fully
+	// flushed to disk; renaming over the original in that case would
+	// silently replace it with truncated/corrupt data, so treat these as
+	// real errors rather than best-effort cleanup.
 	if gzipWriter != nil {
-		gzipWriter.Close()
+		if err := gzipWriter.Close(); err != nil {
+			_ = tempFile.Close()
+			return fmt.Errorf("failed to close gzip writer: %w", err)
+		}
 	}
 	if zstdWriter != nil {
-		zstdWriter.Close()
+		if err := zstdWriter.Close(); err != nil {
+			_ = tempFile.Close()
+			return fmt.Errorf("failed to close zstd writer: %w", err)
+		}
 	}
-	tempFile.Close()
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
 
 	// Replace original with truncated file
 	if err := os.Rename(tempPath, filePath); err != nil {

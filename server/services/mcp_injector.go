@@ -178,7 +178,7 @@ func writeSettingsAtomic(settingsPath, claudeDir string, raw map[string]json.Raw
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath) //nolint:errcheck // best-effort cleanup if rename fails
 	if _, err := tmp.Write(out); err != nil {
-		tmp.Close() //nolint:errcheck
+		_ = tmp.Close()
 		return fmt.Errorf("write temp %s: %w", tmpPath, err)
 	}
 	if err := tmp.Close(); err != nil {

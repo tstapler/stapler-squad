@@ -156,6 +156,9 @@ func (s *UnfinishedWorkService) WatchUnfinishedWork(
 	_ *connect.Request[sessionv1.WatchUnfinishedWorkRequest],
 	stream *connect.ServerStream[sessionv1.UnfinishedWorkEvent],
 ) error {
+	done := TrackOpenStream("WatchUnfinishedWork")
+	defer done()
+
 	// 1. Send initial snapshot.
 	results := s.scanner.GetAllResults()
 	pathIndex, prIndex := s.instanceIndexes()

@@ -253,7 +253,7 @@ func mergeSessions(ctx context.Context, destDB, sourceDB string) (int, int, erro
 			return 0, 0, fmt.Errorf("failed to open source database: %w", err)
 		}
 		_ = src.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&sourceTotal)
-		src.Close()
+		_ = src.Close()
 	}
 
 	// ATTACH is scoped to a single physical connection in SQLite, and this *sql.DB has no

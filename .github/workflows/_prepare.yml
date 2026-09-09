@@ -1,9 +1,12 @@
 name: Prepare (reusable)
 
 # Reusable workflow wrapping ./.github/actions/prepare so every consumer
-# (build.yml, e2e-video.yml, registry-validation.yml, ux-analysis.yml, ...)
-# generates protos + builds the web UI exactly once and downloads the same
-# artifact, instead of each workflow file running its own copy of this job.
+# (build.yml, e2e-video.yml, ux-analysis.yml, ...) shares one implementation
+# of "generate protos + build the web UI" instead of hand-rolling it per
+# workflow file. registry-validation.yml used to be one such consumer; its
+# divergence check was folded into build.yml's test-affected job instead
+# (strictly subsumed by that job's exact-match registry diff), so the
+# workflow file itself was deleted rather than kept as a 5th prepare call.
 # See project_plans/ci-speed/implementation/plan.md Epic 3.1 (Story 3.1.1).
 #
 # Deliberately has no `if:`/`needs:` relevance gate — the calling workflow

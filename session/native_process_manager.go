@@ -80,7 +80,7 @@ func (n *NativeProcessManager) Start(dir string) error {
 	}
 
 	if err := n.launchPTY(dir); err != nil {
-		return err
+		return fmt.Errorf("NativeProcessManager: Start failed: %w", err)
 	}
 	go n.supervise(dir)
 	return nil
@@ -225,6 +225,12 @@ func (n *NativeProcessManager) IsAlive() bool {
 // HasSession reports whether a process has been started at least once.
 // Alias for IsAlive() on the native backend.
 func (n *NativeProcessManager) HasSession() bool {
+	return n.IsAlive()
+}
+
+// HasLiveSessionNoCache is just IsAlive(): it already checks live OS process
+// state directly on every call, with nothing cached to bypass.
+func (n *NativeProcessManager) HasLiveSessionNoCache() bool {
 	return n.IsAlive()
 }
 

@@ -210,7 +210,17 @@ prompt: |
   ## Phase 5 — Browser / React Profiling
 
   Run this phase in parallel with or after Go profiling. The app runs at `http://localhost:8543`.
-  Playwright is available at `tests/e2e/node_modules/.bin/playwright`.
+  Playwright is available at `tests/e2e/node_modules/.bin/playwright` (or via the `playwright` MCP
+  server's `browser_*` tools if that path isn't populated in this environment).
+
+  **Load the `browser-profiling` skill for this phase** — it is the canonical reference for
+  everything below (triage table, `<Profiler>` usage, memory-leak workflow, fix verification) plus
+  a section this file doesn't duplicate: analyzing a captured/downloaded trace (`.json`/`.json.gz`)
+  programmatically with Perfetto's `trace_processor` — the `go tool pprof -top` equivalent for
+  Chrome traces. Reach for that instead of `grep`/`jq`/`json.load`-ing a large trace file by hand;
+  a real session trace routinely runs several hundred MB and a naive parse is slow, easy to get
+  wrong (wrong pid/thread, double-counted nested slices), and floods context if the raw output
+  lands in a conversation.
 
   ### 5a — Capture numeric baseline via Playwright
 

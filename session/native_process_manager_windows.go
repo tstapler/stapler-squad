@@ -25,6 +25,7 @@ func (n *NativeProcessManager) Start(_ string) error {
 func (n *NativeProcessManager) RestoreWithWorkDir(_ string) error { return nil }
 func (n *NativeProcessManager) Close() error                      { return nil }
 func (n *NativeProcessManager) IsAlive() bool                     { return false }
+func (n *NativeProcessManager) HasLiveSessionNoCache() bool       { return false }
 func (n *NativeProcessManager) HasSession() bool                  { return false }
 func (n *NativeProcessManager) GetCurrentWorkingDirectory() (string, error) {
 	return "", nil

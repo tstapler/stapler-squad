@@ -297,7 +297,7 @@ func (l *BacklogLifecycleListener) TriggerReviewForSession(workSessionUUID strin
 			return
 		}
 		log.InfoLog().Printf("[BacklogLifecycle] TriggerReviewForSession: spawning immediate review gate item=%s session=%s", item.ID, workSessionUUID)
-		l.spawnReviewGate(item, is)
+		l.spawnReviewGate(builtInReviewGateContext, item, is)
 	}()
 }
 
@@ -360,9 +360,12 @@ func applyVerdictsToACs(ctx context.Context, storage *Storage, item *BacklogItem
 }
 
 // spawnReviewGate creates a one-shot review session for item, using the diff
-// from the work session's worktree.
-func (l *BacklogLifecycleListener) spawnReviewGate(item *BacklogItemData, is ItemSessionSummary) {
-	l.runner.Run(l.shutdownCtx, item, is, l.pushAndCreatePR)
+// from the work session's worktree. gateContext identifies which gate/
+// transition this review is for (Epic 2.4, Story 2.4.3) — the built-in
+// review->pr_pending call site (onSessionExited, session/backlog_lifecycle.go)
+// always passes RequiresDiff: true, since it reviews a code change.
+func (l *BacklogLifecycleListener) spawnReviewGate(gateContext GateContext, item *BacklogItemData, is ItemSessionSummary) {
+	l.runner.Run(l.shutdownCtx, gateContext, item, is, l.pushAndCreatePR)
 }
 
 // reconcileStuckReviewItems notifies once per item when a review-status item

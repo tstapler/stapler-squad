@@ -28,7 +28,33 @@ const (
 	notifTypeApprovalNeeded = int32(1)
 	// notifTypeAutoApproved matches NOTIFICATION_TYPE_AUTO_APPROVED = 13 in types.proto.
 	notifTypeAutoApproved = int32(13)
+
+	// The following mirror session/v1/types.proto's NotificationType enum values
+	// that notificationMapping.ts's ACTIONABLE_TYPES classifies as "needs a
+	// decision" (approval_needed, question, error, task_failed, warning) — see
+	// IsActionableType below.
+	notifTypeInputRequired    = int32(2) // NOTIFICATION_TYPE_INPUT_REQUIRED (maps to UI "question")
+	notifTypeConfirmationNeed = int32(3) // NOTIFICATION_TYPE_CONFIRMATION_NEEDED (maps to UI "approval_needed")
+	notifTypeError            = int32(7) // NOTIFICATION_TYPE_ERROR
+	notifTypeWarning          = int32(8) // NOTIFICATION_TYPE_WARNING
+	notifTypeFailure          = int32(9) // NOTIFICATION_TYPE_FAILURE (maps to UI "error")
 )
+
+// IsActionableType reports whether t is one of the backend NotificationType values
+// that map to a UI type NeedsDecisionSection/NotificationPanel treat as "needs a
+// decision" (notificationMapping.ts's ACTIONABLE_TYPES: approval_needed, question,
+// error, task_failed, warning). Mirrors that TS set; there is no single
+// cross-language source of truth, so a change to one must be mirrored in the other
+// (same accepted pattern as NotificationRecord.IsReconciled()).
+func IsActionableType(t int32) bool {
+	switch t {
+	case notifTypeApprovalNeeded, notifTypeConfirmationNeed, notifTypeInputRequired,
+		notifTypeError, notifTypeFailure, notifTypeWarning:
+		return true
+	default:
+		return false
+	}
+}
 
 // NotificationRecord is the persisted representation of a notification event.
 type NotificationRecord struct {
@@ -55,6 +81,13 @@ type NotificationRecord struct {
 	// with SessionScoped==true and no Metadata["item_id"] are eligible for orphan pruning
 	// via PruneOrphaned — see events.MetadataKeySessionScoped.
 	SessionScoped bool `json:"session_scoped,omitempty"`
+}
+
+// IsReconciled reports whether this record's approval was resolved by
+// rule-reconciliation rather than a live human decision. Single source of
+// truth for the "reconciled" metadata key's value convention.
+func (r *NotificationRecord) IsReconciled() bool {
+	return r.Metadata["reconciled"] == "true"
 }
 
 // notificationsFile is the JSON file format for persisted notifications.
@@ -118,7 +151,8 @@ func NewNotificationHistoryStore(filePath string) (*NotificationHistoryStore, er
 	store.enforceRetention()
 
 	// Deduplicate existing records that were persisted before dedup logic was added.
-	// This consolidates unread duplicates into single records with accurate counts.
+	// This consolidates duplicates (regardless of read state) into single records
+	// with accurate counts.
 	if err := store.deduplicateExisting(); err != nil {
 		log.Warn("NotificationStore failed to deduplicate existing records", "err", err)
 	}
@@ -127,10 +161,11 @@ func NewNotificationHistoryStore(filePath string) (*NotificationHistoryStore, er
 }
 
 // Append adds a notification record, enforces retention limits, and persists to disk.
-// If an unread record with the same (sessionID, notificationType) already exists,
-// the existing record is updated in place (occurrence count incremented, metadata
-// refreshed, moved to front) instead of inserting a new record. Per ADR-003, if the
-// existing record is already read, a new unread record is created instead.
+// If a record with the same (sessionID, notificationType) already exists, the existing
+// record is updated in place (occurrence count incremented, metadata refreshed, moved
+// to front) instead of inserting a new record, regardless of whether the existing
+// record was already read -- except AUTO_APPROVED records, which stay read across
+// recurrence since they never surface as an active alert.
 //
 // For APPROVAL_NEEDED notifications the record ID is also updated to the incoming
 // approval UUID so that SetMetadata outcome-stamping (which looks up by record ID)
@@ -146,8 +181,8 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 		}
 	}
 
-	// Check for unread duplicate by (sessionID, notificationType) and collapse.
-	if existing := s.findUnreadDuplicate(record.SessionID, record.NotificationType); existing != nil {
+	// Check for a duplicate by (sessionID, notificationType) and collapse.
+	if existing := s.findDuplicate(record.SessionID, record.NotificationType); existing != nil {
 		// For APPROVAL_NEEDED: update the record ID to the new approval UUID so that
 		// SetMetadata("newApprovalID", ...) can still find this record after collapse.
 		if record.NotificationType == notifTypeApprovalNeeded {
@@ -159,6 +194,16 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 		existing.Message = record.Message
 		existing.Metadata = record.Metadata
 		existing.Title = record.Title
+		// A recurrence means the event happened again -- surface it as unread again,
+		// except for AUTO_APPROVED, which stays silently pre-read across recurrence.
+		if record.NotificationType != notifTypeAutoApproved {
+			existing.IsRead = false
+			existing.ReadAt = nil
+		}
+		// Sweep retention on the collapse path too, not just the new-record path below --
+		// otherwise a frequently-recurring record only gets swept when some other,
+		// unrelated new notification happens to arrive.
+		s.enforceRetention()
 		// Move updated record to front (newest-first ordering)
 		s.moveToFront(existing)
 		return s.saveToDisk()
@@ -206,12 +251,12 @@ func (s *NotificationHistoryStore) AppendAutoApproved(sessionID, sessionName, to
 	return s.Append(record)
 }
 
-// findUnreadDuplicate scans s.records for an unread record matching the given
-// (sessionID, notificationType) key. Returns nil if no match is found.
-// Must be called with the write lock held.
-func (s *NotificationHistoryStore) findUnreadDuplicate(sessionID string, notifType int32) *NotificationRecord {
+// findDuplicate scans s.records for a record matching the given
+// (sessionID, notificationType) key, regardless of read state. Returns nil if no
+// match is found. Must be called with the write lock held.
+func (s *NotificationHistoryStore) findDuplicate(sessionID string, notifType int32) *NotificationRecord {
 	for _, r := range s.records {
-		if r.SessionID == sessionID && r.NotificationType == notifType && !r.IsRead {
+		if r.SessionID == sessionID && r.NotificationType == notifType {
 			return r
 		}
 	}
@@ -323,23 +368,33 @@ func (s *NotificationHistoryStore) MarkRead(ids []string) (int, error) {
 
 // Clear removes notifications. If before is nil, clears all. Otherwise clears
 // notifications created before the given time. Returns the number cleared.
+// Clear deletes notification records — every record when before is nil, or
+// only those created before the given cutoff otherwise. It never removes a
+// record that is unread and actionable (Task 3.1.5c), regardless of the
+// before-timestamp cutoff: a still-pending approval_needed/question/error/
+// task_failed/warning decision must only leave the store by being resolved,
+// never by "Clear all"/"Clear history" on the Notifications page or the
+// header bell dropdown. Returns the number of records actually removed.
 func (s *NotificationHistoryStore) Clear(before *time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	originalLen := len(s.records)
 
-	if before == nil {
-		s.records = make([]*NotificationRecord, 0)
-	} else {
-		var kept []*NotificationRecord
-		for _, r := range s.records {
-			if !r.CreatedAt.Before(*before) {
-				kept = append(kept, r)
-			}
+	var kept []*NotificationRecord
+	for _, r := range s.records {
+		if !r.IsRead && IsActionableType(r.NotificationType) {
+			kept = append(kept, r) // never delete a still-pending decision
+			continue
 		}
-		s.records = kept
+		if before == nil {
+			continue // "clear everything" still respects the guard above
+		}
+		if !r.CreatedAt.Before(*before) {
+			kept = append(kept, r)
+		}
 	}
+	s.records = kept
 
 	cleared := originalLen - len(s.records)
 	if cleared > 0 {
@@ -423,6 +478,28 @@ func (s *NotificationHistoryStore) SetMetadata(id, key, value string) error {
 	return nil // record not found — silently ignored
 }
 
+// GetByID returns a copy of the record with the given ID, if present. The
+// returned record (including its Metadata map) is safe to read after this
+// call returns without racing concurrent SetMetadata calls on the same ID —
+// it does not alias the store's live record or its Metadata map.
+func (s *NotificationHistoryStore) GetByID(id string) (*NotificationRecord, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, r := range s.records {
+		if r.ID == id {
+			cp := *r
+			if r.Metadata != nil {
+				cp.Metadata = make(map[string]string, len(r.Metadata))
+				for k, v := range r.Metadata {
+					cp.Metadata[k] = v
+				}
+			}
+			return &cp, true
+		}
+	}
+	return nil, false
+}
+
 // GetUnreadCount returns the number of unread notifications. After server-side
 // deduplication (Task 1.2), each unread record represents a distinct
 // (sessionID, notificationType) group, so this count reflects the number of
@@ -440,20 +517,17 @@ func (s *NotificationHistoryStore) GetUnreadCount() int {
 	return count
 }
 
-// deduplicateExisting consolidates unread records with the same (sessionID, notificationType)
-// into the newest one. This runs once on startup to clean up pre-dedup persisted data.
-// Read records are not touched. Idempotent -- safe to run multiple times.
+// deduplicateExisting consolidates duplicate records regardless of read state with the
+// same (sessionID, notificationType) into the newest one. This runs once on startup to
+// clean up pre-dedup persisted data. Idempotent -- safe to run multiple times.
 func (s *NotificationHistoryStore) deduplicateExisting() error {
-	// Group unread records by (sessionID, notificationType)
+	// Group records by (sessionID, notificationType), regardless of read state.
 	type dedupKey struct {
 		sessionID string
 		notifType int32
 	}
 	groups := make(map[dedupKey][]*NotificationRecord)
 	for _, r := range s.records {
-		if r.IsRead {
-			continue
-		}
 		key := dedupKey{sessionID: r.SessionID, notifType: r.NotificationType}
 		groups[key] = append(groups[key], r)
 	}
@@ -512,10 +586,16 @@ func (s *NotificationHistoryStore) enforceRetention() {
 	now := time.Now()
 	cutoff := now.Add(-MaxNotificationAge)
 
-	// Prune expired entries
+	// Prune expired entries. The cutoff is keyed on LastOccurredAt (falling back to
+	// CreatedAt for pre-migration records with no LastOccurredAt) so a still-recurring
+	// record isn't pruned just because its first occurrence aged out.
 	var kept []*NotificationRecord
 	for _, r := range s.records {
-		if r.CreatedAt.After(cutoff) || r.CreatedAt.Equal(cutoff) {
+		effective := r.CreatedAt
+		if r.LastOccurredAt != nil {
+			effective = *r.LastOccurredAt
+		}
+		if effective.After(cutoff) || effective.Equal(cutoff) {
 			kept = append(kept, r)
 		}
 	}
@@ -589,24 +669,24 @@ func (s *NotificationHistoryStore) saveToDisk() error {
 	}
 
 	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
+		_ = f.Close()
+		_ = os.Remove(tmpPath) // best-effort cleanup; we're already returning the real write error
 		return fmt.Errorf("write temp file: %w", err)
 	}
 
 	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
+		_ = f.Close()
+		_ = os.Remove(tmpPath) // best-effort cleanup; we're already returning the real sync error
 		return fmt.Errorf("sync temp file: %w", err)
 	}
 
 	if err := f.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath) // best-effort cleanup; we're already returning the real close error
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, s.filePath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath) // best-effort cleanup; we're already returning the real rename error
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 

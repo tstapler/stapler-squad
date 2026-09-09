@@ -78,15 +78,23 @@ type ApprovalStore struct {
 	pending   map[string]*PendingApproval // keyed by approval ID
 	bySession map[string][]string         // session ID -> approval IDs
 	filePath  string                      // path to pending_approvals.json (empty disables persistence)
+
+	// humanResolving tracks approval IDs with a human-initiated resolution
+	// currently in flight, so a concurrent rule-reconciliation pass can detect
+	// and defer to it instead of racing Resolve()'s mutex (research/ux.md:
+	// "favor the human, not the automation"). Guarded by mu, same as
+	// pending/bySession.
+	humanResolving map[string]struct{}
 }
 
 // NewApprovalStore creates a new ApprovalStore.
 // If filePath is non-empty, persisted approvals are loaded from disk and marked as orphaned.
 func NewApprovalStore(filePath string) *ApprovalStore {
 	s := &ApprovalStore{
-		pending:   make(map[string]*PendingApproval),
-		bySession: make(map[string][]string),
-		filePath:  filePath,
+		pending:        make(map[string]*PendingApproval),
+		bySession:      make(map[string][]string),
+		humanResolving: make(map[string]struct{}),
+		filePath:       filePath,
 	}
 	if filePath != "" {
 		if err := s.loadFromDisk(); err != nil {
@@ -171,6 +179,33 @@ func (s *ApprovalStore) GetApprovalMetadataBySession(sessionID string) []session
 		}
 	}
 	return result
+}
+
+// MarkHumanResolving records that a human-initiated resolution is in flight
+// for id. Call as the very first step of the human resolution path — before
+// any other work, including the CI-red-guard lookup — and always pair with a
+// deferred ClearHumanResolving so the marker cannot leak past one call.
+func (s *ApprovalStore) MarkHumanResolving(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.humanResolving[id] = struct{}{}
+}
+
+// ClearHumanResolving removes the in-flight marker set by MarkHumanResolving.
+// Safe to call even if id was never marked (no-op).
+func (s *ApprovalStore) ClearHumanResolving(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.humanResolving, id)
+}
+
+// IsHumanResolving reports whether a human-initiated resolution is currently
+// in flight for id.
+func (s *ApprovalStore) IsHumanResolving(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.humanResolving[id]
+	return ok
 }
 
 // Resolve sends a decision to the pending approval and removes it from the store.
@@ -352,7 +387,7 @@ func (s *ApprovalStore) persistToDiskLocked() {
 		return
 	}
 	if err := os.Rename(tmpPath, s.filePath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		log.Error("[ApprovalPersistence] failed to rename temp file", "dest", s.filePath, "err", err)
 		return
 	}

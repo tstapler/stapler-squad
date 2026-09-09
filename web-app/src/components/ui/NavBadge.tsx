@@ -2,6 +2,7 @@
 "use client";
 
 import { badge, inline as inlineClass, empty } from "./NavBadge.css";
+import { capBadgeCount } from "@/lib/utils/notificationMapping";
 
 interface NavBadgeBaseProps {
   /** The count to display in the badge. When 0 and showWhenEmpty is false, renders null. */
@@ -43,7 +44,7 @@ export function NavBadge(props: NavBadgeProps) {
   if (count === 0 && !showWhenEmpty) return null;
 
   const className = buildClassName(inline, count === 0);
-  const displayValue = count > 99 ? "99+" : count;
+  const displayValue = capBadgeCount(count);
 
   if (element === "button") {
     return (

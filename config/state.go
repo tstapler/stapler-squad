@@ -300,8 +300,9 @@ func (s *State) saveToDiskWithoutLocking() error {
 
 	// Atomically rename the temporary file to the actual file
 	if err := os.Rename(tmpPath, statePath); err != nil {
-		// Try to clean up the temporary file
-		os.Remove(tmpPath)
+		// Try to clean up the temporary file; the rename error below is what
+		// matters to the caller, and a leftover .tmp file is harmless.
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to atomically update state file: %w", err)
 	}
 

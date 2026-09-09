@@ -64,7 +64,7 @@ func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
 	err = client.Schema.Create(ctx)
 	session.EntSchemaCreateMu.Unlock()
 	if err != nil {
-		client.Close()
+		_ = client.Close()
 		return nil, fmt.Errorf("analytics db: schema migration: %w", err)
 	}
 

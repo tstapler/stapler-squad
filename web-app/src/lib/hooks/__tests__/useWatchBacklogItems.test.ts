@@ -27,7 +27,10 @@ jest.mock("@connectrpc/connect", () => ({
 }));
 
 jest.mock("@connectrpc/connect-web", () => ({
-  createConnectTransport: jest.fn().mockReturnValue({}),
+  // createSessionWatchTransport (watch-ws-transport.ts) wraps this and reads
+  // .unary off the result eagerly at construction time, so the mock must
+  // provide a callable stub rather than an empty object.
+  createConnectTransport: jest.fn().mockReturnValue({ unary: jest.fn(), stream: jest.fn() }),
 }));
 
 jest.mock("@/lib/config", () => ({

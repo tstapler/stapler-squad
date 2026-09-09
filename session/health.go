@@ -273,8 +273,12 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 		instance.started.Store(true)
 	}
 
-	// Check if instance thinks it's started but tmux session doesn't exist
-	if instance.Started() {
+	// Check if instance thinks it's started but tmux session doesn't exist.
+	// Skipped for push-liveness backends (ProcessManagerBackend.SkipsPollBasedLiveness) --
+	// their throwaway LoadInstances() copy can never populate real session
+	// state without an RPC round-trip fromInstanceData deliberately skips,
+	// so this probe would only ever misreport them as missing.
+	if instance.Started() && !instance.Backend.SkipsPollBasedLiveness() {
 		h.checkTmuxHealth(instance, paneStatus, &result)
 	}
 

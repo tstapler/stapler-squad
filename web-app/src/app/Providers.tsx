@@ -18,6 +18,7 @@ import { HttpAnalyticsProvider } from "@/lib/analytics/HttpAnalyticsProvider";
 import { ConsoleAnalyticsProvider } from "@/lib/analytics/ConsoleAnalyticsProvider";
 import { PageViewTracker } from "@/components/analytics/PageViewTracker";
 import { WebVitalsReporter } from "@/components/telemetry/WebVitalsReporter";
+import { OtelInit } from "@/components/telemetry/OtelInit";
 import { OnboardingProvider } from "@/lib/contexts/OnboardingContext";
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -32,6 +33,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <AnalyticsContextProvider provider={analyticsProviderRef.current}>
+      <OtelInit />
       <WebVitalsReporter />
       <PageViewTracker />
       <Provider store={store}>

@@ -70,7 +70,7 @@ describe("useSessionSummary", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     expect(mockGetSessionSummary).toHaveBeenCalledTimes(1);
-    expect(mockGetSessionSummary).toHaveBeenCalledWith({ sessionId: "sess-123" });
+    expect(mockGetSessionSummary).toHaveBeenCalledWith({ sessionId: "sess-123" }, { signal: expect.any(AbortSignal) });
     expect(result.current.data?.status).toBe(SessionSummaryStatus.READY);
   });
 
@@ -148,7 +148,7 @@ describe("useSessionSummary", () => {
       await result.current.regenerate();
     });
 
-    expect(mockRegenerateSessionSummary).toHaveBeenCalledWith({ sessionId: "sess-123" });
+    expect(mockRegenerateSessionSummary).toHaveBeenCalledWith({ sessionId: "sess-123" }, { signal: expect.any(AbortSignal) });
     expect(result.current.data?.status).toBe(SessionSummaryStatus.GENERATING);
 
     mockGetSessionSummary.mockResolvedValue({ summary: makeSummary(SessionSummaryStatus.READY) });

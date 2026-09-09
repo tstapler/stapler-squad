@@ -2207,3 +2207,124 @@ audit's own standing lesson: a carried-forward finding needs the same "re-derive
 trust the prior pass" discipline as everything else, not just new findings.
 
 No code change needed or made. Removing this from the carry-forward list as of this update.
+
+## Update — 2026-09-03: items failing triage repeatedly / spinning wheels — two root causes found, both structural
+
+Prompted by a direct ask to find items "failing triage repeatedly or spinning their wheels" and
+root-cause them one by one. Pulled `ListStuckBacklogItems` live (19 rows / **15 unique items** —
+several items carry multiple open stuck-reason rows simultaneously).
+
+**Live list, deduped by item, most-repeated first:**
+
+| Item | Status | Reason(s) | Remediation attempts | Repeated failure mode |
+|---|---|---|---|---|
+| `306bbc57` "render Mermaid diagrams" + 8 siblings (`06a011e1`, `caff12c9`, `1cea70ed`, `2f9f7b89`, `2a877a49`, `f333fad7`, `10dbf07c`, `7feb8fcd`, `9fbfb834`, `503ca187`, `ee0c686a` — 12 items total) | idea | `ORPHANED_TRIAGE` | 5 (capped/parked) | Triage session repeatedly ends `timeout`/`other` without ever leaving idea |
+| `e271db3d` "flaky server/services tests..." | review | `BOUNCING` + `ABANDONED_REVIEW` + `AUTONOMOUS_STUCK` + `MULTIPLE_REASONS` | 5 (capped/parked) | Review permanently blocked: worktree missing on disk |
+| `eabee433` "keychain token leaks..." | review | `BOUNCING` + `BOUNCE_CAP_EXHAUSTED` | 5 (capped/parked) | Same shape as above: `git diff` exits 129, base commit missing |
+| `db288a47` "PR-status pollers check changed before err..." | ready | `AUTONOMOUS_STUCK` | 1 (fresh, 2026-09-02) | Autonomous driver hit 20-turn cap with no DONE signal — too new to call a repeat yet |
+
+12 of 15 unique items — the large majority — are the **orphaned-triage** cluster. All 12 were
+bulk-imported from `github.com/tstapler/stelekit` issues within the same ~2 minutes on
+2026-08-30 (`notes: "Imported from https://github.com/tstapler/stelekit/issues/2NN"`), all
+share `pipelineModeSnapshot: "sdd"`, and all have hit `MaxRemediationAttempts` (5) and parked —
+`retryOrphanedTriageWithBackoffGate` (`session/backlog_lifecycle_triage.go:361`) is correctly
+firing its "Auto-triage paused... use Reset" notification per its own documented design, not
+silently stuck. The interesting question is *why every attempt fails identically*.
+
+### Root cause 1 (12 items): "sdd" pipeline mode's triage prompt cannot fit inside the fixed 30-minute triage call budget
+
+Read the full session history for `306bbc57` (`GetBacklogItem`, 6 triage `ItemSession` rows over
+4 days): elapsed times cluster at **~30m00s-30m03s with `endReason: timeout`** (3 of 6 attempts),
+one ~1h16m attempt with no `endReason` at all (tombstoned by the staleness sweep, not by the
+call's own timeout), and two near-instant `other`-reason failures. Every attempt used
+`pipelineModeSnapshot: "sdd"`.
+
+`sddTriagePromptTemplate` (`session/pipeline_mode_seed.go:244-270`) instructs the unattended
+headless call to, in one shot: write `project_plans/<name>/requirements.md`, then invoke
+**`sdd:2-research` → `sdd:3-plan` (including its adversarial review pass, which itself dispatches
+subagents) → `sdd:4-validate`**, waiting for every dispatched subagent to actually finish before
+moving on. That is three of this repo's own heavyweight, normally-multi-session SDD phases
+compressed into a single call. `triageCallBudget` (`server/services/backlog_service_triage.go:434`)
+is a flat **30 minutes, unconditional on pipeline mode** — never scaled up for the sdd-mode
+prompt's much larger workload; the default (non-sdd) triage prompt is a lighter ad hoc
+research pass that the same 30-minute budget was originally sized for.
+
+**Compounding**: `defaultPipelineModeForNewItem` (`server/services/backlog_service_lifecycle.go:141-149`)
+defaults every item created *without* an explicit `pipeline_mode` to `"sdd"` whenever the
+`sddDefaultPipelineFlagName` feature flag is on — and `import_github_issue` is exactly such a
+caller (confirmed: all 12 imported items carry `pipelineModeSnapshot: "sdd"` with no per-item
+override visible anywhere in their creation path). So the flag doesn't just make "sdd" the
+default for hand-created items — it silently opts every bulk GitHub-issue import into a triage
+workload that structurally cannot fit the timeout the triage plumbing enforces, at import-batch
+scale (12 items, 12 wasted quota-consuming retry cycles apiece, in this one batch alone).
+
+**Then the retry loop makes it worse, not better.** `retryOrphanedTriageWithBackoffGate` retries
+by calling `AutoRespawnTriage` → `TriggerTriage` again — identical prompt, identical 30-minute
+budget, identical repo state. Nothing about the retry escalates or changes approach, so it is
+**guaranteed** to fail the same way every time until the 5-attempt cap parks it. This is the
+exact "no escalation/different-approach retry once non-converging" shape this doc's Known
+Findings section already named for `bouncing` (2026-07-17 entry) — this is a second, independent
+instance of the same shape, now confirmed live for `orphaned_triage` too, and it is the reason
+this is a **recurring bug shape**, not just 12 independent unlucky items.
+
+**Verified NOT the cause**: the target repo (`/home/tstapler/.stapler-squad/repos/github.com/tstapler/stelekit`)
+exists on disk and is populated — this isn't a missing-clone/path failure.
+
+### Root cause 2 (2 items): a manual full-storage `--reset` CLI path wipes worktrees with zero backlog-DB awareness
+
+`e271db3d` and `eabee433` both fail identically: review is permanently blocked because the
+worktree their `ItemSession` points at doesn't exist on disk, and the code (correctly, per the
+existing `docs/tasks/backlog-feature-improvement.md`-referenced fix at
+`backlog_service_triage.go:3209,3767`) now **refuses to fall back** to a wrong-content
+codebase-read rather than silently reviewing stale/incorrect code — but nothing detects *why*
+the worktree vanished or repairs the dangling reference, so the item just bounces until the cap
+exhausts and parks, needing a human to "investigate, not rework" per its own stuck-context
+message.
+
+Traced the actual deletion path: `main.go:476-498`'s storage-reset CLI command runs, in order,
+`storage.DeleteAllInstances()` (clears the **session/instance** table only), `tmux.CleanupSessions`,
+then `git.CleanupWorktrees()` (`session/git/worktree_ops.go:672-696`) — which unconditionally
+`os.RemoveAll`s **every directory** under the configured worktrees dir, then `git worktree prune`s.
+`CleanupWorktrees()` has no knowledge of the backlog subsystem at all — it does not touch
+`ItemSession` rows, `LastCommitSha`, or any backlog worktree-path record. If this reset command
+runs while a backlog item's `ItemSession` still references one of those directories, the
+directory disappears from disk but the backlog DB row keeps pointing at it — exactly the
+"recorded worktree may have been cleaned up without its DB row being updated" the review-blocked
+message already suspected. This is a **manual, deliberately-total dev/reset command**, not
+something the running server invokes on its own — consistent with the review-code's own careful
+"needs investigation, not rework" framing (it's flagging an out-of-band external event, not an
+internal logic bug in the review path itself).
+
+### Recommended routing (Phase 5)
+
+1. **`sdd:fix-bug`, root cause 1 (highest count — 12 items, actively recurring)**: either (a) give
+   `triageCallBudget` a per-pipeline-mode override so `"sdd"`-mode triage gets a budget sized for
+   research+plan+validate+subagents (the mechanical fix), or (b) make the sdd triage prompt itself
+   cheaper — e.g. only research+plan during triage, defer validate to the normal implement-phase
+   flow — and/or gate `sddDefaultPipelineFlagName`-driven auto-default away from bulk-import
+   callers specifically. (a) is the smaller, more mechanical change; (b) is a product decision
+   about what triage should mean in sdd mode and needs a call from whoever owns that flag's intent.
+   Either way, per this skill's "prefer systemic fixes over instance patches" standing rule, the
+   fix must also address the retry-loop half of the shape: `retryOrphanedTriageWithBackoffGate`
+   should not spend all 5 attempts retrying an approach already proven to fail identically — at
+   minimum, detect "prior N attempts all timed out with pipeline_mode=X" and either widen the
+   budget once or fall back to the default (non-sdd) triage prompt rather than repeating verbatim.
+   Regression test should reproduce the timeout at the prompt-workload level, not just assert the
+   budget constant changed.
+2. **`sdd:fix-bug`, root cause 2 (2 items, real but rare — depends on manually running the reset
+   CLI against a live-with-backlog-items instance)**: lower priority than #1 given it requires a
+   specific manual trigger, but two concrete, cheap options exist: either have `CleanupWorktrees()`
+   refuse/warn when active `ItemSession` rows reference paths under the worktrees dir being wiped,
+   or add a periodic reconciler (mirroring the shape of `reconcileOrphanedTriageItems`) that
+   detects an `ItemSession` whose recorded worktree path no longer exists on disk and marks it via
+   a dedicated stuck reason instead of relying on the review path's refusal message to surface it
+   only when a review happens to be attempted.
+3. **Immediate, no-code action**: the 12 orphaned-triage items and 2 bouncing items are all parked,
+   not silently invisible — each needs a manual Reset (orphaned-triage) or manual
+   investigation+reopen (bouncing) *right now*, independent of whichever code fix above lands,
+   since a code fix won't retroactively unpark already-capped rows (same lesson as the 2026-07-17
+   "Abandon-review respawn" update). Do this only after root cause 1's fix lands, or the 12 items
+   will just re-timeout and re-park on the very next retry.
+4. `db288a47` — too fresh (1 remediation attempt, detected 2026-09-02) to call a repeat of any
+   named shape yet; worth a follow-up check next pass to see whether it joins the "no escalation
+   retry" pattern once it accumulates more attempts, rather than routing a fix now.

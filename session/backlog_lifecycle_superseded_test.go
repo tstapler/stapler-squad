@@ -385,8 +385,8 @@ func TestUpdateItemSessionGitActivity_should_RecordProgressAtObservationTime_Whe
 	require.NotNil(t, sessions[0].LastProgressAt)
 	assert.False(t, sessions[0].LastProgressAt.Before(before.Add(-time.Second)),
 		"last_progress_at must be observation time, not the backdated author time — otherwise a rebase instantly marks a healthy session stale")
-	assert.True(t, staleWork(authoredAt, time.Now()),
+	assert.True(t, staleWork(authoredAt, time.Now(), maxWorkSessionStaleness),
 		"precondition: the author date really is old enough to trip the staleness threshold, so this test would fail if the author date leaked through")
-	assert.False(t, staleWork(*sessions[0].LastProgressAt, time.Now()),
+	assert.False(t, staleWork(*sessions[0].LastProgressAt, time.Now(), maxWorkSessionStaleness),
 		"the session must not be considered stale after just reporting a commit")
 }

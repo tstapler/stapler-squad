@@ -28,6 +28,10 @@ const (
 
 	// DefaultOTLPEndpoint is the default endpoint for OTLP gRPC (Datadog Agent)
 	DefaultOTLPEndpoint = "localhost:4317"
+
+	// DefaultOTLPHTTPEndpoint is the default OTLP/HTTP collector endpoint used
+	// to relay browser-originated spans/metrics (see OTLPHTTPEndpoint below).
+	DefaultOTLPHTTPEndpoint = "http://localhost:4318"
 )
 
 // Config holds telemetry configuration
@@ -37,6 +41,13 @@ type Config struct {
 
 	// OTLPEndpoint is the gRPC endpoint for OTLP exporter (e.g., "localhost:4317")
 	OTLPEndpoint string
+
+	// OTLPHTTPEndpoint is the OTLP/HTTP collector endpoint (e.g.,
+	// "http://localhost:4318") that server/handlers.OtelProxyHandler relays
+	// browser-originated OTLP export requests to. Kept separate from
+	// OTLPEndpoint because the Go SDK exports over gRPC while browsers export
+	// over HTTP — same collector, different protocol/port.
+	OTLPHTTPEndpoint string
 
 	// ServiceVersion is the version of the service
 	ServiceVersion string
@@ -55,6 +66,11 @@ func DefaultConfig() Config {
 		endpoint = DefaultOTLPEndpoint
 	}
 
+	httpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_HTTP_ENDPOINT")
+	if httpEndpoint == "" {
+		httpEndpoint = DefaultOTLPHTTPEndpoint
+	}
+
 	env := os.Getenv("OTEL_SERVICE_ENVIRONMENT")
 	if env == "" {
 		env = "development"
@@ -69,11 +85,12 @@ func DefaultConfig() Config {
 	enabled := os.Getenv("OTEL_ENABLED") == "true" || os.Getenv("DD_TRACE_ENABLED") == "true"
 
 	return Config{
-		Enabled:        enabled,
-		OTLPEndpoint:   endpoint,
-		ServiceVersion: version,
-		Environment:    env,
-		SampleRate:     1.0, // Sample all traces by default
+		Enabled:          enabled,
+		OTLPEndpoint:     endpoint,
+		OTLPHTTPEndpoint: httpEndpoint,
+		ServiceVersion:   version,
+		Environment:      env,
+		SampleRate:       1.0, // Sample all traces by default
 	}
 }
 
@@ -223,6 +240,23 @@ func (p *Provider) Meter() metric.Meter {
 // IsEnabled returns whether telemetry is enabled
 func (p *Provider) IsEnabled() bool {
 	return p.config.Enabled
+}
+
+// IsGloballyEnabled reports whether Initialize has run with tracing/metrics
+// enabled. Safe to call before Initialize (returns false). Used by
+// server/handlers.OtelProxyHandler's registration to decide whether to
+// expose the browser-trace relay endpoints at all.
+func IsGloballyEnabled() bool {
+	return globalProvider != nil && globalProvider.config.Enabled
+}
+
+// GlobalOTLPHTTPEndpoint returns the configured OTLP/HTTP collector endpoint
+// (see Config.OTLPHTTPEndpoint), or "" before Initialize has run.
+func GlobalOTLPHTTPEndpoint() string {
+	if globalProvider != nil {
+		return globalProvider.config.OTLPHTTPEndpoint
+	}
+	return ""
 }
 
 // GetTracer returns the global tracer (convenience function)

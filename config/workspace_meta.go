@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/tstapler/stapler-squad/config/workspacepath"
 	"os"
 	"path/filepath"
 	"time"
@@ -103,7 +104,7 @@ func ReadWorkspaceMeta(configDir string) (WorkspaceMeta, error) {
 
 // GetPreferredWorkspaceFile returns the path to the preferred workspace preference file.
 func GetPreferredWorkspaceFile(baseDir string) string {
-	return filepath.Join(baseDir, "preferred_workspace")
+	return workspacepath.PreferredWorkspaceFile(baseDir)
 }
 
 // SetPreferredWorkspace atomically writes the preferred workspace config dir path.

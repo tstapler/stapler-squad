@@ -68,14 +68,16 @@ func StartProfiling(cfg Config) (func(), error) {
 			return nil, fmt.Errorf("failed to create trace file: %w", err)
 		}
 		if err := trace.Start(f); err != nil {
-			f.Close()
+			_ = f.Close() // trace never started, so there's nothing buffered to lose
 			return nil, fmt.Errorf("failed to start trace: %w", err)
 		}
 		log.Info("Execution trace enabled", "file", traceFile)
 		log.Info("View with: go tool trace <file>", "file", traceFile)
 		cleanupFuncs = append(cleanupFuncs, func() {
 			trace.Stop()
-			f.Close()
+			if err := f.Close(); err != nil {
+				log.Warn("Failed to close trace file; trace data may be incomplete", "file", traceFile, "err", err)
+			}
 			log.Info("Trace saved", "file", traceFile)
 		})
 	}

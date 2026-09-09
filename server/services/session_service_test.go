@@ -672,6 +672,48 @@ func TestCleanupPartialCreation_should_NotKillTmuxSession_When_ItLooksAliveDespi
 	assert.True(t, inst.TmuxSessionExists(), "tmux session must NOT be killed: it looks alive, so the guard must skip the destructive KillSession call")
 }
 
+// TestCleanupPartialCreation_should_StopSessionDriver_When_NotStarted is the
+// BUG-099 regression test. The other cleanupPartialCreation tests all use a
+// bare &session.Instance{} on which StopSessionDriver is a no-op (no driver
+// was ever started), so they can't distinguish "the call is present" from
+// "the call was deleted." This test starts a real driver against a live
+// tmux session first, so a removed StopSessionDriver call leaves an
+// observably still-running goroutine.
+func TestCleanupPartialCreation_should_StopSessionDriver_When_NotStarted(t *testing.T) {
+	t.Parallel()
+
+	inst := &session.Instance{Title: "cleanup-driver-test", Status: session.Stopped, Program: "bash"}
+	sess := tmux.NewTmuxSessionWithPrefix(inst.Title, inst.Program, "ssq-cleanup-driver-test-")
+	require.NoError(t, sess.Start(t.TempDir()))
+	t.Cleanup(func() { _ = sess.Close() })
+
+	// Reproduce Started()==false with a live tmux session attached, same as
+	// TestCleanupPartialCreation_should_NotKillTmuxSession_...'s setup.
+	_ = inst.GetTmuxSessionName()
+	inst.SetTmuxSession(sess)
+	inst.RecoverFromStopped()
+	require.False(t, inst.Started(), "test setup must reproduce Started()==false with a live tmux session still attached")
+	require.True(t, inst.TmuxSessionExists(), "test setup must have a genuinely alive tmux session")
+
+	session.StartSessionDriver(inst, t.TempDir())
+
+	err := cleanupPartialCreation(inst)
+	require.NoError(t, err)
+	assert.True(t, inst.TmuxSessionExists(), "tmux session must survive: this test isolates the driver, not the defense-in-depth kill guard")
+
+	// If StopSessionDriver's call were removed, the driver goroutine keeps
+	// polling the still-alive tmux session forever, so JoinSessionDriver
+	// would block for its full internal timeout (10s) before giving up.
+	// Bound the assertion well under that so a regression fails fast rather
+	// than passing by accident on a slow machine.
+	start := time.Now()
+	session.JoinSessionDriver(inst)
+	elapsed := time.Since(start)
+	assert.Less(t, elapsed, 3*time.Second,
+		"driver goroutine should already be stopped by cleanupPartialCreation's StopSessionDriver call; "+
+			"JoinSessionDriver blocking this long means it was not actually stopped (BUG-099 regression)")
+}
+
 // TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil verifies that
 // Shutdown blocks until DeleteSession's background cleanup goroutine (the
 // KillTmuxSessionByTitle fallback used when FindLiveInstance returns nil) has
@@ -1869,13 +1911,16 @@ func TestUpdateSession_should_RejectStop_When_TransitionIsIllegal(t *testing.T) 
 // fake/mock SendKeys recorder, to get a genuinely "started" Instance whose
 // SendKeys call actually succeeds.
 func TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel(): needs t.Setenv (STAPLER_SQUAD_TEST_DIR) for config
+	// isolation to force the native backend live, and Go forbids Setenv in
+	// any test that also calls Parallel.
 	if testing.Short() {
 		t.Skip("requires PTY allocation")
 	}
 
-	session.RegisterBackendProvider(session.BackendNative)
-	defer session.RegisterBackendProvider(session.BackendTmux)
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"process_manager_backend": "native"}`), 0o644))
 
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
@@ -3055,18 +3100,15 @@ func TestCreateSession_HonorsSessionNameOverrideMap(t *testing.T) {
 
 // TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides verifies that with
 // no request override and no TymuxSessionOverrides entry for this session,
-// CreateSession applies the process-wide registered backend
-// (session.RegisterBackendProvider) rather than a hardcoded BackendTmux.
+// CreateSession applies the process-wide "tymux" feature flag default
+// (config.EffectiveTymuxEnabled) rather than a hardcoded BackendTmux.
 func TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides(t *testing.T) {
-	session.RegisterBackendProvider(session.BackendTymux)
-	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
-
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	testDir := t.TempDir()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
-	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"feature_flags": {"tymux": true}}`), 0o644))
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:   "no-override-session",
@@ -3096,9 +3138,6 @@ func TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides(t *testing.T) {
 // CreateDirectorySession) forces the resulting instance's backend even
 // though the process-wide default is registered as tymux.
 func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
-	session.RegisterBackendProvider(session.BackendTymux)
-	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
-
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -3107,7 +3146,7 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 	const title = "directory-session-override-map-test"
 	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
-		[]byte(`{"default_program": "claude", "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+		[]byte(`{"default_program": "claude", "feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
 	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false)
 	require.NoError(t, err)
@@ -3120,9 +3159,6 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 // TestCreateWorktreeSession_HonorsSessionNameOverrideMap is the
 // CreateWorktreeSession analogue of the CreateDirectorySession test above.
 func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
-	session.RegisterBackendProvider(session.BackendTymux)
-	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
-
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -3131,7 +3167,7 @@ func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	const title = "worktree-session-override-map-test"
 	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
-		[]byte(`{"default_program": "claude", "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+		[]byte(`{"default_program": "claude", "feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
 	worktreePath := t.TempDir()
 	initGitRepoWithCommit(t, worktreePath)
@@ -3904,6 +3940,24 @@ func TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable(t *testing.T) 
 	t.Cleanup(func() { svc.Shutdown() })
 
 	assert.NotNil(t, svc.GetClaudeSettingsWatcher())
+}
+
+// TestNewSessionService_WiresApprovalServiceIntoRulesService is the
+// construction-order regression guard for Task 2.1.2b (validation.md Scope 4 /
+// Epic 2.1.2 — "gap — add"): after NewSessionService returns, rulesSvc's
+// approvalSvc field must be non-nil, so a future edit can't silently drop the
+// rulesSvc.SetApprovalService(approvalSvc) call without a test noticing.
+func TestNewSessionService_WiresApprovalServiceIntoRulesService(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	require.NotNil(t, svc.rulesSvc)
+	assert.NotNil(t, svc.rulesSvc.approvalSvc, "rulesSvc.approvalSvc must be wired by NewSessionService")
 }
 
 // TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules is the

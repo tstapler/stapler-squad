@@ -13,6 +13,12 @@ type ProcessManager interface {
 	RestoreWithWorkDir(workDir string) error
 	Close() error
 	IsAlive() bool
+	// HasLiveSessionNoCache is IsAlive() with any cached liveness flag
+	// bypassed — always a fresh check. Callers use this before an action
+	// whose cost of a stale positive is high (e.g. attaching control-mode
+	// to what turns out to be a dead session and immediately receiving
+	// %exit).
+	HasLiveSessionNoCache() bool
 
 	// Identification
 	GetSessionIdentifier() string
@@ -75,6 +81,20 @@ const (
 	BackendNative ProcessManagerBackend = "native"
 	BackendTymux  ProcessManagerBackend = "tymux"
 )
+
+// pushesLivenessEvents lists backends that report liveness push-style
+// (instanceOnExitCallback) instead of being independently pollable by name
+// — the single place to add a future backend instead of touching every
+// poll site that needs to skip it.
+var pushesLivenessEvents = map[ProcessManagerBackend]bool{
+	BackendTymux: true,
+}
+
+// SkipsPollBasedLiveness reports whether tmux-socket-based liveness polling
+// (reconcileSessions, health.go) has anything correct to add for this backend.
+func (b ProcessManagerBackend) SkipsPollBasedLiveness() bool {
+	return pushesLivenessEvents[b]
+}
 
 // ProcessManagerOptions holds constructor parameters for NewProcessManager.
 type ProcessManagerOptions struct {

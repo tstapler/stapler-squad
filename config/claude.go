@@ -266,8 +266,9 @@ func (m *ClaudeConfigManager) UpdateConfig(filename string, content string) erro
 
 	// Atomically rename temp file to actual file
 	if err := os.Rename(tmpPath, filePath); err != nil {
-		// Clean up temp file on failure
-		os.Remove(tmpPath)
+		// Clean up temp file on failure; the rename error below is what matters to
+		// the caller, and a leftover .tmp file is harmless best-effort cleanup.
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to atomically update file: %w", err)
 	}
 

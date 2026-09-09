@@ -547,7 +547,7 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 	// itself) only recognizes '\r' as submit, so a trailing '\n' leaves the
 	// command sitting unsubmitted in the input buffer.
 	sendErrCh := make(chan error, 1)
-	go func() { sendErrCh <- inst.SendKeys(session.BuildSubmittableInput(command, true)) }()
+	go func() { sendErrCh <- inst.SendKeys(session.BuildSubmittableInputAndSubmit(command)) }()
 
 	sendCtx, sendCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer sendCancel()

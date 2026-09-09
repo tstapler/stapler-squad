@@ -31,13 +31,17 @@ func TestGetStreamHubRolloutStatus_DefaultsToNoRehearsalNoOverrides(t *testing.T
 	assert.Empty(t, resp.Msg.SessionOverrides)
 }
 
-func TestGetStreamHubRolloutStatus_ReportsGlobalEnvVar(t *testing.T) {
+// TestGetStreamHubRolloutStatus_GlobalEnvVarAlwaysFalse is a regression
+// guard: STAPLER_SQUAD_USE_STREAM_HUB was removed in favor of the
+// "stream_hub" feature flag (see GlobalOverride), so GlobalEnvVarSet must
+// stay false even if that env var happens to be set in the environment.
+func TestGetStreamHubRolloutStatus_GlobalEnvVarAlwaysFalse(t *testing.T) {
 	s := newIsolatedStreamHubRolloutService(t)
 	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
 
 	resp, err := s.GetStreamHubRolloutStatus(context.Background(), connect.NewRequest(&sessionv1.GetStreamHubRolloutStatusRequest{}))
 	require.NoError(t, err)
-	assert.True(t, resp.Msg.GlobalEnvVarSet)
+	assert.False(t, resp.Msg.GlobalEnvVarSet)
 }
 
 func TestCompleteStreamHubRollbackRehearsal_SetsTimestamp(t *testing.T) {

@@ -98,16 +98,18 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 			}
 			if f, err := os.OpenFile(agyHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil { // #nosec G304 -- agyHistoryPath is home dir + hardcoded constant components only
 				if _, werr := f.Write(historyData); werr != nil {
-					f.Close()
+					_ = f.Close()
 					log.Warn("PortSessionHistory: failed to write agy history data", "error", werr)
 					return werr
 				}
 				if _, werr := f.Write([]byte("\n")); werr != nil {
-					f.Close()
+					_ = f.Close()
 					log.Warn("PortSessionHistory: failed to write agy history newline", "error", werr)
 					return werr
 				}
-				f.Close()
+				if err := f.Close(); err != nil {
+					log.Warn("PortSessionHistory: failed to close agy history file", "error", err)
+				}
 			}
 		}
 	} else if dstAdapter.Name() == "claude" {
@@ -128,16 +130,18 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 			}
 			if hf, err := os.OpenFile(claudeHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil { // #nosec G304 -- claudeHistoryPath is home dir + hardcoded constant components only
 				if _, werr := hf.Write(historyData); werr != nil {
-					hf.Close()
+					_ = hf.Close()
 					log.Warn("PortSessionHistory: failed to write claude history data", "error", werr)
 					return werr
 				}
 				if _, werr := hf.Write([]byte("\n")); werr != nil {
-					hf.Close()
+					_ = hf.Close()
 					log.Warn("PortSessionHistory: failed to write claude history newline", "error", werr)
 					return werr
 				}
-				hf.Close()
+				if err := hf.Close(); err != nil {
+					log.Warn("PortSessionHistory: failed to close claude history file", "error", err)
+				}
 			}
 		}
 

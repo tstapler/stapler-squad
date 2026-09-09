@@ -83,12 +83,15 @@ interface NotificationContextValue {
    * so the toast disappears even if auto-minimize hasn't fired yet.
    */
   removeToastBySessionId: (sessionId: string | string[]) => void;
-  markAllAsRead: () => void;
   removeFromHistory: (id: string) => void;
   clearHistory: () => void;
   getUnreadCount: () => number;
   historyLoading: boolean;
   historyHasMore: boolean;
+  /** Set when the most recent history fetch failed; cleared on the next successful one. Last-known-good `notificationHistory` is left untouched either way (Task 3.1.2h, AC38). */
+  historyError: Error | null;
+  /** Date.now() of the last successful history fetch; null until the first one completes. */
+  historyLastUpdatedAt: number | null;
   loadMoreHistory: () => Promise<void>;
   /** Re-fetch the full notification history from the server (e.g. after a stream reconnect). */
   refreshHistory: () => Promise<void>;
@@ -421,15 +424,6 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     setNotifications((prev) => prev.filter((n) => !sessionIds.has(n.sessionId ?? "")));
   }, []);
 
-  const markAllAsRead = useCallback(() => {
-    setNotificationHistory((prev) => {
-      const unreadCount = prev.filter((n) => !n.isRead).length;
-      if (unreadCount > 0) auditLog.logNotificationMarkedAllRead(unreadCount);
-      return prev.map((n) => ({ ...n, isRead: true }));
-    });
-    history.markAllAsRead();
-  }, [auditLog, history]);
-
   const removeFromHistory = useCallback((id: string) => {
     setNotificationHistory((prev) => {
       const notification = prev.find((n) => n.id === id);
@@ -470,12 +464,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         markAsRead,
         markAsReadBySessionId,
         removeToastBySessionId,
-        markAllAsRead,
         removeFromHistory,
         clearHistory,
         getUnreadCount,
         historyLoading: history.loading,
         historyHasMore: history.hasMore,
+        historyError: history.error,
+        historyLastUpdatedAt: history.lastUpdatedAt,
         loadMoreHistory: history.loadMore,
         refreshHistory: history.refresh,
         showUndoToast,

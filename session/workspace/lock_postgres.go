@@ -88,7 +88,12 @@ func (l *PostgresAdvisoryLock) Acquire(ctx context.Context, resource string, tim
 	// pg_advisory_lock blocks until the lock is available
 	_, err = conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", key)
 	if err != nil {
-		conn.Close()
+		// The lock was never acquired on this connection, so closing it has
+		// no lock-safety implication; a failure here is just a leaked pool
+		// connection worth knowing about.
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Debug("failed to close postgres connection after failed advisory lock attempt", "resource", resource, "err", closeErr)
+		}
 		return nil, &LockError{
 			Op:       "acquire",
 			Resource: resource,
@@ -140,7 +145,12 @@ func (l *PostgresAdvisoryLock) TryAcquire(ctx context.Context, resource string) 
 	var acquired bool
 	err = conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&acquired)
 	if err != nil {
-		conn.Close()
+		// The lock was never acquired on this connection, so closing it has
+		// no lock-safety implication; a failure here is just a leaked pool
+		// connection worth knowing about.
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Debug("failed to close postgres connection after failed try-advisory-lock attempt", "resource", resource, "err", closeErr)
+		}
 		return nil, false, &LockError{
 			Op:       "try_acquire",
 			Resource: resource,
@@ -149,7 +159,11 @@ func (l *PostgresAdvisoryLock) TryAcquire(ctx context.Context, resource string) 
 	}
 
 	if !acquired {
-		conn.Close()
+		// Lock is held by someone else; this connection never held it, so a
+		// close failure is only a leaked pool connection, not a stuck lock.
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Debug("failed to close postgres connection after advisory lock unavailable", "resource", resource, "err", closeErr)
+		}
 		return nil, false, nil
 	}
 
@@ -176,8 +190,20 @@ func (l *PostgresAdvisoryLock) Close() error {
 
 	for _, handle := range l.handles {
 		if !handle.released && handle.conn != nil {
-			// Advisory locks are automatically released when connection closes
-			handle.conn.Close()
+			// Advisory locks are automatically released when the connection
+			// closes, but only if the close actually succeeds — if it
+			// silently fails the lock stays held server-side, blocking
+			// every future Acquire on this resource until the connection is
+			// eventually reaped for other reasons. Attempt an explicit
+			// unlock first (mirrors Release()) so the lock still clears
+			// even when Close() itself fails, and log any Close() failure
+			// so a stuck lock isn't silent.
+			if _, err := handle.conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", handle.key); err != nil {
+				log.Debug("failed to explicitly release advisory lock during Close", "resource", handle.resource, "err", err)
+			}
+			if err := handle.conn.Close(); err != nil {
+				log.Warn("failed to close postgres advisory lock connection; lock may remain held until connection is reaped", "resource", handle.resource, "err", err)
+			}
 		}
 	}
 

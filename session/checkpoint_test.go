@@ -155,9 +155,6 @@ func TestCreateCheckpoint_StartedInstance_AllFieldsPopulated(t *testing.T) {
 // forked instance's backend even though the process-wide default is
 // registered as tymux.
 func TestForkFromCheckpoint_HonorsSessionNameOverrideMap(t *testing.T) {
-	RegisterBackendProvider(BackendTymux)
-	t.Cleanup(func() { RegisterBackendProvider(BackendTmux) })
-
 	testDir := t.TempDir()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
 
@@ -170,7 +167,7 @@ func TestForkFromCheckpoint_HonorsSessionNameOverrideMap(t *testing.T) {
 	const newTitle = "checkpoint-fork-override-test"
 	sessionKey := tmux.NewSessionName(newTitle, tmux.TmuxPrefix).String()
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
-		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+		[]byte(`{"feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
 	newInst, err := inst.ForkFromCheckpoint(cp.ID, newTitle, t.TempDir())
 	require.NoError(t, err)

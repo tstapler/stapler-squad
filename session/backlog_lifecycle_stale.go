@@ -92,7 +92,17 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 		if active.LastProgressAt != nil {
 			lastProgress = *active.LastProgressAt
 		}
-		if !staleWork(lastProgress, time.Now()) {
+
+		// Shape B (LivenessKindHeartbeat), keyed BacklogStatusInProgress — Epic 1.4,
+		// Story 1.4.3. Nil-guarded: an unwired/unresolvable engine falls back to the
+		// literal maxWorkSessionStaleness constant, unchanged from before.
+		maxNoProgress := maxWorkSessionStaleness
+		if l.livenessEngine != nil {
+			if def, defErr := l.livenessEngine.LivenessFor(BacklogStatusInProgress, PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+				maxNoProgress = def.MaxNoProgressDuration
+			}
+		}
+		if !staleWork(lastProgress, time.Now(), maxNoProgress) {
 			continue
 		}
 		stillStale[item.ID] = true
@@ -135,7 +145,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 		log.WarningLog().Printf("[BacklogLifecycle] item %s work session %s stale (no progress since %s)", item.ID, active.SessionUUID, lastProgress)
 		l.notify(item.ID,
 			"Work session may be stuck",
-			fmt.Sprintf("%s — no progress reported in over %s. It may be hung or working silently.", item.Title, maxWorkSessionStaleness),
+			fmt.Sprintf("%s — no progress reported in over %s. It may be hung or working silently.", item.Title, maxNoProgress),
 			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
 		)

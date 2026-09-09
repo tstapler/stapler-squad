@@ -1,103 +1,73 @@
 package config
 
 import (
-	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
-// TestResolveGlobalStreamHubDefault_should_ReturnFalseWithNoError_When_RequestedIsFalse
-// verifies the gate never blocks the safe direction: requesting the global
-// default be false is always permitted, regardless of whether the rollback
-// rehearsal has been recorded.
-func TestResolveGlobalStreamHubDefault_should_ReturnFalseWithNoError_When_RequestedIsFalse(t *testing.T) {
-	cfg := &Config{} // RollbackRehearsalCompletedAt unset
-
-	got, err := ResolveGlobalStreamHubDefault(cfg, false)
-	if err != nil {
-		t.Fatalf("expected no error requesting false, got %v", err)
-	}
-	if got != false {
-		t.Fatalf("expected false, got %v", got)
+// TestEffectiveStreamHubEnabled covers the single source of truth that
+// replaced two independently-derived (and quietly diverged) copies of this
+// logic in server/services.useStreamHub and session.effectiveStreamHubFlag:
+// the "stream_hub" feature flag defaults to on, and an explicit value
+// (set via SetStreamHubGlobalOverride, i.e. the settings panel) wins either
+// direction.
+func TestEffectiveStreamHubEnabled_should_DefaultOn_When_FlagUnset(t *testing.T) {
+	if got := EffectiveStreamHubEnabled(&Config{}); got != true {
+		t.Fatalf("expected default-on, got %v", got)
 	}
 }
 
-// TestResolveGlobalStreamHubDefault_should_FailFast_When_RehearsalNotCompleted
-// is plan.md Story 3.3.1's AC2/Task 3.3.1e scenario (pre-mortem P1 #4): with
-// RollbackRehearsalCompletedAt unset, requesting the global default resolve
-// to true must fail with an explicit error, not silently fall back to false
-// without signaling why.
-func TestResolveGlobalStreamHubDefault_should_FailFast_When_RehearsalNotCompleted(t *testing.T) {
-	cfg := &Config{} // RollbackRehearsalCompletedAt unset
-
-	got, err := ResolveGlobalStreamHubDefault(cfg, true)
-	if !errors.Is(err, ErrRollbackRehearsalNotCompleted) {
-		t.Fatalf("expected ErrRollbackRehearsalNotCompleted, got %v", err)
+func TestEffectiveStreamHubEnabled_should_HonorExplicitFlagValue(t *testing.T) {
+	cfg := &Config{}
+	if err := cfg.SetStreamHubGlobalOverride(boolPtr(false)); err != nil {
+		t.Fatalf("SetStreamHubGlobalOverride(false): %v", err)
 	}
-	if got != false {
-		t.Fatalf("expected false to be returned alongside the error, got %v", got)
+	if got := EffectiveStreamHubEnabled(cfg); got != false {
+		t.Fatalf("expected explicit false to win, got %v", got)
+	}
+
+	if err := cfg.SetStreamHubGlobalOverride(boolPtr(true)); err != nil {
+		t.Fatalf("SetStreamHubGlobalOverride(true): %v", err)
+	}
+	if got := EffectiveStreamHubEnabled(cfg); got != true {
+		t.Fatalf("expected explicit true, got %v", got)
+	}
+
+	if err := cfg.SetStreamHubGlobalOverride(nil); err != nil {
+		t.Fatalf("SetStreamHubGlobalOverride(nil): %v", err)
+	}
+	if got := EffectiveStreamHubEnabled(cfg); got != true {
+		t.Fatalf("expected clearing the override to revert to the on-by-default value, got %v", got)
 	}
 }
 
-// TestResolveGlobalStreamHubDefault_should_FailFast_When_ConfigIsNil verifies
-// the gate is nil-safe: a nil *Config must behave like an unset rehearsal
-// timestamp rather than panicking.
-func TestResolveGlobalStreamHubDefault_should_FailFast_When_ConfigIsNil(t *testing.T) {
-	got, err := ResolveGlobalStreamHubDefault(nil, true)
-	if !errors.Is(err, ErrRollbackRehearsalNotCompleted) {
-		t.Fatalf("expected ErrRollbackRehearsalNotCompleted for nil config, got %v", err)
+// TestGetStreamHubGlobalOverride_should_ReportUnset_Then_Set mirrors
+// GetStreamHubSessionOverride's (value, ok) shape for the global flag.
+func TestGetStreamHubGlobalOverride_should_ReportUnset_Then_Set(t *testing.T) {
+	cfg := &Config{}
+	if _, ok := cfg.GetStreamHubGlobalOverride(); ok {
+		t.Fatal("expected no override on a fresh config")
 	}
-	if got != false {
-		t.Fatalf("expected false, got %v", got)
+
+	if err := cfg.SetStreamHubGlobalOverride(boolPtr(false)); err != nil {
+		t.Fatalf("SetStreamHubGlobalOverride: %v", err)
+	}
+	if got, ok := cfg.GetStreamHubGlobalOverride(); !ok || got != false {
+		t.Fatalf("expected (false, true), got (%v, %v)", got, ok)
 	}
 }
 
-// TestResolveGlobalStreamHubDefault_should_Succeed_When_RehearsalCompleted is
-// Task 3.3.1e's happy path: once RollbackRehearsalCompletedAt is set to a
-// valid, non-zero timestamp, the same resolution that previously failed now
-// succeeds and permits the global default to be true.
-func TestResolveGlobalStreamHubDefault_should_Succeed_When_RehearsalCompleted(t *testing.T) {
-	completedAt := time.Now()
-	cfg := &Config{RollbackRehearsalCompletedAt: &completedAt}
-
-	got, err := ResolveGlobalStreamHubDefault(cfg, true)
-	if err != nil {
-		t.Fatalf("expected no error once rehearsal is recorded, got %v", err)
-	}
-	if got != true {
-		t.Fatalf("expected true, got %v", got)
-	}
-}
-
-// TestRecordRollbackRehearsalCompleted_should_PersistTimestamp_And_UnblockResolution
-// exercises Task 3.3.2c end to end: recording a completed rehearsal persists
-// RollbackRehearsalCompletedAt to disk, and a freshly reloaded config
-// subsequently permits ResolveGlobalStreamHubDefault to return true where it
-// previously refused.
-func TestRecordRollbackRehearsalCompleted_should_PersistTimestamp_And_UnblockResolution(t *testing.T) {
+// TestRecordRollbackRehearsalCompleted_should_PersistTimestamp is now a
+// purely historical record — EffectiveStreamHubEnabled no longer gates on
+// it — but RecordRollbackRehearsalCompleted still exists and still persists,
+// so cover that it does.
+func TestRecordRollbackRehearsalCompleted_should_PersistTimestamp(t *testing.T) {
 	tempHome := t.TempDir()
-	origHome := os.Getenv("HOME")
-	origInstance := os.Getenv("STAPLER_SQUAD_INSTANCE")
-	os.Setenv("HOME", tempHome)
-	os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
-	defer func() {
-		os.Setenv("HOME", origHome)
-		if origInstance == "" {
-			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
-		} else {
-			os.Setenv("STAPLER_SQUAD_INSTANCE", origInstance)
-		}
-	}()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
 
 	cfg := &Config{}
-
-	// Before recording, the gate refuses.
-	if _, err := ResolveGlobalStreamHubDefault(cfg, true); !errors.Is(err, ErrRollbackRehearsalNotCompleted) {
-		t.Fatalf("expected gate to refuse before rehearsal is recorded, got %v", err)
-	}
-
 	before := time.Now()
 	if err := cfg.RecordRollbackRehearsalCompleted(); err != nil {
 		t.Fatalf("RecordRollbackRehearsalCompleted returned error: %v", err)
@@ -111,20 +81,13 @@ func TestRecordRollbackRehearsalCompleted_should_PersistTimestamp_And_UnblockRes
 		t.Fatalf("expected RollbackRehearsalCompletedAt to be within [%v, %v], got %v", before, after, *cfg.RollbackRehearsalCompletedAt)
 	}
 
-	if _, err := ResolveGlobalStreamHubDefault(cfg, true); err != nil {
-		t.Fatalf("expected gate to succeed after rehearsal is recorded, got %v", err)
-	}
-
 	configPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
 	reloaded, err := LoadConfigFromPath(configPath)
 	if err != nil {
-		t.Fatalf("LoadConfigFromPath after RecordRollbackRehearsalCompleted: %v", err)
+		t.Fatalf("LoadConfigFromPath: %v", err)
 	}
 	if reloaded.RollbackRehearsalCompletedAt == nil {
 		t.Fatal("expected persisted config to carry RollbackRehearsalCompletedAt")
-	}
-	if _, err := ResolveGlobalStreamHubDefault(reloaded, true); err != nil {
-		t.Fatalf("expected reloaded config's gate to succeed, got %v", err)
 	}
 }
 
@@ -143,22 +106,14 @@ func TestGetStreamHubSessionOverride_should_ReportNoOverride_When_Unset(t *testi
 }
 
 // TestSetStreamHubSessionOverride_should_SetAndClear_And_Persist exercises
-// Task 3.3.1b's per-session override storage: setting an override persists
-// it, and passing nil clears it again, in both cases surviving a reload.
+// the per-session override storage: setting an override persists it, and
+// passing nil clears it again, in both cases surviving a reload. Unaffected
+// by the global-default change above — this path never went through
+// STAPLER_SQUAD_USE_STREAM_HUB or the rehearsal gate.
 func TestSetStreamHubSessionOverride_should_SetAndClear_And_Persist(t *testing.T) {
 	tempHome := t.TempDir()
-	origHome := os.Getenv("HOME")
-	origInstance := os.Getenv("STAPLER_SQUAD_INSTANCE")
-	os.Setenv("HOME", tempHome)
-	os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
-	defer func() {
-		os.Setenv("HOME", origHome)
-		if origInstance == "" {
-			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
-		} else {
-			os.Setenv("STAPLER_SQUAD_INSTANCE", origInstance)
-		}
-	}()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
 
 	cfg := &Config{}
 	forceHub := true
@@ -194,3 +149,5 @@ func TestSetStreamHubSessionOverride_should_SetAndClear_And_Persist(t *testing.T
 		t.Fatal("expected persisted config to no longer have the override")
 	}
 }
+
+func boolPtr(b bool) *bool { return &b }
