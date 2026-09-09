@@ -962,11 +962,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       }, 250);
     } else if (wasConnected && !isConnected) {
       console.log("[TerminalOutput] Connection lost, will attempt reconnection");
-      // Only clear the overlay if real content already loaded — otherwise this is a
-      // brand-new session whose first connection attempt landed before the tmux pane
-      // was ready, and dropping the spinner here would show a bare "Disconnected"
-      // instead of a startup state (the overlay's own text switches to "Starting
-      // session..." for this case — see the isLoadingInitialContent block below).
+      // New session: don't drop the spinner before first content arrives.
       if (isInitialScrollbackDoneRef.current) {
         setIsLoadingInitialContent(false);
       }
@@ -1608,6 +1604,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     },
   ];
 
+  const isConnectingState = terminalState === "CONNECTING" || terminalState === "LOADING";
+
   return (
     <div className={styles.container}>
       <div className={styles.toolbar}>
@@ -1621,7 +1619,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             className={`${styles.statusIndicator} ${
               isConnected
                 ? styles.connected
-                : isWaitingForStableSize || terminalState === "CONNECTING" || terminalState === "LOADING"
+                : isWaitingForStableSize || isConnectingState
                   ? styles.stabilizing
                   : styles.disconnected
             }`}
@@ -1631,7 +1629,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               ? "Connected"
               : isWaitingForStableSize
                 ? "Initializing..."
-                : terminalState === "CONNECTING" || terminalState === "LOADING"
+                : isConnectingState
                   ? "Connecting..."
                   : "Disconnected"}
           </span>
