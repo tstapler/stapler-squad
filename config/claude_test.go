@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/envtest"
 )
 
 // TestResolveClaudeHistoryDir_should_ReturnConfigDirSubpath_When_IsolatedInstance
@@ -44,7 +46,7 @@ func TestResolveClaudeHistoryDir_should_ReturnConfigDirSubpath_When_IsolatedInst
 // branch above.
 func TestResolveClaudeHistoryDir_should_ReturnRealHomeDir_When_NotIsolated(t *testing.T) {
 	homeDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	got, err := ResolveClaudeHistoryDir(homeDir, false)
 	if err != nil {

@@ -6,11 +6,13 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/envtest"
 )
 
 func newTestHandler(t *testing.T, rpIDs []string, hostnameValidator func(string) bool) *Handler {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	store, err := NewCredentialStore()
 	if err != nil {

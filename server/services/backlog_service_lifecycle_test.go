@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -96,7 +97,7 @@ func TestCreateBacklogItem_should_SetPipelineModeFromRequest_When_FieldPresent(t
 // is the positive case for the opt-in default: with the flag on and no explicit
 // pipeline_mode on the request, a brand-new item defaults to "sdd" instead of "".
 func TestCreateBacklogItem_should_DefaultPipelineModeToSDD_When_FlagEnabledAndFieldOmitted(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(sddDefaultPipelineFlagName, true))
 	svc := newBacklogService(t)
 
@@ -113,7 +114,7 @@ func TestCreateBacklogItem_should_DefaultPipelineModeToSDD_When_FlagEnabledAndFi
 // created with no explicit pipeline_mode still gets "" — zero behavior change
 // for every item until an operator deliberately opts in.
 func TestCreateBacklogItem_should_NotDefaultPipelineMode_When_FlagDisabled(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	svc := newBacklogService(t)
 
 	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -129,7 +130,7 @@ func TestCreateBacklogItem_should_NotDefaultPipelineMode_When_FlagDisabled(t *te
 // explicit empty string, which must still mean "flat default pipeline", not
 // "unset, please apply the sdd default".
 func TestCreateBacklogItem_should_RespectExplicitPipelineMode_When_FlagEnabledButFieldSet(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(sddDefaultPipelineFlagName, true))
 	svc := newBacklogService(t)
 

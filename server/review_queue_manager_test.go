@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -1469,7 +1470,7 @@ func (f *fakeSlackNotifierWiring) counts() (notify, maybeThreshold int) {
 // config.LoadConfig() call sees them.
 func setTestSlackConfig(t *testing.T, notifyOnQueueItem bool, queueDepthThreshold int) {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	cfg := config.LoadConfig()
 	cfg.Slack.NotifyOnQueueItem = notifyOnQueueItem
 	cfg.Slack.QueueDepthThreshold = queueDepthThreshold

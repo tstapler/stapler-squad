@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 )
 
 // newTestSuspendedProcessStore creates a SuspendedProcessStore rooted at a
@@ -12,7 +13,7 @@ import (
 // STAPLER_SQUAD_TEST_DIR isolation pattern used throughout session/*_test.go).
 func newTestSuspendedProcessStore(t *testing.T) *SuspendedProcessStore {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	store, err := NewSuspendedProcessStore()
 	require.NoError(t, err)
 	return store

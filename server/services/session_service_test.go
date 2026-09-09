@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -202,9 +203,9 @@ func TestCreateSession_should_RejectSecondDuplicate_When_TwoRapidCallsShareTitle
 	// that other process's config.json instead of getting a fresh
 	// testModeSentinelProgram default -- an empty/real DefaultProgram there
 	// fails Session.program's NotEmpty validator. Matches the same
-	// t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir()) pattern used elsewhere
-	// in this file (e.g. the "ModeIsAlias" subtest) for the identical reason.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	// envtest.NewIsolatedStateDir(t) call used elsewhere in this file (e.g.
+	// the "ModeIsAlias" subtest) for the identical reason.
+	envtest.NewIsolatedStateDir(t)
 
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
@@ -4218,7 +4219,7 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 		t.Cleanup(fix.cleanup)
 		wireRegistryForActorSerialization(fix)
 
-		t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+		envtest.NewIsolatedStateDir(t)
 		aliasPath := t.TempDir()
 		cfg := config.DefaultConfig()
 		cfg.SessionDefaults.Aliases = []config.AliasConfig{
@@ -4365,7 +4366,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 	// STAPLER_SQUAD_TEST_DIR/STAPLER_SQUAD_INSTANCE leaking in from elsewhere
 	// (e.g. a live e2e/demo run in the same shell) would otherwise make this
 	// test read that other process's config.json instead.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	fix := setupForkTestFixture(t)
 	wireRegistryForActorSerialization(fix)

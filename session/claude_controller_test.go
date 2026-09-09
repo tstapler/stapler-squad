@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
@@ -720,7 +721,7 @@ func TestClaudeController_IsIdle_should_returnFalse_When_BatchedToolCallSummaryD
 // a future regression at that exact line (e.g. reverting to `rs.SetStableSessionID(cc.sessionName)`)
 // would pass the entire existing suite.
 func TestClaudeController_Start_TagsEscapeAnalyticsWithStableID(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	spy := &escapeEventSpy{}
 	prev := analytics.GetGlobalEscapeWriter()
@@ -786,7 +787,7 @@ func TestClaudeController_Start_TagsEscapeAnalyticsWithStableID(t *testing.T) {
 // exact same code path (detection.ResolveDetectorForProgram resolving cc.instance.GetProgram()
 // against the live snapshot) with zero global state to leak into other tests.
 func TestClaudeController_Start_UsesPerProgramDetector_WhenRegistered(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	reader, writer, err := mockPTY()
 	if err != nil {
@@ -837,7 +838,7 @@ func TestClaudeController_Start_UsesPerProgramDetector_WhenRegistered(t *testing
 // patterns — so every session that isn't running a program with a registered
 // detector sees no behavior change from this story.
 func TestClaudeController_Start_FallsBackToDefaultDetector_WhenProgramUnregistered(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	reader, writer, err := mockPTY()
 	if err != nil {
