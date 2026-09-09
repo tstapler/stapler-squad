@@ -15,17 +15,20 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
-// pipelineEventuallyTimeout bounds every require.Eventually below that waits
-// for the background resolution pipeline to reach a terminal state. These
-// tests spawn a real tmux session as part of that pipeline, so completion
-// time depends on OS process-scheduling latency, not just in-process work --
-// a fixed 2-3s window flaked under concurrent test-suite load (confirmed:
-// the same tests always pass in isolation, and the pipeline never actually
-// fails to converge, just takes longer than 2-3s when many other tests are
-// also spawning real tmux sessions at once). 10s is generous enough to
-// absorb that contention while still catching a genuine hang.
+// pipelineEventuallyTimeout is the BASE bound every wait.RequireEventually
+// below uses while waiting for the background resolution pipeline to reach a
+// terminal state. These tests spawn a real tmux session as part of that
+// pipeline, so completion time depends on OS process-scheduling latency, not
+// just in-process work -- a fixed 2-3s window flaked under concurrent
+// test-suite load (confirmed: the same tests always pass in isolation, and
+// the pipeline never actually fails to converge, just takes longer than 2-3s
+// when many other tests are also spawning real tmux sessions at once).
+// wait.RequireEventually scales this base value by measured machine load
+// (wait.ScaleTimeout) instead of relying on a single hand-picked constant
+// generous enough for the worst case.
 const pipelineEventuallyTimeout = 10 * time.Second
 
 // TestBackgroundResolutionPipeline_should_ContinueRunning_When_RPCContextIsCanceled
@@ -71,7 +74,7 @@ func TestBackgroundResolutionPipeline_should_ContinueRunning_When_RPCContextIsCa
 		t.Fatal("background resolution pipeline did not continue running after the RPC context was canceled")
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
 		return inst != nil && session.Status(inst.GetStatus()) == session.Active
 	}, pipelineEventuallyTimeout, 20*time.Millisecond, "pipeline must still reach Active after the RPC context cancellation")
@@ -107,7 +110,7 @@ func TestBackgroundResolutionPipeline_should_WriteFailed_When_ResolutionExceedsT
 		t.Fatal("githubResolver's context never became Done within creationResolutionTimeout")
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
 		return inst != nil && session.Status(inst.GetStatus()) == session.Failed
 	}, pipelineEventuallyTimeout, 20*time.Millisecond, "a resolution that exceeds the Background Resolution Context's timeout must produce a terminal Failed write")
@@ -154,7 +157,7 @@ func TestBackgroundResolutionPipeline_should_PublishProgressPerPhase_When_Github
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
 		return inst != nil && session.Status(inst.GetStatus()) == session.Active
 	}, pipelineEventuallyTimeout, 20*time.Millisecond)
@@ -192,7 +195,7 @@ func TestBackgroundResolutionPipeline_should_CompleteWithoutNetworkIO_When_Plain
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
 		return inst != nil && session.Status(inst.GetStatus()) == session.Active
 	}, pipelineEventuallyTimeout, 5*time.Millisecond)
@@ -226,7 +229,7 @@ func TestBackgroundResolutionPipeline_should_WriteFailedAndNotCrashProcess_When_
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
 		return inst != nil && session.Status(inst.GetStatus()) == session.Failed
 	}, pipelineEventuallyTimeout, 20*time.Millisecond, "a panic inside the pipeline must be recovered into a terminal Failed write")
@@ -259,7 +262,7 @@ func TestBackgroundResolutionPipeline_should_TransitionToActive_When_ResolutionS
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
 		return inst != nil && session.Status(inst.GetStatus()) == session.Active
 	}, pipelineEventuallyTimeout, 20*time.Millisecond)
