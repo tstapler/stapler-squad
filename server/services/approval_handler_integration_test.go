@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newTestHandler creates an ApprovalHandler wired with real in-memory dependencies
@@ -777,7 +778,7 @@ func TestHandlePermissionRequest_ContextCancelPublishesApprovalResponseEvent(t *
 	}()
 
 	// Wait for approval to appear, then cancel
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return len(store.ListAll()) > 0
 	}, 500*time.Millisecond, 5*time.Millisecond)
 
@@ -892,7 +893,7 @@ func TestHandlePermissionRequest_ContextCancelMarksRead(t *testing.T) {
 		h.HandlePermissionRequest(rr, req)
 	}()
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return len(store.ListAll()) > 0
 	}, 500*time.Millisecond, 5*time.Millisecond)
 
@@ -934,7 +935,7 @@ func TestHandlePermissionRequest_ContextCancelStampsMetadata(t *testing.T) {
 		h.HandlePermissionRequest(rr, req)
 	}()
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return len(store.ListAll()) > 0
 	}, 500*time.Millisecond, 5*time.Millisecond)
 

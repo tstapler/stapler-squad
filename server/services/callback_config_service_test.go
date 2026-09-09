@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newIsolatedCallbackConfigService creates a CallbackConfigService backed by a
@@ -182,7 +183,7 @@ func TestUpdateCallbackConfig_TakesEffectOnDispatchWithoutRestart(t *testing.T) 
 	// now reach the newly-saved URL.
 	d.Dispatch("session_complete", map[string]any{"phase": "after"})
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		urls := rt.urls()
 		return len(urls) == 1 && urls[0] == newURL
 	}, 2*time.Second, 10*time.Millisecond, "dispatch after config update must reach the newly-saved URL without a restart")

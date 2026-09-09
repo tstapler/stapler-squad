@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // backdateStuckFirstDetected sets first_detected_at on the open
@@ -914,7 +915,7 @@ func TestReconcileStaleWorkSessions_should_dispatchRemediation_When_RowAlreadyOp
 	// is already open, so this tick must dispatch remediation.
 	listener.reconcileStaleWorkSessions(ctx, er)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		select {
 		case itemID := <-remediator.calls:
 			return itemID == item.ID
@@ -923,7 +924,7 @@ func TestReconcileStaleWorkSessions_should_dispatchRemediation_When_RowAlreadyOp
 		}
 	}, time.Second, 10*time.Millisecond, "remediation must be dispatched once the row is already open and still due")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		rows, findErr := er.FindOpenStuckStates(ctx)
 		return findErr == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
 	}, time.Second, 10*time.Millisecond, "RemediationDue's attempt accounting must advance exactly once")
@@ -955,7 +956,7 @@ func TestRemediateStaleWorkWithBackoffGate_should_respectBackoffSchedule_When_Ca
 		listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		rows, err := er.FindOpenStuckStates(ctx)
 		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
 	}, time.Second, 10*time.Millisecond, "only the first of 10 back-to-back calls should consume an attempt")
@@ -1057,7 +1058,7 @@ func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_Rewo
 
 	for attempt := 1; attempt <= 5; attempt++ {
 		listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			rows, findErr := er.FindOpenStuckStates(ctx)
 			return findErr == nil && len(rows) == 1 && rows[0].RemediationAttempts == int32(attempt)
 		}, time.Second, 10*time.Millisecond, "attempt %d must be recorded", attempt)
@@ -1786,7 +1787,7 @@ func TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGa
 		t.Fatal("expected AutoRespawnTriage to be dispatched for the due row")
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		rows, err := er.FindOpenStuckStates(ctx)
 		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
 	}, time.Second, 10*time.Millisecond, "the dispatched attempt must advance RemediationDue's own accounting")
@@ -2142,7 +2143,7 @@ func TestRetryOrphanedTriageWithBackoffGate_should_respectBackoffSchedule_When_C
 		listener.retryOrphanedTriageWithBackoffGate(ctx, item.ID, item.Title)
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		rows, err := er.FindOpenStuckStates(ctx)
 		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
 	}, time.Second, 10*time.Millisecond, "only the first of 10 back-to-back calls should consume an attempt")
@@ -3668,7 +3669,7 @@ func TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_Calle
 		listener.retryPushFailedWithBackoffGate(ctx, item.ID, item.Title)
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		rows, err := er.FindOpenStuckStates(ctx)
 		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
 	}, time.Second, 10*time.Millisecond, "only the first of 10 back-to-back calls should consume an attempt")
@@ -3704,7 +3705,7 @@ func TestReconcilePushFailedItems_should_dispatchRetryThroughBackoffGate_When_Ro
 
 	listener.reconcilePushFailedItems(ctx, er)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		fetched, err := storage.GetBacklogItem(ctx, item.ID)
 		return err == nil && fetched.Status == string(BacklogStatusPRPending)
 	}, 2*time.Second, 10*time.Millisecond, "the periodic sweep must dispatch a retry that eventually ships the item")

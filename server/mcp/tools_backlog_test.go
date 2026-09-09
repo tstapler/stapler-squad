@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
 )
 
@@ -5538,7 +5539,7 @@ func TestWaitForBacklogEvent_NoGoroutineLeak(t *testing.T) {
 		t.Fatal("matched-path call did not return")
 	}
 
-	require.Eventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
+	wait.RequireEventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
 		"both calls must Unsubscribe on exit")
 	goleak.VerifyNone(t, baseline)
 }
@@ -6493,7 +6494,7 @@ func TestWaitForBacklogEvent_should_NotWake_When_ActivityNoteAddedFires(t *testi
 		t.Fatal("waitForBacklogEvent did not return within the timeout window")
 	}
 
-	require.Eventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
+	wait.RequireEventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
 		"the timed-out call must Unsubscribe on exit")
 	goleak.VerifyNone(t, baseline)
 }
@@ -6546,7 +6547,7 @@ func TestWaitForBacklogEvent_should_StillWake_When_StatusTransitionFires(t *test
 		t.Fatal("waitForBacklogEvent did not return after a genuine status-transition event")
 	}
 
-	require.Eventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
+	wait.RequireEventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
 		"the matched call must Unsubscribe on exit")
 	goleak.VerifyNone(t, baseline)
 }

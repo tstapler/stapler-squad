@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/testutil"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newNarrowServerDeps builds the minimal *server.ServerDependencies graph
@@ -247,7 +248,7 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	// check occasionally raced this and failed; polling gives it the extra
 	// moment it actually needs without weakening what's being verified.
 	defer func() {
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			return goleak.Find(baseline) == nil
 		}, 2*time.Second, 20*time.Millisecond, "background goroutines did not exit within 2s")
 	}()

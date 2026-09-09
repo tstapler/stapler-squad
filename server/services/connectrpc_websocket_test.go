@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
@@ -1376,7 +1377,7 @@ func TestHubRegistry_should_CallSubscribeControlModeUpdatesExactlyOnce_When_Mult
 		hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{})
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return atomic.LoadInt32(&controller.subscribeCalls) >= 1
 	}, time.Second, 5*time.Millisecond, "expected the pump goroutine to subscribe at least once")
 	require.EqualValues(t, 1, atomic.LoadInt32(&controller.subscribeCalls),
@@ -1472,7 +1473,7 @@ func TestPumpControlModeOutputIntoHub_should_FlushOpportunistically_When_Channel
 		close(controller.updates)
 	})
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		for _, frame := range transport.ReceivedFrames() {
 			if bytes.Contains(frame, []byte("frame-3;")) {
 				return true
@@ -1518,7 +1519,7 @@ func TestPumpControlModeOutputIntoHub_should_ResubscribeAndKeepDelivering_When_C
 	// by closing its channel — control mode's own exit handler does the same
 	// to every subscriber when the process dies.
 	controller.updates <- []byte("before-crash;")
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return bytes.Contains(bytes.Join(transport.ReceivedFrames(), nil), []byte("before-crash;"))
 	}, time.Second, 5*time.Millisecond, "expected the pre-crash frame to be delivered")
 	close(controller.updates)
@@ -1526,7 +1527,7 @@ func TestPumpControlModeOutputIntoHub_should_ResubscribeAndKeepDelivering_When_C
 	// Control mode "restarts": the pump must resubscribe (picking up
 	// resubscribeUpdates, per the fake's second-call behavior) and keep
 	// delivering — not have exited for good when updates closed above.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return controller.subscribeCalls.Load() >= 2
 	}, time.Second, 5*time.Millisecond, "expected the pump to resubscribe after its channel closed instead of exiting for good")
 
@@ -1543,7 +1544,7 @@ func TestPumpControlModeOutputIntoHub_should_ResubscribeAndKeepDelivering_When_C
 		"expected the pump to call StartControlMode on every (re)subscribe attempt, not just the first")
 
 	controller.resubscribeUpdates <- []byte("after-restart;")
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return bytes.Contains(bytes.Join(transport.ReceivedFrames(), nil), []byte("after-restart;"))
 	}, time.Second, 5*time.Millisecond, "expected the post-restart frame to be delivered via the resubscribed channel")
 }
@@ -1580,7 +1581,7 @@ func TestHubRegistry_should_RestartPump_When_ReconnectingAfterFullTeardown(t *te
 	subID1 := hub.AttachSubscriber(transport1, streamhub.SubscriberCapability{})
 
 	controller.updates <- []byte("first-connection;")
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return bytes.Contains(bytes.Join(transport1.ReceivedFrames(), nil), []byte("first-connection;"))
 	}, time.Second, 5*time.Millisecond, "expected the first connection's frame to be delivered")
 
@@ -1606,7 +1607,7 @@ func TestHubRegistry_should_RestartPump_When_ReconnectingAfterFullTeardown(t *te
 	// state, so this uses them as a poll-and-release probe: claim, observe
 	// success, release immediately so the real reconnect below can claim it
 	// for real.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		if hub.TryStartPump() {
 			hub.MarkPumpExited()
 			return true
@@ -1625,7 +1626,7 @@ func TestHubRegistry_should_RestartPump_When_ReconnectingAfterFullTeardown(t *te
 	hub2.AttachSubscriber(transport2, streamhub.SubscriberCapability{})
 
 	controller.resubscribeUpdates <- []byte("after-reconnect;")
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return bytes.Contains(bytes.Join(transport2.ReceivedFrames(), nil), []byte("after-reconnect;"))
 	}, time.Second, 5*time.Millisecond, "expected live output to resume after reconnecting to a fully-torn-down hub")
 }

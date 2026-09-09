@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestKillSessionThenStart_DoesNotRebuildLaunchCommand is the Epic 1.0
@@ -66,7 +67,7 @@ func TestKillSessionThenStart_DoesNotRebuildLaunchCommand(t *testing.T) {
 			}
 		}
 	}()
-	require.Eventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after first start")
+	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after first start")
 	require.NotContains(t, inst.LaunchCommand, "--resume", "sanity: first launch had no UUID set yet")
 
 	// Simulate the UUID being captured while the session was running (exactly what
@@ -80,7 +81,7 @@ func TestKillSessionThenStart_DoesNotRebuildLaunchCommand(t *testing.T) {
 
 	// health.go's dead-pane recovery path: KillSession() then Start(false).
 	require.NoError(t, inst.Start(false), "Start(false) after KillSession should succeed")
-	require.Eventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after KillSession()+Start(false)")
+	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after KillSession()+Start(false)")
 
 	t.Logf("LaunchCommand after KillSession()+Start(false): %q", inst.LaunchCommand)
 	assert.NotContains(t, inst.LaunchCommand, "--resume",
@@ -100,7 +101,7 @@ func TestKillSessionThenStart_DoesNotRebuildLaunchCommand(t *testing.T) {
 		LastAttached:     time.Now(),
 	})
 	require.NoError(t, inst.Restart(false), "Restart should succeed")
-	require.Eventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after Restart")
+	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after Restart")
 	assert.Contains(t, inst.LaunchCommand, "--resume", "Restart() is expected to rebuild the launch command with --resume")
 	assert.Contains(t, inst.LaunchCommand, "550e8400-e29b-41d4-a716-446655440000")
 }

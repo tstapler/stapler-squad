@@ -659,7 +659,7 @@ func waitForResolvedAddr(t *testing.T, srv *Server, timeout time.Duration) strin
 func waitForLiveInstance(t *testing.T, deps *ServerDependencies, sessionID string, timeout time.Duration) *session.Instance {
 	t.Helper()
 	var inst *session.Instance
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		if got := deps.SessionService.FindLiveInstance(sessionID); got != nil {
 			inst = got
 			return true
@@ -683,7 +683,7 @@ func waitForLiveInstance(t *testing.T, deps *ServerDependencies, sessionID strin
 func waitForPermissionRequestHookCommand(t *testing.T, settingsPath string, timeout time.Duration) string {
 	t.Helper()
 	var hookCmd string
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		data, err := os.ReadFile(settingsPath)
 		if err != nil {
 			return false

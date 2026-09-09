@@ -17,6 +17,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // fakeJulesKeyManager is a fake julesKeyManager, letting Story 2.4.1 tests
@@ -201,7 +202,7 @@ func TestJulesConfigService_GetJulesConfig_should_ReflectPollerAuthReconnectRequ
 	poller.Start(t.Context())
 	t.Cleanup(poller.Stop)
 
-	require.Eventually(t, poller.AuthReconnectRequired, time.Second, 5*time.Millisecond,
+	wait.RequireEventually(t, poller.AuthReconnectRequired, time.Second, 5*time.Millisecond,
 		"poller must observe the 401/403 and set AuthReconnectRequired")
 
 	resp, err := svc.GetJulesConfig(context.Background(), connect.NewRequest(&sessionv1.GetJulesConfigRequest{}))
@@ -209,7 +210,7 @@ func TestJulesConfigService_GetJulesConfig_should_ReflectPollerAuthReconnectRequ
 	assert.True(t, resp.Msg.Config.AuthReconnectRequired)
 
 	client.setFail(false)
-	require.Eventually(t, func() bool { return !poller.AuthReconnectRequired() }, time.Second, 5*time.Millisecond,
+	wait.RequireEventually(t, func() bool { return !poller.AuthReconnectRequired() }, time.Second, 5*time.Millisecond,
 		"poller must clear AuthReconnectRequired on its next successful tick")
 
 	resp2, err := svc.GetJulesConfig(context.Background(), connect.NewRequest(&sessionv1.GetJulesConfigRequest{}))

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/mux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // fakeConn is a minimal net.Conn whose Read is fully test-controlled: each
@@ -91,7 +92,7 @@ func TestExternalStreamer_ReadLoop_WrappedTimeoutError_KeepsPollingWithoutReconn
 
 	// Wait for the loop to call Read again, proving it treated the error as
 	// benign and continued rather than reconnecting.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return atomic.LoadInt32(&fc.readCalls) >= 2
 	}, time.Second, time.Millisecond, "readLoop did not continue polling after a benign timeout")
 
@@ -145,7 +146,7 @@ func TestExternalStreamer_ReadLoop_RealDisconnectError_TriggersReconnect(t *test
 	// must mark the connection dead.
 	fc.readErrs <- errors.New("connection reset by peer")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		s.connMu.RLock()
 		defer s.connMu.RUnlock()
 		return !s.connected && s.conn == nil
@@ -155,7 +156,7 @@ func TestExternalStreamer_ReadLoop_RealDisconnectError_TriggersReconnect(t *test
 
 	// ...and the next readLoop iteration must invoke reconnect(): the only
 	// way s.connected becomes true again is a fresh, successful connect().
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return s.IsConnected()
 	}, 3*time.Second, 10*time.Millisecond, "readLoop did not reconnect after the disconnect")
 }
