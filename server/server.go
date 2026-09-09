@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/pkg/buildinfo"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -1516,6 +1517,19 @@ func (s *Server) GetOrigins() []string {
 // registerServerInfoHandler registers the /api/server-info endpoint which exposes
 // the CA PEM file path and HTTPS URL for display in the settings UI.
 func (s *Server) registerServerInfoHandler() {
+	// Resolved once at registration time, not per-request: the running
+	// executable's path never changes for the life of the process, so
+	// there's no reason to repeat the os.Executable()/EvalSymlinks syscalls
+	// on every /api/server-info hit.
+	binaryPath, err := os.Executable()
+	if err == nil {
+		if resolved, evalErr := filepath.EvalSymlinks(binaryPath); evalErr == nil {
+			binaryPath = resolved
+		}
+	} else {
+		binaryPath = ""
+	}
+
 	s.mux.HandleFunc("/api/server-info", func(w http.ResponseWriter, r *http.Request) {
 		type serverInfoResponse struct {
 			CAPEMPath  string   `json:"ca_pem_path"`
@@ -1523,6 +1537,22 @@ func (s *Server) registerServerInfoHandler() {
 			TLSEnabled bool     `json:"tls_enabled"`
 			Hostnames  []string `json:"hostnames"`
 			Programs   []string `json:"programs"`
+			// Version/Branch/Commit/Worktree let the settings UI show which
+			// build is actually running — see pkg/buildinfo's doc comment for
+			// why Branch/Commit/Worktree are only ever non-empty on a locally
+			// built binary, not a GoReleaser release.
+			Version  string `json:"version"`
+			Branch   string `json:"branch,omitempty"`
+			Commit   string `json:"commit,omitempty"`
+			Worktree bool   `json:"worktree,omitempty"`
+			// BinaryPath is the resolved, symlink-following path of the
+			// running executable — lets a human confirm, from the UI, which
+			// on-disk build this instance actually is (e.g. the repo's dev
+			// build vs. a Homebrew install vs. a manual-builds/ scratch
+			// binary — see docs/reference/state-isolation.md's multi-
+			// instance layout for why more than one of these can be running
+			// on the same machine at once).
+			BinaryPath string `json:"binary_path,omitempty"`
 		}
 
 		configDir, err := config.GetConfigDir()
@@ -1541,6 +1571,11 @@ func (s *Server) registerServerInfoHandler() {
 			TLSEnabled: tlsEnabled,
 			Hostnames:  s.hostnames,
 			Programs:   s.availablePrograms,
+			Version:    buildinfo.Version,
+			Branch:     buildinfo.Branch,
+			Commit:     buildinfo.Commit,
+			Worktree:   buildinfo.Worktree == "true",
+			BinaryPath: binaryPath,
 		}
 
 		w.Header().Set("Content-Type", "application/json")

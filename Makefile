@@ -20,7 +20,27 @@ export CGO_ENABLED := 1
 # (e.g. `` ` `` or `$()`), and this value is later embedded in a
 # double-quoted shell argument, where those characters are NOT neutralized.
 VERSION := $(shell (git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev) | tr -cd 'A-Za-z0-9.+_-')
-LDFLAGS := -X main.version=$(VERSION)
+
+# Branch/commit/worktree provenance for a LOCAL build only — not set by
+# GoReleaser's release build (see pkg/buildinfo's doc comment for why
+# that's intentional). This exists so `make install-service` run from a
+# feature-branch worktree can be told apart from a `main` build before it
+# silently becomes someone's persistent service — see
+# scripts/install-service.sh's provenance banner and the web UI's version
+# display (server/server.go's /api/server-info), both of which read
+# pkg/buildinfo. Same charset-stripping as VERSION above: branch names are
+# as attacker/typo-controlled as tag names and land in the same
+# double-quoted shell argument downstream.
+GIT_BRANCH := $(shell (git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown) | tr -cd 'A-Za-z0-9.+_/-')
+GIT_COMMIT := $(shell (git rev-parse --short HEAD 2>/dev/null || echo unknown) | tr -cd 'A-Za-z0-9')
+GIT_WORKTREE := $(shell [ "$$(git rev-parse --git-dir 2>/dev/null)" != "$$(git rev-parse --git-common-dir 2>/dev/null)" ] && echo true || echo false)
+
+BUILDINFO_PKG := github.com/tstapler/stapler-squad/pkg/buildinfo
+LDFLAGS := -X main.version=$(VERSION) \
+	-X $(BUILDINFO_PKG).Version=$(VERSION) \
+	-X $(BUILDINFO_PKG).Branch=$(GIT_BRANCH) \
+	-X $(BUILDINFO_PKG).Commit=$(GIT_COMMIT) \
+	-X $(BUILDINFO_PKG).Worktree=$(GIT_WORKTREE)
 
 # File dependencies
 GO_FILES := $(shell find . -maxdepth 3 -name "*.go" -not -path "./vendor/*" -not -path "./node_modules/*")
