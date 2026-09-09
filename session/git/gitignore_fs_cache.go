@@ -12,12 +12,15 @@ import (
 )
 
 // gitignoreCacheTTL bounds how long a cached directory listing or ignore-file read
-// (from gitignoreFSCache) may be reused. It matches IsDirtyCacheTTL: the outer
-// isDirtyCache already tolerates a dirty/clean result up to that old, so serving the
-// underlying filesystem reads from a cache of the same age doesn't relax the freshness
-// contract IsDirtyWithHint documents, and InvalidateDirtyCache clears both together —
-// a commit/push still forces a fully fresh read on the next check.
-const gitignoreCacheTTL = IsDirtyCacheTTL
+// (from gitignoreFSCache) may be reused. Deliberately longer than IsDirtyCacheTTL
+// (30s): a repo the poller has just found dirty gets rechecked every 30s by
+// IsDirtyWithHint's own cache, so a gitignoreCacheTTL of the *same* 30s would expire
+// in lockstep with it — every outer cache-miss would also be an inner cache-miss,
+// giving no steady-state benefit at all (measured live: ReadDir still ~35% of CPU with
+// gitignoreCacheTTL == IsDirtyCacheTTL). Matching IsDirtyCleanCacheTTL instead means an
+// outer recheck usually lands on a still-warm inner cache. InvalidateDirtyCache clears
+// both together, so a commit/push still forces a fully fresh read regardless of this TTL.
+const gitignoreCacheTTL = IsDirtyCleanCacheTTL
 
 // readDirEntry is a cached result of one gitignoreFSCache.dirs entry.
 type readDirEntry struct {
