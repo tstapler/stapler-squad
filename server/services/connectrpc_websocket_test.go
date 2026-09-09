@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
+	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/stretchr/testify/require"
@@ -1102,6 +1103,238 @@ func TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButT
 	case <-time.After(5 * time.Second):
 		t.Fatal("streamViaHub did not return after client disconnect")
 	}
+}
+
+// deadThenAliveExecutor is a listSessionsFakeExecutor variant with the
+// opposite call-count answer order: absent on the first call (so
+// IsBackendProcessAlive's no-cache check sees the backend as dead, driving
+// ensureHubBackendAlive/ensureControlModeStarted into their restore branch)
+// and present on every call after that (so RestoreWithWorkDir's own
+// DoesSessionExist retry loop finds the session on its very first attempt,
+// with no exponential-backoff sleep). Deterministic by call count, same
+// technique as listSessionsFakeExecutor's own doc comment explains.
+type deadThenAliveExecutor struct {
+	mu         sync.Mutex
+	calls      int
+	existsName string
+}
+
+func (e *deadThenAliveExecutor) CombinedOutput(_ *exec.Cmd) ([]byte, error) {
+	e.mu.Lock()
+	first := e.calls == 0
+	e.calls++
+	e.mu.Unlock()
+	if first {
+		return []byte("some-other-session\n"), nil
+	}
+	return []byte(e.existsName + "\n"), nil
+}
+
+func (e *deadThenAliveExecutor) Run(_ *exec.Cmd) error {
+	return fmt.Errorf("deadThenAliveExecutor: Run is unsupported")
+}
+
+func (e *deadThenAliveExecutor) Output(_ *exec.Cmd) ([]byte, error) {
+	return nil, fmt.Errorf("deadThenAliveExecutor: Output is unsupported")
+}
+
+// alwaysAbsentExecutor answers every list-sessions call as if no session
+// (and no server) exists — used to drive RestoreWithWorkDir's retry loop to
+// genuine exhaustion so it falls through to ValidateWorkDir's fast failure
+// rather than ever finding a session.
+type alwaysAbsentExecutor struct{}
+
+func (alwaysAbsentExecutor) CombinedOutput(_ *exec.Cmd) ([]byte, error) {
+	return nil, fmt.Errorf("no server running on socket (fake: session absent)")
+}
+func (alwaysAbsentExecutor) Run(_ *exec.Cmd) error { return fmt.Errorf("unsupported") }
+func (alwaysAbsentExecutor) Output(_ *exec.Cmd) ([]byte, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+// fakePtyFactory is a tmux.PtyFactory test double that never forks a real
+// subprocess (this sandboxed test environment does not permit it — see
+// session_service_test.go's newRealControllerForTest doc comment for the
+// same constraint). On success, StartWithSize hands back a genuine PTY pair
+// via github.com/creack/pty's Open (which allocates the master/slave devices
+// directly rather than forking) and an unstarted *exec.Cmd — safe because
+// RestoreWithWorkDir only ever calls cmd.Wait() on it (never cmd.Start()),
+// and Wait on a never-started Cmd just returns "exec: not started" instead
+// of spawning anything.
+type fakePtyFactory struct {
+	startErr error
+
+	mu      sync.Mutex
+	created []*os.File
+}
+
+func (f *fakePtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
+	return f.StartWithSize(cmd, nil)
+}
+
+func (f *fakePtyFactory) StartWithSize(_ *exec.Cmd, _ *pty.Winsize) (*os.File, *exec.Cmd, error) {
+	if f.startErr != nil {
+		return nil, nil, f.startErr
+	}
+	master, slave, err := pty.Open()
+	if err != nil {
+		return nil, nil, err
+	}
+	_ = slave.Close()
+	f.mu.Lock()
+	f.created = append(f.created, master)
+	f.mu.Unlock()
+	return master, exec.Command("true"), nil
+}
+
+func (f *fakePtyFactory) Close() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, file := range f.created {
+		_ = file.Close()
+	}
+	f.created = nil
+}
+
+// newTestTmuxInstance builds a real *session.Instance whose tmux backend is
+// wired to the given fake executor/PTY factory. path is the instance's
+// working directory — pass a never-created path (e.g.
+// filepath.Join(t.TempDir(), "never-created")) to make a subsequent restore
+// fail fast via tmux.ErrWorkDirMissing instead of a real temp dir.
+func newTestTmuxInstance(t *testing.T, title, path string, exec executorIface, ptyFactory tmux.PtyFactory) (*session.Instance, string) {
+	t.Helper()
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: title,
+		Path:  path,
+	})
+	require.NoError(t, err)
+
+	snap := inst.Snapshot()
+	tmuxPrefix := snap.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	tmuxSessionName := tmux.NewSessionName(snap.Title, tmuxPrefix).String()
+
+	_ = inst.GetTmuxSessionName()
+	inst.SetTmuxSession(tmux.NewTmuxSessionWithDeps(snap.Title, "true", ptyFactory, exec))
+	return inst, tmuxSessionName
+}
+
+// executorIface is the minimal shape NewTmuxSessionWithDeps requires of its
+// cmdExec argument (session/tmux's executor.Executor), spelled out locally so
+// newTestTmuxInstance can accept any of this file's fake executors without
+// importing the executor package just for the type name.
+type executorIface interface {
+	CombinedOutput(*exec.Cmd) ([]byte, error)
+	Run(*exec.Cmd) error
+	Output(*exec.Cmd) ([]byte, error)
+}
+
+// TestEnsureHubBackendAlive covers ensureHubBackendAlive's four
+// restore-decision branches (PR #741 review gap: zero prior test coverage of
+// either ensureHubBackendAlive or ensureControlModeStarted's restore
+// decision) using a real *session.Instance/*tmux.TmuxSession wired to fake
+// executor/PTY-factory test doubles rather than a real tmux server.
+func TestEnsureHubBackendAlive(t *testing.T) {
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+
+	t.Run("backend alive: no restore attempted, returns alive immediately", func(t *testing.T) {
+		fakeExec := &listSessionsFakeExecutor{}
+		inst, tmuxSessionName := newTestTmuxInstance(t, "ensure-hub-alive-"+t.Name(), t.TempDir(), fakeExec, &fakePtyFactory{})
+		fakeExec.existsName = tmuxSessionName
+
+		alive, err := h.ensureHubBackendAlive(inst, "sess")
+
+		require.NoError(t, err)
+		require.True(t, alive)
+		require.Equal(t, 1, fakeExec.calls, "IsBackendProcessAlive's own no-cache check must be the only list-sessions call — restore must not be attempted when the backend is already alive")
+	})
+
+	t.Run("backend dead, restore succeeds, PTY attaches: ends up alive", func(t *testing.T) {
+		fakeExec := &deadThenAliveExecutor{}
+		ptyFactory := &fakePtyFactory{}
+		t.Cleanup(ptyFactory.Close)
+		inst, tmuxSessionName := newTestTmuxInstance(t, "ensure-hub-restore-ok-"+t.Name(), t.TempDir(), fakeExec, ptyFactory)
+		fakeExec.existsName = tmuxSessionName
+
+		alive, err := h.ensureHubBackendAlive(inst, "sess")
+
+		require.NoError(t, err)
+		require.True(t, alive, "restore succeeding and the PTY attaching must report alive")
+	})
+
+	t.Run("backend dead, restore succeeds but PTY attach fails: ends up not alive, no error", func(t *testing.T) {
+		fakeExec := &deadThenAliveExecutor{}
+		ptyFactory := &fakePtyFactory{startErr: fmt.Errorf("fake PTY attach failure")}
+		inst, tmuxSessionName := newTestTmuxInstance(t, "ensure-hub-restore-pty-fail-"+t.Name(), t.TempDir(), fakeExec, ptyFactory)
+		fakeExec.existsName = tmuxSessionName
+
+		alive, err := h.ensureHubBackendAlive(inst, "sess")
+
+		require.NoError(t, err, "a restore that succeeds but never gets a PTY attached must not be treated as an error (RestoreProcess itself always returns nil here)")
+		require.False(t, alive, "PTY attach failing after a successful restore must not be treated as alive")
+	})
+
+	t.Run("backend dead, restore itself fails: error propagated", func(t *testing.T) {
+		missingDir := filepath.Join(t.TempDir(), "never-created")
+		inst, _ := newTestTmuxInstance(t, "ensure-hub-restore-fail-"+t.Name(), missingDir, alwaysAbsentExecutor{}, tmux.MakePtyFactory())
+
+		alive, restoreErr := h.ensureHubBackendAlive(inst, "sess")
+
+		require.Error(t, restoreErr, "a restore that genuinely fails (missing work dir) must propagate an error")
+		require.ErrorIs(t, restoreErr, tmux.ErrWorkDirMissing)
+		require.False(t, alive)
+		require.Equal(t, session.PermanentlyFailed, inst.Snapshot().Status,
+			"handleTmuxRestoreFailure must mark the session PermanentlyFailed when its working directory is missing")
+	})
+}
+
+// TestEnsureControlModeStarted covers ensureControlModeStarted's
+// restore-decision branches using pumpTestController (already defined below)
+// as a SessionStreamer fake, and the same real-instance/fake-tmux-backend
+// seam TestEnsureHubBackendAlive uses above.
+func TestEnsureControlModeStarted(t *testing.T) {
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+
+	t.Run("backend alive: no restore attempted, control mode still started", func(t *testing.T) {
+		fakeExec := &listSessionsFakeExecutor{}
+		inst, tmuxSessionName := newTestTmuxInstance(t, "ensure-control-mode-alive-"+t.Name(), t.TempDir(), fakeExec, &fakePtyFactory{})
+		fakeExec.existsName = tmuxSessionName
+		streamer := &pumpTestController{}
+
+		err := h.ensureControlModeStarted(inst, "sess", streamer)
+
+		require.NoError(t, err)
+		require.Equal(t, int32(1), streamer.startControlModeCalls.Load())
+		require.Equal(t, 1, fakeExec.calls, "restore must not be attempted when the backend is already alive")
+	})
+
+	t.Run("backend dead, restore succeeds: control mode still started", func(t *testing.T) {
+		fakeExec := &deadThenAliveExecutor{}
+		ptyFactory := &fakePtyFactory{}
+		t.Cleanup(ptyFactory.Close)
+		inst, tmuxSessionName := newTestTmuxInstance(t, "ensure-control-mode-restore-ok-"+t.Name(), t.TempDir(), fakeExec, ptyFactory)
+		fakeExec.existsName = tmuxSessionName
+		streamer := &pumpTestController{}
+
+		err := h.ensureControlModeStarted(inst, "sess", streamer)
+
+		require.NoError(t, err)
+		require.Equal(t, int32(1), streamer.startControlModeCalls.Load(), "control mode must still start after a successful restore")
+	})
+
+	t.Run("backend dead, restore fails: error propagated, control mode never started", func(t *testing.T) {
+		missingDir := filepath.Join(t.TempDir(), "never-created")
+		inst, _ := newTestTmuxInstance(t, "ensure-control-mode-restore-fail-"+t.Name(), missingDir, alwaysAbsentExecutor{}, tmux.MakePtyFactory())
+		streamer := &pumpTestController{}
+
+		startErr := h.ensureControlModeStarted(inst, "sess", streamer)
+
+		require.Error(t, startErr)
+		require.ErrorIs(t, startErr, tmux.ErrWorkDirMissing)
+		require.Equal(t, int32(0), streamer.startControlModeCalls.Load(), "control mode must never start once restore itself has failed")
+	})
 }
 
 // TestEndStreamErrorCode_should_UseFailedPrecondition_When_ErrIsErrWorkDirMissing

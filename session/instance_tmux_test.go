@@ -47,6 +47,27 @@ func TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive(t *testing.T) {
 	}
 }
 
+// TestIsBackendProcessAlive_ColdStart_HasSessionFalse covers the other half
+// of IsBackendProcessAlive's short-circuit (HasSession() && HasLiveSessionNoCache()):
+// a freshly created instance whose backend has never had a session attached
+// at all (hasSessionReturn: false, the cold-start case — e.g. before the
+// first Start()/RestoreProcess() call ever runs). IsBackendProcessAlive must
+// report false via the HasSession() short-circuit alone, without even
+// reaching HasLiveSessionNoCache() — the caller's own tmux-alive check must
+// never need a live session to answer this safely.
+func TestIsBackendProcessAlive_ColdStart_HasSessionFalse(t *testing.T) {
+	mock := &mockTmuxManager{hasSessionReturn: false, existsNoCacheReturn: true}
+	inst := &Instance{
+		Title:          "t",
+		Status:         Creating,
+		processManager: NewTmuxBackend(mock),
+	}
+
+	if inst.IsBackendProcessAlive() {
+		t.Error("IsBackendProcessAlive() = true, want false when HasSession() is false (no backend session object exists yet)")
+	}
+}
+
 // TestRestoreProcess_DelegatesToProcessManager confirms RestoreProcess is a
 // thin, backend-agnostic pass-through to ProcessManager.RestoreWithWorkDir —
 // the replacement for reaching into a concrete *tmux.TmuxSession via

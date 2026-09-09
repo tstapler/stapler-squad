@@ -1794,8 +1794,10 @@ func (h *ConnectRPCWebSocketHandler) ensureHubInstanceStarted(instance *session.
 // refcounting is shared by both paths, so it having already succeeded in the
 // caller says nothing about which ownership model won.
 //
-// done=true means the caller should return immediately with err — either the
-// (possibly nil) result of the legacy fallback, with hub left nil.
+// done=true means the caller should return immediately with (nil hub, err):
+// err is the result of the legacy fallback (nil on success, non-nil if it
+// too failed). done=false means ownership resolved hub-owned as expected —
+// hub is the created/retrieved *StreamHub and err is always nil.
 func (h *ConnectRPCWebSocketHandler) resolveHubOrJoinLegacy(stream *connectWebSocketStream, instance *session.Instance, sessionID, tmuxSessionName string) (hub *streamhub.StreamHub, done bool, err error) {
 	hub, hubErr := HubRegistry.GetOrCreate(tmuxSessionName, instance)
 	if hubErr == nil {
