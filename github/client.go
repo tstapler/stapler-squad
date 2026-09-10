@@ -297,7 +297,7 @@ func GetPRInfoCtx(ctx context.Context, owner, repo string, prNumber int) (*PRInf
 
 	fields := "number,title,body,headRefName,headRefOid,baseRefName,state,url,createdAt,updatedAt,isDraft,mergeable,additions,deletions,changedFiles,author,labels,reviews,reviewDecision,statusCheckRollup"
 	cmd := safeexec.CommandContext(ctx, "gh", "pr", "view", prRef, "--repo", repoRef, "--json", fields)
-	output, err := cmd.Output()
+	output, err := runGHCLICommand(ctx, "pr.view", func() ([]byte, error) { return cmd.Output() })
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return nil, fmt.Errorf("failed to get PR info: %s", string(exitErr.Stderr))
@@ -574,7 +574,7 @@ func IsForkRepo(ctx context.Context, owner, repo string) (bool, error) {
 		fmt.Sprintf("repos/%s/%s", owner, repo),
 		"--jq", ".fork",
 	)
-	output, err := cmd.Output()
+	output, err := runGHCLICommand(ctx, "repo.fork_check", func() ([]byte, error) { return cmd.Output() })
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return false, fmt.Errorf("failed to check fork status: %s", string(exitErr.Stderr))
@@ -598,7 +598,7 @@ func GetPRComments(ctx context.Context, owner, repo string, prNumber int) ([]PRC
 	commentsCtx, commentsCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer commentsCancel()
 	cmd := safeexec.CommandContext(commentsCtx, "gh", "pr", "view", prRef, "--repo", repoRef, "--json", "comments")
-	output, err := cmd.Output()
+	output, err := runGHCLICommand(commentsCtx, "pr.comments", func() ([]byte, error) { return cmd.Output() })
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return nil, fmt.Errorf("failed to get PR comments: %s", string(exitErr.Stderr))
@@ -642,7 +642,7 @@ func GetPRDiff(ctx context.Context, owner, repo string, prNumber int) (string, e
 	diffCtx, diffCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer diffCancel()
 	cmd := safeexec.CommandContext(diffCtx, "gh", "pr", "diff", prRef, "--repo", repoRef)
-	output, err := cmd.Output()
+	output, err := runGHCLICommand(diffCtx, "pr.diff", func() ([]byte, error) { return cmd.Output() })
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return "", fmt.Errorf("failed to get PR diff: %s", string(exitErr.Stderr))
@@ -665,7 +665,7 @@ func PostPRComment(ctx context.Context, owner, repo string, prNumber int, body s
 	commentCtx, commentCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer commentCancel()
 	cmd := safeexec.CommandContext(commentCtx, "gh", "pr", "comment", prRef, "--repo", repoRef, "--body", body)
-	if err := cmd.Run(); err != nil {
+	if _, err := runGHCLICommand(commentCtx, "pr.comment", func() ([]byte, error) { return nil, cmd.Run() }); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("failed to post comment: %s", string(exitErr.Stderr))
 		}
@@ -698,7 +698,7 @@ func MergePR(ctx context.Context, owner, repo string, prNumber int, method strin
 	mergeCtx, mergeCancel := context.WithTimeout(ctx, 60*time.Second)
 	defer mergeCancel()
 	cmd := safeexec.CommandContext(mergeCtx, "gh", args...)
-	if err := cmd.Run(); err != nil {
+	if _, err := runGHCLICommand(mergeCtx, "pr.merge", func() ([]byte, error) { return nil, cmd.Run() }); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("failed to merge PR: %s", string(exitErr.Stderr))
 		}
@@ -720,7 +720,7 @@ func ClosePR(ctx context.Context, owner, repo string, prNumber int) error {
 	closeCtx, closeCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer closeCancel()
 	cmd := safeexec.CommandContext(closeCtx, "gh", "pr", "close", prRef, "--repo", repoRef)
-	if err := cmd.Run(); err != nil {
+	if _, err := runGHCLICommand(closeCtx, "pr.close", func() ([]byte, error) { return nil, cmd.Run() }); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("failed to close PR: %s", string(exitErr.Stderr))
 		}
@@ -740,7 +740,7 @@ func CloneRepository(owner, repo, targetPath string) error {
 	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cloneCancel()
 	cmd := safeexec.CommandContext(cloneCtx, "gh", "repo", "clone", repoRef, targetPath)
-	if err := cmd.Run(); err != nil {
+	if _, err := runGHCLICommand(cloneCtx, "repo.clone", func() ([]byte, error) { return nil, cmd.Run() }); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("failed to clone repository: %s", string(exitErr.Stderr))
 		}

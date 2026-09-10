@@ -10,7 +10,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 // prNumberFromURLRe extracts the trailing PR number from a GitHub PR URL,
@@ -19,6 +25,72 @@ import (
 // duplicated here rather than imported since session/git cannot import the
 // parent session package without a cycle.
 var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
+
+// ghCommandCallsTotal / ghCommandDurationMs mirror github/gh_exec.go's
+// runGHCLICommand instrumentation (same metric names, same attribute keys),
+// registered separately here because session/git cannot import package
+// github to reuse its instruments directly: github/clone.go already imports
+// session/git, so the reverse import would be a compile-time cycle — the
+// same constraint already documented on isTraversalPathSegment above.
+// Registering the same instrument name from two packages against the one
+// global meter is expected and merges into a single series.
+var (
+	ghCommandCallsTotal = mustGHCommandCounter()
+	ghCommandDurationMs = mustGHCommandDurationHistogram()
+)
+
+func mustGHCommandCounter() metric.Int64Counter {
+	counter, err := telemetry.GetMeter().Int64Counter("github.calls_total",
+		metric.WithDescription("Count of gh CLI subprocess calls, tagged by call origin and call site"))
+	if err != nil {
+		panic(err)
+	}
+	return counter
+}
+
+func mustGHCommandDurationHistogram() metric.Int64Histogram {
+	hist, err := telemetry.GetMeter().Int64Histogram("github.call.duration_ms",
+		metric.WithDescription("gh CLI subprocess call latency in milliseconds"),
+		metric.WithUnit("ms"))
+	if err != nil {
+		panic(err)
+	}
+	return hist
+}
+
+// runGHCommand wraps a `gh` CLI invocation routed through g.commandRunner()
+// with span/metric telemetry, matching github/gh_exec.go's runGHCLICommand
+// shape for the sites that adapter can't reach (see ghCommandCallsTotal's
+// doc comment for why this can't just call runGHCLICommand directly). It
+// does not attempt to set a github.call.origin attribute: none of
+// GitWorktree's gh-CLI methods thread a caller-supplied context today (each
+// builds its own context.WithTimeout(context.Background(), ...) internally,
+// unchanged by Epic 1.1's scope), so there is never a tagged origin to read
+// here even where the import cycle wasn't in the way.
+func (g *GitWorktree) runGHCommand(ctx context.Context, callSite string, args ...string) ([]byte, error) {
+	ctx, span := telemetry.StartSpan(ctx, "gh."+callSite, trace.WithSpanKind(trace.SpanKindClient))
+	defer span.End()
+
+	attrs := []attribute.KeyValue{
+		attribute.String("process.command", "gh"),
+		attribute.String("github.call_site", callSite),
+	}
+	span.SetAttributes(attrs...)
+
+	start := time.Now()
+	output, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", args...)
+	duration := time.Since(start)
+
+	ghCommandCallsTotal.Add(ctx, 1, metric.WithAttributes(attrs...))
+	ghCommandDurationMs.Record(ctx, duration.Milliseconds(), metric.WithAttributes(attrs...))
+
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+
+	return output, err
+}
 
 // runGitCommand executes a git command scoped to path and returns any error.
 // Routes through g.commandRunner() unconditionally, exactly like every other
@@ -68,7 +140,7 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	// First push the branch to remote to ensure it exists
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pushCancel()
-	if _, err := g.commandRunner().Run(pushCtx, g.worktreePath, "gh", "repo", "sync", "--source", "-b", g.branchName); err != nil {
+	if _, err := g.runGHCommand(pushCtx, "repo.sync_source", "repo", "sync", "--source", "-b", g.branchName); err != nil {
 		// If sync fails, try creating the branch on remote first
 		gitPushCtx, gitPushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer gitPushCancel()
@@ -81,7 +153,7 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	// Now sync with remote
 	syncCtx, syncCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer syncCancel()
-	if output, err := g.commandRunner().Run(syncCtx, g.worktreePath, "gh", "repo", "sync", "-b", g.branchName); err != nil {
+	if output, err := g.runGHCommand(syncCtx, "repo.sync", "repo", "sync", "-b", g.branchName); err != nil {
 		log.Error("failed to sync changes", "err", err)
 		return fmt.Errorf("failed to sync changes: %s (%w)", output, err)
 	}
@@ -298,7 +370,7 @@ func (g *GitWorktree) OpenBranchURL() error {
 
 	browseCtx, browseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer browseCancel()
-	if _, err := g.commandRunner().Run(browseCtx, g.worktreePath, "gh", "browse", "--branch", g.branchName); err != nil {
+	if _, err := g.runGHCommand(browseCtx, "browse", "browse", "--branch", g.branchName); err != nil {
 		return fmt.Errorf("failed to open branch URL: %w", err)
 	}
 	return nil
@@ -353,7 +425,7 @@ func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int
 	if baseBranch != "" {
 		args = append(args, "--base", baseBranch)
 	}
-	out, runErr := g.commandRunner().Run(ctx, g.worktreePath, "gh", args...)
+	out, runErr := g.runGHCommand(ctx, "pr.create", args...)
 	if runErr != nil {
 		// A race: PR was created between our check and now. Re-check once.
 		if u, n, err2 := g.findExistingPR(); err2 == nil && n > 0 {
@@ -387,7 +459,7 @@ func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int
 		// original gh-view-based lookup as a last resort.
 		numCtx, numCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer numCancel()
-		numOut, numErr := g.commandRunner().Run(numCtx, g.worktreePath, "gh", "pr", "view", "--json", "number", "--jq", ".number", "--head", g.branchName)
+		numOut, numErr := g.runGHCommand(numCtx, "pr.view.number", "pr", "view", "--json", "number", "--jq", ".number", "--head", g.branchName)
 		if numErr == nil {
 			prNumber, _ = strconv.Atoi(strings.TrimSpace(string(numOut)))
 		}
@@ -401,7 +473,7 @@ func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int
 func (g *GitWorktree) findExistingPR() (string, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "list", "--head", g.branchName,
+	out, err := g.runGHCommand(ctx, "pr.list", "pr", "list", "--head", g.branchName,
 		"--json", "number,url", "--jq", ".[0] | .number, .url")
 	if err != nil || strings.TrimSpace(string(out)) == "" {
 		return "", 0, fmt.Errorf("no existing PR")
@@ -671,7 +743,7 @@ func (g *GitWorktree) GetPRStatus(prNumber int) (*PRStatus, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	raw, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "view", strconv.Itoa(prNumber),
+	raw, err := g.runGHCommand(ctx, "pr.view.status", "pr", "view", strconv.Itoa(prNumber),
 		"--json", "statusCheckRollup,reviews,comments,mergeable,mergeStateStatus,state,isDraft")
 	if err != nil {
 		return nil, fmt.Errorf("gh pr view failed: %s (%w)", raw, err)
@@ -831,7 +903,7 @@ func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "merge", strconv.Itoa(prNumber), "--auto", "--squash")
+	out, err := g.runGHCommand(ctx, "pr.merge.auto", "pr", "merge", strconv.Itoa(prNumber), "--auto", "--squash")
 	if err != nil {
 		return fmt.Errorf("gh pr merge --auto failed: %s (%w)", out, err)
 	}
@@ -851,7 +923,7 @@ func (g *GitWorktree) RequestCopilotReview(prNumber int) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "edit", strconv.Itoa(prNumber), "--add-reviewer", copilotReviewerLogin)
+	out, err := g.runGHCommand(ctx, "pr.edit.add_reviewer", "pr", "edit", strconv.Itoa(prNumber), "--add-reviewer", copilotReviewerLogin)
 	if err != nil {
 		return fmt.Errorf("gh pr edit --add-reviewer copilot failed: %s (%w)", out, err)
 	}
@@ -868,7 +940,7 @@ func (g *GitWorktree) ClosePR(prNumber int, comment string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "close", strconv.Itoa(prNumber), "--comment", comment)
+	out, err := g.runGHCommand(ctx, "pr.close", "pr", "close", strconv.Itoa(prNumber), "--comment", comment)
 	if err != nil {
 		return fmt.Errorf("gh pr close failed: %s (%w)", out, err)
 	}
@@ -882,7 +954,7 @@ func (g *GitWorktree) IsPRMerged(prNumber int) (bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "view", strconv.Itoa(prNumber), "--json", "state", "--jq", ".state")
+	out, err := g.runGHCommand(ctx, "pr.view.state", "pr", "view", strconv.Itoa(prNumber), "--json", "state", "--jq", ".state")
 	if err != nil {
 		return false, fmt.Errorf("gh pr view failed: %s (%w)", out, err)
 	}

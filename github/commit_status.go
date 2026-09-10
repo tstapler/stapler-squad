@@ -88,7 +88,7 @@ func SetCommitStatus(repo RepoRef, req CommitStatusRequest) error {
 	}
 
 	cmd := safeexec.CommandContext(ctx, "gh", args...)
-	if err := cmd.Run(); err != nil {
+	if _, err := runGHCLICommand(ctx, "commit_status.set", func() ([]byte, error) { return nil, cmd.Run() }); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("failed to set commit status on %s: %s", req.SHA, string(exitErr.Stderr))
 		}
