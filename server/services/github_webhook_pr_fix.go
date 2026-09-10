@@ -459,6 +459,17 @@ func parseTrailingID(rawURL string) (int64, bool) {
 func (h *GitHubWebhookHandler) handlePRFixEvent(w http.ResponseWriter, r *http.Request, payload map[string]interface{}, body []byte, deliveryID, eventType string) {
 	ctx := r.Context()
 	if h.cfg == nil || !h.cfg.GetFeatureFlag("pr_event_webhooks") {
+		// Reaching this line at all proves webhook_triggers is on (Handle's own
+		// earlier gate) — pre-mortem P2 #4: without this log, that combination
+		// 200s every delivery with zero signal anywhere that pr_event_webhooks is
+		// the reason nothing happened. Once-guarded, mirroring firstPRFixDelivery
+		// below, so a live but misconfigured webhook tunnel doesn't spam one line
+		// per delivery.
+		if h.cfg != nil {
+			h.prEventWebhooksOffWarning.Do(func() {
+				log.Warn("[GitHubWebhookHandler] pr_event_webhooks is disabled — PR-fix webhook delivery accepted (200 OK) but silently dropped; enable the pr_event_webhooks feature flag to process it", "event_type", eventType)
+			})
+		}
 		// True no-op — not even a "no_match" row, per Story 2.1.3.
 		w.WriteHeader(http.StatusOK)
 		return
@@ -566,6 +577,16 @@ func (h *GitHubWebhookHandler) handlePRFixEvent(w http.ResponseWriter, r *http.R
 			outcome = "fired_success"
 		}
 		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{Outcome: outcome, DeliveryID: deliveryID, ErrorMessage: errMsg})
+
+		// Second consumer of the same verified event (Epic 5.3): invalidate the
+		// shared GitHub poller cache for prNumber so poller-observed state doesn't
+		// wait for the next tick's conditional-request cycle to notice a
+		// webhook-signaled change. InvalidateAndRefresh already tags its
+		// dispatched out-of-band fetch OriginWebhookReconcile internally
+		// (session/pr_status_poller.go), so no origin tagging is needed here.
+		if h.prPollerInvalidator != nil {
+			h.prPollerInvalidator.InvalidateForEvent(ctx, fullName, prNumber)
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)
