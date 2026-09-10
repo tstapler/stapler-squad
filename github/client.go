@@ -586,7 +586,7 @@ func IsForkRepo(ctx context.Context, owner, repo string) (bool, error) {
 }
 
 // GetPRComments fetches all comments on a pull request
-func GetPRComments(owner, repo string, prNumber int) ([]PRComment, error) {
+func GetPRComments(ctx context.Context, owner, repo string, prNumber int) ([]PRComment, error) {
 	if err := CheckGHAuth(); err != nil {
 		return nil, err
 	}
@@ -595,7 +595,7 @@ func GetPRComments(owner, repo string, prNumber int) ([]PRComment, error) {
 	prRef := strconv.Itoa(prNumber)
 
 	// Get comments
-	commentsCtx, commentsCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	commentsCtx, commentsCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer commentsCancel()
 	cmd := safeexec.CommandContext(commentsCtx, "gh", "pr", "view", prRef, "--repo", repoRef, "--json", "comments")
 	output, err := cmd.Output()
@@ -631,7 +631,7 @@ func GetPRComments(owner, repo string, prNumber int) ([]PRComment, error) {
 }
 
 // GetPRDiff fetches the diff for a pull request
-func GetPRDiff(owner, repo string, prNumber int) (string, error) {
+func GetPRDiff(ctx context.Context, owner, repo string, prNumber int) (string, error) {
 	if err := CheckGHAuth(); err != nil {
 		return "", err
 	}
@@ -639,7 +639,7 @@ func GetPRDiff(owner, repo string, prNumber int) (string, error) {
 	repoRef := fmt.Sprintf("%s/%s", owner, repo)
 	prRef := strconv.Itoa(prNumber)
 
-	diffCtx, diffCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	diffCtx, diffCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer diffCancel()
 	cmd := safeexec.CommandContext(diffCtx, "gh", "pr", "diff", prRef, "--repo", repoRef)
 	output, err := cmd.Output()
@@ -654,7 +654,7 @@ func GetPRDiff(owner, repo string, prNumber int) (string, error) {
 }
 
 // PostPRComment posts a comment on a pull request
-func PostPRComment(owner, repo string, prNumber int, body string) error {
+func PostPRComment(ctx context.Context, owner, repo string, prNumber int, body string) error {
 	if err := CheckGHAuth(); err != nil {
 		return err
 	}
@@ -662,7 +662,7 @@ func PostPRComment(owner, repo string, prNumber int, body string) error {
 	repoRef := fmt.Sprintf("%s/%s", owner, repo)
 	prRef := strconv.Itoa(prNumber)
 
-	commentCtx, commentCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	commentCtx, commentCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer commentCancel()
 	cmd := safeexec.CommandContext(commentCtx, "gh", "pr", "comment", prRef, "--repo", repoRef, "--body", body)
 	if err := cmd.Run(); err != nil {
@@ -677,7 +677,7 @@ func PostPRComment(owner, repo string, prNumber int, body string) error {
 
 // MergePR merges a pull request
 // method can be: "merge", "squash", or "rebase"
-func MergePR(owner, repo string, prNumber int, method string) error {
+func MergePR(ctx context.Context, owner, repo string, prNumber int, method string) error {
 	if err := CheckGHAuth(); err != nil {
 		return err
 	}
@@ -695,7 +695,7 @@ func MergePR(owner, repo string, prNumber int, method string) error {
 		args = append(args, "--merge")
 	}
 
-	mergeCtx, mergeCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	mergeCtx, mergeCancel := context.WithTimeout(ctx, 60*time.Second)
 	defer mergeCancel()
 	cmd := safeexec.CommandContext(mergeCtx, "gh", args...)
 	if err := cmd.Run(); err != nil {
@@ -709,7 +709,7 @@ func MergePR(owner, repo string, prNumber int, method string) error {
 }
 
 // ClosePR closes a pull request without merging
-func ClosePR(owner, repo string, prNumber int) error {
+func ClosePR(ctx context.Context, owner, repo string, prNumber int) error {
 	if err := CheckGHAuth(); err != nil {
 		return err
 	}
@@ -717,7 +717,7 @@ func ClosePR(owner, repo string, prNumber int) error {
 	repoRef := fmt.Sprintf("%s/%s", owner, repo)
 	prRef := strconv.Itoa(prNumber)
 
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	closeCtx, closeCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer closeCancel()
 	cmd := safeexec.CommandContext(closeCtx, "gh", "pr", "close", prRef, "--repo", repoRef)
 	if err := cmd.Run(); err != nil {

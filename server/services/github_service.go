@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/tstapler/stapler-squad/github"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 
@@ -46,6 +47,8 @@ func (gs *GitHubService) GetPRInfo(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetPRInfoRequest],
 ) (*connect.Response[sessionv1.GetPRInfoResponse], error) {
+	ctx = github.WithGitHubCallOrigin(ctx, github.OriginInteractive)
+
 	if req.Msg.Id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
@@ -59,7 +62,7 @@ func (gs *GitHubService) GetPRInfo(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session '%s' is not a PR session", req.Msg.Id))
 	}
 
-	prInfo, err := instance.RefreshPRInfo()
+	prInfo, err := instance.RefreshPRInfo(ctx)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to refresh PR info: %w", err))
 	}
@@ -97,6 +100,8 @@ func (gs *GitHubService) GetPRComments(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetPRCommentsRequest],
 ) (*connect.Response[sessionv1.GetPRCommentsResponse], error) {
+	ctx = github.WithGitHubCallOrigin(ctx, github.OriginInteractive)
+
 	if req.Msg.Id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
@@ -110,7 +115,7 @@ func (gs *GitHubService) GetPRComments(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session '%s' is not a PR session", req.Msg.Id))
 	}
 
-	comments, err := instance.GetPRComments()
+	comments, err := instance.GetPRComments(ctx)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get PR comments: %w", err))
 	}
@@ -150,6 +155,8 @@ func (gs *GitHubService) PostPRComment(
 	ctx context.Context,
 	req *connect.Request[sessionv1.PostPRCommentRequest],
 ) (*connect.Response[sessionv1.PostPRCommentResponse], error) {
+	ctx = github.WithGitHubCallOrigin(ctx, github.OriginInteractive)
+
 	if req.Msg.Id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
@@ -166,7 +173,7 @@ func (gs *GitHubService) PostPRComment(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session '%s' is not a PR session", req.Msg.Id))
 	}
 
-	if err := instance.PostComment(req.Msg.Body); err != nil {
+	if err := instance.PostComment(ctx, req.Msg.Body); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to post comment: %w", err))
 	}
 
@@ -181,6 +188,8 @@ func (gs *GitHubService) MergePR(
 	ctx context.Context,
 	req *connect.Request[sessionv1.MergePRRequest],
 ) (*connect.Response[sessionv1.MergePRResponse], error) {
+	ctx = github.WithGitHubCallOrigin(ctx, github.OriginInteractive)
+
 	if req.Msg.Id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
@@ -199,7 +208,7 @@ func (gs *GitHubService) MergePR(
 		method = *req.Msg.Method
 	}
 
-	if err := instance.MergePR(method); err != nil {
+	if err := instance.MergePR(ctx, method); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to merge PR: %w", err))
 	}
 
@@ -214,6 +223,8 @@ func (gs *GitHubService) ClosePR(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ClosePRRequest],
 ) (*connect.Response[sessionv1.ClosePRResponse], error) {
+	ctx = github.WithGitHubCallOrigin(ctx, github.OriginInteractive)
+
 	if req.Msg.Id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
@@ -227,7 +238,7 @@ func (gs *GitHubService) ClosePR(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session '%s' is not a PR session", req.Msg.Id))
 	}
 
-	if err := instance.ClosePR(); err != nil {
+	if err := instance.ClosePR(ctx); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to close PR: %w", err))
 	}
 

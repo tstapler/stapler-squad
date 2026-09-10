@@ -244,6 +244,7 @@ func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
 
 	ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
 	defer cancel()
+	ctx = github.WithGitHubCallOrigin(ctx, github.OriginWorktreePRPoller)
 
 	key := worktreeCacheKey(item.RepoPath, item.Branch)
 

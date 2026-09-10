@@ -285,6 +285,7 @@ func (p *PRStatusPoller) isAuthOK() bool {
 func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 	ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
 	defer cancel()
+	ctx = github.WithGitHubCallOrigin(ctx, github.OriginPRStatusPoller)
 
 	// Use Snapshot() — actor-based writes (SetGitHubPRNumber etc.) do not hold mu,
 	// so mu.RLock would not synchronize with them.
