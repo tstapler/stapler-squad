@@ -174,6 +174,19 @@ func (r *RateLimiter) setLimitedUntil(t time.Time) {
 	r.mu.Unlock()
 }
 
+// currentResourceQuotas returns the currently known (remaining, limit) pair
+// for every GitHub API resource (core, search, graphql, ...) observed so far.
+// This is a stub ahead of Phase 3's Story 3.1.1, which partitions
+// RateLimiterSnapshot by resource and adds real per-resource storage here —
+// until then it always returns an empty map, so the
+// github.rate_limit.remaining gauge callback (telemetry_transport.go) simply
+// emits zero observations rather than fabricating data. Only the plumbing
+// line that calls into RateLimiter changes when Phase 3 lands; the gauge
+// callback already iterates a map so its shape is unaffected.
+func (r *RateLimiter) currentResourceQuotas() map[string]struct{ Remaining, Limit int } {
+	return map[string]struct{ Remaining, Limit int }{}
+}
+
 // Reset clears any recorded rate-limit state. DefaultRateLimiter is a package-level
 // singleton shared by every caller of HTTPClient() (see http_client.go) — a test that
 // deliberately simulates a rate-limit response (e.g. to verify the fail-fast behavior

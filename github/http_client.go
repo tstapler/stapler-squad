@@ -12,16 +12,27 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/singleflight"
 )
 
 // ghHTTPClient is the shared HTTP client used for all native GitHub REST and
 // GraphQL calls. The 30-second timeout matches the existing gh CLI call
-// timeout. Its Transport feeds every response through DefaultRateLimiter.Update
-// (see rate_limit.go) so IsLimited() reflects real GitHub rate-limit state.
+// timeout. Its Transport is a 3-layer chain, outermost first:
+//
+//   - githubTelemetryTransport (telemetry_transport.go) — records the
+//     github.http.request span and github.calls_total/duration/cache-result
+//     metrics, including the fail-fast admission-skip case below.
+//   - otelhttp.NewTransport — generic HTTP client instrumentation.
+//   - rateLimitTransport — feeds every response through
+//     DefaultRateLimiter.Update (see rate_limit.go) so IsLimited() reflects
+//     real GitHub rate-limit state, and fails fast (no span otherwise) when
+//     already limited.
 var ghHTTPClient = &http.Client{
-	Timeout:   30 * time.Second,
-	Transport: &rateLimitTransport{next: http.DefaultTransport},
+	Timeout: 30 * time.Second,
+	Transport: &githubTelemetryTransport{
+		next: otelhttp.NewTransport(&rateLimitTransport{next: http.DefaultTransport}),
+	},
 }
 
 // HTTPClient returns the shared GitHub HTTP client, so other packages (e.g.
