@@ -404,6 +404,11 @@ func IsServerDown(serverSocket string) bool {
 // Callers should treat this as "no sessions are alive" without attempting recovery.
 var ErrServerDown = errors.New("tmux server not running")
 
+// ErrSessionNotFound is returned by capture/query methods that short-circuit
+// on DoesSessionExist() returning false, instead of forking a tmux subprocess
+// that would just fail with "can't find pane"/"can't find session".
+var ErrSessionNotFound = errors.New("tmux session not found")
+
 // ListAllSessions returns the set of all currently live tmux session names.
 // Uses serverSocket for isolation if non-empty (same -L flag semantics as TmuxSession).
 // Does NOT go through the per-session existence cache - intended for bulk reconciliation.
@@ -2857,6 +2862,16 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 // needs to interrupt a capture-pane call already in flight, not just abandon
 // the wait for one — see session/session_driver.go's stop/join mechanism.
 func (t *TmuxSession) CapturePaneContentContext(ctx context.Context) (string, error) {
+	// Short-circuit on a session already known gone via the cached/coalesced
+	// DoesSessionExist() check, instead of forking capture-pane and letting it
+	// fail. Without this, a caller polling a dead session (e.g. SessionDriver's
+	// 2s tick, or ExternalTmuxStreamer's 100ms fallback poll) re-forked and
+	// re-failed every single tick forever — measured in production as a
+	// sustained ~39% subprocess-spawn failure rate, almost entirely wasted
+	// ForkLock-contended forks against panes that were already gone.
+	if !t.DoesSessionExist() {
+		return "", fmt.Errorf("error capturing pane content for session '%s': %w", t.sanitizedName, ErrSessionNotFound)
+	}
 	if t.cmEnabledForBackground() {
 		// Derived from the caller's ctx (not cmCtx()'s independent
 		// context.Background()) so a caller cancellation propagates into this
@@ -3364,6 +3379,12 @@ func (t *TmuxSession) GetPaneCurrentPath() (string, error) {
 // GetPanePID returns the PID of the foreground process in the pane.
 // This is used by HistoryLinker to correlate open files with session records.
 func (t *TmuxSession) GetPanePID() (int32, error) {
+	// See CapturePaneContentContext's identical guard: skip the fork entirely
+	// against a session already known gone, rather than forking display-message
+	// and letting it fail every poll tick.
+	if !t.DoesSessionExist() {
+		return 0, fmt.Errorf("failed to get pane PID for session '%s': %w", t.sanitizedName, ErrSessionNotFound)
+	}
 	if t.cmEnabledForBackground() {
 		ctx, cancel := cmCtx()
 		defer cancel()

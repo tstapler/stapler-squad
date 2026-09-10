@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	sessiongit "github.com/tstapler/stapler-squad/session/git"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -781,28 +784,85 @@ func CheckoutBranch(repoPath, branchName string) error {
 	return nil
 }
 
-// remoteURLCache memoises GetRemoteURL results per repo path.
-// Remote URLs are stable for a repo's lifetime; no TTL needed.
+// remoteURLCache memoises GetRemoteURL results per canonical git common-dir
+// (see remoteCacheKey), not per repoPath. Remote URLs are stable for a repo's
+// lifetime; no TTL needed.
 var remoteURLCache sync.Map // map[string]string
 
-// GetRemoteURL returns the remote URL of a repository (used to determine owner/repo)
+// remoteURLGroup coalesces concurrent GetRemoteURL cache misses for the same
+// canonical key (e.g. many session worktrees of one repo starting at once)
+// into a single subprocess call.
+var remoteURLGroup singleflight.Group //nolint:exhaustruct
+
+// remoteCacheKey resolves repoPath to the shared git common-dir (the main
+// .git directory) so every worktree of the same repository maps to one cache
+// entry instead of one per worktree path. Filesystem-only, no subprocess —
+// mirrors session/unfinished/gogit_vcs_reader.go's gitCommonDir. Falls back
+// to repoPath itself (the old cache key) if the .git file can't be parsed,
+// which only degrades to the pre-fix behavior, never breaks correctness.
+func remoteCacheKey(repoPath string) string {
+	gitPath := filepath.Join(repoPath, ".git")
+	data, err := os.ReadFile(gitPath) // #nosec G304 -- repoPath is a session's own worktree directory, not user-supplied network input
+	if err != nil {
+		// .git is a directory (main repo, not a linked worktree) or missing.
+		return repoPath
+	}
+	line := strings.TrimSpace(string(data))
+	const prefix = "gitdir: "
+	if !strings.HasPrefix(line, prefix) {
+		return repoPath
+	}
+	wtGitDir := strings.TrimPrefix(line, prefix)
+	if !filepath.IsAbs(wtGitDir) {
+		wtGitDir = filepath.Join(repoPath, wtGitDir)
+	}
+	cdData, err := os.ReadFile(filepath.Join(wtGitDir, "commondir")) // #nosec G304 -- wtGitDir derives from repoPath's own .git file, not user input
+	if err != nil {
+		return repoPath
+	}
+	commondir := strings.TrimSpace(string(cdData))
+	if !filepath.IsAbs(commondir) {
+		commondir = filepath.Join(wtGitDir, commondir)
+	}
+	return filepath.Clean(commondir)
+}
+
+// GetRemoteURL returns the remote URL of a repository (used to determine owner/repo).
+// Reads the URL out of the repo's own git config via go-git (session/git.OpenRepo,
+// which sets EnableDotGitCommonDir so linked worktrees resolve correctly) instead of
+// shelling out to `git remote get-url` — no subprocess, so no ForkLock contention.
+// Cached and singleflight-coalesced per canonical repo (shared across all its
+// worktrees), not per repoPath — a repo's remote is identical for every worktree,
+// so without the shared key, every session worktree caused its own cache miss.
 func GetRemoteURL(repoPath string) (string, error) {
-	if v, ok := remoteURLCache.Load(repoPath); ok {
+	key := remoteCacheKey(repoPath)
+	if v, ok := remoteURLCache.Load(key); ok {
 		return v.(string), nil
 	}
-	remoteCtx, remoteCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer remoteCancel()
-	cmd := safeexec.CommandContext(remoteCtx, "git", "-C", repoPath, "remote", "get-url", "origin")
-	output, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("failed to get remote URL: %s", string(exitErr.Stderr))
+	v, err, _ := remoteURLGroup.Do(key, func() (any, error) {
+		if v, ok := remoteURLCache.Load(key); ok {
+			return v.(string), nil
 		}
-		return "", fmt.Errorf("failed to get remote URL: %w", err)
+		repo, err := sessiongit.OpenRepo(repoPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to get remote URL: failed to open repository: %w", err)
+		}
+		remote, err := repo.Remote("origin")
+		if err != nil {
+			return "", fmt.Errorf("failed to get remote URL: %w", err)
+		}
+		urls := remote.Config().URLs
+		if len(urls) == 0 {
+			return "", fmt.Errorf("failed to get remote URL: origin has no configured URL")
+		}
+		url := urls[0]
+		remoteURLCache.Store(key, url)
+		return url, nil
+	})
+	if err != nil {
+		return "", err
 	}
-	url := strings.TrimSpace(string(output))
-	remoteURLCache.Store(repoPath, url)
-	return url, nil
+	return v.(string), nil
 }
 
 // GetOwnerRepoFromRemote returns a RepoRef for a local git repository by
