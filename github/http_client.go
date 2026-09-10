@@ -41,10 +41,18 @@ const githubPriorityAdmissionFlagName = "github:priority-admission-control"
 //     DefaultRateLimiter.Update (see rate_limit.go) so IsLimited() reflects
 //     real GitHub rate-limit state, and fails fast (no span otherwise) when
 //     already limited.
+//
+// ghInnerTransport is the innermost transport in ghHTTPClient's chain (see
+// rateLimitTransport below); kept as a package-level var, rather than inlined
+// into ghHTTPClient's Transport literal, so SetGHHTTPBaseTransportForTest can
+// swap it for a test-supplied http.RoundTripper while the telemetry and
+// rate-limit layers above it keep running unchanged.
+var ghInnerTransport = &rateLimitTransport{next: http.DefaultTransport}
+
 var ghHTTPClient = &http.Client{
 	Timeout: 30 * time.Second,
 	Transport: &githubTelemetryTransport{
-		next: otelhttp.NewTransport(&rateLimitTransport{next: http.DefaultTransport}),
+		next: otelhttp.NewTransport(ghInnerTransport),
 	},
 }
 
@@ -57,7 +65,12 @@ func HTTPClient() *http.Client {
 
 // rateLimitTransport wraps an http.RoundTripper and reports every response to
 // DefaultRateLimiter.Update, so callers never need to invoke Update manually.
+// mu guards next: production code never changes it after init, but
+// SetGHHTTPBaseTransportForTest swaps it from a test goroutine while a
+// previously-dispatched request (e.g. a fire-and-forget InvalidateAndRefresh
+// fetch from an earlier test) may still be reading it concurrently.
 type rateLimitTransport struct {
+	mu   sync.RWMutex
 	next http.RoundTripper
 }
 
@@ -87,11 +100,34 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 		}
 	}
 
-	resp, err := t.next.RoundTrip(req)
+	t.mu.RLock()
+	next := t.next
+	t.mu.RUnlock()
+	resp, err := next.RoundTrip(req)
 	if resp != nil {
 		DefaultRateLimiter.Update(resp)
 	}
 	return resp, err
+}
+
+// SetGHHTTPBaseTransportForTest swaps the innermost RoundTripper in
+// ghHTTPClient's transport chain (normally http.DefaultTransport) for rt,
+// returning a restore func — mirroring SetGhBaseURLForTest's
+// swap-a-var-return-a-restore-func pattern. The githubTelemetryTransport,
+// otelhttp.NewTransport, and rateLimitTransport layers above rt keep running
+// unchanged, so a test using this seam can observe
+// GitHubCallOriginFrom(req.Context()) on whatever request actually reaches
+// the "wire" while those real layers still execute.
+func SetGHHTTPBaseTransportForTest(rt http.RoundTripper) (restore func()) {
+	ghInnerTransport.mu.Lock()
+	prev := ghInnerTransport.next
+	ghInnerTransport.next = rt
+	ghInnerTransport.mu.Unlock()
+	return func() {
+		ghInnerTransport.mu.Lock()
+		ghInnerTransport.next = prev
+		ghInnerTransport.mu.Unlock()
+	}
 }
 
 // hostConfigMu guards ghBaseURL (below) and EnterpriseBaseURLOverride

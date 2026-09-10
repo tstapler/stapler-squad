@@ -400,7 +400,8 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(ctx context.Context, inst *Insta
 	p.applyPRUpdate(inst, prInfo)
 }
 
-// handleFetchError inspects an error for rate limits and auth failures.
+// handleFetchError inspects an error for rate limits, auth failures, and
+// admission-control rejections (AdmitOrigin, github/http_client.go).
 // Returns true if the error was handled (caller should not log separately).
 // Rate-limit state is managed by github.DefaultRateLimiter (updated by the
 // transport); this method only needs to detect the error type and signal auth
@@ -414,6 +415,10 @@ func (p *PRStatusPoller) handleFetchError(err error) bool {
 	if strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized") {
 		log.Warn("PR status poller: github auth error, invalidating auth cache")
 		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
+		return true
+	}
+	if strings.Contains(msg, "admission control rejected") {
+		log.Warn("PR status poller: admission control rejected request")
 		return true
 	}
 	return false

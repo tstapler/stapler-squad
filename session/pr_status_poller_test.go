@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -249,24 +250,12 @@ func TestInvalidateAndRefresh_should_DispatchFetchForEachInstance_When_TwoInstan
 // below backgroundHeadroomPercent (Epic 3.2's AdmitOrigin, github/rate_limit.go),
 // a poller tick's GetPRInfoConditional call is rejected by
 // rateLimitTransport.RoundTrip (github/http_client.go) before the request ever
-// reaches GitHub. fetchAndUpdatePRStatus needs no new code to handle this: the
-// rejection surfaces as a plain error from GetPRInfoConditional, which the
-// existing `if p.handleFetchError(err) { ... }; log.Warn(...); return` block
-// (session/pr_status_poller.go) already handles like any other fetch failure —
-// the tick is skipped cleanly with no PR-status mutation and no onUpdated
-// callback.
-//
-// Deviation from the plan's literal AC wording: the rejection error text
-// ("github: admission control rejected request: ...") contains none of
-// handleFetchError's substring matches ("rate limit", "429", "401",
-// "Unauthorized"), so handleFetchError itself returns false here and the code
-// falls through to the generic log.Warn+return branch rather than
-// handleFetchError's own `return true` line — unlike a real GitHub-side 403/429,
-// which handleFetchError does special-case. Both branches still return
-// immediately without touching PR status, so the observable behavior this
-// story cares about (a clean skip) holds either way; this is confirmed below
-// alongside a direct assertion on handleFetchError's actual return value so
-// the distinction is explicit rather than assumed.
+// reaches GitHub. handleFetchError recognizes the rejection's "admission
+// control rejected" substring via its own named branch (Epic 3.3's intended
+// fix — see the branch above the generic fallthrough in
+// session/pr_status_poller.go), logs, and returns true, so
+// fetchAndUpdatePRStatus's `if p.handleFetchError(err) { return }` skips the
+// tick cleanly with no PR-status mutation and no onUpdated callback.
 func TestFetchAndUpdatePRStatus_AdmissionControlRejection_SkipsCleanly(t *testing.T) {
 	// Deliberately not github.ResetRateLimiterForTest(t): that helper swaps the
 	// DefaultRateLimiter *pointer* itself, which races (under go test -race)
@@ -330,12 +319,12 @@ func TestFetchAndUpdatePRStatus_AdmissionControlRejection_SkipsCleanly(t *testin
 	if reached {
 		t.Fatal("expected the request to be rejected by AdmitOrigin before reaching the fake GitHub server")
 	}
-	if p.handleFetchError(err) {
-		t.Fatal("handleFetchError(err) = true for an admission-control rejection, want false — its message matches none of handleFetchError's rate-limit/auth substrings (see deviation note in this test's doc comment)")
+	if !p.handleFetchError(err) {
+		t.Fatal("handleFetchError(err) = false for an admission-control rejection, want true via handleFetchError's dedicated \"admission control rejected\" branch")
 	}
 
-	// Full path: fetchAndUpdatePRStatus must still skip cleanly via the
-	// generic log.Warn+return fallthrough, with no PR-status mutation.
+	// Full path: fetchAndUpdatePRStatus must skip cleanly via
+	// handleFetchError's admission-control branch, with no PR-status mutation.
 	p.fetchAndUpdatePRStatus(context.Background(), inst)
 
 	if reached {
@@ -346,5 +335,88 @@ func TestFetchAndUpdatePRStatus_AdmissionControlRejection_SkipsCleanly(t *testin
 	}
 	if snap := inst.Snapshot(); snap.GitHub.GitHubPRPriority != "" {
 		t.Fatalf("expected PR priority to remain unset after an admission-control rejection, got %q", snap.GitHub.GitHubPRPriority)
+	}
+}
+
+// spyRoundTripper adapts a function to http.RoundTripper — a minimal recording
+// transport installed via github.SetGHHTTPBaseTransportForTest below.
+type spyRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f spyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// TestPRStatusPoller_should_TagOriginWebhookReconcileDistinctFromTickerOrigin_When_InvalidateAndRefreshDispatchesFetch
+// is validation.md's correctness property behind Phase 5's ctx-threading
+// change to fetchAndUpdatePRStatus(ctx, inst): the ticker fan-out loop
+// (checkAllSessions) and InvalidateAndRefresh's webhook-driven dispatch must
+// tag outbound GitHub calls with different github.CallOrigin values
+// (OriginPRStatusPoller vs OriginWebhookReconcile) so they stay distinguishable
+// in telemetry. This installs a spy at the innermost layer of ghHTTPClient's
+// real transport chain (via github.SetGHHTTPBaseTransportForTest) so it
+// observes the origin actually reaching the "wire", rather than merely
+// asserting on a context value never threaded through an HTTP request.
+func TestPRStatusPoller_should_TagOriginWebhookReconcileDistinctFromTickerOrigin_When_InvalidateAndRefreshDispatchesFetch(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+
+	// See TestFetchAndUpdatePRStatus_AdmissionControlRejection_SkipsCleanly's
+	// comment on why Reset() (not the pointer-swapping ResetRateLimiterForTest)
+	// is the safe choice here: this test also dispatches a fire-and-forget
+	// goroutine (InvalidateAndRefresh), so a bare pointer reassignment could
+	// race a still-in-flight read from an earlier test.
+	github.DefaultRateLimiter.Reset()
+
+	var mu sync.Mutex
+	var origins []github.CallOrigin
+	spy := spyRoundTripper(func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		origins = append(origins, github.GitHubCallOriginFrom(req.Context()))
+		mu.Unlock()
+		return &http.Response{StatusCode: http.StatusNotModified, Body: http.NoBody, Header: make(http.Header)}, nil
+	})
+	defer github.SetGHHTTPBaseTransportForTest(spy)()
+
+	p := newTestPRStatusPoller()
+	tickerInst := newInvalidateTestInstance(t, "ticker-origin-test", 42)
+	webhookInst := newInvalidateTestInstance(t, "webhook-origin-test", 43)
+	p.AddInstance(tickerInst)
+	p.AddInstance(webhookInst)
+
+	// Ticker path: tag the context exactly as checkAllSessions does, then call
+	// fetchAndUpdatePRStatus directly — bypassing pollLoop/isAuthOK, which would
+	// otherwise shell out to a real `gh auth status`.
+	tickerCtx := github.WithGitHubCallOrigin(context.Background(), github.OriginPRStatusPoller)
+	p.fetchAndUpdatePRStatus(tickerCtx, tickerInst)
+
+	// Webhook path: InvalidateAndRefresh tags OriginWebhookReconcile itself and
+	// dispatches fetchAndUpdatePRStatus out of band (see its doc comment).
+	matched := p.InvalidateAndRefresh(context.Background(), "acme", "widgets", 43)
+	if !matched {
+		t.Fatal("InvalidateAndRefresh() = false, want true for a tracked instance")
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		mu.Lock()
+		n := len(origins)
+		mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for both requests to reach the spy transport, got %d/2", n)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if origins[0] != github.OriginPRStatusPoller {
+		t.Errorf("ticker-path request origin = %q, want %q", origins[0], github.OriginPRStatusPoller)
+	}
+	if origins[1] != github.OriginWebhookReconcile {
+		t.Errorf("webhook-path request origin = %q, want %q", origins[1], github.OriginWebhookReconcile)
+	}
+	if origins[0] == origins[1] {
+		t.Fatal("ticker-path and webhook-path origins must be distinguishable, but both requests carried the same origin")
 	}
 }

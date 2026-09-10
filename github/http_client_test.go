@@ -536,3 +536,47 @@ func TestNewConditionalRequestNoCache_should_NeverSetIfNoneMatch(t *testing.T) {
 		t.Errorf("X-GitHub-Api-Version = %q, want 2022-11-28", got)
 	}
 }
+
+// roundTripFunc adapts a function to http.RoundTripper, for spy transports
+// installed via SetGHHTTPBaseTransportForTest below.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// TestSetGHHTTPBaseTransportForTest_should_ObserveTaggedOriginThroughRealLayers_When_SpyInstalled
+// is the regression test for the SetGHHTTPBaseTransportForTest seam itself:
+// installing a spy at the innermost layer must leave githubTelemetryTransport,
+// otelhttp.NewTransport, and rateLimitTransport all still running (the request
+// reaches the spy at all, and DefaultRateLimiter still observes the response),
+// while letting the spy see GitHubCallOriginFrom(req.Context()) for whatever
+// origin the caller tagged — the exact capability session's origin-distinctness
+// test (pr_status_poller_test.go) depends on.
+func TestSetGHHTTPBaseTransportForTest_should_ObserveTaggedOriginThroughRealLayers_When_SpyInstalled(t *testing.T) {
+	resetRateLimiterForTest(t)
+
+	var gotOrigin CallOrigin
+	spy := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotOrigin = GitHubCallOriginFrom(req.Context())
+		header := make(http.Header)
+		header.Set("X-RateLimit-Remaining", "10")
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: header}, nil
+	})
+	restore := SetGHHTTPBaseTransportForTest(spy)
+	defer restore()
+
+	ctx := WithGitHubCallOrigin(context.Background(), OriginWebhookReconcile)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://ghhttpbasetransport.invalid/", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	resp, err := ghHTTPClient.Do(req)
+	if err != nil {
+		t.Fatalf("ghHTTPClient.Do: %v", err)
+	}
+	resp.Body.Close()
+
+	if gotOrigin != OriginWebhookReconcile {
+		t.Fatalf("spy observed origin %q, want %q", gotOrigin, OriginWebhookReconcile)
+	}
+}
