@@ -260,3 +260,67 @@ func TestRateLimitTransport_SkipsRequestWhenAlreadyLimited(t *testing.T) {
 		t.Error("request reached the server despite DefaultRateLimiter already being limited")
 	}
 }
+
+// TestNewConditionalRequest_should_SetIfNoneMatch_When_CacheHasEntry_And_OmitHeader_When_CacheEmpty
+// exercises NewConditionalRequest against a real *ETagCache across both
+// branches: no cached entry yet (first-fetch case, no If-None-Match) versus a
+// cached ETag (conditional case, If-None-Match set to the cached value).
+func TestNewConditionalRequest_should_SetIfNoneMatch_When_CacheHasEntry_And_OmitHeader_When_CacheEmpty(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	resetGHTokenCache()
+	defer resetGHTokenCache()
+
+	cache := NewETagCache()
+	const path = "repos/owner/repo/issues/1"
+
+	req, err := NewConditionalRequest(context.Background(), path, cache)
+	if err != nil {
+		t.Fatalf("NewConditionalRequest() error = %v", err)
+	}
+	if got := req.Header.Get("If-None-Match"); got != "" {
+		t.Errorf("If-None-Match = %q on first fetch, want empty (no cached entry)", got)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer test-token" {
+		t.Errorf("Authorization = %q, want %q", got, "Bearer test-token")
+	}
+	if got := req.Header.Get("Accept"); got != "application/vnd.github+json" {
+		t.Errorf("Accept = %q, want application/vnd.github+json", got)
+	}
+
+	cache.set(path, etagEntry{etag: `"cached-etag"`})
+
+	cachedReq, err := NewConditionalRequest(context.Background(), path, cache)
+	if err != nil {
+		t.Fatalf("NewConditionalRequest() (cached) error = %v", err)
+	}
+	if got := cachedReq.Header.Get("If-None-Match"); got != `"cached-etag"` {
+		t.Errorf("If-None-Match = %q, want %q", got, `"cached-etag"`)
+	}
+}
+
+// TestNewConditionalRequestNoCache_should_NeverSetIfNoneMatch verifies the
+// deliberate opt-out constructor never attaches conditional-request headers,
+// regardless of what an unrelated ETagCache for the same path might contain.
+func TestNewConditionalRequestNoCache_should_NeverSetIfNoneMatch(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	resetGHTokenCache()
+	defer resetGHTokenCache()
+
+	const path = "repos/owner/repo/issues/1"
+	cache := NewETagCache()
+	cache.set(path, etagEntry{etag: `"should-be-ignored"`})
+
+	req, err := NewConditionalRequestNoCache(context.Background(), path)
+	if err != nil {
+		t.Fatalf("NewConditionalRequestNoCache() error = %v", err)
+	}
+	if got := req.Header.Get("If-None-Match"); got != "" {
+		t.Errorf("If-None-Match = %q, want empty (opt-out constructor)", got)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer test-token" {
+		t.Errorf("Authorization = %q, want %q", got, "Bearer test-token")
+	}
+	if got := req.Header.Get("X-GitHub-Api-Version"); got != "2022-11-28" {
+		t.Errorf("X-GitHub-Api-Version = %q, want 2022-11-28", got)
+	}
+}

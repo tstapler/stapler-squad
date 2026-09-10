@@ -46,10 +46,13 @@ const ghPackagePath = "github.com/tstapler/stapler-squad/github"
 // exemptConstructorNames are the github-package functions allowed to call
 // http.NewRequest/NewRequestWithContext directly because they ARE the
 // approved wrapper this analyzer steers every other call site toward.
-// Epic 2.2's conditional-aware successor constructor gets added here when it
-// ships — this analyzer's own logic does not change for that.
+// NewConditionalRequest/NewConditionalRequestNoCache (github/http_client.go,
+// Epic 2.2) are the conditional-aware successor constructors for new native
+// call sites — one cache-backed, one an explicit opt-out.
 var exemptConstructorNames = map[string]bool{
 	"newGHRequestForHostWithToken": true,
+	"NewConditionalRequest":        true,
+	"NewConditionalRequestNoCache": true,
 }
 
 func run(pass *analysis.Pass) (interface{}, error) {

@@ -385,7 +385,7 @@ func ciBudgetGHGet(ctx context.Context, path string, out interface{}) error {
 	if token == "" {
 		return errors.New("github token not configured")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, github.RestBaseURLForHost("")+path, nil)
+	req, err := github.NewConditionalRequestNoCache(ctx, path)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}

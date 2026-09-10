@@ -187,6 +187,53 @@ func newGHRequestForHostWithToken(ctx context.Context, host, path, token string)
 	return req, nil
 }
 
+// NewConditionalRequest builds an authenticated GET request to the github.com
+// REST API for path, setting If-None-Match from cache's last-known ETag for
+// path (if any) so GitHub can answer with a zero-rate-limit-cost 304 when
+// nothing has changed. This only builds the request — the caller reads the
+// response's ETag header and stores it back via cache.set(...) itself,
+// mirroring GetPRInfoConditional's existing split between building the
+// request and handling the response. This is one of the two approved
+// constructors for new native GitHub call sites (the other being
+// NewConditionalRequestNoCache); see .claude/rules/norawghrequest.md.
+func NewConditionalRequest(ctx context.Context, path string, cache *ETagCache) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, RestBaseURLForHost("")+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token := getGHToken(ctx); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if cache != nil {
+		if entry, ok := cache.get(path); ok && entry.etag != "" {
+			req.Header.Set("If-None-Match", entry.etag)
+		}
+	}
+	return req, nil
+}
+
+// NewConditionalRequestNoCache builds an authenticated GET request to the
+// github.com REST API for path with no conditional (If-None-Match)
+// semantics — the deliberate, reviewable opt-out for a call site that
+// genuinely has no need for ETag caching (e.g. a one-off fetch with no
+// meaningful cache key), so skipping conditional semantics is a visible
+// decision rather than a silent omission. Prefer NewConditionalRequest
+// whenever an *ETagCache is available.
+func NewConditionalRequestNoCache(ctx context.Context, path string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, RestBaseURLForHost("")+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token := getGHToken(ctx); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	return req, nil
+}
+
 // isGHRateLimited reports whether resp carries GitHub's rate-limit signals:
 // a Retry-After header (secondary/abuse limit) or X-RateLimit-Remaining: 0
 // (primary limit exhausted). Both only appear on 403 responses; a 429 is
