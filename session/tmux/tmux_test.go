@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -81,6 +82,61 @@ func TestSanitizeName(t *testing.T) {
 	// Test combined special characters
 	session = NewTmuxSession("My: Session. Name", "program")
 	require.Equal(t, TmuxPrefix+"My_Session_Name", session.sanitizedName)
+
+	// Regression (2026-09-10): a workflow-fired title's " <em dash> " separator
+	// (e.g. "PR Code Review — 2026-09-10 12:03") produced a sanitizedName that
+	// kept the em dash. `tmux new-session -s <that name>` reported success and
+	// t.sanitizedName kept the em dash throughout, but a `tmux list-sessions`
+	// moments later, on the same socket, only ever showed the
+	// underscore-substituted form -- so Start()'s post-creation existence
+	// check never found the session it had just (successfully) created, and
+	// timed out treating a live, healthy session as failed. Every ASCII-only
+	// session name round-trips correctly; this asserts non-ASCII never
+	// reaches sanitizedName at all, regardless of the exact tmux-side
+	// transformation (never fully identified -- see nonSafeTmuxNameChar's doc
+	// comment).
+	session = NewTmuxSession("PR Code Review — 2026-09-10 12:03", "program")
+	require.Equal(t, TmuxPrefix+"PRCodeReview_2026-09-1012_03", session.sanitizedName)
+
+	// Same class, different offending character: "&" in a workflow title.
+	session = NewTmuxSession("Research & Synthesize to Notes — 2026-09-10 12:04", "program")
+	require.Equal(t, TmuxPrefix+"Research_SynthesizetoNotes_2026-09-1012_04", session.sanitizedName)
+}
+
+// safeTmuxNameBody matches the character set toStaplerSquadTmuxNameWithPrefix
+// must produce for the portion of sanitizedName after the (already-safe,
+// constant) prefix -- see nonSafeTmuxNameChar.
+var safeTmuxNameBody = regexp.MustCompile(`^[a-zA-Z0-9_-]*$`)
+
+// FuzzToStaplerSquadTmuxName asserts the sanitizer's invariant holds for any
+// input, not just the specific em-dash/ampersand cases known today: the
+// portion of the sanitized name after the prefix must only ever contain
+// characters already proven to round-trip safely through tmux (see
+// nonSafeTmuxNameChar's doc comment for why "known-safe allowlist" replaced
+// the previous "known-unsafe denylist" after this exact class of bug
+// recurred). Run with `go test -fuzz=FuzzToStaplerSquadTmuxName` to search
+// for counterexamples beyond the seed corpus.
+func FuzzToStaplerSquadTmuxName(f *testing.F) {
+	for _, seed := range []string{
+		"asdf",
+		"a sd f . . asdf",
+		"Resumed: test-session",
+		"PR Code Review — 2026-09-10 12:03",
+		"Research & Synthesize to Notes — 2026-09-10 12:04",
+		"emoji 🎉 title",
+		"curly ’quotes’ and “these”",
+		"ünïcödé évérywhere",
+		"", // empty title is a valid input (e.g. a not-yet-titled instance)
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, title string) {
+		got := ToStaplerSquadTmuxName(title)
+		require.True(t, strings.HasPrefix(got, TmuxPrefix), "sanitized name %q lost its prefix", got)
+		body := strings.TrimPrefix(got, TmuxPrefix)
+		require.True(t, safeTmuxNameBody.MatchString(body),
+			"sanitized name body %q (from title %q) contains a character outside [a-zA-Z0-9_-]", body, title)
+	})
 }
 
 func TestStartTmuxSession(t *testing.T) {

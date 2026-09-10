@@ -289,6 +289,25 @@ var sessionCreateTimeout = func() time.Duration {
 
 var whiteSpaceRegex = regexp.MustCompile(`\s+`)
 
+// nonSafeTmuxNameChar matches any character outside the ASCII-safe set for a
+// tmux session name: letters, digits, underscore, hyphen. Investigated
+// 2026-09-10: a workflow-fired session titled with a " <em dash> " separator
+// (e.g. "PR Code Review — 2026-09-10 12:03") deterministically failed to
+// start -- `tmux new-session -s <name-with-em-dash>` itself reported success
+// and t.sanitizedName kept the em dash throughout, but a `tmux list-sessions`
+// moments later, on the same socket, only ever showed the
+// underscore-substituted form (confirmed byte-for-byte via a temporary debug
+// dump of the raw list-sessions output). The exact transformation point was
+// never pinned down -- tmux new-session and list-sessions were each
+// independently confirmed, in isolation, to round-trip a raw em dash
+// correctly, so something specific to this codebase's fuller invocation
+// (many -e flags, -c, the actual program string) is responsible. Every
+// ASCII-only session name in this app's history has round-tripped correctly,
+// so this strips non-ASCII rather than chasing the exact transformation
+// point further. Same normalization tmux session names already get for "."
+// and ":" below, just widened to every character outside the safe set.
+var nonSafeTmuxNameChar = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+
 // existsCacheState is the immutable snapshot stored in TmuxSession.existsCache.
 type existsCacheState struct {
 	exists bool
@@ -312,6 +331,7 @@ func toStaplerSquadTmuxNameWithPrefix(str string, prefix string) string {
 	str = whiteSpaceRegex.ReplaceAllString(str, "")
 	str = strings.ReplaceAll(str, ".", "_") // tmux replaces all . with _
 	str = strings.ReplaceAll(str, ":", "_") // colons are special in tmux (session:window.pane)
+	str = nonSafeTmuxNameChar.ReplaceAllString(str, "_")
 	return fmt.Sprintf("%s%s", prefix, str)
 }
 
@@ -1407,7 +1427,25 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	// %session-created event arrives asynchronously), so using the registry alone
 	// causes poll-loop timeouts when the event is delayed. A single no-cache check
 	// right after successful new-session avoids the 10s wait in the common case.
-	if t.DoesSessionExistNoCache() {
+	//
+	// Uses the fast-lane priority variant (doesSessionExistNoCachePriority), not
+	// the default-pool DoesSessionExistNoCache: `tmux new-session -d` above already
+	// exited 0, so a negative here should only mean "not visible yet", never "gate
+	// congestion". Confirmed in production (2026-09-10) that the default pool can
+	// starve this check for the entire sessionCreateTimeout window when busy with
+	// ordinary traffic (ReviewQueuePoller, control-mode streaming, other sessions'
+	// health checks), causing Start() to report a false timeout -- and then abandon,
+	// not kill, the session it just created (Close()'s own DoesSessionExist() call
+	// hits the identical false negative, so kill-session never runs): the tmux pane
+	// is left running, alive and orphaned from the app's perspective, while the
+	// caller (session_creation_pipeline.go) marks the session Failed and never wires
+	// SessionDriver -- so neither the startup trust-dialog nor the initial prompt
+	// ever get delivered even though the session is fine. Routing this specific,
+	// latency-sensitive, one-shot check through the resync fast lane (the same
+	// isolation CapturePaneContentPriority/RefreshClientPriority already use for
+	// this exact class of problem, Epic 4.2) fixes it at the source instead of
+	// papering over it with a longer timeout.
+	if t.doesSessionExistNoCachePriority() {
 		// Proactively update the registry so DoesSessionExist() returns true
 		// immediately — the async %session-created event may not have arrived yet.
 		if notifier, ok := t.registry.(interface{ NotifySessionCreated(string) }); ok {
@@ -1436,7 +1474,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		// from multiple active sessions (ReviewQueuePoller, control-mode streaming, etc.).
 		timeout := time.After(sessionCreateTimeout)
 		sleepDuration := sessionPollInitialDelay
-		for !t.DoesSessionExistNoCache() {
+		for !t.doesSessionExistNoCachePriority() {
 			select {
 			case <-timeout:
 				if cleanupErr := t.Close(); cleanupErr != nil {
@@ -2605,6 +2643,61 @@ func (t *TmuxSession) listSessionsRaw(ctx context.Context) ([]byte, error) {
 		}
 		return output, err
 	})
+}
+
+// listSessionsRawPriority mirrors listSessionsRaw but routes the subprocess
+// through the resync exec-gate fast lane (runFastLaneSubprocess) instead of
+// the default pool (runGated). Used only by doesSessionExistNoCachePriority,
+// itself used only by Start()'s post-creation confirmation check/poll loop --
+// see that call site's comment for why a false negative there must come from
+// the session genuinely not existing yet, never from default-pool exec-gate
+// congestion.
+func (t *TmuxSession) listSessionsRawPriority(ctx context.Context) ([]byte, error) {
+	return runFastLaneSubprocess(ctx, t.serverSocket, func(ctx context.Context) ([]byte, error) {
+		cmdArgs := Socket(t.serverSocket).Args("list-sessions", "-F", "#{session_name}")
+		cmd := safeexec.CommandContext(ctx, Binary(), cmdArgs...)
+		output, err := t.cmdExec.CombinedOutput(cmd)
+		if errors.Is(err, executor.ErrCircuitOpen) {
+			runner := t.commandRunner()
+			runName, runArgs := Binary(), cmdArgs
+			if runner.IsRemote() {
+				runName, runArgs = wrapRemoteCommand(runName, runArgs)
+			}
+			output, err = runner.Run(ctx, "", runName, runArgs...)
+		}
+		return output, err
+	})
+}
+
+// doesSessionExistNoCachePriority mirrors DoesSessionExistNoCache but calls
+// listSessionsRawPriority instead of listSessionsRaw, so it can't be starved
+// by ordinary tmux exec traffic on the default pool. Not a general-purpose
+// replacement for DoesSessionExistNoCache: high-frequency callers (health
+// checks, resync) should stay on the default pool so this one-shot,
+// latency-sensitive check doesn't itself get crowded out by them on the fast
+// lane. Single caller (Start()), so unlike DoesSessionExistNoCache it doesn't
+// need singleflight coalescing.
+func (t *TmuxSession) doesSessionExistNoCachePriority() bool {
+	if t == nil {
+		return false
+	}
+	if t.registryConfirmsExists(t.sanitizedName) {
+		return true
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), ResyncFastLaneTimeout)
+	defer cancel()
+	output, err := t.listSessionsRawPriority(ctx)
+	if err != nil {
+		log.Warn("doesSessionExistNoCachePriority: tmux list-sessions failed", "session", t.sanitizedName, "serverSocket", t.serverSocket, "err", err, "output", string(output))
+		return false
+	}
+	for _, session := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if session == t.sanitizedName {
+			return true
+		}
+	}
+	return false
 }
 
 // registryConfirmsExists reports whether the push-based registry is healthy
