@@ -181,6 +181,141 @@ func runConcurrentReader(t *testing.T, r *RateLimiter, stop <-chan struct{}) {
 	}
 }
 
+// TestAdmitOrigin_should_AdmitInteractive_When_RemainingBelowBackgroundHeadroom
+// covers Task 3.2.1b: OriginInteractive is always admitted regardless of
+// headroom, as long as the resource has been observed at all.
+func TestAdmitOrigin_should_AdmitInteractive_When_RemainingBelowBackgroundHeadroom(t *testing.T) {
+	r := &RateLimiter{}
+	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", ResourceQuota{Remaining: 400, Limit: 5000})))
+
+	admitted, reason := r.AdmitOrigin(OriginInteractive, "core")
+	if !admitted {
+		t.Fatalf("AdmitOrigin(OriginInteractive, \"core\") = (%v, %q), want (true, \"\")", admitted, reason)
+	}
+	if reason != "" {
+		t.Errorf("reason = %q, want empty for an admitted call", reason)
+	}
+}
+
+// TestAdmitOrigin_should_RejectBackgroundOrigin_When_RemainingBelowBackgroundHeadroomPercent
+// covers Task 3.2.1b: a background origin (here OriginPRStatusPoller) is
+// rejected once Remaining drops below backgroundHeadroomPercent of Limit for
+// that resource, single-resource case.
+func TestAdmitOrigin_should_RejectBackgroundOrigin_When_RemainingBelowBackgroundHeadroomPercent(t *testing.T) {
+	r := &RateLimiter{}
+	// 400/5000 = 8%, below the 10% backgroundHeadroomPercent threshold.
+	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", ResourceQuota{Remaining: 400, Limit: 5000})))
+
+	admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, "core")
+	if admitted {
+		t.Fatalf("AdmitOrigin(OriginPRStatusPoller, \"core\") admitted = true, want false (below headroom)")
+	}
+	const want = "background headroom reserved for resource core"
+	if reason != want {
+		t.Errorf("reason = %q, want %q", reason, want)
+	}
+}
+
+// TestAdmitOrigin_should_AdmitBackgroundOrigin_When_HeadroomHealthy is the
+// converse of the rejection case: a background origin is admitted while
+// Remaining stays at/above the headroom threshold.
+func TestAdmitOrigin_should_AdmitBackgroundOrigin_When_HeadroomHealthy(t *testing.T) {
+	r := &RateLimiter{}
+	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", ResourceQuota{Remaining: 4800, Limit: 5000})))
+
+	admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, "core")
+	if !admitted {
+		t.Fatalf("AdmitOrigin(OriginPRStatusPoller, \"core\") = (%v, %q), want (true, \"\")", admitted, reason)
+	}
+	if reason != "" {
+		t.Errorf("reason = %q, want empty for an admitted call", reason)
+	}
+}
+
+// TestAdmitOrigin_should_AdmitBackgroundOrigin_When_SnapshotNeverPublished is
+// the adversarial-review-flagged edge case (validation.md REQ-2 row): a
+// resource never observed (map lookup ok == false) must read as "no data —
+// admit," not "exhausted — reject," since a zero-value ResourceQuota would
+// otherwise falsely present as Remaining: 0.
+func TestAdmitOrigin_should_AdmitBackgroundOrigin_When_SnapshotNeverPublished(t *testing.T) {
+	r := &RateLimiter{}
+
+	admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, "core")
+	if !admitted {
+		t.Fatalf("AdmitOrigin on a never-updated RateLimiter admitted = false, want true (fail-open on no data)")
+	}
+	if reason != "" {
+		t.Errorf("reason = %q, want empty", reason)
+	}
+}
+
+// TestAdmitOrigin_should_RejectInInterleavedOrdering_WithoutCrossResourceLeak
+// is the mandatory Phase 3 merge gate from Task 3.2.1c / pre-mortem P1 #2: a
+// low-limit search Update() interleaved with a healthy core Update(), in both
+// orderings, must never let one resource's numbers leak into the other
+// resource's AdmitOrigin decision.
+func TestAdmitOrigin_should_RejectInInterleavedOrdering_WithoutCrossResourceLeak(t *testing.T) {
+	search := ResourceQuota{Remaining: 2, Limit: 30}    // 6.7%, below headroom
+	core := ResourceQuota{Remaining: 4800, Limit: 5000} // 96%, healthy
+
+	assertBothDecisions := func(t *testing.T, r *RateLimiter) {
+		t.Helper()
+		if admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, "core"); !admitted {
+			t.Errorf("AdmitOrigin(OriginPRStatusPoller, \"core\") admitted = false (reason %q), want true — unhealthy search bucket must not leak into a core-scoped decision", reason)
+		}
+		admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, "search")
+		if admitted {
+			t.Errorf("AdmitOrigin(OriginPRStatusPoller, \"search\") admitted = true, want false — healthy core bucket must not mask an exhausted search decision")
+		}
+		const want = "background headroom reserved for resource search"
+		if reason != want {
+			t.Errorf("reason = %q, want %q", reason, want)
+		}
+	}
+
+	t.Run("search then core", func(t *testing.T) {
+		r := &RateLimiter{}
+		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("search", search)))
+		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", core)))
+		assertBothDecisions(t, r)
+	})
+
+	t.Run("core then search", func(t *testing.T) {
+		r := &RateLimiter{}
+		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", core)))
+		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("search", search)))
+		assertBothDecisions(t, r)
+	})
+}
+
+// TestResourceForRequest covers the request-to-resource classifier (Task
+// 3.2.1a): search/* paths classify as "search", a graphql-suffixed path
+// classifies as "graphql", and everything else classifies as "core".
+func TestResourceForRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"search repositories", "/search/repositories", "search"},
+		{"search issues", "/search/issues", "search"},
+		{"graphql", "/graphql", "graphql"},
+		{"repo pull request (core)", "/repos/tstapler/stapler-squad/pulls/704", "core"},
+		{"repo issue comments (core)", "/repos/tstapler/stapler-squad/issues/1/comments", "core"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, "https://api.github.com"+tt.path, nil)
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			if got := ResourceForRequest(req); got != tt.want {
+				t.Errorf("ResourceForRequest(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestRateLimiterSnapshot_Concurrent is the mandatory Task 3.1.1d merge gate:
 // 100 goroutines (50 calling Update with interleaved resources, 50 calling
 // Snapshot) hammer a shared RateLimiter for ~1 second under -race. It asserts

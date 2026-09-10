@@ -2,8 +2,10 @@ package github
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +21,13 @@ const maxRetryAfterSleep = 60 * time.Second
 // a warning log. Using a percentage handles resources with different quotas
 // correctly: core (5000/hr) warns at 500, search (30/hr) warns at 3.
 const rateLimitWarnPercent = 10
+
+// backgroundHeadroomPercent is the % of a resource's Limit reserved from
+// background CallOrigins for that resource — AdmitOrigin rejects a
+// non-interactive call once Remaining drops below this fraction of Limit, so
+// interactive traffic always has quota left even when a background poller
+// has been driving that resource down.
+const backgroundHeadroomPercent = 10
 
 // DefaultRateLimiter is the shared GitHub API rate limiter used by all native
 // HTTP calls. It is updated automatically by rateLimitTransport on every
@@ -247,6 +256,51 @@ func (r *RateLimiter) Snapshot() RateLimiterSnapshot {
 // github.rate_limit.remaining gauge callback (telemetry_transport.go).
 func (r *RateLimiter) currentResourceQuotas() map[string]ResourceQuota {
 	return r.Snapshot().Resources
+}
+
+// AdmitOrigin decides whether a call for origin targeting resource (as
+// classified by ResourceForRequest) should proceed. OriginInteractive is
+// always admitted while the token isn't globally rate limited — callers must
+// still check IsLimited() themselves first (rateLimitTransport.RoundTrip
+// does), since AdmitOrigin only makes the priority-tier decision, not the
+// already-limited one. Any other origin is rejected once resource's own
+// Remaining drops below backgroundHeadroomPercent of its Limit, so a
+// background poller backs off before it can starve an interactive call. A
+// resource never observed yet (ok == false) is treated as "no data — admit,"
+// not "exhausted — reject," since a zero-value ResourceQuota would otherwise
+// read as Remaining: 0. The decision is scoped strictly to resource's own
+// bucket — another resource's quota (e.g. a low-limit search response) never
+// affects it (pre-mortem P1 #2).
+func (r *RateLimiter) AdmitOrigin(origin CallOrigin, resource string) (bool, string) {
+	if origin == OriginInteractive {
+		return true, ""
+	}
+
+	quota, ok := r.Snapshot().Resources[resource]
+	if !ok {
+		return true, ""
+	}
+	if quota.Remaining < quota.Limit*backgroundHeadroomPercent/100 {
+		return false, fmt.Sprintf("background headroom reserved for resource %s", resource)
+	}
+	return true, ""
+}
+
+// ResourceForRequest classifies an outbound GitHub HTTP request into the
+// GitHub API resource bucket it consumes quota from (core, search, graphql),
+// mirroring GitHub's own per-endpoint resource assignment. Derived from the
+// request rather than the eventual response, since AdmitOrigin must decide
+// before dispatch — before any X-RateLimit-Resource response header exists.
+func ResourceForRequest(req *http.Request) string {
+	path := req.URL.Path
+	switch {
+	case strings.Contains(path, "search/"):
+		return "search"
+	case strings.HasSuffix(path, "graphql"):
+		return "graphql"
+	default:
+		return "core"
+	}
 }
 
 // Reset clears any recorded rate-limit state. DefaultRateLimiter is a package-level

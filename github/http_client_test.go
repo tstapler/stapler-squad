@@ -9,7 +9,28 @@ import (
 	"time"
 
 	"github.com/zalando/go-keyring"
+
+	"github.com/tstapler/stapler-squad/config"
 )
+
+// setAdmissionFlagForTest flips githubPriorityAdmissionFlagName to value for
+// the duration of t, restoring its prior persisted value on cleanup. Tests
+// run in IsTestMode()'s isolated per-process config dir (config/config.go),
+// but that dir is still shared across every test in this package's binary,
+// so a test that flips this flag must always restore it.
+func setAdmissionFlagForTest(t *testing.T, value bool) {
+	t.Helper()
+	cfg := config.LoadConfig()
+	prev := cfg.GetFeatureFlag(githubPriorityAdmissionFlagName)
+	if err := cfg.SetFeatureFlag(githubPriorityAdmissionFlagName, value); err != nil {
+		t.Fatalf("SetFeatureFlag(%q, %v) failed: %v", githubPriorityAdmissionFlagName, value, err)
+	}
+	t.Cleanup(func() {
+		if err := config.LoadConfig().SetFeatureFlag(githubPriorityAdmissionFlagName, prev); err != nil {
+			t.Errorf("cleanup: failed to restore %q to %v: %v", githubPriorityAdmissionFlagName, prev, err)
+		}
+	})
+}
 
 // resetGHTokenCache clears getGHToken's package-level 1-minute token cache
 // (ghTokenCacheVal/ghTokenCacheAt in http_client.go) so each subtest's
@@ -295,6 +316,197 @@ func TestNewConditionalRequest_should_SetIfNoneMatch_When_CacheHasEntry_And_Omit
 	}
 	if got := cachedReq.Header.Get("If-None-Match"); got != `"cached-etag"` {
 		t.Errorf("If-None-Match = %q, want %q", got, `"cached-etag"`)
+	}
+}
+
+// doGHRequestWithOrigin builds a GET request to url tagged with origin and
+// dispatches it through ghHTTPClient, failing t immediately if the request
+// itself can't be constructed. Shared by the admission-control tests below,
+// which otherwise all repeat the same build-request-then-dispatch shape.
+func doGHRequestWithOrigin(t *testing.T, url string, origin CallOrigin) (*http.Response, error) {
+	t.Helper()
+	ctx := WithGitHubCallOrigin(context.Background(), origin)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	return ghHTTPClient.Do(req)
+}
+
+// TestRateLimitTransport_should_ProceedUnaffectedByHeadroom_When_FlagOff
+// covers Task 3.2.2a's "byte-identical to today" acceptance criterion: with
+// githubPriorityAdmissionFlagName off, a background-origin request still
+// reaches the server even when the resource's remaining quota is below
+// backgroundHeadroomPercent — AdmitOrigin is never even consulted.
+func TestRateLimitTransport_should_ProceedUnaffectedByHeadroom_When_FlagOff(t *testing.T) {
+	resetRateLimiterForTest(t)
+	setAdmissionFlagForTest(t, false)
+
+	reached := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.Header().Set("X-RateLimit-Resource", "core")
+		w.Header().Set("X-RateLimit-Remaining", "400")
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// Below headroom (400/5000 = 8% < 10%) via a prior response.
+	DefaultRateLimiter.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", ResourceQuota{Remaining: 400, Limit: 5000})))
+
+	resp, err := doGHRequestWithOrigin(t, server.URL, OriginPRStatusPoller)
+	if err != nil {
+		t.Fatalf("ghHTTPClient.Do() error = %v, want nil (flag off, AdmitOrigin never consulted)", err)
+	}
+	resp.Body.Close()
+
+	if !reached {
+		t.Error("request never reached the server; flag-off path should behave exactly as before this story")
+	}
+}
+
+// TestRateLimitTransport_should_RejectBackgroundOrigin_When_FlagOnAndBelowHeadroom
+// covers Task 3.2.2a/3.2.2b: with the flag on, a background-origin request
+// targeting a resource below headroom is rejected before dispatch, and
+// github.admission.rejected_total is incremented (verified indirectly here
+// via the counter's registration not panicking — direct value assertion
+// needs an OTel test exporter, which this package doesn't wire up; the
+// request-never-reached-server assertion is this test's primary claim, per
+// plan Task 3.2.2a's explicit AC).
+func TestRateLimitTransport_should_RejectBackgroundOrigin_When_FlagOnAndBelowHeadroom(t *testing.T) {
+	resetRateLimiterForTest(t)
+	setAdmissionFlagForTest(t, true)
+
+	reached := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	DefaultRateLimiter.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", ResourceQuota{Remaining: 400, Limit: 5000})))
+
+	_, err := doGHRequestWithOrigin(t, server.URL, OriginPRStatusPoller)
+	if err == nil {
+		t.Fatal("ghHTTPClient.Do() error = nil, want an admission-control rejection error")
+	}
+	if reached {
+		t.Error("request reached the server despite being below headroom with the flag on")
+	}
+}
+
+// TestRateLimitTransport_should_AdmitInteractiveCall_When_BackgroundOriginExhaustedSameRateLimiter
+// is the compound two-origin scenario (validation.md's REQ-2 integration
+// row): a background call drives the shared RateLimiter below headroom, a
+// second background call is rejected, and a subsequent interactive call on
+// the same transport still succeeds — proving AdmitOrigin's reserved
+// headroom actually protects interactive traffic end-to-end through
+// rateLimitTransport, not merely in isolation.
+func TestRateLimitTransport_should_AdmitInteractiveCall_When_BackgroundOriginExhaustedSameRateLimiter(t *testing.T) {
+	resetRateLimiterForTest(t)
+	setAdmissionFlagForTest(t, true)
+
+	var requestCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("X-RateLimit-Resource", "core")
+		w.Header().Set("X-RateLimit-Remaining", "400")
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// Step A: background call causes exhaustion (200, publishes Remaining=400/5000, 8%).
+	resp, err := doGHRequestWithOrigin(t, server.URL, OriginPRStatusPoller)
+	if err != nil {
+		t.Fatalf("step A: background call error = %v, want nil", err)
+	}
+	resp.Body.Close()
+	if got := DefaultRateLimiter.Snapshot().Resources["core"].Remaining; got != 400 {
+		t.Fatalf("step A: Snapshot().Resources[\"core\"].Remaining = %d, want 400", got)
+	}
+	if requestCount != 1 {
+		t.Fatalf("step A: requestCount = %d, want 1", requestCount)
+	}
+
+	// Step B: a second background call is rejected before dispatch.
+	_, err = doGHRequestWithOrigin(t, server.URL, OriginPRStatusPoller)
+	if err == nil {
+		t.Fatal("step B: background call error = nil, want a rejection error")
+	}
+	if requestCount != 1 {
+		t.Fatalf("step B: requestCount = %d, want still 1 (rejected before dispatch)", requestCount)
+	}
+
+	// Step C: an interactive call still succeeds through the same transport.
+	resp, err = doGHRequestWithOrigin(t, server.URL, OriginInteractive)
+	if err != nil {
+		t.Fatalf("step C: interactive call error = %v, want nil", err)
+	}
+	resp.Body.Close()
+	if requestCount != 2 {
+		t.Fatalf("step C: requestCount = %d, want 2 (interactive call dispatched)", requestCount)
+	}
+}
+
+// TestRateLimitTransport_should_AdmitBackgroundOrigin_When_ResourceUnaffectedBySearchExhaustion
+// covers Task 3.2.2a's pre-mortem-P1-#2 acceptance criterion at the transport
+// level: an exhausted search bucket must not block a core-targeting request.
+func TestRateLimitTransport_should_AdmitBackgroundOrigin_When_ResourceUnaffectedBySearchExhaustion(t *testing.T) {
+	resetRateLimiterForTest(t)
+	setAdmissionFlagForTest(t, true)
+
+	reached := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// search is exhausted; core is healthy.
+	DefaultRateLimiter.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("search", ResourceQuota{Remaining: 2, Limit: 30})))
+	DefaultRateLimiter.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", ResourceQuota{Remaining: 4800, Limit: 5000})))
+
+	// The request path doesn't contain "search/" or end in "graphql", so
+	// ResourceForRequest classifies it as "core".
+	resp, err := doGHRequestWithOrigin(t, server.URL+"/repos/tstapler/stapler-squad/pulls/704", OriginPRStatusPoller)
+	if err != nil {
+		t.Fatalf("ghHTTPClient.Do() error = %v, want nil (core is healthy, search's exhaustion must not leak)", err)
+	}
+	resp.Body.Close()
+	if !reached {
+		t.Error("request never reached the server; exhausted search bucket incorrectly blocked a core-targeting request")
+	}
+}
+
+// TestRateLimitTransport_should_NeverReachAdmitOrigin_When_AlreadyGloballyLimited
+// covers Task 3.2.3a: IsLimited()'s unconditional fail-fast check runs before
+// the flag-gated AdmitOrigin check, so an already-limited state is always
+// rejected regardless of flag state or headroom — there is never a window
+// where the two checks could disagree. Verified here with the flag ON and an
+// origin (OriginInteractive) that AdmitOrigin itself would always admit: if
+// AdmitOrigin's check ran first (or instead of) IsLimited()'s, this request
+// would incorrectly succeed.
+func TestRateLimitTransport_should_NeverReachAdmitOrigin_When_AlreadyGloballyLimited(t *testing.T) {
+	resetRateLimiterForTest(t)
+	setAdmissionFlagForTest(t, true)
+
+	reached := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	DefaultRateLimiter.setLimitedUntil(time.Now().Add(time.Minute))
+
+	_, err := doGHRequestWithOrigin(t, server.URL, OriginInteractive)
+	if err == nil {
+		t.Fatal("ghHTTPClient.Do() error = nil, want the IsLimited() fail-fast error")
+	}
+	if reached {
+		t.Error("request reached the server despite DefaultRateLimiter already being globally limited")
 	}
 }
 

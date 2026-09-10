@@ -33,6 +33,16 @@ const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 // where it's read.
 const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
 
+// githubPriorityAdmissionFlagName gates github.rateLimitTransport.RoundTrip's
+// AdmitOrigin rejection branch (github/http_client.go). github cannot import
+// this package (server/services already imports github, so the reverse would
+// be a cycle), so github/http_client.go duplicates this same string literal
+// under its own constant of the same name rather than importing it — mirrors
+// session/instance_tmux.go's terminalResyncExecGateFastLaneFlagName
+// precedent. Keep both constants' values in sync if this flag is ever
+// renamed.
+const githubPriorityAdmissionFlagName = "github:priority-admission-control"
+
 // handoffSummaryFlagName is the generic-registry name for the
 // restart-with-handoff-summary feature, so the frontend can discover
 // HandoffSummaryConfig.Enabled up front (via GetFeatureFlags) instead of only
@@ -189,6 +199,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        terminalResyncBatchingFlagName,
 		description: "Batch multiple terminals' resync requests into a single round trip instead of issuing one request per terminal. Default: off.",
+	},
+	{
+		name:        githubPriorityAdmissionFlagName,
+		description: "Priority-aware admission control for outbound GitHub API calls: background pollers/sync back off once a resource's (core/search/graphql) remaining quota drops below a reserved headroom, so interactive GitHub actions (merge, comment, refresh) keep succeeding. Protects this stapler-squad instance's own interactive GitHub calls only — does not coordinate with other machines sharing the same GitHub token. Default: off.",
 	},
 	{
 		name:        piSupportFlagName,

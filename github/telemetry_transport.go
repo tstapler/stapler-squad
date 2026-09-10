@@ -92,6 +92,15 @@ func recordCacheResult(ctx context.Context, resp *http.Response, attrs []attribu
 	cacheResultCounter.Add(ctx, 1, metric.WithAttributes(withResult...))
 }
 
+// recordAdmissionRejected increments github.admission.rejected_total for a
+// call AdmitOrigin rejected, labeled by origin (Story 3.2.2, Task 3.2.2b).
+func recordAdmissionRejected(ctx context.Context, origin CallOrigin) {
+	if admissionRejectedCounter == nil {
+		return
+	}
+	admissionRejectedCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("origin", string(origin))))
+}
+
 func recordGitHubCall(ctx context.Context, duration time.Duration, attrs []attribute.KeyValue) {
 	if callsCounter != nil {
 		callsCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
@@ -104,10 +113,11 @@ func recordGitHubCall(ctx context.Context, duration time.Duration, attrs []attri
 var (
 	registerTelemetryOnce sync.Once
 
-	callsCounter       metric.Int64Counter
-	callDurationHist   metric.Int64Histogram
-	cacheResultCounter metric.Int64Counter
-	rateLimitRemaining metric.Int64ObservableGauge
+	callsCounter             metric.Int64Counter
+	callDurationHist         metric.Int64Histogram
+	cacheResultCounter       metric.Int64Counter
+	rateLimitRemaining       metric.Int64ObservableGauge
+	admissionRejectedCounter metric.Int64Counter
 )
 
 func init() {
@@ -139,6 +149,11 @@ func registerGitHubTelemetry() {
 		if cacheResultCounter, err = meter.Int64Counter("github.cache.result_total",
 			metric.WithDescription("Count of conditional-GET outcomes (result=hit for 304, result=miss for 200)")); err != nil {
 			log.Error("github: failed to register github.cache.result_total", "error", err)
+		}
+
+		if admissionRejectedCounter, err = meter.Int64Counter("github.admission.rejected_total",
+			metric.WithDescription("Count of outbound GitHub calls rejected by AdmitOrigin's priority-aware admission control, tagged by origin")); err != nil {
+			log.Error("github: failed to register github.admission.rejected_total", "error", err)
 		}
 
 		if rateLimitRemaining, err = meter.Int64ObservableGauge("github.rate_limit.remaining",

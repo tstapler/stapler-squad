@@ -14,7 +14,20 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/tstapler/stapler-squad/config"
 )
+
+// githubPriorityAdmissionFlagName gates AdmitOrigin's rejection branch below.
+// server/services/feature_flag_service.go's knownFeatureFlags registers this
+// same literal under its own githubPriorityAdmissionFlagName constant — github
+// cannot import server/services (that would be a cycle; server/services
+// already imports github), so the name is duplicated here rather than shared,
+// mirroring session/instance_tmux.go's terminalResyncExecGateFastLaneFlagName
+// precedent. Keep both constants' string values in sync if this flag is ever
+// renamed. Default off — see plan.md's Risk Control section for the dated
+// flip trigger.
+const githubPriorityAdmissionFlagName = "github:priority-admission-control"
 
 // ghHTTPClient is the shared HTTP client used for all native GitHub REST and
 // GraphQL calls. The 30-second timeout matches the existing gh CLI call
@@ -59,6 +72,21 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 	if limited, until := DefaultRateLimiter.IsLimited(); limited {
 		return nil, fmt.Errorf("github: rate limited until %s, skipping request to avoid another guaranteed failure", until.Format(time.RFC3339))
 	}
+
+	// Priority-aware admission control (Story 3.2.2): flag-gated so behavior is
+	// byte-identical to the IsLimited()-only check above when off. This check
+	// always runs strictly after IsLimited() — an already-limited state is
+	// rejected there and never reaches AdmitOrigin, so there is no window where
+	// the two checks could disagree (Story 3.2.3).
+	if config.LoadConfig().GetFeatureFlagWithDefault(githubPriorityAdmissionFlagName, false) {
+		origin := GitHubCallOriginFrom(req.Context())
+		resource := ResourceForRequest(req)
+		if admitted, reason := DefaultRateLimiter.AdmitOrigin(origin, resource); !admitted {
+			recordAdmissionRejected(req.Context(), origin)
+			return nil, fmt.Errorf("github: admission control rejected request: %s", reason)
+		}
+	}
+
 	resp, err := t.next.RoundTrip(req)
 	if resp != nil {
 		DefaultRateLimiter.Update(resp)
