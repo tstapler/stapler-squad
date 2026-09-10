@@ -44,6 +44,14 @@ func (c *ETagCache) set(key string, e etagEntry) {
 	c.store.Store(key, e)
 }
 
+// Invalidate drops the cached entry for (owner, repo, prNumber), safe to call
+// concurrently with get/set. The next GetPRInfoConditional call for that key
+// omits If-None-Match, forcing a fresh, unconditional 200 fetch instead of a
+// stale 304.
+func (c *ETagCache) Invalidate(owner, repo string, prNumber int) {
+	c.store.Delete(c.cacheKey(owner, repo, prNumber))
+}
+
 // GetPRInfoConditional fetches PR info using ETag conditional requests.
 // Uses native net/http instead of a gh subprocess to avoid forkExec lock contention.
 // Returns (info, changed, error).

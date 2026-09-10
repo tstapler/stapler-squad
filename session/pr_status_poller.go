@@ -108,6 +108,41 @@ func (p *PRStatusPoller) ETagCache() *github.ETagCache {
 	return p.etagCache
 }
 
+// InvalidateAndRefresh drops the shared ETagCache entry for (owner, repo,
+// prNumber) and dispatches an out-of-band fetchAndUpdatePRStatus for every
+// tracked instance matching that PR (plural — two Instances, e.g. a worktree
+// session and its parent, can track the same PR). Returns matched=true if at
+// least one instance matched; a miss still invalidates the cache (harmless
+// sync.Map no-op) and returns false.
+//
+// The dispatched fetch's context is built from p.ctx (the poller's own
+// lifetime), not derived from the passed-in ctx: the caller (the webhook
+// handler) does not block on this call, so deriving from its request-scoped
+// ctx would cancel the fetch as soon as the HTTP response is written.
+func (p *PRStatusPoller) InvalidateAndRefresh(ctx context.Context, owner, repo string, prNumber int) bool {
+	_ = ctx // request-scoped; not used for the dispatched fetch's lifetime, see doc comment
+	p.etagCache.Invalidate(owner, repo, prNumber)
+
+	matched := false
+	for _, inst := range p.GetInstances() {
+		snap := inst.Snapshot()
+		if snap.GitHub.GitHubOwner != owner || snap.GitHub.GitHubRepo != repo || snap.GitHub.GitHubPRNumber != prNumber {
+			continue
+		}
+		matched = true
+
+		captured := inst
+		fetchCtx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
+		fetchCtx = github.WithGitHubCallOrigin(fetchCtx, github.OriginWebhookReconcile)
+		go func() {
+			defer cancel()
+			p.fetchAndUpdatePRStatus(fetchCtx, captured)
+		}()
+	}
+
+	return matched
+}
+
 // SetInstances replaces the full list of monitored instances.
 func (p *PRStatusPoller) SetInstances(instances []*Instance) {
 	p.mu.Lock()
@@ -254,7 +289,10 @@ func (p *PRStatusPoller) checkAllSessions() {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			p.fetchAndUpdatePRStatus(captured)
+			ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
+			defer cancel()
+			ctx = github.WithGitHubCallOrigin(ctx, github.OriginPRStatusPoller)
+			p.fetchAndUpdatePRStatus(ctx, captured)
 		}()
 	}
 
@@ -282,11 +320,10 @@ func (p *PRStatusPoller) isAuthOK() bool {
 }
 
 // fetchAndUpdatePRStatus fetches fresh PR status for one instance and applies it.
-func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
-	ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
-	defer cancel()
-	ctx = github.WithGitHubCallOrigin(ctx, github.OriginPRStatusPoller)
-
+// ctx carries the caller's timeout and github.CallOrigin tag — the ticker fan-out
+// loop (checkAllSessions) tags OriginPRStatusPoller; InvalidateAndRefresh tags
+// OriginWebhookReconcile — so the two call paths stay distinguishable in telemetry.
+func (p *PRStatusPoller) fetchAndUpdatePRStatus(ctx context.Context, inst *Instance) {
 	// Use Snapshot() — actor-based writes (SetGitHubPRNumber etc.) do not hold mu,
 	// so mu.RLock would not synchronize with them.
 	snap := inst.Snapshot()
