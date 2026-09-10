@@ -61,7 +61,19 @@ type EscapeCodeParser struct {
 	samplingRate      float64
 	chunkSeqNum       int64 // incremented per Parse call (Stage 1 goroutine only)
 	stage2ChunkSeqNum int64 // incremented per ParseStage2 call (Stage 2 goroutine only)
-	correlator        *MangleCorrelator
+	// stage1CodesBuf/stage2CodesBuf are extractEscapeSequences' reused output buffers, one
+	// per goroutine (same split as chunkSeqNum/stage2ChunkSeqNum — never touched by the other
+	// stage's goroutine, so no lock is needed). Passed by pointer and reset to length 0
+	// before each call, keeping the backing array's capacity across calls instead of
+	// allocating a fresh slice per chunk: live profiling on a busy instance (~50-100
+	// concurrent sessions) showed this the single largest stapler-squad-owned flat
+	// allocator (extractEscapeSequences, 1.26% of all process allocations over a 30-minute
+	// window) — every PTY read chunk paid a fresh append-driven grow, even though a
+	// session's steady-state code count per chunk is stable enough for the capacity to
+	// converge and stop growing after a few calls.
+	stage1CodesBuf []ParsedEscapeCode
+	stage2CodesBuf []ParsedEscapeCode
+	correlator     *MangleCorrelator
 	// totalSequences/totalMangled are written from both the Stage 1 (PTY read) and
 	// Stage 2 (WebSocket output) goroutines via emitEventWithStageAndSeq, so they
 	// must be atomic rather than plain int64.
@@ -179,7 +191,8 @@ func (p *EscapeCodeParser) Parse(data []byte, sessionSeq int64) []byte {
 	}
 
 	// Extract all escape sequences
-	codes, trailingIncomplete := p.extractEscapeSequences(parseData)
+	p.stage1CodesBuf = p.stage1CodesBuf[:0]
+	codes, trailingIncomplete := p.extractEscapeSequences(parseData, &p.stage1CodesBuf)
 
 	// Record each code to the store and emit events
 	sessionID := p.currentSessionID()
@@ -214,7 +227,8 @@ func (p *EscapeCodeParser) ParseStage2(data []byte, sessionSeq int64) {
 
 	p.stage2ChunkSeqNum++
 
-	codes, _ := p.extractEscapeSequences(data)
+	p.stage2CodesBuf = p.stage2CodesBuf[:0]
+	codes, _ := p.extractEscapeSequences(data, &p.stage2CodesBuf)
 	for _, code := range codes {
 		p.emitEventWithStageAndSeq(code, sessionSeq, StageTransport, p.stage2ChunkSeqNum)
 	}
@@ -330,13 +344,17 @@ func extractOSCCommand(rawBytes []byte) string {
 	return string(content[:end])
 }
 
-// extractEscapeSequences finds all escape sequences in the data.
+// extractEscapeSequences finds all escape sequences in the data, appending them to
+// *buf (which the caller must reset to length 0 first — reusing its capacity across
+// calls instead of allocating a fresh slice every time; see stage1CodesBuf's doc
+// comment). The returned slice aliases *buf's backing array and is only valid until
+// the next call through the same buffer.
 // It also returns the offset of a trailing ESC byte that did not resolve to a
 // complete sequence by the end of data (or -1 if none) — this is the position
 // a subsequent chunk's data must be prepended to via partialBuffer, since the
 // sequence may simply have been split across a PTY read boundary.
-func (p *EscapeCodeParser) extractEscapeSequences(data []byte) ([]ParsedEscapeCode, int) {
-	var codes []ParsedEscapeCode
+func (p *EscapeCodeParser) extractEscapeSequences(data []byte, buf *[]ParsedEscapeCode) ([]ParsedEscapeCode, int) {
+	codes := *buf
 	i := 0
 	trailingIncomplete := -1
 
@@ -361,6 +379,7 @@ func (p *EscapeCodeParser) extractEscapeSequences(data []byte) ([]ParsedEscapeCo
 		}
 	}
 
+	*buf = codes
 	return codes, trailingIncomplete
 }
 

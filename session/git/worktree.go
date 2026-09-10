@@ -111,6 +111,11 @@ type GitWorktree struct {
 	// isDirtySF coalesces concurrent dirty-checks on the same worktree so only
 	// one in-process status check runs at a time.
 	isDirtySF singleflight.Group //nolint:exhaustruct
+
+	// gitignoreFS caches the filesystem reads go-git's Worktree.Status() issues
+	// while re-walking gitignore patterns on every call — see worktreeIsDirty and
+	// HasStagedChanges. Zero value is ready to use; cleared by InvalidateDirtyCache.
+	gitignoreFS gitignoreFSCache
 }
 
 // GitWorktreeOption is a functional option for GitWorktree construction,
@@ -393,10 +398,14 @@ func (g *GitWorktree) commandRunner() tmux.CommandRunner {
 	return g.runner
 }
 
-// dirtyCheckerFunc returns g.dirtyChecker, defaulting to worktreeIsDirty when unset.
+// dirtyCheckerFunc returns g.dirtyChecker, defaulting to worktreeIsDirtyFast (mtime/hash
+// short-circuit, no go-git Worktree.Status() tree-diff — see its doc comment) backed by
+// g.gitignoreFS when unset.
 func (g *GitWorktree) dirtyCheckerFunc() func(string) (bool, error) {
 	if g.dirtyChecker == nil {
-		return worktreeIsDirty
+		return func(path string) (bool, error) {
+			return worktreeIsDirtyFast(path, &g.gitignoreFS)
+		}
 	}
 	return g.dirtyChecker
 }

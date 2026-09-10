@@ -249,32 +249,26 @@ func (g *GitWorktree) StageAllExceptScaffolding() error {
 // StageAllExceptScaffolding so a commit whose only staged change was a
 // just-untracked scaffolding file is skipped gracefully instead of failing on
 // "nothing to commit".
+//
+// Uses worktreeStagedDirty (see worktree_dirty_fast.go) instead of go-git's
+// Worktree.Status() — untracked files are never in the index by definition, so
+// they're naturally excluded from this comparison exactly like go-git's own
+// git.Untracked exclusion was (see TestCommitChanges_SkipsCommitGracefully_WhenOnlyScaffoldingStaged,
+// the "brand-new scaffolding file added, then untracked again" case).
 func (g *GitWorktree) HasStagedChanges() (bool, error) {
 	repo, err := OpenRepo(g.worktreePath)
 	if err != nil {
 		return false, fmt.Errorf("failed to check staged changes: %w", err)
 	}
-	worktree, err := repo.Worktree()
+	idx, err := repo.Storer.Index()
 	if err != nil {
 		return false, fmt.Errorf("failed to check staged changes: %w", err)
 	}
-	status, err := worktree.Status()
+	headHashes, err := headTreeHashes(repo)
 	if err != nil {
 		return false, fmt.Errorf("failed to check staged changes: %w", err)
 	}
-	for _, fileStatus := range status {
-		// git.Untracked is go-git's Staging code for a plain untracked file
-		// (present in the worktree, absent from both the index and HEAD) — it
-		// is not a staged change (`git diff --cached` reports nothing for it),
-		// so it must be excluded alongside Unmodified. Missing this excludes
-		// exactly the "brand-new scaffolding file added, then untracked again"
-		// case CommitChanges must skip as a no-op (see
-		// TestCommitChanges_SkipsCommitGracefully_WhenOnlyScaffoldingStaged).
-		if fileStatus.Staging != git.Unmodified && fileStatus.Staging != git.Untracked {
-			return true, nil
-		}
-	}
-	return false, nil
+	return worktreeStagedDirty(idx, headHashes), nil
 }
 
 // PrimeDirtyCacheAt sets the dirty-cache timestamp to t without running git status.
@@ -289,6 +283,7 @@ func (g *GitWorktree) PrimeDirtyCacheAt(t time.Time) {
 // manual commit, after running git operations, or in tests after writing files directly).
 func (g *GitWorktree) InvalidateDirtyCache() {
 	g.isDirtyCache.Store(dirtyCacheState{}) // zero time signals "cache invalid"
+	g.gitignoreFS.reset()
 }
 
 // IsDirty checks if the worktree has uncommitted changes.
@@ -368,9 +363,19 @@ func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
 // unstaged change, via go-git's Worktree.Status() — no subprocess (the
 // `prefer-go-git-over-subshells` skill). status.IsClean() is true iff there
 // are zero entries at all, staged or unstaged, matching `git status
-// --porcelain` producing empty output. This is IsDirtyWithHint's default
-// dirtyChecker; see dirtyCheckerFunc in worktree.go.
+// --porcelain` producing empty output. Uncached — kept for direct callers/tests
+// that want a guaranteed-fresh read; dirtyCheckerFunc's default instead calls
+// worktreeIsDirtyWithFS with the owning GitWorktree's gitignoreFS.
 func worktreeIsDirty(path string) (bool, error) {
+	return worktreeIsDirtyWithFS(path, nil)
+}
+
+// worktreeIsDirtyWithFS is worktreeIsDirty with the worktree's gitignore-pattern
+// filesystem reads served from cache (see gitignoreFSCache) when cache is non-nil.
+// go-git recomputes the full gitignore pattern set from scratch on every
+// Worktree.Status() call — profiling showed this dominating CPU/allocations under
+// load — so this is the fast path IsDirtyWithHint's cache-miss branch actually takes.
+func worktreeIsDirtyWithFS(path string, cache *gitignoreFSCache) (bool, error) {
 	repo, err := OpenRepo(path)
 	if err != nil {
 		return false, fmt.Errorf("failed to open git repo at %s: %w", path, err)
@@ -379,6 +384,7 @@ func worktreeIsDirty(path string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to get worktree at %s: %w", path, err)
 	}
+	worktree.Filesystem = newCachedFilesystem(worktree.Filesystem, cache)
 	status, err := worktree.Status()
 	if err != nil {
 		return false, fmt.Errorf("failed to get worktree status at %s: %w", path, err)
