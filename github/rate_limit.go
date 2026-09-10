@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -41,6 +42,26 @@ var DefaultRateLimiter = &RateLimiter{}
 type RateLimiter struct {
 	mu               sync.RWMutex
 	rateLimitedUntil time.Time
+	snapshot         atomic.Pointer[RateLimiterSnapshot]
+}
+
+// ResourceQuota is one GitHub API resource's (core, search, graphql, ...)
+// last-observed quota, as reported by that resource's own X-RateLimit-*
+// response headers.
+type ResourceQuota struct {
+	Remaining int
+	Limit     int
+	ResetAt   time.Time
+}
+
+// RateLimiterSnapshot is a lock-free, point-in-time read of RateLimiter's
+// state, partitioned by resource so a low-limit resource (e.g. search, 30/hr)
+// can never clobber or mask another resource's (e.g. core, 5000/hr) quota —
+// core/search/graphql share one token but have independent budgets (see
+// pre-mortem P1 #2).
+type RateLimiterSnapshot struct {
+	Resources        map[string]ResourceQuota
+	RateLimitedUntil time.Time
 }
 
 // Update reads GitHub rate-limit headers from resp and updates the limiter.
@@ -68,6 +89,13 @@ func (r *RateLimiter) Update(resp *http.Response) {
 			resetAt = time.Unix(unix, 0)
 		}
 	}
+
+	// Publish this resource's quota on every return path below (including the
+	// early return in the secondary-rate-limit branch), not just the
+	// fall-through end — pre-mortem P1 #2 requires the storing side to be
+	// unconditional so a resource's last-known quota is never left stale by a
+	// branch that returns early.
+	defer r.publishResourceQuota(resource, ResourceQuota{Remaining: remaining, Limit: limit, ResetAt: resetAt})
 
 	// Percentage-based warning threshold so search (30/hr) and core (5000/hr) both
 	// warn at the right time rather than always / never.
@@ -174,17 +202,51 @@ func (r *RateLimiter) setLimitedUntil(t time.Time) {
 	r.mu.Unlock()
 }
 
-// currentResourceQuotas returns the currently known (remaining, limit) pair
-// for every GitHub API resource (core, search, graphql, ...) observed so far.
-// This is a stub ahead of Phase 3's Story 3.1.1, which partitions
-// RateLimiterSnapshot by resource and adds real per-resource storage here —
-// until then it always returns an empty map, so the
-// github.rate_limit.remaining gauge callback (telemetry_transport.go) simply
-// emits zero observations rather than fabricating data. Only the plumbing
-// line that calls into RateLimiter changes when Phase 3 lands; the gauge
-// callback already iterates a map so its shape is unaffected.
-func (r *RateLimiter) currentResourceQuotas() map[string]struct{ Remaining, Limit int } {
-	return map[string]struct{ Remaining, Limit int }{}
+// publishResourceQuota copy-on-write publishes a new RateLimiterSnapshot:
+// load the current snapshot (nil-safe — a never-published pointer reads as an
+// empty map), shallow-copy its Resources map, then overwrite only resource's
+// entry. Every other resource's last-known quota is carried forward
+// untouched, since Resources is a map and cannot be safely mutated in place
+// behind an atomic.Pointer with concurrent readers (pre-mortem P1 #2).
+func (r *RateLimiter) publishResourceQuota(resource string, quota ResourceQuota) {
+	var oldResources map[string]ResourceQuota
+	if old := r.snapshot.Load(); old != nil {
+		oldResources = old.Resources
+	}
+
+	newResources := make(map[string]ResourceQuota, len(oldResources)+1)
+	for k, v := range oldResources {
+		newResources[k] = v
+	}
+	newResources[resource] = quota
+
+	r.mu.RLock()
+	rateLimitedUntil := r.rateLimitedUntil
+	r.mu.RUnlock()
+
+	r.snapshot.Store(&RateLimiterSnapshot{
+		Resources:        newResources,
+		RateLimitedUntil: rateLimitedUntil,
+	})
+}
+
+// Snapshot returns a lock-free, point-in-time read of the limiter's state. If
+// Update has never published one, it returns a zero-value RateLimiterSnapshot
+// (Resources is nil) — a caller reading Snapshot().Resources["core"] off a nil
+// map gets ResourceQuota{}'s zero value via Go's safe nil-map-read semantics,
+// not a panic.
+func (r *RateLimiter) Snapshot() RateLimiterSnapshot {
+	if s := r.snapshot.Load(); s != nil {
+		return *s
+	}
+	return RateLimiterSnapshot{}
+}
+
+// currentResourceQuotas returns the currently known quota for every GitHub
+// API resource (core, search, graphql, ...) observed so far, for the
+// github.rate_limit.remaining gauge callback (telemetry_transport.go).
+func (r *RateLimiter) currentResourceQuotas() map[string]ResourceQuota {
+	return r.Snapshot().Resources
 }
 
 // Reset clears any recorded rate-limit state. DefaultRateLimiter is a package-level
