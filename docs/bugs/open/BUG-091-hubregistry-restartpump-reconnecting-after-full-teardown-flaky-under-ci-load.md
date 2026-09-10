@@ -19,6 +19,8 @@ The failing assertion is a `require.Eventually(..., time.Second, 5*time.Millisec
 
 Not yet reproduced in isolation. Observed once in CI (PR #615, run 33023813275) under full-suite `-race` load; re-run of the same job triggered to check for flakiness (see PR #615 for outcome).
 
+Recurred in CI for PR #641 (an unrelated web-app-only diff). Locally, `go test ./server/services -run TestHubRegistry_should_RestartPump_When_ReconnectingAfterFullTeardown -count=15` passes reliably in isolation, but `-count=20 -race` intermittently reproduces the same "Condition never satisfied" failure at `connectrpc_websocket_test.go:1263` — consistent with the CPU-contention hypothesis below rather than a real logic bug.
+
 ## Root Cause
 
 Not yet root-caused. Leading hypothesis, per the symptom shape and this test's own doc comments: the 1-second `require.Eventually` budget for observing a frame arrive after reconnect is tight enough that CPU contention from other packages running `-race` in parallel (the same class of CI-load timing pressure documented in `project_plans/worktree-selfheal-test-flake/research/pitfalls.md` for an unrelated flake) can push the actual pump-restart-and-deliver latency past the assertion's timeout even when the underlying fix (#595) is correct.
