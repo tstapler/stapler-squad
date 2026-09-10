@@ -91,7 +91,7 @@ jobs:
         run: |
           set -o pipefail
           go test \
-            -bench='BenchmarkEventBus|BenchmarkDeltaGenerat|BenchmarkCircularBuffer|BenchmarkGetTimeSinceLastMeaningfulOutput|BenchmarkStripANSI|BenchmarkStripANSICodes|BenchmarkIsBanner|BenchmarkProcessOutput|BenchmarkDiffShortstat|BenchmarkReviewQueue|BenchmarkDetectCommandsInText|BenchmarkTokenParser|BenchmarkListShippedCommitsWithCap' \
+            -bench='BenchmarkEventBus|BenchmarkDeltaGenerat|BenchmarkCircularBuffer|BenchmarkGetTimeSinceLastMeaningfulOutput|BenchmarkStripANSI|BenchmarkStripANSICodes|BenchmarkIsBanner|BenchmarkProcessOutput|BenchmarkDiffShortstat|BenchmarkReviewQueue|BenchmarkDetectCommandsInText|BenchmarkTokenParser|BenchmarkListShippedCommitsWithCap|BenchmarkStopController_NoOpFastPath|BenchmarkSetHistoryInfo_NoOpFastPath' \
             -run='^$' \
             -benchmem \
             -count=8 \

@@ -1020,7 +1020,7 @@ func markSessionNeedsAttention(inst *Instance, reason string) {
 // conversation log and produces a brief prompt summarizing the last assistant
 // turn. Falls back to a generic prompt if the log is unavailable.
 func buildContinuationPrompt(inst *Instance) string {
-	histPath := inst.HistoryFilePath
+	histPath := inst.Snapshot().HistoryFilePath
 	if histPath == "" {
 		return "Your previous session exited unexpectedly. Please continue from where you left off."
 	}

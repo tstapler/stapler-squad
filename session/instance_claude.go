@@ -535,6 +535,15 @@ func (i *Instance) SetClaudeSessionIDSavedCallback(fn func()) {
 	i.claudeSessionIDSavedCallback = fn
 }
 
+// currentConversationUUIDLocked returns i.claudeSession's ConversationUUID
+// ("" if unset). Caller must hold claudeSessionMu (R or exclusive).
+func (i *Instance) currentConversationUUIDLocked() string {
+	if i.claudeSession == nil {
+		return ""
+	}
+	return i.claudeSession.ConversationUUID
+}
+
 // SetHistoryInfo updates the conversation UUID and history file path.
 // Thread-safe: acquires stateMutex write lock.
 // No-op if the UUID is already set to the same value.
@@ -545,12 +554,22 @@ func (i *Instance) SetClaudeSessionIDSavedCallback(fn func()) {
 // a tmux pane killed before that sweep runs would otherwise resume with no
 // conversation UUID to pass to --resume.
 func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
+	// Fast path: check the no-op condition under RLock first. HistoryLinker
+	// calls this on every scan tick, and most ticks find nothing changed —
+	// taking claudeSessionMu.Lock() (exclusive) just to discover that blocks
+	// every concurrent reader (e.g. GetHistoryInfo) for no reason. Re-checked
+	// below once the exclusive lock is actually held, since the value could
+	// change between the RUnlock and the Lock.
+	i.claudeSessionMu.RLock()
+	noop := i.currentConversationUUIDLocked() == conversationUUID && i.HistoryFilePath == historyFilePath
+	i.claudeSessionMu.RUnlock()
+	if noop {
+		return
+	}
+
 	i.claudeSessionMu.Lock()
 
-	currentUUID := ""
-	if i.claudeSession != nil {
-		currentUUID = i.claudeSession.ConversationUUID
-	}
+	currentUUID := i.currentConversationUUIDLocked()
 	if currentUUID == conversationUUID && i.HistoryFilePath == historyFilePath {
 		i.claudeSessionMu.Unlock()
 		return
