@@ -775,6 +775,11 @@ func TestBug_ShellsAndMonitorsStillRunning_WrappedLineNotDetected(t *testing.T) 
 // M shell still running" instead of "N shell, M monitor still running") — no live evidence
 // this format exists yet (see plan.md's Out of Scope), but pins the current behavior
 // explicitly rather than leaving it undocumented, per pre-mortem finding #1.
+//
+// The surviving count is the SHELL count, not the monitor count: shells_still_running
+// matches the trailing "1 shell still running" substring (skipping the leading "1 monitor, "),
+// while monitors_still_running never matches at all here because "still running" doesn't
+// immediately follow "monitor" in this ordering.
 func TestBug_ReversedOrderShellsAndMonitors_KnownUndercount(t *testing.T) {
 	t.Parallel()
 	sd := NewStatusDetector()
@@ -787,7 +792,8 @@ func TestBug_ReversedOrderShellsAndMonitors_KnownUndercount(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("DetectWithContextAndCountFromLines(reversed-order) count = %d, want 1 (documented undercount — "+
-			"only the monitor is matched today; if this now returns 2, add a real fix and update this test/plan.md)", count)
+			"shells_still_running matches only the trailing \"1 shell still running\" substring, skipping the "+
+			"leading \"1 monitor, \"; if this now returns 2, add a real fix and update this test/plan.md)", count)
 	}
 }
 
