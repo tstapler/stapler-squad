@@ -1217,6 +1217,29 @@ func TestReviewQueuePoller_ShouldSkipSession_SkipsCrashed(t *testing.T) {
 	}
 }
 
+// TestReviewQueuePoller_ShouldSkipSession_SkipsHibernatedAndPermanentlyFailed pins the
+// gap closed by switching shouldSkipSession to Status.IsSuspended(): Hibernated and
+// PermanentlyFailed sessions have no live tmux pane either (hibernation explicitly kills
+// the tmux session; PermanentlyFailed is terminal, awaiting an explicit Retry), so they
+// must be excluded from review-queue attention-reason checks exactly like
+// Stopped/Paused/Crashed already were.
+func TestReviewQueuePoller_ShouldSkipSession_SkipsHibernatedAndPermanentlyFailed(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+
+	hibernated := makeSocketTestInstance("hibernated-session", "session-hibernated", "", Hibernated)
+	hibernated.started.Store(true)
+	if !poller.shouldSkipSession(hibernated) {
+		t.Error("expected shouldSkipSession(Hibernated instance) to be true")
+	}
+
+	permFailed := makeSocketTestInstance("perm-failed-session", "session-perm-failed", "", PermanentlyFailed)
+	permFailed.started.Store(true)
+	if !poller.shouldSkipSession(permFailed) {
+		t.Error("expected shouldSkipSession(PermanentlyFailed instance) to be true")
+	}
+}
+
 // stubApprovalMetadataProvider is a minimal ApprovalMetadataProvider for tests. It records
 // each key it was queried with so tests can assert lookup order.
 type stubApprovalMetadataProvider struct {
