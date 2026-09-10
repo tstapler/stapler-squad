@@ -2923,6 +2923,11 @@ func (t *TmuxSession) CapturePaneContentContext(ctx context.Context) (string, er
 // isolation the subprocess gate provides, and control mode has no gate to
 // isolate against.
 func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
+	// See CapturePaneContentContext's identical guard: skip the fork entirely
+	// against a session already known gone.
+	if !t.DoesSessionExist() {
+		return "", fmt.Errorf("error capturing pane content for session '%s': %w", t.sanitizedName, ErrSessionNotFound)
+	}
 	// No caller currently chains this with other fast-lane calls in one
 	// operation, so a fresh, self-contained deadline is correct here — see
 	// CapturePaneContentRawPriority's doc comment for the case where that
@@ -2960,6 +2965,11 @@ func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
 // so it must share the same overall deadline as its siblings rather than get
 // its own fresh ResyncFastLaneTimeout allowance.
 func (t *TmuxSession) CapturePaneContentRawPriority(ctx context.Context) (string, error) {
+	// See CapturePaneContentContext's identical guard: skip the fork entirely
+	// against a session already known gone.
+	if !t.DoesSessionExist() {
+		return "", fmt.Errorf("error capturing raw pane content for session '%s': %w", t.sanitizedName, ErrSessionNotFound)
+	}
 	recordSpawn(time.Now())
 	output, err := runFastLaneSubprocess(ctx, t.serverSocket, func(ctx context.Context) ([]byte, error) {
 		cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-t", t.sanitizedName)
@@ -3352,6 +3362,11 @@ func sanitizeUTF8String(rawBytes []byte) string {
 // GetPaneCurrentPath returns the current working directory of the tmux pane.
 // This is used by CaptureCurrentState to persist cwd before shutdown for cold restore.
 func (t *TmuxSession) GetPaneCurrentPath() (string, error) {
+	// See CapturePaneContentContext's identical guard: skip the fork entirely
+	// against a session already known gone.
+	if !t.DoesSessionExist() {
+		return "", fmt.Errorf("failed to get pane path for session '%s': %w", t.sanitizedName, ErrSessionNotFound)
+	}
 	if t.cmEnabledForBackground() {
 		ctx, cancel := cmCtx()
 		defer cancel()

@@ -10,18 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCapturePaneContentContext_SkipsForkWhenSessionGone asserts that a
-// poller (e.g. SessionDriver's 2s tick) calling CapturePaneContentContext
-// against a session the registry already knows is gone gets
-// ErrSessionNotFound without ever forking capture-pane — not a fresh fork
-// that fails every tick.
-func TestCapturePaneContentContext_SkipsForkWhenSessionGone(t *testing.T) {
-	t.Parallel()
-	captureForkCount := 0
+// newGoneSessionForGuardTest builds a TmuxSession whose registry
+// affirmatively reports it does not exist, with a MockCmdExec that counts
+// forks whose command line contains substr.
+func newGoneSessionForGuardTest(t *testing.T, substr string) (session *TmuxSession, forkCount *int) {
+	t.Helper()
+	forkCount = new(int)
 	cmdExec := MockCmdExec{
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
-			if strings.Contains(cmd.String(), "capture-pane") {
-				captureForkCount++
+			if strings.Contains(cmd.String(), substr) {
+				*forkCount++
 			}
 			return []byte(""), nil
 		},
@@ -31,46 +29,84 @@ func TestCapturePaneContentContext_SkipsForkWhenSessionGone(t *testing.T) {
 	reg.SetHealthy(true)
 	reg.SetSessions(nil) // registry affirmatively knows this session does not exist
 
-	session := newTmuxSessionWithSocket("gone-session", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, "", WithRegistry(reg))
-
-	// Call repeatedly, as a poller would every tick: the existence check's own
-	// authoritative subprocess fork is cached (existsCacheTTL), but the bug this
-	// guard fixes was a fresh capture-pane fork on every single call.
-	for i := 0; i < 5; i++ {
-		_, err := session.CapturePaneContentContext(context.Background())
-		require.Error(t, err)
-		require.True(t, errors.Is(err, ErrSessionNotFound), "want ErrSessionNotFound, got %v", err)
-	}
-	require.Equal(t, 0, captureForkCount, "capture-pane should never be forked once the session is known gone")
+	session = newTmuxSessionWithSocket("gone-session", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, "", WithRegistry(reg))
+	return session, forkCount
 }
 
-// TestGetPanePID_SkipsForkWhenSessionGone mirrors
-// TestCapturePaneContentContext_SkipsForkWhenSessionGone for GetPanePID, the
-// other dominant contended-fork call site identified by the mutex profile.
-func TestGetPanePID_SkipsForkWhenSessionGone(t *testing.T) {
+// TestSkipsForkWhenSessionGone is the regression test for the dead-pane
+// retry storm: every TmuxSession method that captures pane content or
+// queries the pane via a subprocess must short-circuit via DoesSessionExist()
+// once the session is known gone, instead of forking and failing every call
+// — measured in production as a sustained ~39% subprocess-spawn failure
+// rate, almost entirely wasted ForkLock-contended forks against panes that
+// were already gone.
+func TestSkipsForkWhenSessionGone(t *testing.T) {
 	t.Parallel()
-	displayMessageForkCount := 0
-	cmdExec := MockCmdExec{
-		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
-			if strings.Contains(cmd.String(), "display-message") {
-				displayMessageForkCount++
-			}
-			return []byte(""), nil
+
+	cases := []struct {
+		name       string
+		forkSubstr string
+		call       func(s *TmuxSession) error
+	}{
+		{
+			name:       "CapturePaneContentContext",
+			forkSubstr: "capture-pane",
+			call: func(s *TmuxSession) error {
+				_, err := s.CapturePaneContentContext(context.Background())
+				return err
+			},
+		},
+		{
+			name:       "GetPanePID",
+			forkSubstr: "display-message",
+			call: func(s *TmuxSession) error {
+				_, err := s.GetPanePID()
+				return err
+			},
+		},
+		{
+			name:       "CapturePaneContentPriority",
+			forkSubstr: "capture-pane",
+			call: func(s *TmuxSession) error {
+				_, err := s.CapturePaneContentPriority()
+				return err
+			},
+		},
+		{
+			name:       "CapturePaneContentRawPriority",
+			forkSubstr: "capture-pane",
+			call: func(s *TmuxSession) error {
+				_, err := s.CapturePaneContentRawPriority(context.Background())
+				return err
+			},
+		},
+		{
+			name:       "GetPaneCurrentPath",
+			forkSubstr: "display-message",
+			call: func(s *TmuxSession) error {
+				_, err := s.GetPaneCurrentPath()
+				return err
+			},
 		},
 	}
 
-	reg := NewFakeTmuxRegistry()
-	reg.SetHealthy(true)
-	reg.SetSessions(nil)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			session, forkCount := newGoneSessionForGuardTest(t, tc.forkSubstr)
 
-	session := newTmuxSessionWithSocket("gone-session", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, "", WithRegistry(reg))
-
-	for i := 0; i < 5; i++ {
-		_, err := session.GetPanePID()
-		require.Error(t, err)
-		require.True(t, errors.Is(err, ErrSessionNotFound), "want ErrSessionNotFound, got %v", err)
+			// Call repeatedly, as a poller would every tick: the existence
+			// check's own authoritative subprocess fork is cached
+			// (existsCacheTTL), but the bug this guard fixes was a fresh
+			// fork on every single call.
+			for i := 0; i < 5; i++ {
+				err := tc.call(session)
+				require.Error(t, err)
+				require.True(t, errors.Is(err, ErrSessionNotFound), "want ErrSessionNotFound, got %v", err)
+			}
+			require.Equal(t, 0, *forkCount, "%s should never be forked once the session is known gone", tc.forkSubstr)
+		})
 	}
-	require.Equal(t, 0, displayMessageForkCount, "display-message should never be forked once the session is known gone")
 }
 
 // TestCapturePaneContentContext_StillCapturesWhenSessionExists guards against
