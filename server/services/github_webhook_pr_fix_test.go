@@ -708,6 +708,72 @@ func TestHandle_should_Return200NoAuditRow_When_EventTypeIsUnrecognized(t *testi
 	requireNoRowPersisted(t, infra, "delivery-ping")
 }
 
+// --- Webhook-delivery-staleness metric (Epic 5.4 Task 5.4.1c) -------------
+
+// TestWebhookLastDelivery_should_UpdateTimestamp_When_DeliveryVerified is Task
+// 5.4.1c's positive case: a verified (signature-checked, actionable, non-self)
+// check_run delivery must advance lastPRFixDeliveryUnixNano["check_run"].
+func TestWebhookLastDelivery_should_UpdateTimestamp_When_DeliveryVerified(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	newGitHubPushWorkflow(t, infra, "gh-staleness-1", "s3cr3t", "tstapler/stapler-squad", "main", "x")
+	router := &fakePRFixEventRouter{matched: true}
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+
+	before := lastPRFixDeliveryUnixNano["check_run"].Load()
+
+	body := checkRunFailureBody(t)
+	rec := doPRFixEventRequest(t, h, "check_run", body, "delivery-staleness-verified", sign("s3cr3t", body))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, 1, router.callCount(), "sanity check: delivery must actually have been verified and routed")
+	after := lastPRFixDeliveryUnixNano["check_run"].Load()
+	assert.Greater(t, after, before, "a verified delivery must advance the last-seen timestamp")
+	assert.WithinDuration(t, time.Now(), time.Unix(0, after), 5*time.Second)
+}
+
+// TestWebhookLastDelivery_should_NotUpdateTimestamp_When_SignatureInvalid is Task
+// 5.4.1c's negative case: a rejected (bad-signature) delivery never reaches the
+// verified-delivery boundary, so it must not move the timestamp.
+func TestWebhookLastDelivery_should_NotUpdateTimestamp_When_SignatureInvalid(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	newGitHubPushWorkflow(t, infra, "gh-staleness-2", "s3cr3t", "tstapler/stapler-squad", "main", "x")
+	router := &fakePRFixEventRouter{matched: true}
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+
+	before := lastPRFixDeliveryUnixNano["check_run"].Load()
+
+	body := checkRunFailureBody(t)
+	rec := doPRFixEventRequest(t, h, "check_run", body, "delivery-staleness-badsig", sign("wrong-secret", body))
+
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+	require.Equal(t, 0, router.callCount())
+	after := lastPRFixDeliveryUnixNano["check_run"].Load()
+	assert.Equal(t, before, after, "a rejected (bad-signature) delivery must not advance the last-seen timestamp")
+}
+
+// TestWebhookLastDelivery_should_NotUpdateTimestamp_When_PREventWebhooksDisabled is
+// Task 5.4.1c's other negative case: pr_event_webhooks off short-circuits before
+// signature verification even runs, so this must not advance the timestamp either.
+func TestWebhookLastDelivery_should_NotUpdateTimestamp_When_PREventWebhooksDisabled(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	// pr_event_webhooks left unset (default false).
+	newGitHubPushWorkflow(t, infra, "gh-staleness-3", "s3cr3t", "tstapler/stapler-squad", "main", "x")
+	router := &fakePRFixEventRouter{matched: true}
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+
+	before := lastPRFixDeliveryUnixNano["check_run"].Load()
+
+	body := checkRunFailureBody(t)
+	rec := doPRFixEventRequest(t, h, "check_run", body, "delivery-staleness-flagoff", sign("s3cr3t", body))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, 0, router.callCount())
+	after := lastPRFixDeliveryUnixNano["check_run"].Load()
+	assert.Equal(t, before, after, "a delivery accepted only because pr_event_webhooks is off must not advance the last-seen timestamp")
+}
+
 // --- helpers -----------------------------------------------------------
 
 func jsonBody(t *testing.T, v map[string]interface{}) []byte {

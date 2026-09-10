@@ -12,11 +12,16 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 // prFixEventTypes is the single source of truth for the 4 GitHub webhook event types
@@ -25,6 +30,64 @@ import (
 // means updating this slice (and extractPRFixEvent's dispatch) instead of silently
 // missing one of several previously hand-duplicated lists.
 var prFixEventTypes = []string{"check_run", "workflow_run", "pull_request_review", "issue_comment"}
+
+// lastPRFixDeliveryUnixNano tracks, as unix-nano, the last time each tracked event
+// type had a *verified* webhook delivery (same boundary as firstPRFixDelivery's
+// once.Do below — signature-verified, not self-authored, not a CI-budget-only
+// failure) — read by the github.webhook.last_delivery_age_seconds gauge callback
+// registered in init() below (Epic 5.4). Package-level rather than a
+// GitHubWebhookHandler field: only one handler exists per process, matching the
+// package-level-atomics pattern session/streamhub/observability.go already
+// established for this repo's other custom OTel gauges.
+var lastPRFixDeliveryUnixNano = newLastPRFixDeliveryMap()
+
+func newLastPRFixDeliveryMap() map[string]*atomic.Int64 {
+	m := make(map[string]*atomic.Int64, len(prFixEventTypes))
+	for _, eventType := range prFixEventTypes {
+		m[eventType] = &atomic.Int64{}
+	}
+	return m
+}
+
+var registerWebhookStalenessMetricOnce sync.Once
+
+func init() {
+	registerWebhookStalenessMetricOnce.Do(func() {
+		if err := registerWebhookStalenessMetric(); err != nil {
+			log.Error("[GitHubWebhookHandler] failed to register github.webhook.last_delivery_age_seconds", "error", err)
+		}
+	})
+}
+
+// registerWebhookStalenessMetric registers github.webhook.last_delivery_age_seconds:
+// per tracked event type that has seen at least one verified delivery this process,
+// how long ago that was — so a silently-broken webhook tunnel shows up as a
+// monotonically climbing value instead of being indistinguishable from "nothing
+// changed" (Epic 5.4's goal). An event type with no delivery yet (nano == 0) is
+// omitted rather than reported as a huge bogus age.
+func registerWebhookStalenessMetric() error {
+	meter := telemetry.GetMeter()
+	gauge, err := meter.Int64ObservableGauge("github.webhook.last_delivery_age_seconds",
+		metric.WithDescription("Seconds since the last verified webhook delivery of this event type"),
+		metric.WithUnit("s"))
+	if err != nil {
+		return err
+	}
+	if _, err := meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+		for _, eventType := range prFixEventTypes {
+			nano := lastPRFixDeliveryUnixNano[eventType].Load()
+			if nano == 0 {
+				continue
+			}
+			age := time.Since(time.Unix(0, nano)).Seconds()
+			o.ObserveInt64(gauge, int64(age), metric.WithAttributes(attribute.String("event_type", eventType)))
+		}
+		return nil
+	}, gauge); err != nil {
+		return fmt.Errorf("register github.webhook.last_delivery_age_seconds callback: %w", err)
+	}
+	return nil
+}
 
 // GitHub's documented action/conclusion/state enum values relevant to deciding
 // whether a check_run/workflow_run/pull_request_review/issue_comment delivery is
@@ -542,6 +605,12 @@ func (h *GitHubWebhookHandler) handlePRFixEvent(w http.ResponseWriter, r *http.R
 		once.Do(func() {
 			log.Info(fmt.Sprintf("[GitHubWebhookHandler] first verified %s delivery received — /webhooks/github reachability confirmed", eventType))
 		})
+	}
+	// Task 5.4.1a: record every verified delivery's timestamp (not once-guarded, unlike
+	// firstPRFixDelivery above) — the staleness gauge needs the *most recent* delivery,
+	// not just the first.
+	if lastSeen, ok := lastPRFixDeliveryUnixNano[eventType]; ok {
+		lastSeen.Store(time.Now().UnixNano())
 	}
 
 	// Delivery-level dedup (AC0) — see ExistsByDeliveryID's doc comment for why this
