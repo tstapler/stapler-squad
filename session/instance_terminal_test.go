@@ -124,12 +124,22 @@ func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T
 // instead, mirroring the technique in tmux_process_manager_test.go.
 func newInstanceWithRealTmuxProcessManager(t *testing.T, outputFunc func(cmd *exec.Cmd) ([]byte, error)) *Instance {
 	t.Helper()
+	// sessionExists is filled in after ts is constructed below, so the
+	// CombinedOutputFunc closure (built first) reads it by reference rather
+	// than needing to duplicate tmux's own name-sanitization logic.
+	var sessionExists string
 	cmdExec := tmux.MockCmdExec{
-		OutputFunc:         outputFunc,
-		RunFunc:            func(cmd *exec.Cmd) error { return nil },
-		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
+		OutputFunc: outputFunc,
+		RunFunc:    func(cmd *exec.Cmd) error { return nil },
+		// Reports the session as existing to tmux's list-sessions, so
+		// CapturePaneContentContext's DoesSessionExist() guard doesn't
+		// short-circuit before outputFunc's mocked capture-pane call runs.
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			return []byte(sessionExists), nil
+		},
 	}
 	ts := tmux.NewTmuxSessionWithDeps(t.Name(), "echo", tmux.MakePtyFactory(), cmdExec)
+	sessionExists = ts.GetSanitizedName()
 	tpm := &TmuxProcessManager{}
 	tpm.SetSession(ts)
 

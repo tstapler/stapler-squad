@@ -846,7 +846,10 @@ func TestGetPaneCurrentPath_ReturnsTrimmedPath(t *testing.T) {
 		RunFunc:            func(cmd *exec.Cmd) error { return nil },
 		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
-	session := newTmuxSession("capture-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix)
+	reg := NewFakeTmuxRegistry()
+	reg.SetHealthy(true)
+	session := newTmuxSession("capture-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, WithRegistry(reg))
+	reg.SetSessions([]string{session.GetSanitizedName()})
 
 	path, err := session.GetPaneCurrentPath()
 
@@ -1131,7 +1134,10 @@ func TestCapturePaneSemaphore(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(i int) {
 			defer wg.Done()
-			session := newTmuxSession(fmt.Sprintf("sem-test-%d", i), "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix)
+			reg := NewFakeTmuxRegistry()
+			reg.SetHealthy(true)
+			session := newTmuxSession(fmt.Sprintf("sem-test-%d", i), "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, WithRegistry(reg))
+			reg.SetSessions([]string{session.GetSanitizedName()})
 			_, _ = session.CapturePaneContent()
 		}(i)
 	}
@@ -1158,7 +1164,10 @@ func TestCapturePaneContentPriority_should_UseFastLaneGate_When_ExecGateFastLane
 		RunFunc:            func(cmd *exec.Cmd) error { return nil },
 		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
-	session := newTmuxSessionWithSocket("fast-lane-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, serverSocket)
+	reg := NewFakeTmuxRegistry()
+	reg.SetHealthy(true)
+	session := newTmuxSessionWithSocket("fast-lane-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, serverSocket, WithRegistry(reg))
+	reg.SetSessions([]string{session.GetSanitizedName()})
 
 	releaseFastLane, err := AcquireResyncExecSlot(context.Background(), serverSocket)
 	require.NoError(t, err)
@@ -1624,7 +1633,16 @@ func TestCapturePaneContentContext_RespectsCancellation(t *testing.T) {
 			}
 		},
 	}
-	session := newTmuxSession("capture-pane-cancel-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix)
+	reg := NewFakeTmuxRegistry()
+	reg.SetHealthy(true)
+	session := newTmuxSession("capture-pane-cancel-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix, WithRegistry(reg))
+	// Registered via the registry fast path (not the mocked exec fallback) so
+	// DoesSessionExist()'s guard resolves instantly without itself touching
+	// the blocking mock below — otherwise the existence check's own
+	// subprocess call would block on ctx exactly like the real capture call
+	// this test means to exercise, masking the cancellation error this test
+	// asserts on with a different (also correct, but untested-here) one.
+	reg.SetSessions([]string{session.GetSanitizedName()})
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -1666,7 +1684,13 @@ func TestCapturePaneContentContext_RespectsTimeout(t *testing.T) {
 			return nil, ctx.Err()
 		},
 	}
-	session := newTmuxSession("capture-pane-timeout-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix)
+	reg := NewFakeTmuxRegistry()
+	reg.SetHealthy(true)
+	session := newTmuxSession("capture-pane-timeout-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix, WithRegistry(reg))
+	// See TestCapturePaneContentContext_RespectsCancellation for why this is
+	// registered via the registry fast path rather than the mocked exec
+	// fallback.
+	reg.SetSessions([]string{session.GetSanitizedName()})
 
 	start := time.Now()
 	_, err := session.CapturePaneContentContext(ctx)
