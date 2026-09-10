@@ -14,6 +14,10 @@ jest.mock("@/lib/api/transport", () => ({
   getConnectTransport: jest.fn(() => ({})),
 }));
 
+jest.mock("@/lib/contexts/AnalyticsContext", () => ({
+  useAnalytics: () => ({ track: jest.fn() }),
+}));
+
 function renderWidget() {
   return render(
     <VcsWidgetComments owner="acme" repo="widget" prNumber={7} sessionId="session-1" />
