@@ -149,6 +149,15 @@ func (p *WorktreePRPoller) GetPRData(repoPath, branch string) *github.PRInfo {
 	return v.(*github.PRInfo)
 }
 
+// InvalidateCache clears the shared ETag cache entry for a PR so the next
+// scheduled tick (ticker or ScanDone()) performs a full fetch instead of a
+// 304. It does not dispatch an immediate refetch: WorktreePRPoller has no
+// persistent per-worktree index to target one, so up to one PollInterval of
+// staleness is an accepted trade-off for worktrees with no active session.
+func (p *WorktreePRPoller) InvalidateCache(owner, repo string, prNumber int) {
+	p.etagCache.Invalidate(owner, repo, prNumber)
+}
+
 // pollLoop drives the poller: react to scanner completions and a fallback ticker.
 func (p *WorktreePRPoller) pollLoop() {
 	defer p.wg.Done()
@@ -225,14 +234,17 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem) {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			p.fetchAndStore(captured)
+			ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
+			defer cancel()
+			ctx = github.WithGitHubCallOrigin(ctx, github.OriginWorktreePRPoller)
+			p.fetchAndStore(ctx, captured)
 		}()
 	}
 	wg.Wait()
 }
 
 // fetchAndStore fetches PR info for one worktree and stores it in the cache.
-func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
+func (p *WorktreePRPoller) fetchAndStore(ctx context.Context, item WorktreeScanItem) {
 	repoRef, err := github.GetOwnerRepoFromRemote(item.RepoPath)
 	if err != nil {
 		log.Warn("worktree PR poller: could not read remote URL", "path", item.RepoPath, "err", err)
@@ -241,10 +253,6 @@ func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
 	if !repoRef.IsValid() {
 		return // not a GitHub remote
 	}
-
-	ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
-	defer cancel()
-	ctx = github.WithGitHubCallOrigin(ctx, github.OriginWorktreePRPoller)
 
 	key := worktreeCacheKey(item.RepoPath, item.Branch)
 
