@@ -339,13 +339,13 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				Priority:    26,
 			},
 		},
-		// The three patterns below are confirmed dead against Claude Code's current CLI
-		// output (verified via live tmux capture-pane during the auto-mode-footer
-		// investigation, session/detection/detector.go's autoModeFooterRegex) — the
-		// current CLI never emits "Waiting for N background agent(s)"/"N shells running"
-		// text, using the persistent "auto mode on · N shells[, M monitors]" footer bar
-		// instead. Kept (not deleted) for older CLI versions and as documentation of the
-		// historical format; do not treat these as reachable against a live modern session.
+		// waiting_for_background_agent below remains unverified against a live modern
+		// Claude Code capture (kept for older CLI versions/documentation purposes; do not
+		// treat as reachable against a live modern session). shells_still_running and
+		// monitors_still_running, however, ARE reachable against the current CLI — the
+		// turn-completion long form ("✻ Cogitated for 1m 6s · done 3:06 PM · 1 shell, 1
+		// monitor still running") emits this exact phrasing, confirmed via a real captured
+		// session (see project_plans/monitor-waiting-indicator/implementation/plan.md).
 		WaitingForAgent: []dtypes.StatusPattern{
 			{
 				Name: "waiting_for_background_agent",
@@ -364,9 +364,11 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				// active. The "N shell(s) still running" suffix overrides the turn-completion
 				// verb-duration marker — the session is not done yet.
 				// Also matches bare "N shell(s) running" / "N shells still running" variants
-				// found in the Claude Code bottom status bar.
-				Pattern:     `(\d+)\s+shells?\s+(?:still\s+)?running`,
-				Description: "Background shell processes still running — session not yet idle",
+				// found in the Claude Code bottom status bar, and the turn-completion long
+				// form's comma-joined "N shell, M monitor still running" suffix — group 2
+				// optionally captures the trailing monitor count so both are summed.
+				Pattern:     `(\d+)\s+shells?(?:,\s*(\d+)\s+monitors?)?\s+(?:still\s+)?running`,
+				Description: "Background shell processes (optionally with monitors) still running — session not yet idle",
 				Priority:    27,
 			},
 			{
