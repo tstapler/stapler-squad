@@ -164,9 +164,18 @@ describe("useFocusTrap", () => {
   it("useFocusTrap_should_NotThrow_When_TabPressedWithZeroFocusableChildren", () => {
     render(<TrapHarness isActive empty />);
 
+    let notCancelled = true;
     expect(() => {
-      fireEvent.keyDown(document, { key: "Tab" });
+      notCancelled = fireEvent.keyDown(document, {
+        key: "Tab",
+        cancelable: true,
+      });
     }).not.toThrow();
+
+    // fireEvent returns false when preventDefault() was called — proves the
+    // trap still calls it for the zero-focusable-elements branch instead of
+    // silently letting Tab escape the container.
+    expect(notCancelled).toBe(false);
   });
 
   it("useFocusTrap_should_ExcludeDisabledElement_When_ComputingForwardWrapBoundary", () => {

@@ -1,4 +1,4 @@
-# BUG-091: flow-control-stress "Mixed Content Stress" test times out under full `npx jest` run [SEVERITY: Low]
+# BUG-093: flow-control-stress "Mixed Content Stress" test times out under full `npx jest` run [SEVERITY: Low]
 
 **Status**: 🐛 Open
 **Discovered**: 2026-08-26
