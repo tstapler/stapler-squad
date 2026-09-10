@@ -851,7 +851,7 @@ func resetInitPluginsForTest(t *testing.T) {
 }
 
 func Test_InitPlugins(t *testing.T) {
-	builtinNames := []string{"claude", "gemini", "aider", "opencode", "agy"}
+	builtinNames := []string{"claude", "gemini", "aider", "opencode", "agy", "pi"}
 
 	t.Run("InitPlugins_should_bootstrapLoadAndStartWatcher_When_noPluginDirExistsYet", func(t *testing.T) {
 		resetInitPluginsForTest(t)

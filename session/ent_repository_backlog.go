@@ -197,6 +197,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		Priority:                     item.Priority,
 		Status:                       item.Status,
 		RepoPath:                     item.RepoPath,
+		BaseBranch:                   item.BaseBranch,
 		SkipReviewGate:               item.SkipReviewGate,
 		SkipPlanning:                 item.SkipPlanning,
 		AutoSpawnSession:             item.AutoSpawnSession,
@@ -326,6 +327,7 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetPriority(priority).
 		SetStatus(status).
 		SetNillableRepoPath(&data.RepoPath).
+		SetNillableBaseBranch(&data.BaseBranch).
 		SetSkipReviewGate(data.SkipReviewGate).
 		SetSkipPlanning(data.SkipPlanning).
 		SetAutoSpawnSession(data.AutoSpawnSession).
@@ -576,7 +578,7 @@ func (r *EntRepository) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []
 		Where(
 			backlogitemdependency.BlockedIDIn(parsedIDs...),
 			backlogitemdependency.HasBlockerWith(
-				backlogitem.StatusNotIn(string(BacklogStatusDone), string(BacklogStatusArchived)),
+				backlogitem.StatusNotIn(TerminalStatusStrings()...),
 			),
 		).
 		All(ctx)
@@ -603,7 +605,7 @@ func (r *EntRepository) UnresolvedBlockerIDs(ctx context.Context, itemID string)
 		Where(
 			backlogitemdependency.BlockedIDEQ(parsed),
 			backlogitemdependency.HasBlockerWith(
-				backlogitem.StatusNotIn(string(BacklogStatusDone), string(BacklogStatusArchived)),
+				backlogitem.StatusNotIn(TerminalStatusStrings()...),
 			),
 		).
 		All(ctx)
@@ -621,7 +623,11 @@ func (r *EntRepository) UnresolvedBlockerIDs(ctx context.Context, itemID string)
 // excludedTerminalStatuses returns the statuses filter.ExcludeDone/ExcludeArchived
 // ask to exclude from a default (no explicit Statuses) query, as a slice for
 // StatusNotIn. The two flags are independent — either, both, or neither may be
-// set — see BacklogItemFilter's doc comments.
+// set — see BacklogItemFilter's doc comments. Reviewed for Epic 2.1, Story
+// 2.1.3: deliberately built-in-only, unlike IsTerminalStatus — these flags
+// name the two built-in statuses specifically (a caller opting out of "done"
+// items, say), not "whatever is terminal", so a custom terminal stage is not
+// silently swept in here.
 func excludedTerminalStatuses(filter BacklogItemFilter) []string {
 	var excluded []string
 	if filter.ExcludeDone {
@@ -907,6 +913,9 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.RepoPath != nil {
 		u.SetRepoPath(*update.RepoPath)
 	}
+	if update.BaseBranch != nil {
+		u.SetBaseBranch(*update.BaseBranch)
+	}
 	if update.SkipReviewGate != nil {
 		u.SetSkipReviewGate(*update.SkipReviewGate)
 	}
@@ -1051,6 +1060,9 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	}
 	if update.RepoPath != nil {
 		fields = append(fields, "repoPath")
+	}
+	if update.BaseBranch != nil {
+		fields = append(fields, "baseBranch")
 	}
 	if update.SkipReviewGate != nil {
 		fields = append(fields, "skipReviewGate")
@@ -2262,6 +2274,7 @@ func (r *EntRepository) CreateItemSource(ctx context.Context, data ItemSourceDat
 
 // ListItemSources returns all registered item sources.
 func (r *EntRepository) ListItemSources(ctx context.Context) ([]ItemSourceData, error) {
+	//nolint:entfullscan small, bounded-by-nature table (one row per registered source), intentionally returns all.
 	sources, err := r.client.ItemSource.Query().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list item sources: %w", err)
@@ -2344,6 +2357,29 @@ func (r *EntRepository) GetItemSourceByID(ctx context.Context, id string) (*ent.
 		return nil, fmt.Errorf("failed to get item source %s: %w", id, err)
 	}
 	return src, nil
+}
+
+// GetBacklogItemByExternalURL retrieves a BacklogItem by its external_url —
+// used by manual imports (e.g. ImportGitHubIssue) that have no ItemSource row
+// to scope an external_id lookup by (see GetBacklogItemByExternalID), so they
+// dedup on the issue/PR URL instead. external_url has no uniqueness
+// constraint at the schema level, and rows created before this dedup check
+// existed may already repeat one, so this uses First (oldest match) rather
+// than Only — which would hard-error on exactly the pre-existing-duplicate
+// data this lookup exists to stop compounding.
+func (r *EntRepository) GetBacklogItemByExternalURL(ctx context.Context, externalURL string) (*BacklogItemData, error) {
+	item, err := r.client.BacklogItem.Query().
+		Where(backlogitem.ExternalURL(externalURL)).
+		Order(ent.Asc(backlogitem.FieldCreatedAt)).
+		First(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to query backlog item by external_url %q: %w", externalURL, err)
+	}
+	result := backlogItemToData(item)
+	return &result, nil
 }
 
 // GetBacklogItemByExternalID retrieves a BacklogItem by its external_id, scoped
@@ -2540,6 +2576,7 @@ func (r *EntRepository) FinishSourceSync(ctx context.Context, sourceID string, c
 // GetAllItemSessionsWithBacklogInfo returns all item sessions joined with their parent
 // backlog item's ID, title, and status. Used by the Insights dashboard index.
 func (r *EntRepository) GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]ItemSessionBacklogEntry, error) {
+	//nolint:entfullscan feeds the Insights dashboard, which needs the full join across all item sessions.
 	sessions, err := r.client.ItemSession.Query().
 		WithBacklogItem().
 		All(ctx)

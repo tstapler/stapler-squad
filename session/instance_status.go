@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/tstapler/stapler-squad/log"
@@ -27,13 +28,66 @@ type InstanceStatusInfo struct {
 type InstanceStatusManager struct {
 	// ponytail: xsync.Map replaces map+RWMutex — lock-free reads on the hot GetStatus path
 	controllers *xsync.Map[string, *ClaudeController]
+
+	// piSources holds registered PiStatusSources, keyed by instance title —
+	// a parallel map to controllers, not a shared interface. See plan.md's
+	// Pattern Decisions table: pi status is a purpose-built event-to-status
+	// mapping (session/pi_status_source.go) with no PTY-scraping, queued
+	// commands, or subagent concepts, so unifying it behind
+	// ClaudeController's interface would force those concepts onto pi for
+	// no benefit.
+	piSources *xsync.Map[string, *PiStatusSource]
+
+	// approvalProviderMu guards approvalProvider, set at most once during
+	// startup wiring (see server/dependencies.go) and read on every
+	// GetStatus() call for a pi-fallback instance — mirrors
+	// ReviewQueuePoller's approvalProvider field/mutex pattern
+	// (session/review_queue_poller.go).
+	approvalProviderMu sync.RWMutex
+	approvalProvider   ApprovalMetadataProvider
 }
 
 // NewInstanceStatusManager creates a new status manager.
 func NewInstanceStatusManager() *InstanceStatusManager {
 	return &InstanceStatusManager{
 		controllers: xsync.NewMap[string, *ClaudeController](),
+		piSources:   xsync.NewMap[string, *PiStatusSource](),
 	}
+}
+
+// RegisterPiStatusSource registers a PiStatusSource for an instance. Mirrors
+// RegisterController.
+func (ism *InstanceStatusManager) RegisterPiStatusSource(instanceTitle string, source *PiStatusSource) {
+	ism.piSources.Store(instanceTitle, source)
+	log.Debug("registered pi status source", "session", instanceTitle, "count", ism.piSources.Size())
+}
+
+// UnregisterPiStatusSource removes a PiStatusSource for an instance. Mirrors
+// UnregisterController.
+func (ism *InstanceStatusManager) UnregisterPiStatusSource(instanceTitle string) {
+	ism.piSources.Delete(instanceTitle)
+}
+
+// GetPiStatusSource retrieves a PiStatusSource for an instance.
+func (ism *InstanceStatusManager) GetPiStatusSource(instanceTitle string) (*PiStatusSource, bool) {
+	return ism.piSources.Load(instanceTitle)
+}
+
+// SetApprovalProvider wires the shared pending-approval lookup (backed by
+// *services.ApprovalStore in production — see server/dependencies.go) used
+// by GetStatus()'s pi-fallback branch to override an inferred Idle status
+// with NeedsApproval (Story 5.3.1). Optional: GetStatus() skips the override
+// entirely when no provider has been set (e.g. in tests that don't need it).
+func (ism *InstanceStatusManager) SetApprovalProvider(provider ApprovalMetadataProvider) {
+	ism.approvalProviderMu.Lock()
+	defer ism.approvalProviderMu.Unlock()
+	ism.approvalProvider = provider
+}
+
+func (ism *InstanceStatusManager) getApprovalProvider() ApprovalMetadataProvider {
+	ism.approvalProviderMu.RLock()
+	defer ism.approvalProviderMu.RUnlock()
+	return ism.approvalProvider
 }
 
 // RegisterController registers a controller for an instance.
@@ -87,6 +141,41 @@ func (ism *InstanceStatusManager) GetStatus(instance *Instance) InstanceStatusIn
 		currentCmd := controller.GetCurrentCommand()
 		if currentCmd != nil {
 			info.LastCommandStatus = "Executing: " + currentCmd.Text
+		}
+
+		return info
+	}
+
+	// No Claude controller registered — fall back to a PiStatusSource if one
+	// is registered for this instance (Story 5.2.2). This is a parallel
+	// lookup, not a shared-interface dispatch — see the Pattern Decision on
+	// the piSources field.
+	if src, ok := ism.piSources.Load(instance.Title); ok && src != nil {
+		info.ClaudeStatus = src.CurrentStatus()
+		info.StatusContext = src.StatusContext()
+		info.IsControllerActive = true
+		// QueuedCommands, SubagentCount, and LastCommandStatus intentionally
+		// stay at their zero value: pi has no queued-command or subagent
+		// concepts (Pattern Decision, plan.md Epic 5.2).
+
+		// Story 5.3.1: don't show "idle" while pi is actually blocked on a
+		// pending human approval decision. PendingApproval.SessionID is
+		// stored as the session's stable ID — UUID when present, Title only
+		// as a fallback (see ApprovalHandler.resolveSessionID) — so look up
+		// by UUID first, then Title, mirroring
+		// ReviewQueuePoller.pollOnce's identical fallback.
+		if info.ClaudeStatus == detection.StatusIdle {
+			if provider := ism.getApprovalProvider(); provider != nil {
+				snap := instance.Snapshot()
+				approvals := provider.GetApprovalMetadataBySession(snap.UUID)
+				if len(approvals) == 0 && snap.UUID != snap.Title {
+					approvals = provider.GetApprovalMetadataBySession(snap.Title)
+				}
+				if len(approvals) > 0 {
+					info.ClaudeStatus = detection.StatusNeedsApproval
+					info.PendingApprovals = len(approvals)
+				}
+			}
 		}
 	}
 
@@ -143,6 +232,10 @@ func (info InstanceStatusInfo) GetStatusDescription() string {
 			return "Stopped"
 		case Hibernated:
 			return "Hibernated"
+		case Crashed:
+			return "Crashed"
+		case PermanentlyFailed:
+			return "Failed"
 		default:
 			return "Unknown"
 		}

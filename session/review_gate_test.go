@@ -47,7 +47,7 @@ func TestReviewGateRunner_SkipReviewGate(t *testing.T) {
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, nil)
 
-	runner.Run(context.Background(), item, is, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner.Run(context.Background(), GateContext{RequiresDiff: true}, item, is, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
@@ -96,7 +96,7 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
@@ -171,7 +171,7 @@ func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPi
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, engine)
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
 
 	require.Equal(t, 1, spawner.getCallCount(), "SpawnReviewSession must be called exactly once")
 	prompt := spawner.getLastPrompt()
@@ -216,7 +216,7 @@ func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
 	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, nil)
 
 	require.NotPanics(t, func() {
-		runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+		runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
 	})
 
 	assert.Equal(t, 1, spawner.getCallCount())
@@ -262,7 +262,7 @@ func TestReviewGateRunner_NilSessionCreator_LogsAndReturns(t *testing.T) {
 	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, nil)
 
 	require.NotPanics(t, func() {
-		runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+		runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
 	})
 
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
@@ -318,7 +318,7 @@ func TestReviewGateRunner_ThreadsVerificationNotesIntoPrompt(t *testing.T) {
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, nil)
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
 
 	require.Equal(t, 1, spawner.getCallCount(), "SpawnReviewSession must be called exactly once")
 
@@ -377,7 +377,7 @@ func TestReviewGateRunner_MergesLiveCriterionNoteIntoStalePromptWhenSnapshotPred
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, nil)
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
 
 	require.Equal(t, 1, spawner.getCallCount(), "SpawnReviewSession must be called exactly once")
 
@@ -545,7 +545,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
@@ -630,7 +630,7 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
@@ -720,7 +720,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
@@ -806,7 +806,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_DuplicateClaimSpawnsRealReview(t *t
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
@@ -845,7 +845,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_TwoConsecutiveDuplicateClaims(t *te
 		getSessionCreator := func() ReviewGateSpawner { return spawner }
 		runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
-		runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+		runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
 
 		require.Equal(t, 1, spawner.getCallCount(), "call %d: duplicate claim must spawn a real review session", i+1)
 
@@ -989,7 +989,7 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
@@ -1080,7 +1080,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
@@ -1179,7 +1179,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 	warnBuf := swapWarningLog(t)
 
 	var onPassCalled atomic.Bool
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
@@ -1270,7 +1270,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
@@ -1349,7 +1349,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 		require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
 		item := &BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
-		runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+		runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
 	}
 
 	recent, err := storage.GetRecentReviewVerdictSummaries(ctx, createdItemData.ID, 2)
@@ -1432,7 +1432,7 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
@@ -1520,7 +1520,7 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
@@ -1677,7 +1677,7 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
@@ -1767,7 +1767,7 @@ func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConfl
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
-	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
 
 	assert.Equal(t, 1, spawner.getCallCount(), "a cleanly-synced branch must proceed to a real review, not stay blocked")
 
@@ -1788,4 +1788,81 @@ func runGitCapture(t *testing.T, dir string, args ...string) string {
 	out, err := cmd.CombinedOutput()
 	require.NoErrorf(t, err, "git %v failed: %s", args, out)
 	return string(out)
+}
+
+// TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateContextRequiresDiffIsFalse
+// is Task 2.4.3e's test: a no-diff custom transition's automated-review gate
+// (e.g. idea -> ready, modeled here via GateContext{RequiresDiff: false}) must
+// fire the review straight to reviewPromptFor/SpawnReviewSession without ever
+// calling runDiffPreChecks — i.e. no worktree lookup, no identity/branch-drift
+// check, no diff computation.
+//
+// Proven here by deliberately pointing item.RepoPath at a directory that does
+// not exist on disk: if Run mistakenly still ran runDiffPreChecks, the
+// directory-mode diff computation (GetGitDiff against a nonexistent
+// item.RepoPath) would fail, worktreeDiffErr would be set, and Run would block
+// with a synthetic "diff computation failed" FAIL verdict instead of spawning
+// — so a successful spawn here is only possible if runDiffPreChecks was never
+// called at all, not merely that it happened to succeed.
+func TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateContextRequiresDiffIsFalse(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	itemData := BacklogItemData{
+		Title:              "No-diff custom gate test",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+		RepoPath:           "/nonexistent/repo/path/story-2-4-3e-regression-test",
+	}
+	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	// No worktree row is ever created for this session — runDiffPreChecks
+	// would fall through to the directory-mode branch (item.RepoPath) if it
+	// were called at all, which is exactly the path that would fail against
+	// the nonexistent RepoPath above.
+	workSessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItemData.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	item := &BacklogItemData{ID: createdItemData.ID, RepoPath: createdItemData.RepoPath}
+
+	reviewInstance := &Instance{UUID: uuid.New().String()}
+	spawner := &mockReviewGateSpawner{instance: reviewInstance}
+	getSessionCreator := func() ReviewGateSpawner { return spawner }
+	getAutoReopener := func() AutoReopenSpawner { return nil }
+	getNotifier := func() Notifier { return nil }
+
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
+
+	gateContext := GateContext{
+		GateID:           "gate-idea-ready-feasibility",
+		TargetTransition: BacklogStatusReady,
+		RequiresDiff:     false,
+	}
+	runner.Run(ctx, gateContext, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+
+	require.Equal(t, 1, spawner.getCallCount(), "a RequiresDiff:false gate must proceed straight to the review-prompt call, never blocked by a diff-computation failure against the (deliberately invalid) RepoPath")
+
+	prompt := spawner.getLastPrompt()
+	assert.Contains(t, prompt, noDiffExpectedSection, "prompt must explain no diff was expected for this gate")
+	assert.NotContains(t, prompt, "no committed code changes were found for this session", "must not render the review->pr_pending-flavored empty-diff message for a gate that never expected a diff")
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+	var reviewEntry *ItemSessionSummary
+	for i := range sessions {
+		if sessions[i].Role == SessionRoleReview {
+			reviewEntry = &sessions[i]
+		}
+	}
+	require.NotNil(t, reviewEntry, "a review ItemSession must still be created")
+	assert.Equal(t, reviewInstance.UUID, reviewEntry.SessionUUID)
 }

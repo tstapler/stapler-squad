@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil"
 )
@@ -643,6 +644,12 @@ func (s *spyStamper) MarkRead(ids []string) (int, error) {
 	return len(ids), nil
 }
 
+// GetByID is a fixed stub — ApprovalHandler never calls GetByID itself (only
+// ApprovalService does), so this only needs to satisfy the interface.
+func (s *spyStamper) GetByID(id string) (*notifications.NotificationRecord, bool) {
+	return nil, false
+}
+
 // TestHandlePermissionRequest_TimeoutPublishesApprovalResponseEvent verifies that
 // when an approval times out, an EventApprovalResponse is published so connected
 // clients can remove the toast immediately.
@@ -684,6 +691,63 @@ func TestHandlePermissionRequest_TimeoutPublishesApprovalResponseEvent(t *testin
 			t.Fatal("expected EventApprovalResponse within 500ms after 10ms timeout")
 		}
 	}
+}
+
+// TestHandlePermissionRequest_PiSource_TimeoutDeniesExplicitly covers
+// pi-support MAJOR 3: pi's approval extension has no native terminal
+// permission dialog to fall back to (unlike Claude's curl hook), so a
+// server-side approval timeout for a pi-sourced request must fail closed via
+// an explicit "deny" decision, not an empty 200 body (which happened to work
+// only because the pi extension's own fetch() throws on an empty/malformed
+// response — an accident of the client, not a server-side contract).
+func TestHandlePermissionRequest_PiSource_TimeoutDeniesExplicitly(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(10 * time.Millisecond)
+
+	payload := map[string]interface{}{
+		"tool_name":  "Bash",
+		"tool_input": map[string]interface{}{},
+		"cwd":        "/tmp",
+		"source":     "pi",
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/hooks/permission-request", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CS-Session-ID", "pi-timeout-session")
+	rr := httptest.NewRecorder()
+
+	h.HandlePermissionRequest(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp hookDecisionResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp), "pi timeout must return a real hookSpecificOutput body, not an empty response")
+	assert.Equal(t, "deny", resp.HookSpecificOutput.Decision.Behavior)
+	assert.NotEmpty(t, resp.HookSpecificOutput.Decision.Message)
+}
+
+// TestHandlePermissionRequest_ClaudeSource_TimeoutStaysEmptyBody verifies the
+// fix above leaves Claude's existing contract untouched: a Claude-sourced (or
+// source-omitted, the default) timeout still returns an empty 200 body so
+// Claude Code's native terminal permission dialog fallback keeps working.
+func TestHandlePermissionRequest_ClaudeSource_TimeoutStaysEmptyBody(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(10 * time.Millisecond)
+
+	payload := map[string]interface{}{
+		"tool_name":  "Bash",
+		"tool_input": map[string]interface{}{},
+		"cwd":        "/tmp",
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/hooks/permission-request", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CS-Session-ID", "claude-timeout-session")
+	rr := httptest.NewRecorder()
+
+	h.HandlePermissionRequest(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Empty(t, rr.Body.Bytes(), "claude-sourced timeout must keep returning an empty body (native dialog fallback trigger)")
 }
 
 // TestHandlePermissionRequest_ContextCancelPublishesApprovalResponseEvent verifies

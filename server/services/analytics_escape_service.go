@@ -92,10 +92,12 @@ func (s *SessionService) QueryEscapeAnalytics(
 			SessionId:    e.SessionID,
 			Stage:        e.Stage,
 			SequenceType: e.SequenceType,
-			ByteLength:   int32(e.ByteLength),
-			Mangled:      e.Mangled,
-			SessionSeq:   e.SessionSeq,
-			WallTime:     timestamppb.New(e.WallTime),
+			// #nosec G115 -- ByteLength is the byte length of one captured
+			// terminal escape-sequence chunk, far below int32 range.
+			ByteLength: int32(e.ByteLength),
+			Mangled:    e.Mangled,
+			SessionSeq: e.SessionSeq,
+			WallTime:   timestamppb.New(e.WallTime),
 		}
 		if e.SequenceSubtype != "" {
 			pe.SequenceSubtype = e.SequenceSubtype
@@ -112,6 +114,7 @@ func (s *SessionService) QueryEscapeAnalytics(
 		protoEvents = append(protoEvents, pe)
 	}
 
+	// #nosec G115 -- totalCount is a local escape-analytics event count, far below int32 range.
 	return connect.NewResponse(&sessionv1.QueryEscapeAnalyticsResponse{
 		Events:        protoEvents,
 		NextPageToken: nextPageToken,

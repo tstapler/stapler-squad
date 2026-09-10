@@ -168,9 +168,10 @@ func (s *SlackConfigService) slackConfigToProto(cfg *config.Config) *sessionv1.S
 		WebhookConfigured:       cfg.Slack.WebhookURLEncrypted != "" || cfg.SlackWebhookURLOverride() != "",
 		SigningSecretConfigured: cfg.Slack.SigningSecretEncrypted != "" || cfg.SlackSigningSecretOverride() != "",
 		NotifyOnQueueItem:       cfg.Slack.NotifyOnQueueItem,
-		QueueDepthThreshold:     int32(cfg.Slack.QueueDepthThreshold),
-		ApprovalEnabled:         cfg.Slack.ApprovalEnabled,
-		DashboardBaseUrl:        cfg.Slack.DashboardBaseURL,
+		// #nosec G115 -- QueueDepthThreshold is a small local config knob, far below int32 range.
+		QueueDepthThreshold: int32(cfg.Slack.QueueDepthThreshold),
+		ApprovalEnabled:     cfg.Slack.ApprovalEnabled,
+		DashboardBaseUrl:    cfg.Slack.DashboardBaseURL,
 	}
 
 	if s.slackNotifier != nil {

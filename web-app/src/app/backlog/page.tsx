@@ -297,6 +297,7 @@ function BacklogPageInner() {
   const [githubIssueUrl, setGithubIssueUrl] = useState("");
   const [githubImporting, setGithubImporting] = useState(false);
   const [githubImportError, setGithubImportError] = useState<string | null>(null);
+  const [githubImportProgress, setGithubImportProgress] = useState<{ done: number; total: number } | null>(null);
 
   // First-visit walkthrough
   const { showTour, setTourComplete, hideTour, resetTour } = useBacklogTour();
@@ -544,17 +545,27 @@ function BacklogPageInner() {
   const handlePickerSelect = useCallback(
     async (owner: string, repo: string, issues: GitHubIssue[]) => {
       setGithubImportError(null);
+      setGithubImporting(true);
+      setGithubImportProgress({ done: 0, total: issues.length });
       const createdIds: string[] = [];
       let failures = 0;
-      for (const issue of issues) {
-        const url = issue.url || `https://github.com/${owner}/${repo}/issues/${issue.number}`;
-        const result = await importGitHubIssue(url.trim());
-        if (result) {
-          await hydrateItemIntoStore(result.item.id);
-          createdIds.push(result.item.id);
-        } else {
-          failures++;
+      let duplicates = 0;
+      try {
+        for (const issue of issues) {
+          const url = issue.url || `https://github.com/${owner}/${repo}/issues/${issue.number}`;
+          const result = await importGitHubIssue(url.trim());
+          if (result) {
+            await hydrateItemIntoStore(result.item.id);
+            createdIds.push(result.item.id);
+            if (result.alreadyExisted) duplicates++;
+          } else {
+            failures++;
+          }
+          setGithubImportProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
         }
+      } finally {
+        setGithubImporting(false);
+        setGithubImportProgress(null);
       }
       if (failures > 0) {
         // Leave the modal open (don't setShowForm(false) below) so this error
@@ -564,6 +575,16 @@ function BacklogPageInner() {
           issues.length === 1
             ? "Import failed. Check that this is a real issue, not a pull request, and try again."
             : `Imported ${createdIds.length} of ${issues.length} — ${failures} failed. Pull requests can't be imported as backlog items.`
+        );
+        return;
+      }
+      if (duplicates > 0) {
+        // Same reasoning as the failures branch above: leave the modal open
+        // so this message is actually visible.
+        setGithubImportError(
+          duplicates === issues.length
+            ? "Already imported — no new items created."
+            : `Imported ${createdIds.length - duplicates} new item${createdIds.length - duplicates === 1 ? "" : "s"}; ${duplicates} already imported.`
         );
         return;
       }
@@ -862,6 +883,8 @@ function BacklogPageInner() {
                 <GitHubIssuePicker
                   onSelect={handlePickerSelect}
                   onCancel={() => { setShowForm(false); setGithubIssueUrl(""); setGithubImportError(null); }}
+                  importing={githubImporting}
+                  importProgress={githubImportProgress}
                 />
                 {githubImportError && (
                   <p style={{ fontSize: "12px", color: "var(--error)", margin: "8px 0 0" }}>

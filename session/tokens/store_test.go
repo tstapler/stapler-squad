@@ -15,15 +15,42 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
+// syncBuffer wraps bytes.Buffer with a mutex, matching the pattern already used in
+// executor/safeexec/safeexec_pg_test.go and server/services/autonomous_orchestration_service_test.go.
+// A plain bytes.Buffer here would be a real -race hazard the moment a future test drives
+// concurrent writes through captureLogs (e.g. by calling Start()), even though today's
+// sole caller is synchronous.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *syncBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Len()
+}
+
 // captureLogs redirects slog's default logger to a JSON-lines buffer for the
 // duration of the test, restoring the previous default on cleanup. Not safe
 // to use from a t.Parallel() test — it mutates the process-wide slog default.
-func captureLogs(t *testing.T) *bytes.Buffer {
+func captureLogs(t *testing.T) *syncBuffer {
 	t.Helper()
-	buf := &bytes.Buffer{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := &syncBuffer{}
+	prev := log.SetSlogDefaultForTest(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { log.SetSlogDefaultForTest(prev) })
 	return buf
 }
 
@@ -162,6 +189,67 @@ func TestTokenStore_Subscribe_WhenStoreUpdated_ExpectNotification(t *testing.T) 
 	select {
 	case <-ch:
 		// Notification received.
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected subscription notification within 5 seconds")
+	}
+}
+
+// TestTokenStoreSubscribe_WhenSingleFileReparsed_ExpectSubscriberReceivesThatFilesParseResult
+// asserts that a single-file reparse notification (triggered via enqueue,
+// same path production code uses on an fsnotify callback) carries that
+// file's freshly parsed *ParseResult, not a bare signal.
+func TestTokenStoreSubscribe_WhenSingleFileReparsed_ExpectSubscriberReceivesThatFilesParseResult(t *testing.T) {
+	t.Parallel()
+	const path = "testdata/valid_session.jsonl"
+
+	// Deliberately not calling Start(): the background walk's own
+	// walk-complete notify(nil) would race against Subscribe() below and
+	// could be mistaken for this test's single-file notification. Driving
+	// parseAndCache directly exercises the same notify(result) call site
+	// production's worker pool uses on an fsnotify callback, without that
+	// race.
+	store := NewTokenStore("")
+
+	want, err := store.parser.ParseFile(path)
+	require.NoError(t, err)
+
+	ch := store.Subscribe()
+	defer store.Unsubscribe(ch)
+
+	store.parseAndCache(path)
+
+	select {
+	case got := <-ch:
+		require.NotNil(t, got, "expected the reparsed file's *ParseResult, not nil")
+		assert.Equal(t, want.SessionUUID, got.SessionUUID)
+		assert.Equal(t, want.TotalInput, got.TotalInput)
+		assert.Equal(t, want.TotalOutput, got.TotalOutput)
+		assert.Equal(t, want.CacheCreation, got.CacheCreation)
+		assert.Equal(t, want.CacheRead, got.CacheRead)
+		assert.Equal(t, want.PrimaryModel, got.PrimaryModel)
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected subscription notification within 5 seconds")
+	}
+}
+
+// TestTokenStoreSubscribe_WhenInitialWalkCompletes_ExpectSubscriberReceivesNil
+// asserts that the deferred notify at the end of walkAndEnqueue sends nil,
+// distinguishing "walk finished" from "this file changed". The subscriber is
+// created before Start() so it can't miss the walk-complete notification.
+func TestTokenStoreSubscribe_WhenInitialWalkCompletes_ExpectSubscriberReceivesNil(t *testing.T) {
+	t.Parallel()
+	store := NewTokenStore("") // empty historyDir: walkAndEnqueue returns (and notifies) immediately.
+
+	ch := store.Subscribe()
+	defer store.Unsubscribe(ch)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store.Start(ctx)
+
+	select {
+	case got := <-ch:
+		assert.Nil(t, got, "expected nil for the initial-walk-complete notification")
 	case <-time.After(5 * time.Second):
 		t.Fatal("expected subscription notification within 5 seconds")
 	}

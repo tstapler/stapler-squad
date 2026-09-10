@@ -1,0 +1,16 @@
+{
+  "id": "retry-history",
+  "type": "frontend",
+  "name": "Retry attempt history list in the session detail view",
+  "component": "RetryHistoryList",
+  "path": "web-app/src/components/sessions/RetryHistoryList.tsx",
+  "filePath": "web-app/src/components/sessions/RetryHistoryList.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "RetryHistoryList_should_ShowNoRetriesYetMessage_When_HistoryIsEmpty",
+    "RetryHistoryList_should_ShowLoadingSkeleton_NotFalseEmptyState_When_DataNotYetFetched",
+    "RetryHistoryList_should_RenderNewestAttemptFirst_When_MultipleRecordsExist"
+  ],
+  "lastModified": "2026-08-30T00:00:00Z"
+}

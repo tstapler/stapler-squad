@@ -15,6 +15,7 @@ import { FilesTab } from "./FilesTab";
 import { BrowserTab } from "./BrowserTab";
 import { ArtifactsTab } from "./ArtifactsTab";
 import { SessionSummaryPanel } from "./SessionSummaryPanel";
+import { RetryHistoryList } from "./RetryHistoryList";
 import { VNCStatus } from "@/gen/session/v1/types_pb";
 import { ActionBar } from "@/components/ui/ActionBar";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
@@ -319,7 +320,10 @@ export interface SessionDetailViewProps {
 // (terminal state, cannot transition further)." Used to gate the Summary
 // tab, which only has content once the session has ended.
 function isSessionTerminal(status: SessionStatus): boolean {
-  return status === SessionStatus.STOPPED;
+  // PermanentlyFailed is terminal-like (session-retry-backoff): the retry
+  // policy has given up for this episode, so the Summary tab's content is
+  // just as final as a plain Stopped session's, until "Retry now" re-arms it.
+  return status === SessionStatus.STOPPED || status === SessionStatus.PERMANENTLY_FAILED;
 }
 
 function getStatusLabel(status: SessionStatus): string {
@@ -331,6 +335,7 @@ function getStatusLabel(status: SessionStatus): string {
     case SessionStatus.NEEDS_APPROVAL: return "Needs Approval";
     case SessionStatus.CREATING: return "Creating";
     case SessionStatus.STOPPED: return "Stopped";
+    case SessionStatus.PERMANENTLY_FAILED: return "Failed";
     default: return "Unknown";
   }
 }
@@ -1163,6 +1168,7 @@ export function SessionDetailView({
                 setFilesSelectedPath(path);
                 handleTabChange("files");
               }}
+              onBrowseFiles={() => handleTabChange("files")}
             />
           </div>
         )}
@@ -1660,6 +1666,7 @@ export function SessionDetailView({
         {activeTab === "summary" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-summary">
             <SessionSummaryPanel sessionId={session.id} />
+            <RetryHistoryList history={session.retryHistory} />
           </div>
         )}
       </div>

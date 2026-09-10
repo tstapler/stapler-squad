@@ -12,6 +12,8 @@ import (
 	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/pkg/buildinfo"
+	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/handlers"
@@ -27,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/telemetry"
 
 	"github.com/google/uuid"
 	"net"
@@ -116,6 +119,11 @@ func newServerBase(addr string) (*Server, context.Context) {
 			// connections (ConnectRPC terminal streams, SSE) see a done context
 			// and self-close instead of blocking the graceful shutdown timeout.
 			BaseContext: func(_ net.Listener) context.Context { return connCtx },
+			// ConnState feeds http.server.connections_open/
+			// http.server.connections_hijacked_total (http_connection_metrics.go)
+			// — see that file's doc comment for why this is the natural place
+			// to maintain the count.
+			ConnState: trackHTTPConnState,
 		},
 	}
 	srv.addr.Store(&addr)
@@ -232,6 +240,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.WorktreePRPoller != nil {
 		deps.WorktreePRPoller.Start(serverCtx)
 		log.Info("WorktreePRPoller started")
+	}
+
+	// Start JulesSessionPoller: nil unless config.Config.Jules.Enabled and the
+	// API key resolved at startup (server/dependencies.go's jules wiring
+	// block) — never started, and no "jules poll tick" line ever logged,
+	// when the feature is off.
+	if deps.JulesSessionPoller != nil {
+		deps.JulesSessionPoller.Start(serverCtx)
+		log.Info("JulesSessionPoller started")
 	}
 
 	// Register shutdown hook: capture pane working dirs and persist instance
@@ -434,6 +451,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		uwAPIPath := "/api" + uwPath
 		srv.RegisterConnectHandler(uwAPIPath, http.StripPrefix("/api", uwHandler))
 		log.Info("Registered UnfinishedWorkService handler", "path", uwAPIPath)
+
+		// Bridge WatchUnfinishedWork over WebSocket too (see StreamingWSBridge's
+		// doc comment) — otherwise it's one more long-lived HTTP/1.1 connection
+		// competing with WatchSessions/WatchReviewQueue/etc. for the browser's
+		// 6-connections-per-origin budget.
+		uwWsBridge := services.NewStreamingWSBridge(uwHandler)
+		watchUnfinishedWorkPath := "/api" + sessionv1connect.UnfinishedWorkServiceWatchUnfinishedWorkProcedure
+		srv.mux.Handle(watchUnfinishedWorkPath, uwWsBridge.Handler("/api"))
+		log.Info("Registered StreamingWSBridge", "watchUnfinishedWork", watchUnfinishedWorkPath)
 	}
 
 	// Register SessionSummaryService handler.
@@ -460,6 +486,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		insightsAPIPath := "/api" + insightsPath
 		srv.RegisterConnectHandler(insightsAPIPath, http.StripPrefix("/api", insightsHandler))
 		log.Info("Registered InsightsService handler", "path", insightsAPIPath)
+
+		// Bridge WatchInsights over WebSocket too — see StreamingWSBridge's doc
+		// comment (avoids the browser's 6-connections-per-origin HTTP/1.1 limit).
+		insightsWsBridge := services.NewStreamingWSBridge(insightsHandler)
+		watchInsightsPath := "/api" + sessionv1connect.InsightsServiceWatchInsightsProcedure
+		srv.mux.Handle(watchInsightsPath, insightsWsBridge.Handler("/api"))
+		log.Info("Registered StreamingWSBridge", "watchInsights", watchInsightsPath)
 	}
 
 	// Register GitHubUserService handler (GitHub Work Continuity feature).
@@ -481,6 +514,19 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		tymuxRolloutAPIPath := "/api" + tymuxRolloutPath
 		srv.RegisterConnectHandler(tymuxRolloutAPIPath, http.StripPrefix("/api", tymuxRolloutHandler))
 		log.Info("Registered TymuxRolloutService handler", "path", tymuxRolloutAPIPath)
+	}
+
+	// Register NativeGitRolloutService handler (go-git-worktree-and-merge
+	// Epic 4.2: operator-facing controls for the staged native-worktree/
+	// native-merge rollout, mirroring TymuxRolloutService's registration).
+	// Config-backed with no external deps, so it's constructed inline rather
+	// than threaded through ServerDependencies.
+	{
+		nativeGitRolloutSvc := services.NewNativeGitRolloutService()
+		nativeGitRolloutPath, nativeGitRolloutHandler := sessionv1connect.NewNativeGitRolloutServiceHandler(nativeGitRolloutSvc, ConnectOptions(deps.ErrorRegistry)...)
+		nativeGitRolloutAPIPath := "/api" + nativeGitRolloutPath
+		srv.RegisterConnectHandler(nativeGitRolloutAPIPath, http.StripPrefix("/api", nativeGitRolloutHandler))
+		log.Info("Registered NativeGitRolloutService handler", "path", nativeGitRolloutAPIPath)
 	}
 
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
@@ -557,6 +603,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		blAPIPath := "/api" + blPath
 		srv.RegisterConnectHandler(blAPIPath, http.StripPrefix("/api", blHandler))
 		log.InfoLog().Printf("Registered BacklogService handler at %s", blAPIPath)
+
+		// Bridge WatchBacklogItems over WebSocket too — see StreamingWSBridge's
+		// doc comment (avoids the browser's 6-connections-per-origin HTTP/1.1
+		// limit). Wraps blHandler directly so the feature-flag interceptor
+		// above still applies (StreamingWSBridge calls handler.ServeHTTP for
+		// both transports).
+		blWsBridge := services.NewStreamingWSBridge(blHandler)
+		watchBacklogItemsPath := "/api" + sessionv1connect.BacklogServiceWatchBacklogItemsProcedure
+		srv.mux.Handle(watchBacklogItemsPath, blWsBridge.Handler("/api"))
+		log.InfoLog().Printf("Registered StreamingWSBridge for watchBacklogItems at %s", watchBacklogItemsPath)
 	}
 
 	// Start UserPRCache and register GitHubUserService handler.
@@ -673,6 +729,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
 	services.SetHookBaseURLFn(hookBaseURLFn)
+	// Same lazy base-URL resolver, wired into BacklogLifecycleListener so agent-created
+	// PR bodies can link back to the backlog item instead of embedding a bare UUID.
+	if deps.BacklogLifecycleListener != nil {
+		deps.BacklogLifecycleListener.SetDashboardBaseURLFn(hookBaseURLFn)
+	}
 	// Wire the review queue poller for immediate queue checks on new approvals (Story 3, Task 3.1)
 	approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
 	// Wire the classifier and analytics store for auto-approve/deny before manual review
@@ -718,6 +779,43 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
 	srv.approvalHandler = approvalHandler
+
+	// pi approval-extension health tracking (pi-support Epic 4.2). The route
+	// itself is registered unconditionally (mirroring every other
+	// /api/hooks/* route above), but HandlePiExtensionLoaded gates on
+	// config.FeaturePiSupport as its first line and 404s when the flag is
+	// off — so with the flag off this never records into piHealthTracker's
+	// in-memory map, matching every other pi surface.
+	piHealthTracker := services.NewPiExtensionHealthTracker()
+	approvalHandler.SetPiExtensionHealthTracker(piHealthTracker)
+	srv.mux.HandleFunc("/api/hooks/pi-extension-loaded", approvalHandler.HandlePiExtensionLoaded)
+	log.Info("Registered pi approval-extension health-ping handler at /api/hooks/pi-extension-loaded")
+	// Feed the tracker into InstanceToProto (server/adapters/instance_adapter.go)
+	// via the same package-level-resolver pattern hookBaseURLFn uses above --
+	// adapters can't import services directly (services already imports
+	// adapters), so server.go is the one place that can wire the two together.
+	adapters.SetPiExtensionHealthResolver(func(sessionID, program string) sessionv1.PiExtensionHealth {
+		if !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) || !session.IsPi(program) {
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNSPECIFIED
+		}
+		switch piHealthTracker.HealthFor(sessionID) {
+		case services.PiExtensionHealthLoaded:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_LOADED
+		case services.PiExtensionHealthFailed:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_FAILED
+		default:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNKNOWN
+		}
+	})
+	// Evict a destroyed session's tracker entry (pi-support Epic 4.2 MAJOR 1
+	// fix) -- session cannot import server/services directly (services
+	// already imports session), so this is the mirror-image of the resolver
+	// wiring just above: session.Instance.Destroy() calls this closure via
+	// session.SetPiExtensionHealthForgetter, and server.go is the one place
+	// that can wire the two packages together.
+	session.SetPiExtensionHealthForgetter(func(sessionID string) {
+		piHealthTracker.Forget(sessionID)
+	})
 	// Wire the same ApprovalHandler as the PermissionRequestHandler every
 	// remote session's RemoteApprovalRelay drives its requests through
 	// (ssh-remote-workspaces Phase 5 correction, ADR-003's addendum) --
@@ -905,7 +1003,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local" && deps.Storage != nil {
 		backlogSeedHandler := services.NewBacklogDebugSeedHandler(deps.Storage)
 		backlogSeedHandler.RegisterRoutes(srv.mux)
-		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, and /api/debug/backlog/seed-headless-triage-session (e2e-local only)")
+		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, /api/debug/backlog/seed-headless-triage-session, /api/debug/backlog/seed-work-item-session, and /api/debug/backlog/seed-work-session-with-worktree (e2e-local only)")
 
 		// Registered for project_plans/backlog-event-driven-updates's Playwright
 		// e2e layer — lets tests mutate a backlog item directly through the
@@ -977,6 +1075,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("POST /api/telemetry", telemetryHandler.HandleTelemetry)
 	log.Info("Registered telemetry handler at POST /api/telemetry")
 
+	// Relay browser OpenTelemetry spans/metrics to the same collector the Go
+	// server exports to (see docs/how-to/enable-opentelemetry.md). Only
+	// registered when telemetry is enabled, matching every other OTel surface.
+	if telemetry.IsGloballyEnabled() {
+		otelProxyHandler := handlers.NewOtelProxyHandler(telemetry.GlobalOTLPHTTPEndpoint())
+		srv.mux.HandleFunc("POST /api/otel/v1/traces", otelProxyHandler.HandleTraces)
+		srv.mux.HandleFunc("POST /api/otel/v1/metrics", otelProxyHandler.HandleMetrics)
+		log.Info("Registered OTel browser-trace proxy at /api/otel/v1/{traces,metrics}", "collector", telemetry.GlobalOTLPHTTPEndpoint())
+	}
+
 	// Register raw file download endpoint.
 	// Uses the FileService inside SessionService to validate paths against
 	// the session worktree root (path traversal prevention).
@@ -991,6 +1099,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/local/files/list", localFileSvc.ListLocalDirectory)
 	srv.mux.Handle("/api/local/serve/", http.StripPrefix("/api/local/serve", http.HandlerFunc(localFileSvc.ServeLocalFile)))
 	log.Info("Registered local file browser at /api/local/files/list and /api/local/serve/")
+
+	// pi-support (Epic 2.1, Story 2.1.2): reports whether the global pi approval
+	// extension is installed, so the settings UI can gate its disable-flag warning.
+	piExtensionStatusSvc := services.NewPiExtensionStatusService()
+	srv.mux.HandleFunc("/api/pi-extension-status", piExtensionStatusSvc.HandlePiExtensionStatus)
 
 	// Register backlog attachment upload endpoint — durable image attachments
 	// for backlog item descriptions, served back via /api/local/serve/.
@@ -1043,6 +1156,17 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			"idle_timeout_minutes", cfg.Hibernation.IdleTimeoutMinutes)
 	}
 
+	// Start orphaned-tmux sweeper (periodic counterpart to the one-time startup
+	// orphan sweep in BuildRuntimeDeps step 6d — see OrphanedTmuxSweeper doc comment).
+	// Guarded the same way as the startup call: skip entirely for an isolated
+	// instance (OrphanedTmuxSweeper.Start re-checks this itself; ReviewQueuePoller
+	// nil-check here just avoids starting a sweeper that could never sweep).
+	if deps.ReviewQueuePoller != nil {
+		orphanSweeper := session.NewOrphanedTmuxSweeper()
+		orphanSweeper.SetLiveProvider(deps.ReviewQueuePoller)
+		go orphanSweeper.Start(serverCtx)
+	}
+
 	// Start session retention sweeper (deletes archived sessions past the retention
 	// window once they pass safety checks — see SessionRetentionSweeper doc comment).
 	if cfg.SessionRetention.EnabledOrDefault() {
@@ -1061,6 +1185,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Stale session notifier started",
 			"threshold_minutes", cfg.StaleSession.ThresholdMinutesOrDefault(),
 			"notify_enabled", cfg.StaleSession.NotifyEnabledOrDefault())
+	}
+
+	// Start stale creation sweeper (flips a Creating session whose persisted
+	// creation-progress timestamp has exceeded the configured threshold to
+	// Failed/Stale -- see StaleCreationSweeper doc comment, Epic 4.1).
+	if deps.ReviewQueuePoller != nil && deps.Storage != nil {
+		staleCreationSweeper := services.NewStaleCreationSweeper(deps.ReviewQueuePoller, deps.Storage, deps.EventBus)
+		go staleCreationSweeper.Start(serverCtx)
+		log.Info("Stale creation sweeper started",
+			"threshold_minutes", cfg.CreationStale.ThresholdMinutesOrDefault())
 	}
 
 	// Start memory pressure notifier (fires an operator-facing notification the first time
@@ -1212,7 +1346,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok","service":"stapler-squad-web"}`)) //nolint:errcheck
+		_, _ = w.Write([]byte(`{"status":"ok","service":"stapler-squad-web"}`)) //nolint:errcheck
 	})
 	s.registerActuatorRoutes()
 
@@ -1383,6 +1517,19 @@ func (s *Server) GetOrigins() []string {
 // registerServerInfoHandler registers the /api/server-info endpoint which exposes
 // the CA PEM file path and HTTPS URL for display in the settings UI.
 func (s *Server) registerServerInfoHandler() {
+	// Resolved once at registration time, not per-request: the running
+	// executable's path never changes for the life of the process, so
+	// there's no reason to repeat the os.Executable()/EvalSymlinks syscalls
+	// on every /api/server-info hit.
+	binaryPath, err := os.Executable()
+	if err == nil {
+		if resolved, evalErr := filepath.EvalSymlinks(binaryPath); evalErr == nil {
+			binaryPath = resolved
+		}
+	} else {
+		binaryPath = ""
+	}
+
 	s.mux.HandleFunc("/api/server-info", func(w http.ResponseWriter, r *http.Request) {
 		type serverInfoResponse struct {
 			CAPEMPath  string   `json:"ca_pem_path"`
@@ -1390,6 +1537,22 @@ func (s *Server) registerServerInfoHandler() {
 			TLSEnabled bool     `json:"tls_enabled"`
 			Hostnames  []string `json:"hostnames"`
 			Programs   []string `json:"programs"`
+			// Version/Branch/Commit/Worktree let the settings UI show which
+			// build is actually running — see pkg/buildinfo's doc comment for
+			// why Branch/Commit/Worktree are only ever non-empty on a locally
+			// built binary, not a GoReleaser release.
+			Version  string `json:"version"`
+			Branch   string `json:"branch,omitempty"`
+			Commit   string `json:"commit,omitempty"`
+			Worktree bool   `json:"worktree,omitempty"`
+			// BinaryPath is the resolved, symlink-following path of the
+			// running executable — lets a human confirm, from the UI, which
+			// on-disk build this instance actually is (e.g. the repo's dev
+			// build vs. a Homebrew install vs. a manual-builds/ scratch
+			// binary — see docs/reference/state-isolation.md's multi-
+			// instance layout for why more than one of these can be running
+			// on the same machine at once).
+			BinaryPath string `json:"binary_path,omitempty"`
 		}
 
 		configDir, err := config.GetConfigDir()
@@ -1408,6 +1571,11 @@ func (s *Server) registerServerInfoHandler() {
 			TLSEnabled: tlsEnabled,
 			Hostnames:  s.hostnames,
 			Programs:   s.availablePrograms,
+			Version:    buildinfo.Version,
+			Branch:     buildinfo.Branch,
+			Commit:     buildinfo.Commit,
+			Worktree:   buildinfo.Worktree == "true",
+			BinaryPath: binaryPath,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -1444,7 +1612,7 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 	// Bind eagerly so the caller gets a port-in-use error immediately.
 	ln, err := net.Listen("tcp", remoteAddr)
 	if err != nil {
-		return fmt.Errorf("bind remote server on %s: %w", remoteAddr, err)
+		return newRemoteBindError(remoteAddr, err)
 	}
 	log.Info("Remote HTTPS server listening", "addr", remoteAddr)
 

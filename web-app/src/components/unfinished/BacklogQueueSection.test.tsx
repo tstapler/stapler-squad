@@ -22,12 +22,26 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
 const pickerRender = jest.fn();
 let capturedOnSelect: ((owner: string, repo: string, issues: GitHubIssue[]) => void) | null = null;
 let capturedOnCancel: (() => void) | null = null;
+// useFocusTrap.ts's own Tab-wrap behavior has its own dedicated suite
+// (useFocusTrap.test.tsx) run against the real hook — mocked here so this
+// file only asserts what's actually this component's responsibility: that
+// it wires the hook onto its import-dialog ref with the trap active.
+const useFocusTrapSpy = jest.fn();
+jest.mock("@/lib/hooks/useFocusTrap", () => ({ useFocusTrap: (...args: unknown[]) => useFocusTrapSpy(...args) }));
+
 jest.mock("@/components/backlog/GitHubIssuePicker", () => ({
   GitHubIssuePicker: (props: { onSelect: (owner: string, repo: string, issues: GitHubIssue[]) => void; onCancel: () => void }) => {
     pickerRender(props);
     capturedOnSelect = props.onSelect;
     capturedOnCancel = props.onCancel;
-    return <div data-testid="mock-github-issue-picker" />;
+    return (
+      <div data-testid="mock-github-issue-picker">
+        <input aria-label="Repository" />
+        <button type="button" onClick={props.onCancel}>
+          Cancel
+        </button>
+      </div>
+    );
   },
 }));
 
@@ -232,5 +246,32 @@ describe("BacklogQueueSection — import button keyboard activation does not tog
     // The section must remain expanded — the keydown must not have reached the
     // ancestor header's handleKeyDown (which would collapse the section).
     expect(header).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
+describe("BacklogQueueSection — import dialog traps focus via useFocusTrap", () => {
+  it("BacklogQueueSection_should_activateFocusTrapOnImportDialogRef_When_ImportOpened", async () => {
+    render(<BacklogQueueSection />);
+    await waitFor(() => expect(screen.getByText("Fix flaky test")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("import-github-issue-button"));
+
+    await waitFor(() => expect(useFocusTrapSpy).toHaveBeenCalledWith(expect.anything(), true));
+    const lastCall = useFocusTrapSpy.mock.calls[useFocusTrapSpy.mock.calls.length - 1];
+    const [refArg, isActiveArg] = lastCall;
+    expect(refArg.current).toBeInstanceOf(HTMLElement);
+    expect(isActiveArg).toBe(true);
+  });
+
+  it("BacklogQueueSection_should_notCloseImportDialog_When_EscapePressed", async () => {
+    render(<BacklogQueueSection />);
+    await waitFor(() => expect(screen.getByText("Fix flaky test")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("import-github-issue-button"));
+    expect(screen.getByTestId("backlog-queue-import-modal")).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(screen.getByTestId("backlog-queue-import-modal")).toBeInTheDocument();
   });
 });

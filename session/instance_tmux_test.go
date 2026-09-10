@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,7 +12,81 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 )
+
+// TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive is the
+// regression test for a bug caught reviewing this exact refactor: the
+// generic replacement for connectrpc_websocket.go's GetTmuxSession()+
+// DoesSessionExistNoCache() reach-in must call the ProcessManager's no-cache
+// check, not the cached IsAlive() TmuxAlive() itself uses — a stale cached
+// positive there causes control mode to attach to a dead session and
+// immediately receive %exit (see the two callers' own comments). Also
+// confirms IsBackendProcessAlive() bypasses Status/started gating, unlike
+// TmuxAlive(), since streamViaHub/streamViaControlMode call it before that
+// gating would even apply.
+func TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive(t *testing.T) {
+	// isAliveReturn (cached) says dead; existsNoCacheReturn (fresh) says
+	// alive — a stale-cache-vs-fresh-check divergence. If
+	// IsBackendProcessAlive() used the cached path, it would wrongly
+	// report false here.
+	mock := &mockTmuxManager{hasSessionReturn: true, isAliveReturn: false, existsNoCacheReturn: true}
+	inst := &Instance{
+		Title:          "t",
+		Status:         Creating,
+		processManager: NewTmuxBackend(mock),
+	}
+	// started deliberately left false: TmuxAlive() would report false here,
+	// but IsBackendProcessAlive() must not gate on it.
+
+	if !inst.IsBackendProcessAlive() {
+		t.Error("IsBackendProcessAlive() = false, want true (must use the no-cache check, and must not gate on Status/started like TmuxAlive())")
+	}
+	if inst.TmuxAlive() {
+		t.Error("test setup invalid: TmuxAlive() should be false here (started==false) to prove the two diverge")
+	}
+}
+
+// TestIsBackendProcessAlive_ColdStart_HasSessionFalse covers the other half
+// of IsBackendProcessAlive's short-circuit (HasSession() && HasLiveSessionNoCache()):
+// a freshly created instance whose backend has never had a session attached
+// at all (hasSessionReturn: false, the cold-start case — e.g. before the
+// first Start()/RestoreProcess() call ever runs). IsBackendProcessAlive must
+// report false via the HasSession() short-circuit alone, without even
+// reaching HasLiveSessionNoCache() — the caller's own tmux-alive check must
+// never need a live session to answer this safely.
+func TestIsBackendProcessAlive_ColdStart_HasSessionFalse(t *testing.T) {
+	mock := &mockTmuxManager{hasSessionReturn: false, existsNoCacheReturn: true}
+	inst := &Instance{
+		Title:          "t",
+		Status:         Creating,
+		processManager: NewTmuxBackend(mock),
+	}
+
+	if inst.IsBackendProcessAlive() {
+		t.Error("IsBackendProcessAlive() = true, want false when HasSession() is false (no backend session object exists yet)")
+	}
+}
+
+// TestRestoreProcess_DelegatesToProcessManager confirms RestoreProcess is a
+// thin, backend-agnostic pass-through to ProcessManager.RestoreWithWorkDir —
+// the replacement for reaching into a concrete *tmux.TmuxSession via
+// GetTmuxSession().RestoreWithWorkDir().
+func TestRestoreProcess_DelegatesToProcessManager(t *testing.T) {
+	mock := &mockTmuxManager{restoreReturn: errRestoreFailedForTest}
+	inst := &Instance{Title: "t", processManager: NewTmuxBackend(mock)}
+
+	err := inst.RestoreProcess("/some/dir")
+
+	if mock.restoreCalls != 1 {
+		t.Errorf("RestoreWithWorkDir calls = %d, want 1", mock.restoreCalls)
+	}
+	if !errors.Is(err, errRestoreFailedForTest) {
+		t.Errorf("RestoreProcess() error = %v, want the ProcessManager's own error propagated", err)
+	}
+}
+
+var errRestoreFailedForTest = errors.New("restore failed (test)")
 
 // TestBuildSubmittableInput_UsesCarriageReturnNotNewline is a regression test
 // for BUG-047: WriteToSession (the ConnectRPC handler backing the web UI's
@@ -86,33 +161,112 @@ func TestIsClaude(t *testing.T) {
 	}
 }
 
-func TestClassifyProgram(t *testing.T) {
+func TestClaudeLaunchBuilder_Matches(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		program string
-		want    string // "claude" or "plain"
+		want    bool
 	}{
-		{"claude", "claude"},
-		{"/usr/local/bin/claude", "claude"},
-		{"env -u PROXY claude", "claude"},
-		{"aider", "plain"},
-		{"claude-squad", "plain"},
-		{"", "plain"},
+		{"claude", true},
+		{"/usr/local/bin/claude", true},
+		{"env -u PROXY claude", true},
+		{"aider", false},
+		{"claude-squad", false},
+		{"", false},
+	}
+	b := &claudeLaunchBuilder{}
+	for _, tc := range cases {
+		t.Run(tc.program, func(t *testing.T) {
+			t.Parallel()
+			if got := b.Matches(tc.program); got != tc.want {
+				t.Errorf("claudeLaunchBuilder{}.Matches(%q) = %v, want %v", tc.program, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsPi(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		program string
+		want    bool
+	}{
+		{"pi", true},
+		{"/usr/local/bin/pi", true},
+		{"pi --model x", true},
+		{"pipenv run pi-helper", false}, // basename of first token is "pipenv", not "pi"
+		{"mypi", false},
+		{"", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.program, func(t *testing.T) {
 			t.Parallel()
-			switch classifyProgram(tc.program).(type) {
-			case claudeProgram:
-				if tc.want != "claude" {
-					t.Errorf("classifyProgram(%q) = claudeProgram, want plainProgram", tc.program)
-				}
-			case plainProgram:
-				if tc.want != "plain" {
-					t.Errorf("classifyProgram(%q) = plainProgram, want claudeProgram", tc.program)
-				}
+			got := isPi(tc.program)
+			if got != tc.want {
+				t.Errorf("isPi(%q) = %v, want %v", tc.program, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPiLaunchBuilder_Matches(t *testing.T) {
+	t.Parallel()
+	if !(&piLaunchBuilder{}).Matches("pi") {
+		t.Errorf("piLaunchBuilder{}.Matches(%q) = false, want true", "pi")
+	}
+}
+
+// wantPiStderrRedirect builds the exact " 2>>'<path>'" suffix
+// buildLaunchCommand appends for a pi instance titled title, using the same
+// piStderrLogPath helper production code calls -- so these tests assert on
+// behavior, not a hardcoded path that would drift from GetLogDir's real
+// resolution (test-mode dir, custom LogsDir, etc).
+func wantPiStderrRedirect(t *testing.T, inst *Instance) string {
+	t.Helper()
+	path, err := piStderrLogPath(inst)
+	if err != nil {
+		t.Fatalf("piStderrLogPath(%+v) failed: %v", inst, err)
+	}
+	return " 2>>" + shellQuote(path)
+}
+
+func TestBuildLaunchCommand_PiSessionResume(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Program: "pi", piExtension: piExtension{piSession: &PiSessionData{SessionID: "abc123"}}}
+	got := inst.buildLaunchCommand("")
+	want := "pi --session 'abc123'" + wantPiStderrRedirect(t, inst)
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestBuildLaunchCommand_PiNoSession_NoOp(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Program: "pi"}
+	got := inst.buildLaunchCommand("")
+	// The stderr-redirect suffix keeps pi's own per-project trust-gate
+	// diagnostics out of the pane -- see piLaunchBuilder.StderrRedirect.
+	want := "pi" + wantPiStderrRedirect(t, inst)
+	if got != want {
+		t.Errorf("got %q, want exactly %q (no-op aside from the pi stderr redirect)", got, want)
+	}
+}
+
+// TestBuildLaunchCommand_PiStderrRedirectComesAfterCLIFlagsAndExtraArgs guards
+// the suffix ordering: the stderr redirect must be the final token, after
+// CLIFlags and ExtraArgs, or it lands mid-command and no longer redirects the
+// whole pi invocation's stderr.
+func TestBuildLaunchCommand_PiStderrRedirectComesAfterCLIFlagsAndExtraArgs(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Program:   "pi",
+		CLIFlags:  "--model x",
+		ExtraArgs: []string{"--verbose"},
+	}
+	got := inst.buildLaunchCommand("")
+	want := "pi " + shellQuote("--model") + " " + shellQuote("x") + " " + shellQuote("--verbose") + wantPiStderrRedirect(t, inst)
+	if got != want {
+		t.Errorf("got %q, want %q (stderr redirect must be the final token)", got, want)
 	}
 }
 
@@ -491,19 +645,14 @@ var promptFileRefRegex = regexp.MustCompile(`\$\(cat '([^']+)'\)`)
 // shared package var, so parallel tests never race each other over it.
 const shortPromptFileCleanupDelay = 10 * time.Millisecond
 
-func TestBuildClaudeCommand_LargePromptUsesTempFileNotInline(t *testing.T) {
-	t.Parallel()
-	// Regression test for the review-gate spawn bug: BacklogLifecycle kept
-	// re-spawning the identical review session every ~8 minutes and tmux
-	// rejected every single attempt with "command too long" because the large
-	// review prompt (big description + many verbose acceptance criteria) was
-	// embedded directly in the tmux new-session command string. Empirically,
-	// tmux's own command-length limit sits between 16000 and 16500 bytes for
-	// the *entire* new-session command -- so a large prompt embedded inline
-	// blows that budget outright, no matter how it's quoted.
-	// Build a prompt shaped like the real trigger: a description plus many
-	// acceptance criteria each carrying a verbose implementation note, well
-	// past both maxInlinePromptBytes and the ~16KB tmux limit.
+// buildOversizedOneShotPrompt returns a synthetic backlog-review-shaped
+// prompt (a description plus many verbose acceptance criteria) well past
+// both maxInlinePromptBytes and tmux's own ~16KB new-session command-length
+// limit, failing the test immediately if either bound wasn't actually
+// exceeded (a silent test-setup bug would otherwise make the caller's
+// assertions pass vacuously).
+func buildOversizedOneShotPrompt(t *testing.T) string {
+	t.Helper()
 	var sb strings.Builder
 	sb.WriteString("--- BACKLOG ITEM DATA ---\nRich File Browser\n")
 	for n := 0; n < 40; n++ {
@@ -517,6 +666,41 @@ func TestBuildClaudeCommand_LargePromptUsesTempFileNotInline(t *testing.T) {
 	if len(prompt) < 16*1024 {
 		t.Fatalf("test setup bug: prompt (%d bytes) should exceed the ~16KB tmux command-length limit this regression test guards against", len(prompt))
 	}
+	return prompt
+}
+
+// assertPromptRoutedThroughTempFile checks that got (a buildLaunchCommand
+// result) stays under budget and references prompt via a $(cat '<path>')
+// substitution rather than embedding it inline -- the whole point of the
+// temp-file fix, since tmux's own command-length limit sits ~16000-16500
+// bytes. It registers the temp file's cleanup and returns its path for
+// further inspection.
+func assertPromptRoutedThroughTempFile(t *testing.T, got, prompt string, budget int) string {
+	t.Helper()
+	if len(got) > budget {
+		t.Errorf("assembled command is %d bytes, want under %d (tmux's own limit sits ~16000-16500 bytes) -- large prompt was not routed through a temp file: %s", len(got), budget, got)
+	}
+	if strings.Contains(got, prompt) {
+		t.Errorf("large prompt was embedded inline instead of via a temp file: %s", got)
+	}
+
+	m := promptFileRefRegex.FindStringSubmatch(got)
+	if m == nil {
+		t.Fatalf("expected a $(cat '<path>') command substitution in command, got: %s", got)
+	}
+	path := m[1]
+	t.Cleanup(func() { _ = os.Remove(path) })
+	return path
+}
+
+func TestBuildClaudeCommand_LargePromptUsesTempFileNotInline(t *testing.T) {
+	t.Parallel()
+	// Regression test for the review-gate spawn bug: BacklogLifecycle kept
+	// re-spawning the identical review session every ~8 minutes and tmux
+	// rejected every single attempt with "command too long" because the large
+	// review prompt was embedded directly in the tmux new-session command
+	// string.
+	prompt := buildOversizedOneShotPrompt(t)
 
 	// This test only checks routing/content, not cleanup timing (that's
 	// TestBuildClaudeCommand_LargePromptTempFileIsCleanedUpAfterDelay's job),
@@ -532,23 +716,8 @@ func TestBuildClaudeCommand_LargePromptUsesTempFileNotInline(t *testing.T) {
 	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt}
 	got := inst.buildLaunchCommand("")
 
-	// The whole point of the fix: the assembled command handed to tmux must
-	// stay well clear of tmux's ~16KB new-session command-length limit,
-	// regardless of how large the prompt is.
 	const safeCommandBudget = 8000
-	if len(got) > safeCommandBudget {
-		t.Errorf("assembled command is %d bytes, want under %d (tmux's own limit sits ~16000-16500 bytes) -- large prompt was not routed through a temp file: %s", len(got), safeCommandBudget, got)
-	}
-	if strings.Contains(got, prompt) {
-		t.Errorf("large prompt was embedded inline instead of via a temp file: %s", got)
-	}
-
-	m := promptFileRefRegex.FindStringSubmatch(got)
-	if m == nil {
-		t.Fatalf("expected a $(cat '<path>') command substitution in command, got: %s", got)
-	}
-	path := m[1]
-	t.Cleanup(func() { _ = os.Remove(path) })
+	path := assertPromptRoutedThroughTempFile(t, got, prompt, safeCommandBudget)
 
 	// Prove the shell will receive the full, unmodified prompt at exec time.
 	written, err := os.ReadFile(path)
@@ -640,17 +809,11 @@ func TestBuildClaudeCommand_PromptJustUnderThresholdStaysInline(t *testing.T) {
 	}
 }
 
-func TestClaudeMCPConfigArgs_HTTPFormat(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{
-		Program:      "claude",
-		MCPServerURL: "http://localhost:8543/mcp",
-		UUID:         "test-uuid-123",
-	}
-	flag, val := inst.claudeMCPConfigArgs()
-	if flag != "--mcp-config" {
-		t.Errorf("flag = %q, want --mcp-config", flag)
-	}
+// assertStaplerSquadMCPEntry unwraps claudeMCPConfigArgs' shell-quoted JSON
+// value and checks the "stapler-squad" mcpServers entry's HTTP
+// type/url/session-UUID header.
+func assertStaplerSquadMCPEntry(t *testing.T, val, wantURL, wantUUID string) {
+	t.Helper()
 	// val is shell-quoted; strip the outer single quotes to get the raw JSON.
 	if !strings.HasPrefix(val, "'") || !strings.HasSuffix(val, "'") {
 		t.Fatalf("val should be single-quoted JSON, got %q", val)
@@ -671,11 +834,86 @@ func TestClaudeMCPConfigArgs_HTTPFormat(t *testing.T) {
 	if got := entry["type"]; got != "http" {
 		t.Errorf("type = %q, want http", got)
 	}
-	if got := entry["url"]; got != "http://localhost:8543/mcp" {
-		t.Errorf("url = %q, want http://localhost:8543/mcp", got)
+	if got := entry["url"]; got != wantURL {
+		t.Errorf("url = %q, want %q", got, wantURL)
 	}
+	// ok ignored: a failed assertion leaves headers nil, and the lookup below
+	// still fails with a clear mismatch message.
 	headers, _ := entry["headers"].(map[string]interface{})
-	if headers["X-Stapler-Session-UUID"] != "test-uuid-123" {
-		t.Errorf("X-Stapler-Session-UUID = %q, want test-uuid-123", headers["X-Stapler-Session-UUID"])
+	if headers["X-Stapler-Session-UUID"] != wantUUID {
+		t.Errorf("X-Stapler-Session-UUID = %q, want %s", headers["X-Stapler-Session-UUID"], wantUUID)
+	}
+}
+
+func TestClaudeMCPConfigArgs_HTTPFormat(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Program:      "claude",
+		MCPServerURL: "http://localhost:8543/mcp",
+		UUID:         "test-uuid-123",
+	}
+	flag, val := inst.claudeMCPConfigArgs()
+	if flag != "--mcp-config" {
+		t.Errorf("flag = %q, want --mcp-config", flag)
+	}
+	assertStaplerSquadMCPEntry(t, val, "http://localhost:8543/mcp", "test-uuid-123")
+}
+
+// fakeHasSessionProcessManager reports HasSession() true (the tmux session
+// object has been wired by LoadInstances()'s reconciliation) and records
+// SetWindowSize calls, without a real PTY behind it -- used to prove
+// Instance.SetWindowSize gates on i.started rather than on HasSession() alone.
+type fakeHasSessionProcessManager struct {
+	ProcessManager
+	resized bool
+}
+
+func (f *fakeHasSessionProcessManager) HasSession() bool { return true }
+func (f *fakeHasSessionProcessManager) SetWindowSize(cols, rows int) error {
+	f.resized = true
+	return nil
+}
+
+// TestInstance_SetWindowSize_should_ReturnErrSessionNotStarted_When_NotStarted
+// is a regression test for the "PTY is not initialized" race: right after
+// LoadInstances() reconciles a session back to Active (instance_serialization.go),
+// the *tmux.TmuxSession object is wired -- so HasSession() is already true --
+// well before the async Start()/RestoreWithWorkDir() call that installs the
+// PTY finishes. A resize landing in that window used to fall through to the
+// tmux layer and fail with a raw "PTY is not initialized" error that
+// StreamHub.applyNegotiatedSize's errors.Is(err, ErrSessionNotStarted)
+// skip-and-retry branch (session/streamhub/hub.go) could not recognize.
+// SetWindowSize must check i.started the same way its sibling
+// CapturePaneContent does and return the shared sentinel instead.
+func TestInstance_SetWindowSize_should_ReturnErrSessionNotStarted_When_NotStarted(t *testing.T) {
+	t.Parallel()
+	pm := &fakeHasSessionProcessManager{}
+	instance := &Instance{Title: "test", processManager: pm}
+	// started defaults to false (zero value) -- the reconciled-but-not-yet-attached window.
+
+	err := instance.SetWindowSize(100, 30)
+
+	if !errors.Is(err, streamhub.ErrSessionNotStarted) {
+		t.Fatalf("SetWindowSize() error = %v, want errors.Is(err, streamhub.ErrSessionNotStarted)", err)
+	}
+	if pm.resized {
+		t.Error("SetWindowSize must not delegate to the process manager before the instance has started")
+	}
+}
+
+// TestInstance_SetWindowSize_should_Delegate_When_Started is the positive
+// counterpart: once the actor has actually finished starting, SetWindowSize
+// must still reach the process manager as before.
+func TestInstance_SetWindowSize_should_Delegate_When_Started(t *testing.T) {
+	t.Parallel()
+	pm := &fakeHasSessionProcessManager{}
+	instance := &Instance{Title: "test", processManager: pm}
+	instance.started.Store(true)
+
+	if err := instance.SetWindowSize(100, 30); err != nil {
+		t.Fatalf("SetWindowSize() unexpected error: %v", err)
+	}
+	if !pm.resized {
+		t.Error("SetWindowSize should delegate to the process manager once started")
 	}
 }

@@ -219,7 +219,9 @@ func paneDeadStatus(instance *Instance, batch map[string]tmux.PaneDeadStatus) (d
 // every naturally-completed session would hit recoverMissingSession and get
 // auto-restarted on the very next tick. Crashed sessions require an explicit
 // resume (see Instance.ResumeFromCrash / the ResumeCrashedSession RPC) and must
-// not be silently respawned either.
+// not be silently respawned either. PermanentlyFailed is likewise terminal
+// (ADR-001, session-retry-backoff) -- it requires an explicit Retry now, not
+// silent health-checker recovery.
 func healthCheckSkipReason(instance *Instance) (string, bool) {
 	if instance.Paused() {
 		return "Skipped (session is paused)", true
@@ -232,6 +234,8 @@ func healthCheckSkipReason(instance *Instance) (string, bool) {
 		return "Skipped (session is stopped)", true
 	case Crashed:
 		return "Skipped (session has crashed, awaiting resume)", true
+	case PermanentlyFailed:
+		return "Skipped (session is permanently failed, awaiting retry)", true
 	}
 	return "", false
 }
@@ -269,8 +273,12 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 		instance.started.Store(true)
 	}
 
-	// Check if instance thinks it's started but tmux session doesn't exist
-	if instance.Started() {
+	// Check if instance thinks it's started but tmux session doesn't exist.
+	// Skipped for push-liveness backends (ProcessManagerBackend.SkipsPollBasedLiveness) --
+	// their throwaway LoadInstances() copy can never populate real session
+	// state without an RPC round-trip fromInstanceData deliberately skips,
+	// so this probe would only ever misreport them as missing.
+	if instance.Started() && !instance.Backend.SkipsPollBasedLiveness() {
 		h.checkTmuxHealth(instance, paneStatus, &result)
 	}
 

@@ -1107,3 +1107,67 @@ func TestRecoverBaseCommitSHA_MissingDirOrBranch_Errors(t *testing.T) {
 	_, err = RecoverBaseCommitSHA(ctx, t.TempDir(), "")
 	require.Error(t, err)
 }
+
+// TestIsPathUnderAnyRoot covers the containment logic readPlanFile relies on to
+// reject a PlanArtifactsPath that escapes every allowlisted root -- including
+// the classic prefix-check-without-separator bug class ("/tmp/foo" vs
+// "/tmp/foobar" must NOT be treated as "foobar is under foo").
+func TestIsPathUnderAnyRoot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	roots := []string{root}
+
+	t.Run("exact root match", func(t *testing.T) {
+		assert.True(t, isPathUnderAnyRoot(filepath.Clean(root), roots))
+	})
+
+	t.Run("legitimate descendant", func(t *testing.T) {
+		descendant := filepath.Join(root, "sub", "dir")
+		assert.True(t, isPathUnderAnyRoot(filepath.Clean(descendant), roots))
+	})
+
+	t.Run("dot-dot escape attempt", func(t *testing.T) {
+		escape := filepath.Join(root, "..", "escaped")
+		assert.False(t, isPathUnderAnyRoot(filepath.Clean(escape), roots))
+	})
+
+	t.Run("sibling directory sharing a string prefix with the root", func(t *testing.T) {
+		// root="/tmp/foo", candidate="/tmp/foobar" -- foobar is NOT under foo,
+		// even though the raw strings share a prefix.
+		siblingWithSharedPrefix := filepath.Clean(root) + "bar"
+		assert.False(t, isPathUnderAnyRoot(siblingWithSharedPrefix, roots))
+	})
+}
+
+// TestReadPlanFile_RejectsPathEscapingAllowedRoots verifies that an
+// artifactsDir outside every root returned by planArtifactsAllowedRoots
+// (repoPath, the worktrees dir, and the triage-artifacts dir) is rejected
+// before any file is read -- readPlanFile must return "" rather than the
+// content of a plan.md that happens to live outside the sandbox.
+func TestReadPlanFile_RejectsPathEscapingAllowedRoots(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	repoPath := t.TempDir()
+
+	// A directory entirely unrelated to repoPath, the worktrees dir, or the
+	// triage-artifacts dir -- but which DOES contain a plan.md a broken
+	// containment check might still serve.
+	maliciousDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(maliciousDir, "plan.md"), []byte("SECRET ESCAPED CONTENT"), 0o644))
+
+	got := readPlanFile(maliciousDir, repoPath)
+	assert.Equal(t, "", got, "readPlanFile must reject an artifactsDir outside every allowed root")
+}
+
+// TestReadPlanFile_AllowsPathUnderRepoPath verifies the legitimate case still
+// works: an artifactsDir under repoPath (one of planArtifactsAllowedRoots)
+// is read normally.
+func TestReadPlanFile_AllowsPathUnderRepoPath(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	repoPath := t.TempDir()
+	artifactsDir := filepath.Join(repoPath, "triage-artifacts")
+	require.NoError(t, os.MkdirAll(artifactsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(artifactsDir, "plan.md"), []byte("legit plan content"), 0o644))
+
+	got := readPlanFile(artifactsDir, repoPath)
+	assert.Equal(t, "legit plan content", got)
+}

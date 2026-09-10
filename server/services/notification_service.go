@@ -191,9 +191,11 @@ func (ns *NotificationService) GetNotificationHistory(
 
 	return connect.NewResponse(&sessionv1.GetNotificationHistoryResponse{
 		Notifications: protoRecords,
-		TotalCount:    int32(totalCount),
-		UnreadCount:   int32(unreadCount),
-		HasMore:       hasMore,
+		// #nosec G115 -- totalCount is a local in-memory notification store count, far below int32 range.
+		TotalCount: int32(totalCount),
+		// #nosec G115 -- see TotalCount above.
+		UnreadCount: int32(unreadCount),
+		HasMore:     hasMore,
 	}), nil
 }
 
@@ -217,6 +219,7 @@ func (ns *NotificationService) MarkNotificationRead(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	// #nosec G115 -- count is a local notification-store row count, far below int32 range.
 	return connect.NewResponse(&sessionv1.MarkNotificationReadResponse{
 		Success:     true,
 		MarkedCount: int32(count),
@@ -250,6 +253,7 @@ func (ns *NotificationService) ClearNotificationHistory(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	// #nosec G115 -- count is a local notification-store row count, far below int32 range.
 	return connect.NewResponse(&sessionv1.ClearNotificationHistoryResponse{
 		Success:      true,
 		ClearedCount: int32(count),
@@ -283,7 +287,9 @@ func recordToProto(r *notifications.NotificationRecord) *sessionv1.NotificationH
 		Metadata:         metadata,
 		CreatedAt:        timestamppb.New(r.CreatedAt),
 		IsRead:           r.IsRead,
-		OccurrenceCount:  int32(r.OccurrenceCount),
+		// #nosec G115 -- OccurrenceCount is a per-notification dedup-repeat
+		// counter, far below int32 range.
+		OccurrenceCount: int32(r.OccurrenceCount),
 	}
 
 	if r.ReadAt != nil {

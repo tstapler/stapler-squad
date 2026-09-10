@@ -1,6 +1,6 @@
 import { FileStatus } from "@/gen/session/v1/types_pb";
-import type { VCSStatus, FileChange, Session, UnfinishedWorktree } from "@/gen/session/v1/types_pb";
-import type { BacklogItemShipStatus, ShippedCommit, ShippedFileStat } from "@/gen/session/v1/backlog_pb";
+import type { VCSStatus, FileChange, Session, UnfinishedWorktree, ShippedCommit } from "@/gen/session/v1/types_pb";
+import type { BacklogItemShipStatus, ShippedFileStat } from "@/gen/session/v1/backlog_pb";
 import type {
   VcsWidgetData,
   FileChangeSummary,
@@ -77,10 +77,34 @@ function fromSessionGithub(session?: Session): GithubSummary | null {
     checkConclusion: toCheckConclusion(session.githubCheckConclusion),
     approvedCount: session.githubApprovedCount,
     changesReqCount: session.githubChangesReqCount,
+    // "unknown" sentinel matches fromShipStatusGithub/fromUnfinishedWorktreeGithub
+    // below — one "not known" value across all three adapters, not an
+    // empty-string special case only this one produces.
+    mergeable: session.githubMergeable || "unknown",
+    checks: session.githubChecks.map((c) => ({
+      name: c.name,
+      context: c.context,
+      state: c.state,
+      status: c.status,
+      conclusion: c.conclusion,
+    })),
+    reviewFeedback: session.githubReviewFeedback.map((r) => ({
+      author: r.author,
+      state: r.state,
+      body: r.body,
+    })),
+    lastCheckedAt: toDate(session.lastPrStatusCheck) ?? undefined,
   };
 }
 
 export function fromSessionVcs(status: VCSStatus, session?: Session): VcsWidgetData {
+  const aggregateStats = status.aggregateDiffStat
+    ? {
+        filesChanged: status.aggregateDiffStat.filesChanged,
+        additions: status.aggregateDiffStat.additions,
+        deletions: status.aggregateDiffStat.deletions,
+      }
+    : undefined;
   return {
     kind: "live",
     branch: status.branch,
@@ -89,9 +113,13 @@ export function fromSessionVcs(status: VCSStatus, session?: Session): VcsWidgetD
     aheadOfMain: status.aheadBy,
     behindMain: status.behindBy,
     branchExists: true,
-    commits: [],
+    commits: status.commits.map(toCommitSummary),
     github: fromSessionGithub(session),
     shipped: false,
+    aggregateStats,
+    statusAsOf: toDate(status.statusAsOf) ?? undefined,
+    commitsTruncated: status.commitsTruncated,
+    commitsUnavailable: status.commitsUnavailable,
   };
 }
 
@@ -148,6 +176,11 @@ function fromShipStatusGithub(status: BacklogItemShipStatus): GithubSummary | nu
     checkConclusion: toCheckConclusion(status.shippedCheckConclusion),
     approvedCount: status.shippedApprovedCount,
     changesReqCount: status.shippedChangesReqCount,
+    // Historical ship-status snapshots never captured mergeable/checks/review
+    // feedback — default gracefully rather than fabricate a value.
+    mergeable: "unknown",
+    checks: [],
+    reviewFeedback: [],
   };
 }
 
@@ -196,6 +229,11 @@ function fromUnfinishedWorktreeGithub(wt: UnfinishedWorktree): GithubSummary | n
     checkConclusion: "",
     approvedCount: 0,
     changesReqCount: 0,
+    // The unfinished-worktree scanner never captured mergeable/checks/review
+    // feedback — default gracefully rather than fabricate a value.
+    mergeable: "unknown",
+    checks: [],
+    reviewFeedback: [],
   };
 }
 

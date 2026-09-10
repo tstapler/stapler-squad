@@ -398,11 +398,11 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 			clearedAt := time.Now()
 
 			inst := &Instance{
-				Title:                 "test-clearedat-guard",
-				Path:                  tmpDir,
-				SessionType:           SessionTypeDirectory,
-				conversationClearedAt: clearedAt,
-				historyDetector:       NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
+				Title:           "test-clearedat-guard",
+				Path:            tmpDir,
+				SessionType:     SessionTypeDirectory,
+				claudeExtension: claudeExtension{conversationClearedAt: clearedAt},
+				historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
 			}
 			writeJSONLFixture(t, fakeHome, tmpDir, fixtureUUID, clearedAt.Add(tt.offset))
 

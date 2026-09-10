@@ -9,11 +9,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-git/go-git/v5"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
+
+	"github.com/go-git/go-git/v5/plumbing"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -33,7 +34,7 @@ func getWorktreeDirectory() (string, error) {
 	}
 
 	dir := filepath.Join(configDir, "worktrees")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", fmt.Errorf("failed to create worktree base directory %s: %w", dir, err)
 	}
 	resolved, err := filepath.EvalSymlinks(dir)
@@ -96,12 +97,25 @@ type GitWorktree struct {
 	// addendum.
 	runner tmux.CommandRunner
 
+	// dirtyChecker computes IsDirtyWithHint's uncached "is the worktree dirty"
+	// result. Defaults to worktreeIsDirty (go-git's Worktree.Status(), no
+	// subprocess — see worktree_git.go) via dirtyCheckerFunc() below; tests in
+	// this package override the field directly (same-package access) to
+	// simulate a racing cache writer or a persistent failure without needing a
+	// real git worktree on disk for every case.
+	dirtyChecker func(worktreePath string) (bool, error)
+
 	// ponytail: atomic.Value replaces sync.RWMutex+bool+time — lock-free reads on the fast cache-hit path
 	isDirtyCache atomic.Value // stores dirtyCacheState; zero value = cache invalid
 
 	// isDirtySF coalesces concurrent dirty-checks on the same worktree so only
 	// one in-process status check runs at a time.
 	isDirtySF singleflight.Group //nolint:exhaustruct
+
+	// gitignoreFS caches the filesystem reads go-git's Worktree.Status() issues
+	// while re-walking gitignore patterns on every call — see worktreeIsDirty and
+	// HasStagedChanges. Zero value is ready to use; cleared by InvalidateDirtyCache.
+	gitignoreFS gitignoreFSCache
 }
 
 // GitWorktreeOption is a functional option for GitWorktree construction,
@@ -266,8 +280,18 @@ func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, cu
 		return nil, "", err
 	}
 
-	// First check if the branch is already checked out in an existing worktree
-	existingWorktreePath, found := findExistingWorktreeForBranch(repoPath, branchName)
+	// First check if the branch is already checked out in an existing worktree.
+	// Dispatches on useNativeWorktree(sessionName) (Epic 2.3, Task 2.3.2b) rather than
+	// changing findExistingWorktreeForBranch's own signature/name, since that function
+	// (and parseWorktreeListForBranch) are exercised directly by name in
+	// worktree_creation_test.go outside this epic's task-file scope.
+	var existingWorktreePath string
+	var found bool
+	if useNativeWorktree(sessionName) {
+		existingWorktreePath, found = nativeFindExistingWorktreeForBranch(repoPath, branchName)
+	} else {
+		existingWorktreePath, found = findExistingWorktreeForBranch(repoPath, branchName)
+	}
 	if found {
 		// git realpath's the path it reports in 'worktree list' output, so
 		// canonicalize before storing to keep this consistent with the
@@ -347,7 +371,7 @@ func findExistingGitRepoRootReadOnly(path string) (string, error) {
 
 	currentPath := path
 	for {
-		if _, err := git.PlainOpen(currentPath); err == nil {
+		if _, err := OpenRepo(currentPath); err == nil {
 			return currentPath, nil
 		}
 
@@ -372,6 +396,18 @@ func (g *GitWorktree) commandRunner() tmux.CommandRunner {
 		return tmux.LocalRunner{}
 	}
 	return g.runner
+}
+
+// dirtyCheckerFunc returns g.dirtyChecker, defaulting to worktreeIsDirtyFast (mtime/hash
+// short-circuit, no go-git Worktree.Status() tree-diff — see its doc comment) backed by
+// g.gitignoreFS when unset.
+func (g *GitWorktree) dirtyCheckerFunc() func(string) (bool, error) {
+	if g.dirtyChecker == nil {
+		return func(path string) (bool, error) {
+			return worktreeIsDirtyFast(path, &g.gitignoreFS)
+		}
+	}
+	return g.dirtyChecker
 }
 
 // GetBranchName returns the name of the branch associated with this worktree
@@ -467,6 +503,25 @@ func findExistingWorktreeForBranch(repoPath, branchName string) (string, bool) {
 
 	// Parse the porcelain output to find matching branch
 	return parseWorktreeListForBranch(string(output), branchName)
+}
+
+// nativeFindExistingWorktreeForBranch is findExistingWorktreeForBranch's native
+// counterpart (Epic 2.3, Task 2.3.2b): same first-match-wins semantics, sourced from
+// nativeListWorktrees instead of shelling out to `git worktree list --porcelain` +
+// parseWorktreeListForBranch.
+func nativeFindExistingWorktreeForBranch(repoPath, targetBranch string) (string, bool) {
+	entries, err := nativeListWorktrees(repoPath)
+	if err != nil {
+		log.Info("failed to list worktrees for branch check", "err", err)
+		return "", false
+	}
+	targetRef := plumbing.NewBranchReferenceName(targetBranch).String()
+	for _, entry := range entries {
+		if entry.BranchRef == targetRef {
+			return entry.WorktreePath, true
+		}
+	}
+	return "", false
 }
 
 // parseWorktreeListForBranch parses the output of 'git worktree list --porcelain'

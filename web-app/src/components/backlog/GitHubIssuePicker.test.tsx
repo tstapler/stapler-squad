@@ -32,11 +32,15 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
-function renderPicker(onSelect = jest.fn(), onCancel = jest.fn()) {
+function renderPicker(
+  onSelect = jest.fn(),
+  onCancel = jest.fn(),
+  extraProps: Partial<React.ComponentProps<typeof GitHubIssuePicker>> = {}
+) {
   const store = makeStore();
   render(
     <Provider store={store}>
-      <GitHubIssuePicker onSelect={onSelect} onCancel={onCancel} />
+      <GitHubIssuePicker onSelect={onSelect} onCancel={onCancel} {...extraProps} />
     </Provider>
   );
   return { onSelect, onCancel };
@@ -56,10 +60,13 @@ function makeIssue(overrides: Partial<GitHubIssue> = {}): GitHubIssue {
   };
 }
 
-async function goToIssuePhase(issues: GitHubIssue[]) {
+async function goToIssuePhase(
+  issues: GitHubIssue[],
+  extraProps: Partial<React.ComponentProps<typeof GitHubIssuePicker>> = {}
+) {
   searchGitHubRepos.mockResolvedValue([REPO]);
   listGitHubIssues.mockResolvedValue(issues);
-  const handlers = renderPicker();
+  const handlers = renderPicker(jest.fn(), jest.fn(), extraProps);
 
   await waitFor(() => expect(screen.getByText("octocat/hello-world")).toBeInTheDocument());
   fireEvent.mouseDown(screen.getByText("octocat/hello-world"));
@@ -147,6 +154,34 @@ describe("GitHubIssuePicker — multi-select", () => {
       fireEvent.click(screen.getByText("A real issue"));
 
       expect(screen.getByText("1 selected")).toBeInTheDocument();
+    });
+  });
+
+  // PR #663: importing/importProgress let the page show live progress while
+  // handlePickerSelect's sequential import loop runs, instead of the picker
+  // silently sitting there for however long a multi-issue import takes.
+  describe("importing / importProgress", () => {
+    it("shows normal selection hint and an enabled Import/Cancel when not importing", async () => {
+      await goToIssuePhase([makeIssue({ number: 7, title: "Fix the thing" })]);
+      await waitFor(() => expect(screen.getByText("Fix the thing")).toBeInTheDocument());
+
+      fireEvent.click(screen.getByText("Fix the thing"));
+
+      expect(screen.getByText("1 selected")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Import (1)" })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "Cancel" })).not.toBeDisabled();
+    });
+
+    it("shows import progress and disables Import/Cancel when importing is true", async () => {
+      await goToIssuePhase([makeIssue({ number: 7, title: "Fix the thing" })], {
+        importing: true,
+        importProgress: { done: 2, total: 5 },
+      });
+      await waitFor(() => expect(screen.getByText("Fix the thing")).toBeInTheDocument());
+
+      expect(screen.getByText("Importing 2 of 5…")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Importing…" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
     });
   });
 });

@@ -2,18 +2,35 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"connectrpc.com/connect"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-	"github.com/tstapler/stapler-squad/config"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 )
+
+// mcpAwaitTerminalTimeout bounds create_session/create_session_for_pr's wait
+// for the Background Resolution Pipeline to reach a terminal status
+// (async-session-creation Epic 2.3). Today's MCP path was unbounded before
+// this change (inst.Start(true) ran with no context deadline threaded into
+// its GitHub/worktree/tmux calls at all) -- 150s is therefore a new,
+// deliberately chosen cap, picked to align with the frontend's own SLO
+// expectation for CreateSession (createSessionTimeout in
+// server/services/session_service.go), not a preservation of a prior bound.
+// Intentionally shorter than the pipeline's own maxCreationResolutionTimeout
+// (10 min) so a genuinely slow pipeline degrades to the "still creating"
+// result (see mapCreationOutcome) rather than holding the MCP tool call open
+// for the pipeline's full budget.
+const mcpAwaitTerminalTimeout = 150 * time.Second
 
 type lifecycleHandlers struct {
 	store session.InstanceStore
@@ -25,12 +42,18 @@ type CreateSessionResult struct {
 	MCPResult
 	Session            *SessionDetail `json:"session,omitempty"`
 	MCPInjectionFailed bool           `json:"mcp_injection_failed,omitempty"`
+	// StillCreating is true when mcpAwaitTerminalTimeout elapsed before the
+	// Background Resolution Pipeline reached a terminal status. Session is
+	// still returned (Creating status, ID valid) — the session was
+	// successfully created and is genuinely still resolving, not failed or
+	// broken. Use get_session to check on it.
+	StillCreating bool `json:"still_creating,omitempty"`
 }
 
 func registerLifecycleTools(s *mcpserver.MCPServer, lh *lifecycleHandlers) {
 	s.AddTool(
 		mcpgo.NewTool("create_session",
-			mcpgo.WithDescription("Create and start a new Stapler Squad session (tmux + optional git worktree). By default, injects this MCP server into the child session's .claude/settings.local.json so the new session can use all Stapler Squad tools. Returns the new session. Rate-limited to 3 per minute.\n\nNOTE: Do not use this tool just to run commands or execute tasks — spawn an Agent subagent instead. Reserve create_session for cases where a USER INTERACTABLE, persistent tmux session is genuinely needed (e.g. long-running background work, multi-turn Claude Code sessions the user will actively monitor or control)."),
+			mcpgo.WithDescription("Create and start a new Stapler Squad session (tmux + optional git worktree). By default, injects this MCP server into the child session's .claude/settings.local.json so the new session can use all Stapler Squad tools. Waits up to 150s for the session to finish starting up; if it's still resolving after that, returns a still_creating result (session_id present, safe to poll with get_session) rather than an error or an open-ended hang. Rate-limited to 3 per minute.\n\nNOTE: Do not use this tool just to run commands or execute tasks — spawn an Agent subagent instead. Reserve create_session for cases where a USER INTERACTABLE, persistent tmux session is genuinely needed (e.g. long-running background work, multi-turn Claude Code sessions the user will actively monitor or control)."),
 			mcpgo.WithString("title", mcpgo.Description("Unique name for the session"), mcpgo.Required()),
 			mcpgo.WithString("path", mcpgo.Description("Absolute path to the repository root"), mcpgo.Required()),
 			mcpgo.WithString("branch", mcpgo.Description("Git branch name (creates if missing; required for new_worktree session type)")),
@@ -91,6 +114,17 @@ type lifecycleResult struct {
 }
 
 func (lh *lifecycleHandlers) createSession(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return lh.createSessionWithAwaitTimeout(ctx, req, mcpAwaitTerminalTimeout)
+}
+
+// createSessionWithAwaitTimeout is create_session's real implementation,
+// parameterized on the AwaitCreationTerminal timeout. The registered tool
+// handler (createSession, above) always uses mcpAwaitTerminalTimeout; tests
+// call this directly with a much shorter timeout to exercise the
+// still_creating outcome (Story 2.3.4) without waiting out the real 150s
+// bound — the same interval-parameterized-implementation seam
+// AwaitCreationTerminal itself uses (server/services/session_creation_await.go).
+func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, req mcpgo.CallToolRequest, awaitTimeout time.Duration) (*mcpgo.CallToolResult, error) {
 	if !createSessionLimiter.allow("global") {
 		return errResult(ErrRateLimitExceeded, "create_session rate limit exceeded (max 3 per minute)",
 			"Wait before creating another session."), nil
@@ -122,16 +156,9 @@ func (lh *lifecycleHandlers) createSession(ctx context.Context, req mcpgo.CallTo
 		program = "claude"
 	}
 
-	var sessionType session.SessionType
-	switch sessionTypeStr {
-	case "new_worktree":
-		sessionType = session.SessionTypeNewWorktree
-	case "existing_worktree":
-		sessionType = session.SessionTypeExistingWorktree
-	case "directory", "":
-		sessionType = session.SessionTypeDirectory
-	default:
-		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid session_type %q", sessionTypeStr),
+	protoSessionType, typeErr := mcpSessionTypeToProto(sessionTypeStr)
+	if typeErr != nil {
+		return errResult(ErrInvalidArgument, typeErr.Error(),
 			"Valid values: directory, new_worktree, existing_worktree"), nil
 	}
 
@@ -149,6 +176,11 @@ func (lh *lifecycleHandlers) createSession(ctx context.Context, req mcpgo.CallTo
 
 	// Check for title collision before starting. Use ListInstanceData (raw DB read)
 	// rather than LoadInstances to avoid spawning PTY processes as a side effect.
+	// This is a fast, agent-friendly pre-check in addition to CreateSession's own
+	// synchronous title-uniqueness check below -- a TOCTOU race between the two
+	// is not a correctness gap, since CreateSession still authoritatively rejects
+	// a duplicate that slips past this pre-check (async-session-creation Epic
+	// 2.3, Story 2.3.1).
 	existing, err := lh.store.ListInstanceData()
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("load sessions: %v", err), ""), nil
@@ -160,30 +192,48 @@ func (lh *lifecycleHandlers) createSession(ctx context.Context, req mcpgo.CallTo
 		}
 	}
 
-	cfg := config.LoadConfig()
-	inst, err := session.NewInstance(session.InstanceOptions{
+	createResp, createErr := lh.svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       title,
 		Path:        path,
 		Branch:      branch,
 		Program:     program,
-		SessionType: sessionType,
-		Tags:        tags,
-		// Backend consults the session-name override map (tymux-bundled-integration
-		// Epic 4.4.1) so a canary override applies through this entry point too;
-		// there's no per-request override field on this MCP tool's schema.
-		Backend: session.ResolveSessionBackendForTitle(cfg, title, ""),
-	})
-	if err != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("create session: %v", err), ""), nil
+		SessionType: protoSessionType,
+		// Tags (Task 2.3.1c) are applied at construction time, synchronously, rather than via a
+		// post-hoc SetTags call after AwaitCreationTerminal succeeds -- a pipeline resolution
+		// that outlasts awaitTimeout (StillCreating path below) would otherwise silently never
+		// get these tags applied.
+		Tags: tags,
+	}))
+	if createErr != nil {
+		return mapCreateSessionRPCError(createErr, title), nil
+	}
+	sessionID := createResp.Msg.Session.Id
+
+	outcome, awaitErr := lh.svc.AwaitCreationTerminal(ctx, sessionID, awaitTimeout)
+	if errors.Is(awaitErr, services.ErrCreationAwaitTimeout) {
+		return okResult(CreateSessionResult{
+			MCPResult: MCPResult{Success: true},
+			Session: &SessionDetail{SessionSummary: SessionSummary{
+				ID:     sessionID,
+				Title:  title,
+				Status: session.Creating.String(),
+			}},
+			StillCreating: true,
+		}), nil
+	}
+	if result := mapCreationOutcome(outcome, awaitErr); result != nil {
+		return result, nil
 	}
 
-	if err := inst.Start(true); err != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("start session: %v", err), ""), nil
+	// The pipeline reached Active: the worktree/tmux state MCP/hook injection
+	// depend on now exists. Re-fetch the live instance rather than reusing a
+	// stale local reference -- there isn't one; this handler never constructs
+	// an *Instance itself anymore (Epic 2.1/2.2's CreateSession does).
+	inst := lh.svc.FindLiveInstance(sessionID)
+	if inst == nil {
+		return errResult(ErrInternalError,
+			fmt.Sprintf("session %q reached Active but is no longer findable", sessionID), ""), nil
 	}
-
-	// Wire a session driver to handle startup dialogs and send the initial task prompt.
-	// Mirrors the pattern used in session_service.go:CreateDirectorySession.
-	session.StartSessionDriver(inst, path)
 
 	// MCP injection: write our server config into the session's .claude/settings.local.json.
 	// inject_mcp defaults to true when not explicitly provided.
@@ -214,10 +264,11 @@ func (lh *lifecycleHandlers) createSession(ctx context.Context, req mcpgo.CallTo
 		log.Warn("mcp hook injection failed for session", "title", title, "err", err)
 	}
 
-	// Save to storage. AddInstance persists just this new instance.
-	if err := lh.store.AddInstance(inst); err != nil {
-		// Best-effort cleanup; don't fail the session just because save failed.
-		log.Error("mcp save instance failed after creating session", "title", title, "err", err)
+	// Persist the tag/injection changes above. The instance is Started() now
+	// (Active), so SaveInstances (unlike a Creating-status row) will not
+	// silently no-op this write.
+	if err := lh.store.SaveInstances([]*session.Instance{inst}); err != nil {
+		log.Error("mcp save instance failed after session creation", "title", title, "err", err)
 		return errResult(ErrInternalError, fmt.Sprintf("save session: %v", err), ""), nil
 	}
 
@@ -227,6 +278,86 @@ func (lh *lifecycleHandlers) createSession(ctx context.Context, req mcpgo.CallTo
 		Session:            &detail,
 		MCPInjectionFailed: mcpInjectionFailed,
 	}), nil
+}
+
+// mcpSessionTypeToProto maps create_session/create_session_for_pr's MCP-level
+// session_type string onto the proto SessionType enum CreateSession's request
+// takes. Mirrors the string set the old inline session.SessionType switch
+// validated (server/adapters.sessionTypeToProto performs the equivalent
+// mapping for the *response* direction but is unexported outside its
+// package, so this is a small, deliberate duplicate of that switch's cases
+// for the request direction).
+func mcpSessionTypeToProto(sessionTypeStr string) (sessionv1.SessionType, error) {
+	switch sessionTypeStr {
+	case "new_worktree":
+		return sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE, nil
+	case "existing_worktree":
+		return sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE, nil
+	case "directory", "":
+		return sessionv1.SessionType_SESSION_TYPE_DIRECTORY, nil
+	default:
+		return 0, fmt.Errorf("invalid session_type %q", sessionTypeStr)
+	}
+}
+
+// mapCreateSessionRPCError maps a synchronous CreateSession RPC error onto the
+// errResult codes MCP callers see today. Defense-in-depth for the TOCTOU
+// window the title-collision pre-check leaves open, not the primary error
+// path -- the MCP-level pre-checks above already catch the common cases
+// before CreateSession is ever called (async-session-creation Epic 2.3, Task
+// 2.3.1b).
+func mapCreateSessionRPCError(err error, title string) *mcpgo.CallToolResult {
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		return errResult(ErrInternalError, fmt.Sprintf("create session: %v", err), "")
+	}
+	switch connectErr.Code() {
+	case connect.CodeAlreadyExists:
+		return errResult(ErrInvalidArgument, fmt.Sprintf("session with title %q already exists", title),
+			"Choose a different title.")
+	case connect.CodeNotFound:
+		return errResult(ErrInvalidArgument, connectErr.Message(), "")
+	case connect.CodeInvalidArgument:
+		return errResult(ErrInvalidArgument, connectErr.Message(), "")
+	default:
+		return errResult(ErrInternalError, fmt.Sprintf("create session: %v", connectErr.Message()), "")
+	}
+}
+
+// mapCreationOutcome maps AwaitCreationTerminal's Failed/vanished/caller-ctx
+// exits onto the MCP result shape (async-session-creation Epic 2.3, Story
+// 2.3.4). The timeout exit (services.ErrCreationAwaitTimeout) is handled by
+// each caller directly, before calling this, since its "still creating"
+// result carries a tool-specific result type (CreateSessionResult vs
+// CreateSessionForPRResult) that this shared helper can't build generically.
+//
+// Consumes only the CreationOutcome snapshot or sentinel error
+// AwaitCreationTerminal returned -- never a second, separate read of
+// Status()/FailureReason() off the actor (see CreationOutcome's doc comment
+// for why a second read would be unsafe).
+//
+// Returns nil when the pipeline succeeded (outcome.Status is Active/Running)
+// -- the caller should proceed with post-creation steps. Returns a non-nil
+// error result for every other case: Failed, vanished (cancelled), or the
+// caller's own ctx ending first.
+func mapCreationOutcome(outcome services.CreationOutcome, err error) *mcpgo.CallToolResult {
+	switch {
+	case err == nil:
+		if outcome.Status == session.Failed {
+			return errResult(ErrSessionCreationFailed,
+				fmt.Sprintf("session creation failed: %s", outcome.FailureReason),
+				"Use get_session to inspect the session, or call create_session again to retry.")
+		}
+		return nil // Active/Running: proceed with post-creation steps.
+	case errors.Is(err, services.ErrCreationVanished):
+		return errResult(ErrSessionCreationCancelled,
+			"session creation was cancelled while waiting for it to complete",
+			"The session no longer exists; call create_session again if you still need it.")
+	default:
+		return errResult(ErrSessionCreationAwaitCanceled,
+			"the wait for session creation was ended by the caller's own request context (not a pipeline timeout or failure); the session may still be resolving",
+			"Use get_session to check on its status.")
+	}
 }
 
 // injectMCPConfig writes the MCP server entry into <rootDir>/.claude/settings.local.json.

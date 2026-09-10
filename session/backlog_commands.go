@@ -39,7 +39,7 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 
 	var mkErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		mkErr = os.MkdirAll(cmdDir, 0o755)
+		mkErr = os.MkdirAll(cmdDir, 0o750)
 		if mkErr == nil {
 			break
 		}
@@ -277,12 +277,32 @@ func WriteBacklogContextFile(item *BacklogItemData, priorSessions []ItemSessionS
 	content := sb.String()
 
 	destPath := filepath.Join(worktreePath, ".backlog-context.md")
-	tmpPath := destPath + ".tmp"
 
-	if err := os.WriteFile(tmpPath, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("WriteBacklogContextFile: failed to write tmp file: %w", err)
+	// Unique tmp name (not destPath+".tmp"): this is called on every spawn AND re-attach
+	// for the same worktreePath (see doc comment above), so two concurrent callers writing
+	// the same fixed name could interleave writes and rename a torn/corrupt file into place.
+	// Mirrors config.go's saveConfigLocked fix for the identical hazard.
+	tmpFile, err := os.CreateTemp(worktreePath, ".backlog-context.md.*.tmp")
+	if err != nil {
+		return fmt.Errorf("WriteBacklogContextFile: failed to create tmp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	_, writeErr := tmpFile.Write([]byte(content))
+	closeErr := tmpFile.Close()
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to write tmp file: %w", writeErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to close tmp file: %w", closeErr)
+	}
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to chmod tmp file: %w", err)
 	}
 	if err := os.Rename(tmpPath, destPath); err != nil {
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("WriteBacklogContextFile: failed to rename tmp to dest: %w", err)
 	}
 	return nil
@@ -313,7 +333,7 @@ func CleanupBacklogContextFile(worktreePath string) error {
 
 // writeFile is a helper that writes content to a file, creating it if needed.
 func writeFile(path, content string) error {
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("writeFile: failed to write %s: %w", path, err)
 	}
 	return nil
@@ -340,15 +360,15 @@ func addWorktreeExcludes(worktreePath string) {
 	gitCommonDir := strings.TrimSpace(string(out))
 
 	excludeFile := filepath.Join(gitCommonDir, "info", "exclude")
-	if mkErr := os.MkdirAll(filepath.Dir(excludeFile), 0o755); mkErr != nil {
+	if mkErr := os.MkdirAll(filepath.Dir(excludeFile), 0o750); mkErr != nil {
 		log.WarningLog().Printf("[addWorktreeExcludes] mkdir %s: %v", filepath.Dir(excludeFile), mkErr)
 		return
 	}
 
-	existingBytes, _ := os.ReadFile(excludeFile)
+	existingBytes, _ := os.ReadFile(excludeFile) // #nosec G304 -- excludeFile is derived from `git rev-parse --git-common-dir` output for the session's own worktree, not external input
 	existing := string(existingBytes)
 
-	f, openErr := os.OpenFile(excludeFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, openErr := os.OpenFile(excludeFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- same excludeFile as above, derived from git's own git-common-dir resolution
 	if openErr != nil {
 		log.WarningLog().Printf("[addWorktreeExcludes] open %s: %v", excludeFile, openErr)
 		return

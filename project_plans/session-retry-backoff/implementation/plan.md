@@ -35,10 +35,11 @@ value is `10`, not the `8` `research/stack.md` guessed before `HIBERNATED`/`REST
 | `backoffDelay` | Pure function `backoffDelay(attempt int, initial, max time.Duration, jitterFraction float64) time.Duration` computing `min(initial * 2^attempt, max)` plus bounded jitter. Hand-rolled, no new dependency (`research/build-vs-buy.md`). | `session/retry_state.go`. |
 | `classifyFailureReason` | `func classifyFailureReason(inst *Instance) string` — returns `"tmux_exited"` when `TmuxProcessManager.DoesSessionExist()` is `false`, else `"crashed"` for a process-exit path, or `"stalled"` for the inactivity-timeout path (which calls it directly with a known reason, not through liveness detection). | `session/session_driver.go`. |
 | `tmux_exited` | Failure reason: the tmux *session* itself (not just the pane process) is gone — pane loss, OOM-killed tmux server, laptop sleep. Distinct from `crashed` (process exited, tmux session/remain-on-exit placeholder still alive). | Detected via `session/tmux_process_manager.go:123` `DoesSessionExist()`. |
-| `evaluateSessionRetry` | Pure decision function `evaluateSessionRetry(rs RetryState, policy RetryPolicyConfig, reason string, now, bootTime time.Time) retryDecision` mirroring `session/backlog_remediation.go`'s `evaluateRemediation` shape. Returns `scheduled` / `notEligible` (reason ∉ RetryOn) / `exhausted` (attempt ≥ max) / `restartGrace` (tmux_exited within grace window of `bootTime`). | New, DB-independent, exhaustively unit-testable. |
-| `retryInFlight` | `atomic.Bool` field on `Instance`, analogous to `driverRunning` — CAS-guards the single restart critical section so the automated backoff-expiry path and a manual "Retry now" RPC can never both call `inst.Restart()`/mutate `RetryState` concurrently. | Closes the double-restart / lost-update races in `research/pitfalls.md` §2. |
-| `restartForRetry` | Extracted helper (from today's `handleDriverFailure` restart block, lines ~534-552) shared by both the automated backoff-expiry path and manual `RetryNow()` — single source of the actual `inst.Restart()`/`inst.Start()` call. | |
-| `RetryNow` | `func (i *Instance) RetryNow() error` — claims `retryInFlight`, resets `RetryState`, transitions `Status` out of `PermanentlyFailed` (or bypasses `NextRetryAt`), calls `restartForRetry`. Backs the manual "Retry now" UI action and `RetrySession` RPC. | |
+| `evaluateSessionRetry` | Pure decision function `evaluateSessionRetry(rs RetryState, policy session.RetryPolicy, reason string, now, bootTime time.Time) retryDecision` mirroring `session/backlog_remediation.go`'s `evaluateRemediation` shape. Takes the **resolved** `session.RetryPolicy` (plain, already-defaulted fields), not `config.RetryPolicyConfig` — see `resolveRetryPolicy`'s layering correction (architecture-review.md Concerns, Task 2.1.2b). Returns `scheduled` / `notEligible` (reason ∉ RetryOn) / `exhausted` (attempt ≥ max) / `restartGrace` (tmux_exited within grace window of `bootTime`). | New, DB-independent, exhaustively unit-testable. |
+| `session.RetryPolicy` | New domain-layer type (`session/retry_state.go`) — plain, non-pointer, already-defaulted fields (`Enabled bool`, `MaxAttempts int`, `RetryOn []string`, `InitialDelay`/`MaxDelay time.Duration`). The output of `resolveRetryPolicy`; keeps config's nil-means-unset representation out of the domain layer. | Distinct from `config.RetryPolicyConfig` (raw, nilable-field config-package shape). |
+| `retryInFlight` | `atomic.Bool` field on `Instance`, analogous to `driverRunning`. **CAS is owned exclusively by `restartForRetry` itself** (architecture-review.md Blocker 2 correction) — no other function CASes it directly, so every restart path (automated tick-check, restart-grace, manual `RetryNow()`) is guarded by construction, not by each caller remembering to. | Closes the double-restart / lost-update races in `research/pitfalls.md` §2. |
+| `restartForRetry` | The single choke point for every restart: `if !inst.retryInFlight.CompareAndSwap(false, true) { return ErrRetryInFlight }`, `defer inst.retryInFlight.Store(false)`, then the extracted `inst.Restart()`/`inst.Start()` sequence (from today's `handleDriverFailure` restart block, lines ~534-552). Called by the automated backoff-expiry path, the restart-grace branch, and manual `RetryNow()` — none of them CAS `retryInFlight` themselves. | |
+| `RetryNow` | `func (i *Instance) RetryNow() error` — resets `RetryState`, transitions `Status` out of `PermanentlyFailed` (or bypasses `NextRetryAt`), calls `restartForRetry` (which does the CAS). Backs the manual "Retry now" UI action and `RetrySession` RPC. | |
 | `RetrySession` | New ConnectRPC method (`proto/session/v1/session.proto`), cloned from `RestartSession`'s shape, calling `inst.RetryNow()` instead of `inst.Restart()`. | |
 | `markSessionPermanentlyFailed` | Replaces the give-up branch of today's `markSessionNeedsAttention` call inside `handleDriverFailure`: transitions `Status → PermanentlyFailed`, still adds a `ReviewQueue` entry (unchanged `ReasonStale`, per ADR-001), and fires `inst.notifier.Notify(...)` exactly once (edge-triggered). | |
 | `Notifier` | Existing interface (`session/backlog_lifecycle.go:28`) + `EventBusNotifier` adapter (`server/services/backlog_notifier.go`). Newly wired onto `Instance` (mirrors `SetReviewQueue`/`GetReviewQueue`) so `markSessionPermanentlyFailed` can push a proactive notification, not just a passive queue entry. | |
@@ -105,21 +106,25 @@ every other `*Config` addition (`SessionRetention`, `TmuxExecGate`, `Hibernation
 
 ## Unresolved Questions
 
-- [ ] Should `backlog:work`-tagged sessions get a distinct (lower) `max_attempts` cap, or be fully
-  excluded from the new multi-attempt policy, given `BacklogLifecycleListener`'s independent
-  remediation gate (`session/backlog_lifecycle.go`) can also act on the same session
-  (`research/features.md` "Unstated needs" #1)? — blocks Epic 2.1's gating logic if answered
-  "exclude." **Recommended default, not blocking implementation**: apply `RetryPolicyConfig`
-  uniformly (no new carve-out beyond the existing `isOneShot()` tags) since the shipped default
-  `MaxAttempts:1` reproduces today's exact behavior for every session type including
-  `backlog:work` (AC7); the double-remediation risk only newly appears once someone raises the
-  global `MaxAttempts` above 1, which is a config change, not a code change — revisit before
-  recommending `MaxAttempts > 1` as a new global default. Owner: Tyler.
+- [x] **Resolved in response to adversarial-review.md Blocker 4** (was: should `backlog:work`
+  sessions get a distinct cap or be excluded, given `BacklogLifecycleListener`'s independent
+  remediation gate can act on the same session — `research/features.md` "Unstated needs" #1).
+  Decision: extend `isOneShot()` (`session_driver.go:643-645`) to also exclude `backlog:work`-tagged
+  sessions from driver-level auto-retry, mirroring its existing `backlog:triage`/`backlog:review`
+  carve-out — those sessions defer entirely to `backlog_lifecycle.go`'s remediation gate, which
+  already owns retry/remediation decisions for that session type. This closes the double-remediation
+  risk at the code level instead of leaving it latent behind a "don't raise `MaxAttempts` above 1"
+  operational note, which the plan's own premise (raising it above 1 is the point of this feature)
+  made unenforceable. See new Task 2.1.1d below.
 - [ ] `MaxDelaySeconds` default (300s/5min, `research/architecture.md`'s placeholder) and jitter
   fraction — neither is specified in `requirements.md`'s functional requirements. Recommended:
   ship `MaxDelaySeconds: 300`, jitter `±10%` (`jitterFraction: 0.1`), both easily changed via
   config later without a proto/schema change. Owner: Tyler — blocks Task 1.2.2b only if a
-  different value is wanted before merge.
+  different value is wanted before merge. **Wiring the nonzero default into the real call site is
+  now an explicit task (2.3.1c below)** — adversarial-review.md's Concerns section flagged that a
+  spec limited to the pure `backoffDelay` function's tests could ship with the production call site
+  still passing `jitterFraction: 0`, silently dropping the retry-storm mitigation this value exists
+  for.
 - [ ] A live "retrying in Ns" countdown badge (`research/features.md`/`research/ux.md` both flag
   as a plausible addition, not one of `requirements.md`'s 9 functional requirements). Out of
   scope for this plan — the static "Attempt N/max" badge (AC4) satisfies the literal requirement.
@@ -273,8 +278,22 @@ silently preserves today's behavior.
 ##### Task 1.2.1b: Add `EnabledOrDefault()`, `MaxAttemptsOrDefault()`, `RetryOnOrDefault()` methods (~5 min)
 - `EnabledOrDefault()` defaults `true` when nil (mirrors `SessionRetentionConfig.EnabledOrDefault`, `config/types.go:48-51`).
 - `MaxAttemptsOrDefault()` defaults `1` when `MaxAttempts <= 0`.
-- `RetryOnOrDefault()` defaults `["crashed","stalled","tmux_exited"]` when `RetryOn` is empty.
+- `RetryOnOrDefault()` defaults `["crashed","stalled","tmux_exited"]` when `RetryOn` is empty, and
+  **(added in response to architecture-review.md Concerns)** drops (with a logged warning, not a
+  hard error) any entry that isn't one of the three known reasons — a config typo like `"crashd"`
+  otherwise silently produces a policy that never matches, with no error/warning/UI signal
+  anywhere that the entry is being ignored.
 - Files: `config/types.go`
+
+##### Task 1.2.1c: Validate `Backoff` at config-load time (~3 min)
+- **Added in response to architecture-review.md Concerns.** `Backoff string` currently has no
+  behavior behind it — `backoffDelay` always computes exponential regardless of its value, so
+  `"exponential"` and a typo produce byte-identical behavior (an illegal state made
+  representable for no reason). Add a load-time check: if `Backoff` is set and isn't
+  `"exponential"`, log a warning and fall back to the default rather than silently ignoring it —
+  consistent with the plan's own "no new strategies" YAGNI framing (not worth a typed enum for a
+  single valid value, but worth not pretending the field does something it doesn't).
+- Files: `config/config.go` (`LoadConfigFromPath` region)
 
 #### Story 1.2.2: Wire `RetryPolicy` into `Config` + defaults function
 
@@ -332,8 +351,29 @@ goroutine restart and can express more than one bit of state.
 - Files: `session/session_driver.go` (lines 110, 125, 509 regions)
 
 ##### Task 2.1.1b: Update the 3 call sites referencing `retried.Load()`/`CompareAndSwap` (~5 min)
-- Lines ~203, ~216 (`retried.Load()`) → read `inst.RetryState.RetryAttempt >= inst.RetryState.RetryMaxAttempts` under `inst.mu.RLock()`.
+- Lines ~203, ~216 (`retried.Load()`) → call the new `inst.retryExhausted()` accessor (Task
+  2.1.1b-1) instead of inlining `inst.mu.RLock()` at the call site.
+- **Revised in response to architecture-review.md Blocker 3**: the original wording ("read
+  `inst.RetryState.RetryAttempt >= inst.RetryState.RetryMaxAttempts` under `inst.mu.RLock()`")
+  invites `inst.mu.RLock(); defer inst.mu.RUnlock()` written directly at the call site — but the
+  very next statement in both branches calls `handleDriverFailure`, which takes `inst.mu.Lock()`
+  internally (Task 2.3.2a/2.5.2a). A `defer`'d `RUnlock()` doesn't release until the *enclosing*
+  function returns, i.e. after `handleDriverFailure` already tried to acquire the write lock on
+  the same goroutine — `sync.RWMutex` isn't reentrant, so this self-deadlocks on the very first
+  exhausted-retry path exercised.
 - Files: `session/session_driver.go`
+
+##### Task 2.1.1b-1: Add `func (i *Instance) retryExhausted() bool` accessor (~3 min)
+- **Added in response to architecture-review.md Blocker 3.** Internally does
+  `i.mu.RLock(); defer i.mu.RUnlock(); return i.RetryState.RetryAttempt >= i.RetryState.RetryMaxAttempts`
+  and returns *before* the caller reaches `handleDriverFailure` — matching the existing
+  `Snapshot()`-style read pattern elsewhere in `instance.go`. The RLock is fully released on
+  return from this function, not deferred past it.
+- Test: a `-race`-run test exercising the exhausted path end-to-end (call the accessor, then
+  `handleDriverFailure`, on the same goroutine) — a self-deadlock won't show under `-race` alone
+  but will hang the test, so give it an explicit timeout so CI surfaces a failure instead of
+  hanging silently.
+- Files: `session/instance.go`, `session/instance_test.go`
 
 ##### Task 2.1.1c: `StartSessionDriver` resolves the effective policy once (~5 min)
 - Compute `effectivePolicy := resolveRetryPolicy(globalCfg.RetryPolicy, inst.RetryPolicyOverride)` and pass down.
@@ -353,8 +393,58 @@ goroutine restart and can express more than one bit of state.
 - Mirrors `ReworkCapOverride *int` (`session/repository.go:374-379`).
 - Files: `session/instance.go`
 
-##### Task 2.1.2b: Write `resolveRetryPolicy(global config.RetryPolicyConfig, override *config.RetryPolicyConfig) config.RetryPolicyConfig` (~4 min)
+##### Task 2.1.2b: Write `resolveRetryPolicy(global config.RetryPolicyConfig, override *config.RetryPolicyConfig) session.RetryPolicy` (~6 min)
+- **Revised in response to architecture-review.md Concerns** (layering + merge-semantics, two
+  separate findings addressed together since they're the same function):
+  - **Layering**: return a new `session.RetryPolicy` (plain, already-defaulted fields — no
+    pointers) instead of re-returning `config.RetryPolicyConfig`. `resolveRetryPolicy` is the one
+    conversion point from config's nil-means-unset representation to the domain layer's
+    fully-resolved value; `evaluateSessionRetry` (Task 2.3.1a) then depends only on
+    `session.RetryPolicy`, not on `config`'s struct shape or its `...OrDefault()` methods.
+  - **Merge semantics (explicit, field-by-field, not whole-struct)**: for each field, if the
+    override struct is non-nil and that *specific field* is set (non-zero-value / non-nil
+    sub-pointer), it wins; otherwise inherit the *global policy's already-resolved* value (i.e.
+    post-`...OrDefault()`), not that field's own bare zero-value default. Concretely: a global
+    `RetryOn: ["crashed"]` plus a per-session override that only sets `MaxAttempts` must resolve
+    `RetryOn` to `["crashed"]` (inherited from the resolved global), never silently widen to the
+    all-three fallback that `RetryOnOrDefault()` would produce from an empty override field taken
+    in isolation.
 - Files: `session/retry_state.go`
+
+##### Task 2.1.2c: Table-driven test for `resolveRetryPolicy`'s field-by-field merge semantics (~5 min)
+- **Added in response to cross-artifact-consistency Blocker 4 and architecture-review.md
+  Concerns** — every other pure function in this plan (Stories 1.1.3, 1.2.3, 2.1.3, 2.4.2, 4.1.3,
+  4.2.2) has a dedicated test task; this one didn't despite Story 2.1.2's AC explicitly claiming
+  "override wins" behavior. Required cases: override present (all fields) → override wins;
+  override nil → falls back to resolved global; override sets only `MaxAttempts` against a
+  **non-default global** (`RetryOn: ["crashed"]`) → resolved `RetryOn` stays `["crashed"]`, not
+  the all-three fallback (this is the specific silent-widening bug architecture-review.md flagged
+  — the test must use a narrowed global, not the default, or it can't catch this).
+- Files: `session/retry_state_test.go`
+
+##### Task 2.1.1d: `backlog:work`-tagged sessions get coordinated retry, not blanket exclusion (~8 min)
+- **Revised in response to pre-mortem.md Failure #2** (originally: "extend `isOneShot()` to
+  exclude `backlog:work`"). Reading `backlog_remediation.go`/`backlog_lifecycle.go` shows
+  `BacklogLifecycleListener`'s remediation (`evaluateRemediation`, `OpenStuckStateData`) keys off
+  backlog-item-level stuck states (push failed, orphaned triage) — it has no evidence of covering
+  "the underlying tmux/agent process for a `backlog:work` session crashed." Blanket-excluding
+  `backlog:work` via `isOneShot()` (the round-1 fix) would silently remove `backlog:work`'s
+  *existing* single-retry coverage (`session_driver_test.go:274` confirms it gets today's retry)
+  without a verified replacement — a regression against AC7/AC8 for the app's primary automation
+  mode (5-10 parallel `backlog:work` sessions).
+  **Corrected approach**: do NOT add `backlog:work` to `isOneShot()`. Instead, `backlog:work`
+  sessions use the standard `RetryState`/`RetryPolicyConfig` machinery like any other session
+  (preserving process-crash recovery), and the double-remediation risk from round-1 Blocker 4 is
+  closed by having `restartForRetry` (Epic 2.3.4) claim the same `retryInFlight` CAS guard that
+  gates the manual/automated retry paths against each other — `BacklogLifecycleListener`'s
+  remediation gate must check `inst.retryInFlight`/`RetryState.NextRetryAt` before acting on a
+  `backlog:work` session's process-level state, so the two mechanisms serialize instead of racing.
+- Files: `session/session_driver.go`, `session/backlog_lifecycle.go`, `session/backlog_remediation.go`
+- Test: (a) a `backlog:work`-tagged session with a crashed process still gets retried via
+  `evaluateSessionRetry` (regression guard for AC7/AC8, replaces the old "never eligible" test);
+  (b) `BacklogLifecycleListener`'s remediation gate observes `retryInFlight == true` for a
+  `backlog:work` session and defers rather than acting concurrently.
+  Files: `session/session_driver_test.go`, `session/backlog_lifecycle_test.go`
 
 #### Story 2.1.3: Migrate existing tests off `atomic.Bool`
 
@@ -418,6 +508,41 @@ regress into a thundering herd).
 - In `evaluateSessionRetry` (Epic 2.3), branch: `reason == "tmux_exited" && failureTime.Sub(serverStartTime) < gracePeriod` → `restartGrace`.
 - Files: `session/retry_state.go`
 
+##### Task 2.2.2c: Minimum jitter floor at `attempt 0` to prevent synchronous restart storms (~5 min)
+- **Added in response to pre-mortem.md Failure #1.** The default policy's `InitialDelaySeconds:
+  0` (kept for AC7 backward-compat) makes `backoffDelay(0, 0, max, jitterFraction)` return exactly
+  `0` — `0 * (1±jitterFraction)` is still `0` — so a shared-cause failure (network blip, expired
+  credential, tmux server OOM-killed outside the `serverStartTime` grace window) hitting several
+  sessions at once produces a synchronous, un-staggered mass-restart at `attempt 0`. This repo has
+  had two real OOM incidents traced to exactly this load pattern (session/worktree churn — see
+  `MEMORY` `project_2026_07_29_oom_session_leak_fix.md`). Fix: apply a small fixed floor +
+  jitter-only delay even at `attempt 0` when `InitialDelaySeconds == 0` (e.g. `defaultJitterFraction`
+  of a fixed 2s floor, not the multiplicative `initial*2^0`), so simultaneous same-tick failures
+  are staggered by a few hundred ms–2s instead of firing in the same scheduler tick.
+- Files: `session/retry_state.go` (`backoffDelay`'s caller in `evaluateSessionRetry`)
+
+##### Task 2.2.2d: Load test — 5+ sessions failing simultaneously restart staggered, not synchronously (~6 min)
+- **Added in response to pre-mortem.md Failure #1.** Simulate 5+ `Instance`s hitting
+  `handleDriverFailure` with the same failure reason at the same `time.Now()`; assert the
+  resulting `NextRetryAt` values are NOT identical (jitter/floor from Task 2.2.2c actually spreads
+  them) and that a mock `restartForRetry` is never invoked for more than 1-2 sessions within the
+  same poll-tick window.
+- Files: `session/session_driver_test.go`
+
+##### Task 2.2.2e: Grace for pending retries observed after a wall-clock discontinuity (laptop sleep) (~6 min)
+- **Added in response to pre-mortem.md Failure #4.** `serverStartTime`-anchored grace (Task
+  2.2.2a/b) only covers a process restart, not a laptop sleeping for hours with sessions mid-backoff
+  — on wake, every pending `NextRetryAt` is already in the past and the poll loop's tick-check
+  (Task 2.3.3a) fires all of them as genuine failures, burning down `MaxAttempts` for sessions that
+  were healthy pre-sleep. Detect a wall-clock jump (compare the poll ticker's expected ~2s interval
+  against the actual elapsed wall-clock time since the last tick; a gap far exceeding the ticker
+  period indicates sleep/suspend, not N consecutive missed ticks) and treat any pending
+  backoff-expiry observed within a short window of a detected jump as `restartGrace` (don't
+  increment `RetryAttempt`), same treatment as the `tmux_exited`/`serverStartTime` case.
+- Files: `session/session_driver.go`
+- Test: simulate a large `time.Now()` jump between two poll ticks; assert pending retries are
+  granted grace, not consumed as real failures. Files: `session/session_driver_test.go`
+
 ---
 
 ### Epic 2.3: `evaluateSessionRetry` decision function + poll-loop backoff wiring
@@ -451,22 +576,108 @@ tmux session.
 ##### Task 2.3.1b: Table-driven tests for `evaluateSessionRetry` covering AC1/AC2/AC7 (~5 min)
 - Files: `session/retry_state_test.go`
 
-#### Story 2.3.2: Wire the decision into `handleDriverFailure`
+##### Task 2.3.1c: Wire `defaultJitterFraction = 0.1` into the production `backoffDelay` call site (~3 min)
+- **Added in response to adversarial-review.md Concerns.** `backoffDelay`'s `jitterFraction` param
+  is tested with real values but every existing call-site task (`handleDriverFailure` /
+  `evaluateSessionRetry`) left it implicitly `0`. Add a named constant
+  `const defaultJitterFraction = 0.1` and pass it at the real call site — jitter's entire purpose
+  (`research/pitfalls.md` §3: preventing a synchronized retry storm after a shared-cause failure)
+  is defeated if the production path never uses a nonzero value even though the pure function
+  supports one.
+- Test: assert the computed delay varies run-to-run at the call site (not just that
+  `backoffDelay`'s bounds are correct in isolation, which Task 1.1.3a already covers).
+- Files: `session/retry_state.go`, `session/session_driver.go`
+
+#### Story 2.3.2: Wire the decision into `handleDriverFailure` — without killing the driver goroutine
 
 **Acceptance Criteria**:
 - *Given* a `scheduled` decision with `attempt=1, initial=10s`, *When* `handleDriverFailure`
   processes it, *Then* `inst.RetryState.NextRetryAt` is set to `~now+10s`, a new
   `RetryAttemptRecord{Attempt:1, Reason:"crashed", Timestamp:now}` is appended to
-  `RetryHistory`, and no restart happens on this call — AC3's "reuse worktree" restart is
-  deferred to the tick-check.
+  `RetryHistory`, **the calling goroutine's ticker loop keeps running** (does not `return`), and
+  no restart happens on this call — AC3's "reuse worktree" restart is deferred to the tick-check.
 
 **Files**: `session/session_driver.go`
 
 ##### Task 2.3.2a: Branch `handleDriverFailure` on `evaluateSessionRetry`'s result (~5 min)
-- `scheduled` → set `NextRetryAt` + append history under `inst.mu`, return (no immediate restart).
-- `notEligible`/`exhausted` → call `markSessionPermanentlyFailed` (Epic 2.5).
-- `restartGrace` → call `restartForRetry` immediately without incrementing `RetryAttempt`.
+- `scheduled` → set `NextRetryAt` + append history under `inst.mu`; signal "keep ticking" to the
+  caller (Task 2.3.2b) — **not** a `return`, this is the structural fix for
+  architecture-review.md Blocker 1.
+- `notEligible`/`exhausted` → call `markSessionPermanentlyFailed` (Epic 2.5); signal "driver
+  goroutine ends" to the caller.
+- `restartGrace` → call `restartForRetry` immediately without incrementing `RetryAttempt`; signal
+  "driver goroutine ends" (a real restart already happened via `restartForRetry`, which starts its
+  own fresh driver goroutine — see Task 2.3.4a).
 - Files: `session/session_driver.go`
+
+##### Task 2.3.2b: Convert `handleStoppedStatus` to the `(shouldContinue, shouldReturn bool)` signal pattern already used by `handleInactivityTick` (~8 min)
+- **Corrected in response to a real gap the Product Triad Review's Engineering lens found by
+  reading the live file (2026-08-29)**: the original round-2 fix for architecture-review.md
+  Blocker 1 patched only the `handleDriverFailure` call sites *inside* `handleStoppedStatus`
+  (`session/session_driver.go:439` and `:477`) — but `handleStoppedStatus` itself is `func
+  handleStoppedStatus(...)` with **no return value**, and its doc comment states outright "The
+  caller always returns from the driver loop immediately after calling this — every path here is
+  terminal." Its caller, `runSessionDriverWithPrompt`'s `st == Stopped` branch
+  (`session_driver.go:373-376`), is:
+  ```go
+  if st == Stopped {
+      handleStoppedStatus(inst, allowedPath, initialPrompt, retried, stop, sentInitial, initialPromptSentAt)
+      return
+  }
+  ```
+  — an unconditional `return` regardless of what `evaluateSessionRetry` decided inside. Patching
+  only the inner function's internal returns left this outer `return` in place, so the backoff
+  mechanism still could not fire for the `scheduled` case reached via the Stopped branch — the
+  identical failure Blocker 1 described, one call layer further out than the first patch accounted
+  for.
+  **Fix, mirroring the pattern `handleInactivityTick` (`session_driver.go:643`) already uses**:
+  change `handleStoppedStatus`'s signature to
+  `func handleStoppedStatus(...) (shouldContinue, shouldReturn bool)`. Every existing terminal
+  branch (the `isOneShot(inst) || retried.Load()` early-outs at lines ~433/~446, the
+  no-initial-prompt case at ~459, the completed-normally case at ~472) returns `(false, true)`.
+  The `evaluateSessionRetry`/`handleDriverFailure`-reached branches (the two call sites at ~439
+  and ~477) return `(true, false)` for `scheduled` and `(false, true)` for
+  `notEligible`/`exhausted`/`restartGrace`, per Task 2.3.2a.
+  Then update the caller (`session_driver.go:373-376`) to match `handleInactivityTick`'s existing
+  call-site shape exactly:
+  ```go
+  if st == Stopped {
+      cont, ret := handleStoppedStatus(inst, allowedPath, initialPrompt, retried, stop, sentInitial, initialPromptSentAt)
+      if ret {
+          return
+      }
+      if cont {
+          continue
+      }
+  }
+  ```
+- Files: `session/session_driver.go` (function signature + all internal return points at ~429-478, call site at ~373-376)
+
+##### Task 2.3.2c: Reorder the `st == Stopped` branch so `NextRetryAt` is checked before any re-evaluation (~6 min)
+- **Added in response to architecture-review.md Blocker 1's "compounding bug" note.** With Task
+  2.3.2b's fix alone, `st == Stopped` stays true on every subsequent tick once a retry is
+  scheduled (no new status marks "retry pending" — see Domain Glossary). If `handleStoppedStatus`
+  is left re-entering its full body on every tick, it unconditionally re-evaluates on *every* 2s
+  tick during the backoff wait — re-appending `RetryAttemptRecord`s and re-incrementing
+  `RetryAttempt` every tick, exhausting `MaxAttempts` within seconds instead of after the intended
+  delay.
+  Required order, checked *first* — at the very top of `runSessionDriverWithPrompt`'s loop body,
+  *before* the `st == Stopped` check reaches `handleStoppedStatus` at all (not inside
+  `handleStoppedStatus`, since a pending `NextRetryAt` means the tmux session may already be back
+  in a non-`Stopped` state after `restartForRetry`, or may still read `Stopped` — the gate must
+  not depend on which):
+  1. `NextRetryAt` non-zero and not yet elapsed → `continue` (no re-evaluation, no re-append —
+     this is Task 2.3.3a's gate).
+  2. `NextRetryAt` non-zero and elapsed → hand off to `restartForRetry` via the choke point (Task
+     2.3.4a), clear `NextRetryAt` (Task 2.3.3b), then `return` (a fresh driver goroutine now owns
+     this instance).
+  3. `NextRetryAt` zero (no retry pending — either never scheduled, or already resolved) → fall
+     through to the existing `st == Stopped`/`handleStoppedStatus` path unchanged; this is a
+     genuinely new failure episode.
+- Test: table-driven test asserting `RetryAttempt`/`len(RetryHistory)` stay constant across N
+  ticks (e.g. 5 ticks of the 2s ticker) while `NextRetryAt` is still in the future — this is the
+  regression guard for the exact bug architecture-review.md flagged, and is cheap to write.
+- Files: `session/session_driver.go`, `session/session_driver_test.go`
 
 #### Story 2.3.3: Poll-loop tick-check for pending backoff
 
@@ -479,32 +690,76 @@ tmux session.
   earlier in the loop still run every tick, so a manual stop during the wait works exactly as it
   does today via the loop's existing `st == Paused`/`st == Stopped` branches.
 - *Given* `NextRetryAt` has just elapsed, *When* the next tick fires, *Then* `restartForRetry` is
-  invoked and `NextRetryAt` is cleared.
+  invoked (via the single CAS choke point, Task 2.3.4a) and `NextRetryAt` is cleared.
 
 **Files**: `session/session_driver.go`
 
-##### Task 2.3.3a: Add the `NextRetryAt` gate near the top of the ticker loop (~4 min)
-- After the existing `Paused`/`Stopped` checks (`session_driver.go:194-238` region), add:
-  `if !inst.RetryState.NextRetryAt.IsZero() && time.Now().Before(inst.RetryState.NextRetryAt) { continue }`.
+##### Task 2.3.3a: Add the `NextRetryAt` gate at the top of `runSessionDriverWithPrompt`'s loop body, before the `st == Stopped` check (~4 min)
+- Per Task 2.3.2c's required ordering: place immediately after the existing `st == Paused` early
+  return (`session_driver.go:368-370`) and *before* `if st == Stopped { ... }`
+  (`session_driver.go:373`) — not inside `handleStoppedStatus`, since the whole point is to skip
+  re-entering that function's re-evaluation path while a retry is pending, regardless of what
+  `GetEffectiveStatus()` currently reports.
+  `if !inst.RetryState.NextRetryAt.IsZero() && time.Now().Before(inst.RetryState.NextRetryAt) { continue }`
 - Files: `session/session_driver.go`
 
-##### Task 2.3.3b: On elapsed `NextRetryAt`, invoke `restartForRetry` and clear the timestamp (~5 min)
+##### Task 2.3.3b: On elapsed `NextRetryAt`, call `restartForRetry` and clear the timestamp (~4 min)
+- Calls the single-choke-point `restartForRetry` (Task 2.3.4a) — **does not CAS `retryInFlight`
+  itself**; the guard now lives inside `restartForRetry` per architecture-review.md Blocker 2 (see
+  Task 2.3.4a). This task is now a thin caller: elapsed → call `restartForRetry`, clear
+  `NextRetryAt` only if it returned success (a CAS-rejected call leaves `NextRetryAt` untouched,
+  retried on the next tick).
 - Files: `session/session_driver.go`
+- Test: assert `NextRetryAt` clears after a successful automated restart. Files: `session/session_driver_test.go`
 
-#### Story 2.3.4: Extract shared `restartForRetry` helper
+##### Task 2.3.3c: Test the automated tick-check racing a concurrent `RetryNow()` call (~5 min)
+- Distinct from Task 2.4.2a (which only races `RetryNow()` against itself): assert that when both
+  the poll-loop's elapsed-`NextRetryAt` branch and a manual `RetryNow()` call race for the same
+  `restartForRetry` choke point at the same instant, exactly one proceeds and the other is a
+  no-op/returns `ErrRetryInFlight` — never both restarting concurrently. Because the guard now
+  lives inside `restartForRetry` itself (Task 2.3.4a), this test exercises the shared function
+  from two goroutines rather than needing each call site to remember its own CAS.
+- Files: `session/session_driver_test.go`
+
+#### Story 2.3.4: Extract shared `restartForRetry` helper — the single CAS choke point
 
 **Acceptance Criteria**:
 - *Given* both the poll-loop's backoff-elapsed path and (Epic 2.4's) `RetryNow()`, *When* either
   calls `restartForRetry(inst, allowedPath, reason)`, *Then* both execute the identical
   `inst.RecoverFromStopped()`/`inst.StopController()`/`inst.Start(false)`/`inst.StartController()`
   (or `inst.Restart(false)`) sequence — no duplicated restart logic between the two entry points.
+- *Given* two callers invoke `restartForRetry` concurrently for the same `Instance` (one from the
+  automated tick-check, one from `RetryNow()`), *When* both race, *Then* exactly one proceeds
+  (claims `retryInFlight` via CAS, runs the restart sequence, releases the guard via `defer`) and
+  the other returns `ErrRetryInFlight` immediately without touching `RetryState` or attempting any
+  restart call — this is the whole guarantee `retryInFlight` exists for.
 
 **Files**: `session/session_driver.go`
 
-##### Task 2.3.4a: Extract `restartForRetry` from `handleDriverFailure`'s restart block (~5 min)
-- Move lines ~534-552's restart logic into a standalone function; `handleDriverFailure` and
-  `RetryNow()` (Epic 2.4) both call it.
+##### Task 2.3.4a: Extract `restartForRetry` as the single `retryInFlight`-guarded choke point (~8 min)
+- **Revised in response to architecture-review.md Blocker 2** (originally: extract the restart
+  logic only, with each of the 3 call sites — tick-check, `restartGrace` branch, `RetryNow()` —
+  individually responsible for CAS-ing `retryInFlight` first). The original per-call-site design
+  meant a caller who forgot to CAS (confirmed: the `restartGrace` branch in Task 2.3.2a and the
+  original Task 2.3.3b draft both never mentioned it) would call the real restart sequence
+  unguarded — reproducing the exact double-restart race this field exists to close.
+  **Corrected shape**: `restartForRetry` itself does the CAS —
+  `if !inst.retryInFlight.CompareAndSwap(false, true) { return ErrRetryInFlight }`, `defer
+  inst.retryInFlight.Store(false)`, then runs the extracted restart sequence (moved from
+  `handleDriverFailure`'s old restart block, lines ~534-552). Every caller (tick-check's elapsed
+  branch, the `restartGrace` branch, `RetryNow()`) goes through this one function and gets the
+  guard automatically — structurally impossible to bypass, not three call sites each independently
+  responsible for remembering it.
 - Files: `session/session_driver.go`
+
+##### Task 2.3.4b: Feed a `restartForRetry` failure back into `evaluateSessionRetry` as a failure occurrence (~5 min)
+- Today's code (`session_driver.go:531-556`) falls back to `markSessionNeedsAttention` when
+  `inst.Restart()`/`inst.Start()` itself errors; `restartForRetry` must preserve that — a failed
+  restart call (distinct from the CAS-guard rejection) consumes a retry attempt like any other
+  failure reason for every entry point, rather than leaving the session silently stuck or
+  double-consuming budget. Specify `RetrySession`'s RPC error mapping (Task 3.2.2c) for this case
+  too, not just `ErrRetryInFlight`.
+- Files: `session/session_driver.go`, `server/services/session_service.go`
 
 ---
 
@@ -524,18 +779,26 @@ terminal give-up.
   *When* `inst.RetryNow()` is called, *Then* `RetryState` resets to `{RetryAttempt:0,
   NextRetryAt: zero}`, `Status` transitions to `Active`, and `restartForRetry` runs — AC6.
 - *Given* a `RetryNow()` call racing an automated backoff-expiry restart already in flight
-  (`retryInFlight` already `true`), *When* the second caller's CAS fails, *Then* `RetryNow()`
-  returns `ErrRetryInFlight` without touching `RetryState` or calling `inst.Restart()` twice.
+  (`retryInFlight` already `true` inside `restartForRetry`), *When* the second caller's CAS fails,
+  *Then* `RetryNow()` returns `ErrRetryInFlight` without touching `RetryState` or calling
+  `inst.Restart()` twice.
 
 **Files**: `session/retry_state.go`
 
 ##### Task 2.4.1a: Implement `RetryNow()` (~5 min)
-- CAS `retryInFlight` (false→true), reset `RetryState` under `inst.mu`, transition `Status`
-  `PermanentlyFailed`/`Stopped` → `Active`, call `restartForRetry`, `defer` release `retryInFlight`.
+- **Revised in response to architecture-review.md Blocker 2**: `RetryNow()` no longer CASes
+  `retryInFlight` itself — that guard now lives inside `restartForRetry` (Task 2.3.4a), the single
+  choke point every restart path goes through. `RetryNow()`'s job: reset `RetryState` under
+  `inst.mu`, transition `Status` `PermanentlyFailed`/`Stopped` → `Active`, then call
+  `restartForRetry`, and propagate `ErrRetryInFlight` if `restartForRetry` returns it (rather than
+  CAS-ing separately and having two independent guards that could disagree).
 - Files: `session/retry_state.go`
 
-##### Task 2.4.1b: Define and return `ErrRetryInFlight` on CAS failure (~3 min)
-- Files: `session/retry_state.go`
+##### Task 2.4.1b: `ErrRetryInFlight` is defined and returned by `restartForRetry` (~3 min)
+- **Revised**: the error is now defined and returned from the single choke point (Task 2.3.4a),
+  not independently by `RetryNow()`. This task is just the sentinel error definition plus
+  `RetryNow()` propagating it unchanged.
+- Files: `session/session_driver.go` (or `session/retry_state.go` — colocate with `restartForRetry`)
 
 #### Story 2.4.2: Concurrency test
 
@@ -576,6 +839,22 @@ terminal give-up.
 - With a "terminal state" doc comment matching `SESSION_STATUS_STOPPED`'s style.
 - Files: `proto/session/v1/types.proto` (line 350 region, after `SESSION_STATUS_RESTORING = 9`)
 
+##### Task 2.5.1f: Add `PermanentlyFailed` cases to the 3 wire-boundary switches in `server/adapters/instance_adapter.go` (~5 min)
+- **Added in response to adversarial-review.md Blocker 1**: `StatusToProto` (lines 293-310),
+  `ProtoToStatus` (lines 319-334), and `StatusStringToProto` (lines 353-377) each need a
+  `case session.PermanentlyFailed: return sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED`
+  (and the reverse / string-keyed equivalents). Without this, `StatusToProto`'s `default:` silently
+  renders `PermanentlyFailed` as `SESSION_STATUS_UNSPECIFIED` over the wire (including in
+  `RetrySession`'s own response), and `ProtoToStatus`'s `default:` returns `session.Creating`,
+  which would silently reopen a permanently-failed session as "Creating" on any round-trip.
+- Files: `server/adapters/instance_adapter.go`
+
+**ADR-001 correction**: its stated verification method (`grep -rn "case Stopped:" session/
+server/`) is a same-package-only match and produced a false negative for this file, where the
+qualified form `case session.Stopped:` is required. Re-verify exhaustiveness with
+`grep -rn 'case \(session\.\)\?Stopped\b\|case \(sessionv1\.SessionStatus_\)\?SESSION_STATUS_STOPPED\b' session/ server/`
+(or equivalent) before trusting an "N exhaustive switches" count for any future status value.
+
 #### Story 2.5.2: `markSessionPermanentlyFailed`
 
 **Acceptance Criteria**:
@@ -608,8 +887,42 @@ terminal give-up.
 
 ##### Task 2.5.3b: Verify `SessionActionsOverflow`'s `isStopped`/`isRunning` booleans handle `PermanentlyFailed` correctly (~5 min)
 - `PermanentlyFailed` should behave like `isStopped` for button-visibility purposes (no
-  double-showing both "Restart" and "Retry now"); confirm/adjust the boolean derivations.
+  double-showing both "Restart" and "Retry now"); confirm/adjust the boolean derivations, citing
+  the actual boolean-derivation line numbers in the resulting diff rather than a rubber-stamp
+  "looks fine."
 - Files: `web-app/src/components/sessions/SessionActionsOverflow.tsx`
+
+##### Task 2.5.3c: Add `PERMANENTLY_FAILED` to `getStatusDisplayName` (~4 min)
+- **Added in response to adversarial-review.md Blocker 2** (ADR-001 named this file's need but no
+  task existed). `strategies.ts:208-219`'s `getStatusDisplayName` currently falls through its
+  `default:` to `"Unknown"` for any unhandled status — add an explicit case so a
+  `PermanentlyFailed` session grouped by the "Status" strategy shows its real label, not
+  "Unknown".
+- Files: `web-app/src/lib/grouping/strategies.ts`
+
+##### Task 2.5.3d: Add `PERMANENTLY_FAILED` to `getStatusDotValue` (~4 min)
+- `SessionRow.tsx:71-90`'s `getStatusDotValue` defaults unhandled statuses to `"idle"` — a
+  permanently-failed session's status dot would otherwise render identically to a healthy idle
+  one. Map it to the same error/attention dot value `SessionCard.tsx` uses (Task 2.5.3a).
+- Files: `web-app/src/components/sessions/SessionRow.tsx`
+
+##### Task 2.5.3e: Treat `PERMANENTLY_FAILED` as terminal in `SessionDetailView.tsx` (~5 min)
+- `isSessionTerminal` (`:86-89`) checks only `=== STOPPED`, so the Summary tab (gated on this
+  helper) never unlocks for a permanently-failed session; `getStatusLabel` defaults unhandled
+  statuses to `"Unknown"`. Add `PermanentlyFailed` to both — terminal-like, same treatment
+  `STOPPED` gets.
+- Files: `web-app/src/components/sessions/SessionDetailView.tsx`
+
+##### Task 2.5.3f: Treat `PERMANENTLY_FAILED` as not-live in `HistoryEntryCard.tsx` (~3 min)
+- `hasLiveStatus` (`:19-38`) is `status !== SessionStatus.STOPPED`, so a permanently-failed
+  history entry currently reads as still "live". Extend the check to also exclude
+  `PERMANENTLY_FAILED`.
+- Files: `web-app/src/components/sessions/HistoryEntryCard.tsx`
+
+##### Task 2.5.3g: Treat `PERMANENTLY_FAILED` as "gone" in `WorkspacePeersPanel.tsx` (~3 min)
+- `:36`'s `peer.status === SessionStatus.STOPPED` check means a permanently-failed peer never
+  registers as `"gone"`. Extend to `STOPPED || PERMANENTLY_FAILED`.
+- Files: `web-app/src/components/sessions/WorkspacePeersPanel.tsx`
 
 ---
 
@@ -657,6 +970,15 @@ terminal give-up.
 
 ##### Task 2.7.1b: Test both the JSONL-derived and fallback-to-`InitialPrompt` paths get the prefix (~4 min)
 - Files: `session/session_driver_test.go`
+
+##### Task 2.7.1c: Add a one-line worktree-integrity hint to the continuation prompt (~2 min)
+- **Added in response to adversarial-review.md Concerns** (`research/pitfalls.md` §4, worktree
+  deletion/corruption between attempts, was dropped from the plan without even a documented
+  deferral). Low-cost mitigation from pitfalls.md: append "(this is retry attempt N; if this
+  failure looks identical to the last one, the worktree itself may be the problem)" to the
+  prefix built in Task 2.7.1a. Not a detection mechanism — just surfaces the possibility to
+  whoever reads the resumed session.
+- Files: `session/session_driver.go`
 
 ---
 
@@ -752,7 +1074,16 @@ terminal give-up.
 - `events.NewSessionUpdatedEvent(instance, []string{"status", "updated_at", "retry_attempt"})`, `s.storage.SaveInstances(...)`.
 - Files: `server/services/session_service.go`
 
-##### Task 3.2.2c: Map `ErrRetryInFlight` to `connect.CodeFailedPrecondition` (~3 min)
+##### Task 3.2.2c: Map `ErrRetryInFlight` and a `restartForRetry` restart failure to distinct connect error codes (~4 min)
+- `ErrRetryInFlight` → `connect.CodeFailedPrecondition` (concurrent retry already in progress).
+- A restart failure surfaced from `restartForRetry` (Task 2.3.4b) → `connect.CodeInternal` with the
+  underlying error message, so the frontend's Surface 4 error state (per `design/ux.md`) can
+  distinguish "already retrying" from "the restart itself failed."
+- **Extended in response to cross-artifact-consistency Nitpick** (ux.md Surface 4's "worktree
+  gone" error state, UX AC6 "no dead ends," self-flagged in ux.md's own Gaps #2): also detect a
+  missing/deleted worktree directory before attempting the restart and return a distinct
+  `connect.CodeNotFound`-mapped error (not a generic restart failure) so the frontend can render
+  the inline "Delete this session" affordance instead of a retry-doomed-to-fail loop.
 - Files: `server/services/session_service.go`
 
 #### Story 3.2.3: Handler test
@@ -855,7 +1186,15 @@ tell whether a session has been quietly crash-looping (AC5).
 - Clone `CheckpointList.tsx`'s shape verbatim (newest-first, `MAX_VISIBLE=10`, show-all toggle, `formatRelativeTime`, empty state, `aria-label` on `<ul>`).
 - Files: `web-app/src/components/sessions/RetryHistoryList.tsx`
 
-##### Task 4.2.1b: Add as a peer section near checkpoints in `SessionDetailView.tsx` (~5 min)
+##### Task 4.2.1b: Render within `SessionDetailView.tsx`'s Summary tab (~5 min)
+- **Corrected in response to Product Triad Review's UX lens** (2026-08-29): the original wording
+  ("peer section near checkpoints") assumed a rendered checkpoints section in this file to sit
+  next to — confirmed absent (`CheckpointList.tsx` is not imported by `SessionDetailView.tsx`, and
+  has no `<CheckpointList` render call anywhere in `web-app/src/`; it's currently unreferenced).
+  Task 4.2.1a's "clone `CheckpointList.tsx`'s shape" (styling/behavior pattern) still stands —
+  only the placement instruction was wrong. Place `RetryHistoryList` in the Summary tab gated by
+  `isSessionTerminal`-adjacent content (see Task 2.5.3e), near where retry-related state is
+  already surfaced.
 - Files: `web-app/src/components/sessions/SessionDetailView.tsx`
 
 #### Story 4.2.2: Tests
@@ -898,6 +1237,15 @@ action (AC6).
 - Clone `isRestartConfirmOpen`'s `useFocusTrap`/`dangerButton`/portal dialog shape (line 288-311 region); two copy variants per the acceptance criteria above.
 - Files: `web-app/src/components/sessions/SessionActionsOverflow.tsx`
 
+##### Task 4.3.1e: Inline "Delete this session" affordance for the worktree-gone error state (~5 min)
+- **Added in response to cross-artifact-consistency Nitpick** (ux.md Surface 4, "worktree gone"
+  state, UX AC6 "no dead ends," self-flagged in ux.md's own Gaps #2 — this sub-task didn't exist
+  under Story 4.3.1 despite ux.md already speccing the interaction). When `retrySession` fails
+  with the `CodeNotFound` worktree-missing mapping from Task 3.2.2c, render an inline "Delete this
+  session" link instead of a generic error toast, so a session whose worktree is gone has an exit
+  path instead of a dead-end retry loop.
+- Files: `web-app/src/components/sessions/SessionActionsOverflow.tsx`
+
 #### Story 4.3.2: RPC wiring
 
 ##### Task 4.3.2a: Add `retrySession` call to `useSessionService.ts` (~5 min)
@@ -929,6 +1277,36 @@ action (AC6).
 - Files: `docs/registry/features/frontend/retry-badge.json`, `docs/registry/features/frontend/retry-history.json`
 
 ##### Task 4.4.1c: `make registry-generate` and commit changed aggregate files (~2 min)
+
+---
+
+### Epic 4.5: Retry Policy settings form (`design/ux.md` Surface 6)
+
+**Goal**: Close the gap cross-artifact-consistency review flagged as Blocker 1 — FR1 requires a
+**configurable** global default retry policy, but until this epic, Epic 3.3 only builds the
+backend persistence path with no UI consumer, so FR1 was unsatisfiable end-to-end. `design/ux.md`
+already specs this surface (§"Surface 6 — Retry Policy settings (`GlobalDefaultsForm.tsx`)") in
+full; this epic is the missing implementation tasks for it.
+
+#### Story 4.5.1: `GlobalDefaultsForm.tsx`
+
+**Acceptance Criteria**:
+- *Given* the settings page, *When* a user changes `max_attempts`/`initial_delay_seconds`/
+  `max_delay_seconds`/`retry_on`/`enabled` and saves, *Then* the change persists via Epic 3.3's
+  `UpdateConfig` path and is reflected in the next session's resolved `RetryPolicyConfig` — per
+  `design/ux.md`'s own note, changed values apply to *newly started* retry episodes only, not
+  sessions already mid-backoff.
+
+**Files**: `web-app/src/components/settings/GlobalDefaultsForm.tsx` (new, or extends the existing settings form if one already covers global session defaults — check `web-app/src/components/settings/` before assuming a new file)
+
+##### Task 4.5.1a: Build the form fields per `design/ux.md` Surface 6's field list (~8 min)
+- Files: `web-app/src/components/settings/GlobalDefaultsForm.tsx`
+
+##### Task 4.5.1b: Wire to the `UpdateConfig`/settings-persist RPC from Epic 3.3 (~5 min)
+- Files: `web-app/src/lib/hooks/` (existing settings hook), `web-app/src/components/settings/GlobalDefaultsForm.tsx`
+
+##### Task 4.5.1c: RTL test for form validation (e.g. `max_delay_seconds >= initial_delay_seconds`) (~4 min)
+- Files: `web-app/src/components/settings/GlobalDefaultsForm.test.tsx`
 
 ---
 
@@ -969,6 +1347,12 @@ action (AC6).
 
 #### Story 6.1.2: Manual smoke test (per CLAUDE.md's manual/interactive testing section — never `make install-service` against the live instance)
 
-##### Task 6.1.2a: `PORT=8999 STAPLER_SQUAD_INSTANCE=claude-manual-test` — force 3 crashes with `max_attempts=3`, confirm `PermanentlyFailed` + one notification (AC1) (~5 min)
+##### Task 6.1.2a: `PORT=62871 STAPLER_SQUAD_INSTANCE=claude-manual-test ~/.stapler-squad/manual-builds/manual-1/stapler-squad --tmux-keep-server` — force 3 crashes with `max_attempts=3`, confirm `PermanentlyFailed` + one notification (AC1) (~5 min)
+- **Corrected in response to Product Triad Review's Engineering lens** (2026-08-29): the original
+  draft used an ad hoc `PORT=8999`, which collides with this repo's documented manual-dev port
+  reservations and skips the numbered `manual-builds/manual-<N>/` binary convention. Use the
+  reserved manual-instance-#1 port block (`62871`/`62872`) and build path per `CLAUDE.md`'s
+  "Manual/interactive testing without touching the live deployed instance" section — never a bare
+  ad hoc port or the live `./stapler-squad` binary path.
 
 ##### Task 6.1.2b: Confirm a `["crashed"]`-only policy does not retry a `tmux_exited` failure (AC2), and "Retry now" works from `PermanentlyFailed` (AC6) (~5 min)

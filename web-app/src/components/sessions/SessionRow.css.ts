@@ -78,6 +78,14 @@ export const statusDot = style({
     '&[data-status="crashed"]': {
       background: vars.color.error,
     },
+    // Distinct from "crashed" (vars.color.error) per plan.md's Pattern
+    // Decisions table -- a failed-before-running creation and a
+    // crashed-after-running session are different enough states to warrant
+    // different colors, matching SessionCard.tsx's statusCreationFailed
+    // token (also vars.color.warning-family, not the error palette).
+    '&[data-status="failed"]': {
+      background: vars.color.warning,
+    },
   },
   "@media": {
     "(prefers-reduced-motion: no-preference)": {
@@ -407,4 +415,21 @@ export const checkboxButton = style({
 /** Applied to the row when it is in the selected set — background tint distinct from active/paused accents. */
 export const rowSelected = style({
   background: "var(--session-selected-bg)",
+});
+
+/** Persistent Failed-state message — row-layout equivalent of SessionCard.tsx's
+ *  failure-message row (design/ux.md Surface 3: the toast in Epic 5.3 is
+ *  transient, this line is not). Third line in nameCell, only rendered when
+ *  session.status === FAILED. Text color mirrors SessionCard.tsx's message
+ *  wrapper (var(--text-secondary)); the icon itself uses SessionCard.css's
+ *  failureMessageIcon token (imported, not redefined) for the warning color. */
+export const failureMessageLine = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "4px",
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
 });

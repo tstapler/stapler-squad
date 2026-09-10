@@ -508,6 +508,55 @@ func TestInstance_GetHasCommitsAhead_should_ReturnFalse_When_NoWorktree(t *testi
 	}
 }
 
+// TestInstance_GetBaseCommitSHA_should_ReturnWorktreeBaseSHA_When_WorktreeModeSession
+// covers GetBaseCommitSHA's worktree-mode branch (session/instance_worktree.go):
+// with a worktree set via SetGitWorktree, it must delegate to
+// GitWorktreeManager.GetBaseCommitSHA() rather than the directory-mode
+// GetDirBaseSHA() fallback. Uses NewGitWorktreeFromStorage (plain struct
+// construction, no real git repo needed) since this only exercises the
+// delegation, not actual git plumbing.
+func TestInstance_GetBaseCommitSHA_should_ReturnWorktreeBaseSHA_When_WorktreeModeSession(t *testing.T) {
+	t.Parallel()
+	const wantSHA = "abc123worktreebase"
+	wt := git.NewGitWorktreeFromStorage("/fake/repo", "/fake/worktree", "worktree-base-sha-test", "feature-branch", wantSHA)
+
+	inst := &Instance{Title: "worktree-base-sha-test", UUID: "sess-worktree-base-sha"}
+	inst.SetGitWorktree(wt) // also sets started=true
+
+	if got := inst.GetBaseCommitSHA(); got != wantSHA {
+		t.Fatalf("GetBaseCommitSHA() = %q, want %q (worktree mode)", got, wantSHA)
+	}
+}
+
+// TestInstance_GetBaseCommitSHA_should_ReturnDirBaseSHA_When_DirectoryModeSession
+// covers the directory-mode fallback a prior review found untested: no worktree
+// set, only SetDirBaseSHA — GetBaseCommitSHA must fall through to
+// GitWorktreeManager.GetDirBaseSHA() rather than returning "" just because
+// HasWorktree() is false.
+func TestInstance_GetBaseCommitSHA_should_ReturnDirBaseSHA_When_DirectoryModeSession(t *testing.T) {
+	t.Parallel()
+	const wantSHA = "def456dirbase"
+	inst := &Instance{Title: "dir-base-sha-test", UUID: "sess-dir-base-sha", Path: t.TempDir()}
+	inst.SetDirBaseSHA(wantSHA)
+
+	if got := inst.GetBaseCommitSHA(); got != wantSHA {
+		t.Fatalf("GetBaseCommitSHA() = %q, want %q (directory mode)", got, wantSHA)
+	}
+}
+
+// TestInstance_GetBaseCommitSHA_should_ReturnEmptyString_When_NeitherWorktreeNorDirBaseSet
+// covers the "not yet resolved" case named in GetBaseCommitSHA's doc comment: no
+// worktree and no dir base SHA set at all, so both delegate paths' zero values
+// should surface as "", not a panic or a placeholder.
+func TestInstance_GetBaseCommitSHA_should_ReturnEmptyString_When_NeitherWorktreeNorDirBaseSet(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "no-base-sha-test", UUID: "sess-no-base-sha"}
+
+	if got := inst.GetBaseCommitSHA(); got != "" {
+		t.Fatalf("GetBaseCommitSHA() = %q, want empty string when neither worktree nor dir base SHA is set", got)
+	}
+}
+
 // Destroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted verifies
 // Task 1.1.1a's confirmed-correct-behavior note: Destroy() on an instance that never
 // reached a state where a worktree/diff would exist still fires EventStopped

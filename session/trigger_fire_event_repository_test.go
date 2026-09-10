@@ -211,6 +211,7 @@ func TestEntTriggerFireEventRepository_Create_should_AllowNilWorkflowID_When_Rej
 	// Not fetchable via ListByWorkflow (no workflow_id) — just confirm it inserted
 	// without error and without a WorkflowID.
 	client := storage.GetEntClient()
+	//nolint:entfullscan test assertion over a test-scoped in-memory DB; verifies exactly one row exists.
 	all, err := client.TriggerFireEvent.Query().All(t.Context())
 	require.NoError(t, err)
 	require.Len(t, all, 1)

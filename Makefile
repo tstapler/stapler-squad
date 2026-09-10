@@ -20,7 +20,27 @@ export CGO_ENABLED := 1
 # (e.g. `` ` `` or `$()`), and this value is later embedded in a
 # double-quoted shell argument, where those characters are NOT neutralized.
 VERSION := $(shell (git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev) | tr -cd 'A-Za-z0-9.+_-')
-LDFLAGS := -X main.version=$(VERSION)
+
+# Branch/commit/worktree provenance for a LOCAL build only — not set by
+# GoReleaser's release build (see pkg/buildinfo's doc comment for why
+# that's intentional). This exists so `make install-service` run from a
+# feature-branch worktree can be told apart from a `main` build before it
+# silently becomes someone's persistent service — see
+# scripts/install-service.sh's provenance banner and the web UI's version
+# display (server/server.go's /api/server-info), both of which read
+# pkg/buildinfo. Same charset-stripping as VERSION above: branch names are
+# as attacker/typo-controlled as tag names and land in the same
+# double-quoted shell argument downstream.
+GIT_BRANCH := $(shell (git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown) | tr -cd 'A-Za-z0-9.+_/-')
+GIT_COMMIT := $(shell (git rev-parse --short HEAD 2>/dev/null || echo unknown) | tr -cd 'A-Za-z0-9')
+GIT_WORKTREE := $(shell [ "$$(git rev-parse --git-dir 2>/dev/null)" != "$$(git rev-parse --git-common-dir 2>/dev/null)" ] && echo true || echo false)
+
+BUILDINFO_PKG := github.com/tstapler/stapler-squad/pkg/buildinfo
+LDFLAGS := -X main.version=$(VERSION) \
+	-X $(BUILDINFO_PKG).Version=$(VERSION) \
+	-X $(BUILDINFO_PKG).Branch=$(GIT_BRANCH) \
+	-X $(BUILDINFO_PKG).Commit=$(GIT_COMMIT) \
+	-X $(BUILDINFO_PKG).Worktree=$(GIT_WORKTREE)
 
 # File dependencies
 GO_FILES := $(shell find . -maxdepth 3 -name "*.go" -not -path "./vendor/*" -not -path "./node_modules/*")
@@ -30,6 +50,16 @@ PROTO_STAMP := .proto-gen.stamp
 PROTO_OUT_DIRS := gen/proto/go web-app/src/gen
 ASDF_STAMP := .asdf-install.stamp
 ENT_STAMP := .ent-gen.stamp
+
+# gotestsum wraps `go test -json` for readable, machine-parsable test output
+# (pass/fail per test instead of a wall of raw go test stdout) -- default
+# runner for every test target below except the profiling/benchmark/harness
+# one-offs, which pipe raw go test output to files or need -bench/-trace/
+# -cpuprofile flags gotestsum doesn't add value for.
+GOTESTSUM_BIN := $(shell go env GOPATH)/bin/gotestsum
+$(GOTESTSUM_BIN):
+	@echo "Installing gotestsum..."
+	@go install gotest.tools/gotestsum@v1.13.0
 
 .PHONY: ensure-tools
 # ensure-tools runs asdf install only when .tool-versions changes
@@ -140,6 +170,10 @@ e2e-lighthouse: ## Run Lighthouse CI performance audit
 # Build targets
 build: stapler-squad ## Build the Go application
 
+# Also invoked directly by tests/e2e/helpers/test-server.ts (`make stapler-squad`)
+# to build the binary Playwright's global-setup spawns — relying on this
+# target's own dependency chain (server/web/dist) is what keeps e2e runs from
+# serving a stale frontend after only web-app/src changes.
 stapler-squad: ensure-tools proto-gen ent-gen server/web/dist $(GO_FILES) ## Build the Go binary
 	@echo "Building Go application..."
 ifeq ($(UNAME_S),Darwin)
@@ -189,9 +223,8 @@ qr: ensure-tools proto-gen ## Print remote access QR codes for phone setup
 	@./stapler-squad print-qr-codes
 
 restart-web: build-all ## Rebuild and restart the web server
-	@echo "Stopping existing stapler-squad processes..."
-	@-pkill -f "(^|/)stapler-squad([[:space:]]|$$)" 2>/dev/null || true
-	@sleep 1
+	@echo "Stopping existing stapler-squad dev processes (leaves the installed service alone)..."
+	@./scripts/dev-restart-guard.sh 8543 8444 $(PROFILE_PORT)
 	@echo "Starting server..."
 	@./stapler-squad $(SERVER_FLAGS) $(PROFILE_FLAGS) &
 	@sleep 2
@@ -212,9 +245,8 @@ restart-web-profile: ## Rebuild and restart web server with profiling enabled
 	@echo "   Analyze with: go tool trace /tmp/stapler-squad-trace-*.out"
 
 web-dev: build-all ## Build web UI and server, then restart (detects file changes automatically)
-	@echo "Stopping existing stapler-squad processes..."
-	@-pkill -f "(^|/)stapler-squad([[:space:]]|$$)" 2>/dev/null || true
-	@sleep 1
+	@echo "Stopping existing stapler-squad dev processes (leaves the installed service alone)..."
+	@./scripts/dev-restart-guard.sh 8543 8444 $(PROFILE_PORT)
 	@echo "Starting server..."
 	@./stapler-squad $(PROFILE_FLAGS) &
 	@sleep 2
@@ -539,7 +571,7 @@ proto-clean: ## Clean generated protocol buffer code
 	rm -rf web/src/gen
 
 # Testing targets
-test: ensure-tools proto-gen $(BIN_TMUX) ## Run all tests (skips slow integration tests; use test-integration for full suite)
+test: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run all tests (skips slow integration tests; use test-integration for full suite)
 	# session, session/mux, and session/tmux fork real tmux subprocesses at high
 	# t.Parallel() fan-out. Running them under the suite's default per-package
 	# parallelism let those tmux-heavy tests compete for scheduler time against
@@ -554,18 +586,33 @@ test: ensure-tools proto-gen $(BIN_TMUX) ## Run all tests (skips slow integratio
 	# default is 10s -- see session/tmux/tmux.go's sessionCreateTimeoutDefault).
 	# testutil also forks real tmux subprocesses (TestRealTmuxSessionLifecycle) and
 	# hit the same contention under full-suite load -- included in the -p 1 group.
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
 
 test-verbose: ensure-tools proto-gen ## Run tests with verbose output
 	go test -short -v ./...
 
-test-coverage: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with coverage report (HTML)
+test-affected: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run tests only for packages transitively affected by changes vs BASE (default origin/main); usage: make test-affected [BASE=some-ref]
+	@pkgs="$$(python3 scripts/test-affected.py $(or $(BASE),origin/main))"; \
+	if [ -z "$$pkgs" ]; then \
+		echo "No Go packages affected by changes vs $(or $(BASE),origin/main)"; \
+	elif [ "$$pkgs" = "__ALL__" ]; then \
+		echo "A change vs $(or $(BASE),origin/main) can't be safely narrowed (proto/go.mod/go.sum/Makefile/.golangci.yml/the affected-test script itself) -- running the full suite"; \
+		$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m ./...; \
+	else \
+		echo "Affected packages:"; echo "$$pkgs"; \
+		$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m $$pkgs; \
+	fi
+
+test-affected-web: ## Run only the web-app Jest tests transitively affected by changes vs BASE (default origin/main); usage: make test-affected-web [BASE=some-ref]
+	cd web-app && BASE=$(or $(BASE),origin/main) pnpm run test:affected
+
+test-coverage: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests with coverage report (HTML)
 	# Same tmux-contention root cause as the test target above -- see its comment.
 	# Split into two invocations and merge the resulting coverage profiles since
 	# go test only writes one -coverprofile per invocation.
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m -p 1 -cover -coverprofile=coverage.tmux.out ./session ./session/mux ./session/tmux ./testutil
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m -cover -coverprofile=coverage.rest.out $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m -p 1 -cover -coverprofile=coverage.tmux.out ./session ./session/mux ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m -cover -coverprofile=coverage.rest.out $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
 	head -n 1 coverage.tmux.out > coverage.out
 	tail -q -n +2 coverage.tmux.out coverage.rest.out >> coverage.out
 	rm -f coverage.tmux.out coverage.rest.out
@@ -618,12 +665,12 @@ coverage-refactor: ensure-tools proto-gen ## Show coverage for the 4 files targe
 	@echo ""
 	@go tool cover -func=coverage.out | grep "^total"
 
-test-race: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with race detector enabled (skips slow integration tests)
+test-race: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests with race detector enabled (skips slow integration tests)
 	# Same tmux-contention root cause as the test target above -- see its comment.
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
 
-test-integration: ensure-tools proto-gen ## Run integration tests (requires real tmux)
+test-integration: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run integration tests (requires real tmux)
 	# ./session and ./session/tmux are the only integration-tagged packages that
 	# fork real tmux servers (server/mcp and session/headless don't touch tmux).
 	# Running the full suite's default per-package parallelism let those two
@@ -635,8 +682,8 @@ test-integration: ensure-tools proto-gen ## Run integration tests (requires real
 	# session/tmux/server_registry_integration_test.go). -p 1 serializes just
 	# these two packages against each other; everything else still runs in
 	# parallel via the second invocation.
-	go test -race -tags integration -timeout 20m -p 1 ./session ./session/tmux
-	go test -race -tags integration -timeout 20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
+	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m -p 1 ./session ./session/tmux
+	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
 
 test-triage-harness: proto-gen ## Run all backlog triage harness phases (no UI/browser needed)
 	go test -v -tags=harness -run TestTriageHarness ./server/services/
@@ -689,6 +736,13 @@ benchmark: ensure-tools proto-gen ## Run all benchmarks
 	go test -bench=. -benchmem -timeout=10m ./... > benchmark_results.txt 2>&1 &
 	@echo "Benchmarks running in background. Results will be saved to benchmark_results.txt"
 
+# benchmark-soak is a convenience shortcut for running just this one benchmark;
+# `make benchmark`'s -bench=. already matches it too (it's out of
+# test/test-integration/ci, per BenchmarkGogitstoreSoakUnderSustainedLoad's own
+# doc comment, but not out of a full benchmark sweep).
+benchmark-soak: ensure-tools proto-gen ## Run the gogitstore sustained-load soak benchmark (~20-25s, not part of make test/test-integration/ci)
+	go test -bench=BenchmarkGogitstoreSoakUnderSustainedLoad -benchtime=1x -run '^$$' -v -timeout=2m ./session/unfinished/gogitstore/
+
 # Development tools installation
 install-tools: ensure-tools ## Install all development and analysis tools
 	@echo "Installing Go development tools..."
@@ -701,6 +755,7 @@ install-tools: ensure-tools ## Install all development and analysis tools
 	go install golang.org/x/perf/cmd/benchstat@latest
 	go install gvisor.dev/gvisor/tools/checklocks/cmd/checklocks@latest
 	go install github.com/mibk/dupl@latest
+	go install gotest.tools/gotestsum@v1.13.0
 	@echo "All tools installed successfully!"
 
 # Code quality and analysis
@@ -739,7 +794,7 @@ lint: ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell ## R
 
 LINTER_BIN := $(CURDIR)/bin/linter
 
-lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (hotpolllog, nocommandpattern, norawexec, tmuxsocketscope) in a single pass
+lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, nocommandpattern, norawexec, norawgitopen, silenttransition, tmuxsocketscope) in a single pass
 	@echo "Running custom lint..."
 	@$(LINTER_BIN) $(shell go list ./... | grep -v "^github.com/tstapler/stapler-squad$$")
 	@echo "custom lint: ok"
@@ -758,6 +813,13 @@ lint-shell: ## Run shellcheck over all first-party shell scripts
 	@echo "Running shellcheck on $(words $(SHELL_SCRIPTS)) first-party shell script(s)..."
 	@shellcheck -x $(SHELL_SCRIPTS)
 	@echo "shellcheck: ok"
+
+test-shell: ## Run shell-script regression tests (*.test.sh) — currently: dev-restart-guard.sh
+	@echo "Running shell regression tests..."
+	@for t in $$(find scripts -name '*.test.sh'); do \
+		echo "-- $$t --"; \
+		sh "$$t" || exit 1; \
+	done
 
 actor-lint: ## Detect actor self-deadlock patterns using ast-grep (sg)
 	@which sg >/dev/null 2>&1 || (echo "sg (ast-grep) not installed; run: cargo install ast-grep" && exit 1)
@@ -782,12 +844,12 @@ lint-css-tokens: ## Fail if any component .css.ts file uses hardcoded hex colors
 	  ! -name 'ThemePicker.css.ts' \
 	  ! -path '*/debug/escape-codes/page.css.ts' \
 	  | while read f; do \
-	    if grep '#[0-9a-fA-F]\{3,8\}' "$$f" 2>/dev/null | grep -qv '//.*#[0-9a-fA-F]\{3,8\}'; then echo "$$f"; fi; \
+	    if grep '#[0-9a-fA-F]\{3,8\}' "$$f" 2>/dev/null | grep -v '^[[:space:]]*\*' | grep -qv '//.*#[0-9a-fA-F]\{3,8\}'; then echo "$$f"; fi; \
 	  done); \
 	if [ -n "$$violations" ]; then \
 	  echo "❌ Hardcoded hex colors found in component .css.ts files (use vars.color.* instead):"; \
 	  for f in $$violations; do \
-	    grep -n '#[0-9a-fA-F]\{3,8\}' "$$f" | grep -v '//.*#[0-9a-fA-F]\{3,8\}' | head -3 | sed "s|^|  $$f line |"; \
+	    grep -n '#[0-9a-fA-F]\{3,8\}' "$$f" | grep -v '^[0-9]*:[[:space:]]*\*' | grep -v '//.*#[0-9a-fA-F]\{3,8\}' | head -3 | sed "s|^|  $$f line |"; \
 	  done; \
 	  exit 1; \
 	fi
@@ -886,7 +948,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/

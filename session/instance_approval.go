@@ -19,6 +19,18 @@ func (i *Instance) SetReviewQueue(queue *ReviewQueue) {
 	i.reviewQueue = queue
 }
 
+// GetNotifier returns the notifier for this instance, or nil if unset.
+func (i *Instance) GetNotifier() Notifier {
+	return i.notifier
+}
+
+// SetNotifier sets the notifier for this instance, used by
+// markSessionPermanentlyFailed to push a proactive notification when the
+// retry policy exhausts its attempt budget.
+func (i *Instance) SetNotifier(notifier Notifier) {
+	i.notifier = notifier
+}
+
 // NeedsReview returns true if this session is in the review queue.
 func (i *Instance) NeedsReview() bool {
 	if i.reviewQueue == nil {

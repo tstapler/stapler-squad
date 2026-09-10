@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"connectrpc.com/connect"
@@ -147,7 +148,7 @@ func (s *BacklogService) AttachSessionToItem(
 	}
 
 	// 7. Transition item to in_progress (only if the state machine permits it).
-	if session.CanTransitionBacklog(session.BacklogStatus(item.Status), session.BacklogStatusInProgress) {
+	if s.engine.CanTransition(session.BacklogStatus(item.Status), session.BacklogStatusInProgress) {
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem); transErr != nil {
 			log.ErrorLog().Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)
 			// Same shape as SpawnSessionFromItem's fresh-spawn path: a real
@@ -269,6 +270,20 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fetch GitHub issue: %w", err))
 	}
 
+	// Dedup: this issue may already have been imported (double-click, re-run of
+	// a bulk-import selection that partially failed, etc). external_url is the
+	// issue's own URL, globally unique on its own — unlike external_id (see
+	// GetBacklogItemByExternalID's doc comment), no ItemSource scoping is
+	// needed since a manual import has no source row to scope by.
+	if existing, lookupErr := s.storage.GetBacklogItemByExternalURL(ctx, issue.URL); lookupErr == nil {
+		return connect.NewResponse(&sessionv1.ImportGitHubIssueResponse{
+			Item:           backlogItemToProto(existing, s.buildCostLookup()),
+			AlreadyExisted: true,
+		}), nil
+	} else if !errors.Is(lookupErr, session.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check for existing import: %w", lookupErr))
+	}
+
 	repoPath := req.Msg.RepoPath
 	if repoPath == "" {
 		var resolveErr error
@@ -285,6 +300,8 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		Status:       string(session.BacklogStatusIdea),
 		RepoPath:     repoPath,
 		Notes:        fmt.Sprintf("Imported from %s", issue.URL),
+		ExternalID:   strconv.Itoa(ref.IssueNumber),
+		ExternalURL:  issue.URL,
 		PipelineMode: defaultPipelineModeForNewItem(nil),
 	})
 	if err != nil {

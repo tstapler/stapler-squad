@@ -129,7 +129,10 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
       }
       if (buffer.length === 0) return;
       const entries = buffer.splice(0);
-      // Use ConnectRPC client — fire-and-forget; never recurse into console
+      // Use ConnectRPC client — fire-and-forget; never recurse into console.
+      // Deliberately not cancelled: buffered log entries should still ship
+      // even if the effect that scheduled this flush re-runs first.
+      // abort-signal-exempt
       client
         .logClientEvents({
           entries: entries.map((e) => ({

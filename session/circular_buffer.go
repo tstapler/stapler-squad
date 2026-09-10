@@ -183,8 +183,9 @@ func (cb *CircularBuffer) GetRecentHash(n int) (uint64, bool) {
 	}
 	// Wrapped: stream over two segments (allocates hasher, ~0.04% of calls for 4KB reads on 10MB buffer).
 	h := murmur3.New64()
-	h.Write(cb.data[startPos:])    //nolint:errcheck
-	h.Write(cb.data[:n-firstHalf]) //nolint:errcheck
+	// hash.Hash.Write never returns an error per the io.Writer contract it documents.
+	_, _ = h.Write(cb.data[startPos:])
+	_, _ = h.Write(cb.data[:n-firstHalf])
 	return h.Sum64(), true
 }
 

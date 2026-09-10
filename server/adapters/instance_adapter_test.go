@@ -6,6 +6,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
@@ -292,15 +293,50 @@ func TestStatusToProto_AllStates(t *testing.T) {
 		{"Stopped", session.Stopped, sessionv1.SessionStatus_SESSION_STATUS_STOPPED},
 		{"Hibernated", session.Hibernated, sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED},
 		{"Restoring", session.Restoring, sessionv1.SessionStatus_SESSION_STATUS_RESTORING},
+		{"Crashed", session.Crashed, sessionv1.SessionStatus_SESSION_STATUS_CRASHED},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := StatusToProto(tc.input)
+			got, err := StatusToProto(tc.input)
+			if err != nil {
+				t.Errorf("StatusToProto(%v) returned unexpected error: %v", tc.input, err)
+			}
 			if got != tc.expected {
 				t.Errorf("StatusToProto(%v) = %v, want %v", tc.input, got, tc.expected)
 			}
 		})
+	}
+}
+
+// TestStatusToProto_should_ReturnFailed_When_StatusIsFailed verifies Epic 1.1
+// Story 1.1.3's Failed arm: session.Failed maps to SESSION_STATUS_FAILED, not
+// UNSPECIFIED.
+func TestStatusToProto_should_ReturnFailed_When_StatusIsFailed(t *testing.T) {
+	got, err := StatusToProto(session.Failed)
+	if err != nil {
+		t.Fatalf("StatusToProto(Failed) returned unexpected error: %v", err)
+	}
+	if got != sessionv1.SessionStatus_SESSION_STATUS_FAILED {
+		t.Errorf("StatusToProto(Failed) = %v, want SESSION_STATUS_FAILED", got)
+	}
+}
+
+// TestStatusToProto_should_ReturnExplicitError_When_StatusIsUnrecognized is the
+// Task 1.1.3c exhaustiveness guard: an unmapped session.Status value must fail
+// loudly (a returned error) instead of silently falling back to UNSPECIFIED, so
+// the next new status value added to the FSM but not to this switch is caught
+// instead of repeating the exact gap this story closes.
+func TestStatusToProto_should_ReturnExplicitError_When_StatusIsUnrecognized(t *testing.T) {
+	unrecognized := session.Status(99)
+
+	got, err := StatusToProto(unrecognized)
+
+	if err == nil {
+		t.Fatalf("StatusToProto(%v) = %v, <nil>, want a non-nil error for an unrecognized status", unrecognized, got)
+	}
+	if got != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
+		t.Errorf("StatusToProto(%v) status = %v, want SESSION_STATUS_UNSPECIFIED alongside the error", unrecognized, got)
 	}
 }
 
@@ -338,5 +374,83 @@ func TestInstanceToProto_omitsGoalSummaryWhenNil(t *testing.T) {
 	}
 	if proto.Goal != nil {
 		t.Errorf("expected Goal to be nil when inst.SessionGoal is nil, got %+v", proto.Goal)
+	}
+}
+
+// TestInstanceToProto_should_MapChecksAndReviewFeedback_When_Populated verifies
+// GithubChecks/GithubReviewFeedback/GithubMergeable populate field-for-field from
+// Instance.GitHubChecks/GitHubReviewFeedback/GitHubMergeable, matching the existing
+// sibling GitHub-status field GithubCheckConclusion.
+func TestInstanceToProto_should_MapChecksAndReviewFeedback_When_Populated(t *testing.T) {
+	inst := &session.Instance{
+		GitHubCheckConclusion: "success",
+		GitHubChecks: []github.CheckItem{
+			{Name: "build", Context: "ci/build", State: "SUCCESS", Status: "COMPLETED", Conclusion: "SUCCESS"},
+			{Name: "lint", Context: "ci/lint", State: "FAILURE", Status: "COMPLETED", Conclusion: "FAILURE"},
+		},
+		GitHubReviewFeedback: []github.ReviewItem{
+			{Author: "alice", State: "APPROVED", Body: "LGTM"},
+			{Author: "bob", State: "CHANGES_REQUESTED", Body: "please fix X"},
+		},
+		GitHubMergeable: "mergeable",
+	}
+
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+
+	if proto.GithubMergeable != "mergeable" {
+		t.Errorf("GithubMergeable = %q, want %q", proto.GithubMergeable, "mergeable")
+	}
+
+	if len(proto.GithubChecks) != 2 {
+		t.Fatalf("expected 2 GithubChecks, got %d", len(proto.GithubChecks))
+	}
+	wantChecks := []struct{ name, context, state, status, conclusion string }{
+		{"build", "ci/build", "SUCCESS", "COMPLETED", "SUCCESS"},
+		{"lint", "ci/lint", "FAILURE", "COMPLETED", "FAILURE"},
+	}
+	for i, want := range wantChecks {
+		got := proto.GithubChecks[i]
+		if got.Name != want.name || got.Context != want.context || got.State != want.state ||
+			got.Status != want.status || got.Conclusion != want.conclusion {
+			t.Errorf("GithubChecks[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+
+	if len(proto.GithubReviewFeedback) != 2 {
+		t.Fatalf("expected 2 GithubReviewFeedback, got %d", len(proto.GithubReviewFeedback))
+	}
+	wantReviews := []struct{ author, state, body string }{
+		{"alice", "APPROVED", "LGTM"},
+		{"bob", "CHANGES_REQUESTED", "please fix X"},
+	}
+	for i, want := range wantReviews {
+		got := proto.GithubReviewFeedback[i]
+		if got.Author != want.author || got.State != want.state || got.Body != want.body {
+			t.Errorf("GithubReviewFeedback[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+}
+
+// TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackNil verifies
+// the nil/empty case doesn't panic and produces empty (non-nil-required) slices.
+func TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackNil(t *testing.T) {
+	inst := &session.Instance{}
+
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+
+	if len(proto.GithubChecks) != 0 {
+		t.Errorf("expected empty GithubChecks, got %+v", proto.GithubChecks)
+	}
+	if len(proto.GithubReviewFeedback) != 0 {
+		t.Errorf("expected empty GithubReviewFeedback, got %+v", proto.GithubReviewFeedback)
+	}
+	if proto.GithubMergeable != "" {
+		t.Errorf("expected empty GithubMergeable, got %q", proto.GithubMergeable)
 	}
 }

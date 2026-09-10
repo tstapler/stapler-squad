@@ -103,7 +103,7 @@ func TestCallbackDispatcher_Dispatch_NonBlocking(t *testing.T) {
 // server's request count never exceeds cap even after the held requests are
 // released and given time to complete.
 func TestCallbackDispatcher_Dispatch_DropsBeyondCapacity(t *testing.T) {
-	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// Not t.Parallel(): captureInfoLog() mutates the log package's injectable slog seam (log.SetSlogDefaultForTest)
 	// logger, which races against any other test's concurrent logging calls.
 	const cap = 3
 	const extra = 5
@@ -222,7 +222,7 @@ func TestCallbackDispatcher_Deliver_DoesNotFollowRedirect(t *testing.T) {
 // (retries exhausted) never logs the target URL — the URL may carry embedded
 // credentials in its userinfo component.
 func TestCallbackDispatcher_Deliver_RedactsURLOnFailure(t *testing.T) {
-	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// Not t.Parallel(): captureInfoLog() mutates the log package's injectable slog seam (log.SetSlogDefaultForTest)
 	// logger, which races against any other test's concurrent logging calls.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

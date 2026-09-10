@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"regexp"
@@ -171,24 +172,35 @@ type TmuxSession struct {
 	controlModeStdin       io.WriteCloser         // stdin pipe for control mode commands
 	controlModeDone        chan struct{}          // Signal channel for control mode termination
 	controlModeSubscribers map[string]chan []byte // WebSocket clients subscribed to control mode updates
-	controlModeSubMu       sync.RWMutex           // Protects controlModeSubscribers, controlModeExited, pendingCmds, and controlModeRefCount
-	controlModeExited      bool                   // True after readControlModeOutput exits; new subscribers get pre-closed channel
-	controlModeStartMu     sync.Mutex             // Serializes Start/Stop so only one process starts at a time
-	controlModeRefCount    int                    // Number of active Start/Stop pairs; protected by controlModeSubMu
+	// slowSendInFlight tracks, per subscriber ID, whether a background
+	// goroutine is already waiting out controlModeSlowSubscriberGrace to
+	// deliver a frame to that subscriber's channel (see
+	// broadcastControlModeUpdate). At most one such waiter may exist per
+	// subscriber at a time -- see that function's doc comment for why.
+	slowSendInFlight map[string]bool
+	// pendingCloseAfterDrain holds a channel a close was requested for while
+	// slowSendInFlight[id] was true -- closing it immediately would race the
+	// in-flight drainSlowSubscriber goroutine's blocked send and panic. See
+	// closeSubscriberLocked and drainSlowSubscriber.
+	pendingCloseAfterDrain map[string]chan []byte
+	controlModeSubMu       sync.RWMutex // Protects controlModeSubscribers, slowSendInFlight, pendingCloseAfterDrain, controlModeExited, pendingCmds, controlModeRefCount, controlModeCmd, and controlModeRemoteProc
+	controlModeExited      bool         // True after readControlModeOutput exits; new subscribers get pre-closed channel
+	controlModeStartMu     sync.Mutex   // Serializes Start/Stop so only one process starts at a time
+	controlModeRefCount    int          // Number of active Start/Stop pairs; protected by controlModeSubMu
 
 	// Control mode command dispatch — priority queue
 	// A dedicated sender goroutine owns the stdin write path so that high-priority
 	// requests (interactive user input) always jump ahead of low-priority ones
 	// (background polling, resize, capture-pane). The goroutine drains highPriSendCh
 	// before touching normPriSendCh.
-	highPriSendCh  chan cmSendReq   // user send-keys — processed before normPriSendCh
-	normPriSendCh  chan cmSendReq   // background commands (polling, resize, capture-pane)
-	cmSenderExited chan struct{}    // closed when runCMSender exits; lets StopControlMode know stdin is safe to close
-	cmdSendMu      deadlock.Mutex   // guards stdin-close in StopControlMode vs sender goroutine writes
-	pendingCmds    []chan cmdResult // FIFO of pending response channels; protected by controlModeSubMu
-	cmdBodyBuf     strings.Builder  // body accumulator between %begin and %end; reader goroutine only
-	curCmdCh       chan cmdResult   // current in-flight response channel; reader goroutine only
-	inCmdResp      bool             // true while inside a %begin/%end block; reader goroutine only
+	highPriSendCh  highPrioritySendCh   // user send-keys — processed before normPriSendCh
+	normPriSendCh  normalPrioritySendCh // background commands (polling, resize, capture-pane)
+	cmSenderExited chan struct{}        // closed when runCMSender exits; lets StopControlMode know stdin is safe to close
+	cmdSendMu      deadlock.Mutex       // guards stdin-close in StopControlMode vs sender goroutine writes
+	pendingCmds    []chan cmdResult     // FIFO of pending response channels; protected by controlModeSubMu
+	cmdBodyBuf     strings.Builder      // body accumulator between %begin and %end; reader goroutine only
+	curCmdCh       chan cmdResult       // current in-flight response channel; reader goroutine only
+	inCmdResp      bool                 // true while inside a %begin/%end block; reader goroutine only
 
 	// Exit detection: fired when the session exits unexpectedly (not via StopControlMode).
 	// onExit is called at most once per TmuxSession lifetime (guarded by onExitOnce).
@@ -1729,7 +1741,9 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			// produces a 0×0 PTY; tmux reads that size at client startup and immediately
 			// disconnects, causing EIO within ~1ms of the response stream starting.
 			ws := &pty.Winsize{
+				// #nosec G115 -- lastKnownRows/Cols are only ever written via clampWinsizeDim (or the defaultAttachRows/Cols constants), so Load() is always in [0, 65535]
 				Rows: uint16(t.lastKnownRows.Load()),
+				// #nosec G115 -- see justification above
 				Cols: uint16(t.lastKnownCols.Load()),
 			}
 			ptmx, attachCmd, err := t.ptyFactory.StartWithSize(t.buildAttachCommand(), ws)
@@ -2395,6 +2409,25 @@ func (t *TmuxSession) SetDetachedSize(width, height int) error {
 	return t.updateWindowSize(width, height)
 }
 
+// ClampWinsizeDim clamps a terminal dimension (columns or rows) coming from
+// a resize request (ultimately client-controlled, e.g. a browser's terminal
+// widget) to the range representable by pty.Winsize's uint16 fields
+// ([1, 65535]) before the narrowing int->uint16 conversion, so an
+// out-of-range or negative value can't silently wrap around into a bogus
+// terminal size. Exported so session/instance_tmux.go and
+// session/native_process_manager.go (which build pty.Winsize themselves,
+// outside this package) share one implementation instead of duplicating it.
+func ClampWinsizeDim(v int) uint16 {
+	switch {
+	case v < 1:
+		return 1
+	case v > math.MaxUint16:
+		return math.MaxUint16
+	default:
+		return uint16(v)
+	}
+}
+
 // updateWindowSize updates the window size of the PTY.
 func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 	// Check if PTY is valid before attempting to resize
@@ -2419,8 +2452,8 @@ func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 	}
 
 	return pty.Setsize(file, &pty.Winsize{
-		Rows: uint16(rows),
-		Cols: uint16(cols),
+		Rows: ClampWinsizeDim(rows),
+		Cols: ClampWinsizeDim(cols),
 		X:    0,
 		Y:    0,
 	})
@@ -2438,14 +2471,24 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 	// Also resize the tmux window itself to ensure the dimensions are applied.
 	colsStr := fmt.Sprintf("%d", cols)
 	rowsStr := fmt.Sprintf("%d", rows)
-	if t.cmEnabledForBackground() {
-		ctx, cancel := cmCtx()
+	// Bounded to fastLaneCMAttemptTimeout (not cmCtx's 3s) and skipped entirely
+	// when the queue is already backed up -- same fix as GetPaneDimensionsPriority
+	// (see its doc comment). SetWindowSizeContext's caller (StreamHub.applyNegotiatedSize)
+	// shares ONE deadline across this call and the CapturePaneContentRawContext call
+	// that follows it; the old cmCtx() 3s budget here, on a backed-up control-mode
+	// queue, could burn nearly all of that shared deadline on a doomed resize-window
+	// response, leaving the subsequent capture no budget at all (confirmed live:
+	// "streamhub: resize caller disconnected or timed out" immediately followed by
+	// "exec gate: context deadline exceeded" on the capture, for staplersquad_tymux).
+	if t.cmEnabledForBackground() && t.pendingCommandDepth() < controlModeQueueBackpressureThreshold {
+		ctx, cancel := context.WithTimeout(context.Background(), fastLaneCMAttemptTimeout)
 		defer cancel()
 		if _, cmErr := t.sendCMCommand(ctx,
 			"resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr); cmErr == nil {
 			// Store requested dimensions for future PTY attach connections (via attach-session -x/-y).
-			t.lastKnownCols.Store(int32(cols))
-			t.lastKnownRows.Store(int32(rows))
+			// Widened from the already-clamped uint16 dimension, so this always fits int32.
+			t.lastKnownCols.Store(int32(ClampWinsizeDim(cols)))
+			t.lastKnownRows.Store(int32(ClampWinsizeDim(rows)))
 			return nil
 		} else {
 			log.Debug("SetWindowSize CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
@@ -2476,8 +2519,9 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 	}
 
 	// Store requested dimensions for future PTY attach connections (via attach-session -x/-y).
-	t.lastKnownCols.Store(int32(cols))
-	t.lastKnownRows.Store(int32(rows))
+	// Widened from the already-clamped uint16 dimension, so this always fits int32.
+	t.lastKnownCols.Store(int32(ClampWinsizeDim(cols)))
+	t.lastKnownRows.Store(int32(ClampWinsizeDim(rows)))
 	return nil
 }
 
@@ -3092,6 +3136,25 @@ func (t *TmuxSession) GetPaneDimensions() (width, height int, err error) {
 	return paneWidth, paneHeight, nil
 }
 
+// fastLaneCMAttemptTimeout bounds GetPaneDimensionsPriority's own
+// control-mode attempt to a small slice of the shared resync budget
+// (handleCurrentPaneRequest's single ResyncFastLaneTimeout, 3s total),
+// rather than layering a full independent allowance on top of it — a
+// backed-up control-mode queue could otherwise consume nearly the entire
+// shared deadline on one doomed attempt, starving every fast-lane step that
+// follows. Called twice per resync (initial check + post-resize verify), so
+// the worst case here is 2x this value, well under the 3s total.
+const fastLaneCMAttemptTimeout = 300 * time.Millisecond
+
+// controlModeQueueBackpressureThreshold is the pending-command depth past
+// which a new control-mode command is treated as certain to time out rather
+// than worth even fastLaneCMAttemptTimeout's bounded wait -- tmux answers
+// %begin/%end responses strictly in FIFO order, so a command joining a queue
+// already this deep cannot possibly get an answer within either budget.
+// Normal depth observed in practice is single digits; 20 is a conservative
+// floor well below the 107-115 seen during the confirmed incident.
+const controlModeQueueBackpressureThreshold = 20
+
 // GetPaneDimensionsPriority mirrors GetPaneDimensions' control-mode-first
 // behavior, but routes its subprocess fallback through the resync exec-gate
 // fast lane (with a caller-supplied, shared ctx — see
@@ -3103,8 +3166,8 @@ func (t *TmuxSession) GetPaneDimensions() (width, height int, err error) {
 // fast-lane isolation and shared deadline as the refresh/capture calls
 // around it, not the unbounded default-pool path.
 func (t *TmuxSession) GetPaneDimensionsPriority(ctx context.Context) (width, height int, err error) {
-	if t.cmEnabledForBackground() {
-		cmCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	if t.cmEnabledForBackground() && t.pendingCommandDepth() < controlModeQueueBackpressureThreshold {
+		cmCtx, cancel := context.WithTimeout(ctx, fastLaneCMAttemptTimeout)
 		defer cancel()
 		body, cmErr := t.sendCMCommand(cmCtx,
 			"display-message", "-p", "-t", t.sanitizedName, "'#{pane_width} #{pane_height}'")

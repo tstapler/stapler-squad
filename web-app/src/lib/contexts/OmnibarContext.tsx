@@ -240,15 +240,17 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   // Handle session creation
   const handleCreateSession = useCallback(
     async (data: OmnibarSessionData) => {
-      // Determine effective session type.
-      // For new_project + "open as new_worktree": use NEW_WORKTREE — findGitRepoRoot already
-      // handles mkdir + git init + initial commit for non-existent paths, so no special type needed.
-      // For new_project + "open as directory": use NEW_PROJECT so the backend initialises the repo
-      // and opens the session without a worktree.
+      // Determine effective session type. Every new_project variant — "open as
+      // new_worktree" and "open as directory" alike — uses NEW_PROJECT: the
+      // backend's SessionTypeNewProject case always bootstraps a missing path
+      // (mkdir + git init + initial commit), then additionally creates a
+      // worktree on it when a branch is present (Omnibar.tsx sets `branch` only
+      // for "open as new_worktree"), or leaves it as a plain directory session
+      // otherwise (see session/instance_worktree.go's setupFirstTimeWorktree).
+      // NEW_WORKTREE is deliberately never used for new_project — it requires
+      // an already-existing repo unconditionally, with no bootstrap exception.
       const effectiveSessionType = data.isNewProject
-        ? data.sessionType === "new_worktree"
-          ? sessionTypeMap["new_worktree"]
-          : SessionType.NEW_PROJECT
+        ? SessionType.NEW_PROJECT
         : data.sessionType
         ? sessionTypeMap[data.sessionType]
         : undefined;

@@ -4,6 +4,8 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
+import { routes } from "@/lib/routes";
 import { create } from "@bufbuild/protobuf";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
@@ -11,6 +13,7 @@ import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useReviewQueueNavigation } from "@/lib/hooks/useReviewQueueNavigation";
 import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
 import { useFilterState } from "@/lib/hooks/useFilterState";
+import { useFocusRestoreOnRemoval } from "@/lib/hooks/useFocusRestoreOnRemoval";
 import { GroupingStrategy, GroupingStrategyLabels, groupSessions } from "@/lib/grouping/strategies";
 import { parseGitHubRef } from "@/lib/github/urlParser";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
@@ -85,8 +88,14 @@ import {
   sortSelect,
   groupSection,
   groupHeading,
+  stalenessIndicator,
+  stalenessRetry,
+  autoResolvedItem,
+  autoResolvedBanner,
+  autoResolvedBannerLink,
 } from "./ReviewQueuePanel.css";
 import { Button } from "@/components/ui";
+import { CollapsibleSection } from "@/components/ui/Collapsible";
 
 interface ReviewQueuePanelProps {
   onSessionClick?: (sessionId: string) => void;
@@ -249,6 +258,27 @@ function resolveInitialSortField(urlSort: string | undefined): SortField {
   return DEFAULT_SORT_FIELD;
 }
 
+// Groups one tier's items via groupSessions() (the same grouping engine SessionList uses) by
+// bridging each ReviewItem to a minimal Session — shared by both the "Needs a decision" and
+// "Informational" tiers (Task 3.2.1a/b) so grouping isn't a parallel implementation per tier.
+function groupTierItems(
+  tierItems: ReviewItem[],
+  groupingStrategy: GroupingStrategy,
+  sessionByItemId: Map<string, Session>
+): { groupKey: string; displayName: string; items: ReviewItem[] }[] | null {
+  if (groupingStrategy === GroupingStrategy.None) return null;
+  const sessions = tierItems.map((it) => sessionByItemId.get(it.sessionId) ?? reviewItemToSession(it));
+  const groups = groupSessions(sessions, groupingStrategy);
+  const bySessionId = new Map(tierItems.map((it) => [it.sessionId, it]));
+  return groups
+    .map((g) => ({
+      groupKey: g.groupKey,
+      displayName: g.displayName,
+      items: g.sessions.map((s) => bySessionId.get(s.id)).filter((it): it is ReviewItem => !!it),
+    }))
+    .filter((g) => g.items.length > 0);
+}
+
 // Minimal Session shape for groupSessions() — only the fields grouping strategies read.
 function reviewItemToSession(item: ReviewItem): Session {
   return create(SessionSchema, {
@@ -379,12 +409,15 @@ export function ReviewQueuePanel({
     totalItems,
     loading,
     error,
+    lastUpdatedAt,
     byPriority,
     byReason,
     averageAgeSeconds,
     oldestAgeSeconds,
     refresh,
     acknowledgeSession,
+    acknowledgeSessions,
+    autoResolvedRules,
   } = useReviewQueueContext();
 
   // ─── Snapshot-on-enter pattern ────────────────────────────────────────────
@@ -414,6 +447,22 @@ export function ReviewQueuePanel({
     setReviewingIdsSnapshot(new Set(allItems.map((item) => item.sessionId)));
     refresh();
   }, [allItems, refresh]);
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // ─── Focus management on item removal (design/ux.md AC34) ─────────────────
+  // Tracks which row (by sessionId) currently holds keyboard focus, via onFocus/
+  // onBlur on each row in renderQueueItem below. When that row disappears from
+  // `allItems` — including the ~5s deferred removal after a reconciliation-driven
+  // auto-resolve (Surface 9) — focus moves to the row now at the same list
+  // position, or the panel heading if none remain, instead of being dropped.
+  // Shared with NotificationItem.tsx's NeedsDecisionSection via useFocusRestoreOnRemoval.
+  const panelHeadingRef = useRef<HTMLHeadingElement>(null);
+  const allItemIds = useMemo(() => allItems.map((i) => i.sessionId), [allItems]);
+  const resolveReviewItemElement = useCallback(
+    (id: string) => document.querySelector<HTMLElement>(`[data-testid="review-item-${id}"]`),
+    []
+  );
+  const focusedSessionIdRef = useFocusRestoreOnRemoval(allItemIds, resolveReviewItemElement, panelHeadingRef);
   // ─────────────────────────────────────────────────────────────────────────
 
   // Separate working sessions from waiting sessions for count display.
@@ -606,21 +655,98 @@ export function ReviewQueuePanel({
   // grouping strategies already rely on above, rather than building a second lookup.
   const activePrSession = isCreatePrOpen ? sessionByItemId.get(isCreatePrOpen) : undefined;
 
+  // Task 3.2.1a: partition `items` (post-filter, pre-groupingStrategy) into the
+  // always-expanded "Needs a decision" tier and the collapsed-by-default "Informational"
+  // tier, ahead of the existing groupingStrategy — which still applies *within* each tier
+  // when selected (design/ux.md Surface 6/7), not instead of the tiering.
+  const needsDecisionItems = useMemo(
+    () => items.filter((it) => it.priority !== Priority.LOW),
+    [items]
+  );
+  const informationalItems = useMemo(
+    () => items.filter((it) => it.priority === Priority.LOW),
+    [items]
+  );
+
+  // The unfiltered "needs a decision" count — over `allItems` (the pool before any of the
+  // priority/reason/severity/program/category/tag/PR/diverged/search filters in
+  // `allFilteredItems` apply), not `items`. Lets the empty-state logic (Task 3.2.1c)
+  // distinguish "genuinely zero urgent/high/medium items" from "some exist but the active
+  // filter is hiding all of them" (Product Triad Review round-4 blocker fix, ux.md AC18).
+  const allNeedsDecisionCount = useMemo(
+    () => allItems.filter((it) => it.priority !== Priority.LOW).length,
+    [allItems]
+  );
+
   // Reuses groupSessions() (the same grouping engine SessionList uses) by bridging each
   // ReviewItem to a minimal Session — avoids building a parallel grouping implementation.
-  const groupedItems = useMemo(() => {
-    if (groupingStrategy === GroupingStrategy.None) return null;
-    const sessions = items.map((it) => sessionByItemId.get(it.sessionId) ?? reviewItemToSession(it));
-    const groups = groupSessions(sessions, groupingStrategy);
-    const bySessionId = new Map(items.map((it) => [it.sessionId, it]));
-    return groups
-      .map((g) => ({
-        groupKey: g.groupKey,
-        displayName: g.displayName,
-        items: g.sessions.map((s) => bySessionId.get(s.id)).filter((it): it is ReviewItem => !!it),
-      }))
-      .filter((g) => g.items.length > 0);
-  }, [items, groupingStrategy, sessionByItemId]);
+  const groupedNeedsDecisionItems = useMemo(
+    () => groupTierItems(needsDecisionItems, groupingStrategy, sessionByItemId),
+    [needsDecisionItems, groupingStrategy, sessionByItemId]
+  );
+  const groupedInformationalItems = useMemo(
+    () => groupTierItems(informationalItems, groupingStrategy, sessionByItemId),
+    [informationalItems, groupingStrategy, sessionByItemId]
+  );
+
+  // Items eligible for bulk skip — scoped to the "Needs a decision" tier only, never the
+  // Informational tier below it (Priority.LOW): "Skip all" is meant to clear urgent/high/
+  // medium items awaiting a decision, not to blanket-dismiss lower-priority informational
+  // items a user hasn't chosen to act on. Approval requests are further excluded because
+  // they need an explicit Approve/Deny decision, not a blanket dismissal (mirrors the
+  // single-item Skip button's own exclusion below).
+  const skippableItems = useMemo(
+    () => needsDecisionItems.filter((it) => !it.metadata?.["pending_approval_id"]),
+    [needsDecisionItems]
+  );
+  const [isBulkSkipping, setIsBulkSkipping] = useState(false);
+
+  // Single-item skip: routes through the onSkipSession prop override when given (e.g. the
+  // review page's own dismissal logic), otherwise the hook's acknowledgeSession. Shared by
+  // the per-row Skip button below so the onSkipSession-or-acknowledgeSession branch isn't
+  // copy-pasted at each call site.
+  const skipSession = useCallback(
+    (sessionId: string) =>
+      Promise.resolve(onSkipSession ? onSkipSession(sessionId) : acknowledgeSession(sessionId)).then(
+        () => onAcknowledged?.(sessionId)
+      ),
+    [onSkipSession, acknowledgeSession, onAcknowledged]
+  );
+
+  const handleSkipAllVisible = useCallback(async () => {
+    if (skippableItems.length === 0 || isBulkSkipping) return;
+    const count = skippableItems.length;
+    if (!window.confirm(`Skip all ${count} visible item${count === 1 ? "" : "s"}? This removes ${count === 1 ? "it" : "them"} from the review queue.`)) {
+      return;
+    }
+    setIsBulkSkipping(true);
+    try {
+      if (onSkipSession) {
+        // No hook-level bulk primitive exists for the prop-override path — fan out the
+        // override individually, but only report success for items that actually resolved.
+        const results = await Promise.allSettled(
+          skippableItems.map((it) => onSkipSession(it.sessionId))
+        );
+        results.forEach((result, i) => {
+          if (result.status === "fulfilled") {
+            onAcknowledged?.(skippableItems[i].sessionId);
+          }
+        });
+      } else {
+        // Single bulk RPC call — failures are collected instead of dispatching the queue's
+        // global error (which would otherwise blank the whole panel on one flaky request).
+        const { failed } = await acknowledgeSessions(skippableItems.map((it) => it.sessionId));
+        const failedIds = new Set(failed);
+        for (const it of skippableItems) {
+          if (!failedIds.has(it.sessionId)) {
+            onAcknowledged?.(it.sessionId);
+          }
+        }
+      }
+    } finally {
+      setIsBulkSkipping(false);
+    }
+  }, [skippableItems, isBulkSkipping, onSkipSession, acknowledgeSessions, onAcknowledged]);
 
   // Approval actions for APPROVAL_PENDING items
   const { approve: approveRequest, deny: denyRequest } = useApprovalsContext();
@@ -895,12 +1021,25 @@ export function ReviewQueuePanel({
 
   const hasActiveFilter = activeFilterCount > 0;
 
-  const renderQueueItem = (queueItem: ReviewItem, index: number) => (
+  const renderQueueItem = (queueItem: ReviewItem, index: number) => {
+    // Epic 2.3.2 / ux.md Surface 9: an item reconciled while visible is disabled
+    // in place (dimmed, actions disabled, named banner) for its ~5s display
+    // window rather than vanishing immediately — see useReviewQueue's
+    // autoResolvedRules for the timing/removal side of this.
+    const autoResolvedRuleName = autoResolvedRules[queueItem.sessionId];
+    const isAutoResolved = !!autoResolvedRuleName;
+
+    return (
     <div
       key={queueItem.sessionId}
-      className={item}
+      className={`${item} ${isAutoResolved ? autoResolvedItem : ""}`}
       data-testid={index === currentIndex ? "current-item" : "review-item"}
       data-session-id={queueItem.sessionId}
+      data-auto-resolved={isAutoResolved ? "true" : undefined}
+      onFocus={() => { focusedSessionIdRef.current = queueItem.sessionId; }}
+      onBlur={() => {
+        if (focusedSessionIdRef.current === queueItem.sessionId) focusedSessionIdRef.current = null;
+      }}
     >
       <div
         className={`${itemClickable} ${index === currentIndex ? currentItem : ""}`}
@@ -935,6 +1074,19 @@ export function ReviewQueuePanel({
             reason={queueItem.reason}
             compact={false}
           />
+          {isAutoResolved && (
+            <div className={autoResolvedBanner} data-testid={`auto-resolved-banner-${queueItem.sessionId}`}>
+              <span>✓ Auto-resolved by rule: {autoResolvedRuleName} — no action needed</span>
+              <Link
+                href={routes.rules}
+                className={autoResolvedBannerLink}
+                title={`View the "${autoResolvedRuleName}" rule`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                why?
+              </Link>
+            </div>
+          )}
           {queueItem.context && !queueItem.metadata?.["pending_approval_id"] && (
             <p className={itemContext}>{queueItem.context}</p>
           )}
@@ -977,10 +1129,12 @@ export function ReviewQueuePanel({
               <span className={detailLabel}>Program:</span>
               <span className={detailValue}>{queueItem.program}</span>
             </div>
-            <div className={detailRow}>
-              <span className={detailLabel}>Branch:</span>
-              <span className={detailValue}>{queueItem.branch}</span>
-            </div>
+            {queueItem.branch && (
+              <div className={detailRow}>
+                <span className={detailLabel}>Branch:</span>
+                <span className={detailValue}>{queueItem.branch}</span>
+              </div>
+            )}
             <div className={detailRow}>
               <span className={detailLabel}>Path:</span>
               <span className={detailValue} title={queueItem.path}>{queueItem.path}</span>
@@ -1016,6 +1170,7 @@ export function ReviewQueuePanel({
             <Button
               intent="primary"
               size="lg"
+              disabled={isAutoResolved}
               onClick={(e) => {
                 e.stopPropagation();
                 approveRequest(queueItem.metadata!["pending_approval_id"]).finally(() => {
@@ -1023,7 +1178,7 @@ export function ReviewQueuePanel({
                   onAcknowledged?.(queueItem.sessionId);
                 });
               }}
-              title="Approve this tool-use request"
+              title={isAutoResolved ? `Auto-resolved by rule: ${autoResolvedRuleName} — no action needed` : "Approve this tool-use request"}
               aria-label="Approve"
               data-testid={`approve-${queueItem.sessionId}`}
             >
@@ -1032,6 +1187,7 @@ export function ReviewQueuePanel({
             <Button
               intent="danger"
               size="lg"
+              disabled={isAutoResolved}
               onClick={(e) => {
                 e.stopPropagation();
                 denyRequest(queueItem.metadata!["pending_approval_id"]).finally(() => {
@@ -1039,7 +1195,7 @@ export function ReviewQueuePanel({
                   onAcknowledged?.(queueItem.sessionId);
                 });
               }}
-              title="Deny this tool-use request"
+              title={isAutoResolved ? `Auto-resolved by rule: ${autoResolvedRuleName} — no action needed` : "Deny this tool-use request"}
               aria-label="Deny"
               data-testid={`deny-${queueItem.sessionId}`}
             >
@@ -1050,6 +1206,7 @@ export function ReviewQueuePanel({
               <Button
                 intent="secondary"
                 size="md"
+                disabled={isAutoResolved}
                 onClick={(e) => {
                   e.stopPropagation();
                   setRuleSaved(false);
@@ -1077,12 +1234,7 @@ export function ReviewQueuePanel({
             size="md"
             onClick={(e) => {
               e.stopPropagation();
-              if (onSkipSession) {
-                onSkipSession(queueItem.sessionId);
-              } else {
-                acknowledgeSession(queueItem.sessionId);
-              }
-              onAcknowledged?.(queueItem.sessionId);
+              void skipSession(queueItem.sessionId);
             }}
             title="Acknowledge session (remove from queue)"
             aria-label="Acknowledge session"
@@ -1137,9 +1289,47 @@ export function ReviewQueuePanel({
         })()}
       </div>
     </div>
-  );
+    );
+  };
 
-  if (error) {
+  // Renders one tier's items (grouped-by-strategy or flat), shared by the "Needs a decision"
+  // and "Informational" tiers (Task 3.2.1a/b) so grouping isn't reimplemented per tier.
+  // Always resolves the render index via `indexById` (position within the flat, whole-queue
+  // `items` array) rather than a tier-local loop index, so keyboard-nav "current item"
+  // highlighting stays correct regardless of which tier an item landed in.
+  const renderTierItems = (
+    tierItems: ReviewItem[],
+    grouped: ReturnType<typeof groupTierItems>
+  ) =>
+    grouped ? (
+      <>
+        {grouped.map((group) => (
+          <div key={group.groupKey} className={groupSection} data-testid={`review-group-${group.groupKey}`}>
+            <h4 className={groupHeading}>
+              {group.displayName} ({group.items.length})
+            </h4>
+            {group.items.map((queueItem) =>
+              renderQueueItem(queueItem, indexById.get(queueItem.sessionId) ?? -1)
+            )}
+          </div>
+        ))}
+      </>
+    ) : (
+      <>
+        {tierItems.map((queueItem) =>
+          renderQueueItem(queueItem, indexById.get(queueItem.sessionId) ?? -1)
+        )}
+      </>
+    );
+
+  // Task 3.2.1d (AC38): only take over the whole panel when there is no last-known-good
+  // data to fall back on (first-load failure). `lastUpdatedAt === null` means exactly
+  // "never completed a successful fetch" — unlike `allItems.length === 0`, it doesn't
+  // conflate that with "successfully fetched, legitimately empty, then a later background
+  // poll failed" (round-6 UX re-check). When `error` is set but `lastUpdatedAt !== null`,
+  // the queue renders normally below with a "Last updated <Xm ago> · Retry" indicator
+  // instead of discarding data that's still good.
+  if (error && lastUpdatedAt === null) {
     return (
       <div className={errorClass}>
         <p>Failed to load review queue: {error.message}</p>
@@ -1149,6 +1339,11 @@ export function ReviewQueuePanel({
       </div>
     );
   }
+
+  const showStalenessIndicator = !!error && lastUpdatedAt !== null;
+  const stalenessLabel = lastUpdatedAt !== null
+    ? formatDuration(BigInt(Math.max(0, Math.floor((Date.now() - lastUpdatedAt) / 1000))))
+    : null;
 
   return (
     <div className={panel} data-testid="review-queue">
@@ -1162,7 +1357,7 @@ export function ReviewQueuePanel({
       </div>
       <div className={header}>
         <div className={titleRow}>
-          <h2 className={title}>
+          <h2 className={title} ref={panelHeadingRef} tabIndex={-1}>
             Review Queue{" "}
             <span className={count} data-testid="review-queue-badge">
               {totalItems}
@@ -1208,6 +1403,20 @@ export function ReviewQueuePanel({
           </div>
         )}
 
+        {/* Task 3.2.1d (AC38): a background poll/fetch failure no longer discards
+            already-loaded data (see the narrowed `error && lastUpdatedAt === null`
+            takeover below) — instead it surfaces here, unconditionally, so it's visible
+            regardless of which content branch (hidden-by-filter, calm empty, or the
+            normal two-tier list) renders below. */}
+        {showStalenessIndicator && (
+          <div className={stalenessIndicator} role="status" data-testid="review-queue-staleness">
+            Last updated {stalenessLabel} ago ·{" "}
+            <button type="button" className={stalenessRetry} onClick={refresh}>
+              Retry
+            </button>
+          </div>
+        )}
+
         {/* Heads-up callout when oldest item is over 5 minutes old */}
         {oldestAgeSeconds > BigInt(300) && (
           <div className={oldestCallout} role="status">
@@ -1245,6 +1454,19 @@ export function ReviewQueuePanel({
             >
               ✕ Clear
             </button>
+          )}
+          {(skippableItems.length > 0 || isBulkSkipping) && (
+            <Button
+              intent="ghost"
+              size="md"
+              onClick={handleSkipAllVisible}
+              disabled={isBulkSkipping || skippableItems.length === 0}
+              title={`Skip every Needs a Decision item currently shown${hasActiveFilter ? " by the active filter" : ""} (excludes approval requests and Informational items)`}
+              aria-label={`Skip all ${skippableItems.length} visible Needs a Decision item${skippableItems.length === 1 ? "" : "s"}`}
+              data-testid="skip-all-visible"
+            >
+              {isBulkSkipping ? "Skipping…" : `⏭ Skip all (${skippableItems.length})`}
+            </Button>
           )}
         </div>
       )}
@@ -1489,7 +1711,39 @@ export function ReviewQueuePanel({
       <div className={itemsClass}>
         {loading && items.length === 0 ? (
           <div className={loadingClass}>Loading review queue...</div>
+        ) : allNeedsDecisionCount > 0 && needsDecisionItems.length === 0 ? (
+          // Task 3.2.1c step 2 (Product Triad Review round-5 blocker fix, ux.md AC18): fires
+          // whenever unfiltered urgent/high/medium items exist but the active filter has
+          // hidden all of them from this tier — regardless of whether `informationalItems`
+          // is also empty (e.g. a `reasonFilter` that empties the whole queue at once).
+          // Takes precedence over the legacy whole-list `items.length === 0` branch below.
+          <>
+            <div className={groupSection} data-testid="needs-decision-hidden-by-filter">
+              <h3 className={groupHeading}>Needs a decision</h3>
+              <div className={emptyClass}>
+                <p>
+                  {allNeedsDecisionCount} item{allNeedsDecisionCount === 1 ? "" : "s"} need
+                  {allNeedsDecisionCount === 1 ? "s" : ""} a decision, but{" "}
+                  {allNeedsDecisionCount === 1 ? "is" : "are"} hidden by your filter
+                </p>
+                <Button intent="secondary" size="md" onClick={clearAllFilters}>
+                  Clear filter
+                </Button>
+              </div>
+            </div>
+            {informationalItems.length > 0 && (
+              <CollapsibleSection
+                sectionKey="review-queue-informational"
+                title={`Informational (${informationalItems.length})`}
+              >
+                {renderTierItems(informationalItems, groupedInformationalItems)}
+              </CollapsibleSection>
+            )}
+          </>
         ) : items.length === 0 ? (
+          // Legacy whole-list empty states — now reachable only once allNeedsDecisionCount
+          // is itself 0 (the branch above already caught every case where it's nonzero).
+          // Copy unchanged from before Epic 3.2's tiering (Task 3.2.1c step 3).
           hasActiveFilter ? (
             <div className={emptyClass}>
               <p>No items match the current filter.</p>
@@ -1521,20 +1775,32 @@ export function ReviewQueuePanel({
             </div>
           )
         ) : (
+          // Task 3.2.1b: normal two-tier render — "Needs a decision" always expanded,
+          // "Informational" collapsed by default (reusing Collapsible.tsx, not a new
+          // accordion). Reachable here means allNeedsDecisionCount === 0 whenever
+          // needsDecisionItems is empty (the filter-hidden branch above already caught the
+          // allNeedsDecisionCount > 0 case), so an empty tier here is the genuine "All caught
+          // up" case (Surface 8), not a filter artifact.
           <>
-            {groupedItems ? (
-              groupedItems.map((group) => (
-                <div key={group.groupKey} className={groupSection} data-testid={`review-group-${group.groupKey}`}>
-                  <h4 className={groupHeading}>
-                    {group.displayName} ({group.items.length})
-                  </h4>
-                  {group.items.map((queueItem) =>
-                    renderQueueItem(queueItem, indexById.get(queueItem.sessionId) ?? -1)
-                  )}
+            <div className={groupSection}>
+              <h3 className={groupHeading}>Needs a decision</h3>
+              {needsDecisionItems.length === 0 ? (
+                <div className={`${emptyClass} ${completionState}`} data-testid="needs-decision-empty">
+                  <p className={completionIcon}>✓</p>
+                  <p>All caught up</p>
+                  <p className={emptySubtext}>Nothing needs your attention right now</p>
                 </div>
-              ))
-            ) : (
-              items.map((queueItem, index) => renderQueueItem(queueItem, index))
+              ) : (
+                renderTierItems(needsDecisionItems, groupedNeedsDecisionItems)
+              )}
+            </div>
+            {informationalItems.length > 0 && (
+              <CollapsibleSection
+                sectionKey="review-queue-informational"
+                title={`Informational (${informationalItems.length})`}
+              >
+                {renderTierItems(informationalItems, groupedInformationalItems)}
+              </CollapsibleSection>
             )}
           </>
         )}

@@ -166,6 +166,12 @@ export const item = style({
       boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
     },
   },
+  "@media": {
+    "(max-width: 640px)": {
+      flexDirection: "column",
+      gap: 0,
+    },
+  },
 });
 
 export const itemClickable = style({
@@ -186,6 +192,19 @@ export const itemActions = style({
   gap: "6px",
   padding: `12px 12px 12px 0`,
   borderLeft: `1px solid ${vars.color.borderColor}`,
+  "@media": {
+    "(max-width: 640px)": {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      justifyContent: "flex-start",
+      width: "100%",
+      padding: "0 16px 16px",
+      borderLeft: "none",
+      borderTop: `1px solid ${vars.color.borderColor}`,
+      marginTop: "8px",
+      paddingTop: "12px",
+    },
+  },
 });
 
 export const itemHeader = style({
@@ -238,6 +257,31 @@ export const commandPreview = style({
   overflowY: "auto",
   wordBreak: "break-all",
   whiteSpace: "pre-wrap",
+});
+
+// Epic 2.3.2 / ux.md Surface 9: dims a row that was auto-resolved by rule-reconciliation
+// while it was visible, for its ~5s "disable, don't hide" display window.
+export const autoResolvedItem = style({
+  opacity: 0.6,
+});
+
+export const autoResolvedBanner = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["2"],
+  padding: `${vars.space["2"]} 10px`,
+  background: vars.color.accentBg,
+  border: `1px solid ${vars.color.primary}`,
+  borderRadius: vars.radii.md,
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textPrimary,
+  marginTop: vars.space["2"],
+});
+
+export const autoResolvedBannerLink = style({
+  color: vars.color.primary,
+  textDecoration: "underline",
+  whiteSpace: "nowrap",
 });
 
 export const expiredBadge = style({
@@ -471,6 +515,7 @@ export const savedIndicator = style({
 export const filterToggleRow = style({
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: vars.space["2"],
   marginBottom: vars.space["3"],
 });
@@ -625,6 +670,27 @@ export const groupHeading = style({
   letterSpacing: "0.05em",
   paddingBottom: vars.space["1"],
   borderBottom: `1px solid ${vars.color.borderColor}`,
+});
+
+// Task 3.2.1d (AC38): "Last updated <Xm ago> · Retry" indicator shown when a background
+// poll fails without discarding already-loaded data — rendered once in the panel header
+// rather than per-branch, so it's visible regardless of which content state (hidden-by-
+// filter, calm empty, or the normal two-tier list) is rendering below.
+export const stalenessIndicator = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textMuted,
+  whiteSpace: "nowrap",
+});
+
+export const stalenessRetry = style({
+  background: "none",
+  border: "none",
+  padding: 0,
+  color: vars.color.primary,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 600,
+  cursor: "pointer",
+  textDecoration: "underline",
 });
 
 export const divergedBadge = style({

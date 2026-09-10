@@ -85,6 +85,17 @@ export function useTerminalFlowControl({
   const lastResyncTimeRef = useRef<number>(0);
   const lastResizeTimeRef = useRef<number>(0);
   const lastSentDimsRef = useRef<ResizeDimensions | null>(null);
+  // Last BOUNCE_HISTORY_SIZE sizes sent (oldest first; current lastSentDimsRef excluded,
+  // handled by value-dedup above). Lets resize() catch a repeat of any recent size, not
+  // just two sends back, since a real oscillating viewport can cycle through 3+ values.
+  const sentHistoryRef = useRef<ResizeDimensions[]>([]);
+  const BOUNCE_HISTORY_SIZE = 4;
+  // Consecutive bounces held back-to-back with no genuinely-new size sent in
+  // between. Drives an escalating hold (doubling, capped) so a viewport
+  // stuck oscillating for an extended period backs off further apart instead
+  // of retrying every flat BOUNCE_HOLD_MS — resets to 0 the moment a resize
+  // actually sends (a real new size, or a held one whose hold elapsed).
+  const bounceStreakRef = useRef(0);
   const pendingResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const paneRequestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dimensionSyncRef = useRef<{ cols?: number; rows?: number }>({});
@@ -124,11 +135,22 @@ export function useTerminalFlowControl({
     pushMessageRef.current?.(msg);
   }, [pushMessageRef]);
 
+  // Shared connection gate for every public dispatch function below — a copy-pasted
+  // per-callsite check is how sendInput's copy silently lacked a console.warn. Internal
+  // per-chunk/per-tick continuation checks stay inline (a background retry after the
+  // initial call already logged once shouldn't log again).
+  const ensureConnected = useCallback((action: string): boolean => {
+    if (!pushMessageRef.current || !isConnectedRef.current) {
+      console.warn(`[useTerminalFlowControl] Cannot ${action}: stream not connected`);
+      return false;
+    }
+    return true;
+  }, [pushMessageRef, isConnectedRef]);
+
   // ---- Resync ----
 
   const requestFullResync = useCallback((urgent: boolean = false, isVisibilityTriggered: boolean = false): string | undefined => {
-    if (!pushMessageRef.current || !isConnectedRef.current) {
-      console.warn("[useTerminalFlowControl] Cannot request resync: stream not connected");
+    if (!ensureConnected("request resync")) {
       return undefined;
     }
 
@@ -205,7 +227,7 @@ export function useTerminalFlowControl({
       handleError(err);
       return undefined;
     }
-  }, [sessionId, getTerminal, pushMessage, pushMessageRef, isConnectedRef, handleError, correlationIdEnabled, outstandingResyncIdsRef]);
+  }, [sessionId, getTerminal, pushMessage, ensureConnected, handleError, correlationIdEnabled, outstandingResyncIdsRef]);
 
   // ---- Message dispatch functions ----
 
@@ -213,7 +235,7 @@ export function useTerminalFlowControl({
   const CHUNK_DELAY_MS = 10;   // ms between chunks — yields event loop without stalling input
 
   const sendInput = useCallback((input: string) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) return;
+    if (!ensureConnected("send input")) return;
 
     const encoder = new TextEncoder();
     const inputBytes = encoder.encode(input);
@@ -265,13 +287,10 @@ export function useTerminalFlowControl({
       }
     };
     sendChunk();
-  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
+  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError, ensureConnected]);
 
   const resize = useCallback((cols: number, rows: number, force: boolean = false) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) {
-      console.warn("Cannot resize terminal: stream not connected");
-      return;
-    }
+    if (!ensureConnected("resize terminal")) return;
 
     // Cancel any previously deferred resize — we have newer dimensions now.
     // This MUST run before the value-dedup early-return below: otherwise a
@@ -317,7 +336,14 @@ export function useTerminalFlowControl({
         // Only record success (and refresh the throttle/dedup state) after the
         // send above completed without throwing.
         lastResizeTimeRef.current = Date.now();
+        if (lastSentDimsRef.current !== null) {
+          sentHistoryRef.current.push(lastSentDimsRef.current);
+          if (sentHistoryRef.current.length > BOUNCE_HISTORY_SIZE) {
+            sentHistoryRef.current.shift();
+          }
+        }
         lastSentDimsRef.current = { cols, rows };
+        bounceStreakRef.current = 0;
 
         // After resizing, request fresh terminal content
         paneRequestTimerRef.current = setTimeout(() => {
@@ -358,6 +384,24 @@ export function useTerminalFlowControl({
       }
     };
 
+    // Bounce detection: matches ANY of the last BOUNCE_HISTORY_SIZE sizes sent, not just
+    // the one two sends ago, since a real oscillating viewport can wander through 3+
+    // values on a slower cadence than THROTTLE_MS catches. Held out past an escalating
+    // BOUNCE_HOLD_MS instead of sent immediately, coalescing the oscillation into one settled resize.
+    const isBounce = !force && sentHistoryRef.current.some((d) => dimensionsEqual(d, { cols, rows }));
+    if (isBounce) {
+      const BOUNCE_HOLD_BASE_MS = 3000;
+      const BOUNCE_HOLD_MAX_MS = 15000;
+      const holdMs = Math.min(BOUNCE_HOLD_BASE_MS * 2 ** bounceStreakRef.current, BOUNCE_HOLD_MAX_MS);
+      bounceStreakRef.current += 1;
+      console.log(`[useTerminalFlowControl] Resize bounce detected (${cols}x${rows} matches recent history), holding ${holdMs}ms (streak ${bounceStreakRef.current})`);
+      pendingResizeTimerRef.current = setTimeout(() => {
+        pendingResizeTimerRef.current = null;
+        doSend();
+      }, holdMs);
+      return;
+    }
+
     if (!force && timeSinceLastResize < THROTTLE_MS && lastResizeTimeRef.current !== 0) {
       // Defer instead of drop: schedule the trailing-edge send so the final
       // settled size always reaches the server after rapid resize sequences.
@@ -371,13 +415,10 @@ export function useTerminalFlowControl({
     }
 
     doSend();
-  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError, correlationIdEnabled, outstandingResyncIdsRef]);
+  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, ensureConnected, handleError, correlationIdEnabled, outstandingResyncIdsRef]);
 
   const requestScrollback = useCallback((fromSequence: number, limit: number) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) {
-      console.warn("Cannot request scrollback: stream not connected");
-      return;
-    }
+    if (!ensureConnected("request scrollback")) return;
 
     try {
       console.log(`[useTerminalFlowControl] Requesting scrollback: fromSeq=${fromSequence}, limit=${limit}`);
@@ -396,13 +437,10 @@ export function useTerminalFlowControl({
     } catch (err) {
       handleError(err);
     }
-  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
+  }, [sessionId, pushMessage, ensureConnected, handleError]);
 
   const sendFlowControl = useCallback((paused: boolean, watermark?: number) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) {
-      console.warn("Cannot send flow control: stream not connected");
-      return;
-    }
+    if (!ensureConnected("send flow control")) return;
 
     try {
       console.log(`[useTerminalFlowControl] Sending flow control: paused=${paused}, watermark=${watermark || 'N/A'}`);
@@ -421,7 +459,7 @@ export function useTerminalFlowControl({
     } catch (err) {
       handleError(err);
     }
-  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
+  }, [sessionId, pushMessage, ensureConnected, handleError]);
 
   const markResyncComplete = useCallback(() => {
     isResyncingRef.current = null;

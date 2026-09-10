@@ -8,7 +8,7 @@ import "context"
 const (
 	// redactedSecret is written to analytics storage when a secret is detected
 	// in a command and must not be persisted.
-	redactedSecret = "[REDACTED: secret detected]"
+	redactedSecret = "[REDACTED: secret detected]" // #nosec G101 -- redaction sentinel string, not a credential
 	// redactedPrompt is inserted into AI prompts in place of a command that
 	// triggered the secret scanner (defense-in-depth, per FLAG-1).
 	redactedPrompt = "[REDACTED]"

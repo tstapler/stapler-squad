@@ -21,8 +21,13 @@ SCANNER="tools/scanner/backend/cmd/scanner"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-protos_raw="$("$SCRIPT_DIR/list-backend-protos.sh")"
-mapfile -t protos <<< "$protos_raw"
+# Avoid mapfile (bash 4+ only) — macOS ships bash 3.2 as /bin/bash and
+# #!/usr/bin/env bash resolves to whatever's first on PATH, not necessarily a
+# newer Homebrew bash.
+protos=()
+while IFS= read -r line; do
+  [ -n "$line" ] && protos+=("$line")
+done < <("$SCRIPT_DIR/list-backend-protos.sh")
 
 for proto in "${protos[@]}"; do
   "$SCANNER" "$proto" server/services/ "$TMP" >/dev/null

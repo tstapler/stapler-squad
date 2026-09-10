@@ -89,7 +89,19 @@ function makeItem(sessionId: string) {
   return { sessionId, sessionName: sessionId };
 }
 
+// AttentionReason.IDLE = 7 (session.v1.AttentionReason) — avoids importing the full
+// generated proto enum into this otherwise proto-free test file.
+const ATTENTION_REASON_IDLE = 7;
+
+function makeItemWithReason(sessionId: string, reason: number) {
+  return { sessionId, sessionName: sessionId, reason };
+}
+
 function makeQueue(items: Array<{ sessionId: string; sessionName: string }>) {
+  // `totalItems` here simulates the RAW backend stat (session/queue/queue.go's
+  // len(rq.items), over ALL items including idle ones per ADR-002) — deliberately NOT
+  // filtered, so the tests below can assert the hook republishes a filtered value instead
+  // of passing this raw stat through (adversarial-review.md Blocker 2).
   return { items, totalItems: items.length, byPriority: {}, byReason: {}, averageAgeSeconds: BigInt(0), oldestItemId: "", oldestAgeSeconds: BigInt(0) };
 }
 
@@ -202,6 +214,68 @@ describe("useReviewQueue — acknowledgeSession", () => {
     });
 
     expect(selectReviewQueueItems(store.getState() as never)).toHaveLength(0);
+  });
+});
+
+describe("useReviewQueue — acknowledgeSessions (bulk)", () => {
+  beforeEach(() => {
+    mockAcknowledgeSession.mockReset();
+    mockGetReviewQueue.mockReset();
+    mockWatchReviewQueue.mockReset();
+
+    mockGetReviewQueue.mockResolvedValue({ reviewQueue: makeQueue([]) });
+    mockWatchReviewQueue.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
+    });
+  });
+
+  it("removes all items from the store synchronously, then resolves with an empty failed list on full success", async () => {
+    const store = makeTestStore();
+    store.dispatch(setReviewQueue(makeQueue([makeItem("s1"), makeItem("s2"), makeItem("s3")]) as never));
+    mockAcknowledgeSession.mockResolvedValue({});
+
+    const { result } = renderHook(() => useReviewQueue({ useWebSocketPush: false, autoRefresh: false }), {
+      wrapper: makeWrapper(store),
+    });
+
+    let bulkResult!: { failed: string[] };
+    act(() => {
+      void result.current.acknowledgeSessions(["s1", "s2"]).then((r) => { bulkResult = r; });
+    });
+
+    // Optimistic removal happens synchronously for every id passed in.
+    expect(selectReviewQueueItems(store.getState() as never).map((i) => i.sessionId)).toEqual(["s3"]);
+
+    await waitFor(() => expect(bulkResult).toBeDefined());
+    expect(bulkResult.failed).toEqual([]);
+    expect(mockAcknowledgeSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("collects only the failed ids and calls refresh() to reconcile when some acknowledgements fail", async () => {
+    const store = makeTestStore();
+    store.dispatch(setReviewQueue(makeQueue([makeItem("s1"), makeItem("s2")]) as never));
+
+    // s1 succeeds, s2 fails
+    mockAcknowledgeSession.mockImplementation((req: { id: string }) =>
+      req.id === "s2" ? Promise.reject(new Error("boom")) : Promise.resolve({})
+    );
+    // Rollback refresh restores s2 (acknowledge never actually landed server-side)
+    mockGetReviewQueue.mockResolvedValue({ reviewQueue: makeQueue([makeItem("s2")]) });
+
+    const { result } = renderHook(() => useReviewQueue({ useWebSocketPush: false, autoRefresh: false }), {
+      wrapper: makeWrapper(store),
+    });
+
+    let bulkResult!: { failed: string[] };
+    await act(async () => {
+      bulkResult = await result.current.acknowledgeSessions(["s1", "s2"]);
+    });
+
+    expect(bulkResult.failed).toEqual(["s2"]);
+    // refresh() was called to reconcile the optimistic removal of the failed item
+    await waitFor(() => {
+      expect(selectReviewQueueItems(store.getState() as never).map((i) => i.sessionId)).toEqual(["s2"]);
+    });
   });
 });
 
@@ -320,5 +394,214 @@ describe("useReviewQueue — WebSocket reconnect retry loop", () => {
 
     // No additional calls after unmount
     expect(mockWatchReviewQueue).not.toHaveBeenCalled();
+  });
+});
+
+// ── Epic 3.2.2 — idle items excluded from items and totalItems ─────────────
+
+describe("useReviewQueue — idle-reason items excluded (Epic 3.2.2)", () => {
+  beforeEach(() => {
+    mockAcknowledgeSession.mockReset();
+    mockGetReviewQueue.mockReset();
+    mockWatchReviewQueue.mockReset();
+    mockWatchReviewQueue.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
+    });
+  });
+
+  it("filters idle-reason items out of `items` (Task 3.2.2a)", async () => {
+    const idle = makeItemWithReason("s-idle", ATTENTION_REASON_IDLE);
+    const approvalPending = makeItemWithReason("s-approval", 1); // ATTENTION_REASON_APPROVAL_PENDING
+    mockGetReviewQueue.mockResolvedValue({ reviewQueue: makeQueue([idle, approvalPending]) });
+
+    const store = makeTestStore();
+    const { result } = renderHook(() => useReviewQueue({ useWebSocketPush: false, autoRefresh: false }), {
+      wrapper: makeWrapper(store),
+    });
+
+    await waitFor(() => {
+      expect(result.current.items.map((i) => i.sessionId)).toEqual(["s-approval"]);
+    });
+  });
+
+  it("useReviewQueue totalItems excludes idle items — filtered items.length, not the raw backend stat (adversarial-review.md Blocker 2)", async () => {
+    const idle = makeItemWithReason("s-idle", ATTENTION_REASON_IDLE);
+    const approvalPending = makeItemWithReason("s-approval", 1);
+    const queue = makeQueue([idle, approvalPending]);
+    mockGetReviewQueue.mockResolvedValue({ reviewQueue: queue });
+
+    const store = makeTestStore();
+    const { result } = renderHook(() => useReviewQueue({ useWebSocketPush: false, autoRefresh: false }), {
+      wrapper: makeWrapper(store),
+    });
+
+    await waitFor(() => {
+      // The raw backend stat (queue.totalItems) is 2 — the hook must republish the
+      // filtered items.length (1), never pass the raw stat through.
+      expect(result.current.totalItems).toBe(1);
+    });
+    expect(queue.totalItems).toBe(2);
+  });
+});
+
+// ── Epic 2.3.2 — disable-in-place on a reconciliation-driven removal ───────
+
+describe("useReviewQueue — auto-resolved-by-rule item_removed (Epic 2.3.2, ux.md Surface 9)", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockAcknowledgeSession.mockReset();
+    mockGetReviewQueue.mockReset();
+    mockWatchReviewQueue.mockReset();
+    mockGetReviewQueue.mockResolvedValue({ reviewQueue: makeQueue([]) });
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.clearAllMocks();
+  });
+
+  it("keeps the item present and populates autoResolvedRules immediately, then removes it after the ~5s display window", async () => {
+    async function* fakeStream() {
+      yield { event: { case: "itemAdded", value: { item: makeItem("s1") } } };
+      yield {
+        event: {
+          case: "itemRemoved",
+          value: { sessionId: "s1", autoResolvedByRule: "Auto-allow safe git status checks" },
+        },
+      };
+      await new Promise(() => {}); // keep the stream open
+    }
+    mockWatchReviewQueue.mockReturnValue(fakeStream());
+
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useReviewQueue({ useWebSocketPush: true, autoRefresh: false }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await act(async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+
+    // Immediately after the event: item still present, banner state populated.
+    expect(selectReviewQueueItems(store.getState() as never).map((i) => i.sessionId)).toEqual(["s1"]);
+    expect(result.current.autoResolvedRules).toEqual({ s1: "Auto-allow safe git status checks" });
+
+    // Well before the ~5s window elapses, nothing has changed yet.
+    await act(async () => {
+      jest.advanceTimersByTime(2000);
+      await Promise.resolve();
+    });
+    expect(selectReviewQueueItems(store.getState() as never).map((i) => i.sessionId)).toEqual(["s1"]);
+    expect(result.current.autoResolvedRules).toEqual({ s1: "Auto-allow safe git status checks" });
+
+    // After the ~5s window: item is actually removed and the banner state clears.
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+      await Promise.resolve();
+    });
+    expect(selectReviewQueueItems(store.getState() as never)).toHaveLength(0);
+    expect(result.current.autoResolvedRules).toEqual({});
+  });
+
+  it("a plain (non-rule) item_removed still removes the item immediately, with no autoResolvedRules entry", async () => {
+    async function* fakeStream() {
+      yield { event: { case: "itemAdded", value: { item: makeItem("s1") } } };
+      yield { event: { case: "itemRemoved", value: { sessionId: "s1", reason: "user_action" } } };
+      await new Promise(() => {});
+    }
+    mockWatchReviewQueue.mockReturnValue(fakeStream());
+
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useReviewQueue({ useWebSocketPush: true, autoRefresh: false }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await act(async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+
+    expect(selectReviewQueueItems(store.getState() as never)).toHaveLength(0);
+    expect(result.current.autoResolvedRules).toEqual({});
+  });
+
+  it("invokes the onAutoResolved callback immediately when a rule name is present", async () => {
+    const onAutoResolved = jest.fn();
+    async function* fakeStream() {
+      yield { event: { case: "itemAdded", value: { item: makeItem("s1") } } };
+      yield {
+        event: {
+          case: "itemRemoved",
+          value: { sessionId: "s1", autoResolvedByRule: "Some rule" },
+        },
+      };
+      await new Promise(() => {});
+    }
+    mockWatchReviewQueue.mockReturnValue(fakeStream());
+
+    const store = makeTestStore();
+    renderHook(
+      () => useReviewQueue({ useWebSocketPush: true, autoRefresh: false, onAutoResolved }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await act(async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+
+    expect(onAutoResolved).toHaveBeenCalledWith("s1", "Some rule");
+  });
+
+  // Review finding #2: the fallback poll fires unconditionally (not gated on the WS stream
+  // being alive), and its REST response fully replaces state.reviewQueue. A poll landing
+  // inside the ~5s display window — after the backend has already deleted the reconciled
+  // item — must not evict the row early while its banner is still showing.
+  it("does not evict an item during its ~5s display window when the fallback poll lands mid-window", async () => {
+    async function* fakeStream() {
+      yield { event: { case: "itemAdded", value: { item: makeItem("s1") } } };
+      yield {
+        event: {
+          case: "itemRemoved",
+          value: { sessionId: "s1", autoResolvedByRule: "Auto-allow safe git status checks" },
+        },
+      };
+      await new Promise(() => {});
+    }
+    mockWatchReviewQueue.mockReturnValue(fakeStream());
+
+    // Initial mount fetch still sees s1; by the time the fallback poll below fires,
+    // the backend has already removed it (simulating the real reconciliation race).
+    mockGetReviewQueue
+      .mockResolvedValueOnce({ reviewQueue: makeQueue([makeItem("s1")]) })
+      .mockResolvedValue({ reviewQueue: makeQueue([]) });
+
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useReviewQueue({ useWebSocketPush: true, autoRefresh: false, fallbackPollInterval: 2000 }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await act(async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+    expect(result.current.autoResolvedRules).toEqual({ s1: "Auto-allow safe git status checks" });
+
+    // Fallback poll fires at t=2s (well inside the 5s window) with a REST response
+    // that no longer contains s1 — the row must survive the full-queue replace.
+    await act(async () => {
+      jest.advanceTimersByTime(2000);
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+    expect(selectReviewQueueItems(store.getState() as never).map((i) => i.sessionId)).toEqual(["s1"]);
+    expect(result.current.autoResolvedRules).toEqual({ s1: "Auto-allow safe git status checks" });
+
+    // After the full ~5s window elapses, the deferred removal still fires as normal.
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+      await Promise.resolve();
+    });
+    expect(selectReviewQueueItems(store.getState() as never)).toHaveLength(0);
+    expect(result.current.autoResolvedRules).toEqual({});
   });
 });

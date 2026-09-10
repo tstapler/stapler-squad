@@ -3,6 +3,7 @@ import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { AuthProvider } from "@/lib/contexts/AuthContext";
 import { Providers } from "./Providers";
 import { NotificationPanel } from "@/components/ui/NotificationPanel";
+import { TmuxVersionMismatchBanner } from "@/components/system/TmuxVersionMismatchBanner";
 import { ViewportProvider } from "@/components/providers/ViewportProvider";
 import { CockpitShell } from "@/components/layout/CockpitShell";
 import { matrixTheme, cyberpunk77Theme, wh40kTheme, cleanTheme, lightTheme, darkTheme } from "@/styles/theme.css";
@@ -63,6 +64,7 @@ export default function RootLayout({
                 <CockpitShell>
                   <a href="#main-content" className="skip-link">Skip to main content</a>
                   <main id="main-content" className={mainContent}>
+                    <TmuxVersionMismatchBanner />
                     {children}
                   </main>
                   <NotificationPanel />

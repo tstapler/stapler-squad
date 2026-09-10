@@ -11,6 +11,50 @@ import (
 	"go.uber.org/goleak"
 )
 
+// TestRecordFromResult_ThreadsSourceOntoEntry verifies pi-support Story 4.3.1b:
+// the source value passed to RecordFromResult ends up on the resulting
+// AnalyticsEntry, so per-agent approval patterns are distinguishable in the
+// audit/analytics record — regardless of the value ApprovalHandler defaulted it
+// to ("claude" or "pi") before calling in.
+func TestRecordFromResult_ThreadsSourceOntoEntry(t *testing.T) {
+	t.Parallel()
+	store := NewAnalyticsStore(nil)
+
+	store.RecordFromResult(
+		classifier.PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "ls"}},
+		classifier.ClassificationResult{Decision: classifier.AutoAllow},
+		"sess-1", "", 0, "pi",
+	)
+
+	select {
+	case entry := <-store.ch:
+		assert.Equal(t, "pi", entry.Source)
+	default:
+		t.Fatal("expected RecordFromResult to enqueue an entry")
+	}
+}
+
+// TestRecordFromResult_DefaultsSourceEmpty_When_CallerPassesEmptyString mirrors
+// Claude's unmodified curl hook path (ApprovalHandler defaults empty to
+// "claude" at its own call site — RecordFromResult itself never re-defaults).
+func TestRecordFromResult_DefaultsSourceEmpty_When_CallerPassesEmptyString(t *testing.T) {
+	t.Parallel()
+	store := NewAnalyticsStore(nil)
+
+	store.RecordFromResult(
+		classifier.PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "ls"}},
+		classifier.ClassificationResult{Decision: classifier.AutoAllow},
+		"sess-1", "", 0, "",
+	)
+
+	select {
+	case entry := <-store.ch:
+		assert.Equal(t, "", entry.Source)
+	default:
+		t.Fatal("expected RecordFromResult to enqueue an entry")
+	}
+}
+
 func TestClassify_DailyBucketAutoApproveRate(t *testing.T) {
 	t.Parallel()
 	b := DailyBucket{

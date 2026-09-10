@@ -75,6 +75,8 @@ func detectAgyStatus() bool {
 		filepath.Join(home, ".gemini", "config", "hooks.json"),
 	}
 	for _, c := range candidates {
+		// #nosec G304 -- c is one of a fixed, hardcoded set of home-dir-relative
+		// candidate paths above; never derived from network/RPC input.
 		raw, err := os.ReadFile(c)
 		if err == nil && strings.Contains(string(raw), "check --antigravity") {
 			return true
@@ -93,6 +95,8 @@ func detectGeminiStatus() bool {
 		filepath.Join(home, ".gemini", "config.json"),
 	}
 	for _, c := range candidates {
+		// #nosec G304 -- c is one of a fixed, hardcoded set of home-dir-relative
+		// candidate paths above; never derived from network/RPC input.
 		raw, err := os.ReadFile(c)
 		if err == nil && strings.Contains(string(raw), "check --gemini") {
 			return true

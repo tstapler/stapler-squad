@@ -288,6 +288,7 @@ func (r *EntWorkflowRepository) GetByWebhookSlug(ctx context.Context, slug strin
 // ListAll returns all workflows sorted ascending by created_at.
 // A safety cap of 1000 is applied to prevent runaway queries.
 func (r *EntWorkflowRepository) ListAll(ctx context.Context) ([]*ent.Workflow, error) {
+	//nolint:entfullscan capped at Limit(1000) below; doc comment states this explicitly.
 	wfs, err := r.client.Workflow.Query().
 		Order(ent.Asc(workflow.FieldCreatedAt)).
 		Limit(1000).

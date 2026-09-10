@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -52,6 +53,45 @@ type RulesService struct {
 	// claude-settings files. Nil until SetClaudeSettingsWatcher is called (or if fsnotify
 	// is unavailable) — ReloadClaudeSettingsRules degrades to CodeUnimplemented in that case.
 	claudeSettingsWatcher *ClaudeSettingsWatcher
+
+	// approvalSvc is nil until SetApprovalService is called — reconcilePendingApprovals
+	// no-ops when nil, same idiom as claudeSettingsWatcher.
+	approvalSvc reconciliationResolver
+
+	// reconcileDoneHook is a test-only synchronization point invoked exactly once per
+	// reconcilePendingApprovalsSafe call, after that call's recover()-and-summary-log logic
+	// has run — whether or not the pass panicked. Nil in production. Lets tests observe
+	// completion of the async reconciliation goroutine via <-doneCh instead of sleeping,
+	// the same rationale as testHook above.
+	reconcileDoneHook func()
+}
+
+// maxReconcileAutoResolvesPerPass caps how many pending approvals a single reconciliation
+// pass will auto-resolve, so a pathological rule edit against a large pending backlog can't
+// make one pass run unbounded. Excess items are left pending for the next pass.
+const maxReconcileAutoResolvesPerPass = 50
+
+// reconcileCounts accumulates one pass's counters in reconcilePendingApprovalsSafe's
+// stack frame (not reconcilePendingApprovals'), so a mid-loop panic in the
+// latter never leaves the deferred summary log with stale/zeroed counts —
+// it reads the same struct the loop was just incrementing by pointer.
+type reconcileCounts struct {
+	resolved, skipped, declinedByGuard, deferredToHuman, lostToConcurrentPass int
+}
+
+// reconciliationResolver is the narrow contract reconcilePendingApprovals needs
+// from ApprovalService, satisfied implicitly by *ApprovalService. Letting
+// RulesService depend on this instead of the concrete type lets
+// reconciliation-loop tests inject a lightweight fake for cases that only
+// exercise classify-and-branch logic, without a real ApprovalStore.
+type reconciliationResolver interface {
+	ListPendingApprovalsInternal() []*PendingApproval
+	ResolveApprovalReconciled(ctx context.Context, approvalID, decision, ruleName string) error
+	// IsApprovalPending disambiguates a genuine CI-red-guard decline from
+	// "lost the race to a concurrent reconciliation pass" when
+	// ResolveApprovalReconciled returns connect.CodeFailedPrecondition for
+	// both (adversarial-review.md Concern 2) — see Task 2.2.1a.
+	IsApprovalPending(approvalID string) bool
 }
 
 // SetClaudeSettingsWatcher wires the watcher constructed alongside this service in
@@ -59,6 +99,14 @@ type RulesService struct {
 // SetHeadlessPool elsewhere in this package.
 func (rs *RulesService) SetClaudeSettingsWatcher(w *ClaudeSettingsWatcher) {
 	rs.claudeSettingsWatcher = w
+}
+
+// SetApprovalService wires the ApprovalService reference used by
+// reconcilePendingApprovals to resolve newly-covered pending approvals.
+// Accepting the interface (not *ApprovalService) lets a test fake be passed
+// directly without an adapter.
+func (rs *RulesService) SetApprovalService(as reconciliationResolver) {
+	rs.approvalSvc = as
 }
 
 // afterRebuildReadHook calls testHook if set (see field doc comment); a no-op in production.
@@ -207,7 +255,8 @@ func (rs *RulesService) ReloadClaudeSettingsRules(
 			len(failedPaths), strings.Join(failedPaths, ", "))
 		log.Warn("[RulesService] claude-settings reload had failures", "failed_paths", failedPaths, "rule_count", ruleCount)
 		return connect.NewResponse(&sessionv1.ReloadClaudeSettingsRulesResponse{
-			Success:   false,
+			Success: false,
+			// #nosec G115 -- count of rules parsed from local ~/.claude/settings.json files, bounded by realistic config file size
 			RuleCount: int32(ruleCount),
 			Message:   msg,
 		}), nil
@@ -215,7 +264,8 @@ func (rs *RulesService) ReloadClaudeSettingsRules(
 
 	log.Info("[RulesService] reloaded claude-settings rules", "rule_count", ruleCount)
 	return connect.NewResponse(&sessionv1.ReloadClaudeSettingsRulesResponse{
-		Success:   true,
+		Success: true,
+		// #nosec G115 -- count of rules parsed from local ~/.claude/settings.json files, bounded by realistic config file size
 		RuleCount: int32(ruleCount),
 		Message:   fmt.Sprintf("Reloaded %d claude-settings rule(s).", ruleCount),
 	}), nil
@@ -253,14 +303,17 @@ func (rs *RulesService) GetApprovalAnalytics(
 		DailyBuckets: make([]*sessionv1.DailyBucketProto, 0, len(buckets)),
 	}
 	for _, b := range buckets {
+		// Per-day decision counts derived from the local analytics decision log
+		// (window capped at 90 days) — bounded by realistic single-user daily
+		// tool-call volume, nowhere near int32 overflow.
 		protoResp.DailyBuckets = append(protoResp.DailyBuckets, &sessionv1.DailyBucketProto{
 			Date:        b.Date,
-			AutoAllow:   int32(b.AutoAllow),
-			AutoDeny:    int32(b.AutoDeny),
-			Escalate:    int32(b.Escalate),
-			ManualAllow: int32(b.ManualAllow),
-			ManualDeny:  int32(b.ManualDeny),
-			Total:       int32(b.Total),
+			AutoAllow:   int32(b.AutoAllow),   // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			AutoDeny:    int32(b.AutoDeny),    // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			Escalate:    int32(b.Escalate),    // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			ManualAllow: int32(b.ManualAllow), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			ManualDeny:  int32(b.ManualDeny),  // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			Total:       int32(b.Total),       // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
 	return connect.NewResponse(protoResp), nil
@@ -354,14 +407,16 @@ func (rs *RulesService) GetProgramAnalytics(
 	// Build daily trend proto
 	trendProtos := make([]*sessionv1.DailyBucketProto, 0, len(dailyBuckets))
 	for _, b := range dailyBuckets {
+		// Same rationale as GetApprovalAnalytics above: per-day counts from the
+		// local analytics decision log, bounded by realistic single-user volume.
 		trendProtos = append(trendProtos, &sessionv1.DailyBucketProto{
 			Date:        b.Date,
-			AutoAllow:   int32(b.AutoAllow),
-			AutoDeny:    int32(b.AutoDeny),
-			Escalate:    int32(b.Escalate),
-			ManualAllow: int32(b.ManualAllow),
-			ManualDeny:  int32(b.ManualDeny),
-			Total:       int32(b.Total),
+			AutoAllow:   int32(b.AutoAllow),   // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			AutoDeny:    int32(b.AutoDeny),    // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			Escalate:    int32(b.Escalate),    // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			ManualAllow: int32(b.ManualAllow), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			ManualDeny:  int32(b.ManualDeny),  // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			Total:       int32(b.Total),       // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
 
@@ -515,27 +570,162 @@ func filterRulesBySource(rules []classifier.Rule, allowed ...classifier.RuleSour
 // so a concurrent rebuildClaudeSettingsRules call can't interleave its own read-filter-replace
 // sequence with this one and silently drop one side's update.
 func (rs *RulesService) rebuildClassifier() {
-	rs.rebuildMu.Lock()
-	defer rs.rebuildMu.Unlock()
+	func() {
+		rs.rebuildMu.Lock()
+		defer rs.rebuildMu.Unlock()
 
-	userRules := rs.rulesStore.ToRules()
-	existing := rs.classifier.Rules()
-	rs.afterRebuildReadHook() // test-only: see field doc comment
-	nonUser := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceClaudeSettings)
-	rs.classifier.ReplaceRules(append(nonUser, userRules...))
+		userRules := rs.rulesStore.ToRules()
+		existing := rs.classifier.Rules()
+		rs.afterRebuildReadHook() // test-only: see field doc comment
+		nonUser := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceClaudeSettings)
+		rs.classifier.ReplaceRules(append(nonUser, userRules...))
+	}()
+	// Per ADR-004: reconciliation runs asynchronously, after rebuildMu releases, so the
+	// RPC that triggered this rebuild (UpsertApprovalRule/DeleteApprovalRule) returns
+	// before a large pending backlog finishes reconciling. Always the panic-recovering
+	// wrapper, never the bare method — see reconcilePendingApprovalsSafe's doc comment.
+	go rs.reconcilePendingApprovalsSafe()
 }
 
 // rebuildClaudeSettingsRules hot-swaps the claude-settings-sourced rules in the classifier,
 // keeping seed and DB-backed user rules unchanged. Guarded by rebuildMu for the same reason
 // as rebuildClassifier — see that method's doc comment.
 func (rs *RulesService) rebuildClaudeSettingsRules(newClaudeRules []classifier.Rule) {
-	rs.rebuildMu.Lock()
-	defer rs.rebuildMu.Unlock()
+	func() {
+		rs.rebuildMu.Lock()
+		defer rs.rebuildMu.Unlock()
 
-	existing := rs.classifier.Rules()
-	rs.afterRebuildReadHook() // test-only: see field doc comment
-	kept := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceUser)
-	rs.classifier.ReplaceRules(append(kept, newClaudeRules...))
+		existing := rs.classifier.Rules()
+		rs.afterRebuildReadHook() // test-only: see field doc comment
+		kept := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceUser)
+		rs.classifier.ReplaceRules(append(kept, newClaudeRules...))
+	}()
+	// See rebuildClassifier's identical comment above — same ADR-004 rationale.
+	go rs.reconcilePendingApprovalsSafe()
+}
+
+// reconcilePendingApprovalsSafe wraps reconcilePendingApprovals with panic
+// recovery, matching ReviewQueuePoller.checkSessionsSafe's house idiom for
+// background goroutines. The summary log lives here (not in
+// reconcilePendingApprovals) so a mid-loop panic still logs whatever partial
+// progress counts had reached — see adversarial-review.md for the analysis.
+func (rs *RulesService) reconcilePendingApprovalsSafe() {
+	counts := &reconcileCounts{}
+	defer func() {
+		r := recover()
+		if r != nil {
+			log.Error("[RulesService] panic in reconcilePendingApprovals recovered", "panic", r,
+				"resolved_count", counts.resolved, "skipped_count", counts.skipped,
+				"declined_by_ci_guard_count", counts.declinedByGuard)
+		}
+		if r != nil || counts.resolved > 0 || counts.skipped > 0 || counts.declinedByGuard > 0 ||
+			counts.deferredToHuman > 0 || counts.lostToConcurrentPass > 0 {
+			log.Info("[RulesService] reconciliation pass complete",
+				"resolved_count", counts.resolved, "skipped_count", counts.skipped,
+				"declined_by_ci_guard_count", counts.declinedByGuard,
+				"deferred_to_human_count", counts.deferredToHuman,
+				"lost_to_concurrent_pass_count", counts.lostToConcurrentPass,
+				"capped", counts.skipped > 0, "panicked", r != nil)
+		}
+		if rs.reconcileDoneHook != nil {
+			rs.reconcileDoneHook()
+		}
+	}()
+	rs.reconcilePendingApprovals(counts)
+}
+
+// reconcilePendingApprovals re-runs Classify() against every currently
+// pending, Escalate-sourced approval using the just-rebuilt rule set, and
+// resolves any that now decide via ApprovalService.ResolveApprovalReconciled.
+// counts is owned by the caller (reconcilePendingApprovalsSafe) and
+// incremented in place so its summary log survives a panic here. Called
+// after rebuildMu releases — Classify() is a pure read, so this needs no
+// lock of its own. Always call via reconcilePendingApprovalsSafe, never
+// directly, outside of tests that intentionally exercise the panic path.
+//
+// Accepted limitation: no rule-generation snapshot is taken at pass start, so
+// a concurrent rule edit mid-pass (ADR-004 permits this) can classify later
+// items in the same pass against a newer ruleset than earlier ones — see
+// adversarial-review.md Minor 3 for why this is only a summary-log framing
+// issue, not a per-item accuracy one.
+//
+// Accepted gap: SessionIdleMinutes is left at its zero value below because
+// RulesService has no live-instance idle-minutes lookup (only ApprovalHandler
+// does); a MinSessionIdleMinutes > 0 rule fails closed here and is picked up
+// on the item's next natural classification instead. See adversarial-review.md.
+func (rs *RulesService) reconcilePendingApprovals(counts *reconcileCounts) {
+	if rs.approvalSvc == nil {
+		return
+	}
+	// Deterministic, oldest-escalated-first order before the cap is applied
+	// (pre-mortem.md #5): ApprovalStore.pending is a map, and
+	// ListPendingApprovalsInternal/ListAll iterate it directly, so which N
+	// of a >maxReconcileAutoResolvesPerPass backlog get resolved would
+	// otherwise be arbitrary and different on every pass. Sorting by
+	// CreatedAt makes repeated passes monotonic: the same oldest items
+	// resolve first every time, so a capped pass followed by the next
+	// unrelated rule edit continues draining the backlog in order instead
+	// of touching a random subset each time.
+	pending := rs.approvalSvc.ListPendingApprovalsInternal()
+	sort.Slice(pending, func(i, j int) bool { return pending[i].CreatedAt.Before(pending[j].CreatedAt) })
+	for _, a := range pending {
+		payload := classifier.PermissionRequestPayload{
+			ToolName: a.ToolName, ToolInput: a.ToolInput,
+			Cwd: a.Cwd, PermissionMode: a.PermissionMode,
+		}
+		ctx := classifier.ClassificationContext{Cwd: a.Cwd}
+		result := rs.classifier.Classify(payload, ctx)
+		if result.Decision == classifier.Escalate {
+			continue
+		}
+		if counts.resolved >= maxReconcileAutoResolvesPerPass {
+			counts.skipped++
+			continue
+		}
+		decision := "deny"
+		if result.Decision == classifier.AutoAllow {
+			decision = "allow"
+		}
+		if err := rs.approvalSvc.ResolveApprovalReconciled(context.Background(), a.ID, decision, result.RuleName); err != nil {
+			// Three-way classification (adversarial-review.md Blocker + Concern 1/2,
+			// iteration 2). All three below can surface as errors from
+			// ResolveApprovalReconciled, and must not be conflated:
+			switch {
+			case connect.CodeOf(err) == connect.CodeAborted:
+				// Lost the race to an in-flight HUMAN decision (Task 2.1.1c's
+				// arbitration) — research/ux.md's "favor the human" mandate in
+				// action, not an error. Never retried within this pass.
+				counts.deferredToHuman++
+				log.Info("[RulesService] reconciliation deferred to in-flight human decision",
+					"approval_id", a.ID, "session_id", a.SessionID)
+			case connect.CodeOf(err) == connect.CodeFailedPrecondition:
+				// Both the CI-red guard (approval_service.go's block-on-red-CI check,
+				// *before* approvalStore.Resolve is reached) and "another reconciliation
+				// pass already resolved this" (Task 2.1.1c's IsReconciled()-aware
+				// not-found branch) surface this same code — disambiguate by checking
+				// whether the item is still present in the store (adversarial-review.md
+				// Concern 2): a real CI-guard decline leaves it pending; a lost race to a
+				// concurrent pass has already removed it.
+				if rs.approvalSvc.IsApprovalPending(a.ID) {
+					counts.declinedByGuard++
+					log.Info("[RulesService] reconciliation declined by CI-red guard",
+						"approval_id", a.ID, "session_id", a.SessionID,
+						"rule_id", result.RuleID, "rule_name", result.RuleName)
+				} else {
+					counts.lostToConcurrentPass++
+					log.Info("[RulesService] reconciliation lost race to a concurrent reconciliation pass",
+						"approval_id", a.ID, "session_id", a.SessionID)
+				}
+			}
+			continue // otherwise (e.g. CodeNotFound): lost the race to a human's
+			// already-completed, non-reconciled resolution — expected, uncounted
+		}
+		counts.resolved++
+		log.Info("[RulesService] reconciled pending approval",
+			"approval_id", a.ID, "session_id", a.SessionID,
+			"rule_id", result.RuleID, "rule_name", result.RuleName,
+			"before_decision", "escalate", "after_decision", decision)
+	}
 }
 
 // -- Mapping helpers ----------------------------------------------------------
@@ -553,7 +743,7 @@ func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
 		RiskLevel:      spec.RiskLevel,
 		Reason:         spec.Reason,
 		Alternative:    spec.Alternative,
-		Priority:       int32(spec.Priority),
+		Priority:       int32(spec.Priority), // #nosec G115 -- every write path into RuleSpec.Priority is already bounded: DB round-trips through an int32 proto field, and YAML import is range-checked in validateYAMLEntry
 		Enabled:        spec.Enabled,
 		Source:         spec.Source,
 
@@ -613,51 +803,55 @@ func ruleToSpec(r classifier.Rule) RuleSpec {
 	return spec
 }
 
+// summaryToProto converts an in-process AnalyticsSummary (built by aggregating
+// this single local user's decision-log entries — see analytics_store.go) into
+// its proto form. Every count/int field converted to int32 below is bounded by
+// realistic single-user decision-log volume, nowhere near int32 overflow.
 func summaryToProto(s AnalyticsSummary) *sessionv1.AnalyticsSummaryProto {
 	p := &sessionv1.AnalyticsSummaryProto{
-		TotalDecisions:   int32(s.TotalDecisions),
+		TotalDecisions:   int32(s.TotalDecisions), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		DecisionCounts:   make(map[string]int32, len(s.DecisionCounts)),
 		AutoApproveRate:  s.AutoApproveRate,
 		ManualReviewRate: s.ManualReviewRate,
 	}
 	for k, v := range s.DecisionCounts {
-		p.DecisionCounts[k] = int32(v)
+		p.DecisionCounts[k] = int32(v) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	}
 	for _, t := range s.TopTools {
-		p.TopTools = append(p.TopTools, &sessionv1.ToolStatProto{ToolName: t.ToolName, Count: int32(t.Count)})
+		p.TopTools = append(p.TopTools, &sessionv1.ToolStatProto{ToolName: t.ToolName, Count: int32(t.Count)}) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	}
 	for _, c := range s.TopDeniedCommands {
-		p.TopDeniedCommands = append(p.TopDeniedCommands, &sessionv1.CommandStatProto{Preview: c.Preview, ToolName: c.ToolName, Count: int32(c.Count)})
+		p.TopDeniedCommands = append(p.TopDeniedCommands, &sessionv1.CommandStatProto{Preview: c.Preview, ToolName: c.ToolName, Count: int32(c.Count)}) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	}
 	for _, r := range s.TopTriggeredRules {
-		p.TopTriggeredRules = append(p.TopTriggeredRules, &sessionv1.RuleStatProto{RuleId: r.RuleID, RuleName: r.RuleName, Count: int32(r.Count)})
+		p.TopTriggeredRules = append(p.TopTriggeredRules, &sessionv1.RuleStatProto{RuleId: r.RuleID, RuleName: r.RuleName, Count: int32(r.Count)}) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	}
 	for _, prog := range s.TopCommandPrograms {
 		p.TopCommandPrograms = append(p.TopCommandPrograms, &sessionv1.ProgramStatProto{
 			ProgramName: prog.Program,
 			Category:    prog.Category,
-			Count:       int32(prog.Count),
+			Count:       int32(prog.Count), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
 	for _, imp := range s.TopPythonImports {
 		p.TopPythonImports = append(p.TopPythonImports, &sessionv1.ImportStatProto{
 			Module: imp.Module,
-			Count:  int32(imp.Count),
+			Count:  int32(imp.Count), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
-	p.CoverageGapCount = int32(s.CoverageGapCount)
+	p.CoverageGapCount = int32(s.CoverageGapCount) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	p.CoverageGapRate = s.CoverageGapRate
 	for _, t := range s.TopUncoveredTools {
 		p.TopUncoveredTools = append(p.TopUncoveredTools, &sessionv1.ToolStatProto{
 			ToolName: t.ToolName,
-			Count:    int32(t.Count),
+			Count:    int32(t.Count), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
 	for _, prog := range s.TopUncoveredPrograms {
 		p.TopUncoveredPrograms = append(p.TopUncoveredPrograms, &sessionv1.ProgramStatProto{
 			ProgramName: prog.Program,
 			Category:    prog.Category,
-			Count:       int32(prog.Count),
+			Count:       int32(prog.Count), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
 	for _, s := range s.CommandSubcommandStats {
@@ -665,16 +859,16 @@ func summaryToProto(s AnalyticsSummary) *sessionv1.AnalyticsSummaryProto {
 			ProgramName: s.Program,
 			Subcommand:  s.Subcommand,
 			Category:    s.Category,
-			Count:       int32(s.Count),
+			Count:       int32(s.Count), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
 	p.EscalationReasonCounts = make(map[string]int32, len(s.EscalationReasonCounts))
 	for k, v := range s.EscalationReasonCounts {
-		p.EscalationReasonCounts[k] = int32(v)
+		p.EscalationReasonCounts[k] = int32(v) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	}
 	p.RiskLevelCounts = make(map[string]int32, len(s.RiskLevelCounts))
 	for k, v := range s.RiskLevelCounts {
-		p.RiskLevelCounts[k] = int32(v)
+		p.RiskLevelCounts[k] = int32(v) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	}
 	if !s.WindowStart.IsZero() {
 		p.WindowStart = timestamppb.New(s.WindowStart)
@@ -1138,10 +1332,20 @@ func validateYAMLEntry(e yamlRuleEntry) (*sessionv1.ApprovalRuleProto, []string)
 		}
 	}
 
+	// Priority comes straight from a user-uploaded YAML file with no schema-level
+	// bound (unlike the DB-backed approval_rule.priority column, which is at least
+	// typed but also unbounded) -- reject anything that would silently truncate or
+	// sign-flip through the int32 conversion below.
+	if e.Priority < 0 || e.Priority > math.MaxInt32 {
+		errs = append(errs, fmt.Sprintf("priority %d out of range: must be between 0 and %d", e.Priority, math.MaxInt32))
+	}
+
 	if len(errs) > 0 {
 		return nil, errs
 	}
 
+	// #nosec G115 -- range-checked against [0, math.MaxInt32] above; out-of-range
+	// values return a validation error before reaching this conversion.
 	priority := int32(e.Priority)
 	if priority == 0 {
 		priority = 10

@@ -43,6 +43,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 )
 
@@ -622,7 +623,7 @@ func TestCreateSession_RemoteTarget_NewProject_InitializesGitRepoOnRemoteHost(t 
 	// mirroring InitializeProjectDirectory's local behavior (util.go's
 	// createInitialCommit) rather than merely creating an empty directory.
 	require.DirExists(t, filepath.Join(newProjectPath, ".git"))
-	repo, openErr := gogit.PlainOpen(newProjectPath)
+	repo, openErr := gitutil.OpenRepo(newProjectPath)
 	require.NoError(t, openErr, "remote path must be a valid git repo after new_project init")
 	head, headErr := repo.Head()
 	require.NoError(t, headErr, "remote repo must have a commit (git worktree add requires at least one)")

@@ -273,13 +273,6 @@ func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
 	if changed && newEtag != "" {
 		p.listEtags.Store(key, listCacheEntry{etag: newEtag, noPR: errors.Is(fetchErr, github.ErrNoPR)})
 	}
-	if !changed {
-		// 304 Not Modified: re-apply no-PR backoff if the cached result had no PR.
-		if v, ok := p.listEtags.Load(key); ok && v.(listCacheEntry).noPR {
-			p.setNoPRBackoff(key)
-		}
-		return
-	}
 	if fetchErr != nil {
 		if errors.Is(fetchErr, github.ErrNoPR) {
 			p.setNoPRBackoff(key)
@@ -287,6 +280,13 @@ func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
 		}
 		if !p.handleFetchError(fetchErr) {
 			log.Warn("worktree PR poller: PR discovery failed", "branch", item.Branch, "err", fetchErr)
+		}
+		return
+	}
+	if !changed {
+		// 304 Not Modified: re-apply no-PR backoff if the cached result had no PR.
+		if v, ok := p.listEtags.Load(key); ok && v.(listCacheEntry).noPR {
+			p.setNoPRBackoff(key)
 		}
 		return
 	}

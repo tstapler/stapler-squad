@@ -69,6 +69,19 @@ type SessionController interface {
 	// the client cursor after a snapshot renders.
 	GetPaneCursorPosition() (x, y int, err error)
 
+	// StartControlMode ensures the underlying control-mode process is
+	// running, forking a fresh one if it isn't (refcounted -- see
+	// session/tmux/control_mode.go) and otherwise a no-op. Called by
+	// pumpControlModeOutputIntoHub (server/services/connectrpc_websocket.go)
+	// before every (re)subscribe, matching StopControlMode's one call from
+	// StreamHub.ForceTeardown: without this, a control-mode crash mid-session
+	// left the pump looping forever against a permanently pre-closed
+	// subscription -- SubscribeControlModeUpdates alone never restarts a
+	// dead process, only StartControlMode does -- silently and permanently
+	// starving the hub (and every subscriber watching it) of live output,
+	// including the subscriber's own typed input echoing back (2026-09-01).
+	StartControlMode() error
+
 	// StopControlMode stops the control-mode stream. Called exactly once by
 	// StreamHub.ForceTeardown.
 	StopControlMode() error
@@ -82,6 +95,8 @@ type SessionController interface {
 	// UnsubscribeControlModeUpdates removes a subscription by the ID
 	// returned from SubscribeControlModeUpdates. Implementations must close
 	// the corresponding channel so a range loop reading from it can exit
-	// without leaking.
+	// without leaking. That close may be deferred past this call's return
+	// (up to controlModeSlowSubscriberGrace) if a slow-drain is in flight
+	// for this subscriber when Unsubscribe is called.
 	UnsubscribeControlModeUpdates(id string)
 }

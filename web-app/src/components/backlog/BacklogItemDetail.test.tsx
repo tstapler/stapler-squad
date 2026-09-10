@@ -15,7 +15,7 @@
 
 import React from "react";
 import { render, screen, act, fireEvent, within, waitFor } from "@testing-library/react";
-import { create } from "@bufbuild/protobuf";
+import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { BacklogItemDetail } from "./BacklogItemDetail";
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
@@ -263,6 +263,20 @@ function makeSession(overrides: Partial<LinkedSession> = {}): LinkedSession {
   };
 }
 
+function makeShippedSnapshot(overrides: MessageInitShape<typeof BacklogItemShipStatusSchema> = {}) {
+  return create(BacklogItemShipStatusSchema, {
+    shipped: true,
+    shippedVia: "pr",
+    branchName: "feature/foo",
+    branchExists: false,
+    prUrl: "https://github.com/tstapler/stapler-squad/pull/999",
+    shippedCheckConclusion: "success",
+    shippedApprovedCount: 2,
+    shippedChangesReqCount: 1,
+    ...overrides,
+  });
+}
+
 function makeItem(linkedSessions: LinkedSession[]): BacklogItem {
   return {
     id: "item-1",
@@ -485,6 +499,57 @@ describe("BacklogItemDetail — Story 2.2.3: VcsWidget wiring", () => {
     fireEvent.click(screen.getByRole("button", { name: "Browse files in this worktree" }));
 
     expect(screen.getByTestId("file-browser-modal-stub")).toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_RenderShippedCiConclusionAndReviewCounts_When_ShipStatusHasSnapshot", async () => {
+    useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
+    useBacklogItemShipStatusMock.mockReturnValue({
+      data: makeShippedSnapshot({
+        snapshotAt: timestampFromDate(new Date("2026-07-17T10:00:00Z")),
+        snapshotCaptureFailed: false,
+      }),
+      loading: false,
+      refetch: jest.fn(),
+    });
+
+    const session = makeSession({ role: "work", worktreePath: "/tmp/repo-wt" });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+
+    expect(screen.getByText("CI: success")).toBeInTheDocument();
+    expect(screen.getByLabelText("2 approved")).toBeInTheDocument();
+    expect(screen.getByLabelText("1 changes requested")).toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_RenderCaptureFailedCopy_When_ShipStatusSnapshotCaptureFailedTrue", async () => {
+    useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
+    useBacklogItemShipStatusMock.mockReturnValue({
+      data: makeShippedSnapshot({ snapshotCaptureFailed: true }),
+      loading: false,
+      refetch: jest.fn(),
+    });
+
+    const session = makeSession({ role: "work", worktreePath: "/tmp/repo-wt" });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+
+    expect(screen.getByText("Couldn't capture PR status at ship time")).toBeInTheDocument();
   });
 });
 

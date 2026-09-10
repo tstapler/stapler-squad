@@ -14,6 +14,17 @@ text-pattern `DebounceDelay`.
 
 ## Requirement → Test Mapping
 
+**Note (2026-08-28):** the table below predates the architecture-review.md design
+correction. Every `TestIdleDetector_ApplyOSCStatus_*` name below was implemented as
+the equivalent `TestIdleDetector_DetectStateFromContentWithOSC_*` in
+`session/detection/idle_test.go` (same scenario, same AC coverage — see plan.md's
+Story 3.1.2 for why the standalone `ApplyOSCStatus` method was dropped). Two rows
+were also added beyond what's listed here: `TestApplyOSCStatusOverride_FullMatrix`
+(all 12 `DetectedStatus` values × both OSC directions, closing the adversarial-review
+Concern that only 3 of ~20 branch combinations had coverage) and
+`TestIdleDetector_DetectStateFromContentWithOSC_NonPromotableTextBlocksOverride`
+(the direct BLOCKER 2 regression test).
+
 | Requirement | Test File | Test Name | Type | Scenario |
 |-------------|-----------|-----------|------|----------|
 | AC1: OSC title captured without altering stripped-text behavior | `pkg/ansi/osc_test.go` | `TestExtractLastOSC` (BEL-terminated match subcase) | Unit | Happy: `"\x1b]0;⠋ working\x07"` → `("⠋ working", true)`; `stripANSI` output unchanged |
@@ -67,7 +78,9 @@ N/A — pure backend detection logic (Go), no user-facing surface change in this
 | Go | `go test ./session/detection/... ./pkg/ansi/... ./session/... -coverprofile=coverage.out && go tool cover -func=coverage.out` | ≥80% line |
 
 - All public functions/methods introduced by this plan (`ExtractLastOSC`, `ClassifyOSCTitle`,
-  `IdleDetector.ApplyOSCStatus`, `ClaudeController.classifyOSC`, `applyOSCStatusOverride`):
+  `IdleDetector.DetectStateFromContentWithOSC`, `ClaudeController.classifyOSC`, `applyOSCStatusOverride`,
+  `IsOSCExecutingPromotable`, `IsOSCIdlePromotable` — the last two added in the 2026-08-28 design
+  correction, see architecture-review.md):
   happy path + error/edge paths covered
 - External-facing integration points (`GetCurrentStatus`, `GetStatusAndIdleInfo`, `GetIdleState`):
   each has at least one controller-level integration test exercising the OSC override path

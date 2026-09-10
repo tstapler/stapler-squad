@@ -200,6 +200,36 @@ resolve_binary() {
     exit 1
 }
 
+# print_binary_provenance: shows which branch/commit the binary about to
+# become the persistent service was built from, and warns (doesn't block —
+# installing a feature-branch build to test it is legitimate) when that's
+# not 'main'. Without this, 'make install-service' run from a worktree (or
+# resolve_binary()'s which/local-artifact fallback picking up some other
+# build entirely) silently replaces the live service with no record of what
+# it actually is — this is the exact question a human asks after the fact
+# ("wait, what commit is my daemon actually running?") with no answer
+# available short of `strings`-ing the binary. Reads it from the binary
+# itself (`stapler-squad version`, populated by the Makefile's LDFLAGS)
+# rather than re-deriving git state from the script's own $PWD, since the
+# script's cwd has no guaranteed relationship to which checkout bin_path was
+# actually built from.
+print_binary_provenance() {
+    pbp_bin="$1"
+    pbp_ver_output="$("$pbp_bin" version 2>/dev/null)" || {
+        log_warning "Could not run '$pbp_bin version' — provenance unknown (older build without branch/commit support?)"
+        return
+    }
+    printf '%s\n' "$pbp_ver_output" | sed 's/^/    /'
+
+    pbp_branch="$(printf '%s\n' "$pbp_ver_output" | sed -n 's/^ *branch: *\([^ ]*\).*/\1/p')"
+    case "$pbp_branch" in
+        ""|main|unknown) ;;
+        *)
+            log_warning "Installing a build from branch '$pbp_branch', not 'main' — this is about to become the persistent service."
+            ;;
+    esac
+}
+
 # ── Linux / systemd user service ──────────────────────────────────────────────
 install_linux() {
     bin_path="$1"
@@ -403,30 +433,14 @@ fda_is_granted() {
     return 1
 }
 
-# Polls (up to 10s) until none of the given TCP ports have a LISTENer, so the
-# incoming process doesn't race the outgoing one's socket teardown. Ports that
-# are empty/unset (e.g. profiling disabled) are skipped. Proceeds with a
-# warning on timeout rather than blocking forever — a genuinely stuck old
-# process needs a human, not a longer sleep.
-wait_for_port_release() {
-    max_ticks=20  # 20 * 0.5s = 10s
-    tick=0
-    while [ "$tick" -lt "$max_ticks" ]; do
-        busy=0
-        for port in "$@"; do
-            [ -n "$port" ] || continue
-            if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-                busy=1
-                break
-            fi
-        done
-        [ "$busy" = "0" ] && return 0
-        sleep 0.5
-        tick=$((tick + 1))
-    done
-    log_warning "Old process still holding a port after $((max_ticks / 2))s — starting anyway."
-    return 1
-}
+# wait_for_port_release: polls (up to 10s) until none of the given TCP ports
+# have a LISTENer. Used only as macos_stop_service's fallback for a bin_path
+# that predates the 'ensure-ports-free' subcommand (see that function's doc
+# comment) — the normal path no longer needs this. Shared with
+# scripts/dev-restart-guard.sh (see that file's and lib/wait_for_port_release.sh's
+# doc comments for why this must not be a second, drifted reimplementation).
+# shellcheck source=scripts/lib/wait_for_port_release.sh
+. "$(dirname "$0")/lib/wait_for_port_release.sh"
 
 # ── macOS launchd start/stop helpers ─────────────────────────────────────────
 # Shared by install_macos (fresh install/redeploy) and health_check_and_rollback
@@ -450,17 +464,75 @@ wait_for_port_release() {
 # on 0.0.0.0:8444: ... address already in use" crash-loop entries). Poll for
 # the ports to actually clear instead of guessing a sleep duration. Fall back
 # to 'launchctl unload' on older macOS that lacks bootout support.
+#
+# wait_for_port_release only *waits* — it deliberately gives up and proceeds
+# after 10s (see its own doc comment) rather than blocking forever, on the
+# theory that a still-stuck process "needs a human, not a longer sleep". In
+# practice that just deferred the problem: a real incident (2026-09-08) had
+# the old process still holding :8444 past that grace period, so the new one
+# started anyway, hit EADDRINUSE, and crash-looped fast enough that launchd's
+# own throttling gave up retrying it — the service was fully down until
+# someone noticed and ran 'launchctl kickstart -k' by hand.
+#
+# This is the third incident this exact precondition ("is the old process
+# actually gone") has caused (see also: fa2926e8d's pkill widened to hit the
+# live service, and 88e819f14's bootstrap/load domain mismatch breaking
+# rollback) — each fixed with another ad hoc shell patch that itself had a
+# gap, because shell has no practical way to write a test that spawns a real
+# stuck process and asserts the reap logic actually clears it. That
+# invariant now lives in one tested place — pkg/portguard, exercised by
+# pkg/portguard/portguard_test.go — instead of being reimplemented here and
+# in dev-restart-guard.sh. bootout above already unregistered the job from
+# launchd, so any stapler-squad process still alive at this point is an
+# orphan by definition (docs/explanation/service-restart-orphan-process.md);
+# ensure-ports-free (SIGTERM, then SIGKILL if that doesn't clear it) reaps it
+# directly instead of just hoping it exits before a fixed timeout.
+#
+# bin_path is NOT always a binary built from this change: install_macos's
+# call is on the freshly built binary (fine), but health_check_and_rollback
+# overwrites bin_path with prev_bin's *old* content before calling this
+# function again (`cp -f "$prev_bin" "$bin_path"`, scripts/install-
+# service.sh:722) to restart the last-known-good build — and that .prev
+# binary can predate this feature entirely (anyone's first rollback after
+# this ships, or a stale local build run directly without 'make build'
+# first, per resolve_binary's STAPLER_SQUAD_BIN/which/local-artifact
+# fallback order). Probe for the subcommand before relying on it, so a
+# binary that predates 'ensure-ports-free' degrades to the old best-effort
+# wait instead of hard-failing the whole install/rollback over a missing
+# feature in an old build.
 macos_stop_service() {
     plist_file="$1"
     log_info "Stopping existing service (if running)..."
     if ! launchctl bootout "gui/$(id -u)/com.stapler-squad" 2>/dev/null; then
         launchctl unload "$plist_file" 2>/dev/null || true
     fi
+
     if [ "$ENABLE_PROFILE" = "1" ]; then
-        wait_for_port_release 8543 8444 "$PROFILE_PORT"
+        mssv_ports="8543 8444 $PROFILE_PORT"
     else
-        wait_for_port_release 8543 8444
+        mssv_ports="8543 8444"
     fi
+
+    if "$bin_path" ensure-ports-free --help >/dev/null 2>&1; then
+        # shellcheck disable=SC2086 # mssv_ports is an intentionally unquoted word list of ports
+        if ! "$bin_path" ensure-ports-free $mssv_ports; then
+            log_error "Old stapler-squad process would not release its port(s) — aborting."
+            log_error "Check for a stuck process: ps aux | grep stapler-squad"
+            exit 1
+        fi
+        return 0
+    fi
+
+    log_warning "This build of stapler-squad predates 'ensure-ports-free' — falling back to a best-effort port wait"
+    for mssv_pid in $(pgrep -f '(^|/)stapler-squad([[:space:]]|$)' 2>/dev/null || true); do
+        kill "$mssv_pid" 2>/dev/null || true
+    done
+    # shellcheck disable=SC2086
+    wait_for_port_release $mssv_ports
+    for mssv_pid in $(pgrep -f '(^|/)stapler-squad([[:space:]]|$)' 2>/dev/null || true); do
+        log_warning "Forcing exit of orphaned stapler-squad process (PID $mssv_pid) still running after graceful stop"
+        kill -9 "$mssv_pid" 2>/dev/null || true
+    done
 }
 
 # Registers and starts the job from plist_file via 'launchctl bootstrap',
@@ -480,13 +552,40 @@ macos_stop_service() {
 # hand. Always go through this same function to (re)start, on both the
 # forward-deploy and rollback paths, so there's only one code path that can
 # have this class of bug.
+#
+# Root-caused empirically this session (three reproductions, 2026-09-08):
+# 'launchctl bootstrap' called immediately after macos_stop_service's
+# 'launchctl bootout' of the SAME label reliably fails (falls through to the
+# legacy 'load' branch below) even though ports are already confirmed free
+# by ensure-ports-free — bootout's async cleanup apparently covers the
+# listening sockets faster than it covers launchd's own job-table entry for
+# the label, so re-registering the same label too soon loses the race. A
+# standalone 'launchctl bootstrap' run a couple of seconds later, outside
+# the script, consistently succeeded. Retry with a short backoff before
+# falling back to 'load' — cheap, and turns a near-100%-reproducible failure
+# into the common case succeeding on this machine.
+#
+# Separately (also confirmed this session): even a successful bootstrap
+# doesn't reliably self-start via RunAtLoad in this environment — 'launchctl
+# print' reported "state = not running" seconds after a clean bootstrap
+# with no process ever spawned, until an explicit 'launchctl kickstart -k'
+# was issued. Rather than trust RunAtLoad's timing, always kickstart right
+# after a successful bootstrap so this function's contract is "the process
+# is actually running", not just "the job is registered and might start
+# eventually".
 macos_start_service() {
     plist_file="$1"
     log_info "Starting service..."
-    if launchctl bootstrap "gui/$(id -u)" "$plist_file" 2>/dev/null; then
-        log_success "Service started via launchctl bootstrap."
-        return 0
-    fi
+    mss_attempt=1
+    while [ "$mss_attempt" -le 5 ]; do
+        if launchctl bootstrap "gui/$(id -u)" "$plist_file" 2>/dev/null; then
+            launchctl kickstart -k "gui/$(id -u)/com.stapler-squad" 2>/dev/null || true
+            log_success "Service started via launchctl bootstrap (attempt $mss_attempt)."
+            return 0
+        fi
+        sleep 1
+        mss_attempt=$((mss_attempt + 1))
+    done
     if launchctl load "$plist_file" 2>/dev/null; then
         log_success "Service started via launchctl load (bootstrap fallback)."
         return 0
@@ -831,6 +930,7 @@ main() {
 
     bin_path=$(resolve_binary)
     log_info "Using binary: $bin_path"
+    print_binary_provenance "$bin_path"
 
     case "$os" in
         linux) install_linux "$bin_path" ;;

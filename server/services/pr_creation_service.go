@@ -152,6 +152,7 @@ func (s *PRCreationService) DraftPullRequest(
 	// Existing-PR short-circuit (AC4): skip all diff/draft work below entirely.
 	snap := inst.Snapshot()
 	if snap.GitHub.GitHubPRURL != "" {
+		// #nosec G115 -- GitHubPRNumber is a GitHub PR number, far below int32 range.
 		return connect.NewResponse(&sessionv1.DraftPullRequestResponse{
 			ExistingPrUrl:    snap.GitHub.GitHubPRURL,
 			ExistingPrNumber: int32(snap.GitHub.GitHubPRNumber),
@@ -309,6 +310,7 @@ func (s *PRCreationService) CreatePullRequest(
 		s.backlogLifecycleListener.RecordPRCreatedOutOfBand(ctx, inst.UUID, prURL, prNumber)
 	}
 
+	// #nosec G115 -- prNumber is a GitHub PR number, far below int32 range.
 	return connect.NewResponse(&sessionv1.CreatePullRequestResponse{
 		PrUrl:          prURL,
 		PrNumber:       int32(prNumber),

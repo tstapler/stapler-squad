@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -330,14 +331,18 @@ func (i *Instance) GetStatusIconForType() string {
 // instance_adapter.go and serialization (ToInstanceData/FromInstanceData).
 
 // GitHub returns a read-only view of the GitHub metadata for this instance.
+// Reads through Snapshot() rather than the raw fields: setGitHubResolutionLocked
+// writes these under i.mu from the actor goroutine, so an unguarded read here
+// races it exactly like the pre-fix GetEffectiveRootDir did (backlog 10fc3913).
 func (i *Instance) GitHub() GitHubMetadataView {
+	gh := i.Snapshot().GitHub
 	return GitHubMetadataView{
-		PRNumber:       i.GitHubPRNumber,
-		PRURL:          i.GitHubPRURL,
-		Owner:          i.GitHubOwner,
-		Repo:           i.GitHubRepo,
-		SourceRef:      i.GitHubSourceRef,
-		ClonedRepoPath: i.ClonedRepoPath,
+		PRNumber:       gh.GitHubPRNumber,
+		PRURL:          gh.GitHubPRURL,
+		Owner:          gh.GitHubOwner,
+		Repo:           gh.GitHubRepo,
+		SourceRef:      gh.GitHubSourceRef,
+		ClonedRepoPath: gh.ClonedRepoPath,
 	}
 }
 
@@ -368,8 +373,8 @@ type prUpdateResult struct {
 // changes). For directory sessions, Branch is never stored, so it reads the branch live
 // from the working directory via git. Returns "" if the branch cannot be determined.
 func (i *Instance) CurrentBranch() string {
-	if i.Branch != "" {
-		return i.Branch
+	if branch := i.Snapshot().Branch; branch != "" {
+		return branch
 	}
 	workDir := i.GetWorkingDirectory()
 	if workDir == "" {
@@ -383,10 +388,27 @@ func (i *Instance) CurrentBranch() string {
 	return branch
 }
 
+// PRStatusUpdate bundles the fields PRStatusPoller writes to an Instance on each
+// successful fetch. Introduced when itemized checks/review feedback/mergeable were
+// added — the prior 7-positional-parameter signature was already at the limit this
+// repo's primitive-obsession checklist flags.
+type PRStatusUpdate struct {
+	State           string
+	Priority        string
+	CheckConclusion string
+	Mergeable       string
+	ApprovedCount   int
+	ChangesReqCount int
+	IsDraft         bool
+	Terminal        bool
+	Checks          []github.CheckItem
+	Reviews         []github.ReviewItem
+}
+
 // UpdatePRStatus atomically updates the PR status fields on this instance.
 // Called by PRStatusPoller on each successful fetch.
 // Returns prUpdateResult indicating whether the priority changed.
-func (i *Instance) UpdatePRStatus(state, priority, checkConclusion string, approvedCount, changesReqCount int, isDraft, terminal bool) prUpdateResult {
+func (i *Instance) UpdatePRStatus(update PRStatusUpdate) prUpdateResult {
 	var result prUpdateResult
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		inst := s.inst
@@ -394,15 +416,18 @@ func (i *Instance) UpdatePRStatus(state, priority, checkConclusion string, appro
 		// (MarkViewed & co.) mutate other fields directly under i.mu.Lock() from
 		// outside the actor — see runActor's doc comment in actor.go.
 		inst.mu.Lock()
-		result.PriorityChanged = priority != inst.GitHubPRPriority
-		result.CheckConclusionChanged = checkConclusion != inst.GitHubCheckConclusion
-		inst.GitHubPRState = state
-		inst.GitHubPRPriority = priority
-		inst.GitHubPRIsDraft = isDraft
-		inst.GitHubApprovedCount = approvedCount
-		inst.GitHubChangesReqCount = changesReqCount
-		inst.GitHubCheckConclusion = checkConclusion
-		inst.GitHubPRStatusTerminal = terminal
+		result.PriorityChanged = update.Priority != inst.GitHubPRPriority
+		result.CheckConclusionChanged = update.CheckConclusion != inst.GitHubCheckConclusion
+		inst.GitHubPRState = update.State
+		inst.GitHubPRPriority = update.Priority
+		inst.GitHubPRIsDraft = update.IsDraft
+		inst.GitHubApprovedCount = update.ApprovedCount
+		inst.GitHubChangesReqCount = update.ChangesReqCount
+		inst.GitHubCheckConclusion = update.CheckConclusion
+		inst.GitHubPRStatusTerminal = update.Terminal
+		inst.GitHubChecks = update.Checks
+		inst.GitHubReviewFeedback = update.Reviews
+		inst.GitHubMergeable = update.Mergeable
 		inst.LastPRStatusCheck = time.Now()
 		snap := buildSnapshot(inst)
 		inst.mu.Unlock()

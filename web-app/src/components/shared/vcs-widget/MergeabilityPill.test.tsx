@@ -31,6 +31,11 @@ describe("MergeabilityPill", () => {
     expect(screen.getByText("Conflicts")).toBeInTheDocument();
   });
 
+  it("MergeabilityPill_should_RenderDivergedFromBaseLabel_When_StateDiverged", () => {
+    render(<MergeabilityPill state="diverged" />);
+    expect(screen.getByText("Diverged from base")).toBeInTheDocument();
+  });
+
   it("MergeabilityPill_should_RenderChangesRequestedLabel_When_StateChangesRequested", () => {
     render(<MergeabilityPill state="changes_requested" />);
     expect(screen.getByText("Changes requested")).toBeInTheDocument();
@@ -56,13 +61,14 @@ describe("MergeabilityPill", () => {
     expect(screen.getByText("No PR")).toBeInTheDocument();
   });
 
-  it("covers all 10 MergeabilityState members with a rendered label", () => {
+  it("covers all 11 MergeabilityState members with a rendered label", () => {
     const states: MergeabilityState[] = [
       "shipped",
       "snapshot_unavailable",
       "no_pr",
       "draft",
       "conflicted",
+      "diverged",
       "changes_requested",
       "ci_failing",
       "closed_unshipped",

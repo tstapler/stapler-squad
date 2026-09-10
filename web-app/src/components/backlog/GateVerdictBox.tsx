@@ -2,6 +2,7 @@
 // +feature: backlog:gate-verdict
 
 import { useEffect, useRef, useState } from "react";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import * as styles from "./GateVerdictBox.css";
 import { InlineError } from "./InlineError";
 
@@ -104,8 +105,20 @@ export function GateVerdictBox(props: GateVerdictBoxProps) {
 
   const overrideToggleRef = useRef<HTMLButtonElement>(null);
   const skipLinkRef = useRef<HTMLButtonElement>(null);
-  const cancelRef = useRef<HTMLButtonElement>(null);
-  const confirmRef = useRef<HTMLButtonElement>(null);
+  const skipConfirmDialogRef = useRef<HTMLDivElement>(null);
+  // skipLinkRef's button and the dialog occupy the same position in a
+  // ternary, so React unmounts/remounts a brand-new button element on every
+  // toggle — useFocusTrap's own triggerRef restore would capture a DOM node
+  // that's already disconnected by the time its cleanup runs. Restore focus
+  // to the (new) button ourselves once it has actually remounted instead.
+  useFocusTrap(skipConfirmDialogRef, showSkipConfirm);
+  const wasSkipConfirmOpenRef = useRef(false);
+  useEffect(() => {
+    if (wasSkipConfirmOpenRef.current && !showSkipConfirm) {
+      skipLinkRef.current?.focus();
+    }
+    wasSkipConfirmOpenRef.current = showSkipConfirm;
+  }, [showSkipConfirm]);
 
   // Focus override reason textarea when form opens
   useEffect(() => {
@@ -126,13 +139,6 @@ export function GateVerdictBox(props: GateVerdictBoxProps) {
       }
     }
   }, [showReopen]);
-
-  // Focus cancel button when skip confirm opens
-  useEffect(() => {
-    if (showSkipConfirm) {
-      cancelRef.current?.focus();
-    }
-  }, [showSkipConfirm]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     if (readOnly) return;
@@ -215,27 +221,6 @@ export function GateVerdictBox(props: GateVerdictBoxProps) {
   function handleSkipConfirmKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     if (e.key === "Escape") {
       setShowSkipConfirm(false);
-      skipLinkRef.current?.focus();
-      return;
-    }
-    if (e.key === "Tab") {
-      const focusables = [cancelRef.current, confirmRef.current].filter(
-        (el): el is HTMLButtonElement => el !== null,
-      );
-      if (focusables.length === 0) return;
-      const first = focusables[0];
-      const last = focusables[focusables.length - 1];
-      if (e.shiftKey) {
-        if (document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        }
-      } else {
-        if (document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
     }
   }
 
@@ -483,6 +468,7 @@ export function GateVerdictBox(props: GateVerdictBoxProps) {
       {!readOnly &&
         (showSkipConfirm ? (
           <div
+            ref={skipConfirmDialogRef}
             role="alertdialog"
             aria-labelledby="skip-gate-warning"
             aria-modal="true"
@@ -497,14 +483,12 @@ export function GateVerdictBox(props: GateVerdictBoxProps) {
             </p>
             <div className={styles.formActions}>
               <button
-                ref={cancelRef}
                 className={styles.secondaryButton}
                 onClick={() => setShowSkipConfirm(false)}
               >
                 Cancel
               </button>
               <button
-                ref={confirmRef}
                 className={styles.dangerButton}
                 onClick={() => void handleSkipGateConfirm()}
               >
