@@ -15,6 +15,24 @@ jest.mock("@/lib/contexts/AnalyticsContext", () => ({
 
 const mockUseSessionVcsContext = useSessionVcsContext as jest.Mock;
 
+// Mirrors the "(reason=transient|exhausted; reset_at=<RFC3339>)" marker
+// classifyGitHubRateLimitError appends server-side (see githubRateLimit.test.ts).
+function rateLimitError(reason: "transient" | "exhausted", msUntilReset: number): Error {
+  const resetAt = new Date(Date.now() + msUntilReset);
+  return new Error(
+    `github: rate limited until ${resetAt.toISOString()}: some detail (reason=${reason}; reset_at=${resetAt.toISOString()})`
+  );
+}
+
+function mockVcsError(error: Error) {
+  mockUseSessionVcsContext.mockReturnValue({
+    status: null,
+    statusLoading: false,
+    error,
+    refresh: jest.fn(),
+  });
+}
+
 describe("VcsPanel", () => {
   it("VcsPanel_should_RenderThroughVcsWidgetLoadedTestid_When_SessionVcsContextResolves", () => {
     const status = create(VCSStatusSchema, {
@@ -59,5 +77,47 @@ describe("VcsPanel", () => {
 
     expect(screen.getByRole("status", { name: "Loading VCS status" })).toBeInTheDocument();
     expect(screen.queryByTestId("vcs-widget-loaded")).not.toBeInTheDocument();
+  });
+
+  it("VcsPanel_should_RenderFriendlyRateLimitCopy_When_ErrorCarriesTransientReasonMarker", () => {
+    const error = rateLimitError("transient", 20_000);
+    mockVcsError(error);
+
+    render(<VcsPanel />);
+
+    expect(
+      screen.getByText(
+        /^GitHub is temporarily rate-limited — this should clear up in about .+, retrying automatically\.$/
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(error.message)).not.toBeInTheDocument();
+  });
+
+  it("VcsPanel_should_RenderFriendlyRateLimitCopy_When_ErrorCarriesExhaustedReasonMarker", () => {
+    const error = rateLimitError("exhausted", 4 * 60_000);
+    mockVcsError(error);
+
+    render(<VcsPanel />);
+
+    expect(screen.getByText(/^GitHub rate limit reached — try again in ~.+\.$/)).toBeInTheDocument();
+    expect(screen.queryByText(error.message)).not.toBeInTheDocument();
+  });
+
+  it("VcsPanel_should_RenderErrorBoxAsPoliteLiveRegion_When_ErrorPresent", () => {
+    mockVcsError(new Error("network error: connection refused"));
+
+    render(<VcsPanel />);
+
+    const errorBox = screen.getByRole("status");
+    expect(errorBox).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("VcsPanel_should_RenderRawMessageFallback_When_ErrorHasNoRateLimitReasonMarker", () => {
+    const error = new Error("network error: connection refused");
+    mockVcsError(error);
+
+    render(<VcsPanel />);
+
+    expect(screen.getByText(error.message)).toBeInTheDocument();
   });
 });
