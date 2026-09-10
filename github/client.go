@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"golang.org/x/sync/singleflight"
 )
@@ -35,6 +36,17 @@ var (
 )
 
 const ghAuthTTL = 5 * time.Minute
+
+// githubGraphQLMigrationFlagName gates GetPRInfoCtx's dispatch to
+// GetPRInfoGraphQL below. server/services/feature_flag_service.go's
+// knownFeatureFlags registers this same literal under its own
+// githubGraphQLMigrationFlagName constant — github cannot import
+// server/services (that would be a cycle; server/services already imports
+// github), so the name is duplicated here rather than shared, mirroring
+// githubPriorityAdmissionFlagName's precedent (http_client.go). Keep both
+// constants' string values in sync if this flag is ever renamed. Default
+// off — see plan.md's Risk Control section for the dated flip trigger.
+const githubGraphQLMigrationFlagName = "github:graphql-pr-info"
 
 // PR state strings. These are the single source of truth for the three PR
 // lifecycle states surfaced by PRInfo.State — GetPRByNumber and any other
@@ -288,6 +300,10 @@ func GetPRInfo(owner, repo string, prNumber int) (*PRInfo, error) {
 // GetPRInfoCtx fetches metadata for a pull request with context support.
 // Includes review decisions and CI/check status.
 func GetPRInfoCtx(ctx context.Context, owner, repo string, prNumber int) (*PRInfo, error) {
+	if config.LoadConfig().GetFeatureFlagWithDefault(githubGraphQLMigrationFlagName, false) {
+		return GetPRInfoGraphQL(ctx, owner, repo, prNumber)
+	}
+
 	if err := CheckGHAuth(); err != nil {
 		return nil, err
 	}

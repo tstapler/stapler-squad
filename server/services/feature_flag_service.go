@@ -43,6 +43,15 @@ const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
 // renamed.
 const githubPriorityAdmissionFlagName = "github:priority-admission-control"
 
+// githubGraphQLMigrationFlagName gates GetPRInfoCtx's dispatch to
+// GetPRInfoGraphQL instead of the gh-CLI shell-out (github/client.go). github
+// cannot import this package (server/services already imports github, so the
+// reverse would be a cycle), so github/client.go duplicates this same string
+// literal under its own constant of the same name rather than importing it —
+// mirrors githubPriorityAdmissionFlagName's precedent above. Keep both
+// constants' values in sync if this flag is ever renamed.
+const githubGraphQLMigrationFlagName = "github:graphql-pr-info"
+
 // handoffSummaryFlagName is the generic-registry name for the
 // restart-with-handoff-summary feature, so the frontend can discover
 // HandoffSummaryConfig.Enabled up front (via GetFeatureFlags) instead of only
@@ -203,6 +212,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        githubPriorityAdmissionFlagName,
 		description: "Priority-aware admission control for outbound GitHub API calls: background pollers/sync back off once a resource's (core/search/graphql) remaining quota drops below a reserved headroom, so interactive GitHub actions (merge, comment, refresh) keep succeeding. Protects this stapler-squad instance's own interactive GitHub calls only — does not coordinate with other machines sharing the same GitHub token. Default: off.",
+	},
+	{
+		name:        githubGraphQLMigrationFlagName,
+		description: "Route GetPRInfoCtx's PR-metadata fetch through a single native GraphQL request instead of the `gh pr view` CLI shell-out, cutting the REST-equivalent call count for PR status refreshes. Default: off.",
 	},
 	{
 		name:        piSupportFlagName,
