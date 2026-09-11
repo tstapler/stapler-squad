@@ -28,7 +28,12 @@ describe("getGitHubRateLimitMessage", () => {
   });
 
   it("returns a real day-count span (not the mirrored past date) for a reset >=7 days out", () => {
-    const err = rateLimitError("exhausted", 10 * 24 * 60 * 60 * 1000);
+    // A minute of headroom past the exact 10-day mark, not an exact
+    // multiple: relativeSpanUntil floors elapsed time to whole days at
+    // call time, which is a moment after rateLimitError computed resetAt —
+    // an exact boundary would flake down to "~9d." depending on how much
+    // wall-clock time passes between the two.
+    const err = rateLimitError("exhausted", 10 * 24 * 60 * 60 * 1000 + 60_000);
     const message = getGitHubRateLimitMessage(err, "fallback");
     expect(message).toBe("GitHub rate limit reached — try again in ~10d.");
     expect(message).not.toMatch(ISO_TIMESTAMP_PATTERN);
