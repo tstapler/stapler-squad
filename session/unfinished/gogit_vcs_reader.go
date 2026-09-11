@@ -232,17 +232,37 @@ const approxBytesPerCachedRepo = 96 * 1024 * 1024
 // repoCacheMaxEntries*approxBytesPerCachedRepo ceiling (~9.6 GB): this process
 // runs alongside many other memory-hungry tools on a single host, and a
 // scanner cache has no business claiming multiple GB of that budget on its
-// own. 1.5 GB covers roughly 16 simultaneously "hot" repos at the ~96 MB
-// estimate, which comfortably covers realistic concurrent-viewing workloads.
-const repoCacheMemoryBudgetBytes = 1536 * 1024 * 1024
+// own.
+//
+// 3 GB covers roughly 32 simultaneously "hot" repos at the ~96 MB estimate --
+// doubled from an original 1.5 GB/16-repo budget after live /debug/blob-cache
+// stats on a host running dozens of concurrent sessions showed a 0.07% hit
+// rate (77 hits / 117330 misses): with more actively-scanned repos than the
+// cache had room for, every poll cycle evicted and reopened a cold repo,
+// wiping its per-repo blobCache before the next poll could ever hit it. This
+// is a size trade-off, not a fix for unbounded growth -- the
+// high/severeMemoryPressureThreshold tiers below still shrink this budget
+// under real process memory pressure, so a host that can't afford the extra
+// headroom degrades gracefully rather than OOMing.
+const repoCacheMemoryBudgetBytes = 3072 * 1024 * 1024
 
 // highMemoryPressureThreshold/severeMemoryPressureThreshold gate
-// effectiveCacheBudgetBytes' tiered response. Measured against the Go
-// runtime's own HeapInuse (this process's heap, not host-wide memory) so the
-// signal is specific to this process's contribution to memory pressure.
+// effectiveCacheBudgetBytes' tiered response, measured against the Go
+// runtime's own HeapInuse (this process's heap, not host-wide memory).
+//
+// Both are derived from repoCacheMemoryBudgetBytes rather than independent
+// constants, specifically so normal cache growth toward its own budget can
+// never itself cross into a pressure tier: an earlier version set
+// highMemoryPressureThreshold to a flat 3 GB, identical to the budget it
+// gates, so filling the cache to its own full budget triggered the
+// high-pressure branch, which halved the budget and forced eviction --
+// heap then dropped back below 3 GB, the budget rose back to 3 GB, and the
+// cache refilled toward 3 GB again, an oscillating grow/evict loop that
+// re-created the exact cache-thrashing symptom repoCacheMemoryBudgetBytes'
+// own doc comment describes fixing.
 const (
-	highMemoryPressureThreshold   = 3 * 1024 * 1024 * 1024 // 3 GB heap in-use: halve the budget
-	severeMemoryPressureThreshold = 6 * 1024 * 1024 * 1024 // 6 GB heap in-use: floor to a handful of repos
+	highMemoryPressureThreshold   = repoCacheMemoryBudgetBytes + repoCacheMemoryBudgetBytes/2 // 1.5x budget: 4.5 GB
+	severeMemoryPressureThreshold = repoCacheMemoryBudgetBytes * 2                            // 2x budget: 6 GB
 )
 
 // readHeapInUse returns the process's current in-use heap bytes. Declared as
@@ -739,7 +759,9 @@ func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) 
 		base := filepath.Join(worktreesDir, entry.Name())
 
 		// gitdir file contains the absolute path to the worktree's .git file.
-		gitdirData, err := os.ReadFile(filepath.Join(base, "gitdir"))
+		// base is built from entry.Name(), enumerated by os.ReadDir(worktreesDir)
+		// just above -- a trusted filesystem listing, not user input.
+		gitdirData, err := os.ReadFile(filepath.Join(base, "gitdir")) // #nosec G304 -- base comes from a trusted os.ReadDir listing, not user input
 		if err != nil {
 			continue
 		}
@@ -749,7 +771,7 @@ func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) 
 		wt := WorktreeInfo{Path: wtPath}
 
 		// Read HEAD: either "ref: refs/heads/<branch>" or a bare SHA.
-		headData, err := os.ReadFile(filepath.Join(base, "HEAD"))
+		headData, err := os.ReadFile(filepath.Join(base, "HEAD")) // #nosec G304 -- base comes from a trusted os.ReadDir listing, not user input
 		if err == nil {
 			headStr := strings.TrimSpace(string(headData))
 			const refPrefix = "ref: refs/heads/"
@@ -1631,7 +1653,9 @@ func readFileIfSmall(path string) ([]byte, bool) {
 	if info.Size() > maxUntrackedFileSize {
 		return nil, false
 	}
-	data, err := os.ReadFile(path) //nolint:gosec
+	// path is walked from repoPath by walkUntrackedFiles (an internal directory
+	// walk over the session's own git worktree), not user/RPC input.
+	data, err := os.ReadFile(path) // #nosec G304 -- path comes from an internal directory walk over the worktree, not user input
 	if err != nil {
 		return nil, false
 	}
@@ -1834,7 +1858,10 @@ func walkUntrackedRec(dir string, indexed map[string]struct{}, matcher gitignore
 // index) always live here, never in the shared commondir.
 func worktreeGitDir(repoPath string) string {
 	gitPath := filepath.Join(repoPath, ".git")
-	data, err := os.ReadFile(gitPath)
+	// repoPath is the local repo/worktree directory this server itself
+	// manages for the session (Instance.Path), validated to exist at session
+	// creation -- not raw untrusted network/RPC input.
+	data, err := os.ReadFile(gitPath) // #nosec G304 -- repoPath is the session's own worktree directory, not user-supplied network input
 	if err != nil {
 		// .git is a directory (or missing).
 		return gitPath
@@ -1858,7 +1885,8 @@ func worktreeGitDir(repoPath string) string {
 // resolving through the .git file in linked worktrees.
 func gitCommonDir(repoPath string) string {
 	gitPath := filepath.Join(repoPath, ".git")
-	data, err := os.ReadFile(gitPath)
+	// repoPath is the session's own worktree directory (see worktreeGitDir above).
+	data, err := os.ReadFile(gitPath) // #nosec G304 -- repoPath is the session's own worktree directory, not user-supplied network input
 	if err != nil {
 		// .git is a directory (or missing).
 		return gitPath
@@ -1870,8 +1898,9 @@ func gitCommonDir(repoPath string) string {
 		return gitPath
 	}
 	wtGitDir := strings.TrimPrefix(line, prefix)
-	// Each per-worktree gitdir contains a "commondir" file pointing to the main .git.
-	if cdData, err := os.ReadFile(filepath.Join(wtGitDir, "commondir")); err == nil {
+	// wtGitDir is parsed from gitPath above, which is itself rooted at the
+	// trusted repoPath -- not user input.
+	if cdData, err := os.ReadFile(filepath.Join(wtGitDir, "commondir")); err == nil { // #nosec G304 -- wtGitDir derives from repoPath's own .git file, not user input
 		commondir := strings.TrimSpace(string(cdData))
 		if !filepath.IsAbs(commondir) {
 			commondir = filepath.Join(wtGitDir, commondir)

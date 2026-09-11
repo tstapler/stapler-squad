@@ -65,6 +65,14 @@ const (
 	// deliberate terminal state pending human action via "Retry now"
 	// (Instance.RetryNow), not an incidental stop. See ADR-001.
 	PermanentlyFailed Status = 7
+	// Failed is a non-terminal state: the async creation pipeline (Background
+	// Resolution Pipeline, Epic 2.2) failed before the session ever reached
+	// Active. Distinct from Crashed (a previously-Active session whose process
+	// later exited abnormally): Failed→Creating is a legal transition, used by
+	// the retry path (Epic 1.2's TryStartRetry), while Crashed only recovers to
+	// Active. See ADR-001 and SESSION_STATUS_FAILED in
+	// proto/session/v1/types.proto.
+	Failed Status = 8
 
 	// Deprecated: use Active.
 	Running = Active
@@ -93,8 +101,27 @@ func (s Status) String() string {
 		return "Crashed"
 	case PermanentlyFailed:
 		return "PermanentlyFailed"
+	case Failed:
+		return "Failed"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
+	}
+}
+
+// IsSuspended reports whether a session in this status is not actively running
+// and so must not be treated as a live target for background work that assumes
+// a running process or tmux session (health checks, PR/CI status polling, etc.):
+// Paused and Hibernated sessions have no tmux session at all; Stopped, Crashed,
+// and PermanentlyFailed are terminal states awaiting an explicit resume/retry,
+// not incidental gaps that background pollers should paper over. See
+// healthCheckSkipReason (session/health.go) for the health-checker's per-status
+// skip messages, and pr_status_poller.go's checkAllSessions for another consumer.
+func (s Status) IsSuspended() bool {
+	switch s {
+	case Paused, Hibernated, Stopped, Crashed, PermanentlyFailed:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -341,6 +368,44 @@ type Instance struct {
 	// Not persisted to the database — only meaningful in-memory during startup.
 	CreationProgress string `json:"-"`
 
+	// creationProgressUpdatedAt records when CreationProgress was last set, so the
+	// Stale-Creation Sweeper (Epic 4.1) can judge how far a killed process actually
+	// got instead of only how long ago it entered Creating. Bumped by
+	// setCreationProgressLocked on every SetCreationProgress call, in the same
+	// actor command as the progress-text write. Unlike CreationProgress itself,
+	// this IS persisted (see session/ent/schema's creation_progress_updated_at)
+	// so it survives a process restart.
+	creationProgressUpdatedAt time.Time
+
+	// failureReason holds the human-readable reason the async creation pipeline
+	// failed. Meaningful only when Status == Failed; empty otherwise. Terminal-write
+	// metadata, not independently-settable progress text (contrast
+	// SetCreationProgress, which ADR-002 deliberately leaves ungated) — there is no
+	// public setter. Only setFailureReasonLocked may write it, called exclusively
+	// from within TryForceStatusIfEpoch's own command closure (Epic 1.2).
+	failureReason string
+
+	// creationEpoch is a fencing counter bumped exactly once per cancel/retry of
+	// the async creation pipeline (ADR-002). A background writer captures the
+	// epoch before starting work and must present it back to
+	// TryForceStatusIfEpoch/UpdateInstanceIfEpoch to win the terminal write —
+	// if the epoch has since moved (a cancel or retry raced ahead of it), the
+	// write is silently dropped instead of overwriting a newer outcome.
+	// Written only by bumpCreationEpoch, called only from cancel/retry code
+	// paths (Phase 3) and from within TryStartRetry's own command closure.
+	creationEpoch uint64
+
+	// creationCancelFunc is the context.CancelFunc for this instance's
+	// Background Resolution Context (Epic 2.2, Story 2.2.1), stored at
+	// pipeline-spawn time so the Cancel RPC (Epic 3.2) can stop an
+	// in-progress creation. Process-local by nature -- a context.CancelFunc
+	// cannot be persisted or reconstructed -- so an instance loaded from
+	// storage without a live pipeline goroutine spawned in the current
+	// process has this nil (Task 3.2.1b's documented nil-guard case, not an
+	// edge case to special-case away). Not part of InstanceSnapshot; guarded
+	// by i.mu like creationEpoch (see instance_actor_setters.go).
+	creationCancelFunc context.CancelFunc
+
 	// LaunchCommand is the full command passed to tmux on session start, including
 	// any injected flags (--resume, --mcp-config, -y, initial prompt). Set once on
 	// first start and updated on restart. Empty for external (mux-discovered) sessions.
@@ -392,20 +457,21 @@ type Instance struct {
 	// ArchivedAt is set when the session is archived. Nil means not archived.
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 
-	// Claude Code session information for persistence and re-attachment
-	claudeSession *ClaudeSessionData
+	// claudeExtension holds Claude Code conversation-resume session state
+	// (claudeSession/claudeSessionMu/conversationClearedAt), embedded
+	// anonymously so those fields stay accessible as i.claudeSession etc.
+	// See claudeExtension's doc comment (instance_claude.go) for why this is
+	// always populated regardless of Program, unlike piExtension below.
+	claudeExtension
 
-	// conversationClearedAt records when ClearConversationState() last ran, so
-	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
-	// predating an explicit "start fresh" request. In-memory only — does not
-	// survive a process restart (see ADR-001, Consequences). Guarded by
-	// claudeSessionMu, not i.mu.
-	conversationClearedAt time.Time
-
-	// claudeSessionMu protects claudeSession, conversationClearedAt, and
-	// claudeSessionIDSavedCallback.
-	// Separate from mu to avoid holding the instance write lock during persistence I/O.
-	claudeSessionMu sync.RWMutex
+	// piExtension holds pi-coding-agent controller and session state
+	// (piSession/piSessionMu/piStatusSrc/piStatusStartMu), embedded
+	// anonymously so those fields stay accessible as i.piSession etc. See
+	// piExtension's doc comment (instance_pi_status.go) -- it implements
+	// programExtension so StartController/StopController
+	// (instance_controller.go) dispatch to it instead of growing another
+	// if-branch.
+	piExtension
 
 	// Review queue integration for tracking sessions needing attention
 	reviewQueue *ReviewQueue
@@ -459,6 +525,12 @@ type Instance struct {
 	// Initialized to a TmuxBackend by default; future backends implement the ProcessManager interface.
 	pmMu           sync.Mutex
 	processManager ProcessManager
+	// claudeTrustStoreImpl backs trustStore()'s lazy default (real disk-backed
+	// store in production, in-memory in tests) -- see that method's doc
+	// comment. A test may set this directly (e.g. to a *memoryClaudeTrustStore
+	// it wants to assert against) before the first markWorkingDirTrusted call.
+	trustStoreMu         sync.Mutex
+	claudeTrustStoreImpl claudeTrustStore
 	// gitManager owns the git worktree and diff stats.
 	gitManager GitWorktreeManager
 	// vncManager owns the Xvfb + x11vnc lifecycle for this session.
@@ -1048,7 +1120,7 @@ func (i *Instance) HasGitHubPR() bool {
 
 // SetArtifacts atomically updates the in-memory Artifacts cache.
 func (i *Instance) SetArtifacts(blob *artifacts.SessionArtifactsBlob) {
-	i.sendSyncErr(func(s *instanceState) error { //nolint:errcheck
+	_ = i.sendSyncErr(func(s *instanceState) error {
 		s.inst.Artifacts = blob
 		return nil
 	})
@@ -1743,6 +1815,17 @@ func (i *Instance) Destroy() error {
 	// seeing it, rather than continuing until its own 25-minute deadline.
 	i.destroyed.Store(true)
 
+	// Evict this session's entry from PiExtensionHealthTracker (pi-support
+	// Epic 4.2 MAJOR 1 fix) so the tracker's map doesn't grow unboundedly for
+	// the life of the process. Gated on isPi to avoid a no-op resolver call on
+	// every single non-pi session's destroy; nil-checked since not every
+	// deployment wires SetPiExtensionHealthForgetter (e.g. tests).
+	if isPi(i.Program) {
+		if forgetter := getPiExtensionHealthForgetter(); forgetter != nil {
+			forgetter(i.GetStableID())
+		}
+	}
+
 	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
 	defer i.cleanupPromptFile()
 
@@ -2159,7 +2242,29 @@ func (i *Instance) Restart(preserveOutput bool) error {
 		return fmt.Errorf("cannot restart session '%s': no working directory configured", i.Title)
 	}
 
+	// Suppress pi's --session resume injection (buildLaunchCommand reads
+	// i.piSession directly for piProgram, unlike claude's explicit
+	// claudeSessionID param) unless both isPi(i.Program) and the pi-support
+	// feature flag are true — mirroring the claudeSessionID capture above's
+	// gating intent. The field itself is restored afterward rather than
+	// cleared outright, so a stale piSession isn't lost if the flag is later
+	// re-enabled.
+	//
+	// Guarded by piSessionMu (not i.mu), mirroring claudeSessionMu's usage:
+	// this used to rely on Stop() always having joined SetPiSessionID's only
+	// writer goroutine before Restart reached this code, an argument Bug 2
+	// broke (a disabled flag could skip stopPiStatusSource entirely, leaving
+	// that goroutine alive). The lock makes this safe structurally instead.
+	i.piSessionMu.Lock()
+	restorePiSession := i.piSession
+	if !isPi(i.Program) || !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) {
+		i.piSession = nil
+	}
+	i.piSessionMu.Unlock()
 	program := i.buildLaunchCommand(claudeSessionID)
+	i.piSessionMu.Lock()
+	i.piSession = restorePiSession
+	i.piSessionMu.Unlock()
 
 	// Create a new tmux session
 	// Use configurable prefix or default

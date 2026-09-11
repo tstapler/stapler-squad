@@ -30,7 +30,7 @@ func Auth(validator AuthValidator) func(http.Handler) http.Handler {
 				if isAPIPath(r.URL.Path) {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusUnauthorized)
-					w.Write([]byte(`{"error":"unauthorized"}`)) //nolint:errcheck
+					_, _ = w.Write([]byte(`{"error":"unauthorized"}`)) //nolint:errcheck
 					return
 				}
 				// Browser navigations → redirect to login page

@@ -61,7 +61,7 @@ func NewHostAdvertiser(identity HostIdentity, registry *HostRegistry, addresses 
 		// key. TLS here provides transport encryption only.
 		client: &http.Client{
 			Timeout:   5 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec // see comment above
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, // #nosec G402 -- see comment above: TLS is transport-only, identity is Ed25519/TOFU-verified at the application layer
 		},
 		interval: interval,
 	}

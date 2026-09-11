@@ -1,10 +1,31 @@
 package session
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tstapler/stapler-squad/github"
 )
+
+// fakeGHClient counts calls per (owner, repo) pair so tests can assert whether
+// checkAllSessions reached fetchAndUpdatePRStatus for a given instance, without
+// shelling out to the real `gh` CLI.
+type fakeGHClient struct {
+	getPRInfoCalls atomic.Int64
+}
+
+func (f *fakeGHClient) CheckGHAuth() error { return nil }
+
+func (f *fakeGHClient) GetPRForBranchConditional(_ context.Context, _, _, _, etag string) (*github.PRInfo, string, bool, error) {
+	return nil, etag, false, github.ErrNoPR
+}
+
+func (f *fakeGHClient) GetPRInfoConditional(_ context.Context, _, _ string, _ int, _ *github.ETagCache) (*github.PRInfo, bool, error) {
+	f.getPRInfoCalls.Add(1)
+	return &github.PRInfo{State: "open"}, true, nil
+}
 
 // TestApplyPRUpdate_FiresOnUpdated_WhenCheckConclusionChangesWithoutPriorityChange is the
 // regression test for Task 3.2.1a's changed-only-publish fix: onUpdated must fire when
@@ -96,6 +117,47 @@ func TestApplyPRUpdate_should_ThreadChecksReviewsMergeable_When_PRInfoPopulated(
 		if snap.GitHub.GitHubReviewFeedback[i] != r {
 			t.Errorf("review[%d]: expected %+v, got %+v", i, r, snap.GitHub.GitHubReviewFeedback[i])
 		}
+	}
+}
+
+// TestCheckAllSessions_SkipsPausedHibernatedStoppedInstances is the regression
+// test for the gap found auditing background pollers for unnecessary work on
+// suspended sessions: checkAllSessions previously re-fetched GitHub PR status
+// for every registered instance every tick regardless of lifecycle state,
+// unlike the analogous health-check loop (see healthCheckSkipReason). Paused,
+// Hibernated, and Stopped instances must not trigger an outbound GitHub call.
+func TestCheckAllSessions_SkipsPausedHibernatedStoppedInstances(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeGHClient{}
+	poller := NewPRStatusPoller(nil)
+	poller.ghClient = fake
+	poller.ctx = context.Background()
+	poller.cancel = func() {}
+	poller.authState.Store(pollerAuthResult{ok: true, checkedAt: time.Now()})
+
+	makeInst := func(title string, status Status) *Instance {
+		return &Instance{
+			Title:          title,
+			Status:         status,
+			GitHubOwner:    "tstapler",
+			GitHubRepo:     "stapler-squad",
+			GitHubPRNumber: 1,
+		}
+	}
+
+	skipped := []*Instance{
+		makeInst("paused-session", Paused),
+		makeInst("hibernated-session", Hibernated),
+		makeInst("stopped-session", Stopped),
+	}
+	active := makeInst("active-session", Active)
+
+	poller.SetInstances(append(skipped, active))
+	poller.checkAllSessions()
+
+	if got := fake.getPRInfoCalls.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 GetPRInfoConditional call (for the active instance only), got %d", got)
 	}
 }
 

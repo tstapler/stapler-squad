@@ -92,6 +92,24 @@ const (
 	ErrSessionStartupTimeout = "SESSION_STARTUP_TIMEOUT"
 	ErrInvalidPath           = "INVALID_PATH"
 	ErrPTYWriteTimeout       = "PTY_WRITE_TIMEOUT"
+
+	// Async-session-creation Epic 2.3, Story 2.3.4: distinct outcomes for
+	// create_session/create_session_for_pr's wait on the Background
+	// Resolution Pipeline (server/services/session_creation_await.go).
+	// ErrSessionCreationFailed: the pipeline reached a terminal Failed status
+	// before the session ever became Active — distinct from ErrInternalError
+	// so the caller can tell "resolution failed" from "the tool itself
+	// errored."
+	ErrSessionCreationFailed = "SESSION_CREATION_FAILED"
+	// ErrSessionCreationCancelled: the instance vanished mid-wait (a
+	// concurrent CancelSessionCreation removed it) — distinct from
+	// ErrSessionNotFound, which means "never existed."
+	ErrSessionCreationCancelled = "SESSION_CREATION_CANCELLED"
+	// ErrSessionCreationAwaitCanceled: the MCP caller's own request context
+	// ended before AwaitCreationTerminal observed a terminal status, a
+	// timeout, or a vanish — distinct from both of the above and from the
+	// timeout's still_creating success result.
+	ErrSessionCreationAwaitCanceled = "SESSION_CREATION_AWAIT_CANCELED"
 )
 
 // BacklogItemSummaryResult is a trimmed backlog item shown in list_backlog_items results.

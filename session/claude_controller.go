@@ -395,7 +395,7 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		// Start command executor
 		if err := exec.Start(innerCtx); err != nil {
 			cancel()
-			rs.Stop()
+			_ = rs.Stop() // best-effort cleanup; startErr below is the real error
 			startErr = fmt.Errorf("failed to start command executor: %w", err)
 			return
 		}

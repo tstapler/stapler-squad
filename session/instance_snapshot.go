@@ -137,6 +137,10 @@ type InstanceSnapshot struct {
 	CLIFlags                   string
 	ArchivedAt                 *time.Time // copy of pointee — see buildSnapshot
 
+	// CreationProgressUpdatedAt mirrors Instance.creationProgressUpdatedAt (Epic
+	// 1.1.4/4.1) — see ToInstanceData/FromInstanceData for the persisted round trip.
+	CreationProgressUpdatedAt time.Time
+
 	// Review queue / activity state (embedded value — copied by value)
 	ReviewState
 
@@ -154,29 +158,30 @@ type InstanceSnapshot struct {
 // mutations to the live Instance after Unlock cannot corrupt the snapshot.
 func buildSnapshot(i *Instance) *InstanceSnapshot {
 	s := &InstanceSnapshot{
-		ID:               i.ID,
-		UUID:             i.UUID,
-		Title:            i.Title,
-		Path:             i.Path,
-		WorkingDir:       i.WorkingDir,
-		Branch:           i.Branch,
-		CreatedAt:        i.CreatedAt,
-		UpdatedAt:        i.UpdatedAt,
-		Status:           i.Status,
-		Program:          i.Program,
-		Height:           i.Height,
-		Width:            i.Width,
-		AutoYes:          i.AutoYes,
-		AutoApprove:      i.AutoApprove,
-		IsExpanded:       i.IsExpanded,
-		Prompt:           i.Prompt,
-		InitialPrompt:    i.InitialPrompt,
-		Category:         i.Category,
-		Note:             i.Note,
-		SessionType:      i.SessionType,
-		TmuxPrefix:       i.TmuxPrefix,
-		TmuxServerSocket: i.TmuxServerSocket,
-		Tags:             append([]string(nil), i.Tags...),
+		ID:                        i.ID,
+		UUID:                      i.UUID,
+		Title:                     i.Title,
+		Path:                      i.Path,
+		WorkingDir:                i.WorkingDir,
+		Branch:                    i.Branch,
+		CreatedAt:                 i.CreatedAt,
+		UpdatedAt:                 i.UpdatedAt,
+		Status:                    i.Status,
+		CreationProgressUpdatedAt: i.creationProgressUpdatedAt,
+		Program:                   i.Program,
+		Height:                    i.Height,
+		Width:                     i.Width,
+		AutoYes:                   i.AutoYes,
+		AutoApprove:               i.AutoApprove,
+		IsExpanded:                i.IsExpanded,
+		Prompt:                    i.Prompt,
+		InitialPrompt:             i.InitialPrompt,
+		Category:                  i.Category,
+		Note:                      i.Note,
+		SessionType:               i.SessionType,
+		TmuxPrefix:                i.TmuxPrefix,
+		TmuxServerSocket:          i.TmuxServerSocket,
+		Tags:                      append([]string(nil), i.Tags...),
 		Autonomous: AutonomousModeState{
 			AutonomousMode:     i.AutonomousMode,
 			AutonomousTurn:     i.AutonomousTurn,

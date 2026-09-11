@@ -140,7 +140,8 @@ func (s *ImportService) PreviewImportExternalSession(
 		// omitted (zero value). Commit will attempt the same read again.
 		if historyPath, err := s.detector.ResolveFilePath(candidate.Path, result.UUID); err == nil {
 			if turns, err := session.ReadCanonicalTurnsFromFile(historyPath); err == nil {
-				resp.TurnCount = int32(len(turns)) //nolint:gosec // turn counts are bounded by transcript size, never near int32 max
+				// #nosec G115 -- turn counts are bounded by transcript size, never near int32 max.
+				resp.TurnCount = int32(len(turns))
 				resp.LastMessageExcerpt = lastMessageExcerpt(turns)
 			}
 		}

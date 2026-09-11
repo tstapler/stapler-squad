@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/daemon"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/buildinfo"
 	"github.com/tstapler/stapler-squad/pkg/warren"
 	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server"
@@ -32,6 +33,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"syscall"
@@ -42,8 +44,19 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
+// version is normally overridden via -X main.version=... (see Makefile's
+// LDFLAGS / GoReleaser's .goreleaser.yaml). "dev" is a placeholder, not a
+// real fallback: resolveDevVersion() below replaces it at startup using
+// Go's own automatic VCS build-info stamping (populated by a plain
+// `go build`/`go install` run from inside this git checkout — no ldflags
+// needed), rather than a hardcoded version string that silently goes stale
+// forever. That staleness was a real, live bug: a binary this repo
+// documents building via a bare `go build`/`go install` (no Makefile, no
+// ldflags) reported "1.1.2" regardless of what commit it actually
+// contained, because that was the last value anyone happened to hardcode
+// here — verified in the field on a machine's actual ~/.local/bin install.
 var (
-	version                 = "1.1.2"
+	version                 = "dev"
 	daemonFlag              bool
 	mcpFlag                 bool
 	testModeFlag            bool
@@ -159,24 +172,22 @@ var (
 					testDir = fmt.Sprintf("/tmp/stapler-squad-test-%d", os.Getpid())
 				}
 				// Set environment variable for config package to use
-				os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+				if err := os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir); err != nil {
+					log.Warn("Failed to set STAPLER_SQUAD_TEST_DIR; test mode may use the wrong data directory", "err", err)
+				}
 				log.Info("Test mode enabled: using isolated data directory", "dir", testDir)
 			}
 
 			// Load config first so we can configure logging properly
 			cfg := config.LoadConfig()
 
-			// Register the process manager backend before any session is created.
-			// Empty string defaults to "tmux" for backwards-compatibility.
-			// resolveStartupBackend is the single source of truth for the
-			// effective backend, routing both the config value and the env var
-			// through the same rollback-rehearsal gate (ADR-002) so hand-editing
-			// process_manager_backend: "tymux" in config.json can never bypass it.
-			resolvedBackend, err := resolveStartupBackend(cfg, os.Getenv("STAPLER_SQUAD_USE_TYMUX") == "true")
-			if err != nil {
-				log.Warn("tymux: global default requested but rollback rehearsal not completed; falling back to tmux", "err", err)
-			}
-			session.RegisterBackendProvider(resolvedBackend)
+			// The process-wide default backend is resolved live per session
+			// (session.getSelectedBackend, via config.EffectiveTymuxEnabled) —
+			// no startup-time registration needed. resolvedBackend here is only
+			// for tymuxNeeded's startup-supervision decision below: whether
+			// tymuxd needs to be running *right now*, given the flag's value at
+			// this instant.
+			resolvedBackend := session.ResolveSessionBackend(cfg, "", "")
 
 			// Load discovery config
 			discoveryCfg := config.LoadDiscoveryConfig()
@@ -550,6 +561,13 @@ var (
 		Short: "Print the version number of stapler-squad",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("stapler-squad version %s\n", version)
+			if buildinfo.Branch != "" || buildinfo.Commit != "" {
+				worktreeNote := ""
+				if buildinfo.Worktree == "true" {
+					worktreeNote = " (worktree checkout)"
+				}
+				fmt.Printf("  branch: %s  commit: %s%s\n", orUnknown(buildinfo.Branch), orUnknown(buildinfo.Commit), worktreeNote)
+			}
 			fmt.Printf("https://github.com/TylerStaplerAtFanatics/stapler-squad/releases/tag/v%s\n", version)
 		},
 	}
@@ -773,6 +791,13 @@ var (
 	}
 )
 
+func orUnknown(s string) string {
+	if s == "" {
+		return "unknown"
+	}
+	return s
+}
+
 func init() {
 	rootCmd.Flags().BoolVar(&mcpFlag, "mcp", false,
 		"Run as an MCP server (stdio transport). Reads MCP JSON-RPC from stdin, writes to stdout. "+
@@ -843,32 +868,7 @@ func init() {
 	rootCmd.AddCommand(listSessionsCmd)
 	rootCmd.AddCommand(printQRCodesCmd)
 	rootCmd.AddCommand(commands.GetSessionCmd)
-}
-
-// resolveStartupBackend is the single source of truth for the effective
-// process-manager backend at startup (ADR-002, Epic 3.2, Story 3.2.1). It
-// routes both cfg.ProcessManagerBackend and tymuxEnvRequested (the
-// STAPLER_SQUAD_USE_TYMUX env var) through the same
-// config.ResolveGlobalTymuxDefault rollback-rehearsal gate, so hand-editing
-// process_manager_backend: "tymux" directly in config.json cannot bypass the
-// gate the way it could if the config value were honored independently of
-// the env var (research/pitfalls.md §3). Requesting tymux without a
-// completed rehearsal is not fatal — the caller is expected to log the
-// returned error and continue with the tmux fallback this function already
-// returns.
-func resolveStartupBackend(cfg *config.Config, tymuxEnvRequested bool) (session.ProcessManagerBackend, error) {
-	backend := session.ProcessManagerBackend(cfg.ProcessManagerBackend)
-	if backend == "" {
-		backend = session.BackendTmux
-	}
-	tymuxRequested := backend == session.BackendTymux || tymuxEnvRequested
-	tymuxEffective, err := config.ResolveGlobalTymuxDefault(cfg, tymuxRequested)
-	if tymuxEffective {
-		backend = session.BackendTymux
-	} else if backend == session.BackendTymux {
-		backend = session.BackendTmux
-	}
-	return backend, err
+	rootCmd.AddCommand(commands.EnsurePortsFreeCmd)
 }
 
 // tymuxNeeded reports whether tymuxd supervision should run for this process
@@ -1115,6 +1115,42 @@ func scutilNameservers() []string {
 	return servers
 }
 
+// forwardLookupViaKnownNameservers resolves hostname against every
+// nameserver scutil reports, the forward-lookup analog of
+// reverseDNSViaKnownNameservers below: a forward query is scoped by search
+// domain (e.g. "staplerhome.internal"), and an unscoped VPN resolver can take
+// priority over a LAN router's scoped resolver for that same domain, so
+// net.LookupHost's OS-chosen resolver order can return "no such host" from
+// the wrong resolver even though the LAN router would have answered.
+// Querying each known nameserver directly finds a LAN-only A record that
+// step would otherwise miss.
+func forwardLookupViaKnownNameservers(hostname string) []string {
+	seen := make(map[string]bool)
+	var ips []string
+	for _, server := range scutilNameservers() {
+		resolver := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 3 * time.Second}
+				return d.DialContext(ctx, network, net.JoinHostPort(server, "53"))
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		found, err := resolver.LookupHost(ctx, hostname)
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, ip := range found {
+			if !seen[ip] {
+				seen[ip] = true
+				ips = append(ips, ip)
+			}
+		}
+	}
+	return ips
+}
+
 // reverseDNSViaKnownNameservers performs a PTR lookup for lanIPStr against
 // every nameserver scutil reports, rather than relying on the OS's default
 // resolver selection. A PTR query carries no domain suffix, so per-domain
@@ -1274,10 +1310,13 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	// an IP this machine actually owns, so a request can't claim an
 	// arbitrary hostname as its RPID.
 	hostnameValidator := func(hostname string) bool {
-		resolvedIPs, err := net.LookupHost(hostname)
-		if err != nil {
-			return false
-		}
+		resolvedIPs, _ := net.LookupHost(hostname)
+		// The OS's default resolver order can shadow a LAN-only search
+		// domain with an unscoped VPN resolver (see
+		// forwardLookupViaKnownNameservers) -- always also check every
+		// nameserver scutil knows about directly rather than only falling
+		// back to it when net.LookupHost errors.
+		resolvedIPs = append(resolvedIPs, forwardLookupViaKnownNameservers(hostname)...)
 		ownIPs := listNonLoopbackIPs()
 		for _, resolved := range resolvedIPs {
 			for _, own := range ownIPs {
@@ -1447,9 +1486,63 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 }
 
 func main() {
+	if version == "dev" {
+		resolveDevVersion()
+	}
+	// GoReleaser's release build only sets main.version (`-X
+	// main.version={{.Version}}`, kept as its own ldflag target deliberately
+	// — see Makefile's LDFLAGS comment), never buildinfo.Version. Fill it in
+	// here so the web UI's /api/server-info still reports a version on a
+	// released binary instead of an empty string.
+	if buildinfo.Version == "" {
+		buildinfo.Version = version
+	}
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
+		// Every invocation of this binary exited 0 regardless of success or
+		// failure before this line existed — verified: `./stapler-squad
+		// nonexistent-command; echo $?` printed the cobra error and still
+		// exited 0. That silently defeated install-service.sh's new
+		// ensure-ports-free capability probe and its primary safety check
+		// (macos_stop_service): both branch on this process's exit code to
+		// tell "subcommand missing" / "genuinely failed to free the port"
+		// apart from "succeeded", and all three looked identical to the
+		// caller without this.
+		os.Exit(1)
 	}
+}
+
+// resolveDevVersion replaces the "dev" placeholder with real VCS info from
+// Go's own automatic build-info stamping (present on any `go build`/
+// `go install` run from inside a git checkout, no ldflags required) — see
+// the version var's doc comment for why a hardcoded fallback string isn't
+// good enough. No-ops (leaves "dev") if build info or a revision genuinely
+// isn't available, e.g. building from a source tarball with no .git dir.
+func resolveDevVersion() {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	var revision string
+	var modified bool
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+		case "vcs.modified":
+			modified = s.Value == "true"
+		}
+	}
+	if revision == "" {
+		return
+	}
+	if len(revision) > 12 {
+		revision = revision[:12]
+	}
+	if modified {
+		revision += "-dirty"
+	}
+	version = revision
 }
 
 // buildLogConfig converts application config to a log.LogConfig. consoleEnabled

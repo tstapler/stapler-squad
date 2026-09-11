@@ -112,13 +112,13 @@ func (h *FileUploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request)
 	path := f.Name()
 
 	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(path)
+		_ = f.Close()
+		_ = os.Remove(path)
 		log.Error("[FileUpload] write failed", "err", err)
 		http.Error(w, "failed to save file", http.StatusInternalServerError)
 		return
 	}
-	f.Close()
+	_ = f.Close()
 
 	if err := os.Chmod(path, uploadFileMode); err != nil {
 		log.Error("[FileUpload] chmod failed", "err", err)

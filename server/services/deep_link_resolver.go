@@ -103,7 +103,7 @@ func NewRegistryHostResolver(stateDir string, ttl time.Duration) *registryHostRe
 // (session.HostRegistry.Advertise) -- TLS here provides transport
 // encryption only, not peer identity.
 func peerTLSTransport() *http.Transport {
-	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // see doc comment: identity is verified at the application layer (Ed25519/TOFU), not via the TLS chain
+	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} // #nosec G402 -- see doc comment: identity is verified at the application layer (Ed25519/TOFU), not via the TLS chain
 }
 
 // ResolveHost implements HostResolver.
@@ -273,6 +273,11 @@ func (d *DeepLinkResolver) resolveLocal(ctx context.Context, w http.ResponseWrit
 		return
 	}
 
+	// Deliberately Archived-only, not session.IsTerminalStatus: a "done" (or
+	// custom-terminal) item is still a real, viewable item — only "archived"
+	// means gone/hidden for deep-link purposes (Epic 2.1, Story 2.1.3 sweep —
+	// reviewed, benign; this is not the Done||Archived terminal-status
+	// pattern being consolidated elsewhere).
 	if item.Status == string(session.BacklogStatusArchived) {
 		log.Warn("deep_link.resolve_failed", "host", link.Hostname, "item_id", link.ID, "reason", "archived")
 		writeJSON(w, http.StatusNotFound, deepLinkNotFoundResponse{Kind: "not-found", Reason: "archived"})

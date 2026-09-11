@@ -142,8 +142,21 @@ func featureDisabledResult(enabledCheck func() bool) *mcpgo.CallToolResult {
 
 // --- list_backlog_items validation ---
 
-// validBacklogStatuses is the whitelist list_backlog_items validates the
-// status filter against, matching session.BacklogStatus's full value set.
+// stageLister is a minimal seam so list_backlog_items' status-filter
+// validation can recognize an operator-configured custom stage once Epic
+// 2.3's ConfiguredWorkflowEngine exists, without this package depending on
+// Epic 2.3's (not-yet-written) package. ConfiguredWorkflowEngine is expected
+// to satisfy this interface when it lands (Story 2.1.4, Task 2.1.4a).
+type stageLister interface {
+	// ListEnabledStageSlugs returns every stage slug — built-in and custom —
+	// currently enabled in the operator's configured workflow.
+	ListEnabledStageSlugs() []string
+}
+
+// validBacklogStatuses is the built-in-only fallback list_backlog_items
+// validates the status filter against when no stageLister is wired (see
+// backlogHandlers.stageEngine and validateBacklogStatus) — matching
+// session.BacklogStatus's 9 built-in values.
 var validBacklogStatuses = []session.BacklogStatus{
 	session.BacklogStatusIdea,
 	session.BacklogStatusRefining,
@@ -156,15 +169,32 @@ var validBacklogStatuses = []session.BacklogStatus{
 	session.BacklogStatusArchived,
 }
 
-// validateBacklogStatus rejects a typo'd status value fast instead of letting
-// it silently fall through to an empty result (the RPC applies no validation
-// of its own).
-func validateBacklogStatus(statuses []string) error {
-	valid := make(map[string]bool, len(validBacklogStatuses))
+// validStatusFilterNames returns the status-filter values list_backlog_items
+// accepts: engine's live enabled-stage list when a stageLister is wired
+// (recognizing custom stages), else the fixed built-in 9.
+func validStatusFilterNames(engine stageLister) []string {
+	if engine != nil {
+		if slugs := engine.ListEnabledStageSlugs(); len(slugs) > 0 {
+			return slugs
+		}
+	}
 	names := make([]string, len(validBacklogStatuses))
 	for i, s := range validBacklogStatuses {
-		valid[string(s)] = true
 		names[i] = string(s)
+	}
+	return names
+}
+
+// validateBacklogStatus rejects a typo'd status value fast instead of letting
+// it silently fall through to an empty result (the RPC applies no validation
+// of its own). Sourced from h.stageEngine's live stage list when wired
+// (Story 2.1.4, Task 2.1.4a), falling back to the fixed built-in 9-entry
+// validBacklogStatuses list when no engine is available.
+func (h *backlogHandlers) validateBacklogStatus(statuses []string) error {
+	names := validStatusFilterNames(h.stageEngine)
+	valid := make(map[string]bool, len(names))
+	for _, s := range names {
+		valid[s] = true
 	}
 	for _, s := range statuses {
 		if !valid[s] {
@@ -207,6 +237,12 @@ func paginateBacklogItems(items []*sessionv1.BacklogItem, limit, offset int) (pa
 // allowedSelfResolveSourceStatuses is the whitelist of source statuses a
 // self-resolve tool (request_review, report_duplicate) may transition an
 // item out of. Consulted only from inside validateSelfResolveSource.
+//
+// Scope boundary (Story 2.1.4): intentionally built-in-only, not sourced
+// from any stage engine. Per requirements.md's resolved Open Question, a
+// custom stage is a full transition/liveness graph citizen but does not
+// automatically inherit MCP self-resolve eligibility — that requires an
+// explicit gate-model attachment, out of this project's scope.
 var allowedSelfResolveSourceStatuses = map[session.BacklogStatus]bool{
 	session.BacklogStatusInProgress: true,
 	session.BacklogStatusPRPending:  true,
@@ -222,6 +258,10 @@ var allowedSelfResolveSourceStatuses = map[session.BacklogStatus]bool{
 // Deliberately excludes in_progress/pr_pending/review/done — an item already
 // claimed or resolved must go through the linked-session path in reportDuplicate
 // (or a human), never be yanked out from under whoever's already on it.
+//
+// Scope boundary (Story 2.1.4): intentionally built-in-only, not sourced
+// from any stage engine — same "does not automatically inherit" resolution
+// as allowedSelfResolveSourceStatuses above.
 var unclaimedDuplicateSourceStatuses = map[session.BacklogStatus]bool{
 	session.BacklogStatusIdea:     true,
 	session.BacklogStatusRefining: true,
@@ -234,6 +274,10 @@ var unclaimedDuplicateSourceStatuses = map[session.BacklogStatus]bool{
 // storage write so a structurally ineligible status (e.g. ready, idea, done)
 // gets a specific rejection instead of falling through to the generic
 // CAS-race message.
+//
+// Scope boundary (Story 2.1.4): intentionally built-in-only, not sourced
+// from any stage engine — same "does not automatically inherit" resolution
+// as allowedSelfResolveSourceStatuses above.
 var reportPRCreatedAllowedSourceStatuses = map[session.BacklogStatus]bool{
 	session.BacklogStatusReview:    true,
 	session.BacklogStatusPRPending: true,
@@ -244,6 +288,10 @@ var reportPRCreatedAllowedSourceStatuses = map[session.BacklogStatus]bool{
 // must use only its returned session.BacklogStatus for a transition's
 // ExpectedStatus — never item.Status directly — so that the CAS precondition
 // is never trivially self-satisfying for a disallowed status.
+//
+// Scope boundary (Story 2.1.4): validates against allowedSelfResolveSourceStatuses,
+// which is intentionally built-in-only — see that map's doc comment for the
+// "does not automatically inherit" resolution a custom stage falls under.
 func validateSelfResolveSource(item *session.BacklogItemData, toolName string) (session.BacklogStatus, error) {
 	s := session.BacklogStatus(item.Status)
 	if !allowedSelfResolveSourceStatuses[s] {
@@ -337,6 +385,13 @@ type backlogHandlers struct {
 	// making the call. Defaults to githubpkg.GetCurrentUserLogin when nil;
 	// overridable in tests to avoid making a real GitHub API call.
 	resolveCallerGitHubLogin func(ctx context.Context) (string, error)
+
+	// stageEngine backs list_backlog_items' status-filter validation with a
+	// live enabled-stage list once Epic 2.3's ConfiguredWorkflowEngine
+	// exists and is wired here. Optional; nil (today's only wiring — Epic
+	// 2.3 hasn't landed) falls back to the fixed built-in 9-entry
+	// validBacklogStatuses list (Story 2.1.4).
+	stageEngine stageLister
 }
 
 // --- get_backlog_item ---
@@ -627,7 +682,7 @@ func buildMatchedWaitResult(itemID string, payload *events.BacklogItemEventPaylo
 	if payload.Item != nil {
 		res.Status = payload.Item.Status
 		status := session.BacklogStatus(payload.Item.Status)
-		if status == session.BacklogStatusDone || status == session.BacklogStatusArchived {
+		if session.IsTerminalStatus(status) {
 			res.IsTerminal = true
 		}
 	}
@@ -660,7 +715,7 @@ func buildMatchedWaitResult(itemID string, payload *events.BacklogItemEventPaylo
 // pre-satisfies.
 func currentStateWaitResult(item *session.BacklogItemData, verdict *session.ReviewVerdictSummary, eventTypeFilter string) *WaitForBacklogEventResult {
 	status := session.BacklogStatus(item.Status)
-	terminal := status == session.BacklogStatusDone || status == session.BacklogStatusArchived
+	terminal := session.IsTerminalStatus(status)
 
 	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeVerdictRecorded) && verdict != nil {
 		return &WaitForBacklogEventResult{
@@ -675,6 +730,11 @@ func currentStateWaitResult(item *session.BacklogItemData, verdict *session.Revi
 			IsTerminal:       terminal,
 		}
 	}
+	// Deliberately Archived-only, not session.IsTerminalStatus: this branch
+	// matches the "item_archived" event kind specifically, not general
+	// terminal-ness — a "done" (or custom-terminal) item must not satisfy an
+	// eventTypeItemArchived wait (Epic 2.1, Story 2.1.3 sweep — reviewed,
+	// benign).
 	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeItemArchived) && status == session.BacklogStatusArchived {
 		return &WaitForBacklogEventResult{
 			MCPResult:        MCPResult{Success: true},
@@ -834,7 +894,7 @@ func (h *backlogHandlers) listBacklogItems(ctx context.Context, req mcpgo.CallTo
 			statuses = append(statuses, s)
 		}
 	}
-	if err := validateBacklogStatus(statuses); err != nil {
+	if err := h.validateBacklogStatus(statuses); err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), ""), nil
 	}
 
@@ -1258,6 +1318,11 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		}
 	}
 
+	// Scope boundary (Story 2.1.4): review/done are hardcoded built-in
+	// targets, not sourced from any stage engine — same "does not
+	// automatically inherit" resolution as allowedSelfResolveSourceStatuses
+	// (a custom stage is never chosen here even if it were otherwise a
+	// plausible "review-like" destination).
 	targetStatus := session.BacklogStatusReview
 	if item.SkipReviewGate {
 		targetStatus = session.BacklogStatusDone
@@ -1388,6 +1453,12 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 	if itemErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("failed to load item: %v", itemErr), ""), nil
 	}
+	// Scope boundary (Story 2.1.4): this source-status check is its own
+	// hardcoded switch, separate from validateSelfResolveSource/
+	// allowedSelfResolveSourceStatuses — deliberately built-in-only for the
+	// same "does not automatically inherit" resolution: a custom stage is
+	// never an eligible report_blocked source even if it were otherwise
+	// in_progress-like.
 	currentStatus := session.BacklogStatus(item.Status)
 	switch currentStatus {
 	case session.BacklogStatusInProgress, session.BacklogStatusReview:
@@ -1396,6 +1467,9 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 		return errResult(ErrInvalidArgument, fmt.Sprintf("item is at status %q — report_blocked only allowed from in_progress or review", item.Status), ""), nil
 	}
 
+	// Scope boundary (Story 2.1.4): ready/review are hardcoded built-in
+	// targets, same rationale as request_review's targetStatus above — a
+	// custom stage is never chosen here.
 	priorBlockedCycles := countBlockedCycles(item.Notes)
 	escalated := priorBlockedCycles+1 >= blockedCycleThreshold
 	targetStatus := session.BacklogStatusReady
@@ -2126,6 +2200,7 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 
 	description, _ := args["description"].(string)
 	repoPath, _ := args["repo_path"].(string)
+	baseBranch, _ := args["base_branch"].(string)
 	notes, _ := args["notes"].(string)
 	category, _ := args["category"].(string)
 	if category != "" && !session.IsValidBacklogCategory(category) {
@@ -2161,6 +2236,7 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 		Priority:           priority,
 		Status:             string(session.BacklogStatusIdea),
 		RepoPath:           repoPath,
+		BaseBranch:         baseBranch,
 		Category:           category,
 		Notes:              notes,
 	})
@@ -3018,6 +3094,9 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 			mcpgo.WithString("repo_path",
 				mcpgo.Description("Absolute local filesystem path this item targets, e.g. /home/user/Programming/my-repo — NOT a bare repo name or owner/repo shorthand (triage will reject those with a clear error). Omit for a repo-less item."),
+			),
+			mcpgo.WithString("base_branch",
+				mcpgo.Description("Explicit opt-in override for the branch triage's isolated worktree and the eventual work session fork from, e.g. \"release-2.0\". Omit for the default: origin's default branch tip (main/master/etc) — NOT your own current branch, even if repo_path happens to be your own in-progress worktree. Only set this when you deliberately want new work to build on top of a specific non-default branch."),
 			),
 			mcpgo.WithString("notes",
 				mcpgo.Description("Freeform operator notes, e.g. where this request came from."),

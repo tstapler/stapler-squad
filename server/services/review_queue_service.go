@@ -217,6 +217,9 @@ func (rqs *ReviewQueueService) WatchReviewQueue(
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("reactive queue manager not initialized"))
 	}
 
+	done := TrackOpenStream("WatchReviewQueue")
+	defer done()
+
 	filters := &WatchReviewQueueFilters{
 		PriorityFilter:    convertProtoPriorities(req.Msg.PriorityFilter),
 		ReasonFilter:      convertProtoReasons(req.Msg.ReasonFilter),

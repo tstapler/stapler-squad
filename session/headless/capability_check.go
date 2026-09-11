@@ -121,7 +121,7 @@ func (c *CodebaseReadCapabilitySelfCheck) run(pool PoolClient) bool {
 	}
 	defer os.RemoveAll(tempDir)
 
-	if err := os.WriteFile(filepath.Join(tempDir, "marker.txt"), []byte(capabilityCheckMarkerValue), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tempDir, "marker.txt"), []byte(capabilityCheckMarkerValue), 0o600); err != nil {
 		log.WarningLog().Printf("[headless] codebase-read capability self-check: WriteFile failed: %v", err)
 		return false
 	}

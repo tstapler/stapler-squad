@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestMain pre-seeds headless.DefaultCapabilitySelfCheck as passed before any test
@@ -45,12 +46,20 @@ import (
 // and collectAllTokens reads both env vars straight from the environment, so
 // a developer machine or CI runner with either set would otherwise leak a
 // real token into the cache and dial the real GitHub API mid-suite.
+//
+// It also clears STAPLER_SQUAD_TEST_DIR/STAPLER_SQUAD_INSTANCE for the whole
+// test run — see envtest.ClearAmbientStaplerSquadStateEnv's doc comment for
+// why an ambient value of either silently defeats config.GetConfigDirForDir's
+// own per-PID test isolation and fails session creation with an unrelated
+// "Session.program" validator error.
 func TestMain(m *testing.M) {
 	headless.DefaultCapabilitySelfCheck = headless.NewPassedCapabilitySelfCheckForTesting()
 	restore := envtest.ClearAmbientGitHubTokenEnv()
+	restoreState := envtest.ClearAmbientStaplerSquadStateEnv()
 	reapLeakedTmuxTestServers()
 	startTmuxTestServerWatchdog()
 	code := m.Run()
+	restoreState()
 	restore()
 	os.Exit(code)
 }
@@ -67,6 +76,13 @@ type fakeHeadlessPool struct {
 	cost      float64       // returned as CallBlocking's cost; see TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession
 	calls     []fakePoolCall
 	onCall    func(workDir string) // optional: simulates the LLM writing files into WorkDir before the response returns
+	// onEnter, if set, is invoked synchronously the moment CallBlocking is entered
+	// (call recorded, before delay/ctx.Done blocking) -- lets a test observe "N
+	// concurrent callers have actually started blocking" deterministically via a
+	// channel/WaitGroup instead of polling callCount() with a wall-clock
+	// require.Eventually, which is a scheduler-contention-sensitive flake under
+	// full-suite parallel load (BUG-103).
+	onEnter func()
 }
 
 type fakePoolCall struct {
@@ -100,7 +116,11 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 		resp = f.responses[callIndex]
 	}
 	onCall := f.onCall
+	onEnter := f.onEnter
 	f.mu.Unlock()
+	if onEnter != nil {
+		onEnter()
+	}
 	if delay > 0 {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
@@ -1317,7 +1337,7 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 	// findExistingWorktreeForBranch, silently failing the async triage goroutine's git
 	// status check and leaving the item stuck below (never reaching "ready"). Same fix as
 	// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession, below.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
@@ -2560,7 +2580,7 @@ func TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext(t *testing.T) {
 	require.NoError(t, err)
 
 	var readyItem *sessionv1.BacklogItem
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		getResp, getErr := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
 		if getErr != nil || getResp.Msg.Item.Status != "ready" {
 			return false
@@ -3426,7 +3446,7 @@ func TestTriggerTriage_Success(t *testing.T) {
 	assert.Equal(t, string(session.SessionRoleTriage), resp.Msg.ItemSession.SessionRole)
 
 	// Goroutine runs asynchronously — poll until item transitions to "ready".
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond, "item should transition to ready after headless triage completes")
@@ -3442,7 +3462,7 @@ func TestTriggerTriage_Success(t *testing.T) {
 	// branch) calls UpdateItemSessionEnded — so polling only on status
 	// leaves a real race window where EndedAt hasn't landed yet. Poll for
 	// it too, the same way, rather than asserting immediately.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
 		return listErr == nil && len(sessions) == 1 && sessions[0].EndedAt != nil
 	}, 5*time.Second, 50*time.Millisecond, "triage item session should be marked ended on success")
@@ -3476,10 +3496,21 @@ func TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo(t *tes
 	}))
 	require.NoError(t, trigErr)
 
-	require.Eventually(t, func() bool {
-		return pool.callCount() == 1
-	}, 5*time.Second, 50*time.Millisecond)
+	// TriggerTriage's background goroutine keeps touching the isolated worktree
+	// (commit, retitleTriageWorktreeToFinalBranch) after CallBlocking returns —
+	// waiting only on pool.callCount() let this test return, racing t.TempDir()'s
+	// cleanup RemoveAll against those writes ("directory not empty" under
+	// full-suite load). Poll for the trailing EndedAt write instead (same
+	// ordering rationale as TestTriggerTriage_Success): that write lands after
+	// the worktree commit/retitle step, so seeing it confirms those file writes
+	// are done. Not testTriageCompleteHook — this test's t.Parallel() would race
+	// that single shared hook against sibling tests' own registrations.
+	wait.RequireEventually(t, func() bool {
+		sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+		return listErr == nil && len(sessions) == 1 && sessions[0].EndedAt != nil
+	}, 5*time.Second, 50*time.Millisecond, "triage item session should be marked ended on success")
 
+	require.Equal(t, 1, pool.callCount())
 	workDir := pool.firstCall().workDir
 	assert.NotEqual(t, repoPath, workDir, "triage must not run directly in repo_path when repo_path is a real git repo")
 	assert.NotEmpty(t, workDir)
@@ -3513,10 +3544,15 @@ func TestTriggerTriage_FallsBackToRepoPathDirectly_When_RepoPathIsNotAGitRepo(t 
 	}))
 	require.NoError(t, trigErr)
 
-	require.Eventually(t, func() bool {
-		return pool.callCount() == 1
-	}, 5*time.Second, 50*time.Millisecond)
+	// Wait for the trailing EndedAt write, not just pool.callCount() — see
+	// TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo's
+	// identical comment.
+	wait.RequireEventually(t, func() bool {
+		sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+		return listErr == nil && len(sessions) == 1 && sessions[0].EndedAt != nil
+	}, 5*time.Second, 50*time.Millisecond, "triage item session should be marked ended on success")
 
+	require.Equal(t, 1, pool.callCount())
 	assert.Equal(t, repoPath, pool.firstCall().workDir,
 		"a non-git repo_path must fall back to running triage directly there, same as before this change")
 }
@@ -3642,7 +3678,7 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	// PID-scoped IsTestMode() fallback) to this test's own t.TempDir() gives every
 	// repetition a fully isolated worktree base dir, closing the collision at the
 	// test level without touching the shared worktree-reuse production code.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	storage := createTestStorage(t)
 	const slug = "widget-integration"
@@ -3778,7 +3814,7 @@ func TestTriggerTriage_should_ApplyAssessedPriorityAndCategory_When_LLMProvidesT
 	}))
 	require.NoError(t, trigErr)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond)
@@ -3815,7 +3851,7 @@ func TestTriggerTriage_should_NotClobberExistingPriorityOrCategory_When_LLMOmits
 	}))
 	require.NoError(t, trigErr)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond)
@@ -3872,7 +3908,7 @@ func TestTriggerTriage_AutoSpawnSession_SpawnsWorkSessionWithoutManualClick(t *t
 	// creator call and the subsequent in_progress transition both happen inside the same
 	// synchronous SpawnSessionFromItem call, but from a different goroutine than this
 	// test, so checking creator.calls alone races with the transition that follows it.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusInProgress)
 	}, 20*time.Second, 50*time.Millisecond, "auto-spawn must carry the item all the way to in_progress, not leave it sitting at ready")
@@ -3912,7 +3948,7 @@ func TestTriggerTriage_AutoSpawnSessionFalse_LeavesItemAtReadyForManualSpawn(t *
 	// this exact test time out under full-suite load (go test ./server/services/...
 	// -count=1: 452 passed, this one failed with "Condition never satisfied" at the
 	// 5s window) even though it only does one worktree cycle — widen to match.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 20*time.Second, 50*time.Millisecond)
@@ -4005,7 +4041,7 @@ func TestTriggerTriage_RefineWithFeedback(t *testing.T) {
 		ItemId: item.ID,
 	}))
 	require.NoError(t, trigErr)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond, "initial triage should mark item ready")
@@ -4016,10 +4052,10 @@ func TestTriggerTriage_RefineWithFeedback(t *testing.T) {
 		Feedback: "This missed the mobile case entirely.",
 	}))
 	require.NoError(t, refineErr)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return pool.callCount() == 2
 	}, 5*time.Second, 50*time.Millisecond, "refine should make a second headless call")
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond, "refine should mark item ready again")
@@ -4061,7 +4097,7 @@ func TestTriggerTriage_RefineWithFeedback_ResetsPlanApproved(t *testing.T) {
 		ItemId: item.ID,
 	}))
 	require.NoError(t, trigErr)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond, "initial triage should mark item ready")
@@ -4077,7 +4113,7 @@ func TestTriggerTriage_RefineWithFeedback_ResetsPlanApproved(t *testing.T) {
 		Feedback: "This missed the mobile case entirely.",
 	}))
 	require.NoError(t, refineErr)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady) && !updated.PlanApproved
 	}, 5*time.Second, 50*time.Millisecond, "refine completion should reset plan_approved to false")
@@ -4107,7 +4143,7 @@ func TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason(t *testing.T) {
 		ItemId: item.ID,
 	}))
 	require.NoError(t, trigErr)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond, "initial triage should mark item ready")
@@ -4125,7 +4161,7 @@ func TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason(t *testing.T) {
 		Feedback: rejectResp.Msg.Item.PlanRejectionReason,
 	}))
 	require.NoError(t, refineErr)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady) && updated.PlanRejectionReason == ""
 	}, 5*time.Second, 50*time.Millisecond, "refine completion should clear plan_rejection_reason")
@@ -4184,7 +4220,7 @@ func TestTriggerTriage_HeadlessPoolError(t *testing.T) {
 	require.NoError(t, trigErr, "TriggerTriage must return success synchronously even if headless call will fail")
 
 	// Poll until the goroutine finishes and marks the session ended.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
 		return listErr == nil && len(sessions) > 0 && sessions[0].EndedAt != nil
 	}, 5*time.Second, 50*time.Millisecond, "session should be marked ended after headless error")
@@ -4262,7 +4298,7 @@ func TestTriggerTriage_OrphanedHeadlessSession(t *testing.T) {
 	assert.NotEmpty(t, resp.Msg.ItemSession.Id)
 
 	// Wait for the new goroutine to complete and item to reach ready.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond)

@@ -4,10 +4,17 @@ export interface ProgramOption {
   description?: string;
 }
 
+// pi-support's flag name (mirrors config.FeaturePiSupport / feature_flag_service.go's
+// piSupportFlagName — kept as a plain string constant here since the frontend has no
+// shared import path to those Go constants). Single source of truth for the frontend;
+// import this everywhere instead of redeclaring the literal.
+export const PI_SUPPORT_FLAG_NAME = "pi-support";
+
 export const PROGRAMS: ProgramOption[] = [
   { value: "", label: "System default", description: "Use default_program from config (default: claude)" },
   { value: "claude", label: "Claude Code", description: "Anthropic's CLI assistant" },
   { value: "env -u CLAUDE_CODE_USE_BEDROCK ANTHROPIC_BASE_URL=http://localhost:47000 claude", label: "Claude Code (Proxy via localhost:47000)", description: "Via local proxy" },
+  { value: "pi", label: "pi", description: "@earendil-works/pi-coding-agent — TypeScript-extensible CLI" },
   { value: "aider", label: "Aider", description: "AI pair programming with git" },
   { value: "aider --model ollama_chat/gemma3:1b", label: "Aider (Ollama Gemma 1B)", description: "Local model" },
   { value: "opencode", label: "OpenCode", description: "OpenCode CLI assistant" },
@@ -62,4 +69,21 @@ export function getProgramDisplay(program?: string): string {
 
 export function isKnownProgram(program: string): boolean {
   return PROGRAMS.some((p) => p.value === program) || program.startsWith("aider --model");
+}
+
+/**
+ * Programs to offer in the creation-panel picker, filtered from whichever program
+ * list the caller has (usually `PROGRAMS`, but the creation panel derives its own
+ * list via useAvailablePrograms() to include extra programs detected on the host).
+ * `PROGRAMS` itself stays unconditional (getProgramDisplay/isKnownProgram must
+ * recognize "pi" even with the flag off, for sessions that already have
+ * program: "pi" set from before pi-support was disabled) -- this helper filters
+ * only the rendered option list, per pi-support's "opt-in invisibility" requirement.
+ */
+export function getPickerPrograms(
+  programs: ProgramOption[],
+  piSupportEnabled: boolean,
+): ProgramOption[] {
+  if (piSupportEnabled) return programs;
+  return programs.filter((p) => p.value !== "pi");
 }

@@ -393,7 +393,7 @@ func TestRemoteWorktreeOps_InitializeProjectDirectory_CreatesRepoWithInitialComm
 		t.Fatalf("InitializeProjectDirectory() error = %v", err)
 	}
 
-	repo, err := git.PlainOpen(projectPath)
+	repo, err := OpenRepo(projectPath)
 	if err != nil {
 		t.Fatalf("expected a git repo at %s: %v", projectPath, err)
 	}
@@ -462,7 +462,7 @@ func TestRemoteWorktreeOps_InitializeProjectDirectory_NoOpIfAlreadyRepo(t *testi
 
 	// The pre-existing commit is still HEAD -- no new "Initial commit" was made,
 	// and no .gitignore was written over whatever was already there.
-	repo2, err := git.PlainOpen(projectPath)
+	repo2, err := OpenRepo(projectPath)
 	if err != nil {
 		t.Fatalf("failed to reopen repo: %v", err)
 	}
@@ -506,7 +506,7 @@ func TestRemoteWorktreeOps_InitializeProjectDirectory_DoesNotSkipDueToAncestorRe
 		t.Fatalf("InitializeProjectDirectory() error = %v", err)
 	}
 
-	repo, err := git.PlainOpen(projectPath)
+	repo, err := OpenRepo(projectPath)
 	if err != nil {
 		t.Fatalf("expected a distinct nested git repo at %s: %v", projectPath, err)
 	}

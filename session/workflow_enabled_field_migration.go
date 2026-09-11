@@ -88,6 +88,7 @@ func workflowEnabledColumnPreexisted(db *sql.DB) bool {
 // one with cron_enabled=true. Best-effort per row: a single row's save
 // failure is logged and does not abort the rest.
 func runWorkflowEnabledFieldBackfill(ctx context.Context, er *EntRepository) {
+	//nolint:entfullscan one-time backfill fixing the enabled default on legacy Workflow rows; gated by enabledColumnPreexisted so it only ever runs once.
 	wfs, err := er.client.Workflow.Query().All(ctx)
 	if err != nil {
 		// Table may not exist yet (fresh DB before schema.Create) — ignore,

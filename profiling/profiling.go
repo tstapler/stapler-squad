@@ -60,19 +60,24 @@ func StartProfiling(cfg Config) (func(), error) {
 		if traceFile == "" {
 			traceFile = fmt.Sprintf("/tmp/stapler-squad-trace-%d.out", os.Getpid())
 		}
+		// #nosec G304 -- traceFile is either the fixed /tmp/stapler-squad-trace-<pid>.out
+		// default above or cfg.TraceFile, which is only ever set to "" by main.go (a
+		// compile-time constant); not derived from RPC/network/user request input.
 		f, err := os.Create(traceFile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create trace file: %w", err)
 		}
 		if err := trace.Start(f); err != nil {
-			f.Close()
+			_ = f.Close() // trace never started, so there's nothing buffered to lose
 			return nil, fmt.Errorf("failed to start trace: %w", err)
 		}
 		log.Info("Execution trace enabled", "file", traceFile)
 		log.Info("View with: go tool trace <file>", "file", traceFile)
 		cleanupFuncs = append(cleanupFuncs, func() {
 			trace.Stop()
-			f.Close()
+			if err := f.Close(); err != nil {
+				log.Warn("Failed to close trace file; trace data may be incomplete", "file", traceFile, "err", err)
+			}
 			log.Info("Trace saved", "file", traceFile)
 		})
 	}

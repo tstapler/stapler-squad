@@ -1,13 +1,13 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"strings"
 	"testing"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	ssqlog "github.com/tstapler/stapler-squad/log"
 
 	"connectrpc.com/connect"
 )
@@ -19,18 +19,17 @@ func newLogClientEventsRequest(entries ...*sessionv1.ClientLogEntry) *connect.Re
 	})
 }
 
-// captureInfoLog temporarily redirects the slog default logger to a buffer
-// and returns a function that restores it and returns the captured output.
+// captureInfoLog temporarily redirects the log package's injectable slog seam to a
+// buffer and returns a function that restores it and returns the captured output.
 // Holds slogDefaultMu (declared in autonomous_orchestration_service_test.go) for the
-// full swap-to-restore window so it can't race other tests' slog.Default() swaps.
+// full swap-to-restore window so it can't race other tests' log.SetSlogDefaultForTest swaps.
 func captureInfoLog() func() string {
 	slogDefaultMu.Lock()
-	var buf bytes.Buffer
-	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	original := slog.Default()
-	slog.SetDefault(slog.New(h))
+	buf := &syncLogBuffer{}
+	h := slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	original := ssqlog.SetSlogDefaultForTest(slog.New(h))
 	return func() string {
-		slog.SetDefault(original)
+		ssqlog.SetSlogDefaultForTest(original)
 		slogDefaultMu.Unlock()
 		return buf.String()
 	}
@@ -95,7 +94,7 @@ func TestBrowserLog_EmptyEntries(t *testing.T) {
 
 // UT-B-09: message with newline is sanitized
 func TestBrowserLog_LogInjection_Newline(t *testing.T) {
-	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// Not t.Parallel(): captureInfoLog() mutates the log package's injectable slog seam (log.SetSlogDefaultForTest)
 	// logger, which races against any other test's concurrent logging calls.
 	restore := captureInfoLog()
 	logClientEntry(&sessionv1.ClientLogEntry{
@@ -113,7 +112,7 @@ func TestBrowserLog_LogInjection_Newline(t *testing.T) {
 
 // UT-B-10: message with carriage return is sanitized
 func TestBrowserLog_LogInjection_CarriageReturn(t *testing.T) {
-	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// Not t.Parallel(): captureInfoLog() mutates the log package's injectable slog seam (log.SetSlogDefaultForTest)
 	// logger, which races against any other test's concurrent logging calls.
 	restore := captureInfoLog()
 	logClientEntry(&sessionv1.ClientLogEntry{
@@ -131,7 +130,7 @@ func TestBrowserLog_LogInjection_CarriageReturn(t *testing.T) {
 
 // UT-B-11: message > 200 chars is truncated with ellipsis
 func TestBrowserLog_MessageTruncation(t *testing.T) {
-	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// Not t.Parallel(): captureInfoLog() mutates the log package's injectable slog seam (log.SetSlogDefaultForTest)
 	// logger, which races against any other test's concurrent logging calls.
 	restore := captureInfoLog()
 	msg := strings.Repeat("a", 300)
@@ -152,7 +151,7 @@ func TestBrowserLog_MessageTruncation(t *testing.T) {
 
 // UT-B-12: userAgent > 80 chars is truncated
 func TestBrowserLog_UAShortened(t *testing.T) {
-	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// Not t.Parallel(): captureInfoLog() mutates the log package's injectable slog seam (log.SetSlogDefaultForTest)
 	// logger, which races against any other test's concurrent logging calls.
 	restore := captureInfoLog()
 	ua := strings.Repeat("u", 200)
@@ -169,7 +168,7 @@ func TestBrowserLog_UAShortened(t *testing.T) {
 
 // UT-B-13: level "error" routes to ErrorLog
 func TestBrowserLog_ErrorLevelRoutesToErrorLog(t *testing.T) {
-	// Not t.Parallel(): captureErrorLog() mutates the process-global slog.Default()
+	// Not t.Parallel(): captureErrorLog() mutates the log package's injectable slog seam (log.SetSlogDefaultForTest)
 	// logger, which races against any other test's concurrent logging calls.
 	restore := captureErrorLog()
 	logClientEntry(&sessionv1.ClientLogEntry{
@@ -187,7 +186,7 @@ func TestBrowserLog_ErrorLevelRoutesToErrorLog(t *testing.T) {
 
 // UT-B-14: level "log" routes to InfoLog
 func TestBrowserLog_OtherLevelRoutesToInfoLog(t *testing.T) {
-	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// Not t.Parallel(): captureInfoLog() mutates the log package's injectable slog seam (log.SetSlogDefaultForTest)
 	// logger, which races against any other test's concurrent logging calls.
 	restore := captureInfoLog()
 	logClientEntry(&sessionv1.ClientLogEntry{
@@ -202,7 +201,7 @@ func TestBrowserLog_OtherLevelRoutesToInfoLog(t *testing.T) {
 
 // UT-B-15: entry without sessionId/url does not panic
 func TestBrowserLog_MissingOptionalFields(t *testing.T) {
-	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// Not t.Parallel(): captureInfoLog() mutates the log package's injectable slog seam (log.SetSlogDefaultForTest)
 	// logger, which races against any other test's concurrent logging calls.
 	restore := captureInfoLog()
 	defer restore()

@@ -777,6 +777,14 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// automated remediation for a failed steer is out of scope for
 	// pr-fix-steering.
 	domain.StuckReasonSteerFailed: true,
+	// StuckReasonGateTimeout (Epic 2.4 of backlog-custom-workflow-stages): no
+	// "retry now" action exists because re-invoking InvokeCustomGateCheck
+	// automatically is out of this epic's task scope (plan.md's Story 2.4.4
+	// only builds detection via reconcileCustomGateChecks, not an automated
+	// re-run) — an operator must investigate and manually re-trigger the
+	// transition today. A future epic wiring an auto-retry action should
+	// remove this entry and add a remediationActionByReason case instead.
+	domain.StuckReasonGateTimeout: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded

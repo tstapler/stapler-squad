@@ -22,13 +22,16 @@ import (
 
 // sourceSyncEventToProto converts a SourceSyncEventData to its proto representation.
 func sourceSyncEventToProto(ev session.SourceSyncEventData) *sessionv1.SourceSyncEvent {
+	// Counts below are per-sync-run tallies of GitHub issues processed in a single
+	// SyncGitHubIssues call, bounded by that run's result-page size — nowhere near
+	// int32 overflow.
 	p := &sessionv1.SourceSyncEvent{
 		Id:           ev.ID,
 		StartedAt:    timestamppb.New(ev.StartedAt),
-		ItemsCreated: int32(ev.ItemsCreated),
-		ItemsUpdated: int32(ev.ItemsUpdated),
-		ItemsSkipped: int32(ev.ItemsSkipped),
-		ItemsErrored: int32(ev.ItemsErrored),
+		ItemsCreated: int32(ev.ItemsCreated), // #nosec G115 -- GitHub sync item count for one sync operation, bounded by realistic repo/backlog scale, never attacker-inflated
+		ItemsUpdated: int32(ev.ItemsUpdated), // #nosec G115 -- GitHub sync item count for one sync operation, bounded by realistic repo/backlog scale, never attacker-inflated
+		ItemsSkipped: int32(ev.ItemsSkipped), // #nosec G115 -- GitHub sync item count for one sync operation, bounded by realistic repo/backlog scale, never attacker-inflated
+		ItemsErrored: int32(ev.ItemsErrored), // #nosec G115 -- GitHub sync item count for one sync operation, bounded by realistic repo/backlog scale, never attacker-inflated
 		ErrorMessage: ev.ErrorMessage,
 	}
 	if ev.FinishedAt != nil {
@@ -81,12 +84,34 @@ func (s *BacklogService) GetBacklogItem(
 	}
 
 	p := backlogItemToProto(item, s.buildCostLookup())
-	// Populate worktree_branch/worktree_path for each linked work session.
+	enrichItemSessionsWorktreeData(ctx, s.storage, p)
+
+	return connect.NewResponse(&sessionv1.GetBacklogItemResponse{
+		Item: p,
+	}), nil
+}
+
+// enrichItemSessionsWorktreeData populates WorktreeBranch/WorktreePath on each
+// of p's ItemSessions from the ent Worktree join, keyed by session UUID.
+// BacklogItemData/ItemSessionSummary (the domain struct backlogItemToProto
+// converts from) carries no worktree fields of its own — every code path that
+// turns a BacklogItemData into a wire BacklogItem must call this or the
+// fields silently stay empty on the frontend. That gap is exactly what broke
+// BacklogFileBrowserModal's "Browse files in this worktree" trigger for any
+// item reached via WatchBacklogItems (both the fresh-connection snapshot and
+// the live event fan-out): only this GetBacklogItem RPC used to call the
+// enrichment loop now extracted here, so the very next snapshot/live event a
+// component's watch subscription received always overwrote the enriched
+// worktreePath with an empty one.
+func enrichItemSessionsWorktreeData(ctx context.Context, storage *session.Storage, p *sessionv1.BacklogItem) {
+	if storage == nil || p == nil {
+		return
+	}
 	for _, is := range p.ItemSessions {
 		if is.SessionUuid == "" {
 			continue
 		}
-		wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUuid)
+		wt, wtErr := storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUuid)
 		if wtErr == nil && wt.BranchName != "" {
 			is.WorktreeBranch = wt.BranchName
 		}
@@ -94,10 +119,6 @@ func (s *BacklogService) GetBacklogItem(
 			is.WorktreePath = wt.WorktreePath
 		}
 	}
-
-	return connect.NewResponse(&sessionv1.GetBacklogItemResponse{
-		Item: p,
-	}), nil
 }
 
 // --- ListBacklogItems ---
@@ -282,6 +303,8 @@ func (s *BacklogService) ListGitHubIssues(ctx context.Context, req *connect.Requ
 	entries := make([]*sessionv1.GitHubIssueEntry, 0, len(results))
 	for _, r := range results {
 		entry := &sessionv1.GitHubIssueEntry{
+			// #nosec G115 -- r.Number is a GitHub issue/PR number, structurally bounded
+			// by GitHub's own per-repo numbering scheme, nowhere near int32 range.
 			Number: int32(r.Number),
 			Title:  r.Title,
 			Body:   r.Body,

@@ -152,8 +152,11 @@ func (s *GitHubUserService) StartGitHubDeviceAuth(
 		DeviceCode:      da.DeviceCode,
 		UserCode:        da.UserCode,
 		VerificationUri: da.VerificationURI,
-		ExpiresIn:       int32(da.ExpiresIn),
-		Interval:        int32(da.Interval),
+		// #nosec G115 -- GitHub OAuth device-flow timing in seconds (typically
+		// ~900s), far below int32 range.
+		ExpiresIn: int32(da.ExpiresIn),
+		// #nosec G115 -- see ExpiresIn above; interval is typically ~5s.
+		Interval: int32(da.Interval),
 	}), nil
 }
 
@@ -415,17 +418,21 @@ func userPRsToProto(prs []githubpkg.UserPR) []*sessionv1.UserPR {
 	out := make([]*sessionv1.UserPR, len(prs))
 	for i, pr := range prs {
 		p := &sessionv1.UserPR{
-			Owner:             pr.Owner,
-			Repo:              pr.Repo,
-			Number:            int32(pr.Number),
-			Title:             pr.Title,
-			HtmlUrl:           pr.URL,
-			State:             pr.State,
-			HeadRef:           pr.HeadRef,
-			BaseRef:           pr.BaseRef,
-			IsDraft:           pr.IsDraft,
-			CheckConclusion:   pr.CheckConclusion,
-			ApprovedCount:     int32(pr.ApprovedCount),
+			Owner: pr.Owner,
+			Repo:  pr.Repo,
+			// #nosec G115 -- pr.Number is a GitHub PR number, far below int32 range.
+			Number:          int32(pr.Number),
+			Title:           pr.Title,
+			HtmlUrl:         pr.URL,
+			State:           pr.State,
+			HeadRef:         pr.HeadRef,
+			BaseRef:         pr.BaseRef,
+			IsDraft:         pr.IsDraft,
+			CheckConclusion: pr.CheckConclusion,
+			// #nosec G115 -- review counts for a single PR, bounded by realistic
+			// reviewer counts, far below int32 range.
+			ApprovedCount: int32(pr.ApprovedCount),
+			// #nosec G115 -- see ApprovedCount above.
 			ChangesReqCount:   int32(pr.ChangesReqCount),
 			SessionIds:        pr.SessionIDs,
 			LocalWorktreePath: pr.LocalWorktreePath,

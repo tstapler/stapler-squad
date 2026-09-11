@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/internal/claudehooks"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
 	"gopkg.in/yaml.v3"
@@ -56,7 +57,8 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  check   - Classify a single request from JSON on stdin")
 	fmt.Fprintln(os.Stderr, "  serve   - Start an HTTP server for remote classification")
 	fmt.Fprintln(os.Stderr, "  proxy   - Check permissions before executing a command")
-	fmt.Fprintln(os.Stderr, "  install - Install binary and register hooks (targets: claude, gemini, agy, open-code, service)")
+	fmt.Fprintln(os.Stderr, "  install - Install binary and register hooks (targets: claude, gemini, agy, open-code, pi, service)")
+	fmt.Fprintln(os.Stderr, "            'install pi --uninstall' and 'install service --uninstall' remove what was installed instead")
 	fmt.Fprintln(os.Stderr, "  version - Print version information")
 }
 
@@ -66,7 +68,7 @@ func handleCheck() {
 	geminiMode := checkCmd.Bool("gemini", false, "Translate Gemini TOOL_INPUT payload (exit-code output)")
 	agyMode := checkCmd.Bool("antigravity", false, "Translate Antigravity TOOL_INPUT payload (hooks.json format)")
 	opencodeMode := checkCmd.Bool("opencode", false, "Translate OpenCode tool.execute.before payload (exit-code output)")
-	checkCmd.Parse(os.Args[2:]) //nolint:errcheck
+	_ = checkCmd.Parse(os.Args[2:]) // flag.ExitOnError already exits the process on a parse failure
 
 	var payload classifier.PermissionRequestPayload
 	if *geminiMode || *agyMode {
@@ -139,25 +141,29 @@ func writeHookDecision(result classifier.ClassificationResult) {
 		if result.RuleName != "" {
 			reason = result.RuleName + ": " + reason
 		}
-		json.NewEncoder(os.Stdout).Encode(hookOutput{
+		if err := json.NewEncoder(os.Stdout).Encode(hookOutput{
 			HookSpecificOutput: hookSpecificOutput{
 				HookEventName:            "PreToolUse",
 				PermissionDecision:       "allow",
 				PermissionDecisionReason: reason,
 			},
-		})
+		}); err != nil {
+			log.Warn("Failed to write allow hook decision to stdout", "err", err)
+		}
 	case classifier.AutoDeny:
 		reason := result.Reason
 		if result.Alternative != "" {
 			reason += " " + result.Alternative
 		}
-		json.NewEncoder(os.Stdout).Encode(hookOutput{
+		if err := json.NewEncoder(os.Stdout).Encode(hookOutput{
 			HookSpecificOutput: hookSpecificOutput{
 				HookEventName:            "PreToolUse",
 				PermissionDecision:       "deny",
 				PermissionDecisionReason: reason,
 			},
-		})
+		}); err != nil {
+			log.Warn("Failed to write deny hook decision to stdout", "err", err)
+		}
 	default:
 		// Escalate: write nothing; Claude Code shows its own permission prompt.
 	}
@@ -216,7 +222,9 @@ func writeAntigravityHookDecision(result classifier.ClassificationResult) {
 	default:
 		output.Decision = "ask"
 	}
-	json.NewEncoder(os.Stdout).Encode(output)
+	if err := json.NewEncoder(os.Stdout).Encode(output); err != nil {
+		log.Warn("Failed to write Antigravity hook decision to stdout", "err", err)
+	}
 	// Antigravity hook scripts must always exit with 0 (even on deny).
 	os.Exit(0)
 }
@@ -457,7 +465,7 @@ func handleServe() {
 	serveCmd := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := serveCmd.Int("port", 8544, "Port to listen on")
 	dbPath := serveCmd.String("db", getDefaultDBPath(), "Path to SQLite database")
-	serveCmd.Parse(os.Args[2:])
+	_ = serveCmd.Parse(os.Args[2:]) // flag.ExitOnError already exits the process on a parse failure
 
 	storage := loadStorage(*dbPath)
 	defer storage.Close()
@@ -485,7 +493,9 @@ func handleServe() {
 		recordResult(storage, payload, result, durationMs)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
+		if err := json.NewEncoder(w).Encode(result); err != nil {
+			log.Warn("Failed to write /classify response", "err", err)
+		}
 	})
 
 	fmt.Fprintf(os.Stderr, "SSQ-Hooks server starting on port %d (DB: %s)...\n", *port, *dbPath)
@@ -640,7 +650,7 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 
 	// Also load config file rules from ~/.config/stapler-squad/shared_rules.yaml.
 	configPath := filepath.Join(os.Getenv("HOME"), ".config", "stapler-squad", "shared_rules.yaml")
-	if data, err := os.ReadFile(configPath); err == nil {
+	if data, err := os.ReadFile(configPath); err == nil { // #nosec G304 -- configPath is built from $HOME plus a fixed filename, not caller input.
 		var configFile struct {
 			Rules []struct {
 				Name           string   `yaml:"name"`
@@ -818,6 +828,8 @@ func handleInstall() {
 		installAgy()
 	case "open-code":
 		installOpenCode()
+	case "pi":
+		installOrUninstallPi()
 	case "service":
 		installService()
 	default:
@@ -825,6 +837,15 @@ func handleInstall() {
 		os.Exit(1)
 	}
 }
+
+// defaultSsqHooksBaseURL is stapler-squad's well-known local listen address (see top-level
+// CLAUDE.md: "web server on localhost:8543"), mirroring server/services/hook_injector.go's
+// hookBaseURLFn default. cmd/ssq-hooks is a standalone CLI that never runs inside the server
+// process, so it cannot read the server's real (possibly PORT=0-resolved) listen address the
+// way hookEndpoints() does — it hardcodes the documented default instead. If the server is
+// ever run on a non-default port, a user must currently re-run `ssq-hooks install pi` by hand
+// with that in mind; there is no dynamic port-discovery mechanism for this installer today.
+const defaultSsqHooksBaseURL = "http://localhost:8543"
 
 // installClaude copies the ssq-hooks binary to ~/.local/bin and registers it as
 // a PreToolUse hook in ~/.claude/settings.json. Safe to run multiple times.
@@ -837,7 +858,7 @@ func installClaude() {
 
 	// 1. Copy binary to ~/.local/bin/ssq-hooks.
 	binDir := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
+	if err := os.MkdirAll(binDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
 		os.Exit(1)
 	}
@@ -869,6 +890,8 @@ func installClaude() {
 
 // copyBinary copies src to dst as an executable file, replacing dst if it exists.
 func copyBinary(src, dst string) error {
+	// #nosec G304 -- src is always os.Executable() (this binary's own resolved path),
+	// not caller/user-supplied input.
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -877,14 +900,16 @@ func copyBinary(src, dst string) error {
 
 	// Write to a temp file first, then atomically rename to avoid partial writes.
 	tmp := dst + ".tmp"
+	// #nosec G304 -- tmp is dst+".tmp"; dst is always destBin, an installer-controlled
+	// path under ~/.local/bin, not caller/user-supplied input.
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
 		return err
 	}
-	defer func() { os.Remove(tmp) }() //nolint:errcheck
+	defer func() { _ = os.Remove(tmp) }() // best-effort; harmless if the rename below already succeeded
 
 	if _, err := out.ReadFrom(in); err != nil {
-		out.Close()
+		_ = out.Close() // the ReadFrom error above is what's returned
 		return err
 	}
 	if err := out.Close(); err != nil {
@@ -899,6 +924,8 @@ func copyBinary(src, dst string) error {
 // (e.g. an array), it returns a descriptive error rather than silently overwriting.
 // The write is atomic: data is written to settingsPath+".tmp" then renamed.
 func patchBeforeToolHook(settingsPath, hookCmd string) error {
+	// #nosec G304 -- settingsPath is always one of two fixed candidates under
+	// ~/.gemini (installGemini's candidates slice), not caller/user-supplied input.
 	raw, err := os.ReadFile(settingsPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -935,7 +962,7 @@ func patchBeforeToolHook(settingsPath, hookCmd string) error {
 	}
 	// Atomic write (P-4: avoid partial-read race with running agy/Gemini process).
 	tmpPath := settingsPath + ".tmp"
-	if err := os.WriteFile(tmpPath, append(out, '\n'), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, append(out, '\n'), 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, settingsPath)
@@ -949,7 +976,7 @@ func installGemini() {
 	}
 	// 1. Copy binary to ~/.local/bin/ssq-hooks.
 	binDir := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
+	if err := os.MkdirAll(binDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
 		os.Exit(1)
 	}
@@ -1001,7 +1028,7 @@ func installAgy() {
 	}
 	// 1. Copy binary to ~/.local/bin/ssq-hooks.
 	binDir := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
+	if err := os.MkdirAll(binDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
 		os.Exit(1)
 	}
@@ -1057,6 +1084,8 @@ func installAgy() {
 // contains any ssq-hooks check --antigravity command. No-ops if the file doesn't
 // exist, the key is absent, or no matching command is found.
 func removeAntigravityHookEntry(hooksPath string) error {
+	// #nosec G304 -- hooksPath is always one of two fixed candidates under ~/.gemini
+	// (installAgy's candidates slice), not caller/user-supplied input.
 	raw, err := os.ReadFile(hooksPath)
 	if err != nil {
 		return nil // file absent — nothing to clean up
@@ -1101,7 +1130,7 @@ func removeAntigravityHookEntry(hooksPath string) error {
 		return err
 	}
 	tmpPath := hooksPath + ".tmp"
-	if err := os.WriteFile(tmpPath, append(out, '\n'), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, append(out, '\n'), 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, hooksPath)
@@ -1112,6 +1141,8 @@ func patchAntigravityHooks(hooksPath, binPath string) error {
 	hookCmd := binPath + " check --antigravity"
 
 	// Read existing settings (create minimal file if absent).
+	// #nosec G304 -- hooksPath is always one of two fixed candidates under ~/.gemini
+	// (installAgy's candidates slice), not caller/user-supplied input.
 	raw, err := os.ReadFile(hooksPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -1174,7 +1205,7 @@ func patchAntigravityHooks(hooksPath, binPath string) error {
 
 	// Atomic write
 	tmpPath := hooksPath + ".tmp"
-	if err := os.WriteFile(tmpPath, append(out, '\n'), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, append(out, '\n'), 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, hooksPath)
@@ -1239,12 +1270,12 @@ func openCodePluginContent(ssqHooksPath string) string {
 // binary path produces byte-identical output (no explicit "already present" check needed, unlike
 // the JSON-config installers, since there's no third-party config structure to merge into).
 func patchOpenCodeHooks(pluginPath, ssqHooksPath string) error {
-	if err := os.MkdirAll(filepath.Dir(pluginPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(pluginPath), 0750); err != nil {
 		return err
 	}
 	content := openCodePluginContent(ssqHooksPath)
 	tmpPath := pluginPath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, pluginPath)
@@ -1256,6 +1287,8 @@ func patchOpenCodeHooks(pluginPath, ssqHooksPath string) error {
 // unrelated open-code script) — mirrors removeAntigravityHookEntry's caution about not touching
 // content ssq-hooks didn't write.
 func removeStaleOpenCodeWrapper(path string) error {
+	// #nosec G304 -- path is always staleWrapper = filepath.Join(binDir, "open-code")
+	// in installOpenCode, a fixed installer-controlled path, not caller/user-supplied input.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil // absent — nothing to clean up
@@ -1279,7 +1312,7 @@ func installOpenCode() {
 
 	// 1. Copy binary to ~/.local/bin/ssq-hooks.
 	binDir := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
+	if err := os.MkdirAll(binDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
 		os.Exit(1)
 	}
@@ -1326,10 +1359,273 @@ func installOpenCode() {
 	fmt.Println("Done. Restart OpenCode for the hook to take effect.")
 }
 
+// ssqApprovalExtensionTemplate is the TypeScript pi extension installPi() writes to pi's
+// global extension directory (~/.pi/agent/extensions/ssq-approval.ts, per ADR-002 — see
+// project_plans/pi-support/decisions/ADR-002-approval-extension-shipped-as-global-not-project-local.md).
+//
+// Verified against pi 0.84.4 (@earendil-works/pi-coding-agent) on 2026-09-02 — see
+// project_plans/pi-support/implementation/plan.md's "Phase 1 spike RESULTS": pi.on("tool_call",
+// handler) fires after tool_execution_start, before the tool actually executes. handler's
+// signature is (event, ctx) => ..., with event.toolName, event.toolCallId, and event.input
+// (mutable) confirmed available. Returning { block: true, reason } genuinely blocks the tool
+// call — live-verified: tool_execution_end's result carries the reason text with isError:true,
+// and the underlying tool never runs. The same spike also confirmed a global extension loads
+// and fires with zero trust-prompt friction on the very first invocation in a brand-new
+// directory, confirming ADR-002's premise rather than leaving it doc-derived.
+//
+// Per ADR-001, the handler calls fetch() directly against the running server's
+// /api/hooks/permission-request endpoint — never `ssq-hooks check --pi` — so classification
+// runs against the server's live, hot-reloadable RulesService instead of a disk-reloaded
+// snapshot (see cmd/ssq-hooks/main.go's handleCheck()/loadClassifier(), which do use a fresh
+// on-disk snapshot and are deliberately NOT reused here). The POST body matches
+// classifier.PermissionRequestPayload's JSON shape (pkg/classifier/classifier.go); the
+// response is parsed per ApprovalHandler.writeDecision's shape
+// (server/services/approval_handler.go): {hookSpecificOutput:{decision:{behavior,message}}}.
+//
+// Per ADR-003, a network error, non-2xx response, or any other unexpected fault is treated as
+// deny (fail closed), with a generous ~4.5-minute timeout so a real pending human-review wait
+// isn't mistaken for a dead connection (mirrors remoteApprovalHookAttemptTimeoutSeconds's
+// reasoning in server/services/hook_injector.go — this must cover a real human decision, not
+// just a connectivity probe, unlike openCodePluginTemplate's short 8-second timeout above).
+//
+// The entire handler body is wrapped in try/catch, and the catch block explicitly returns a
+// blocking decision with a stable reason string. This is required per plan.md Task 4.1.1a and
+// ADR-003's residual-risk note, but per the same spike it is defense-in-depth/clarity, not the
+// only thing standing between a template bug and fail-open: an UNCAUGHT exception thrown from
+// inside a pi.on("tool_call", ...) handler was independently confirmed to also fail closed by
+// default (pi's own framework surfaces the raw exception message as the tool's blocked result).
+// The try/catch here exists so a bug in this generated template produces a deliberate,
+// readable deny instead of relying on that implicit default.
+//
+// healthURL targets Epic 4.2's health-ping endpoint (/api/hooks/pi-extension-loaded).
+// The ping is fire-and-forget and its failure is deliberately swallowed so a
+// server that's briefly unreachable never blocks extension load or any tool call.
+// cwd is included in the body because there's no tool_call event/ctx object
+// available yet at this point in the extension's lifecycle — it's the same
+// cwd-prefix session-resolution fallback HandlePermissionRequest already uses
+// for a missing/unmatched X-CS-Session-ID header
+// (server/services/approval_handler.go's resolveSessionID).
+//
+// Per Story 4.2.3, the ping is re-sent every piExtensionRepingInterval
+// (server/services/pi_extension_health.go) for the lifetime of the pi process, in
+// addition to the initial load-time ping, so a stapler-squad server restart doesn't
+// permanently strand a live, still-enforcing session's health badge at Unknown —
+// PiExtensionHealthTracker's grace window is sized to comfortably tolerate one
+// missed re-ping before flipping to Failed.
+const ssqApprovalExtensionTemplate = `// Generated by ssq-hooks install pi. Do not hand-edit — re-run the installer instead.
+export default function ssqApproval(pi) {
+  const permissionURL = %s;
+  const healthURL = %s;
+  // Keep in sync with piExtensionRepingInterval (server/services/pi_extension_health.go).
+  const healthRepingIntervalMs = 120000;
+
+  // Best-effort health ping — fire-and-forget, must never block extension load or
+  // any tool call. Sent once at load time and then re-sent every
+  // healthRepingIntervalMs for the lifetime of the pi process (Story 4.2.3).
+  function sendHealthPing() {
+    try {
+      fetch(healthURL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd: (typeof process !== "undefined" && process.cwd) ? process.cwd() : "" }),
+      }).catch(() => {});
+    } catch {
+      // ignore — health signal is best-effort only
+    }
+  }
+  sendHealthPing();
+  const healthPingIntervalId = setInterval(sendHealthPing, healthRepingIntervalMs);
+  // Best-effort: unref so this interval never keeps the pi process alive on its
+  // own if the extension API exposes no explicit teardown hook to clearInterval it.
+  if (healthPingIntervalId && typeof healthPingIntervalId.unref === "function") {
+    healthPingIntervalId.unref();
+  }
+
+  pi.on("tool_call", async (event, ctx) => {
+    try {
+      const controller = new AbortController();
+      // 270s: covers ApprovalHandler.approvalTimeout()'s 4-minute default manual-review wait
+      // plus margin, per ADR-003 — not a short connectivity-probe timeout.
+      const timeoutId = setTimeout(() => controller.abort(), 270000);
+      let response;
+      try {
+        response = await fetch(permissionURL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: (ctx && ctx.sessionId) || "",
+            transcript_path: "",
+            cwd: (ctx && ctx.cwd) || "",
+            permission_mode: "",
+            hook_event_name: "PermissionRequest",
+            tool_name: event.toolName,
+            tool_input: event.input || {},
+            source: "pi",
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (!response.ok) {
+        // Non-2xx: fail closed per ADR-003.
+        return { block: true, reason: "stapler-squad approval request failed (HTTP " + response.status + ")" };
+      }
+
+      const data = await response.json();
+      const decision = data && data.hookSpecificOutput && data.hookSpecificOutput.decision;
+      if (decision && decision.behavior === "deny") {
+        return { block: true, reason: decision.message || "denied by stapler-squad policy" };
+      }
+      return { block: false };
+    } catch (err) {
+      // Network error, timeout, or any other unexpected fault: fail closed per ADR-003. This
+      // catch is defense-in-depth (see doc comment above) — pi's own framework already fails
+      // closed on an uncaught exception, but a deliberate, readable reason here is required by
+      // plan.md Task 4.1.1a.
+      return { block: true, reason: "stapler-squad approval check failed: " + ((err && err.message) || String(err)) };
+    }
+  });
+}
+`
+
+// ssqApprovalExtensionContent renders ssqApprovalExtensionTemplate with permissionURL and
+// healthURL embedded as JS string literals. Uses encoding/json (not fmt's %q, which is
+// Go/strconv escaping — close to but not identical to JS string-literal escaping) so the
+// embedding is safe by construction, mirroring openCodePluginContent's rationale above.
+func ssqApprovalExtensionContent(permissionURL, healthURL string) string {
+	quotedPermissionURL, err := json.Marshal(permissionURL)
+	if err != nil {
+		quotedPermissionURL = []byte(`""`)
+	}
+	quotedHealthURL, err := json.Marshal(healthURL)
+	if err != nil {
+		quotedHealthURL = []byte(`""`)
+	}
+	return fmt.Sprintf(ssqApprovalExtensionTemplate, quotedPermissionURL, quotedHealthURL)
+}
+
+// patchPiExtension writes the ssq-hooks pi approval extension to extensionPath. Safe to run
+// multiple times: the generated content is a pure function of permissionURL/healthURL, so
+// re-running with the same values produces byte-identical output — same reasoning as
+// patchOpenCodeHooks's doc comment above. The write is atomic (temp file + rename).
+func patchPiExtension(extensionPath, permissionURL, healthURL string) error {
+	if err := os.MkdirAll(filepath.Dir(extensionPath), 0755); err != nil {
+		log.Error("failed to write pi approval extension", "path", extensionPath, "error", err)
+		return err
+	}
+	content := ssqApprovalExtensionContent(permissionURL, healthURL)
+	tmpPath := extensionPath + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+		log.Error("failed to write pi approval extension", "path", extensionPath, "error", err)
+		return err
+	}
+	if err := os.Rename(tmpPath, extensionPath); err != nil {
+		log.Error("failed to write pi approval extension", "path", extensionPath, "error", err)
+		return err
+	}
+	return nil
+}
+
+// installOrUninstallPi parses the "pi" install target's flags and dispatches to installPi or
+// uninstallPi, mirroring installService's --uninstall flag pattern (main.go's installService).
+func installOrUninstallPi() {
+	installCmd := flag.NewFlagSet("pi", flag.ExitOnError)
+	uninstall := installCmd.Bool("uninstall", false, "Remove the pi approval extension")
+	_ = installCmd.Parse(os.Args[3:]) // flag.ExitOnError already exits the process on a parse failure
+
+	if *uninstall {
+		uninstallPi()
+		return
+	}
+	installPi()
+}
+
+// installPi copies the ssq-hooks binary to ~/.local/bin and writes the pi approval extension
+// to pi's GLOBAL extension directory (~/.pi/agent/extensions/ssq-approval.ts), per ADR-002 —
+// deliberately not a project-local `.pi/extensions/` write, since pi's per-directory trust
+// gate would otherwise silently disable enforcement on every new stapler-squad worktree until
+// manually trusted (see ADR-002's rejected alternatives). Safe to run multiple times.
+func installPi() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 1. Copy binary to ~/.local/bin/ssq-hooks.
+	binDir := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
+		os.Exit(1)
+	}
+	destBin := filepath.Join(binDir, "ssq-hooks")
+	srcBin, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving current binary: %v\n", err)
+		os.Exit(1)
+	}
+	if resolved, err := filepath.EvalSymlinks(srcBin); err == nil {
+		srcBin = resolved
+	}
+	if err := copyBinary(srcBin, destBin); err != nil {
+		fmt.Fprintf(os.Stderr, "Error copying binary to %s: %v\n", destBin, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Installed binary: %s\n", destBin)
+
+	// 2. Write the extension to pi's global extension directory.
+	extensionPath := filepath.Join(home, ".pi", "agent", "extensions", "ssq-approval.ts")
+	permissionURL := defaultSsqHooksBaseURL + "/api/hooks/permission-request"
+	healthURL := defaultSsqHooksBaseURL + "/api/hooks/pi-extension-loaded"
+	if err := patchPiExtension(extensionPath, permissionURL, healthURL); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing extension to %s: %v\n", extensionPath, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Installed extension: %s\n", extensionPath)
+
+	// Best-effort, informational only: report the detected pi CLI version so a user can judge
+	// for themselves whether it's far from what this extension shape was verified against
+	// (0.84.4). Deliberately not a hard version gate.
+	versionCtx, versionCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if out, err := safeexec.CommandContext(versionCtx, "pi", "--version").Output(); err == nil {
+		fmt.Printf("Detected pi CLI version: %s", out)
+	}
+	versionCancel()
+
+	fmt.Println("Done. Restart pi for the extension to take effect.")
+}
+
+// uninstallPi removes the pi approval extension file (~/.pi/agent/extensions/ssq-approval.ts)
+// written by installPi. It deliberately leaves the shared ssq-hooks binary copy under
+// ~/.local/bin alone — that copy is shared across every install target (claude, gemini, agy,
+// open-code, pi), not pi-specific, so removing pi's extension must not disable the others.
+// Idempotent: removing an already-absent extension is reported, not an error.
+func uninstallPi() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	extensionPath := filepath.Join(home, ".pi", "agent", "extensions", "ssq-approval.ts")
+	if err := os.Remove(extensionPath); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Printf("Extension not found (already removed?): %s\n", extensionPath)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Error removing %s: %v\n", extensionPath, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Removed: %s\n", extensionPath)
+	fmt.Println("pi will no longer send permission requests to stapler-squad after it is restarted.")
+}
+
 func installService() {
 	installCmd := flag.NewFlagSet("service", flag.ExitOnError)
 	uninstall := installCmd.Bool("uninstall", false, "Remove the service and disable auto-start")
-	installCmd.Parse(os.Args[3:])
+	_ = installCmd.Parse(os.Args[3:]) // flag.ExitOnError already exits the process on a parse failure
 
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -1376,17 +1672,17 @@ func installServiceLinux(home, binPath, logDir, envPath string, uninstall bool) 
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stopCancel()
 		stopCmd := safeexec.CommandContext(stopCtx, "systemctl", "--user", "stop", "stapler-squad")
-		stopCmd.Run() //nolint:errcheck
+		_ = stopCmd.Run() // best-effort; service may already be stopped
 		disableCtx, disableCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer disableCancel()
 		disableCmd := safeexec.CommandContext(disableCtx, "systemctl", "--user", "disable", "stapler-squad")
-		disableCmd.Run() //nolint:errcheck
+		_ = disableCmd.Run() // best-effort; service may already be disabled
 		if _, err := os.Stat(serviceFile); err == nil {
-			os.Remove(serviceFile) //nolint:errcheck
+			_ = os.Remove(serviceFile) // best-effort cleanup of the unit file
 			reloadCtx, reloadCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer reloadCancel()
 			reloadCmd := safeexec.CommandContext(reloadCtx, "systemctl", "--user", "daemon-reload")
-			reloadCmd.Run() //nolint:errcheck
+			_ = reloadCmd.Run() // best-effort; a stale unit cache is harmless after removal above
 			fmt.Printf("Removed: %s\n", serviceFile)
 		} else {
 			fmt.Printf("Service file not found (already removed?): %s\n", serviceFile)
@@ -1396,11 +1692,11 @@ func installServiceLinux(home, binPath, logDir, envPath string, uninstall bool) 
 		return
 	}
 
-	if err := os.MkdirAll(serviceDir, 0755); err != nil {
+	if err := os.MkdirAll(serviceDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", serviceDir, err)
 		os.Exit(1)
 	}
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", logDir, err)
 		os.Exit(1)
 	}
@@ -1426,7 +1722,7 @@ Environment=PATH=%s
 WantedBy=default.target
 `, binPath, home, serviceLog, serviceLog, home, envPath)
 
-	if err := os.WriteFile(serviceFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(serviceFile, []byte(content), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing service file: %v\n", err)
 		os.Exit(1)
 	}
@@ -1454,9 +1750,9 @@ func installServiceMacOS(home, binPath, logDir, envPath string, uninstall bool) 
 		unloadCtx, unloadCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer unloadCancel()
 		unloadCmd := safeexec.CommandContext(unloadCtx, "launchctl", "unload", plistFile)
-		unloadCmd.Run() //nolint:errcheck
+		_ = unloadCmd.Run() // best-effort; agent may already be unloaded
 		if _, err := os.Stat(plistFile); err == nil {
-			os.Remove(plistFile) //nolint:errcheck
+			_ = os.Remove(plistFile) // best-effort cleanup of the plist file
 			fmt.Printf("Removed: %s\n", plistFile)
 		} else {
 			fmt.Printf("Plist not found (already removed?): %s\n", plistFile)
@@ -1466,11 +1762,11 @@ func installServiceMacOS(home, binPath, logDir, envPath string, uninstall bool) 
 		return
 	}
 
-	if err := os.MkdirAll(plistDir, 0755); err != nil {
+	if err := os.MkdirAll(plistDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", plistDir, err)
 		os.Exit(1)
 	}
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", logDir, err)
 		os.Exit(1)
 	}
@@ -1521,7 +1817,7 @@ func installServiceMacOS(home, binPath, logDir, envPath string, uninstall bool) 
 </plist>
 `, binPath, home, home, envPath, serviceLog, serviceLog)
 
-	if err := os.WriteFile(plistFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(plistFile, []byte(content), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing plist: %v\n", err)
 		os.Exit(1)
 	}

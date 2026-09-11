@@ -56,6 +56,7 @@ func StartDemoServer(t *testing.T) *DemoServer {
 		t.Fatalf("failed to ensure binary: %v", err)
 	}
 
+	// #nosec G204 -- binaryPath is projectRoot()+"stapler-squad", this repo's own just-built binary, not external input.
 	//nolint:norawexec long-running demo server process managed via cmd.Start/Stop lifecycle
 	cmd := exec.CommandContext(context.Background(), binaryPath,
 		"--test-mode",
@@ -85,7 +86,7 @@ func (s *DemoServer) WaitForHealth(timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(healthURL)
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				return nil
 			}

@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -47,6 +48,42 @@ func createTestStorage(t *testing.T) (*Storage, func()) {
 		repo.Close()
 	}
 	return storage, cleanup
+}
+
+// TestCreateTestStorage_SecondConnectionSeesSameData pins the invariant
+// createTestStorage's shared-cache DSN exists for: a second, independent
+// *sql.DB opened against the same DSN (as forceEmptyBranchNameViaRawSQL does
+// in review_gate_test.go) must see rows written through the first connection.
+// A bare ":memory:" DSN would fail this — each independent sql.Open gets its
+// own private, unmigrated database — so this test would catch a regression
+// that silently reintroduced that DSN shape.
+func TestCreateTestStorage_SecondConnectionSeesSameData(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	er := storage.repo
+
+	// newTestInstance alone (bare directory-mode, no gitManager.worktree) never
+	// produces a worktrees table row -- SaveInstances only persists a worktree
+	// row when the instance actually carries one. A GitWorktree reconstructed
+	// via NewGitWorktreeFromStorage (as forceEmptyBranchNameViaRawSQL's callers
+	// do, review_gate_test.go) is enough to trigger that row without touching
+	// disk, since it returns non-nil whenever any of repoPath/worktreePath/
+	// branchName is non-empty.
+	inst := newTestInstance("shared-cache-visibility-test")
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+		"/tmp/test", "/tmp/test", "shared-cache-visibility-test", "placeholder-branch",
+		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	db, err := sql.Open("sqlite", er.dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM worktrees WHERE session_name = ?", "shared-cache-visibility-test").Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "second connection against the same DSN must see the row written via the first")
 }
 
 // TestStorage_UUID_PersistedThroughAddAndLoad is the primary regression test for
@@ -950,4 +987,66 @@ func TestSetBacklogItemPRAndTransition_should_RejectStaleObserved_When_Concurren
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "a stale observed snapshot must never win the CAS")
 	assert.Equal(t, 0, fetched.PrNumber)
+}
+
+// TestUpdateInstanceIfEpoch_should_ApplyWrite_When_EpochMatches covers Task
+// 1.2.4a's happy path: a freshly-added row's creation_epoch defaults to 0, so a
+// caller presenting capturedEpoch=0 wins the conditional UPDATE.
+func TestUpdateInstanceIfEpoch_should_ApplyWrite_When_EpochMatches(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := &Instance{
+		Title:     "epoch-match",
+		UUID:      "uuid-epoch-match",
+		Path:      "/tmp/test",
+		Status:    Creating,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+
+	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-match", 0, Active, "")
+	require.NoError(t, err)
+	assert.True(t, applied)
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	assert.Equal(t, Active, loaded[0].Status, "the persisted row must now read Active")
+}
+
+// TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale covers Task
+// 1.2.4a's fencing guarantee: a captured epoch that no longer matches the
+// persisted row's creation_epoch (already bumped past it by a cancel/retry) is
+// rejected and the row is left unchanged.
+func TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := &Instance{
+		Title:     "epoch-stale",
+		UUID:      "uuid-epoch-stale",
+		Path:      "/tmp/test",
+		Status:    Creating,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+
+	// The persisted row's creation_epoch defaults to 0; present a stale
+	// captured value of 2 (as if a cancel had already bumped it past this
+	// caller's captured value).
+	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-stale", 2, Active, "")
+	require.NoError(t, err)
+	assert.False(t, applied)
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	assert.Equal(t, Creating, loaded[0].Status, "the persisted row must be unchanged when epochs mismatch")
 }

@@ -29,6 +29,7 @@ jest.mock("@connectrpc/connect-web", () => ({
 
 jest.mock("@/lib/config", () => ({
   getApiBaseUrl: jest.fn(() => "http://localhost:8543/api"),
+  createAuthInterceptor: jest.fn(() => jest.fn()),
 }));
 
 describe("useBrowserLogStream", () => {

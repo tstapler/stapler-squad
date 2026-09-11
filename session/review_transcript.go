@@ -102,7 +102,7 @@ func WriteReviewTranscriptFile(sm *scrollback.ScrollbackManager, sessionUUID, co
 
 	name := reviewTranscriptFileName(sessionUUID)
 	absPath := filepath.Join(codebaseWorkDir, name)
-	if writeErr := os.WriteFile(absPath, []byte(stripped), 0o644); writeErr != nil {
+	if writeErr := os.WriteFile(absPath, []byte(stripped), 0o600); writeErr != nil {
 		return "", noop, fmt.Errorf("failed to write review transcript file: %w", writeErr)
 	}
 

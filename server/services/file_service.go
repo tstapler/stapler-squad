@@ -336,6 +336,8 @@ func (fs *FileService) GetFileContent(
 	isText := knownTextExtensions[ext]
 
 	// Open file and read enough bytes for content-type detection.
+	// #nosec G304 -- fullPath was already validated above via resolveAndValidatePath,
+	// which rejects any result escaping basePath (the session's worktree).
 	f, openErr := os.Open(fullPath)
 	if openErr != nil {
 		if os.IsNotExist(openErr) {
@@ -609,6 +611,8 @@ func collectAllGitignorePatterns(rootPath string) []gitignore.Pattern {
 		}
 
 		giPath := filepath.Join(path, ".gitignore")
+		// #nosec G304 -- path is enumerated by filepath.WalkDir(rootPath, ...) above, so
+		// it never escapes the trusted rootPath tree, and ".gitignore" is a literal suffix.
 		f, openErr := os.Open(giPath)
 		if openErr != nil {
 			return nil
@@ -669,6 +673,8 @@ func loadGitignorePatterns(rootPath, targetDir string) []gitignore.Pattern {
 		}
 
 		gitignorePath := filepath.Join(dir, ".gitignore")
+		// #nosec G304 -- dir is built from rootPath/targetDir's own dirChain (both already
+		// resolved/cleaned by the caller), and ".gitignore" is a literal suffix.
 		f, openErr := os.Open(gitignorePath)
 		if openErr != nil {
 			continue
@@ -752,6 +758,8 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// #nosec G304 -- absPath was already validated above via resolveAndValidatePath,
+	// which rejects any result escaping basePath (the session's worktree).
 	f, err := os.Open(absPath)
 	if err != nil {
 		http.Error(w, "could not open file", http.StatusInternalServerError)

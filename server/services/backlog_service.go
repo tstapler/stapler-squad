@@ -134,8 +134,15 @@ type BacklogService struct {
 	// self-service "Ship PR" action on the item detail page. nil (the default)
 	// makes TriggerShipPR return CodeUnimplemented; wired via SetOneShotRunner.
 	oneShotRunner PRRunner
-	cfg           *config.Config
-	engine        session.WorkflowEngine
+	// julesDispatcher drives DispatchToJules (backlog_service_jules.go). nil
+	// (the default — Jules disabled, or its dependencies unresolvable at
+	// startup) makes DispatchToJules return CodeFailedPrecondition pointing at
+	// Settings → Jules, mirroring checkEgressConsent's own message for the
+	// same underlying condition; wired via SetJulesDispatcher
+	// (server/dependencies.go, Task 2.4.4a).
+	julesDispatcher JulesDispatcher
+	cfg             *config.Config
+	engine          session.WorkflowEngine
 	// worktreeMu serializes context-file writes to the same worktree path so that
 	// concurrent SpawnSessionFromItem / AttachSessionToItem calls cannot produce
 	// a partially-written .claude/backlog-context.md.
@@ -304,6 +311,101 @@ type BacklogService struct {
 	// uses to construct pipelineEngine (Epic 1.5.1a). May be nil in tests
 	// that don't pass one; handlers nil-check and return CodeUnavailable.
 	pipelineModeRepo session.PipelineModeRepository
+
+	// livenessRepo backs the LivenessDefinition CRUD RPCs (Epic 1.3 of
+	// backlog-custom-workflow-stages): CreateLivenessDefinition/
+	// UpdateLivenessDefinition/DeleteLivenessDefinition/GetLivenessDefinition/
+	// ListLivenessDefinitions. Wired post-construction via
+	// SetLivenessRepository — not a NewBacklogService constructor parameter,
+	// unlike pipelineModeRepo above, to avoid touching every one of this
+	// struct's existing test call sites for a dependency Epic 1.3 introduces;
+	// Epic 1.4 may fold this into the constructor once its own
+	// livenessEngine-in-sweeps wiring needs to. May be nil; handlers nil-check
+	// and return CodeUnavailable.
+	livenessRepo session.LivenessRepository
+	// livenessEngine is the LivenessEngine (session.CachingLivenessEngine in
+	// production) whose in-process cache the CRUD RPC write handlers
+	// invalidate on Create/Update/Delete. Wired post-construction via
+	// SetLivenessEngine, same rationale as livenessRepo above. May be nil;
+	// cache invalidation is then a no-op (matching invalidatePipelineCache's
+	// duck-typed no-op-if-unwired shape for pipelineEngine).
+	livenessEngine session.LivenessEngine
+
+	// stageCRUDRepo backs the Stage/StageTransition/TransitionGate CRUD RPCs
+	// (Epic 2.7 of backlog-custom-workflow-stages):
+	// CreateStage/UpdateStage/DeleteStage/GetStage/ListStages and their
+	// transition/gate siblings. Wired post-construction via
+	// SetStageCRUDRepository, same rationale as livenessRepo above. May be
+	// nil; handlers nil-check and return CodeUnavailable.
+	stageCRUDRepo session.StageCRUDRepository
+	// stageConfigEngine is the ConfiguredWorkflowEngine whose stageConfigCache
+	// the stage/transition/gate CRUD write handlers invalidate on success.
+	// Wired post-construction via SetStageConfigEngine. May be nil; cache
+	// invalidation is then a no-op, mirroring livenessEngine above.
+	stageConfigEngine stageConfigCacheInvalidator
+	// gateSatisfactionRepo backs the RecordGateApproval RPC (Epic 2.4, Story
+	// 2.4.1). Wired post-construction via SetGateSatisfactionRepository, same
+	// rationale as stageCRUDRepo above. May be nil; the handler nil-checks and
+	// returns CodeUnavailable.
+	gateSatisfactionRepo session.GateSatisfactionRepository
+}
+
+// stageConfigCacheInvalidator is a narrow, consumer-defined interface (see
+// pipelineCacheInvalidator's identical rationale in
+// backlog_service_pipeline_mode.go) matched via duck typing against
+// s.stageConfigEngine. *session.ConfiguredWorkflowEngine satisfies it.
+type stageConfigCacheInvalidator interface {
+	InvalidateCache(ctx context.Context) error
+}
+
+// SetStageCRUDRepository wires the repository backing the Stage/
+// StageTransition/TransitionGate CRUD RPCs. nil (the default) makes those
+// RPCs return CodeUnavailable, mirroring pipelineModeRepo's nil-guard shape.
+func (s *BacklogService) SetStageCRUDRepository(repo session.StageCRUDRepository) {
+	s.stageCRUDRepo = repo
+}
+
+// SetStageConfigEngine wires the engine whose stageConfigCache the stage/
+// transition/gate CRUD write handlers invalidate on success. nil (the
+// default) makes cache invalidation a no-op.
+func (s *BacklogService) SetStageConfigEngine(engine stageConfigCacheInvalidator) {
+	s.stageConfigEngine = engine
+}
+
+// invalidateStageConfigCache re-fetches the enabled stage/transition graph
+// into s.stageConfigEngine's cache after a successful stage/transition/gate
+// write. id is used only for the Warn log line if invalidation fails.
+// No-op (silently) if stageConfigEngine is unwired. Deliberately returns
+// nothing — mirrors invalidatePipelineCache's rationale: a cache-invalidation
+// failure after a successful DB write must never fail the RPC.
+func (s *BacklogService) invalidateStageConfigCache(ctx context.Context, id string) {
+	if s.stageConfigEngine == nil {
+		return
+	}
+	if err := s.stageConfigEngine.InvalidateCache(ctx); err != nil {
+		log.WarningLog().Printf("[ConfiguredWorkflowEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
+	}
+}
+
+// SetGateSatisfactionRepository wires the repository backing the
+// RecordGateApproval RPC. nil (the default) makes that RPC return
+// CodeUnavailable, mirroring stageCRUDRepo's nil-guard shape.
+func (s *BacklogService) SetGateSatisfactionRepository(repo session.GateSatisfactionRepository) {
+	s.gateSatisfactionRepo = repo
+}
+
+// SetLivenessRepository wires the repository backing the LivenessDefinition
+// CRUD RPCs. nil (the default) makes those RPCs return CodeUnavailable,
+// mirroring pipelineModeRepo's nil-guard shape.
+func (s *BacklogService) SetLivenessRepository(repo session.LivenessRepository) {
+	s.livenessRepo = repo
+}
+
+// SetLivenessEngine wires the LivenessEngine whose cache the LivenessDefinition
+// CRUD RPC write handlers invalidate on success. nil (the default) makes
+// cache invalidation a no-op.
+func (s *BacklogService) SetLivenessEngine(engine session.LivenessEngine) {
+	s.livenessEngine = engine
 }
 
 // PipelineEngine returns the PipelineEngine injected at construction (nil if none was
@@ -605,9 +707,11 @@ func (s *BacklogService) resolveRepoPathInput(input string) (string, error) {
 // costFor, if non-nil, is called with the tmux session UUID to populate EstimatedCostUsd.
 func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID string) float64) *sessionv1.ItemSession {
 	p := &sessionv1.ItemSession{
-		Id:                       is.ID,
-		SessionUuid:              is.SessionUUID,
-		SessionRole:              is.Role,
+		Id:          is.ID,
+		SessionUuid: is.SessionUUID,
+		SessionRole: is.Role,
+		// #nosec G115 -- git commit count for a single session's worktree, bounded
+		// by realistic repo activity during one session's lifetime.
 		CommitCountSinceSpawn:    int32(is.CommitCountSinceSpawn),
 		LastCommitMessage:        is.LastCommitMessage,
 		CreatedAt:                timestamppb.New(is.CreatedAt),
@@ -635,6 +739,8 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 			Id:             rv.ID,
 			OverallOutcome: rv.OverallOutcome,
 			Summary:        rv.Summary,
+			// #nosec G115 -- token count for one review's diff, bounded by realistic
+			// diff/LLM-context sizes, nowhere near int32 range.
 			DiffTokenCount: int32(rv.DiffTokenCount),
 			DiffTruncated:  rv.DiffTruncated,
 			OverrideBy:     rv.OverrideBy,
@@ -651,6 +757,8 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 				p.ReviewVerdict.PerCriterion = make([]*sessionv1.CriterionVerdict, len(cvs))
 				for i, cv := range cvs {
 					p.ReviewVerdict.PerCriterion[i] = &sessionv1.CriterionVerdict{
+						// #nosec G115 -- index into one backlog item's acceptance-criteria
+						// list, bounded by realistic AC list length (a handful of entries).
 						CriterionIndex: int32(cv.CriterionIndex),
 						Outcome:        string(cv.Outcome),
 						Evidence:       cv.Evidence,
@@ -687,8 +795,10 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 				Suggestions:         suggs,
 				ClarifyingQuestions: clarifying,
 				Tasks:               tasks,
-				Iteration:           int32(tr.Iteration),
-				Feedback:            tr.Feedback,
+				// #nosec G115 -- triage rework iteration counter, bounded by the small
+				// configurable rework cap (config.MaxAutoReworkIterationsOrDefault, default 3).
+				Iteration: int32(tr.Iteration),
+				Feedback:  tr.Feedback,
 			}
 		}
 	}
@@ -718,16 +828,19 @@ type triageResultJSON struct {
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
 func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:                 item.ID,
-		PublicId:           item.PublicIDRaw,
-		Title:              item.Title,
-		Priority:           int32(item.Priority),
-		Status:             string(item.Status),
-		RepoPath:           item.RepoPath,
-		Notes:              item.Notes,
-		ExternalId:         item.ExternalID,
-		Labels:             item.Labels,
-		PrUrl:              item.PrURL,
+		Id:       item.ID,
+		PublicId: item.PublicIDRaw,
+		Title:    item.Title,
+		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))
+		Priority:   int32(item.Priority),
+		Status:     string(item.Status),
+		RepoPath:   item.RepoPath,
+		Notes:      item.Notes,
+		ExternalId: item.ExternalID,
+		Labels:     item.Labels,
+		PrUrl:      item.PrURL,
+		// #nosec G115 -- pr_number is a GitHub PR number; production writers store it
+		// from a *int32 RPC field, structurally bounded well under int32 range.
 		PrNumber:           int32(item.PrNumber),
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
@@ -745,6 +858,8 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 			protoAC := make([]*sessionv1.AcCriterion, len(criteria))
 			for i, c := range criteria {
 				protoAC[i] = &sessionv1.AcCriterion{
+					// #nosec G115 -- index into one backlog item's acceptance-criteria
+					// list, bounded by realistic AC list length (a handful of entries).
 					Index:  int32(c.Index),
 					Text:   c.Text,
 					Status: string(c.Status),
@@ -789,9 +904,10 @@ func allowedTransitionStrings(from session.BacklogStatus) []string {
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
 func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:                  item.ID,
-		Title:               item.Title,
-		Description:         item.Description,
+		Id:          item.ID,
+		Title:       item.Title,
+		Description: item.Description,
+		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))
 		Priority:            int32(item.Priority),
 		Status:              item.Status,
 		RepoPath:            item.RepoPath,
@@ -809,14 +925,19 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		Labels:              item.Labels,
 		SourceId:            item.SourceID,
 		PrUrl:               item.PrURL,
-		PrNumber:            int32(item.PrNumber),
-		CreatedAt:           timestamppb.New(item.CreatedAt),
-		UpdatedAt:           timestamppb.New(item.UpdatedAt),
-		AllowedTransitions:  allowedTransitionStrings(session.BacklogStatus(item.Status)),
-		PublicId:            item.PublicIDRaw,
+		// #nosec G115 -- pr_number is a GitHub PR number; production writers store it
+		// from a *int32 RPC field, structurally bounded well under int32 range.
+		PrNumber:           int32(item.PrNumber),
+		CreatedAt:          timestamppb.New(item.CreatedAt),
+		UpdatedAt:          timestamppb.New(item.UpdatedAt),
+		AllowedTransitions: allowedTransitionStrings(session.BacklogStatus(item.Status)),
+		PublicId:           item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
+	}
+	if item.BaseBranch != "" {
+		p.BaseBranch = &item.BaseBranch
 	}
 	if item.PlanApprovedAt != nil {
 		p.PlanApprovedAt = timestamppb.New(*item.PlanApprovedAt)
@@ -828,6 +949,9 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
 	}
 	if item.ReworkCapOverride != nil {
+		// #nosec G115 -- rework_cap_override is only ever set from a *int32 RPC field
+		// (backlog_service_lifecycle.go's int(*req.Msg.ReworkCapOverride)), so this
+		// int -> int32 round trip cannot lose information.
 		override := int32(*item.ReworkCapOverride)
 		p.ReworkCapOverride = &override
 	}
@@ -839,6 +963,8 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 			protoAC := make([]*sessionv1.AcCriterion, len(criteria))
 			for i, c := range criteria {
 				protoAC[i] = &sessionv1.AcCriterion{
+					// #nosec G115 -- index into one backlog item's acceptance-criteria
+					// list, bounded by realistic AC list length (a handful of entries).
 					Index:  int32(c.Index),
 					Text:   c.Text,
 					Status: string(c.Status),
@@ -883,7 +1009,9 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		protoNotes := make([]*sessionv1.BacklogProgressNote, len(item.ProgressNotes))
 		for i, n := range item.ProgressNotes {
 			protoNotes[i] = &sessionv1.BacklogProgressNote{
-				Id:             n.ID,
+				Id: n.ID,
+				// #nosec G115 -- index into one backlog item's acceptance-criteria
+				// list, bounded by realistic AC list length (a handful of entries).
 				CriterionIndex: int32(n.CriterionIndex),
 				Note:           n.Note,
 				Status:         n.Status,

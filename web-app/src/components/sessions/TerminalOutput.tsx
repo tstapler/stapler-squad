@@ -59,6 +59,10 @@ import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { useInputModeOverride } from "@/lib/hooks/useInputModeOverride";
+import { isWorktreeMissingError } from "@/lib/utils/backoff";
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import * as styles from "./TerminalOutput.css";
 
 interface TerminalOutputProps {
@@ -562,6 +566,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const handleStreamError = useCallback((err: Error) => {
     console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
     setConnectionAttempts((prev) => prev + 1);
+    // A stream error (e.g. a malformed/aborted response while the initial
+    // content fetch was in flight) doesn't necessarily flip isConnected —
+    // Connect-Web's underlying WebSocket transport can stay nominally
+    // connected even though this specific RPC stream errored out. Without
+    // this, neither the wasConnected-&&-!isConnected disconnect handler nor
+    // the connectionAttempts>=5 fallback (both further down this file) ever
+    // fires for a lone error like this, leaving the user staring at an
+    // infinite "Loading terminal content..." spinner with no path to the
+    // reconnect banner/retry button. Clear it here too, same as the
+    // disconnect branch does, so a single early error still surfaces a
+    // recoverable state instead of a permanent stall.
+    setIsLoadingInitialContent(false);
   }, [isExternal]);
   // Story 2.3 — InputDropBadge: dropped-keystroke count + a monotonic
   // per-episode sequence number (so two consecutive episodes with an
@@ -613,6 +629,30 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     foreground: isVisible,
     outstandingResyncIdsRef,
   });
+
+  // Lightweight, single-purpose RPC client for the worktree-missing hard-fail
+  // banner's "Retry now" button — mirrors the pattern used throughout this
+  // codebase (e.g. useLogViewer.ts) for a one-off unary call, rather than
+  // pulling in the full useSessionService hook (which sets up its own
+  // session-list watch stream and Redux wiring — too heavy to instantiate
+  // per open terminal pane).
+  const retrySessionClientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
+  if (!retrySessionClientRef.current) {
+    retrySessionClientRef.current = createClient(SessionService, createConnectTransport({ baseUrl }));
+  }
+  const [isRetryingSession, setIsRetryingSession] = useState(false);
+  const handleRetryNow = useCallback(async () => {
+    setIsRetryingSession(true);
+    try {
+      // Errors are surfaced to the user via the banner remaining visible
+      // (a fresh connect attempt below will just fail again) — no separate
+      // error UI needed for this action itself.
+      await retrySessionClientRef.current?.retrySession({ id: effectiveSessionId });
+    } finally {
+      setIsRetryingSession(false);
+      handleHookReconnect();
+    }
+  }, [effectiveSessionId, handleHookReconnect]);
 
   const { notifyResyncOutputReceived, resetStallWatchdog } = useVisibilityResync({
     sessionId: effectiveSessionId,
@@ -922,9 +962,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       }, 250);
     } else if (wasConnected && !isConnected) {
       console.log("[TerminalOutput] Connection lost, will attempt reconnection");
-      // If connection drops while still loading, content won't arrive — clear the overlay
-      // so the user sees the terminal pane and "Disconnected" status instead of a stuck spinner.
-      setIsLoadingInitialContent(false);
+      // New session: don't drop the spinner before first content arrives.
+      if (isInitialScrollbackDoneRef.current) {
+        setIsLoadingInitialContent(false);
+      }
       if (process.env.NEXT_PUBLIC_RECONNECT_V2 !== "true") {
         reconnectTimeoutRef.current = setTimeout(() => {
           if (!isConnected) {
@@ -1563,6 +1604,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     },
   ];
 
+  const isConnectingState = terminalState === "CONNECTING" || terminalState === "LOADING";
+
   return (
     <div className={styles.container}>
       <div className={styles.toolbar}>
@@ -1574,11 +1617,21 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           )}
           <span
             className={`${styles.statusIndicator} ${
-              isConnected ? styles.connected : isWaitingForStableSize ? styles.stabilizing : styles.disconnected
+              isConnected
+                ? styles.connected
+                : isWaitingForStableSize || isConnectingState
+                  ? styles.stabilizing
+                  : styles.disconnected
             }`}
           />
           <span className={styles.statusText}>
-            {isConnected ? "Connected" : isWaitingForStableSize ? "Initializing..." : "Disconnected"}
+            {isConnected
+              ? "Connected"
+              : isWaitingForStableSize
+                ? "Initializing..."
+                : isConnectingState
+                  ? "Connecting..."
+                  : "Disconnected"}
           </span>
           {!isConnected && connectionAttempts > 0 && connectionAttempts < 5 && (
             <span className={styles.statusText}>
@@ -1850,14 +1903,28 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         )}
         {showReconnectBanner && isHardFailed && (
           <div className={styles.hardFailedBanner} role="alert">
-            Connection lost — <button onClick={handleHookReconnect}>Retry</button>
+            {isWorktreeMissingError(error) ? (
+              <>
+                This session&apos;s working directory no longer exists (its git worktree may
+                have been deleted).{" "}
+                <button onClick={handleRetryNow} disabled={isRetryingSession}>
+                  {isRetryingSession ? "Retrying…" : "Retry now"}
+                </button>
+              </>
+            ) : (
+              <>Connection lost — <button onClick={handleHookReconnect}>Retry</button></>
+            )}
           </div>
         )}
         {isVisible !== false && isLoadingInitialContent && (
           <div className={styles.loadingOverlay}>
             <div className={styles.loadingSpinner} />
             <div className={styles.loadingText}>
-              {isWaitingForStableSize ? "Initializing terminal..." : "Loading terminal content..."}
+              {isWaitingForStableSize
+                ? "Initializing terminal..."
+                : !isConnected && !isInitialScrollbackDoneRef.current
+                  ? "Starting session..."
+                  : "Loading terminal content..."}
             </div>
           </div>
         )}

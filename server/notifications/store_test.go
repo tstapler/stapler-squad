@@ -121,10 +121,14 @@ func TestAppendDedup_DifferentTypes(t *testing.T) {
 
 // TestAppendDedup_ReadThenNew verifies that an existing read record is NOT
 // updated; a new unread record is created instead (per ADR-003).
-func TestAppendDedup_ReadThenNew(t *testing.T) {
+// TestAppendDedup_ReadThenRecur_CollapsesAndUnreads verifies that a recurrence of an
+// already-read (sessionID, notificationType) collapses into the existing record in
+// place -- bumping OccurrenceCount and resetting it back to unread -- rather than
+// forking a second row.
+func TestAppendDedup_ReadThenRecur_CollapsesAndUnreads(t *testing.T) {
 	store := newTestStore(t)
 
-	r1 := makeRecord("id-1", "session-A", 1)
+	r1 := makeRecord("id-1", "session-A", notifTypeDedup)
 	if err := store.Append(r1); err != nil {
 		t.Fatalf("Append r1: %v", err)
 	}
@@ -135,7 +139,7 @@ func TestAppendDedup_ReadThenNew(t *testing.T) {
 	}
 
 	// Append a second record with the same key
-	r2 := makeRecord("id-2", "session-A", 1)
+	r2 := makeRecord("id-2", "session-A", notifTypeDedup)
 	if err := store.Append(r2); err != nil {
 		t.Fatalf("Append r2: %v", err)
 	}
@@ -144,26 +148,22 @@ func TestAppendDedup_ReadThenNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if total != 2 {
-		t.Errorf("expected 2 records (read + new unread), got %d", total)
+	if total != 1 {
+		t.Fatalf("expected exactly 1 record (collapsed in place), got %d", total)
 	}
 
-	// The new record should be unread with OccurrenceCount=1
-	if len(records) < 1 {
-		t.Fatalf("expected at least 1 record, got %d", len(records))
+	rec := records[0]
+	if rec.ID != "id-1" {
+		t.Errorf("expected collapsed record to keep original ID 'id-1', got %q", rec.ID)
 	}
-	newest := records[0]
-	if newest.IsRead {
-		t.Error("newest record should be unread")
+	if rec.OccurrenceCount != 2 {
+		t.Errorf("expected OccurrenceCount=2, got %d", rec.OccurrenceCount)
 	}
-	if newest.OccurrenceCount != 1 {
-		t.Errorf("newest record OccurrenceCount: expected 1, got %d", newest.OccurrenceCount)
+	if rec.IsRead {
+		t.Error("expected collapsed record to be reset to unread")
 	}
-
-	// The old record should still be read
-	oldest := records[1]
-	if !oldest.IsRead {
-		t.Error("oldest record should still be read")
+	if rec.ReadAt != nil {
+		t.Error("expected ReadAt to be cleared on collapse")
 	}
 }
 
@@ -446,10 +446,10 @@ func TestDeduplicateExisting_Migration(t *testing.T) {
 	}
 }
 
-// TestDeduplicateExisting_ReadRecordsUntouched verifies that read records
-// are not consolidated during migration, even if they share the same
-// (sessionID, notificationType) key.
-func TestDeduplicateExisting_ReadRecordsUntouched(t *testing.T) {
+// TestDeduplicateExisting_ReadRecordsConsolidate verifies that two read records
+// sharing the same (sessionID, notificationType) key now consolidate during
+// migration too -- read state no longer exempts a record from dedup grouping.
+func TestDeduplicateExisting_ReadRecordsConsolidate(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "notifications.json")
 
@@ -459,7 +459,7 @@ func TestDeduplicateExisting_ReadRecordsUntouched(t *testing.T) {
 		{
 			ID:               "read-1",
 			SessionID:        "session-foo",
-			NotificationType: 1,
+			NotificationType: notifTypeDedup,
 			Title:            "Read notification",
 			CreatedAt:        now.Add(-2 * time.Hour),
 			IsRead:           true,
@@ -468,7 +468,7 @@ func TestDeduplicateExisting_ReadRecordsUntouched(t *testing.T) {
 		{
 			ID:               "read-2",
 			SessionID:        "session-foo",
-			NotificationType: 1,
+			NotificationType: notifTypeDedup,
 			Title:            "Another read notification",
 			CreatedAt:        now.Add(-3 * time.Hour),
 			IsRead:           true,
@@ -498,19 +498,20 @@ func TestDeduplicateExisting_ReadRecordsUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	// Both read records should still be present (not merged)
-	if total != 2 {
-		t.Errorf("expected 2 read records unchanged, got %d", total)
+	if total != 1 {
+		t.Fatalf("expected the two read duplicates to consolidate into 1 record, got %d", total)
 	}
-	for _, r := range result {
-		if !r.IsRead {
-			t.Errorf("record %s should still be read", r.ID)
-		}
+	if !result[0].IsRead {
+		t.Error("consolidated record should still be read")
+	}
+	if result[0].OccurrenceCount != 2 {
+		t.Errorf("expected OccurrenceCount=2, got %d", result[0].OccurrenceCount)
 	}
 }
 
-// TestDeduplicateExisting_MixedReadUnread verifies that migration only
-// consolidates unread duplicates, leaving read records intact.
+// TestDeduplicateExisting_MixedReadUnread verifies that migration consolidates
+// duplicates sharing the same (sessionID, notificationType) key regardless of
+// read state -- unread and read records in the same group merge into one.
 func TestDeduplicateExisting_MixedReadUnread(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "notifications.json")
@@ -518,7 +519,7 @@ func TestDeduplicateExisting_MixedReadUnread(t *testing.T) {
 	now := time.Now()
 	readAt := now.Add(-time.Hour)
 	records := []*NotificationRecord{
-		// 2 unread duplicates (should merge into 1)
+		// 2 unread duplicates + 1 read duplicate, all same key -- all merge into 1.
 		{
 			ID:               "unread-1",
 			SessionID:        "session-foo",
@@ -535,7 +536,6 @@ func TestDeduplicateExisting_MixedReadUnread(t *testing.T) {
 			CreatedAt:        now.Add(-2 * time.Minute),
 			IsRead:           false,
 		},
-		// 1 read record (should stay)
 		{
 			ID:               "read-1",
 			SessionID:        "session-foo",
@@ -569,22 +569,79 @@ func TestDeduplicateExisting_MixedReadUnread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	// 1 merged unread + 1 read = 2 records
-	if total != 2 {
-		t.Errorf("expected 2 records (1 merged unread + 1 read), got %d", total)
+	// All 3 share the same key, so they consolidate into 1 record.
+	if total != 1 {
+		t.Fatalf("expected 1 consolidated record, got %d", total)
+	}
+	if result[0].OccurrenceCount != 3 {
+		t.Errorf("merged record OccurrenceCount: expected 3, got %d", result[0].OccurrenceCount)
+	}
+	// The keeper is the newest record (unread-1), so the merged record stays unread.
+	if result[0].IsRead {
+		t.Error("expected merged record (keyed on newest, unread-1) to remain unread")
+	}
+}
+
+// TestDeduplicateExisting_ReadAndUnreadDuplicates_Consolidate verifies the Story
+// 1.1.3 acceptance criterion directly: a read record and an unread record sharing
+// the same (sessionID, notificationType) consolidate into one on load, keyed on
+// whichever is newest by CreatedAt, with a summed OccurrenceCount.
+func TestDeduplicateExisting_ReadAndUnreadDuplicates_Consolidate(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "notifications.json")
+
+	now := time.Now()
+	readAt := now.Add(-time.Hour)
+	records := []*NotificationRecord{
+		{
+			ID:               "n6",
+			SessionID:        "sess-a1b2c3",
+			NotificationType: notifTypeDedup,
+			Title:            "Newest (unread)",
+			CreatedAt:        now,
+			IsRead:           false,
+		},
+		{
+			ID:               "n5",
+			SessionID:        "sess-a1b2c3",
+			NotificationType: notifTypeDedup,
+			Title:            "Oldest (read)",
+			CreatedAt:        now.Add(-time.Hour),
+			IsRead:           true,
+			ReadAt:           &readAt,
+		},
 	}
 
-	unreadCount := 0
-	for _, r := range result {
-		if !r.IsRead {
-			unreadCount++
-			if r.OccurrenceCount != 2 {
-				t.Errorf("merged unread record OccurrenceCount: expected 2, got %d", r.OccurrenceCount)
-			}
-		}
+	file := notificationsFile{
+		Version:       1,
+		UpdatedAt:     now,
+		Notifications: records,
 	}
-	if unreadCount != 1 {
-		t.Errorf("expected 1 unread record, got %d", unreadCount)
+	data, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(fp, data, 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	store, err := NewNotificationHistoryStore(fp)
+	if err != nil {
+		t.Fatalf("NewNotificationHistoryStore: %v", err)
+	}
+
+	result, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected exactly 1 consolidated record, got %d", total)
+	}
+	if result[0].ID != "n6" {
+		t.Errorf("expected keeper to be the newest record 'n6', got %q", result[0].ID)
+	}
+	if result[0].OccurrenceCount != 2 {
+		t.Errorf("expected OccurrenceCount=2, got %d", result[0].OccurrenceCount)
 	}
 }
 
@@ -857,5 +914,325 @@ func TestEnforceRetention_GatesOrphanSweep_ByOrphanPruneInterval(t *testing.T) {
 
 	if callCount <= firstCount {
 		t.Errorf("expected existence-check to fire again after advancing past orphanPruneInterval, callCount stayed at %d", callCount)
+	}
+}
+
+// TestAppendDedup_AutoApprovedStaysReadAcrossRecurrence verifies the AUTO_APPROVED
+// carve-out: unlike every other notification type, a recurrence must NOT flip the
+// collapsed record back to unread, since AUTO_APPROVED records are pre-read by design
+// and never surface as an active alert.
+func TestAppendDedup_AutoApprovedStaysReadAcrossRecurrence(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.AppendAutoApproved("session-A", "Session A", "Bash", "/tmp/foo", "rule-1", "Allow Bash", "seed", "approve"); err != nil {
+		t.Fatalf("AppendAutoApproved 1: %v", err)
+	}
+	if err := store.AppendAutoApproved("session-A", "Session A", "Bash", "/tmp/foo", "rule-1", "Allow Bash", "seed", "approve"); err != nil {
+		t.Fatalf("AppendAutoApproved 2: %v", err)
+	}
+
+	records, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected 1 collapsed AUTO_APPROVED record, got %d", total)
+	}
+	if records[0].OccurrenceCount != 2 {
+		t.Errorf("expected OccurrenceCount=2, got %d", records[0].OccurrenceCount)
+	}
+	if !records[0].IsRead {
+		t.Error("expected AUTO_APPROVED record to stay read across recurrence")
+	}
+}
+
+// TestAppendDedup_CollapsePathTriggersRetention verifies that enforceRetention() is
+// swept on the collapse branch of Append(), not only the new-record branch -- a
+// stale, unrelated record past MaxNotificationAge is pruned by a collapse triggered
+// on a completely different (sessionID, notificationType) pair.
+func TestAppendDedup_CollapsePathTriggersRetention(t *testing.T) {
+	store := newTestStore(t)
+
+	// Seed a stale record directly (old CreatedAt/LastOccurredAt, past MaxNotificationAge)
+	// for an unrelated session/type -- it should be pruned once a collapse happens
+	// anywhere in the store, not just on a brand-new record.
+	staleTime := time.Now().Add(-MaxNotificationAge - time.Hour)
+	store.mu.Lock()
+	store.records = append(store.records, &NotificationRecord{
+		ID:               "stale-1",
+		SessionID:        "session-stale",
+		NotificationType: notifTypeDedup,
+		Title:            "Stale",
+		CreatedAt:        staleTime,
+		LastOccurredAt:   &staleTime,
+		OccurrenceCount:  1,
+	})
+	store.mu.Unlock()
+
+	// First append for a different (sessionID, notificationType) pair to establish
+	// a record to collapse into.
+	if err := store.Append(makeRecord("id-1", "session-A", notifTypeDedup)); err != nil {
+		t.Fatalf("Append 1: %v", err)
+	}
+	// Second append for the same pair triggers the collapse branch.
+	if err := store.Append(makeRecord("id-2", "session-A", notifTypeDedup)); err != nil {
+		t.Fatalf("Append 2: %v", err)
+	}
+
+	_, total, err := store.List(ListOptions{Limit: 100, SessionID: "session-stale"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 0 {
+		t.Errorf("expected the stale record to be pruned by the collapse-path retention sweep, got %d matching records", total)
+	}
+}
+
+// TestAppendDedup_ApprovalNeeded_IDReassignmentUnaffectedByCollapse pins the one
+// documented side effect of collapsing an APPROVAL_NEEDED record: the ID still
+// reassigns to the incoming approval UUID, and (per the widened dedup predicate)
+// IsRead is reset to false even though this behavior was already exercised for the
+// unread case elsewhere -- here the existing record starts out read.
+func TestAppendDedup_ApprovalNeeded_IDReassignmentUnaffectedByCollapse(t *testing.T) {
+	store := newTestStore(t)
+
+	r1 := makeRecord("n3", "session-A", notifTypeApprovalNeededTest)
+	if err := store.Append(r1); err != nil {
+		t.Fatalf("Append r1: %v", err)
+	}
+	if _, err := store.MarkRead([]string{"n3"}); err != nil {
+		t.Fatalf("MarkRead: %v", err)
+	}
+
+	r2 := makeRecord("n4", "session-A", notifTypeApprovalNeededTest)
+	if err := store.Append(r2); err != nil {
+		t.Fatalf("Append r2: %v", err)
+	}
+
+	records, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected exactly 1 collapsed record, got %d", total)
+	}
+	if records[0].ID != "n4" {
+		t.Errorf("expected collapsed record ID to reassign to incoming UUID 'n4', got %q", records[0].ID)
+	}
+	if records[0].IsRead {
+		t.Error("expected collapsed record to be unread")
+	}
+}
+
+// TestEnforceRetention_KeyedByLastOccurredAt_SurvivesOldCreatedAt verifies that a
+// frequently-recurring record with an old CreatedAt but a recent LastOccurredAt
+// survives enforceRetention() -- retention keys off LastOccurredAt, not CreatedAt.
+func TestEnforceRetention_KeyedByLastOccurredAt_SurvivesOldCreatedAt(t *testing.T) {
+	store := newTestStore(t)
+
+	createdAt := time.Now().Add(-10 * 24 * time.Hour)
+	lastOccurredAt := time.Now().Add(-2 * time.Minute)
+	store.mu.Lock()
+	store.records = append(store.records, &NotificationRecord{
+		ID:               "recurring-1",
+		SessionID:        "session-A",
+		NotificationType: notifTypeDedup,
+		Title:            "Recurring",
+		CreatedAt:        createdAt,
+		LastOccurredAt:   &lastOccurredAt,
+		OccurrenceCount:  47,
+	})
+	store.enforceRetention()
+	store.mu.Unlock()
+
+	_, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("expected the recurring record to survive retention, got %d records", total)
+	}
+}
+
+// TestEnforceRetention_NoRecentOccurrence_StillPruned verifies that a record with no
+// recent occurrences (both CreatedAt and LastOccurredAt past MaxNotificationAge) is
+// still pruned by enforceRetention().
+func TestEnforceRetention_NoRecentOccurrence_StillPruned(t *testing.T) {
+	store := newTestStore(t)
+
+	createdAt := time.Now().Add(-10 * 24 * time.Hour)
+	lastOccurredAt := time.Now().Add(-9 * 24 * time.Hour)
+	store.mu.Lock()
+	store.records = append(store.records, &NotificationRecord{
+		ID:               "cold-1",
+		SessionID:        "session-A",
+		NotificationType: notifTypeDedup,
+		Title:            "Cold",
+		CreatedAt:        createdAt,
+		LastOccurredAt:   &lastOccurredAt,
+		OccurrenceCount:  3,
+	})
+	store.enforceRetention()
+	store.mu.Unlock()
+
+	_, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 0 {
+		t.Errorf("expected the cold record to be pruned, got %d records", total)
+	}
+}
+
+// TestEnforceRetention_NilLastOccurredAt_FallsBackToCreatedAt verifies that a
+// pre-migration record with LastOccurredAt: nil falls back to CreatedAt for the
+// cutoff check, matching pre-fix behavior exactly.
+func TestEnforceRetention_NilLastOccurredAt_FallsBackToCreatedAt(t *testing.T) {
+	store := newTestStore(t)
+
+	// Old CreatedAt, no LastOccurredAt set (nil) -- should be pruned via CreatedAt fallback.
+	oldCreatedAt := time.Now().Add(-MaxNotificationAge - time.Hour)
+	store.mu.Lock()
+	store.records = append(store.records, &NotificationRecord{
+		ID:               "old-nil-lastoccurred",
+		SessionID:        "session-A",
+		NotificationType: notifTypeDedup,
+		Title:            "Old, pre-migration",
+		CreatedAt:        oldCreatedAt,
+		LastOccurredAt:   nil,
+		OccurrenceCount:  1,
+	})
+	// Recent CreatedAt, no LastOccurredAt set (nil) -- should survive via CreatedAt fallback.
+	recentCreatedAt := time.Now().Add(-time.Minute)
+	store.records = append(store.records, &NotificationRecord{
+		ID:               "recent-nil-lastoccurred",
+		SessionID:        "session-B",
+		NotificationType: notifTypeDedup,
+		Title:            "Recent, pre-migration",
+		CreatedAt:        recentCreatedAt,
+		LastOccurredAt:   nil,
+		OccurrenceCount:  1,
+	})
+	store.enforceRetention()
+	store.mu.Unlock()
+
+	result, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected exactly 1 surviving record, got %d", total)
+	}
+	if result[0].ID != "recent-nil-lastoccurred" {
+		t.Errorf("expected surviving record to be 'recent-nil-lastoccurred', got %q", result[0].ID)
+	}
+}
+
+// notifTypeTaskCompleteTest matches NOTIFICATION_TYPE_TASK_COMPLETE = 4 in
+// types.proto -- not in IsActionableType's set, so it's clearable.
+const notifTypeTaskCompleteTest = int32(4)
+
+// TestClear_NeverDeletesUnreadActionableRecord_WithTimestampCutoff verifies Task
+// 3.1.5c's guarantee: an unread APPROVAL_NEEDED record survives Clear(&future)
+// even though its CreatedAt is before the cutoff, while an old, read, non-actionable
+// record is removed as usual.
+func TestClear_NeverDeletesUnreadActionableRecord_WithTimestampCutoff(t *testing.T) {
+	store := newTestStore(t)
+
+	old := time.Now().Add(-time.Hour)
+	pending := &NotificationRecord{
+		ID:               "pending-approval",
+		SessionID:        "session-A",
+		NotificationType: notifTypeApprovalNeededTest,
+		CreatedAt:        old,
+		IsRead:           false,
+	}
+	resolved := &NotificationRecord{
+		ID:               "old-task-complete",
+		SessionID:        "session-B",
+		NotificationType: notifTypeTaskCompleteTest,
+		CreatedAt:        old,
+		IsRead:           true,
+	}
+	if err := store.Append(pending); err != nil {
+		t.Fatalf("Append pending: %v", err)
+	}
+	if err := store.Append(resolved); err != nil {
+		t.Fatalf("Append resolved: %v", err)
+	}
+
+	future := time.Now().Add(time.Hour)
+	if _, err := store.Clear(&future); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+
+	if _, ok := store.GetByID("pending-approval"); !ok {
+		t.Error("expected unread actionable record to survive Clear(&future), but it was removed")
+	}
+	if _, ok := store.GetByID("old-task-complete"); ok {
+		t.Error("expected old, read, non-actionable record to be removed by Clear(&future), but it survived")
+	}
+}
+
+// TestClear_NeverDeletesUnreadActionableRecord_ClearEverything verifies the same
+// guarantee holds for the before==nil ("clear everything") path.
+func TestClear_NeverDeletesUnreadActionableRecord_ClearEverything(t *testing.T) {
+	store := newTestStore(t)
+
+	pending := &NotificationRecord{
+		ID:               "pending-approval",
+		SessionID:        "session-A",
+		NotificationType: notifTypeApprovalNeededTest,
+		CreatedAt:        time.Now(),
+		IsRead:           false,
+	}
+	resolved := &NotificationRecord{
+		ID:               "read-task-complete",
+		SessionID:        "session-B",
+		NotificationType: notifTypeTaskCompleteTest,
+		CreatedAt:        time.Now(),
+		IsRead:           true,
+	}
+	if err := store.Append(pending); err != nil {
+		t.Fatalf("Append pending: %v", err)
+	}
+	if err := store.Append(resolved); err != nil {
+		t.Fatalf("Append resolved: %v", err)
+	}
+
+	if _, err := store.Clear(nil); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+
+	if _, ok := store.GetByID("pending-approval"); !ok {
+		t.Error("expected unread actionable record to survive Clear(nil), but it was removed")
+	}
+	if _, ok := store.GetByID("read-task-complete"); ok {
+		t.Error("expected read, non-actionable record to be removed by Clear(nil), but it survived")
+	}
+}
+
+// TestIsActionableType verifies the actionable/non-actionable classification
+// mirrors notificationMapping.ts's ACTIONABLE_TYPES set.
+func TestIsActionableType(t *testing.T) {
+	actionable := []int32{
+		notifTypeApprovalNeededTest, // APPROVAL_NEEDED
+		notifTypeConfirmationNeed,   // CONFIRMATION_NEEDED
+		notifTypeInputRequired,      // INPUT_REQUIRED (question)
+		notifTypeError,              // ERROR
+		notifTypeFailure,            // FAILURE (error)
+		notifTypeWarning,            // WARNING
+	}
+	for _, ty := range actionable {
+		if !IsActionableType(ty) {
+			t.Errorf("expected NotificationType %d to be actionable", ty)
+		}
+	}
+
+	nonActionable := []int32{notifTypeTaskCompleteTest, notifTypeAutoApproved, notifTypeDedup}
+	for _, ty := range nonActionable {
+		if IsActionableType(ty) {
+			t.Errorf("expected NotificationType %d to be non-actionable", ty)
+		}
 	}
 }

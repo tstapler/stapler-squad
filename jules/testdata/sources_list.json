@@ -1,0 +1,12 @@
+{
+  "sources": [
+    {
+      "name": "sources/github-tstapler-stapler-squad",
+      "id": "github-tstapler-stapler-squad"
+    },
+    {
+      "name": "sources/github-tstapler-dotfiles",
+      "id": "github-tstapler-dotfiles"
+    }
+  ]
+}

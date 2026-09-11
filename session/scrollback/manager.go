@@ -2,6 +2,7 @@ package scrollback
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"time"
 )
@@ -312,7 +313,16 @@ func (m *ScrollbackManager) GetScrollbackBefore(sessionID string, beforeSeq uint
 	}
 
 	// Get all entries from the beginning up to (but not including) beforeSeq.
-	all, err := m.GetScrollback(sessionID, 0, int(beforeSeq))
+	// beforeSeq is used directly as GetScrollback's limit (fetch everything
+	// from the start up to that many entries); it can come from a
+	// client-supplied pagination cursor, so clamp it to the max int the
+	// platform can represent before the narrowing conversion instead of
+	// letting an out-of-range uint64 wrap into a negative limit.
+	seqLimit := beforeSeq
+	if seqLimit > math.MaxInt {
+		seqLimit = math.MaxInt
+	}
+	all, err := m.GetScrollback(sessionID, 0, int(seqLimit)) // #nosec G115 -- clamped to math.MaxInt above
 	if err != nil {
 		return nil, err
 	}

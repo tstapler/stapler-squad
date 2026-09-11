@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,13 +20,16 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 
+	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/stretchr/testify/require"
@@ -530,102 +534,42 @@ func TestRecordControlModeStreamStart_should_LogOverlapWarning_When_TwoInvocatio
 
 // --- HubRegistry / PathHubOwned routing (Epic 2.2) ---
 
-// TestUseStreamHub_should_DefaultToTrue_When_EnvVarUnsetAndRehearsalRecorded
-// covers the post-rollout default: with STAPLER_SQUAD_USE_STREAM_HUB unset
-// (mirrors STAPLER_SQUAD_USE_CONTROL_MODE's "unset means on" convention) and
-// a recorded rollback rehearsal, streamTerminal routes to PathHubOwned.
-func TestUseStreamHub_should_DefaultToTrue_When_EnvVarUnsetAndRehearsalRecorded(t *testing.T) {
-	recordRollbackRehearsalCompletedForTest(t)
-
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "")
+// TestUseStreamHub_should_DefaultToTrue_When_FlagUnset covers the
+// post-rollout default: the "stream_hub" feature flag defaults on with no
+// explicit override needed.
+func TestUseStreamHub_should_DefaultToTrue_When_FlagUnset(t *testing.T) {
+	clearStreamHubOverrideForTest(t)
 	require.True(t, useStreamHub())
 }
 
-// TestUseStreamHub_should_ReturnFalse_When_EnvVarIsExactlyFalse verifies the
-// opt-out: any value other than "" or "true" (e.g. the literal "false", or a
-// typo like "1"/"True") stays on the legacy path rather than failing open.
-// Requires a recorded rollback rehearsal (Story 3.3.2) since useStreamHub()'s
-// gate refuses to enable the global default otherwise (Story 3.3.1's Task
-// 3.3.1d).
-func TestUseStreamHub_should_ReturnFalse_When_EnvVarIsExactlyFalse(t *testing.T) {
-	recordRollbackRehearsalCompletedForTest(t)
-
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
-	require.True(t, useStreamHub())
-
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "false")
-	require.False(t, useStreamHub())
-
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "1")
-	require.False(t, useStreamHub())
-}
-
-// recordRollbackRehearsalCompletedForTest records a passing rollback
-// rehearsal (Story 3.3.2's Task 3.3.2c) so a test's useStreamHub() call can
-// resolve the global default to true, and restores
-// RollbackRehearsalCompletedAt to nil via t.Cleanup so this doesn't leak
-// into other tests in the same package binary run.
-func recordRollbackRehearsalCompletedForTest(t *testing.T) {
-	t.Helper()
-	require.NoError(t, config.LoadConfig().RecordRollbackRehearsalCompleted())
-	t.Cleanup(func() {
-		cfg := config.LoadConfig()
-		cfg.RollbackRehearsalCompletedAt = nil
-		_ = config.SaveConfig(cfg)
-	})
-}
-
-// TestUseStreamHub_should_ReturnFalse_When_RehearsalNotCompleted is Story
-// 3.3.1/3.3.2's integration-level regression test (pre-mortem P1 #4): even
-// with STAPLER_SQUAD_USE_STREAM_HUB="true" set, useStreamHub() must return
-// false — safely, not by panicking or crashing the connection — when no
-// rollback rehearsal has been recorded.
-func TestUseStreamHub_should_ReturnFalse_When_RehearsalNotCompleted(t *testing.T) {
+// TestUseStreamHub_should_FollowExplicitGlobalOverride verifies
+// SetStreamHubGlobalOverride (the settings panel's toggle) wins in both
+// directions, and clearing it (nil) reverts to the on-by-default value.
+func TestUseStreamHub_should_FollowExplicitGlobalOverride(t *testing.T) {
+	clearStreamHubOverrideForTest(t)
 	cfg := config.LoadConfig()
-	cfg.RollbackRehearsalCompletedAt = nil
-	require.NoError(t, config.SaveConfig(cfg))
 
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
-	require.False(t, useStreamHub(), "expected the global default to stay false without a recorded rollback rehearsal")
-}
-
-// TestUseStreamHub_should_PreferGlobalOverride_Over_EnvVar (Story 3.3.4)
-// verifies the live, browser-settable config.StreamHubGlobalOverride takes
-// precedence over the STAPLER_SQUAD_USE_STREAM_HUB env var in both
-// directions, and that clearing it (nil) reverts resolution to the env var.
-func TestUseStreamHub_should_PreferGlobalOverride_Over_EnvVar(t *testing.T) {
-	recordRollbackRehearsalCompletedForTest(t)
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
-
-	cfg := config.LoadConfig()
 	forceFalse := false
 	require.NoError(t, cfg.SetStreamHubGlobalOverride(&forceFalse))
-	require.False(t, useStreamHub(), "override=false must win over env var=true")
+	require.False(t, useStreamHub())
 
 	forceTrue := true
 	require.NoError(t, cfg.SetStreamHubGlobalOverride(&forceTrue))
 	require.True(t, useStreamHub())
 
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "false")
-	require.True(t, useStreamHub(), "override=true must win over env var=false")
-
 	require.NoError(t, cfg.SetStreamHubGlobalOverride(nil))
-	require.False(t, useStreamHub(), "clearing the override must revert resolution to the env var")
+	require.True(t, useStreamHub(), "clearing the override must revert to the on-by-default value")
 }
 
-// TestUseStreamHub_should_GateGlobalOverride_On_RollbackRehearsal (Story
-// 3.3.4) verifies forcing the override to true is refused, same as the env
-// var path, when no rollback rehearsal has been recorded.
-func TestUseStreamHub_should_GateGlobalOverride_On_RollbackRehearsal(t *testing.T) {
+// clearStreamHubOverrideForTest ensures no persisted "stream_hub" override
+// leaks between tests in this package binary run.
+func clearStreamHubOverrideForTest(t *testing.T) {
+	t.Helper()
 	cfg := config.LoadConfig()
-	cfg.RollbackRehearsalCompletedAt = nil
-	require.NoError(t, config.SaveConfig(cfg))
-
-	forceTrue := true
-	require.NoError(t, cfg.SetStreamHubGlobalOverride(&forceTrue))
-	t.Cleanup(func() { _ = cfg.SetStreamHubGlobalOverride(nil) })
-
-	require.False(t, useStreamHub(), "override=true must still be refused without a recorded rollback rehearsal")
+	require.NoError(t, cfg.SetStreamHubGlobalOverride(nil))
+	t.Cleanup(func() {
+		_ = config.LoadConfig().SetStreamHubGlobalOverride(nil)
+	})
 }
 
 // getOrCreateHubForTest wraps hubRegistry.GetOrCreate and registers
@@ -1012,6 +956,405 @@ func TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFa
 	errData := terminalData.GetError()
 	require.NotNil(t, errData, "expected a TerminalData_Error frame when both the hub path and legacy fallback fail")
 	require.Equal(t, HubStartFailedErrorCode, errData.Code)
+
+	// handleTmuxRestoreFailure's whole purpose is to move a session with a
+	// missing working directory to PermanentlyFailed (so "Retry now" is
+	// reachable) instead of leaving it Active with a terminal that can never
+	// reconnect — this scenario is exactly the ErrWorkDirMissing path
+	// (streamViaControlMode's fallback check above), so assert on it here
+	// rather than only on the unrelated HubStartFailedErrorCode frame.
+	require.Equal(t, session.PermanentlyFailed, inst.Snapshot().Status,
+		"handleTmuxRestoreFailure must mark the session PermanentlyFailed when its working directory is missing")
+}
+
+// TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButTmuxAlive
+// is the PR #693 review's requested regression test for streamViaHub's other
+// new branch alongside the failure test above: Instance.Started()==false
+// (e.g. Instance.Start() never ran, or raced/failed in
+// server/dependencies.go's boot-time restart loop) while the underlying tmux
+// session is genuinely alive. Before commits 787a61165/69a43aa92, this left
+// Started() wedged at false forever, so every subsequent capture/resize on
+// the hub streaming path returned streamhub.ErrSessionNotStarted
+// indefinitely (see MarkStartedIfTmuxAlive's doc comment). This test drives
+// streamViaHub itself (not just MarkStartedIfTmuxAlive in isolation, which
+// session/instance_mark_started_test.go already covers) through that branch
+// and asserts streaming actually proceeds: the connection reaches a
+// successful attach (no HubStartFailedErrorCode frame), Started() flips
+// true, and a direct capture call no longer reports ErrSessionNotStarted.
+func TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButTmuxAlive(t *testing.T) {
+	// Instance.StartControlMode() (session/instance_tmux.go) resolves this
+	// session's StreamOwnershipLock via its own effectiveStreamHubFlag()
+	// read, before streamViaHub ever reaches HubRegistry.GetOrCreate's own
+	// AcquireAndResolveExpecting(true, PathHubOwned, ...) call. Without the
+	// global default resolving true here, StartControlMode resolves
+	// ownership to PathLegacyPerConnection first, and GetOrCreate's later
+	// PathHubOwned expectation then conflicts with it — sending this
+	// connection down the legacy fallback instead of the hub-owned path this
+	// test means to exercise.
+	clearStreamHubOverrideForTest(t)
+	require.True(t, useStreamHub(), "flag must resolve PathHubOwned for this test's premise to hold")
+
+	dir := t.TempDir()
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "hub-self-heal-" + t.Name(),
+		Path:  dir,
+	})
+	require.NoError(t, err)
+
+	snap := inst.Snapshot()
+	tmuxPrefix := snap.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	tmuxSessionName := tmux.NewSessionName(snap.Title, tmuxPrefix).String()
+
+	// Same fake-executor setup as
+	// TestStreamViaHub_should_SendHubStartFailedError_...: existsName makes
+	// DoesSessionExistNoCache() report the session alive on the first call
+	// (streamViaHub's own tmux-alive check), which is all this test needs —
+	// it never reaches a second call.
+	_ = inst.GetTmuxSessionName()
+	fakeExec := &listSessionsFakeExecutor{existsName: tmuxSessionName}
+	inst.SetTmuxSession(tmux.NewTmuxSessionWithDeps(snap.Title, "true", tmux.MakePtyFactory(), fakeExec))
+
+	// SetTmuxSession's own side effect (session/instance_tmux.go, "for
+	// testing purposes") flips started true purely because it was handed a
+	// non-nil session — that's not this test's premise. Force the instance
+	// back to "tmux attached but Instance.Start() never completed", using
+	// the same exported recovery path production code already relies on for
+	// a stale instance (RecoverFromStopped's doc comment): flip Status to
+	// Stopped (a plain exported-field write, bypassing the state machine,
+	// same as the session-level self-heal tests' bare &Instance{} literals)
+	// and let RecoverFromStopped reset it to Creating with started=false.
+	inst.Status = session.Stopped
+	inst.RecoverFromStopped()
+	require.False(t, inst.Started(), "test premise requires Started()==false before streamViaHub runs")
+	require.Equal(t, session.Creating, inst.Snapshot().Status)
+
+	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	// No TargetCols/TargetRows, matching the sibling failure test above —
+	// this keeps the handshake from also exercising RequestResize, which is
+	// unrelated to the self-heal branch under test here.
+	handshake := &sessionv1.TerminalData{
+		Data: &sessionv1.TerminalData_CurrentPaneRequest{
+			CurrentPaneRequest: &sessionv1.CurrentPaneRequest{},
+		},
+	}
+	handshakeBytes, err := proto.Marshal(handshake)
+	require.NoError(t, err)
+	serverStream.requestMsg = handshakeBytes
+
+	// Unlike the sibling failure test above, this test's instance genuinely
+	// has Started()==false when streamViaHub runs, so it takes the
+	// waitForInstanceStartedEvent branch (connectrpc_websocket.go:1765),
+	// which calls h.sessionService.GetEventBus() unconditionally — a nil
+	// *SessionService (as the sibling test passes) panics there. A real,
+	// bare SessionService with no listener wired to this hand-built instance
+	// is enough: no EventSessionUpdated for it will ever arrive, so the wait
+	// simply runs out its startupWaitTimeout and falls through to the
+	// Started()-direct-check fallback, exactly like a nil event bus would,
+	// just after a real (bounded) wait instead of returning instantly.
+	storage := createTestStorage(t)
+	bus := events.NewEventBus(16)
+	t.Cleanup(bus.Close)
+	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
+	h := NewConnectRPCWebSocketHandler(svc, nil, nil)
+
+	streamErrCh := make(chan error, 1)
+	go func() { streamErrCh <- h.streamViaHub(serverStream, inst) }()
+
+	// The hub-owned path's initial-snapshot send (line ~1897) is the first
+	// frame this connection ever receives, so successfully reading it proves
+	// streamViaHub got past the self-heal branch, StartControlMode, and
+	// HubRegistry.GetOrCreate instead of getting stuck retrying
+	// ErrSessionNotStarted or bailing out with a HubStartFailedErrorCode
+	// frame (the sibling failure test's assertion).
+	// startupWaitTimeout (2s) elapses before the self-heal branch runs, so
+	// this deadline needs headroom beyond that.
+	require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(10*time.Second)))
+	env := readEnvelopeFromClient(t, clientConn)
+	var terminalData sessionv1.TerminalData
+	require.NoError(t, proto.Unmarshal(env.Data, &terminalData))
+	require.Nil(t, terminalData.GetError(), "must not surface a hub-start-failed error frame")
+
+	require.True(t, inst.Started(), "self-heal must flip Started() to true before streaming proceeds")
+	require.Equal(t, session.Active, inst.Snapshot().Status)
+
+	// The regression this test guards: before the self-heal branch existed,
+	// Started() stayed false forever, so every capture/resize call returned
+	// streamhub.ErrSessionNotStarted on every single attempt (see
+	// MarkStartedIfTmuxAlive's doc comment). It's not ErrSessionNotStarted
+	// any more — the fake executor's Output/Run methods are otherwise
+	// unimplemented (listSessionsFakeExecutor's doc comment), so this
+	// specific error is expected in this fixture, but it proves the call was
+	// actually attempted rather than short-circuited by the stale started
+	// flag.
+	_, captureErr := inst.CapturePaneContentRaw()
+	require.Error(t, captureErr, "expected the fake executor's Output to fail (not a real tmux server), just not with ErrSessionNotStarted")
+	require.NotErrorIs(t, captureErr, streamhub.ErrSessionNotStarted,
+		"capture must no longer report ErrSessionNotStarted once self-heal has run")
+
+	require.NoError(t, clientConn.Close())
+
+	select {
+	case <-streamErrCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("streamViaHub did not return after client disconnect")
+	}
+}
+
+// deadThenAliveExecutor is a listSessionsFakeExecutor variant with the
+// opposite call-count answer order: absent on the first call (so
+// IsBackendProcessAlive's no-cache check sees the backend as dead, driving
+// ensureHubBackendAlive/ensureControlModeStarted into their restore branch)
+// and present on every call after that (so RestoreWithWorkDir's own
+// DoesSessionExist retry loop finds the session on its very first attempt,
+// with no exponential-backoff sleep). Deterministic by call count, same
+// technique as listSessionsFakeExecutor's own doc comment explains.
+type deadThenAliveExecutor struct {
+	mu         sync.Mutex
+	calls      int
+	existsName string
+}
+
+func (e *deadThenAliveExecutor) CombinedOutput(_ *exec.Cmd) ([]byte, error) {
+	e.mu.Lock()
+	first := e.calls == 0
+	e.calls++
+	e.mu.Unlock()
+	if first {
+		return []byte("some-other-session\n"), nil
+	}
+	return []byte(e.existsName + "\n"), nil
+}
+
+func (e *deadThenAliveExecutor) Run(_ *exec.Cmd) error {
+	return fmt.Errorf("deadThenAliveExecutor: Run is unsupported")
+}
+
+func (e *deadThenAliveExecutor) Output(_ *exec.Cmd) ([]byte, error) {
+	return nil, fmt.Errorf("deadThenAliveExecutor: Output is unsupported")
+}
+
+// alwaysAbsentExecutor answers every list-sessions call as if no session
+// (and no server) exists — used to drive RestoreWithWorkDir's retry loop to
+// genuine exhaustion so it falls through to ValidateWorkDir's fast failure
+// rather than ever finding a session.
+type alwaysAbsentExecutor struct{}
+
+func (alwaysAbsentExecutor) CombinedOutput(_ *exec.Cmd) ([]byte, error) {
+	return nil, fmt.Errorf("no server running on socket (fake: session absent)")
+}
+func (alwaysAbsentExecutor) Run(_ *exec.Cmd) error { return fmt.Errorf("unsupported") }
+func (alwaysAbsentExecutor) Output(_ *exec.Cmd) ([]byte, error) {
+	return nil, fmt.Errorf("unsupported")
+}
+
+// fakePtyFactory is a tmux.PtyFactory test double that never forks a real
+// subprocess (this sandboxed test environment does not permit it — see
+// session_service_test.go's newRealControllerForTest doc comment for the
+// same constraint). On success, StartWithSize hands back a genuine PTY pair
+// via github.com/creack/pty's Open (which allocates the master/slave devices
+// directly rather than forking) and an unstarted *exec.Cmd — safe because
+// RestoreWithWorkDir only ever calls cmd.Wait() on it (never cmd.Start()),
+// and Wait on a never-started Cmd just returns "exec: not started" instead
+// of spawning anything.
+type fakePtyFactory struct {
+	startErr error
+
+	mu      sync.Mutex
+	created []*os.File
+}
+
+func (f *fakePtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
+	return f.StartWithSize(cmd, nil)
+}
+
+func (f *fakePtyFactory) StartWithSize(_ *exec.Cmd, _ *pty.Winsize) (*os.File, *exec.Cmd, error) {
+	if f.startErr != nil {
+		return nil, nil, f.startErr
+	}
+	master, slave, err := pty.Open()
+	if err != nil {
+		return nil, nil, err
+	}
+	_ = slave.Close()
+	f.mu.Lock()
+	f.created = append(f.created, master)
+	f.mu.Unlock()
+	return master, exec.Command("true"), nil
+}
+
+func (f *fakePtyFactory) Close() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, file := range f.created {
+		_ = file.Close()
+	}
+	f.created = nil
+}
+
+// newTestTmuxInstance builds a real *session.Instance whose tmux backend is
+// wired to the given fake executor/PTY factory. path is the instance's
+// working directory — pass a never-created path (e.g.
+// filepath.Join(t.TempDir(), "never-created")) to make a subsequent restore
+// fail fast via tmux.ErrWorkDirMissing instead of a real temp dir.
+func newTestTmuxInstance(t *testing.T, title, path string, exec executorIface, ptyFactory tmux.PtyFactory) (*session.Instance, string) {
+	t.Helper()
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: title,
+		Path:  path,
+	})
+	require.NoError(t, err)
+
+	snap := inst.Snapshot()
+	tmuxPrefix := snap.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	tmuxSessionName := tmux.NewSessionName(snap.Title, tmuxPrefix).String()
+
+	_ = inst.GetTmuxSessionName()
+	inst.SetTmuxSession(tmux.NewTmuxSessionWithDeps(snap.Title, "true", ptyFactory, exec))
+	return inst, tmuxSessionName
+}
+
+// executorIface is the minimal shape NewTmuxSessionWithDeps requires of its
+// cmdExec argument (session/tmux's executor.Executor), spelled out locally so
+// newTestTmuxInstance can accept any of this file's fake executors without
+// importing the executor package just for the type name.
+type executorIface interface {
+	CombinedOutput(*exec.Cmd) ([]byte, error)
+	Run(*exec.Cmd) error
+	Output(*exec.Cmd) ([]byte, error)
+}
+
+// TestEnsureHubBackendAlive covers ensureHubBackendAlive's four
+// restore-decision branches (PR #741 review gap: zero prior test coverage of
+// either ensureHubBackendAlive or ensureControlModeStarted's restore
+// decision) using a real *session.Instance/*tmux.TmuxSession wired to fake
+// executor/PTY-factory test doubles rather than a real tmux server.
+func TestEnsureHubBackendAlive(t *testing.T) {
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+
+	t.Run("backend alive: no restore attempted, returns alive immediately", func(t *testing.T) {
+		fakeExec := &listSessionsFakeExecutor{}
+		inst, tmuxSessionName := newTestTmuxInstance(t, "ensure-hub-alive-"+t.Name(), t.TempDir(), fakeExec, &fakePtyFactory{})
+		fakeExec.existsName = tmuxSessionName
+
+		alive, err := h.ensureHubBackendAlive(inst, "sess")
+
+		require.NoError(t, err)
+		require.True(t, alive)
+		require.Equal(t, 1, fakeExec.calls, "IsBackendProcessAlive's own no-cache check must be the only list-sessions call — restore must not be attempted when the backend is already alive")
+	})
+
+	t.Run("backend dead, restore succeeds, PTY attaches: ends up alive", func(t *testing.T) {
+		fakeExec := &deadThenAliveExecutor{}
+		ptyFactory := &fakePtyFactory{}
+		t.Cleanup(ptyFactory.Close)
+		inst, tmuxSessionName := newTestTmuxInstance(t, "ensure-hub-restore-ok-"+t.Name(), t.TempDir(), fakeExec, ptyFactory)
+		fakeExec.existsName = tmuxSessionName
+
+		alive, err := h.ensureHubBackendAlive(inst, "sess")
+
+		require.NoError(t, err)
+		require.True(t, alive, "restore succeeding and the PTY attaching must report alive")
+	})
+
+	t.Run("backend dead, restore succeeds but PTY attach fails: ends up not alive, no error", func(t *testing.T) {
+		fakeExec := &deadThenAliveExecutor{}
+		ptyFactory := &fakePtyFactory{startErr: fmt.Errorf("fake PTY attach failure")}
+		inst, tmuxSessionName := newTestTmuxInstance(t, "ensure-hub-restore-pty-fail-"+t.Name(), t.TempDir(), fakeExec, ptyFactory)
+		fakeExec.existsName = tmuxSessionName
+
+		alive, err := h.ensureHubBackendAlive(inst, "sess")
+
+		require.NoError(t, err, "a restore that succeeds but never gets a PTY attached must not be treated as an error (RestoreProcess itself always returns nil here)")
+		require.False(t, alive, "PTY attach failing after a successful restore must not be treated as alive")
+	})
+
+	t.Run("backend dead, restore itself fails: error propagated", func(t *testing.T) {
+		missingDir := filepath.Join(t.TempDir(), "never-created")
+		inst, _ := newTestTmuxInstance(t, "ensure-hub-restore-fail-"+t.Name(), missingDir, alwaysAbsentExecutor{}, tmux.MakePtyFactory())
+
+		alive, restoreErr := h.ensureHubBackendAlive(inst, "sess")
+
+		require.Error(t, restoreErr, "a restore that genuinely fails (missing work dir) must propagate an error")
+		require.ErrorIs(t, restoreErr, tmux.ErrWorkDirMissing)
+		require.False(t, alive)
+		require.Equal(t, session.PermanentlyFailed, inst.Snapshot().Status,
+			"handleTmuxRestoreFailure must mark the session PermanentlyFailed when its working directory is missing")
+	})
+}
+
+// TestEnsureControlModeStarted covers ensureControlModeStarted's
+// restore-decision branches using pumpTestController (already defined below)
+// as a SessionStreamer fake, and the same real-instance/fake-tmux-backend
+// seam TestEnsureHubBackendAlive uses above.
+func TestEnsureControlModeStarted(t *testing.T) {
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+
+	t.Run("backend alive: no restore attempted, control mode still started", func(t *testing.T) {
+		fakeExec := &listSessionsFakeExecutor{}
+		inst, tmuxSessionName := newTestTmuxInstance(t, "ensure-control-mode-alive-"+t.Name(), t.TempDir(), fakeExec, &fakePtyFactory{})
+		fakeExec.existsName = tmuxSessionName
+		streamer := &pumpTestController{}
+
+		err := h.ensureControlModeStarted(inst, "sess", streamer)
+
+		require.NoError(t, err)
+		require.Equal(t, int32(1), streamer.startControlModeCalls.Load())
+		require.Equal(t, 1, fakeExec.calls, "restore must not be attempted when the backend is already alive")
+	})
+
+	t.Run("backend dead, restore succeeds: control mode still started", func(t *testing.T) {
+		fakeExec := &deadThenAliveExecutor{}
+		ptyFactory := &fakePtyFactory{}
+		t.Cleanup(ptyFactory.Close)
+		inst, tmuxSessionName := newTestTmuxInstance(t, "ensure-control-mode-restore-ok-"+t.Name(), t.TempDir(), fakeExec, ptyFactory)
+		fakeExec.existsName = tmuxSessionName
+		streamer := &pumpTestController{}
+
+		err := h.ensureControlModeStarted(inst, "sess", streamer)
+
+		require.NoError(t, err)
+		require.Equal(t, int32(1), streamer.startControlModeCalls.Load(), "control mode must still start after a successful restore")
+	})
+
+	t.Run("backend dead, restore fails: error propagated, control mode never started", func(t *testing.T) {
+		missingDir := filepath.Join(t.TempDir(), "never-created")
+		inst, _ := newTestTmuxInstance(t, "ensure-control-mode-restore-fail-"+t.Name(), missingDir, alwaysAbsentExecutor{}, tmux.MakePtyFactory())
+		streamer := &pumpTestController{}
+
+		startErr := h.ensureControlModeStarted(inst, "sess", streamer)
+
+		require.Error(t, startErr)
+		require.ErrorIs(t, startErr, tmux.ErrWorkDirMissing)
+		require.Equal(t, int32(0), streamer.startControlModeCalls.Load(), "control mode must never start once restore itself has failed")
+	})
+}
+
+// TestEndStreamErrorCode_should_UseFailedPrecondition_When_ErrIsErrWorkDirMissing
+// and its sibling below cover endStreamErrorCode directly (extracted from
+// sendEndStreamError specifically so this selection is testable without a
+// real WebSocket stream) — the frontend's isWorktreeMissingError depends on
+// "failed_precondition" being emitted only for this specific failure.
+func TestEndStreamErrorCode_should_UseFailedPrecondition_When_ErrIsErrWorkDirMissing(t *testing.T) {
+	t.Parallel()
+	wrapped := fmt.Errorf("tmux session missing and restore failed: %w", tmux.ErrWorkDirMissing)
+
+	require.Equal(t, "failed_precondition", endStreamErrorCode(wrapped))
+}
+
+func TestEndStreamErrorCode_should_UseInternal_When_ErrIsUnrelated(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "internal", endStreamErrorCode(errors.New("boom")))
 }
 
 // TestHubRegistry_should_CallSubscribeControlModeUpdatesExactlyOnce_When_MultipleSubscribersAttach
@@ -1034,7 +1377,7 @@ func TestHubRegistry_should_CallSubscribeControlModeUpdatesExactlyOnce_When_Mult
 		hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{})
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return atomic.LoadInt32(&controller.subscribeCalls) >= 1
 	}, time.Second, 5*time.Millisecond, "expected the pump goroutine to subscribe at least once")
 	require.EqualValues(t, 1, atomic.LoadInt32(&controller.subscribeCalls),
@@ -1056,6 +1399,13 @@ type pumpTestController struct {
 	// resubscribeUpdates, when non-nil, is returned from the second
 	// SubscribeControlModeUpdates call onward instead of updates.
 	resubscribeUpdates chan []byte
+
+	// startControlModeCalls counts StartControlMode invocations —
+	// TestPumpControlModeOutputIntoHub_should_RestartControlMode_When_ResubscribingAfterCrash
+	// asserts the pump actually attempts to restart the dead process on every
+	// (re)subscribe, not just re-register a listener on it.
+	startControlModeCalls atomic.Int32
+	startControlModeErr   error
 }
 
 func (c *pumpTestController) SetWindowSizeContext(context.Context, int, int) error { return nil }
@@ -1065,6 +1415,10 @@ func (c *pumpTestController) CapturePaneContentRawContext(context.Context) (stre
 }
 func (c *pumpTestController) GetPaneCursorPosition() (x, y int, err error) {
 	return 0, 0, nil
+}
+func (c *pumpTestController) StartControlMode() error {
+	c.startControlModeCalls.Add(1)
+	return c.startControlModeErr
 }
 func (c *pumpTestController) StopControlMode() error               { return nil }
 func (c *pumpTestController) UnsubscribeControlModeUpdates(string) {}
@@ -1119,7 +1473,7 @@ func TestPumpControlModeOutputIntoHub_should_FlushOpportunistically_When_Channel
 		close(controller.updates)
 	})
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		for _, frame := range transport.ReceivedFrames() {
 			if bytes.Contains(frame, []byte("frame-3;")) {
 				return true
@@ -1165,7 +1519,7 @@ func TestPumpControlModeOutputIntoHub_should_ResubscribeAndKeepDelivering_When_C
 	// by closing its channel — control mode's own exit handler does the same
 	// to every subscriber when the process dies.
 	controller.updates <- []byte("before-crash;")
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return bytes.Contains(bytes.Join(transport.ReceivedFrames(), nil), []byte("before-crash;"))
 	}, time.Second, 5*time.Millisecond, "expected the pre-crash frame to be delivered")
 	close(controller.updates)
@@ -1173,12 +1527,24 @@ func TestPumpControlModeOutputIntoHub_should_ResubscribeAndKeepDelivering_When_C
 	// Control mode "restarts": the pump must resubscribe (picking up
 	// resubscribeUpdates, per the fake's second-call behavior) and keep
 	// delivering — not have exited for good when updates closed above.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return controller.subscribeCalls.Load() >= 2
 	}, time.Second, 5*time.Millisecond, "expected the pump to resubscribe after its channel closed instead of exiting for good")
 
+	// 2026-09-01 regression: resubscribing alone is not recovery.
+	// SubscribeControlModeUpdates only registers a listener on whatever
+	// control-mode process already exists (or, if it crashed, immediately
+	// returns a pre-closed channel forever) — it never starts a fresh one.
+	// Before this fix, this loop spun on pumpControlModeResubscribeDelay
+	// forever after a real crash, permanently starving the hub (see
+	// StartControlMode's doc comment on session_controller.go). The pump
+	// must call StartControlMode on every (re)subscribe attempt, not just
+	// the first.
+	require.GreaterOrEqual(t, controller.startControlModeCalls.Load(), int32(2),
+		"expected the pump to call StartControlMode on every (re)subscribe attempt, not just the first")
+
 	controller.resubscribeUpdates <- []byte("after-restart;")
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return bytes.Contains(bytes.Join(transport.ReceivedFrames(), nil), []byte("after-restart;"))
 	}, time.Second, 5*time.Millisecond, "expected the post-restart frame to be delivered via the resubscribed channel")
 }
@@ -1215,7 +1581,7 @@ func TestHubRegistry_should_RestartPump_When_ReconnectingAfterFullTeardown(t *te
 	subID1 := hub.AttachSubscriber(transport1, streamhub.SubscriberCapability{})
 
 	controller.updates <- []byte("first-connection;")
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return bytes.Contains(bytes.Join(transport1.ReceivedFrames(), nil), []byte("first-connection;"))
 	}, time.Second, 5*time.Millisecond, "expected the first connection's frame to be delivered")
 
@@ -1241,7 +1607,7 @@ func TestHubRegistry_should_RestartPump_When_ReconnectingAfterFullTeardown(t *te
 	// state, so this uses them as a poll-and-release probe: claim, observe
 	// success, release immediately so the real reconnect below can claim it
 	// for real.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		if hub.TryStartPump() {
 			hub.MarkPumpExited()
 			return true
@@ -1260,7 +1626,7 @@ func TestHubRegistry_should_RestartPump_When_ReconnectingAfterFullTeardown(t *te
 	hub2.AttachSubscriber(transport2, streamhub.SubscriberCapability{})
 
 	controller.resubscribeUpdates <- []byte("after-reconnect;")
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return bytes.Contains(bytes.Join(transport2.ReceivedFrames(), nil), []byte("after-reconnect;"))
 	}, time.Second, 5*time.Millisecond, "expected live output to resume after reconnecting to a fully-torn-down hub")
 }
@@ -1276,12 +1642,7 @@ func TestHubRegistry_should_RestartPump_When_ReconnectingAfterFullTeardown(t *te
 // SetWindowSize/ResizePTY/CapturePaneContent called by anything in this
 // epic's new code path (only AttachSubscriber's bookkeeping runs).
 func TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHubOwnedResolved(t *testing.T) {
-	// Story 3.3.1/3.3.2: useStreamHub() now refuses to resolve the global
-	// default to true unless a rollback rehearsal has been recorded
-	// (config.RollbackRehearsalCompletedAt) — record one here so this
-	// test's premise (the global default resolving true) still holds.
-	recordRollbackRehearsalCompletedForTest(t)
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
+	clearStreamHubOverrideForTest(t)
 	require.True(t, useStreamHub(), "flag must resolve PathHubOwned for this test's premise to hold")
 
 	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
@@ -1292,7 +1653,7 @@ func TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHu
 	serverStream, _, cleanup := createTestWebSocketPair(t)
 	defer cleanup()
 
-	transport := NewWebSocketTransport(serverStream)
+	transport := NewWebSocketTransport(serverStream, "path-hub-owned-test")
 	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{CanResize: true, CanWrite: true})
 	transport.BindSubscriber(hub, id)
 
@@ -1656,7 +2017,7 @@ func TestRunInputReadLoopExitsPromptlyOnConnectionClose(t *testing.T) {
 	onScrollbackRequest := func(startLine, endLine string) (string, error) {
 		return "", nil
 	}
-	onCurrentPaneRequest := func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+	onCurrentPaneRequest := func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 		return &sessionv1.TerminalOutput{}, nil
 	}
 
@@ -1665,7 +2026,17 @@ func TestRunInputReadLoopExitsPromptlyOnConnectionClose(t *testing.T) {
 	done := make(chan struct{})
 	var resizeSettling atomic.Bool
 	go func() {
-		runInputReadLoop(serverStream, doneChan, errChan, "test-session", onInput, onResize, onScrollbackRequest, onCurrentPaneRequest, &resizeSettling)
+		runInputReadLoop(inputReadLoopParams{
+			stream:               serverStream,
+			doneChan:             doneChan,
+			errChan:              errChan,
+			sessionID:            "test-session",
+			onInput:              onInput,
+			onResize:             onResize,
+			onScrollbackRequest:  onScrollbackRequest,
+			onCurrentPaneRequest: onCurrentPaneRequest,
+			resizeSettling:       &resizeSettling,
+		})
 		close(done)
 	}()
 
@@ -1802,6 +2173,15 @@ func (f *fakePanePTY) ResizePTY(cols, rows int) error {
 	return f.resizePTYErr
 }
 
+// ResizePTYContext mirrors ResizePTY for this fake, additionally recording ctx
+// seen (like GetPaneDimensionsPriority/CapturePaneContentRawPriority above) so
+// tests can assert the resize step shares handleCurrentPaneRequest's fast-lane
+// ctx rather than running unbounded.
+func (f *fakePanePTY) ResizePTYContext(ctx context.Context, cols, rows int) error {
+	f.fastLaneCtxsSeen = append(f.fastLaneCtxsSeen, ctx)
+	return f.ResizePTY(cols, rows)
+}
+
 func (f *fakePanePTY) RefreshTmuxClient() error {
 	f.refreshTmuxCalled++
 	return f.refreshTmuxErr
@@ -1828,13 +2208,13 @@ func (f *fakePanePTY) GetPaneCursorPosition() (int, int, error) {
 // CurrentPaneRequest branch (and both control-mode call sites) delegate to, so this covers
 // all three integration points at once.
 func TestStreamViaTmuxCapturePane_should_EchoResyncIdOnTerminalOutput_When_RequestCarriesResyncId(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, true))
 
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{EchoResyncID: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -1850,13 +2230,13 @@ func TestStreamViaTmuxCapturePane_should_EchoResyncIdOnTerminalOutput_When_Reque
 // the "never invent an ID server-side" requirement: a request with no resync_id set
 // must produce a TerminalOutput with an empty ResyncId, not a generated one.
 func TestHandleCurrentPaneRequest_should_LeaveResyncIdEmpty_When_RequestOmitsIt(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, true))
 
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{EchoResyncID: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -1870,13 +2250,13 @@ func TestHandleCurrentPaneRequest_should_LeaveResyncIdEmpty_When_RequestOmitsIt(
 // terminal:resync-correlation-id. With the flag off (its default), a request carrying a
 // resync_id must still get back an empty ResyncId, matching pre-project behavior exactly.
 func TestHandleCurrentPaneRequest_should_NotEchoResyncId_When_CorrelationIdFlagIsOff(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, false))
 
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -1892,14 +2272,14 @@ func TestHandleCurrentPaneRequest_should_NotEchoResyncId_When_CorrelationIdFlagI
 // client never receives an ID to compare against at all in that case) — this is the only
 // place that specific gap is observable, so it must be logged here.
 func TestHandleCurrentPaneRequest_should_LogDebugWhenResyncIdNotEchoed_When_CorrelationIdFlagIsOff(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, false))
 
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
 
 	restore := captureInfoLog()
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{})
 	logOutput := restore()
 
 	require.NoError(t, err)
@@ -1920,7 +2300,7 @@ func int32Ptr(v int32) *int32 { return &v }
 // called 0 times — and the response must capture at the pane's pre-existing dimensions even
 // though they differ from the request's target_cols/target_rows.
 func TestHandleCurrentPaneRequest_should_SkipResizeAndSigwinchLoop_When_StaleDimensionsTrueAndFlagOn(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{
@@ -1929,7 +2309,7 @@ func TestHandleCurrentPaneRequest_should_SkipResizeAndSigwinchLoop_When_StaleDim
 		StaleDimensions: true,
 	}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -1955,7 +2335,7 @@ func TestHandleCurrentPaneRequest_should_SkipResizeAndSigwinchLoop_When_StaleDim
 // slow path must run unchanged (ResizePTY once, RefreshTmuxClient 3 times) whenever either
 // StaleDimensions is false or the skip option is off — the skip must never fire on its own.
 func TestHandleCurrentPaneRequest_should_RunFullSlowPath_When_StaleDimensionsFalseOrFlagOff(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	testCases := []struct {
 		name            string
@@ -1988,7 +2368,7 @@ func TestHandleCurrentPaneRequest_should_RunFullSlowPath_When_StaleDimensionsFal
 				StaleDimensions: tc.staleDimensions,
 			}
 
-			_, err := handleCurrentPaneRequest("test-session", target, req, tc.opts)
+			_, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, tc.opts)
 			if err != nil {
 				t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 			}
@@ -2014,7 +2394,7 @@ func TestHandleCurrentPaneRequest_should_RunFullSlowPath_When_StaleDimensionsFal
 // confirms the skip path leaves the pane captured at its existing dimensions rather than the
 // request's (stale, per the client) target dimensions.
 func TestStreamViaTmuxCapturePane_should_CaptureAtExistingPaneDimensions_When_StaleDimensionsTrueAndFlagOn(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	target := &fakePanePTY{captureContent: "existing-dimension-content", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{
@@ -2023,7 +2403,7 @@ func TestStreamViaTmuxCapturePane_should_CaptureAtExistingPaneDimensions_When_St
 		StaleDimensions: true,
 	}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -2053,7 +2433,7 @@ func TestRunInputReadLoop_should_InvokeOnCurrentPaneRequestOnce_When_CurrentPane
 	var mu sync.Mutex
 	var invocations int
 	var lastReq *sessionv1.CurrentPaneRequest
-	onCurrentPaneRequest := func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+	onCurrentPaneRequest := func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		invocations++
@@ -2069,7 +2449,17 @@ func TestRunInputReadLoop_should_InvokeOnCurrentPaneRequestOnce_When_CurrentPane
 	done := make(chan struct{})
 	var resizeSettling atomic.Bool
 	go func() {
-		runInputReadLoop(serverStream, doneChan, errChan, "test-session", onInput, onResize, onScrollbackRequest, onCurrentPaneRequest, &resizeSettling)
+		runInputReadLoop(inputReadLoopParams{
+			stream:               serverStream,
+			doneChan:             doneChan,
+			errChan:              errChan,
+			sessionID:            "test-session",
+			onInput:              onInput,
+			onResize:             onResize,
+			onScrollbackRequest:  onScrollbackRequest,
+			onCurrentPaneRequest: onCurrentPaneRequest,
+			resizeSettling:       &resizeSettling,
+		})
 		close(done)
 	}()
 	defer func() {
@@ -2516,7 +2906,7 @@ func TestAllSnapshotSendsUseCursorSync(t *testing.T) {
 // replies, each still carrying its own request's resync_id — batching must not collapse
 // or merge the individual responses.
 func TestHandleBatchedCurrentPaneRequest_should_DispatchNIndividuallyTaggedResponses_When_BatchingFlagOn(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, true))
 
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
@@ -2528,8 +2918,8 @@ func TestHandleBatchedCurrentPaneRequest_should_DispatchNIndividuallyTaggedRespo
 		},
 	}
 
-	onCurrentPaneRequest := func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
+	onCurrentPaneRequest := func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest(ctx, "test-session", target, req, ResyncOptions{EchoResyncID: true})
 	}
 
 	outputs := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
@@ -2553,7 +2943,7 @@ func TestHandleBatchedCurrentPaneRequest_should_DispatchNIndividuallyTaggedRespo
 // coalesced requests' captures fails — the failure must be skipped (logged), not corrupt
 // or misattribute another sibling's resync_id.
 func TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_When_ThreeCoalescedRequestsHaveDistinctResyncIds(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalResyncCorrelationIDFlagName, true))
 
 	batch := &sessionv1.BatchedCurrentPaneRequest{
@@ -2566,12 +2956,12 @@ func TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_Wh
 
 	// bravo's underlying capture fails; alpha and charlie must still come back correctly
 	// correlated to their own resync_id, with bravo simply absent from the results.
-	onCurrentPaneRequest := func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+	onCurrentPaneRequest := func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 		if req.GetResyncId() == "bravo" {
 			return nil, fmt.Errorf("simulated capture failure")
 		}
 		target := &fakePanePTY{captureContent: req.GetResyncId() + "-content", cols: 80, rows: 24}
-		return handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
+		return handleCurrentPaneRequest(ctx, "test-session", target, req, ResyncOptions{EchoResyncID: true})
 	}
 
 	outputs := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
@@ -2646,7 +3036,7 @@ func setOnlyResyncFlag(t *testing.T, flagName string) {
 // path always runs (never skipped), the default (non-fast-lane) capture/refresh methods are
 // used, and the response envelope carries no compression flag.
 func TestFullResyncRoundTrip_should_MatchPreProjectBaseline_When_AllSevenFlagsOff(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	setAllTerminalResyncFlags(t, false)
 
 	stream, clientConn, cleanup := createTestWebSocketPair(t)
@@ -2659,8 +3049,8 @@ func TestFullResyncRoundTrip_should_MatchPreProjectBaseline_When_AllSevenFlagsOf
 		TargetRows: int32Ptr(40),
 	}
 
-	onCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest("test-session", target, r, currentResyncOptions())
+	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptions())
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -2718,7 +3108,7 @@ func TestFullResyncRoundTrip_should_MatchPreProjectBaseline_When_AllSevenFlagsOf
 // CompressedFlag must still be unset here — this assertion documents the "flag on but
 // payload too small" case, not the compression primitive's absence.
 func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsOn(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	setAllTerminalResyncFlags(t, true)
 
 	stream, clientConn, cleanup := createTestWebSocketPair(t)
@@ -2732,8 +3122,8 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 		StaleDimensions: true,
 	}
 
-	onCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest("test-session", target, r, currentResyncOptions())
+	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptions())
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -2779,8 +3169,8 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 	// for the dedicated test. Exercised here too so "all seven simultaneously" actually
 	// covers it in this same all-flags-on context, not only in isolation.
 	batchTarget := &fakePanePTY{captureContent: "batch-content", cols: 80, rows: 24}
-	batchOnCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest("test-session", batchTarget, r, currentResyncOptions())
+	batchOnCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest(ctx, "test-session", batchTarget, r, currentResyncOptions())
 	}
 	batch := &sessionv1.BatchedCurrentPaneRequest{
 		Requests: []*sessionv1.CurrentPaneRequest{{ResyncId: "batch-1"}, {ResyncId: "batch-2"}},
@@ -2800,7 +3190,7 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 // parseResponseBody/DecompressionStream('gzip') path in websocket-transport.ts) must recover
 // the exact same ResyncId/Data the pre-compression TerminalOutput had.
 func TestHandleCurrentPaneRequest_should_RoundTripCompressedTerminalOutput_When_PayloadExceedsSizeThresholdAndCompressionFlagOn(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	setOnlyResyncFlag(t, terminalResyncCompressionFlagName)
 	// ResyncId is only echoed back when terminal:resync-correlation-id is on (see
 	// handleCurrentPaneRequest's doc comment) — enable it alongside compression so this
@@ -2819,8 +3209,8 @@ func TestHandleCurrentPaneRequest_should_RoundTripCompressedTerminalOutput_When_
 	stream, clientConn, cleanup := createTestWebSocketPair(t)
 	defer cleanup()
 
-	onCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest("test-session", target, r, currentResyncOptions())
+	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptions())
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -2859,7 +3249,7 @@ func TestHandleCurrentPaneRequest_should_RoundTripCompressedTerminalOutput_When_
 // a skip event to a specific session and quantify the time saved without instrumenting a
 // separate metric.
 func TestHandleCurrentPaneRequest_should_LogSkippedSlowPathWithSessionIdAndElapsedMs_When_StaleDimensionSkipFires(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{
@@ -2869,7 +3259,7 @@ func TestHandleCurrentPaneRequest_should_LogSkippedSlowPathWithSessionIdAndElaps
 	}
 
 	restore := captureInfoLog()
-	_, err := handleCurrentPaneRequest("skip-log-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
+	_, err := handleCurrentPaneRequest(context.Background(), "skip-log-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
 	logOutput := restore()
 
 	require.NoError(t, err)
@@ -2890,7 +3280,7 @@ func TestHandleCurrentPaneRequest_should_LogSkippedSlowPathWithSessionIdAndElaps
 // TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFastLaneFlagOn spot
 // checks terminal:resync-exec-gate-fast-lane in isolation.
 func TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFastLaneFlagOn(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	setOnlyResyncFlag(t, terminalResyncExecGateFastLaneFlagName)
 
 	target := &fakePanePTY{captureContent: "fast-lane-content", cols: 80, rows: 24}
@@ -2900,7 +3290,7 @@ func TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFast
 		TargetRows: int32Ptr(40),
 	}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, currentResyncOptions())
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptions())
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -2928,15 +3318,19 @@ func TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFast
 // TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_When_ResizeNeeded
 // is the regression test for the second half of the 2026-08-25 incident (see
 // tmux.ResyncFastLaneTimeout's doc comment): fixing each fast-lane call's individual
-// timeout wasn't enough on its own — handleCurrentPaneRequest makes up to 5 fast-lane
-// calls in sequence for one resize/resync (a dimension check, up to 3 refresh-client
-// calls, a dimension verify, and a final capture), and each one independently minting a
-// fresh 3s budget could still let the *total* elapsed time silently blow well past the
-// client's stall watchdog. This asserts every fast-lane call the request actually
-// triggers received the exact same ctx (by deadline) — a single shared, decreasing
-// budget for the whole operation, not N independent ones.
+// timeout wasn't enough on its own — handleCurrentPaneRequest makes up to 6 fast-lane
+// calls in sequence for one resize/resync (a dimension check, the resize itself, up to 3
+// refresh-client calls, a dimension verify, and a final capture), and each one
+// independently minting a fresh 3s budget could still let the *total* elapsed time
+// silently blow well past the client's stall watchdog. The resize step
+// (ResizePTYContext) was itself missed from this group until a live trace caught a
+// single resync taking 6.46s — double the 3s budget every other call respected — because
+// ResizePTY ran unbounded on the separate default exec-gate pool. This asserts every
+// fast-lane call the request actually triggers received the exact same ctx (by
+// deadline) — a single shared, decreasing budget for the whole operation, not N
+// independent ones.
 func TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_When_ResizeNeeded(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	setOnlyResyncFlag(t, terminalResyncExecGateFastLaneFlagName)
 
 	target := &fakePanePTY{captureContent: "fast-lane-content", cols: 80, rows: 24}
@@ -2945,14 +3339,14 @@ func TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_
 		TargetRows: int32Ptr(40),
 	}
 
-	_, err := handleCurrentPaneRequest("test-session", target, req, currentResyncOptions())
+	_, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptions())
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
 
-	// Dimension check (1) + refresh x3 + dimension verify (1) + final capture (1) = 6.
-	if len(target.fastLaneCtxsSeen) != 6 {
-		t.Fatalf("expected 6 fast-lane calls in the resize-through-verify path, got %d", len(target.fastLaneCtxsSeen))
+	// Dimension check (1) + resize (1) + refresh x3 + dimension verify (1) + final capture (1) = 7.
+	if len(target.fastLaneCtxsSeen) != 7 {
+		t.Fatalf("expected 7 fast-lane calls in the resize-through-verify path, got %d", len(target.fastLaneCtxsSeen))
 	}
 	wantDeadline, ok := target.fastLaneCtxsSeen[0].Deadline()
 	if !ok {
@@ -2974,7 +3368,7 @@ func TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_
 // TestHandleCurrentPaneRequest_should_OnlyEchoResyncId_When_OnlyCorrelationIdFlagOn spot
 // checks terminal:resync-correlation-id in isolation.
 func TestHandleCurrentPaneRequest_should_OnlyEchoResyncId_When_OnlyCorrelationIdFlagOn(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	setOnlyResyncFlag(t, terminalResyncCorrelationIDFlagName)
 
 	target := &fakePanePTY{captureContent: "correlation-content", cols: 80, rows: 24}
@@ -2984,7 +3378,7 @@ func TestHandleCurrentPaneRequest_should_OnlyEchoResyncId_When_OnlyCorrelationId
 		TargetRows: int32Ptr(40),
 	}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, currentResyncOptions())
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptions())
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3010,7 +3404,7 @@ func TestHandleCurrentPaneRequest_should_OnlyEchoResyncId_When_OnlyCorrelationId
 // TestHandleCurrentPaneRequest_should_OnlySkipSlowPath_When_OnlySkipStaleDimensionFlagOn spot
 // checks terminal:resync-skip-stale-dimension-slowpath in isolation.
 func TestHandleCurrentPaneRequest_should_OnlySkipSlowPath_When_OnlySkipStaleDimensionFlagOn(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	setOnlyResyncFlag(t, terminalResyncSkipStaleDimensionSlowpathFlagName)
 
 	target := &fakePanePTY{captureContent: "skip-content", cols: 80, rows: 24}
@@ -3021,7 +3415,7 @@ func TestHandleCurrentPaneRequest_should_OnlySkipSlowPath_When_OnlySkipStaleDime
 		StaleDimensions: true,
 	}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, currentResyncOptions())
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptions())
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3057,7 +3451,7 @@ func TestStreamTerminal_should_PopulateConnectionCount_When_SessionIsPathHubOwne
 	stop := make(chan struct{})
 	defer close(stop)
 
-	transport1 := NewWebSocketTransport(serverStream)
+	transport1 := NewWebSocketTransport(serverStream, "conn-count-test")
 	id1 := hub.AttachSubscriber(transport1, streamhub.SubscriberCapability{CanResize: true})
 	transport1.BindSubscriber(hub, id1)
 	defer hub.DetachSubscriber(id1)
@@ -3086,7 +3480,7 @@ func TestStreamTerminal_should_PopulateConnectionCount_When_SessionIsPathHubOwne
 	// tick) delivers the current count without waiting a full poll interval.
 	require.Equal(t, int32(1), readConnectionCount())
 
-	transport2 := NewWebSocketTransport(serverStream)
+	transport2 := NewWebSocketTransport(serverStream, "conn-count-test")
 	id2 := hub.AttachSubscriber(transport2, streamhub.SubscriberCapability{CanResize: true})
 	transport2.BindSubscriber(hub, id2)
 	defer hub.DetachSubscriber(id2)

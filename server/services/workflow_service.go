@@ -84,10 +84,16 @@ func entWorkflowToProto(w *ent.Workflow) *sessionv1.WorkflowProto {
 	}
 	// Optional retention fields — only set on proto when non-zero (zero = disabled).
 	if w.KeepSessions != 0 {
+		// #nosec G115 -- w.KeepSessions is populated only from the
+		// KeepSessions int32 request field (see CreateWorkflow/UpdateWorkflow
+		// below); converting back to int32 cannot overflow.
 		v := int32(w.KeepSessions)
 		proto.KeepSessions = &v
 	}
 	if w.ArchiveAfterHours != 0 {
+		// #nosec G115 -- w.ArchiveAfterHours is populated only from the
+		// ArchiveAfterHours int32 request field; converting back to int32
+		// cannot overflow.
 		v := int32(w.ArchiveAfterHours)
 		proto.ArchiveAfterHours = &v
 	}
@@ -650,6 +656,8 @@ func (ws *WorkflowService) ArchiveWorkflowSessions(
 	log.Info("[WorkflowService] ArchiveWorkflowSessions completed",
 		"workflow_id", req.Msg.WorkflowId, "archived_count", updated)
 
+	// #nosec G115 -- updated is an ent bulk-update row count bounded by the
+	// local sessions table size, far below int32 range.
 	return connect.NewResponse(&sessionv1.ArchiveWorkflowSessionsResponse{
 		ArchivedCount: int32(updated),
 	}), nil
@@ -695,6 +703,8 @@ func (ws *WorkflowService) DeleteWorkflowFailedSessions(
 	log.Info("[WorkflowService] DeleteWorkflowFailedSessions completed",
 		"workflow_id", req.Msg.WorkflowId, "archived_count", updated)
 
+	// #nosec G115 -- updated is an ent bulk-update row count bounded by the
+	// local sessions table size, far below int32 range.
 	return connect.NewResponse(&sessionv1.DeleteWorkflowFailedSessionsResponse{
 		DeletedCount: int32(updated),
 	}), nil
