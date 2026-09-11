@@ -16,13 +16,16 @@ const SessionVcsContext = createContext<SessionVcsState | null>(null);
 export function SessionVcsProvider({
   sessionId,
   baseUrl,
+  isActive,
   children,
 }: {
   sessionId: string;
   baseUrl: string;
+  /** Forwarded to useSessionVcs — see its doc comment. Defaults to true. */
+  isActive?: boolean;
   children: ReactNode;
 }) {
-  const value = useSessionVcs(sessionId, baseUrl);
+  const value = useSessionVcs(sessionId, baseUrl, isActive);
   return (
     <SessionVcsContext.Provider value={value}>
       {children}
