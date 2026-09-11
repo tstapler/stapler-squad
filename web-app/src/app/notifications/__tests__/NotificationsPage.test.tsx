@@ -36,7 +36,7 @@ jest.mock("@/lib/hooks/useAuditLog", () => ({
   }),
 }));
 
-let mockLiveSessions: Pick<Session, "id">[] = [];
+let mockLiveSessions: Pick<Session, "id" | "title">[] = [];
 let mockHasLoadedSessionsOnce = true;
 jest.mock("@/lib/store", () => ({
   // selectAllSessions/selectSessionsHasLoadedOnce (mocked below) ignore the state argument entirely.
@@ -112,7 +112,7 @@ describe("NotificationsPage — session link fallback (Task 3.3.2b)", () => {
 
   it("keeps the existing live-list route unaffected when the session is still live", () => {
     mockHistory = [makeNotification({ id: "notif-live", sessionId: "sess-live" })];
-    mockLiveSessions = [{ id: "sess-live" }];
+    mockLiveSessions = [{ id: "sess-live", title: "my-session" }];
 
     render(<NotificationsPage />);
     expandRecentActivity();
@@ -134,6 +134,20 @@ describe("NotificationsPage — session link fallback (Task 3.3.2b)", () => {
 
     const link = screen.getByRole("link", { name: "View Session" });
     expect(link).toHaveAttribute("href", "/?session=sess-still-loading");
+  });
+
+  it("routes live when the notification's sessionId is the session's title rather than its stable id", () => {
+    // Regression: reproduced live against a real "stapler-squad-perf" Active session whose
+    // SendNotification-recorded sessionId was the title, not GetStableID()'s UUID — the exact
+    // same title-vs-id split that page.tsx's findSessionById already tolerates for `/?session=`.
+    mockHistory = [makeNotification({ id: "notif-title-id", sessionId: "stapler-squad-perf" })];
+    mockLiveSessions = [{ id: "d5508540-5955-438c-9a6b-2c7ee7b5adee", title: "stapler-squad-perf" }];
+
+    render(<NotificationsPage />);
+    expandRecentActivity();
+
+    const link = screen.getByRole("link", { name: "View Session" });
+    expect(link).toHaveAttribute("href", "/?session=stapler-squad-perf");
   });
 });
 
