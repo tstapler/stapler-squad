@@ -2921,6 +2921,8 @@ message EscapeEventProto {
   string mangle_type = 10;
   google.protobuf.Timestamp wall_time = 11;
   int64 session_seq = 12;
+  string project_path = 13;
+  string sequence_signature = 14;
 }
 
 message QueryEscapeAnalyticsRequest {
@@ -2957,6 +2959,11 @@ message GetEscapeAnalyticsSummaryResponse {
   int64 total_sequences = 2;
   int64 total_mangled = 3;
   double mangle_rate = 4;
+  int64 correlation_outcomes = 5;
+  int64 matched_sequences = 6;
+  int64 stripped_sequences = 7;
+  double correlation_coverage = 8;
+  bool capture_healthy = 9;
 }
 
 message GetEscapeAnalyticsGlobalSummaryRequest {
@@ -2970,6 +2977,13 @@ message GetEscapeAnalyticsGlobalSummaryResponse {
   int64 total_mangled = 3;
   double mangle_rate = 4;
   repeated SessionEscapeSummary per_session = 5;
+  int64 correlation_outcomes = 6;
+  int64 matched_sequences = 7;
+  int64 stripped_sequences = 8;
+  double correlation_coverage = 9;
+  bool capture_healthy = 10;
+  int64 dropped_events = 11;
+  repeated ProjectEscapeSummary per_project = 12;
 }
 
 message SessionEscapeSummary {
@@ -2977,6 +2991,24 @@ message SessionEscapeSummary {
   int64 total_sequences = 2;
   int64 total_mangled = 3;
   double mangle_rate = 4;
+  string project_path = 5;
+  int64 correlation_outcomes = 6;
+  int64 matched_sequences = 7;
+  int64 stripped_sequences = 8;
+  double correlation_coverage = 9;
+  bool capture_healthy = 10;
+}
+
+message ProjectEscapeSummary {
+  string project_path = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
+  int64 correlation_outcomes = 5;
+  int64 matched_sequences = 6;
+  int64 stripped_sequences = 7;
+  double correlation_coverage = 8;
+  bool capture_healthy = 9;
 }
 
 // ============================================================================
