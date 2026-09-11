@@ -1359,17 +1359,24 @@ func TestAutoRespawnAutonomousWork_NoActiveSession_ResolvesAnyOpenRespawnBlocked
 
 // --- Repeated-failure circuit breaker (session.IsRepeatedFailure) ---
 
-// TestAutoReopenAfterFailedReview_RepeatedFailure_LeavesInReviewAndNotifies is
-// the regression test for a fast-looping non-converging rework cycle (e.g. an
-// infrastructure fault like a broken worktree diff, reproduced identically on
-// every attempt): once the last two review verdicts fail for the exact same
-// reason, AutoReopenAfterFailedReview must stop reopening — ahead of the
-// (possibly much larger) rework cap — and park the item via the same durable
-// stuck-state/notification path notifyReworkCapHit uses.
-func TestAutoReopenAfterFailedReview_RepeatedFailure_LeavesInReviewAndNotifies(t *testing.T) {
+// TestAutoReopenAfterFailedReview_RepeatedFailureTwice_GrantsOneEscalatedRetry
+// is the regression test for docs/tasks/backlog-feature-improvement.md's
+// "no escalation, no awareness that the last N attempts failed the same
+// way" finding: AutoReopenAfterFailedReview used to stop reopening and park
+// the item the INSTANT it detected two identical review failures, without
+// ever trying anything different first. It must now grant exactly one more
+// (escalated) attempt instead — reopening to in_progress and spawning a new
+// work session — with the escalation nudge itself carried in the respawned
+// session's prompt (see TestBuildSessionInitialPrompt_should_includeEscalationNotice
+// in session/backlog_context_test.go for the unit-level check of that text;
+// this test additionally asserts the nudge actually reaches the prompt
+// handed to CreateDirectorySession, proving the two are really wired
+// together end to end), not by parking here.
+func TestAutoReopenAfterFailedReview_RepeatedFailureTwice_GrantsOneEscalatedRetry(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	repoPath := t.TempDir()
@@ -1400,11 +1407,66 @@ func TestAutoReopenAfterFailedReview_RepeatedFailure_LeavesInReviewAndNotifies(t
 	}
 
 	reopenErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
+	require.NoError(t, reopenErr, "granting an escalated retry is an expected outcome, not a failure")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status, "streak of exactly 2 must still reopen for one escalated attempt, not park")
+	require.Len(t, creator.calls, 1, "the escalated attempt is a fresh work session, not a park")
+	assert.Contains(t, creator.calls[0].prompt, "Escalation Notice",
+		"the respawned session's actual prompt must carry the escalation nudge, not just a bare identical-looking retry")
+	assert.Contains(t, creator.calls[0].prompt, "Review blocked: could not compute a diff for this session",
+		"the escalation notice must name the repeated failure reason")
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "an escalated retry is not a park — no stuck row should be opened yet")
+}
+
+// TestAutoReopenAfterFailedReview_RepeatedFailureThreeTimes_ParksAfterEscalatedRetryAlsoFails
+// covers the far side of the escalate-once shape above: once the streak
+// survives THAT escalated attempt too (three identical failures in a row,
+// not two), AutoReopenAfterFailedReview must finally stop reopening — ahead
+// of the (possibly much larger) rework cap — and park the item via the same
+// durable stuck-state/notification path notifyReworkCapHit uses.
+func TestAutoReopenAfterFailedReview_RepeatedFailureThreeTimes_ParksAfterEscalatedRetryAlsoFails(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "Item that fails the same way every time, even after an escalated retry",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// Three prior review rounds, all ending in an identical FAIL verdict — the
+	// escalated attempt (round 3) failed for the exact same reason as rounds 1-2.
+	for i := 0; i < 3; i++ {
+		is, isErr := storage.CreateItemSession(ctx, session.ItemSessionData{
+			ItemID:      item.ID,
+			SessionUUID: "prior-review-" + string(rune('a'+i)),
+			SessionRole: session.SessionRoleReview,
+		})
+		require.NoError(t, isErr)
+		require.NoError(t, storage.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
+			ItemSessionID:  is.ID,
+			OverallOutcome: session.ReviewOutcomeFail,
+			Summary:        "Review blocked: could not compute a diff for this session",
+		}))
+	}
+
+	reopenErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
 	require.NoError(t, reopenErr, "stopping the loop is an expected outcome, not a failure")
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "item must stay in review, not spin on an identical failure")
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "item must stay in review once the escalated attempt also fails identically")
 
 	open, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
