@@ -200,7 +200,16 @@ func CheckGHAuth(ctx context.Context) error {
 
 	// Slow path: at most one goroutine calls the API; others wait and reuse the result.
 	res, err, _ := ghAuthGroup.Do("auth", func() (interface{}, error) {
-		authCheckCtx, authCheckCancel := context.WithTimeout(ctx, 10*time.Second)
+		// context.WithoutCancel: ghAuthGroup coalesces every concurrent caller
+		// process-wide onto whichever one's Do() call happened to start the
+		// in-flight request — if that leader's own ctx got canceled first
+		// (e.g. its RPC/test returned), a plain context.WithTimeout(ctx, ...)
+		// here would cancel the shared request out from under every other
+		// still-waiting caller too, surfacing as their result instead of a
+		// real auth failure. Detach from ctx's cancellation, keep its
+		// call-origin/call-site values, and rely solely on the fixed 10s
+		// timeout to bound the request.
+		authCheckCtx, authCheckCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer authCheckCancel()
 		authCheckCtx = WithGitHubCallSite(authCheckCtx, "auth.check")
 

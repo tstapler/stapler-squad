@@ -2,9 +2,11 @@ package github
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -116,4 +118,50 @@ func TestGetPRInfoCtx_should_DispatchToGraphQL_When_FlagOn(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 802, info.Number)
 	assert.Equal(t, "approved", info.ReviewDecision)
+}
+
+// TestCheckGHAuth_JoinerUnaffectedByLeaderContextCancellation is the
+// regression test for a bug ctx-threading introduced: ghAuthGroup coalesces
+// every concurrent CheckGHAuth caller process-wide onto whichever one's Do()
+// call started the in-flight request first (the "leader"). Deriving that
+// shared request's context straight from the leader's own ctx meant the
+// leader's context canceling (e.g. its own RPC/test returning) canceled the
+// one shared request out from under every other still-waiting "joiner" too
+// — surfacing as a spurious "context canceled" auth failure for callers
+// whose own context was never canceled (observed in CI:
+// TestWorktreePRPoller_InvalidateCache_NextFetchIsCacheMiss flaking with
+// exactly this error from an unrelated concurrently-running test).
+func TestCheckGHAuth_JoinerUnaffectedByLeaderContextCancellation(t *testing.T) {
+	ghAuthState.Store(authResult{err: errors.New("force cache miss"), expiry: time.Now().Add(-time.Hour)})
+	t.Cleanup(func() { ghAuthState.Store(authResult{err: nil, expiry: time.Now().Add(-time.Hour)}) })
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+	defer resetGhBaseURLForTest(ts)()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+
+	leaderCtx, leaderCancel := context.WithCancel(context.Background())
+	leaderDone := make(chan error, 1)
+	go func() { leaderDone <- CheckGHAuth(leaderCtx) }()
+	<-started // leader's request is in flight, holding the singleflight call
+
+	joinerDone := make(chan error, 1)
+	go func() { joinerDone <- CheckGHAuth(context.Background()) }()
+	time.Sleep(20 * time.Millisecond) // let the joiner actually enter ghAuthGroup.Do and start waiting
+
+	leaderCancel() // leader's own context is canceled while the shared request is still in flight
+	close(release) // now let the fake server respond
+
+	if err := <-leaderDone; err != nil {
+		t.Logf("leader's own CheckGHAuth returned an error (acceptable, its ctx was canceled): %v", err)
+	}
+	if err := <-joinerDone; err != nil {
+		t.Fatalf("joiner's CheckGHAuth returned an error even though its own ctx was never canceled: %v", err)
+	}
 }
