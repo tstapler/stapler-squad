@@ -92,7 +92,7 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 	// always runs strictly after IsLimited() — an already-limited state is
 	// rejected there and never reaches AdmitOrigin, so there is no window where
 	// the two checks could disagree (Story 3.2.3).
-	if config.LoadConfig().GetFeatureFlagWithDefault(githubPriorityAdmissionFlagName, false) {
+	if priorityAdmissionEnabled() {
 		origin := GitHubCallOriginFrom(req.Context())
 		resource := ResourceForRequest(req)
 		if admitted, reason := DefaultRateLimiter.AdmitOrigin(origin, resource); !admitted {
@@ -109,6 +109,38 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 		DefaultRateLimiter.Update(resp)
 	}
 	return resp, err
+}
+
+// ghPriorityAdmissionFlagCacheVal/ghPriorityAdmissionFlagCacheAt cache
+// config.LoadConfig().GetFeatureFlagWithDefault's result for
+// githubPriorityAdmissionFlagName, so RoundTrip's disk read + JSON unmarshal
+// doesn't run on every native GitHub HTTP call — including the
+// highest-concurrency poller path. Mirrors ghTokenCacheVal/ghTokenCacheAt's
+// TTL-cache pattern below; a short TTL is fine since this only gates a
+// feature-flag lookup, not correctness-critical freshness.
+var (
+	ghPriorityAdmissionFlagCacheVal atomic.Bool
+	ghPriorityAdmissionFlagCacheAt  atomic.Int64 // unix-nanosecond timestamp of last read
+)
+
+const ghPriorityAdmissionFlagCacheTTL = 5 * time.Second
+
+// priorityAdmissionEnabled returns whether githubPriorityAdmissionFlagName is
+// currently on, refreshing from config.LoadConfig() at most once per
+// ghPriorityAdmissionFlagCacheTTL. Unlike getGHToken's cache-miss path, this
+// intentionally skips singleflight coalescing — a burst of concurrent misses
+// each re-reading config.LoadConfig() is a cheap, bounded cost (not the
+// expensive keychain round-trip getGHToken coalesces), so adding a
+// singleflight.Group here would be complexity without a matching payoff.
+func priorityAdmissionEnabled() bool {
+	now := time.Now().UnixNano()
+	if now-ghPriorityAdmissionFlagCacheAt.Load() < int64(ghPriorityAdmissionFlagCacheTTL) {
+		return ghPriorityAdmissionFlagCacheVal.Load()
+	}
+	enabled := config.LoadConfig().GetFeatureFlagWithDefault(githubPriorityAdmissionFlagName, false)
+	ghPriorityAdmissionFlagCacheVal.Store(enabled)
+	ghPriorityAdmissionFlagCacheAt.Store(now)
+	return enabled
 }
 
 // SetGHHTTPBaseTransportForTest swaps the innermost RoundTripper in

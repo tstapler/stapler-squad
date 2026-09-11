@@ -25,11 +25,62 @@ func setAdmissionFlagForTest(t *testing.T, value bool) {
 	if err := cfg.SetFeatureFlag(githubPriorityAdmissionFlagName, value); err != nil {
 		t.Fatalf("SetFeatureFlag(%q, %v) failed: %v", githubPriorityAdmissionFlagName, value, err)
 	}
+	resetGHPriorityAdmissionFlagCache()
 	t.Cleanup(func() {
 		if err := config.LoadConfig().SetFeatureFlag(githubPriorityAdmissionFlagName, prev); err != nil {
 			t.Errorf("cleanup: failed to restore %q to %v: %v", githubPriorityAdmissionFlagName, prev, err)
 		}
+		resetGHPriorityAdmissionFlagCache()
 	})
+}
+
+// TestPriorityAdmissionEnabled_CachesWithinTTL is the regression test for a
+// code-review MAJOR: RoundTrip previously called config.LoadConfig() (a disk
+// read + JSON unmarshal) on every native GitHub HTTP call. It confirms
+// priorityAdmissionEnabled() serves a stale cached value for
+// ghPriorityAdmissionFlagCacheTTL after the persisted flag changes
+// underneath it, then re-reads once the cache goes stale.
+func TestPriorityAdmissionEnabled_CachesWithinTTL(t *testing.T) {
+	resetGHPriorityAdmissionFlagCache()
+	t.Cleanup(resetGHPriorityAdmissionFlagCache)
+
+	cfg := config.LoadConfig()
+	prev := cfg.GetFeatureFlag(githubPriorityAdmissionFlagName)
+	t.Cleanup(func() {
+		_ = config.LoadConfig().SetFeatureFlag(githubPriorityAdmissionFlagName, prev)
+	})
+
+	if err := cfg.SetFeatureFlag(githubPriorityAdmissionFlagName, false); err != nil {
+		t.Fatalf("SetFeatureFlag(false) failed: %v", err)
+	}
+	resetGHPriorityAdmissionFlagCache()
+	if priorityAdmissionEnabled() {
+		t.Fatal("priorityAdmissionEnabled() = true, want false immediately after setting the flag off")
+	}
+
+	// Flip the persisted flag without invalidating the cache: the cached
+	// value must still be served while within the TTL window.
+	if err := config.LoadConfig().SetFeatureFlag(githubPriorityAdmissionFlagName, true); err != nil {
+		t.Fatalf("SetFeatureFlag(true) failed: %v", err)
+	}
+	if priorityAdmissionEnabled() {
+		t.Fatal("priorityAdmissionEnabled() = true, want false while still within the TTL window (stale cache should be served)")
+	}
+
+	// Force the cache stale by backdating its timestamp past the TTL.
+	ghPriorityAdmissionFlagCacheAt.Store(time.Now().Add(-ghPriorityAdmissionFlagCacheTTL - time.Second).UnixNano())
+	if !priorityAdmissionEnabled() {
+		t.Fatal("priorityAdmissionEnabled() = false, want true after the TTL window elapses and config is re-read")
+	}
+}
+
+// resetGHPriorityAdmissionFlagCache clears priorityAdmissionEnabled's TTL
+// cache so a test that just flipped githubPriorityAdmissionFlagName via
+// setAdmissionFlagForTest sees the change immediately, instead of RoundTrip
+// serving a stale cached value for up to ghPriorityAdmissionFlagCacheTTL.
+func resetGHPriorityAdmissionFlagCache() {
+	ghPriorityAdmissionFlagCacheVal.Store(false)
+	ghPriorityAdmissionFlagCacheAt.Store(0)
 }
 
 // TestGithubPriorityAdmissionFlagName_MatchesServerServicesDuplicate is a
