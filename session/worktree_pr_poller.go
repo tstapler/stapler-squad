@@ -361,8 +361,8 @@ func (p *WorktreePRPoller) sessionBackedPaths() map[string]struct{} {
 
 	paths := make(map[string]struct{}, len(insts))
 	for _, inst := range insts {
-		if inst.Path != "" {
-			paths[inst.Path] = struct{}{}
+		if p := inst.GetPath(); p != "" {
+			paths[p] = struct{}{}
 		}
 	}
 	return paths
