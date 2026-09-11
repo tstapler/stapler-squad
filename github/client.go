@@ -184,7 +184,13 @@ type ghCommentResponse struct {
 // client. No subprocess is invoked — avoids forkExec lock contention.
 // Results are cached for 5 minutes. Concurrent callers share a single inflight
 // call via singleflight.
-func CheckGHAuth() error {
+//
+// ctx is threaded through to the underlying request so GitHubCallOriginFrom
+// sees the caller's origin tag (e.g. an interactive PR action) instead of
+// always falling back to the background-tier default — a singleflight-joined
+// call still only uses the first caller's ctx for the shared in-flight
+// request, the same limitation singleflight coalescing always has.
+func CheckGHAuth(ctx context.Context) error {
 	// Fast path: return cached result if still fresh.
 	if v := ghAuthState.Load(); v != nil {
 		if r := v.(authResult); time.Now().Before(r.expiry) {
@@ -194,7 +200,7 @@ func CheckGHAuth() error {
 
 	// Slow path: at most one goroutine calls the API; others wait and reuse the result.
 	res, err, _ := ghAuthGroup.Do("auth", func() (interface{}, error) {
-		authCheckCtx, authCheckCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		authCheckCtx, authCheckCancel := context.WithTimeout(ctx, 10*time.Second)
 		defer authCheckCancel()
 		authCheckCtx = WithGitHubCallSite(authCheckCtx, "auth.check")
 
@@ -310,7 +316,7 @@ func GetPRInfoCtx(ctx context.Context, owner, repo string, prNumber int) (*PRInf
 		return GetPRInfoGraphQL(ctx, owner, repo, prNumber)
 	}
 
-	if err := CheckGHAuth(); err != nil {
+	if err := CheckGHAuth(ctx); err != nil {
 		return nil, err
 	}
 
@@ -590,7 +596,7 @@ func GetPRByNumber(ctx context.Context, owner, repo string, prNumber int) (*PRIn
 
 // IsForkRepo reports whether the given repo is a fork of another repository.
 func IsForkRepo(ctx context.Context, owner, repo string) (bool, error) {
-	if err := CheckGHAuth(); err != nil {
+	if err := CheckGHAuth(ctx); err != nil {
 		return false, err
 	}
 
@@ -611,7 +617,7 @@ func IsForkRepo(ctx context.Context, owner, repo string) (bool, error) {
 
 // GetPRComments fetches all comments on a pull request
 func GetPRComments(ctx context.Context, owner, repo string, prNumber int) ([]PRComment, error) {
-	if err := CheckGHAuth(); err != nil {
+	if err := CheckGHAuth(ctx); err != nil {
 		return nil, err
 	}
 
@@ -656,7 +662,7 @@ func GetPRComments(ctx context.Context, owner, repo string, prNumber int) ([]PRC
 
 // GetPRDiff fetches the diff for a pull request
 func GetPRDiff(ctx context.Context, owner, repo string, prNumber int) (string, error) {
-	if err := CheckGHAuth(); err != nil {
+	if err := CheckGHAuth(ctx); err != nil {
 		return "", err
 	}
 
@@ -679,7 +685,7 @@ func GetPRDiff(ctx context.Context, owner, repo string, prNumber int) (string, e
 
 // PostPRComment posts a comment on a pull request
 func PostPRComment(ctx context.Context, owner, repo string, prNumber int, body string) error {
-	if err := CheckGHAuth(); err != nil {
+	if err := CheckGHAuth(ctx); err != nil {
 		return err
 	}
 
@@ -702,7 +708,7 @@ func PostPRComment(ctx context.Context, owner, repo string, prNumber int, body s
 // MergePR merges a pull request
 // method can be: "merge", "squash", or "rebase"
 func MergePR(ctx context.Context, owner, repo string, prNumber int, method string) error {
-	if err := CheckGHAuth(); err != nil {
+	if err := CheckGHAuth(ctx); err != nil {
 		return err
 	}
 
@@ -734,7 +740,7 @@ func MergePR(ctx context.Context, owner, repo string, prNumber int, method strin
 
 // ClosePR closes a pull request without merging
 func ClosePR(ctx context.Context, owner, repo string, prNumber int) error {
-	if err := CheckGHAuth(); err != nil {
+	if err := CheckGHAuth(ctx); err != nil {
 		return err
 	}
 
@@ -756,7 +762,10 @@ func ClosePR(ctx context.Context, owner, repo string, prNumber int) error {
 
 // CloneRepository clones a GitHub repository
 func CloneRepository(owner, repo, targetPath string) error {
-	if err := CheckGHAuth(); err != nil {
+	// CloneRepository has no ctx parameter of its own (out of scope to add
+	// one here); context.Background() preserves CheckGHAuth's prior behavior
+	// exactly for this call site.
+	if err := CheckGHAuth(context.Background()); err != nil {
 		return err
 	}
 
