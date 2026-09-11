@@ -31,6 +31,21 @@ func setGraphQLMigrationFlagForTest(t *testing.T, value bool) {
 	})
 }
 
+// TestGithubGraphQLMigrationFlagName_MatchesServerServicesDuplicate is a
+// code-review MAJOR's cheap safety net: server/services/feature_flag_service.go's
+// knownFeatureFlags registers this same literal under its own
+// githubGraphQLMigrationFlagName constant (github cannot import
+// server/services — a cycle). This test hardcodes that literal so a rename
+// on either side without the other breaks CI here instead of silently
+// diverging; see this package's githubGraphQLMigrationFlagName doc comment
+// above for the full cross-package rationale.
+func TestGithubGraphQLMigrationFlagName_MatchesServerServicesDuplicate(t *testing.T) {
+	const serverServicesFlagName = "github:graphql-pr-info" // server/services/feature_flag_service.go:53
+	if githubGraphQLMigrationFlagName != serverServicesFlagName {
+		t.Fatalf("githubGraphQLMigrationFlagName = %q, want %q to match server/services/feature_flag_service.go's constant", githubGraphQLMigrationFlagName, serverServicesFlagName)
+	}
+}
+
 // TestGetPRInfoCtx_should_UseUnchangedCLIPath_When_FlagOff is plan Task
 // 4.2.1c's flag-off regression case (validation.md REQ-3 row): with
 // githubGraphQLMigrationFlagName off (its default), GetPRInfoCtx must still

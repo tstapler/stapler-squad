@@ -408,3 +408,18 @@ func TestRateLimiterSnapshot_NoLostUpdate_ConcurrentDifferentResources(t *testin
 		}
 	}
 }
+
+// TestMaxRetryAfterSleep_MatchesServerServicesDuplicate is a code-review
+// MAJOR's cheap safety net: server/services/github_service.go's
+// secondaryRateLimitMaxWait duplicates this package's maxRetryAfterSleep
+// (github cannot import server/services — a cycle) and classifies a
+// rate-limit error's reset time using that exact cap. This test hardcodes
+// the server/services literal so a change to either constant without the
+// other breaks CI here instead of silently diverging; see maxRetryAfterSleep's
+// doc comment for the full cross-package rationale.
+func TestMaxRetryAfterSleep_MatchesServerServicesDuplicate(t *testing.T) {
+	const serverServicesSecondaryRateLimitMaxWait = 60 * time.Second // server/services/github_service.go:29
+	if maxRetryAfterSleep != serverServicesSecondaryRateLimitMaxWait {
+		t.Fatalf("maxRetryAfterSleep = %v, want %v to match server/services/github_service.go's secondaryRateLimitMaxWait", maxRetryAfterSleep, serverServicesSecondaryRateLimitMaxWait)
+	}
+}

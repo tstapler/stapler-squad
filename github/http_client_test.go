@@ -32,6 +32,21 @@ func setAdmissionFlagForTest(t *testing.T, value bool) {
 	})
 }
 
+// TestGithubPriorityAdmissionFlagName_MatchesServerServicesDuplicate is a
+// code-review MAJOR's cheap safety net: server/services/feature_flag_service.go's
+// knownFeatureFlags registers this same literal under its own
+// githubPriorityAdmissionFlagName constant (github cannot import
+// server/services — a cycle). This test hardcodes that literal so a rename
+// on either side without the other breaks CI here instead of silently
+// diverging; see this package's githubPriorityAdmissionFlagName doc comment
+// (http_client.go) for the full cross-package rationale.
+func TestGithubPriorityAdmissionFlagName_MatchesServerServicesDuplicate(t *testing.T) {
+	const serverServicesFlagName = "github:priority-admission-control" // server/services/feature_flag_service.go:44
+	if githubPriorityAdmissionFlagName != serverServicesFlagName {
+		t.Fatalf("githubPriorityAdmissionFlagName = %q, want %q to match server/services/feature_flag_service.go's constant", githubPriorityAdmissionFlagName, serverServicesFlagName)
+	}
+}
+
 // resetGHTokenCache clears getGHToken's package-level 1-minute token cache
 // (ghTokenCacheVal/ghTokenCacheAt in http_client.go) so each subtest's
 // keyring.MockInit() call actually takes effect. Without this, a subtest that
