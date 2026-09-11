@@ -108,6 +108,23 @@ func (s Status) String() string {
 	}
 }
 
+// IsSuspended reports whether a session in this status is not actively running
+// and so must not be treated as a live target for background work that assumes
+// a running process or tmux session (health checks, PR/CI status polling, etc.):
+// Paused and Hibernated sessions have no tmux session at all; Stopped, Crashed,
+// and PermanentlyFailed are terminal states awaiting an explicit resume/retry,
+// not incidental gaps that background pollers should paper over. See
+// healthCheckSkipReason (session/health.go) for the health-checker's per-status
+// skip messages, and pr_status_poller.go's checkAllSessions for another consumer.
+func (s Status) IsSuspended() bool {
+	switch s {
+	case Paused, Hibernated, Stopped, Crashed, PermanentlyFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 // LifecycleEvent is a notification type emitted by an Instance when key state
 // transitions occur (e.g., the session starts, or the program exits unexpectedly).
 type LifecycleEvent int
@@ -508,6 +525,12 @@ type Instance struct {
 	// Initialized to a TmuxBackend by default; future backends implement the ProcessManager interface.
 	pmMu           sync.Mutex
 	processManager ProcessManager
+	// claudeTrustStoreImpl backs trustStore()'s lazy default (real disk-backed
+	// store in production, in-memory in tests) -- see that method's doc
+	// comment. A test may set this directly (e.g. to a *memoryClaudeTrustStore
+	// it wants to assert against) before the first markWorkingDirTrusted call.
+	trustStoreMu         sync.Mutex
+	claudeTrustStoreImpl claudeTrustStore
 	// gitManager owns the git worktree and diff stats.
 	gitManager GitWorktreeManager
 	// vncManager owns the Xvfb + x11vnc lifecycle for this session.

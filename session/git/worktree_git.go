@@ -264,7 +264,7 @@ func (g *GitWorktree) HasStagedChanges() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to check staged changes: %w", err)
 	}
-	headHashes, err := headTreeHashes(repo)
+	headHashes, err := cachedHeadTreeHashes(repo, &g.headTreeCache)
 	if err != nil {
 		return false, fmt.Errorf("failed to check staged changes: %w", err)
 	}
@@ -284,6 +284,7 @@ func (g *GitWorktree) PrimeDirtyCacheAt(t time.Time) {
 func (g *GitWorktree) InvalidateDirtyCache() {
 	g.isDirtyCache.Store(dirtyCacheState{}) // zero time signals "cache invalid"
 	g.gitignoreFS.reset()
+	g.headTreeCache.v.Store(headTreeCacheEntry{}) //nolint:exhaustruct // zero entry, defensive reset — see headTreeCache's doc comment
 }
 
 // IsDirty checks if the worktree has uncommitted changes.

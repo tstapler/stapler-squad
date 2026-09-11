@@ -223,21 +223,24 @@ func paneDeadStatus(instance *Instance, batch map[string]tmux.PaneDeadStatus) (d
 // (ADR-001, session-retry-backoff) -- it requires an explicit Retry now, not
 // silent health-checker recovery.
 func healthCheckSkipReason(instance *Instance) (string, bool) {
-	if instance.Paused() {
+	status := instance.Snapshot().Status
+	if !status.IsSuspended() {
+		return "", false
+	}
+	switch status {
+	case Paused:
 		return "Skipped (session is paused)", true
-	}
-	if instance.Hibernated() {
+	case Hibernated:
 		return "Skipped (session is hibernated)", true
-	}
-	switch instance.Snapshot().Status {
 	case Stopped:
 		return "Skipped (session is stopped)", true
 	case Crashed:
 		return "Skipped (session has crashed, awaiting resume)", true
 	case PermanentlyFailed:
 		return "Skipped (session is permanently failed, awaiting retry)", true
+	default:
+		return "Skipped (session is suspended)", true
 	}
-	return "", false
 }
 
 // checkSingleSession performs a health check on a single session. paneStatus
