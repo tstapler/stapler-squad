@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5"
@@ -87,8 +86,8 @@ func worktreeStagedDirty(idx *index.Index, headHashes map[string]plumbing.Hash) 
 	return false
 }
 
-// worktreeUnstagedDirty reports whether any tracked file's on-disk size/mtime differs
-// from its index record. O(index size) stat calls, no file reads/hashing.
+// worktreeUnstagedDirty reports whether any tracked file's on-disk size or full-precision
+// mtime differs from its index record. O(index size) stat calls, no file reads/hashing.
 func worktreeUnstagedDirty(worktreePath string, idx *index.Index) (bool, error) {
 	for _, e := range idx.Entries {
 		info, statErr := os.Lstat(filepath.Join(worktreePath, e.Name))
@@ -98,8 +97,7 @@ func worktreeUnstagedDirty(worktreePath string, idx *index.Index) (bool, error) 
 			}
 			return false, fmt.Errorf("stat %s: %w", e.Name, statErr)
 		}
-		if info.Size() != int64(e.Size) ||
-			!info.ModTime().Truncate(time.Second).Equal(e.ModifiedAt.Truncate(time.Second)) {
+		if info.Size() != int64(e.Size) || !info.ModTime().Equal(e.ModifiedAt) {
 			return true, nil
 		}
 	}

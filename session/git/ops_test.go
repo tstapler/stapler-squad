@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/gitfixture"
 )
 
 // runGit runs a git command in dir and fails the test on error.
@@ -36,8 +37,7 @@ func cloneTestRepo(t *testing.T, originDir string) string {
 	// missing target, so clone into a subdirectory instead.
 	cloneDir := filepath.Join(workDir, "clone")
 	runGit(t, workDir, "clone", originDir, cloneDir)
-	runGit(t, cloneDir, "config", "user.email", "test@example.com")
-	runGit(t, cloneDir, "config", "user.name", "Test User")
+	gitfixture.ConfigureNativeIdentity(t, cloneDir)
 	return cloneDir
 }
 
@@ -186,8 +186,8 @@ func TestMergeMainIntoWorktree_should_ReturnError_When_MergeFailsForNonConflictR
 	assert.Equal(t, "uncommitted local edit\n", string(content))
 }
 
-// findRealGitBinary scans PATH for the first "git" candidate that is a real ELF binary,
-// skipping any shell-script wrapper along the way (this dev environment's own `git`
+// findRealGitBinary scans PATH for the first executable "git" candidate that is not a
+// script, skipping any shell-script wrapper along the way (this dev environment's own `git`
 // resolves through ~/.local/bin/git, a git-ssh-fallback wrapper script that re-invokes
 // "git" via PATH internally — exec'ing that wrapper from installGitSubcommandLogger's own
 // script would have it resolve back to the shadowed PATH and recurse into itself forever,
@@ -201,7 +201,7 @@ func findRealGitBinary(t *testing.T) string {
 		if err != nil {
 			continue
 		}
-		if isELFBinary(resolved) {
+		if isNativeExecutable(resolved) {
 			return resolved
 		}
 	}
@@ -209,18 +209,23 @@ func findRealGitBinary(t *testing.T) string {
 	return ""
 }
 
-// isELFBinary reports whether path's first 4 bytes are the ELF magic number.
-func isELFBinary(path string) bool {
+// isNativeExecutable rejects script wrappers while accepting native binaries on every
+// supported platform (ELF on Linux, Mach-O on macOS, and PE on Windows).
+func isNativeExecutable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.Mode()&0o111 == 0 {
+		return false
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return false
 	}
 	defer func() { _ = f.Close() }()
-	var magic [4]byte
-	if _, err := io.ReadFull(f, magic[:]); err != nil {
+	var prefix [2]byte
+	if _, err := io.ReadFull(f, prefix[:]); err != nil {
 		return false
 	}
-	return string(magic[:]) == "\x7fELF"
+	return string(prefix[:]) != "#!"
 }
 
 // installGitSubcommandLogger prepends a fake "git" wrapper script to PATH that appends

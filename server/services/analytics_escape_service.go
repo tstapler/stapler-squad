@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"connectrpc.com/connect"
@@ -227,14 +228,17 @@ func escapeCorrelationCoverage(source, matched int64) float64 {
 	return coverage
 }
 
-// escapeAggregateRow is the destination shape for both GroupBy/Aggregate
-// queries below: one row per group key (sequence_type or session_id), with
-// a count and a summed mangled column.
+// escapeAggregateRow is the destination shape for the global summary's SQL
+// GROUP BY. Grouping on every dimension used by the Go aggregation preserves
+// the correlation semantics without loading every raw event into memory.
 type escapeAggregateRow struct {
-	SequenceType string `json:"sequence_type"`
 	SessionID    string `json:"session_id"`
+	ProjectPath  string `json:"project_path"`
+	SequenceType string `json:"sequence_type"`
+	Stage        string `json:"stage"`
+	Mangled      bool   `json:"mangled"`
+	MangleType   string `json:"mangle_type"`
 	Count        int64  `json:"count"`
-	MangledCount int64  `json:"mangled_count"`
 }
 
 // GetEscapeAnalyticsGlobalSummary returns aggregate escape sequence statistics
@@ -256,11 +260,22 @@ func (s *SessionService) GetEscapeAnalyticsGlobalSummary(
 		timeFilters = append(timeFilters, escapeevent.WallTimeLTE(req.Msg.EndTime.AsTime()))
 	}
 
-	events, err := s.analyticsClient.EscapeEvent.Query().Where(timeFilters...).Select(
-		escapeevent.FieldSessionID, escapeevent.FieldProjectPath,
-		escapeevent.FieldSequenceType, escapeevent.FieldStage,
-		escapeevent.FieldMangled, escapeevent.FieldMangleType,
-	).All(ctx)
+	// Aggregate in SQL by every dimension needed below. The number of rows
+	// returned is bounded by the distinct dimension combinations rather than
+	// the total event volume, avoiding an unbounded raw-event allocation on
+	// this global endpoint.
+	var events []escapeAggregateRow
+	err := s.analyticsClient.EscapeEvent.Query().Where(timeFilters...).
+		GroupBy(
+			escapeevent.FieldSessionID,
+			escapeevent.FieldProjectPath,
+			escapeevent.FieldSequenceType,
+			escapeevent.FieldStage,
+			escapeevent.FieldMangled,
+			escapeevent.FieldMangleType,
+		).
+		Aggregate(ent.As(ent.Count(), "count")).
+		Scan(ctx, &events)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -294,29 +309,32 @@ func (s *SessionService) GetEscapeAnalyticsGlobalSummary(
 		}
 		for _, a := range []*aggregate{global, sa, pa} {
 			if isEscapeSourceStage(e.Stage) {
-				a.source++
+				a.source += e.Count
 			}
 			if isEscapeOutcomeStage(e.Stage) {
-				a.outcomes++
+				a.outcomes += e.Count
 				if e.Mangled {
-					a.mangled++
+					a.mangled += e.Count
 				}
 				if e.MangleType == "stripped" {
-					a.stripped++
+					a.stripped += e.Count
 				}
 			}
 		}
 		if isEscapeSourceStage(e.Stage) {
-			h.Count++
+			h.Count += e.Count
 		}
 		if isEscapeOutcomeStage(e.Stage) && e.Mangled {
-			h.MangledCount++
+			h.MangledCount += e.Count
 		}
 	}
 	histogram := make([]*sessionv1.EscapeSequenceCount, 0, len(hist))
 	for _, h := range hist {
 		histogram = append(histogram, h)
 	}
+	sort.Slice(histogram, func(i, j int) bool {
+		return histogram[i].SequenceType < histogram[j].SequenceType
+	})
 
 	perSession := make([]*sessionv1.SessionEscapeSummary, 0, len(sessions))
 	for id, a := range sessions {
@@ -329,6 +347,9 @@ func (s *SessionService) GetEscapeAnalyticsGlobalSummary(
 			CaptureHealthy: a.source == 0 || coverage >= 0.8,
 		})
 	}
+	sort.Slice(perSession, func(i, j int) bool {
+		return perSession[i].SessionId < perSession[j].SessionId
+	})
 	perProject := make([]*sessionv1.ProjectEscapeSummary, 0, len(projects))
 	for _, a := range projects {
 		matched, coverage := a.outcomes-a.stripped, escapeCorrelationCoverage(a.source, a.outcomes-a.stripped)
@@ -339,6 +360,9 @@ func (s *SessionService) GetEscapeAnalyticsGlobalSummary(
 			CorrelationCoverage: coverage, CaptureHealthy: a.source == 0 || coverage >= 0.8,
 		})
 	}
+	sort.Slice(perProject, func(i, j int) bool {
+		return perProject[i].ProjectPath < perProject[j].ProjectPath
+	})
 	matched, coverage := global.outcomes-global.stripped, escapeCorrelationCoverage(global.source, global.outcomes-global.stripped)
 	return connect.NewResponse(&sessionv1.GetEscapeAnalyticsGlobalSummaryResponse{
 		Histogram: histogram, TotalSequences: global.source, TotalMangled: global.mangled,
