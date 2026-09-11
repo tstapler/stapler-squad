@@ -36,7 +36,7 @@ func setupUWSFixture(t *testing.T) (svc *UnfinishedWorkService, cleanup func()) 
 
 	storage := createTestStorage(t)
 
-	svc = NewUnfinishedWorkService(scanner, stateStore, bus, storage)
+	svc = NewUnfinishedWorkService(scanner, stateStore, bus, storage, nil)
 
 	cleanup = func() {
 		bus.Close()
