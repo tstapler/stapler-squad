@@ -21,7 +21,7 @@ import (
 func writeCapabilityCheckFakeClaudeScript(t *testing.T, scriptDir, countPath, resultText string) string {
 	t.Helper()
 	scriptPath := filepath.Join(scriptDir, "fake-claude.sh")
-	outerJSON := fmt.Sprintf(`{"session_id":"s1","result":%q,"cost_usd":0}`, resultText)
+	outerJSON := fmt.Sprintf(`{"type":"result","session_id":"s1","result":%q,"total_cost_usd":0}`, resultText)
 	script := fmt.Sprintf("#!/bin/sh\ncat > /dev/null\necho call >> %s\ncat <<'HEADLESSTESTEOF'\n%s\nHEADLESSTESTEOF\n", countPath, outerJSON)
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o755))
 	return scriptPath
@@ -170,7 +170,7 @@ func TestCodebaseReadCapabilitySelfCheck_CallerCtxAlreadyExpired_ProbeStillSucce
 func writeSlowCapabilityCheckFakeClaudeScript(t *testing.T, scriptDir, countPath, resultText string, delay time.Duration) string {
 	t.Helper()
 	scriptPath := filepath.Join(scriptDir, "fake-claude-slow.sh")
-	outerJSON := fmt.Sprintf(`{"session_id":"s1","result":%q,"cost_usd":0}`, resultText)
+	outerJSON := fmt.Sprintf(`{"type":"result","session_id":"s1","result":%q,"total_cost_usd":0}`, resultText)
 	sleepSeconds := delay.Seconds()
 	script := fmt.Sprintf("#!/bin/sh\ncat > /dev/null\necho call >> %s\nsleep %f\ncat <<'HEADLESSTESTEOF'\n%s\nHEADLESSTESTEOF\n", countPath, sleepSeconds, outerJSON)
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o755))

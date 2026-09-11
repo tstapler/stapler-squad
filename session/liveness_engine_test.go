@@ -12,18 +12,19 @@ import (
 	tslog "github.com/tstapler/stapler-squad/log"
 )
 
-// TestDefaultLivenessEngine_should_ReturnThirtyFiveMinuteThreshold_When_StageIsIdeaDefaultMode
+// TestDefaultLivenessEngine_should_ReturnThreeHourFifteenMinuteThreshold_When_StageIsIdeaDefaultMode
 // is the Story 1.2.1 zero-regression assertion for Shape A: the idea stage's
-// duration-budget-plus-margin definition must derive to exactly 35m, today's
-// maxHeadlessTriageSessionStaleness (session/backlog_lifecycle_triage.go).
-func TestDefaultLivenessEngine_should_ReturnThirtyFiveMinuteThreshold_When_StageIsIdeaDefaultMode(t *testing.T) {
+// duration-budget-plus-margin definition must derive to exactly today's
+// maxHeadlessTriageSessionStaleness (session/backlog_lifecycle_triage.go,
+// 3h15m as of the 2026-09-08 triageCallBudget raise).
+func TestDefaultLivenessEngine_should_ReturnThreeHourFifteenMinuteThreshold_When_StageIsIdeaDefaultMode(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
 	def, err := engine.LivenessFor(BacklogStatusIdea, PipelineModeDefault)
 
 	require.NoError(t, err)
 	assert.Equal(t, LivenessKindDurationBudget, def.Kind)
-	assert.Equal(t, 35*time.Minute, def.StalenessThreshold())
+	assert.Equal(t, 3*time.Hour+15*time.Minute, def.StalenessThreshold())
 	assert.Equal(t, maxHeadlessTriageSessionStaleness, def.StalenessThreshold())
 }
 
