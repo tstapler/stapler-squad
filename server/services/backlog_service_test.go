@@ -27,15 +27,15 @@ import (
 
 // TestMain pre-seeds headless.DefaultCapabilitySelfCheck as passed before any test
 // runs. NewBacklogService defaults every instance's capabilityCheck field to that
-// package-level singleton (guarded by sync.Once, deliberately cached for the whole
-// process lifetime in production — see capability_check.go). Left unseeded, the
-// first test in this binary to reach the codebase-read gate without calling
-// SetCapabilityCheck "wins" the once.Do race and permanently resolves the
+// package-level singleton, which caches a successful result for the whole process
+// lifetime in production (a cached failure is only trusted for a bounded window —
+// see capability_check.go). Left unseeded, the first test in this binary to reach
+// the codebase-read gate without calling SetCapabilityCheck resolves the
 // singleton based on whether ITS OWN fakeHeadlessPool response happens to contain
 // the capability marker string (it doesn't — the fakes return scripted verdict
-// JSON) — poisoning it to failed for every other test in the package for the rest
-// of the process, regardless of test order or -count. That was the actual root
-// cause behind TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns'
+// JSON) — poisoning it to failed for every other test in the package that runs
+// within the failure-cache window, regardless of test order or -count. That was
+// the actual root cause behind TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns'
 // order-dependent flake (reliably 1-pass-then-every-subsequent-run-fails under
 // -count=N in one process). Tests that specifically exercise the capability-check
 // failure/success path still override it per-instance via SetCapabilityCheck.

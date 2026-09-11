@@ -234,11 +234,13 @@ type BacklogService struct {
 	// goroutine in the new process could possibly still be running an old triage call.
 	triageInFlight sync.Map
 
-	// capabilityCheck gates the first codebase-read call per process lifetime (Story
-	// 2.2.6). Defaults to headless.DefaultCapabilitySelfCheck (shared with
-	// ReviewGateRunner so a failure discovered via either call site short-circuits
-	// the other) but is a field — not a hardcoded package-var reference — so tests
-	// can inject a fresh instance instead of fighting the singleton's sync.Once.
+	// capabilityCheck gates codebase-read calls with a cached smoke-test result
+	// (Story 2.2.6): a success is cached for the process lifetime, a failure only
+	// for a bounded window before it's re-attempted. Defaults to
+	// headless.DefaultCapabilitySelfCheck (shared with ReviewGateRunner so a
+	// failure discovered via either call site short-circuits the other) but is a
+	// field — not a hardcoded package-var reference — so tests can inject a fresh
+	// instance instead of fighting the shared singleton's cached state.
 	capabilityCheck *headless.CodebaseReadCapabilitySelfCheck
 
 	// triageCleanupTimeout bounds the post-LLM-call DB writes in TriggerTriage's

@@ -96,6 +96,29 @@ func TestCodebaseReadCapabilitySelfCheck_Success_CachesOK(t *testing.T) {
 	assert.Equal(t, 1, countInvocations(t, countPath), "second Ensure call must not re-run the subprocess")
 }
 
+// TestCodebaseReadCapabilitySelfCheck_Success_SurvivesPastFailureWindow verifies a
+// cached success, unlike a cached failure, is trusted indefinitely: it must still
+// short-circuit Ensure (no subprocess re-run) even long after
+// capabilityCheckFailureCacheWindow has elapsed.
+func TestCodebaseReadCapabilitySelfCheck_Success_SurvivesPastFailureWindow(t *testing.T) {
+	t.Parallel()
+	scriptDir := t.TempDir()
+	countPath := filepath.Join(scriptDir, "count.txt")
+	scriptPath := writeCapabilityCheckFakeClaudeScript(t, scriptDir, countPath, capabilityCheckMarkerValue)
+
+	runner := NewShellWrappedProcessRunnerForTesting(scriptPath)
+	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2}, runner)
+
+	fakeNow := time.Now()
+	check := &CodebaseReadCapabilitySelfCheck{now: func() time.Time { return fakeNow }}
+
+	assert.True(t, check.Ensure(context.Background(), pool))
+
+	fakeNow = fakeNow.Add(10 * capabilityCheckFailureCacheWindow)
+	assert.True(t, check.Ensure(context.Background(), pool), "a cached success must survive well past the failure-cache window")
+	assert.Equal(t, 1, countInvocations(t, countPath), "must not re-run the subprocess for a cached success, regardless of elapsed time")
+}
+
 // TestCodebaseReadCapabilitySelfCheck_Failure_CachesFailureWithinWindow verifies
 // that a smoke test whose result does not contain the marker caches ok=false and
 // subsequent Ensure calls, while still within capabilityCheckFailureCacheWindow,
