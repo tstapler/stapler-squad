@@ -320,7 +320,7 @@ func (p *WorktreePRPoller) isAuthOK() bool {
 			return r.ok
 		}
 	}
-	if err := github.CheckGHAuth(); err != nil {
+	if err := github.CheckGHAuth(p.ctx); err != nil {
 		log.Warn("worktree PR poller: github auth unavailable", "err", err)
 		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
 		return false

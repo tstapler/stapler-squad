@@ -25,14 +25,14 @@ type pollerAuthResult struct {
 // fetchAndUpdatePRStatus would otherwise require real gh auth and network access
 // to exercise). realGHClient below is the only production implementation.
 type prGitHubClient interface {
-	CheckGHAuth() error
+	CheckGHAuth(ctx context.Context) error
 	GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (info *github.PRInfo, newEtag string, changed bool, err error)
 	GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int, cache *github.ETagCache) (info *github.PRInfo, changed bool, err error)
 }
 
 type realGHClient struct{}
 
-func (realGHClient) CheckGHAuth() error { return github.CheckGHAuth() }
+func (realGHClient) CheckGHAuth(ctx context.Context) error { return github.CheckGHAuth(ctx) }
 
 func (realGHClient) GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (*github.PRInfo, string, bool, error) {
 	return github.GetPRForBranchConditional(ctx, owner, repo, branch, etag)
@@ -344,7 +344,7 @@ func (p *PRStatusPoller) isAuthOK() bool {
 		}
 	}
 
-	if err := p.ghClient.CheckGHAuth(); err != nil {
+	if err := p.ghClient.CheckGHAuth(p.ctx); err != nil {
 		log.Warn("PR status poller: github auth unavailable", "err", err)
 		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
 		return false
