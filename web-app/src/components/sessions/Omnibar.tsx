@@ -1053,8 +1053,10 @@ export function Omnibar({
           setAliasSuggestIndex((i) => Math.max(i - 1, -1));
           return;
         }
-        if (e.key === "Tab" || (e.key === "Enter" && aliasSuggestIndex >= 0)) {
+        if (e.key === "Tab" || e.key === "Enter") {
           e.preventDefault();
+          // Default to the top suggestion when nothing has been arrow-key-highlighted,
+          // matching Tab's fallback so a bare Enter accepts the best match.
           const idx = aliasSuggestIndex >= 0 ? aliasSuggestIndex : 0;
           if (filteredAliases[idx]) {
             setInput(completeAlias(filteredAliases[idx]));
@@ -1089,23 +1091,15 @@ export function Omnibar({
           setUIField("atSuggestIndex", Math.max(atSuggestIndex - 1, -1));
           return;
         }
-        if (e.key === "Tab") {
-          e.preventDefault();
+        if (e.key === "Tab" || e.key === "Enter") {
+          // Default to the top suggestion when nothing has been arrow-key-highlighted,
+          // matching Tab's existing fallback so a bare Enter accepts the best match.
           const idx = atSuggestIndex >= 0 ? atSuggestIndex : 0;
           if (atSuggestions[idx]) {
+            e.preventDefault();
             setInput(completeAtCommand(atSuggestions[idx]));
             setUIField("atSuggestIndex", -1);
           }
-          return;
-        }
-        if (
-          e.key === "Enter" &&
-          atSuggestIndex >= 0 &&
-          atSuggestions[atSuggestIndex]
-        ) {
-          e.preventDefault();
-          setInput(completeAtCommand(atSuggestions[atSuggestIndex]));
-          setUIField("atSuggestIndex", -1);
           return;
         }
         if (e.key === "Escape") {
@@ -1221,8 +1215,10 @@ export function Omnibar({
       } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         // Cmd+Enter (Mac) / Ctrl+Enter (Linux/Windows) to submit.
         handleSubmitRef.current();
-      } else if (e.key === "Enter" && !isDiscoveryMode) {
-        // Plain Enter in creation mode submits when the form is ready.
+      } else if (e.key === "Enter") {
+        // Plain Enter submits when the form is ready (creation mode), or fires a
+        // fire-and-forget detection like @workflow invocation (discovery mode) —
+        // reached here only when no result/dropdown entry consumed Enter above.
         // handleSubmit guards on canSubmit internally, so this is a no-op when the form is incomplete.
         handleSubmitRef.current();
       }
@@ -1322,6 +1318,12 @@ export function Omnibar({
       return true;
     // Chat backlog item creation (backlog: <message>) needs no sessionName/path.
     if (detection?.type === InputType.ChatBacklogItem) return true;
+    // Workflow invocation (@slug [arg]) is fire-and-forget, no sessionName/path needed.
+    if (
+      detection?.type === InputType.Workflow &&
+      detection.metadata?.workflowFound
+    )
+      return true;
 
     if (!input.trim()) return false;
     if (!sessionName.trim()) return false;
@@ -1854,6 +1856,30 @@ export function Omnibar({
                 {m.extraFlags ? (
                   <span> · {String(m.extraFlags)} (appended)</span>
                 ) : null}
+              </div>
+            );
+          })()}
+        {detection?.type === InputType.Workflow &&
+          !!detection.metadata?.workflowFound &&
+          (() => {
+            const { workflow, workflowArg } = detection.metadata as {
+              workflow?: WorkflowEntry;
+              workflowArg?: string;
+            };
+            return (
+              <div
+                role="status"
+                aria-live="polite"
+                data-testid="workflow-resolution-chip"
+              >
+                <span>
+                  Workflow: @{workflow?.slug}
+                  {workflow?.name ? ` (${workflow.name})` : ""}
+                </span>
+                {workflow?.description ? (
+                  <span> · {workflow.description}</span>
+                ) : null}
+                <span> · arg: {workflowArg ? workflowArg : "(none)"}</span>
               </div>
             );
           })()}

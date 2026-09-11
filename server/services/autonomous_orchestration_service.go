@@ -361,6 +361,24 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 							// budget directly instead, gated by the same rework cap the
 							// review-side auto-reopen loop uses.
 							log.Info("[AutonomousDriver] work session hit turn cap without DONE; leaving in_progress instead of forcing review", "item", item.ID, "reason", outcome.Reason)
+							// BUG-048's review-role fix (below, in the SessionRoleReview branch)
+							// established that a driver stopping (turn cap, or here a startup
+							// timeout with 0 turns) does NOT kill the underlying tmux/CLI
+							// session -- AutonomousDriver.run just stops injecting turns, so the
+							// ItemSession row stays EndedAt == nil and the pane keeps producing
+							// output. That fact was never applied to this branch: without ending
+							// `is` first, AutoRespawnAutonomousWork dispatched below immediately
+							// finds this very session via findActiveWorkSession (EndedAt == nil)
+							// and/or tombstoneOrphanWorkSessions' IsSessionLive (pane still
+							// alive) and self-blocks with RESPAWN_BLOCKED_ACTIVE, citing the
+							// pane's leftover output recency as "still active" even though the
+							// driver that was using it already reported Stuck. End it now,
+							// synchronously, exactly like the review branch does, so the respawn
+							// below sees an accurately-closed session instead of racing its own
+							// stale liveness signal.
+							if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil {
+								log.Warn("[AutonomousDriver] onAutonomousDriverComplete: UpdateItemSessionEnded(work, stuck) failed", "item", item.ID, "itemSession", is.ID, "err", endErr)
+							}
 							if a.autonomousStuckRespawner != nil {
 								respawner := a.autonomousStuckRespawner
 								itemID := item.ID

@@ -184,7 +184,14 @@ func (f *fakeGitHubResolver) resolve(input string) (string, *session.GitHubRef, 
 }
 
 // mockSessionCreator records CreateDirectorySession calls for inspection.
+// mu guards calls against concurrent CreateDirectorySession/
+// CreateWorktreeSession invocations — needed when the code under test
+// dispatches a spawn from a background goroutine (e.g. the autonomous
+// respawn path) while a test polls the call count from the main goroutine.
+// Most tests never touch calls concurrently and read the field directly,
+// same caveat as mockSessionSteerer's mu above.
 type mockSessionCreator struct {
+	mu    sync.Mutex
 	calls []mockCreateCall
 	err   error
 }
@@ -358,6 +365,8 @@ type mockCreateCall struct {
 func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, path, prompt string, tags []string, oneShot bool, _ bool) (*session.Instance, error) {
 	_, contextErr := os.Stat(filepath.Join(path, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(path, ".claude", "commands", "backlog", "status.md"))
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.err != nil {
 		m.calls = append(m.calls, mockCreateCall{
 			title:                       title,
@@ -395,6 +404,8 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, worktreePath, prompt string, tags []string, oneShot bool, _ bool) (*session.Instance, error) {
 	_, contextErr := os.Stat(filepath.Join(worktreePath, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(worktreePath, ".claude", "commands", "backlog", "status.md"))
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.err != nil {
 		m.calls = append(m.calls, mockCreateCall{
 			title:                       title,
@@ -419,6 +430,15 @@ func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, 
 		inst:                        inst,
 	})
 	return inst, nil
+}
+
+// callCount returns len(calls) under mu, safe to poll concurrently with an
+// in-flight CreateDirectorySession/CreateWorktreeSession call (e.g. from
+// wait.RequireEventually while a background respawn goroutine is spawning).
+func (m *mockSessionCreator) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.calls)
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
