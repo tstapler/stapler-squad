@@ -28,14 +28,19 @@ function extractMessage(error: unknown): string {
 }
 
 /**
- * Reuses formatRelativeTime's own duration-bucketing thresholds (1m/1h/1d/7d)
+ * Reuses formatRelativeTime's own duration-bucketing thresholds (1m/1h/1d)
  * for a *future* timestamp by mirroring it onto the past side of "now" and
  * stripping the resulting " ago" suffix, instead of duplicating that
- * threshold logic here.
+ * threshold logic here. formatRelativeTime falls back to a bare calendar
+ * date (no " ago" suffix) once its input is >=7 days old, which the mirror
+ * trick can't reuse — that would render the mirrored *past* date instead of
+ * the real future reset day — so that range is handled directly below.
  */
 function relativeSpanUntil(resetAt: Date): string {
   const now = Date.now();
   const msUntil = Math.max(resetAt.getTime() - now, 0);
+  const daysUntil = Math.floor(msUntil / 86_400_000);
+  if (daysUntil >= 7) return `${daysUntil}d`;
   const mirrored = now - msUntil;
   const formatted = formatRelativeTime(mirrored);
   if (formatted === "Just now") return "a moment";

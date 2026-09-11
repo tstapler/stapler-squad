@@ -27,6 +27,15 @@ describe("getGitHubRateLimitMessage", () => {
     expect(message).not.toMatch(ISO_TIMESTAMP_PATTERN);
   });
 
+  it("returns a real day-count span (not the mirrored past date) for a reset >=7 days out", () => {
+    const err = rateLimitError("exhausted", 10 * 24 * 60 * 60 * 1000);
+    const message = getGitHubRateLimitMessage(err, "fallback");
+    expect(message).toBe("GitHub rate limit reached — try again in ~10d.");
+    expect(message).not.toMatch(ISO_TIMESTAMP_PATTERN);
+  });
+});
+
+describe("getGitHubRateLimitMessage fallback behavior", () => {
   it("falls back to the generic message for a non-rate-limit error", () => {
     const err = new Error("network error: connection refused");
     expect(getGitHubRateLimitMessage(err, "Failed to load comments")).toBe("Failed to load comments");
