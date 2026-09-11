@@ -47,6 +47,22 @@ var (
 	// failure is bucketed as "subprocess_start_error" in logs instead of falling
 	// through to an undiagnosable "other".
 	ErrSubprocessStart = errors.New("headless subprocess failed to start")
+	// ErrPoolSaturated is returned when a call never got a shot at running the LLM
+	// subprocess: it waited for a concurrency-pool slot until maxQueueWait
+	// (caller.go) elapsed, without the caller's own ctx expiring first. Distinct
+	// from a genuine subprocess timeout so classifyHeadlessCallError
+	// (server/services/backlog_service_triage.go) can bucket "starved behind
+	// other concurrent calls" separately from "ran and hung" — see BUG-093.
+	ErrPoolSaturated = errors.New("headless pool: timed out waiting for a concurrency slot")
+	// ErrIdleTimeout is returned when a stream-json subprocess produced no new
+	// output line for idleTimeout (pool.go) — a real progress signal, distinct
+	// from the caller's own ctx deadline, so classifyHeadlessCallError can bucket
+	// "genuinely stalled" separately from "hit the ceiling while still active."
+	ErrIdleTimeout = errors.New("headless pool: no output for the idle timeout window")
+	// ErrOutputCapExceeded is returned when a first-call subprocess's cumulative
+	// stream-json output exceeds maxFirstCallOutputBytes (pool.go) — a memory
+	// safeguard independent of idleTimeout for a long-running, non-idle stream.
+	ErrOutputCapExceeded = errors.New("headless pool: cumulative output exceeded the byte cap")
 )
 
 // ProcessRunner implements ClaudeRunner using executor.StartProcess.

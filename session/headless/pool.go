@@ -2,6 +2,7 @@ package headless
 
 import (
 	"sync"
+	"time"
 )
 
 // FeatureKey is a named type for feature identifiers.
@@ -76,6 +77,31 @@ const defaultMaxCalls = 25
 
 // defaultMaxConcurrent is the fallback when PoolConfig.MaxConcurrentSessions is zero.
 const defaultMaxConcurrent = 5
+
+// maxQueueWait bounds how long call() waits for a concurrency-pool slot before
+// giving up with ErrPoolSaturated — much shorter than any real caller's own
+// call budget, so a saturated pool fails fast instead of silently burning a
+// caller's entire budget just waiting for a slot (see BUG-093).
+//
+// A var, not a const, so tests can shrink it instead of waiting out the real
+// 2-minute window (mirrors remediationBackoffSchedule in
+// session/backlog_remediation.go).
+var maxQueueWait = 2 * time.Minute
+
+// idleTimeout bounds how long a first call (--output-format stream-json) may go
+// with no new output line before it's considered stalled and killed with
+// ErrIdleTimeout — the primary defense against a hung call. The caller's own
+// ctx deadline is now just a backstop against a call that never stops
+// producing output (see BUG-093).
+//
+// A var, not a const, for the same test-injectability reason as maxQueueWait.
+var idleTimeout = 10 * time.Minute
+
+// maxFirstCallOutputBytes caps the cumulative stream-json transcript
+// readFirstCallStream (caller.go) accumulates for one call, independent of
+// the per-line scanner buffer cap — so a long-running, non-idle stream can't
+// grow this buffer unbounded before idleTimeout or ctx would otherwise catch it.
+var maxFirstCallOutputBytes = 32 * 1024 * 1024
 
 // acquireKeyMu returns (and lazily creates) the per-key mutex.
 // Caller must hold p.mu.

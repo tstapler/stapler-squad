@@ -40,9 +40,15 @@ func TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping(t *testing.
 		elapsed time.Duration
 		want    string
 	}{
+		{"pool saturated (queue-wait cap, not the caller's own budget)", headless.ErrPoolSaturated, 5 * time.Minute, "pool_saturated"},
+		{"wrapped pool saturated", fmt.Errorf("headless pool: %w", headless.ErrPoolSaturated), 5 * time.Minute, "pool_saturated"},
+		{"pool saturated even with elapsed near budget must not fall into the timeout heuristic", headless.ErrPoolSaturated, triageCallBudget - time.Second, "pool_saturated"},
+		{"idle timeout (stream stalled)", headless.ErrIdleTimeout, 5 * time.Minute, "idle"},
+		{"wrapped idle timeout", fmt.Errorf("headless call ended: %w", headless.ErrIdleTimeout), 5 * time.Minute, "idle"},
+		{"idle timeout even with elapsed near budget must not fall into the timeout heuristic", headless.ErrIdleTimeout, triageCallBudget - time.Second, "idle"},
 		{"ctx deadline exceeded", context.DeadlineExceeded, 5 * time.Minute, "timeout"},
 		{"wrapped ctx deadline exceeded", fmt.Errorf("headless call ended: %w", context.DeadlineExceeded), 5 * time.Minute, "timeout"},
-		{"elapsed within budget tail even without deadline error", errors.New("some other error"), 29*time.Minute + 56*time.Second, "timeout"},
+		{"elapsed within budget tail even without deadline error", errors.New("some other error"), 3*time.Hour - 4*time.Second, "timeout"},
 		{"ctx canceled (shutdown)", context.Canceled, time.Minute, "shutdown"},
 		{"claude binary not found", headless.ErrClaudeNotFound, time.Second, "claude_not_found"},
 		{"subprocess start error", headless.ErrSubprocessStart, time.Minute, "subprocess_start_error"},
@@ -3623,12 +3629,14 @@ func (f *fakeTriageLivenessEngine) LivenessFor(_ session.BacklogStatus, _ sessio
 	return f.def, nil
 }
 
-// TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsNil
+// TestTriggerTriage_should_UseFlatTriageCallBudgetConstant_When_LivenessEngineIsNil
 // is Story 1.4.2's fallback path: with no LivenessEngine wired (the zero value of
 // BacklogService.livenessEngine, matching every pre-Epic-1.4 construction), the
-// headless call's context.WithTimeout must use the flat triageCallBudget constant
-// (30m), byte-for-byte unchanged from before.
-func TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsNil(t *testing.T) {
+// headless call's context.WithTimeout must use the flat triageCallBudget constant,
+// byte-for-byte unchanged from before. Asserted against the triageCallBudget
+// constant itself (not a hardcoded literal) so this can't drift out of sync the
+// way it did across the 2026-09-08 30m->3h raise (BUG-055).
+func TestTriggerTriage_should_UseFlatTriageCallBudgetConstant_When_LivenessEngineIsNil(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
@@ -3656,8 +3664,8 @@ func TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsN
 	call := pool.firstCall()
 	require.True(t, call.hasDeadline, "the headless call's context must carry a deadline")
 	remaining := time.Until(call.ctxDeadline)
-	assert.Greater(t, remaining, 25*time.Minute, "remaining budget must be close to the flat 30m triageCallBudget constant, not a shorter resolved value")
-	assert.LessOrEqual(t, remaining, 30*time.Minute, "remaining budget must not exceed the flat 30m triageCallBudget constant")
+	assert.Greater(t, remaining, triageCallBudget-5*time.Minute, "remaining budget must be close to the flat triageCallBudget constant, not a shorter resolved value")
+	assert.LessOrEqual(t, remaining, triageCallBudget, "remaining budget must not exceed the flat triageCallBudget constant")
 }
 
 // TestTriggerTriage_should_UseResolvedFortyFiveMinuteTimeout_When_SddModeOverrideConfigured
