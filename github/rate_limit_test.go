@@ -347,3 +347,47 @@ func TestRateLimiterSnapshot_Concurrent(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+// TestRateLimiterSnapshot_NoLostUpdate_ConcurrentDifferentResources is the
+// regression test for the lost-update bug in publishResourceQuota's original
+// unconditional Store: two goroutines racing Update() calls for *different*
+// resources can both Load() the same old snapshot before either Store()s, so
+// the second Store silently overwrites the first goroutine's just-published
+// entry with a copy built from stale data. Unlike
+// TestRateLimiterSnapshot_Concurrent, each round publishes a round-specific
+// value per resource rather than a fixed one, so a lost update is
+// observable — it would leave a resource holding a stale value from an
+// earlier (or no) round instead of the round's own value.
+func TestRateLimiterSnapshot_NoLostUpdate_ConcurrentDifferentResources(t *testing.T) {
+	const rounds = 200
+	r := &RateLimiter{}
+
+	for round := 0; round < rounds; round++ {
+		core := ResourceQuota{Remaining: round, Limit: 5000}
+		search := ResourceQuota{Remaining: 1000 + round, Limit: 30}
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", core)))
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("search", search)))
+		}()
+		close(start)
+		wg.Wait()
+
+		snap := r.Snapshot()
+		if got := snap.Resources["core"]; got.Remaining != core.Remaining {
+			t.Fatalf("round %d: Resources[\"core\"].Remaining = %d, want %d (lost update — concurrent search publish overwrote it)", round, got.Remaining, core.Remaining)
+		}
+		if got := snap.Resources["search"]; got.Remaining != search.Remaining {
+			t.Fatalf("round %d: Resources[\"search\"].Remaining = %d, want %d (lost update — concurrent core publish overwrote it)", round, got.Remaining, search.Remaining)
+		}
+	}
+}

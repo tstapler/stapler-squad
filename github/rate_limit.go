@@ -217,26 +217,39 @@ func (r *RateLimiter) setLimitedUntil(t time.Time) {
 // entry. Every other resource's last-known quota is carried forward
 // untouched, since Resources is a map and cannot be safely mutated in place
 // behind an atomic.Pointer with concurrent readers (pre-mortem P1 #2).
+//
+// The load-copy-store cycle runs in a CompareAndSwap retry loop rather than a
+// plain Store: two goroutines publishing different resources can both Load()
+// the same old snapshot before either publishes, and an unconditional Store
+// would let the second writer silently overwrite the first writer's entry
+// with a copy built from stale data (a lost update). CompareAndSwap detects
+// that the snapshot moved out from under us and retries against the new one.
 func (r *RateLimiter) publishResourceQuota(resource string, quota ResourceQuota) {
-	var oldResources map[string]ResourceQuota
-	if old := r.snapshot.Load(); old != nil {
-		oldResources = old.Resources
+	for {
+		old := r.snapshot.Load()
+		var oldResources map[string]ResourceQuota
+		if old != nil {
+			oldResources = old.Resources
+		}
+
+		newResources := make(map[string]ResourceQuota, len(oldResources)+1)
+		for k, v := range oldResources {
+			newResources[k] = v
+		}
+		newResources[resource] = quota
+
+		r.mu.RLock()
+		rateLimitedUntil := r.rateLimitedUntil
+		r.mu.RUnlock()
+
+		newSnapshot := &RateLimiterSnapshot{
+			Resources:        newResources,
+			RateLimitedUntil: rateLimitedUntil,
+		}
+		if r.snapshot.CompareAndSwap(old, newSnapshot) {
+			return
+		}
 	}
-
-	newResources := make(map[string]ResourceQuota, len(oldResources)+1)
-	for k, v := range oldResources {
-		newResources[k] = v
-	}
-	newResources[resource] = quota
-
-	r.mu.RLock()
-	rateLimitedUntil := r.rateLimitedUntil
-	r.mu.RUnlock()
-
-	r.snapshot.Store(&RateLimiterSnapshot{
-		Resources:        newResources,
-		RateLimitedUntil: rateLimitedUntil,
-	})
 }
 
 // Snapshot returns a lock-free, point-in-time read of the limiter's state. If
