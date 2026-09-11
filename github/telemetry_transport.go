@@ -135,13 +135,20 @@ func registerGitHubTelemetry() {
 		meter := telemetry.GetMeter()
 
 		var err error
+		// These two description strings must stay byte-identical to
+		// session/git/worktree_git.go's githubCallsTotalDescription /
+		// githubCallDurationMsDescription constants, which register the same
+		// two instrument names against the same global meter from a package
+		// that can't import this one (see that file's doc comment) — two
+		// different descriptions for one instrument name is a
+		// duplicate-instrument conflict most OTel SDKs warn or error on.
 		if callsCounter, err = meter.Int64Counter("github.calls_total",
-			metric.WithDescription("Count of native GitHub HTTP calls, tagged by call origin and resource")); err != nil {
+			metric.WithDescription("Count of GitHub API calls (native HTTP and gh CLI subprocess), tagged by call origin, call site, and resource where applicable")); err != nil {
 			log.Error("github: failed to register github.calls_total", "error", err)
 		}
 
 		if callDurationHist, err = meter.Int64Histogram("github.call.duration_ms",
-			metric.WithDescription("Native GitHub HTTP call latency in milliseconds"),
+			metric.WithDescription("GitHub API call latency in milliseconds (native HTTP and gh CLI subprocess)"),
 			metric.WithUnit("ms")); err != nil {
 			log.Error("github: failed to register github.call.duration_ms", "error", err)
 		}

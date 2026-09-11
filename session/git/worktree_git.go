@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -33,29 +34,68 @@ var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
 // session/git, so the reverse import would be a compile-time cycle — the
 // same constraint already documented on isTraversalPathSegment above.
 // Registering the same instrument name from two packages against the one
-// global meter is expected and merges into a single series.
+// global meter is expected and merges into a single series — both
+// registrations use the identical description text (see the constants
+// below) so the merged series never carries two conflicting descriptions.
+//
+// Registration failures are logged, not fatal, mirroring
+// github/telemetry_transport.go's registerGitHubTelemetry: these vars are
+// left nil on failure and every call site below nil-guards before using
+// them, so a meter that rejects registration (e.g. a duplicate-instrument
+// conflict) degrades to "telemetry silently skipped" rather than crashing
+// the whole binary at package-init time.
 var (
-	ghCommandCallsTotal = mustGHCommandCounter()
-	ghCommandDurationMs = mustGHCommandDurationHistogram()
+	registerGHCommandTelemetryOnce sync.Once
+
+	ghCommandCallsTotal metric.Int64Counter
+	ghCommandDurationMs metric.Int64Histogram
 )
 
-func mustGHCommandCounter() metric.Int64Counter {
-	counter, err := telemetry.GetMeter().Int64Counter("github.calls_total",
-		metric.WithDescription("Count of gh CLI subprocess calls, tagged by call origin and call site"))
-	if err != nil {
-		panic(err)
-	}
-	return counter
+func init() {
+	registerGHCommandTelemetry()
 }
 
-func mustGHCommandDurationHistogram() metric.Int64Histogram {
-	hist, err := telemetry.GetMeter().Int64Histogram("github.call.duration_ms",
-		metric.WithDescription("gh CLI subprocess call latency in milliseconds"),
-		metric.WithUnit("ms"))
-	if err != nil {
-		panic(err)
+// githubCallsTotalDescription / githubCallDurationMsDescription must stay
+// byte-identical to the descriptions github/telemetry_transport.go's
+// registerGitHubTelemetry registers under the same two instrument names
+// (github.calls_total / github.call.duration_ms) — two different
+// descriptions for the same instrument name is a duplicate-instrument
+// conflict most OTel SDKs warn or error on.
+const (
+	githubCallsTotalDescription     = "Count of GitHub API calls (native HTTP and gh CLI subprocess), tagged by call origin, call site, and resource where applicable"
+	githubCallDurationMsDescription = "GitHub API call latency in milliseconds (native HTTP and gh CLI subprocess)"
+)
+
+// registerGHCommandTelemetry registers this package's gh-CLI call
+// instruments against telemetry.GetMeter(). Safe to call before
+// telemetry.Initialize (returns a no-op meter) and idempotent via
+// sync.Once, matching github/telemetry_transport.go's
+// registerGitHubTelemetry pattern.
+func registerGHCommandTelemetry() {
+	registerGHCommandTelemetryOnce.Do(func() {
+		registerGHCommandTelemetryWithMeter(telemetry.GetMeter())
+	})
+}
+
+// registerGHCommandTelemetryWithMeter does the actual instrument
+// registration against meter. Split out from registerGHCommandTelemetry so
+// tests can exercise the non-fatal-on-error path with a meter constructed to
+// fail, since a real OTel SDK meter's registration call doesn't itself
+// return an error for the specific duplicate-name/description conflict this
+// fix targets (that surfaces later, asynchronously, via the SDK's error
+// handler) — only for other rejections such as an invalid instrument name.
+func registerGHCommandTelemetryWithMeter(meter metric.Meter) {
+	var err error
+	if ghCommandCallsTotal, err = meter.Int64Counter("github.calls_total",
+		metric.WithDescription(githubCallsTotalDescription)); err != nil {
+		log.Error("session/git: failed to register github.calls_total", "err", err)
 	}
-	return hist
+
+	if ghCommandDurationMs, err = meter.Int64Histogram("github.call.duration_ms",
+		metric.WithDescription(githubCallDurationMsDescription),
+		metric.WithUnit("ms")); err != nil {
+		log.Error("session/git: failed to register github.call.duration_ms", "err", err)
+	}
 }
 
 // runGHCommand wraps a `gh` CLI invocation routed through g.commandRunner()
@@ -81,8 +121,12 @@ func (g *GitWorktree) runGHCommand(ctx context.Context, callSite string, args ..
 	output, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", args...)
 	duration := time.Since(start)
 
-	ghCommandCallsTotal.Add(ctx, 1, metric.WithAttributes(attrs...))
-	ghCommandDurationMs.Record(ctx, duration.Milliseconds(), metric.WithAttributes(attrs...))
+	if ghCommandCallsTotal != nil {
+		ghCommandCallsTotal.Add(ctx, 1, metric.WithAttributes(attrs...))
+	}
+	if ghCommandDurationMs != nil {
+		ghCommandDurationMs.Record(ctx, duration.Milliseconds(), metric.WithAttributes(attrs...))
+	}
 
 	if err != nil {
 		span.RecordError(err)
