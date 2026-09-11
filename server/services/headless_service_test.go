@@ -16,9 +16,11 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
-// firstCallJSONHS returns a valid first-call JSON response for headless service tests.
+// firstCallJSONHS returns a valid first-call stream-json terminal "result" line
+// for headless service tests. total_cost_usd (not cost_usd) matches the real
+// CLI's field name — see headless.firstCallJSONResult's doc comment.
 func firstCallJSONHS(sessionID, result string) string {
-	return `{"session_id":"` + sessionID + `","result":"` + result + `","cost_usd":0.001}`
+	return `{"type":"result","session_id":"` + sessionID + `","result":"` + result + `","total_cost_usd":0.001}`
 }
 
 // newHeadlessTestServer creates an in-process HTTP test server for HeadlessService.

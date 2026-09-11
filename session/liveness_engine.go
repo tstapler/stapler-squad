@@ -51,13 +51,15 @@ func (d LivenessDefinition) IsNoTimeout() bool {
 }
 
 // defaultTriageExpectedDuration mirrors server/services.triageCallBudget
-// (30m) — the headless triage call's own timeout. That constant is
-// unexported in a different package (server/services), so its value is
-// duplicated here as a literal rather than imported; StalenessMargin below is
-// derived by subtraction from maxHeadlessTriageSessionStaleness (this
-// package's own constant) rather than a second hardcoded literal, so the two
-// numbers can never drift apart from the 35m total BUG-055 requires.
-const defaultTriageExpectedDuration = 30 * time.Minute
+// (3h, raised from 30m 2026-09-08 alongside headless.idleTimeout — see that
+// constant's own doc comment) — the headless triage call's own timeout. That
+// constant is unexported in a different package (server/services), so its
+// value is duplicated here as a literal rather than imported; StalenessMargin
+// below is derived by subtraction from maxHeadlessTriageSessionStaleness
+// (this package's own constant) rather than a second hardcoded literal, so
+// the two numbers can never drift apart from the 3h15m total BUG-055
+// requires.
+const defaultTriageExpectedDuration = 3 * time.Hour
 
 // DefaultLivenessEngine is the in-memory LivenessEngine implementation that
 // reproduces every hardcoded StuckReason threshold surveyed in
@@ -78,9 +80,9 @@ type DefaultLivenessEngine struct {
 // appropriate because a failure here is exclusively a programmer error in
 // this file's own table, never a runtime/configuration condition.
 func NewDefaultLivenessEngine() *DefaultLivenessEngine {
-	// Shape A: idea stage, headless triage call. ExpectedDuration (30m) +
-	// StalenessMargin (35m - 30m = 5m) reproduces
-	// maxHeadlessTriageSessionStaleness (35m) exactly — see that constant's
+	// Shape A: idea stage, headless triage call. ExpectedDuration (3h) +
+	// StalenessMargin (3h15m - 3h = 15m) reproduces
+	// maxHeadlessTriageSessionStaleness (3h15m) exactly — see that constant's
 	// doc comment (session/backlog_lifecycle_triage.go) for why it must stay
 	// strictly greater than the call budget, with real margin.
 	orphanedTriage, err := NewLivenessDefinition(LivenessKindDurationBudget,
