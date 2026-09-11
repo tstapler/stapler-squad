@@ -202,6 +202,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		SkipPlanning:                 item.SkipPlanning,
 		AutoSpawnSession:             item.AutoSpawnSession,
 		AutoCreatePR:                 item.AutoCreatePr,
+		AutoApprovePlan:              item.AutoApprovePlan,
 		PipelineMode:                 item.PipelineMode,
 		Category:                     item.Category,
 		PlanApproved:                 item.PlanApproved,
@@ -332,6 +333,7 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetSkipPlanning(data.SkipPlanning).
 		SetAutoSpawnSession(data.AutoSpawnSession).
 		SetAutoCreatePr(data.AutoCreatePR).
+		SetAutoApprovePlan(data.AutoApprovePlan).
 		SetPipelineMode(data.PipelineMode).
 		SetCategory(data.Category).
 		SetPlanApproved(data.PlanApproved).
@@ -928,6 +930,9 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.AutoCreatePR != nil {
 		u.SetAutoCreatePr(*update.AutoCreatePR)
 	}
+	if update.AutoApprovePlan != nil {
+		u.SetAutoApprovePlan(*update.AutoApprovePlan)
+	}
 	if update.PipelineMode != nil {
 		u.SetPipelineMode(*update.PipelineMode)
 	}
@@ -1075,6 +1080,9 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	}
 	if update.AutoCreatePR != nil {
 		fields = append(fields, "autoCreatePR")
+	}
+	if update.AutoApprovePlan != nil {
+		fields = append(fields, "autoApprovePlan")
 	}
 	if update.PipelineMode != nil {
 		fields = append(fields, "pipelineMode")

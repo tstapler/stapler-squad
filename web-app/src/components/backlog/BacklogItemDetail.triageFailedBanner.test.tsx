@@ -115,6 +115,7 @@ function makeFailedTriageItem(status: BacklogItemStatus): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     planArtifactsPath: undefined,
     acCriteria: [],

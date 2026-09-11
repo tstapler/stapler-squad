@@ -208,6 +208,7 @@ func (s *BacklogService) CreateBacklogItem(
 		SkipPlanning:       req.Msg.SkipPlanning,
 		AutoSpawnSession:   req.Msg.AutoSpawnSession,
 		AutoCreatePR:       req.Msg.AutoCreatePr,
+		AutoApprovePlan:    req.Msg.AutoApprovePlan,
 		PipelineMode:       defaultPipelineModeForNewItem(req.Msg.PipelineMode),
 		Category:           category,
 		Notes:              req.Msg.Notes,
@@ -311,6 +312,8 @@ func (s *BacklogService) UpdateBacklogItem(
 	update.AutoSpawnSession = &autoSpawn
 	autoCreatePR := req.Msg.AutoCreatePr
 	update.AutoCreatePR = &autoCreatePR
+	autoApprovePlan := req.Msg.AutoApprovePlan
+	update.AutoApprovePlan = &autoApprovePlan
 	// PipelineMode is presence-gated (optional string on the wire): only set
 	// update.PipelineMode when the field was explicitly present on the
 	// request, so an omitted pipeline_mode never clobbers the item's existing

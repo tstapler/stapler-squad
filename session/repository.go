@@ -275,6 +275,13 @@ type BacklogItemData struct {
 	// deliberate opt-in, since it removes the human review-the-prompt
 	// checkpoint before an LLM-authored PR is created.
 	AutoCreatePR bool
+	// AutoApprovePlan, when true, approves a plan TriggerTriage produces
+	// automatically (PlanApproved set true, mirroring a manual "Approve Plan"
+	// click) once its artifacts exist on disk — no human review checkpoint.
+	// Off by default, same opt-in rationale as AutoCreatePR. See the
+	// auto-approve call site in server/services/backlog_service_triage.go's
+	// TriggerTriage.
+	AutoApprovePlan bool
 	// ReworkCapOverride is a per-item override for the auto-rework cap
 	// (config.Config.MaxAutoReworkIterationsOrDefault). Nil = use the global
 	// default. 0 = unlimited retries for this item. >0 = this item's own cap,
@@ -489,6 +496,7 @@ type BacklogItemUpdate struct {
 	SkipPlanning     *bool
 	AutoSpawnSession *bool
 	AutoCreatePR     *bool
+	AutoApprovePlan  *bool
 	// PipelineMode is a pointer for partial-update presence: nil means "leave
 	// the item's stored pipeline_mode untouched", while a non-nil pointer
 	// (including one pointing at "") explicitly sets/resets it. See
