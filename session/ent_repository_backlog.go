@@ -1672,14 +1672,15 @@ func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Cont
 	return &result, nil
 }
 
-// publishItemChanged eager-loads item's ItemSessions (see
-// attachItemSessionsForPublish) and then publishes via
-// publishItemChangedSnapshot. This is the entry point every call site should
-// use except DeleteBacklogItem, whose snapshot must be captured before the
-// item's sessions are deleted and therefore cannot be re-queried here — see
-// publishItemChangedSnapshot's doc comment.
+// publishItemChanged eager-loads item's ItemSessions and StatusEvents (see
+// attachItemSessionsForPublish/attachStatusEventsForPublish) and then
+// publishes via publishItemChangedSnapshot. This is the entry point every
+// call site should use except DeleteBacklogItem, whose snapshot must be
+// captured before the item's sessions are deleted and therefore cannot be
+// re-queried here — see publishItemChangedSnapshot's doc comment.
 func (r *EntRepository) publishItemChanged(ctx context.Context, item *BacklogItemData, change BacklogItemChange) {
 	r.attachItemSessionsForPublish(ctx, item)
+	r.attachStatusEventsForPublish(ctx, item)
 	r.publishItemChangedSnapshot(item, change)
 }
 
@@ -1812,6 +1813,45 @@ func (r *EntRepository) attachItemSessionsForPublish(ctx context.Context, data *
 		return
 	}
 	data.ItemSessions = sessions
+}
+
+// attachStatusEventsForPublish best-effort loads and attaches this item's
+// status-transition audit trail onto data before it's handed to
+// publishItemChanged, mirroring attachItemSessionsForPublish above.
+//
+// Every publish-hook call site builds its BacklogItemData from a plain
+// BacklogItem.Get() (e.g. TransitionBacklogItemStatus re-reads the row right
+// after recordStatusEvent appends the new row) rather than a query with
+// WithStatusEvents(), unlike GetBacklogItem's REST read path — so without
+// this, every live BacklogItemEvent following a status transition carries an
+// empty StatusEvents slice. BacklogItemDetail.tsx's live-watch merge effect
+// does a wholesale item replace (not a field merge), so that empty slice
+// immediately stomps the correctly-populated StatusEvents a prior
+// GetBacklogItem() fetch had loaded — the Workflow section reverts to "No
+// status history recorded" moments after a real transition even though the
+// audit rows are persisted correctly. Best-effort: a lookup failure is
+// logged and skipped, never fails the mutation that already succeeded.
+func (r *EntRepository) attachStatusEventsForPublish(ctx context.Context, data *BacklogItemData) {
+	if data == nil || data.ID == "" {
+		return
+	}
+	parsedID, err := r.resolveBacklogItemLookup(ctx, data.ID)
+	if err != nil {
+		log.WarningLog().Printf("[EntRepository] attachStatusEventsForPublish: invalid item id %s: %v", data.ID, err)
+		return
+	}
+	events, err := r.client.BacklogStatusEvent.Query().
+		Where(backlogstatusevent.ItemID(parsedID)).
+		Order(ent.Asc(backlogstatusevent.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		log.WarningLog().Printf("[EntRepository] attachStatusEventsForPublish: failed to load status events for item %s: %v", data.ID, err)
+		return
+	}
+	data.StatusEvents = make([]BacklogStatusEventData, len(events))
+	for i, ev := range events {
+		data.StatusEvents[i] = backlogStatusEventToData(ev)
+	}
 }
 
 // --- BacklogStuckState (durable stuck-state bookkeeping) ---
