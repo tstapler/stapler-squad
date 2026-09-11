@@ -7,7 +7,26 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
+	"time"
 )
+
+// etagCacheEntryTTL bounds how long an ETagCache entry survives without being
+// re-written. The cache is per-process and keyed by every (owner, repo,
+// prNumber) ever polled; Invalidate() is only called from the two webhook-
+// reconciliation call sites, never on PR merge/close/session-archival/
+// worktree-removal, so without a TTL the map grows unbounded over the life
+// of a long-running process. A PR that hasn't been polled in a day is very
+// likely closed/archived — letting its entry expire just costs the next poll
+// one uncached fetch instead of a 304.
+const etagCacheEntryTTL = 24 * time.Hour
+
+// etagCacheSweepEveryNWrites triggers an opportunistic sweepExpired pass
+// every N calls to set(), rather than running a dedicated background
+// goroutine — set()'s caller (GetPRInfoConditional, polled continuously by
+// session/pr_status_poller.go) already drives the cache's write rate, so
+// piggybacking eviction on writes needs no extra lifecycle/ctx wiring.
+const etagCacheSweepEveryNWrites = 64
 
 // ETagCache stores ETags and cached PRInfo responses per (owner, repo, prNumber).
 // Using conditional requests (If-None-Match) allows GitHub to return 304 Not Modified
@@ -15,12 +34,14 @@ import (
 // sync.Map gives lock-free reads in the steady state — entries are written once on
 // first PR discovery and then read on every subsequent poll tick.
 type ETagCache struct {
-	store sync.Map // key: string, value: etagEntry
+	store      sync.Map // key: string, value: etagEntry
+	writeCount atomic.Uint64
 }
 
 type etagEntry struct {
-	etag   string
-	prInfo *PRInfo
+	etag        string
+	prInfo      *PRInfo
+	lastWriteAt time.Time
 }
 
 // NewETagCache creates a new empty ETagCache.
@@ -41,7 +62,27 @@ func (c *ETagCache) get(key string) (etagEntry, bool) {
 }
 
 func (c *ETagCache) set(key string, e etagEntry) {
+	e.lastWriteAt = time.Now()
 	c.store.Store(key, e)
+	if c.writeCount.Add(1)%etagCacheSweepEveryNWrites == 0 {
+		c.sweepExpired(time.Now())
+	}
+}
+
+// sweepExpired deletes every entry whose lastWriteAt is older than
+// etagCacheEntryTTL relative to now, returning the count removed. now is a
+// parameter (rather than always time.Now()) so tests can fast-forward past
+// the TTL deterministically instead of waiting on real time.
+func (c *ETagCache) sweepExpired(now time.Time) int {
+	removed := 0
+	c.store.Range(func(key, value any) bool {
+		if entry, ok := value.(etagEntry); ok && now.Sub(entry.lastWriteAt) > etagCacheEntryTTL {
+			c.store.Delete(key)
+			removed++
+		}
+		return true
+	})
+	return removed
 }
 
 // Invalidate drops the cached entry for (owner, repo, prNumber), safe to call

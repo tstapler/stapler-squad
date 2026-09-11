@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // TestETagCache_Invalidate_NextFetchSendsNoIfNoneMatch is Task 5.1.1b's unit
@@ -64,6 +65,64 @@ func TestETagCache_Invalidate_NextFetchSendsNoIfNoneMatch(t *testing.T) {
 	}
 	if gotIfNoneMatch != "" {
 		t.Fatalf("If-None-Match = %q, want empty after Invalidate", gotIfNoneMatch)
+	}
+}
+
+// TestETagCache_SweepExpired_EvictsOldEntries is the regression test for a
+// code-review MAJOR: ETagCache.store had no eviction/TTL/size cap, so
+// entries accumulate for the life of a long-running process. sweepExpired
+// takes `now` as a parameter so the TTL can be fast-forwarded past
+// deterministically instead of waiting on real time.
+func TestETagCache_SweepExpired_EvictsOldEntries(t *testing.T) {
+	cache := NewETagCache()
+	key := cache.cacheKey("acme", "widgets", 1)
+	cache.set(key, etagEntry{etag: "e1", prInfo: &PRInfo{Number: 1}})
+
+	removed := cache.sweepExpired(time.Now().Add(etagCacheEntryTTL + time.Minute))
+	if removed != 1 {
+		t.Fatalf("sweepExpired removed %d entries, want 1", removed)
+	}
+	if _, ok := cache.get(key); ok {
+		t.Fatal("expected entry to be evicted once older than etagCacheEntryTTL")
+	}
+}
+
+// TestETagCache_SweepExpired_KeepsFreshEntries confirms sweepExpired leaves
+// an entry written within the TTL window untouched.
+func TestETagCache_SweepExpired_KeepsFreshEntries(t *testing.T) {
+	cache := NewETagCache()
+	key := cache.cacheKey("acme", "widgets", 2)
+	cache.set(key, etagEntry{etag: "e2", prInfo: &PRInfo{Number: 2}})
+
+	removed := cache.sweepExpired(time.Now())
+	if removed != 0 {
+		t.Fatalf("sweepExpired removed %d entries, want 0 (entry is still fresh)", removed)
+	}
+	if _, ok := cache.get(key); !ok {
+		t.Fatal("expected fresh entry to survive sweep")
+	}
+}
+
+// TestETagCache_SetTriggersOpportunisticSweep confirms set() itself, not
+// just a direct sweepExpired call, evicts a stale entry once
+// etagCacheSweepEveryNWrites writes have accumulated — the production path
+// GetPRInfoConditional actually drives.
+func TestETagCache_SetTriggersOpportunisticSweep(t *testing.T) {
+	cache := NewETagCache()
+	staleKey := cache.cacheKey("acme", "widgets", 3)
+	cache.set(staleKey, etagEntry{etag: "stale", prInfo: &PRInfo{Number: 3}})
+
+	// Backdate the entry directly (same package) so it's already expired.
+	entry, _ := cache.get(staleKey)
+	entry.lastWriteAt = time.Now().Add(-etagCacheEntryTTL - time.Minute)
+	cache.store.Store(staleKey, entry)
+
+	for i := 0; i < etagCacheSweepEveryNWrites; i++ {
+		cache.set(cache.cacheKey("acme", "widgets", 100+i), etagEntry{etag: "x", prInfo: &PRInfo{Number: 100 + i}})
+	}
+
+	if _, ok := cache.get(staleKey); ok {
+		t.Fatal("expected stale entry to be swept opportunistically after etagCacheSweepEveryNWrites writes")
 	}
 }
 
