@@ -1,6 +1,7 @@
 import React from "react";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import { VcsWidgetComments } from "./VcsWidgetComments";
+import { rateLimitError } from "@/lib/vcs/__testUtils__/rateLimitFixtures";
 
 const mockGetPRComments = jest.fn();
 
@@ -21,15 +22,6 @@ jest.mock("@/lib/contexts/AnalyticsContext", () => ({
 function renderWidget() {
   return render(
     <VcsWidgetComments owner="acme" repo="widget" prNumber={7} sessionId="session-1" />
-  );
-}
-
-// Mirrors the "(reason=transient|exhausted; reset_at=<RFC3339>)" marker
-// classifyGitHubRateLimitError appends server-side (see githubRateLimit.test.ts).
-function rateLimitError(reason: "transient" | "exhausted", msUntilReset: number): Error {
-  const resetAt = new Date(Date.now() + msUntilReset);
-  return new Error(
-    `github: rate limited until ${resetAt.toISOString()}: some detail (reason=${reason}; reset_at=${resetAt.toISOString()})`
   );
 }
 

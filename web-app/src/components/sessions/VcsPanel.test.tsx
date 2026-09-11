@@ -4,6 +4,7 @@ import { create } from "@bufbuild/protobuf";
 import { VCSStatusSchema, FileChangeSchema, SessionSchema, FileStatus } from "@/gen/session/v1/types_pb";
 import { VcsPanel } from "./VcsPanel";
 import { useSessionVcsContext } from "@/lib/contexts/SessionVcsContext";
+import { rateLimitError } from "@/lib/vcs/__testUtils__/rateLimitFixtures";
 
 jest.mock("@/lib/contexts/SessionVcsContext", () => ({
   useSessionVcsContext: jest.fn(),
@@ -14,15 +15,6 @@ jest.mock("@/lib/contexts/AnalyticsContext", () => ({
 }));
 
 const mockUseSessionVcsContext = useSessionVcsContext as jest.Mock;
-
-// Mirrors the "(reason=transient|exhausted; reset_at=<RFC3339>)" marker
-// classifyGitHubRateLimitError appends server-side (see githubRateLimit.test.ts).
-function rateLimitError(reason: "transient" | "exhausted", msUntilReset: number): Error {
-  const resetAt = new Date(Date.now() + msUntilReset);
-  return new Error(
-    `github: rate limited until ${resetAt.toISOString()}: some detail (reason=${reason}; reset_at=${resetAt.toISOString()})`
-  );
-}
 
 function mockVcsError(error: Error) {
   mockUseSessionVcsContext.mockReturnValue({
