@@ -200,11 +200,17 @@ func writeSwappableCapabilityCheckFakeClaudeScript(t *testing.T, scriptDir, coun
 	// Both values ever written to resultPath in this test file are plain,
 	// quote-free ASCII (capabilityCheckMarkerValue or "not the marker"), so a bare
 	// double-quoted substitution is safe — no JSON-escaping helper needed.
+	// isResultLine (caller.go) only recognizes a line as the terminal result
+	// once it structurally parses with top-level "type":"result" — omitting it
+	// (as an earlier version of this script did) means the pool never finds a
+	// result line, run() always returns false, and Ensure deterministically
+	// (not flakily) fails to observe the swapped-in success value. total_cost_usd
+	// is the real field name (firstCallJSONResult); cost_usd doesn't exist.
 	script := fmt.Sprintf(`#!/bin/sh
 cat > /dev/null
 echo call >> %s
 result=$(cat %s)
-printf '{"session_id":"s1","result":"%%s","cost_usd":0}\n' "$result"
+printf '{"type":"result","session_id":"s1","result":"%%s","total_cost_usd":0}\n' "$result"
 `, countPath, resultPath)
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o755))
 	return scriptPath
