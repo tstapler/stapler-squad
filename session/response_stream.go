@@ -46,6 +46,18 @@ type ResponseStream struct {
 	OnEOF        func()                      // Called when the PTY exits unexpectedly (program exit, not Stop())
 }
 
+// ptyDeadlineUnsupported tracks, per underlying PTY, whether SetReadDeadline
+// has already failed with "file type does not support deadline" -- a
+// permanent, platform-level property of the fd (confirmed: on Darwin, a PTY
+// master opened via github.com/creack/pty is not always registered with the
+// runtime's netpoller, so os.File.SetReadDeadline never succeeds for it; on
+// Linux it typically does). streamLoop is the only goroutine that reads this
+// stream's PTY, so a plain bool (no lock) is safe -- it is only ever read and
+// written from that single goroutine.
+type ptyDeadlineUnsupported struct {
+	confirmed bool
+}
+
 // mangleCorrelatorTTL is how long a Stage 1 observation waits for its matching
 // Stage 2 observation before being evicted and recorded as "stripped".
 const mangleCorrelatorTTL = 5 * time.Second
@@ -210,6 +222,10 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 	// Buffer for reading PTY output
 	readBuf := make([]byte, 4096)
 
+	// See ptyDeadlineUnsupported's doc comment: scoped to this loop's single
+	// goroutine, so a plain struct (no lock, no atomic) is safe.
+	deadlineUnsupported := &ptyDeadlineUnsupported{}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -232,8 +248,27 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 				continue
 			}
 
-			// Set read deadline to avoid blocking forever
-			pty.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			// Set read deadline to avoid blocking forever. A failure here (e.g. the
+			// PTY was just closed out from under us) means the fd is already
+			// unusable, so the following Read will fail immediately with its own
+			// error rather than block -- fall through into the normal Read/error
+			// handling below instead of skipping the read, which would spin forever
+			// without ever detecting the closed PTY.
+			//
+			// deadlineUnsupported gates this: once SetReadDeadline has failed once
+			// for this stream with the platform-level "file type does not support
+			// deadline" error (see ptyDeadlineUnsupported's doc comment), it will
+			// fail identically on every subsequent iteration -- retrying it (and
+			// logging every failure) every 100ms for the life of the session was
+			// pure log-volume noise with no actionable signal. Log it once, at Warn
+			// (an expected platform limitation, not an application error), and stop
+			// retrying the syscall for the rest of this loop's life.
+			if !deadlineUnsupported.confirmed {
+				if err := pty.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+					deadlineUnsupported.confirmed = true
+					log.Warn("PTY does not support read deadlines; falling back to blocking reads for this session", "session", rs.sessionName, "err", err)
+				}
+			}
 			n, err := pty.Read(readBuf)
 
 			if err != nil {
@@ -295,9 +330,11 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 					rs.escapeParser.Parse(data, sessionSeq)
 				}
 
-				// Write to circular buffer (copies data internally, no reference retained)
+				// Write to circular buffer (copies data internally, no reference retained).
+				// CircularBuffer.Write never returns a non-nil error; it exists only to
+				// satisfy io.Writer.
 				if rs.ptyAccess.buffer != nil {
-					rs.ptyAccess.buffer.Write(data)
+					_, _ = rs.ptyAccess.buffer.Write(data)
 				}
 
 				// Broadcast to subscribers — only allocates a copy when subscribers exist.

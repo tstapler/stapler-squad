@@ -1406,3 +1406,7 @@ func (r *EntRepository) CountReviewCyclesSince(ctx context.Context, itemID strin
 	}
 	return n, nil
 }
+
+// Jules-specific queries (ListOpenJulesItemSessions, CountJulesItemSessionsSince,
+// TouchItemSessionProgress) live in storage_backlog_jules.go, split out to
+// keep this file under the file-length-limit gate.

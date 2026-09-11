@@ -23,6 +23,12 @@ export function useFocusTrap(
     if (!isActive || !ref.current) return;
 
     const container = ref.current as HTMLElement;
+    // Ensure the "no focusable descendants" fallback below can actually
+    // move focus onto the container itself — a plain <div> without a
+    // tabindex silently no-ops .focus().
+    if (!container.hasAttribute("tabindex")) {
+      container.setAttribute("tabindex", "-1");
+    }
 
     // Computed fresh on every Tab press (not cached once at activation) so a
     // control that becomes disabled/enabled after the trap activates (e.g. a
@@ -64,11 +70,31 @@ export function useFocusTrap(
       }
     };
 
+    // Safety net for widgets that rewrite their own tabindex on focus (e.g.
+    // react-arborist's FileTree), which can let native Tab slip past
+    // handleKeyDown's first/last check entirely — backlog item
+    // 4a1f73c4-5558-41f8-9860-8508fb874fcc.
+    const handleFocusIn = (e: FocusEvent) => {
+      const target = e.target as Node | null;
+      if (!target || container.contains(target)) return;
+      // A deliberate close-restore (e.g. a sibling trap sharing this trigger,
+      // like SessionActionsOverflow's Program Picker over its overflow menu),
+      // not an escape.
+      if (target === triggerRef?.current) return;
+      // Focus moved into another legitimate dialog — e.g. React's autoFocus
+      // lands here before that dialog's own trap effect has registered.
+      const targetEl = target as HTMLElement;
+      if (targetEl.closest?.('[role="dialog"], [role="alertdialog"]')) return;
+      (getFocusable()[0] ?? container).focus();
+    };
+
     document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("focusin", handleFocusIn);
 
     const triggerEl = triggerRef?.current;
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("focusin", handleFocusIn);
       // Return focus to the trigger element when the trap is deactivated
       triggerEl?.focus();
     };

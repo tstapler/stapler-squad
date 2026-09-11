@@ -205,9 +205,10 @@ if [ -d "$SOCKDIR" ]; then
 fi
 rm -f "$0"
 `, ownerPID, uid, ownerPID)
-	if err := os.WriteFile(scriptPath, []byte(script), 0700); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(script), 0600); err != nil {
 		return // best-effort; normal t.Cleanup handles the happy path
 	}
+	// #nosec G204 -- scriptPath is a fixed path this function just wrote itself above, not external input.
 	cmd := exec.CommandContext(context.Background(), "sh", scriptPath) //nolint:norawexec long-running cmd.Start() process; lifecycle managed by caller
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}              // own process group → survives SIGKILL to test binary
 	_ = cmd.Start()

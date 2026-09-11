@@ -43,6 +43,10 @@ type ToolTokenStats struct {
 	CallCount int
 	// MCPServer is non-empty when tool follows mcp__<server>__<tool> pattern.
 	MCPServer string
+	// CostUsd is populated by AttributeToolCosts (tool-type-level session sum,
+	// per ADR-001), not by the parser. Zero until a caller explicitly attributes
+	// costs onto this struct.
+	CostUsd float64
 }
 
 // SkillActivation records a detected skill or command invocation.
@@ -58,8 +62,8 @@ type TokenStoreReader interface {
 	GetAll() []*ParseResult
 	GetByUUID(uuid string) *ParseResult
 	IsLoading() bool
-	Subscribe() <-chan struct{}
-	Unsubscribe(ch <-chan struct{})
+	Subscribe() <-chan *ParseResult
+	Unsubscribe(ch <-chan *ParseResult)
 }
 
 // ModelPricing holds per-model token prices in USD per million tokens.

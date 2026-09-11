@@ -178,11 +178,12 @@ linters:
         linters: [gocyclo, gocognit, funlen, revive, dupl]
       - path: "session/ent/"
         linters: [gocyclo, gocognit, funlen, revive, dupl]
-      # exhaustive enforces DetectedStatus switch coverage in session/detection/ only.
-      # All other packages use iota types with intentional default: clauses.
+      # exhaustive enforces DetectedStatus switch coverage in session/detection/
+      # and Reason switch coverage in session/lifecycle/ only. All other
+      # packages use iota types with intentional default: clauses.
       - path: "^server/"
         linters: [exhaustive]
-      - path: "^session/[^d]"
+      - path: "^session/[^dl]"
         linters: [exhaustive]
       - path: "^session/d[^e]"
         linters: [exhaustive]
@@ -191,6 +192,16 @@ linters:
       - path: "^session/det[^e]"
         linters: [exhaustive]
       - path: "^session/dete[^c]"
+        linters: [exhaustive]
+      - path: "^session/l[^i]"
+        linters: [exhaustive]
+      - path: "^session/li[^f]"
+        linters: [exhaustive]
+      - path: "^session/lif[^e]"
+        linters: [exhaustive]
+      - path: "^session/life[^c]"
+        linters: [exhaustive]
+      - path: "^session/lifec[^y]"
         linters: [exhaustive]
       - path: "^main\\.go"
         linters: [exhaustive]

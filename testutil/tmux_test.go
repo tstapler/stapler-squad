@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestTmuxTestServer_Creation validates isolated server creation
@@ -131,7 +132,7 @@ func TestTmuxTestServer_KillSession(t *testing.T) {
 	// Verify only one session remains — poll instead of a fixed sleep, since
 	// how long tmux takes to reflect the kill in list-sessions varies under load.
 	var sessionsAfter []string
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		var listErr error
 		sessionsAfter, listErr = server.ListSessions()
 		return listErr == nil && len(sessionsAfter) == 1
@@ -168,7 +169,7 @@ func TestTmuxTestServer_KillAllSessions(t *testing.T) {
 
 	// Verify no sessions remain — poll instead of a fixed sleep, since cleanup
 	// completion time varies under load.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		var listErr error
 		sessions, listErr = server.ListSessions()
 		return listErr == nil && len(sessions) == 0
@@ -207,7 +208,7 @@ func TestTmuxTestServer_AutomaticCleanup(t *testing.T) {
 	// sleep, since t.Cleanup()'s teardown (process kill + socket removal) can
 	// take longer than a fixed 100ms under system load.
 	var lastOutput string
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer listCancel()
 		cmd := safeexec.CommandContext(listCtx, "tmux", "-L", socketName, "list-sessions")

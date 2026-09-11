@@ -193,10 +193,14 @@ func TestTriggerHandoffSummary_DispatchesAsyncAndReturnsGeneratingRow(t *testing
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	release, startedAt, started, err := gen.BeginGeneration(ctx, sessionID, "title")
+	require.NoError(t, err)
+	require.True(t, started, "expected BeginGeneration to start a new generation")
+
 	firstDone := make(chan struct{})
 	go func() {
 		defer close(firstDone)
-		gen.GenerateAndPersist(ctx, sessionID, "title")
+		gen.GenerateAndPersist(ctx, sessionID, "title", release, startedAt)
 	}()
 
 	select {
@@ -223,22 +227,32 @@ func TestTriggerHandoffSummary_DispatchesAsyncAndReturnsGeneratingRow(t *testing
 	<-firstDone
 }
 
-// TestTriggerHandoffSummary_SynthesizesPendingResponse_When_NoRowExistsYet
-// covers the narrow race documented on TriggerHandoffSummary: if no prior row
-// exists, the handler dispatches generation but does not wait for the
-// interim GENERATING upsert to land before its own read — so a not-found
-// result must produce a synthesized PENDING response, not an error.
+// TestTriggerHandoffSummary_ReturnsGeneratingResponse_When_NoRowExistsYet
+// covers the no-prior-row path: BeginGeneration writes the interim
+// GENERATING row synchronously, before TriggerHandoffSummary dispatches the
+// rest of the pipeline, so the handler's own read is guaranteed to observe
+// GENERATING — never a not-found race and never a synthesized PENDING
+// response.
 //
-// Note: TriggerHandoffSummary always dispatches GenerateAndPersist with
-// context.Background(), detached from this test's own context (by design —
-// see the handler's doc comment), so this test cannot cancel it. $HOME is
-// isolated to an empty temp dir (no conversation fixture) purely so the
-// dispatched goroutine's transcript lookup fails fast and deterministically
-// instead of scanning whatever real ~/.claude/projects data happens to exist
-// on the machine running the test; the test then waits for that goroutine to
-// reach a terminal state before returning, so it can't race this test's own
-// ent-client cleanup.
-func TestTriggerHandoffSummary_SynthesizesPendingResponse_When_NoRowExistsYet(t *testing.T) {
+// This test previously asserted PENDING-or-GENERATING and was flaky: before
+// BeginGeneration existed, the interim upsert happened inside the dispatched
+// goroutine itself, so on a sufficiently contended scheduler that goroutine
+// could reach a terminal ERROR row (this test's empty $HOME makes the
+// transcript lookup fail immediately) before TriggerHandoffSummary's own
+// post-dispatch read ran, occasionally observing status=ERROR instead of
+// PENDING/GENERATING. Making BeginGeneration synchronous closes that race by
+// construction — see its doc comment (session/handoff_summary_service.go).
+//
+// Note: TriggerHandoffSummary always dispatches the rest of the pipeline
+// (GenerateAndPersist) with context.Background(), detached from this test's
+// own context (by design — see the handler's doc comment), so this test
+// cannot cancel it. $HOME is isolated to an empty temp dir (no conversation
+// fixture) purely so the dispatched goroutine's transcript lookup fails fast
+// and deterministically instead of scanning whatever real ~/.claude/projects
+// data happens to exist on the machine running the test; the test then waits
+// for that goroutine to reach a terminal state before returning, so it can't
+// race this test's own ent-client cleanup.
+func TestTriggerHandoffSummary_ReturnsGeneratingResponse_When_NoRowExistsYet(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 
@@ -251,18 +265,7 @@ func TestTriggerHandoffSummary_SynthesizesPendingResponse_When_NoRowExistsYet(t 
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.Summary)
 	require.Equal(t, sessionID, resp.Msg.Summary.SessionId)
-
-	// Either outcome is contractually valid the instant the handler returns
-	// (see TriggerHandoffSummary's doc comment): the interim GENERATING upsert
-	// may or may not have landed yet. What must never happen is an error or a
-	// terminal (READY/ERROR) status this early.
-	require.Contains(t,
-		[]sessionv1.HandoffSummaryStatus{
-			sessionv1.HandoffSummaryStatus_HANDOFF_SUMMARY_STATUS_PENDING,
-			sessionv1.HandoffSummaryStatus_HANDOFF_SUMMARY_STATUS_GENERATING,
-		},
-		resp.Msg.Summary.Status,
-	)
+	require.Equal(t, sessionv1.HandoffSummaryStatus_HANDOFF_SUMMARY_STATUS_GENERATING, resp.Msg.Summary.Status)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {

@@ -8,6 +8,8 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -109,4 +111,59 @@ func TestInitialize_Enabled_NonEnumEnvironment_NoSchemaURLConflict(t *testing.T)
 	require.NoError(t, err)
 	require.True(t, p.IsEnabled())
 	_ = p.Shutdown(context.Background())
+}
+
+// TestStartLinkedBackgroundSpan_should_ReturnNoopSpan_When_OtelDisabled is
+// ADR-003's explicit "creation must succeed with OTel fully
+// disabled/unconfigured" requirement: GetTracer() falls back to a global
+// no-op tracer when no provider has been installed (the default state for
+// this test binary, since no other test in this file runs before it sets a
+// global TracerProvider), so this call must not panic and must return a
+// usable, non-nil span.
+func TestStartLinkedBackgroundSpan_should_ReturnNoopSpan_When_OtelDisabled(t *testing.T) {
+	require.NotPanics(t, func() {
+		ctx, span := StartLinkedBackgroundSpan(context.Background(), "session.create.resolve")
+		require.NotNil(t, ctx)
+		require.NotNil(t, span)
+		span.End()
+	})
+}
+
+// TestStartLinkedBackgroundSpan_should_LinkToParentTrace_When_OtelEnabled
+// installs a real SDK TracerProvider with an in-memory SpanRecorder, starts
+// an "RPC" span to stand in for the otelconnect interceptor's span
+// (server/server.go:1542-1546), then calls StartLinkedBackgroundSpan against
+// a context carrying that span. Per ADR-003, the returned span must be a new
+// root (different trace ID than the parent) with exactly one Link pointing
+// back at the parent's SpanContext for correlation.
+func TestStartLinkedBackgroundSpan_should_LinkToParentTrace_When_OtelEnabled(t *testing.T) {
+	sr := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	t.Cleanup(func() {
+		require.NoError(t, tp.Shutdown(context.Background()))
+	})
+
+	prevProvider := globalProvider
+	globalProvider = &Provider{tracer: tp.Tracer(ServiceName)}
+	t.Cleanup(func() { globalProvider = prevProvider })
+
+	rpcCtx, rpcSpan := tp.Tracer(ServiceName).Start(context.Background(), "rpc.CreateSession")
+	parentSC := rpcSpan.SpanContext()
+	rpcSpan.End()
+
+	bgCtx, bgSpan := StartLinkedBackgroundSpan(rpcCtx, "session.create.resolve")
+	bgSC := bgSpan.SpanContext()
+	require.NotEqual(t, parentSC.TraceID(), bgSC.TraceID(), "background span must be a new root, not a child of the RPC trace")
+	bgSpan.End()
+	require.NotNil(t, bgCtx)
+
+	ended := sr.Ended()
+	require.Len(t, ended, 2)
+	bgRecorded := ended[len(ended)-1]
+	require.Equal(t, "session.create.resolve", bgRecorded.Name())
+	links := bgRecorded.Links()
+	require.Len(t, links, 1)
+	require.Equal(t, parentSC.TraceID(), links[0].SpanContext.TraceID())
+	require.Equal(t, parentSC.SpanID(), links[0].SpanContext.SpanID())
+	require.True(t, links[0].SpanContext.IsValid())
 }

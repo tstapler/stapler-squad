@@ -137,8 +137,10 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	inst := &Instance{
 		Title: "test-session",
 		Path:  workspace,
-		claudeSession: &ClaudeSessionData{
-			ConversationUUID: uuid,
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: uuid,
+			},
 		},
 	}
 
@@ -419,8 +421,10 @@ func TestPortSessionHistory_LiveClaude(t *testing.T) {
 	inst := &Instance{
 		Title: "live-port-test",
 		Path:  instWorkspacePath,
-		claudeSession: &ClaudeSessionData{
-			ConversationUUID: liveSessionUUID,
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: liveSessionUUID,
+			},
 		},
 	}
 
@@ -525,8 +529,10 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 	inst := &Instance{
 		Title: "live-port-test-agy",
 		Path:  workspace,
-		claudeSession: &ClaudeSessionData{
-			ConversationUUID: liveSessionUUID,
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: liveSessionUUID,
+			},
 		},
 	}
 
@@ -606,7 +612,7 @@ func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 		Title:           "schema-test-session",
 		Path:            workspace,
 		WorkingDir:      workspace,
-		claudeSession:   &ClaudeSessionData{ConversationUUID: uuid},
+		claudeExtension: claudeExtension{claudeSession: &ClaudeSessionData{ConversationUUID: uuid}},
 		HistoryFilePath: claudeLogPath,
 	}
 	if err := portClaudeToAgy(inst); err != nil {
@@ -710,7 +716,7 @@ func TestPortSessionHistory_WithInhibitionEngineRedaction(t *testing.T) {
 		Title:           "secret-test-session",
 		Path:            workspace,
 		WorkingDir:      workspace,
-		claudeSession:   &ClaudeSessionData{ConversationUUID: uuid},
+		claudeExtension: claudeExtension{claudeSession: &ClaudeSessionData{ConversationUUID: uuid}},
 		HistoryFilePath: claudeLogPath,
 	}
 

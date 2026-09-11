@@ -39,7 +39,7 @@ describe("VcsWidgetComments", () => {
   it("VcsWidgetComments_should_FetchExactlyOnce_When_ExpandedForTheFirstTime", async () => {
     mockGetPRComments.mockResolvedValue({
       comments: [
-        { id: 1, author: "octocat", body: "Looks good", createdAt: undefined, isReview: false },
+        { id: 1n, author: "octocat", body: "Looks good", createdAt: undefined, isReview: false },
       ],
     });
     renderWidget();
@@ -54,7 +54,7 @@ describe("VcsWidgetComments", () => {
   it("VcsWidgetComments_should_NotRefetch_When_ReCollapsedAndReExpanded", async () => {
     mockGetPRComments.mockResolvedValue({
       comments: [
-        { id: 1, author: "octocat", body: "Looks good", createdAt: undefined, isReview: false },
+        { id: 1n, author: "octocat", body: "Looks good", createdAt: undefined, isReview: false },
       ],
     });
     renderWidget();
@@ -102,7 +102,7 @@ describe("VcsWidgetComments", () => {
 
   it("VcsWidgetComments_should_RenderViewOnGitHubLink_When_CommentIsGeneral", async () => {
     mockGetPRComments.mockResolvedValue({
-      comments: [{ id: 42, author: "octocat", body: "General note", isReview: false }],
+      comments: [{ id: 42n, author: "octocat", body: "General note", isReview: false }],
     });
     renderWidget();
 

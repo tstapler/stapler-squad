@@ -32,16 +32,10 @@ test('uxAnalysis_AxeStep_should_NotHaveContinueOnError_When_ParsedFromRealYAML',
 });
 
 test('build_CheckNewRPCsHaveTestsStep_should_NotHaveContinueOnError_When_ParsedFromRealYAML', () => {
+  // Moved from the `test` job to `test-affected` (registry-validation.yml's
+  // removal, folded its exact-match divergence check into this step) -- see
+  // that commit's message for why the two checks were redundant.
   const doc = loadWorkflow('build.yml');
-  const step = findStep(doc, 'test', 'Check new RPCs have tests');
+  const step = findStep(doc, 'test-affected', 'Check new RPCs have tests');
   assert.notEqual(step['continue-on-error'], true);
-});
-
-test('registryValidation_should_BeUntouchedByThisItem_ViaDivergenceFailingExit', () => {
-  const doc = loadWorkflow('registry-validation.yml');
-  const step = findStep(doc, 'registry-validation', 'Validate registry divergence');
-  // This job has no `continue-on-error` at all on the validation step itself
-  // (only the advisory comment step does) — a real exit-code failure still
-  // fails the job.
-  assert.equal(step['continue-on-error'], undefined);
 });

@@ -36,6 +36,9 @@ func (BacklogItem) Fields() []ent.Field {
 			Default("idea"),
 		field.String("repo_path").
 			Optional(),
+		field.String("base_branch").
+			Optional().
+			Comment("Explicit opt-in override for the branch new worktrees (triage's isolated worktree, and the eventual work session) fork from. Empty means the default: origin's default branch tip (see git.ResolveWorktreeBaseCommit), NOT repo_path's own ambient HEAD — an agent's own in-progress worktree must never become the implicit base just because it filed the item."),
 		field.Bool("skip_review_gate").
 			Default(false),
 		field.Bool("skip_planning").

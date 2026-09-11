@@ -69,6 +69,15 @@ export const badgeDisabled = style({
   color: vars.color.textSecondary,
 });
 
+// badgeUnknown/overrideRowConflicted/removeButtonConflicted/hintWarning: the "unknown
+// state" and "override conflicts with the global setting" visuals for
+// NativeGitRolloutPanel — static classes rather than runtime inline styles, per
+// docs/reference/css-architecture.md's Never Do rule.
+export const badgeUnknown = style({
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+});
+
 export const errorMessage = style({
   color: vars.color.errorText,
   background: vars.color.errorBg,
@@ -91,6 +100,10 @@ export const overrideRow = style({
   gap: "0.75rem",
   padding: "0.5rem 0",
   borderBottom: `1px solid ${vars.color.borderColor}`,
+});
+
+export const overrideRowConflicted = style({
+  background: vars.color.warningBg,
 });
 
 export const addRow = style({
@@ -143,4 +156,13 @@ export const removeButton = style({
       cursor: "not-allowed",
     },
   },
+});
+
+export const removeButtonConflicted = style({
+  borderColor: vars.color.warning,
+  borderWidth: "2px",
+});
+
+export const hintWarning = style({
+  color: vars.color.warningText,
 });

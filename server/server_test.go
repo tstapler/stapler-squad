@@ -1,18 +1,95 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/zalando/go-keyring"
+
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"go.uber.org/goleak"
 )
+
+// syncBuffer wraps bytes.Buffer with a mutex so it's safe to read via
+// String() from the test goroutine while background goroutines the server
+// under test spawned (SessionRetentionSweeper, MemoryPressureNotifier, etc.)
+// are still writing to it via the default slog logger — a plain
+// bytes.Buffer is not safe for that, and Server.Shutdown() does not
+// guarantee every such goroutine has exited by the time it returns.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// tempDirTolerantOfStragglers behaves like t.TempDir() but replaces its
+// cleanup with a few retries on ENOTEMPTY. wireDepsIntoServer starts several
+// background goroutines (SessionRetentionSweeper, StaleSessionNotifier,
+// MemoryPressureNotifier, the hibernation sweeper) as bare `go X.Start(ctx)`
+// calls never registered with Server.backgroundTasksWG, so Shutdown() cannot
+// guarantee they've stopped touching files under this directory before it
+// returns — a pre-existing gap (backgroundTasksWG's own doc comment lists
+// only "fork-pressure logger, zombie watcher, zombie reaper" as joined), not
+// something introduced by the Jules tests using this helper. Properly fixing
+// it means auditing and rewiring four unrelated services' shutdown
+// registration, out of scope here — this local retry keeps that pre-existing
+// gap from flaking these two Jules-specific tests.
+func tempDirTolerantOfStragglers(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", strings.ReplaceAll(t.Name(), "/", "_"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		var lastErr error
+		for i := 0; i < 5; i++ {
+			if lastErr = os.RemoveAll(dir); lastErr == nil {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Logf("tempDirTolerantOfStragglers: cleanup of %s did not converge: %v", dir, lastErr)
+	})
+	return dir
+}
+
+// captureDefaultLog swaps slog's default handler for one that writes to a
+// buffer, restoring the original on test cleanup. Mirrors
+// log/package_level_external_test.go's TestInfo_AttributesToCallerNotLogPackage
+// setup — the only existing precedent in this codebase for asserting on
+// log.Info/Debug output.
+func captureDefaultLog(t *testing.T) *syncBuffer {
+	t.Helper()
+	buf := &syncBuffer{}
+	handler := slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	origDefault := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(origDefault) })
+	return buf
+}
 
 // newTestServer builds a minimal Server (bypassing BuildDependencies),
 // suitable for exercising Start()'s listener behavior in isolation from the
@@ -553,4 +630,60 @@ func Test_runGoleakTolerant_should_RepanicUnrelatedPanics(t *testing.T) {
 	}()
 
 	runGoleakTolerant(t, func() { panic(unrelatedPanicMsg) })
+}
+
+// TestServer_should_LeaveJulesSessionPollerNil_When_JulesConfigDisabled covers
+// google-jules-integration Story 2.4.4: with Jules disabled (the zero-value
+// default), the server must start with deps.JulesSessionPoller nil and must
+// never log a "jules poll tick" line (which only the poller's own tick()
+// loop, never started, could produce).
+func TestServer_should_LeaveJulesSessionPollerNil_When_JulesConfigDisabled(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", tempDirTolerantOfStragglers(t))
+	buf := captureDefaultLog(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+
+	srv := NewServerWithDeps("localhost:0", deps)
+	// Shut down before reading buf: wireDepsIntoServer starts background
+	// goroutines (SessionRetentionSweeper, MemoryPressureNotifier, etc.) that
+	// write to this same shared, unsynchronized bytes.Buffer via the default
+	// slog logger. Reading buf.String() while they're still running (as a
+	// deferred t.Cleanup would, since cleanups run after the test body) is a
+	// data race under -race — Shutdown stops them first.
+	require.NoError(t, srv.Shutdown())
+
+	assert.Nil(t, deps.JulesSessionPoller)
+	assert.NotContains(t, buf.String(), "jules poll tick")
+}
+
+// TestServer_should_LogJulesSessionPollerStarted_When_JulesEnabledAndKeyResolvable
+// covers Story 2.4.4: with Jules enabled and a resolvable API key at
+// startup, "JulesSessionPoller started" must be logged beside the existing
+// "WorktreePRPoller started" line (server.go's wireDepsIntoServer).
+func TestServer_should_LogJulesSessionPollerStarted_When_JulesEnabledAndKeyResolvable(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", tempDirTolerantOfStragglers(t))
+	keyring.MockInit()
+	require.NoError(t, jules.NewKeyringTokenSource().SetJulesAPIKey(context.Background(), "AIzaSyD-TEST"))
+
+	cfg := config.LoadConfig()
+	cfg.Jules.Enabled = true
+	require.NoError(t, config.SaveConfig(cfg))
+
+	buf := captureDefaultLog(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+
+	srv := NewServerWithDeps("localhost:0", deps)
+	// Shut down before reading buf — see the sibling
+	// TestServer_should_LeaveJulesSessionPollerNil_When_JulesConfigDisabled's
+	// comment: background goroutines wireDepsIntoServer starts write to this
+	// same shared, unsynchronized bytes.Buffer, so reading it via a deferred
+	// t.Cleanup (which runs after the test body) races under -race.
+	require.NoError(t, srv.Shutdown())
+
+	require.NotNil(t, deps.JulesSessionPoller)
+	assert.Contains(t, buf.String(), "JulesSessionPoller started")
+	assert.Contains(t, buf.String(), "WorktreePRPoller started")
 }

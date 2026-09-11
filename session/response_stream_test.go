@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -315,7 +316,7 @@ func TestResponseStream_SetStableSessionID(t *testing.T) {
 	// Isolate config so the test doesn't depend on (or clobber) the developer's
 	// real ~/.stapler-squad config — and so capture_level is deterministically
 	// "summary" (DefaultConfig's default) regardless of ambient environment.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	spy := &escapeEventSpy{}
 	prev := analytics.GetGlobalEscapeWriter()

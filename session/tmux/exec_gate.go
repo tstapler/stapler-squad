@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"go.opentelemetry.io/otel/attribute"
+
 	appconfig "github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 // execGateAcquireBackoffMax caps the retry backoff while waiting for a slot.
@@ -44,7 +47,9 @@ func AcquireExecSlot(ctx context.Context, serverSocket string) (release func(), 
 		return nil, fmt.Errorf("exec gate: resolve dir: %w", err)
 	}
 	n := appconfig.LoadConfig().TmuxExecGate.SlotsOrDefault()
+	waitStart := time.Now()
 	rel, _, acquireErr := acquireSlot(ctx, dir, n, true)
+	recordExecGateWait("default", time.Since(waitStart), acquireErr != nil)
 	if acquireErr != nil {
 		return nil, acquireErr
 	}
@@ -78,6 +83,7 @@ func AcquireResyncExecSlot(ctx context.Context, serverSocket string) (release fu
 	waitStart := time.Now()
 	rel, _, acquireErr := acquireSlot(ctx, dir, n, true)
 	waitElapsed := time.Since(waitStart)
+	recordExecGateWait("resync", waitElapsed, acquireErr != nil)
 	if acquireErr != nil {
 		log.Debug("resync exec gate: wait for fast-lane slot failed", "serverSocket", serverSocket, "waitMs", waitElapsed.Milliseconds(), "err", acquireErr)
 		return nil, acquireErr
@@ -107,7 +113,9 @@ func AcquireInputExecSlot(ctx context.Context, serverSocket string) (release fun
 		return nil, fmt.Errorf("input exec gate: resolve dir: %w", err)
 	}
 	n := appconfig.LoadConfig().TmuxExecGate.InputFastLaneSlotsOrDefault()
+	waitStart := time.Now()
 	rel, _, acquireErr := acquireSlot(ctx, dir, n, true)
+	recordExecGateWait("input", time.Since(waitStart), acquireErr != nil)
 	if acquireErr != nil {
 		return nil, acquireErr
 	}
@@ -124,7 +132,9 @@ func TryAcquireExecSlot(serverSocket string) (release func(), ok bool) {
 		return func() {}, true
 	}
 	n := appconfig.LoadConfig().TmuxExecGate.SlotsOrDefault()
+	waitStart := time.Now()
 	rel, ok, _ := acquireSlot(context.Background(), dir, n, false)
+	recordExecGateWait("default_nonblocking", time.Since(waitStart), !ok)
 	return rel, ok
 }
 
@@ -146,17 +156,42 @@ const resyncFastLaneAcquireTimeout = 3 * time.Second
 // runGatedWith is the shared acquire/run/release body behind both runGated
 // (execGateAcquireTimeout, the default pool) and runGatedFastLane
 // (resyncFastLaneAcquireTimeout, the resync-only pool) so the two timeout
-// variants don't hand-copy the same 11 lines.
-func runGatedWith[T any](ctx context.Context, serverSocket string, timeout time.Duration, acquire func(ctx context.Context, serverSocket string) (func(), error), fn func() (T, error)) (T, error) {
-	gateCtx, cancel := context.WithTimeout(ctx, timeout)
+// variants don't hand-copy the same 11 lines. pool is a label only (which
+// acquire func to use is still the acquire parameter) — it's what makes the
+// tmux_exec_gate_wait_duration_ms/tmux_exec_gate_exec_duration_ms metrics and
+// the "tmux.exec_gate" span filterable by pool instead of an undifferentiated
+// blob. See exec_gate_observability.go's doc comment for why this exists:
+// diagnosing a real "exec gate: context deadline exceeded" incident (2026-09-06)
+// required manually sampling flock() state on disk because there was no
+// queryable wait-vs-exec breakdown.
+func runGatedWith[T any](ctx context.Context, serverSocket, pool string, timeout time.Duration, acquire func(ctx context.Context, serverSocket string) (func(), error), fn func() (T, error)) (T, error) {
+	spanCtx, span := telemetry.StartSpan(ctx, "tmux.exec_gate")
+	span.SetAttributes(attribute.String("pool", pool), attribute.String("server_socket", serverSocket))
+	defer span.End()
+
+	gateCtx, cancel := context.WithTimeout(spanCtx, timeout)
 	defer cancel()
+	waitStart := time.Now()
 	release, err := acquire(gateCtx, serverSocket)
+	waitElapsed := time.Since(waitStart)
+	span.SetAttributes(attribute.Int64("wait_ms", waitElapsed.Milliseconds()))
 	if err != nil {
+		span.SetAttributes(attribute.Bool("timed_out", true))
+		span.RecordError(err)
 		var zero T
 		return zero, fmt.Errorf("exec gate: %w", err)
 	}
 	defer release()
-	return fn()
+
+	execStart := time.Now()
+	result, fnErr := fn()
+	execElapsed := time.Since(execStart)
+	span.SetAttributes(attribute.Int64("exec_ms", execElapsed.Milliseconds()))
+	recordExecGateExec(pool, execElapsed)
+	if fnErr != nil {
+		span.RecordError(fnErr)
+	}
+	return result, fnErr
 }
 
 // runGated acquires an exec-gate slot for serverSocket (bounded by whichever
@@ -165,7 +200,7 @@ func runGatedWith[T any](ctx context.Context, serverSocket string, timeout time.
 // subprocess spawn in this package should use instead of hand-rolling
 // acquire/timeout/release around each one.
 func runGated[T any](ctx context.Context, serverSocket string, fn func() (T, error)) (T, error) {
-	return runGatedWith(ctx, serverSocket, execGateAcquireTimeout, AcquireExecSlot, fn)
+	return runGatedWith(ctx, serverSocket, "default", execGateAcquireTimeout, AcquireExecSlot, fn)
 }
 
 // runGatedFastLane is runGated's resync-only counterpart: it acquires from
@@ -180,7 +215,7 @@ func runGated[T any](ctx context.Context, serverSocket string, fn func() (T, err
 // execution once the slot is acquired. Prefer runFastLaneSubprocess below
 // over calling this directly: it closes that gap.
 func runGatedFastLane[T any](ctx context.Context, serverSocket string, fn func() (T, error)) (T, error) {
-	return runGatedWith(ctx, serverSocket, resyncFastLaneAcquireTimeout, AcquireResyncExecSlot, fn)
+	return runGatedWith(ctx, serverSocket, "resync", resyncFastLaneAcquireTimeout, AcquireResyncExecSlot, fn)
 }
 
 // ResyncFastLaneTimeout bounds the ENTIRE runFastLaneSubprocess call — both

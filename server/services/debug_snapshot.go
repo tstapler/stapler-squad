@@ -322,6 +322,8 @@ func collectRecentLogs(lineCount int) RecentLogsSnapshot {
 
 // tailFile returns the last n lines of a file efficiently.
 func tailFile(path string, n int) ([]string, error) {
+	// #nosec G304 -- path is always logFilePath from log.GetLogFilePath(cfg), the
+	// server's own configured log path; never network/RPC input.
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -371,7 +373,7 @@ func WriteSnapshot(snap *DebugSnapshot, dir string) (string, error) {
 		return "", fmt.Errorf("failed to marshal snapshot: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return "", fmt.Errorf("failed to write snapshot file: %w", err)
 	}
 

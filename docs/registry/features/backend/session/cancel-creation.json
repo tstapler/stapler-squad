@@ -1,0 +1,19 @@
+{
+  "id": "session:cancel-creation",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "CancelSessionCreation",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestCancelSessionCreation_should_RemoveInstanceAndCleanUp_When_StatusIsCreating",
+    "TestCancelSessionCreation_should_SucceedWithoutPanic_When_CancelFuncIsNil",
+    "TestCancelSessionCreation_should_ReturnFailedPrecondition_When_StatusIsActive",
+    "TestCancelSessionCreation_should_ResolveDeterministically_When_RacingPipelineSuccess",
+    "TestCancelSessionCreation_should_ReturnNotFound_When_SessionDoesNotExist",
+    "TestCancelSessionCreation_should_ReturnInvalidArgument_When_IdIsEmpty"
+  ],
+  "lastModified": "2026-08-27T01:50:21.805937893-07:00"
+}

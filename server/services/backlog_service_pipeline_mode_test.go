@@ -23,6 +23,7 @@ import (
 	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // warningLogMu serializes swapWarningLog calls across this package's
@@ -324,7 +325,7 @@ func TestTriggerTriage_should_FallBackToDefaultWithWarnLog_When_ReferencedModeDe
 	_, trigErr := svc.TriggerTriage(ctx, connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
 	require.NoError(t, trigErr)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return pool.callCount() == 1
 	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
 

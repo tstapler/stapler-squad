@@ -1,13 +1,8 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
 import { SessionDetailDrawer } from "./SessionDetailDrawer";
-import {
-  SessionTokenSummarySchema,
-  TurnTokenStatSchema,
-  type SessionTokenSummary,
-  type TurnTokenStat,
-} from "@/gen/session/v1/insights_pb";
+import { SessionTokenSummarySchema, type SessionTokenSummary } from "@/gen/session/v1/insights_pb";
 
 const mockUseSessionTurnTimeline = jest.fn();
 
@@ -16,13 +11,8 @@ jest.mock("@/lib/hooks/useInsightsService", () => ({
     mockUseSessionTurnTimeline(conversationId),
 }));
 
-// The generic .css.ts jest mock (src/__mocks__/styleMock.js) returns
-// Proxy-wrapped functions, which React's dev-mode className validation
-// silently refuses to set as a DOM attribute either way (confirmed:
-// "Invalid value for prop `className`" warning, attribute never appears) —
-// making the conditional outlierCell className unobservable via the DOM in
-// tests. Override with real strings for this one module so the outlier test
-// below can assert on the actual class attribute.
+// See SessionDetailContent.test.tsx for the rationale on overriding the
+// generic .css.ts jest mock with real class-name strings for this module.
 jest.mock("./SessionDetailDrawer.css", () => ({
   overlay: "overlay",
   drawer: "drawer",
@@ -65,109 +55,92 @@ function makeSession(
   });
 }
 
-function makeTurn(
-  overrides: Partial<Omit<TurnTokenStat, "$typeName" | "$unknown">> = {}
-): TurnTokenStat {
-  return create(TurnTokenStatSchema, {
-    model: "claude-sonnet-4",
-    inputTokens: 100n,
-    outputTokens: 50n,
-    cacheCreationTokens: 0n,
-    cacheReadTokens: 0n,
-    toolNames: [],
-    ...overrides,
-  });
-}
-
 describe("SessionDetailDrawer", () => {
   beforeEach(() => {
     mockUseSessionTurnTimeline.mockReset();
     mockUseSessionTurnTimeline.mockReturnValue({ turns: [], loading: false, error: null });
   });
 
-  describe("SessionDetailDrawer_should_fetchTurnTimelineOnce_When_drawerOpensForSession", () => {
-    it("calls useSessionTurnTimeline with the session's conversationId", () => {
-      const session = makeSession({ conversationId: "conversation-42" });
-      render(<SessionDetailDrawer session={session} onClose={jest.fn()} />);
+  it("SessionDetailDrawer_should_fetchTurnTimelineByConversationId_when_drawerOpensForSession", () => {
+    const session = makeSession({ conversationId: "conversation-42" });
+    render(<SessionDetailDrawer session={session} onClose={jest.fn()} />);
 
-      expect(mockUseSessionTurnTimeline).toHaveBeenCalledWith("conversation-42");
-    });
-
-    it("renders the Per-Turn Breakdown table when turns are present", () => {
-      mockUseSessionTurnTimeline.mockReturnValue({
-        turns: [makeTurn({ inputTokens: 100n, outputTokens: 50n })],
-        loading: false,
-        error: null,
-      });
-      const session = makeSession();
-      render(<SessionDetailDrawer session={session} onClose={jest.fn()} />);
-
-      expect(screen.getByText("Per-Turn Breakdown")).toBeInTheDocument();
-      expect(screen.getByText("100")).toBeInTheDocument();
-      expect(screen.getByText("50")).toBeInTheDocument();
-    });
+    expect(mockUseSessionTurnTimeline).toHaveBeenCalledWith("conversation-42");
   });
 
-  it("SessionDetailDrawer_should_showExactEmptyStateCopy_When_noTurnData", () => {
-    mockUseSessionTurnTimeline.mockReturnValue({ turns: [], loading: false, error: null });
+  it("SessionDetailDrawer_should_returnNull_when_sessionIsNull", () => {
+    const { container } = render(<SessionDetailDrawer session={null} onClose={jest.fn()} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("SessionDetailDrawer_should_renderDialogChrome_when_sessionProvided", () => {
     const session = makeSession();
     render(<SessionDetailDrawer session={session} onClose={jest.fn()} />);
 
-    expect(
-      screen.getByText("No per-turn data available for this session.")
-    ).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByRole("button", { name: "Close session details" })).toBeInTheDocument();
   });
 
-  it("SessionDetailDrawer_should_renderHighestTokenTurnFirst_When_turnsVarySize", () => {
-    mockUseSessionTurnTimeline.mockReturnValue({
-      turns: [
-        makeTurn({ model: "small-turn", inputTokens: 10n, outputTokens: 5n }),
-        makeTurn({ model: "large-turn", inputTokens: 1000n, outputTokens: 500n }),
-      ],
-      loading: false,
-      error: null,
-    });
+  it("SessionDetailDrawer_should_callOnClose_when_escapePressed", () => {
+    const onClose = jest.fn();
+    const session = makeSession();
+    render(<SessionDetailDrawer session={session} onClose={onClose} />);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("SessionDetailDrawer_should_callOnClose_when_overlayClicked", () => {
+    const onClose = jest.fn();
+    const session = makeSession();
+    render(<SessionDetailDrawer session={session} onClose={onClose} />);
+
+    // The drawer renders via createPortal to document.body, so it's outside
+    // RTL's default `container` — query the document directly.
+    const overlayEl = document.querySelector(".overlay") as HTMLElement;
+    fireEvent.click(overlayEl);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("SessionDetailDrawer_should_moveFocusToCloseButton_when_mountedWithSession", () => {
     const session = makeSession();
     render(<SessionDetailDrawer session={session} onClose={jest.fn()} />);
 
-    const rows = document.querySelectorAll("tbody tr");
-    // First row belongs to the "Tools Breakdown" table only if there were tools;
-    // scope to rows containing "large-turn"/"small-turn" model text.
-    const modelCells = Array.from(document.querySelectorAll("td")).filter((td) =>
-      ["small-turn", "large-turn"].includes(td.textContent || "")
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Close session details" })
     );
-    expect(modelCells[0].textContent).toBe("large-turn");
-    expect(modelCells[1].textContent).toBe("small-turn");
-    expect(rows.length).toBeGreaterThan(0);
   });
 
-  it("SessionDetailDrawer_should_flagOutlierCell_When_turnExceedsTwiceMean", () => {
-    // totals: 15, 15, 1000 -> mean ~343.3 -> threshold ~686.7 -> only the
-    // 1000-token turn exceeds it.
-    mockUseSessionTurnTimeline.mockReturnValue({
-      turns: [
-        makeTurn({ model: "small-a", inputTokens: 10n, outputTokens: 5n }),
-        makeTurn({ model: "small-b", inputTokens: 10n, outputTokens: 5n }),
-        makeTurn({ model: "huge", inputTokens: 700n, outputTokens: 300n }),
-      ],
-      loading: false,
-      error: null,
-    });
+  it("SessionDetailDrawer_should_restoreFocusToTrigger_when_sessionClosed", () => {
+    const trigger = document.createElement("button");
+    trigger.textContent = "open session";
+    document.body.appendChild(trigger);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    const session = makeSession();
+    const { rerender } = render(<SessionDetailDrawer session={session} onClose={jest.fn()} />);
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Close session details" })
+    );
+
+    rerender(<SessionDetailDrawer session={null} onClose={jest.fn()} />);
+
+    expect(document.activeElement).toBe(trigger);
+    document.body.removeChild(trigger);
+  });
+
+  it("SessionDetailDrawer_should_renderSessionDetailContent_when_sessionProvided", () => {
     const session = makeSession();
     render(<SessionDetailDrawer session={session} onClose={jest.fn()} />);
 
-    const hugeRow = screen.getByText("huge").closest("tr") as HTMLElement;
-    const smallRow = screen.getByText("small-a").closest("tr") as HTMLElement;
-
-    const hugeSpans = Array.from(hugeRow.querySelectorAll("td span"));
-    const smallSpans = Array.from(smallRow.querySelectorAll("td span"));
-
-    // Input + output cells: the outlier row's spans carry the outlierCell
-    // class, the non-outlier row's spans (same markup, className={undefined})
-    // don't.
-    expect(hugeSpans).toHaveLength(2);
-    expect(smallSpans).toHaveLength(2);
-    hugeSpans.forEach((s) => expect(s.className).toContain("outlierCell"));
-    smallSpans.forEach((s) => expect(s.className).toBe(""));
+    // SessionDetailContent's Metadata section is rendered inside the drawer —
+    // confirms composition, not re-testing SessionDetailContent's own
+    // rendering (covered by SessionDetailContent.test.tsx).
+    expect(screen.getByText("Metadata")).toBeInTheDocument();
   });
 });

@@ -43,6 +43,8 @@ func DefaultLauncherPresetsPath() (string, error) {
 // from a validation failure — callers treat "not exist" as "zero presets, no error to
 // surface" and any other error as a loud, whole-file rejection to surface as load_error.
 func LoadLauncherPresets(path string) (*LauncherPresetsFile, error) {
+	// #nosec G304 -- the only caller passes DefaultLauncherPresetsPath(), a fixed
+	// path derived from GetConfigDir(), not caller/user-controlled input.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

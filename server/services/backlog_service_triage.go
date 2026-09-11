@@ -18,6 +18,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
@@ -1017,6 +1018,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if active := findActiveWorkSession(priorSessions); active != nil {
 		return nil, connect.NewError(connect.CodeAlreadyExists, s.activeWorkSessionBlockedError(active))
 	}
+	// 8b (Jules). Guard against starting a competing local session while a Jules
+	// session for this item is already running on Google's infrastructure — see
+	// session.HasActiveJulesSession's doc comment.
+	if activeJules := findActiveJulesSession(priorSessions); activeJules != nil {
+		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("a Jules session (%s) is already running for this item; wait for it to finish before starting a local session", activeJules.SessionUUID))
+	}
 
 	// 8. Build agent prompt. Routed through PipelineEngine (Epic 1.5, Story 1.5.5) so a
 	// non-default PipelineMode changes what inst.Prompt / AutonomousDriver's goal sees.
@@ -1051,7 +1058,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// self-heals that specific error, but serializing here closes the race at the
 	// source instead of just recovering from it after the fact).
 	s.worktreeMu.Lock()
-	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle))
+	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle), item.BaseBranch)
 	if resolveErr != nil {
 		s.worktreeMu.Unlock()
 		return nil, resolveErr
@@ -1274,6 +1281,20 @@ func hasActiveWorkSession(priorSessions []session.ItemSessionSummary) bool {
 func findActiveWorkSession(priorSessions []session.ItemSessionSummary) *session.ItemSessionSummary {
 	for i := range priorSessions {
 		if priorSessions[i].Role == session.SessionRoleWork && priorSessions[i].EndedAt == nil {
+			return &priorSessions[i]
+		}
+	}
+	return nil
+}
+
+// findActiveJulesSession returns the open (not yet ended) jules_work-role
+// ItemSession, if any — the Jules-specific counterpart to findActiveWorkSession,
+// used alongside it (not instead of it — see Story 2.1.3's design note on why
+// findActiveWorkSession itself is left unwidened) so a caller can log/notify with
+// the actual session UUID rather than a bare "already active."
+func findActiveJulesSession(priorSessions []session.ItemSessionSummary) *session.ItemSessionSummary {
+	for i := range priorSessions {
+		if priorSessions[i].Role == session.SessionRoleJulesWork && priorSessions[i].EndedAt == nil {
 			return &priorSessions[i]
 		}
 	}
@@ -1647,8 +1668,8 @@ func buildRevisionTitle(baseTitle string, isReopen bool, priorSessions []session
 // included — instead of failing loudly. Confirmed: this is the shape that
 // left session-resume-fix work committed directly on stapler-squad's own
 // main branch outside a worktree.
-func resolveSessionPath(repoPath, slug string) (worktreePath string, useWorktree bool, err error) {
-	wt, wtErr := session.CreateBacklogWorktree(repoPath, slug)
+func resolveSessionPath(repoPath, slug, baseBranch string) (worktreePath string, useWorktree bool, err error) {
+	wt, wtErr := session.CreateBacklogWorktree(repoPath, slug, baseBranch)
 	if wtErr == nil {
 		return wt, true, nil
 	}
@@ -1920,6 +1941,10 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnAutonomousWork", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
 		return nil
 	}
+	if activeJules := findActiveJulesSession(sessions); activeJules != nil {
+		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnAutonomousWork", itemID, item.Title, session.BacklogStatus(item.Status), activeJules.SessionUUID)
+		return nil
+	}
 	s.resolveRespawnBlockedActiveLogged(ctx, "AutoRespawnAutonomousWork", itemID)
 
 	workCount := 0
@@ -2131,7 +2156,7 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 		active = knownActive
 	}
 	if active != nil {
-		s.steerActiveSessionForPRFix(ctx, itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID, fixContext)
+		s.steerActiveSessionForPRFix(ctx, itemID, item.Title, session.BacklogStatus(item.Status), active, fixContext)
 		return nil
 	}
 	s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)
@@ -2271,6 +2296,9 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	if active == nil {
 		active = findActiveReviewSession(sessions)
 	}
+	if active == nil {
+		active = findActiveJulesSession(sessions)
+	}
 	if active != nil {
 		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnReview", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
 		return nil
@@ -2348,6 +2376,10 @@ func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) e
 		// Already moved on by the time this async call runs (e.g. a human already
 		// re-triggered triage manually, or the item was otherwise resolved) —
 		// nothing to do. Mirrors AutoRespawnReview's identical staleness guard.
+		// Also correctly covers a custom stage: this function only knows how to
+		// retriage from idea/queued, so a custom-status item falling here and
+		// no-oping is intentional, not merely non-crashing (Epic 2.1, Story
+		// 2.1.3e's "BacklogStatus becomes the open stage-slug type" decision).
 		return nil
 	}
 
@@ -2710,7 +2742,7 @@ func (s *BacklogService) TriggerTriage(
 	artifactAbsPath := filepath.Join(triageBase, item.ID)
 
 	// 5. Create artifact dir.
-	if mkErr := os.MkdirAll(artifactAbsPath, 0o755); mkErr != nil {
+	if mkErr := os.MkdirAll(artifactAbsPath, 0o750); mkErr != nil {
 		return nil, connect.NewError(connect.CodeInternal,
 			fmt.Errorf("failed to create artifact dir %s: %w", artifactAbsPath, mkErr))
 	}
@@ -2799,7 +2831,24 @@ func (s *BacklogService) TriggerTriage(
 		}
 		defer func() { <-s.triageSem }()
 
-		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, triageCallBudget)
+		// Shape A (session.LivenessKindDurationBudget), keyed session.BacklogStatusIdea —
+		// the same key reconcileOrphanedTriageItems' staleness gate resolves against
+		// (session/backlog_lifecycle_triage.go), so ExpectedDuration and StalenessThreshold
+		// can never independently drift apart for the same item (BUG-055's actual
+		// invariant — Epic 1.4, Story 1.4.2). BacklogStatusIdea is used rather than
+		// item.Status directly: by this point item.Status may still hold its pre-3b-transition
+		// value ("ready") in this closure's captured struct even though the item's real status
+		// is idea for the duration of this call — an unresolved "ready" key would fall through
+		// to NoTimeoutLiveness (0 ExpectedDuration), an immediate-timeout regression. Nil-guarded:
+		// an unwired/unresolvable engine falls back to the literal triageCallBudget constant,
+		// byte-for-byte unchanged from before.
+		callBudget := triageCallBudget
+		if s.livenessEngine != nil {
+			if def, defErr := s.livenessEngine.LivenessFor(session.BacklogStatusIdea, session.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+				callBudget = def.ExpectedDuration
+			}
+		}
+		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, callBudget)
 		defer cancel()
 
 		// Run triage in a dedicated worktree, not itemRepoPath directly. SDD-mode
@@ -2819,7 +2868,40 @@ func (s *BacklogService) TriggerTriage(
 		// legitimately target a plain directory).
 		triageWorkDir := itemRepoPath
 		var triageWorktree *git.GitWorktree
-		if wt, _, wtErr := git.NewGitWorktree(itemRepoPath, "triage-"+itemID); wtErr != nil {
+		// Anchor to the main repo root and branch from its default branch tip,
+		// exactly like session.CreateBacklogWorktree does for the real work
+		// session — not from itemRepoPath's ambient HEAD. Without this, an item
+		// filed by an agent that passed its own in-progress worktree as repo_path
+		// forked triage (and, via retitleTriageWorktreeToFinalBranch below, the
+		// item's eventual work branch too) from that agent's feature branch
+		// instead of main. item.BaseBranch is the deliberate opt-out of that
+		// default: when set, triage forks from that named branch instead (still
+		// origin-first, falling back to local). Best-effort at every step: any
+		// resolution failure falls back to the pre-fix behavior (branch from
+		// ambient HEAD), and any worktree-creation failure falls back to running
+		// triage directly in itemRepoPath, both unchanged from before — a bad
+		// BaseBranch is still caught loudly later, when the real work session is
+		// spawned via CreateBacklogWorktree, which hard-errors instead.
+		triageRepoRoot, mainRepoErr := session.ResolveMainRepoRoot(itemRepoPath)
+		if mainRepoErr != nil {
+			triageRepoRoot = itemRepoPath
+		}
+		triageBranchName := config.LoadConfig().BranchPrefix + git.SanitizeBranchName("triage-"+itemID)
+		var triageBaseSHA string
+		var baseErr error
+		if item.BaseBranch != "" {
+			triageBaseSHA, baseErr = git.ResolveExplicitBranchSHA(triageRepoRoot, item.BaseBranch)
+		} else {
+			_, triageBaseSHA, baseErr = git.ResolveWorktreeBaseCommit(triageRepoRoot)
+		}
+		var wt *git.GitWorktree
+		var wtErr error
+		if baseErr == nil && triageBaseSHA != "" {
+			wt, _, wtErr = git.NewGitWorktreeFromCommitSHA(triageRepoRoot, "triage-"+itemID, triageBranchName, triageBaseSHA)
+		} else {
+			wt, _, wtErr = git.NewGitWorktree(triageRepoRoot, "triage-"+itemID)
+		}
+		if wtErr != nil {
 			log.WarningLog().Printf("[TriggerTriage] failed to create isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, wtErr)
 		} else if setupErr := wt.Setup(); setupErr != nil {
 			log.WarningLog().Printf("[TriggerTriage] failed to set up isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, setupErr)
@@ -2995,6 +3077,31 @@ func (s *BacklogService) TriggerTriage(
 			persistFailures = append(persistFailures, "saving the plan artifacts path")
 		}
 
+		// Close out the ItemSession and release triageInFlight together, BEFORE the
+		// status transition to Ready below — not after it, and not after the optional
+		// auto-spawn further down. ended_at and triageInFlight are updated in the same
+		// spot deliberately: both are inputs to the orphan-liveness check (IsTriageLive
+		// / tombstoneOrphanTriageSessions above), so moving one without the other would
+		// let a concurrent reconciliation sweep see "ended_at nil, not live" and
+		// wrongly tombstone a session that's simply between here and its final log
+		// line.
+		//
+		// This pair used to run AFTER the status transition ("the item's status
+		// already flipped to Ready, so a caller polling on status can legitimately
+		// re-trigger triage now"), which was itself the fix for the original
+		// TestTriggerTriage_RefineWithFeedback CI flake (auto-spawn's I/O stretching
+		// the window). But that left a second, narrower window open: a caller polling
+		// storage directly (not through IsTriageLive) can observe Ready the instant
+		// TransitionBacklogItemStatus returns, race ahead of this goroutine's own next
+		// line, and hit a spurious AlreadyExists from the triageInFlight guard at 3a-i
+		// above -- confirmed as the root cause of a full-test-suite-only (never
+		// isolated) flake in TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason,
+		// where DB lock contention under -p made that window wide enough to hit
+		// reliably. Clearing triageInFlight before the status write closes it: by the
+		// time Ready is observable to any caller, this item is already re-triggerable.
+		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
+		s.triageInFlight.Delete(itemID)
+
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 		statusAdvanced := true
 		if _, transErr := s.storage.TransitionBacklogItemStatus(persistCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
@@ -3007,21 +3114,6 @@ func (s *BacklogService) TriggerTriage(
 		if len(persistFailures) > 0 {
 			s.notifyTriagePersistFailure(persistCtx, itemID, item.Title, persistFailures, statusAdvanced)
 		}
-
-		// Close out the ItemSession and release triageInFlight together, right here —
-		// not after the optional auto-spawn below. The item's status already flipped to
-		// Ready above, so a caller polling on status (or a human clicking "retry") can
-		// legitimately re-trigger triage now; leaving triageInFlight held through
-		// auto-spawn's own I/O (SpawnSessionFromItem creates a worktree, etc.) only
-		// stretched a window where a well-timed retry got a spurious AlreadyExists —
-		// exactly what made TestTriggerTriage_RefineWithFeedback flaky in CI. ended_at
-		// and triageInFlight are updated in the same spot deliberately: both are inputs
-		// to the orphan-liveness check (IsTriageLive / tombstoneOrphanTriageSessions
-		// above), so moving one without the other would let a concurrent reconciliation
-		// sweep see "ended_at nil, not live" and wrongly tombstone a session that's
-		// simply between here and its final log line.
-		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
-		s.triageInFlight.Delete(itemID)
 
 		// Opt-in: skip the manual "Spawn Session" click when the item is configured to
 		// auto-spawn. Autonomous: true bypasses the planning-approval gate the same way
@@ -3525,6 +3617,26 @@ Do not modify the code. Only write the review verdict.
 	}), nil
 }
 
+// workSessionRestartGraceWindow bounds how long after this process's boot an
+// apparently-dead work session is left alone rather than tombstoned as a
+// genuine orphan. Mirrors session.restartGraceWindow (session/retry_state.go)
+// — that constant governs whether session-retry-backoff resurrects an
+// Instance in place without consuming a retry attempt; this one gives that
+// resurrection time to happen before the backlog layer's own orphan sweep
+// concludes the work session is gone and frees the item for a duplicate spawn.
+const workSessionRestartGraceWindow = 60 * time.Second
+
+// shouldSkipWorkTombstoneForRestartGrace reports whether an apparently-dead
+// work session (createdAt) should be left alone rather than tombstoned,
+// because it predates this process's own boot (bootTime) and we're still
+// within workSessionRestartGraceWindow of booting — session-retry-backoff's
+// in-place restart may not have had time to reattach it yet. Pure and
+// side-effect-free so the decision table is directly testable, same
+// rationale as shouldAttributeTombstoneToShutdown above.
+func shouldSkipWorkTombstoneForRestartGrace(createdAt, bootTime, now time.Time) bool {
+	return createdAt.Before(bootTime) && now.Sub(bootTime) < workSessionRestartGraceWindow
+}
+
 // tombstoneOrphanWorkSessions marks any open (not-yet-ended) work-role ItemSession as
 // ended if it is confirmed dead (no live tracked session). Called before
 // hasActiveWorkSession's guard in SpawnSessionFromItem so a work session that never
@@ -3546,6 +3658,15 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 		}
 		if s.sessionStopper.IsSessionLive(is.SessionUUID) {
 			continue // genuinely still running
+		}
+		if shouldSkipWorkTombstoneForRestartGrace(is.CreatedAt, serverStartTime, time.Now()) {
+			// BUG-065's work-session counterpart: this session predates our own
+			// boot and still looks dead, but session-retry-backoff's in-place
+			// restart (session/retry_state.go's restartGraceWindow) hasn't had
+			// time to reattach it yet. Tombstoning now would free the item for a
+			// duplicate spawn while the original session is still recovering —
+			// wait out the grace window instead of guessing.
+			continue
 		}
 		now := time.Now()
 		if err := s.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil { //nolint:silenttransition best-effort tombstone sweep; continue skips only this session, retried every call rather than silently proceeding as if it succeeded

@@ -273,7 +273,7 @@ func (h *mmapIndexHandle) maybeUnmapLocked() {
 // store.
 func openMmapIndexHandle(commonDirAbs string, h plumbing.Hash) (*mmapIndexHandle, error) {
 	path := filepath.Join(commonDirAbs, "objects", "pack", fmt.Sprintf("pack-%s.idx", h.String()))
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- h is a go-git plumbing.Hash (fixed-length hex string), commonDirAbs is the repo's own git dir; neither is user input
 	if err != nil {
 		return nil, err
 	}

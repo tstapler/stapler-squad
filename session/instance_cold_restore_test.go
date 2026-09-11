@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // checkTmuxAvailable skips the test if tmux is not installed.
@@ -111,7 +112,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold restore")
 	// DoesSessionExist slow path has a 3s timeout; deadline must exceed that to guarantee
 	// at least one successful check before the Eventually deadline fires.
-	require.Eventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
+	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
 }
 
 // TestColdRestore_WithoutUUID verifies that when the tmux session is dead and
@@ -157,7 +158,7 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 
 	assert.True(t, inst.Started(), "instance must be marked as started after cold start")
 	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold start")
-	require.Eventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold start")
+	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold start")
 }
 
 // writeJSONLFixture writes a fake conversation JSONL fixture under
@@ -237,7 +238,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 
 	assert.True(t, inst.Started(), "instance must be marked as started after cold restore")
 	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold restore")
-	require.Eventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
+	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
 
 	assert.Contains(t, inst.LaunchCommand, "--resume", "launch command must embed --resume when a same-path JSONL was recoverable")
 	assert.Contains(t, inst.LaunchCommand, fixtureUUID)
@@ -285,7 +286,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 		}
 	}()
 
-	require.Eventually(t, inst1.TmuxAlive, 10*time.Second, 50*time.Millisecond, "inst1 tmux session must be alive before hot restore")
+	wait.RequireEventually(t, inst1.TmuxAlive, 10*time.Second, 50*time.Millisecond, "inst1 tmux session must be alive before hot restore")
 
 	// Second instance: same title/socket — simulates an instance reloaded from storage
 	// while the original tmux session is still alive.
@@ -398,11 +399,11 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 			clearedAt := time.Now()
 
 			inst := &Instance{
-				Title:                 "test-clearedat-guard",
-				Path:                  tmpDir,
-				SessionType:           SessionTypeDirectory,
-				conversationClearedAt: clearedAt,
-				historyDetector:       NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
+				Title:           "test-clearedat-guard",
+				Path:            tmpDir,
+				SessionType:     SessionTypeDirectory,
+				claudeExtension: claudeExtension{conversationClearedAt: clearedAt},
+				historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
 			}
 			writeJSONLFixture(t, fakeHome, tmpDir, fixtureUUID, clearedAt.Add(tt.offset))
 

@@ -124,17 +124,17 @@ func (h *BacklogAttachmentUploadHandler) HandleUpload(w http.ResponseWriter, r *
 	var writeErr error
 	defer func() {
 		if writeErr != nil {
-			os.Remove(savedPath) //nolint:errcheck
+			_ = os.Remove(savedPath)
 		}
 	}()
 
 	if _, writeErr = io.Copy(f, file); writeErr != nil {
-		f.Close()
+		_ = f.Close()
 		log.Error("[BacklogAttachmentUpload] write failed", "err", writeErr)
 		http.Error(w, "failed to save file", http.StatusInternalServerError)
 		return
 	}
-	f.Close()
+	_ = f.Close()
 
 	if err := os.Chmod(savedPath, backlogAttachmentFileMode); err != nil {
 		log.Error("[BacklogAttachmentUpload] chmod failed (non-fatal)", "err", err)

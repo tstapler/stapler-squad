@@ -33,6 +33,9 @@ var (
 // ParseClaudeSettings reads a Claude settings.json file and extracts permissions.
 // Returns nil permissions (no error) if the file does not exist or has no permissions key.
 func ParseClaudeSettings(path string) (*ClaudePermissions, error) {
+	// #nosec G304 -- path always comes from settingsPaths(), built from os.UserHomeDir()
+	// or the server's own projectDir plus literal ".claude/settings*.json" suffixes; never
+	// network/RPC input.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

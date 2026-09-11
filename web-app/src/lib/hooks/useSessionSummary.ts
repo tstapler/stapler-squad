@@ -7,6 +7,7 @@ import type { SessionSummaryProto } from "@/gen/session/v1/session_summary_pb";
 import { SessionSummaryStatus } from "@/gen/session/v1/types_pb";
 import { getConnectTransport } from "@/lib/api/transport";
 import { copyToClipboard } from "@/lib/clipboard";
+import { useAbortableRequest } from "@/lib/hooks/useAbortableRequest";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -92,6 +93,11 @@ export function useSessionSummary(sessionId: string): UseSessionSummaryResult {
   // skips issuing a new request rather than firing a second one whose
   // out-of-order response could leave stale data displayed.
   const pollInFlightRef = useRef(false);
+  // Shared between fetchSummary and regenerate (safe: pollInFlightRef
+  // already keeps them from firing concurrently) so either cancels the
+  // other's in-flight request, and both are cancelled on sessionId
+  // change/unmount.
+  const startRequest = useAbortableRequest();
 
   const stopPolling = useCallback(() => {
     if (intervalRef.current !== null) {
@@ -114,9 +120,11 @@ export function useSessionSummary(sessionId: string): UseSessionSummaryResult {
       return;
     }
     pollInFlightRef.current = true;
+    const signal = startRequest();
     try {
       const client = createClient(SessionSummaryService, getConnectTransport());
-      const response = await client.getSessionSummary({ sessionId });
+      const response = await client.getSessionSummary({ sessionId }, { signal });
+      if (signal.aborted) return;
 
       // A newer sessionId may have become active while this request was in
       // flight — discard this response rather than overwriting the fresher
@@ -147,15 +155,15 @@ export function useSessionSummary(sessionId: string): UseSessionSummaryResult {
         stopPolling();
       }
     } catch (err) {
-      if (activeSessionIdRef.current !== sessionId) return;
+      if (signal.aborted || activeSessionIdRef.current !== sessionId) return;
       setError(err instanceof Error ? err : new Error("Failed to load session summary"));
     } finally {
-      if (activeSessionIdRef.current === sessionId) {
+      if (!signal.aborted && activeSessionIdRef.current === sessionId) {
         setLoading(false);
       }
       pollInFlightRef.current = false;
     }
-  }, [sessionId, startPolling, stopPolling]);
+  }, [sessionId, startPolling, stopPolling, startRequest]);
 
   useEffect(() => {
     fetchSummaryRef.current = fetchSummary;
@@ -176,9 +184,11 @@ export function useSessionSummary(sessionId: string): UseSessionSummaryResult {
   const regenerate = useCallback(async () => {
     if (!sessionId) return;
     pollInFlightRef.current = true;
+    const signal = startRequest();
     try {
       const client = createClient(SessionSummaryService, getConnectTransport());
-      const response = await client.regenerateSessionSummary({ sessionId });
+      const response = await client.regenerateSessionSummary({ sessionId }, { signal });
+      if (signal.aborted) return;
 
       // See fetchSummary's identical guard — the sessionId this call was
       // issued for may no longer be the active one by the time it resolves.
@@ -197,6 +207,7 @@ export function useSessionSummary(sessionId: string): UseSessionSummaryResult {
         stopPolling();
       }
     } catch (err) {
+      if (signal.aborted) return;
       const e = err instanceof Error ? err : new Error("Failed to regenerate session summary");
       if (activeSessionIdRef.current === sessionId) {
         setError(e);
@@ -210,7 +221,7 @@ export function useSessionSummary(sessionId: string): UseSessionSummaryResult {
     } finally {
       pollInFlightRef.current = false;
     }
-  }, [sessionId, startPolling, stopPolling]);
+  }, [sessionId, startPolling, stopPolling, startRequest]);
 
   const copy = useCallback(async () => {
     return copyToClipboard(data?.markdown ?? "");

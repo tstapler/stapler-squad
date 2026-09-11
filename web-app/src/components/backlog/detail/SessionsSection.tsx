@@ -11,8 +11,48 @@ import { useShowMore } from "@/lib/hooks/useShowMore";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { SessionMonitor } from "../SessionMonitor";
 import { SessionDiagnosticPanel } from "./SessionDiagnosticPanel";
+import { JulesStatusBadge, type JulesSessionPhase } from "../JulesStatusBadge";
 import * as styles from "../BacklogItemDetail.css";
 import * as sectionStyles from "./SessionsSection.css";
+
+// Jules end reasons that represent a successful outcome (session/jules_session_poller.go's
+// applyCompletedState) -- everything else ("jules_failed", "jules_session_missing",
+// "jules_timed_out", "dispatch_incomplete") is a failure. Kept local to this file
+// since ItemSession carries no dedicated Jules-outcome field, only the generic
+// end_reason string already used for headless triage/review buckets.
+const JULES_SUCCESS_END_REASONS = new Set(["jules_completed", "jules_completed_no_pr"]);
+
+/**
+ * Computes a jules_work row's badge phase from fields already on the wire
+ * (role/endedAt/endReason) -- there is no live Jules API state on
+ * ItemSession itself, only the coarse durable outcome (Story 3.3.2, Task
+ * 3.3.2a). An open row is always "running": SessionsSection has no signal to
+ * distinguish Queued/Planning/AwaitingPlanApproval, all of which the poller
+ * treats identically (session/jules_session_poller.go's applyNonTerminalState).
+ * authReconnectRequired overrides every open row account-wide (ux.md §4.2
+ * step 6/plan.md Story 2.3.4) -- a closed row's phase is never overridden.
+ */
+function computeJulesPhase(session: LinkedSession, authReconnectRequired: boolean): JulesSessionPhase {
+  if (!session.endedAt) {
+    return authReconnectRequired ? "reconnect-required" : "running";
+  }
+  return JULES_SUCCESS_END_REASONS.has(session.endReason ?? "") ? "done" : "failed";
+}
+
+// Jules doesn't persist a web URL on ItemSession (only the ephemeral API
+// response carries s.URL, session/jules_session_poller.go's
+// julesSessionWebURL) -- the durable session_uuid is stored as
+// "jules-sessions/<id>" (julesSessionNameFromUUID's inverse), which maps
+// onto the same "https://jules.google.com/session/<id>" shape the backend's
+// own failure notes already link to (plan.md:894).
+const JULES_SESSION_UUID_PREFIX = "jules-sessions/";
+
+function julesWebUrlFor(session: LinkedSession): string {
+  const id = session.sessionId.startsWith(JULES_SESSION_UUID_PREFIX)
+    ? session.sessionId.slice(JULES_SESSION_UUID_PREFIX.length)
+    : session.sessionId;
+  return `https://jules.google.com/session/${id}`;
+}
 
 // Partial (not a full Record<SessionKind, ...>) because "work"/"review" are
 // Real Sessions rendered via the plain <a> branch below and never look this
@@ -42,6 +82,14 @@ export interface SessionsSectionProps {
    */
   onSteerSession: (session: LinkedSession, message: string) => Promise<void>;
   steeringSessionId: string | null;
+  /**
+   * GetJulesConfig's account-wide auth_reconnect_required flag (Story
+   * 2.3.4) -- overrides every open jules_work row's badge to
+   * "reconnect-required" regardless of its own computed phase. Defaults to
+   * false so every other call site (and every pre-existing test) is
+   * unaffected.
+   */
+  authReconnectRequired?: boolean;
 }
 
 const SHOW_MORE_CAP = 5;
@@ -65,6 +113,7 @@ export function SessionsSection({
   onDeleteSession,
   onSteerSession,
   steeringSessionId,
+  authReconnectRequired = false,
 }: SessionsSectionProps) {
   const { visible, hasMore, remaining, showAll } = useShowMore(
     item.id,
@@ -215,10 +264,35 @@ export function SessionsSection({
               const pipelineDisplay = resolvePipelineModeDisplay(s, pipelineModes);
               const kind = classifySessionKind(s);
               const isSynthetic = kind !== "work" && kind !== "review";
+              // A Jules cloud session has no PTY/tmux Instance behind it --
+              // never Steerable, never Instance-backed -- so it's routed to
+              // its own row content (badge instead of branch chip, no
+              // SessionMonitor) ahead of the synthetic/work-review split
+              // above, which doesn't know about this kind (Story 3.3.2,
+              // Task 3.3.2a).
+              const isJulesWork = s.role === "jules_work";
               return (
                 <div key={s.entityId ?? s.sessionId} className={styles.sessionRow} role="listitem">
                   <div className={styles.sessionRowMain}>
-                    {isSynthetic ? (
+                    {isJulesWork ? (
+                      <div className={sectionStyles.julesRowContent}>
+                        <JulesStatusBadge
+                          phase={computeJulesPhase(s, authReconnectRequired)}
+                          julesWebUrl={julesWebUrlFor(s)}
+                        />
+                        <div className={sectionStyles.julesRowMeta}>
+                          <span className={styles.sessionId} title={s.sessionId}>
+                            {s.sessionId}
+                          </span>
+                          {s.startedAt && <span className={styles.sessionDate}>{formatDate(s.startedAt)}</span>}
+                          {s.estimatedCostUsd > 0 && (
+                            <span className={styles.sessionCost} title="Estimated session cost">
+                              ${s.estimatedCostUsd.toFixed(4)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ) : isSynthetic ? (
                       <div className={sectionStyles.diagnosticRowWrapper}>
                         <CollapsibleSection
                           sectionKey={`session-${s.entityId ?? s.sessionId}`}
@@ -270,8 +344,12 @@ export function SessionsSection({
                         diagnostic panel, not an action surface. For an ended
                         work/review row it renders disabled+reason instead of being
                         absent, since "this used to be steerable" is real state
-                        information. */}
-                    {!isSynthetic && (
+                        information. Also never rendered for a jules_work row
+                        (Story 3.3.2) — there is no PTY behind a Jules cloud
+                        session to steer; classifySessionKind falls back to
+                        "work" for this role since it predates Jules, so this
+                        guard is explicit rather than relying on isSynthetic. */}
+                    {!isSynthetic && !isJulesWork && (
                       <button
                         type="button"
                         ref={(el) => {
@@ -306,7 +384,7 @@ export function SessionsSection({
                       {deletingSessionId === s.sessionId ? "…" : "Delete"}
                     </button>
                   </div>
-                  {!isSynthetic && openSteerFor === s.sessionId && (
+                  {!isSynthetic && !isJulesWork && openSteerFor === s.sessionId && (
                     <div
                       id={`session-steer-composer-${s.sessionId}`}
                       data-testid={`session-steer-composer-${s.sessionId}`}
@@ -438,8 +516,13 @@ export function SessionsSection({
         {/* Session monitor for the most recent active session. A session is
             only considered active if the item is in the matching lifecycle
             phase — prevents ghost "RUNNING" tiles for sessions that died
-            without setting endedAt. */}
-        {active && <SessionMonitor sessionId={active.sessionId} sessionRole={active.role} isRunning={true} />}
+            without setting endedAt. `active` can never resolve to a
+            jules_work row today (statusToRole never maps to "jules_work"),
+            but the guard is explicit rather than relying on that — there is
+            no PTY behind a Jules cloud session to monitor (Story 3.3.2). */}
+        {active && active.role !== "jules_work" && (
+          <SessionMonitor sessionId={active.sessionId} sessionRole={active.role} isRunning={true} />
+        )}
       </div>
     </CollapsibleSection>
   );

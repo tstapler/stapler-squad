@@ -82,4 +82,40 @@ export class SessionsPage {
     expect(sessionId).not.toBeNull();
     return sessionId!;
   }
+
+  /**
+   * Creates a temporary (no-git) session with the "pi" program preset via the
+   * Omnibar (Epic 6.2 Story 6.2.1) — mirrors createBashSession's flow, but
+   * selects "pi" instead of "bash" and returns the exact `program` value sent
+   * on the CreateSession request so callers can assert against it directly,
+   * rather than re-deriving it from the resulting session's rendered label.
+   *
+   * Callers must enable the `pi-support` feature flag (e.g. via
+   * UpdateFeatureFlag) before navigating to the page — "pi" is only rendered
+   * as a picker option when the flag is on (Story 3.1.1's "opt-in
+   * invisibility" requirement).
+   */
+  async createPiSession(namePrefix: string): Promise<{ sessionId: string; program: string }> {
+    await this.newSessionButton.click({ timeout: 20000 });
+    await this.page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
+
+    const sessionTitle = `${namePrefix}-${Date.now()}`;
+    await this.page.getByLabel('Session Name').fill(sessionTitle);
+
+    await this.page.getByText('Advanced Options').click();
+    await this.page.getByLabel('Program', { exact: true }).selectOption('pi');
+
+    const createRequest = this.page.waitForRequest(
+      (req) => req.url().includes('CreateSession') && req.method() === 'POST',
+    );
+    await this.createSessionSubmitButton.click();
+    const request = await createRequest;
+    const program = request.postDataJSON().program as string;
+
+    await this.page.waitForURL(/[?&]session=/, { timeout: 15000 });
+    const url = new URL(this.page.url());
+    const sessionId = url.searchParams.get('session');
+    expect(sessionId).not.toBeNull();
+    return { sessionId: sessionId!, program };
+  }
 }

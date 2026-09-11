@@ -112,11 +112,11 @@ func (s *StateStore) save() error {
 		return fmt.Errorf("marshal unfinished state: %w", err)
 	}
 	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("write temp state file: %w", err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {

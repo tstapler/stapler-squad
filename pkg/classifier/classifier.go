@@ -62,6 +62,12 @@ type PermissionRequestPayload struct {
 	HookEventName  string                 `json:"hook_event_name"`
 	ToolName       string                 `json:"tool_name"`
 	ToolInput      map[string]interface{} `json:"tool_input"`
+	// Source identifies which agent's hook sent this payload: "claude" or "pi".
+	// Optional and backward compatible — Claude's existing curl-based hook
+	// command is unmodified and simply omits it (empty string). Defaulted to
+	// "claude" only at the audit/analytics recording boundary, never here.
+	// See pi-support Epic 4.3 / ADR-related plan.md Story 4.3.1.
+	Source string `json:"source,omitempty"`
 }
 
 // ClassificationContext provides local-environment context to the classifier.

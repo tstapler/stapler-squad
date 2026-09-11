@@ -423,6 +423,11 @@ message ReviewQueueItemRemovedEvent {
 
   // Why it was removed
   string reason = 2; // "resolved", "dismissed", "timeout", "acknowledged"
+
+  // Set only when reason == "auto_resolved_by_rule": the display name of
+  // the rule that resolved the underlying approval. Empty for every other
+  // removal reason.
+  optional string auto_resolved_by_rule = 3;
 }
 
 // ReviewQueueItemUpdatedEvent is emitted when item properties change

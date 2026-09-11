@@ -293,15 +293,50 @@ func TestStatusToProto_AllStates(t *testing.T) {
 		{"Stopped", session.Stopped, sessionv1.SessionStatus_SESSION_STATUS_STOPPED},
 		{"Hibernated", session.Hibernated, sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED},
 		{"Restoring", session.Restoring, sessionv1.SessionStatus_SESSION_STATUS_RESTORING},
+		{"Crashed", session.Crashed, sessionv1.SessionStatus_SESSION_STATUS_CRASHED},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := StatusToProto(tc.input)
+			got, err := StatusToProto(tc.input)
+			if err != nil {
+				t.Errorf("StatusToProto(%v) returned unexpected error: %v", tc.input, err)
+			}
 			if got != tc.expected {
 				t.Errorf("StatusToProto(%v) = %v, want %v", tc.input, got, tc.expected)
 			}
 		})
+	}
+}
+
+// TestStatusToProto_should_ReturnFailed_When_StatusIsFailed verifies Epic 1.1
+// Story 1.1.3's Failed arm: session.Failed maps to SESSION_STATUS_FAILED, not
+// UNSPECIFIED.
+func TestStatusToProto_should_ReturnFailed_When_StatusIsFailed(t *testing.T) {
+	got, err := StatusToProto(session.Failed)
+	if err != nil {
+		t.Fatalf("StatusToProto(Failed) returned unexpected error: %v", err)
+	}
+	if got != sessionv1.SessionStatus_SESSION_STATUS_FAILED {
+		t.Errorf("StatusToProto(Failed) = %v, want SESSION_STATUS_FAILED", got)
+	}
+}
+
+// TestStatusToProto_should_ReturnExplicitError_When_StatusIsUnrecognized is the
+// Task 1.1.3c exhaustiveness guard: an unmapped session.Status value must fail
+// loudly (a returned error) instead of silently falling back to UNSPECIFIED, so
+// the next new status value added to the FSM but not to this switch is caught
+// instead of repeating the exact gap this story closes.
+func TestStatusToProto_should_ReturnExplicitError_When_StatusIsUnrecognized(t *testing.T) {
+	unrecognized := session.Status(99)
+
+	got, err := StatusToProto(unrecognized)
+
+	if err == nil {
+		t.Fatalf("StatusToProto(%v) = %v, <nil>, want a non-nil error for an unrecognized status", unrecognized, got)
+	}
+	if got != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
+		t.Errorf("StatusToProto(%v) status = %v, want SESSION_STATUS_UNSPECIFIED alongside the error", unrecognized, got)
 	}
 }
 

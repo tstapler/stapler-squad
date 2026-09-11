@@ -120,6 +120,7 @@ func TestMangleCorrelator_EvictExpired_PrunesStaleOrdinalCounters(t *testing.T) 
 
 	time.Sleep(200 * time.Millisecond)
 	c.EvictExpired(context.Background(), spy)
+	c.PruneStaleOrdinals()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -131,6 +132,33 @@ func TestMangleCorrelator_EvictExpired_PrunesStaleOrdinalCounters(t *testing.T) 
 	}
 	if _, ok := c.ordinalLastSeen[ordinalKey{"sess1", "SGR"}]; ok {
 		t.Error("expected ordinalLastSeen entry to be pruned once its (session, type) pair went quiet")
+	}
+}
+
+// TestMangleCorrelator_EvictExpired_DoesNotScanOrdinalMaps is the enforcement for the
+// mutex-contention fix: EvictExpired must NOT prune ordinal counters itself — that scan
+// moved to the separate, less-frequent PruneStaleOrdinals so the hot maxAge/2 eviction tick's
+// critical section stays limited to the pending map. A regression that merges the two back
+// together would make this fail (ordinals pruned by EvictExpired alone, before
+// PruneStaleOrdinals ever runs).
+func TestMangleCorrelator_EvictExpired_DoesNotScanOrdinalMaps(t *testing.T) {
+	spy := &spyWriter{}
+	c := NewMangleCorrelator(100*time.Millisecond, 100)
+
+	c.RecordStage1("sess1", "SGR", "hash-1", 5)
+	c.CheckStage2("sess1", "SGR", "hash-1", 5)
+
+	time.Sleep(200 * time.Millisecond)
+	c.EvictExpired(context.Background(), spy)
+
+	ok := ordinalKey{"sess1", "SGR"}
+	c.mu.Lock()
+	_, s1ok := c.stage1Ordinals[ok]
+	_, s2ok := c.stage2Ordinals[ok]
+	_, lastSeenOk := c.ordinalLastSeen[ok]
+	c.mu.Unlock()
+	if !s1ok || !s2ok || !lastSeenOk {
+		t.Errorf("expected EvictExpired alone to leave stale ordinal entries in place (pruning belongs to PruneStaleOrdinals), got s1=%v s2=%v lastSeen=%v", s1ok, s2ok, lastSeenOk)
 	}
 }
 

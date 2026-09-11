@@ -197,7 +197,7 @@ func TestNativeProcessManager_StartAfterClose_Restarts(t *testing.T) {
 	// been reaped yet (ProcessState == nil, i.e. IsAlive() still true) — wait
 	// for supervise()'s cmd.Wait() to actually observe the SIGTERM'd process
 	// exit instead of sleeping a fixed duration that can be too short under load.
-	require.Eventually(t, func() bool { return !mgr.IsAlive() }, 5*time.Second, 10*time.Millisecond,
+	wait.RequireEventually(t, func() bool { return !mgr.IsAlive() }, 5*time.Second, 10*time.Millisecond,
 		"process manager never reported exited after Close()")
 
 	require.NoError(t, mgr.Start(dir))
@@ -268,8 +268,6 @@ func TestNativeProcessManager_FanOut_DeliversPTYOutput(t *testing.T) {
 // T-UNIT-11: Factory routes "native" → *NativeProcessManager.
 func TestNewProcessManager_ReturnsNativeProcessManager_WhenFlagIsNative(t *testing.T) {
 	t.Parallel()
-	RegisterBackendProvider(BackendNative)
-	defer RegisterBackendProvider(BackendTmux) // restore default for other tests
 
 	pm, err := NewProcessManager(context.Background(), BackendNative, ProcessManagerOptions{
 		SessionName: "test-native",

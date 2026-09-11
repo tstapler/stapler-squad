@@ -6,7 +6,30 @@ import {
   notificationTypeLabel,
   priorityColor,
   notificationTypeFilter,
+  isActionableNotification,
+  computeScopedMarkReadIds,
+  capBadgeCount,
 } from "@/lib/utils/notificationMapping";
+import type { NotificationData } from "@/lib/types/notification";
+
+type UIType = NonNullable<NotificationData["notificationType"]>;
+
+// The full 13-member notificationType union (web-app/src/lib/types/notification.ts:16).
+const ALL_UI_TYPES: UIType[] = [
+  "info",
+  "approval_needed",
+  "auto_approved",
+  "error",
+  "warning",
+  "task_complete",
+  "task_failed",
+  "progress",
+  "question",
+  "reminder",
+  "system",
+  "custom",
+  "undo",
+];
 
 describe("notificationMapping", () => {
   describe("mapNotificationType", () => {
@@ -67,8 +90,81 @@ describe("notificationMapping", () => {
       expect(mapNotificationType(NotificationType.CUSTOM)).toBe("custom");
     });
 
-    it("defaults unknown values to info", () => {
-      expect(mapNotificationType(9999)).toBe("info");
+    it("maps UNSPECIFIED to info", () => {
+      expect(mapNotificationType(NotificationType.UNSPECIFIED)).toBe("info");
+    });
+
+    // Task 3.1.1c (pre-mortem P1): an unmapped backend NotificationType must not
+    // silently default to "info" — that reproduces the exact miscategorization
+    // bug this project exists to fix, one stage upstream of the "info" filter.
+    it("warns and defaults unknown values to an actionable type (fail-safe), not info", () => {
+      const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+      const result = mapNotificationType(9999);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(isActionableNotification(result)).toBe(true);
+      warnSpy.mockRestore();
+    });
+
+    it("never warns for any currently-mapped real enum value", () => {
+      const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+      const realValues = Object.values(NotificationType).filter((v): v is number => typeof v === "number");
+      for (const value of realValues) {
+        mapNotificationType(value);
+      }
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe("isActionableNotification", () => {
+    it("classifies the five actionable types", () => {
+      expect(isActionableNotification("approval_needed")).toBe(true);
+      expect(isActionableNotification("question")).toBe(true);
+      expect(isActionableNotification("error")).toBe(true);
+      expect(isActionableNotification("task_failed")).toBe(true);
+      expect(isActionableNotification("warning")).toBe(true);
+    });
+
+    it("classifies non-actionable types as false", () => {
+      expect(isActionableNotification("info")).toBe(false);
+      expect(isActionableNotification("task_complete")).toBe(false);
+      expect(isActionableNotification("auto_approved")).toBe(false);
+    });
+
+    // Regression for the found "task_complete" gap: the first draft defined
+    // "info" as a second, independently-maintained 7-type list that (with
+    // ACTIONABLE_TYPES) covered only 12 of the 13 UITypes. "info" is now the
+    // literal complement of ACTIONABLE_TYPES, so this is structurally
+    // guaranteed — this test pins it against the type union drifting.
+    it("every UIType is classified by isActionableNotification, none fall through both notificationTypeFilter('info') and ACTIONABLE_TYPES", () => {
+      for (const type of ALL_UI_TYPES) {
+        const actionable = isActionableNotification(type);
+        const inInfo = notificationTypeFilter("info", [type]).includes(type);
+        expect(actionable).toBe(!inInfo);
+      }
+    });
+  });
+
+  describe("computeScopedMarkReadIds", () => {
+    it("returns only unread non-actionable IDs", () => {
+      const notifications = [
+        { id: "a1", isRead: false, notificationType: "approval_needed" as UIType },
+        { id: "b2", isRead: false, notificationType: "task_complete" as UIType },
+        { id: "c3", isRead: true, notificationType: "task_complete" as UIType },
+        { id: "d4", isRead: false, notificationType: "question" as UIType },
+      ];
+      expect(computeScopedMarkReadIds(notifications)).toEqual(["b2"]);
+    });
+  });
+
+  describe("capBadgeCount", () => {
+    it("caps above 99", () => {
+      expect(capBadgeCount(152)).toBe("99+");
+    });
+
+    it("shows the literal number at or below 99", () => {
+      expect(capBadgeCount(99)).toBe("99");
+      expect(capBadgeCount(7)).toBe("7");
     });
   });
 
@@ -235,43 +331,54 @@ describe("notificationMapping", () => {
       expect(result).toEqual(["task_complete"]);
     });
 
-    it("'info' category excludes the types covered by other filter pills", () => {
+    // Task 3.1.1a converted "info" from a hand-maintained exclusion list to the
+    // literal complement of ACTIONABLE_TYPES (approval_needed, question, error,
+    // task_failed, warning) — it now excludes only those five actionable types.
+    it("info category never includes question", () => {
+      const result = notificationTypeFilter("info", ["question", "info", "auto_approved"]);
+      expect(result).not.toContain("question");
+      expect(result).toEqual(["info", "auto_approved"]);
+    });
+
+    it("'info' category excludes the five actionable types", () => {
       const result = notificationTypeFilter("info", [...allTypes]);
       expect(result).not.toContain("approval_needed");
+      expect(result).not.toContain("question");
       expect(result).not.toContain("error");
       expect(result).not.toContain("task_failed");
       expect(result).not.toContain("warning");
-      expect(result).not.toContain("task_complete");
     });
 
-    it("'info' category includes progress, reminder, system, custom, and info", () => {
+    it("'info' category includes progress, reminder, system, custom, info, task_complete, and auto_approved (allow-list complement)", () => {
       const result = notificationTypeFilter("info", [...allTypes]);
       expect(result).toContain("info");
       expect(result).toContain("progress");
       expect(result).toContain("reminder");
       expect(result).toContain("system");
       expect(result).toContain("custom");
+      // task_complete and auto_approved are not in ACTIONABLE_TYPES, so the
+      // allow-list complement includes them. Both call sites (NotificationsPage,
+      // NotificationPanel) already filter auto_approved out of `items` before
+      // ever calling notificationTypeFilter, so this is inert in the actual UI —
+      // auto_approved never reaches the "info" pill in practice.
+      expect(result).toContain("task_complete");
+      expect(result).toContain("auto_approved");
     });
 
-    it("filter categories are mutually exclusive and collectively exhaustive (excluding auto_approved)", () => {
+    it("info category includes an unrecognized-but-mapped type", () => {
+      // "reminder" is not in ACTIONABLE_TYPES, so it must fall into "info".
+      const result = notificationTypeFilter("info", ["reminder"]);
+      expect(result).toEqual(["reminder"]);
+    });
+
+    it("filter categories are mutually exclusive and collectively exhaustive", () => {
       const approval = notificationTypeFilter("approval_needed", [...allTypes]);
       const error = notificationTypeFilter("error", [...allTypes]);
       const task = notificationTypeFilter("task_complete", [...allTypes]);
       const info = notificationTypeFilter("info", [...allTypes]);
 
       const covered = new Set([...approval, ...error, ...task, ...info]);
-      // auto_approved is intentionally excluded from all filter pills — it appears only in the
-      // collapsible "Auto-handled" section in NotificationPanel, so it must NOT appear in any filter.
-      const filterable = allTypes.filter((t) => t !== "auto_approved");
-      filterable.forEach((t) => expect(covered.has(t)).toBe(true));
-    });
-
-    it("auto_approved is excluded from all filter categories", () => {
-      const approval = notificationTypeFilter("approval_needed", ["auto_approved"]);
-      const error = notificationTypeFilter("error", ["auto_approved"]);
-      const task = notificationTypeFilter("task_complete", ["auto_approved"]);
-      const info = notificationTypeFilter("info", ["auto_approved"]);
-      expect([...approval, ...error, ...task, ...info]).toHaveLength(0);
+      allTypes.forEach((t) => expect(covered.has(t)).toBe(true));
     });
 
     it("returns empty array when input is empty", () => {

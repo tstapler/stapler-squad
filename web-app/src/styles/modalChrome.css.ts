@@ -63,6 +63,48 @@ export const animatedSubtitleBase = style({
   color: vars.color.textSecondary,
 });
 
+// ── Static confirm-dialog surface ───────────────────────────────────────────
+// Token-based (non-animated) overlay/dialog/heading/body shared by the
+// settings confirm dialogs (BackwardSyncConfirmDialog, PiDisableWarningDialog).
+
+export const confirmOverlay = style({
+  position: "fixed",
+  inset: 0,
+  backgroundColor: vars.color.overlayBackground,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: zIndex.modal,
+  padding: vars.space["4"],
+});
+
+export const confirmDialog = style({
+  backgroundColor: vars.color.modalBackground,
+  border: `1px solid ${vars.color.modalBorder}`,
+  borderRadius: vars.radii.lg,
+  boxShadow: vars.shadow.lg,
+  padding: vars.space["6"],
+  maxWidth: "480px",
+  width: "calc(100% - 2rem)",
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["4"],
+});
+
+export const confirmHeading = style({
+  fontSize: vars.fontSize.lg,
+  fontWeight: vars.fontWeight.semibold,
+  color: vars.color.textPrimary,
+  margin: 0,
+});
+
+export const confirmBody = style({
+  color: vars.color.textSecondary,
+  fontSize: vars.fontSize.base,
+  margin: 0,
+  lineHeight: "1.5",
+});
+
 // ── Static confirm-dialog action row ────────────────────────────────────────
 // Token-based (non-animated) footer buttons shared by the backlog/settings
 // confirm dialogs (VaguenessPromptModal, BackwardSyncConfirmDialog).

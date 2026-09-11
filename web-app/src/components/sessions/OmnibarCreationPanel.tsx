@@ -1,5 +1,5 @@
 "use client";
-// +feature: session-image-attach
+// +feature: session-image-attach pi-support
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { KeyboardEvent } from "react";
@@ -8,8 +8,10 @@ import { SessionService } from "@/gen/session/v1/session_pb";
 import type { WorktreeEntry } from "@/gen/session/v1/session_pb";
 import type { OmnibarFormState } from "./Omnibar";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
+import { PI_SUPPORT_FLAG_NAME, getPickerPrograms } from "@/lib/constants/programs";
 import { getConnectTransport } from "@/lib/api/transport";
-import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
+import { isAutoApproveSupported, isApprovalExtensionSupported } from "@/lib/sessions/autoApprove";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import {
   body, field, label as labelClass, fieldInput, hint, select as selectClass,
   checkbox as checkboxClass, collapsible, collapsibleHeader, collapsibleTitle, collapsibleIcon, expanded,
@@ -183,6 +185,13 @@ export interface OmnibarCreationPanelProps {
   /** Configured remotes for the "Remote host" selector. Renders only when non-empty — see
    * RemoteOption's doc comment for why this is a prop rather than a Redux-sourced list. */
   remotes?: RemoteOption[];
+  /**
+   * Stubbed extension-health signal for Story 3.1.2's capability warning: true means the pi
+   * approval extension is known to have failed to load. Always `false` for now — Phase 4's
+   * Story 4.2.2 will wire this to the real per-session health tracker; this prop exists so the
+   * warning UI itself can ship and be tested now without waiting on that server-side work.
+   */
+  piApprovalExtensionFailed?: boolean;
 }
 
 // Helper: file → base64 string (strips data URL prefix).
@@ -222,6 +231,7 @@ export function OmnibarCreationPanel({
   launcherPresetsLoading: presetsLoading = false,
   launcherPresetsLoadError: presetsLoadError = null,
   remotes = EMPTY_REMOTES,
+  piApprovalExtensionFailed = false,
 }: OmnibarCreationPanelProps) {
   const {
     sessionName, branch, program, category, autoYes, autoApprove,
@@ -311,6 +321,16 @@ export function OmnibarCreationPanel({
   }, [sessionType]);
 
   const availablePrograms = useAvailablePrograms();
+  const piSupportEnabled = useFeatureFlag(PI_SUPPORT_FLAG_NAME);
+  // Story 3.1.1: "pi" is only offered in the rendered picker options when pi-support is on —
+  // opt-in invisibility. availablePrograms (not the raw PROGRAMS constant) is the base list
+  // here since it may also include extra programs detected on the host; getPickerPrograms
+  // takes that list as a parameter so this call site and programs.ts share one filter rule.
+  const pickerPrograms = getPickerPrograms(availablePrograms, piSupportEnabled);
+  // Story 3.1.2: the capability warning is only even eligible to show for a program the pi
+  // approval extension covers, and only while pi-support itself is on.
+  const showPiApprovalWarning =
+    piSupportEnabled && isApprovalExtensionSupported(program) && piApprovalExtensionFailed;
   // Default-expanded once there's something to show — either a loaded preset or a config
   // error. An error must never sit hidden behind a collapsed section: AC requires a malformed
   // config to "fail loudly", and a load_error with zero presets (the RPC's own contract) would
@@ -924,13 +944,22 @@ export function OmnibarCreationPanel({
                   value={program}
                   onChange={(e) => setFormField("program", e.target.value)}
                 >
-                  {availablePrograms.map((p) => (
+                  {pickerPrograms.map((p) => (
                     <option key={p.value} value={p.value}>{p.label}</option>
                   ))}
                 </select>
                 {!isProgramRecognized && (
                   <span className={presetListStyles.programWarning} data-testid="preset-program-warning">
                     &quot;{program}&quot; not found in PATH — check it&apos;s installed
+                  </span>
+                )}
+                {/* Story 3.1.2 / Phase 3: placeholder capability warning. piApprovalExtensionFailed
+                    is a stubbed prop (always false today) — Story 4.2.2 will wire the real
+                    per-session extension-health signal here; the UI/AC (role="alert", exact
+                    wording) ships now so it doesn't block on that server-side work. */}
+                {showPiApprovalWarning && (
+                  <span className={styles.piApprovalWarning} role="alert" data-testid="pi-approval-extension-warning">
+                    Approval extension not loaded for pi — tool calls will run WITHOUT rule enforcement for this session.
                   </span>
                 )}
               </div>
@@ -985,7 +1014,11 @@ export function OmnibarCreationPanel({
       </div>
 
       {/* Error Message */}
-      {error && <div className={errorClass}>{error}</div>}
+      {error && (
+        <div className={errorClass} role="alert" data-testid="omnibar-create-error">
+          {error}
+        </div>
+      )}
 
       {/* Footer */}
       <div className={footer}>

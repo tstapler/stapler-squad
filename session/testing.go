@@ -1,9 +1,13 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 )
 
 var testEntRepoCounter int64
@@ -34,4 +38,30 @@ func NewTestEntRepository(t testing.TB) *EntRepository {
 		}
 	})
 	return repo
+}
+
+// TestBackdateCreationProgress rewrites a persisted instance's
+// creation_progress_updated_at column directly to `when`, simulating elapsed
+// wall-clock time without a real sleep. There is no production setter for an
+// arbitrary (possibly past) timestamp -- SetCreationProgress always stamps
+// "now" -- so callers outside this package (e.g. the Stale-Creation
+// Sweeper's tests in server/services) need this to exercise their
+// reload-from-storage path without importing session/ent directly, which
+// server/services' depguard rule (no_ent_in_services) forbids.
+func TestBackdateCreationProgress(t *testing.T, storage *Storage, uuid string, when time.Time) {
+	t.Helper()
+	client := storage.GetEntClient()
+	if client == nil {
+		t.Fatalf("TestBackdateCreationProgress: storage has no ent client")
+	}
+	n, err := client.Session.Update().
+		Where(entsession.UUID(uuid)).
+		SetCreationProgressUpdatedAt(when).
+		Save(context.Background())
+	if err != nil {
+		t.Fatalf("TestBackdateCreationProgress: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("TestBackdateCreationProgress: expected to update 1 row, updated %d", n)
+	}
 }

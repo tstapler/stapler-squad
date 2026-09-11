@@ -252,7 +252,9 @@ func (ws *WorkspaceService) GetWorkspaceInfo(
 		CurrentBookmark:       vcsInfo.CurrentBookmark,
 		CurrentRevision:       vcsInfo.CurrentRevision,
 		HasUncommittedChanges: vcsInfo.HasUncommittedChanges,
-		ModifiedFileCount:     int32(vcsInfo.ModifiedFileCount),
+		// #nosec G115 -- ModifiedFileCount is a working-tree file count for one
+		// local repo, far below int32 range.
+		ModifiedFileCount: int32(vcsInfo.ModifiedFileCount),
 	}
 
 	switch vcsInfo.VCSType {
@@ -453,11 +455,14 @@ func vcsStatusToProto(status *vc.VCSStatus) *sessionv1.VCSStatus {
 	}
 
 	protoStatus := &sessionv1.VCSStatus{
-		Type:         vcsTypeToProto(status.Type),
-		Branch:       status.Branch,
-		HeadCommit:   status.HeadCommit,
-		Description:  status.Description,
-		AheadBy:      int32(status.AheadBy),
+		Type:        vcsTypeToProto(status.Type),
+		Branch:      status.Branch,
+		HeadCommit:  status.HeadCommit,
+		Description: status.Description,
+		// #nosec G115 -- AheadBy/BehindBy are git/jj ahead-behind commit
+		// counts for one local branch, far below int32 range.
+		AheadBy: int32(status.AheadBy),
+		// #nosec G115 -- see AheadBy above.
 		BehindBy:     int32(status.BehindBy),
 		Upstream:     status.Upstream,
 		HasStaged:    status.HasStaged,
@@ -491,9 +496,12 @@ func vcsStatusToProto(status *vc.VCSStatus) *sessionv1.VCSStatus {
 	protoStatus.CommitsUnavailable = status.CommitsUnavailable
 	if status.AggregateDiffStat != nil {
 		protoStatus.AggregateDiffStat = &sessionv1.AggregateDiffStat{
+			// #nosec G115 -- diff stats for one local commit range, far below int32 range.
 			FilesChanged: int32(status.AggregateDiffStat.FilesChanged),
-			Additions:    int32(status.AggregateDiffStat.Additions),
-			Deletions:    int32(status.AggregateDiffStat.Deletions),
+			// #nosec G115 -- see FilesChanged above.
+			Additions: int32(status.AggregateDiffStat.Additions),
+			// #nosec G115 -- see FilesChanged above.
+			Deletions: int32(status.AggregateDiffStat.Deletions),
 		}
 	}
 	if !status.StatusAsOf.IsZero() {
@@ -539,11 +547,13 @@ func fileStatusToProto(s vc.FileStatus) sessionv1.FileStatus {
 
 func fileChangeToProto(f vc.FileChange) *sessionv1.FileChange {
 	return &sessionv1.FileChange{
-		Path:      f.Path,
-		Status:    fileStatusToProto(f.Status),
-		IsStaged:  f.IsStaged,
-		OldPath:   f.OldPath,
+		Path:     f.Path,
+		Status:   fileStatusToProto(f.Status),
+		IsStaged: f.IsStaged,
+		OldPath:  f.OldPath,
+		// #nosec G115 -- per-file diff line counts, far below int32 range.
 		Additions: int32(f.Additions),
+		// #nosec G115 -- see Additions above.
 		Deletions: int32(f.Deletions),
 	}
 }
@@ -589,7 +599,8 @@ func (ws *WorkspaceService) ListBranches(
 		if time.Since(cached.cachedAt) < branchCacheTTL {
 			branches := filterBranches(cached.branches, filter, maxResults)
 			return connect.NewResponse(&sessionv1.ListBranchesResponse{
-				Branches:   branches,
+				Branches: branches,
+				// #nosec G115 -- len(branches) is a git ref count for one local repo, far below int32 range.
 				TotalCount: int32(len(branches)),
 				Truncated:  false,
 			}), nil
@@ -644,7 +655,8 @@ func (ws *WorkspaceService) ListBranches(
 
 	branches := filterBranches(all, filter, maxResults)
 	return connect.NewResponse(&sessionv1.ListBranchesResponse{
-		Branches:   branches,
+		Branches: branches,
+		// #nosec G115 -- len(branches) is a git ref count for one local repo, far below int32 range.
 		TotalCount: int32(len(branches)),
 		Truncated:  truncated,
 	}), nil

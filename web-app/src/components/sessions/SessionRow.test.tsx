@@ -1,7 +1,7 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { SessionRow } from "./SessionRow";
-import { ReviveOutcome, SessionStatus } from "@/gen/session/v1/types_pb";
+import { ReviveOutcome, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 
 jest.mock("@connectrpc/connect", () => ({
@@ -99,6 +99,85 @@ function minutesAgoTimestamp(minutes: number) {
   return { seconds: BigInt(seconds), nanos: 0 };
 }
 
+// Epic 5.2 (async-session-creation) parity fix: SessionRow is the view users
+// actually see (SessionList.tsx defaults viewMode to "row"; SessionCard.tsx
+// is unreachable), so the Failed-state rendering built in SessionCard.tsx
+// must also work here. Mirrors SessionCard.test.tsx's "Failed status pill"
+// / "Failed reason-specific message" / live-region describe blocks.
+describe("SessionRow — Failed status dot", () => {
+  it("SessionRow_should_RenderFailedLabelAndDistinctDotStatus_When_StatusIsFailed", () => {
+    const session = { ...minimalSession, status: SessionStatus.FAILED } as unknown as Session;
+    const { container } = render(<SessionRow session={session} />);
+
+    // Radix Tooltip only renders its label text into a portal on
+    // hover/focus, so assert directly on the dot's data-status attribute
+    // (queried via the DOM, not an accessible-name query) -- distinct value
+    // per plan.md's Pattern Decisions table, not a reuse of "crashed".
+    const dot = container.querySelector('[data-status="failed"]');
+    expect(dot).not.toBeNull();
+    expect(screen.getByTestId("session-row")).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("status: Failed")
+    );
+  });
+});
+
+describe("SessionRow — Failed reason-specific message", () => {
+  it.each([
+    ["GitHubResolutionError", "Failed to resolve GitHub URL."],
+    ["StartupError", "Failed to start session."],
+    ["Stale", "This session creation appears to have stalled."],
+    ["SomeUnrecognizedReason", "Session creation failed."],
+  ])("SessionRow_should_ShowReasonSpecificMessage_When_FailureReasonIs_%s", (failureReason, expected) => {
+    const session = { ...minimalSession, status: SessionStatus.FAILED, failureReason } as unknown as Session;
+    render(<SessionRow session={session} />);
+
+    expect(screen.getByTestId("failure-message")).toHaveTextContent(expected);
+  });
+
+  it("SessionRow_should_FallBackToCreationProgress_When_FailureReasonIsAbsent", () => {
+    const session = {
+      ...minimalSession,
+      status: SessionStatus.FAILED,
+      failureReason: "",
+      creationProgress: "Failed to resolve GitHub URL: connection timed out",
+    } as unknown as Session;
+    render(<SessionRow session={session} />);
+
+    expect(screen.getByTestId("failure-message")).toHaveTextContent(
+      "Failed to resolve GitHub URL: connection timed out"
+    );
+  });
+});
+
+describe("SessionRow — Creating/Failed live region (single node, no remount)", () => {
+  it("SessionRow_should_ReuseSameLiveRegionNode_When_TransitioningCreatingToFailed", () => {
+    const creatingSession = {
+      ...minimalSession,
+      status: SessionStatus.CREATING,
+      creationProgress: "Cloning repository...",
+    } as unknown as Session;
+    const { rerender } = render(<SessionRow session={creatingSession} />);
+
+    const liveRegionBefore = screen.getByTestId("creation-live-region");
+    expect(liveRegionBefore).toHaveAttribute("aria-live", "polite");
+    expect(liveRegionBefore.textContent).toBe("Cloning repository...");
+
+    const failedSession = {
+      ...minimalSession,
+      status: SessionStatus.FAILED,
+      failureReason: "GitHubResolutionError",
+    } as unknown as Session;
+    rerender(<SessionRow session={failedSession} />);
+
+    const liveRegionsAfter = screen.getAllByTestId("creation-live-region");
+    expect(liveRegionsAfter).toHaveLength(1);
+    expect(liveRegionsAfter[0]).toBe(liveRegionBefore); // same DOM node, not a remount
+    expect(liveRegionsAfter[0]).toHaveAttribute("aria-live", "assertive");
+    expect(liveRegionsAfter[0].textContent).toBe("Failed to resolve GitHub URL.");
+  });
+});
+
 describe("SessionRow — stale badge", () => {
   it("SessionRow_should_RenderStaleBadge_When_ActiveSessionExceedsThreshold", () => {
     const session = {
@@ -123,5 +202,24 @@ describe("SessionRow — stale badge", () => {
     render(<SessionRow session={session} staleThresholdMinutes={30} />);
 
     expect(screen.queryByText("Stale", { exact: false })).toBeNull();
+  });
+});
+
+describe("SessionRow — IDLE substatus chip (Epic 3.2.2)", () => {
+  it("SessionRow_should_RenderIdleChip_When_ActiveSessionSubStatusIsIdle", () => {
+    // Flip of the pre-Epic-3.2.2 suppression: idle-reason items were removed from the
+    // Review Queue entirely, so this chip is now the Sessions-list's only "ready for
+    // next task" signal (SessionRow.tsx no longer excludes SubStatus.IDLE at :352).
+    const session = {
+      ...minimalSession,
+      status: SessionStatus.ACTIVE,
+      subStatus: SubStatus.IDLE,
+    } as unknown as Session;
+    render(<SessionRow session={session} />);
+
+    const chip = screen.getByText("Idle", { exact: false });
+    expect(chip).toBeInTheDocument();
+    expect(chip).toHaveAttribute("role", "status");
+    expect(chip).toHaveAttribute("aria-label", "Session is idle");
   });
 });

@@ -171,19 +171,45 @@ function connectStream(rerender: (el: React.ReactElement) => void, base: ReturnT
   return next;
 }
 
+// Flushes XtermTerminal's mount-time onResize microtask, then lets
+// TerminalOutput's own size-stability debounce (50ms setTimeout + two nested
+// requestAnimationFrame callbacks — see the "Event-driven size stability
+// detection" block in TerminalOutput.tsx) elapse so isWaitingForStableSize
+// clears. Needed before badge/overlay assertions that depend on text driven
+// by isConnected/terminalState rather than the stabilizing state.
+async function settleSizeStabilityWait() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  act(() => {
+    jest.advanceTimersByTime(50);
+  });
+  act(() => {
+    jest.advanceTimersByTime(32);
+  });
+}
+
+// Shared by every describe block below (jscpd flagged the inlined version as
+// a 3x clone): fake timers, silenced console, and a freshly reset mock xterm
+// handle. Each describe still owns its own afterEach cleanup.
+function resetSharedTerminalMocks() {
+  jest.useFakeTimers();
+  jest.spyOn(console, "log").mockImplementation(() => {});
+  jest.spyOn(console, "warn").mockImplementation(() => {});
+  jest.spyOn(console, "error").mockImplementation(() => {});
+  mockXtermState.onResize = null;
+  mockXtermState.cols = 80;
+  mockXtermState.rows = 24;
+  mockXtermState.fit.mockClear();
+  mockXtermState.clear.mockClear();
+}
+
 describe("TerminalOutput resize call sites", () => {
   let streamState: ReturnType<typeof makeStreamMock>;
 
   beforeEach(() => {
-    jest.useFakeTimers();
-    jest.spyOn(console, "log").mockImplementation(() => {});
-    jest.spyOn(console, "warn").mockImplementation(() => {});
-    jest.spyOn(console, "error").mockImplementation(() => {});
-    mockXtermState.onResize = null;
-    mockXtermState.cols = 80;
-    mockXtermState.rows = 24;
-    mockXtermState.fit.mockClear();
-    mockXtermState.clear.mockClear();
+    resetSharedTerminalMocks();
     streamState = makeStreamMock();
     mockUseTerminalStream.mockImplementation(() => streamState);
   });
@@ -304,17 +330,7 @@ describe("TerminalOutput resize call sites", () => {
 // normal tab order (no tabIndex={-1} skip) and activatable with Enter/Space,
 // per design/ux.md §2 Accessibility "Keyboard" bullet.
 describe("TerminalOutput hardFailedBanner Retry keyboard accessibility", () => {
-  beforeEach(() => {
-    jest.useFakeTimers();
-    jest.spyOn(console, "log").mockImplementation(() => {});
-    jest.spyOn(console, "warn").mockImplementation(() => {});
-    jest.spyOn(console, "error").mockImplementation(() => {});
-    mockXtermState.onResize = null;
-    mockXtermState.cols = 80;
-    mockXtermState.rows = 24;
-    mockXtermState.fit.mockClear();
-    mockXtermState.clear.mockClear();
-  });
+  beforeEach(resetSharedTerminalMocks);
 
   afterEach(() => {
     jest.restoreAllMocks();
@@ -371,5 +387,56 @@ describe("TerminalOutput hardFailedBanner Retry keyboard accessibility", () => {
     button.focus();
     await user.keyboard(" ");
     expect(handleManualReconnect).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Regression test: a brand-new session whose first connect attempt drops
+// before any content has ever loaded must show a startup state, not the
+// same bare "Disconnected" badge/overlay used for a real post-load drop.
+describe("TerminalOutput startup state (never-connected content race)", () => {
+  beforeEach(resetSharedTerminalMocks);
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+  });
+
+  it("TerminalOutput_should_showConnectingBadge_When_terminalStateIsConnecting", async () => {
+    const streamState = makeStreamMock({ isConnected: false, terminalState: "CONNECTING" });
+    mockUseTerminalStream.mockImplementation(() => streamState);
+    render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+    await settleSizeStabilityWait();
+
+    expect(screen.getByText("Connecting...")).toBeInTheDocument();
+  });
+
+  it("TerminalOutput_should_keepStartupOverlay_When_connectionDropsBeforeAnyContentLoaded", async () => {
+    // Mount disconnected (as every real session does) and let the size-stability
+    // wait clear before the first connect — mirrors production, where isConnected
+    // never flips true until after that wait resolves.
+    let streamState = makeStreamMock({ isConnected: false });
+    mockUseTerminalStream.mockImplementation(() => streamState);
+    const { rerender } = render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+    await settleSizeStabilityWait();
+
+    // First connect lands...
+    streamState = makeStreamMock({ isConnected: true });
+    mockUseTerminalStream.mockImplementation(() => streamState);
+    act(() => {
+      rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+    });
+
+    // ...then drops before the mocked TerminalStreamManager ever calls its
+    // setOnFirstOutput callback, i.e. no content has loaded (the default —
+    // see terminalOutputTestMocks.ts's terminalStreamManagerWithSerializeAddonMockModule).
+    streamState = makeStreamMock({ isConnected: false, terminalState: "DISCONNECTED" });
+    mockUseTerminalStream.mockImplementation(() => streamState);
+    act(() => {
+      rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+    });
+
+    // The startup overlay stays up with its own message instead of falling
+    // through to the generic "Disconnected" badge/overlay treatment.
+    expect(screen.getByText("Starting session...")).toBeInTheDocument();
   });
 });

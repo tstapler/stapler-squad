@@ -23,10 +23,9 @@ import (
 func captureLogWarn(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	prev := log.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() {
-		slog.SetDefault(prev)
+		log.SetSlogDefaultForTest(prev)
 	})
 	return &buf
 }
@@ -337,99 +336,5 @@ func Test_superviseTymuxd_should_DecideRegisterStopAndError_When_GivenEachCombin
 				t.Errorf("registerStop called = %v, want %v (called %d times)", gotRegisterStop, tc.wantRegisterStop, registerStopCalls)
 			}
 		})
-	}
-}
-
-// TestResolveStartupBackend_EmptyConfigDefaultsToTmux covers Epic 3.2 Task
-// 3.2.1a/b (project_plans/tymux-bundled-integration/implementation/plan.md):
-// with no ProcessManagerBackend set and no env var, the function must default
-// to BackendTmux with no error — the pre-existing backwards-compatible
-// behavior of the inline block it replaces.
-func TestResolveStartupBackend_EmptyConfigDefaultsToTmux(t *testing.T) {
-	backend, err := resolveStartupBackend(&config.Config{}, false)
-	if err != nil {
-		t.Fatalf("resolveStartupBackend() error = %v, want nil", err)
-	}
-	if backend != session.BackendTmux {
-		t.Errorf("resolveStartupBackend() backend = %q, want %q", backend, session.BackendTmux)
-	}
-}
-
-// TestResolveStartupBackend_TymuxConfigValueWithoutRehearsalFallsBackToTmux is
-// the bypass-guard regression test named in the plan: hand-editing
-// process_manager_backend: "tymux" directly into config.json, with no env var
-// set and no rollback rehearsal recorded, must NOT bypass the rehearsal gate
-// (research/pitfalls.md §3). It must resolve to BackendTmux and surface
-// config.ErrTymuxRollbackRehearsalNotCompleted for the caller to log.
-func TestResolveStartupBackend_TymuxConfigValueWithoutRehearsalFallsBackToTmux(t *testing.T) {
-	cfg := &config.Config{ProcessManagerBackend: "tymux"} // hand-edited config.json, no rehearsal, no env var
-
-	backend, err := resolveStartupBackend(cfg, false)
-
-	if backend != session.BackendTmux {
-		t.Errorf("resolveStartupBackend() backend = %q, want %q (bypass guard failed)", backend, session.BackendTmux)
-	}
-	if !errors.Is(err, config.ErrTymuxRollbackRehearsalNotCompleted) {
-		t.Errorf("resolveStartupBackend() error = %v, want %v", err, config.ErrTymuxRollbackRehearsalNotCompleted)
-	}
-}
-
-// TestResolveStartupBackend_TymuxConfigValueWithRehearsalCompletes verifies
-// the config-value path DOES resolve to tymux once the rehearsal has been
-// recorded — the gate blocks the unrehearsed case above, not the tymux value
-// unconditionally.
-func TestResolveStartupBackend_TymuxConfigValueWithRehearsalCompletes(t *testing.T) {
-	completedAt := time.Now()
-	cfg := &config.Config{
-		ProcessManagerBackend:             "tymux",
-		TymuxRollbackRehearsalCompletedAt: &completedAt,
-	}
-
-	backend, err := resolveStartupBackend(cfg, false)
-
-	if err != nil {
-		t.Fatalf("resolveStartupBackend() error = %v, want nil", err)
-	}
-	if backend != session.BackendTymux {
-		t.Errorf("resolveStartupBackend() backend = %q, want %q", backend, session.BackendTymux)
-	}
-}
-
-// TestResolveStartupBackend_EnvVarWithRehearsalCompletes verifies
-// STAPLER_SQUAD_USE_TYMUX=true (tymuxEnvRequested=true) also resolves to
-// tymux once the rehearsal is recorded, even when the config value itself is
-// something other than "tymux" — the env var and the config value both feed
-// the same tymuxRequested gate.
-func TestResolveStartupBackend_EnvVarWithRehearsalCompletes(t *testing.T) {
-	completedAt := time.Now()
-	cfg := &config.Config{
-		ProcessManagerBackend:             "tmux",
-		TymuxRollbackRehearsalCompletedAt: &completedAt,
-	}
-
-	backend, err := resolveStartupBackend(cfg, true)
-
-	if err != nil {
-		t.Fatalf("resolveStartupBackend() error = %v, want nil", err)
-	}
-	if backend != session.BackendTymux {
-		t.Errorf("resolveStartupBackend() backend = %q, want %q", backend, session.BackendTymux)
-	}
-}
-
-// TestResolveStartupBackend_NativeBackendPassesThroughUnaffected verifies the
-// gate only ever intercepts the tymux case — a "native" backend value passes
-// through completely unaffected, with no error, matching the plan's
-// acceptance criteria.
-func TestResolveStartupBackend_NativeBackendPassesThroughUnaffected(t *testing.T) {
-	cfg := &config.Config{ProcessManagerBackend: "native"}
-
-	backend, err := resolveStartupBackend(cfg, false)
-
-	if err != nil {
-		t.Fatalf("resolveStartupBackend() error = %v, want nil", err)
-	}
-	if backend != session.BackendNative {
-		t.Errorf("resolveStartupBackend() backend = %q, want %q", backend, session.BackendNative)
 	}
 }

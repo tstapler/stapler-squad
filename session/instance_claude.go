@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -17,6 +18,38 @@ import (
 // staleResumePattern is the prefix Claude CLI emits when --resume is used with a
 // conversation ID that no longer exists in Claude's backend.
 const staleResumePattern = "No conversation found with session ID"
+
+// claudeExtension holds Claude Code conversation-resume session state.
+// Unlike piExtension (instance_pi_status.go), this is populated for a
+// session regardless of Program -- e.g. HistoryLinker and AgyAdapter (Import)
+// populate claudeSession for non-claude programs too, and initTmuxSession
+// (instance_tmux.go) reads claudeSession unconditionally before dispatching
+// on programKind. It therefore does NOT implement programExtension: nothing
+// here starts or stops a controller. The default StartController/
+// StopController path (ClaudeController) is separate, unrelated business
+// logic that happens to share the "claude" name -- see StartController's
+// doc comment in instance_controller.go.
+//
+// Embedded anonymously into Instance so every existing i.claudeSession /
+// i.claudeSessionMu access site (this package and its tests) keeps working
+// unchanged via Go's field promotion, mirroring ReviewState/RetryState's
+// existing precedent on Instance.
+type claudeExtension struct {
+	// claudeSessionMu protects claudeSession and conversationClearedAt.
+	// Separate from i.mu to avoid holding the instance write lock during
+	// persistence I/O -- see the lock-order comments on
+	// ClearConversationState/SetHistoryInfo/tryExtractConversationUUID/
+	// startLocked (i.mu nests INSIDE this lock, never the reverse).
+	claudeSessionMu sync.RWMutex
+	// claudeSession is Claude Code session information for persistence and
+	// re-attachment.
+	claudeSession *ClaudeSessionData
+	// conversationClearedAt records when ClearConversationState() last ran, so
+	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
+	// predating an explicit "start fresh" request. In-memory only -- does not
+	// survive a process restart (see ADR-001, Consequences).
+	conversationClearedAt time.Time
+}
 
 // ReviveOutcome records the outcome of the most recent start/cold-restore
 // decision (session-revive-uuid-loss AC3). See Instance.LastReviveOutcome.
@@ -502,6 +535,15 @@ func (i *Instance) SetClaudeSessionIDSavedCallback(fn func()) {
 	i.claudeSessionIDSavedCallback = fn
 }
 
+// currentConversationUUIDLocked returns i.claudeSession's ConversationUUID
+// ("" if unset). Caller must hold claudeSessionMu (R or exclusive).
+func (i *Instance) currentConversationUUIDLocked() string {
+	if i.claudeSession == nil {
+		return ""
+	}
+	return i.claudeSession.ConversationUUID
+}
+
 // SetHistoryInfo updates the conversation UUID and history file path.
 // Thread-safe: acquires stateMutex write lock.
 // No-op if the UUID is already set to the same value.
@@ -512,12 +554,22 @@ func (i *Instance) SetClaudeSessionIDSavedCallback(fn func()) {
 // a tmux pane killed before that sweep runs would otherwise resume with no
 // conversation UUID to pass to --resume.
 func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
+	// Fast path: check the no-op condition under RLock first. HistoryLinker
+	// calls this on every scan tick, and most ticks find nothing changed —
+	// taking claudeSessionMu.Lock() (exclusive) just to discover that blocks
+	// every concurrent reader (e.g. GetHistoryInfo) for no reason. Re-checked
+	// below once the exclusive lock is actually held, since the value could
+	// change between the RUnlock and the Lock.
+	i.claudeSessionMu.RLock()
+	noop := i.currentConversationUUIDLocked() == conversationUUID && i.HistoryFilePath == historyFilePath
+	i.claudeSessionMu.RUnlock()
+	if noop {
+		return
+	}
+
 	i.claudeSessionMu.Lock()
 
-	currentUUID := ""
-	if i.claudeSession != nil {
-		currentUUID = i.claudeSession.ConversationUUID
-	}
+	currentUUID := i.currentConversationUUIDLocked()
 	if currentUUID == conversationUUID && i.HistoryFilePath == historyFilePath {
 		i.claudeSessionMu.Unlock()
 		return

@@ -1,0 +1,13 @@
+{
+  "id": "hooks:pi-extension-loaded",
+  "type": "backend",
+  "service": "HTTPHandler",
+  "method": "POST /api/hooks/pi-extension-loaded",
+  "httpMethod": "POST",
+  "httpPath": "/api/hooks/pi-extension-loaded",
+  "markerFound": true,
+  "handlerFile": "server/services/approval_handler.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-02T23:56:18.423968194-07:00"
+}

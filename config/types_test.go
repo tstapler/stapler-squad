@@ -191,3 +191,23 @@ func TestRetryPolicyConfig_BackoffOrWarn_should_ReturnExponential_When_Unset(t *
 		t.Errorf("BackoffOrWarn() = %q, want exponential", got)
 	}
 }
+
+func TestCreationStaleConfig_ThresholdMinutesOrDefault_should_Return10_When_Unset(t *testing.T) {
+	cfg := CreationStaleConfig{}
+
+	out := cfg.ThresholdMinutesOrDefault()
+
+	if out != 10 {
+		t.Errorf("ThresholdMinutesOrDefault() = %v, want 10", out)
+	}
+}
+
+func TestCreationStaleConfig_ThresholdMinutesOrDefault_should_ReturnConfiguredValue_When_Set(t *testing.T) {
+	cfg := CreationStaleConfig{ThresholdMinutes: 20}
+
+	out := cfg.ThresholdMinutesOrDefault()
+
+	if out != 20 {
+		t.Errorf("ThresholdMinutesOrDefault() = %v, want 20 (explicit value must survive defaulting)", out)
+	}
+}

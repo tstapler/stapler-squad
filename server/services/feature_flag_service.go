@@ -12,6 +12,11 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
+// piSupportFlagName mirrors config.FeaturePiSupport so knownFeatureFlags below
+// doesn't duplicate the literal — see config/config.go for the flag's full
+// documentation and project_plans/pi-support/implementation/plan.md, Epic 2.1.
+const piSupportFlagName = config.FeaturePiSupport
+
 // sddDefaultPipelineFlagName is shared between knownFeatureFlags below and
 // CreateBacklogItem's default-resolution branch (backlog_service_lifecycle.go)
 // so the flag name can't drift between where it's declared and where it's
@@ -184,6 +189,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        terminalResyncBatchingFlagName,
 		description: "Batch multiple terminals' resync requests into a single round trip instead of issuing one request per terminal. Default: off.",
+	},
+	{
+		name:        piSupportFlagName,
+		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
 	},
 }
 

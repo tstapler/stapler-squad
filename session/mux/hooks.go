@@ -180,7 +180,7 @@ func CleanupStaleHooksFiles() error {
 
 		// Check if process with this PID exists
 		if !processExists(pid) {
-			os.Remove(match)
+			_ = os.Remove(match) // best-effort cleanup of an orphaned stale-hooks file
 		}
 	}
 
