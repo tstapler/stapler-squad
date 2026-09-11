@@ -404,26 +404,41 @@ type BacklogItemData struct {
 }
 
 // BacklogItemSummary is a lightweight projection of BacklogItemData for list views.
-// It omits large text fields (Description, plan artifacts) and status-event history,
-// but eagerly includes ItemSessions (with ReviewVerdict) for cost/status display.
+// It omits large text fields (Description, plan artifact *contents*) and
+// status-event history, but eagerly includes ItemSessions (with ReviewVerdict)
+// for cost/status display. PlanApproved/PlanArtifactsPath/SkipPlanning/
+// PlanRejectionReason ARE included despite the "lightweight" framing — they're
+// short scalar fields (a bool and two strings holding a path/short reason, not
+// file content), and board/list-view card actions gate on them directly (see
+// getAvailableActions in web-app/src/lib/backlog/itemActions.ts). Omitting
+// them here previously left backlogItemSummaryToProto silently zero-valuing
+// all four — the same class of bug fixed once already for AllowedTransitions
+// (#585); see this type's ent_repository_backlog.go and
+// backlog_service.go:backlogItemSummaryToProto call sites, which must keep
+// setting every one of these fields to stay in parity with the full
+// BacklogItemData/backlogItemToProto path.
 type BacklogItemSummary struct {
-	ID                 string               `json:"id"`
-	PublicIDRaw        string               `json:"public_id"`
-	ExternalID         string               `json:"external_id"`
-	ExternalURL        string               `json:"external_url"`
-	Labels             []string             `json:"labels"`
-	Title              string               `json:"title"`
-	Status             BacklogStatus        `json:"status"`
-	Priority           int                  `json:"priority"`
-	RepoPath           string               `json:"repo_path"`
-	AcceptanceCriteria AcCriteriaJSON       `json:"acceptance_criteria"`
-	Notes              string               `json:"notes"`
-	PrURL              string               `json:"pr_url"`
-	PrNumber           int                  `json:"pr_number"`
-	CreatedAt          time.Time            `json:"created_at"`
-	UpdatedAt          time.Time            `json:"updated_at"`
-	ArchivedAt         *time.Time           `json:"archived_at"`
-	ItemSessions       []ItemSessionSummary `json:"-"`
+	ID                  string               `json:"id"`
+	PublicIDRaw         string               `json:"public_id"`
+	ExternalID          string               `json:"external_id"`
+	ExternalURL         string               `json:"external_url"`
+	Labels              []string             `json:"labels"`
+	Title               string               `json:"title"`
+	Status              BacklogStatus        `json:"status"`
+	Priority            int                  `json:"priority"`
+	RepoPath            string               `json:"repo_path"`
+	AcceptanceCriteria  AcCriteriaJSON       `json:"acceptance_criteria"`
+	Notes               string               `json:"notes"`
+	PrURL               string               `json:"pr_url"`
+	PrNumber            int                  `json:"pr_number"`
+	CreatedAt           time.Time            `json:"created_at"`
+	UpdatedAt           time.Time            `json:"updated_at"`
+	ArchivedAt          *time.Time           `json:"archived_at"`
+	ItemSessions        []ItemSessionSummary `json:"-"`
+	SkipPlanning        bool                 `json:"skip_planning"`
+	PlanApproved        bool                 `json:"plan_approved"`
+	PlanArtifactsPath   string               `json:"plan_artifacts_path"`
+	PlanRejectionReason string               `json:"plan_rejection_reason"`
 }
 
 // ItemSessionBacklogEntry is a lightweight join record linking a tmux session UUID
