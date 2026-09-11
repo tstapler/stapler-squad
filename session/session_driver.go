@@ -709,19 +709,27 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		return
 	}
 
-	// Wait for PTY echo + pane-capture latency before reading back.
-	time.Sleep(500 * time.Millisecond)
-	contentAfter, verifyErr := inst.PreviewContext(ctx)
-	if verifyErr == nil && contentBefore != "" && contentAfter == contentBefore {
-		// Terminal content identical to before the send — the
-		// keystrokes were likely swallowed before readline consumed
-		// them.  Retry on the next tick.
-		log.Warn("SessionDriver: terminal content unchanged after send — keystrokes may have been swallowed, retrying",
-			"session", inst.Title,
-			"attempt", *sendAttempts,
-		)
-		// sentInitial stays false
-		return
+	// Wait for PTY echo + pane-capture latency before reading back. Adaptive
+	// (poll for an actual pane change, up to 1.5s) rather than a fixed sleep:
+	// a fixed 500ms sleep is a race — a slower-than-usual capture-pane round
+	// trip under load makes a genuinely successful send look "swallowed,"
+	// which resent the identical prompt on the next tick (the user-visible
+	// "same message delivered repeatedly" bug this replaces the sleep to fix).
+	// Only fall back to the exact-content comparison (the real swallow case)
+	// if the pane never reported any change at all within the wait window.
+	if !waitForPaneUpdate(ctx, inst, defaultPaneSettlePollInterval, 1500*time.Millisecond) {
+		contentAfter, verifyErr := inst.PreviewContext(ctx)
+		if verifyErr == nil && contentBefore != "" && contentAfter == contentBefore {
+			// Terminal content identical to before the send — the
+			// keystrokes were likely swallowed before readline consumed
+			// them.  Retry on the next tick.
+			log.Warn("SessionDriver: terminal content unchanged after send — keystrokes may have been swallowed, retrying",
+				"session", inst.Title,
+				"attempt", *sendAttempts,
+			)
+			// sentInitial stays false
+			return
+		}
 	}
 	// Content changed (or verification read failed) — treat as success.
 	log.Info("SessionDriver: read-back confirmed initial prompt received",

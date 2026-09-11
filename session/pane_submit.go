@@ -50,3 +50,25 @@ func SubmitDriverContent(ctx context.Context, inst paneSubmitter, content string
 	}
 	return nil
 }
+
+// waitForPaneUpdate polls inst until it reports a pane change or maxWait
+// elapses, returning whether a change was observed. The counterpart to
+// waitForPaneSettle (which waits for changes to STOP): this waits for a
+// change to START, so a caller verifying "did my send take effect" isn't
+// forced to guess a single fixed sleep duration — a slow-to-render PTY
+// capture that resolves at, say, 700ms no longer reads as "swallowed" just
+// because it missed a 500ms deadline.
+func waitForPaneUpdate(ctx context.Context, inst paneSettleChecker, pollInterval, maxWait time.Duration) (observed bool) {
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(pollInterval):
+		}
+		if updated, _ := inst.HasUpdated(); updated {
+			return true
+		}
+	}
+	return false
+}
