@@ -26,6 +26,7 @@ import { TerminalLinkMenu } from "./TerminalLinkMenu";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme, type TerminalConfig } from "@/lib/config/terminalConfig";
 import { dimensionsEqual, isFiniteResizeDimensions, type ResizeDimensions } from "@/lib/terminal/types";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
+import { pointToCell, rafThrottlePoint, type CellGeometry } from "@/lib/terminal/touchDrag";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
 
 const DEFAULT_SCROLLBACK_SIZE = 5000;
@@ -820,17 +821,14 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           if (!el) return;
           // { startCol, startRow, endCol, endRow } in xterm viewport coords
           let anchor: { sc: number; sr: number; ec: number; er: number } | null = null;
+          // Cached once per drag (not re-measured on every touchmove — see touchDrag.ts).
+          let geometry: CellGeometry | null = null;
+          let selectThrottled: ((clientX: number, clientY: number) => void) | null = null;
+          let cancelSelectThrottle: (() => void) | null = null;
 
-          const onTouchMove = (e: TouchEvent) => {
-            if (!anchor || !terminal.element) return;
-            const touch = e.touches[0];
-            if (!touch) return;
-            e.preventDefault();
-            const rect = terminal.element.getBoundingClientRect();
-            const { cellH, cellW } = getCellDimensions(terminal);
-            const col = Math.max(0, Math.min(terminal.cols - 1, Math.floor((touch.clientX - rect.left) / cellW)));
-            const row = Math.max(0, Math.min(terminal.rows - 1, Math.floor((touch.clientY - rect.top) / cellH)));
-
+          const applyHandleDrag = (clientX: number, clientY: number) => {
+            if (!anchor || !geometry) return;
+            const { col, row } = pointToCell(clientX, clientY, geometry);
             if (handle === 'end') {
               // Keep start fixed, extend/shrink the end
               const len = Math.max(1, (row - anchor.sr) * terminal.cols + (col - anchor.sc));
@@ -842,8 +840,18 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             }
           };
 
+          const onTouchMove = (e: TouchEvent) => {
+            if (!anchor) return;
+            const touch = e.touches[0];
+            if (!touch) return;
+            e.preventDefault();
+            selectThrottled?.(touch.clientX, touch.clientY);
+          };
+
           const onTouchEnd = () => {
             anchor = null;
+            geometry = null;
+            cancelSelectThrottle?.();
             document.removeEventListener('touchmove', onTouchMove);
             document.removeEventListener('touchend', onTouchEnd);
             document.removeEventListener('touchcancel', onTouchEnd);
@@ -853,8 +861,17 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             e.preventDefault();
             e.stopPropagation();
             const pos = terminal.getSelectionPosition();
-            if (!pos) return;
+            if (!pos || !terminal.element) return;
             anchor = { sc: pos.start.x, sr: pos.start.y, ec: pos.end.x, er: pos.end.y };
+            const { cellH, cellW } = getCellDimensions(terminal);
+            geometry = {
+              rect: terminal.element.getBoundingClientRect(),
+              cellW,
+              cellH,
+              maxCol: terminal.cols - 1,
+              maxRow: terminal.rows - 1,
+            };
+            [selectThrottled, cancelSelectThrottle] = rafThrottlePoint(applyHandleDrag);
             document.addEventListener('touchmove', onTouchMove, { passive: false });
             document.addEventListener('touchend', onTouchEnd, { passive: true });
             document.addEventListener('touchcancel', onTouchEnd, { passive: true });
@@ -863,6 +880,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           el.addEventListener('touchstart', onTouchStart, { passive: false });
           handleCleanupFns.push(() => {
             el.removeEventListener('touchstart', onTouchStart);
+            cancelSelectThrottle?.();
             document.removeEventListener('touchmove', onTouchMove);
             document.removeEventListener('touchend', onTouchEnd);
             document.removeEventListener('touchcancel', onTouchEnd);
