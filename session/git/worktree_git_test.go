@@ -4,10 +4,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -124,6 +129,60 @@ func TestIsDirtyWithHint_BacksOffAfterError(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("calls after second check within backoff TTL = %d; want still 1 (no recomputation)", calls)
 	}
+}
+
+// TestIsDirtyUncached_should_ReturnTrue_When_IsDirtyWithHintCacheIsStillClean is
+// validation.md's Story 1.1.2 happy-path test: IsDirtyUncached must genuinely bypass
+// IsDirtyWithHint's own 30s/5min TTL cache rather than reusing its cached answer. A
+// clean IsDirtyWithHint(false) call populates the 5-minute clean-cache entry; a file
+// created immediately afterward must be invisible to a same-instant IsDirtyWithHint(false)
+// (still serving the stale cached false) but visible to IsDirtyUncached(), proving the
+// two are decoupled.
+func TestIsDirtyUncached_should_ReturnTrue_When_IsDirtyWithHintCacheIsStillClean(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	g := NewGitWorktreeFromStorageWithExecutor(repoDir, repoDir, "test-session", "main", "")
+	require.NotNil(t, g)
+
+	clean, err := g.IsDirtyWithHint(false)
+	require.NoError(t, err)
+	require.False(t, clean, "sanity check: freshly committed repo must start clean")
+
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "untracked.txt"), []byte("new"), 0o644))
+
+	uncached, err := g.IsDirtyUncached()
+	require.NoError(t, err)
+	assert.True(t, uncached, "IsDirtyUncached must see the new untracked file immediately")
+
+	hinted, err := g.IsDirtyWithHint(false)
+	require.NoError(t, err)
+	assert.False(t, hinted, "IsDirtyWithHint must still serve its stale 5-minute clean-cache entry, proving the two are decoupled")
+}
+
+// TestIsDirtyUncached_should_ReuseHeadTreeCache_When_HeadUnchangedAcrossCalls guards
+// against a future regression back to worktreeIsDirtyFast(path, nil, nil): IsDirtyUncached
+// must still populate and reuse GitWorktree's own headTreeCache across calls against an
+// unchanged HEAD, not just bypass IsDirtyWithHint's outer TTL cache. Mirrors
+// TestCachedHeadTreeHashes_ReusesCacheUntilHeadMoves's pointer-identity check.
+func TestIsDirtyUncached_should_ReuseHeadTreeCache_When_HeadUnchangedAcrossCalls(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	g := NewGitWorktreeFromStorageWithExecutor(repoDir, repoDir, "test-session", "main", "")
+	require.NotNil(t, g)
+
+	_, err := g.IsDirtyUncached()
+	require.NoError(t, err)
+	first, ok := g.headTreeCache.v.Load().(headTreeCacheEntry)
+	require.True(t, ok, "IsDirtyUncached must populate g.headTreeCache, not leave it empty")
+	require.NotNil(t, first.hashes, "cached entry must carry a real hashes map")
+
+	_, err = g.IsDirtyUncached()
+	require.NoError(t, err)
+	second, ok := g.headTreeCache.v.Load().(headTreeCacheEntry)
+	require.True(t, ok)
+
+	assert.Equal(t, fmt.Sprintf("%p", first.hashes), fmt.Sprintf("%p", second.hashes),
+		"a second IsDirtyUncached call against an unchanged HEAD must reuse the cached hashes map, not recompute it")
 }
 
 // TestParsePRStatusPayload_ConflictDetection is a table-driven test over the
