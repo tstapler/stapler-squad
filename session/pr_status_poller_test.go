@@ -238,6 +238,13 @@ func TestInvalidateAndRefresh_should_DispatchFetchAndReturnMatchedTrue_When_OneI
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for the dispatched fetchAndUpdatePRStatus to reach the fake GitHub server")
 	}
+
+	// Wait for the dispatched goroutine to fully return, not just for its
+	// request to reach the fake server — fetchAndUpdatePRStatus still has
+	// Instance-mutation/onUpdated work to do after the HTTP round trip, and a
+	// later test reading shared state (e.g. github.DefaultRateLimiter) must not
+	// race against it still being in flight.
+	p.dispatchWG.Wait()
 }
 
 // TestInvalidateAndRefresh_should_ReturnMatchedFalse_When_NoTrackedInstanceMatches
@@ -302,6 +309,11 @@ func TestInvalidateAndRefresh_should_DispatchFetchForEachInstance_When_TwoInstan
 			t.Fatalf("timed out waiting for hit %d/2 — expected fetchAndUpdatePRStatus dispatched for both matching instances", i+1)
 		}
 	}
+
+	// See the single-instance test's comment on why request-arrival alone
+	// isn't sufficient synchronization: wait for both dispatched goroutines to
+	// actually return.
+	p.dispatchWG.Wait()
 }
 
 // TestFetchAndUpdatePRStatus_AdmissionControlRejection_SkipsCleanly is Task
@@ -452,6 +464,12 @@ func TestPRStatusPoller_should_TagOriginWebhookReconcileDistinctFromTickerOrigin
 	if !matched {
 		t.Fatal("InvalidateAndRefresh() = false, want true for a tracked instance")
 	}
+
+	// Wait for InvalidateAndRefresh's dispatched goroutine to fully return
+	// (not just for its request to reach the spy transport) before reading
+	// origins below — the ticker-path call above is synchronous, so by this
+	// point both requests are guaranteed to have been recorded.
+	p.dispatchWG.Wait()
 
 	deadline := time.After(2 * time.Second)
 	for {

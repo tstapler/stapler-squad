@@ -98,6 +98,11 @@ type PRStatusPoller struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	mu     deadlock.RWMutex
+
+	// dispatchWG tracks InvalidateAndRefresh's out-of-band fetchAndUpdatePRStatus
+	// goroutines, so tests can wait for a dispatch to fully finish rather than
+	// just for its HTTP request to reach a fake server (see pr_status_poller_test.go).
+	dispatchWG sync.WaitGroup
 }
 
 // NewPRStatusPoller creates a new poller with default configuration.
@@ -158,8 +163,10 @@ func (p *PRStatusPoller) InvalidateAndRefresh(ctx context.Context, owner, repo s
 		captured := inst
 		fetchCtx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
 		fetchCtx = github.WithGitHubCallOrigin(fetchCtx, github.OriginWebhookReconcile)
+		p.dispatchWG.Add(1)
 		go func() {
 			defer cancel()
+			defer p.dispatchWG.Done()
 			p.fetchAndUpdatePRStatus(fetchCtx, captured)
 		}()
 	}
