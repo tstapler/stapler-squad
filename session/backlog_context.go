@@ -120,6 +120,68 @@ unclosed instances have previously exhausted this machine's memory.
 8. After `+"`/backlog/review`"+`, stay in this session — do not exit. Wait roughly 2-3 minutes, then run `+"`/backlog/status`"+` again to check for a verdict. PASS → immediately run `+"`/backlog/ship`"+` yourself to open the pull request (it drives `+"`/github:pr-ship`"+`, which can rebase, resolve merge conflicts, and react to failing CI checks) — shipping the PR is part of this task, not a separate step someone else does; do not stop here. FAIL/PARTIAL → fix the noted gaps yourself and run `+"`/backlog/review`"+` again.
 9. `+"`/backlog/review`"+`'s underlying request_review call reports which attempt you're on out of %d allowed in THIS session — the count is tracked server-side, so trust what it reports. Once it says you've hit the cap, STOP looping: run `+"`/backlog/ship`"+` anyway to open a PR so a human can pick up the review directly, rather than retrying `+"`/backlog/review`"+` again. Nothing will kill or replace this session while you do any of this.`, MaxSameSessionReviewAttempts)
 
+// reviewVerdictSummariesMostRecentFirst extracts the review verdicts from
+// ended (a slice of completed ItemSessions ordered oldest-first, as
+// BuildSessionInitialPrompt's own "ended" local is) into a most-recent-first
+// []ReviewVerdictSummary — mirroring what Storage.GetRecentReviewVerdictSummaries
+// returns, but computed from data BuildSessionInitialPrompt already has in
+// hand rather than a second query. Only review-role sessions that actually
+// wrote a verdict are included, same as that storage query's own filter.
+func reviewVerdictSummariesMostRecentFirst(ended []ItemSessionSummary) []ReviewVerdictSummary {
+	var out []ReviewVerdictSummary
+	for i := len(ended) - 1; i >= 0; i-- {
+		s := ended[i]
+		if s.Role == SessionRoleReview && s.ReviewVerdict != nil {
+			out = append(out, *s.ReviewVerdict)
+		}
+	}
+	return out
+}
+
+// reviewHadVerdictMostRecentFirst extracts, most-recent-first, one bool per
+// completed review-role session in ended — true if that session ever wrote a
+// verdict — mirroring server/services/backlog_service_triage.go's
+// recentReviewHadVerdict but computed from data already in hand.
+func reviewHadVerdictMostRecentFirst(ended []ItemSessionSummary) []bool {
+	var out []bool
+	for i := len(ended) - 1; i >= 0; i-- {
+		s := ended[i]
+		if s.Role == SessionRoleReview {
+			out = append(out, s.ReviewVerdict != nil)
+		}
+	}
+	return out
+}
+
+// escalationNotice returns an explicit "try something different" instruction
+// when ended's review history shows a streak of exactly
+// RepeatedFailureEscalationThreshold consecutive identical failures — the ONE
+// escalated retry AutoReopenAfterFailedReview grants before parking the item
+// (see RepeatedFailureParkThreshold's doc comment in stuck_decisions.go).
+// Requires no new field on SpawnSessionFromItemRequest: it recomputes the
+// identical streak AutoReopenAfterFailedReview already inspected, from the
+// same priorSessions history every prompt-building call site already passes
+// in. Deliberately fires only at streak == threshold, not >=: once the
+// streak reaches RepeatedFailureParkThreshold, AutoReopenAfterFailedReview
+// parks the item and never respawns at all, so this never needs to render a
+// "third strike" framing.
+func escalationNotice(ended []ItemSessionSummary) string {
+	if streak := ReviewFailureStreakLen(reviewVerdictSummariesMostRecentFirst(ended)); streak == RepeatedFailureEscalationThreshold {
+		verdicts := reviewVerdictSummariesMostRecentFirst(ended)
+		return fmt.Sprintf(
+			"## Escalation Notice\nThe last %d review attempts failed for the identical reason: %q. Repeating the same fix will fail again. Before writing any code, diagnose why the previous fix did not resolve this, and take a genuinely different approach this time (different root cause, different files touched, or a different fix strategy).\n\n",
+			streak, sanitizeField(verdicts[0].Summary, 300))
+	}
+
+	if streak := NoVerdictStreakLen(reviewHadVerdictMostRecentFirst(ended)); streak == RepeatedFailureEscalationThreshold {
+		return fmt.Sprintf(
+			"## Escalation Notice\nThe last %d review sessions exited without ever recording a verdict (crash, kill, or turn cap). Before repeating the same review flow, consider whether the diff is too large, the worktree is broken, or the review step is hanging — and adjust your approach accordingly.\n\n",
+			streak)
+	}
+
+	return ""
+}
+
 // BuildSessionInitialPrompt renders the full context prompt for an agent session.
 func BuildSessionInitialPrompt(item *BacklogItemData, priorSessions []ItemSessionSummary) string {
 	var sb strings.Builder
@@ -194,6 +256,8 @@ func BuildSessionInitialPrompt(item *BacklogItemData, priorSessions []ItemSessio
 	}
 
 	sb.WriteString("--- END BACKLOG ITEM DATA ---\n\n")
+
+	sb.WriteString(escalationNotice(ended))
 
 	if item.PlanArtifactsPath != "" {
 		fmt.Fprintf(&sb, "Your plan is at `%s/plan.md`. Read plan.md and validation.md before writing code.\n\n",

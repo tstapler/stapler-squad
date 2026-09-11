@@ -880,8 +880,58 @@ func (l *BacklogLifecycleListener) reconcilePushFailedItems(ctx context.Context,
 		if row.ItemStatus != BacklogStatusReview {
 			continue // no longer applicable to this item's current state
 		}
-		l.retryPushFailedWithBackoffGate(ctx, row.ItemID, row.ItemTitle)
+		l.retryPushFailedWithBackoffGate(ctx, row.ItemID, row.ItemTitle, row.Context)
 	}
+}
+
+// unrecoverableByMergeSignatures are substrings (case-insensitive) of a
+// push_failed row's stored Context (set by stayInReviewAndNotify as
+// "<reason>: <err>") that indicate the original failure was NOT a
+// non-fast-forward rejection and therefore cannot be fixed by
+// attemptPushRemediation's fetch+merge+retry — the only remediation it knows
+// how to do (see its doc comment: it reconciles the exact "something else
+// advanced origin's copy of this branch" shape). Auth/permission/protection
+// failures need a human (rotate a token, request access, adjust branch
+// protection); retrying the identical push after a no-op merge only wastes a
+// remediation attempt and repeats a notification that already told the
+// operator nothing new. Deliberately a narrow, conservative list: an
+// unmatched (unknown or genuinely FF-shaped) error still falls through to
+// the existing merge+retry path unchanged — see
+// isNonFastForwardRecoverable's doc comment for why false positives here
+// (skipping a retry that might have worked) are worse than the reverse.
+var unrecoverableByMergeSignatures = []string{
+	"permission denied",
+	"authentication failed",
+	"could not read username",
+	"could not read password",
+	"403",
+	"401",
+	"not permitted",
+	"protected branch",
+	"required status check",
+	"required review",
+	"you don't have push access",
+	"signed commits",
+}
+
+// isNonFastForwardRecoverable reports whether failureContext (a push_failed
+// row's stored Context) looks like something attemptPushRemediation's
+// fetch+merge+retry can plausibly fix, as opposed to a cause
+// unrecoverableByMergeSignatures already knows a merge cannot touch.
+// Defaults to true (assume recoverable, attempt the retry) for an empty or
+// unrecognized context — this stays fail-open on purpose, matching
+// retryPushFailedWithBackoffGate's own RemediationDue fail-open rationale:
+// skipping a retry that might have worked (a false "unrecoverable") is worse
+// than running one more harmless no-op merge+push against a cause this
+// classifier doesn't recognize.
+func isNonFastForwardRecoverable(failureContext string) bool {
+	lower := strings.ToLower(failureContext)
+	for _, sig := range unrecoverableByMergeSignatures {
+		if strings.Contains(lower, sig) {
+			return false
+		}
+	}
+	return true
 }
 
 // retryPushFailedWithBackoffGate dispatches attemptPushRemediation through
@@ -894,8 +944,14 @@ func (l *BacklogLifecycleListener) reconcilePushFailedItems(ctx context.Context,
 // review-gate respawns share is not needed here). Best-effort: gate
 // query/write errors are logged, never returned, and fail OPEN (still
 // attempts the retry) rather than silently stranding the item — same
-// rationale as autoReopenWithBackoffGate.
-func (l *BacklogLifecycleListener) retryPushFailedWithBackoffGate(ctx context.Context, itemID, itemTitle string) {
+// rationale as autoReopenWithBackoffGate. failureContext is the stuck row's
+// stored Context, threaded through to attemptPushRemediation so it can tell
+// a recoverable non-fast-forward rejection apart from a cause a merge cannot
+// fix (see isNonFastForwardRecoverable) — RemediationDue's own backoff/park
+// bookkeeping is unaffected either way, so an item still eventually parks
+// via MaxRemediationAttempts even when every attempt below is skipped as
+// unrecoverable.
+func (l *BacklogLifecycleListener) retryPushFailedWithBackoffGate(ctx context.Context, itemID, itemTitle, failureContext string) {
 	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonPushFailed)
 	if gateErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] retryPushFailedWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
@@ -915,7 +971,7 @@ func (l *BacklogLifecycleListener) retryPushFailedWithBackoffGate(ctx context.Co
 	}
 
 	go func() {
-		l.attemptPushRemediation(l.shutdownCtx, itemID, itemTitle)
+		l.attemptPushRemediation(l.shutdownCtx, itemID, itemTitle, failureContext)
 	}()
 }
 
@@ -937,7 +993,26 @@ func (l *BacklogLifecycleListener) retryPushFailedWithBackoffGate(ctx context.Co
 // item is left stuck (still governed by the normal backoff schedule, so it
 // eventually parks after MaxRemediationAttempts) with a notification naming
 // the conflicting files.
-func (l *BacklogLifecycleListener) attemptPushRemediation(ctx context.Context, itemID, itemTitle string) {
+//
+// failureContext (the push_failed row's stored Context) is checked via
+// isNonFastForwardRecoverable BEFORE any of the above runs: when it matches
+// a known unrecoverable-by-merge signature (auth/permission/branch
+// protection — see unrecoverableByMergeSignatures), this skips the
+// merge+retry entirely and surfaces a distinct notification explaining why,
+// rather than blindly rerunning the identical failing push every backoff
+// tick with no new information for the operator.
+func (l *BacklogLifecycleListener) attemptPushRemediation(ctx context.Context, itemID, itemTitle, failureContext string) {
+	if !isNonFastForwardRecoverable(failureContext) {
+		log.InfoLog().Printf("[BacklogLifecycle] attemptPushRemediation item=%s: recorded failure (%q) doesn't look like a non-fast-forward rejection; skipping merge+retry", itemID, failureContext)
+		l.notify(itemID,
+			"Automated push retry skipped",
+			fmt.Sprintf("%s — the recorded push failure (%s) doesn't look like something a fetch+merge retry can fix (looks like an auth/permission/branch-protection issue). Investigate manually, then use Reset to try again automatically.", itemTitle, failureContext),
+			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+		return
+	}
+
 	item, err := l.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] attemptPushRemediation GetBacklogItem item=%s: %v", itemID, err)
