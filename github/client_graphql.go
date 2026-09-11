@@ -1,7 +1,6 @@
 package github
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -215,16 +214,10 @@ func GetPRInfoGraphQL(ctx context.Context, owner, repo string, prNumber int) (*P
 		return nil, fmt.Errorf("marshal GraphQL query: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, graphQLURLForHost(""), bytes.NewReader(reqBody))
+	req, err := newGHGraphQLRequest(ctx, "", reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("build GraphQL request: %w", err)
 	}
-	if token := getGHToken(ctx); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 
 	resp, err := ghHTTPClient.Do(req)
 	if err != nil {
