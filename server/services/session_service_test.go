@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -25,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/binaries"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
 )
 
@@ -202,9 +204,9 @@ func TestCreateSession_should_RejectSecondDuplicate_When_TwoRapidCallsShareTitle
 	// that other process's config.json instead of getting a fresh
 	// testModeSentinelProgram default -- an empty/real DefaultProgram there
 	// fails Session.program's NotEmpty validator. Matches the same
-	// t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir()) pattern used elsewhere
-	// in this file (e.g. the "ModeIsAlias" subtest) for the identical reason.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	// envtest.NewIsolatedStateDir(t) call used elsewhere in this file (e.g.
+	// the "ModeIsAlias" subtest) for the identical reason.
+	envtest.NewIsolatedStateDir(t)
 
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
@@ -4218,7 +4220,7 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 		t.Cleanup(fix.cleanup)
 		wireRegistryForActorSerialization(fix)
 
-		t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+		envtest.NewIsolatedStateDir(t)
 		aliasPath := t.TempDir()
 		cfg := config.DefaultConfig()
 		cfg.SessionDefaults.Aliases = []config.AliasConfig{
@@ -4365,7 +4367,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 	// STAPLER_SQUAD_TEST_DIR/STAPLER_SQUAD_INSTANCE leaking in from elsewhere
 	// (e.g. a live e2e/demo run in the same shell) would otherwise make this
 	// test read that other process's config.json instead.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	fix := setupForkTestFixture(t)
 	wireRegistryForActorSerialization(fix)
@@ -4400,7 +4402,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 
 		inst := fix.svc.FindLiveInstance(id)
 		require.NotNil(t, inst)
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			return session.Status(inst.GetStatus()) == session.Active
 		}, awaitTimeout, pollInterval, "precondition: fixture instance must reach Active before being forced to Failed")
 
@@ -4410,7 +4412,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 				Id: id,
 			}))
 			require.NoError(t, retryErr)
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				status := session.Status(inst.GetStatus())
 				return status == session.Active || status == session.Failed
 			}, awaitTimeout, pollInterval, "retried pipeline must reach a terminal status")
@@ -4450,7 +4452,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 		// well-defined to clean up.
 		inst := fix.svc.FindLiveInstance(id)
 		if inst != nil {
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				return session.Status(inst.GetStatus()) == session.Failed
 			}, awaitTimeout, pollInterval, "pipeline must still reach Failed after losing the cancel race")
 		}
@@ -4478,7 +4480,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 		// The pipeline's Active write won the race instead.
 		inst := fix.svc.FindLiveInstance(id)
 		if inst != nil {
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				return session.Status(inst.GetStatus()) == session.Active
 			}, awaitTimeout, pollInterval, "pipeline must still reach Active after winning the cancel race")
 		}

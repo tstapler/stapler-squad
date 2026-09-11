@@ -515,6 +515,14 @@ func (i *Instance) initTmuxSession() {
 	i.LaunchCommand = enrichedProgram
 	log.Info("creating tmux session", "session", i.Title, "program", enrichedProgram)
 
+	// Pre-trust the working directory so claude never blocks this
+	// (possibly-unattended) session on its interactive "trust this folder?"
+	// dialog. Every Start() path calls initTmuxSession() before starting the
+	// tmux session, so this is the single choke point that covers all of
+	// them (first-time setup, cold/hot restore, worktree creation). See
+	// markWorkingDirTrusted's doc comment.
+	i.markWorkingDirTrusted()
+
 	tmuxPrefix := i.TmuxPrefix
 	if tmuxPrefix == "" {
 		tmuxPrefix = "staplersquad_"

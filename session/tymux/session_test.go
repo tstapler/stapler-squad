@@ -18,6 +18,7 @@ import (
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // fakeTransport is a hand-driven rpcTransport substitute (Task 2.2.1d /
@@ -385,7 +386,7 @@ func TestTymuxGRPCSession_GetPTY_BridgesOutputAndInput(t *testing.T) {
 	_, err = f.Write([]byte("echo hi\n"))
 	require.NoError(t, err)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		for _, req := range stream.sentRequests() {
 			if in, ok := req.Payload.(*v1.AttachRequest_Input); ok && string(in.Input) == "echo hi\n" {
 				return true
@@ -660,7 +661,7 @@ func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredAfterPaneAlreadyE
 
 	// Wait for readAttachLoop to actually observe the Exited event before
 	// registering — this is the ordering the test exists to exercise.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		concrete.mu.RLock()
 		defer concrete.mu.RUnlock()
 		return concrete.exited
@@ -697,7 +698,7 @@ func TestResetExitOnce_WithoutANewExit_DoesNotFireSpuriously(t *testing.T) {
 	code := int32(1)
 	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Exited{Exited: &v1.ExitStatus{Code: &code}}})
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return atomic.LoadInt32(&calls) == 1
 	}, time.Second, time.Millisecond, "callback never fired for the original exit")
 

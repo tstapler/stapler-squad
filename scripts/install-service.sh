@@ -230,6 +230,28 @@ print_binary_provenance() {
     esac
 }
 
+# post_grafana_deploy_annotation: marks a successful (re)deploy on the
+# machine-shared Grafana instance (~/dotfiles/stapler-scripts/observability,
+# localhost:48300 by default — see the observability-grafana-dashboards
+# skill) so it shows up as a vertical marker on the stapler-squad dashboards.
+# Best-effort only: that stack is frequently down (laptop with the compose
+# stack stopped, CI, a machine that's never run it) and a deploy must never
+# fail or hang on it — short timeout, backgrounded, all output discarded.
+post_grafana_deploy_annotation() {
+    pgda_bin="$1"
+    pgda_url="${GRAFANA_URL:-http://localhost:48300}"
+    pgda_auth="${GRAFANA_AUTH:-admin:admin}"
+    pgda_ver_output="$("$pgda_bin" version 2>/dev/null)"
+    pgda_branch="$(printf '%s\n' "$pgda_ver_output" | sed -n 's/.*branch: *\([^ ]*\).*/\1/p')"
+    pgda_commit="$(printf '%s\n' "$pgda_ver_output" | sed -n 's/.*commit: *\([^ ]*\).*/\1/p')"
+    pgda_text="stapler-squad redeployed on $(hostname -s 2>/dev/null || hostname) (${pgda_branch:-unknown}@${pgda_commit:-unknown})"
+    pgda_text_escaped="$(printf '%s' "$pgda_text" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    pgda_payload="{\"text\":\"$pgda_text_escaped\",\"tags\":[\"deploy\",\"stapler-squad\"]}"
+    (curl -sf -m 2 -u "$pgda_auth" -X POST "$pgda_url/api/annotations" \
+        -H "Content-Type: application/json" \
+        -d "$pgda_payload" >/dev/null 2>&1 &)
+}
+
 # ── Linux / systemd user service ──────────────────────────────────────────────
 install_linux() {
     bin_path="$1"
@@ -561,9 +583,24 @@ macos_stop_service() {
 # listening sockets faster than it covers launchd's own job-table entry for
 # the label, so re-registering the same label too soon loses the race. A
 # standalone 'launchctl bootstrap' run a couple of seconds later, outside
-# the script, consistently succeeded. Retry with a short backoff before
-# falling back to 'load' — cheap, and turns a near-100%-reproducible failure
-# into the common case succeeding on this machine.
+# the script, consistently succeeded.
+#
+# Reproduced a FOURTH time on 2026-09-09 (under heavy concurrent load — many
+# other processes/agents competing for CPU on this machine): the retry loop
+# below exhausted all 5 attempts (5s total), fell through to 'load', hit the
+# same domain-mismatch failure mode the 2026-08-18 incident above describes,
+# and the deploy timed out and rolled back. Load-dependent timing means a
+# fixed retry BUDGET can always be beaten by a slow-enough machine. Fix:
+# wait_for_launchd_job_clear below polls the actual precondition
+# ('launchctl print' for this label returns nonzero, i.e. the job-table entry
+# is actually gone) instead of guessing how many retries cover it — this
+# addresses the root cause directly rather than further padding the retry
+# count, which is the same category of "another ad hoc patch with its own
+# gap" this function's history already warns about. The bootstrap retry loop
+# stays as defense in depth (job-table-clear is necessary but this session
+# didn't prove it's sufficient), now with more headroom (8 attempts,
+# incremental backoff, ~20s total instead of 5s) for whatever residual race
+# remains.
 #
 # Separately (also confirmed this session): even a successful bootstrap
 # doesn't reliably self-start via RunAtLoad in this environment — 'launchctl
@@ -573,17 +610,44 @@ macos_stop_service() {
 # after a successful bootstrap so this function's contract is "the process
 # is actually running", not just "the job is registered and might start
 # eventually".
+
+# Polls (up to 10s) until 'launchctl print' reports the com.stapler-squad
+# label as gone from the bootstrap domain's job table — the actual
+# precondition 'launchctl bootstrap' needs to succeed right after a bootout
+# of the same label (see macos_start_service's doc comment above). Unlike
+# wait_for_port_release (which watches sockets, already confirmed clear by
+# ensure-ports-free before this runs), this watches launchd's own bookkeeping
+# for the label, which the 2026-09-08/09 incidents showed clears on a
+# separate, sometimes-slower timeline than the sockets do. Gives up and
+# proceeds after 10s on the same "needs a human, not a longer wait" theory as
+# wait_for_port_release — the bootstrap retry loop below is the backstop if
+# this timeout was too short.
+wait_for_launchd_job_clear() {
+    wfljc_waited=0
+    while [ "$wfljc_waited" -lt 10 ]; do
+        if ! launchctl print "gui/$(id -u)/com.stapler-squad" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+        wfljc_waited=$((wfljc_waited + 1))
+    done
+    return 1
+}
+
 macos_start_service() {
     plist_file="$1"
     log_info "Starting service..."
+    if ! wait_for_launchd_job_clear; then
+        log_warning "com.stapler-squad still in launchd's job table >10s after bootout — proceeding anyway, the retry loop below is the backstop"
+    fi
     mss_attempt=1
-    while [ "$mss_attempt" -le 5 ]; do
+    while [ "$mss_attempt" -le 8 ]; do
         if launchctl bootstrap "gui/$(id -u)" "$plist_file" 2>/dev/null; then
             launchctl kickstart -k "gui/$(id -u)/com.stapler-squad" 2>/dev/null || true
             log_success "Service started via launchctl bootstrap (attempt $mss_attempt)."
             return 0
         fi
-        sleep 1
+        sleep "$mss_attempt"
         mss_attempt=$((mss_attempt + 1))
     done
     if launchctl load "$plist_file" 2>/dev/null; then
@@ -937,7 +1001,11 @@ main() {
         macos) install_macos "$bin_path" ;;
     esac
 
-    health_check_and_rollback "$bin_path"
+    if health_check_and_rollback "$bin_path"; then
+        post_grafana_deploy_annotation "$bin_path"
+        return 0
+    fi
+    return 1
 }
 
 main "$@"

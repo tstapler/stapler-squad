@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	gh "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"github.com/zalando/go-keyring"
 )
 
@@ -189,7 +190,7 @@ func seedUserPRCacheWithOnePR(t *testing.T, owner, repo string, prNumber int, br
 	cache := gh.NewUserPRCache()
 	cache.Start(context.Background())
 	t.Cleanup(cache.Stop)
-	require.Eventually(t, func() bool { return len(cache.GetAll()) == 1 }, 5*time.Second, 10*time.Millisecond,
+	wait.RequireEventually(t, func() bool { return len(cache.GetAll()) == 1 }, 5*time.Second, 10*time.Millisecond,
 		"fixture setup: initial fetch never populated exactly one PR from the mocked GraphQL response")
 
 	repoRef, err := gh.NewRepoRef(owner, repo)

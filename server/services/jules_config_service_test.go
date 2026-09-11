@@ -13,9 +13,11 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // fakeJulesKeyManager is a fake julesKeyManager, letting Story 2.4.1 tests
@@ -118,7 +120,7 @@ func (f *fakeJulesPollStatusClient) setFail(v bool) {
 }
 
 func TestJulesConfigService_GetJulesConfig_should_NeverReturnKeyMaterial_When_KeyStored(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	const key = "AIzaSyD-EXAMPLE"
 	svc := NewJulesConfigService(&fakeJulesKeyManager{hasKey: true, key: key}, nil, nil)
 
@@ -135,7 +137,7 @@ func TestJulesConfigService_GetJulesConfig_should_NeverReturnKeyMaterial_When_Ke
 
 func TestJulesConfigService_UpdateJulesConfig_should_WriteKeychainNotConfigJSON_When_APIKeyProvided(t *testing.T) {
 	keyring.MockInit()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	const newKey = "AIzaSyD-NEW"
 
 	keys := jules.NewKeyringTokenSource()
@@ -161,7 +163,7 @@ func TestJulesConfigService_UpdateJulesConfig_should_WriteKeychainNotConfigJSON_
 }
 
 func TestJulesConfigService_TestJulesConnection_should_NameUnconnectedRepo_When_SourceNotInListSources(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	repoPath := newTestJulesRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
 	registry := jules.NewJulesSourceRegistry(&fakeSourceLister{
 		sources: []jules.JulesSource{{Name: "sources/github-tstapler-dotfiles", ID: "src-1"}},
@@ -179,7 +181,7 @@ func TestJulesConfigService_TestJulesConnection_should_NameUnconnectedRepo_When_
 }
 
 func TestJulesConfigService_GetJulesConfig_should_ReflectPollerAuthReconnectRequiredLive_When_PollerFlagToggles(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	client := newFakeJulesPollStatusClient(true)
 	storage := &fakeJulesPollerStorage{
 		entries: []session.ItemSessionBacklogEntry{{
@@ -200,7 +202,7 @@ func TestJulesConfigService_GetJulesConfig_should_ReflectPollerAuthReconnectRequ
 	poller.Start(t.Context())
 	t.Cleanup(poller.Stop)
 
-	require.Eventually(t, poller.AuthReconnectRequired, time.Second, 5*time.Millisecond,
+	wait.RequireEventually(t, poller.AuthReconnectRequired, time.Second, 5*time.Millisecond,
 		"poller must observe the 401/403 and set AuthReconnectRequired")
 
 	resp, err := svc.GetJulesConfig(context.Background(), connect.NewRequest(&sessionv1.GetJulesConfigRequest{}))
@@ -208,7 +210,7 @@ func TestJulesConfigService_GetJulesConfig_should_ReflectPollerAuthReconnectRequ
 	assert.True(t, resp.Msg.Config.AuthReconnectRequired)
 
 	client.setFail(false)
-	require.Eventually(t, func() bool { return !poller.AuthReconnectRequired() }, time.Second, 5*time.Millisecond,
+	wait.RequireEventually(t, func() bool { return !poller.AuthReconnectRequired() }, time.Second, 5*time.Millisecond,
 		"poller must clear AuthReconnectRequired on its next successful tick")
 
 	resp2, err := svc.GetJulesConfig(context.Background(), connect.NewRequest(&sessionv1.GetJulesConfigRequest{}))
@@ -217,7 +219,7 @@ func TestJulesConfigService_GetJulesConfig_should_ReflectPollerAuthReconnectRequ
 }
 
 func TestJulesConfigService_GetJulesConfig_should_ReturnAuthReconnectRequiredFalse_When_PollerDependencyIsNil(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 
 	resp, err := svc.GetJulesConfig(context.Background(), connect.NewRequest(&sessionv1.GetJulesConfigRequest{}))
@@ -226,7 +228,7 @@ func TestJulesConfigService_GetJulesConfig_should_ReturnAuthReconnectRequiredFal
 }
 
 func TestJulesConfigService_ConfirmEgressConsent_should_AppendAndPersistRepo_When_RepoNotAlreadyAcknowledged(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 	const repoPath = "/home/tstapler/code/github.com/tstapler/stapler-squad"
 
@@ -239,7 +241,7 @@ func TestJulesConfigService_ConfirmEgressConsent_should_AppendAndPersistRepo_Whe
 }
 
 func TestJulesConfigService_ConfirmEgressConsent_should_AvoidDuplicateEntry_When_RepoAlreadyAcknowledged(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 	const repoPath = "/home/tstapler/code/github.com/tstapler/stapler-squad"
 
@@ -252,7 +254,7 @@ func TestJulesConfigService_ConfirmEgressConsent_should_AvoidDuplicateEntry_When
 }
 
 func TestJulesConfigService_ConfirmEgressConsent_should_ReturnInvalidArgument_When_RepoPathEmpty(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 
 	_, err := svc.ConfirmEgressConsent(context.Background(), connect.NewRequest(&sessionv1.ConfirmEgressConsentRequest{RepoPath: ""}))
@@ -264,7 +266,7 @@ func TestJulesConfigService_ConfirmEgressConsent_should_ReturnInvalidArgument_Wh
 }
 
 func TestJulesConfigService_RevokeEgressConsent_should_RemoveOnlyTargetRepo_When_MultipleRepoAcknowledged(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 	const repoA = "/home/tstapler/code/github.com/tstapler/stapler-squad"
 	const repoB = "/home/tstapler/code/github.com/tstapler/dotfiles"
@@ -284,7 +286,7 @@ func TestJulesConfigService_RevokeEgressConsent_should_RemoveOnlyTargetRepo_When
 }
 
 func TestJulesConfigService_RevokeEgressConsent_should_BeIdempotent_When_RepoNotAcknowledged(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 	const repoPath = "/home/tstapler/code/github.com/tstapler/stapler-squad"
 
@@ -294,7 +296,7 @@ func TestJulesConfigService_RevokeEgressConsent_should_BeIdempotent_When_RepoNot
 }
 
 func TestJulesConfigService_RevokeEgressConsent_should_ReturnInvalidArgument_When_RepoPathEmpty(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 
 	_, err := svc.RevokeEgressConsent(context.Background(), connect.NewRequest(&sessionv1.RevokeEgressConsentRequest{RepoPath: ""}))

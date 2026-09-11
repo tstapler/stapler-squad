@@ -16,10 +16,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"gopkg.in/yaml.v3"
 )
 
@@ -186,7 +188,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 		})
 	}
 	// Wait for the async write to complete by polling LoadWindow until all 3 entries appear.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		return err == nil && len(entries) >= 3
 	}, 2*time.Second, 10*time.Millisecond, "analytics entries must be persisted within 2s")
@@ -2237,7 +2239,7 @@ func TestReconcilePendingApprovals_PanicIsRecovered(t *testing.T) {
 // declined_by_ci_guard_count, never lost_to_concurrent_pass_count, and must leave the item
 // pending.
 func TestReconcilePendingApprovals_CIRedGuardDecline_LoggedAndCountedSeparately(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")

@@ -12,6 +12,7 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -36,7 +37,7 @@ import (
 // accessor since it lives in this same package and its unexported
 // slackNotifier field is reachable directly from a same-package test.
 func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	deps, err := BuildDependencies()
 	if err != nil {
@@ -284,7 +285,7 @@ func TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFl
 // StatusDetail() calls cfgFn() directly, so it's used here as the observable
 // proof without needing a rate-limit/token-usage fixture to trigger Reconcile.
 func TestBuildRuntimeDeps_should_ReadLiveConfigOnEveryCfgFnCall_When_ConfigJSONChangesAfterBoot(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
 
 	deps, err := BuildDependencies()
@@ -394,7 +395,7 @@ func TestPrNumFromTitle(t *testing.T) {
 // leaving deps.JulesSessionPoller nil and logging "jules disabled" once at
 // Info — every other subsystem (SessionService, BacklogService) unaffected.
 func TestServerDependencies_should_DegradeFeatureNotServer_When_KeychainUnreadableAtStartup(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	keyring.MockInitWithError(errors.New("simulated unreadable keychain"))
 
 	cfg := config.LoadConfig()

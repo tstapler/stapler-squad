@@ -914,12 +914,22 @@ func (c *Config) OneOffBaseDirOrDefault() (string, error) {
 }
 
 // HibernationCheckpointDirOrDefault returns the resolved hibernation checkpoint directory.
-// If CheckpointDir is empty, it returns "~/.stapler-squad/checkpoints" with ~ expanded.
-// The directory is NOT created here — the checkpoint writer creates it on first use.
+// If CheckpointDir is empty, it defaults to "checkpoints" under GetConfigDir() (so it
+// inherits the same test/instance/workspace isolation as config.json/sessions.json —
+// see GetConfigDirForDir's priority list — rather than always writing to the real
+// ~/.stapler-squad regardless of STAPLER_SQUAD_TEST_DIR/IsTestMode()). An explicit
+// CheckpointDir override still expands "~" against the real home dir, since a
+// user-configured absolute/tilde path is an intentional override of the state dir,
+// not app state itself. The directory is NOT created here — the checkpoint writer
+// creates it on first use.
 func (c *Config) HibernationCheckpointDirOrDefault() (string, error) {
 	dir := c.Hibernation.CheckpointDir
 	if dir == "" {
-		dir = "~/.stapler-squad/checkpoints"
+		configDir, err := GetConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve config dir: %w", err)
+		}
+		return filepath.Join(configDir, "checkpoints"), nil
 	}
 	if strings.HasPrefix(dir, "~/") {
 		home, err := os.UserHomeDir()
@@ -939,48 +949,59 @@ func (c *Config) HibernationCheckpointDirOrDefault() (string, error) {
 
 // TriageArtifactDirOrDefault returns the resolved triage artifact directory.
 // Triage workers write their planning files here instead of into the item's repo.
-// Always defaults to "~/.stapler-squad/triage-artifacts".
+// "triage-artifacts" under GetConfigDir() — see HibernationCheckpointDirOrDefault's
+// doc comment for why this routes through GetConfigDir() rather than a hardcoded
+// ~/.stapler-squad path.
 func (c *Config) TriageArtifactDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "triage-artifacts"), nil
+	return filepath.Join(configDir, "triage-artifacts"), nil
 }
 
 // HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
 // headless (triage/review claude -p) failure captures — see
-// session.WriteHeadlessFailureCapture. Always defaults to
-// "~/.stapler-squad/headless-failures".
+// session.WriteHeadlessFailureCapture. "headless-failures" under GetConfigDir() —
+// see HibernationCheckpointDirOrDefault's doc comment for why this routes through
+// GetConfigDir() rather than a hardcoded ~/.stapler-squad path. Previously hardcoded
+// to os.UserHomeDir() regardless of test mode: every go test run that exercised a
+// headless-failure capture wrote real files into the developer's actual
+// ~/.stapler-squad/headless-failures (656+ accumulated on this maintainer's machine),
+// and concurrent test processes competed with each other and the live production
+// service for real disk I/O in that one shared directory — see BUG-103 item 2.
 func (c *Config) HeadlessFailureCaptureDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "headless-failures"), nil
+	return filepath.Join(configDir, "headless-failures"), nil
 }
 
 // BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.
 // Uploaded images referenced from backlog item descriptions are stored here,
 // durably (unlike the 24h temp paste dir) since they're linked from persisted
-// markdown text. Always defaults to "~/.stapler-squad/backlog-attachments".
+// markdown text. "backlog-attachments" under GetConfigDir() — see
+// HibernationCheckpointDirOrDefault's doc comment for why this routes through
+// GetConfigDir() rather than a hardcoded ~/.stapler-squad path.
 func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "backlog-attachments"), nil
+	return filepath.Join(configDir, "backlog-attachments"), nil
 }
 
 // PromptCacheDirOrDefault returns the resolved directory for temp-file-backed
-// session launch prompts (see Instance.promptArg). Always defaults to
-// "~/.stapler-squad/prompt-cache".
+// session launch prompts (see Instance.promptArg). "prompt-cache" under
+// GetConfigDir() — see HibernationCheckpointDirOrDefault's doc comment for why
+// this routes through GetConfigDir() rather than a hardcoded ~/.stapler-squad path.
 func (c *Config) PromptCacheDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "prompt-cache"), nil
+	return filepath.Join(configDir, "prompt-cache"), nil
 }
 
 // NewProjectBaseDirOrDefault returns the resolved new-project base directory.

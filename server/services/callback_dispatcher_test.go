@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // permissiveValidator is a validateURL stub that always accepts, so tests can exercise
@@ -91,7 +92,7 @@ func TestCallbackDispatcher_Dispatch_NonBlocking(t *testing.T) {
 	assert.Less(t, elapsed, 200*time.Millisecond, "Dispatch must return immediately, not wait for delivery")
 
 	close(block)
-	require.Eventually(t, func() bool { return len(d.inFlight) == 0 }, 2*time.Second, 10*time.Millisecond,
+	wait.RequireEventually(t, func() bool { return len(d.inFlight) == 0 }, 2*time.Second, 10*time.Millisecond,
 		"the background delivery goroutine must finish before the test returns, or it leaks into later tests")
 }
 
@@ -127,7 +128,7 @@ func TestCallbackDispatcher_Dispatch_DropsBeyondCapacity(t *testing.T) {
 
 	// Poll until exactly `cap` requests have reached the (hanging) server — proves
 	// the semaphore let exactly `cap` goroutines through, not zero and not more.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return received.Load() == int32(cap)
 	}, 2*time.Second, 10*time.Millisecond, "expected exactly cap in-flight requests")
 

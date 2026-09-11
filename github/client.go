@@ -797,9 +797,11 @@ var remoteURLGroup singleflight.Group //nolint:exhaustruct
 // remoteCacheKey resolves repoPath to the shared git common-dir (the main
 // .git directory) so every worktree of the same repository maps to one cache
 // entry instead of one per worktree path. Filesystem-only, no subprocess —
-// mirrors session/unfinished/gogit_vcs_reader.go's gitCommonDir. Falls back
-// to repoPath itself (the old cache key) if the .git file can't be parsed,
-// which only degrades to the pre-fix behavior, never breaks correctness.
+// same parsing approach as session/unfinished/gogit_vcs_reader.go's
+// gitCommonDir, though its fallback differs slightly (this always falls back
+// to repoPath itself on any parse failure, since here that's just the old
+// per-worktree cache key — a degraded cache hit rate, never a correctness
+// issue — whereas gitCommonDir's callers need a real git dir path).
 func remoteCacheKey(repoPath string) string {
 	gitPath := filepath.Join(repoPath, ".git")
 	data, err := os.ReadFile(gitPath) // #nosec G304 -- repoPath is a session's own worktree directory, not user-supplied network input

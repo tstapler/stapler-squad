@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/server/services"
 )
 
@@ -37,7 +38,7 @@ func computeTestSlackInteractiveSignature(secret, timestamp, body string) string
 // gate (server.go, Story 2.1.3) reads the value this test intends.
 func setSlackInteractiveTestConfig(t *testing.T, approvalEnabled bool) {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	cfg := config.LoadConfig()
 	cfg.Slack.ApprovalEnabled = approvalEnabled
 	require.NoError(t, config.SaveConfig(cfg))

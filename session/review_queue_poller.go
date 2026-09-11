@@ -762,13 +762,13 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 func (rqp *ReviewQueuePoller) shouldSkipSession(inst *Instance) bool {
 	// Lock-free snapshot read for Hidden, Status, and ArchivedAt; Started() reads
 	// inst.started (set once during construction, not in the snapshot).
-	// Crashed is skipped alongside Stopped/Paused: SessionHealthChecker already
-	// killed its tmux session before setting this status (see MarkCrashed,
-	// session/instance_crash.go), so there is no live pane content to check, and
-	// the session already surfaces to the user via its own distinct status/banner
+	// Status.IsSuspended() covers Paused/Hibernated/Stopped/Crashed/PermanentlyFailed:
+	// none of these have a live tmux pane to check (SessionHealthChecker already
+	// tore it down, or it was never created), so there is no pane content to
+	// evaluate, and each surfaces to the user via its own distinct status/banner
 	// rather than a review-queue attention reason.
 	snap := inst.Snapshot()
-	return snap.Hidden || snap.Status == Stopped || snap.Status == Paused || snap.Status == Crashed || snap.ArchivedAt != nil || !inst.Started()
+	return snap.Hidden || snap.Status.IsSuspended() || snap.ArchivedAt != nil || !inst.Started()
 }
 
 // checkSession checks a single session and adds/removes from queue as needed.

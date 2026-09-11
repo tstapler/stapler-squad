@@ -36,6 +36,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // realExecWithPtySessionSSHHandler is realExecSessionSSHHandler
@@ -196,12 +197,12 @@ func TestStreamTerminal_RemoteSession_InputReachesRemotePTY(t *testing.T) {
 	sessionID := resp.Msg.Session.Id
 
 	sessionName := "staplersquad_remote-stream-input"
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
 	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist before streaming")
 
 	var found *session.Instance
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		for _, inst := range fix.poller.GetInstances() {
 			if inst.Title == "remote-stream-input" {
 				found = inst
@@ -257,7 +258,7 @@ func TestStreamTerminal_RemoteSession_InputReachesRemotePTY(t *testing.T) {
 		// No immediate error; proceed to the authoritative check below.
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return remoteCapturePaneContains(t, srv, sessionName, fix.svc.testTmuxServerSocket, marker)
 	}, 10*time.Second, 200*time.Millisecond,
 		"input sent via StreamTerminal must reach the remote tmux pane (proving remotePTY.Write was used, not the local-only instance.WriteToPTY path)")
@@ -301,11 +302,11 @@ func TestStreamTerminal_RemoteSession_RecoversAfterConnectionKilledMidStream(t *
 	sessionID := resp.Msg.Session.Id
 
 	sessionName := "staplersquad_remote-stream-recovery"
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
 	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist before streaming")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		for _, inst := range fix.poller.GetInstances() {
 			if inst.Title == "remote-stream-recovery" {
 				return inst.Started()
@@ -347,7 +348,7 @@ func TestStreamTerminal_RemoteSession_RecoversAfterConnectionKilledMidStream(t *
 		SessionId: sessionID,
 		Data:      &sessionv1.TerminalData_Input{Input: &sessionv1.TerminalInput{Data: []byte(markerBeforeKill)}},
 	}))
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return remoteCapturePaneContains(t, srv, sessionName, fix.svc.testTmuxServerSocket, markerBeforeKill)
 	}, 10*time.Second, 200*time.Millisecond, "stream must be actively flowing before the connection is killed")
 
@@ -389,7 +390,7 @@ func TestStreamTerminal_RemoteSession_RecoversAfterConnectionKilledMidStream(t *
 	// timeout. Waiting for eviction first removes the race by
 	// construction: every reconnect attempt below is guaranteed to see an
 	// empty pool entry and therefore genuinely redial.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		_, stillPooled := pool.Peek("test-remote")
 		return !stillPooled
 	}, 10*time.Second, 50*time.Millisecond, "pool must evict the dead client before a reconnect can succeed")
@@ -399,7 +400,7 @@ func TestStreamTerminal_RemoteSession_RecoversAfterConnectionKilledMidStream(t *
 	// dead entry is gone, rather than a fresh call also getting stuck on
 	// the same dead client forever.
 	const markerAfterRecovery = "REMOTE_RECOVERY_AFTER_KILL"
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		streamCtx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel2()
 		stream2 := client.StreamTerminal(streamCtx2)

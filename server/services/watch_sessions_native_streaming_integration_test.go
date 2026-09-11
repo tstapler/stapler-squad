@@ -21,6 +21,7 @@ import (
 	"go.uber.org/goleak"
 	"golang.org/x/net/http2"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	gh "github.com/tstapler/stapler-squad/github"
@@ -30,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/testutil"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newNarrowServerDeps builds the minimal *server.ServerDependencies graph
@@ -161,7 +163,7 @@ func sessionIDFromEvent(ev *sessionv1.SessionEvent) string {
 // upgrade request at all; StreamingWSBridge.Handler forwards any non-upgrade
 // request straight to the wrapped Connect handler, see ws_stream_bridge_test.go).
 func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_CalledThroughStartRemoteTLSListener(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	// wireDepsIntoServer unconditionally calls SessionService.SetLifecycleContext,
 	// which starts CapacityMonitor's real Anthropic/Gemini QueryLimits polling
 	// (server/services/capacity_monitor.go, session_service.go:1387-1389) --
@@ -246,7 +248,7 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	// check occasionally raced this and failed; polling gives it the extra
 	// moment it actually needs without weakening what's being verified.
 	defer func() {
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			return goleak.Find(baseline) == nil
 		}, 2*time.Second, 20*time.Millisecond, "background goroutines did not exit within 2s")
 	}()

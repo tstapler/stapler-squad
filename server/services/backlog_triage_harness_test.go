@@ -40,6 +40,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // setupTriageHarness spins up a real BacklogService + ConnectRPC handler
@@ -69,7 +70,7 @@ func preambleTriageJSON() string {
 // pollUntilReady polls GetBacklogItem until status == "ready" or timeout.
 func pollUntilReady(t *testing.T, client sessionv1connect.BacklogServiceClient, itemID string) {
 	t.Helper()
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		resp, err := client.GetBacklogItem(context.Background(),
 			connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
 		return err == nil && resp.Msg.Item.Status == "ready"
@@ -365,7 +366,7 @@ func TestTriageHarness_RealClaude(t *testing.T) {
 	require.NoError(t, trigErr)
 
 	// Fast-prompt triage should complete in well under 2 minutes.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		resp, getErr := client.GetBacklogItem(context.Background(),
 			connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
 		if getErr != nil {
