@@ -253,17 +253,25 @@ func newGHRequestForHostWithToken(ctx context.Context, host, path, token string)
 }
 
 // newGHGraphQLRequest creates an authenticated POST request to host's GraphQL
-// endpoint (graphQLURLForHost), body already JSON-encoded by the caller. This
-// is the POST+body sibling of newGHRequest/newGHRequestForHostWithToken — the
-// GET-only constructors can't build a GraphQL request, so this centralizes
-// the same Authorization/Accept/X-GitHub-Api-Version header-setting instead
-// of GetPRInfoGraphQL building its request via raw http.NewRequestWithContext.
+// endpoint (graphQLURLForHost), body already JSON-encoded by the caller,
+// resolving a token via getGHToken(ctx) — the GraphQL sibling of newGHRequest.
 func newGHGraphQLRequest(ctx context.Context, host string, body []byte) (*http.Request, error) {
+	return newGHGraphQLRequestForHostWithToken(ctx, host, body, getGHToken(ctx))
+}
+
+// newGHGraphQLRequestForHostWithToken creates a POST request to host's
+// GraphQL endpoint authenticated with an explicit token, body already
+// JSON-encoded by the caller. This is the POST+body sibling of
+// newGHRequestForHostWithToken — the GET-only constructors can't build a
+// GraphQL request, so this centralizes the same
+// Authorization/Accept/X-GitHub-Api-Version header-setting instead of a call
+// site building its request via raw http.NewRequestWithContext.
+func newGHGraphQLRequestForHostWithToken(ctx context.Context, host string, body []byte, token string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, graphQLURLForHost(host), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	if token := getGHToken(ctx); token != "" {
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Content-Type", "application/json")

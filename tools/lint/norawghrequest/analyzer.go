@@ -50,9 +50,10 @@ const ghPackagePath = "github.com/tstapler/stapler-squad/github"
 // Epic 2.2) are the conditional-aware successor constructors for new native
 // call sites — one cache-backed, one an explicit opt-out.
 var exemptConstructorNames = map[string]bool{
-	"newGHRequestForHostWithToken": true,
-	"NewConditionalRequest":        true,
-	"NewConditionalRequestNoCache": true,
+	"newGHRequestForHostWithToken":        true,
+	"NewConditionalRequest":               true,
+	"NewConditionalRequestNoCache":        true,
+	"newGHGraphQLRequestForHostWithToken": true,
 }
 
 func run(pass *analysis.Pass) (interface{}, error) {
@@ -72,7 +73,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return true
 		}
 		urlArg, ok := urlArgFor(call, name)
-		if !ok || !referencesGitHubHost(pass, urlArg) {
+		if !ok || !referencesGitHubHost(pass, urlArg, enclosingFuncBody(stack)) {
 			return true
 		}
 		if isExemptConstructorCall(pass, stack) {
@@ -130,42 +131,144 @@ func urlArgFor(call *ast.CallExpr, name string) (ast.Expr, bool) {
 	return call.Args[idx], true
 }
 
-// referencesGitHubHost reports whether urlArg's subtree contains a call to
-// github.GhBaseURL or github.RestBaseURLForHost (type-resolved to
-// ghPackagePath), called either qualified (from another package) or
-// unqualified (from within the github package itself).
-func referencesGitHubHost(pass *analysis.Pass, urlArg ast.Expr) bool {
+// hostURLHelperFuncNames are github-package functions known to build a
+// GitHub host URL by calling GhBaseURL/RestBaseURLForHost internally — one
+// function-call deeper than a direct AST walk of the call site sees, so a
+// call to one of these is treated as equivalent to calling GhBaseURL or
+// RestBaseURLForHost directly.
+var hostURLHelperFuncNames = map[string]bool{
+	"graphQLURLForHost": true,
+}
+
+// maxIdentResolutionDepth bounds referencesGitHubHost's recursion through
+// chained local-variable assignments (url := hostURL(); req := ...(url)),
+// so a pathological chain can't spin the analyzer forever.
+const maxIdentResolutionDepth = 5
+
+// referencesGitHubHost reports whether expr's subtree references a GitHub
+// host — directly via github.GhBaseURL/RestBaseURLForHost (type-resolved to
+// ghPackagePath), via a known wrapped helper (hostURLHelperFuncNames, e.g.
+// graphQLURLForHost, itself one call deeper), or indirectly through a local
+// variable assigned from either of those elsewhere in scope (the enclosing
+// function's body, searched via enclosingFuncBody). Call sites may be
+// qualified (from another package) or unqualified (from within the github
+// package itself).
+func referencesGitHubHost(pass *analysis.Pass, expr ast.Expr, scope ast.Node) bool {
+	return referencesGitHubHostDepth(pass, expr, scope, 0)
+}
+
+func referencesGitHubHostDepth(pass *analysis.Pass, expr ast.Expr, scope ast.Node, depth int) bool {
+	if depth > maxIdentResolutionDepth {
+		return false
+	}
 	found := false
-	ast.Inspect(urlArg, func(n ast.Node) bool {
+	ast.Inspect(expr, func(n ast.Node) bool {
 		if found {
 			return false
 		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		var callee *ast.Ident
-		switch fn := call.Fun.(type) {
+		switch node := n.(type) {
+		case *ast.CallExpr:
+			if isGitHubHostURLCall(pass, node) {
+				found = true
+				return false
+			}
 		case *ast.Ident:
-			callee = fn
-		case *ast.SelectorExpr:
-			callee = fn.Sel
+			rhs, ok := resolveLocalIdentRHS(pass, node, scope)
+			if ok && referencesGitHubHostDepth(pass, rhs, scope, depth+1) {
+				found = true
+				return false
+			}
 		}
-		if callee == nil || (callee.Name != "GhBaseURL" && callee.Name != "RestBaseURLForHost") {
-			return true
-		}
-		obj, ok := pass.TypesInfo.Uses[callee]
-		if !ok {
-			return true
-		}
-		fn, ok := obj.(*types.Func)
-		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != ghPackagePath {
-			return true
-		}
-		found = true
-		return false
+		return true
 	})
 	return found
+}
+
+// isGitHubHostURLCall reports whether call resolves (via type info) to
+// GhBaseURL, RestBaseURLForHost, or a known hostURLHelperFuncNames entry, all
+// in ghPackagePath.
+func isGitHubHostURLCall(pass *analysis.Pass, call *ast.CallExpr) bool {
+	var callee *ast.Ident
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		callee = fn
+	case *ast.SelectorExpr:
+		callee = fn.Sel
+	}
+	if callee == nil {
+		return false
+	}
+	if callee.Name != "GhBaseURL" && callee.Name != "RestBaseURLForHost" && !hostURLHelperFuncNames[callee.Name] {
+		return false
+	}
+	obj, ok := pass.TypesInfo.Uses[callee]
+	if !ok {
+		return false
+	}
+	fn, ok := obj.(*types.Func)
+	return ok && fn.Pkg() != nil && fn.Pkg().Path() == ghPackagePath
+}
+
+// resolveLocalIdentRHS reports whether ident is a use of a local variable
+// assigned (via ":=" or "=") somewhere in scope, returning the right-hand
+// side expression of its first such assignment. This lets referencesGitHubHost
+// see through a pattern like `url := GhBaseURL()+"..."; http.NewRequest("GET",
+// url, nil)`, where urlArg is a bare *ast.Ident with no nested CallExpr of
+// its own.
+func resolveLocalIdentRHS(pass *analysis.Pass, ident *ast.Ident, scope ast.Node) (ast.Expr, bool) {
+	if scope == nil {
+		return nil, false
+	}
+	obj, ok := pass.TypesInfo.Uses[ident]
+	if !ok {
+		return nil, false
+	}
+	var rhs ast.Expr
+	found := false
+	ast.Inspect(scope, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, lhs := range assign.Lhs {
+			lhsIdent, ok := lhs.(*ast.Ident)
+			if !ok || i >= len(assign.Rhs) {
+				continue
+			}
+			lhsObj := pass.TypesInfo.Defs[lhsIdent]
+			if lhsObj == nil {
+				lhsObj = pass.TypesInfo.Uses[lhsIdent]
+			}
+			if lhsObj == obj {
+				rhs = assign.Rhs[i]
+				found = true
+			}
+		}
+		return true
+	})
+	return rhs, found
+}
+
+// enclosingFuncBody walks the ancestor stack (as provided by
+// inspector.WithStack) to find the nearest enclosing function body — a
+// FuncDecl or FuncLit — used as the search scope for resolveLocalIdentRHS.
+func enclosingFuncBody(stack []ast.Node) ast.Node {
+	for i := len(stack) - 1; i >= 0; i-- {
+		switch fn := stack[i].(type) {
+		case *ast.FuncDecl:
+			if fn.Body != nil {
+				return fn.Body
+			}
+		case *ast.FuncLit:
+			if fn.Body != nil {
+				return fn.Body
+			}
+		}
+	}
+	return nil
 }
 
 // isExemptConstructorCall reports whether the call at the top of stack sits
