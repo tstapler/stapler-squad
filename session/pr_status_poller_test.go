@@ -347,10 +347,15 @@ func TestFetchAndUpdatePRStatus_AdmissionControlRejection_SkipsCleanly(t *testin
 	if err := cfg.SetFeatureFlag(admissionControlFlagName, true); err != nil {
 		t.Fatalf("SetFeatureFlag(%q, true) failed: %v", admissionControlFlagName, err)
 	}
+	// priorityAdmissionEnabled (github/http_client.go) caches the flag for up
+	// to 5s — bust it so this test doesn't intermittently observe a stale
+	// "disabled" value cached by an earlier test in the same binary.
+	github.ResetPriorityAdmissionFlagCacheForTest()
 	t.Cleanup(func() {
 		if err := config.LoadConfig().SetFeatureFlag(admissionControlFlagName, prevFlag); err != nil {
 			t.Errorf("cleanup: failed to restore %q to %v: %v", admissionControlFlagName, prevFlag, err)
 		}
+		github.ResetPriorityAdmissionFlagCacheForTest()
 	})
 
 	// Prime the shared RateLimiter with a below-headroom "core" quota (400/5000 =

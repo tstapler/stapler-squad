@@ -74,13 +74,11 @@ func TestPriorityAdmissionEnabled_CachesWithinTTL(t *testing.T) {
 	}
 }
 
-// resetGHPriorityAdmissionFlagCache clears priorityAdmissionEnabled's TTL
-// cache so a test that just flipped githubPriorityAdmissionFlagName via
-// setAdmissionFlagForTest sees the change immediately, instead of RoundTrip
-// serving a stale cached value for up to ghPriorityAdmissionFlagCacheTTL.
+// resetGHPriorityAdmissionFlagCache is this package's in-package alias for
+// ResetPriorityAdmissionFlagCacheForTest (github/testing.go) — kept so this
+// file's existing call sites don't need the package-qualified name.
 func resetGHPriorityAdmissionFlagCache() {
-	ghPriorityAdmissionFlagCacheVal.Store(false)
-	ghPriorityAdmissionFlagCacheAt.Store(0)
+	ResetPriorityAdmissionFlagCacheForTest()
 }
 
 // TestGithubPriorityAdmissionFlagName_MatchesServerServicesDuplicate is a
