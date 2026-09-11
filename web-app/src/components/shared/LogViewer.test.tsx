@@ -22,6 +22,7 @@ jest.mock("@connectrpc/connect-web", () => ({
 
 jest.mock("@/lib/config", () => ({
   getApiBaseUrl: jest.fn(() => "http://localhost:8543"),
+  createAuthInterceptor: jest.fn(() => jest.fn()),
 }));
 
 // Live-tail defaults to enabled and fetches immediately on mount — not what

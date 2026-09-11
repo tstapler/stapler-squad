@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 )
 
 // --- Injection-seam stubs ---
@@ -203,7 +204,7 @@ func TestEnsureDaemonRunning_should_StopOrphanedTymuxd_When_HealthCheckRetryExha
 // StopDaemon idempotent-stop contract: stopping when no PID file exists is
 // not an error.
 func TestStopTymuxd_IdempotentWhenNoPIDFile(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	err := StopTymuxd()
 

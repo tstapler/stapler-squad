@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping covers
@@ -2415,11 +2416,11 @@ func TestAutoRespawnTriage_should_retriggerTriage_When_ItemStillIdea(t *testing.
 	respawnErr := svc.AutoRespawnTriage(t.Context(), item.ID)
 	require.NoError(t, respawnErr)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return pool.callCount() >= 1
 	}, 5*time.Second, 50*time.Millisecond, "must actually invoke the headless triage call, not just detect the item")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond, "item should transition to ready after the re-triggered headless triage completes")
@@ -2452,11 +2453,11 @@ func TestAutoRespawnTriage_should_resetQueuedToIdeaAndRetrigger_When_ItemQueued(
 	respawnErr := svc.AutoRespawnTriage(t.Context(), item.ID)
 	require.NoError(t, respawnErr)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return pool.callCount() >= 1
 	}, 5*time.Second, 50*time.Millisecond, "must actually invoke the headless triage call after resetting to idea")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond, "item should transition queued->idea->ready after the re-triggered headless triage completes")
@@ -3385,7 +3386,7 @@ func TestTriggerTriage_NeverPublishesUntaggedNotification_OnHeadlessPoolFailureO
 	t.Parallel()
 	waitForTriageSessionEnded := func(t *testing.T, storage *session.Storage, itemID string) {
 		t.Helper()
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			sessions, listErr := storage.ListItemSessions(context.Background(), itemID)
 			if listErr != nil {
 				return false
@@ -3521,7 +3522,7 @@ func TestTriggerTriage_NeverPublishesUntaggedNotification_OnHeadlessPoolFailureO
 func waitForTriageFailureCaptured(t *testing.T, storage *session.Storage, itemID string) session.ItemSessionSummary {
 	t.Helper()
 	var found session.ItemSessionSummary
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		sessions, listErr := storage.ListItemSessions(context.Background(), itemID)
 		if listErr != nil {
 			return false
@@ -3648,7 +3649,7 @@ func TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsN
 	}))
 	require.NoError(t, trigErr)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return pool.callCount() == 1
 	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
 
@@ -3689,7 +3690,7 @@ func TestTriggerTriage_should_UseResolvedFortyFiveMinuteTimeout_When_SddModeOver
 	}))
 	require.NoError(t, trigErr)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return pool.callCount() == 1
 	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
 
@@ -3734,7 +3735,7 @@ func TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefault
 	}))
 	require.NoError(t, trigErr)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return pool.callCount() == 1
 	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
 
@@ -3785,7 +3786,7 @@ func TestTriggerTriage_should_UseUnmodifiedRetriagePrompt_When_RetriagingRegardl
 		ItemId: item.ID,
 	}))
 	require.NoError(t, trigErr)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond, "initial triage should mark item ready")
@@ -3796,7 +3797,7 @@ func TestTriggerTriage_should_UseUnmodifiedRetriagePrompt_When_RetriagingRegardl
 		Feedback: "This missed the mobile case entirely.",
 	}))
 	require.NoError(t, refineErr)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return pool.callCount() == 2
 	}, 5*time.Second, 50*time.Millisecond, "refine should make a second headless call")
 
@@ -4902,7 +4903,7 @@ func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirect
 	}))
 	require.NoError(t, trigErr, "a valid absolute existing repo_path must not be rejected")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return pool.callCount() == 1
 	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call for a valid repo_path")
 
@@ -4927,7 +4928,14 @@ func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirect
 func TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
-	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: time.Hour}
+	// entered signals deterministically, once per occupier, the instant that
+	// occupier's CallBlocking is entered -- replaces a require.Eventually poll
+	// on pool.callCount(), which raced scheduler contention under full-suite
+	// parallel load rather than the actual condition (BUG-103): a fixed 2s
+	// wall-clock bound isn't a real guarantee that 8 freshly-spawned goroutines
+	// all got scheduled, only a guess at how long that usually takes.
+	entered := make(chan struct{}, 8)
+	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: time.Hour, onEnter: func() { entered <- struct{}{} }}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
@@ -4944,8 +4952,16 @@ func TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphore
 		_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
 		require.NoError(t, trigErr)
 	}
-	require.Eventually(t, func() bool { return pool.callCount() == 8 }, 2*time.Second, 10*time.Millisecond,
-		"all 8 occupiers must have actually entered CallBlocking before the 9th is triggered")
+	// Wait on the channel, not a poll interval -- each receive corresponds to
+	// exactly one occupier having actually entered CallBlocking. The timeout
+	// here is a safety net against a genuine hang, not the pacing mechanism.
+	for i := 0; i < 8; i++ {
+		select {
+		case <-entered:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("occupier %d did not enter CallBlocking within 10s", i)
+		}
+	}
 
 	queuedItem, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
 		Title:    "queued-item",
@@ -4965,7 +4981,7 @@ func TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphore
 
 	svc.Shutdown()
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		sessions, listErr := storage.ListItemSessions(context.Background(), queuedItem.ID)
 		if listErr != nil {
 			return false

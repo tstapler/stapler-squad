@@ -389,6 +389,7 @@ func (r *TmuxServerRegistry) startControlMode() (*exec.Cmd, *bufio.Scanner, io.W
 	// cancellation never runs if this process is SIGKILLed (e.g. a
 	// `--mcp` invocation killed by its parent), so EnsurePdeathsig backs
 	// that up at the kernel level.
+	// #nosec G204 -- Binary() resolves this repo's own bundled/PATH tmux binary; args are a fixed argv slice plus internal session/socket names, never a shell string.
 	cmd := exec.CommandContext(r.ctx, Binary(), args...) //nolint:norawexec long-running cmd.Start() process
 	safeexec.EnsurePdeathsig(cmd)
 
@@ -413,6 +414,10 @@ func (r *TmuxServerRegistry) startControlMode() (*exec.Cmd, *bufio.Scanner, io.W
 
 // reconnectLoop starts the control-mode process and reconnects with exponential
 // backoff whenever it exits. It exits when the registry context is cancelled.
+//
+// Audited (session-lifecycle-state-machine project, 2026-09): no lifecycle.Reason
+// migration needed — its only stop-vs-continue signal is ctx.Done(), a single
+// unambiguous cause with nothing to misclassify.
 func (r *TmuxServerRegistry) reconnectLoop() {
 	const (
 		backoffBase = 100 * time.Millisecond

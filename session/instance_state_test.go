@@ -146,3 +146,46 @@ func TestSetCreationProgress_should_UpdateTimestamp_When_Called(t *testing.T) {
 	inst.SetCreationProgress("Starting tmux session...")
 	assert.True(t, inst.CreationProgressUpdatedAt().After(firstTimestamp), "second call must advance the timestamp")
 }
+
+// TestIsHotRestoreRecoverable_MatchesRecoverFromStopped is the single test
+// enforcing that IsHotRestoreRecoverable's status set never drifts out of
+// sync with what RecoverFromStopped actually resets. Before IsHotRestoreRecoverable
+// existed, that status list (Stopped/PermanentlyFailed/Failed) was duplicated
+// inline at two independent call sites — server/dependencies.go's boot-time
+// reconcile loop and retry_state.go's restartForRetry — and the boot-time copy
+// silently omitted PermanentlyFailed/Failed. A session that reached one of
+// those statuses before a server restart, with its tmux session still alive,
+// was left permanently stuck: Start(false) rejects the PermanentlyFailed/Failed
+// -> Active transition, and nothing else in the boot path recovered it, so
+// every capture/resync against it failed indefinitely.
+//
+// Iterating every real Status constant and asserting IsHotRestoreRecoverable
+// agrees with RecoverFromStopped's actual before/after effect means any future
+// edit to either one that isn't mirrored in the other fails this test —
+// closing the class rather than just the one instance of it.
+func TestIsHotRestoreRecoverable_MatchesRecoverFromStopped(t *testing.T) {
+	t.Parallel()
+	every := []Status{Creating, Active, Paused, Stopped, Hibernated, Restoring, Crashed, PermanentlyFailed, Failed}
+
+	for _, status := range every {
+		status := status
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			inst := &Instance{Title: "test-hot-restore-recoverable", Status: status}
+
+			predicted := inst.IsHotRestoreRecoverable()
+			inst.RecoverFromStopped()
+			after := inst.GetLifecycleStatus()
+
+			if predicted {
+				assert.Equal(t, Creating, after,
+					"IsHotRestoreRecoverable(%s) = true but RecoverFromStopped() left status = %s, want it reset to Creating",
+					status, after)
+			} else {
+				assert.Equal(t, status, after,
+					"IsHotRestoreRecoverable(%s) = false but RecoverFromStopped() changed status to %s — it should have been a no-op",
+					status, after)
+			}
+		})
+	}
+}

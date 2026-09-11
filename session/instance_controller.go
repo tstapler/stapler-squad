@@ -252,6 +252,16 @@ func (i *Instance) StopController() {
 		}
 	}
 
+	// HasController is lock-free (atomic.Pointer read) — skip i.mu.Lock()
+	// entirely on the common no-controller-to-stop path, mirroring
+	// GetController's doc comment above about avoiding needless i.mu
+	// contention. Re-checked below once the lock is actually held, since a
+	// concurrent StartController could register one between this check and
+	// the Lock() call.
+	if !i.controllerManager.HasController() {
+		return
+	}
+
 	i.mu.Lock()
 	defer i.mu.Unlock()
 

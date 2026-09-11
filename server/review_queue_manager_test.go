@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -522,6 +523,81 @@ func TestReactiveQueueManagerEventTypes(t *testing.T) {
 	if _, ok := event.Event.(*sessionv1.ReviewQueueEvent_ItemRemoved); !ok {
 		t.Errorf("Expected ItemRemoved, got %T", event.Event)
 	}
+
+	reactiveQueueMgr.Stop()
+}
+
+// newAutoResolvedRemovalTestFixture builds the queue/poller/eventBus/storage
+// fixture for TestOnItemRemoved_AutoResolvedByRule_SetsReasonAndRuleName as a
+// helper rather than a literal copy of the setup block already repeated across
+// this file's other ReactiveQueueManager tests.
+func newAutoResolvedRemovalTestFixture(t *testing.T) (*session.ReviewQueue, *session.ReviewQueuePoller, *events.EventBus, *session.InstanceStatusManager, *session.Storage) {
+	t.Helper()
+	queue := session.NewReviewQueue()
+	statusManager := session.NewInstanceStatusManager()
+	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
+	eventBus := events.NewEventBus(10)
+	repo := session.NewTestEntRepository(t)
+	storage, err := session.NewStorageWithRepository(repo)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	return queue, reviewQueuePoller, eventBus, statusManager, storage
+}
+
+// TestOnItemRemoved_AutoResolvedByRule_SetsReasonAndRuleName is the regression test for
+// review finding #4: OnItemRemoved's Reason/AutoResolvedByRule field-setting logic had no
+// assertion on the actual field values, only that an ItemRemoved event fired at all. This
+// exercises the auto-resolved-by-rule removal path specifically (session.RemoveWithInfo with
+// session.AutoResolvedByRuleRemoval) and asserts both fields on the emitted proto event.
+func TestOnItemRemoved_AutoResolvedByRule_SetsReasonAndRuleName(t *testing.T) {
+	queue, reviewQueuePoller, eventBus, statusManager, storage := newAutoResolvedRemovalTestFixture(t)
+
+	reactiveQueueMgr := NewReactiveQueueManager(
+		queue,
+		reviewQueuePoller,
+		eventBus,
+		statusManager,
+		storage,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go reactiveQueueMgr.Start(ctx)
+
+	if err := testutil.WaitForCondition(func() bool {
+		return reviewQueuePoller.IsRunning()
+	}, testutil.FastWaitConfig()); err != nil {
+		t.Fatalf("manager failed to initialize: %v", err)
+	}
+
+	clientCtx, clientCancel := context.WithCancel(context.Background())
+	defer clientCancel()
+
+	filters := &WatchReviewQueueFilters{
+		IncludeStatistics: true,
+		InitialSnapshot:   false,
+	}
+
+	eventCh, clientID := reactiveQueueMgr.AddStreamClient(clientCtx, filters)
+	defer reactiveQueueMgr.RemoveStreamClient(clientID)
+
+	item := &session.ReviewItem{
+		SessionID:  "test-auto-resolved",
+		Priority:   session.PriorityHigh,
+		Reason:     session.ReasonApprovalPending,
+		DetectedAt: time.Now(),
+	}
+	queue.Add(item)
+	waitForEvent(t, eventCh, "ItemAdded", 500*time.Millisecond)
+
+	queue.RemoveWithInfo("test-auto-resolved", session.AutoResolvedByRuleRemoval("auto_resolved_by_rule"))
+
+	event := waitForEvent(t, eventCh, "ItemRemoved", 500*time.Millisecond)
+	removed, ok := event.Event.(*sessionv1.ReviewQueueEvent_ItemRemoved)
+	require.True(t, ok, "expected ItemRemoved, got %T", event.Event)
+	require.Equal(t, "auto_resolved_by_rule", removed.ItemRemoved.GetReason())
+	require.Equal(t, "auto_resolved_by_rule", removed.ItemRemoved.GetAutoResolvedByRule())
 
 	reactiveQueueMgr.Stop()
 }
@@ -1394,7 +1470,7 @@ func (f *fakeSlackNotifierWiring) counts() (notify, maybeThreshold int) {
 // config.LoadConfig() call sees them.
 func setTestSlackConfig(t *testing.T, notifyOnQueueItem bool, queueDepthThreshold int) {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	cfg := config.LoadConfig()
 	cfg.Slack.NotifyOnQueueItem = notifyOnQueueItem
 	cfg.Slack.QueueDepthThreshold = queueDepthThreshold

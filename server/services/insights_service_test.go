@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session/tokens"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -689,7 +690,7 @@ func TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies(t *test
 	t.Cleanup(runCancel)
 	done := runWatchInsights(runCtx, svc, sender)
 
-	require.Eventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
+	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
 
 	// walkAndEnqueue's deferred cleanup fires exactly one notify() even for
 	// an empty historyDir (store.go's defer runs before the historyDir==""
@@ -701,7 +702,7 @@ func TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies(t *test
 	before := len(sender.Sent())
 	store.OnHistoryFileChanged("../../session/tokens/testdata/valid_session.jsonl")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return len(sender.Sent()) > before && store.GetByUUID("valid_session") != nil
 	}, 2*time.Second, 10*time.Millisecond)
 	assert.Equal(t, "update", sender.Sent()[len(sender.Sent())-1].EventType)
@@ -799,7 +800,7 @@ func TestGetSessionTurnTimeline_should_returnTurns_When_backedByRealTokenStore(t
 	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil)
 
 	store.OnHistoryFileChanged("../../session/tokens/testdata/valid_session.jsonl")
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return store.GetByUUID("valid_session") != nil
 	}, 2*time.Second, 10*time.Millisecond)
 
@@ -831,7 +832,7 @@ func TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled(t *tes
 	t.Cleanup(runCancel)
 	done := runWatchInsights(runCtx, svc, sender)
 
-	require.Eventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
+	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
 
 	requireCleanReturn(t, runCancel, done)
 }
@@ -997,14 +998,14 @@ func TestWatchInsights_WhenChannelReceivesNonNilParseResult_ExpectUpdateEventWit
 	t.Cleanup(runCancel)
 	done := runWatchInsights(runCtx, svc, sender)
 
-	require.Eventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
+	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
 
 	// notify(result) sends the non-nil *tokens.ParseResult for the reparsed
 	// file (Story 1.5.1), so the "update" event built from it must carry a
 	// populated Session, not the previous always-nil status quo.
 	ch <- newResult("conv-xyz", "claude-sonnet-4", "/proj", 1000, 500, 200, time.Now().UTC())
 
-	require.Eventually(t, func() bool { return len(sender.Sent()) >= 2 }, 2*time.Second, 10*time.Millisecond)
+	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 2 }, 2*time.Second, 10*time.Millisecond)
 
 	last := sender.Sent()[len(sender.Sent())-1]
 	assert.Equal(t, "update", last.EventType)
@@ -1025,7 +1026,7 @@ func TestWatchInsights_WhenChannelReceivesNil_ExpectParseCompleteEventNotBareUpd
 	t.Cleanup(runCancel)
 	done := runWatchInsights(runCtx, svc, sender)
 
-	require.Eventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
+	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
 
 	// notify(nil) is what a completed full-walk sends (Story 1.5.1) — this
 	// must produce a real "parse_complete", not another indistinguishable
@@ -1034,7 +1035,7 @@ func TestWatchInsights_WhenChannelReceivesNil_ExpectParseCompleteEventNotBareUpd
 	// first stream message).
 	ch <- nil
 
-	require.Eventually(t, func() bool { return len(sender.Sent()) >= 2 }, 2*time.Second, 10*time.Millisecond)
+	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 2 }, 2*time.Second, 10*time.Millisecond)
 
 	last := sender.Sent()[len(sender.Sent())-1]
 	assert.Equal(t, "parse_complete", last.EventType)

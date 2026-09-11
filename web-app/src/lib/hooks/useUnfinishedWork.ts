@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getWatchTransport } from "@/lib/api/transport";
 import { UnfinishedWorkService } from "@/gen/session/v1/unfinished_pb";
 import { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
 import {
@@ -10,7 +10,6 @@ import {
   ScanUnfinishedWorkRequestSchema,
 } from "@/gen/session/v1/unfinished_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { Timestamp } from "@bufbuild/protobuf/wkt";
 
 export interface UseUnfinishedWorkReturn {
@@ -35,14 +34,7 @@ export function useUnfinishedWork(): UseUnfinishedWorkReturn {
   const abortRef = useRef<AbortController | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const baseUrl = getApiBaseUrl();
-
-  const transport = createConnectTransport({
-    baseUrl,
-    interceptors: [createAuthInterceptor()],
-  });
-
-  const client = createClient(UnfinishedWorkService, transport);
+  const client = createClient(UnfinishedWorkService, getWatchTransport());
 
   const worktreeKey = (wt: UnfinishedWorktree) =>
     `${wt.repoPath}|${wt.branch}`;

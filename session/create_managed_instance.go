@@ -63,6 +63,21 @@ type CreateManagedInstanceParams struct {
 	// than an InstanceOptions field.
 	CreateIfMissing bool
 
+	// DeferredPathResolution must be true when Options.Path is a placeholder
+	// awaiting async resolution -- currently only a still-unresolved GitHub
+	// URL (Epic 2.1's Background Resolution Pipeline; see
+	// SessionService.CreateSession's deferredGitHubURL) -- rather than an
+	// already-real local path. It skips the Directory/NewWorktree
+	// path-exists pre-flight check below entirely, since that placeholder
+	// can never stat successfully and the background goroutine patches
+	// Options.Path in via Instance.SetGitHubResolution once the clone
+	// completes, before Start() runs. Without this, every deferred-GitHub-URL
+	// NewWorktree session fails CreateSession synchronously with
+	// ErrPathNotExist (regression from the 2026-09-05 "steam-controls" fix
+	// below, which added the unconditional NewWorktree check without this
+	// exemption).
+	DeferredPathResolution bool
+
 	// ResumeID, when non-empty, is the conversation UUID this instance
 	// should resume via `--resume`. Named ResumeID (not embedded in
 	// InstanceOptions.ResumeId) to match the plan's
@@ -112,7 +127,7 @@ func CreateManagedInstance(ctx context.Context, params CreateManagedInstancePara
 	// nonexistent path in the first place (BUG discovered 2026-09-05:
 	// "steam-controls" session; that flow now correctly routes through
 	// SessionTypeNewProject instead, which does support bootstrapping).
-	if opts.SessionType == SessionTypeDirectory || opts.SessionType == SessionTypeNewWorktree {
+	if !params.DeferredPathResolution && (opts.SessionType == SessionTypeDirectory || opts.SessionType == SessionTypeNewWorktree) {
 		if _, statErr := os.Stat(opts.Path); os.IsNotExist(statErr) {
 			if opts.SessionType == SessionTypeNewWorktree || !params.CreateIfMissing {
 				if opts.ResumeId != "" {

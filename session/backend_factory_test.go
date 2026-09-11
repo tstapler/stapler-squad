@@ -22,8 +22,6 @@ import (
 // happy path (validation.md): an explicit per-call override selects *BackendTymux
 // even while the process-wide global default remains BackendTmux.
 func TestNewProcessManager_ShouldReturnBackendTymux_WhenOptsBackendIsTymux(t *testing.T) {
-	RegisterBackendProvider(BackendTmux)
-	defer RegisterBackendProvider(BackendTmux) // restore default for other tests
 
 	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: BackendTymux})
 	require.NoError(t, err)
@@ -36,8 +34,6 @@ func TestNewProcessManager_ShouldReturnBackendTymux_WhenOptsBackendIsTymux(t *te
 // resolve exactly as it did before this field existed — via the process-wide global,
 // falling back to defaultBackend/BackendTmux.
 func TestNewProcessManager_ShouldReturnBackendTmux_WhenOptsBackendIsUnset_MatchingTodaysDefault(t *testing.T) {
-	RegisterBackendProvider(BackendTmux)
-	defer RegisterBackendProvider(BackendTmux)
 
 	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
 	require.NoError(t, err)
@@ -50,8 +46,6 @@ func TestNewProcessManager_ShouldReturnBackendTmux_WhenOptsBackendIsUnset_Matchi
 // calls with different Backend values never interfere — a BackendTymux override on
 // one call must never leak into a sibling call that left opts.Backend unset.
 func TestNewProcessManager_ShouldNotLeakTymuxOverride_IntoConcurrentBackendTmuxCall(t *testing.T) {
-	RegisterBackendProvider(BackendTmux)
-	defer RegisterBackendProvider(BackendTmux)
 
 	const iterations = 50
 	var wg sync.WaitGroup
@@ -91,8 +85,6 @@ func TestNewProcessManager_ShouldNotLeakTymuxOverride_IntoConcurrentBackendTmuxC
 // opts.Backend (the highest-precedence input) so the process-wide global and
 // defaultBackend never get a chance to mask the bad value.
 func TestNewProcessManager_ShouldReturnConstructionError_WhenBackendConstantUnrecognized(t *testing.T) {
-	RegisterBackendProvider(BackendTmux)
-	defer RegisterBackendProvider(BackendTmux)
 
 	garbage := ProcessManagerBackend("not-a-real-backend")
 
@@ -115,8 +107,6 @@ func TestNewProcessManager_ShouldReturnConstructionError_WhenBackendConstantUnre
 // NewProcessManager regressed to calling that seam at construction time,
 // this test would hang until its own timeout and fail.
 func TestNewProcessManager_should_ReturnImmediately_When_BackendIsTymuxRegardlessOfDaemonState(t *testing.T) {
-	RegisterBackendProvider(BackendTmux)
-	defer RegisterBackendProvider(BackendTmux)
 
 	blockForever := make(chan struct{})
 	restore := stubEnsureDaemonRunning(func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {

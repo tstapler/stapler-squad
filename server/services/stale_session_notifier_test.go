@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -87,7 +88,7 @@ func assertNoNotification(t *testing.T, ch <-chan *events.Event) {
 }
 
 func TestStaleSessionNotifier_checkAll_should_FireExactlyOnce_When_SessionStaysStaleAcrossMultipleTicks(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 	writeStaleSessionConfig(t, dir, 30, true)
 
@@ -110,7 +111,7 @@ func TestStaleSessionNotifier_checkAll_should_FireExactlyOnce_When_SessionStaysS
 }
 
 func TestStaleSessionNotifier_checkAll_should_ReArm_When_SessionRecoversAndGoesStaleAgain(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 	writeStaleSessionConfig(t, dir, 30, true)
 
@@ -139,7 +140,7 @@ func TestStaleSessionNotifier_checkAll_should_ReArm_When_SessionRecoversAndGoesS
 }
 
 func TestStaleSessionNotifier_checkAll_should_NotNotify_When_SessionIsNotActive(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 	writeStaleSessionConfig(t, dir, 30, true)
 
@@ -156,7 +157,7 @@ func TestStaleSessionNotifier_checkAll_should_NotNotify_When_SessionIsNotActive(
 }
 
 func TestStaleSessionNotifier_checkAll_should_NotNotify_When_NotifyEnabledIsFalse(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 	writeStaleSessionConfig(t, dir, 30, false)
 
@@ -173,7 +174,7 @@ func TestStaleSessionNotifier_checkAll_should_NotNotify_When_NotifyEnabledIsFals
 }
 
 func TestStaleSessionNotifier_checkAll_should_ObserveConfigChange_When_ConfigFileChangesBetweenTicks(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 	// Threshold starts high enough that a 40-minute idle session is NOT yet stale.
 	writeStaleSessionConfig(t, dir, 60, true)
@@ -199,7 +200,7 @@ func TestStaleSessionNotifier_checkAll_should_ObserveConfigChange_When_ConfigFil
 }
 
 func TestStaleSessionNotifier_checkAll_should_ReNotify_When_SessionPausesThenResumesStillStale(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 	writeStaleSessionConfig(t, dir, 30, true)
 
@@ -246,7 +247,7 @@ func TestStaleSessionNotifier_checkAll_should_ReNotify_When_SessionPausesThenRes
 // recovered below threshold in between) still fires the deferred notification instead of
 // being permanently suppressed.
 func TestStaleSessionNotifier_checkAll_should_FireOnceOnceEnabled_When_NotifyWasDisabledDuringInitialStaleCrossing(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 	writeStaleSessionConfig(t, dir, 30, false)
 

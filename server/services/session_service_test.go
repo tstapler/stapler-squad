@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -25,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/binaries"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
 )
 
@@ -202,9 +204,9 @@ func TestCreateSession_should_RejectSecondDuplicate_When_TwoRapidCallsShareTitle
 	// that other process's config.json instead of getting a fresh
 	// testModeSentinelProgram default -- an empty/real DefaultProgram there
 	// fails Session.program's NotEmpty validator. Matches the same
-	// t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir()) pattern used elsewhere
-	// in this file (e.g. the "ModeIsAlias" subtest) for the identical reason.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	// envtest.NewIsolatedStateDir(t) call used elsewhere in this file (e.g.
+	// the "ModeIsAlias" subtest) for the identical reason.
+	envtest.NewIsolatedStateDir(t)
 
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
@@ -1911,13 +1913,16 @@ func TestUpdateSession_should_RejectStop_When_TransitionIsIllegal(t *testing.T) 
 // fake/mock SendKeys recorder, to get a genuinely "started" Instance whose
 // SendKeys call actually succeeds.
 func TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel(): needs t.Setenv (STAPLER_SQUAD_TEST_DIR) for config
+	// isolation to force the native backend live, and Go forbids Setenv in
+	// any test that also calls Parallel.
 	if testing.Short() {
 		t.Skip("requires PTY allocation")
 	}
 
-	session.RegisterBackendProvider(session.BackendNative)
-	defer session.RegisterBackendProvider(session.BackendTmux)
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"process_manager_backend": "native"}`), 0o644))
 
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
@@ -3097,18 +3102,15 @@ func TestCreateSession_HonorsSessionNameOverrideMap(t *testing.T) {
 
 // TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides verifies that with
 // no request override and no TymuxSessionOverrides entry for this session,
-// CreateSession applies the process-wide registered backend
-// (session.RegisterBackendProvider) rather than a hardcoded BackendTmux.
+// CreateSession applies the process-wide "tymux" feature flag default
+// (config.EffectiveTymuxEnabled) rather than a hardcoded BackendTmux.
 func TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides(t *testing.T) {
-	session.RegisterBackendProvider(session.BackendTymux)
-	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
-
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	testDir := t.TempDir()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
-	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"feature_flags": {"tymux": true}}`), 0o644))
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:   "no-override-session",
@@ -3138,9 +3140,6 @@ func TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides(t *testing.T) {
 // CreateDirectorySession) forces the resulting instance's backend even
 // though the process-wide default is registered as tymux.
 func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
-	session.RegisterBackendProvider(session.BackendTymux)
-	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
-
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -3149,7 +3148,7 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 	const title = "directory-session-override-map-test"
 	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
-		[]byte(`{"default_program": "claude", "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+		[]byte(`{"default_program": "claude", "feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
 	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false)
 	require.NoError(t, err)
@@ -3162,9 +3161,6 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 // TestCreateWorktreeSession_HonorsSessionNameOverrideMap is the
 // CreateWorktreeSession analogue of the CreateDirectorySession test above.
 func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
-	session.RegisterBackendProvider(session.BackendTymux)
-	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
-
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -3173,7 +3169,7 @@ func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	const title = "worktree-session-override-map-test"
 	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
-		[]byte(`{"default_program": "claude", "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+		[]byte(`{"default_program": "claude", "feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
 	worktreePath := t.TempDir()
 	initGitRepoWithCommit(t, worktreePath)
@@ -3948,6 +3944,24 @@ func TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable(t *testing.T) 
 	assert.NotNil(t, svc.GetClaudeSettingsWatcher())
 }
 
+// TestNewSessionService_WiresApprovalServiceIntoRulesService is the
+// construction-order regression guard for Task 2.1.2b (validation.md Scope 4 /
+// Epic 2.1.2 — "gap — add"): after NewSessionService returns, rulesSvc's
+// approvalSvc field must be non-nil, so a future edit can't silently drop the
+// rulesSvc.SetApprovalService(approvalSvc) call without a test noticing.
+func TestNewSessionService_WiresApprovalServiceIntoRulesService(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	require.NotNil(t, svc.rulesSvc)
+	assert.NotNil(t, svc.rulesSvc.approvalSvc, "rulesSvc.approvalSvc must be wired by NewSessionService")
+}
+
 // TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules is the
 // Blocker 2 end-to-end regression test: the live deployed systemd unit runs with
 // WorkingDirectory=$HOME (see scripts/install-service.sh), so the server's own cwd equals
@@ -4206,7 +4220,7 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 		t.Cleanup(fix.cleanup)
 		wireRegistryForActorSerialization(fix)
 
-		t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+		envtest.NewIsolatedStateDir(t)
 		aliasPath := t.TempDir()
 		cfg := config.DefaultConfig()
 		cfg.SessionDefaults.Aliases = []config.AliasConfig{
@@ -4353,7 +4367,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 	// STAPLER_SQUAD_TEST_DIR/STAPLER_SQUAD_INSTANCE leaking in from elsewhere
 	// (e.g. a live e2e/demo run in the same shell) would otherwise make this
 	// test read that other process's config.json instead.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	fix := setupForkTestFixture(t)
 	wireRegistryForActorSerialization(fix)
@@ -4388,7 +4402,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 
 		inst := fix.svc.FindLiveInstance(id)
 		require.NotNil(t, inst)
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			return session.Status(inst.GetStatus()) == session.Active
 		}, awaitTimeout, pollInterval, "precondition: fixture instance must reach Active before being forced to Failed")
 
@@ -4398,7 +4412,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 				Id: id,
 			}))
 			require.NoError(t, retryErr)
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				status := session.Status(inst.GetStatus())
 				return status == session.Active || status == session.Failed
 			}, awaitTimeout, pollInterval, "retried pipeline must reach a terminal status")
@@ -4438,7 +4452,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 		// well-defined to clean up.
 		inst := fix.svc.FindLiveInstance(id)
 		if inst != nil {
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				return session.Status(inst.GetStatus()) == session.Failed
 			}, awaitTimeout, pollInterval, "pipeline must still reach Failed after losing the cancel race")
 		}
@@ -4466,7 +4480,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 		// The pipeline's Active write won the race instead.
 		inst := fix.svc.FindLiveInstance(id)
 		if inst != nil {
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				return session.Status(inst.GetStatus()) == session.Active
 			}, awaitTimeout, pollInterval, "pipeline must still reach Active after winning the cancel race")
 		}

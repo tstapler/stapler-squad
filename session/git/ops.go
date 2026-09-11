@@ -15,6 +15,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -74,7 +76,7 @@ func ResolveDefaultBranchSHA(repoPath string) (branch, sha string, err error) {
 // repoPath's own checkout, this always fetches first, so the returned SHA reflects
 // origin's true current tip rather than whatever repoPath happened to have checked
 // out last — the gap that let a new backlog work session's worktree branch from a
-// days-stale local checkout instead of the real main tip (see setupNewWorktree's
+// days-stale local checkout instead of the real main tip (see legacySetupNewWorktree's
 // "branch from current HEAD" comment, and CreateBacklogWorktree's use of this func).
 func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
 	if err := FetchBranch(repoPath, mainBranch); err != nil {
@@ -449,6 +451,16 @@ func listShippedCommitsWithCap(ctx context.Context, repoPath, baseSHA, headSHA s
 		return nil, false, fmt.Errorf("failed to resolve commit %s: %w", baseSHA, err)
 	}
 
+	// baseAncestors is base's reachable-commit set, computed once up front.
+	// The naive alternative — calling c.IsAncestor(base) inside the walk below
+	// for every node c — makes IsAncestor's own O(history-depth) BFS run once
+	// per visited node, i.e. O(N×M) overall; this single bounded walk plus an
+	// O(1) map lookup per node is O(M) total.
+	baseAncestors, err := reachableAncestors(repo, base.Hash)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to compute ancestor set for %s: %w", baseSHA, err)
+	}
+
 	var commits []ShippedCommit
 	seen := map[plumbing.Hash]bool{head.Hash: true}
 	queue := []*object.Commit{head}
@@ -458,11 +470,7 @@ func listShippedCommitsWithCap(ctx context.Context, repoPath, baseSHA, headSHA s
 		}
 		c := queue[0]
 		queue = queue[1:]
-		isAncestor, err := c.IsAncestor(base)
-		if err != nil {
-			return commits, len(commits) >= maxCommits, err
-		}
-		if isAncestor {
+		if baseAncestors[c.Hash] {
 			continue
 		}
 		summary, _, _ := strings.Cut(c.Message, "\n")
@@ -483,6 +491,34 @@ func listShippedCommitsWithCap(ctx context.Context, repoPath, baseSHA, headSHA s
 		}
 	}
 	return commits, len(commits) >= maxCommits, nil
+}
+
+// maxReachableAncestorsCommits caps reachableAncestors' walk, mirroring
+// session/unfinished's maxReachableSetCommits — a bound on an otherwise
+// unbounded history walk. Declared as a var so a test can lower it without
+// needing thousands of fixture commits.
+var maxReachableAncestorsCommits = 50_000
+
+// reachableAncestors returns the set of commits reachable from start by
+// walking parent links (i.e. start's ancestors, including start itself), up
+// to maxReachableAncestorsCommits commits.
+func reachableAncestors(repo *git.Repository, start plumbing.Hash) (map[plumbing.Hash]bool, error) {
+	seen := make(map[plumbing.Hash]bool, 64)
+	iter, err := repo.Log(&git.LogOptions{From: start})
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk history from %s: %w", start, err)
+	}
+	defer iter.Close()
+	if err := iter.ForEach(func(c *object.Commit) error {
+		if len(seen) >= maxReachableAncestorsCommits {
+			return storer.ErrStop
+		}
+		seen[c.Hash] = true
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("failed to walk history from %s: %w", start, err)
+	}
+	return seen, nil
 }
 
 // AggregateDiffStat is the files-changed/additions/deletions summary
@@ -523,9 +559,10 @@ func DiffStatBetween(ctx context.Context, repoPath, baseSHA, headSHA string) (Ag
 // working tree — equivalent to `git diff baseSHA..headSHA`), using go-git's
 // typed diff API instead of a safeexec shell-out (the
 // `prefer-go-git-over-subshells` skill). Distinct from GitWorktree.Diff
-// (session/git/diff.go), which diffs the working tree against a single ref
-// (via `git add -N .` + `git diff <sha>`) and has no go-git equivalent —
-// see that function's doc comment for why the shell-out stays there.
+// (session/git/diff.go), which diffs the working tree (uncommitted changes and
+// untracked files) against a single base commit — GitWorktree.Diff now has a
+// go-git implementation too, built from lower-level tree/gitignore/line-diff
+// primitives rather than a single library call; see its doc comment.
 func DiffContentBetween(repoPath, baseSHA, headSHA string) (*DiffStats, error) {
 	if baseSHA == headSHA {
 		return &DiffStats{}, nil
@@ -749,41 +786,48 @@ func diffHashFromFilePatches(filePatches []fdiff.FilePatch) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// CheckoutBranch checks out a branch in an existing repository.
+// CheckoutBranch checks out a branch in an existing repository. Uses go-git
+// (no subprocess — the `prefer-go-git-over-subshells` skill); ValidateBranchName
+// is still the defense against a flag-like branchName (unlike FetchBranch's "--"
+// guard, go-git's Checkout takes a typed plumbing.ReferenceName, not a raw CLI
+// argument, so there's no equivalent injection surface here to guard beyond that).
 func CheckoutBranch(repoPath, branchName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	// No "--" guard here (unlike FetchBranch): `git checkout -- <name>` puts
-	// checkout into path-restore mode, not branch-switch mode — verified this
-	// breaks every legitimate call (treats branchName as a pathspec, "did not
-	// match any file(s)"), not just malicious input. ValidateBranchName below
-	// is the actual defense for this call site.
 	if err := ValidateBranchName(branchName); err != nil {
 		return fmt.Errorf("failed to checkout branch: %w", err)
 	}
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "checkout", branchName)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to checkout branch: %s", string(exitErr.Stderr))
-		}
+	repo, err := OpenRepo(repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to checkout branch: %w", err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to checkout branch: %w", err)
+	}
+	if err := worktree.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(branchName)}); err != nil {
 		return fmt.Errorf("failed to checkout branch: %w", err)
 	}
 	return nil
 }
 
-// RemoteURL returns the URL of the named remote (usually "origin") for a local repo.
+// RemoteURL returns the URL of the named remote (usually "origin") for a local
+// repo, matching `git remote get-url <remote>`'s single-URL output — uses
+// go-git (no subprocess — the `prefer-go-git-over-subshells` skill). Fetch
+// always uses the first configured URL (see config.RemoteConfig.URLs' doc
+// comment), so this returns urls[0] the same way the CLI does.
 func RemoteURL(repoPath, remote string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "remote", "get-url", remote)
-	out, err := cmd.Output()
+	repo, err := OpenRepo(repoPath)
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("failed to get remote URL: %s", string(exitErr.Stderr))
-		}
 		return "", fmt.Errorf("failed to get remote URL: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	r, err := repo.Remote(remote)
+	if err != nil {
+		return "", fmt.Errorf("failed to get remote URL: %w", err)
+	}
+	urls := r.Config().URLs
+	if len(urls) == 0 {
+		return "", fmt.Errorf("failed to get remote URL: remote %q has no configured URL", remote)
+	}
+	return urls[0], nil
 }
 
 // MergeMainResult describes the outcome of MergeMainIntoWorktree.
@@ -805,11 +849,57 @@ type MergeMainResult struct {
 
 // MergeMainIntoWorktree fetches mainBranch from origin and merges it into whatever
 // branch is currently checked out in worktreePath. It never leaves the worktree in a
-// conflicted state: on conflict it aborts the merge immediately (via `git merge
-// --abort`) and reports the conflicting paths, so the caller can hand that context to
-// whoever resolves it rather than leaving a half-merged working tree behind for the
-// next thing that touches it.
+// conflicted state: on conflict it aborts the merge immediately and reports the
+// conflicting paths, so the caller can hand that context to whoever resolves it rather
+// than leaving a half-merged working tree behind for the next thing that touches it.
+//
+// Dispatches to nativeMergeMainIntoWorktree (Epic 3.4) or legacyMergeMainIntoWorktree
+// (the original subprocess-based implementation below) based on useNativeMerge, keyed by
+// worktreePath per ADR-002 — every real call site (drift.go's EnsureBranchSyncedWithMain,
+// backlog_service_triage.go's syncPRBranchWithMain, session/backlog_lifecycle.go's
+// branchReconciler, which is assigned this exact function value) gets flag coverage with
+// no changes of its own.
 func MergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
+	var result *MergeMainResult
+	ctx := withOperationAttrs(context.Background(), attribute.String("worktree_path", worktreePath))
+	err := withOperationSpan(ctx, "git.merge.main", func() (string, string, error) {
+		native := useNativeMerge(worktreePath)
+		var mergeErr error
+		if native {
+			result, mergeErr = nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch)
+		} else {
+			result, mergeErr = legacyMergeMainIntoWorktree(worktreePath, mainBranch)
+		}
+		return implementationLabel(native), mergeOutcomeLabel(result, mergeErr), mergeErr
+	})
+	return result, err
+}
+
+// mergeOutcomeLabel is MergeMainIntoWorktree's outer-span outcome value: a coarser
+// up_to_date/merged/conflicted breakdown than git_merge_outcome_total's native-only
+// four-way UpToDate/FastForward/CleanMerge/Conflicted split (native_merge.go), since
+// MergeMainResult itself (shared by both the native and legacy implementations) doesn't
+// distinguish a fast-forward from a three-way clean merge — both just set Merged: true.
+func mergeOutcomeLabel(result *MergeMainResult, err error) string {
+	if err != nil || result == nil {
+		return outcomeError
+	}
+	switch {
+	case result.Conflicted:
+		return "conflicted"
+	case result.UpToDate:
+		return "up_to_date"
+	case result.Merged:
+		return "merged"
+	default:
+		return outcomeSuccess
+	}
+}
+
+// legacyMergeMainIntoWorktree is MergeMainIntoWorktree's original subprocess-based
+// implementation (`git fetch` + `git merge` + `git merge --abort` on conflict), unchanged
+// by Epic 3.4's dispatch seam.
+func legacyMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
 	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer fetchCancel()
 	fetchCmd := safeexec.CommandContext(fetchCtx, "git", "-C", worktreePath, "fetch", "origin", mainBranch)

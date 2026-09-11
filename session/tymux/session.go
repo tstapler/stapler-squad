@@ -19,18 +19,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// ErrNotImplemented is returned by tymuxGRPCSession methods that a later
-// epic (2.3+, standing Attach stream / control-mode) has not yet
-// implemented.
-var ErrNotImplemented = errors.New("tymux: not implemented")
-
-// ErrNotSupportedOnTymuxBackend is returned by GetPTY/GetPanePID (Story
-// 2.2.5, Pattern Decisions): tymux has no local PTY file descriptor or OS
-// pane PID to hand back — every terminal I/O path goes over gRPC, not a
-// local file/process the caller could read or signal directly. Returning
-// this explicit, typed error (never a bare nil/zero value or a panic) lets
-// a generic ProcessManager caller distinguish "not supported by this
-// backend" from "supported but currently unavailable."
+// ErrNotSupportedOnTymuxBackend is returned by GetPanePID: tymux has no OS
+// pane PID to hand back, only a remote gRPC process. GetPTY() no longer
+// returns this — see its own doc comment.
 var ErrNotSupportedOnTymuxBackend = errors.New("not supported by the tymux backend")
 
 // errSessionNotStarted is returned by methods that need a live pane_id
@@ -80,11 +71,24 @@ type tymuxGRPCSession struct {
 	cancelAttach context.CancelFunc
 	streamDone   chan struct{}
 
+	// teardownWait bounds teardownStandingStream's wait for the old reader
+	// goroutine to exit (Task 2.3.1a) — see maxTeardownWait's doc comment
+	// (stream.go) for the default and its rationale. A struct field (not a
+	// package const) so tests can shrink it for fast, deterministic
+	// exercises of the abandon-after-timeout path, mirroring
+	// reconnectBaseDelay/reconnectMaxDelay's convention below.
+	teardownWait time.Duration
+
 	// fanout is the local multi-subscriber broadcast (Story 2.3.2) that
 	// SubscribeToControlModeUpdates hands subscriber channels out from —
 	// one upstream standing stream, N independently-paced local
 	// subscribers, rather than one Attach call per subscriber.
 	fanout *ClientFanout
+
+	// pty lazily backs GetPTY() (pty_adapter.go), created once per session
+	// object and torn down by Close() — not reset per reconnect generation,
+	// since the adapter tolerates a stream reconnect transparently.
+	pty *tymuxPTYAdapter
 
 	// outputGapCount is a per-session running total of OutputGap events
 	// received on the standing stream (Observability Plan: "output_gap
@@ -191,6 +195,7 @@ func NewTymuxGRPCSession(transport rpcTransport) TymuxManager {
 		reconnectMaxAttempts: defaultReconnectMaxAttempts,
 		reconnectBaseDelay:   defaultReconnectBaseDelay,
 		reconnectMaxDelay:    defaultReconnectMaxDelay,
+		teardownWait:         maxTeardownWait,
 	}
 }
 
@@ -368,6 +373,13 @@ func (s *tymuxGRPCSession) Close() error {
 	// leaving teardownStandingStream's <-done wait blocked.
 	s.beginClosing()
 	s.teardownStandingStream()
+	s.mu.Lock()
+	pty := s.pty
+	s.pty = nil
+	s.mu.Unlock()
+	if pty != nil {
+		pty.close()
+	}
 	if sessionID == "" {
 		return nil
 	}
@@ -465,9 +477,30 @@ func (s *tymuxGRPCSession) GetCurrentWorkingDirectory() (string, error) {
 
 // --- Terminal I/O ---
 
-// GetPTY always returns ErrNotSupportedOnTymuxBackend — see that var's doc
-// comment (Story 2.2.5).
-func (s *tymuxGRPCSession) GetPTY() (*os.File, error) { return nil, ErrNotSupportedOnTymuxBackend }
+// GetPTY returns a synthetic *os.File backed by the standing Attach stream
+// (pty_adapter.go), lazily created on first call and reused thereafter —
+// tymux has no local PTY of its own, but ClaudeController etc. need
+// something Read/Write-shaped to treat as one.
+func (s *tymuxGRPCSession) GetPTY() (*os.File, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// s.closed, not just s.stream == nil: Close() never resets s.stream (only
+	// reconnects/opens do), so without this a GetPTY() call racing a
+	// concurrent Close() would build and leak a fresh adapter — subscribed
+	// to the fanout, its pump goroutines running — that Close() has already
+	// passed its own one-shot pty.close() call and will never clean up.
+	if s.closed || s.stream == nil {
+		return nil, errSessionNotStarted
+	}
+	if s.pty == nil {
+		pty, err := newTymuxPTYAdapter(s.fanout, s.sendOnStream)
+		if err != nil {
+			return nil, err
+		}
+		s.pty = pty
+	}
+	return s.pty.file(), nil
+}
 
 // SendKeys, TapEnter, SendPromptWithEnter, and SendInputViaControlMode
 // (Story 2.3.3) all collapse onto one AttachRequest{Input(...)} send over
@@ -673,8 +706,11 @@ func (s *tymuxGRPCSession) HasMeaningfulContent(content string) bool   { return 
 
 // --- Streaming (control mode) ---
 
-func (s *tymuxGRPCSession) StartControlMode() error { return ErrNotImplemented }
-func (s *tymuxGRPCSession) StopControlMode() error  { return ErrNotImplemented }
+// StartControlMode/StopControlMode are no-ops: the standing Attach stream
+// is already running for the session's whole lifetime, unlike tmux's
+// on-demand `tmux -C attach-session` client process.
+func (s *tymuxGRPCSession) StartControlMode() error { return nil }
+func (s *tymuxGRPCSession) StopControlMode() error  { return nil }
 
 // SubscribeToControlModeUpdates/UnsubscribeFromControlModeUpdates (Story
 // 2.3.2) delegate to ClientFanout — every subscriber shares the one
@@ -780,16 +816,11 @@ func (s *tymuxGRPCSession) ReconnectState() (reconnecting bool, attempt int, cau
 	return s.reconnecting, s.reconnectAttempt, s.reconnectCause
 }
 
-// BackendRestarted reports whether tymuxd was detected to have restarted
-// out from under this session's standing stream (Story 2.5.3) — i.e. the
-// currently-live pane is a fresh ReviveSession-spawned replacement
-// process, not the one Start()/RestoreWithWorkDir() originally attached
-// to, and any in-flight work in the original process (if it survived at
-// all as an orphan) is not recovered. Task 2.5.3b: deliberately not
-// folded into IsAlive()/SetOnExitCallback — "still alive" and "alive, but
-// it's not the same process anymore" are different facts a caller needs
-// to tell apart. since is the zero time if no restart has been observed
-// in this generation.
+// BackendRestarted reports whether tymuxd restarted out from under this
+// session's standing stream, replacing the pane with a fresh process —
+// kept separate from IsAlive()/SetOnExitCallback since "still alive" and
+// "alive, but not the same process" are different facts a caller needs to
+// tell apart. since is the zero time if no restart has been observed.
 func (s *tymuxGRPCSession) BackendRestarted() (restarted bool, since time.Time) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -11,6 +11,7 @@ const mockClient = {
   listSessions: jest.fn(),
   completeTymuxRollbackRehearsal: jest.fn(),
   setTymuxSessionOverride: jest.fn(),
+  setTymuxGlobalOverride: jest.fn(),
 };
 
 jest.mock("@connectrpc/connect", () => ({
@@ -35,14 +36,44 @@ beforeEach(() => {
 });
 
 describe("TymuxRolloutPanel", () => {
-  it("renders the global env var status and no-overrides state", async () => {
+  it("renders the default global-override status and no-overrides state", async () => {
     mockClient.getTymuxRolloutStatus.mockResolvedValue(emptyStatus());
     render(<TymuxRolloutPanel />);
 
     await waitFor(() => expect(screen.getByTestId("tymux-rollout-panel")).toBeInTheDocument());
-    expect(screen.getByText("Off")).toBeInTheDocument();
+    expect(screen.getByText("Not set (default: off)")).toBeInTheDocument();
     expect(screen.getByText("No sessions are currently overridden.")).toBeInTheDocument();
     expect(screen.getByTestId("tymux-complete-rehearsal")).toBeInTheDocument();
+  });
+
+  it("forces the global override on and reflects the new status", async () => {
+    mockClient.getTymuxRolloutStatus.mockResolvedValue(emptyStatus());
+    mockClient.setTymuxGlobalOverride.mockResolvedValue({
+      ...emptyStatus(),
+      globalOverride: true,
+    });
+    render(<TymuxRolloutPanel />);
+
+    await waitFor(() => screen.getByTestId("tymux-global-override-on"));
+    fireEvent.click(screen.getByTestId("tymux-global-override-on"));
+
+    await waitFor(() => expect(screen.getByText("Forced on")).toBeInTheDocument());
+    expect(mockClient.setTymuxGlobalOverride).toHaveBeenCalledWith({ forceTymux: true });
+  });
+
+  it("clears the global override", async () => {
+    mockClient.getTymuxRolloutStatus.mockResolvedValue({
+      ...emptyStatus(),
+      globalOverride: false,
+    });
+    mockClient.setTymuxGlobalOverride.mockResolvedValue(emptyStatus());
+    render(<TymuxRolloutPanel />);
+
+    await waitFor(() => screen.getByTestId("tymux-global-override-clear"));
+    fireEvent.click(screen.getByTestId("tymux-global-override-clear"));
+
+    await waitFor(() => expect(screen.getByText("Not set (default: off)")).toBeInTheDocument());
+    expect(mockClient.setTymuxGlobalOverride).toHaveBeenCalledWith({ forceTymux: undefined });
   });
 
   it("marks the rehearsal complete and reflects the new status", async () => {

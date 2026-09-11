@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // waitWithTimeout waits for the done channel to be closed or fails the test after 2 seconds.
@@ -555,7 +556,7 @@ func TestBacklogLifecycleListener_WireToInstance(t *testing.T) {
 
 	// Allow the goroutine inside onSessionStarted to complete.
 	// Since the shim spawns its own goroutine, we poll briefly.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		repo := storage.repo
 		fetchedIS, ferr := repo.GetItemSession(ctx, createdIS.ID)
 		return ferr == nil && fetchedIS.StartedAt != nil
@@ -609,7 +610,7 @@ func TestBacklogLifecycleListener_WireToInstance_EventStopped_TransitionsToRevie
 	}()
 	waitWithTimeout(t, done)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		fetchedItem, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
 		return ferr == nil && fetchedItem.Status == string(BacklogStatusReview)
 	}, 2*time.Second, 20*time.Millisecond, "EventStopped should trigger the same in_progress->review transition as EventExited")
@@ -859,7 +860,7 @@ func TestBacklogLifecycleListener_IgnoresEventsWhenDisabled(t *testing.T) {
 
 	// Fire EventExited — the gate should stop processing immediately.
 	// Allow time for any goroutine that might have been started to settle.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		inst.fireLifecycleEvent(EventExited, "")
 		// Check that the item was NOT transitioned.
 		fetched, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
@@ -909,7 +910,7 @@ func TestBacklogLifecycleListener_ProcessesEventsWhenEnabled(t *testing.T) {
 	// Fire EventExited — the listener must process it and transition the item.
 	inst.fireLifecycleEvent(EventExited, "")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		fetched, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
 		return ferr == nil && fetched.Status == string(BacklogStatusDone)
 	}, 2*time.Second, 20*time.Millisecond,
@@ -4193,7 +4194,7 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 	// The item still transitions to review (that part of onSessionExited is
 	// unconditional), but no review ItemSession should ever be created since the
 	// gate never spawns.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		fetched, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
 		return ferr == nil && fetched.Status == string(BacklogStatusReview)
 	}, 2*time.Second, 20*time.Millisecond)
@@ -4254,7 +4255,7 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 	}()
 	waitWithTimeout(t, done)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return spawner.getCallCount() == 1
 	}, 2*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session")
 

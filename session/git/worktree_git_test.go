@@ -59,28 +59,27 @@ func TestPrNumberFromURLRe_ExtractsTrailingNumber(t *testing.T) {
 //
 // With atomic.Value the write is unconditional, so a race can't suppress our Store.
 // The test simulates a racing goroutine that stores false into the cache WHILE our
-// git subprocess is running; our code must still return true (its own observation).
+// dirty check is "in flight"; our code must still return true (its own observation).
 //
-// Uses a gitSpyCommandRunner (via WithCommandRunner) rather than the
-// executor.Executor-based mock this test used before runGitCommand was migrated
-// onto CommandRunner unconditionally (see ADR-002's addendum) — spy.runFunc plays
-// the same role raceSimulatorExecutor's raceSetup hook used to.
+// Overrides g.dirtyChecker directly (same-package test, no exported seam needed)
+// rather than injecting a gitSpyCommandRunner — IsDirtyWithHint moved onto go-git's
+// Worktree.Status() directly and no longer routes through CommandRunner at all (the
+// `prefer-go-git-over-subshells` skill), so runFunc's "hook inside the subprocess
+// call" trick no longer applies; dirtyChecker plays the same role.
 func TestIsDirtyWithHint_ReturnsLocallyComputedValue_WhenCacheIsWrittenByRacingGoroutine(t *testing.T) {
 	t.Parallel()
-	spy := &gitSpyCommandRunner{}
 	g := NewGitWorktreeFromStorageWithExecutor(
 		"/fake/repo", "/fake/worktree", "test-session", "test-branch", "",
-		WithCommandRunner(spy),
 	)
 
-	// runFunc runs inside Run, simulating a concurrent goroutine that stores
-	// dirty=false while our git call is "in flight".
-	spy.runFunc = func() ([]byte, error) {
+	// dirtyChecker runs inside the singleflight-guarded slow path, simulating a
+	// concurrent goroutine that stores dirty=false while our check is "in flight".
+	g.dirtyChecker = func(string) (bool, error) {
 		g.isDirtyCache.Store(dirtyCacheState{dirty: false, time: time.Now()})
-		return []byte("M file.txt\n"), nil // our goroutine sees the worktree as dirty
+		return true, nil // our goroutine sees the worktree as dirty
 	}
 
-	// Start with an invalid cache so IsDirtyWithHint takes the slow (git) path.
+	// Start with an invalid cache so IsDirtyWithHint takes the slow path.
 	g.isDirtyCache.Store(dirtyCacheState{}) // zero time = cache invalid
 
 	got, err := g.IsDirtyWithHint(false)
@@ -95,39 +94,37 @@ func TestIsDirtyWithHint_ReturnsLocallyComputedValue_WhenCacheIsWrittenByRacingG
 	}
 }
 
-// TestIsDirtyWithHint_BacksOffAfterError proves that a failing `git status` (e.g. the
+// TestIsDirtyWithHint_BacksOffAfterError proves that a failing dirty check (e.g. the
 // worktree directory is missing — the stale-path-after-rework bug) is cached with a
 // backoff TTL rather than re-run on every call: a second call made immediately after a
-// failure must return the same error without spawning another subprocess.
+// failure must return the same error without recomputing.
 //
-// Uses a gitSpyCommandRunner (via WithCommandRunner) rather than the
-// executor.Executor-based countingErrExecutor mock this test used before
-// runGitCommand was migrated onto CommandRunner unconditionally (see ADR-002's
-// addendum) — len(spy.runCalls) plays the same role countingErrExecutor.calls used to.
+// Overrides g.dirtyChecker directly rather than injecting a gitSpyCommandRunner — see
+// the sibling race test's doc comment for why.
 func TestIsDirtyWithHint_BacksOffAfterError(t *testing.T) {
 	t.Parallel()
-	spy := &gitSpyCommandRunner{
-		runOut: []byte("fatal: cannot change to '/fake/worktree': No such file or directory"),
-		runErr: exec.ErrNotFound,
-	}
+	var calls int
 	g := NewGitWorktreeFromStorageWithExecutor(
 		"/fake/repo", "/fake/worktree", "test-session", "test-branch", "",
-		WithCommandRunner(spy),
 	)
+	g.dirtyChecker = func(string) (bool, error) {
+		calls++
+		return false, fmt.Errorf("failed to open git repo at /fake/worktree: no such file or directory")
+	}
 	g.isDirtyCache.Store(dirtyCacheState{}) // zero time = cache invalid
 
 	if _, err := g.IsDirtyWithHint(false); err == nil {
-		t.Fatalf("IsDirtyWithHint() error = nil; want an error from the failing git command")
+		t.Fatalf("IsDirtyWithHint() error = nil; want an error from the failing check")
 	}
-	if len(spy.runCalls) != 1 {
-		t.Fatalf("calls after first (failing) check = %d; want 1", len(spy.runCalls))
+	if calls != 1 {
+		t.Fatalf("calls after first (failing) check = %d; want 1", calls)
 	}
 
 	if _, err := g.IsDirtyWithHint(false); err == nil {
 		t.Fatalf("second IsDirtyWithHint() error = nil; want the cached error")
 	}
-	if len(spy.runCalls) != 1 {
-		t.Errorf("calls after second check within backoff TTL = %d; want still 1 (no new subprocess spawned)", len(spy.runCalls))
+	if calls != 1 {
+		t.Errorf("calls after second check within backoff TTL = %d; want still 1 (no recomputation)", calls)
 	}
 }
 
@@ -802,12 +799,12 @@ func TestWithCommandRunner_InjectedRunnerIsActuallyUsed(t *testing.T) {
 // TestRunGitCommand_UsesInjectedCommandRunner is the positive proof required
 // by the FIX-FIRST re-review: runGitCommand (session/git/worktree_git.go),
 // the sole remaining call site with a g.cmdExec-gated branch before this fix,
-// now routes through g.commandRunner() unconditionally, for real -- not just
-// that IsDirtyWithHint's existing tests above still pass. runGitCommand backs
-// ~25 production call sites (RenameBranch, stageAndCommit,
-// StageAllExceptScaffolding, HasStagedChanges, IsDirtyWithHint, and every
-// worktree_ops.go worktree add/remove/prune/list call), so this is the seam
-// Phase 2's RemoteWorktreeOps depends on actually being live.
+// now routes through g.commandRunner() unconditionally, for real. runGitCommand
+// still backs RenameBranch and every worktree_ops.go worktree
+// add/remove/prune/list call (stageAndCommit, StageAllExceptScaffolding,
+// HasStagedChanges, and IsDirtyWithHint have since moved onto go-git directly —
+// see worktree_git.go), so this is the seam Phase 2's RemoteWorktreeOps depends
+// on actually being live.
 func TestRunGitCommand_UsesInjectedCommandRunner(t *testing.T) {
 	spy := &gitSpyCommandRunner{runOut: []byte("output\n")}
 	g := NewGitWorktreeFromStorageWithExecutor(

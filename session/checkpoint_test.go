@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -155,9 +156,6 @@ func TestCreateCheckpoint_StartedInstance_AllFieldsPopulated(t *testing.T) {
 // forked instance's backend even though the process-wide default is
 // registered as tymux.
 func TestForkFromCheckpoint_HonorsSessionNameOverrideMap(t *testing.T) {
-	RegisterBackendProvider(BackendTymux)
-	t.Cleanup(func() { RegisterBackendProvider(BackendTmux) })
-
 	testDir := t.TempDir()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
 
@@ -170,7 +168,7 @@ func TestForkFromCheckpoint_HonorsSessionNameOverrideMap(t *testing.T) {
 	const newTitle = "checkpoint-fork-override-test"
 	sessionKey := tmux.NewSessionName(newTitle, tmux.TmuxPrefix).String()
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
-		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+		[]byte(`{"feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
 	newInst, err := inst.ForkFromCheckpoint(cp.ID, newTitle, t.TempDir())
 	require.NoError(t, err)
@@ -307,7 +305,7 @@ func TestCreateCheckpoint_LegitimateTitle_WritesUnderConfigDir(t *testing.T) {
 // even though ForkFromCheckpoint itself still succeeds (scrollback forking is
 // best-effort).
 func TestForkFromCheckpoint_NewTitleEscapingConfigDir_SkipsScrollbackFork(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	testConfigDir := t.TempDir()
 
 	const srcTitle = "checkpoint-fork-escape-src"

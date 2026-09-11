@@ -682,6 +682,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	notificationSvc := NewNotificationService(NewNotificationRateLimiter(10, 20), eventBus)
 	approvalSvc := NewApprovalService(approvalStore)
 	approvalSvc.SetEventBus(eventBus)
+	approvalSvc.SetReviewQueueRemover(reviewQueue)
 	utilitySvc := NewUtilityService(approvalStore)
 
 	// Build rules store, analytics store, and classifier for approval rules service.
@@ -755,6 +756,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			fmt.Sprintf("%d claude-settings rule(s) reloaded (%s).", len(rules), origin), origin)
 	})
 	rulesSvc.SetClaudeSettingsWatcher(claudeSettingsWatcher)
+	rulesSvc.SetApprovalService(approvalSvc)
 
 	// Initialize capacity monitor.
 	var capCfg config.CapacityConfig
@@ -2652,11 +2654,12 @@ func (s *SessionService) CreateSession(
 	// 1.2.0a). This does NOT start tmux/the process; that happens in the
 	// async goroutine below, exactly as before this extraction.
 	instance, err := session.CreateManagedInstance(ctx, session.CreateManagedInstanceParams{
-		Options:         instanceOpts,
-		Storage:         s.storage,
-		Registry:        s.registry,
-		CreateIfMissing: req.Msg.CreateIfMissing,
-		ResumeID:        req.Msg.ResumeId,
+		Options:                instanceOpts,
+		Storage:                s.storage,
+		Registry:               s.registry,
+		CreateIfMissing:        req.Msg.CreateIfMissing,
+		ResumeID:               req.Msg.ResumeId,
+		DeferredPathResolution: deferredGitHubURL,
 	})
 	if err != nil {
 		switch {
@@ -3306,7 +3309,7 @@ func (s *SessionService) steerInstance(ctx context.Context, instance *session.In
 	// Non-autonomous sessions get the same PTY send primitive the MCP
 	// steer_session tool falls back to, bounded with a timeout so a browser
 	// click against a wedged/dead session can't hang this goroutine forever.
-	text := session.BuildSubmittableInput(message, true)
+	text := session.BuildSubmittableInputAndSubmit(message)
 	errCh := make(chan error, 1)
 	go func() { errCh <- instance.SendKeys(text) }()
 
@@ -3639,6 +3642,20 @@ func (s *SessionService) DeleteSession(
 	// race is between removeFromAllPollers and storage.DeleteInstance, not this).
 	liveInst := s.FindLiveInstance(sessionTitle)
 
+	// Fence out an in-flight Background Resolution Pipeline before cleanup,
+	// bumping the epoch before re-reading status exactly like
+	// CancelSessionCreation (see its doc comment for why that order, not the
+	// reverse, is what resolves the race deterministically). Narrows, but
+	// doesn't replace, the Snapshot()-based read fix.
+	if liveInst != nil {
+		liveInst.BumpCreationEpoch()
+		if status, _ := liveInst.StatusAndFailureReason(); status == session.Creating {
+			if cancelFunc := liveInst.CreationCancelFunc(); cancelFunc != nil {
+				cancelFunc()
+			}
+		}
+	}
+
 	// Remove from all pollers BEFORE deleting from storage. This is atomic from the
 	// poller's perspective and closes the race window where external discovery could
 	// re-add the session between storage deletion and the old LoadInstances() reload.
@@ -3920,6 +3937,9 @@ func (s *SessionService) WatchSessions(
 	req *connect.Request[sessionv1.WatchSessionsRequest],
 	stream *connect.ServerStream[sessionv1.SessionEvent],
 ) error {
+	done := TrackOpenStream("WatchSessions")
+	defer done()
+
 	// Subscribe before building the snapshot so no events are lost between the
 	// two phases (snapshot races are resolved by client-side upsert semantics).
 	eventCh, subID := s.eventBus.Subscribe(ctx)

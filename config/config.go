@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config/workspacepath"
@@ -411,21 +410,13 @@ type Config struct {
 	// package config directly.
 	StreamHubSessionOverrides map[string]bool `json:"stream_hub_session_overrides,omitempty"`
 	// RollbackRehearsalCompletedAt records when Story 3.3.2's rollback
-	// rehearsal (flip STAPLER_SQUAD_USE_STREAM_HUB's per-session override on
-	// for a disposable session, use it briefly, remove the override, confirm
-	// a clean reconnect under the legacy path) was last completed
-	// successfully. nil means "never completed". ResolveGlobalStreamHubDefault
-	// refuses to let the *global* default resolve to true until this is set
-	// (pre-mortem P1 #4's mechanical gate) — the per-session override above
-	// is unaffected by this gate. Set via RecordRollbackRehearsalCompleted.
+	// rehearsal (flip the stream-hub path on for a disposable session, use
+	// it briefly, confirm a clean reconnect under the legacy path) was last
+	// completed. Purely a historical record now — the global default no
+	// longer gates on it (see EffectiveStreamHubEnabled; the "stream_hub"
+	// feature flag defaults to true directly). Set via
+	// RecordRollbackRehearsalCompleted.
 	RollbackRehearsalCompletedAt *time.Time `json:"rollback_rehearsal_completed_at,omitempty"`
-	// StreamHubGlobalOverride is a live, config.json-backed override of the
-	// global stream-hub default, settable from the browser via
-	// SetStreamHubGlobalOverride with no process restart required. nil means
-	// "no override — resolve from the STAPLER_SQUAD_USE_STREAM_HUB env var as
-	// before". A non-nil value is still subject to
-	// ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
-	StreamHubGlobalOverride *bool `json:"stream_hub_global_override,omitempty"`
 	// TymuxRollbackRehearsalCompletedAt records when the tymux backend's own
 	// rollback rehearsal was last completed successfully. This is a distinct
 	// field from RollbackRehearsalCompletedAt above — the two rehearsals
@@ -446,38 +437,72 @@ type Config struct {
 	// comment above); consulted by ResolveSessionBackend
 	// (session/backend_resolution.go).
 	TymuxSessionOverrides map[string]bool `json:"tymux_session_overrides,omitempty"`
+	// NativeWorktreeSessionOverrides forces the go-git-worktree-and-merge
+	// project's native (go-git) worktree implementation for specific named
+	// tmux sessions, regardless of the global native_git_worktree feature
+	// flag default (ADR-002; Phase 4, Epic 4.1). Keys are tmux session names
+	// — GitWorktree already carries a sessionName field to key off of — an
+	// absent key means "no override, use the global default". Mirrors
+	// StreamHubSessionOverrides's shape exactly; consulted by
+	// session/git.useNativeWorktree.
+	NativeWorktreeSessionOverrides map[string]bool `json:"native_worktree_session_overrides,omitempty"`
+	// NativeMergeWorktreeOverrides forces the native (go-git) merge
+	// implementation for specific worktree paths, regardless of the global
+	// native_git_merge feature flag default (ADR-002; Phase 4, Epic 4.1).
+	// Keyed by worktreePath rather than sessionName: MergeMainIntoWorktree
+	// has no session-name parameter to key off of without a signature
+	// change or a new session/git reverse lookup, both rejected in ADR-002's
+	// Alternatives Considered. An absent key means "no override, use the
+	// global default". Consulted by session/git.useNativeMerge.
+	NativeMergeWorktreeOverrides map[string]bool `json:"native_merge_worktree_overrides,omitempty"`
 }
 
-// ErrRollbackRehearsalNotCompleted is returned by ResolveGlobalStreamHubDefault
-// when the caller requests the global STAPLER_SQUAD_USE_STREAM_HUB default
-// resolve to true but RollbackRehearsalCompletedAt is unset — Story 3.3.2's
-// rollback rehearsal must be executed and recorded first (pre-mortem P1 #4).
-var ErrRollbackRehearsalNotCompleted = errors.New("config: cannot enable the global stream-hub default: rollback rehearsal (RollbackRehearsalCompletedAt) has not been completed — see Story 3.3.2")
+// StreamHubFeatureFlag is the config.FeatureFlags key backing
+// EffectiveStreamHubEnabled — the global stream-hub default. Defaults to on
+// (see GetFeatureFlagWithDefault); an explicit false opts back out.
+const StreamHubFeatureFlag = "stream_hub"
 
-// ErrTymuxRollbackRehearsalNotCompleted is returned by ResolveGlobalTymuxDefault
-// when the caller requests the global tymux backend default resolve to true
-// but TymuxRollbackRehearsalCompletedAt is unset — the tymux rollback
-// rehearsal must be executed and recorded first (ADR-002, Story 3.1.1).
-var ErrTymuxRollbackRehearsalNotCompleted = errors.New("config: cannot enable the global tymux default: rollback rehearsal (TymuxRollbackRehearsalCompletedAt) has not been completed — see Story 3.1.1")
+// TymuxFeatureFlag is the config.FeatureFlags key backing
+// EffectiveTymuxEnabled — the global tymux process-manager-backend default.
+// Defaults to off (unlike StreamHubFeatureFlag): no rollback rehearsal has
+// vouched for tymux as the global default yet, so an explicit opt-in is
+// still required, same as the STAPLER_SQUAD_USE_TYMUX env var it replaces.
+const TymuxFeatureFlag = "tymux"
 
-// ResolveGlobalTymuxDefault applies Story 3.1.1's mechanical
-// rollback-rehearsal gate to a raw requested value for the *global* tymux
-// process-manager-backend default (e.g. derived from cfg.ProcessManagerBackend
-// or the STAPLER_SQUAD_USE_TYMUX environment variable). Requesting false is
-// always permitted — the gate only blocks turning the risky path *on*.
-// Requesting true is refused with ErrTymuxRollbackRehearsalNotCompleted, not
-// a silent fallback to false, unless cfg.TymuxRollbackRehearsalCompletedAt is
-// a recorded, non-zero timestamp. This gate does not apply to any per-session
-// override path, which callers resolve independently and which remains
-// available even when this function returns an error.
-func ResolveGlobalTymuxDefault(cfg *Config, requested bool) (bool, error) {
-	if !requested {
-		return false, nil
-	}
-	if cfg == nil || cfg.TymuxRollbackRehearsalCompletedAt == nil || cfg.TymuxRollbackRehearsalCompletedAt.IsZero() {
-		return false, ErrTymuxRollbackRehearsalNotCompleted
-	}
-	return true, nil
+// NativeWorktreeFeatureFlag is the config.FeatureFlags key backing
+// EffectiveNativeWorktreeEnabled — the global native (go-git) worktree
+// implementation default. Defaults to off (ADR-002): this is
+// corruption-blast-radius code touching every session's git state, not a
+// transparent perf optimization, so rollout is opt-in.
+const NativeWorktreeFeatureFlag = "native_git_worktree"
+
+// NativeMergeFeatureFlag is the config.FeatureFlags key backing
+// EffectiveNativeMergeEnabled — the global native (go-git) merge
+// implementation default. Defaults to off, same rationale as
+// NativeWorktreeFeatureFlag (ADR-002).
+const NativeMergeFeatureFlag = "native_git_merge"
+
+// EffectiveNativeWorktreeEnabled reports whether the global native-worktree
+// default is active. session/git.useNativeWorktree checks a session
+// override first and falls back to this for the global default (ADR-002).
+func EffectiveNativeWorktreeEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(NativeWorktreeFeatureFlag, false)
+}
+
+// EffectiveNativeMergeEnabled reports whether the global native-merge
+// default is active. session/git.useNativeMerge checks a worktree-path
+// override first and falls back to this for the global default (ADR-002).
+func EffectiveNativeMergeEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(NativeMergeFeatureFlag, false)
+}
+
+// EffectiveTymuxEnabled reports whether the global tymux process-manager
+// backend default is active. Read once at process startup
+// (main.go's resolveStartupBackend) — deliberately not live-settable, so
+// switching the default backend for every new session stays a conscious
+// operator action rather than a live UI toggle.
+func EffectiveTymuxEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(TymuxFeatureFlag, false)
 }
 
 // RecordTymuxRollbackRehearsalCompleted persists the current time as
@@ -492,25 +517,11 @@ func (c *Config) RecordTymuxRollbackRehearsalCompleted() error {
 	return SaveConfig(c)
 }
 
-// ResolveGlobalStreamHubDefault applies Story 3.3.1/3.3.2's mechanical
-// rollback-rehearsal gate to a raw requested value for the *global*
-// STAPLER_SQUAD_USE_STREAM_HUB default (e.g. read from that environment
-// variable). Requesting false is always permitted — the gate only blocks
-// turning the risky path *on*. Requesting true is refused with
-// ErrRollbackRehearsalNotCompleted, not a silent fallback to false, unless
-// cfg.RollbackRehearsalCompletedAt is a recorded, non-zero timestamp. This
-// gate does not apply to the per-session override path
-// (StreamHubSessionOverrides / streamhub.SetSessionOverrideLookup), which
-// callers resolve independently and which remains available even when this
-// function returns an error.
-func ResolveGlobalStreamHubDefault(cfg *Config, requested bool) (bool, error) {
-	if !requested {
-		return false, nil
-	}
-	if cfg == nil || cfg.RollbackRehearsalCompletedAt == nil || cfg.RollbackRehearsalCompletedAt.IsZero() {
-		return false, ErrRollbackRehearsalNotCompleted
-	}
-	return true, nil
+// EffectiveStreamHubEnabled is the single source of truth for whether the
+// stream-hub path is active, so server/services.useStreamHub and
+// session.effectiveStreamHubFlag can't diverge by each re-deriving it.
+func EffectiveStreamHubEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(StreamHubFeatureFlag, true)
 }
 
 // RecordRollbackRehearsalCompleted persists the current time as
@@ -559,15 +570,24 @@ func (c *Config) SetStreamHubSessionOverride(sessionName string, forceHub *bool)
 	return SaveConfig(c)
 }
 
-// SetStreamHubGlobalOverride sets or clears the live global stream-hub
-// override and persists the config to disk. forceHub follows this file's
-// tri-state *bool convention: nil clears the override (reverting to the
-// STAPLER_SQUAD_USE_STREAM_HUB env var default), non-nil forces that value
-// for every session connection resolved from now on — subject to
-// ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
+// SetStreamHubGlobalOverride sets or clears the "stream_hub" feature flag
+// and persists the config to disk. forceHub follows this file's tri-state
+// *bool convention: nil clears the flag (reverting to
+// GetFeatureFlagWithDefault's on-by-default), non-nil sets it explicitly for
+// every session connection resolved from now on.
 func (c *Config) SetStreamHubGlobalOverride(forceHub *bool) error {
-	c.StreamHubGlobalOverride = forceHub
-	return SaveConfig(c)
+	if forceHub == nil {
+		return c.DeleteFeatureFlag(StreamHubFeatureFlag)
+	}
+	return c.SetFeatureFlag(StreamHubFeatureFlag, *forceHub)
+}
+
+// GetStreamHubGlobalOverride reports the explicitly-persisted "stream_hub"
+// feature flag value, if any — mirrors GetStreamHubSessionOverride's
+// (value, ok) shape. ok is false when the flag has never been explicitly
+// set (i.e. EffectiveStreamHubEnabled is resolving its default).
+func (c *Config) GetStreamHubGlobalOverride() (value bool, ok bool) {
+	return c.GetFeatureFlagOverride(StreamHubFeatureFlag)
 }
 
 // GetTymuxSessionOverride reports whether sessionName has a per-session
@@ -604,6 +624,140 @@ func (c *Config) SetTymuxSessionOverride(sessionName string, forceTymux *bool) e
 	}
 	c.TymuxSessionOverrides[sessionName] = *forceTymux
 	return SaveConfig(c)
+}
+
+// SetTymuxGlobalOverride sets or clears the "tymux" feature flag and
+// persists the config to disk. forceTymux follows this file's tri-state
+// *bool convention: nil clears the flag (reverting to
+// GetFeatureFlagWithDefault's off-by-default), non-nil sets it explicitly
+// for every session created from now on. Mirrors
+// SetStreamHubGlobalOverride exactly.
+func (c *Config) SetTymuxGlobalOverride(forceTymux *bool) error {
+	if forceTymux == nil {
+		return c.DeleteFeatureFlag(TymuxFeatureFlag)
+	}
+	return c.SetFeatureFlag(TymuxFeatureFlag, *forceTymux)
+}
+
+// GetTymuxGlobalOverride reports the explicitly-persisted "tymux" feature
+// flag value, if any. Mirrors GetStreamHubGlobalOverride's (value, ok) shape.
+func (c *Config) GetTymuxGlobalOverride() (value bool, ok bool) {
+	return c.GetFeatureFlagOverride(TymuxFeatureFlag)
+}
+
+// GetNativeWorktreeSessionOverride reports whether sessionName has a
+// per-session NativeWorktreeSessionOverrides entry recorded, and if so, what
+// it forces. Mirrors GetStreamHubSessionOverride's nil-safe shape: a nil
+// Config or nil map reports (false, false) — no override.
+func (c *Config) GetNativeWorktreeSessionOverride(sessionName string) (forceNative bool, ok bool) {
+	if c == nil || c.NativeWorktreeSessionOverrides == nil {
+		return false, false
+	}
+	forceNative, ok = c.NativeWorktreeSessionOverrides[sessionName]
+	return forceNative, ok
+}
+
+// SetNativeWorktreeSessionOverride sets or clears sessionName's per-session
+// native-worktree override and persists the config to disk. forceNative
+// follows this file's tri-state *bool convention (see
+// SetStreamHubSessionOverride): nil removes any override for sessionName
+// (falling back to the global default), a non-nil false explicitly pins the
+// session to the legacy implementation regardless of the global default,
+// and a non-nil true forces the native implementation.
+//
+// KNOWN GAP (PR #730 Gate 2 review): this load-mutate-save isn't fully locked
+// against a concurrent writer — a pre-existing pattern shared with
+// StreamHub/Tymux overrides; needs a shared fix across all three, not a
+// one-off here.
+func (c *Config) SetNativeWorktreeSessionOverride(sessionName string, forceNative *bool) error {
+	if forceNative == nil {
+		if c.NativeWorktreeSessionOverrides != nil {
+			delete(c.NativeWorktreeSessionOverrides, sessionName)
+		}
+		return SaveConfig(c)
+	}
+	if c.NativeWorktreeSessionOverrides == nil {
+		c.NativeWorktreeSessionOverrides = make(map[string]bool)
+	}
+	c.NativeWorktreeSessionOverrides[sessionName] = *forceNative
+	return SaveConfig(c)
+}
+
+// SetNativeWorktreeGlobalOverride sets or clears the "native_git_worktree"
+// feature flag and persists the config to disk. forceNative follows this
+// file's tri-state *bool convention: nil clears the flag (reverting to
+// GetFeatureFlagWithDefault's off-by-default), non-nil sets it explicitly
+// for every session resolved from now on. Mirrors SetStreamHubGlobalOverride
+// exactly.
+func (c *Config) SetNativeWorktreeGlobalOverride(forceNative *bool) error {
+	if forceNative == nil {
+		return c.DeleteFeatureFlag(NativeWorktreeFeatureFlag)
+	}
+	return c.SetFeatureFlag(NativeWorktreeFeatureFlag, *forceNative)
+}
+
+// GetNativeWorktreeGlobalOverride reports the explicitly-persisted
+// "native_git_worktree" feature flag value, if any. Mirrors
+// GetStreamHubGlobalOverride's (value, ok) shape.
+func (c *Config) GetNativeWorktreeGlobalOverride() (value bool, ok bool) {
+	return c.GetFeatureFlagOverride(NativeWorktreeFeatureFlag)
+}
+
+// GetNativeMergeWorktreeOverride reports whether worktreePath has a
+// per-worktree NativeMergeWorktreeOverrides entry recorded, and if so, what
+// it forces. Keyed by worktreePath, not sessionName, per ADR-002. Mirrors
+// GetStreamHubSessionOverride's nil-safe shape: a nil Config or nil map
+// reports (false, false) — no override.
+func (c *Config) GetNativeMergeWorktreeOverride(worktreePath string) (forceNative bool, ok bool) {
+	if c == nil || c.NativeMergeWorktreeOverrides == nil {
+		return false, false
+	}
+	forceNative, ok = c.NativeMergeWorktreeOverrides[worktreePath]
+	return forceNative, ok
+}
+
+// SetNativeMergeWorktreeOverride sets or clears worktreePath's per-worktree
+// native-merge override and persists the config to disk. forceNative
+// follows this file's tri-state *bool convention: nil removes any override
+// for worktreePath (falling back to the global default), a non-nil false
+// explicitly pins that worktree to the legacy implementation regardless of
+// the global default, and a non-nil true forces the native implementation.
+//
+// KNOWN GAP (PR #730 Gate 2 review): this load-mutate-save isn't fully locked
+// against a concurrent writer — see SetNativeWorktreeSessionOverride's
+// identical note.
+func (c *Config) SetNativeMergeWorktreeOverride(worktreePath string, forceNative *bool) error {
+	if forceNative == nil {
+		if c.NativeMergeWorktreeOverrides != nil {
+			delete(c.NativeMergeWorktreeOverrides, worktreePath)
+		}
+		return SaveConfig(c)
+	}
+	if c.NativeMergeWorktreeOverrides == nil {
+		c.NativeMergeWorktreeOverrides = make(map[string]bool)
+	}
+	c.NativeMergeWorktreeOverrides[worktreePath] = *forceNative
+	return SaveConfig(c)
+}
+
+// SetNativeMergeGlobalOverride sets or clears the "native_git_merge" feature
+// flag and persists the config to disk. forceNative follows this file's
+// tri-state *bool convention: nil clears the flag (reverting to
+// GetFeatureFlagWithDefault's off-by-default), non-nil sets it explicitly
+// for every merge resolved from now on. Mirrors SetStreamHubGlobalOverride
+// exactly.
+func (c *Config) SetNativeMergeGlobalOverride(forceNative *bool) error {
+	if forceNative == nil {
+		return c.DeleteFeatureFlag(NativeMergeFeatureFlag)
+	}
+	return c.SetFeatureFlag(NativeMergeFeatureFlag, *forceNative)
+}
+
+// GetNativeMergeGlobalOverride reports the explicitly-persisted
+// "native_git_merge" feature flag value, if any. Mirrors
+// GetStreamHubGlobalOverride's (value, ok) shape.
+func (c *Config) GetNativeMergeGlobalOverride() (value bool, ok bool) {
+	return c.GetFeatureFlagOverride(NativeMergeFeatureFlag)
 }
 
 // GetGitHubEnterpriseHosts returns the configured GHES hosts, or nil if c is nil.
@@ -760,12 +914,22 @@ func (c *Config) OneOffBaseDirOrDefault() (string, error) {
 }
 
 // HibernationCheckpointDirOrDefault returns the resolved hibernation checkpoint directory.
-// If CheckpointDir is empty, it returns "~/.stapler-squad/checkpoints" with ~ expanded.
-// The directory is NOT created here — the checkpoint writer creates it on first use.
+// If CheckpointDir is empty, it defaults to "checkpoints" under GetConfigDir() (so it
+// inherits the same test/instance/workspace isolation as config.json/sessions.json —
+// see GetConfigDirForDir's priority list — rather than always writing to the real
+// ~/.stapler-squad regardless of STAPLER_SQUAD_TEST_DIR/IsTestMode()). An explicit
+// CheckpointDir override still expands "~" against the real home dir, since a
+// user-configured absolute/tilde path is an intentional override of the state dir,
+// not app state itself. The directory is NOT created here — the checkpoint writer
+// creates it on first use.
 func (c *Config) HibernationCheckpointDirOrDefault() (string, error) {
 	dir := c.Hibernation.CheckpointDir
 	if dir == "" {
-		dir = "~/.stapler-squad/checkpoints"
+		configDir, err := GetConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve config dir: %w", err)
+		}
+		return filepath.Join(configDir, "checkpoints"), nil
 	}
 	if strings.HasPrefix(dir, "~/") {
 		home, err := os.UserHomeDir()
@@ -785,48 +949,59 @@ func (c *Config) HibernationCheckpointDirOrDefault() (string, error) {
 
 // TriageArtifactDirOrDefault returns the resolved triage artifact directory.
 // Triage workers write their planning files here instead of into the item's repo.
-// Always defaults to "~/.stapler-squad/triage-artifacts".
+// "triage-artifacts" under GetConfigDir() — see HibernationCheckpointDirOrDefault's
+// doc comment for why this routes through GetConfigDir() rather than a hardcoded
+// ~/.stapler-squad path.
 func (c *Config) TriageArtifactDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "triage-artifacts"), nil
+	return filepath.Join(configDir, "triage-artifacts"), nil
 }
 
 // HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
 // headless (triage/review claude -p) failure captures — see
-// session.WriteHeadlessFailureCapture. Always defaults to
-// "~/.stapler-squad/headless-failures".
+// session.WriteHeadlessFailureCapture. "headless-failures" under GetConfigDir() —
+// see HibernationCheckpointDirOrDefault's doc comment for why this routes through
+// GetConfigDir() rather than a hardcoded ~/.stapler-squad path. Previously hardcoded
+// to os.UserHomeDir() regardless of test mode: every go test run that exercised a
+// headless-failure capture wrote real files into the developer's actual
+// ~/.stapler-squad/headless-failures (656+ accumulated on this maintainer's machine),
+// and concurrent test processes competed with each other and the live production
+// service for real disk I/O in that one shared directory — see BUG-103 item 2.
 func (c *Config) HeadlessFailureCaptureDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "headless-failures"), nil
+	return filepath.Join(configDir, "headless-failures"), nil
 }
 
 // BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.
 // Uploaded images referenced from backlog item descriptions are stored here,
 // durably (unlike the 24h temp paste dir) since they're linked from persisted
-// markdown text. Always defaults to "~/.stapler-squad/backlog-attachments".
+// markdown text. "backlog-attachments" under GetConfigDir() — see
+// HibernationCheckpointDirOrDefault's doc comment for why this routes through
+// GetConfigDir() rather than a hardcoded ~/.stapler-squad path.
 func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "backlog-attachments"), nil
+	return filepath.Join(configDir, "backlog-attachments"), nil
 }
 
 // PromptCacheDirOrDefault returns the resolved directory for temp-file-backed
-// session launch prompts (see Instance.promptArg). Always defaults to
-// "~/.stapler-squad/prompt-cache".
+// session launch prompts (see Instance.promptArg). "prompt-cache" under
+// GetConfigDir() — see HibernationCheckpointDirOrDefault's doc comment for why
+// this routes through GetConfigDir() rather than a hardcoded ~/.stapler-squad path.
 func (c *Config) PromptCacheDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "prompt-cache"), nil
+	return filepath.Join(configDir, "prompt-cache"), nil
 }
 
 // NewProjectBaseDirOrDefault returns the resolved new-project base directory.
@@ -1520,6 +1695,27 @@ func (c *Config) SetFeatureFlag(name string, value bool) error {
 	return SaveConfig(c)
 }
 
+// DeleteFeatureFlag removes the named flag entirely — a reader using
+// GetFeatureFlagWithDefault falls back to its default again — and persists
+// the config to disk.
+func (c *Config) DeleteFeatureFlag(name string) error {
+	delete(c.FeatureFlags, name)
+	return SaveConfig(c)
+}
+
+// GetFeatureFlagOverride reports the explicitly-persisted value of the named
+// feature flag: (value, true) when a key exists in FeatureFlags, (false,
+// false) when it's never been set. Distinguishes "explicitly false" from
+// "falling through to a default" for status/UI surfaces — GetFeatureFlag and
+// GetFeatureFlagWithDefault collapse that distinction on purpose.
+func (c *Config) GetFeatureFlagOverride(name string) (value bool, ok bool) {
+	if c == nil || c.FeatureFlags == nil {
+		return false, false
+	}
+	value, ok = c.FeatureFlags[name]
+	return value, ok
+}
+
 // ImportSessionEnabled reports whether the import-external-session feature
 // (Phase 1: ssq-mux single-session import) is enabled. Unlike GetFeatureFlag,
 // this is a plain environment variable rather than a persisted config flag —
@@ -1530,4 +1726,13 @@ func (c *Config) SetFeatureFlag(name string, value bool) error {
 // without a server restart, matching the re-read behavior of GetFeatureFlag.
 func ImportSessionEnabled() bool {
 	return os.Getenv("STAPLER_SQUAD_ENABLE_SESSION_IMPORT") == "true"
+}
+
+// TmuxLifecycleV2Enabled reports whether control_mode.go's consolidated
+// classifyControlModeExit path is enabled. Defaults to false since
+// control_mode.go is the default, systemd-deployed backend every running
+// session uses — this migration ships as an opt-in for one release rather
+// than switching every session's classification path on the next restart.
+func TmuxLifecycleV2Enabled() bool {
+	return os.Getenv("STAPLER_SQUAD_TMUX_LIFECYCLE_V2") == "true"
 }

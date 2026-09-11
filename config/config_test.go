@@ -3,7 +3,6 @@ package config
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config/workspacepath"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -26,6 +26,18 @@ func TestMain(m *testing.M) {
 	// Initialize the logger for tests with ERROR level to reduce noise
 	log.InitializeForTests(log.ERROR, log.ERROR)
 	defer log.Close()
+
+	// See envtest.ClearAmbientStaplerSquadStateEnv's doc comment: an ambient
+	// STAPLER_SQUAD_TEST_DIR wins over GetConfigDirForDir's other priorities
+	// (including a test's own explicit STAPLER_SQUAD_INSTANCE/HOME override —
+	// Priority 1 is checked before Priority 2), so a value left set in the
+	// shell silently redirects config saves/loads to someone else's shared
+	// directory. Confirmed to break TestSetFeatureFlag_InitializesMap and
+	// TestSetFeatureFlag_UpdatesExistingMap, which set HOME + a "shared"
+	// STAPLER_SQUAD_INSTANCE but don't know to also guard against
+	// STAPLER_SQUAD_TEST_DIR.
+	restoreStaplerSquadEnv := envtest.ClearAmbientStaplerSquadStateEnv()
+	defer restoreStaplerSquadEnv()
 
 	exitCode := m.Run()
 	os.Exit(exitCode)
@@ -887,6 +899,56 @@ func TestOneOffBaseDirOrDefault_CustomAbsolutePath(t *testing.T) {
 	assert.Equal(t, "/tmp/my-custom-oneoffs", result)
 }
 
+// TestStateSubdirsOrDefault_should_RouteThroughGetConfigDir_When_NoOverride is a
+// regression test for the bug fixed alongside BUG-103 item 2: these five helpers
+// used to always resolve against os.UserHomeDir() + a hardcoded ".stapler-squad"
+// prefix, ignoring GetConfigDir()'s test/instance/workspace isolation entirely —
+// every `go test` run that exercised one wrote real files into the developer's
+// actual ~/.stapler-squad, and concurrent test processes shared that one real
+// directory with each other and the live production service. Setting
+// STAPLER_SQUAD_TEST_DIR here must be enough to redirect every one of them; if any
+// helper still resolves under t's real home directory, this fails.
+func TestStateSubdirsOrDefault_should_RouteThroughGetConfigDir_When_NoOverride(t *testing.T) {
+	testDir := envtest.NewIsolatedStateDir(t)
+	cfg := &Config{}
+
+	tests := []struct {
+		name    string
+		fn      func() (string, error)
+		subpath string
+	}{
+		{"HibernationCheckpointDirOrDefault", cfg.HibernationCheckpointDirOrDefault, "checkpoints"},
+		{"TriageArtifactDirOrDefault", cfg.TriageArtifactDirOrDefault, "triage-artifacts"},
+		{"HeadlessFailureCaptureDirOrDefault", cfg.HeadlessFailureCaptureDirOrDefault, "headless-failures"},
+		{"BacklogAttachmentDirOrDefault", cfg.BacklogAttachmentDirOrDefault, "backlog-attachments"},
+		{"PromptCacheDirOrDefault", cfg.PromptCacheDirOrDefault, "prompt-cache"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := tt.fn()
+			require.NoError(t, err)
+			assert.Equal(t, filepath.Join(testDir, tt.subpath), result,
+				"%s must resolve under STAPLER_SQUAD_TEST_DIR, not the real home directory", tt.name)
+		})
+	}
+}
+
+// TestHibernationCheckpointDirOrDefault_CustomOverride_StillExpandsRealHomeTilde
+// verifies HibernationCheckpointDirOrDefault's one behavioral difference from its
+// four siblings above: an explicit CheckpointDir override is a user-configured
+// absolute/tilde path, not app state, so it deliberately expands "~" against the
+// real home directory even under STAPLER_SQUAD_TEST_DIR isolation.
+func TestHibernationCheckpointDirOrDefault_CustomOverride_StillExpandsRealHomeTilde(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	cfg := &Config{Hibernation: HibernationConfig{CheckpointDir: "~/my-checkpoints"}}
+
+	result, err := cfg.HibernationCheckpointDirOrDefault()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "my-checkpoints"), result)
+}
+
 // TestMaxConcurrentJulesSessionsOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange
 // verifies Story 2.2.2's clamp table: an out-of-range value never reaches the
 // spend-guard check raw.
@@ -1252,7 +1314,7 @@ func TestFeatureFlag_PiSupport_DefaultsFalseAndPersists(t *testing.T) {
 	})
 
 	t.Run("SetFeatureFlag persists and is re-readable, including on disk", func(t *testing.T) {
-		t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+		envtest.NewIsolatedStateDir(t)
 
 		cfg := LoadConfig()
 		require.NoError(t, cfg.SetFeatureFlag(FeaturePiSupport, true))
@@ -1482,86 +1544,68 @@ func TestLoadConfig_HandoffSummaryAbsentFromExistingConfig_DefaultsToEnabled(t *
 	assert.Equal(t, 12000, cfg.HandoffSummary.MaxMiddleExcerptTokens)
 }
 
-// TestResolveGlobalTymuxDefault_AlwaysAllowsFalse verifies the gate never
-// blocks the safe direction: requesting the global tymux default be false is
-// always permitted, regardless of whether the tymux rollback rehearsal has
-// been recorded. Mirrors
-// TestResolveGlobalStreamHubDefault_should_ReturnFalseWithNoError_When_RequestedIsFalse
-// (config/stream_hub_rollout_test.go).
-func TestResolveGlobalTymuxDefault_AlwaysAllowsFalse(t *testing.T) {
-	cfg := &Config{} // TymuxRollbackRehearsalCompletedAt unset
-
-	got, err := ResolveGlobalTymuxDefault(cfg, false)
-	if err != nil {
-		t.Fatalf("expected no error requesting false, got %v", err)
-	}
-	if got != false {
-		t.Fatalf("expected false, got %v", got)
+// TestEffectiveTymuxEnabled_should_DefaultOff_When_FlagUnset covers the
+// off-by-default posture: unlike stream-hub, no rollback rehearsal has
+// vouched for tymux as the global default yet.
+func TestEffectiveTymuxEnabled_should_DefaultOff_When_FlagUnset(t *testing.T) {
+	if got := EffectiveTymuxEnabled(&Config{}); got != false {
+		t.Fatalf("expected default-off, got %v", got)
 	}
 }
 
-// TestResolveGlobalTymuxDefault_RefusesTrueWithoutRehearsal is ADR-002's
-// mechanical gate: with TymuxRollbackRehearsalCompletedAt unset, requesting
-// the global tymux default resolve to true must fail with an explicit error,
-// not silently fall back to false without signaling why. Mirrors
-// TestResolveGlobalStreamHubDefault_should_FailFast_When_RehearsalNotCompleted.
-func TestResolveGlobalTymuxDefault_RefusesTrueWithoutRehearsal(t *testing.T) {
-	cfg := &Config{} // TymuxRollbackRehearsalCompletedAt unset
-
-	got, err := ResolveGlobalTymuxDefault(cfg, true)
-	if !errors.Is(err, ErrTymuxRollbackRehearsalNotCompleted) {
-		t.Fatalf("expected ErrTymuxRollbackRehearsalNotCompleted, got %v", err)
+// TestEffectiveTymuxEnabled_should_HonorExplicitFlagValue verifies
+// SetTymuxGlobalOverride (the settings panel's toggle) wins in both
+// directions, and clearing it (nil) reverts to the off-by-default value.
+func TestEffectiveTymuxEnabled_should_HonorExplicitFlagValue(t *testing.T) {
+	cfg := &Config{}
+	if err := cfg.SetTymuxGlobalOverride(boolPtr(true)); err != nil {
+		t.Fatalf("SetTymuxGlobalOverride(true): %v", err)
 	}
-	if got != false {
-		t.Fatalf("expected false to be returned alongside the error, got %v", got)
+	if got := EffectiveTymuxEnabled(cfg); got != true {
+		t.Fatalf("expected explicit true to win, got %v", got)
 	}
-}
 
-// TestResolveGlobalTymuxDefault_AllowsTrueAfterRehearsal is the happy path:
-// once TymuxRollbackRehearsalCompletedAt is set to a valid, non-zero
-// timestamp, the same resolution that previously failed now succeeds and
-// permits the global tymux default to be true.
-func TestResolveGlobalTymuxDefault_AllowsTrueAfterRehearsal(t *testing.T) {
-	completedAt := time.Now()
-	cfg := &Config{TymuxRollbackRehearsalCompletedAt: &completedAt}
-
-	got, err := ResolveGlobalTymuxDefault(cfg, true)
-	if err != nil {
-		t.Fatalf("expected no error once rehearsal is recorded, got %v", err)
+	if err := cfg.SetTymuxGlobalOverride(boolPtr(false)); err != nil {
+		t.Fatalf("SetTymuxGlobalOverride(false): %v", err)
 	}
-	if got != true {
-		t.Fatalf("expected true, got %v", got)
+	if got := EffectiveTymuxEnabled(cfg); got != false {
+		t.Fatalf("expected explicit false, got %v", got)
+	}
+
+	if err := cfg.SetTymuxGlobalOverride(nil); err != nil {
+		t.Fatalf("SetTymuxGlobalOverride(nil): %v", err)
+	}
+	if got := EffectiveTymuxEnabled(cfg); got != false {
+		t.Fatalf("expected clearing the override to revert to the off-by-default value, got %v", got)
 	}
 }
 
-// TestRecordTymuxRollbackRehearsalCompleted_PersistsTimestamp exercises
-// recording a completed tymux rehearsal end to end: it persists
-// TymuxRollbackRehearsalCompletedAt to disk, and a freshly reloaded config
-// subsequently permits ResolveGlobalTymuxDefault to return true where it
-// previously refused. Mirrors
-// TestRecordRollbackRehearsalCompleted_should_PersistTimestamp_And_UnblockResolution.
+// TestGetTymuxGlobalOverride_should_ReportUnset_Then_Set mirrors
+// GetStreamHubGlobalOverride's (value, ok) shape for the tymux flag.
+func TestGetTymuxGlobalOverride_should_ReportUnset_Then_Set(t *testing.T) {
+	cfg := &Config{}
+	if _, ok := cfg.GetTymuxGlobalOverride(); ok {
+		t.Fatal("expected no override on a fresh config")
+	}
+
+	if err := cfg.SetTymuxGlobalOverride(boolPtr(true)); err != nil {
+		t.Fatalf("SetTymuxGlobalOverride: %v", err)
+	}
+	if got, ok := cfg.GetTymuxGlobalOverride(); !ok || got != true {
+		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
+	}
+}
+
+// TestRecordTymuxRollbackRehearsalCompleted_PersistsTimestamp is now a
+// purely historical record — EffectiveTymuxEnabled no longer gates on it —
+// but RecordTymuxRollbackRehearsalCompleted still exists and still
+// persists, so cover that it does.
 func TestRecordTymuxRollbackRehearsalCompleted_PersistsTimestamp(t *testing.T) {
 	tempHome := t.TempDir()
-	origHome := os.Getenv("HOME")
-	origInstance := os.Getenv("STAPLER_SQUAD_INSTANCE")
-	os.Setenv("HOME", tempHome)
-	os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
-	defer func() {
-		os.Setenv("HOME", origHome)
-		if origInstance == "" {
-			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
-		} else {
-			os.Setenv("STAPLER_SQUAD_INSTANCE", origInstance)
-		}
-	}()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
 
 	cfg := &Config{}
-
-	// Before recording, the gate refuses.
-	if _, err := ResolveGlobalTymuxDefault(cfg, true); !errors.Is(err, ErrTymuxRollbackRehearsalNotCompleted) {
-		t.Fatalf("expected gate to refuse before rehearsal is recorded, got %v", err)
-	}
-
 	before := time.Now()
 	if err := cfg.RecordTymuxRollbackRehearsalCompleted(); err != nil {
 		t.Fatalf("RecordTymuxRollbackRehearsalCompleted returned error: %v", err)
@@ -1575,20 +1619,13 @@ func TestRecordTymuxRollbackRehearsalCompleted_PersistsTimestamp(t *testing.T) {
 		t.Fatalf("expected TymuxRollbackRehearsalCompletedAt to be within [%v, %v], got %v", before, after, *cfg.TymuxRollbackRehearsalCompletedAt)
 	}
 
-	if _, err := ResolveGlobalTymuxDefault(cfg, true); err != nil {
-		t.Fatalf("expected gate to succeed after rehearsal is recorded, got %v", err)
-	}
-
 	configPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
 	reloaded, err := LoadConfigFromPath(configPath)
 	if err != nil {
-		t.Fatalf("LoadConfigFromPath after RecordTymuxRollbackRehearsalCompleted: %v", err)
+		t.Fatalf("LoadConfigFromPath: %v", err)
 	}
 	if reloaded.TymuxRollbackRehearsalCompletedAt == nil {
 		t.Fatal("expected persisted config to carry TymuxRollbackRehearsalCompletedAt")
-	}
-	if _, err := ResolveGlobalTymuxDefault(reloaded, true); err != nil {
-		t.Fatalf("expected reloaded config's gate to succeed, got %v", err)
 	}
 }
 
@@ -1680,5 +1717,175 @@ func TestSetTymuxSessionOverride_ForceTrueThenForceFalse(t *testing.T) {
 	}
 	if _, ok := reloadedAfterClear.GetTymuxSessionOverride("canary-1"); ok {
 		t.Fatal("expected persisted config to no longer have the override")
+	}
+}
+
+// TestEffectiveNativeWorktreeEnabled_DefaultsFalse verifies ADR-002's "both
+// flags default off" decision (Phase 4, Epic 4.1): a fresh config with no
+// FeatureFlags set must resolve native-worktree to false.
+func TestEffectiveNativeWorktreeEnabled_DefaultsFalse(t *testing.T) {
+	if got := EffectiveNativeWorktreeEnabled(&Config{}); got != false {
+		t.Fatalf("expected default-off, got %v", got)
+	}
+}
+
+// TestEffectiveNativeMergeEnabled_DefaultsFalse is the merge equivalent of
+// TestEffectiveNativeWorktreeEnabled_DefaultsFalse — ADR-002 requires both
+// flags, not just worktree, to default off.
+func TestEffectiveNativeMergeEnabled_DefaultsFalse(t *testing.T) {
+	if got := EffectiveNativeMergeEnabled(&Config{}); got != false {
+		t.Fatalf("expected default-off, got %v", got)
+	}
+}
+
+// TestGetNativeWorktreeSessionOverride_should_ReturnFalseFalse_When_KeyAbsent
+// distinguishes "no override" from "overridden false" — a session with no
+// entry in NativeWorktreeSessionOverrides reports (false, false), not
+// (false, true).
+func TestGetNativeWorktreeSessionOverride_should_ReturnFalseFalse_When_KeyAbsent(t *testing.T) {
+	cfg := &Config{}
+	if got, ok := cfg.GetNativeWorktreeSessionOverride("sess-1"); ok || got {
+		t.Fatalf("expected (false, false) for an absent key, got (%v, %v)", got, ok)
+	}
+}
+
+// TestGetNativeWorktreeSessionOverride_TakesPrecedence verifies a session
+// override wins over an unset global default (ADR-002/plan.md Story 4.1.1).
+func TestGetNativeWorktreeSessionOverride_TakesPrecedence(t *testing.T) {
+	cfg := &Config{NativeWorktreeSessionOverrides: map[string]bool{"sess-1": true}}
+	got, ok := cfg.GetNativeWorktreeSessionOverride("sess-1")
+	if !ok || !got {
+		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
+	}
+}
+
+// TestGetNativeMergeWorktreeOverride_KeyedByPath verifies the merge override
+// is keyed by worktreePath, not sessionName, per ADR-002.
+func TestGetNativeMergeWorktreeOverride_KeyedByPath(t *testing.T) {
+	cfg := &Config{NativeMergeWorktreeOverrides: map[string]bool{"/tmp/wt1": true}}
+	got, ok := cfg.GetNativeMergeWorktreeOverride("/tmp/wt1")
+	if !ok || !got {
+		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
+	}
+}
+
+// TestSetNativeWorktreeSessionOverride_ForceTrueThenForceFalse mirrors
+// TestSetTymuxSessionOverride_ForceTrueThenForceFalse: both directions must
+// actually flip the stored value and persist, and nil must clear it.
+func TestSetNativeWorktreeSessionOverride_ForceTrueThenForceFalse(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	configPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
+
+	cfg := &Config{}
+	if err := cfg.SetNativeWorktreeSessionOverride("sess-1", boolPtr(true)); err != nil {
+		t.Fatalf("SetNativeWorktreeSessionOverride(true) returned error: %v", err)
+	}
+	if got, ok := cfg.GetNativeWorktreeSessionOverride("sess-1"); !ok || !got {
+		t.Fatalf("expected override to force native, got (%v, %v)", got, ok)
+	}
+	reloaded, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigFromPath after forcing true: %v", err)
+	}
+	if got, ok := reloaded.GetNativeWorktreeSessionOverride("sess-1"); !ok || !got {
+		t.Fatalf("expected persisted override to force native, got (%v, %v)", got, ok)
+	}
+
+	if err := cfg.SetNativeWorktreeSessionOverride("sess-1", boolPtr(false)); err != nil {
+		t.Fatalf("SetNativeWorktreeSessionOverride(false) returned error: %v", err)
+	}
+	if got, ok := cfg.GetNativeWorktreeSessionOverride("sess-1"); !ok || got {
+		t.Fatalf("expected override to force legacy (false), got (%v, %v)", got, ok)
+	}
+
+	if err := cfg.SetNativeWorktreeSessionOverride("sess-1", nil); err != nil {
+		t.Fatalf("SetNativeWorktreeSessionOverride(nil) returned error: %v", err)
+	}
+	if _, ok := cfg.GetNativeWorktreeSessionOverride("sess-1"); ok {
+		t.Fatal("expected override to be cleared")
+	}
+}
+
+// TestSetNativeMergeWorktreeOverride_ForceTrueThenForceFalse is the merge
+// equivalent of TestSetNativeWorktreeSessionOverride_ForceTrueThenForceFalse,
+// keyed by worktreePath instead of sessionName.
+func TestSetNativeMergeWorktreeOverride_ForceTrueThenForceFalse(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	configPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
+
+	cfg := &Config{}
+	if err := cfg.SetNativeMergeWorktreeOverride("/tmp/wt1", boolPtr(true)); err != nil {
+		t.Fatalf("SetNativeMergeWorktreeOverride(true) returned error: %v", err)
+	}
+	if got, ok := cfg.GetNativeMergeWorktreeOverride("/tmp/wt1"); !ok || !got {
+		t.Fatalf("expected override to force native, got (%v, %v)", got, ok)
+	}
+	reloaded, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigFromPath after forcing true: %v", err)
+	}
+	if got, ok := reloaded.GetNativeMergeWorktreeOverride("/tmp/wt1"); !ok || !got {
+		t.Fatalf("expected persisted override to force native, got (%v, %v)", got, ok)
+	}
+
+	if err := cfg.SetNativeMergeWorktreeOverride("/tmp/wt1", boolPtr(false)); err != nil {
+		t.Fatalf("SetNativeMergeWorktreeOverride(false) returned error: %v", err)
+	}
+	if got, ok := cfg.GetNativeMergeWorktreeOverride("/tmp/wt1"); !ok || got {
+		t.Fatalf("expected override to force legacy (false), got (%v, %v)", got, ok)
+	}
+
+	if err := cfg.SetNativeMergeWorktreeOverride("/tmp/wt1", nil); err != nil {
+		t.Fatalf("SetNativeMergeWorktreeOverride(nil) returned error: %v", err)
+	}
+	if _, ok := cfg.GetNativeMergeWorktreeOverride("/tmp/wt1"); ok {
+		t.Fatal("expected override to be cleared")
+	}
+}
+
+// TestGetNativeWorktreeGlobalOverride_should_ReportUnset_Then_Set mirrors
+// TestGetTymuxGlobalOverride_should_ReportUnset_Then_Set for the
+// native_git_worktree flag.
+func TestGetNativeWorktreeGlobalOverride_should_ReportUnset_Then_Set(t *testing.T) {
+	cfg := &Config{}
+	if _, ok := cfg.GetNativeWorktreeGlobalOverride(); ok {
+		t.Fatal("expected no override on a fresh config")
+	}
+	if err := cfg.SetNativeWorktreeGlobalOverride(boolPtr(true)); err != nil {
+		t.Fatalf("SetNativeWorktreeGlobalOverride: %v", err)
+	}
+	if got, ok := cfg.GetNativeWorktreeGlobalOverride(); !ok || got != true {
+		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
+	}
+	if err := cfg.SetNativeWorktreeGlobalOverride(nil); err != nil {
+		t.Fatalf("SetNativeWorktreeGlobalOverride(nil): %v", err)
+	}
+	if _, ok := cfg.GetNativeWorktreeGlobalOverride(); ok {
+		t.Fatal("expected clearing the override to remove it")
+	}
+}
+
+// TestGetNativeMergeGlobalOverride_should_ReportUnset_Then_Set is the merge
+// equivalent of TestGetNativeWorktreeGlobalOverride_should_ReportUnset_Then_Set.
+func TestGetNativeMergeGlobalOverride_should_ReportUnset_Then_Set(t *testing.T) {
+	cfg := &Config{}
+	if _, ok := cfg.GetNativeMergeGlobalOverride(); ok {
+		t.Fatal("expected no override on a fresh config")
+	}
+	if err := cfg.SetNativeMergeGlobalOverride(boolPtr(true)); err != nil {
+		t.Fatalf("SetNativeMergeGlobalOverride: %v", err)
+	}
+	if got, ok := cfg.GetNativeMergeGlobalOverride(); !ok || got != true {
+		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
+	}
+	if err := cfg.SetNativeMergeGlobalOverride(nil); err != nil {
+		t.Fatalf("SetNativeMergeGlobalOverride(nil): %v", err)
+	}
+	if _, ok := cfg.GetNativeMergeGlobalOverride(); ok {
+		t.Fatal("expected clearing the override to remove it")
 	}
 }

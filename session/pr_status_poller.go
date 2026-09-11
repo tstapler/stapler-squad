@@ -20,6 +20,28 @@ type pollerAuthResult struct {
 	checkedAt time.Time
 }
 
+// prGitHubClient is every outbound GitHub call PRStatusPoller makes. It exists so
+// tests can inject a fake instead of shelling out to `gh` (checkAllSessions and
+// fetchAndUpdatePRStatus would otherwise require real gh auth and network access
+// to exercise). realGHClient below is the only production implementation.
+type prGitHubClient interface {
+	CheckGHAuth() error
+	GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (info *github.PRInfo, newEtag string, changed bool, err error)
+	GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int, cache *github.ETagCache) (info *github.PRInfo, changed bool, err error)
+}
+
+type realGHClient struct{}
+
+func (realGHClient) CheckGHAuth() error { return github.CheckGHAuth() }
+
+func (realGHClient) GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (*github.PRInfo, string, bool, error) {
+	return github.GetPRForBranchConditional(ctx, owner, repo, branch, etag)
+}
+
+func (realGHClient) GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int, cache *github.ETagCache) (*github.PRInfo, bool, error) {
+	return github.GetPRInfoConditional(ctx, owner, repo, prNumber, cache)
+}
+
 // PRStatusPollerConfig contains configuration for the PR status poller.
 type PRStatusPollerConfig struct {
 	// PollInterval controls how often all sessions are checked.
@@ -54,6 +76,7 @@ type PRStatusPoller struct {
 	storage   *Storage
 	config    PRStatusPollerConfig
 	etagCache *github.ETagCache
+	ghClient  prGitHubClient
 
 	// onUpdated is called when a session's PR priority changes.
 	// Intended for EventBus notification; injected from the server layer.
@@ -89,6 +112,7 @@ func NewPRStatusPollerWithConfig(storage *Storage, config PRStatusPollerConfig) 
 		storage:       storage,
 		config:        config,
 		etagCache:     github.NewETagCache(),
+		ghClient:      realGHClient{},
 		noPRPollAfter: make(map[string]time.Time),
 	}
 }
@@ -267,6 +291,10 @@ func (p *PRStatusPoller) checkAllSessions() {
 		// the explicit stateMutex.RLock() for GitHubPRStatusTerminal / GitHubIsFork.
 		instSnap := inst.Snapshot()
 
+		if instSnap.Status.IsSuspended() {
+			continue // paused/hibernated/stopped/crashed/permanently-failed: nothing to poll for
+		}
+
 		if instSnap.GitHub.GitHubOwner == "" || instSnap.GitHub.GitHubRepo == "" {
 			continue // no GitHub info for this session
 		}
@@ -309,7 +337,7 @@ func (p *PRStatusPoller) isAuthOK() bool {
 		}
 	}
 
-	if err := github.CheckGHAuth(); err != nil {
+	if err := p.ghClient.CheckGHAuth(); err != nil {
 		log.Warn("PR status poller: github auth unavailable", "err", err)
 		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
 		return false
@@ -343,7 +371,7 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(ctx context.Context, inst *Insta
 		if v, ok := p.listEtags.Load(listKey); ok {
 			listEtag = v.(string)
 		}
-		prInfo, newEtag, changed, err := github.GetPRForBranchConditional(ctx, owner, repo, branch, listEtag)
+		prInfo, newEtag, changed, err := p.ghClient.GetPRForBranchConditional(ctx, owner, repo, branch, listEtag)
 		if newEtag != "" {
 			p.listEtags.Store(listKey, newEtag)
 		}
@@ -382,7 +410,7 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(ctx context.Context, inst *Insta
 	}
 
 	// Conditional fetch using ETag cache (304 = no change)
-	prInfo, changed, err := github.GetPRInfoConditional(ctx, owner, repo, prNumber, p.etagCache)
+	prInfo, changed, err := p.ghClient.GetPRInfoConditional(ctx, owner, repo, prNumber, p.etagCache)
 	if err != nil {
 		if p.handleFetchError(err) {
 			return

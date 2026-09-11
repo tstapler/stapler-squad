@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/pkg/buildinfo"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -28,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/telemetry"
 
 	"github.com/google/uuid"
 	"net"
@@ -117,6 +119,11 @@ func newServerBase(addr string) (*Server, context.Context) {
 			// connections (ConnectRPC terminal streams, SSE) see a done context
 			// and self-close instead of blocking the graceful shutdown timeout.
 			BaseContext: func(_ net.Listener) context.Context { return connCtx },
+			// ConnState feeds http.server.connections_open/
+			// http.server.connections_hijacked_total (http_connection_metrics.go)
+			// — see that file's doc comment for why this is the natural place
+			// to maintain the count.
+			ConnState: trackHTTPConnState,
 		},
 	}
 	srv.addr.Store(&addr)
@@ -444,6 +451,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		uwAPIPath := "/api" + uwPath
 		srv.RegisterConnectHandler(uwAPIPath, http.StripPrefix("/api", uwHandler))
 		log.Info("Registered UnfinishedWorkService handler", "path", uwAPIPath)
+
+		// Bridge WatchUnfinishedWork over WebSocket too (see StreamingWSBridge's
+		// doc comment) — otherwise it's one more long-lived HTTP/1.1 connection
+		// competing with WatchSessions/WatchReviewQueue/etc. for the browser's
+		// 6-connections-per-origin budget.
+		uwWsBridge := services.NewStreamingWSBridge(uwHandler)
+		watchUnfinishedWorkPath := "/api" + sessionv1connect.UnfinishedWorkServiceWatchUnfinishedWorkProcedure
+		srv.mux.Handle(watchUnfinishedWorkPath, uwWsBridge.Handler("/api"))
+		log.Info("Registered StreamingWSBridge", "watchUnfinishedWork", watchUnfinishedWorkPath)
 	}
 
 	// Register SessionSummaryService handler.
@@ -470,6 +486,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		insightsAPIPath := "/api" + insightsPath
 		srv.RegisterConnectHandler(insightsAPIPath, http.StripPrefix("/api", insightsHandler))
 		log.Info("Registered InsightsService handler", "path", insightsAPIPath)
+
+		// Bridge WatchInsights over WebSocket too — see StreamingWSBridge's doc
+		// comment (avoids the browser's 6-connections-per-origin HTTP/1.1 limit).
+		insightsWsBridge := services.NewStreamingWSBridge(insightsHandler)
+		watchInsightsPath := "/api" + sessionv1connect.InsightsServiceWatchInsightsProcedure
+		srv.mux.Handle(watchInsightsPath, insightsWsBridge.Handler("/api"))
+		log.Info("Registered StreamingWSBridge", "watchInsights", watchInsightsPath)
 	}
 
 	// Register GitHubUserService handler (GitHub Work Continuity feature).
@@ -491,6 +514,19 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		tymuxRolloutAPIPath := "/api" + tymuxRolloutPath
 		srv.RegisterConnectHandler(tymuxRolloutAPIPath, http.StripPrefix("/api", tymuxRolloutHandler))
 		log.Info("Registered TymuxRolloutService handler", "path", tymuxRolloutAPIPath)
+	}
+
+	// Register NativeGitRolloutService handler (go-git-worktree-and-merge
+	// Epic 4.2: operator-facing controls for the staged native-worktree/
+	// native-merge rollout, mirroring TymuxRolloutService's registration).
+	// Config-backed with no external deps, so it's constructed inline rather
+	// than threaded through ServerDependencies.
+	{
+		nativeGitRolloutSvc := services.NewNativeGitRolloutService()
+		nativeGitRolloutPath, nativeGitRolloutHandler := sessionv1connect.NewNativeGitRolloutServiceHandler(nativeGitRolloutSvc, ConnectOptions(deps.ErrorRegistry)...)
+		nativeGitRolloutAPIPath := "/api" + nativeGitRolloutPath
+		srv.RegisterConnectHandler(nativeGitRolloutAPIPath, http.StripPrefix("/api", nativeGitRolloutHandler))
+		log.Info("Registered NativeGitRolloutService handler", "path", nativeGitRolloutAPIPath)
 	}
 
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
@@ -567,6 +603,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		blAPIPath := "/api" + blPath
 		srv.RegisterConnectHandler(blAPIPath, http.StripPrefix("/api", blHandler))
 		log.InfoLog().Printf("Registered BacklogService handler at %s", blAPIPath)
+
+		// Bridge WatchBacklogItems over WebSocket too — see StreamingWSBridge's
+		// doc comment (avoids the browser's 6-connections-per-origin HTTP/1.1
+		// limit). Wraps blHandler directly so the feature-flag interceptor
+		// above still applies (StreamingWSBridge calls handler.ServeHTTP for
+		// both transports).
+		blWsBridge := services.NewStreamingWSBridge(blHandler)
+		watchBacklogItemsPath := "/api" + sessionv1connect.BacklogServiceWatchBacklogItemsProcedure
+		srv.mux.Handle(watchBacklogItemsPath, blWsBridge.Handler("/api"))
+		log.InfoLog().Printf("Registered StreamingWSBridge for watchBacklogItems at %s", watchBacklogItemsPath)
 	}
 
 	// Start UserPRCache and register GitHubUserService handler.
@@ -1036,6 +1082,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("POST /api/telemetry", telemetryHandler.HandleTelemetry)
 	log.Info("Registered telemetry handler at POST /api/telemetry")
 
+	// Relay browser OpenTelemetry spans/metrics to the same collector the Go
+	// server exports to (see docs/how-to/enable-opentelemetry.md). Only
+	// registered when telemetry is enabled, matching every other OTel surface.
+	if telemetry.IsGloballyEnabled() {
+		otelProxyHandler := handlers.NewOtelProxyHandler(telemetry.GlobalOTLPHTTPEndpoint())
+		srv.mux.HandleFunc("POST /api/otel/v1/traces", otelProxyHandler.HandleTraces)
+		srv.mux.HandleFunc("POST /api/otel/v1/metrics", otelProxyHandler.HandleMetrics)
+		log.Info("Registered OTel browser-trace proxy at /api/otel/v1/{traces,metrics}", "collector", telemetry.GlobalOTLPHTTPEndpoint())
+	}
+
 	// Register raw file download endpoint.
 	// Uses the FileService inside SessionService to validate paths against
 	// the session worktree root (path traversal prevention).
@@ -1468,6 +1524,19 @@ func (s *Server) GetOrigins() []string {
 // registerServerInfoHandler registers the /api/server-info endpoint which exposes
 // the CA PEM file path and HTTPS URL for display in the settings UI.
 func (s *Server) registerServerInfoHandler() {
+	// Resolved once at registration time, not per-request: the running
+	// executable's path never changes for the life of the process, so
+	// there's no reason to repeat the os.Executable()/EvalSymlinks syscalls
+	// on every /api/server-info hit.
+	binaryPath, err := os.Executable()
+	if err == nil {
+		if resolved, evalErr := filepath.EvalSymlinks(binaryPath); evalErr == nil {
+			binaryPath = resolved
+		}
+	} else {
+		binaryPath = ""
+	}
+
 	s.mux.HandleFunc("/api/server-info", func(w http.ResponseWriter, r *http.Request) {
 		type serverInfoResponse struct {
 			CAPEMPath  string   `json:"ca_pem_path"`
@@ -1475,6 +1544,22 @@ func (s *Server) registerServerInfoHandler() {
 			TLSEnabled bool     `json:"tls_enabled"`
 			Hostnames  []string `json:"hostnames"`
 			Programs   []string `json:"programs"`
+			// Version/Branch/Commit/Worktree let the settings UI show which
+			// build is actually running — see pkg/buildinfo's doc comment for
+			// why Branch/Commit/Worktree are only ever non-empty on a locally
+			// built binary, not a GoReleaser release.
+			Version  string `json:"version"`
+			Branch   string `json:"branch,omitempty"`
+			Commit   string `json:"commit,omitempty"`
+			Worktree bool   `json:"worktree,omitempty"`
+			// BinaryPath is the resolved, symlink-following path of the
+			// running executable — lets a human confirm, from the UI, which
+			// on-disk build this instance actually is (e.g. the repo's dev
+			// build vs. a Homebrew install vs. a manual-builds/ scratch
+			// binary — see docs/reference/state-isolation.md's multi-
+			// instance layout for why more than one of these can be running
+			// on the same machine at once).
+			BinaryPath string `json:"binary_path,omitempty"`
 		}
 
 		configDir, err := config.GetConfigDir()
@@ -1493,6 +1578,11 @@ func (s *Server) registerServerInfoHandler() {
 			TLSEnabled: tlsEnabled,
 			Hostnames:  s.hostnames,
 			Programs:   s.availablePrograms,
+			Version:    buildinfo.Version,
+			Branch:     buildinfo.Branch,
+			Commit:     buildinfo.Commit,
+			Worktree:   buildinfo.Worktree == "true",
+			BinaryPath: binaryPath,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -1529,7 +1619,7 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 	// Bind eagerly so the caller gets a port-in-use error immediately.
 	ln, err := net.Listen("tcp", remoteAddr)
 	if err != nil {
-		return fmt.Errorf("bind remote server on %s: %w", remoteAddr, err)
+		return newRemoteBindError(remoteAddr, err)
 	}
 	log.Info("Remote HTTPS server listening", "addr", remoteAddr)
 

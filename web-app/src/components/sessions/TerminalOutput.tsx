@@ -962,9 +962,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       }, 250);
     } else if (wasConnected && !isConnected) {
       console.log("[TerminalOutput] Connection lost, will attempt reconnection");
-      // If connection drops while still loading, content won't arrive — clear the overlay
-      // so the user sees the terminal pane and "Disconnected" status instead of a stuck spinner.
-      setIsLoadingInitialContent(false);
+      // New session: don't drop the spinner before first content arrives.
+      if (isInitialScrollbackDoneRef.current) {
+        setIsLoadingInitialContent(false);
+      }
       if (process.env.NEXT_PUBLIC_RECONNECT_V2 !== "true") {
         reconnectTimeoutRef.current = setTimeout(() => {
           if (!isConnected) {
@@ -1603,6 +1604,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     },
   ];
 
+  const isConnectingState = terminalState === "CONNECTING" || terminalState === "LOADING";
+
   return (
     <div className={styles.container}>
       <div className={styles.toolbar}>
@@ -1614,11 +1617,21 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           )}
           <span
             className={`${styles.statusIndicator} ${
-              isConnected ? styles.connected : isWaitingForStableSize ? styles.stabilizing : styles.disconnected
+              isConnected
+                ? styles.connected
+                : isWaitingForStableSize || isConnectingState
+                  ? styles.stabilizing
+                  : styles.disconnected
             }`}
           />
           <span className={styles.statusText}>
-            {isConnected ? "Connected" : isWaitingForStableSize ? "Initializing..." : "Disconnected"}
+            {isConnected
+              ? "Connected"
+              : isWaitingForStableSize
+                ? "Initializing..."
+                : isConnectingState
+                  ? "Connecting..."
+                  : "Disconnected"}
           </span>
           {!isConnected && connectionAttempts > 0 && connectionAttempts < 5 && (
             <span className={styles.statusText}>
@@ -1907,7 +1920,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           <div className={styles.loadingOverlay}>
             <div className={styles.loadingSpinner} />
             <div className={styles.loadingText}>
-              {isWaitingForStableSize ? "Initializing terminal..." : "Loading terminal content..."}
+              {isWaitingForStableSize
+                ? "Initializing terminal..."
+                : !isConnected && !isInitialScrollbackDoneRef.current
+                  ? "Starting session..."
+                  : "Loading terminal content..."}
             </div>
           </div>
         )}

@@ -40,8 +40,7 @@ type lifecycleHandlers struct {
 // CreateSessionResult is returned by create_session.
 type CreateSessionResult struct {
 	MCPResult
-	Session            *SessionDetail `json:"session,omitempty"`
-	MCPInjectionFailed bool           `json:"mcp_injection_failed,omitempty"`
+	Session *SessionDetail `json:"session,omitempty"`
 	// StillCreating is true when mcpAwaitTerminalTimeout elapsed before the
 	// Background Resolution Pipeline reached a terminal status. Session is
 	// still returned (Creating status, ID valid) — the session was
@@ -53,7 +52,7 @@ type CreateSessionResult struct {
 func registerLifecycleTools(s *mcpserver.MCPServer, lh *lifecycleHandlers) {
 	s.AddTool(
 		mcpgo.NewTool("create_session",
-			mcpgo.WithDescription("Create and start a new Stapler Squad session (tmux + optional git worktree). By default, injects this MCP server into the child session's .claude/settings.local.json so the new session can use all Stapler Squad tools. Waits up to 150s for the session to finish starting up; if it's still resolving after that, returns a still_creating result (session_id present, safe to poll with get_session) rather than an error or an open-ended hang. Rate-limited to 3 per minute.\n\nNOTE: Do not use this tool just to run commands or execute tasks — spawn an Agent subagent instead. Reserve create_session for cases where a USER INTERACTABLE, persistent tmux session is genuinely needed (e.g. long-running background work, multi-turn Claude Code sessions the user will actively monitor or control)."),
+			mcpgo.WithDescription("Create and start a new Stapler Squad session (tmux + optional git worktree). The new session is launched with this MCP server already wired in via a --mcp-config command-line flag, so it can use all Stapler Squad tools with no extra setup. Waits up to 150s for the session to finish starting up; if it's still resolving after that, returns a still_creating result (session_id present, safe to poll with get_session) rather than an error or an open-ended hang. Rate-limited to 3 per minute.\n\nNOTE: Do not use this tool just to run commands or execute tasks — spawn an Agent subagent instead. Reserve create_session for cases where a USER INTERACTABLE, persistent tmux session is genuinely needed (e.g. long-running background work, multi-turn Claude Code sessions the user will actively monitor or control)."),
 			mcpgo.WithString("title", mcpgo.Description("Unique name for the session"), mcpgo.Required()),
 			mcpgo.WithString("path", mcpgo.Description("Absolute path to the repository root"), mcpgo.Required()),
 			mcpgo.WithString("branch", mcpgo.Description("Git branch name (creates if missing; required for new_worktree session type)")),
@@ -61,8 +60,6 @@ func registerLifecycleTools(s *mcpserver.MCPServer, lh *lifecycleHandlers) {
 			mcpgo.WithString("session_type", mcpgo.Description("Session type: directory, new_worktree, existing_worktree (default: directory)"),
 				mcpgo.Enum("directory", "new_worktree", "existing_worktree")),
 			mcpgo.WithArray("tags", mcpgo.Description("Tags for organizing the session")),
-			mcpgo.WithBoolean("inject_mcp", mcpgo.Description("Inject MCP server config into session's .claude/settings.local.json (default true)"),
-				mcpgo.DefaultBool(true)),
 			mcpgo.WithArray("hooks", mcpgo.Description("Built-in hook names to inject (default: [permission_approval, stop_notification])")),
 		),
 		lh.createSession,
@@ -95,13 +92,11 @@ func registerLifecycleTools(s *mcpserver.MCPServer, lh *lifecycleHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("update_session",
-			mcpgo.WithDescription("Update session metadata (title, tags, category) or toggle MCP injection. Does not change session status."),
+			mcpgo.WithDescription("Update session metadata (title, tags, category). Does not change session status."),
 			mcpgo.WithString("session_id", mcpgo.Description("Session ID (title) to update"), mcpgo.Required()),
 			mcpgo.WithString("title", mcpgo.Description("New title for the session")),
 			mcpgo.WithArray("tags", mcpgo.Description("Replace session tags")),
 			mcpgo.WithString("category", mcpgo.Description("Session category")),
-			mcpgo.WithBoolean("inject_mcp", mcpgo.Description("Inject MCP config into the session")),
-			mcpgo.WithBoolean("remove_mcp", mcpgo.Description("Remove MCP config from the session")),
 		),
 		lh.updateSession,
 	)
@@ -235,20 +230,6 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 			fmt.Sprintf("session %q reached Active but is no longer findable", sessionID), ""), nil
 	}
 
-	// MCP injection: write our server config into the session's .claude/settings.local.json.
-	// inject_mcp defaults to true when not explicitly provided.
-	shouldInjectMCP := true
-	if v, ok := args["inject_mcp"].(bool); ok {
-		shouldInjectMCP = v
-	}
-	var mcpInjectionFailed bool
-	if shouldInjectMCP {
-		if injErr := injectMCPConfig(inst.GetEffectiveRootDir()); injErr != nil {
-			log.Warn("mcp MCP injection failed for session", "title", title, "err", injErr)
-			mcpInjectionFailed = true
-		}
-	}
-
 	// Hook injection: inject permission_approval hook (always) + any requested hooks.
 	var hookNames []services.HookName
 	if rawHooks, ok := args["hooks"]; ok {
@@ -274,9 +255,8 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 
 	detail := instanceToDetail(inst)
 	return okResult(CreateSessionResult{
-		MCPResult:          MCPResult{Success: true},
-		Session:            &detail,
-		MCPInjectionFailed: mcpInjectionFailed,
+		MCPResult: MCPResult{Success: true},
+		Session:   &detail,
 	}), nil
 }
 
@@ -358,17 +338,6 @@ func mapCreationOutcome(outcome services.CreationOutcome, err error) *mcpgo.Call
 			"the wait for session creation was ended by the caller's own request context (not a pipeline timeout or failure); the session may still be resolving",
 			"Use get_session to check on its status.")
 	}
-}
-
-// injectMCPConfig writes the MCP server entry into <rootDir>/.claude/settings.local.json.
-// Uses os.Executable() for the binary path so it survives PATH changes.
-// Non-fatal: caller should log the error and continue.
-func injectMCPConfig(rootDir string) error {
-	binaryPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolve binary path: %w", err)
-	}
-	return services.InjectMCPConfig(rootDir, binaryPath)
 }
 
 func (lh *lifecycleHandlers) pauseSession(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -553,18 +522,6 @@ func (lh *lifecycleHandlers) updateSession(ctx context.Context, req mcpgo.CallTo
 	}
 	if cat, ok := args["category"].(string); ok {
 		inst.Category = cat
-	}
-
-	// MCP injection toggle on existing session.
-	if injectMCP, ok := args["inject_mcp"].(bool); ok && injectMCP {
-		if injErr := injectMCPConfig(inst.GetEffectiveRootDir()); injErr != nil {
-			log.Warn("mcp update MCP injection failed", "session", sessionID, "err", injErr)
-		}
-	}
-	if removeMCP, ok := args["remove_mcp"].(bool); ok && removeMCP {
-		if rmErr := services.RemoveMCPConfig(inst.GetEffectiveRootDir()); rmErr != nil {
-			log.Warn("mcp update MCP removal failed", "session", sessionID, "err", rmErr)
-		}
 	}
 
 	if err := lh.store.SaveInstances([]*session.Instance{inst}); err != nil {

@@ -583,6 +583,9 @@ func (s *InsightsService) WatchInsights(
 // insightsEventSender interface (see its doc comment) so it is directly
 // unit-testable without a real RPC round-trip.
 func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEventSender) error {
+	done := TrackOpenStream("WatchInsights")
+	defer done()
+
 	// 1. Send initial state.
 	allParsed := !s.store.IsLoading()
 	initialEvent := &sessionv1.InsightsEvent{

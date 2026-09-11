@@ -13,9 +13,74 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
+
+	"github.com/tstapler/stapler-squad/session/lifecycle"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
+
+// testTymuxMetricReader backs the single real MeterProvider installed for
+// this test binary. session/lifecycle's package-level instruments are
+// constructed against OTel's global delegating meter at package-init time,
+// before this file's init() runs -- otel.SetMeterProvider rewires what that
+// delegating meter forwards to, so a process-lifetime manual reader with
+// delta-based (before/after) assertions is the correct fit here, mirroring
+// session/lifecycle/observability_test.go's and
+// session/pi_status_source_metrics_test.go's identical pattern.
+var testTymuxMetricReader = sdkmetric.NewManualReader()
+
+func init() {
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(testTymuxMetricReader)))
+}
+
+// collectMetric returns name's current collected data, or nil if it has no
+// recorded data points yet.
+func collectMetric(t *testing.T, name string) *metricdata.Metrics {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, testTymuxMetricReader.Collect(context.Background(), &rm))
+	for _, sm := range rm.ScopeMetrics {
+		for i := range sm.Metrics {
+			if sm.Metrics[i].Name == name {
+				return &sm.Metrics[i]
+			}
+		}
+	}
+	return nil
+}
+
+// sumForSubsystem sums an int64 Sum metric's data points whose "subsystem"
+// attribute equals subsystem, further filtered by reason when reason != ""
+// (session_lifecycle_active_generations carries no "reason" attribute, so
+// callers pass "" for that metric).
+func sumForSubsystem(t *testing.T, m *metricdata.Metrics, subsystem, reason string) int64 {
+	t.Helper()
+	if m == nil {
+		return 0
+	}
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "unexpected data type %T for %s", m.Data, m.Name)
+	var total int64
+	for _, dp := range sum.DataPoints {
+		sv, ok := dp.Attributes.Value(attribute.Key("subsystem"))
+		if !ok || sv.AsString() != subsystem {
+			continue
+		}
+		if reason != "" {
+			rv, ok := dp.Attributes.Value(attribute.Key("reason"))
+			if !ok || rv.AsString() != reason {
+				continue
+			}
+		}
+		total += dp.Value
+	}
+	return total
+}
 
 // fakeAttachStream is a hand-driven attachStream substitute: Receive()
 // plays back queued events (send more anytime via push) until either the
@@ -84,6 +149,33 @@ func (f *fakeAttachStream) sentRequests() []*v1.AttachRequest {
 
 var _ attachStream = (*fakeAttachStream)(nil)
 
+// wedgedAttachStream's Receive() never returns, regardless of ctx
+// cancellation — simulating incident #3's stuck reader (a transport that
+// doesn't honor context cancellation), the exact shape
+// teardownStandingStream's bounded wait (lifecycle.AwaitBounded) exists to
+// survive. Unlike fakeAttachStream, which selects on ctx.Done(), this type
+// deliberately never does.
+type wedgedAttachStream struct {
+	sent chan *v1.AttachRequest
+}
+
+func (w *wedgedAttachStream) Send(req *v1.AttachRequest) error {
+	select {
+	case w.sent <- req:
+	default:
+	}
+	return nil
+}
+
+func (w *wedgedAttachStream) Receive() (*v1.AttachEvent, error) {
+	select {} // never returns
+}
+
+func (w *wedgedAttachStream) CloseRequest() error  { return nil }
+func (w *wedgedAttachStream) CloseResponse() error { return nil }
+
+var _ attachStream = (*wedgedAttachStream)(nil)
+
 // startedSessionWithStream builds a started tymuxGRPCSession (via the
 // fakeTransport helpers in session_test.go) and returns it alongside the
 // fakeAttachStream the standing stream opened against, and the
@@ -148,7 +240,7 @@ func TestStandingStream_SnapshotEvent_SeedsLiveness(t *testing.T) {
 	// 2.2.1c) rather than trusting the cache, so assert on the cached
 	// field the reader goroutine actually writes instead.
 	concrete := sess.(*tymuxGRPCSession)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		concrete.mu.RLock()
 		defer concrete.mu.RUnlock()
 		return concrete.liveness == v1.Liveness_LIVENESS_DEAD
@@ -226,7 +318,7 @@ func TestStandingStream_ExitedEvent_UpdatesLivenessAndFiresRegisteredCallback(t 
 	}
 
 	concrete := sess.(*tymuxGRPCSession)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		concrete.mu.RLock()
 		defer concrete.mu.RUnlock()
 		return concrete.liveness == v1.Liveness_LIVENESS_DEAD
@@ -349,6 +441,17 @@ func setReconnectBackoff(sess TymuxManager, base, max time.Duration, maxAttempts
 	return c
 }
 
+// setTeardownWait overrides a session's teardownStandingStream bound (Task
+// 2.3.1a) — the production default (maxTeardownWait) would make wedged-
+// reader tests slow, mirroring setReconnectBackoff's convention above.
+func setTeardownWait(sess TymuxManager, wait time.Duration) *tymuxGRPCSession {
+	c := sess.(*tymuxGRPCSession)
+	c.mu.Lock()
+	c.teardownWait = wait
+	c.mu.Unlock()
+	return c
+}
+
 // --- Story 2.5.1 ---
 
 func TestReconnectLoop_DoesNotFire_OnDeliberateDetach(t *testing.T) {
@@ -374,7 +477,7 @@ func TestReconnectLoop_Fires_OnTransportErrorNotPrecededByDetach(t *testing.T) {
 
 	close(stream.events) // drop, not preceded by DetachSafely/Close
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return atomic.LoadInt32(&transport.attachCalls) >= 2
 	}, time.Second, time.Millisecond, "a non-deliberate stream end must trigger ReconnectLoop (a second Attach call)")
 }
@@ -432,6 +535,8 @@ func TestReconnectLoop_GivesUp_AfterMaxAttempts_ClosesAttachChannel_AndFiresDist
 	reasons := make(chan string, 1)
 	sess.SetOnExitCallback(func(reason string) { reasons <- reason })
 
+	before := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_reconnect", "reconnect_exhausted")
+
 	done, err := sess.Attach()
 	require.NoError(t, err)
 
@@ -449,6 +554,11 @@ func TestReconnectLoop_GivesUp_AfterMaxAttempts_ClosesAttachChannel_AndFiresDist
 	case <-time.After(time.Second):
 		t.Fatal("exit callback never fired after ReconnectLoop exhaustion")
 	}
+
+	// REQ-10: true exhaustion (closing never observed) must be recorded
+	// distinctly from a deliberate-close interruption.
+	after := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_reconnect", "reconnect_exhausted")
+	assert.Equal(t, before+1, after, "session_lifecycle_ends_total{subsystem=tymux_reconnect,reason=reconnect_exhausted} must increment by exactly 1")
 }
 
 // TestReconnectLoop_NoDuplicateRenderedOutput_AcrossReconnectBoundary is
@@ -496,7 +606,7 @@ func TestReconnectLoop_NoDuplicateRenderedOutput_AcrossReconnectBoundary(t *test
 	}
 	assert.Contains(t, string(redraw), "RW")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		secondMu.Lock()
 		defer secondMu.Unlock()
 		return second != nil
@@ -557,7 +667,7 @@ func TestReconnectLoop_DetectsDaemonRestart_RevivesSession_AndSurfacesDistinctSt
 	}
 
 	concrete := sess.(*tymuxGRPCSession)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		restarted, _ := concrete.BackendRestarted()
 		return restarted
 	}, time.Second, time.Millisecond, "BackendRestarted should report true after a FailedPrecondition-detected daemon restart")
@@ -597,11 +707,20 @@ func TestReadAttachLoop_CleanExitThenStreamEnd_DoesNotReconnectOrRevive(t *testi
 	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Exited{Exited: &v1.ExitStatus{Code: &code}}})
 
 	concrete := sess.(*tymuxGRPCSession)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		concrete.mu.RLock()
 		defer concrete.mu.RUnlock()
 		return concrete.exited
 	}, time.Second, time.Millisecond, "Exited event should be observed before the stream ends")
+
+	// Task 2.4.1b: tie the end-to-end behavioral proof above to the new
+	// classifier directly — classifyStreamEnd must already report
+	// ReasonCleanExit for this exact exited-before-Receive()-error
+	// sequence, not just "the end-to-end behavior happens to be correct."
+	liveCtx, cancelLiveCtx := context.WithCancel(context.Background())
+	defer cancelLiveCtx()
+	assert.Equal(t, lifecycle.ReasonCleanExit, concrete.classifyStreamEnd(liveCtx),
+		"classifyStreamEnd must report ReasonCleanExit once Exited has been observed, even with a live (non-canceled) ctx")
 
 	close(stream.events) // server closes the stream right after Exited (io.EOF)
 
@@ -632,7 +751,7 @@ func TestReconnectLoop_OrdinaryDrop_DoesNotSetBackendRestarted(t *testing.T) {
 
 	close(stream.events) // ordinary transport drop, pane stays live
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return atomic.LoadInt32(&transport.attachCalls) >= 2
 	}, time.Second, time.Millisecond)
 	time.Sleep(50 * time.Millisecond)
@@ -640,6 +759,198 @@ func TestReconnectLoop_OrdinaryDrop_DoesNotSetBackendRestarted(t *testing.T) {
 	concrete := sess.(*tymuxGRPCSession)
 	restarted, _ := concrete.BackendRestarted()
 	assert.False(t, restarted, "an ordinary transport blip must not be surfaced as a daemon restart")
+}
+
+// --- Phase 2 (session-lifecycle-state-machine): classifyStreamEnd, lifecycle wiring ---
+
+// TestClassifyStreamEnd_AllFourOrigins is Story 2.1.1/2.4.2's direct
+// table-driven unit test of classifyStreamEnd in isolation, independent of
+// any readAttachLoop/RPC-mock setup.
+func TestClassifyStreamEnd_AllFourOrigins(t *testing.T) {
+	tests := []struct {
+		name        string
+		closing     bool
+		exited      bool
+		ctxCanceled bool
+		want        lifecycle.Reason
+	}{
+		{
+			name:        "closing wins over exited and a canceled ctx",
+			closing:     true,
+			exited:      true,
+			ctxCanceled: true,
+			want:        lifecycle.ReasonDeliberateClose,
+		},
+		{
+			name:   "exited wins over ctx when not closing",
+			exited: true,
+			want:   lifecycle.ReasonCleanExit,
+		},
+		{
+			name:        "a canceled ctx alone is a deliberate supersede",
+			ctxCanceled: true,
+			want:        lifecycle.ReasonDeliberateSupersede,
+		},
+		{
+			name: "none of the three signals fired is a transport drop",
+			want: lifecycle.ReasonTransportDrop,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := NewTymuxGRPCSession(&fakeTransport{})
+			concrete := sess.(*tymuxGRPCSession)
+			concrete.closing.Store(tt.closing)
+			concrete.mu.Lock()
+			concrete.exited = tt.exited
+			concrete.mu.Unlock()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.ctxCanceled {
+				cancel()
+			}
+
+			assert.Equal(t, tt.want, concrete.classifyStreamEnd(ctx))
+		})
+	}
+}
+
+// TestOpenStandingStream_ReadAttachLoop_CleanExit_IncrementsEndsTotalWithCleanExitReason
+// is REQ-10's happy-path observability assertion: a clean pane exit followed
+// by stream end must increment session_lifecycle_ends_total with
+// reason=clean_exit for subsystem=tymux_stream exactly once.
+func TestOpenStandingStream_ReadAttachLoop_CleanExit_IncrementsEndsTotalWithCleanExitReason(t *testing.T) {
+	sess, stream, _ := startedSessionWithStream(t)
+
+	before := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_stream", "clean_exit")
+
+	done, err := sess.Attach()
+	require.NoError(t, err)
+
+	code := int32(0)
+	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Exited{Exited: &v1.ExitStatus{Code: &code}}})
+	close(stream.events) // server closes the stream right after Exited (io.EOF)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Attach's channel never closed after a clean exit followed by stream end")
+	}
+
+	wait.RequireEventually(t, func() bool {
+		after := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_stream", "clean_exit")
+		return after == before+1
+	}, time.Second, time.Millisecond,
+		"session_lifecycle_ends_total{subsystem=tymux_stream,reason=clean_exit} must increment by exactly 1")
+}
+
+// TestReconnectLoop_ClosingDuringExhaustion_RecordsDeliberateCloseNotExhausted
+// is REQ-10's branch-distinction assertion: when ReconnectLoop observes
+// s.closing.Load() == true (a deliberate Close()/DetachSafely()), it must
+// record reason=deliberate_close, never reason=reconnect_exhausted, even
+// though both share the same "gave up" outward return value.
+func TestReconnectLoop_ClosingDuringExhaustion_RecordsDeliberateCloseNotExhausted(t *testing.T) {
+	sess, _, _ := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 3)
+	concrete.beginClosing()
+
+	beforeClose := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_reconnect", "deliberate_close")
+	beforeExhausted := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_reconnect", "reconnect_exhausted")
+
+	_, _, ok, reason := concrete.ReconnectLoop(context.Background(), "pane-1", "error")
+	assert.False(t, ok)
+	assert.Equal(t, lifecycle.ReasonDeliberateClose, reason, "ReconnectLoop must return the same Reason it recorded")
+
+	afterClose := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_reconnect", "deliberate_close")
+	afterExhausted := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_reconnect", "reconnect_exhausted")
+
+	assert.Equal(t, beforeClose+1, afterClose, "closing observed mid-loop must record deliberate_close")
+	assert.Equal(t, beforeExhausted, afterExhausted, "closing observed mid-loop must not also record reconnect_exhausted")
+}
+
+// TestOpenStandingStream_TearDownForReopen_DoesNotDeadlock_WhenOldStreamWouldOtherwiseReconnect
+// is incident #2's regression test: openStandingStream's own tear-down-
+// before-reopen (a plain reopen, not a Close()/DetachSafely()) cancels the
+// old stream's ctx without ever setting s.closing. Before classifyStreamEnd
+// (Task 2.1.1a) added the ctx.Err() check, the old reader's Receive() error
+// fell through to ReconnectLoop instead of exiting, and since nothing
+// closes s.abortReconnect for a mere reopen, ReconnectLoop's redial blocks
+// forever on its own Receive() — wedging teardownStandingStream's wait on
+// the old generation's `done` and, transitively, the reopening
+// Start()/RestoreWithWorkDir() call itself.
+func TestOpenStandingStream_TearDownForReopen_DoesNotDeadlock_WhenOldStreamWouldOtherwiseReconnect(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 50)
+
+	dir, err := sess.GetCurrentWorkingDirectory()
+	require.NoError(t, err)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- sess.Start(dir) // reopen: tears down the old stream first
+	}()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("reopen deadlocked waiting for the old reader goroutine to exit — its ctx cancellation was misclassified as a reconnectable drop")
+	}
+
+	assert.EqualValues(t, 2, atomic.LoadInt32(&transport.attachCalls),
+		"reopen must open exactly one new Attach stream, not trigger the old reader's ReconnectLoop")
+}
+
+// TestOpenStandingStream_TearDownForReopen_ProceedsAnyway_WhenOldReaderIsWedged
+// is incident #3's regression test: a reader goroutine whose Receive()
+// never returns, even once its stream's ctx is canceled (a transport that
+// doesn't honor context cancellation) — the case classifyStreamEnd's
+// ctx.Err() check cannot help with, since the old reader never gets back
+// into readAttachLoop's error-handling branch at all. teardownStandingStream
+// must still abandon it and let the reopen proceed, bounded by
+// s.teardownWait via lifecycle.AwaitBounded (Task 2.3.1a) — and the
+// abandoned generation's session_lifecycle_active_generations slot must
+// stay elevated, since its EndGeneration is never reached (Task 2.2.2a,
+// REQ-11).
+func TestOpenStandingStream_TearDownForReopen_ProceedsAnyway_WhenOldReaderIsWedged(t *testing.T) {
+	dir := t.TempDir()
+	wedged := &wedgedAttachStream{sent: make(chan *v1.AttachRequest, 4)}
+	transport := &fakeTransport{
+		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			return connect.NewResponse(fakeSession("sess-1", "pane-1", dir, v1.Liveness_LIVENESS_LIVE)), nil
+		},
+	}
+	transport.attachFn = func(ctx context.Context) attachStream { return wedged }
+
+	sess := NewTymuxGRPCSession(transport)
+	setTeardownWait(sess, 50*time.Millisecond)
+	require.NoError(t, sess.Start(dir))
+	t.Cleanup(func() { _ = sess.Close() })
+
+	before := sumForSubsystem(t, collectMetric(t, "session_lifecycle_active_generations"), "tymux_stream", "")
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- sess.Start(dir) // reopen: old reader is wedged in wedged.Receive()
+	}()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("reopen did not proceed within 2s despite teardownWait bounding the wedged old reader's wait")
+	}
+
+	assert.EqualValues(t, 2, atomic.LoadInt32(&transport.attachCalls),
+		"reopen must still open a fresh Attach stream despite the old reader being wedged")
+
+	wait.RequireEventually(t, func() bool {
+		after := sumForSubsystem(t, collectMetric(t, "session_lifecycle_active_generations"), "tymux_stream", "")
+		return after == before+1
+	}, time.Second, time.Millisecond,
+		"the abandoned generation must stay counted as active — its EndGeneration is never reached")
 }
 
 // TestClampResizeDim is the regression test for the gosec G115 fix.

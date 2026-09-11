@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,9 +15,13 @@ import (
 	connect "connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"gopkg.in/yaml.v3"
 )
 
@@ -181,7 +188,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 		})
 	}
 	// Wait for the async write to complete by polling LoadWindow until all 3 entries appear.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		return err == nil && len(entries) >= 3
 	}, 2*time.Second, 10*time.Millisecond, "analytics entries must be persisted within 2s")
@@ -1785,4 +1792,542 @@ func TestRebuildMu_ForcesSerialization_ConcurrentPathBlocksUntilFirstCompletes(t
 		}
 	}
 	assert.True(t, found, "goroutine B's rebuildClassifier must not have clobbered A's claude-settings rule")
+}
+
+// ─── Epic 2.2: reconcilePendingApprovals() core loop ─────────────────────────
+
+// fakeReconciliationResolver is a lightweight, in-memory reconciliationResolver double for
+// tests that only need to exercise reconcilePendingApprovals' classify-and-branch logic
+// (Task 2.2.2a's guidance) — no real ApprovalStore needed. Safe for concurrent use since
+// reconcilePendingApprovals itself may run on a background goroutine.
+type fakeReconciliationResolver struct {
+	mu sync.Mutex
+
+	items []*PendingApproval
+
+	// resolveErr maps approval ID -> error ResolveApprovalReconciled should return for it.
+	// A missing entry means "succeed" (nil error).
+	resolveErr map[string]error
+	// panicIDs marks approval IDs whose ResolveApprovalReconciled call panics instead of
+	// returning, simulating a fault partway through a multi-item batch.
+	panicIDs map[string]bool
+	// pending overrides IsApprovalPending's return per ID. A missing entry defaults to true.
+	pending map[string]bool
+
+	calls         []string // every approval ID ResolveApprovalReconciled was invoked with
+	resolvedCalls []string // approval IDs for which ResolveApprovalReconciled returned nil
+}
+
+func (f *fakeReconciliationResolver) ListPendingApprovalsInternal() []*PendingApproval {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*PendingApproval, len(f.items))
+	copy(out, f.items)
+	return out
+}
+
+func (f *fakeReconciliationResolver) ResolveApprovalReconciled(_ context.Context, approvalID, _, _ string) error {
+	f.mu.Lock()
+	if f.panicIDs[approvalID] {
+		f.mu.Unlock()
+		panic("fakeReconciliationResolver: simulated panic resolving " + approvalID)
+	}
+	f.calls = append(f.calls, approvalID)
+	err := f.resolveErr[approvalID]
+	if err == nil {
+		f.resolvedCalls = append(f.resolvedCalls, approvalID)
+	}
+	f.mu.Unlock()
+	return err
+}
+
+func (f *fakeReconciliationResolver) IsApprovalPending(approvalID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if v, ok := f.pending[approvalID]; ok {
+		return v
+	}
+	return true
+}
+
+func (f *fakeReconciliationResolver) resolved(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.resolvedCalls {
+		if c == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *fakeReconciliationResolver) wasCalled(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.calls {
+		if c == id {
+			return true
+		}
+	}
+	return false
+}
+
+// bashApproval builds a minimal pending Bash approval for reconciliation tests.
+func bashApproval(id, sessionID, command string, createdAt time.Time) *PendingApproval {
+	return &PendingApproval{
+		ID:        id,
+		SessionID: sessionID,
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{"command": command},
+		CreatedAt: createdAt,
+	}
+}
+
+// addBashRuleDirect installs an AutoAllow rule directly into svc's live classifier,
+// bypassing UpsertApprovalRule/rebuildClassifier so no reconciliation goroutine is spawned as
+// a side effect of adding the rule — for tests that drive reconcilePendingApprovals(Safe)
+// themselves, synchronously, and would otherwise race a background pass triggered by the
+// RPC path (upsertAllowRule below).
+func addBashRuleDirect(svc *RulesService, id, name, commandPattern string) {
+	rule := classifier.Rule{
+		ID: id, Name: name, ToolName: "Bash",
+		Decision: classifier.AutoAllow, Enabled: true, Source: "user", Priority: 999,
+	}
+	if commandPattern != "" {
+		rule.CommandPattern = regexp.MustCompile(commandPattern)
+	}
+	svc.classifier.ReplaceRules(append(svc.classifier.Rules(), rule))
+}
+
+// upsertAllowRule adds a user rule via the real UpsertApprovalRule RPC (triggering the same
+// rebuildClassifier + async reconciliation path production code takes), scoped to Bash
+// commands matching commandPattern (empty means "any Bash command"). Only use this in tests
+// that want that async pass to be the ONE reconciliation trigger in play — set
+// reconcileDoneHook before calling, and never also call reconcilePendingApprovals(Safe)
+// manually in the same test, or the two passes race to invoke the hook (see
+// addBashRuleDirect for tests that need a rule present without spawning a pass).
+func upsertAllowRule(t *testing.T, svc *RulesService, id, name, commandPattern string) {
+	t.Helper()
+	_, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:             id,
+			Name:           name,
+			ToolName:       "Bash",
+			CommandPattern: commandPattern,
+			Decision:       sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:        true,
+			Source:         "user",
+			Priority:       999,
+		},
+	}))
+	require.NoError(t, err)
+}
+
+// TestReconcilePendingApprovals_AutoAllowResolves is Task 2.2.2a: a pending Escalate item
+// that now classifies AutoAllow under a freshly-added rule gets resolved end-to-end, through
+// the real ApprovalStore/ApprovalService/NotificationHistoryStore chain, with the
+// notification record stamped reconciled: "true".
+func TestReconcilePendingApprovals_AutoAllowResolves(t *testing.T) {
+	store := NewApprovalStore("")
+	notifStore := newTestNotificationStore(t)
+	approvalSvc := NewApprovalService(store)
+	approvalSvc.SetNotificationStore(notifStore)
+
+	rulesSvc := newRulesService(t)
+	rulesSvc.SetApprovalService(approvalSvc)
+
+	a := bashApproval("appr-1a2b3c", "sess-a1b2c3", "git status", time.Now())
+	require.NoError(t, store.Create(a))
+	require.NoError(t, notifStore.Append(&notifications.NotificationRecord{
+		ID:               "appr-1a2b3c",
+		SessionID:        "sess-a1b2c3",
+		NotificationType: 1, // NOTIFICATION_TYPE_APPROVAL_NEEDED
+		CreatedAt:        time.Now(),
+	}))
+
+	doneCh := make(chan struct{})
+	rulesSvc.reconcileDoneHook = func() { close(doneCh) }
+
+	upsertAllowRule(t, rulesSvc, "auto-allow-git-status", "Auto-allow safe git status checks", "^git status$")
+	<-doneCh
+
+	_, stillPending := store.Get("appr-1a2b3c")
+	assert.False(t, stillPending, "resolved approval must be removed from ApprovalStore")
+
+	rec, ok := notifStore.GetByID("appr-1a2b3c")
+	require.True(t, ok)
+	assert.Equal(t, "allow", rec.Metadata["approval_decision"])
+	assert.Equal(t, "Auto-allow safe git status checks", rec.Metadata["classifier_rule_name"])
+	assert.Equal(t, "true", rec.Metadata["reconciled"])
+}
+
+// upsertDenyRule is upsertAllowRule's AutoDeny counterpart — same real-RPC-path caveats apply.
+func upsertDenyRule(t *testing.T, svc *RulesService, id, name, commandPattern string) {
+	t.Helper()
+	_, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:             id,
+			Name:           name,
+			ToolName:       "Bash",
+			CommandPattern: commandPattern,
+			Decision:       sessionv1.AutoDecision_AUTO_DECISION_DENY,
+			Enabled:        true,
+			Source:         "user",
+			Priority:       999,
+		},
+	}))
+	require.NoError(t, err)
+}
+
+// TestReconcilePendingApprovals_AutoDenyResolves is review finding #5: every existing
+// reconciliation test only installs an AutoAllow-classifying rule, leaving the deny-resolution
+// branch (rules_service.go's `decision := "deny"` fallback) completely uncovered. Parallels
+// TestReconcilePendingApprovals_AutoAllowResolves's structure with an AutoDeny rule instead.
+func TestReconcilePendingApprovals_AutoDenyResolves(t *testing.T) {
+	store := NewApprovalStore("")
+	notifStore := newTestNotificationStore(t)
+	approvalSvc := NewApprovalService(store)
+	approvalSvc.SetNotificationStore(notifStore)
+
+	rulesSvc := newRulesService(t)
+	rulesSvc.SetApprovalService(approvalSvc)
+
+	a := bashApproval("appr-7g8h9i", "sess-d4e5f6", "rm -rf /tmp/scratch", time.Now())
+	require.NoError(t, store.Create(a))
+	require.NoError(t, notifStore.Append(&notifications.NotificationRecord{
+		ID:               "appr-7g8h9i",
+		SessionID:        "sess-d4e5f6",
+		NotificationType: 1, // NOTIFICATION_TYPE_APPROVAL_NEEDED
+		CreatedAt:        time.Now(),
+	}))
+
+	doneCh := make(chan struct{})
+	rulesSvc.reconcileDoneHook = func() { close(doneCh) }
+
+	upsertDenyRule(t, rulesSvc, "auto-deny-rm-rf", "Auto-deny destructive rm -rf", "^rm -rf")
+	<-doneCh
+
+	_, stillPending := store.Get("appr-7g8h9i")
+	assert.False(t, stillPending, "resolved approval must be removed from ApprovalStore")
+
+	rec, ok := notifStore.GetByID("appr-7g8h9i")
+	require.True(t, ok)
+	assert.Equal(t, "deny", rec.Metadata["approval_decision"])
+	assert.Equal(t, "Auto-deny destructive rm -rf", rec.Metadata["classifier_rule_name"])
+	assert.Equal(t, "true", rec.Metadata["reconciled"])
+}
+
+// TestReconcilePendingApprovals_StillEscalates_LeftUntouched is Task 2.2.2b: a rule that
+// doesn't match the pending item's tool call must never call ResolveApprovalReconciled, and
+// the item remains unresolved.
+func TestReconcilePendingApprovals_StillEscalates_LeftUntouched(t *testing.T) {
+	rulesSvc := newRulesService(t)
+
+	fake := &fakeReconciliationResolver{
+		items: []*PendingApproval{bashApproval("appr-4d5e6f", "sess-x", "rm -rf /tmp/scratch", time.Now())},
+	}
+	rulesSvc.approvalSvc = fake
+
+	// New rule matches "git status", not the pending item's "rm -rf /tmp/scratch".
+	addBashRuleDirect(rulesSvc, "auto-allow-git-status-b", "Auto-allow safe git status checks", "^git status$")
+
+	doneCh := make(chan struct{})
+	rulesSvc.reconcileDoneHook = func() { close(doneCh) }
+	rulesSvc.reconcilePendingApprovalsSafe()
+	<-doneCh
+
+	assert.False(t, fake.wasCalled("appr-4d5e6f"), "a still-escalating item must never reach ResolveApprovalReconciled")
+}
+
+// TestReconcilePendingApprovals_HumanWinsRace is Task 2.2.2c, the single highest-risk test
+// in the plan (validation.md's dedicated Concurrency Test Design section): a real concurrent
+// race between a human's in-flight resolution and a reconciliation pass, synchronized with
+// unbuffered channel send/close/receive — never time.Sleep — so the interleaving is
+// deterministic on every run.
+func TestReconcilePendingApprovals_HumanWinsRace(t *testing.T) {
+	store := NewApprovalStore("")
+	approvalSvc := NewApprovalService(store)
+	rulesSvc := newRulesService(t)
+	rulesSvc.SetApprovalService(approvalSvc)
+
+	pendingApproval := bashApproval("appr-race", "sess-race", "rm -rf /tmp/scratch", time.Now())
+	require.NoError(t, store.Create(pendingApproval))
+
+	humanClaimed := make(chan struct{})
+	releaseHuman := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	// Human-side goroutine, deliberately isolated to the exact two ApprovalStore primitive
+	// calls resolveApproval's human branch makes, so the sync point lands exactly on the
+	// arbitration boundary rather than inside unrelated CI-guard/stamping I/O.
+	go func() {
+		defer wg.Done()
+		store.MarkHumanResolving("appr-race")
+		close(humanClaimed) // happens-before: reconciliation's IsHumanResolving check
+		<-releaseHuman
+		_ = store.Resolve("appr-race", ApprovalDecision{Behavior: "deny", Message: "blocking this"})
+		store.ClearHumanResolving("appr-race")
+	}()
+
+	// Wait for the claim, THEN attempt reconciliation — this ordering (not a hoped-for
+	// interleaving) is what makes the race deterministic.
+	<-humanClaimed
+	err := approvalSvc.ResolveApprovalReconciled(context.Background(), "appr-race", "allow", "Auto-allow safe git status checks")
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAborted, connect.CodeOf(err))
+
+	stillPending := false
+	for _, a := range store.ListAll() {
+		if a.ID == "appr-race" {
+			stillPending = true
+		}
+	}
+	assert.True(t, stillPending, "reconciliation must never touch the store while a human decision is in flight")
+
+	close(releaseHuman) // let the human's Resolve proceed
+	wg.Wait()
+
+	// Ground-truth assertion: read the delivered decision directly off the approval's own
+	// channel, not inferred from error codes or store absence alone.
+	decision := <-pendingApproval.decisionCh
+	assert.Equal(t, "deny", decision.Behavior)
+	assert.Equal(t, "blocking this", decision.Message)
+
+	for _, a := range store.ListAll() {
+		assert.NotEqual(t, "appr-race", a.ID, "appr-race should be resolved and gone")
+	}
+
+	// Re-run the identical interleaving through the full reconcilePendingApprovals loop
+	// (not just a direct ResolveApprovalReconciled call) with a fresh item, to confirm
+	// counts.deferredToHuman increments and the loop's own log line fires. addBashRuleDirect
+	// (not upsertAllowRule) so adding the rule doesn't itself spawn a competing async pass
+	// racing the manual reconcilePendingApprovals call below.
+	addBashRuleDirect(rulesSvc, "race-loop-rule", "Auto-allow safe git status checks", "^git status$")
+
+	item2 := bashApproval("appr-race-2", "sess-race-2", "git status", time.Now())
+	require.NoError(t, store.Create(item2))
+
+	humanClaimed2 := make(chan struct{})
+	releaseHuman2 := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		store.MarkHumanResolving("appr-race-2")
+		close(humanClaimed2)
+		<-releaseHuman2
+		_ = store.Resolve("appr-race-2", ApprovalDecision{Behavior: "deny", Message: "blocking this too"})
+		store.ClearHumanResolving("appr-race-2")
+	}()
+	<-humanClaimed2
+
+	logs := captureLogs(t)
+	counts := &reconcileCounts{}
+	rulesSvc.reconcilePendingApprovals(counts)
+	assert.Equal(t, 1, counts.deferredToHuman)
+	assert.Contains(t, logs.String(), "reconciliation deferred to in-flight human decision")
+
+	close(releaseHuman2)
+	wg.Wait()
+}
+
+// TestReconcilePendingApprovals_CapsAtMaxPerPass is Task 2.2.2d: a backlog larger than
+// maxReconcileAutoResolvesPerPass resolves exactly the cap and skips the rest, and the same
+// oldest-first set resolves across repeated passes (pre-mortem.md #5's determinism guard).
+func TestReconcilePendingApprovals_CapsAtMaxPerPass(t *testing.T) {
+	rulesSvc := newRulesService(t)
+	addBashRuleDirect(rulesSvc, "allow-all-bash-cap-test", "Allow all bash (test)", "")
+
+	const total = maxReconcileAutoResolvesPerPass + 5
+	base := time.Now()
+	items := make([]*PendingApproval, total)
+	for i := 0; i < total; i++ {
+		// Deliberately out-of-construction-order CreatedAt: index 0 gets the newest
+		// timestamp, index total-1 the oldest, so a correct implementation must actually
+		// sort rather than rely on slice/construction order.
+		items[i] = bashApproval(fmt.Sprintf("appr-%03d", i), fmt.Sprintf("sess-%03d", i), "echo hi",
+			base.Add(time.Duration(total-i)*time.Second))
+	}
+	fake := &fakeReconciliationResolver{items: items}
+	rulesSvc.approvalSvc = fake
+
+	// Go through reconcilePendingApprovalsSafe (not a direct reconcilePendingApprovals call)
+	// for this assertion — the "capped" summary log is emitted by Safe's deferred summary
+	// log, not by the inner loop function itself.
+	logs := captureLogs(t)
+	doneCh := make(chan struct{})
+	rulesSvc.reconcileDoneHook = func() { close(doneCh) }
+	rulesSvc.reconcilePendingApprovalsSafe()
+	<-doneCh
+
+	assert.Len(t, fake.resolvedCalls, maxReconcileAutoResolvesPerPass)
+	assert.Contains(t, logs.String(), "resolved_count=50")
+	assert.Contains(t, logs.String(), "skipped_count=5")
+	assert.Contains(t, logs.String(), "capped=true")
+
+	// Compute the expected oldest-first resolved set independently of the loop under test.
+	sortedIdx := make([]int, total)
+	for i := range sortedIdx {
+		sortedIdx[i] = i
+	}
+	sort.Slice(sortedIdx, func(i, j int) bool {
+		return items[sortedIdx[i]].CreatedAt.Before(items[sortedIdx[j]].CreatedAt)
+	})
+	expectedResolved := make(map[string]bool, maxReconcileAutoResolvesPerPass)
+	for _, idx := range sortedIdx[:maxReconcileAutoResolvesPerPass] {
+		expectedResolved[items[idx].ID] = true
+	}
+	for _, id := range fake.resolvedCalls {
+		assert.True(t, expectedResolved[id], "resolved id %s was not among the oldest %d", id, maxReconcileAutoResolvesPerPass)
+	}
+
+	// Second pass: simulate the next rebuild seeing only what pass one left behind, and
+	// assert it resolves exactly the remainder — pinning that repeated capped passes are
+	// monotonic instead of touching an arbitrary subset each time.
+	remaining := make([]*PendingApproval, 0, len(sortedIdx)-maxReconcileAutoResolvesPerPass)
+	for _, idx := range sortedIdx[maxReconcileAutoResolvesPerPass:] {
+		remaining = append(remaining, items[idx])
+	}
+	require.Len(t, remaining, 5)
+	fake2 := &fakeReconciliationResolver{items: remaining}
+	rulesSvc.approvalSvc = fake2
+	counts2 := &reconcileCounts{}
+	rulesSvc.reconcilePendingApprovals(counts2)
+	assert.Equal(t, 5, counts2.resolved)
+	assert.Equal(t, 0, counts2.skipped)
+}
+
+// TestReconcilePendingApprovals_PanicIsRecovered is Task 2.2.2e, the second hardest test in
+// the plan (validation.md's dedicated Panic-Recovery Test Design section): a panic partway
+// through a batch must never crash the process, must be logged, and the pass-complete
+// summary must still report the real partial-progress counts reached before the panic —
+// proving the counters live in reconcilePendingApprovalsSafe's frame, not the panicking
+// function's.
+func TestReconcilePendingApprovals_PanicIsRecovered(t *testing.T) {
+	rulesSvc := newRulesService(t)
+	addBashRuleDirect(rulesSvc, "allow-all-bash-panic-test", "Allow all bash (test)", "")
+
+	base := time.Now()
+	item1 := bashApproval("item1", "s1", "echo 1", base.Add(1*time.Second))
+	item2 := bashApproval("item2", "s2", "echo 2", base.Add(2*time.Second))
+	panicItem := bashApproval("item3-panic", "s3", "echo 3", base.Add(3*time.Second))
+
+	fake := &fakeReconciliationResolver{
+		items:    []*PendingApproval{item1, item2, panicItem},
+		panicIDs: map[string]bool{"item3-panic": true},
+	}
+	rulesSvc.approvalSvc = fake
+
+	logs := captureLogs(t)
+	done := make(chan struct{})
+	rulesSvc.reconcileDoneHook = func() { close(done) }
+
+	require.NotPanics(t, func() {
+		rulesSvc.reconcilePendingApprovalsSafe()
+	})
+	<-done // deterministic completion signal, not a sleep
+
+	assert.Contains(t, logs.String(), "panic in reconcilePendingApprovals recovered")
+	assert.Contains(t, logs.String(), "reconciliation pass complete")
+	assert.Contains(t, logs.String(), "resolved_count=2", "item1+item2 resolved BEFORE the panic")
+	assert.Contains(t, logs.String(), "panicked=true")
+	assert.True(t, fake.resolved("item1"))
+	assert.True(t, fake.resolved("item2"))
+}
+
+// TestReconcilePendingApprovals_CIRedGuardDecline_LoggedAndCountedSeparately is Task 2.2.2f:
+// a genuine CI-red-guard decline during reconciliation must be logged and counted as
+// declined_by_ci_guard_count, never lost_to_concurrent_pass_count, and must leave the item
+// pending.
+func TestReconcilePendingApprovals_CIRedGuardDecline_LoggedAndCountedSeparately(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
+
+	store := NewApprovalStore("")
+	approvalSvc := NewApprovalService(store)
+	approvalSvc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("sess-ci-guard")})
+
+	rulesSvc := newRulesService(t)
+	rulesSvc.SetApprovalService(approvalSvc)
+
+	a := bashApproval("appr-ci-guard", "sess-ci-guard", "git status", time.Now())
+	require.NoError(t, store.Create(a))
+
+	logs := captureLogs(t)
+	doneCh := make(chan struct{})
+	rulesSvc.reconcileDoneHook = func() { close(doneCh) }
+
+	upsertAllowRule(t, rulesSvc, "auto-allow-git-status-ci", "Auto-allow safe git status checks", "^git status$")
+	<-doneCh
+
+	assert.True(t, approvalSvc.IsApprovalPending("appr-ci-guard"), "a CI-red-guard decline must leave the item pending")
+	assert.Contains(t, logs.String(), "reconciliation declined by CI-red guard")
+	assert.NotContains(t, logs.String(), "lost race to a concurrent reconciliation pass")
+	assert.Contains(t, logs.String(), "declined_by_ci_guard_count=1")
+	assert.Contains(t, logs.String(), "lost_to_concurrent_pass_count=0")
+}
+
+// TestReconcilePendingApprovals_LostToConcurrentPass_CountedSeparatelyFromCIGuard is Task
+// 2.2.2g, the counterpart to 2.2.2f: the same connect.CodeFailedPrecondition, but with the
+// item already gone from the store (IsApprovalPending false), must be counted as
+// lost_to_concurrent_pass_count, never declined_by_ci_guard_count.
+func TestReconcilePendingApprovals_LostToConcurrentPass_CountedSeparatelyFromCIGuard(t *testing.T) {
+	rulesSvc := newRulesService(t)
+	addBashRuleDirect(rulesSvc, "auto-allow-git-status-lost-race", "Auto-allow safe git status checks", "^git status$")
+
+	item := bashApproval("appr-lost-race", "sess-lost-race", "git status", time.Now())
+	fake := &fakeReconciliationResolver{
+		items: []*PendingApproval{item},
+		resolveErr: map[string]error{
+			"appr-lost-race": connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("already auto-resolved by rule %q while you were reviewing it", "some-other-rule")),
+		},
+		pending: map[string]bool{"appr-lost-race": false}, // concurrent pass already removed it
+	}
+	rulesSvc.approvalSvc = fake
+
+	logs := captureLogs(t)
+	counts := &reconcileCounts{}
+	rulesSvc.reconcilePendingApprovals(counts)
+
+	assert.Equal(t, 1, counts.lostToConcurrentPass)
+	assert.Equal(t, 0, counts.declinedByGuard)
+	assert.Contains(t, logs.String(), "reconciliation lost race to a concurrent reconciliation pass")
+	assert.NotContains(t, logs.String(), "declined by CI-red guard")
+}
+
+// TestReconcilePendingApprovals_WorktreeSettingsChange_DoesNotTrigger is Task 2.2.2h: it
+// pins the accepted limitation documented on Epic 2.2's Goal (pre-mortem.md #2) — a rule
+// added to the live classifier through any path other than UpsertApprovalRule/
+// rebuildClaudeSettingsRules (i.e. a session's per-worktree settings write, which never
+// reaches the server-cwd-only ClaudeSettingsWatcher) never triggers reconciliation, so a
+// pending item it would now cover is left untouched.
+func TestReconcilePendingApprovals_WorktreeSettingsChange_DoesNotTrigger(t *testing.T) {
+	store := NewApprovalStore("")
+	approvalSvc := NewApprovalService(store)
+	rulesSvc := newRulesService(t)
+	rulesSvc.SetApprovalService(approvalSvc)
+
+	a := bashApproval("appr-worktree", "sess-worktree", "git status", time.Now())
+	require.NoError(t, store.Create(a))
+
+	// Mimic a worktree-scoped settings write: mutate the live classifier directly, bypassing
+	// both rebuildClassifier (UpsertApprovalRule) and rebuildClaudeSettingsRules (the
+	// server-cwd-only ClaudeSettingsWatcher path) — neither of which a per-worktree settings
+	// file ever reaches. ReplaceRules is synchronous and spawns no goroutine of its own, so
+	// there is no async reconciliation to wait for: if none of the production call sites
+	// that spawn reconcilePendingApprovalsSafe ran, nothing ever will.
+	rulesSvc.classifier.ReplaceRules(append(rulesSvc.classifier.Rules(), classifier.Rule{
+		ID:             "worktree-rule",
+		Name:           "Auto-allow safe git status checks",
+		ToolName:       "Bash",
+		CommandPattern: regexp.MustCompile("^git status$"),
+		Decision:       classifier.AutoAllow,
+		Enabled:        true,
+		Source:         "user",
+		Priority:       999,
+	}))
+
+	all := store.ListAll()
+	require.Len(t, all, 1, "item must still be pending — reconciliation must never have run for a worktree-scoped settings change")
+	assert.Equal(t, "appr-worktree", all[0].ID)
 }

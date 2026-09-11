@@ -31,6 +31,7 @@ func TestConfiguredWorkflowEngine_should_MatchDomainValidTransitions_When_Databa
 
 	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, client))
 
+	//nolint:entfullscan test assertion over a test-scoped in-memory DB; verifies exactly the built-in stage count exists.
 	stages, err := client.BacklogStage.Query().All(ctx)
 	require.NoError(t, err)
 	require.Len(t, stages, len(builtInStageOrder), "expected exactly the 9 built-in stages to be seeded")
@@ -45,6 +46,7 @@ func TestConfiguredWorkflowEngine_should_MatchDomainValidTransitions_When_Databa
 		require.True(t, slugSeen[want], "expected built-in stage %q to be seeded", want)
 	}
 
+	//nolint:entfullscan test assertion over a test-scoped in-memory DB; must see every seeded edge to prove the seeded graph exactly matches domain.ValidTransitions().
 	transitions, err := client.StageTransition.Query().All(ctx)
 	require.NoError(t, err)
 
@@ -120,10 +122,12 @@ func TestConfiguredWorkflowEngine_should_ReturnEmptyGraph_When_SeedMigrationHasN
 	// (schema migration always runs) but hold zero rows, the exact
 	// pre-Epic-2.2.2-seed state Risk Control's "tables can exist unused"
 	// zero-downtime strategy describes.
+	//nolint:entfullscan test assertion over a test-scoped in-memory DB; verifies the unseeded table is exactly empty.
 	stages, err := client.BacklogStage.Query().All(ctx)
 	require.NoError(t, err)
 	require.Empty(t, stages, "unseeded backlog_stages must be empty, not nil-panic or error")
 
+	//nolint:entfullscan test assertion over a test-scoped in-memory DB; verifies the unseeded table is exactly empty.
 	transitions, err := client.StageTransition.Query().All(ctx)
 	require.NoError(t, err)
 	require.Empty(t, transitions, "unseeded stage_transitions must be empty, not nil-panic or error")

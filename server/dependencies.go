@@ -852,19 +852,26 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			}
 		}
 
-		// Step 6b: reconcile Stopped sessions that have a live tmux session.
-		// This handles the case where the server crashed or restarted while a session
-		// was running — the DB recorded Stopped but the tmux session survived.
-		// RecoverFromStopped resets the status to Ready (bypassing the terminal-state
-		// guard) so Start(false) can hot-attach to the existing tmux session.
+		// Step 6b: reconcile Stopped/PermanentlyFailed/Failed sessions that have a
+		// live tmux session. This handles the case where the server crashed or
+		// restarted while a session was running — the DB recorded a terminal
+		// status but the tmux session survived. RecoverFromStopped resets the
+		// status to Creating (bypassing the terminal-state guard) so Start(false)
+		// can hot-attach to the existing tmux session. Without this, a session
+		// that reached PermanentlyFailed/Failed before the restart is stuck
+		// forever: Step 6 above skips it (already !inst.Started() but Start(false)
+		// rejects the PermanentlyFailed/Failed -> Active transition), so every
+		// capture/resync against it fails indefinitely even though the
+		// underlying tmux session is fully functional. IsHotRestoreRecoverable is
+		// the single source of truth for this status set — see its doc comment.
 		for _, inst := range instances {
-			if inst.GetLifecycleStatus() == session.Stopped && inst.TmuxSessionExists() {
-				log.Info("Reconcile: session is Stopped in DB but tmux is alive — restoring", "session", inst.Title)
+			if inst.IsHotRestoreRecoverable() && inst.TmuxSessionExists() {
+				log.Info("Reconcile: session is terminal in DB but tmux is alive — restoring", "session", inst.Title, "status", inst.GetLifecycleStatus())
 				inst.RecoverFromStopped()
 				if err := inst.Start(false); err != nil {
 					log.Warn("Reconcile: hot-restore failed", "session", inst.Title, "err", err)
 				} else {
-					log.Info("Reconcile: restored session (was Stopped, now Running)", "session", inst.Title)
+					log.Info("Reconcile: restored session (was terminal, now Running)", "session", inst.Title)
 					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 				}
 			}

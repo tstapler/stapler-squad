@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session/streamhub"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // fakeSessionController is a minimal streamhub.SessionController test double
@@ -98,7 +99,7 @@ func TestWebSocketTransport_should_DetachSubscriberExactlyOnce_When_CloseCalledA
 	require.NoError(t, transport.Close())
 	require.NoError(t, transport.Close()) // second call must be a no-op, not a deadlock or double-detach
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return hub.SubscriberCount() == 0
 	}, time.Second, 5*time.Millisecond, "subscriber should be detached exactly once")
 }
@@ -153,10 +154,12 @@ func TestWebSocketTransport_should_UnblockRead_When_HubTearsDown(t *testing.T) {
 	}()
 
 	require.NoError(t, hub.ForceTeardown())
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
 	select {
 	case err := <-readDone:
 		require.Error(t, err)
-	case <-time.After(time.Second):
+	case <-timer.C:
 		t.Fatal("hub teardown left the WebSocket input read blocked on a dead output stream")
 	}
 }

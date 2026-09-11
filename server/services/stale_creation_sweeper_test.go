@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -47,7 +48,7 @@ func backdateCreationProgress(t *testing.T, storage *session.Storage, uuid strin
 }
 
 func TestStaleCreationSweeper_should_FlipToFailedStale_When_LastProgressExceedsThreshold(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	writeCreationStaleConfig(t, os.Getenv("STAPLER_SQUAD_TEST_DIR"), 10)
 
 	storage := createTestStorage(t)
@@ -89,7 +90,7 @@ func TestStaleCreationSweeper_should_FlipToFailedStale_When_LastProgressExceedsT
 }
 
 func TestStaleCreationSweeper_should_LeaveInstanceUntouched_When_BelowThreshold(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	writeCreationStaleConfig(t, os.Getenv("STAPLER_SQUAD_TEST_DIR"), 10)
 
 	storage := createTestStorage(t)
@@ -124,7 +125,7 @@ func TestStaleCreationSweeper_should_LeaveInstanceUntouched_When_BelowThreshold(
 // task and on backdateCreationProgress's doc comment for why only the clock is
 // fast-forwarded afterward, not the row's existence.
 func TestStaleCreationSweeper_should_FlipReloadedInstance_When_OrphanedAcrossRestart(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	writeCreationStaleConfig(t, os.Getenv("STAPLER_SQUAD_TEST_DIR"), 10)
 
 	storage := createTestStorage(t)
@@ -173,7 +174,7 @@ func TestStaleCreationSweeper_should_FlipReloadedInstance_When_OrphanedAcrossRes
 // must still go stale on schedule, using CreatedAt as the baseline instead of the
 // zero-valued CreationProgressUpdatedAt.
 func TestStaleCreationSweeper_should_UseCreatedAtBaseline_When_NoProgressUpdateEverRecorded(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	writeCreationStaleConfig(t, os.Getenv("STAPLER_SQUAD_TEST_DIR"), 10)
 
 	storage := createTestStorage(t)
@@ -207,7 +208,7 @@ func TestStaleCreationSweeper_should_UseCreatedAtBaseline_When_NoProgressUpdateE
 // no failure reason, or Failed/Stale), never a mix of the two or a status stuck
 // at Creating.
 func TestStaleCreationSweeper_should_ResolveDeterministically_When_RacingLatePipelineSuccess(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	writeCreationStaleConfig(t, os.Getenv("STAPLER_SQUAD_TEST_DIR"), 10)
 
 	storage := createTestStorage(t)

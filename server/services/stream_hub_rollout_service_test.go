@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -18,7 +19,7 @@ import (
 // between tests (same isolation pattern as newIsolatedSlackConfigService).
 func newIsolatedStreamHubRolloutService(t *testing.T) *StreamHubRolloutService {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	return NewStreamHubRolloutService(nil)
 }
 
@@ -31,13 +32,17 @@ func TestGetStreamHubRolloutStatus_DefaultsToNoRehearsalNoOverrides(t *testing.T
 	assert.Empty(t, resp.Msg.SessionOverrides)
 }
 
-func TestGetStreamHubRolloutStatus_ReportsGlobalEnvVar(t *testing.T) {
+// TestGetStreamHubRolloutStatus_GlobalEnvVarAlwaysFalse is a regression
+// guard: STAPLER_SQUAD_USE_STREAM_HUB was removed in favor of the
+// "stream_hub" feature flag (see GlobalOverride), so GlobalEnvVarSet must
+// stay false even if that env var happens to be set in the environment.
+func TestGetStreamHubRolloutStatus_GlobalEnvVarAlwaysFalse(t *testing.T) {
 	s := newIsolatedStreamHubRolloutService(t)
 	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
 
 	resp, err := s.GetStreamHubRolloutStatus(context.Background(), connect.NewRequest(&sessionv1.GetStreamHubRolloutStatusRequest{}))
 	require.NoError(t, err)
-	assert.True(t, resp.Msg.GlobalEnvVarSet)
+	assert.False(t, resp.Msg.GlobalEnvVarSet)
 }
 
 func TestCompleteStreamHubRollbackRehearsal_SetsTimestamp(t *testing.T) {
@@ -89,7 +94,7 @@ func TestSetStreamHubSessionOverride_SetsAndClears(t *testing.T) {
 func TestSetStreamHubSessionOverride_HonorsCustomTmuxPrefix(t *testing.T) {
 	inst := &session.Instance{Title: "my-session", TmuxPrefix: "custom_"}
 	s := NewStreamHubRolloutService(nil)
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	s.findInstance = func(title string) *session.Instance {
 		if title == "my-session" {
 			return inst

@@ -14,10 +14,11 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { ReviewQueuePanel, isCreateRuleEligibleCategory } from "../ReviewQueuePanel";
 import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
+import { isReviewQueueVisible } from "@/lib/utils/reviewQueueVisibility";
 
 afterEach(() => {
   mockSearchParams = new URLSearchParams();
@@ -172,12 +173,23 @@ function countBy<T>(items: ReviewItem[], pick: (item: ReviewItem) => T): Map<T, 
   return counts;
 }
 
-function makeContextValue(items: ReviewItem[] = []) {
+function makeContextValue(
+  items: ReviewItem[] = [],
+  overrides: Partial<{
+    error: Error | null;
+    lastUpdatedAt: number | null;
+    autoResolvedRules: Record<string, string>;
+  }> = {}
+) {
   return {
     items,
     totalItems: items.length,
     loading: false,
     error: null,
+    // Defaults to "a successful fetch already completed" — matches the common case every
+    // pre-existing test exercises. Tests for Task 3.2.1d/e override this to null to exercise
+    // the first-load-failure takeover.
+    lastUpdatedAt: Date.now(),
     byPriority: countBy(items, (i) => i.priority),
     byReason: countBy(items, (i) => i.reason),
     averageAgeSeconds: 0,
@@ -185,6 +197,10 @@ function makeContextValue(items: ReviewItem[] = []) {
     refresh: mockRefresh,
     acknowledgeSession: mockAcknowledge,
     acknowledgeSessions: mockAcknowledgeSessions,
+    // Epic 2.3.2: sessionId -> rule name for rows in their "disable, don't hide"
+    // display window. Empty by default; tests for that behavior override this.
+    autoResolvedRules: {},
+    ...overrides,
   };
 }
 
@@ -320,7 +336,29 @@ describe("ReviewQueuePanel — bulk skip", () => {
 
     renderPanel();
 
-    expect(screen.getByTestId("skip-all-visible")).toHaveAccessibleName("Skip all 1 visible item");
+    expect(screen.getByTestId("skip-all-visible")).toHaveAccessibleName(
+      "Skip all 1 visible Needs a Decision item"
+    );
+  });
+
+  it("excludes Informational (LOW priority) items from the count and the bulk-skip call (validation.md: Bulk skip scoped to visible tier)", async () => {
+    confirmSpy.mockReturnValue(true);
+    const items = [
+      makeReviewItem({ sessionId: "s-nd-1", priority: Priority.HIGH }),
+      makeReviewItem({ sessionId: "s-nd-2", priority: Priority.MEDIUM }),
+      makeReviewItem({ sessionId: "s-info-1", priority: Priority.LOW }),
+      makeReviewItem({ sessionId: "s-info-2", priority: Priority.LOW }),
+    ];
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue(items));
+
+    renderPanel();
+
+    expect(screen.getByTestId("skip-all-visible")).toHaveTextContent("Skip all (2)");
+
+    fireEvent.click(screen.getByTestId("skip-all-visible"));
+
+    await waitFor(() => expect(mockAcknowledgeSessions).toHaveBeenCalledTimes(1));
+    expect(mockAcknowledgeSessions).toHaveBeenCalledWith(["s-nd-1", "s-nd-2"]);
   });
 
   it("hides the Branch row when branch is empty and shows it with the correct text when set", () => {
@@ -837,9 +875,13 @@ describe("ReviewQueuePanel — combinable filters", () => {
   });
 
   it("sorts by priority ascending when selected", () => {
-    const low = makeReviewItem({ sessionId: "s-low", sessionName: "Low Item", priority: Priority.LOW });
+    // Both items are non-Low priority (Epic 3.2.1 tiering — a Low item would land in the
+    // collapsed-by-default Informational tier, which unmounts its content while collapsed
+    // and would make this a tiering test, not a sort test) so both stay in the always-
+    // expanded "Needs a decision" tier and this exercises sort order in isolation.
+    const medium = makeReviewItem({ sessionId: "s-medium", sessionName: "Medium Item", priority: Priority.MEDIUM });
     const urgent = makeReviewItem({ sessionId: "s-urgent", sessionName: "Urgent Item", priority: Priority.URGENT });
-    mockUseReviewQueueContext.mockReturnValue(makeContextValue([low, urgent]));
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([medium, urgent]));
 
     renderPanel();
     openFilters();
@@ -849,7 +891,7 @@ describe("ReviewQueuePanel — combinable filters", () => {
     const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
       el.getAttribute("data-session-id")
     );
-    expect(ids).toEqual(["s-urgent", "s-low"]);
+    expect(ids).toEqual(["s-urgent", "s-medium"]);
   });
 
   it("sorts by last activity (age) ascending when selected", () => {
@@ -928,9 +970,13 @@ describe("ReviewQueuePanel — exclude filters", () => {
   }
 
   it("cycles a priority pill through neutral -> include -> exclude -> neutral", () => {
+    // Both items are non-Low priority (Epic 3.2.1 tiering) so the second one stays in the
+    // always-expanded "Needs a decision" tier — a Low item would sit in the collapsed-by-
+    // default Informational tier, which unmounts its content while collapsed, confounding
+    // this filter-cycling test with tiering visibility.
     const urgent = makeReviewItem({ sessionId: "s-urgent", sessionName: "Urgent Item", priority: Priority.URGENT });
-    const low = makeReviewItem({ sessionId: "s-low", sessionName: "Low Item", priority: Priority.LOW });
-    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgent, low]));
+    const medium = makeReviewItem({ sessionId: "s-medium", sessionName: "Medium Item", priority: Priority.MEDIUM });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgent, medium]));
 
     renderPanel();
     openFilters();
@@ -941,21 +987,21 @@ describe("ReviewQueuePanel — exclude filters", () => {
     fireEvent.click(pill());
     expect(pill()).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByTestId("review-item-s-urgent")).toBeInTheDocument();
-    expect(screen.queryByTestId("review-item-s-low")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-medium")).not.toBeInTheDocument();
 
     // include -> exclude
     fireEvent.click(pill());
     expect(pill()).toHaveAttribute("aria-pressed", "false");
     expect(pill()).toHaveTextContent("🚫");
     expect(screen.queryByTestId("review-item-s-urgent")).not.toBeInTheDocument();
-    expect(screen.getByTestId("review-item-s-low")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-medium")).toBeInTheDocument();
 
     // exclude -> neutral
     fireEvent.click(pill());
     expect(pill()).toHaveAttribute("aria-pressed", "false");
     expect(pill()).not.toHaveTextContent("🚫");
     expect(screen.getByTestId("review-item-s-urgent")).toBeInTheDocument();
-    expect(screen.getByTestId("review-item-s-low")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-medium")).toBeInTheDocument();
   });
 
   it("excludes items by program when a program pill is clicked twice", () => {
@@ -991,9 +1037,11 @@ describe("ReviewQueuePanel — exclude filters", () => {
   });
 
   it("counts excluded values toward the active filter count and clear-all resets them", () => {
+    // Non-Low priority (see comment on the priority-pill-cycle test above) so s2 stays in
+    // the always-expanded tier rather than the collapsed-by-default Informational one.
     const urgent = makeReviewItem({ sessionId: "s1", sessionName: "S1", priority: Priority.URGENT });
-    const low = makeReviewItem({ sessionId: "s2", sessionName: "S2", priority: Priority.LOW });
-    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgent, low]));
+    const medium = makeReviewItem({ sessionId: "s2", sessionName: "S2", priority: Priority.MEDIUM });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgent, medium]));
 
     renderPanel();
     openFilters();
@@ -1289,10 +1337,14 @@ describe("ReviewQueuePanel — severity", () => {
     expect(screen.queryByTestId("review-item-s-low")).not.toBeInTheDocument();
   });
 
-  it("ReviewQueuePanel_should_ShowSharedEmptyState_When_SeverityFilterMatchesZeroItems", () => {
+  it("ReviewQueuePanel_should_ShowHiddenByFilterState_When_SeverityFilterMatchesZeroItems", () => {
     // Low-severity approval-pending item, plus an unrelated Idle-reason item with no
     // risk_level metadata at all. Low (severity dim) AND Idle (reason dim) each individually
-    // match one item, but their combination (AND across dimensions) matches zero.
+    // match one item, but their combination (AND across dimensions) matches zero — emptying
+    // both tiers at once (both items are non-Low priority, so both count toward
+    // allNeedsDecisionCount). Per Task 3.2.1c's round-5 reorder, this is the tier-aware
+    // "hidden by filter" state, not the legacy generic "No items match" message — the exact
+    // case the round-4 fix's own test didn't exercise.
     const low = makeApprovalItem({ sessionId: "s-low", sessionName: "Low Item", riskLevel: "low" });
     const idle = makeReviewItem({ sessionId: "s-idle", sessionName: "Idle Item", reason: AttentionReason.IDLE });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([low, idle]));
@@ -1305,7 +1357,9 @@ describe("ReviewQueuePanel — severity", () => {
 
     expect(screen.queryByTestId("review-item-s-low")).not.toBeInTheDocument();
     expect(screen.queryByTestId("review-item-s-idle")).not.toBeInTheDocument();
-    expect(screen.getByText(/No items match the current filter/i)).toBeInTheDocument();
+    expect(screen.getByTestId("needs-decision-hidden-by-filter")).toBeInTheDocument();
+    expect(screen.getByText(/2 items? need a? ?decision, but are hidden by your filter/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No items match the current filter/i)).not.toBeInTheDocument();
   });
 
   it("ReviewQueuePanel_should_RenderCompactSeverityBadgeNextToEscalationReason_When_ApprovalPendingItemRenders", () => {
@@ -1713,5 +1767,276 @@ describe("escalation reason", () => {
     it("returns true for an unrecognized/future category (fail-open by design)", () => {
       expect(isCreateRuleEligibleCategory("some-future-category")).toBe(true);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Epic 3.2.1 — priority-tier sectioning (Task 3.2.1a/b/c)
+// ---------------------------------------------------------------------------
+
+describe("ReviewQueuePanel — priority-tier sectioning", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSearchParams = new URLSearchParams();
+  });
+
+  it("golden fixture: splits a mixed-priority queue into an expanded Needs-a-decision tier and a collapsed Informational tier", () => {
+    const highItem = makeReviewItem({ sessionId: "sess-a", sessionName: "Sess A", priority: Priority.HIGH });
+    const lowItem = makeReviewItem({ sessionId: "sess-b", sessionName: "Sess B", priority: Priority.LOW });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([highItem, lowItem]));
+
+    renderPanel();
+
+    expect(screen.getByText("Needs a decision")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-sess-a")).toBeInTheDocument();
+
+    // Informational tier header is visible, but its content is collapsed (unmounted) by
+    // default — Collapsible.tsx removes collapsed content from the DOM, not just hides it.
+    expect(screen.getByText("Informational (1)")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-sess-b")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("collapsible-header-review-queue-informational"));
+    expect(screen.getByTestId("review-item-sess-b")).toBeInTheDocument();
+  });
+
+  it("golden fixture: shows the calm 'All caught up' state in the Needs-a-decision tier when only Low-priority items remain, keeping Informational visible-but-collapsed", () => {
+    const lowItem = makeReviewItem({ sessionId: "sess-low", sessionName: "Sess Low", priority: Priority.LOW });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([lowItem]));
+
+    renderPanel();
+
+    expect(screen.getByTestId("needs-decision-empty")).toBeInTheDocument();
+    expect(screen.getByText("All caught up")).toBeInTheDocument();
+    expect(screen.getByText("Nothing needs your attention right now")).toBeInTheDocument();
+    expect(screen.getByText("Informational (1)")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-sess-low")).not.toBeInTheDocument();
+  });
+
+  it("second fixture case (Product Triad Review round-4 blocker fix): shows the tier-aware hidden-by-filter state, not the calm All-caught-up state, when a reason filter hides the only needs-decision item but Informational stays non-empty", () => {
+    const urgentItem = makeReviewItem({
+      sessionId: "sess-urgent",
+      sessionName: "Urgent",
+      priority: Priority.URGENT,
+      reason: AttentionReason.ERROR_STATE,
+    });
+    const lowItem = makeReviewItem({
+      sessionId: "sess-low",
+      sessionName: "Low",
+      priority: Priority.LOW,
+      reason: AttentionReason.STALE,
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgentItem, lowItem]));
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+    // Include only STALE — excludes the urgent ERROR_STATE item from `items`.
+    fireEvent.click(screen.getByRole("button", { name: /Stale \(1\)/ }));
+
+    expect(screen.getByTestId("needs-decision-hidden-by-filter")).toBeInTheDocument();
+    expect(screen.getByText(/1 item needs a decision, but is hidden by your filter/i)).toBeInTheDocument();
+    expect(screen.queryByText("All caught up")).not.toBeInTheDocument();
+    // Informational tier is unaffected by the needs-decision-only filter miss — still shown.
+    expect(screen.getByText("Informational (1)")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+    expect(screen.getByTestId("review-item-sess-urgent")).toBeInTheDocument();
+  });
+
+  it("third fixture case (Product Triad Review round-5 blocker fix): shows the tier-aware hidden-by-filter state — not the legacy generic empty message — when a filter empties both tiers at once", () => {
+    const urgentItem = makeReviewItem({
+      sessionId: "sess-urgent",
+      sessionName: "Urgent",
+      priority: Priority.HIGH,
+      reason: AttentionReason.ERROR_STATE,
+    });
+    const lowItem = makeReviewItem({
+      sessionId: "sess-low",
+      sessionName: "Low",
+      priority: Priority.LOW,
+      reason: AttentionReason.STALE,
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgentItem, lowItem]));
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+    // Exclude both reasons present in the queue — items.length becomes 0 overall (unlike
+    // the second fixture case above, where Informational stayed non-empty).
+    fireEvent.click(screen.getByRole("button", { name: /Error \(1\)/ })); // include
+    fireEvent.click(screen.getByRole("button", { name: /Error \(1\)/ })); // exclude
+    fireEvent.click(screen.getByRole("button", { name: /Stale \(1\)/ })); // include
+    fireEvent.click(screen.getByRole("button", { name: /Stale \(1\)/ })); // exclude
+
+    expect(screen.queryByTestId("review-item-sess-urgent")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-sess-low")).not.toBeInTheDocument();
+    expect(screen.getByTestId("needs-decision-hidden-by-filter")).toBeInTheDocument();
+    expect(screen.getByText(/1 item needs a decision, but is hidden by your filter/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No items match the current filter/i)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Epic 3.2.1d/e — background poll/fetch-failure staleness indicator + narrowed
+// error takeover (design/ux.md AC38)
+// ---------------------------------------------------------------------------
+
+describe("ReviewQueuePanel — staleness indicator and narrowed error takeover", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSearchParams = new URLSearchParams();
+  });
+
+  it("renders the two-tier list (not the full takeover) with a staleness indicator when error is set but lastUpdatedAt is non-null", () => {
+    const item = makeReviewItem({ sessionId: "sess-a", priority: Priority.HIGH });
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([item], { error: new Error("network blip"), lastUpdatedAt: Date.now() - 65_000 })
+    );
+
+    renderPanel();
+
+    expect(screen.getByTestId("review-item-sess-a")).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to load review queue/i)).not.toBeInTheDocument();
+    const indicator = screen.getByTestId("review-queue-staleness");
+    expect(indicator).toHaveTextContent(/Last updated 1m ago/i);
+    expect(within(indicator).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  it("still shows the full 'Failed to load' takeover when error is set and lastUpdatedAt is null (first-load failure)", () => {
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([], { error: new Error("boom"), lastUpdatedAt: null })
+    );
+
+    renderPanel();
+
+    expect(screen.getByText(/Failed to load review queue: boom/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(screen.queryByText("Needs a decision")).not.toBeInTheDocument();
+  });
+
+  it("round-6 fix: shows the calm empty state with the staleness indicator (never the full takeover) when error is set, lastUpdatedAt is non-null, and the queue is legitimately empty", () => {
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([], { error: new Error("network blip"), lastUpdatedAt: Date.now() })
+    );
+
+    renderPanel();
+
+    expect(screen.queryByText(/Failed to load review queue/i)).not.toBeInTheDocument();
+    expect(screen.getByText("No sessions need attention!")).toBeInTheDocument();
+    expect(screen.getByTestId("review-queue-staleness")).toBeInTheDocument();
+  });
+
+  it("clicking Retry in the staleness indicator calls refresh, and the indicator disappears once a subsequent fetch succeeds", () => {
+    const item = makeReviewItem({ sessionId: "sess-a", priority: Priority.HIGH });
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([item], { error: new Error("network blip"), lastUpdatedAt: Date.now() })
+    );
+    const { rerender } = renderPanel();
+
+    fireEvent.click(within(screen.getByTestId("review-queue-staleness")).getByRole("button", { name: "Retry" }));
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+    // A subsequent successful fetch clears `error` — indicator disappears.
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+    rerender(<ReviewQueuePanel />);
+    expect(screen.queryByTestId("review-queue-staleness")).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Epic 3.2.2 — idle items excluded from the panel's list and headline count
+// ---------------------------------------------------------------------------
+
+describe("ReviewQueuePanel — idle items excluded (Epic 3.2.2)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSearchParams = new URLSearchParams();
+  });
+
+  it("idle-reason item never renders and the headline count excludes it (adversarial-review.md Blocker 2)", () => {
+    // useReviewQueue.ts filters idle-reason items out of `items`/`totalItems` centrally
+    // (Task 3.2.2a) before they ever reach this context — mirrored here via the same
+    // isReviewQueueVisible util so the panel is exercised with exactly the shape the real
+    // hook would hand it, rather than re-deriving visibility a second time in this test.
+    const idleItem = makeReviewItem({ sessionId: "sess-c", sessionName: "Idle Session", priority: Priority.LOW, reason: AttentionReason.IDLE });
+    // UNCOMMITTED_CHANGES isn't one of summaryCount's reasonFormatters, so the headline
+    // falls back to the generic "N item(s)" count rather than a reason-specific phrase —
+    // isolating the assertion to totalItems itself (adversarial-review.md Blocker 2).
+    const nonIdleItem = makeReviewItem({
+      sessionId: "sess-d",
+      sessionName: "Non-idle Session",
+      priority: Priority.HIGH,
+      reason: AttentionReason.UNCOMMITTED_CHANGES,
+    });
+    const rawItems = [idleItem, nonIdleItem];
+    const visibleItems = rawItems.filter(isReviewQueueVisible);
+
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue(visibleItems));
+
+    renderPanel();
+
+    expect(screen.queryByTestId("review-item-sess-c")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-sess-d")).toBeInTheDocument();
+    expect(screen.getByTestId("review-queue-badge")).toHaveTextContent("1");
+    expect(screen.getByTestId("total-items")).toHaveTextContent(/^1 item$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Epic 2.3.2 / ux.md Surface 9 — disable-in-place on a reconciliation-driven removal
+// ---------------------------------------------------------------------------
+
+describe("ReviewQueuePanel — auto-resolved-by-rule disable-in-place", () => {
+  it("keeps a reconciled row present but disabled with an explanatory banner", () => {
+    const item = makeApprovalItem();
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([item], {
+        autoResolvedRules: { "session-approval": "Auto-allow safe git status checks" },
+      })
+    );
+
+    renderPanel();
+
+    // Row still present, not removed.
+    expect(screen.getByTestId("review-item-session-approval")).toBeInTheDocument();
+
+    // Banner explains the auto-resolution.
+    const banner = screen.getByTestId("auto-resolved-banner-session-approval");
+    expect(banner).toHaveTextContent("Auto-resolved by rule: Auto-allow safe git status checks");
+    expect(banner).toHaveTextContent("no action needed");
+
+    // Approve/Deny are disabled, not hidden.
+    expect(screen.getByTestId("approve-session-approval")).toBeDisabled();
+    expect(screen.getByTestId("deny-session-approval")).toBeDisabled();
+  });
+
+  it("renders a live (non-reconciled) row normally: no banner, actions enabled", () => {
+    const item = makeApprovalItem();
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item], { autoResolvedRules: {} }));
+
+    renderPanel();
+
+    expect(screen.queryByTestId("auto-resolved-banner-session-approval")).not.toBeInTheDocument();
+    expect(screen.getByTestId("approve-session-approval")).not.toBeDisabled();
+    expect(screen.getByTestId("deny-session-approval")).not.toBeDisabled();
+  });
+
+  it("removes the row once it is no longer in autoResolvedRules/items (the ~5s window elapsing is owned by useReviewQueue, verified there)", () => {
+    const item = makeApprovalItem();
+
+    // "Before": row present, disabled, banner showing.
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([item], { autoResolvedRules: { "session-approval": "Auto-allow safe git status checks" } })
+    );
+    const { rerender } = renderPanel();
+    expect(screen.getByTestId("review-item-session-approval")).toBeInTheDocument();
+    expect(screen.getByTestId("auto-resolved-banner-session-approval")).toBeInTheDocument();
+
+    // "After the ~5s window": the hook has dispatched removeItem and cleared the map entry —
+    // reflected here as an updated context value, since the timer itself lives in the hook
+    // (see useReviewQueue.test.ts's "keeps the item present ... then removes it after the
+    // ~5s display window" for the actual timer-driven behavior).
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([], { autoResolvedRules: {} }));
+    rerender(<ReviewQueuePanel />);
+
+    expect(screen.queryByTestId("review-item-session-approval")).not.toBeInTheDocument();
   });
 });

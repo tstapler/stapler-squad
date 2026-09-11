@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestSessionService_RetrySession_should_ReturnInvalidArgument_When_IDEmpty
@@ -123,7 +124,7 @@ func TestSessionService_RetrySession_should_RestartImmediately_When_SessionIsPer
 	// tighter window even though the pipeline always eventually converges
 	// (see pipelineEventuallyTimeout's doc comment in
 	// session_creation_pipeline_test.go for the same pattern/root cause).
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return session.Status(inst.GetStatus()) == session.Active
 	}, 10*time.Second, 10*time.Millisecond, "session should reach Active before the test forces PermanentlyFailed")
 	// Simulate a session that has exhausted its automated retries and is
