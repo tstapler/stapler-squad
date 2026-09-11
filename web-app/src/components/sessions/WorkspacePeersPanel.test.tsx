@@ -38,6 +38,7 @@ function renderWithStore(session: Session, peers: Session[]) {
         ids: peers.map((p) => p.id),
         entities: Object.fromEntries(peers.map((p) => [p.id, p])),
         loading: false,
+        hasLoadedOnce: false,
         error: null,
         connectionState: "connected" as const,
         detectedStatusMap: {},

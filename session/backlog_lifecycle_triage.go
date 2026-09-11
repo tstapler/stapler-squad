@@ -52,16 +52,18 @@ const headlessTriageSessionUUIDPrefix = "headless-triage-"
 // maxHeadlessTriageSessionStaleness bounds how long an open headless-triage session is
 // trusted before reconcileOrphanedTriageItems flags it as orphaned. MUST stay strictly
 // greater than server/services.triageCallBudget (the real per-call LLM budget, currently
-// 30m) with real margin — confirmed live 2026-08-01 (BUG-055) that headless triage calls
-// routinely run right up to that full 30m budget (27m41s, 27m53s, 30m38s observed across
-// distinct items in one incident), not the 7-15 minutes this constant was originally tuned
-// against. At exactly 30m (this constant's prior value, matching triageCallBudget with zero
-// margin), this sweep's periodic tick raced the call's own natural
-// completion/timeout on every slow call. IsTriageLive (checked by the shape-1 branch below)
-// is the structural fix for that race — this margin is a defense-in-depth belt-and-suspenders
-// measure on top of it, not a substitute: even with a real liveness check, there's no reason
-// to court the race in the first place when a full call is still plausibly finishing.
-const maxHeadlessTriageSessionStaleness = 35 * time.Minute
+// 3h — raised 2026-09-08 alongside headless.idleTimeout, which is now the primary defense
+// against a hung call; see triageCallBudget's own doc comment) with real margin —
+// confirmed live 2026-08-01 (BUG-055) that headless triage calls routinely run right up
+// to their full call budget (27m41s, 27m53s, 30m38s observed against the old 30m budget
+// in one incident), not the 7-15 minutes this constant was originally tuned against. At a
+// value equal to or below triageCallBudget, this sweep's periodic tick races the call's
+// own natural completion/timeout on every slow call. IsTriageLive (checked by the shape-1
+// branch below) is the structural fix for that race — this margin is a defense-in-depth
+// belt-and-suspenders measure on top of it, not a substitute: even with a real liveness
+// check, there's no reason to court the race in the first place when a full call is still
+// plausibly finishing.
+const maxHeadlessTriageSessionStaleness = 3*time.Hour + 15*time.Minute
 
 // latestTriageSession returns the most recent triage-role ItemSession (by
 // CreatedAt), regardless of whether it has ended yet, or nil if none exists.
@@ -135,9 +137,10 @@ func triageEndReasonOrUnknown(endReason string) string {
 //     triage on the item; this is the standing-sweep equivalent. Pure staleness
 //     gate — no liveness checker — matching reconcileStaleWorkSessions' established
 //     pattern for the closest analogous detector in this file: a headless triage
-//     call routinely runs 7-15 minutes, so per-tick liveness signals are noisy
-//     here; staleness alone is the reliable signal. Headless-triage sessions (the
-//     common case) get the much shorter maxHeadlessTriageSessionStaleness (35m)
+//     call can legitimately run up to triageCallBudget (3h) now, so per-tick
+//     liveness signals are noisy here; staleness alone is the reliable signal.
+//     Headless-triage sessions (the common case) get the shorter
+//     maxHeadlessTriageSessionStaleness (3h15m)
 //     rather than the general-purpose maxWorkSessionStaleness (2h): an open
 //     headless row found later reliably means dead, not slow (see that constant's
 //     doc comment). Not generalized beyond idea: nothing in this codebase creates

@@ -96,6 +96,78 @@ func TestSendNotification_ResolvesSessionTitleToStableID(t *testing.T) {
 	}
 }
 
+// TestSendNotification_PollerMissFallsBackToStorage verifies that when the
+// in-memory ReviewQueuePoller hasn't (yet) been seeded with a session — e.g. shortly
+// after a server restart, before the startup instance-load completes — SendNotification
+// still resolves the hook-supplied title to the session's stable UUID via durable
+// storage, instead of permanently recording the raw title. Reproduces the bug where
+// "View Session" in the web UI wrongly concluded a genuinely live session was gone,
+// because its notification's session_id never got past the title.
+func TestSendNotification_PollerMissFallsBackToStorage(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	bus := events.NewEventBus(32)
+	t.Cleanup(bus.Close)
+	svc := NewSessionServiceWithSearchEngine(storage, bus, nil)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	mux := http.NewServeMux()
+	path, handler := sessionv1connect.NewSessionServiceHandler(svc)
+	mux.Handle(path, handler)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// Wire an empty poller (simulates the poller not having this session yet) — this
+	// is also what wires storage into notificationSvc, via SetReviewQueuePoller.
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+
+	const sessionTitle = "stapler-squad-perf"
+	const sessionUUID = "14c67dc3-a950-4863-b01a-e4abe58045d1"
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:     sessionTitle,
+		UUID:      sessionUUID,
+		Path:      t.TempDir(),
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := bus.Subscribe(ctx)
+
+	client := newTestClient(srv)
+	_, err := client.SendNotification(ctx, connect.NewRequest(&sessionv1.SendNotificationRequest{
+		SessionId:        sessionTitle, // hook sends the title; poller doesn't have it yet
+		Title:            "Claude is waiting for your input",
+		NotificationType: sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED,
+		Priority:         sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM,
+	}))
+	require.NoError(t, err)
+
+	var gotEvent *events.Event
+	timeout := time.After(2 * time.Second)
+	for gotEvent == nil {
+		select {
+		case e := <-eventCh:
+			if e.Type == events.EventNotification {
+				gotEvent = e
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for notification event on event bus")
+		}
+	}
+
+	if gotEvent.SessionID != sessionUUID {
+		t.Errorf("event.SessionID = %q, want UUID %q (session title was %q, poller miss, storage fallback)",
+			gotEvent.SessionID, sessionUUID, sessionTitle)
+	}
+}
+
 // TestSendNotification_UnknownSessionUsesRawID verifies that when no session
 // matches the incoming ID, the raw value is used as-is (graceful fallback).
 func TestSendNotification_UnknownSessionUsesRawID(t *testing.T) {
