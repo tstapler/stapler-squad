@@ -265,30 +265,14 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	p.instance.SetCreationProgress("")
 
 	// Persist the full instance row (branch/worktree/etc. resolved during
-	// Start(), e.g. an existing-worktree remote session's discovered branch
-	// name) RIGHT HERE -- immediately after Start() returns, before any of
-	// the wiring below -- not after it. startLocked (session/instance.go)
-	// flips the in-memory Status to Active as an unconditional side effect of
-	// Start() itself, out-of-band from commitTerminalStatus's fencing (see
-	// the epoch-check comment above Start()'s call site). That means any
-	// reader of the in-memory instance -- including this pipeline's own
-	// eventual wait.RequireEventually-style callers -- can already observe
-	// Active the instant Start() returns. Persisting only after the hook
-	// injection / controller / session-driver / autonomous-driver wiring
-	// below (as this used to) left a window, wide enough to lose under CI
-	// contention, where the persisted row still read Creating while the
-	// in-memory instance already read Active -- exactly the
-	// live-session/stale-persisted-row split ADR-002's "durable-first
-	// terminal write" was meant to rule out. Root-caused via
-	// TestBackgroundResolutionPipeline_should_TransitionToActive_When_ResolutionSucceeds
-	// flaking in CI (never locally: local runs are fast enough to always
-	// close the window) -- see its "persisted row must reflect the terminal
-	// Active write" assertion. commitTerminalStatus's own UpdateInstanceIfEpoch
-	// (called from terminal() below) only sets status/failure_reason/updated_at
-	// (an intentionally narrow, epoch-gated conditional UPDATE, see its doc
-	// comment), not the rest of the row -- this call covers everything else.
-	// None of the wiring steps below mutate any field this persists, so moving
-	// it here loses nothing that the old call site captured.
+	// Start()) here, before the wiring below, not after: startLocked flips
+	// the in-memory Status to Active as a side effect of Start() itself,
+	// out-of-band from commitTerminalStatus's fencing, so any reader can
+	// already observe Active the instant Start() returns. Persisting later
+	// left a window where the row still read Creating while the instance
+	// read Active -- the live-session/stale-row split ADR-002's
+	// durable-first terminal write exists to rule out. None of the wiring
+	// below mutates a field this call captures.
 	if storage := s.GetStorage(); storage != nil {
 		if err := storage.UpdateInstance(p.instance); err != nil {
 			log.Warn("[session pipeline] failed to persist instance after successful start", "session", p.instanceTitle, "err", err)
