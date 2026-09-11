@@ -3626,12 +3626,14 @@ func (f *fakeTriageLivenessEngine) LivenessFor(_ session.BacklogStatus, _ sessio
 	return f.def, nil
 }
 
-// TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsNil
+// TestTriggerTriage_should_UseFlatTriageCallBudgetConstant_When_LivenessEngineIsNil
 // is Story 1.4.2's fallback path: with no LivenessEngine wired (the zero value of
 // BacklogService.livenessEngine, matching every pre-Epic-1.4 construction), the
-// headless call's context.WithTimeout must use the flat triageCallBudget constant
-// (30m), byte-for-byte unchanged from before.
-func TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsNil(t *testing.T) {
+// headless call's context.WithTimeout must use the flat triageCallBudget constant,
+// byte-for-byte unchanged from before. Asserted against the triageCallBudget
+// constant itself (not a hardcoded literal) so this can't drift out of sync the
+// way it did across the 2026-09-08 30m->3h raise (BUG-055).
+func TestTriggerTriage_should_UseFlatTriageCallBudgetConstant_When_LivenessEngineIsNil(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
@@ -3659,8 +3661,8 @@ func TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsN
 	call := pool.firstCall()
 	require.True(t, call.hasDeadline, "the headless call's context must carry a deadline")
 	remaining := time.Until(call.ctxDeadline)
-	assert.Greater(t, remaining, 25*time.Minute, "remaining budget must be close to the flat 30m triageCallBudget constant, not a shorter resolved value")
-	assert.LessOrEqual(t, remaining, 30*time.Minute, "remaining budget must not exceed the flat 30m triageCallBudget constant")
+	assert.Greater(t, remaining, triageCallBudget-5*time.Minute, "remaining budget must be close to the flat triageCallBudget constant, not a shorter resolved value")
+	assert.LessOrEqual(t, remaining, triageCallBudget, "remaining budget must not exceed the flat triageCallBudget constant")
 }
 
 // TestTriggerTriage_should_UseResolvedFortyFiveMinuteTimeout_When_SddModeOverrideConfigured
