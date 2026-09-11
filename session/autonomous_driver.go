@@ -413,20 +413,11 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		// text into the multiline buffer without submitting — identical to steer_session
 		// which uses inst.SendKeys(msg + "\r") directly and is known to work.
 		//
-		// content and "\r" are sent as two SEPARATE writes, not concatenated into one
-		// (BUG-031): a single large write lands its trailing "\r" inside the TUI's
-		// paste-detection window for sufficiently long prompts, folding it into the
-		// pasted block instead of submitting — live-confirmed via a stuck session
-		// showing an unsubmitted "[Pasted text #N +1 lines]" block at the input line.
-		// waitForPaneSettle gives the TUI's paste detector a chance to close before
-		// the submit keystroke arrives as its own write.
-		if sendErr := d.inst.SendKeys(nextMsg); sendErr != nil {
-			log.Warn("AutonomousDriver: SendKeys failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
-			break
-		}
-		waitForPaneSettle(ctx, d.inst, d.paneSettlePollInterval, d.paneSettleMaxWait)
-		if sendErr := d.inst.SendKeys(EnterKeySequence); sendErr != nil {
-			log.Warn("AutonomousDriver: submit keystroke failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
+		// SubmitDriverContent sends content and the submit keystroke as two SEPARATE
+		// writes, not concatenated into one (BUG-031): see its doc comment
+		// (pane_submit.go) for why a single write is unsafe for long content.
+		if sendErr := SubmitDriverContent(ctx, d.inst, nextMsg, d.paneSettlePollInterval, d.paneSettleMaxWait); sendErr != nil {
+			log.Warn("AutonomousDriver: failed to submit turn", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			break
 		}
 		// Re-capture the pane AFTER delivery completes, rather than reusing the
