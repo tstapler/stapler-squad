@@ -448,13 +448,11 @@ func ciBudgetGHGet(ctx context.Context, path string, out interface{}) error {
 	if token == "" {
 		return errors.New("github token not configured")
 	}
+	ctx = github.WithGitHubCallOrigin(ctx, github.OriginWebhookReconcile)
 	req, err := github.NewConditionalRequestNoCache(ctx, path)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 
 	resp, err := github.HTTPClient().Do(req)
 	if err != nil {
