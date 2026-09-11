@@ -12,6 +12,7 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAnalytics } from "@/lib/analytics";
 import { useCurrentWorkSession } from "@/lib/backlog/currentWorkSession";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
+import { summarizeStuckItemGroup } from "@/components/backlog-stuck/stuckReason";
 import { classifySessionKind } from "@/lib/backlog/sessionKind";
 import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
@@ -216,7 +217,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // on every remount (this component remounts via `key={selectedItemId}` on
   // every backlog item click — see stapler-squad PR #208 review).
   const { items: stuckItems, triggerRemediationNow } = useStuckBacklogItems();
-  const stuckItem = item ? stuckItems.find((i) => i.itemId === item.id) : undefined;
+  // BUG-105: an item can have several simultaneous open StuckBacklogItem rows
+  // (e.g. BOUNCING + BOUNCE_CAP_EXHAUSTED + MULTIPLE_REASONS all open at
+  // once) — `summarizeStuckItemGroup` resolves the SAME shared-priority
+  // primary reason BacklogBoard/BacklogItemCard resolve for the same item,
+  // instead of this component picking array order 0 (`.find()`) on its own.
+  const stuckItemGroup = item ? stuckItems.filter((i) => i.itemId === item.id) : [];
+  const stuckSummary = summarizeStuckItemGroup(stuckItemGroup);
+  const stuckItem = stuckSummary?.primary;
 
   // Version control state for the most recent work session's worktree.
   const latestWorkSession = useCurrentWorkSession(item);
@@ -1401,6 +1409,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           item={item}
           pipelineDisplay={pipelineDisplay}
           stuckItem={stuckItem}
+          otherStuckReasons={stuckSummary?.otherReasons}
           onTriggerRemediationNow={triggerRemediationNow}
         />
       </div>
