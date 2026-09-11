@@ -11,13 +11,34 @@ import (
 // test: invalidating a cached entry forces the next GetPRInfoConditional call
 // to omit If-None-Match, so GitHub sees an unconditional request instead of a
 // 304 candidate. GetPRInfoConditional's 200 branch then shells out to `gh pr
-// view` (GetPRInfoCtx) for review/CI data, which this test does not stub —
-// out of scope for Task 5.1.1b, which is about the conditional-request header
-// only.
+// view` (GetPRInfoCtx) for review/CI data, so the `gh` binary is stubbed here
+// too, matching the pattern in client_pr_by_number_test.go.
 func TestETagCache_Invalidate_NextFetchSendsNoIfNoneMatch(t *testing.T) {
 	resetRateLimiterForTest(t)
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 	resetGHTokenCache()
+	installFakeGHForTest(t, `{
+		"number": 42,
+		"title": "Test PR",
+		"body": "test body",
+		"headRefName": "feature/x",
+		"headRefOid": "abc123",
+		"baseRefName": "main",
+		"state": "open",
+		"url": "https://github.com/acme/widgets/pull/42",
+		"createdAt": "2026-08-20T12:00:00Z",
+		"updatedAt": "2026-08-21T12:00:00Z",
+		"isDraft": false,
+		"mergeable": "MERGEABLE",
+		"additions": 1,
+		"deletions": 1,
+		"changedFiles": 1,
+		"author": {"login": "carol"},
+		"labels": [],
+		"reviewDecision": "",
+		"reviews": [],
+		"statusCheckRollup": []
+	}`)
 
 	var sawRequest bool
 	var gotIfNoneMatch string
