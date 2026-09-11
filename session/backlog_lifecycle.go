@@ -1713,7 +1713,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		// rather than inventing a new one.
 		if item.PrNumber > 0 && item.RepoPath != "" {
 			checker := l.getPRPendingCheckerFactory()(item.RepoPath)
-			merged, mergedErr := checker.IsPRMerged(item.PrNumber)
+			merged, mergedErr := checker.IsPRMerged(ctx, item.PrNumber)
 			if mergedErr != nil {
 				log.DebugLog().Printf("[BacklogLifecycle] reconcileBouncingItems IsPRMerged item=%s pr=%d: %v", item.ID, item.PrNumber, mergedErr)
 			} else if merged {

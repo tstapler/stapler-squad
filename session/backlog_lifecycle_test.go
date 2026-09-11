@@ -724,18 +724,18 @@ type fakePRPendingChecker struct {
 	onIsPRMerged func()
 }
 
-func (f *fakePRPendingChecker) IsPRMerged(prNumber int) (bool, error) {
+func (f *fakePRPendingChecker) IsPRMerged(ctx context.Context, prNumber int) (bool, error) {
 	if f.onIsPRMerged != nil {
 		f.onIsPRMerged()
 	}
 	return f.merged, f.mergedErr
 }
 
-func (f *fakePRPendingChecker) GetPRStatus(prNumber int) (*git.PRStatus, error) {
+func (f *fakePRPendingChecker) GetPRStatus(ctx context.Context, prNumber int) (*git.PRStatus, error) {
 	return f.status, f.statusErr
 }
 
-func (f *fakePRPendingChecker) ClosePR(prNumber int, comment string) error {
+func (f *fakePRPendingChecker) ClosePR(ctx context.Context, prNumber int, comment string) error {
 	f.closeCalled = true
 	f.closedPR = prNumber
 	f.closeComment = comment
@@ -2402,8 +2402,10 @@ func (f *fakePRCreator) CreatePR(opts git.PRCreateOptions) (string, int, error) 
 	f.createdBody = opts.Body
 	return f.createURL, f.createNumber, f.createErr
 }
-func (f *fakePRCreator) EnablePRAutoMerge(prNumber int) error { return f.autoMergeErr }
-func (f *fakePRCreator) RequestCopilotReview(prNumber int) error {
+func (f *fakePRCreator) EnablePRAutoMerge(ctx context.Context, prNumber int) error {
+	return f.autoMergeErr
+}
+func (f *fakePRCreator) RequestCopilotReview(ctx context.Context, prNumber int) error {
 	f.copilotReviewCalled = true
 	return f.copilotReviewErr
 }

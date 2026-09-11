@@ -28,7 +28,7 @@ type fakeGHClient struct {
 	getPRInfoCalls atomic.Int64
 }
 
-func (f *fakeGHClient) CheckGHAuth() error { return nil }
+func (f *fakeGHClient) CheckGHAuth(ctx context.Context) error { return nil }
 
 func (f *fakeGHClient) GetPRForBranchConditional(_ context.Context, _, _, _, etag string) (*github.PRInfo, string, bool, error) {
 	return nil, etag, false, github.ErrNoPR

@@ -892,12 +892,13 @@ func (s *PRStatus) FeedbackAuthors() []string {
 }
 
 // GetPRStatus fetches the combined CI check status, reviewer decisions,
-// mergeability, and PR comments for the given pull request number.
-func (g *GitWorktree) GetPRStatus(prNumber int) (*PRStatus, error) {
+// mergeability, and PR comments for the given pull request number. ctx is the
+// caller's context, per EnablePRAutoMerge's doc comment above.
+func (g *GitWorktree) GetPRStatus(ctx context.Context, prNumber int) (*PRStatus, error) {
 	if err := g.checkGHCLI(); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	raw, err := g.runGHCommand(ctx, "pr.view.status", "pr", "view", strconv.Itoa(prNumber),
@@ -1054,11 +1055,13 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 // EnablePRAutoMerge enables GitHub auto-merge on the given PR so it merges
 // automatically once required CI checks pass. Best-effort: fails silently
 // when the repo does not have auto-merge enabled in its branch protection rules.
-func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
+// ctx is the caller's context (timeout/cancellation and any github.CallOrigin
+// tag thread through to runGHCommand) rather than a fresh context.Background().
+func (g *GitWorktree) EnablePRAutoMerge(ctx context.Context, prNumber int) error {
 	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	out, err := g.runGHCommand(ctx, "pr.merge.auto", "pr", "merge", strconv.Itoa(prNumber), "--auto", "--squash")
 	if err != nil {
@@ -1073,12 +1076,13 @@ func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
 // Uses the legacy bot-login form (copilot-pull-request-reviewer[bot]) via
 // --add-reviewer rather than the newer @copilot alias, since the literal
 // login is accepted by every gh version this repo targets while the alias is
-// version-gated (see plan.md's Pattern Decisions table).
-func (g *GitWorktree) RequestCopilotReview(prNumber int) error {
+// version-gated (see plan.md's Pattern Decisions table). ctx is the caller's
+// context, per EnablePRAutoMerge's doc comment above.
+func (g *GitWorktree) RequestCopilotReview(ctx context.Context, prNumber int) error {
 	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	out, err := g.runGHCommand(ctx, "pr.edit.add_reviewer", "pr", "edit", strconv.Itoa(prNumber), "--add-reviewer", copilotReviewerLogin)
 	if err != nil {
@@ -1090,12 +1094,13 @@ func (g *GitWorktree) RequestCopilotReview(prNumber int) error {
 // ClosePR closes prNumber without merging, posting comment as an explanatory
 // PR comment first. Used when a PR is discovered to be superseded (its
 // branch's work already landed on main through a different path) rather than
-// genuinely broken — see BUG-032.
-func (g *GitWorktree) ClosePR(prNumber int, comment string) error {
+// genuinely broken — see BUG-032. ctx is the caller's context, per
+// EnablePRAutoMerge's doc comment above.
+func (g *GitWorktree) ClosePR(ctx context.Context, prNumber int, comment string) error {
 	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	out, err := g.runGHCommand(ctx, "pr.close", "pr", "close", strconv.Itoa(prNumber), "--comment", comment)
 	if err != nil {
@@ -1104,12 +1109,13 @@ func (g *GitWorktree) ClosePR(prNumber int, comment string) error {
 	return nil
 }
 
-// IsPRMerged reports whether the given PR number has been merged.
-func (g *GitWorktree) IsPRMerged(prNumber int) (bool, error) {
+// IsPRMerged reports whether the given PR number has been merged. ctx is the
+// caller's context, per EnablePRAutoMerge's doc comment above.
+func (g *GitWorktree) IsPRMerged(ctx context.Context, prNumber int) (bool, error) {
 	if err := g.checkGHCLI(); err != nil {
 		return false, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	out, err := g.runGHCommand(ctx, "pr.view.state", "pr", "view", strconv.Itoa(prNumber), "--json", "state", "--jq", ".state")
 	if err != nil {

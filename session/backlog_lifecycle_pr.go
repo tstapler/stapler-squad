@@ -95,9 +95,9 @@ const oneShotShipTimeoutSeconds = 1800
 // ReconcilePRPending depends on. Defined here (the consumer) rather than in
 // package git, scoped to exactly what's called.
 type prPendingChecker interface {
-	IsPRMerged(prNumber int) (bool, error)
-	GetPRStatus(prNumber int) (*git.PRStatus, error)
-	ClosePR(prNumber int, comment string) error
+	IsPRMerged(ctx context.Context, prNumber int) (bool, error)
+	GetPRStatus(ctx context.Context, prNumber int) (*git.PRStatus, error)
+	ClosePR(ctx context.Context, prNumber int, comment string) error
 }
 
 // prCreator is the subset of GitWorktree's push/PR-creation behavior that
@@ -107,8 +107,8 @@ type prCreator interface {
 	CommitChanges(commitMessage string) error
 	PushBranch() error
 	CreatePR(opts git.PRCreateOptions) (prURL string, prNumber int, err error)
-	EnablePRAutoMerge(prNumber int) error
-	RequestCopilotReview(prNumber int) error
+	EnablePRAutoMerge(ctx context.Context, prNumber int) error
+	RequestCopilotReview(ctx context.Context, prNumber int) error
 	HasCommitsAheadOfMain(mainBranch string) (bool, error)
 }
 
@@ -650,7 +650,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 	// operator must merge it manually, so this needs a notification, not just a log line
 	// (same silent-failure pattern found and fixed elsewhere in this codebase — see
 	// docs/tasks/backlog-feature-improvement.md).
-	if autoErr := g.EnablePRAutoMerge(prNumber); autoErr != nil {
+	if autoErr := g.EnablePRAutoMerge(ctx, prNumber); autoErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR auto-merge item=%s pr=%d: %v", item.ID, prNumber, autoErr)
 		l.notify(item.ID,
 			"Auto-merge not enabled",
@@ -666,7 +666,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 	// to land before the item goes unwatched at pr_pending. Best-effort: a
 	// missing Copilot review is a missed nicety, not a missed auto-merge path
 	// (lower notification priority than the auto-merge failure above).
-	if reviewErr := g.RequestCopilotReview(prNumber); reviewErr != nil {
+	if reviewErr := g.RequestCopilotReview(ctx, prNumber); reviewErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR RequestCopilotReview item=%s pr=%d: %v", item.ID, prNumber, reviewErr)
 		l.notify(item.ID,
 			"Copilot review not requested",
@@ -1294,8 +1294,19 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 	}
 	g := l.getPRPendingCheckerFactory()(repoPath)
 
+	// Tag outbound GitHub calls with the same trigger source already recorded
+	// on ctx (ReconcilePRPending's 60s tick vs. TriggerPRFixForEvent's
+	// webhook-driven call — see prFixTriggerSourceFrom's doc comment), so
+	// they're attributable by github.CallOrigin too, not just the AC8
+	// fix-attempt log.
+	ghOrigin := github.OriginPRStatusPoller
+	if prFixTriggerSourceFrom(ctx) == prFixTriggerSourceWebhook {
+		ghOrigin = github.OriginWebhookReconcile
+	}
+	ghCtx := github.WithGitHubCallOrigin(ctx, ghOrigin)
+
 	// 1. Check if the PR has been merged → done.
-	merged, mergedErr := g.IsPRMerged(item.PrNumber)
+	merged, mergedErr := g.IsPRMerged(ghCtx, item.PrNumber)
 	if mergedErr != nil {
 		log.DebugLog().Printf("[BacklogLifecycle] ReconcilePRPending IsPRMerged item=%s pr=%d: %v", item.ID, item.PrNumber, mergedErr)
 		return
@@ -1310,7 +1321,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		// rather than skipping capture entirely, since CaptureShipSnapshot
 		// treats a nil prStatus as "group A already failed" and still
 		// captures group B (file stats) independently.
-		snapshotPRStatus, snapshotStatusErr := g.GetPRStatus(item.PrNumber)
+		snapshotPRStatus, snapshotStatusErr := g.GetPRStatus(ghCtx, item.PrNumber)
 		if snapshotStatusErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending GetPRStatus (ship snapshot) item=%s pr=%d: %v", item.ID, item.PrNumber, snapshotStatusErr)
 			snapshotPRStatus = nil
@@ -1398,7 +1409,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 	}
 
 	// 2. PR still open — check CI status and reviews.
-	prStatus, statusErr := g.GetPRStatus(item.PrNumber)
+	prStatus, statusErr := g.GetPRStatus(ghCtx, item.PrNumber)
 	if statusErr != nil {
 		log.DebugLog().Printf("[BacklogLifecycle] ReconcilePRPending GetPRStatus item=%s pr=%d: %v", item.ID, item.PrNumber, statusErr)
 		return
@@ -1887,7 +1898,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 	closeComment := fmt.Sprintf(
 		"Closing as superseded: this branch's last known commit (%s) is already present on %s, so this item's work has already shipped through another path. No further fix is needed here.",
 		lastCommitSha, bounceMainBranch)
-	if closeErr := checker.ClosePR(item.PrNumber, closeComment); closeErr != nil {
+	if closeErr := checker.ClosePR(ctx, item.PrNumber, closeComment); closeErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] closeIfSupersededByMain ClosePR item=%s pr=%d: %v", item.ID, item.PrNumber, closeErr)
 		// Still proceed — the item's code is on main regardless of whether the
 		// close-comment API call itself succeeded.
