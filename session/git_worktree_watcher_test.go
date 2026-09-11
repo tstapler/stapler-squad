@@ -186,41 +186,37 @@ func TestWorktreeChangeDetector_PanickingCallbackDoesNotStopOtherCallbacksOrDete
 	require.EqualValues(t, 2, atomic.LoadInt32(&counter))
 }
 
-// TestWorktreeChangeDetector_ColdWorktree_SkipsFingerprintOnPeriodicTick
-// covers Story 2.1.2's core acceptance criterion: an activeFunc that always
-// returns false must suppress fingerprint() on every periodic tick after
-// Start()'s unconditional baseline read, and no OnChange callback must ever
-// fire.
-func TestWorktreeChangeDetector_ColdWorktree_SkipsFingerprintOnPeriodicTick(t *testing.T) {
-	t.Parallel()
-
-	var calls int32
-	fp := func() (bool, string, error) {
-		atomic.AddInt32(&calls, 1)
-		return false, "sha1", nil
+// TestWorktreeChangeDetector_ActiveFuncGatesPeriodicFingerprinting covers
+// Story 2.1.2's activeFunc gate from both sides: a permanently-cold worktree
+// (activeFunc==false) must suppress fingerprint() on every periodic tick
+// after Start()'s unconditional baseline read and never fire OnChange
+// (core acceptance criterion); a permanently-warm one (activeFunc==true)
+// must keep calling fingerprint() every tick, same as before Story 2.1.2
+// existed (Task 2.1.2a's regression guard).
+func TestWorktreeChangeDetector_ActiveFuncGatesPeriodicFingerprinting(t *testing.T) {
+	tests := []struct {
+		name       string
+		active     bool
+		wantTicked bool // whether fingerprint() should be called beyond the Start()-time baseline
+	}{
+		{name: "cold worktree suppresses tick fingerprinting", active: false, wantTicked: false},
+		{name: "warm worktree keeps fingerprinting every tick", active: true, wantTicked: true},
 	}
-	activeFunc := func() bool { return false }
 
-	d := NewWorktreeChangeDetector(t.TempDir(), fp, activeFunc)
-	d.setStatWalkInterval(testStatWalkInterval)
-
-	fireCh := make(chan struct{}, 8)
-	d.OnChange(func() { fireCh <- struct{}{} })
-	d.Start()
-	defer d.Stop()
-
-	require.False(t, waitForSignal(t, fireCh, 8*testStatWalkInterval),
-		"a permanently-cold worktree must never fire OnChange")
-	require.EqualValues(t, 1, atomic.LoadInt32(&calls),
-		"activeFunc()==false must suppress every tick's fingerprint() call after the Start()-time baseline read")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assertActiveFuncGatesTicking(t, tt.active, tt.wantTicked)
+		})
+	}
 }
 
-// TestWorktreeChangeDetector_WarmWorktree_StillFingerprintsEveryTick is the
-// regression guard for Task 2.1.2a's gate: an activeFunc that always returns
-// true must not suppress the warm case -- fingerprint() keeps getting called
-// on every tick, same as before Story 2.1.2 existed.
-func TestWorktreeChangeDetector_WarmWorktree_StillFingerprintsEveryTick(t *testing.T) {
-	t.Parallel()
+// assertActiveFuncGatesTicking starts a detector whose fingerprint always
+// reports "not dirty" (so OnChange must never fire regardless of active) and
+// asserts whether the periodic loop keeps calling fingerprint() beyond
+// Start()'s synchronous baseline read, per wantTicked.
+func assertActiveFuncGatesTicking(t *testing.T, active, wantTicked bool) {
+	t.Helper()
 
 	var calls int32
 	tickCh := make(chan struct{}, 32)
@@ -234,14 +230,26 @@ func TestWorktreeChangeDetector_WarmWorktree_StillFingerprintsEveryTick(t *testi
 		}
 		return false, "sha1", nil
 	}
-	activeFunc := func() bool { return true }
+	activeFunc := func() bool { return active }
 
 	d := NewWorktreeChangeDetector(t.TempDir(), fp, activeFunc)
 	d.setStatWalkInterval(testStatWalkInterval)
+
+	fireCh := make(chan struct{}, 8)
+	d.OnChange(func() { fireCh <- struct{}{} })
 	d.Start()
 	defer d.Stop()
 
-	require.True(t, waitForSignal(t, tickCh, 2*time.Second),
-		"activeFunc()==true must let the periodic loop keep calling fingerprint() every tick")
-	require.GreaterOrEqual(t, atomic.LoadInt32(&calls), int32(2))
+	require.False(t, waitForSignal(t, fireCh, 8*testStatWalkInterval),
+		"fingerprint never reports dirty, so OnChange must never fire")
+
+	ticked := waitForSignal(t, tickCh, 2*time.Second)
+	require.Equal(t, wantTicked, ticked,
+		"activeFunc()==%v must gate whether periodic ticks call fingerprint() beyond the baseline read", active)
+	if wantTicked {
+		require.GreaterOrEqual(t, atomic.LoadInt32(&calls), int32(2))
+	} else {
+		require.EqualValues(t, 1, atomic.LoadInt32(&calls),
+			"activeFunc()==false must suppress every tick's fingerprint() call after the baseline read")
+	}
 }
