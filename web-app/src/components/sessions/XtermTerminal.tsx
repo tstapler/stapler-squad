@@ -22,6 +22,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import "@xterm/xterm/css/xterm.css";
 import * as styles from "./XtermTerminal.css";
 import { TerminalContextMenu } from "./TerminalContextMenu";
+import { TerminalLinkMenu } from "./TerminalLinkMenu";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme, type TerminalConfig } from "@/lib/config/terminalConfig";
 import { dimensionsEqual, isFiniteResizeDimensions, type ResizeDimensions } from "@/lib/terminal/types";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
@@ -239,6 +240,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
   // Context menu uses useState (shown at most once per right-click — not a hot path)
   const [contextMenuState, setContextMenuState] = useState<{ x: number; y: number } | null>(null);
+  // Link tap menu (touch devices only) — same rationale as contextMenuState
+  const [linkMenuState, setLinkMenuState] = useState<{ x: number; y: number; uri: string } | null>(null);
 
   // Store callbacks in refs to avoid recreating terminal on callback changes
   const onDataRef = useRef(onData);
@@ -383,6 +386,35 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     setContextMenuState(null);
   }, []);
 
+  // Link tap menu action handlers (touch devices only)
+  const handleLinkMenuCopy = useCallback((uri: string) => {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(uri)
+        .then(() => showToast('copied'))
+        .catch(() => showToast(execCommandCopy(uri) ? 'copied' : 'failed'));
+    } else {
+      showToast(execCommandCopy(uri) ? 'copied' : 'failed');
+    }
+  }, [showToast, execCommandCopy]);
+
+  const handleLinkMenuOpen = useCallback((uri: string) => {
+    // Mirrors @xterm/addon-web-links' own default handler (window.open + null opener)
+    // so touch and mouse land on identical navigation behavior, just gated differently.
+    const newWindow = window.open();
+    if (newWindow) {
+      try {
+        newWindow.opener = null;
+      } catch {
+        // Some browsers throw when reassigning opener — navigation still proceeds.
+      }
+      newWindow.location.href = uri;
+    }
+  }, []);
+
+  const handleLinkMenuDismiss = useCallback(() => {
+    setLinkMenuState(null);
+  }, []);
+
   // Sync the custom left-side scrollbar with the terminal's current viewport.
   // Called from onScroll, onResize, and after the initial fit — all via direct
   // DOM mutation so there's no React re-render overhead on every scroll event.
@@ -516,9 +548,23 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       (containerRef.current as any).__staplerSquadForceCanvasFallback = () => triggerCanvasFallback();
     }
 
+    // true once on mount — pointer:coarse means a touch-primary device. Hoisted here
+    // (rather than only at its other use-site below) so the WebLinksAddon handler can
+    // read it too.
+    const isTouchPrimary = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+
     // Create and load addons
     const fitAddon = new FitAddon();
-    const webLinksAddon = new WebLinksAddon();
+    // Default web-links behavior opens the link immediately on any click/tap, which on
+    // touch devices (Android Chrome) means a bare tap navigates away before there's any
+    // chance to copy the URL — the only way to get at a link with no public host name.
+    // Gate that default behind a menu on touch devices; leave mouse click-to-open as-is.
+    const webLinksAddon = new WebLinksAddon(isTouchPrimary
+      ? (event: MouseEvent, uri: string) => {
+          event.preventDefault();
+          setLinkMenuState({ x: event.clientX, y: event.clientY, uri });
+        }
+      : undefined);
     const searchAddon = new SearchAddon();
     const serializeAddon = new SerializeAddon();
 
@@ -693,8 +739,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // Show floating Copy button on selection change via direct DOM mutation (no setState).
       // onSelectionChange fires at up to 60fps during mouse drag — setState here would cause
       // a re-render storm. Direct ref mutation costs ~0.01ms vs ~3ms for React reconcile.
-      // true once on mount — pointer:coarse means a touch-primary device
-      const isTouchPrimary = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+      // (isTouchPrimary computed above, near the WebLinksAddon setup)
 
       const selectionDisposable = terminal.onSelectionChange(() => {
         const btn = copyButtonRef.current;
@@ -1289,6 +1334,16 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           onSelectAll={handleMenuSelectAll}
           onPaste={handleMenuPaste}
           onDismiss={handleContextMenuDismiss}
+        />
+      )}
+      {linkMenuState && (
+        <TerminalLinkMenu
+          x={linkMenuState.x}
+          y={linkMenuState.y}
+          uri={linkMenuState.uri}
+          onOpen={handleLinkMenuOpen}
+          onCopy={handleLinkMenuCopy}
+          onDismiss={handleLinkMenuDismiss}
         />
       )}
     </div>
