@@ -146,11 +146,12 @@ func TestCheckAllSessions_SkipsPausedHibernatedStoppedInstances(t *testing.T) {
 		}
 	}
 
-	skipped := []*Instance{
+	skipped := make([]*Instance, 0, 3)
+	skipped = append(skipped,
 		makeInst("paused-session", Paused),
 		makeInst("hibernated-session", Hibernated),
 		makeInst("stopped-session", Stopped),
-	}
+	)
 	active := makeInst("active-session", Active)
 
 	poller.SetInstances(append(skipped, active))
