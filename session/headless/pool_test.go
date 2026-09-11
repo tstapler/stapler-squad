@@ -16,9 +16,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// firstCallJSON returns a valid JSON response for the first-call path.
+// firstCallJSON returns a valid stream-json terminal "result" line for the
+// first-call path — a single line is a valid (degenerate) stream: call()'s
+// scanner treats a line whose top-level JSON "type" field is "result" as
+// terminal regardless of how many lines preceded it. total_cost_usd (not
+// cost_usd) matches the real CLI's actual field name — see
+// firstCallJSONResult's doc comment.
 func firstCallJSON(sessionID, result string) string {
-	return fmt.Sprintf(`{"session_id":%q,"result":%q,"cost_usd":0.001}`, sessionID, result)
+	return fmt.Sprintf(`{"type":"result","session_id":%q,"result":%q,"total_cost_usd":0.001}`, sessionID, result)
 }
 
 // TestPool_CallBlocking_FirstCall_ToleratesTrailingNonJSONOutput covers the fix
@@ -36,6 +41,44 @@ func TestPool_CallBlocking_FirstCall_ToleratesTrailingNonJSONOutput(t *testing.T
 	result, err := pool.CallBlocking(context.Background(), "feat1", "system", "user prompt", CallOptions{}, DiscardCost)
 	require.NoError(t, err)
 	assert.Equal(t, "hello", result)
+}
+
+// TestPool_CallBlocking_FirstCall_NoResultLine_ReturnsErrorWithAccumulatedText
+// covers the fallback when a first-call subprocess exits after producing only
+// non-terminal lines (no "type":"result" event) — a shape with no direct test
+// coverage before this. The error must name the missing terminal event, and
+// the accumulated output must still be delivered so captureHeadlessFailure
+// has something to persist.
+func TestPool_CallBlocking_FirstCall_NoResultLine_ReturnsErrorWithAccumulatedText(t *testing.T) {
+	t.Parallel()
+	response := `{"type":"system","subtype":"init"}` + "\n" + `{"type":"assistant","message":"partial progress"}`
+	runner := NewFakeRunner(response)
+	pool := newTestPool(PoolConfig{}, runner)
+
+	result, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{}, DiscardCost)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no terminal result event")
+	assert.Contains(t, result, "partial progress", "accumulated text must still be delivered even though no terminal event arrived")
+}
+
+// TestPool_CallBlocking_FirstCall_MalformedResultLineJSON_ReturnsParseErrorWithAccumulatedText
+// covers the other stream-json parsing branch with no prior direct coverage:
+// a line that structurally IS the terminal "result" event (so isResultLine
+// recognizes it) but fails firstCallJSONResult's own unmarshal — here,
+// total_cost_usd as a JSON string instead of a number. A truly truncated/
+// invalid-JSON line no longer reaches this branch at all after the
+// structural (not substring) terminal-line check, which is deliberate: see
+// isResultLine's doc comment.
+func TestPool_CallBlocking_FirstCall_MalformedResultLineJSON_ReturnsParseErrorWithAccumulatedText(t *testing.T) {
+	t.Parallel()
+	response := `{"type":"assistant","message":"working"}` + "\n" + `{"type":"result","session_id":"sess-1","total_cost_usd":"oops"}`
+	runner := NewFakeRunner(response)
+	pool := newTestPool(PoolConfig{}, runner)
+
+	result, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{}, DiscardCost)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "first-call result-line JSON parse")
+	assert.Contains(t, result, "working", "accumulated text must still be delivered even when the result line fails to parse")
 }
 
 // newTestPool creates a Pool with FakeRunner for unit testing.
@@ -73,8 +116,10 @@ func TestPool_FirstCall_ArgsContainOutputFormatJSON(t *testing.T) {
 
 	args := runner.ArgsForCall(0)
 	require.NotNil(t, args)
-	assert.True(t, runner.ArgsContainSequence(0, "--output-format", "json"),
-		"first call must include --output-format json; got: %v", args)
+	assert.True(t, runner.ArgsContainSequence(0, "--output-format", "stream-json"),
+		"first call must include --output-format stream-json; got: %v", args)
+	assert.True(t, runner.ArgsContainSequence(0, "--verbose"),
+		"first call must include --verbose (required by the CLI for --print with --output-format=stream-json); got: %v", args)
 	assert.True(t, runner.ArgsContainSequence(0, "--system-prompt", "sys"),
 		"first call must include --system-prompt; got: %v", args)
 	assert.Contains(t, args, "--exclude-dynamic-system-prompt-sections")
@@ -235,7 +280,7 @@ func TestPool_RotatesSession_AfterMaxCalls(t *testing.T) {
 
 	// Third call args should be a first-call (--output-format json), not a resume.
 	args := runner.ArgsForCall(2)
-	assert.True(t, runner.ArgsContainSequence(2, "--output-format", "json"),
+	assert.True(t, runner.ArgsContainSequence(2, "--output-format", "stream-json"),
 		"third call should be fresh (rotation); got: %v", args)
 }
 
@@ -257,7 +302,7 @@ func TestPool_RotatesSession_AfterConsecutiveErrors(t *testing.T) {
 	// After 3 consecutive errors, a subsequent call should be a fresh session.
 	found := false
 	for i := 1; i < runner2.CallCount(); i++ {
-		if runner2.ArgsContainSequence(i, "--output-format", "json") {
+		if runner2.ArgsContainSequence(i, "--output-format", "stream-json") {
 			found = true
 			break
 		}
@@ -597,7 +642,7 @@ func TestFakeRunner_InspectsArgs_ReturnsJSONForFirstCall(t *testing.T) {
 // TestPool_FirstCall_IsError_ReturnsErrorChunk verifies LLM-level error handling.
 func TestPool_FirstCall_IsError_ReturnsErrorChunk(t *testing.T) {
 	t.Parallel()
-	errorJSON := `{"session_id":"","result":"model refused to respond","is_error":true,"cost_usd":0}`
+	errorJSON := `{"type":"result","session_id":"","result":"model refused to respond","is_error":true,"total_cost_usd":0}`
 	runner := NewFakeRunner(errorJSON)
 	pool := newTestPool(PoolConfig{}, runner)
 
@@ -619,7 +664,7 @@ func TestPool_FirstCall_IsError_ReturnsErrorChunk(t *testing.T) {
 // TestPool_FirstCall_CostUSD_ForwardedOnDoneChunk verifies cost_usd propagation.
 func TestPool_FirstCall_CostUSD_ForwardedOnDoneChunk(t *testing.T) {
 	t.Parallel()
-	costJSON := `{"session_id":"s1","result":"ok","is_error":false,"cost_usd":0.0042}`
+	costJSON := `{"type":"result","session_id":"s1","result":"ok","is_error":false,"total_cost_usd":0.0042}`
 	runner := NewFakeRunner(costJSON)
 	pool := newTestPool(PoolConfig{}, runner)
 
@@ -700,6 +745,160 @@ func (r *blockingRunner) Run(ctx context.Context, _ []string, _ io.Reader) (io.R
 	return pr, func() error { return pw.CloseWithError(nil) }, nil
 }
 
+// idlingLinesReader emits each of lines (newline-terminated as it returns them)
+// with a pause of gap before each one — real pacing, not instant buffering, so a
+// test can exercise idleTimeout's per-line timer reset. If blockForever is true,
+// once lines is exhausted the reader blocks (until ctx is done OR killed is
+// closed) instead of returning EOF, simulating a subprocess that produced some
+// real output and then went silent — the exact shape idleTimeout exists to
+// catch. killed is a SEPARATE signal from ctx: a real subprocess's stdout
+// unblocks when the process is killed, which is independent of (and normally
+// happens well before) ctx's own deadline — stop() closes killed to mimic that,
+// so a test can use a ctx budget far longer than idleTimeout and still verify
+// the reader actually gets unblocked once call() calls stop().
+type idlingLinesReader struct {
+	ctx          context.Context
+	killed       chan struct{}
+	lines        []string
+	gap          time.Duration
+	blockForever bool
+	idx          int
+	buf          []byte
+}
+
+// waitForEnd blocks until ctx is done or killed is closed, once lines is
+// exhausted and blockForever is set — factored out so Read stays shallow.
+func (r *idlingLinesReader) waitForEnd() (int, error) {
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	case <-r.killed:
+		return 0, io.EOF
+	}
+}
+
+func (r *idlingLinesReader) Read(p []byte) (int, error) {
+	for len(r.buf) == 0 {
+		if r.idx >= len(r.lines) {
+			if r.blockForever {
+				return r.waitForEnd()
+			}
+			return 0, io.EOF
+		}
+		select {
+		case <-time.After(r.gap):
+		case <-r.ctx.Done():
+			return 0, r.ctx.Err()
+		case <-r.killed:
+			return 0, io.EOF
+		}
+		r.buf = []byte(r.lines[r.idx] + "\n")
+		r.idx++
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
+}
+
+func (r *idlingLinesReader) Close() error { return nil }
+
+// idlingLinesRunner is a ClaudeRunner backed by idlingLinesReader. stopped, if
+// non-nil, is closed the first time stop() is invoked — lets a test assert the
+// subprocess was actually killed (not just that the call errored).
+type idlingLinesRunner struct {
+	lines        []string
+	gap          time.Duration
+	blockForever bool
+	stopped      chan struct{}
+}
+
+func (r *idlingLinesRunner) Run(ctx context.Context, _ []string, _ io.Reader) (io.ReadCloser, func() error, error) {
+	killed := make(chan struct{})
+	reader := &idlingLinesReader{ctx: ctx, killed: killed, lines: r.lines, gap: r.gap, blockForever: r.blockForever}
+	// call() calls stop() at least twice on most exit paths (once explicitly,
+	// once via its own deferred cleanup) — matching every real ClaudeRunner
+	// implementation's idempotent stop(), this one must tolerate that too.
+	var once sync.Once
+	stop := func() error {
+		once.Do(func() {
+			close(killed)
+			if r.stopped != nil {
+				close(r.stopped)
+			}
+		})
+		return nil
+	}
+	return reader, stop, nil
+}
+
+// TestPool_FirstCall_IdleTimeout_KillsStalledCall covers the 2026-09-08 fix
+// (docs/tasks/backlog-feature-improvement.md, "why triage keeps churning" +
+// follow-up): a first call that produces some real output and then goes
+// silent must be killed and reported distinctly (ErrIdleTimeout) once
+// idleTimeout elapses with no new line — not left to silently consume its
+// entire (much larger) absolute ctx budget.
+func TestPool_FirstCall_IdleTimeout_KillsStalledCall(t *testing.T) {
+	// Not t.Parallel(): mutates the package-level idleTimeout var.
+	origIdleTimeout := idleTimeout
+	idleTimeout = 30 * time.Millisecond
+	defer func() { idleTimeout = origIdleTimeout }()
+
+	stopped := make(chan struct{})
+	runner := &idlingLinesRunner{
+		lines:        []string{`{"type":"system","subtype":"init"}`, `{"type":"assistant","message":"working"}`},
+		gap:          5 * time.Millisecond,
+		blockForever: true,
+		stopped:      stopped,
+	}
+	pool := NewPoolWithRunner(PoolConfig{}, runner)
+
+	// ctx's own budget is far longer than idleTimeout — only idleTimeout should
+	// be able to end this call.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+
+	_, err := pool.CallBlocking(ctx, "f1", "sys", "prompt", CallOptions{}, DiscardCost)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrIdleTimeout)
+	assert.NotErrorIs(t, err, context.DeadlineExceeded,
+		"an idle timeout must not be reported as the caller's own ctx expiring")
+
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("expected the stalled subprocess to be stopped")
+	}
+}
+
+// TestPool_FirstCall_ActivityResetsIdleTimer_SucceedsWhileLinesKeepArriving is
+// the inverse of the idle-timeout test above: as long as new lines keep
+// arriving faster than idleTimeout, the call must succeed normally, even
+// though the TOTAL elapsed time across all lines exceeds idleTimeout many
+// times over — proving the timer resets per line rather than bounding the
+// call's overall duration (that remains ctx's job).
+func TestPool_FirstCall_ActivityResetsIdleTimer_SucceedsWhileLinesKeepArriving(t *testing.T) {
+	// Not t.Parallel(): mutates the package-level idleTimeout var.
+	origIdleTimeout := idleTimeout
+	idleTimeout = 30 * time.Millisecond
+	defer func() { idleTimeout = origIdleTimeout }()
+
+	runner := &idlingLinesRunner{
+		lines: []string{
+			`{"type":"system","subtype":"init"}`,
+			`{"type":"assistant","message":"step 1"}`,
+			`{"type":"assistant","message":"step 2"}`,
+			`{"type":"assistant","message":"step 3"}`,
+			firstCallJSON("sess-idle", "done"),
+		},
+		gap: 10 * time.Millisecond, // under idleTimeout; 5 lines * 10ms > idleTimeout in total
+	}
+	pool := NewPoolWithRunner(PoolConfig{}, runner)
+
+	result, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{}, DiscardCost)
+	require.NoError(t, err, "steady incremental activity under idleTimeout must not be killed")
+	assert.Equal(t, "done", result)
+}
+
 // TestPool_CtxCancel_DuringSemaphoreWait_DecrementsCallCount verifies that a
 // context cancellation while blocked on the concurrency semaphore does not
 // permanently inflate callCount (decrementCallCount is called on the cancel path).
@@ -732,6 +931,110 @@ func TestPool_CtxCancel_DuringSemaphoreWait_DecrementsCallCount(t *testing.T) {
 	pool.mu.Unlock()
 	require.NotNil(t, state, "session state must exist after Call")
 	assert.Equal(t, 0, state.callCount, "callCount must be 0 after ctx cancel during semaphore wait")
+}
+
+// TestPool_QueueWaitTimeout_DuringSemaphoreWait_ReturnsErrPoolSaturated covers
+// the 2026-09-08 fix (docs/tasks/backlog-feature-improvement.md): a call stuck
+// behind other concurrent calls must fail fast with a distinct
+// ErrPoolSaturated once maxQueueWait elapses, NOT silently consume its whole
+// (much longer) caller-supplied budget and surface as an indistinguishable
+// context.DeadlineExceeded once that budget finally expires. Mirrors
+// TestPool_CtxCancel_DuringSemaphoreWait_DecrementsCallCount's shape (a
+// manually-occupied slot blocks the next Call) but leaves ctx itself
+// long-lived, so the only thing that can end the wait is maxQueueWait.
+func TestPool_QueueWaitTimeout_DuringSemaphoreWait_ReturnsErrPoolSaturated(t *testing.T) {
+	// Not t.Parallel(): mutates the package-level maxQueueWait var.
+	origMaxQueueWait := maxQueueWait
+	maxQueueWait = 20 * time.Millisecond
+	defer func() { maxQueueWait = origMaxQueueWait }()
+
+	runner := NewFakeRunner()
+	// MaxConcurrentSessions=1 so a single manually-occupied slot blocks the next Call.
+	pool := newTestPool(PoolConfig{MaxConcurrentSessions: 1, MaxCallsPerSession: 100}, runner)
+
+	// Occupy the one semaphore slot so the next Call must block on acquire.
+	pool.concurrencySem <- struct{}{}
+	defer func() { <-pool.concurrencySem }()
+
+	// ctx itself carries a budget far longer than maxQueueWait (mirrors
+	// TriggerTriage's real 30-minute triageCallBudget) — nothing about ctx
+	// should cause this call to fail; only the shorter internal queue-wait cap.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+
+	_, err := pool.Call(ctx, "f1", "sys", "prompt")
+
+	require.Error(t, err, "expected error once maxQueueWait elapses while waiting for a slot")
+	assert.ErrorIs(t, err, ErrPoolSaturated)
+	assert.NotErrorIs(t, err, context.DeadlineExceeded,
+		"a queue-wait timeout must not be reported as the caller's own ctx expiring")
+
+	// callCount must be 0, same invariant as the ctx-cancel path above.
+	pool.mu.Lock()
+	state := pool.sessions["f1"]
+	pool.mu.Unlock()
+	require.NotNil(t, state, "session state must exist after Call")
+	assert.Equal(t, 0, state.callCount, "callCount must be 0 after queue-wait timeout")
+}
+
+// TestPool_CallerCtxShorterThanQueueWait_PreservesRealCtxError verifies the
+// other branch of the same fix: when the CALLER's own ctx is what actually
+// expires first (shorter than maxQueueWait, or genuinely cancelled), that
+// real signal must be preserved as-is — not masked as ErrPoolSaturated.
+func TestPool_CallerCtxShorterThanQueueWait_PreservesRealCtxError(t *testing.T) {
+	// Not t.Parallel(): mutates the package-level maxQueueWait var.
+	origMaxQueueWait := maxQueueWait
+	maxQueueWait = time.Hour // must not be what fires first in this test
+	defer func() { maxQueueWait = origMaxQueueWait }()
+
+	runner := NewFakeRunner()
+	pool := newTestPool(PoolConfig{MaxConcurrentSessions: 1, MaxCallsPerSession: 100}, runner)
+
+	pool.concurrencySem <- struct{}{}
+	defer func() { <-pool.concurrencySem }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	_, err := pool.Call(ctx, "f1", "sys", "prompt")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.NotErrorIs(t, err, ErrPoolSaturated,
+		"the caller's own ctx expiring must not be relabeled as pool saturation")
+}
+
+// TestPool_CallWithOptions_WorkDir_QueueWaitTimeout_ReturnsErrPoolSaturated
+// covers the fix for CallWithOptions's WorkDir branch: its semaphore acquire
+// used to have only a ctx.Done() case, never maxQueueWait, so BUG-093's fix
+// never actually applied to a real WorkDir caller (triage, review, PR
+// creation). Mirrors TestPool_QueueWaitTimeout_DuringSemaphoreWait_
+// ReturnsErrPoolSaturated but through the WorkDir path.
+func TestPool_CallWithOptions_WorkDir_QueueWaitTimeout_ReturnsErrPoolSaturated(t *testing.T) {
+	// Not t.Parallel(): mutates the package-level maxQueueWait var.
+	origMaxQueueWait := maxQueueWait
+	maxQueueWait = 20 * time.Millisecond
+	defer func() { maxQueueWait = origMaxQueueWait }()
+
+	// The queue-wait must time out before ever reaching runner.Run, so a bare
+	// ProcessRunner (never actually exec'd) is enough to satisfy the WorkDir
+	// branch's type assertion.
+	runner := &ProcessRunner{claudeBin: "unused-since-queue-wait-must-fail-first"}
+	pool := NewPoolWithRunner(PoolConfig{MaxConcurrentSessions: 1}, runner)
+
+	// Occupy the one semaphore slot so the WorkDir call must block on acquire.
+	pool.concurrencySem <- struct{}{}
+	defer func() { <-pool.concurrencySem }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+
+	_, err := pool.CallWithOptions(ctx, "f1", "sys", "prompt", CallOptions{WorkDir: t.TempDir()})
+
+	require.Error(t, err, "expected error once maxQueueWait elapses while waiting for a slot on the WorkDir path")
+	assert.ErrorIs(t, err, ErrPoolSaturated)
+	assert.NotErrorIs(t, err, context.DeadlineExceeded,
+		"a queue-wait timeout must not be reported as the caller's own ctx expiring")
 }
 
 // TestFakeRunner_InspectsArgs_ReturnsPlainForResumedCall verifies resumed-call plain text.
@@ -774,7 +1077,7 @@ func TestPool_CallBlocking_ZeroValueOptions_MatchesLegacyCallBlockingBehavior(t 
 		"zero-value opts must still capture the session ID like the pre-consolidation CallBlocking")
 
 	args := runner.ArgsForCall(0)
-	assert.True(t, runner.ArgsContainSequence(0, "--output-format", "json"),
+	assert.True(t, runner.ArgsContainSequence(0, "--output-format", "stream-json"),
 		"zero-value opts must produce a normal first-call via the session-reuse path (no WorkDir one-shot); got: %v", args)
 }
 
@@ -788,7 +1091,7 @@ func TestPool_CallBlocking_WithWorkDir_ReturnsCostAndUsesWorkDir(t *testing.T) {
 	t.Parallel()
 	scriptDir := t.TempDir()
 	scriptPath := filepath.Join(scriptDir, "fake-claude.sh")
-	script := "#!/bin/sh\necho \"{\\\"session_id\\\":\\\"wd1\\\",\\\"result\\\":\\\"$(pwd)\\\",\\\"cost_usd\\\":0.0077}\"\n"
+	script := "#!/bin/sh\necho \"{\\\"type\\\":\\\"result\\\",\\\"session_id\\\":\\\"wd1\\\",\\\"result\\\":\\\"$(pwd)\\\",\\\"total_cost_usd\\\":0.0077}\"\n"
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o755))
 
 	workDir, err := filepath.EvalSymlinks(t.TempDir())

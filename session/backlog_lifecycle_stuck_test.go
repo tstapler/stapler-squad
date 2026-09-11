@@ -1312,7 +1312,7 @@ func TestReconcileOrphanedTriageItems_should_writeDurableRowNotifyOnce_When_Tria
 	ctx := context.Background()
 	er := storage.repo
 
-	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour) // beyond maxWorkSessionStaleness (2h)
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
 	notifier := &fakeNotifier{}
@@ -1345,7 +1345,7 @@ func TestReconcileOrphanedTriageItems_should_tombstoneStaleSession_When_Detected
 	ctx := context.Background()
 	er := storage.repo
 
-	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour) // beyond maxWorkSessionStaleness (2h)
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -1375,22 +1375,29 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_TriageSessionRecent(t 
 	assert.Empty(t, open, "a recently-started triage session must not be flagged as orphaned")
 }
 
-// TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min is the
-// regression test for closing the "triage session died before submit_triage_result,
-// item silently stuck in idea for up to 2h" gap (GAP-20/21): a headless-triage session
-// (the common execution path) must be flagged well before the general-purpose 2h
-// staleness ceiling, since an open headless row reliably means dead, not slow.
-func TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min(t *testing.T) {
+// TestReconcileOrphanedTriageItems_should_notFlagHeadlessSession_BeforeItsOwnLongerThreshold
+// guards headless triage sessions' dedicated staleness threshold in the OTHER direction
+// from its original 2026-08-01 intent: originally (30m real call budget) the headless
+// threshold was much SHORTER than the general-purpose maxWorkSessionStaleness (2h), so this
+// test proved headless sessions got flagged sooner, not held to the slower general ceiling.
+// 2026-09-08 (this session) raised triageCallBudget to 3h alongside headless.idleTimeout
+// becoming the primary hang defense, which pushed maxHeadlessTriageSessionStaleness (now
+// 3h15m, kept in sync per TestMaxHeadlessTriageSessionStaleness_..._ExceedRealTriageCallBudgetWithMargin
+// below) past the general 2h ceiling — inverting the relationship. This test now guards the
+// inverse regression: a headless session must NOT be flagged merely for outliving the
+// general-purpose 2h threshold; it still gets its own (now longer) dedicated patience.
+func TestReconcileOrphanedTriageItems_should_notFlagHeadlessSession_BeforeItsOwnLongerThreshold(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 	er := storage.repo
 
-	// 45 minutes: past maxHeadlessTriageSessionStaleness (30m) but nowhere near the
-	// general-purpose maxWorkSessionStaleness (2h) — would NOT have been flagged
-	// before this fix.
-	item := newOrphanedTriageTestItem(t, storage, er, 45*time.Minute)
+	// 2h30m: past the general-purpose maxWorkSessionStaleness (2h) but still short of
+	// maxHeadlessTriageSessionStaleness (3h15m) — must NOT be flagged if the headless
+	// override is still correctly applied instead of silently falling through to the
+	// shorter general threshold.
+	newOrphanedTriageTestItem(t, storage, er, 2*time.Hour+30*time.Minute)
 
 	listener := NewBacklogLifecycleListener(storage)
 	notifier := &fakeNotifier{}
@@ -1400,10 +1407,8 @@ func TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min(t *t
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	require.Len(t, open, 1, "a headless triage session at 45m must be flagged, not held to the 2h general-purpose threshold")
-	assert.Equal(t, item.ID, open[0].ItemID)
-	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
-	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+	assert.Empty(t, open, "a headless session at 2h30m must not be flagged — it hasn't reached its own (longer) dedicated threshold yet")
+	assert.Empty(t, notifier.titles())
 }
 
 // TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionStaleButGenuinelyLive
@@ -1420,9 +1425,9 @@ func TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionSt
 	ctx := context.Background()
 	er := storage.repo
 
-	// 45 minutes: past maxHeadlessTriageSessionStaleness (35m) — would have been
-	// tombstoned unconditionally before this fix.
-	item := newOrphanedTriageTestItem(t, storage, er, 45*time.Minute)
+	// 4 hours: past maxHeadlessTriageSessionStaleness (3h15m) — would have been
+	// tombstoned unconditionally before BUG-055's fix.
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour)
 
 	listener := NewBacklogLifecycleListener(storage)
 	notifier := &fakeNotifier{}
@@ -1446,14 +1451,14 @@ func TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionSt
 
 // TestMaxHeadlessTriageSessionStaleness_should_ExceedRealTriageCallBudgetWithMargin guards
 // the exact margin regression named in BUG-055: this constant must stay strictly greater
-// than server/services.triageCallBudget (currently 30m — kept as a literal here rather than
+// than server/services.triageCallBudget (currently 3h — kept as a literal here rather than
 // imported, since session cannot depend on server/services) with real headroom, or every
 // slow-but-legitimate headless triage call races this sweep's staleness gate again,
 // regardless of how good IsTriageLive's liveness check is. If server/services.triageCallBudget
 // ever changes, this literal and the one there must be updated together.
 func TestMaxHeadlessTriageSessionStaleness_should_ExceedRealTriageCallBudgetWithMargin(t *testing.T) {
 	t.Parallel()
-	const knownTriageCallBudget = 30 * time.Minute
+	const knownTriageCallBudget = 3 * time.Hour
 	const minMargin = 2 * time.Minute
 	assert.Greater(t, maxHeadlessTriageSessionStaleness, knownTriageCallBudget+minMargin,
 		"maxHeadlessTriageSessionStaleness must exceed the real triage call budget with real margin, not race it")
@@ -1770,7 +1775,7 @@ func TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGa
 	ctx := context.Background()
 	er := storage.repo
 
-	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour)
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetNotifier(&fakeNotifier{})
