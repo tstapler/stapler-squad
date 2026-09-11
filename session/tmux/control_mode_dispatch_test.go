@@ -556,6 +556,34 @@ func TestCMDispatch_ProcessAfterExitReturnsStopped(t *testing.T) {
 	}
 }
 
+// TestParseCMCommandsEnabled_DefaultsOn verifies the zero-fork control-mode
+// command path (session/tmux/tmux.go's CapturePaneContent et al.) stays
+// enabled unless STAPLER_SQUAD_CM_COMMANDS is exactly "false" — an unset,
+// empty, or misspelled value must never silently fall back to per-call
+// subprocess forks (see the ForkLock-contention finding this guards against).
+func TestParseCMCommandsEnabled_DefaultsOn(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"unset", "", true},
+		{"explicit false", "false", false},
+		{"explicit true", "true", true},
+		{"truthy-looking but not exact", "0", true},
+		{"wrong case is not the opt-out sentinel", "False", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := parseCMCommandsEnabled(tt.raw); got != tt.want {
+				t.Errorf("parseCMCommandsEnabled(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestCMDispatch_ExitDrainsInFlightCmdResp verifies that an in-flight command
 // (between %begin and %exit) receives ErrControlModeStopped, not a silent hang.
 func TestCMDispatch_ExitDrainsInFlightCmdResp(t *testing.T) {
