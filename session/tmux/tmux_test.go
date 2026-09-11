@@ -1126,12 +1126,22 @@ func TestCapturePaneSemaphore(t *testing.T) {
 		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
 
+	// DoesSessionExist() short-circuits capture-pane against a session already
+	// known gone (see CapturePaneContentContext's doc comment) -- register every
+	// session as existing so each goroutine's call actually reaches cmdExec.Output
+	// instead of failing fast with ErrSessionNotFound.
+	sessionNames := make([]string, goroutines)
+	for i := range sessionNames {
+		sessionNames[i] = fmt.Sprintf("sem-test-%d", i)
+	}
+	reg := registryWithExistingSessions(sessionNames...)
+
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 	for i := 0; i < goroutines; i++ {
 		go func(i int) {
 			defer wg.Done()
-			session := newTmuxSession(fmt.Sprintf("sem-test-%d", i), "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix)
+			session := newTmuxSession(fmt.Sprintf("sem-test-%d", i), "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, WithRegistry(reg))
 			_, _ = session.CapturePaneContent()
 		}(i)
 	}
@@ -1158,7 +1168,12 @@ func TestCapturePaneContentPriority_should_UseFastLaneGate_When_ExecGateFastLane
 		RunFunc:            func(cmd *exec.Cmd) error { return nil },
 		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
-	session := newTmuxSessionWithSocket("fast-lane-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, serverSocket)
+	// CapturePaneContent()'s CapturePaneContentContext short-circuits via
+	// DoesSessionExist() against a session already known gone (see that
+	// method's doc comment) -- register the session as existing so the call
+	// below actually reaches cmdExec.
+	reg := registryWithExistingSessions("fast-lane-test")
+	session := newTmuxSessionWithSocket("fast-lane-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, serverSocket, WithRegistry(reg))
 
 	releaseFastLane, err := AcquireResyncExecSlot(context.Background(), serverSocket)
 	require.NoError(t, err)
@@ -1624,7 +1639,12 @@ func TestCapturePaneContentContext_RespectsCancellation(t *testing.T) {
 			}
 		},
 	}
-	session := newTmuxSession("capture-pane-cancel-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix)
+	// DoesSessionExist() short-circuits capture-pane against a session already
+	// known gone (see CapturePaneContentContext's doc comment) -- register the
+	// session as existing so the call below reaches the mock's blocking
+	// OutputFunc instead of failing fast on the exists check.
+	reg := registryWithExistingSessions("capture-pane-cancel-test")
+	session := newTmuxSession("capture-pane-cancel-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix, WithRegistry(reg))
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -1666,7 +1686,11 @@ func TestCapturePaneContentContext_RespectsTimeout(t *testing.T) {
 			return nil, ctx.Err()
 		},
 	}
-	session := newTmuxSession("capture-pane-timeout-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix)
+	// See TestCapturePaneContentContext_RespectsCancellation for why the session
+	// must be registered as existing: otherwise DoesSessionExist() short-circuits
+	// the call before it ever reaches the mock's blocking OutputFunc.
+	reg := registryWithExistingSessions("capture-pane-timeout-test")
+	session := newTmuxSession("capture-pane-timeout-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix, WithRegistry(reg))
 
 	start := time.Now()
 	_, err := session.CapturePaneContentContext(ctx)
