@@ -152,6 +152,15 @@ type Scanner struct {
 	cacheStore   sync.Map // map[string]*worktreeCache (key = worktreePath)
 	breakerStore sync.Map // map[string]*circuitBreaker (key = repoPath)
 
+	// repoWorktrees indexes which worktreePaths belong to each repoPath, kept
+	// in sync with cacheStore at every site that populates it (getOrCreateCache,
+	// restoreCacheFromDisk) and pruned alongside cacheStore's own eviction in
+	// persistCacheToDisk. Lets enqueueRepo's freshness check look up only the
+	// handful of worktrees a given repo actually has instead of Range-scanning
+	// every worktree cache entry system-wide on every enqueue — see
+	// enqueueRepo's doc comment for the O(N) scan this replaces.
+	repoWorktrees sync.Map // map[string]*sync.Map  (repoPath -> set[worktreePath]struct{})
+
 	// inFlight tracks repos currently queued or being scanned (key = repoPath)
 	// so a burst of triggers (fsnotify + manual Refresh + periodic tick landing
 	// close together) coalesces into one scan per repo instead of queuing a
@@ -346,6 +355,7 @@ func (s *Scanner) hydrateCacheFromDisk() {
 		c := &worktreeCache{ttl: ttl}
 		c.restore(e.Result, e.ScanTime)
 		s.cacheStore.Store(e.Result.WorktreePath, c)
+		s.indexRepoWorktree(e.Result.RepoPath, e.Result.WorktreePath)
 		restored++
 	}
 	if restored > 0 {
@@ -384,6 +394,11 @@ func (s *Scanner) persistCacheToDisk() {
 	s.cacheStore.Range(func(k, v any) bool {
 		path, _ := k.(string)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
+			if c, ok := v.(*worktreeCache); ok {
+				if result, _, hasValue := c.snapshot(); hasValue {
+					s.deindexRepoWorktree(result.RepoPath, path)
+				}
+			}
 			s.cacheStore.Delete(k)
 			evicted++
 			return true
@@ -563,23 +578,29 @@ func (s *Scanner) enqueueRepo(repoPath string, force bool) {
 	}
 	s.severePressureWarned.Store(false)
 
-	// Check worktree-level TTL cache: if all worktrees for this repo are fresh, skip.
-	// We do a lightweight check by looking for any result stored recently.
+	// Check worktree-level TTL cache: if any worktree for this repo is fresh,
+	// skip. Looks up repoWorktrees' per-repo index (populated by
+	// indexRepoWorktree at every cacheStore write site) instead of Range-
+	// scanning every worktree cache entry system-wide — enqueueAll calls this
+	// once per tracked repo, so the old approach cost O(repos × total cached
+	// worktrees) per tick; this is O(worktrees for this one repo).
 	recent := false
-	s.cacheStore.Range(func(k, v any) bool {
-		c, ok := v.(*worktreeCache)
-		if !ok {
-			return true
+	if v, ok := s.repoWorktrees.Load(repoPath); ok {
+		if set, ok := v.(*sync.Map); ok {
+			set.Range(func(k, _ any) bool {
+				worktreePath, _ := k.(string)
+				if cv, ok := s.cacheStore.Load(worktreePath); ok {
+					if c, ok := cv.(*worktreeCache); ok {
+						if _, fresh := c.Get(); fresh {
+							recent = true
+							return false // stop iteration
+						}
+					}
+				}
+				return true
+			})
 		}
-		// Check if this cache entry belongs to the given repo (by path prefix—approximate).
-		if strings.HasPrefix(k.(string), repoPath+"/") || k == repoPath {
-			if _, ok := c.Get(); ok {
-				recent = true
-				return false // stop iteration
-			}
-		}
-		return true
-	})
+	}
 	if recent && !force {
 		return
 	}
@@ -691,6 +712,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 	// button, ScanUnfinishedWork RPC) always re-reads live git state instead of
 	// returning up-to-30s-stale data.
 	cache := s.getOrCreateCache(wt.Path)
+	s.indexRepoWorktree(repoPath, wt.Path)
 	if !force {
 		if cached, ok := cache.Get(); ok {
 			return cached
@@ -727,10 +749,20 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 		}
 	}
 
-	if d, dErr := s.reader.DiffShortstat(wt.Path); dErr == nil {
-		result.ChangedFiles = d.Files
-		result.LinesAdded = d.Insertions
-		result.LinesRemoved = d.Deletions
+	// Skip when uncommitted is false: DiffShortstat re-derives the identical
+	// staged/unstaged/untracked classification HasUncommitted just computed
+	// (same index, same HEAD tree, same disk stat pass) purely to report a
+	// stat that's necessarily {0,0,0} for a clean worktree. Benchmarked at
+	// ~1.7-2x the allocations and ~20-67% more wall time versus HasUncommitted
+	// alone (BenchmarkScanWorktree_DuplicateClassificationWork,
+	// gogit_vcs_reader_shellout_bench_test.go) — pure waste on the common case
+	// of an idle, already-clean worktree in a large fleet.
+	if uncommitted {
+		if d, dErr := s.reader.DiffShortstat(wt.Path); dErr == nil {
+			result.ChangedFiles = d.Files
+			result.LinesAdded = d.Insertions
+			result.LinesRemoved = d.Deletions
+		}
 	}
 
 	result.Status = ScanResultStatusOK
@@ -1076,6 +1108,36 @@ func (s *Scanner) InvalidateCache(worktreePath string) {
 	if v, ok := s.cacheStore.Load(worktreePath); ok {
 		if c, ok := v.(*worktreeCache); ok {
 			c.Invalidate()
+		}
+	}
+}
+
+// indexRepoWorktree records that worktreePath belongs to repoPath in
+// repoWorktrees, so enqueueRepo can look up exactly this repo's worktrees
+// instead of scanning every cache entry system-wide. Safe to call
+// redundantly — LoadOrStore/Store are idempotent for an already-indexed pair.
+func (s *Scanner) indexRepoWorktree(repoPath, worktreePath string) {
+	if repoPath == "" || worktreePath == "" {
+		return
+	}
+	v, _ := s.repoWorktrees.LoadOrStore(repoPath, &sync.Map{})
+	set, _ := v.(*sync.Map)
+	if set != nil {
+		set.Store(worktreePath, struct{}{})
+	}
+}
+
+// deindexRepoWorktree removes worktreePath from repoPath's entry in
+// repoWorktrees. Called alongside cacheStore's own eviction (see
+// persistCacheToDisk) so the index doesn't grow unbounded across worktrees
+// that no longer exist on disk.
+func (s *Scanner) deindexRepoWorktree(repoPath, worktreePath string) {
+	if repoPath == "" {
+		return
+	}
+	if v, ok := s.repoWorktrees.Load(repoPath); ok {
+		if set, ok := v.(*sync.Map); ok {
+			set.Delete(worktreePath)
 		}
 	}
 }
