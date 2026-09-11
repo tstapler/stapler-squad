@@ -137,9 +137,10 @@ func triageEndReasonOrUnknown(endReason string) string {
 //     triage on the item; this is the standing-sweep equivalent. Pure staleness
 //     gate — no liveness checker — matching reconcileStaleWorkSessions' established
 //     pattern for the closest analogous detector in this file: a headless triage
-//     call routinely runs 7-15 minutes, so per-tick liveness signals are noisy
-//     here; staleness alone is the reliable signal. Headless-triage sessions (the
-//     common case) get the much shorter maxHeadlessTriageSessionStaleness (35m)
+//     call can legitimately run up to triageCallBudget (3h) now, so per-tick
+//     liveness signals are noisy here; staleness alone is the reliable signal.
+//     Headless-triage sessions (the common case) get the shorter
+//     maxHeadlessTriageSessionStaleness (3h15m)
 //     rather than the general-purpose maxWorkSessionStaleness (2h): an open
 //     headless row found later reliably means dead, not slow (see that constant's
 //     doc comment). Not generalized beyond idea: nothing in this codebase creates

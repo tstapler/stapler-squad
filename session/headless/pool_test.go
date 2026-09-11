@@ -18,9 +18,10 @@ import (
 
 // firstCallJSON returns a valid stream-json terminal "result" line for the
 // first-call path — a single line is a valid (degenerate) stream: call()'s
-// scanner treats any line containing "type":"result" as terminal regardless
-// of how many lines preceded it. total_cost_usd (not cost_usd) matches the
-// real CLI's actual field name — see firstCallJSONResult's doc comment.
+// scanner treats a line whose top-level JSON "type" field is "result" as
+// terminal regardless of how many lines preceded it. total_cost_usd (not
+// cost_usd) matches the real CLI's actual field name — see
+// firstCallJSONResult's doc comment.
 func firstCallJSON(sessionID, result string) string {
 	return fmt.Sprintf(`{"type":"result","session_id":%q,"result":%q,"total_cost_usd":0.001}`, sessionID, result)
 }
@@ -40,6 +41,44 @@ func TestPool_CallBlocking_FirstCall_ToleratesTrailingNonJSONOutput(t *testing.T
 	result, err := pool.CallBlocking(context.Background(), "feat1", "system", "user prompt", CallOptions{}, DiscardCost)
 	require.NoError(t, err)
 	assert.Equal(t, "hello", result)
+}
+
+// TestPool_CallBlocking_FirstCall_NoResultLine_ReturnsErrorWithAccumulatedText
+// covers the fallback when a first-call subprocess exits after producing only
+// non-terminal lines (no "type":"result" event) — a shape with no direct test
+// coverage before this. The error must name the missing terminal event, and
+// the accumulated output must still be delivered so captureHeadlessFailure
+// has something to persist.
+func TestPool_CallBlocking_FirstCall_NoResultLine_ReturnsErrorWithAccumulatedText(t *testing.T) {
+	t.Parallel()
+	response := `{"type":"system","subtype":"init"}` + "\n" + `{"type":"assistant","message":"partial progress"}`
+	runner := NewFakeRunner(response)
+	pool := newTestPool(PoolConfig{}, runner)
+
+	result, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{}, DiscardCost)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no terminal result event")
+	assert.Contains(t, result, "partial progress", "accumulated text must still be delivered even though no terminal event arrived")
+}
+
+// TestPool_CallBlocking_FirstCall_MalformedResultLineJSON_ReturnsParseErrorWithAccumulatedText
+// covers the other stream-json parsing branch with no prior direct coverage:
+// a line that structurally IS the terminal "result" event (so isResultLine
+// recognizes it) but fails firstCallJSONResult's own unmarshal — here,
+// total_cost_usd as a JSON string instead of a number. A truly truncated/
+// invalid-JSON line no longer reaches this branch at all after the
+// structural (not substring) terminal-line check, which is deliberate: see
+// isResultLine's doc comment.
+func TestPool_CallBlocking_FirstCall_MalformedResultLineJSON_ReturnsParseErrorWithAccumulatedText(t *testing.T) {
+	t.Parallel()
+	response := `{"type":"assistant","message":"working"}` + "\n" + `{"type":"result","session_id":"sess-1","total_cost_usd":"oops"}`
+	runner := NewFakeRunner(response)
+	pool := newTestPool(PoolConfig{}, runner)
+
+	result, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{}, DiscardCost)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "first-call result-line JSON parse")
+	assert.Contains(t, result, "working", "accumulated text must still be delivered even when the result line fails to parse")
 }
 
 // newTestPool creates a Pool with FakeRunner for unit testing.
@@ -963,6 +1002,39 @@ func TestPool_CallerCtxShorterThanQueueWait_PreservesRealCtxError(t *testing.T) 
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.NotErrorIs(t, err, ErrPoolSaturated,
 		"the caller's own ctx expiring must not be relabeled as pool saturation")
+}
+
+// TestPool_CallWithOptions_WorkDir_QueueWaitTimeout_ReturnsErrPoolSaturated
+// covers the fix for CallWithOptions's WorkDir branch: its semaphore acquire
+// used to have only a ctx.Done() case, never maxQueueWait, so BUG-093's fix
+// never actually applied to a real WorkDir caller (triage, review, PR
+// creation). Mirrors TestPool_QueueWaitTimeout_DuringSemaphoreWait_
+// ReturnsErrPoolSaturated but through the WorkDir path.
+func TestPool_CallWithOptions_WorkDir_QueueWaitTimeout_ReturnsErrPoolSaturated(t *testing.T) {
+	// Not t.Parallel(): mutates the package-level maxQueueWait var.
+	origMaxQueueWait := maxQueueWait
+	maxQueueWait = 20 * time.Millisecond
+	defer func() { maxQueueWait = origMaxQueueWait }()
+
+	// The queue-wait must time out before ever reaching runner.Run, so a bare
+	// ProcessRunner (never actually exec'd) is enough to satisfy the WorkDir
+	// branch's type assertion.
+	runner := &ProcessRunner{claudeBin: "unused-since-queue-wait-must-fail-first"}
+	pool := NewPoolWithRunner(PoolConfig{MaxConcurrentSessions: 1}, runner)
+
+	// Occupy the one semaphore slot so the WorkDir call must block on acquire.
+	pool.concurrencySem <- struct{}{}
+	defer func() { <-pool.concurrencySem }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+
+	_, err := pool.CallWithOptions(ctx, "f1", "sys", "prompt", CallOptions{WorkDir: t.TempDir()})
+
+	require.Error(t, err, "expected error once maxQueueWait elapses while waiting for a slot on the WorkDir path")
+	assert.ErrorIs(t, err, ErrPoolSaturated)
+	assert.NotErrorIs(t, err, context.DeadlineExceeded,
+		"a queue-wait timeout must not be reported as the caller's own ctx expiring")
 }
 
 // TestFakeRunner_InspectsArgs_ReturnsPlainForResumedCall verifies resumed-call plain text.

@@ -48,15 +48,9 @@ type CallOptions struct {
 }
 
 // firstCallJSONResult is the JSON schema of the terminal `"type":"result"` line
-// from claude -p --output-format stream-json --verbose (or, historically, the
-// single top-level object from --output-format json before this package
-// switched formats for per-line progress detection — the schema is identical
-// either way). Field name verified empirically against the live CLI
-// (`claude --version` 2.1.263): the cost field is `total_cost_usd`, not
-// `cost_usd` — the latter does not exist in the response at all. This was a
-// real, silent bug: CostUSD parsed to 0 for every headless call before this
-// fix, and every FakeRunner-based test was self-consistently wrong against
-// the same stale field name, so nothing caught it.
+// from claude -p --output-format stream-json --verbose. The cost field is
+// total_cost_usd, not cost_usd (which doesn't exist) — verified against the
+// live CLI.
 type firstCallJSONResult struct {
 	SessionID string  `json:"session_id"`
 	Result    string  `json:"result"`
@@ -314,9 +308,7 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 	if err != nil {
 		<-p.concurrencySem // release on startup failure
 		p.decrementCallCount(key)
-		if tripBreaker := p.recordError(key); tripBreaker {
-			p.rotateSession(key)
-		}
+		p.recordErrorAndMaybeRotate(key)
 		close(ch)
 		return ch, fmt.Errorf("headless runner start: %w: %w", ErrSubprocessStart, err)
 	}
@@ -349,184 +341,313 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 			}
 		}
 
+		cio := callIO{stop: stop, send: send, sendFinal: sendFinal}
 		if isFirstCall {
-			// First call: --output-format stream-json emits one JSON object per
-			// line (system init, assistant messages, tool_use/tool_result, and a
-			// terminal "type":"result" event). Scan line by line in a helper
-			// goroutine — both so ctx cancellation can terminate the subprocess and
-			// unblock the read (as before), and so idleTimeout has a real per-line
-			// activity signal to reset against, instead of the old design's only
-			// option of waiting for the whole subprocess to finish or die.
-			type firstCallLine struct {
-				text string
-				err  error // set only on the final signal if the scan itself failed
-			}
-			lines := make(chan firstCallLine, 16)
-			go func() {
-				defer close(lines)
-				scanner := bufio.NewScanner(stdout)
-				// The one-time "system init" line lists every tool/MCP server/skill/
-				// plugin and can exceed bufio.Scanner's 64KB default token size on a
-				// richly-configured install — confirmed empirically against a live
-				// call. 10MB is a generous ceiling with no real downside here (one
-				// line, once per call).
-				scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-				for scanner.Scan() {
-					lines <- firstCallLine{text: scanner.Text()}
-				}
-				if err := scanner.Err(); err != nil {
-					lines <- firstCallLine{err: err}
-				}
-			}()
-			drainLines := func() {
-				for range lines { //nolint:revive // draining, not iterating for values
-				}
-			}
-
-			var allText strings.Builder
-			var resultLine string
-			idleTimer := time.NewTimer(idleTimeout)
-			defer idleTimer.Stop()
-
-		scanLoop:
-			for {
-				select {
-				case lr, ok := <-lines:
-					if !ok {
-						break scanLoop
-					}
-					if lr.err != nil {
-						// A subprocess killed mid-write (e.g. OOM-killed) can still have
-						// left real, useful output in allText before the read failed.
-						// Send it as a Text chunk before the terminal Err, mirroring the
-						// no-result-event fallback below — otherwise CallBlocking's raw
-						// return is "" and captureHeadlessFailure has nothing to persist.
-						if tripBreaker := p.recordError(key); tripBreaker {
-							p.rotateSession(key)
-						}
-						if text := strings.TrimSpace(allText.String()); text != "" {
-							if !send(StreamChunk{Text: text}) {
-								return
-							}
-						}
-						send(StreamChunk{Err: lr.err, Done: true})
-						return
-					}
-					if !idleTimer.Stop() {
-						select {
-						case <-idleTimer.C:
-						default:
-						}
-					}
-					idleTimer.Reset(idleTimeout)
-					allText.WriteString(lr.text)
-					allText.WriteByte('\n')
-					if resultLine == "" && strings.Contains(lr.text, `"type":"result"`) {
-						resultLine = lr.text
-					}
-				case <-idleTimer.C:
-					// No new output line for idleTimeout: a real, distinct-from-a-
-					// hard-deadline "this call is stalled" signal — see idleTimeout's
-					// doc comment (pool.go).
-					_ = stop()
-					drainLines()
-					sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", ErrIdleTimeout), Done: true})
-					return
-				case <-ctx.Done():
-					// Kill subprocess to unblock the scan, then wait for it to exit.
-					_ = stop()
-					drainLines()
-					sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", ctx.Err()), Done: true})
-					return
-				}
-			}
-
-			// Guard against a ctx cancellation race after the scan completes normally.
-			if ctx.Err() != nil {
-				sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", ctx.Err()), Done: true})
-				return
-			}
-
-			if resultLine == "" {
-				// The stream ended (subprocess exited) without ever producing a
-				// terminal "result" event — treat the whole accumulated output as
-				// plain text, mirroring the old format's "not valid JSON" fallback.
-				text := strings.TrimSpace(allText.String())
-				if text != "" {
-					if !send(StreamChunk{Text: text}) {
-						return
-					}
-				}
-				if tripBreaker := p.recordError(key); tripBreaker {
-					p.rotateSession(key)
-				}
-				send(StreamChunk{Err: errors.New("stream-json: subprocess exited with no terminal result event"), Done: true})
-				return
-			}
-
-			var result firstCallJSONResult
-			if jsonErr := json.Unmarshal([]byte(resultLine), &result); jsonErr != nil {
-				// Not valid JSON: treat the whole output as plain text.
-				text := strings.TrimSpace(allText.String())
-				if text != "" {
-					if !send(StreamChunk{Text: text}) {
-						return
-					}
-				}
-				if tripBreaker := p.recordError(key); tripBreaker {
-					p.rotateSession(key)
-				}
-				send(StreamChunk{Err: fmt.Errorf("first-call result-line JSON parse: %w", jsonErr), Done: true})
-				return
-			}
-
-			// claude -p sets is_error=true when the LLM returns an error response.
-			if result.IsError {
-				if tripBreaker := p.recordError(key); tripBreaker {
-					p.rotateSession(key)
-				}
-				send(StreamChunk{Err: fmt.Errorf("claude reported error: %s", strings.TrimSpace(result.Result)), Done: true})
-				return
-			}
-
-			// Store the session ID for future resume calls.
-			if result.SessionID != "" {
-				p.storeSessionID(key, result.SessionID)
-			}
-			p.recordSuccess(key)
-			if result.Result != "" {
-				if !send(StreamChunk{Text: result.Result}) {
-					return
-				}
-			}
-			send(StreamChunk{Done: true, CostUSD: result.CostUSD})
+			p.readFirstCallStream(ctx, key, stdout, cio)
 			return
 		}
-
-		// Resumed call: stream line by line.
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			if ctx.Err() != nil {
-				sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", ctx.Err()), Done: true})
-				return
-			}
-			line := scanner.Text()
-			if !send(StreamChunk{Text: line}) {
-				return
-			}
-		}
-		if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
-			if tripBreaker := p.recordError(key); tripBreaker {
-				p.rotateSession(key)
-			}
-			send(StreamChunk{Err: err, Done: true})
-			return
-		}
-		p.recordSuccess(key)
-		send(StreamChunk{Done: true})
+		p.readResumedCallStream(ctx, key, stdout, cio)
 	}()
 
 	return ch, nil
+}
+
+// callIO bundles the plumbing readFirstCallStream/readResumedCallStream (and
+// their helpers) need to terminate a call and deliver chunks, so passing it
+// around doesn't blow past the parameter-count gate.
+type callIO struct {
+	stop      func() error
+	send      func(StreamChunk) bool
+	sendFinal func(StreamChunk)
+}
+
+// streamLine is one line of subprocess stdout read by startLineScanner, or a
+// terminal scan error if the underlying read itself failed.
+type streamLine struct {
+	text string
+	err  error
+}
+
+// startLineScanner reads stdout line by line in a background goroutine so
+// readFirstCallStream/readResumedCallStream can select on a line arriving
+// against ctx cancellation and idleTimeout, instead of blocking on a
+// synchronous Scan() that ctx cancellation can't interrupt. drain must be
+// called once the caller stops reading from the returned channel so the
+// goroutine can exit after stdout closes rather than leaking.
+func startLineScanner(stdout io.Reader) (lines <-chan streamLine, drain func()) {
+	ch := make(chan streamLine, 16)
+	go func() {
+		defer close(ch)
+		scanner := bufio.NewScanner(stdout)
+		// The one-time "system init" line lists every tool/MCP server/skill/
+		// plugin and can exceed bufio.Scanner's 64KB default token size on a
+		// richly-configured install — confirmed empirically against a live
+		// call. 10MB is a generous ceiling with no real downside here (one
+		// line, once per call).
+		scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+		for scanner.Scan() {
+			ch <- streamLine{text: scanner.Text()}
+		}
+		if err := scanner.Err(); err != nil {
+			ch <- streamLine{err: err}
+		}
+	}()
+	return ch, func() {
+		for range ch { //nolint:revive // draining, not iterating for values
+		}
+	}
+}
+
+// isResultLine reports whether line is a well-formed stream-json envelope
+// whose top-level "type" field is "result" — a structural check rather than a
+// substring match, so a tool_use/tool_result payload that happens to contain
+// the literal text `"type":"result"` can never be mistaken for the terminal
+// event.
+func isResultLine(line string) bool {
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal([]byte(line), &envelope) == nil && envelope.Type == "result"
+}
+
+// resetIdleTimer safely resets t after draining an already-fired channel —
+// the standard safe-reset dance for a timer whose Stop() can return false
+// because it already fired.
+func resetIdleTimer(t *time.Timer, d time.Duration) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
+}
+
+// sendAccumulatedTextThenErr sends text (if non-empty) as a Text chunk, then
+// finalErr as the terminal Err chunk — the shared shape for every first-call
+// failure path that still has real partial output worth persisting (see
+// readFirstCallStream/finishFirstCall).
+func sendAccumulatedTextThenErr(send func(StreamChunk) bool, text string, finalErr error) {
+	if trimmed := strings.TrimSpace(text); trimmed != "" {
+		if !send(StreamChunk{Text: trimmed}) {
+			return
+		}
+	}
+	send(StreamChunk{Err: finalErr, Done: true})
+}
+
+// recordErrorAndMaybeRotate records a call failure for key and rotates the
+// session if the circuit-breaker threshold has been reached — the shared
+// shape repeated across every error path below.
+func (p *Pool) recordErrorAndMaybeRotate(key FeatureKey) {
+	if tripBreaker := p.recordError(key); tripBreaker {
+		p.rotateSession(key)
+	}
+}
+
+// terminateStream stops the subprocess, drains any buffered lines, and sends
+// err as the terminal chunk — the shared shutdown path for idle-timeout and
+// ctx-cancellation on both the first-call and resumed-call scan loops.
+func terminateStream(cio callIO, drainLines func(), err error) {
+	_ = cio.stop()
+	drainLines()
+	cio.sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", err), Done: true})
+}
+
+// firstCallScanResult is what scanFirstCallLines collected before the stream
+// ended normally (not via idle timeout, ctx cancellation, or the output cap).
+type firstCallScanResult struct {
+	allText    string
+	resultLine string
+}
+
+// firstCallScanState is the mutable per-line state threaded through
+// scanFirstCallLines — bundled into a struct so handleFirstCallLine doesn't
+// blow past the parameter-count gate.
+type firstCallScanState struct {
+	idleTimer  *time.Timer
+	allText    *strings.Builder
+	resultLine *string
+	drainLines func()
+}
+
+// handleFirstCallLine processes one successfully-scanned line: resets the
+// idle timer, accumulates allText, enforces the cumulative output cap, and
+// records resultLine on the first line whose structural type is "result".
+// Returns true once the output cap has been exceeded and the terminal chunk
+// already sent — the caller must stop looping in that case.
+func (p *Pool) handleFirstCallLine(state firstCallScanState, lr streamLine, cio callIO) bool {
+	resetIdleTimer(state.idleTimer, idleTimeout)
+	state.allText.WriteString(lr.text)
+	state.allText.WriteByte('\n')
+	if state.allText.Len() > maxFirstCallOutputBytes {
+		// Cumulative cap independent of the per-line scanner buffer cap
+		// (startLineScanner): a long-running, non-idle stream could otherwise
+		// grow this buffer unbounded before idleTimeout would catch it.
+		terminateStream(cio, state.drainLines, ErrOutputCapExceeded)
+		return true
+	}
+	if *state.resultLine == "" && isResultLine(lr.text) {
+		*state.resultLine = lr.text
+	}
+	return false
+}
+
+// scanFirstCallLines runs the idle-timeout-guarded scan loop for a first call
+// (--output-format stream-json): system init, assistant messages,
+// tool_use/tool_result, and a terminal "result" event. ok is false if the
+// call was already terminated on this path (idle timeout, ctx cancellation,
+// or the output cap) — the final chunk has already been sent via
+// cio.sendFinal, and the caller must not send anything further.
+func (p *Pool) scanFirstCallLines(ctx context.Context, key FeatureKey, stdout io.Reader, cio callIO) (result firstCallScanResult, ok bool) {
+	lines, drainLines := startLineScanner(stdout)
+
+	var allText strings.Builder
+	var resultLine string
+	state := firstCallScanState{idleTimer: time.NewTimer(idleTimeout), allText: &allText, resultLine: &resultLine, drainLines: drainLines}
+	defer state.idleTimer.Stop()
+
+	for {
+		select {
+		case lr, more := <-lines:
+			if !more {
+				return firstCallScanResult{allText: allText.String(), resultLine: resultLine}, true
+			}
+			if lr.err != nil {
+				// A subprocess killed mid-write (e.g. OOM-killed) can still have
+				// left real, useful output in allText before the read failed —
+				// deliver it rather than discarding it (see sendAccumulatedTextThenErr).
+				p.recordErrorAndMaybeRotate(key)
+				sendAccumulatedTextThenErr(cio.send, allText.String(), lr.err)
+				return firstCallScanResult{}, false
+			}
+			if p.handleFirstCallLine(state, lr, cio) {
+				return firstCallScanResult{}, false
+			}
+		case <-state.idleTimer.C:
+			// No new output line for idleTimeout: a real, distinct-from-a-
+			// hard-deadline "this call is stalled" signal — see idleTimeout's
+			// doc comment (pool.go).
+			terminateStream(cio, drainLines, ErrIdleTimeout)
+			return firstCallScanResult{}, false
+		case <-ctx.Done():
+			// Kill subprocess to unblock the scan, then wait for it to exit.
+			terminateStream(cio, drainLines, ctx.Err())
+			return firstCallScanResult{}, false
+		}
+	}
+}
+
+// sendFirstCallSuccess stores the session ID for future resume calls and
+// delivers the successful result's text and cost.
+func (p *Pool) sendFirstCallSuccess(key FeatureKey, result firstCallJSONResult, cio callIO) {
+	if result.SessionID != "" {
+		p.storeSessionID(key, result.SessionID)
+	}
+	p.recordSuccess(key)
+	if result.Result != "" {
+		if !cio.send(StreamChunk{Text: result.Result}) {
+			return
+		}
+	}
+	cio.send(StreamChunk{Done: true, CostUSD: result.CostUSD})
+}
+
+// finishFirstCall interprets a first call's scan result once the stream has
+// ended normally: parses the terminal result line and sends the resulting
+// success/error chunk(s).
+func (p *Pool) finishFirstCall(key FeatureKey, scanRes firstCallScanResult, cio callIO) {
+	if scanRes.resultLine == "" {
+		// The stream ended (subprocess exited) without ever producing a
+		// terminal "result" event — treat the whole accumulated output as
+		// plain text, mirroring the old format's "not valid JSON" fallback.
+		p.recordErrorAndMaybeRotate(key)
+		sendAccumulatedTextThenErr(cio.send, scanRes.allText, errors.New("stream-json: subprocess exited with no terminal result event"))
+		return
+	}
+
+	var result firstCallJSONResult
+	if jsonErr := json.Unmarshal([]byte(scanRes.resultLine), &result); jsonErr != nil {
+		p.recordErrorAndMaybeRotate(key)
+		sendAccumulatedTextThenErr(cio.send, scanRes.allText, fmt.Errorf("first-call result-line JSON parse: %w", jsonErr))
+		return
+	}
+
+	// claude -p sets is_error=true when the LLM returns an error response.
+	if result.IsError {
+		p.recordErrorAndMaybeRotate(key)
+		cio.send(StreamChunk{Err: fmt.Errorf("claude reported error: %s", strings.TrimSpace(result.Result)), Done: true})
+		return
+	}
+
+	p.sendFirstCallSuccess(key, result, cio)
+}
+
+// readFirstCallStream drives a first call's stream-json scan to completion
+// and reports the outcome via cio.
+func (p *Pool) readFirstCallStream(ctx context.Context, key FeatureKey, stdout io.Reader, cio callIO) {
+	scanRes, ok := p.scanFirstCallLines(ctx, key, stdout, cio)
+	if !ok {
+		return
+	}
+	// Guard against a ctx cancellation race after the scan completes normally.
+	if ctx.Err() != nil {
+		cio.sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", ctx.Err()), Done: true})
+		return
+	}
+	p.finishFirstCall(key, scanRes, cio)
+}
+
+// handleResumedCallLine processes one line for readResumedCallStream:
+// resets the idle timer and forwards the line as a Text chunk, or reports a
+// scan error (recordSuccess on a clean io.EOF, recordError/rotate
+// otherwise). Returns true once the call has ended and the caller must stop
+// looping.
+func (p *Pool) handleResumedCallLine(key FeatureKey, idleTimer *time.Timer, lr streamLine, cio callIO) bool {
+	if lr.err != nil {
+		if errors.Is(lr.err, io.EOF) {
+			p.recordSuccess(key)
+			cio.send(StreamChunk{Done: true})
+			return true
+		}
+		p.recordErrorAndMaybeRotate(key)
+		cio.send(StreamChunk{Err: lr.err, Done: true})
+		return true
+	}
+	resetIdleTimer(idleTimer, idleTimeout)
+	return !cio.send(StreamChunk{Text: lr.text})
+}
+
+// readResumedCallStream scans a resumed call's plain-text stdout line by
+// line, forwarding each line as its own Text chunk. Shares
+// scanFirstCallLines's idle-timer-per-line protection: before this, only a
+// session's first call had any progress detection, leaving every later call
+// in a session — most real call volume — defended only by ctx's own (much
+// larger) deadline.
+func (p *Pool) readResumedCallStream(ctx context.Context, key FeatureKey, stdout io.Reader, cio callIO) {
+	lines, drainLines := startLineScanner(stdout)
+	idleTimer := time.NewTimer(idleTimeout)
+	defer idleTimer.Stop()
+
+	for {
+		select {
+		case lr, more := <-lines:
+			if !more {
+				p.recordSuccess(key)
+				cio.send(StreamChunk{Done: true})
+				return
+			}
+			if p.handleResumedCallLine(key, idleTimer, lr, cio) {
+				return
+			}
+		case <-idleTimer.C:
+			terminateStream(cio, drainLines, ErrIdleTimeout)
+			return
+		case <-ctx.Done():
+			terminateStream(cio, drainLines, ctx.Err())
+			return
+		}
+	}
 }
 
 // CallWithOptions is like Call but allows overriding model and working directory.
@@ -547,13 +668,22 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 			return ch, fmt.Errorf("CallWithOptions: WorkDir requires a ProcessRunner; got %T", p.runner)
 		}
 
-		// Acquire parent semaphore so WorkDir calls count toward the overall cap.
+		// Acquire parent semaphore so WorkDir calls count toward the overall cap,
+		// bounded by maxQueueWait like call()'s own acquire — the oneShot pool
+		// below never blocks on its own semaphore, so without this bound here
+		// the BUG-093 queue-wait fix would never actually apply to a WorkDir
+		// caller (triage, review, PR creation, approval classification).
+		queueCtx, queueCancel := context.WithTimeout(ctx, maxQueueWait)
+		defer queueCancel()
 		select {
 		case p.concurrencySem <- struct{}{}:
-		case <-ctx.Done():
+		case <-queueCtx.Done():
 			ch := make(chan StreamChunk)
 			close(ch)
-			return ch, ctx.Err()
+			if err := ctx.Err(); err != nil {
+				return ch, err
+			}
+			return ch, fmt.Errorf("headless pool: %w", ErrPoolSaturated)
 		}
 
 		dirRunner := pr.WithWorkDir(opts.WorkDir)

@@ -79,43 +79,29 @@ const defaultMaxCalls = 25
 const defaultMaxConcurrent = 5
 
 // maxQueueWait bounds how long call() waits for a concurrency-pool slot before
-// giving up with ErrPoolSaturated — independent of, and much shorter than, any
-// caller's own overall call budget (e.g. TriggerTriage's triageCallBudget,
-// server/services/backlog_service_triage.go — 30 minutes when this was
-// written, since raised to 3 hours; either way this is a small fraction of
-// it). Before this
-// existed, a call whose ctx already carried a long fixed deadline could
-// silently burn that entire budget just waiting for a slot — indistinguishable
-// from a genuine hung LLM call once ctx expired. Confirmed live
-// (docs/tasks/backlog-feature-improvement.md, 2026-09-08) to reliably park
-// bulk-imported backlog items whose triage calls all lost the race for the
-// pool's 5 concurrent slots at once. 2 minutes is generous relative to how
-// fast slots actually turn over — a concurrent call finishes well inside that
-// window in the normal case — while still being a small fraction of any real
-// caller's call budget, so a genuinely saturated pool fails fast instead of
-// stalling every queued caller for the length of its longest budget.
+// giving up with ErrPoolSaturated — much shorter than any real caller's own
+// call budget, so a saturated pool fails fast instead of silently burning a
+// caller's entire budget just waiting for a slot (see BUG-093).
 //
-// A var, not a const, so tests can shrink it rather than actually waiting out
-// the real 2-minute window (mirrors remediationBackoffSchedule/
-// MaxRemediationAttempts in session/backlog_remediation.go).
+// A var, not a const, so tests can shrink it instead of waiting out the real
+// 2-minute window (mirrors remediationBackoffSchedule in
+// session/backlog_remediation.go).
 var maxQueueWait = 2 * time.Minute
 
 // idleTimeout bounds how long a first call (--output-format stream-json) may go
 // with no new output line before it's considered stalled and killed with
-// ErrIdleTimeout — real progress detection, replacing "wait up to the caller's
-// full budget and hope," which a 2026-09-08 incident showed cuts both ways: a
-// hung call wasted its entire budget before being caught, while a genuinely
-// long-but-active call (BUG-055, session/backlog_lifecycle_triage.go) could be
-// cut off mid-work at the same fixed ceiling. This is now the PRIMARY defense
-// against a hung call; the caller's own ctx deadline (e.g. triageCallBudget,
-// server/services/backlog_service_triage.go) becomes a much larger backstop
-// against a call that never stops producing output, not the main protection.
-// 10 minutes is generous enough to tolerate one legitimately slow tool call (a
-// large test run, a slow web fetch) without false-killing active work, while
-// still catching a true hang roughly 18x faster than the old 3-hour ceiling.
+// ErrIdleTimeout — the primary defense against a hung call. The caller's own
+// ctx deadline is now just a backstop against a call that never stops
+// producing output (see BUG-093).
 //
 // A var, not a const, for the same test-injectability reason as maxQueueWait.
 var idleTimeout = 10 * time.Minute
+
+// maxFirstCallOutputBytes caps the cumulative stream-json transcript
+// readFirstCallStream (caller.go) accumulates for one call, independent of
+// the per-line scanner buffer cap — so a long-running, non-idle stream can't
+// grow this buffer unbounded before idleTimeout or ctx would otherwise catch it.
+var maxFirstCallOutputBytes = 32 * 1024 * 1024
 
 // acquireKeyMu returns (and lazily creates) the per-key mutex.
 // Caller must hold p.mu.
