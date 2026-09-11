@@ -741,6 +741,71 @@ describe("BacklogItemDetail — Story 5.3.2: edit-mode buffering", () => {
     expect(screen.getByRole("button", { name: "Edit item" })).toBeInTheDocument();
     expect(screen.getByText("Refactor auth middleware (renamed live)")).toBeInTheDocument();
   });
+
+  // Regression test for the 2026-09-11 UI audit finding: BacklogItemDetail's
+  // loading gate is `loading && !item` (not just `loading`) so a stale entry
+  // already sitting in the shared backlogItemsSlice store (e.g. left over
+  // from a category-less snapshot cached before triage classified the item)
+  // can populate `item` before the authoritative getBacklogItem() fetch
+  // resolves. If Edit were clickable during that window, BacklogItemForm
+  // would mount from the stale snapshot's category — and a correction that
+  // lands afterward, while editMode is already true, only gets buffered
+  // (Story 5.3.2's `if (editMode) { setBufferedItem(...); return; }`), never
+  // applied to the open form. The fix: block Edit specifically (not the
+  // read-only view, preserving #146's no-remount-on-background-refresh
+  // behavior) until the authoritative fetch has confirmed `item` at least
+  // once for this itemId.
+  it("disables Edit until the authoritative getBacklogItem() fetch confirms the item, even if a stale store entry already populated it", async () => {
+    // The shared store already has a category-less snapshot for this item
+    // present *before* the component even mounts (e.g. left by an earlier,
+    // pre-triage live event or list-view load).
+    mockLiveItemsMap = {
+      "item-1": {
+        id: "item-1",
+        title: "Refactor auth middleware",
+        status: "idea",
+        priority: 3,
+        repoPath: "/tmp/repo",
+        category: "",
+      },
+    };
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    // getBacklogItem's authoritative response (category: "bugfix") is held
+    // back so the test can inspect the window before it resolves.
+    let resolveFetch!: (item: BacklogItem) => void;
+    getBacklogItem.mockReset().mockReturnValue(
+      new Promise<BacklogItem>((resolve) => {
+        resolveFetch = resolve;
+      })
+    );
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    // Flush just the synchronous liveRawItem-effect hydration, without
+    // letting the still-pending getBacklogItem() promise resolve.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The stale snapshot is already showing (view mode isn't blocked)...
+    expect(screen.getByText("Refactor auth middleware")).toBeInTheDocument();
+    // ...but Edit is disabled until the server has actually been consulted.
+    expect(screen.getByRole("button", { name: "Edit item" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Edit item" }));
+    expect(screen.queryByTestId("backlog-item-form")).not.toBeInTheDocument();
+
+    // The authoritative fetch lands with the item's real category.
+    await act(async () => {
+      resolveFetch({ ...makeItem([]), category: "bugfix" });
+      await Promise.resolve();
+    });
+
+    // Edit is now safe to open, and correctly shows "bugfix".
+    expect(screen.getByRole("button", { name: "Edit item" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Edit item" }));
+    expect(screen.getByTestId("backlog-category-bugfix")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("backlog-category-uncategorized")).toHaveAttribute("aria-checked", "false");
+  });
 });
 
 describe("BacklogItemDetail — Task 5.3.1c: terminal-state banner", () => {
