@@ -40,9 +40,15 @@ func TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping(t *testing.
 		elapsed time.Duration
 		want    string
 	}{
+		{"pool saturated (queue-wait cap, not the caller's own budget)", headless.ErrPoolSaturated, 5 * time.Minute, "pool_saturated"},
+		{"wrapped pool saturated", fmt.Errorf("headless pool: %w", headless.ErrPoolSaturated), 5 * time.Minute, "pool_saturated"},
+		{"pool saturated even with elapsed near budget must not fall into the timeout heuristic", headless.ErrPoolSaturated, triageCallBudget - time.Second, "pool_saturated"},
+		{"idle timeout (stream stalled)", headless.ErrIdleTimeout, 5 * time.Minute, "idle"},
+		{"wrapped idle timeout", fmt.Errorf("headless call ended: %w", headless.ErrIdleTimeout), 5 * time.Minute, "idle"},
+		{"idle timeout even with elapsed near budget must not fall into the timeout heuristic", headless.ErrIdleTimeout, triageCallBudget - time.Second, "idle"},
 		{"ctx deadline exceeded", context.DeadlineExceeded, 5 * time.Minute, "timeout"},
 		{"wrapped ctx deadline exceeded", fmt.Errorf("headless call ended: %w", context.DeadlineExceeded), 5 * time.Minute, "timeout"},
-		{"elapsed within budget tail even without deadline error", errors.New("some other error"), 29*time.Minute + 56*time.Second, "timeout"},
+		{"elapsed within budget tail even without deadline error", errors.New("some other error"), 3*time.Hour - 4*time.Second, "timeout"},
 		{"ctx canceled (shutdown)", context.Canceled, time.Minute, "shutdown"},
 		{"claude binary not found", headless.ErrClaudeNotFound, time.Second, "claude_not_found"},
 		{"subprocess start error", headless.ErrSubprocessStart, time.Minute, "subprocess_start_error"},
@@ -1353,17 +1359,24 @@ func TestAutoRespawnAutonomousWork_NoActiveSession_ResolvesAnyOpenRespawnBlocked
 
 // --- Repeated-failure circuit breaker (session.IsRepeatedFailure) ---
 
-// TestAutoReopenAfterFailedReview_RepeatedFailure_LeavesInReviewAndNotifies is
-// the regression test for a fast-looping non-converging rework cycle (e.g. an
-// infrastructure fault like a broken worktree diff, reproduced identically on
-// every attempt): once the last two review verdicts fail for the exact same
-// reason, AutoReopenAfterFailedReview must stop reopening — ahead of the
-// (possibly much larger) rework cap — and park the item via the same durable
-// stuck-state/notification path notifyReworkCapHit uses.
-func TestAutoReopenAfterFailedReview_RepeatedFailure_LeavesInReviewAndNotifies(t *testing.T) {
+// TestAutoReopenAfterFailedReview_RepeatedFailureTwice_GrantsOneEscalatedRetry
+// is the regression test for docs/tasks/backlog-feature-improvement.md's
+// "no escalation, no awareness that the last N attempts failed the same
+// way" finding: AutoReopenAfterFailedReview used to stop reopening and park
+// the item the INSTANT it detected two identical review failures, without
+// ever trying anything different first. It must now grant exactly one more
+// (escalated) attempt instead — reopening to in_progress and spawning a new
+// work session — with the escalation nudge itself carried in the respawned
+// session's prompt (see TestBuildSessionInitialPrompt_should_includeEscalationNotice
+// in session/backlog_context_test.go for the unit-level check of that text;
+// this test additionally asserts the nudge actually reaches the prompt
+// handed to CreateDirectorySession, proving the two are really wired
+// together end to end), not by parking here.
+func TestAutoReopenAfterFailedReview_RepeatedFailureTwice_GrantsOneEscalatedRetry(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	repoPath := t.TempDir()
@@ -1394,11 +1407,66 @@ func TestAutoReopenAfterFailedReview_RepeatedFailure_LeavesInReviewAndNotifies(t
 	}
 
 	reopenErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
+	require.NoError(t, reopenErr, "granting an escalated retry is an expected outcome, not a failure")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status, "streak of exactly 2 must still reopen for one escalated attempt, not park")
+	require.Len(t, creator.calls, 1, "the escalated attempt is a fresh work session, not a park")
+	assert.Contains(t, creator.calls[0].prompt, "Escalation Notice",
+		"the respawned session's actual prompt must carry the escalation nudge, not just a bare identical-looking retry")
+	assert.Contains(t, creator.calls[0].prompt, "Review blocked: could not compute a diff for this session",
+		"the escalation notice must name the repeated failure reason")
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "an escalated retry is not a park — no stuck row should be opened yet")
+}
+
+// TestAutoReopenAfterFailedReview_RepeatedFailureThreeTimes_ParksAfterEscalatedRetryAlsoFails
+// covers the far side of the escalate-once shape above: once the streak
+// survives THAT escalated attempt too (three identical failures in a row,
+// not two), AutoReopenAfterFailedReview must finally stop reopening — ahead
+// of the (possibly much larger) rework cap — and park the item via the same
+// durable stuck-state/notification path notifyReworkCapHit uses.
+func TestAutoReopenAfterFailedReview_RepeatedFailureThreeTimes_ParksAfterEscalatedRetryAlsoFails(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "Item that fails the same way every time, even after an escalated retry",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// Three prior review rounds, all ending in an identical FAIL verdict — the
+	// escalated attempt (round 3) failed for the exact same reason as rounds 1-2.
+	for i := 0; i < 3; i++ {
+		is, isErr := storage.CreateItemSession(ctx, session.ItemSessionData{
+			ItemID:      item.ID,
+			SessionUUID: "prior-review-" + string(rune('a'+i)),
+			SessionRole: session.SessionRoleReview,
+		})
+		require.NoError(t, isErr)
+		require.NoError(t, storage.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
+			ItemSessionID:  is.ID,
+			OverallOutcome: session.ReviewOutcomeFail,
+			Summary:        "Review blocked: could not compute a diff for this session",
+		}))
+	}
+
+	reopenErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
 	require.NoError(t, reopenErr, "stopping the loop is an expected outcome, not a failure")
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "item must stay in review, not spin on an identical failure")
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "item must stay in review once the escalated attempt also fails identically")
 
 	open, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -3623,12 +3691,14 @@ func (f *fakeTriageLivenessEngine) LivenessFor(_ session.BacklogStatus, _ sessio
 	return f.def, nil
 }
 
-// TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsNil
+// TestTriggerTriage_should_UseFlatTriageCallBudgetConstant_When_LivenessEngineIsNil
 // is Story 1.4.2's fallback path: with no LivenessEngine wired (the zero value of
 // BacklogService.livenessEngine, matching every pre-Epic-1.4 construction), the
-// headless call's context.WithTimeout must use the flat triageCallBudget constant
-// (30m), byte-for-byte unchanged from before.
-func TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsNil(t *testing.T) {
+// headless call's context.WithTimeout must use the flat triageCallBudget constant,
+// byte-for-byte unchanged from before. Asserted against the triageCallBudget
+// constant itself (not a hardcoded literal) so this can't drift out of sync the
+// way it did across the 2026-09-08 30m->3h raise (BUG-055).
+func TestTriggerTriage_should_UseFlatTriageCallBudgetConstant_When_LivenessEngineIsNil(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
@@ -3656,8 +3726,8 @@ func TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsN
 	call := pool.firstCall()
 	require.True(t, call.hasDeadline, "the headless call's context must carry a deadline")
 	remaining := time.Until(call.ctxDeadline)
-	assert.Greater(t, remaining, 25*time.Minute, "remaining budget must be close to the flat 30m triageCallBudget constant, not a shorter resolved value")
-	assert.LessOrEqual(t, remaining, 30*time.Minute, "remaining budget must not exceed the flat 30m triageCallBudget constant")
+	assert.Greater(t, remaining, triageCallBudget-5*time.Minute, "remaining budget must be close to the flat triageCallBudget constant, not a shorter resolved value")
+	assert.LessOrEqual(t, remaining, triageCallBudget, "remaining budget must not exceed the flat triageCallBudget constant")
 }
 
 // TestTriggerTriage_should_UseResolvedFortyFiveMinuteTimeout_When_SddModeOverrideConfigured

@@ -105,6 +105,8 @@ const terminalResyncVisibilityScopeFlagName = "terminal:resync-visibility-scope"
 const terminalResyncStaggerFlagName = "terminal:resync-stagger"
 const terminalResyncBatchingFlagName = "terminal:resync-batching"
 
+const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
+
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
 // BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
@@ -189,6 +191,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        terminalResyncBatchingFlagName,
 		description: "Batch multiple terminals' resync requests into a single round trip instead of issuing one request per terminal. Default: off.",
+	},
+	{
+		name:        worktreeChangeDetectionFlagName,
+		description: "Watch each session's .git dir via fsnotify and run a staggered 15s periodic cheap dirty/HEAD check to invalidate the diff-stats and VCS-status caches, letting both widen from a 15s to a 5-minute TTL. Applies to newly-created worktrees only; already-open sessions keep today's 15s pure-TTL behavior until restarted. Default: off.",
 	},
 	{
 		name:        piSupportFlagName,

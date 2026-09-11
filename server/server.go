@@ -236,6 +236,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("UnfinishedWork scanner started")
 	}
 
+	// Start UnfinishedWatchDirWatcher: discovers repos under user-configured
+	// watch directories (Settings → Unfinished Work Sources) and registers
+	// them with UnfinishedScanner. Must start after UnfinishedScanner above
+	// since it calls UnfinishedScanner.AddRepo during its initial walk.
+	if deps.UnfinishedWatchDirWatcher != nil {
+		deps.UnfinishedWatchDirWatcher.Start(serverCtx)
+		log.Info("UnfinishedWork watch-dir watcher started")
+	}
+
 	// Start WorktreePRPoller: enriches worktrees-without-sessions with GitHub PR data.
 	if deps.WorktreePRPoller != nil {
 		deps.WorktreePRPoller.Start(serverCtx)

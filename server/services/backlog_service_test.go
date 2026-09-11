@@ -27,15 +27,15 @@ import (
 
 // TestMain pre-seeds headless.DefaultCapabilitySelfCheck as passed before any test
 // runs. NewBacklogService defaults every instance's capabilityCheck field to that
-// package-level singleton (guarded by sync.Once, deliberately cached for the whole
-// process lifetime in production — see capability_check.go). Left unseeded, the
-// first test in this binary to reach the codebase-read gate without calling
-// SetCapabilityCheck "wins" the once.Do race and permanently resolves the
+// package-level singleton, which caches a successful result for the whole process
+// lifetime in production (a cached failure is only trusted for a bounded window —
+// see capability_check.go). Left unseeded, the first test in this binary to reach
+// the codebase-read gate without calling SetCapabilityCheck resolves the
 // singleton based on whether ITS OWN fakeHeadlessPool response happens to contain
 // the capability marker string (it doesn't — the fakes return scripted verdict
-// JSON) — poisoning it to failed for every other test in the package for the rest
-// of the process, regardless of test order or -count. That was the actual root
-// cause behind TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns'
+// JSON) — poisoning it to failed for every other test in the package that runs
+// within the failure-cache window, regardless of test order or -count. That was
+// the actual root cause behind TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns'
 // order-dependent flake (reliably 1-pass-then-every-subsequent-run-fails under
 // -count=N in one process). Tests that specifically exercise the capability-check
 // failure/success path still override it per-instance via SetCapabilityCheck.
@@ -184,7 +184,14 @@ func (f *fakeGitHubResolver) resolve(input string) (string, *session.GitHubRef, 
 }
 
 // mockSessionCreator records CreateDirectorySession calls for inspection.
+// mu guards calls against concurrent CreateDirectorySession/
+// CreateWorktreeSession invocations — needed when the code under test
+// dispatches a spawn from a background goroutine (e.g. the autonomous
+// respawn path) while a test polls the call count from the main goroutine.
+// Most tests never touch calls concurrently and read the field directly,
+// same caveat as mockSessionSteerer's mu above.
 type mockSessionCreator struct {
+	mu    sync.Mutex
 	calls []mockCreateCall
 	err   error
 }
@@ -358,6 +365,8 @@ type mockCreateCall struct {
 func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, path, prompt string, tags []string, oneShot bool, _ bool) (*session.Instance, error) {
 	_, contextErr := os.Stat(filepath.Join(path, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(path, ".claude", "commands", "backlog", "status.md"))
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.err != nil {
 		m.calls = append(m.calls, mockCreateCall{
 			title:                       title,
@@ -395,6 +404,8 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, worktreePath, prompt string, tags []string, oneShot bool, _ bool) (*session.Instance, error) {
 	_, contextErr := os.Stat(filepath.Join(worktreePath, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(worktreePath, ".claude", "commands", "backlog", "status.md"))
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.err != nil {
 		m.calls = append(m.calls, mockCreateCall{
 			title:                       title,
@@ -419,6 +430,15 @@ func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, 
 		inst:                        inst,
 	})
 	return inst, nil
+}
+
+// callCount returns len(calls) under mu, safe to poll concurrently with an
+// in-flight CreateDirectorySession/CreateWorktreeSession call (e.g. from
+// wait.RequireEventually while a background respawn goroutine is spawning).
+func (m *mockSessionCreator) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.calls)
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────

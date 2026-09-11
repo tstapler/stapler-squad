@@ -21,7 +21,7 @@ import (
 func writeCapabilityCheckFakeClaudeScript(t *testing.T, scriptDir, countPath, resultText string) string {
 	t.Helper()
 	scriptPath := filepath.Join(scriptDir, "fake-claude.sh")
-	outerJSON := fmt.Sprintf(`{"session_id":"s1","result":%q,"cost_usd":0}`, resultText)
+	outerJSON := fmt.Sprintf(`{"type":"result","session_id":"s1","result":%q,"total_cost_usd":0}`, resultText)
 	script := fmt.Sprintf("#!/bin/sh\ncat > /dev/null\necho call >> %s\ncat <<'HEADLESSTESTEOF'\n%s\nHEADLESSTESTEOF\n", countPath, outerJSON)
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o755))
 	return scriptPath
@@ -96,10 +96,36 @@ func TestCodebaseReadCapabilitySelfCheck_Success_CachesOK(t *testing.T) {
 	assert.Equal(t, 1, countInvocations(t, countPath), "second Ensure call must not re-run the subprocess")
 }
 
-// TestCodebaseReadCapabilitySelfCheck_Failure_CachesFailureAndDoesNotRetry verifies
+// TestCodebaseReadCapabilitySelfCheck_Success_SurvivesPastFailureWindow verifies a
+// cached success, unlike a cached failure, is trusted indefinitely: it must still
+// short-circuit Ensure (no subprocess re-run) even long after
+// capabilityCheckFailureCacheWindow has elapsed.
+func TestCodebaseReadCapabilitySelfCheck_Success_SurvivesPastFailureWindow(t *testing.T) {
+	t.Parallel()
+	scriptDir := t.TempDir()
+	countPath := filepath.Join(scriptDir, "count.txt")
+	scriptPath := writeCapabilityCheckFakeClaudeScript(t, scriptDir, countPath, capabilityCheckMarkerValue)
+
+	runner := NewShellWrappedProcessRunnerForTesting(scriptPath)
+	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2}, runner)
+
+	fakeNow := time.Now()
+	check := &CodebaseReadCapabilitySelfCheck{now: func() time.Time { return fakeNow }}
+
+	assert.True(t, check.Ensure(context.Background(), pool))
+
+	fakeNow = fakeNow.Add(10 * capabilityCheckFailureCacheWindow)
+	assert.True(t, check.Ensure(context.Background(), pool), "a cached success must survive well past the failure-cache window")
+	assert.Equal(t, 1, countInvocations(t, countPath), "must not re-run the subprocess for a cached success, regardless of elapsed time")
+}
+
+// TestCodebaseReadCapabilitySelfCheck_Failure_CachesFailureWithinWindow verifies
 // that a smoke test whose result does not contain the marker caches ok=false and
-// subsequent Ensure calls return false without re-running the subprocess.
-func TestCodebaseReadCapabilitySelfCheck_Failure_CachesFailureAndDoesNotRetry(t *testing.T) {
+// subsequent Ensure calls, while still within capabilityCheckFailureCacheWindow,
+// return false without re-running the subprocess (Story 2.2.6c's original intent —
+// don't hammer the smoke test on every single call — preserved under bounded
+// rather than permanent caching).
+func TestCodebaseReadCapabilitySelfCheck_Failure_CachesFailureWithinWindow(t *testing.T) {
 	t.Parallel()
 	scriptDir := t.TempDir()
 	countPath := filepath.Join(scriptDir, "count.txt")
@@ -110,12 +136,84 @@ func TestCodebaseReadCapabilitySelfCheck_Failure_CachesFailureAndDoesNotRetry(t 
 	runner := NewShellWrappedProcessRunnerForTesting(scriptPath)
 	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2}, runner)
 
-	check := &CodebaseReadCapabilitySelfCheck{}
+	fakeNow := time.Now()
+	check := &CodebaseReadCapabilitySelfCheck{now: func() time.Time { return fakeNow }}
 
 	assert.False(t, check.Ensure(context.Background(), pool))
-	assert.False(t, check.Ensure(context.Background(), pool), "second call must return the cached failure result")
-	assert.Equal(t, 1, countInvocations(t, countPath), "second Ensure call must not retry the subprocess after a cached failure")
+
+	// Advance the clock, but stay inside the failure-cache window.
+	fakeNow = fakeNow.Add(capabilityCheckFailureCacheWindow - time.Second)
+	assert.False(t, check.Ensure(context.Background(), pool), "second call must return the cached failure result while still within the window")
+	assert.Equal(t, 1, countInvocations(t, countPath), "second Ensure call must not retry the subprocess while the cached failure is still fresh")
 	assert.True(t, check.Checked())
+}
+
+// TestCodebaseReadCapabilitySelfCheck_TransientFailureExpires_LaterEnsureRetriesAndCanSucceed
+// is the regression test for the bug that stuck backlog item bd337ac9: one
+// transient smoke-test failure must not permanently block every future
+// codebase-read review. It simulates a single transient failure, advances the
+// clock past capabilityCheckFailureCacheWindow, and confirms the next Ensure call
+// re-attempts the probe (and can now succeed) rather than trusting the stale
+// cached failure forever.
+func TestCodebaseReadCapabilitySelfCheck_TransientFailureExpires_LaterEnsureRetriesAndCanSucceed(t *testing.T) {
+	t.Parallel()
+	scriptDir := t.TempDir()
+	countPath := filepath.Join(scriptDir, "count.txt")
+	// swapResultPath controls what the fake script returns on the NEXT invocation —
+	// starts failing, then is flipped to succeed once the transient issue "clears".
+	resultPath := filepath.Join(scriptDir, "result.txt")
+	require.NoError(t, os.WriteFile(resultPath, []byte("not the marker"), 0o600))
+	scriptPath := writeSwappableCapabilityCheckFakeClaudeScript(t, scriptDir, countPath, resultPath)
+
+	runner := NewShellWrappedProcessRunnerForTesting(scriptPath)
+	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2}, runner)
+
+	fakeNow := time.Now()
+	check := &CodebaseReadCapabilitySelfCheck{now: func() time.Time { return fakeNow }}
+
+	// One transient failure.
+	assert.False(t, check.Ensure(context.Background(), pool))
+	assert.Equal(t, 1, countInvocations(t, countPath))
+
+	// The underlying issue clears, but the cached failure is still fresh — a call
+	// right after the first must not retry yet.
+	require.NoError(t, os.WriteFile(resultPath, []byte(capabilityCheckMarkerValue), 0o600))
+	assert.False(t, check.Ensure(context.Background(), pool), "must still trust the recent cached failure")
+	assert.Equal(t, 1, countInvocations(t, countPath), "must not have retried yet")
+
+	// Advance the clock past the failure-cache window.
+	fakeNow = fakeNow.Add(capabilityCheckFailureCacheWindow + time.Second)
+
+	assert.True(t, check.Ensure(context.Background(), pool),
+		"once the failure-cache window has elapsed, Ensure must re-attempt the probe and reflect the now-passing result")
+	assert.Equal(t, 2, countInvocations(t, countPath), "the expired cache must trigger exactly one retry")
+	assert.True(t, check.Checked())
+}
+
+// writeSwappableCapabilityCheckFakeClaudeScript writes a fake claude binary that,
+// on each invocation, re-reads resultPath and echoes back whatever it currently
+// contains — letting a test flip between failure and success responses across
+// separate Ensure calls without needing a new script/runner.
+func writeSwappableCapabilityCheckFakeClaudeScript(t *testing.T, scriptDir, countPath, resultPath string) string {
+	t.Helper()
+	scriptPath := filepath.Join(scriptDir, "fake-claude-swappable.sh")
+	// Both values ever written to resultPath in this test file are plain,
+	// quote-free ASCII (capabilityCheckMarkerValue or "not the marker"), so a bare
+	// double-quoted substitution is safe — no JSON-escaping helper needed.
+	// isResultLine (caller.go) only recognizes a line as the terminal result
+	// once it structurally parses with top-level "type":"result" — omitting it
+	// (as an earlier version of this script did) means the pool never finds a
+	// result line, run() always returns false, and Ensure deterministically
+	// (not flakily) fails to observe the swapped-in success value. total_cost_usd
+	// is the real field name (firstCallJSONResult); cost_usd doesn't exist.
+	script := fmt.Sprintf(`#!/bin/sh
+cat > /dev/null
+echo call >> %s
+result=$(cat %s)
+printf '{"type":"result","session_id":"s1","result":"%%s","total_cost_usd":0}\n' "$result"
+`, countPath, resultPath)
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o755))
+	return scriptPath
 }
 
 // TestCodebaseReadCapabilitySelfCheck_NilPool_ReturnsFalse verifies Ensure degrades
@@ -170,7 +268,7 @@ func TestCodebaseReadCapabilitySelfCheck_CallerCtxAlreadyExpired_ProbeStillSucce
 func writeSlowCapabilityCheckFakeClaudeScript(t *testing.T, scriptDir, countPath, resultText string, delay time.Duration) string {
 	t.Helper()
 	scriptPath := filepath.Join(scriptDir, "fake-claude-slow.sh")
-	outerJSON := fmt.Sprintf(`{"session_id":"s1","result":%q,"cost_usd":0}`, resultText)
+	outerJSON := fmt.Sprintf(`{"type":"result","session_id":"s1","result":%q,"total_cost_usd":0}`, resultText)
 	sleepSeconds := delay.Seconds()
 	script := fmt.Sprintf("#!/bin/sh\ncat > /dev/null\necho call >> %s\nsleep %f\ncat <<'HEADLESSTESTEOF'\n%s\nHEADLESSTESTEOF\n", countPath, sleepSeconds, outerJSON)
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o755))

@@ -204,10 +204,10 @@ func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTit
 // stops the auto-reopen loop. Mirrors notifyReworkCapHit's structure: a
 // MarkStuck/MarkStuckNotified failure is logged but never suppresses the
 // notification itself.
-func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, failureSummary string) {
+func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, attemptCount int, failureSummary string) {
 	if s.storage != nil {
 		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, currentStatus,
-			fmt.Sprintf("stopped auto-rework — the last two attempts failed the same way: %q. Fix the underlying issue, then click \"Reopen for Revision\".", failureSummary))
+			fmt.Sprintf("stopped auto-rework — the last %d attempts (including one escalated retry) failed the same way: %q. Fix the underlying issue, then click \"Reopen for Revision\".", attemptCount, failureSummary))
 		if err != nil {
 			log.WarningLog().Printf("[notifyRepeatedFailure] MarkStuck item=%s: %v", itemID, err)
 		} else if applied {
@@ -226,7 +226,7 @@ func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, item
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
 		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
 		"Auto-rework stopped — repeated failure",
-		fmt.Sprintf("%s — the last two attempts failed the same way, so auto-rework stopped instead of retrying. Left for manual review.", itemTitle),
+		fmt.Sprintf("%s — the last %d attempts (including one escalated retry) failed the same way, so auto-rework stopped instead of retrying again. Left for manual review.", itemTitle, attemptCount),
 		map[string]string{"item_id": itemID},
 	))
 }
@@ -425,14 +425,14 @@ const (
 	headlessReReviewUUIDPrefix = "headless-re-review-"
 )
 
-// triageCallBudget bounds a single headless triage LLM call (TriggerTriage's own
-// triageCtx). session.maxHeadlessTriageSessionStaleness (session/backlog_lifecycle.go)
-// — the periodic sweep's threshold for treating a still-open triage session as
-// dead — MUST stay strictly greater than this, with enough margin that a call
-// finishing at (or timing out at) its own full budget has already ended by the
-// time the sweep's next tick considers it stale; otherwise the sweep and this
-// call's own natural completion/timeout race on every slow call. See BUG-055.
-const triageCallBudget = 30 * time.Minute
+// triageCallBudget bounds a single headless triage LLM call — now a backstop
+// against a call that never stops producing output, since headless.idleTimeout
+// (session/headless/pool.go) is the primary, much faster defense against a
+// genuinely hung call. Must stay strictly less than
+// session.maxHeadlessTriageSessionStaleness (session/backlog_lifecycle_triage.go),
+// with margin, so the periodic staleness sweep never races a call that's
+// still legitimately running (see BUG-055).
+const triageCallBudget = 3 * time.Hour
 
 // The auto-rework iteration cap bounds how many automated work sessions can be
 // spawned for a single backlog item by the auto-reopen loop. When this ceiling
@@ -464,9 +464,11 @@ const triageCallBudget = 30 * time.Minute
 const defaultTriageCleanupTimeout = 10 * time.Second
 
 // maxTriageSessionAge is the maximum age of an open triage ItemSession before it is
-// treated as orphaned in the re-trigger guard. This prevents a hung or leaked session
-// from blocking re-trigger indefinitely.
-const maxTriageSessionAge = 2 * time.Hour
+// treated as orphaned in the re-trigger guard, preventing a hung or leaked session
+// from blocking re-trigger indefinitely. Derived from triageCallBudget (not a bare
+// literal) so it can't drift below the real call budget again — mirrors
+// maxHeadlessTriageSessionStaleness's identical invariant (session/backlog_lifecycle_triage.go).
+const maxTriageSessionAge = triageCallBudget + 15*time.Minute
 
 // prFixMainBranch is the branch AutoReopenForPRFix syncs a PR's branch against before
 // respawning a fix session. This repo's convention is "main" (see CLAUDE.md).
@@ -1767,44 +1769,80 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		s.notifyIfActiveWorkSessionStale(ctx, itemID, item.Title, sessions)
 	}
 
-	// Circuit breaker: if the last two verdicts failed for the identical reason,
-	// another rework attempt won't change anything either — stop before burning
-	// through the (possibly much larger) rework cap and park the item for
-	// automated or human remediation instead. Checked ahead of the cap so a
-	// fast-looping infrastructure fault (e.g. a broken worktree diff) can't spend
-	// the whole cap in minutes.
-	recentVerdicts, verdictErr := s.storage.GetRecentReviewVerdictSummaries(ctx, itemID, 2)
+	// Circuit breaker: if the last two-plus verdicts failed for the identical
+	// reason, another IDENTICAL rework attempt won't change anything either.
+	// Rather than parking on the very first sighting of that streak, this now
+	// grants exactly ONE escalated retry first (see escalateRetryReason below,
+	// consumed by session.BuildSessionInitialPrompt to nudge the respawned
+	// session toward a different approach) — parking only once the streak
+	// survives that escalated attempt too. See
+	// docs/tasks/backlog-feature-improvement.md's "no escalation, no
+	// awareness that the last N attempts failed the same way" finding: the
+	// breaker used to stop the loop the instant it detected a repeat, never
+	// trying anything different first. Fetches exactly RepeatedFailureParkThreshold
+	// entries — enough for ReviewFailureStreakLen to observe the streak up to
+	// (and including) the park threshold itself; a streak can never be
+	// reported past that value since the query never returns more rows than that.
+	recentVerdicts, verdictErr := s.storage.GetRecentReviewVerdictSummaries(ctx, itemID, session.RepeatedFailureParkThreshold)
 
 	// Story 3.2.1: purely informational — evaluated unconditionally, on every
 	// call, regardless of whether a circuit breaker below trips and returns
 	// early. Never gates the reopen/park decision itself (see
 	// StuckReasonLikelyFlaky's doc comment); a likely_flaky row can and often
 	// will co-occur with e.g. a bouncing row on the same underlying evidence
-	// (see plan.md's correlated-signal note).
+	// (see plan.md's correlated-signal note). IsFlakyVerdictFlipFlop only ever
+	// reads recentVerdicts[0]/[1], so fetching more entries above is safe.
 	s.notifyLikelyFlaky(ctx, itemID, session.BacklogStatus(item.Status), recentVerdicts, sessions, item.RepoPath)
+
+	// escalateRetryReason is non-empty exactly when this call should proceed
+	// with a respawn but flag it as an escalated (not identical) retry.
+	// Consumed a few lines down where the prompt for the new session gets
+	// built, via priorSessions — no new request/proto field needed, since
+	// BuildSessionInitialPrompt already recomputes the identical streak from
+	// the same review-verdict history this function just queried.
+	var escalateRetryReason string
 
 	if verdictErr != nil {
 		log.WarningLog().Printf("[AutoReopenAfterFailedReview] item %s GetRecentReviewVerdictSummaries: %v", itemID, verdictErr)
-	} else if session.IsRepeatedFailure(recentVerdicts) {
-		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s failed the same way twice in a row; leaving in review for remediation instead of reopening", itemID)
-		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), recentVerdicts[0].Summary)
+	} else if streak := session.ReviewFailureStreakLen(recentVerdicts); streak >= session.RepeatedFailureParkThreshold {
+		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s failed the same way %d times in a row (including one escalated retry); leaving in review for remediation instead of reopening", itemID, streak)
+		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), streak, recentVerdicts[0].Summary)
 		return nil
+	} else if streak >= session.RepeatedFailureEscalationThreshold {
+		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s failed the same way %d times in a row; granting one escalated retry before parking", itemID, streak)
+		escalateRetryReason = recentVerdicts[0].Summary
 	}
 
 	// Circuit breaker, no-verdict shape: GetRecentReviewVerdictSummaries above
 	// queries itemsession.HasReviewVerdict(), so a review session that crashed,
 	// was killed, or hit its turn cap before ever calling submit_review_verdict
-	// is invisible to the check above — the IsRepeatedFailure comparison above
+	// is invisible to the check above — the ReviewFailureStreakLen check above
 	// never even sees it, so it can never trip on this failure shape no matter
 	// how many times it repeats. sessions (already fetched above for the work
 	// session cap check) has the review-role entries with ReviewVerdict
 	// eagerly loaded, so no extra query is needed. See
 	// session.IsRepeatedNoVerdictFailure's doc comment for the live bounce
-	// loop (78 cycles in 24h) this closes.
-	if session.IsRepeatedNoVerdictFailure(recentReviewHadVerdict(sessions, 2)) {
-		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s: the last two review sessions both exited without ever writing a verdict; leaving in review for remediation instead of reopening", itemID)
-		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "review session exited without ever writing a verdict")
-		return nil
+	// loop (78 cycles in 24h) this closes. Same escalate-once-then-park shape
+	// as the verdict-summary streak above.
+	//
+	// The two streaks are checked as mutually exclusive (verdict-summary
+	// streak first, claiming the one escalation/park slot for this call if it
+	// has ANY signal at all) rather than independently — a mixed history
+	// (e.g. two matching FAIL verdicts further back, then the most recent
+	// review session crashed with no verdict) is rare enough in practice that
+	// picking one breaker over evaluating both isn't worth the added
+	// complexity here.
+	if escalateRetryReason == "" {
+		noVerdictStreak := session.NoVerdictStreakLen(recentReviewHadVerdict(sessions, session.RepeatedFailureParkThreshold))
+		switch {
+		case noVerdictStreak >= session.RepeatedFailureParkThreshold:
+			log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s: the last %d review sessions all exited without ever writing a verdict (including one escalated retry); leaving in review for remediation instead of reopening", itemID, noVerdictStreak)
+			s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), noVerdictStreak, "review session exited without ever writing a verdict")
+			return nil
+		case noVerdictStreak >= session.RepeatedFailureEscalationThreshold:
+			log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s: the last %d review sessions exited without ever writing a verdict; granting one escalated retry before parking", itemID, noVerdictStreak)
+			escalateRetryReason = "review session exited without ever writing a verdict, twice in a row"
+		}
 	}
 
 	workCount := 0
@@ -1849,8 +1887,30 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		// cache. The item is now back at in_progress, so that session's next
 		// request_review call succeeds instead of failing the precondition
 		// check forever.
-		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s transitioned to in_progress; reusing its active work session instead of respawning", itemID)
+		//
+		// escalateRetryReason (if set) is deliberately dropped here, not
+		// carried forward: there is no fresh prompt to inject it into — the
+		// live session already has its own context and will simply continue
+		// and call request_review again. Logged explicitly so this isn't a
+		// silent gap: an operator grepping logs for this item's escalation
+		// history can see the streak was detected even though no nudge was
+		// deliverable this round.
+		if escalateRetryReason != "" {
+			log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s transitioned to in_progress with an active work session; escalation (%q) detected but not delivered — no new prompt is built for a reused session", itemID, escalateRetryReason)
+		} else {
+			log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s transitioned to in_progress; reusing its active work session instead of respawning", itemID)
+		}
 		return nil
+	}
+
+	if escalateRetryReason != "" {
+		// No new field needed on SpawnSessionFromItemRequest: the respawned
+		// session's initial prompt is built from priorSessions (freshly
+		// reloaded inside SpawnSessionFromItem), which already contains the
+		// identical review-verdict history this function just inspected —
+		// session.BuildSessionInitialPrompt recomputes the same streak and
+		// injects the "try something different" nudge on its own.
+		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s: spawning an escalated retry (%q)", itemID, escalateRetryReason)
 	}
 
 	_, spawnErr := s.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
@@ -2448,8 +2508,18 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 // investigation) can answer "how often does each failure mode happen" from log history alone,
 // without re-deriving it by hand from raw error text and process timing.
 //
+//   - "pool_saturated": the call never got a shot at running — it waited for a
+//     concurrency-pool slot until headless.ErrPoolSaturated's short queue-wait
+//     cap elapsed (session/headless/caller.go). Checked before "timeout" so a
+//     burst of concurrent calls doesn't look like a genuine LLM hang.
+//   - "idle": the call started but produced no new stream-json output line for
+//     headless.idleTimeout (session/headless/pool.go) — checked before
+//     "timeout" so a genuinely stalled call isn't indistinguishable from a
+//     legitimately long-but-active one.
 //   - "timeout": ctx deadline exceeded, or elapsed is within 5s of budget (covers a
-//     hang whose error got wrapped/lost before reaching context.DeadlineExceeded).
+//     hang whose error got wrapped/lost before reaching context.DeadlineExceeded). With
+//     idle detection now the primary defense against a truly stuck call, this bucket
+//     should mostly mean "actively producing output for the full budget," not "hung."
 //   - "shutdown": server shutdown context cancelled mid-call, not a call failure.
 //   - "claude_not_found": the claude binary itself is missing from PATH — an environment
 //     problem, not a per-call one.
@@ -2477,6 +2547,10 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 // call sites, so it takes budget as a parameter rather than hardcoding one.
 func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string {
 	switch {
+	case errors.Is(err, headless.ErrPoolSaturated):
+		return "pool_saturated"
+	case errors.Is(err, headless.ErrIdleTimeout):
+		return "idle"
 	case errors.Is(err, context.DeadlineExceeded), budget-elapsed < 5*time.Second:
 		return "timeout"
 	case errors.Is(err, context.Canceled):

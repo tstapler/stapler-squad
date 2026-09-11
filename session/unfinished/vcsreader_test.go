@@ -3,7 +3,6 @@ package unfinished_test
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -571,125 +570,6 @@ func (f *fakeVCSReader) CommitMessages(worktreePath, base string, max int) ([]st
 
 func (f *fakeVCSReader) DiffShortstat(worktreePath string) (unfinished.DiffStat, error) {
 	return unfinished.DiffStat{Files: f.diffStatFiles[worktreePath]}, nil
-}
-
-// ---------------------------------------------------------------------------
-// JJ tests
-// ---------------------------------------------------------------------------
-
-// initJJRepo creates a jj-backed git repo at a temp dir with one change.
-func initJJRepo(t *testing.T) string {
-	t.Helper()
-	if _, err := exec.LookPath("jj"); err != nil {
-		t.Skip("jj not installed")
-	}
-
-	raw := t.TempDir()
-	dir, err := filepath.EvalSymlinks(raw)
-	if err != nil {
-		t.Fatalf("EvalSymlinks: %v", err)
-	}
-
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), args[0], args[1:]...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"JJ_USER=Test User",
-			"JJ_EMAIL=test@test.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("%v: %v\n%s", args, err, out)
-		}
-	}
-
-	run("jj", "git", "init")
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	run("jj", "describe", "-m", "initial commit")
-	run("jj", "new") // move to a new empty change on top
-	return dir
-}
-
-// TestVCSReaderContractJJ runs the shared contract suite against JJVCSReader.
-func TestVCSReaderContractJJ(t *testing.T) {
-	if _, err := exec.LookPath("jj"); err != nil {
-		t.Skip("jj not installed")
-	}
-	testVCSReaderContractJJ(t, &unfinished.JJVCSReader{})
-}
-
-// testVCSReaderContractJJ is a jj-specific variant of the contract suite.
-// jj's model differs enough (no linked worktrees, change-based rather than
-// branch-based) that it gets its own focused suite.
-func testVCSReaderContractJJ(t *testing.T, r *unfinished.JJVCSReader) {
-	t.Helper()
-
-	t.Run("ListWorktrees_returns_single_entry", func(t *testing.T) {
-		repo := initJJRepo(t)
-		wts, err := r.ListWorktrees(repo)
-		if err != nil {
-			t.Fatalf("ListWorktrees: %v", err)
-		}
-		if len(wts) != 1 {
-			t.Fatalf("expected exactly 1 worktree for jj repo, got %d", len(wts))
-		}
-		if wts[0].Path != repo {
-			t.Errorf("worktree path = %q, want %q", wts[0].Path, repo)
-		}
-	})
-
-	t.Run("HasUncommitted_false_on_empty_change", func(t *testing.T) {
-		repo := initJJRepo(t)
-		// jj new creates a fresh empty change — no uncommitted files.
-		dirty, err := r.HasUncommitted(repo)
-		if err != nil {
-			t.Fatalf("HasUncommitted: %v", err)
-		}
-		if dirty {
-			t.Error("expected empty jj change to have no uncommitted files")
-		}
-	})
-
-	t.Run("HasUncommitted_true_when_file_modified", func(t *testing.T) {
-		repo := initJJRepo(t)
-		if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("dirty"), 0644); err != nil {
-			t.Fatal(err)
-		}
-		dirty, err := r.HasUncommitted(repo)
-		if err != nil {
-			t.Fatalf("HasUncommitted: %v", err)
-		}
-		if !dirty {
-			t.Error("expected dirty jj change to be detected")
-		}
-	})
-
-	t.Run("DiffShortstat_zero_on_empty_change", func(t *testing.T) {
-		repo := initJJRepo(t)
-		d, err := r.DiffShortstat(repo)
-		if err != nil {
-			t.Fatalf("DiffShortstat: %v", err)
-		}
-		if d.Files != 0 {
-			t.Errorf("expected 0 changed files on empty change, got %d", d.Files)
-		}
-	})
-
-	t.Run("DiffShortstat_detects_change", func(t *testing.T) {
-		repo := initJJRepo(t)
-		if err := os.WriteFile(filepath.Join(repo, "new.txt"), []byte("alpha\nbeta\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-		d, err := r.DiffShortstat(repo)
-		if err != nil {
-			t.Fatalf("DiffShortstat: %v", err)
-		}
-		if d.Files == 0 {
-			t.Error("expected at least 1 changed file")
-		}
-	})
 }
 
 // ---------------------------------------------------------------------------

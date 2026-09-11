@@ -470,6 +470,31 @@ func (i *Instance) SetGitWorktree(worktree *git.GitWorktree) {
 	i.started.Store(worktree != nil)
 }
 
+// RecordVCSStatusRequest marks this instance's worktree as recently active
+// for WorktreeChangeDetector's idle-gating (Story 2.2.2) -- called by
+// WorkspaceService.GetVCSStatus on every call (hit or miss) so a workdir
+// being polled only via GetVCSStatus (never GetSessionDiff) still counts as
+// active for the periodic tick's activeFunc check. No-op if there's no
+// worktree.
+func (i *Instance) RecordVCSStatusRequest() {
+	i.gitManager.RecordRequest()
+}
+
+// RefreshDiffStatsIfStale recomputes diff stats only if the cached value is
+// older than diffStatsCacheTTL — a no-op otherwise. Use for callers that can
+// tolerate a few seconds of staleness (notably the GetSessionDiff RPC, which
+// profiled at ~13% of app-wide CPU since UpdateDiffStats redoes a full diff
+// plus an ahead/behind commit walk unconditionally on every call — mirrors
+// GetVCSStatus's proven TTL-cache pattern). Callers needing a
+// guaranteed-fresh read (daemon.go's AutoYes loop, exit/destroy lifecycle
+// snapshots) must keep calling UpdateDiffStats directly.
+func (i *Instance) RefreshDiffStatsIfStale() error {
+	if i.gitManager.DiffStatsFresh() {
+		return nil
+	}
+	return i.UpdateDiffStats()
+}
+
 // UpdateDiffStats updates the git diff statistics for this instance.
 // Performs I/O (git diff) outside the lock, then updates state under the write lock.
 func (i *Instance) UpdateDiffStats() error {

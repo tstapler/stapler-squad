@@ -1687,6 +1687,7 @@ func (s *SessionService) SetReviewQueuePoller(poller *session.ReviewQueuePoller)
 	s.autonomousSvc.SetInstanceFinder(s.FindLiveInstance)
 	s.reviewQueueSvc.SetReviewQueuePoller(poller)
 	s.notificationSvc.SetReviewQueuePoller(poller)
+	s.notificationSvc.SetStorage(s.storage)
 	s.utilitySvc.SetReviewQueuePoller(poller)
 	s.checkpointSvc.SetPoller(poller)
 	s.terminalSvc.SetPoller(poller)
@@ -4637,8 +4638,8 @@ func (s *SessionService) GetSessionDiff(
 
 	instance := s.findInstance(req.Msg.Id)
 	if instance != nil {
-		// Live session: update and read cached diff.
-		if err := instance.UpdateDiffStats(); err != nil {
+		// Live session: refresh (if the cached value is stale) and read.
+		if err := instance.RefreshDiffStatsIfStale(); err != nil {
 			log.Warn("failed to update diff stats", "session", req.Msg.Id, "err", err)
 		}
 		diffStats = instance.GetDiffStats()
