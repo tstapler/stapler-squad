@@ -97,6 +97,23 @@ func TestUpdate_PublishesOnEarlyReturnPath(t *testing.T) {
 	}
 }
 
+// TestUpdate_SkipsPublishWhenResourceHeaderEmpty is the regression test for a
+// code-review BLOCKER: a response with no X-RateLimit-Resource header (e.g. a
+// non-rate-limited endpoint) must not write a bogus resource="" entry into
+// the shared snapshot map/gauge.
+func TestUpdate_SkipsPublishWhenResourceHeaderEmpty(t *testing.T) {
+	r := &RateLimiter{}
+	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("", ResourceQuota{Remaining: 10, Limit: 5000})))
+
+	snap := r.Snapshot()
+	if _, ok := snap.Resources[""]; ok {
+		t.Fatalf("Snapshot().Resources contains a bogus \"\" entry: %+v", snap.Resources)
+	}
+	if len(snap.Resources) != 0 {
+		t.Fatalf("Snapshot().Resources = %+v, want empty (no resource header means no publish)", snap.Resources)
+	}
+}
+
 // TestSnapshot_ZeroValueWhenNeverPublished covers Task 3.1.1c's nil-safety
 // contract: Snapshot() on a limiter that has never seen Update() returns a
 // zero-value struct, and indexing its nil Resources map is safe (not a

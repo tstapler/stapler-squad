@@ -103,8 +103,13 @@ func (r *RateLimiter) Update(resp *http.Response) {
 	// early return in the secondary-rate-limit branch), not just the
 	// fall-through end — pre-mortem P1 #2 requires the storing side to be
 	// unconditional so a resource's last-known quota is never left stale by a
-	// branch that returns early.
-	defer r.publishResourceQuota(resource, ResourceQuota{Remaining: remaining, Limit: limit, ResetAt: resetAt})
+	// branch that returns early. Skip entirely when the response carried no
+	// X-RateLimit-Resource header (e.g. a non-rate-limited endpoint, or a test
+	// double) — publishing would otherwise write a bogus resource="" entry
+	// into the shared snapshot map/gauge.
+	if resource != "" {
+		defer r.publishResourceQuota(resource, ResourceQuota{Remaining: remaining, Limit: limit, ResetAt: resetAt})
+	}
 
 	// Percentage-based warning threshold so search (30/hr) and core (5000/hr) both
 	// warn at the right time rather than always / never.
