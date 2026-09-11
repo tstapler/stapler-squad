@@ -1267,7 +1267,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_WorkStuck_Res
 	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
 
 	wait.RequireEventually(t, func() bool {
-		return len(creator.calls) == 1
+		return creator.callCount() == 1
 	}, 2*time.Second, 10*time.Millisecond, "the stuck work session must be closed out before the respawn dispatch, so AutoRespawnAutonomousWork spawns a fresh session instead of self-blocking on the very session that just reported stuck")
 
 	open, err := storage.FindOpenStuckStates(ctx)
