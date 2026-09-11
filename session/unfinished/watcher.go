@@ -71,7 +71,20 @@ func (w *WatchDirWatcher) RemoveWatchDir(dir string) {
 	delete(w.discovered, dir)
 	w.mu.Unlock()
 
+	pinned := make(map[string]bool)
+	if w.stateStore != nil {
+		for _, p := range w.stateStore.PinnedRepos() {
+			pinned[p] = true
+		}
+	}
+
 	for repoPath := range repos {
+		if pinned[repoPath] {
+			// Still claimed by the pinned-repo source -- removing it here
+			// would drop tracking until the pinned source happens to fire
+			// again, since Scanner has no per-source refcounting.
+			continue
+		}
 		w.scanner.RemoveRepo(repoPath)
 	}
 }

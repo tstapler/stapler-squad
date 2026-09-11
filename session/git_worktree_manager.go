@@ -212,7 +212,14 @@ func (gm *GitWorktreeManager) Setup() error {
 // its own -- order doesn't affect correctness here (both callbacks are
 // independent, idempotent invalidations) but matches architecture.md's
 // documented ordering.
+//
+// Setup() (this method's only caller) is safe to call repeatedly on the same
+// GitWorktreeManager -- see restartForRetry in retry_state.go -- so this must
+// stop any already-running detector first, or a repeated Setup() call leaks
+// the orphaned detector's goroutine and fsnotify watcher.
 func (gm *GitWorktreeManager) startChangeDetector(wt *git.GitWorktree) {
+	gm.stopChangeDetector()
+
 	detector := NewWorktreeChangeDetector(wt.GetWorktreePath(), func() (bool, string, error) {
 		dirty, err := wt.IsDirtyUncached()
 		if err != nil {

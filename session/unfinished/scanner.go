@@ -920,6 +920,13 @@ func (s *Scanner) AddRepo(repoPath string) {
 	s.EnqueueRepo(repoPath)
 }
 
+// IsTracked reports whether repoPath is currently in the scan set, regardless
+// of which source (pinned, watch-dir, session auto-spider) added it.
+func (s *Scanner) IsTracked(repoPath string) bool {
+	_, tracked := s.repoSet.Load(repoPath)
+	return tracked
+}
+
 // RemoveRepo removes a repo from the scan set, purges its results, and
 // unregisters its fsnotify watch.
 func (s *Scanner) RemoveRepo(repoPath string) {
@@ -933,6 +940,10 @@ func (s *Scanner) RemoveRepo(repoPath string) {
 		}
 		return true
 	})
+	// repoWorktrees has no other eviction path for a repo that's fully
+	// removed (not just missing one worktree) — without this, every repo
+	// ever tracked leaves an empty *sync.Map behind for the process lifetime.
+	s.repoWorktrees.Delete(repoPath)
 }
 
 // pruneRepoInterval is a var (not a const) so tests can shrink it instead of
