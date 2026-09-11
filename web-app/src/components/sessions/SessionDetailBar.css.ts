@@ -34,10 +34,6 @@ export const pathText = style({
   minWidth: 0,
 });
 
-export const spacer = style({
-  flex: 1,
-});
-
 export const shortcutHints = style({
   display: "flex",
   alignItems: "center",

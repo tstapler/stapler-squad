@@ -17,5 +17,3 @@ export const AppLink = forwardRef<HTMLAnchorElement, AppLinkProps>(
     return <Link ref={ref} prefetch={prefetch} {...props} />;
   }
 );
-
-export default AppLink;

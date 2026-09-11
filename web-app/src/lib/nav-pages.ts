@@ -73,8 +73,6 @@ export const NAV_PAGES: NavPage[] = [
 ];
 
 export const MOBILE_NAV_PAGES = NAV_PAGES.filter((p) => p.mobileNav !== false);
-/** Items shown in the always-visible header nav row on wide desktop (≥1100px). */
-export const HEADER_NAV_PAGES = NAV_PAGES.filter((p) => p.headerNav !== false);
 /** Items rendered in the BottomNav primary bar (excluding Notifications which is custom-rendered). */
 export const BOTTOM_NAV_PRIMARY = NAV_PAGES.filter(
   (p) => p.bottomNavPrimary && p.mobileNav !== false && p.href !== routes.notifications

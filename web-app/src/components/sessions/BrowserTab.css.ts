@@ -9,37 +9,6 @@ export const browserTabContainer = style({
   overflow: 'hidden',
 });
 
-export const qualityControls = style({
-  display: 'flex',
-  gap: vars.space['1'],
-  padding: `${vars.space['1']} ${vars.space['2']}`,
-  borderBottom: `1px solid ${vars.color.borderColor}`,
-  flexShrink: 0,
-  alignItems: 'center',
-});
-
-export const qualityButton = style({
-  padding: `2px ${vars.space['2']}`,
-  borderRadius: vars.radii.sm,
-  border: `1px solid ${vars.color.borderColor}`,
-  background: 'transparent',
-  color: vars.color.textSecondary,
-  fontSize: vars.fontSize.sm,
-  cursor: 'pointer',
-  textTransform: 'capitalize',
-  ':hover': {
-    background: vars.color.hoverBackground,
-    color: vars.color.textPrimary,
-  },
-});
-
-export const qualityButtonActive = style({
-  fontWeight: vars.fontWeight.semibold,
-  background: vars.color.accentBg,
-  color: vars.color.textPrimary,
-  borderColor: vars.color.borderStrong,
-});
-
 export const viewerArea = style({
   flex: 1,
   position: 'relative',
@@ -63,13 +32,6 @@ export const placeholderOverlay = style({
 export const canvasWrapper = style({
   position: 'absolute',
   inset: 0,
-});
-
-export const qualityLabel = style({
-  fontSize: vars.fontSize.xs,
-  color: 'inherit',
-  marginRight: vars.space['1'],
-  flexShrink: 0,
 });
 
 export const reconnectingBanner = style({
