@@ -6,7 +6,6 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tstapler/stapler-squad/telemetry"
@@ -42,12 +41,7 @@ func runGHCLICommand(ctx context.Context, callSite string, exec func() ([]byte, 
 	output, err := exec()
 	duration := time.Since(start)
 
-	if callsCounter != nil {
-		callsCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
-	}
-	if callDurationHist != nil {
-		callDurationHist.Record(ctx, duration.Milliseconds(), metric.WithAttributes(attrs...))
-	}
+	recordGitHubCall(ctx, duration, attrs)
 
 	if err != nil {
 		span.RecordError(err)

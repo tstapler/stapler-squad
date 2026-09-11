@@ -37,8 +37,10 @@ func (t *githubTelemetryTransport) RoundTrip(req *http.Request) (*http.Response,
 	defer span.End()
 
 	origin := GitHubCallOriginFrom(ctx)
+	callSite := GitHubCallSiteFrom(ctx)
 	span.SetAttributes(
 		attribute.String("github.call.origin", string(origin)),
+		attribute.String("github.call_site", callSite),
 		attribute.String("http.method", req.Method),
 	)
 
@@ -50,7 +52,10 @@ func (t *githubTelemetryTransport) RoundTrip(req *http.Request) (*http.Response,
 	resp, err := t.next.RoundTrip(req.WithContext(ctx))
 	duration := time.Since(start)
 
-	attrs := []attribute.KeyValue{attribute.String("github.call.origin", string(origin))}
+	attrs := []attribute.KeyValue{
+		attribute.String("github.call.origin", string(origin)),
+		attribute.String("github.call_site", callSite),
+	}
 	if resp != nil {
 		if resource := resp.Header.Get("X-RateLimit-Resource"); resource != "" {
 			span.SetAttributes(attribute.String("github.resource", resource))

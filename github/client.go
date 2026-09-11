@@ -193,6 +193,7 @@ func CheckGHAuth() error {
 	res, err, _ := ghAuthGroup.Do("auth", func() (interface{}, error) {
 		authCheckCtx, authCheckCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer authCheckCancel()
+		authCheckCtx = WithGitHubCallSite(authCheckCtx, "auth.check")
 
 		req, buildErr := newGHRequest(authCheckCtx, "user")
 		if buildErr != nil {
@@ -242,6 +243,7 @@ func CheckGHAuth() error {
 // callers can degrade gracefully. Returns a non-nil error when the request
 // is rate limited instead — that isn't the same as being unauthenticated.
 func GetCurrentUserLogin(ctx context.Context) (string, error) {
+	ctx = WithGitHubCallSite(ctx, "user.login")
 	req, err := newGHRequest(ctx, "user")
 	if err != nil {
 		return "", fmt.Errorf("build /user request: %w", err)
@@ -254,6 +256,7 @@ func GetCurrentUserLogin(ctx context.Context) (string, error) {
 // Returns ("", nil) when the token is invalid or unauthenticated, and a
 // non-nil error when the request is rate limited instead.
 func GetCurrentUserLoginWithToken(ctx context.Context, host, token string) (string, error) {
+	ctx = WithGitHubCallSite(ctx, "user.login")
 	req, err := newGHRequestForHostWithToken(ctx, host, "user", token)
 	if err != nil {
 		return "", fmt.Errorf("build /user request: %w", err)
@@ -447,6 +450,7 @@ func getCheckConclusion(checks []ghStatusCheckItem) (conclusion, status string) 
 // Uses the GitHub REST API directly (no gh subprocess) to avoid forkExec lock contention.
 // Returns ErrNoPR when no pull request exists for the branch.
 func GetPRForBranch(ctx context.Context, owner, repo, branch string) (*PRInfo, error) {
+	ctx = WithGitHubCallSite(ctx, "pr.lookup.by_branch")
 	apiPath := fmt.Sprintf("repos/%s/%s/pulls?head=%s&state=all&per_page=10",
 		url.PathEscape(owner), url.PathEscape(repo),
 		url.QueryEscape(owner+":"+branch))
@@ -504,6 +508,7 @@ func GetPRForBranch(ctx context.Context, owner, repo, branch string) (*PRInfo, e
 // compared against the requested owner/repo; a mismatch returns a non-nil,
 // non-ErrNoPR error rather than trusting the response body blindly.
 func GetPRByNumber(ctx context.Context, owner, repo string, prNumber int) (*PRInfo, error) {
+	ctx = WithGitHubCallSite(ctx, "pr.view.by_number")
 	apiPath := fmt.Sprintf("repos/%s/%s/pulls/%d",
 		url.PathEscape(owner), url.PathEscape(repo), prNumber)
 
@@ -870,6 +875,7 @@ func GeneratePRPrompt(pr *PRInfo, includeDescription bool) string {
 // when no token is configured — callers must check err before treating
 // changed=false as "unchanged, no error."
 func GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (info *PRInfo, newEtag string, changed bool, err error) {
+	ctx = WithGitHubCallSite(ctx, "pr.lookup.by_branch.conditional")
 	if getGHToken(ctx) == "" {
 		return nil, etag, false, ErrNotAuthenticated
 	}

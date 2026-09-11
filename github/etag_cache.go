@@ -59,6 +59,8 @@ func (c *ETagCache) Invalidate(owner, repo string, prNumber int) {
 //   - changed=true means 200 OK; info contains freshly fetched data.
 //   - Both info and changed may be zero values when an error is returned.
 func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int, cache *ETagCache) (*PRInfo, bool, error) {
+	ctx = WithGitHubCallSite(ctx, "pr.view.conditional")
+
 	if getGHToken(ctx) == "" {
 		return nil, false, ErrNotAuthenticated
 	}

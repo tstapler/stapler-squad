@@ -173,33 +173,12 @@ type prInfoCheckContextNode struct {
 	State      string `json:"state"`      // StatusContext only: SUCCESS/FAILURE/PENDING/ERROR
 }
 
-// graphQLCallSiteKey/withGraphQLCallSite (Task 4.1.1d) mirror
-// runGHCLICommand's callSite parameter (gh_exec.go) for this native-HTTP
-// path: gh_exec.go's adapter builds its own span per call and can set
-// "github.call_site" directly on it, but every ghHTTPClient call instead
-// shares one Transport (githubTelemetryTransport, telemetry_transport.go)
-// whose "github.http.request" span today only reads
-// GitHubCallOriginFrom(ctx) — it has no call-site concept yet. Teaching it to
-// also read this key and set "github.call_site" on the span would mean
-// editing telemetry_transport.go, which is outside this epic's file scope
-// (see the task's Files list). This context key is deliberately shaped like
-// CallOrigin's (call_origin.go) so that follow-up wiring — Epic 4.2, or a
-// small dedicated observability task — is a one-line addition to
-// githubTelemetryTransport.RoundTrip rather than another context-plumbing
-// change. Until then, tagging it here is inert: GetPRInfoGraphQL's calls are
-// distinguishable from the gh-CLI path by their span name
-// ("github.http.request" vs "gh.pr.view") and by having no
-// "github.call_site" attribute at all, but not yet by a
-// "github.call_site=pr.view.graphql" attribute.
-type graphQLCallSiteKey struct{}
-
-// callSitePRViewGraphQL is GetPRInfoGraphQL's call-site label — see
-// graphQLCallSiteKey's doc comment for why it isn't surfaced on the span yet.
+// callSitePRViewGraphQL is GetPRInfoGraphQL's call-site label, read by
+// githubTelemetryTransport.RoundTrip (telemetry_transport.go) via
+// GitHubCallSiteFrom to populate plan.md's Observability Plan `call_site`
+// label on the native HTTP path, the same way runGHCLICommand (gh_exec.go)
+// does for the gh-CLI path.
 const callSitePRViewGraphQL = "pr.view.graphql"
-
-func withGraphQLCallSite(ctx context.Context, callSite string) context.Context {
-	return context.WithValue(ctx, graphQLCallSiteKey{}, callSite)
-}
 
 // GetPRInfoGraphQL fetches metadata for a pull request via GitHub's GraphQL
 // API instead of GetPRInfoCtx's `gh pr view` subprocess shell-out, producing
@@ -217,10 +196,12 @@ func withGraphQLCallSite(ctx context.Context, callSite string) context.Context {
 // clearer error than a raw exec failure would; that rationale doesn't apply
 // to a direct HTTP call.
 //
-// This function is unwired — nothing calls it yet. Epic 4.2 adds the
-// feature-flag dispatch inside GetPRInfoCtx that will call it.
+// This function is wired: GetPRInfoCtx (client.go) dispatches here when the
+// github:graphql-pr-info feature flag (githubGraphQLMigrationFlagName) is
+// enabled — see that constant's doc comment for the flag's default-off
+// rationale.
 func GetPRInfoGraphQL(ctx context.Context, owner, repo string, prNumber int) (*PRInfo, error) {
-	ctx = withGraphQLCallSite(ctx, callSitePRViewGraphQL)
+	ctx = WithGitHubCallSite(ctx, callSitePRViewGraphQL)
 
 	reqBody, err := json.Marshal(map[string]any{
 		"query": graphQLPRInfoQuery,
