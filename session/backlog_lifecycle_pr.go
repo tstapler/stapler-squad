@@ -899,18 +899,32 @@ func (l *BacklogLifecycleListener) reconcilePushFailedItems(ctx context.Context,
 // the existing merge+retry path unchanged — see
 // isNonFastForwardRecoverable's doc comment for why false positives here
 // (skipping a retry that might have worked) are worse than the reverse.
+// Deliberately no bare "403"/"401": failureContext embeds the raw
+// error text, which routinely contains commit SHAs, refs, or URLs — a hex
+// SHA has a real chance of containing that digit sequence by coincidence,
+// which would misclassify a genuinely recoverable non-fast-forward failure
+// as unrecoverable. Each signature below instead requires enough
+// surrounding context (a status-code phrase, or prose specific to
+// auth/permission/branch-protection) that a coincidental substring match in
+// unrelated hex/URL text is implausible. Likewise no bare "not permitted"
+// (matches unrelated OS/filesystem errors like sandboxed "operation not
+// permitted") — "you don't have push access"/"you are not permitted to
+// push" below cover the git-specific phrasing without that breadth.
 var unrecoverableByMergeSignatures = []string{
 	"permission denied",
 	"authentication failed",
 	"could not read username",
 	"could not read password",
-	"403",
-	"401",
-	"not permitted",
+	"403 forbidden",
+	"http 403",
+	"401 unauthorized",
+	"http 401",
+	"bad credentials",
 	"protected branch",
 	"required status check",
 	"required review",
 	"you don't have push access",
+	"you are not permitted to push",
 	"signed commits",
 }
 

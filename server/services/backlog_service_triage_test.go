@@ -1362,7 +1362,10 @@ func TestAutoRespawnAutonomousWork_NoActiveSession_ResolvesAnyOpenRespawnBlocked
 // (escalated) attempt instead — reopening to in_progress and spawning a new
 // work session — with the escalation nudge itself carried in the respawned
 // session's prompt (see TestBuildSessionInitialPrompt_should_includeEscalationNotice
-// in session/backlog_review_test.go), not by parking here.
+// in session/backlog_context_test.go for the unit-level check of that text;
+// this test additionally asserts the nudge actually reaches the prompt
+// handed to CreateDirectorySession, proving the two are really wired
+// together end to end), not by parking here.
 func TestAutoReopenAfterFailedReview_RepeatedFailureTwice_GrantsOneEscalatedRetry(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
@@ -1403,7 +1406,11 @@ func TestAutoReopenAfterFailedReview_RepeatedFailureTwice_GrantsOneEscalatedRetr
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status, "streak of exactly 2 must still reopen for one escalated attempt, not park")
-	assert.Len(t, creator.calls, 1, "the escalated attempt is a fresh work session, not a park")
+	require.Len(t, creator.calls, 1, "the escalated attempt is a fresh work session, not a park")
+	assert.Contains(t, creator.calls[0].prompt, "Escalation Notice",
+		"the respawned session's actual prompt must carry the escalation nudge, not just a bare identical-looking retry")
+	assert.Contains(t, creator.calls[0].prompt, "Review blocked: could not compute a diff for this session",
+		"the escalation notice must name the repeated failure reason")
 
 	open, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)

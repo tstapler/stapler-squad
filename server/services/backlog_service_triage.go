@@ -204,10 +204,10 @@ func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTit
 // stops the auto-reopen loop. Mirrors notifyReworkCapHit's structure: a
 // MarkStuck/MarkStuckNotified failure is logged but never suppresses the
 // notification itself.
-func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, failureSummary string) {
+func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, attemptCount int, failureSummary string) {
 	if s.storage != nil {
 		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, currentStatus,
-			fmt.Sprintf("stopped auto-rework — the last two attempts failed the same way: %q. Fix the underlying issue, then click \"Reopen for Revision\".", failureSummary))
+			fmt.Sprintf("stopped auto-rework — the last %d attempts (including one escalated retry) failed the same way: %q. Fix the underlying issue, then click \"Reopen for Revision\".", attemptCount, failureSummary))
 		if err != nil {
 			log.WarningLog().Printf("[notifyRepeatedFailure] MarkStuck item=%s: %v", itemID, err)
 		} else if applied {
@@ -226,7 +226,7 @@ func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, item
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
 		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
 		"Auto-rework stopped — repeated failure",
-		fmt.Sprintf("%s — the last two attempts failed the same way, so auto-rework stopped instead of retrying. Left for manual review.", itemTitle),
+		fmt.Sprintf("%s — the last %d attempts (including one escalated retry) failed the same way, so auto-rework stopped instead of retrying again. Left for manual review.", itemTitle, attemptCount),
 		map[string]string{"item_id": itemID},
 	))
 }
@@ -1777,11 +1777,10 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// docs/tasks/backlog-feature-improvement.md's "no escalation, no
 	// awareness that the last N attempts failed the same way" finding: the
 	// breaker used to stop the loop the instant it detected a repeat, never
-	// trying anything different first. Fetches one more than
-	// RepeatedFailureParkThreshold's own value so ReviewFailureStreakLen can
-	// tell "exactly at the park threshold" apart from "one past it" — not
-	// load-bearing today (streak is capped at len(recentVerdicts) either way)
-	// but keeps the query intent self-evident.
+	// trying anything different first. Fetches exactly RepeatedFailureParkThreshold
+	// entries — enough for ReviewFailureStreakLen to observe the streak up to
+	// (and including) the park threshold itself; a streak can never be
+	// reported past that value since the query never returns more rows than that.
 	recentVerdicts, verdictErr := s.storage.GetRecentReviewVerdictSummaries(ctx, itemID, session.RepeatedFailureParkThreshold)
 
 	// Story 3.2.1: purely informational — evaluated unconditionally, on every
@@ -1805,7 +1804,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		log.WarningLog().Printf("[AutoReopenAfterFailedReview] item %s GetRecentReviewVerdictSummaries: %v", itemID, verdictErr)
 	} else if streak := session.ReviewFailureStreakLen(recentVerdicts); streak >= session.RepeatedFailureParkThreshold {
 		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s failed the same way %d times in a row (including one escalated retry); leaving in review for remediation instead of reopening", itemID, streak)
-		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), recentVerdicts[0].Summary)
+		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), streak, recentVerdicts[0].Summary)
 		return nil
 	} else if streak >= session.RepeatedFailureEscalationThreshold {
 		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s failed the same way %d times in a row; granting one escalated retry before parking", itemID, streak)
@@ -1823,12 +1822,20 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// session.IsRepeatedNoVerdictFailure's doc comment for the live bounce
 	// loop (78 cycles in 24h) this closes. Same escalate-once-then-park shape
 	// as the verdict-summary streak above.
+	//
+	// The two streaks are checked as mutually exclusive (verdict-summary
+	// streak first, claiming the one escalation/park slot for this call if it
+	// has ANY signal at all) rather than independently — a mixed history
+	// (e.g. two matching FAIL verdicts further back, then the most recent
+	// review session crashed with no verdict) is rare enough in practice that
+	// picking one breaker over evaluating both isn't worth the added
+	// complexity here.
 	if escalateRetryReason == "" {
 		noVerdictStreak := session.NoVerdictStreakLen(recentReviewHadVerdict(sessions, session.RepeatedFailureParkThreshold))
 		switch {
 		case noVerdictStreak >= session.RepeatedFailureParkThreshold:
 			log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s: the last %d review sessions all exited without ever writing a verdict (including one escalated retry); leaving in review for remediation instead of reopening", itemID, noVerdictStreak)
-			s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "review session exited without ever writing a verdict")
+			s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), noVerdictStreak, "review session exited without ever writing a verdict")
 			return nil
 		case noVerdictStreak >= session.RepeatedFailureEscalationThreshold:
 			log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s: the last %d review sessions exited without ever writing a verdict; granting one escalated retry before parking", itemID, noVerdictStreak)
@@ -1878,7 +1885,19 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		// cache. The item is now back at in_progress, so that session's next
 		// request_review call succeeds instead of failing the precondition
 		// check forever.
-		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s transitioned to in_progress; reusing its active work session instead of respawning", itemID)
+		//
+		// escalateRetryReason (if set) is deliberately dropped here, not
+		// carried forward: there is no fresh prompt to inject it into — the
+		// live session already has its own context and will simply continue
+		// and call request_review again. Logged explicitly so this isn't a
+		// silent gap: an operator grepping logs for this item's escalation
+		// history can see the streak was detected even though no nudge was
+		// deliverable this round.
+		if escalateRetryReason != "" {
+			log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s transitioned to in_progress with an active work session; escalation (%q) detected but not delivered — no new prompt is built for a reused session", itemID, escalateRetryReason)
+		} else {
+			log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s transitioned to in_progress; reusing its active work session instead of respawning", itemID)
+		}
 		return nil
 	}
 

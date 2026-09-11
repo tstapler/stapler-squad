@@ -185,6 +185,15 @@ const RepeatedFailureEscalationThreshold = 2
 // finding: without this second threshold, IsRepeatedFailure/
 // IsRepeatedNoVerdictFailure tripping at streak==2 just parks immediately,
 // with no attempt at all to try something different first.
+//
+// Honesty check, matching TestOnlyReworkMinAttempts' own candor above: the
+// "escalated" retry is only a text nudge (session.BuildSessionInitialPrompt's
+// Escalation Notice) prepended to an otherwise-identical respawn — same
+// agent, same tools, same diff strategy. Nothing persists which work session
+// was "the escalated one," so there is no way to later query how often the
+// nudge actually changes the outcome versus the agent simply repeating
+// itself again. This is a deliberate v1 bet on prompt-following, not a
+// structural difference in remediation; calibrating it is future work.
 const RepeatedFailureParkThreshold = 3
 
 // ReviewFailureStreakLen reports how many of the leading entries in recent
