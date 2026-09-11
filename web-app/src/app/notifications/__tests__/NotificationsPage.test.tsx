@@ -37,12 +37,14 @@ jest.mock("@/lib/hooks/useAuditLog", () => ({
 }));
 
 let mockLiveSessions: Pick<Session, "id">[] = [];
+let mockHasLoadedSessionsOnce = true;
 jest.mock("@/lib/store", () => ({
-  // selectAllSessions (mocked below) ignores the state argument entirely.
+  // selectAllSessions/selectSessionsHasLoadedOnce (mocked below) ignore the state argument entirely.
   useAppSelector: (selector: unknown) => (selector as (s: unknown) => unknown)(undefined),
 }));
 jest.mock("@/lib/store/sessionsSlice", () => ({
   selectAllSessions: () => mockLiveSessions,
+  selectSessionsHasLoadedOnce: () => mockHasLoadedSessionsOnce,
 }));
 
 function makeNotification(overrides: Partial<NotificationHistoryItem> = {}): NotificationHistoryItem {
@@ -93,6 +95,7 @@ function expandRecentActivity() {
 describe("NotificationsPage — session link fallback (Task 3.3.2b)", () => {
   beforeEach(() => {
     mockLiveSessions = [];
+    mockHasLoadedSessionsOnce = true;
     mockHistory = [];
   });
 
@@ -116,6 +119,21 @@ describe("NotificationsPage — session link fallback (Task 3.3.2b)", () => {
 
     const link = screen.getByRole("link", { name: "View Session" });
     expect(link).toHaveAttribute("href", "/?session=sess-live");
+  });
+
+  it("defaults to the live route before the sessions store has ever loaded, even though the id isn't in the (still-empty) live list", () => {
+    // Regression: a fresh page load whose WatchSessions snapshot hasn't landed yet must
+    // not be mistaken for "session confirmed gone" — that raced a real, active session
+    // into the summary route instead of the terminal view.
+    mockHistory = [makeNotification({ id: "notif-racing", sessionId: "sess-still-loading" })];
+    mockLiveSessions = [];
+    mockHasLoadedSessionsOnce = false;
+
+    render(<NotificationsPage />);
+    expandRecentActivity();
+
+    const link = screen.getByRole("link", { name: "View Session" });
+    expect(link).toHaveAttribute("href", "/?session=sess-still-loading");
   });
 });
 

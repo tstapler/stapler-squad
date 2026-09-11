@@ -3,7 +3,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useAppSelector } from "@/lib/store";
-import { selectAllSessions } from "@/lib/store/sessionsSlice";
+import { selectAllSessions, selectSessionsHasLoadedOnce } from "@/lib/store/sessionsSlice";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useApprovalResolution } from "@/lib/hooks/useApprovalResolution";
@@ -87,6 +87,7 @@ export function NotificationsPage() {
   // `/?session=<id>` link.
   const liveSessions = useAppSelector(selectAllSessions);
   const liveSessionIds = useMemo(() => new Set(liveSessions.map((s) => s.id)), [liveSessions]);
+  const hasLoadedSessionsOnce = useAppSelector(selectSessionsHasLoadedOnce);
 
   const { resolvedApprovals, pendingApprovals, blockedApprovals, failedApprovals, resolveApproval } = useApprovalResolution({
     notificationHistory,
@@ -212,10 +213,14 @@ export function NotificationsPage() {
 
   const getSessionHref = useCallback(
     (sessionId: string) =>
-      liveSessionIds.has(sessionId)
+      // Before the sessions store has ever loaded, an absent id means "haven't
+      // heard yet," not "confirmed gone" — default to the live route so a fast
+      // click right after page load doesn't race the first WatchSessions
+      // snapshot and land on the summary route for a session that's actually live.
+      !hasLoadedSessionsOnce || liveSessionIds.has(sessionId)
         ? `/?session=${encodeURIComponent(sessionId)}`
         : `/sessions/summary?sessionId=${encodeURIComponent(sessionId)}`,
-    [liveSessionIds]
+    [liveSessionIds, hasLoadedSessionsOnce]
   );
 
   // Task 3.1.2h (AC38): background fetch-failure staleness indicator — only
