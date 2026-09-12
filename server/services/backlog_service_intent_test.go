@@ -36,7 +36,26 @@ func TestParseBacklogItemIntent_should_ReturnStructuredDraft_When_HeadlessCallSu
 	assert.InDelta(t, 0.8, resp.Msg.Draft.Confidence, 0.01)
 
 	require.Len(t, pool.calls, 1)
-	assert.Equal(t, headless.FeatureKeyBacklogIntentParse, pool.calls[0].key)
+	assert.Equal(t, headless.FeatureKeyBacklogIntentParse, pool.firstCall().key)
+}
+
+// TestParseBacklogItemIntent_should_ThreadRepoPathIntoPrompt_When_RepoPathSet
+// guards BuildBacklogIntentUserPrompt's repo_path branch end-to-end through
+// the RPC — mirrors the sibling repo-path-threading tests in
+// backlog_service_test.go for TriggerTriage.
+func TestParseBacklogItemIntent_should_ThreadRepoPathIntoPrompt_When_RepoPathSet(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	pool := &fakeHeadlessPool{response: validBacklogIntentJSON()}
+	svc.SetHeadlessPool(pool)
+
+	_, err := svc.ParseBacklogItemIntent(t.Context(), connect.NewRequest(&sessionv1.ParseBacklogItemIntentRequest{
+		Message:  "add a way to export data as csv",
+		RepoPath: "/home/user/my-repo",
+	}))
+	require.NoError(t, err)
+
+	assert.Contains(t, pool.firstCall().userPrompt, "/home/user/my-repo")
 }
 
 // TestParseBacklogItemIntent_should_FallBackToErrorField_When_Unsuccessful

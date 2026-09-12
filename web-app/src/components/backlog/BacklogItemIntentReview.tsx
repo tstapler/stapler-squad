@@ -1,7 +1,7 @@
 "use client";
 // +feature: backlog:intent-review
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { BacklogItemForm } from "./BacklogItemForm";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import type { BacklogItem, BacklogItemInput, ParsedBacklogItemDraft } from "@/lib/hooks/useBacklogService";
@@ -54,24 +54,16 @@ function useParseBacklogItemIntent(initialText: string) {
   const [initialValues, setInitialValues] = useState<Partial<BacklogItem>>({});
   const [parseFailed, setParseFailed] = useState(false);
 
-  // Guards against a stale parse response applying after the user has already
-  // moved on (e.g. pressed Escape, or the omnibar re-opened with new text)
-  // before the in-flight RPC resolves — mirrors the abandoned design's
-  // "abort-on-change" intent without needing an AbortController, since
-  // ParseBacklogItemIntent has no side effects to actually cancel.
-  const cancelledRef = useRef(false);
-  useEffect(() => {
-    cancelledRef.current = false;
-    return () => {
-      cancelledRef.current = true;
-    };
-  }, []);
-
+  // `active` guards against a stale parse response applying after the user
+  // has already moved on (e.g. pressed Escape) before the in-flight RPC
+  // resolves — mirrors the abandoned design's "abort-on-change" intent
+  // without needing an AbortController, since the RPC has no side effects to
+  // actually cancel.
   useEffect(() => {
     let active = true;
     setPhase("parsing");
     parseBacklogItemIntent(initialText).then((draft) => {
-      if (!active || cancelledRef.current) return;
+      if (!active) return;
       setParseFailed(!draft);
       setInitialValues(draftToInitialValues(draft, initialText));
       setPhase("review");
@@ -113,15 +105,10 @@ function ParseFailedBanner() {
 }
 
 /**
- * Renders in place of the omnibar's fire-and-close raw-text creation once a
- * "backlog: <message>" submission is parsed by an LLM (ParseBacklogItemIntent)
- * into a structured draft. Reuses BacklogItemForm wholesale for the actual
- * review/edit/create UI (title/description/AC list, pipeline mode incl. the
- * existing SDD-handoff opt-in, auto-spawn-session checkbox) rather than
- * building a parallel form — see architecture.md's "reuse, don't duplicate"
- * recommendation. On parse failure, pre-fills the same form with the raw
- * text instead of losing it, per the "no silent misparse" acceptance
- * criterion.
+ * Renders the review UI for a parsed "backlog: <message>" draft in place of
+ * the old fire-and-close flow. Reuses BacklogItemForm for edit/create
+ * (including its pipeline-mode and auto-spawn-session controls); falls back
+ * to the raw text on parse failure so nothing is lost.
  */
 export function BacklogItemIntentReview({
   initialText,

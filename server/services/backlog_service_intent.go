@@ -20,12 +20,10 @@ import (
 // should return in seconds; bounded generously to absorb cold-start/backoff.
 const backlogIntentCallBudget = 90 * time.Second
 
-// ParseBacklogItemIntent runs a free-text omnibar message through an LLM to
-// produce a structured draft for the caller to review/edit — see the proto
-// doc. Best-effort: never returns a Connect error for an LLM/parse failure,
-// matching MaybeTriggerTriage's "failure never fails the caller's flow"
-// pattern — the response's error field is set instead so the client can fall
-// back to CreateBacklogItemFromChat.
+// ParseBacklogItemIntent runs a free-text message through an LLM to produce a
+// review draft. Best-effort like MaybeTriggerTriage: failures never return a
+// Connect error — the response's error field signals a fallback to
+// CreateBacklogItemFromChat.
 // +api: backlog:parse-item-intent
 func (s *BacklogService) ParseBacklogItemIntent(
 	ctx context.Context,

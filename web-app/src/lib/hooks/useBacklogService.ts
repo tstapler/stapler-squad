@@ -834,6 +834,9 @@ export function useBacklogService(): UseBacklogServiceReturn {
   );
 
   const parseBacklogItemIntent = useCallback(
+    // repo_path is intentionally omitted: the omnibar has no "current repo"
+    // context available before parsing, and the request field is optional
+    // (see its proto doc) — the LLM parses from message text alone.
     async (message: string): Promise<ParsedBacklogItemDraft | null> => {
       if (!clientRef.current) return null;
       try {

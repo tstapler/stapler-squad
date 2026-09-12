@@ -7,6 +7,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBuildBacklogIntentUserPrompt_IncludesRepoPath_When_RepoPathSet(t *testing.T) {
+	t.Parallel()
+	prompt := BuildBacklogIntentUserPrompt("fix the login bug", "/home/user/my-repo")
+	assert.Contains(t, prompt, "/home/user/my-repo")
+	assert.Contains(t, prompt, "fix the login bug")
+}
+
+func TestBuildBacklogIntentUserPrompt_OmitsRepoLine_When_RepoPathEmpty(t *testing.T) {
+	t.Parallel()
+	prompt := BuildBacklogIntentUserPrompt("fix the login bug", "")
+	assert.NotContains(t, prompt, "Repo:")
+}
+
 func TestParseBacklogItemIntentDraft_ValidJSON(t *testing.T) {
 	t.Parallel()
 	raw := `{"title":"Add dark mode toggle","description":"Let users switch themes from settings.","acceptance_criteria":["Toggle appears in settings","Preference persists across reload"],"confidence":0.85}`
