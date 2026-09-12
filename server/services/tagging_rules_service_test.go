@@ -12,8 +12,11 @@ import (
 )
 
 // newTestTaggingRulesService builds a TaggingRulesService wired to a fresh, empty
-// TaggingRulesStore and a TaggingEngine with zero rules (the seed rules ReplaceRules(nil)
-// clears), backed by an in-memory Ent repository for use by this file's tests.
+// TaggingRulesStore and a TaggingEngine with its seed rules cleared, so tests here can assert
+// on user-rule behavior in isolation without seed rules also matching. This does NOT reflect
+// production behavior — rebuildEngine preserves seed rules on every CRUD call (see
+// TestTaggingRulesService_rebuildEngine_should_PreserveSeedRules_When_CRUDMutatesUserRules for
+// that regression coverage against a real, seeded engine).
 func newTestTaggingRulesService(t *testing.T, analyticsStore *AnalyticsStore) (*TaggingRulesService, *classifier.TaggingEngine) {
 	t.Helper()
 	repo := session.NewTestEntRepository(t)
@@ -66,6 +69,63 @@ func TestTaggingRulesService_UpsertTaggingRule_should_LeaveEngineUnchanged_When_
 	require.Error(t, err)
 
 	assert.Equal(t, before, engine.Rules(), "engine rules must be unchanged after a rejected upsert")
+}
+
+// TestTaggingRulesService_rebuildEngine_should_PreserveSeedRules_When_CRUDMutatesUserRules is
+// the regression test for the bug where rebuildEngine did a bare
+// ReplaceRules(ts.rulesStore.ToRules()), wiping every SeedTaggingRules() entry from the live
+// engine the first time a user rule was upserted or deleted — ToRules only ever returns
+// DB-backed user rules. Unlike newTestTaggingRulesService's helper, the engine here is left
+// with its real seed rules (no ReplaceRules(nil) reset) so this test actually exercises the
+// production wiring.
+func TestTaggingRulesService_rebuildEngine_should_PreserveSeedRules_When_CRUDMutatesUserRules(t *testing.T) {
+	repo := session.NewTestEntRepository(t)
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+
+	rulesStore, err := NewTaggingRulesStore(storage)
+	require.NoError(t, err)
+
+	engine := classifier.NewTaggingEngine()
+	seedCount := len(engine.Rules())
+	require.NotZero(t, seedCount, "NewTaggingEngine should install seed rules")
+
+	svc := NewTaggingRulesService(rulesStore, engine, nil)
+
+	saved, err := svc.UpsertTaggingRule(context.Background(), TaggingRuleSpec{
+		ID:            "user-rule-1",
+		Name:          "Custom user rule",
+		BranchPattern: "^chore/",
+		OutputTag:     "Chore",
+		Enabled:       true,
+		Source:        "user",
+	})
+	require.NoError(t, err)
+
+	rules := engine.Rules()
+	assert.Len(t, rules, seedCount+1, "seed rules must survive an upsert-triggered rebuild alongside the new user rule")
+	assertSeedAndUserRulePresent(t, rules, saved.ID)
+
+	require.NoError(t, svc.DeleteTaggingRule(context.Background(), saved.ID))
+	assert.Len(t, engine.Rules(), seedCount, "seed rules must still be present after a delete-triggered rebuild")
+}
+
+// assertSeedAndUserRulePresent checks rules contains at least one seed-sourced rule and the
+// given user rule id, for
+// TestTaggingRulesService_rebuildEngine_should_PreserveSeedRules_When_CRUDMutatesUserRules.
+func assertSeedAndUserRulePresent(t *testing.T, rules []classifier.TaggingRule, userRuleID string) {
+	t.Helper()
+	var sawSeed, sawUser bool
+	for _, r := range rules {
+		if r.Source == string(classifier.SourceSeed) {
+			sawSeed = true
+		}
+		if r.ID == userRuleID {
+			sawUser = true
+		}
+	}
+	assert.True(t, sawSeed, "seed rules must survive rebuildEngine")
+	assert.True(t, sawUser, "newly upserted user rule must be present")
 }
 
 // TestTaggingRulesService_ListTaggingRules_should_DefaultFireCountToZero_When_AnalyticsStoreNil

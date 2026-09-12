@@ -97,16 +97,30 @@ func (ts *TaggingRulesService) DeleteTaggingRule(ctx context.Context, id string)
 	return nil
 }
 
-// rebuildEngine replaces the live TaggingEngine's rules with the current store contents.
-// Serialization belongs here (not in the engine — ReplaceRules is already atomic per-call,
-// but this service is the one place that knows "read store, then replace engine" must run
-// as one unit relative to itself), mirroring RulesService.rebuildClassifier's rationale.
-// TaggingRulesStore.Upsert/Delete already hold their own mutex around the store mutation
-// (see that type), so serializing here only needs to guard the store-read + engine-replace
-// pair — a single TaggingRulesStore method, ToRules, already returns a full atomic snapshot,
-// so no additional lock is needed beyond the store's own.
+// rebuildEngine reloads user tagging rules from the store and hot-swaps them into the live
+// TaggingEngine, keeping seed rules unchanged — mirroring RulesService.rebuildClassifier.
+// A bare ReplaceRules(ts.rulesStore.ToRules()) would wipe every SeedTaggingRules() entry from
+// the live engine on the first CRUD call, since ToRules only returns DB-backed user rules.
 func (ts *TaggingRulesService) rebuildEngine() {
-	ts.engine.ReplaceRules(ts.rulesStore.ToRules())
+	userRules := ts.rulesStore.ToRules()
+	seedRules := filterTaggingRulesBySource(ts.engine.Rules(), classifier.SourceSeed)
+	ts.engine.ReplaceRules(append(seedRules, userRules...))
+}
+
+// filterTaggingRulesBySource returns only the rules whose Source is in allowed, mirroring
+// rules_service.go's filterRulesBySource for classifier.Rule.
+func filterTaggingRulesBySource(rules []classifier.TaggingRule, allowed ...classifier.RuleSource) []classifier.TaggingRule {
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, s := range allowed {
+		allowedSet[string(s)] = true
+	}
+	var out []classifier.TaggingRule
+	for _, r := range rules {
+		if allowedSet[r.Source] {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // taggingRuleSpecToProto converts a TaggingRuleSpec plus its 7-day fire count to the
