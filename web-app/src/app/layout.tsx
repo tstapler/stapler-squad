@@ -4,6 +4,7 @@ import { AuthProvider } from "@/lib/contexts/AuthContext";
 import { Providers } from "./Providers";
 import { NotificationPanel } from "@/components/ui/NotificationPanel";
 import { TmuxVersionMismatchBanner } from "@/components/system/TmuxVersionMismatchBanner";
+import { ForkPressureStatusBanner } from "@/components/system/ForkPressureStatusBanner";
 import { ViewportProvider } from "@/components/providers/ViewportProvider";
 import { CockpitShell } from "@/components/layout/CockpitShell";
 import { matrixTheme, cyberpunk77Theme, wh40kTheme, cleanTheme, lightTheme, darkTheme } from "@/styles/theme.css";
@@ -65,6 +66,7 @@ export default function RootLayout({
                   <a href="#main-content" className="skip-link">Skip to main content</a>
                   <main id="main-content" className={mainContent}>
                     <TmuxVersionMismatchBanner />
+                    <ForkPressureStatusBanner />
                     {children}
                   </main>
                   <NotificationPanel />
