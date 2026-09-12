@@ -153,13 +153,37 @@ func addrToHostPort(addr string) (string, error) {
 	return u.Host, nil
 }
 
+// tymuxdOutputLogName is where startDaemonAttempt captures the spawned
+// tymuxd's combined stdout/stderr -- BUG-110: this codebase had no way to
+// see WHY a tymuxd cold start failed (e.g. its own "another tymuxd is
+// already starting against <sock>" message when a stuck predecessor still
+// held the lock), because that output was previously discarded entirely.
+const tymuxdOutputLogName = "tymuxd-output.log"
+
+// openTymuxdOutputLog opens (creating/appending) $configDir/tymuxd-output.log
+// for startDaemonAttempt to redirect the spawned tymuxd's stdout/stderr into.
+// Returns nil, nil on any failure to resolve/open it -- diagnostics being
+// unavailable must never block starting the daemon itself.
+func openTymuxdOutputLog() *os.File {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return nil
+	}
+	f, err := os.OpenFile(filepath.Join(configDir, tymuxdOutputLogName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return nil
+	}
+	return f
+}
+
 // startDaemonAttempt spawns tymuxd from cfg.BinaryPath and returns its
 // *os.Process. Follows the same detached-daemon pattern used elsewhere in
-// this codebase: detached Stdin/Stdout/Stderr, a parent-death-aware
-// SysProcAttr (EnsurePdeathsig, below), a PID file written to
-// $configDir/tymuxd.pid (distinct filename from other daemons' PID files),
-// and cmd.Process.Release() so the child is never left as a zombie-risk once
-// this process no longer needs to wait on it.
+// this codebase: detached Stdin, a parent-death-aware SysProcAttr
+// (EnsurePdeathsig, below), a PID file written to $configDir/tymuxd.pid
+// (distinct filename from other daemons' PID files), and
+// cmd.Process.Release() so the child is never left as a zombie-risk once
+// this process no longer needs to wait on it. Stdout/Stderr are captured to
+// $configDir/tymuxd-output.log (openTymuxdOutputLog), not discarded.
 //
 // Explicitly sets TYMUXD_ADDR on the child's environment (never relies on
 // inheriting it from this process's own environment): tymuxd itself reads
@@ -188,8 +212,17 @@ func startDaemonAttempt(cfg DaemonConfig) (*os.Process, error) {
 		cmd.Env = append(cmd.Env, "TYMUXD_SOCKET_PATH="+cfg.SocketPath)
 	}
 	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	if out := openTymuxdOutputLog(); out != nil {
+		// Not closed here: cmd.Start() below dup2's this fd into the child,
+		// which keeps its own reference; closing our copy immediately after
+		// Start() is the standard os/exec pattern for a detached child this
+		// process never Wait()s on (mirrors cmd.Process.Release() a few
+		// lines down -- this process is done with both handles once the
+		// child owns them).
+		defer func() { _ = out.Close() }()
+		cmd.Stdout = out
+		cmd.Stderr = out
+	}
 
 	// Adopt the existing SIGKILL-on-parent-death convention (not SIGTERM) --
 	// same as session/external_tmux_streamer.go, session/mux/multiplexer.go,
@@ -287,6 +320,24 @@ func EnsureDaemonRunning(ctx context.Context, cfg DaemonConfig) (TymuxdReady, er
 	}
 
 	v, err, _ := spawnSF.Do(cfg.Addr, func() (interface{}, error) {
+		// checkDaemonHealthyFn above already confirmed nothing answers
+		// ListSessions correctly at cfg.Addr -- if a PID file nonetheless
+		// names a still-alive process, that process is stuck (e.g. its TCP
+		// listener panicked/closed while the process itself survived --
+		// BUG-110, confirmed against a real production incident) and must be
+		// cleared before spawning a replacement. Without this, the
+		// replacement's own child collides with the still-held tymuxd.sock
+		// lock and dies within milliseconds, and by the time the retry loop
+		// below gives up, the PID file has already been overwritten with
+		// that new, already-dead attempt's PID -- the stop call after the
+		// retry loop then targets the wrong process, and the actual stuck
+		// one is never killed, permanently poisoning every future call for
+		// cfg.Addr. Idempotent/safe to call unconditionally: a no-op when no
+		// PID file exists (the normal cold-start case).
+		if stopErr := stopTymuxdFn(); stopErr != nil {
+			log.Warn("[tymux] failed to stop unhealthy tymuxd before respawn attempt", "err", stopErr)
+		}
+
 		if _, spawnErr := startDaemonAttemptFn(cfg); spawnErr != nil {
 			return nil, fmt.Errorf("tymux: failed to spawn tymuxd at %s: %w", cfg.Addr, spawnErr)
 		}

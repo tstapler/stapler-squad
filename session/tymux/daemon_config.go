@@ -1,6 +1,8 @@
 package tymux
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"hash/crc32"
 	"os"
@@ -87,15 +89,28 @@ func resolveDaemonAddr() string {
 // <path>" (confirmed empirically; overridable via
 // --socket-path/TYMUXD_SOCKET_PATH per `tymuxd --help`).
 //
-// Placed under a dedicated subdirectory of the already-isolated per-instance
-// config dir (config.GetConfigDir(), the same directory startDaemonAttempt's
-// PID file already lives in) rather than replicating tymuxd's own
-// XDG_RUNTIME_DIR/TMPDIR fallback logic. A dedicated subdirectory (not the
-// instance config dir itself) is required: tymuxd refuses to bind a socket
-// whose parent directory isn't mode 0700 and owned by the invoking user
-// (confirmed empirically — "expected uid ... at mode 700"), and the instance
-// config dir is shared with config.json/session state at the codebase's own
-// 0750. Returns "" (tymuxd's own default, unchanged) for the unset/"shared"
+// Not placed inside the per-instance config dir (config.GetConfigDir()):
+// Unix domain socket paths are kernel-length-limited (sun_path, ~108 bytes
+// on Linux) — confirmed empirically against the real binary ("path must be
+// shorter than SUN_LEN") once configDir is a few directories deep (a long
+// STAPLER_SQUAD_INSTANCE name, or -- the case that actually surfaced this --
+// a deeply-nested STAPLER_SQUAD_TEST_DIR under a test's own tmp dir). Hashing
+// configDir into a short, fixed-length token and placing the socket under
+// os.TempDir() instead keeps every resolved path well under that limit
+// regardless of how long or deep configDir itself is, while staying
+// deterministic (same configDir always hashes to the same path, required for
+// EnsureDaemonRunning's reuse case within one instance) and still
+// per-instance-unique (different configDirs hash to different paths, with
+// overwhelming probability). The directory is still created at mode 0700 --
+// tymuxd refuses to bind a socket whose parent directory isn't mode 0700 and
+// owned by the invoking user (confirmed empirically — "expected uid ... at
+// mode 700") — so even though os.TempDir() (e.g. /tmp) is itself
+// world-writable, this specific subdirectory is not: an attacker who
+// pre-creates it with different ownership causes MkdirAll/Chmod to fail here
+// (falling back to tymuxd's own default, never a compromised directory), and
+// tymuxd independently re-checks ownership/mode itself as defense in depth.
+//
+// Returns "" (tymuxd's own default, unchanged) for the unset/"shared"
 // instance and on any resolution error, mirroring resolveDaemonAddr's
 // "unset/shared means unchanged default".
 func resolveSocketPath() string {
@@ -110,7 +125,8 @@ func resolveSocketPath() string {
 	if err != nil {
 		return ""
 	}
-	sockDir := filepath.Join(configDir, "tymuxd-sock")
+	hash := sha256.Sum256([]byte(configDir))
+	sockDir := filepath.Join(os.TempDir(), "ssq-tymux-"+hex.EncodeToString(hash[:8]))
 	if err := os.MkdirAll(sockDir, 0700); err != nil {
 		return ""
 	}
