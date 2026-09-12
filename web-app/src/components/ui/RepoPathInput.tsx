@@ -4,6 +4,11 @@ import { useState, useCallback, useRef, useEffect, useMemo, useId } from "react"
 import { usePathCompletions } from "@/lib/hooks/usePathCompletions";
 import { useSessionRepoPaths } from "@/lib/hooks/useSessionRepoPaths";
 import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
+import {
+  useRepoPathSuggestions,
+  normalizePath,
+  type RepoPathWorktreeInfo,
+} from "@/lib/hooks/useRepoPathSuggestions";
 import { PathCompletionDropdown, type CompletionEntry } from "@/components/ui/PathCompletionDropdown";
 import { isGitHubRef, parseGitHubRef, getRepoFullName } from "@/lib/github/urlParser";
 import * as styles from "./RepoPathInput.css";
@@ -34,6 +39,77 @@ const MAX_HISTORY = 5;
 function tildeAbbreviate(p: string): string {
   const m = p.match(/^(\/(?:Users|home)\/[^/]+)(\/.*)?$/);
   return m ? `~${m[2] ?? ""}` : p;
+}
+
+function makeHistoryEntry(p: string, worktreeOf?: string): CompletionEntry {
+  return {
+    name: tildeAbbreviate(p),
+    path: p,
+    isDirectory: true,
+    isHistory: true,
+    ...(worktreeOf ? { isWorktree: true, rootLabel: tildeAbbreviate(worktreeOf) } : {}),
+  };
+}
+
+/**
+ * Groups history candidates by resolved repo root. The root is synthesized
+ * into the list even when no session is currently rooted there (AC2).
+ */
+interface RepoGroup {
+  rootPath: string | null;
+  discoveredRoot: string | null;
+  members: string[];
+}
+
+function groupByResolvedRoot(
+  paths: string[],
+  resolutions: Map<string, RepoPathWorktreeInfo>
+): { groupOrder: string[]; groups: Map<string, RepoGroup> } {
+  const groupOrder: string[] = [];
+  const groups = new Map<string, RepoGroup>();
+
+  for (const p of paths) {
+    const info = resolutions.get(normalizePath(p));
+    const groupKey = info ? info.rootPath : normalizePath(p);
+
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = { rootPath: null, discoveredRoot: info?.rootPath ?? null, members: [] };
+      groups.set(groupKey, group);
+      groupOrder.push(groupKey);
+    }
+
+    if (!info || info.isMain) {
+      group.rootPath = p;
+    } else {
+      group.members.push(p);
+    }
+  }
+
+  return { groupOrder, groups };
+}
+
+function buildGroupedHistoryEntries(
+  paths: string[],
+  resolutions: Map<string, RepoPathWorktreeInfo>
+): CompletionEntry[] {
+  const { groupOrder, groups } = groupByResolvedRoot(paths, resolutions);
+
+  const entries: CompletionEntry[] = [];
+  for (const groupKey of groupOrder) {
+    const group = groups.get(groupKey);
+    if (!group) continue;
+    if (group.rootPath) {
+      entries.push(makeHistoryEntry(group.rootPath));
+    } else if (group.discoveredRoot) {
+      entries.push(makeHistoryEntry(group.discoveredRoot));
+    }
+    for (const member of group.members) {
+      const info = resolutions.get(normalizePath(member));
+      entries.push(makeHistoryEntry(member, info?.rootPath));
+    }
+  }
+  return entries;
 }
 
 export function RepoPathInput({
@@ -69,19 +145,22 @@ export function RepoPathInput({
     return parseGitHubRef(value, enterpriseHosts);
   }, [detectGitHubUrl, value, enterpriseHosts]);
 
-  const { allEntries, historyCount } = useMemo(() => {
-    const filtered = historyPaths.filter(
-      (p) => value === "" || p.toLowerCase().includes(value.toLowerCase())
-    );
-    const history = filtered.slice(0, MAX_HISTORY);
-    const historySet = new Set(history);
+  const historyCandidates = useMemo(
+    () =>
+      historyPaths
+        .filter((p) => value === "" || p.toLowerCase().includes(value.toLowerCase()))
+        .slice(0, MAX_HISTORY),
+    [historyPaths, value]
+  );
 
-    const historyEntries: CompletionEntry[] = history.map((p) => ({
-      name: tildeAbbreviate(p),
-      path: p,
-      isDirectory: true,
-      isHistory: true,
-    }));
+  // `resolutions` is mutated in place as worktree families resolve in the
+  // background, so `version` (not `resolutions` itself) is the signal that
+  // grouping needs to be recomputed — see useRepoPathSuggestions' doc comment.
+  const { resolutions, version } = useRepoPathSuggestions(historyCandidates);
+
+  const { allEntries, historyCount } = useMemo(() => {
+    const historyEntries = buildGroupedHistoryEntries(historyCandidates, resolutions);
+    const historySet = new Set(historyEntries.map((e) => e.path));
 
     const fsCompletionEntries: CompletionEntry[] = fsEntries
       .filter((e) => !historySet.has(e.path))
@@ -96,7 +175,8 @@ export function RepoPathInput({
       allEntries: [...historyEntries, ...fsCompletionEntries],
       historyCount: historyEntries.length,
     };
-  }, [historyPaths, fsEntries, value]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyCandidates, resolutions, version, fsEntries]);
 
   const showDropdown = open && (allEntries.length > 0 || isLoading);
 
