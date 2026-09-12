@@ -2875,26 +2875,32 @@ func TestWaitForInstanceStartedEvent_should_ReturnFalse_When_BusIsNil(t *testing
 // single snapshot-composition helper, replace this with a direct test of that helper.
 func TestAllSnapshotSendsUseCursorSync(t *testing.T) {
 	t.Parallel()
-	src, err := os.ReadFile("connectrpc_websocket.go")
-	if err != nil {
-		t.Fatalf("read source: %v", err)
-	}
 
-	for i, line := range strings.Split(string(src), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "//") {
-			continue
+	// streamShellViaControlMode's snapshot sends moved to
+	// connectrpc_websocket_shell.go — see docs/reference/hotspot-ranking.md
+	// row 3's extraction — so both files must be scanned.
+	for _, f := range []string{"connectrpc_websocket.go", "connectrpc_websocket_shell.go"} {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read source: %v", err)
 		}
-		// Snapshot frames are composed as <prefix> + prepareSnapshotContent(...).
-		if !strings.Contains(trimmed, "prepareSnapshotContent(") {
-			continue
-		}
-		// Skip the helper's own declaration.
-		if strings.HasPrefix(trimmed, "func prepareSnapshotContent") {
-			continue
-		}
-		if !strings.Contains(trimmed, "withCursorSync(") {
-			t.Errorf("connectrpc_websocket.go:%d composes a snapshot without withCursorSync:\n\t%s", i+1, trimmed)
+
+		for i, line := range strings.Split(string(src), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "//") {
+				continue
+			}
+			// Snapshot frames are composed as <prefix> + prepareSnapshotContent(...).
+			if !strings.Contains(trimmed, "prepareSnapshotContent(") {
+				continue
+			}
+			// Skip the helper's own declaration.
+			if strings.HasPrefix(trimmed, "func prepareSnapshotContent") {
+				continue
+			}
+			if !strings.Contains(trimmed, "withCursorSync(") {
+				t.Errorf("%s:%d composes a snapshot without withCursorSync:\n\t%s", f, i+1, trimmed)
+			}
 		}
 	}
 }
