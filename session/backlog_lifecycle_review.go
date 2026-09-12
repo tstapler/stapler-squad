@@ -125,8 +125,8 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 			l.notify(item.ID,
 				"Review session ended without a verdict",
 				fmt.Sprintf("%s — the review session exited without calling submit_review_verdict. Treating as a failed review.", item.Title),
-				7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-				3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+				7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+				true, true, // urgent, important
 			)
 		}
 		l.autoReopenWithBackoffGate(ctx, item.ID, item.Title, BacklogStatus(item.Status))
@@ -243,8 +243,8 @@ func (l *BacklogLifecycleListener) autoReopenWithBackoffGate(ctx context.Context
 			l.notify(itemID,
 				"Bounce cap exhausted — retry loop not converging",
 				fmt.Sprintf("%s — automated rework hit its retry cap (%d attempts) while still bouncing between in_progress and review. This is evidence the retry loop itself isn't converging, not a transient failure — a different approach may be needed before using Reset.", itemTitle, MaxRemediationAttempts),
-				7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-				4, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT
+				7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+				true, true, // urgent, important
 			)
 			if _, notifiedErr := l.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonBounceCapExhausted); notifiedErr != nil {
 				log.WarningLog().Printf("[BacklogLifecycle] autoReopenWithBackoffGate MarkStuckNotified(bounce_cap_exhausted) item=%s: %v", itemID, notifiedErr)
@@ -654,8 +654,8 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 		l.notify(itemID,
 			"Review item needs attention",
 			fmt.Sprintf("%s — stuck in review with no active session (%s). It may need manual re-review or rework.", itemTitle, contextDesc),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+			8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			false, true, // urgent, important
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonAbandonedReview); notifyErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] markAbandonedReview MarkStuckNotified item=%s: %v", itemID, notifyErr)
@@ -718,8 +718,8 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 		l.notify(itemID,
 			"Auto-rework paused",
 			fmt.Sprintf("%s — automated re-review has been retried %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			true, true, // urgent, important — automated retry gave up; a genuine dead end
 		)
 	}
 	if !due {

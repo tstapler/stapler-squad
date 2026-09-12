@@ -38,6 +38,12 @@ const (
 	notifTypeError            = int32(7) // NOTIFICATION_TYPE_ERROR
 	notifTypeWarning          = int32(8) // NOTIFICATION_TYPE_WARNING
 	notifTypeFailure          = int32(9) // NOTIFICATION_TYPE_FAILURE (maps to UI "error")
+
+	// priorityUrgent/priorityHigh mirror sessionv1.NotificationPriority's URGENT(4)/HIGH(3)
+	// values as raw ints, matching the mirror-constant pattern server/push/
+	// trigger_constants.go already uses to avoid a proto import here.
+	priorityUrgent = int32(4)
+	priorityHigh   = int32(3)
 )
 
 // IsActionableType reports whether t is one of the backend NotificationType values
@@ -578,6 +584,41 @@ func (s *NotificationHistoryStore) deduplicateExisting() error {
 	s.records = cleaned
 
 	return s.saveToDisk()
+}
+
+// DemoteExpiredUrgency downgrades URGENT-priority records whose urgency has aged past ttl
+// (measured from LastOccurredAt, falling back to CreatedAt, same effective-time rule as
+// enforceRetention) from URGENT to HIGH. It never deletes, archives, or marks a record
+// read — urgency is time-bound ("a 1-hour-old notification is no longer urgent") but
+// importance isn't, so a demoted record stays exactly as visible in the unread/in-app
+// list, just no longer eligible for push (server/push/subscriber.go's shouldNotify gates
+// push on priority == URGENT). Returns the number of records demoted and persists to disk
+// if any changed.
+func (s *NotificationHistoryStore) DemoteExpiredUrgency(now time.Time, ttl time.Duration) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	demoted := 0
+	for _, r := range s.records {
+		if r.Priority != priorityUrgent {
+			continue
+		}
+		effective := r.CreatedAt
+		if r.LastOccurredAt != nil {
+			effective = *r.LastOccurredAt
+		}
+		if now.Sub(effective) >= ttl {
+			r.Priority = priorityHigh
+			demoted++
+		}
+	}
+
+	if demoted > 0 {
+		if err := s.saveToDisk(); err != nil {
+			log.Warn("NotificationHistoryStore: failed to persist urgency demotion", "err", err)
+		}
+	}
+	return demoted
 }
 
 // enforceRetention trims records to MaxNotifications and prunes expired entries.
