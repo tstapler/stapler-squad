@@ -8,6 +8,10 @@ import { getConnectTransport } from "@/lib/api/transport";
 import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
 
 const DEBOUNCE_MS = 150;
+// Shorter than the server's own listWorktreesTimeout (20s, path_completion_service.go)
+// so a genuinely stuck git subprocess surfaces as "unresolved" here well before
+// the server would time it out itself.
+const REQUEST_TIMEOUT_MS = 5_000;
 
 export interface RepoPathWorktreeInfo {
   rootPath: string;
@@ -41,10 +45,37 @@ function mergeWorktreeFamily(
 }
 
 /**
- * Resolves the still-unresolved candidates and merges each one into `cache`
- * as soon as its own request settles, calling `onChange` per merge — so one
- * slow candidate doesn't hold up surfacing the others that already resolved.
+ * Resolves one candidate, bounded by its own timeout so a stuck request
+ * can't stay pending past REQUEST_TIMEOUT_MS regardless of what the outer
+ * effect's shared `signal` does. Merges into `cache` and calls `onChange`
+ * as soon as this specific request settles — independent of any sibling.
  */
+async function resolveOnePath(
+  client: ReturnType<typeof createClient<typeof SessionService>>,
+  repoPath: string,
+  cache: Map<string, RepoPathWorktreeInfo>,
+  outerSignal: AbortSignal,
+  onChange: () => void
+): Promise<void> {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  outerSignal.addEventListener("abort", onAbort);
+  const timeoutTimer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const result = await client.listWorktrees({ repoPath }, { signal: controller.signal });
+    if (mergeWorktreeFamily(cache, result.worktrees || [])) {
+      onChange();
+    }
+  } catch {
+    // Aborted, timed out, or a network/server error — leave unresolved so
+    // it's simply retried the next time it's a candidate.
+  } finally {
+    clearTimeout(timeoutTimer);
+    outerSignal.removeEventListener("abort", onAbort);
+  }
+}
+
 async function resolveUnresolvedPaths(
   candidates: string[],
   cache: Map<string, RepoPathWorktreeInfo>,
@@ -58,19 +89,7 @@ async function resolveUnresolvedPaths(
 
   const client = createClient(SessionService, getConnectTransport());
   await Promise.all(
-    unresolved.map(async (repoPath) => {
-      let worktrees: WorktreeEntry[];
-      try {
-        const result = await client.listWorktrees({ repoPath }, { signal });
-        worktrees = result.worktrees || [];
-      } catch {
-        return;
-      }
-      if (signal.aborted) return;
-      if (mergeWorktreeFamily(cache, worktrees)) {
-        onChange();
-      }
-    })
+    unresolved.map((repoPath) => resolveOnePath(client, repoPath, cache, signal, onChange))
   );
 }
 
