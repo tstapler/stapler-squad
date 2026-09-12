@@ -7,10 +7,15 @@ package session
 // ConfiguredWorkflowEngine.
 
 import (
+	"bytes"
 	"context"
+	stdlog "log"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
@@ -241,6 +246,68 @@ func TestConfiguredWorkflowEngine_should_AllowNewCustomTransitionImmediately_Whe
 		"new transition must be legal immediately after InvalidateCache, with no redeploy")
 }
 
+// TestAllowedTransitions_should_ReturnSnapshottedTransitionsWithWarnLog_When_ItemsCurrentStageWasSinceDeleted
+// covers Epic 2.5, Story 2.5.2's acceptance criterion: once a custom stage an
+// item is currently sitting on is deleted (cascading away its
+// StageTransition rows too — session/ent/schema/backlog_stage.go's
+// OnDelete(Cascade) edges), AllowedTransitions/CanTransition must fall back
+// to the item's own captured StageConfigSnapshot rather than reporting an
+// empty slice/false, and must log a Warn noting the live config is stale.
+// Not run with t.Parallel(): SetWarningLogForTest swaps a shared
+// package-level logger (see liveness_cache_test.go's identical convention).
+func TestAllowedTransitions_should_ReturnSnapshottedTransitionsWithWarnLog_When_ItemsCurrentStageWasSinceDeleted(t *testing.T) {
+	engine, client := newSeededConfiguredWorkflowEngine(t)
+	ctx := context.Background()
+
+	customStage, err := client.BacklogStage.Create().
+		SetSlug("design-review").
+		SetName("Design Review").
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	readyStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(BacklogStatusReady))).Only(ctx)
+	require.NoError(t, err)
+
+	_, err = client.StageTransition.Create().
+		SetFromStageID(customStage.ID).
+		SetToStageID(readyStage.ID).
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+	require.NoError(t, engine.InvalidateCache(ctx))
+
+	const customSlug = BacklogStatus("design-review")
+	require.True(t, engine.CanTransition(customSlug, BacklogStatusReady),
+		"sanity: transition must be legal while the stage is still live")
+	require.ElementsMatch(t, []BacklogStatus{BacklogStatusReady}, engine.AllowedTransitions(customSlug))
+
+	// Delete the stage while an item is still sitting on it — cascades away
+	// its outgoing StageTransition row too.
+	require.NoError(t, client.BacklogStage.DeleteOneID(customStage.ID).Exec(ctx))
+	require.NoError(t, engine.InvalidateCache(ctx))
+
+	// No fallback supplied: a defined empty/false answer, never a panic.
+	require.Empty(t, engine.AllowedTransitions(customSlug))
+	require.False(t, engine.CanTransition(customSlug, BacklogStatusReady))
+
+	var buf bytes.Buffer
+	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
+	t.Cleanup(func() { tslog.SetWarningLogForTest(orig) })
+
+	// With the item's own captured StageConfigSnapshot: the transitions legal
+	// at the moment it entered the now-deleted stage.
+	fallback := &StageConfigSnapshot{
+		StageName:          "Design Review",
+		AllowedTransitions: []BacklogStatus{BacklogStatusReady},
+	}
+	assert.Equal(t, []BacklogStatus{BacklogStatusReady}, engine.AllowedTransitions(customSlug, fallback))
+	assert.True(t, engine.CanTransition(customSlug, BacklogStatusReady, fallback))
+	assert.False(t, engine.CanTransition(customSlug, BacklogStatusDone, fallback),
+		"fallback must only legalize transitions actually present in the snapshot")
+	assert.Contains(t, buf.String(), "design-review", "expected a Warn log naming the stale stage")
+}
+
 // acCriteriaAllDone / acCriteriaOneUnchecked build serialized AcCriteriaJSON
 // fixtures for the PendingGates/ValidateGates tests below.
 func acCriteriaAllDone(t *testing.T) AcCriteriaJSON {
@@ -379,4 +446,156 @@ func TestPendingGates_should_ReportUnsatisfied_When_PreviouslySatisfiedStructura
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
 	require.False(t, statuses[0].Satisfied, "structural gate must recompute fresh and report unsatisfied once an AC regresses, never reuse the prior satisfied result")
+}
+
+// --- Epic 2.4 follow-up: resolver + evaluateGate wiring for
+// automated_review/custom gates (the gap this task closes) ---
+
+// TestResolveAutomatedReviewGateContext_should_ReturnGateIDAndConfig_When_GateConfigured
+// covers Story 2.4.3's follow-up resolver: a GateKindAutomatedReview gate
+// configured on a custom (from,to) edge must resolve to its own GateID and
+// parsed AutomatedReviewConfig (RequiresDiff/PipelineMode), not the built-in
+// literal's defaults.
+func TestResolveAutomatedReviewGateContext_should_ReturnGateIDAndConfig_When_GateConfigured(t *testing.T) {
+	t.Parallel()
+	engine, client := newSeededConfiguredWorkflowEngine(t)
+	ctx := context.Background()
+
+	fromStage, err := client.BacklogStage.Create().SetSlug("ar-from").SetName("From").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	toStage, err := client.BacklogStage.Create().SetSlug("ar-to").SetName("To").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	transition, err := client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	gate, err := client.TransitionGate.Create().
+		SetTransitionID(transition.ID).
+		SetKind(string(GateKindAutomatedReview)).
+		SetStateful(true).
+		SetEnabled(true).
+		SetConfig(map[string]interface{}{"requires_diff": false, "pipeline_mode": "sdd"}).
+		Save(ctx)
+	require.NoError(t, err)
+	require.NoError(t, engine.InvalidateCache(ctx))
+
+	gateID, cfg, ok := engine.ResolveAutomatedReviewGateContext(BacklogStatus(fromStage.Slug), BacklogStatus(toStage.Slug))
+	require.True(t, ok)
+	assert.Equal(t, gate.ID.String(), gateID)
+	assert.False(t, cfg.RequiresDiff)
+	assert.Equal(t, "sdd", cfg.PipelineMode)
+}
+
+// TestResolveAutomatedReviewGateContext_should_ReturnNotOK_When_EdgeHasNoSuchGate
+// covers the negative case: an edge with no configured automated_review gate
+// (including one that doesn't exist in the graph at all) resolves ok=false.
+func TestResolveAutomatedReviewGateContext_should_ReturnNotOK_When_EdgeHasNoSuchGate(t *testing.T) {
+	t.Parallel()
+	engine, client := newSeededConfiguredWorkflowEngine(t)
+	from, to := newCustomTransitionWithGates(t, client, engine, []GateKind{GateKindStructural}, []bool{false})
+
+	_, _, ok := engine.ResolveAutomatedReviewGateContext(from, to)
+	assert.False(t, ok, "an edge with only a structural gate must not resolve an automated-review gate context")
+
+	_, _, ok = engine.ResolveAutomatedReviewGateContext(BacklogStatus("no-such-from"), BacklogStatus("no-such-to"))
+	assert.False(t, ok, "a nonexistent edge must not resolve")
+}
+
+// TestResolveCustomCheckGateContext_should_ReturnGateIDAndConfig_When_GateConfigured
+// covers Story 2.4.4's follow-up resolver — the sibling of
+// ResolveAutomatedReviewGateContext for GateKindCustom.
+func TestResolveCustomCheckGateContext_should_ReturnGateIDAndConfig_When_GateConfigured(t *testing.T) {
+	t.Parallel()
+	engine, client := newSeededConfiguredWorkflowEngine(t)
+	ctx := context.Background()
+
+	fromStage, err := client.BacklogStage.Create().SetSlug("cc-from").SetName("From").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	toStage, err := client.BacklogStage.Create().SetSlug("cc-to").SetName("To").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	transition, err := client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	gate, err := client.TransitionGate.Create().
+		SetTransitionID(transition.ID).
+		SetKind(string(GateKindCustom)).
+		SetStateful(true).
+		SetEnabled(true).
+		SetConfig(map[string]interface{}{"skill": "review-feasibility"}).
+		Save(ctx)
+	require.NoError(t, err)
+	require.NoError(t, engine.InvalidateCache(ctx))
+
+	gateID, cfg, ok := engine.ResolveCustomCheckGateContext(BacklogStatus(fromStage.Slug), BacklogStatus(toStage.Slug))
+	require.True(t, ok)
+	assert.Equal(t, gate.ID, gateID)
+	assert.Equal(t, "review-feasibility", cfg.SkillID)
+}
+
+// TestEvaluateGate_AutomatedReviewAndCustom_should_ConsultGateSatisfactionRepository
+// covers this Epic's follow-up to evaluateGate's automated_review/custom
+// branches (previously an unconditional Satisfied:false placeholder — see the
+// pre-follow-up doc comment this change replaced): no record yet reports the
+// placeholder, a satisfied record reports Satisfied:true, and an unsatisfied
+// record reports Satisfied:false with its recorded description — for both
+// stateful gate kinds this task wires up.
+func TestEvaluateGate_AutomatedReviewAndCustom_should_ConsultGateSatisfactionRepository(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range []GateKind{GateKindAutomatedReview, GateKindCustom} {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			engine, client := newSeededConfiguredWorkflowEngine(t)
+			ctx := context.Background()
+			from, to := newCustomTransitionWithGates(t, client, engine, []GateKind{kind}, []bool{true})
+
+			item, err := NewTestEntRepository(t).client.BacklogItem.Create().
+				SetTitle("evaluateGate test item").
+				SetStatus(string(from)).
+				SetPriority(1).
+				Save(ctx)
+			require.NoError(t, err)
+
+			edge, ok := engine.cache.Get(from, to)
+			require.True(t, ok)
+			require.Len(t, edge.Gates, 1)
+			gateID := edge.Gates[0].ID
+
+			// No record yet: falls back to the "not yet actionable" placeholder.
+			statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: item.ID.String(), Status: from}, to)
+			require.NoError(t, err)
+			require.Len(t, statuses, 1)
+			assert.False(t, statuses[0].Satisfied)
+			assert.Contains(t, statuses[0].Description, "nothing has run yet")
+
+			// Satisfied record: reports Satisfied:true with its recorded detail.
+			gateRepo := NewEntGateSatisfactionRepository(client)
+			now := time.Now()
+			_, err = gateRepo.Create(ctx, GateSatisfactionCreateInput{
+				ItemID:        item.ID,
+				GateID:        gateID,
+				Satisfied:     true,
+				SatisfiedAt:   &now,
+				OutcomeDetail: map[string]interface{}{"detail": "looks good"},
+			})
+			require.NoError(t, err)
+
+			statuses, err = engine.PendingGates(BacklogItemTransitionInput{ItemID: item.ID.String(), Status: from}, to)
+			require.NoError(t, err)
+			require.Len(t, statuses, 1)
+			assert.True(t, statuses[0].Satisfied)
+			assert.Equal(t, "looks good", statuses[0].Description)
+
+			// Flip to an unsatisfied outcome: reports Satisfied:false with the new detail.
+			satisfiedFalse := false
+			_, err = gateRepo.Update(ctx, item.ID, gateID, GateSatisfactionUpdateInput{
+				Satisfied:     &satisfiedFalse,
+				OutcomeDetail: map[string]interface{}{"detail": "needs rework"},
+			})
+			require.NoError(t, err)
+
+			statuses, err = engine.PendingGates(BacklogItemTransitionInput{ItemID: item.ID.String(), Status: from}, to)
+			require.NoError(t, err)
+			require.Len(t, statuses, 1)
+			assert.False(t, statuses[0].Satisfied)
+			assert.Equal(t, "needs rework", statuses[0].Description)
+		})
+	}
 }

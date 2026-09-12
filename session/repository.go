@@ -206,7 +206,13 @@ type BacklogStatusEventData struct {
 	ToStatus    string
 	TriggeredBy string
 	Note        *string
-	CreatedAt   time.Time
+	// StageNameSnapshot is Epic 2.5's frozen-at-transition-time human-readable
+	// name of the destination BacklogStage, so item-detail history keeps
+	// rendering the original stage name after that stage row is later renamed
+	// or deleted. Nil for a row written before this field existed, or when no
+	// matching BacklogStage row was found at write time.
+	StageNameSnapshot *string
+	CreatedAt         time.Time
 }
 
 // ProgressNoteData is the domain DTO replacing *ent.BacklogProgressNote in Storage returns.
