@@ -6447,6 +6447,15 @@ func (s *SessionService) RunWorkflow(ctx context.Context, req *connect.Request[s
 	return s.workflowSvc.RunWorkflow(ctx, req)
 }
 
+// +api: workflow:watch
+// WatchWorkflows delegates to WorkflowService.
+func (s *SessionService) WatchWorkflows(ctx context.Context, req *connect.Request[sessionv1.WatchWorkflowsRequest], stream *connect.ServerStream[sessionv1.WorkflowEvent]) error {
+	if s.workflowSvc == nil {
+		return connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
+	}
+	return s.workflowSvc.WatchWorkflows(ctx, req, stream)
+}
+
 // +api: workflow:list-trigger-fire-events
 // ListTriggerFireEvents delegates to WorkflowService.
 func (s *SessionService) ListTriggerFireEvents(ctx context.Context, req *connect.Request[sessionv1.ListTriggerFireEventsRequest]) (*connect.Response[sessionv1.ListTriggerFireEventsResponse], error) {
