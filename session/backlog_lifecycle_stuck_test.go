@@ -878,6 +878,10 @@ func TestReconcileStaleWorkSessions_should_writeDurableStaleWorkRow_When_ActiveS
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonStaleWork, open[0].Reason)
 	assert.Equal(t, []string{"Work session may be stuck"}, notifier.titles())
+	// Push-gate classification table: neither urgent nor important — a routine
+	// self-monitoring poll, not yet a confirmed dead end.
+	assert.False(t, notifier.calls[0].Urgent, "Work session may be stuck must not be urgent")
+	assert.False(t, notifier.calls[0].Important, "Work session may be stuck must not be important")
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcileStaleWorkSessions(ctx, er)
@@ -1416,6 +1420,9 @@ func TestReconcileOrphanedTriageItems_should_writeDurableRowNotifyOnce_When_Tria
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
 	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+	// Push-gate classification table: neither urgent nor important.
+	assert.False(t, notifier.calls[0].Urgent, "Triage may be stuck must not be urgent")
+	assert.False(t, notifier.calls[0].Important, "Triage may be stuck must not be important")
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -5075,6 +5082,9 @@ func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillO
 
 	require.Len(t, notifier.calls, 1)
 	assert.Equal(t, "Multiple stuck reasons open", notifier.calls[0].Title)
+	// Push-gate classification table: urgent and important.
+	assert.True(t, notifier.calls[0].Urgent, "Multiple stuck reasons open must be urgent")
+	assert.True(t, notifier.calls[0].Important, "Multiple stuck reasons open must be important")
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)

@@ -156,13 +156,19 @@ func TestEnsureDaemonRunning_UnhealthyAndPortNotListeningSurfacesPlainError(t *t
 }
 
 // TestEnsureDaemonRunning_should_StopOrphanedTymuxd_When_HealthCheckRetryExhausts
-// is the regression test for the BLOCKER fixed in this change: when the
-// coalesced spawn-and-retry closure exhausts every retry without the daemon
-// becoming healthy, EnsureDaemonRunning must call stopTymuxdFn (StopTymuxd in
+// is the regression test for the original BLOCKER: when the coalesced
+// spawn-and-retry closure exhausts every retry without the daemon becoming
+// healthy, EnsureDaemonRunning must call stopTymuxdFn (StopTymuxd in
 // production) to reap the process it just spawned before returning the
 // error -- otherwise a failed cold start leaves an orphan squatting cfg.Addr
 // that poisons every future call. Covers both failure branches (port
 // squatted and plain timeout) since the fix applies to both.
+//
+// stopCalls is 2, not 1: BUG-110 added a second stopTymuxdFn call before the
+// spawn attempt (clearing any already-stuck predecessor confirmed unhealthy
+// by checkDaemonHealthyFn above), on top of this test's original after-the-
+// retry-loop call -- both fire here since stopTymuxdFn's stub always
+// succeeds.
 func TestEnsureDaemonRunning_should_StopOrphanedTymuxd_When_HealthCheckRetryExhausts(t *testing.T) {
 	testCases := []struct {
 		name          string
@@ -195,9 +201,43 @@ func TestEnsureDaemonRunning_should_StopOrphanedTymuxd_When_HealthCheckRetryExha
 
 			require.Error(t, err)
 			require.True(t, spawned.Load(), "test setup sanity check: a spawn attempt must have happened")
-			require.Equal(t, int32(1), atomic.LoadInt32(&stopCalls), "a failed cold start must reap the spawned process exactly once")
+			require.Equal(t, int32(2), atomic.LoadInt32(&stopCalls), "must stop before the spawn attempt (BUG-110) and again after it fails to become healthy")
 		})
 	}
+}
+
+// TestEnsureDaemonRunning_should_StopStuckDaemon_BeforeSpawningReplacement is
+// BUG-110's regression test, root-caused against a real production incident:
+// a tymuxd process can stay alive (holding its Unix-socket lock) while its
+// TCP listener has died, so checkDaemonHealthyFn correctly reports it
+// unhealthy but nothing will ever evict it on its own. Originally,
+// stopTymuxdFn only ran AFTER a failed spawn+retry, by which point
+// startDaemonAttempt had already overwritten the PID file with the new,
+// short-lived attempt's own (already-dead) PID -- so the actual stuck
+// process was never targeted, and every subsequent call repeated the same
+// failure forever. stopTymuxdFn now also runs before the spawn attempt, so
+// it acts on the stuck predecessor's PID while the file still names it.
+func TestEnsureDaemonRunning_should_StopStuckDaemon_BeforeSpawningReplacement(t *testing.T) {
+	withFastRetryBounds(t, 2, time.Millisecond, 2*time.Millisecond)
+
+	defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool { return false })()
+	defer stubPortListening(func(DaemonConfig) bool { return false })()
+
+	var order []string
+	defer stubStopTymuxd(func() error {
+		order = append(order, "stop")
+		return nil
+	})()
+	defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
+		order = append(order, "spawn")
+		return &os.Process{}, nil // see sentinel-value note above
+	})()
+
+	_, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: "http://127.0.0.1:19992", BinaryPath: "tymuxd"})
+
+	require.Error(t, err)
+	require.Equal(t, []string{"stop", "spawn", "stop"}, order,
+		"must stop a possibly-stuck predecessor before spawning, then stop the failed attempt after retries exhaust")
 }
 
 // TestStopTymuxd_IdempotentWhenNoPIDFile mirrors daemon/daemon.go's

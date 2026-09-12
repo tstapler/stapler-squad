@@ -226,6 +226,35 @@ func TestMaxConcurrentBacklogWorkItemsOrDefault_ClampsInvalidValues(t *testing.T
 	})
 }
 
+func TestAutonomousMaxTurnsOrDefault_ClampsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value int
+		want  int
+	}{
+		{"unset", 0, autonomousMaxTurnsDefault},
+		{"negative", -5, autonomousMaxTurnsDefault},
+		{"valid", 100, 100},
+		{"at ceiling", autonomousMaxTurnsHardCeiling, autonomousMaxTurnsHardCeiling},
+		{"above ceiling", autonomousMaxTurnsHardCeiling + 50, autonomousMaxTurnsHardCeiling},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{AutonomousMaxTurns: tt.value}
+			if got := cfg.AutonomousMaxTurnsOrDefault(); got != tt.want {
+				t.Errorf("AutonomousMaxTurnsOrDefault() with value=%d = %d, want %d", tt.value, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("nil config", func(t *testing.T) {
+		var cfg *Config
+		if got := cfg.AutonomousMaxTurnsOrDefault(); got != autonomousMaxTurnsDefault {
+			t.Errorf("nil config: got %d, want %d", got, autonomousMaxTurnsDefault)
+		}
+	})
+}
+
 // TestAutoSpawnReadyItemsOrDefault_should_DefaultTrue_When_Unset guards the "software
 // factory" default switch: an unset (nil) config value — or a nil *Config entirely —
 // must default to true (auto-spawn "ready" items), not false. A plain bool zero value

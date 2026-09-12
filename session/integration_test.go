@@ -505,11 +505,14 @@ func testFailsLoudlyWhenWorktreePathMissing(t *testing.T) {
 // t.Name() is hashed rather than embedded verbatim — a deeply nested subtest
 // name plus pid/timestamp/suffix can otherwise exceed that limit and fail
 // with tmux's "(File name too long)" error instead of connecting.
+//
+// Must start with "test_" — that's the prefix testutil/tmuxreap sweeps for,
+// so a leaked server here gets cleaned up even after a SIGKILL/timeout.
 func uniqueTestTmuxSocket(t *testing.T, suffix string) string {
 	t.Helper()
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(t.Name()))
-	name := fmt.Sprintf("ssq_%08x_%d_%d", h.Sum32(), os.Getpid(), time.Now().UnixNano())
+	name := fmt.Sprintf("test_ssq_%08x_%d_%d", h.Sum32(), os.Getpid(), time.Now().UnixNano())
 	if suffix != "" {
 		name += "_" + suffix
 	}

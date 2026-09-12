@@ -664,7 +664,7 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 		h.resolveSessionName(sessionID),
 		approval.ID, // Use approval ID as notification ID for correlation
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT),
+		derivePriority(true, true), // urgent, important — a pending permission request blocks the session right now
 		title,
 		message,
 		metadata,
@@ -703,7 +703,7 @@ func (h *ApprovalHandler) broadcastQuestionNotification(sessionID string, payloa
 		h.resolveSessionName(sessionID),
 		uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+		derivePriority(true, true), // urgent, important — Claude is blocked waiting on the user right now
 		"Claude has a question",
 		message,
 		nil,

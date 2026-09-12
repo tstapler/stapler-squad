@@ -23,11 +23,21 @@ import (
 // Notifier publishes an operator-facing notification. Implemented outside this
 // package (typically a thin adapter over the event bus) since this package cannot
 // import pkg/events directly — pkg/events imports session, so the reverse import
-// would be a cycle. notificationType and priority are int32 values matching
-// sessionv1.NotificationType / sessionv1.NotificationPriority; this package stays
-// free of the proto dependency and just passes the raw values through.
+// would be a cycle. notificationType is an int32 value matching
+// sessionv1.NotificationType; this package stays free of the proto dependency
+// and just passes the raw value through.
+//
+// urgent and important are the Eisenhower-style axes every call site classifies
+// itself on: urgent means time-sensitive right now, important means it matters
+// to a real outcome rather than being routine/transient telemetry. The
+// implementation (EventBusNotifier) derives the stored NotificationPriority
+// from the pair; push delivery (server/push/subscriber.go's shouldNotify)
+// fires only when both are true. Replaced a single ad hoc priority argument
+// (2026-09) because the numeric priority picked at each call site didn't
+// reliably track what actually deserved a push — see the notification
+// push-gate redesign PR for the classification behind each site.
 type Notifier interface {
-	Notify(itemID, title, message string, notificationType, priority int32)
+	Notify(itemID, title, message string, notificationType int32, urgent, important bool)
 }
 
 // QueueDequeuer claims and spawns as many queued (and, by default, "ready" —
@@ -591,9 +601,9 @@ func (l *BacklogLifecycleListener) getNotifier() Notifier {
 }
 
 // notify publishes a best-effort operator notification. No-op if no notifier is wired.
-func (l *BacklogLifecycleListener) notify(itemID, title, message string, notificationType, priority int32) {
+func (l *BacklogLifecycleListener) notify(itemID, title, message string, notificationType int32, urgent, important bool) {
 	if n := l.getNotifier(); n != nil {
-		n.Notify(itemID, title, message, notificationType, priority)
+		n.Notify(itemID, title, message, notificationType, urgent, important)
 	}
 }
 
@@ -612,8 +622,8 @@ func (l *BacklogLifecycleListener) notifyTransitionFailed(itemID, itemTitle, fai
 	l.notify(itemID,
 		"Status update failed after work completed",
 		fmt.Sprintf("%s — %s: %v. The item's status may not reflect reality; check manually.", itemTitle, failureContext, writeErr),
-		7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-		3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+		true, true, // urgent, important — a silent status/reality mismatch is a genuine correctness bug
 	)
 }
 
@@ -1618,8 +1628,8 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 		l.notify(item.ID,
 			"Queued item blocked by unapproved plan",
 			fmt.Sprintf("%s — this item cannot be dequeued until its plan is approved (or skip_planning is set). Approve the plan or update the item to unblock it.", item.Title),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+			8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			false, true, // urgent, important — blocks progress but is a standing state, not time-critical
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonPlanNotApproved); notifyErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems MarkStuckNotified item=%s: %v", item.ID, notifyErr)
@@ -1900,8 +1910,8 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		l.notify(item.ID,
 			"Item is thrashing between work and review",
 			notifyBody,
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+			8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			false, true, // urgent, important — non-converging loop matters, but not a drop-everything alert
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonBouncing); notifyErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems MarkStuckNotified item=%s: %v", item.ID, notifyErr)
@@ -2192,8 +2202,8 @@ func (l *BacklogLifecycleListener) notifyMultiReasonEscalationIfReady(ctx contex
 	l.notify(itemID,
 		"Multiple stuck reasons open",
 		fmt.Sprintf("%s — %d stuck reasons currently open simultaneously (%s). This combination is a stronger signal than any single reason alone.", itemTitle, nonEscalationCount, contextString),
-		7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-		4, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT
+		7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+		true, true, // urgent, important
 	)
 	if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonMultipleReasons); notifyErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuckNotified item=%s: %v", itemID, notifyErr)
