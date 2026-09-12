@@ -95,14 +95,10 @@ func TestReclassifyGaps_should_reclassifyEntry_When_ruleNowCoversCommand(t *test
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:             "rule-git-push",
-			Name:           "Allow git push",
 			ToolName:       "Bash",
 			CommandPattern: mustCompileRe(t, "^git push"),
 			Decision:       classifier.AutoAllow,
-			Enabled:        true,
-			Priority:       100,
-			Source:         "user",
+			RuleMeta:       classifier.RuleMeta{ID: "rule-git-push", Name: "Allow git push", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -149,14 +145,10 @@ func TestReclassifyGaps_should_skipEntry_When_hasRuleID(t *testing.T) {
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:             "rule-git-push",
-			Name:           "Allow git push",
 			ToolName:       "Bash",
 			CommandPattern: mustCompileRe(t, "^git push"),
 			Decision:       classifier.AutoAllow,
-			Enabled:        true,
-			Priority:       100,
-			Source:         "user",
+			RuleMeta:       classifier.RuleMeta{ID: "rule-git-push", Name: "Allow git push", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -183,14 +175,10 @@ func TestReclassifyGaps_should_notMutateOriginalSlice(t *testing.T) {
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:             "rule-git-push",
-			Name:           "Allow git push",
 			ToolName:       "Bash",
 			CommandPattern: mustCompileRe(t, "^git push"),
 			Decision:       classifier.AutoAllow,
-			Enabled:        true,
-			Priority:       100,
-			Source:         "user",
+			RuleMeta:       classifier.RuleMeta{ID: "rule-git-push", Name: "Allow git push", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -223,15 +211,11 @@ func TestReclassifyGaps_should_handleCommandUnder200Chars(t *testing.T) {
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:   "rule-git-all",
-			Name: "Allow all git",
 			Criteria: &classifier.CommandCriteria{
 				Programs: []string{"git"},
 			},
 			Decision: classifier.AutoAllow,
-			Enabled:  true,
-			Priority: 100,
-			Source:   "user",
+			RuleMeta: classifier.RuleMeta{ID: "rule-git-all", Name: "Allow all git", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -313,14 +297,10 @@ func TestComputeSummary_should_showFewerGaps_After_ReclassifyGaps(t *testing.T) 
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:             "rule-git-push",
-			Name:           "Allow git push",
 			ToolName:       "Bash",
 			CommandPattern: mustCompileRe(t, "^git push"),
 			Decision:       classifier.AutoAllow,
-			Enabled:        true,
-			Priority:       100,
-			Source:         "user",
+			RuleMeta:       classifier.RuleMeta{ID: "rule-git-push", Name: "Allow git push", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
