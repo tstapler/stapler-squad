@@ -96,6 +96,12 @@ type SessionService struct {
 	statusManager     *session.InstanceStatusManager
 	reviewQueuePoller *session.ReviewQueuePoller
 
+	// sessionTagPoller drives the Phase 4 LLM fallback tag classification
+	// (session-classifier-pipeline Epic 4.4). nil when HeadlessPool is nil (no
+	// claude binary found) — every AddInstance/RemoveInstance call site below
+	// guards for nil the same way reviewQueuePoller does.
+	sessionTagPoller *session.SessionTagClassificationPoller
+
 	// concStorage is the concrete backing store, used for operations (like
 	// ListWorkspacePeers) not part of the InstanceStore interface. nil when storage is a
 	// fake InstanceStore (tests) — callers must nil-check.
@@ -1583,6 +1589,9 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	if s.reviewQueuePoller != nil {
 		s.reviewQueuePoller.AddInstance(instance)
 	}
+	if s.sessionTagPoller != nil {
+		s.sessionTagPoller.AddInstance(instance)
+	}
 	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
 	if s.backlogLifecycleListener != nil {
 		s.backlogLifecycleListener.WireToInstance(instance)
@@ -1642,6 +1651,9 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 	if s.reviewQueuePoller != nil {
 		s.reviewQueuePoller.AddInstance(instance)
 	}
+	if s.sessionTagPoller != nil {
+		s.sessionTagPoller.AddInstance(instance)
+	}
 	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
 	if s.backlogLifecycleListener != nil {
 		s.backlogLifecycleListener.WireToInstance(instance)
@@ -1656,6 +1668,14 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 // from it and cannot be re-persisted by the shutdown hook.
 func (s *SessionService) SetHistoryLinker(hl *session.HistoryLinker) {
 	s.historyLinker = hl
+}
+
+// SetSessionTagPoller wires the SessionTagClassificationPoller so sessions created
+// after server startup are added to it (previously only the boot-time instance list
+// ever reached it via a one-shot SetInstances call — see server/dependencies.go).
+// Must be called during server startup before any session-creation RPCs are used.
+func (s *SessionService) SetSessionTagPoller(poller *session.SessionTagClassificationPoller) {
+	s.sessionTagPoller = poller
 }
 
 // SetHeadlessPool wires the headless LLM pool for use by RunOneShot and other AI features.
@@ -2739,6 +2759,9 @@ func (s *SessionService) CreateSession(
 	if s.reviewQueuePoller != nil {
 		s.reviewQueuePoller.AddInstance(instance)
 		log.Info("[ReviewQueue] added new session to poller", "session", instance.Title)
+	}
+	if s.sessionTagPoller != nil {
+		s.sessionTagPoller.AddInstance(instance)
 	}
 
 	// Record initial_prompt (typed into the session terminal once the session reaches Ready state)
@@ -3970,6 +3993,9 @@ func (s *SessionService) removeFromAllPollers(id string) {
 	}
 	if s.reviewQueuePoller != nil {
 		s.reviewQueuePoller.RemoveInstance(id)
+	}
+	if s.sessionTagPoller != nil {
+		s.sessionTagPoller.RemoveInstance(id)
 	}
 	// Remove from HistoryLinker so the shutdown hook cannot re-persist a
 	// deleted session via historyLinker.Instances() → SaveInstances().
@@ -5399,6 +5425,9 @@ func (s *SessionService) ForkSession(
 		updatedInstances := append(s.reviewQueuePoller.GetInstances(), newInst)
 		s.reviewQueuePoller.SetInstances(updatedInstances)
 		log.Info("[ReviewQueue] updated poller instance references after ForkSession", "session", newInst.Title)
+	}
+	if s.sessionTagPoller != nil {
+		s.sessionTagPoller.AddInstance(newInst)
 	}
 
 	respProto := adapters.InstanceToProto(newInst, s.workflowNames())

@@ -743,6 +743,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	var sessionTagPoller *session.SessionTagClassificationPoller
 	if headlessPool != nil {
 		sessionTagPoller = session.NewSessionTagClassificationPoller(headlessPool, sessionService.GetTaggingEngine())
+		// Wire into SessionService so every session-creation path (CreateSession,
+		// CreateDirectorySession, CreateWorktreeSession, ForkSession) registers new
+		// sessions with the poller too, not just the boot-time instance list set via
+		// SetInstances below. Without this, any session created after server startup
+		// was invisible to LLM-fallback tag classification (sync-rule tagging via
+		// reclassifyTagsLocked still worked, but the LLM fallback never saw it).
+		sessionService.SetSessionTagPoller(sessionTagPoller)
 	}
 
 	// SessionSummaryGenerator — constructed here (not deferred to server.go) so it
@@ -1061,6 +1068,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		reviewQueuePoller.AddInstance(instance)
 		svc.PRStatusPoller.AddInstance(instance)
 		historyLinker.AddInstance(instance)
+		if sessionTagPoller != nil {
+			sessionTagPoller.AddInstance(instance)
+		}
 		backlogLifecycleListener.WireToInstance(instance)
 		if sessionSummaryGenerator != nil {
 			session.WireSessionSummaryListener(sessionSummaryGenerator, instance)
@@ -1071,6 +1081,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		reviewQueuePoller.RemoveInstance(instance.Title)
 		svc.PRStatusPoller.RemoveInstance(instance.Title)
 		historyLinker.RemoveInstance(instance.Title)
+		if sessionTagPoller != nil {
+			sessionTagPoller.RemoveInstance(instance.Title)
+		}
 		log.Info("removed external session from review queue poller, PR status poller, and history linker", "session", instance.Title)
 		reviewQueue.Remove(instance.Title)
 		if err := storage.DeleteInstance(instance.Title); err != nil {

@@ -94,6 +94,16 @@ func (p *SessionTagClassificationPoller) AddInstance(inst *Instance) {
 	p.instances = append(p.instances, inst)
 }
 
+// Instances returns a snapshot copy of the currently monitored instances, mirroring
+// HistoryLinker.Instances().
+func (p *SessionTagClassificationPoller) Instances() []*Instance {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	snap := make([]*Instance, len(p.instances))
+	copy(snap, p.instances)
+	return snap
+}
+
 // RemoveInstance removes an instance from monitoring and evicts its cache entry, mirroring
 // pollerContentProvider.EvictInstance (session/review_queue_poller.go).
 func (p *SessionTagClassificationPoller) RemoveInstance(title string) {
