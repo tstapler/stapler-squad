@@ -301,12 +301,8 @@ type Config struct {
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
 	// AutonomousMaxTurns caps how many turns a single AutonomousDriver run gets before
 	// stopping without a DONE signal (session/autonomous_driver.go). 0 = use the default
-	// (60). Values above autonomousMaxTurnsHardCeiling are clamped to the ceiling. Distinct
-	// from MaxAutoReworkIterations: that caps how many fresh work *sessions* get spawned
-	// (each restarting with a full turn budget but losing prior context); this caps turns
-	// *within* one session, so raising it lets a single run push through a long
-	// investigation instead of running out and either stopping or burning a respawn to
-	// re-establish context from scratch.
+	// (60); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
+	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
 	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`
 	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
 	// "in_progress" at the same time. 0 = use the default (2). Values above
@@ -1061,17 +1057,9 @@ func (c *Config) MaxAutoReworkIterationsOrDefault() int {
 }
 
 // autonomousMaxTurnsDefault is used when the config value is unset (0 or negative).
-// Raised from the driver's own historical fallback of 20: no durable per-session
-// turn-count history exists to derive this from percentiles (AutonomousTurn only
-// lives on the in-memory *Instance, never persisted — see session/instance.go),
-// but 20 was observed live hitting its cap without a DONE signal on genuinely
-// recoverable work (e.g. a multi-round debugging investigation with a Playwright
-// repro harness), forcing a respawn that restarts the session and loses all prior
-// context instead of letting one run push through. autonomousMaxTurnsHardCeiling
-// caps how high the setting can go even via a modified frontend/config request —
-// same blast-radius-guard shape as maxConcurrentJulesSessionsHardCeiling, since
-// each turn is a billed headless LLM call and a non-converging run still burns
-// turns until it hits this ceiling.
+// Raised from the driver's own historical fallback of 20, which was observed cutting
+// off recoverable multi-round work. autonomousMaxTurnsHardCeiling guards against a
+// runaway config value burning billed turns on a non-converging run.
 const (
 	autonomousMaxTurnsDefault     = 60
 	autonomousMaxTurnsHardCeiling = 200
