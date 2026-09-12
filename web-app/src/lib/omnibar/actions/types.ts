@@ -13,5 +13,3 @@ export type OmnibarAction =
   | { type: "create_alias_session"; aliasName: string; branch?: string; label?: string; extraFlags?: string }
   | { type: "chat_backlog_item"; text: string }
   | { type: "parse_backlog_item"; text: string };
-
-export type OmnibarActionType = OmnibarAction["type"];

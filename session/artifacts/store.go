@@ -80,13 +80,6 @@ func (ae *ArtifactExtractor) Start(ctx context.Context, historyDir string) {
 	go ae.walkAndEnqueue(ctx, historyDir)
 }
 
-// Stop cancels background goroutines.
-func (ae *ArtifactExtractor) Stop() {
-	if ae.cancelFunc != nil {
-		ae.cancelFunc()
-	}
-}
-
 // OnHistoryFileChanged is the HistoryLinker callback — filters and enqueues.
 func (ae *ArtifactExtractor) OnHistoryFileChanged(filePath string) {
 	if !strings.HasSuffix(filePath, ".jsonl") {

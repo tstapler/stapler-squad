@@ -229,6 +229,10 @@ message BacklogItem {
   // Unset means the default: origin's default branch tip, not repo_path's
   // own ambient HEAD (see git.ResolveWorktreeBaseCommit).
   optional string base_branch = 37;
+  // auto_approve_plan, when true, approves a plan TriggerTriage produces
+  // automatically (mirroring a manual ApprovePlan call) once its artifacts
+  // exist on disk — no manual "Approve Plan" click required. Off by default.
+  bool auto_approve_plan = 38;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -389,6 +393,9 @@ message CreateBacklogItemRequest {
   // fork from — see BacklogItem.base_branch. Unset means the default
   // (origin's default branch tip), not repo_path's own ambient HEAD.
   optional string base_branch = 14;
+  // auto_approve_plan — see BacklogItem.auto_approve_plan. Unset/false means
+  // the manual "Approve Plan" click is still required.
+  bool auto_approve_plan = 15;
 }
 
 message CreateBacklogItemResponse {
@@ -579,6 +586,10 @@ message UpdateBacklogItemRequest {
   // stored override untouched, a non-nil pointer (including one pointing at
   // "") explicitly sets/clears it. See BacklogItem.base_branch.
   optional string base_branch = 19;
+  // auto_approve_plan — see BacklogItem.auto_approve_plan. Unconditionally
+  // set on every UpdateBacklogItem call, same as skip_review_gate/
+  // skip_planning/auto_spawn_session above (not presence-gated).
+  bool auto_approve_plan = 20;
 }
 
 message UpdateBacklogItemResponse {
@@ -1583,6 +1594,8 @@ message GitHubRepoEntry {
   bool is_local = 3;
   string local_path = 4;
   string description = 5;
+  // GitHub host this repo was found on ("" means github.com).
+  string host = 6;
 }
 
 message GitHubIssueEntry {
@@ -1597,6 +1610,8 @@ message GitHubIssueEntry {
   bool is_pr = 9;
   // GitHub login of the issue's author.
   string author = 10;
+  // GitHub host this issue was found on ("" means github.com).
+  string host = 11;
 }
 
 message SearchGitHubReposRequest {
@@ -1614,6 +1629,8 @@ message ListGitHubIssuesRequest {
   string state = 3;
   string search = 4;
   int32 limit = 5;
+  // GitHub host the repo lives on ("" means github.com).
+  string host = 6;
 }
 
 message ListGitHubIssuesResponse {

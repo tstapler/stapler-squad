@@ -293,11 +293,6 @@ export const barFill = style({
   minWidth: 2,
 });
 
-export const barTotal = style({
-  background: vars.color.primary,
-  opacity: 0.7,
-});
-
 export const barTool = style({
   background: vars.color.gitConflict,
   opacity: 0.7,
@@ -380,15 +375,6 @@ export const gapBadgeDesc = style({
   fontSize: 12, color: vars.color.textSecondary, marginLeft: 6, verticalAlign: "middle",
 });
 
-export const subSectionTitle = style({
-  margin: "14px 0 8px",
-  fontSize: 13,
-  fontWeight: 600,
-  color: vars.color.textSecondary,
-  textTransform: "uppercase",
-  letterSpacing: "0.04em",
-});
-
 export const filterInput = style({
   width: "100%",
   padding: "7px 12px",
@@ -426,127 +412,12 @@ export const addRuleLink = style({
   },
 });
 
-export const coverageGapHeader = style({
-  borderRadius: 10,
-  padding: "14px 16px",
-  marginBottom: 12,
-  border: "1px solid",
-});
-
-export const coverageGapHigh = style({
-  background: vars.color.warningBg,
-  borderColor: vars.color.warning,
-});
-
-export const coverageGapMed = style({
-  background: vars.color.warningBg,
-  borderColor: vars.color.warning,
-});
-
-export const coverageGapLow = style({
-  background: vars.color.successBg,
-  borderColor: vars.color.success,
-});
-
-export const coverageGapTitleRow = style({
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  marginBottom: 6,
-});
-
-export const coverageGapIcon = style({
-  fontSize: 15,
-  lineHeight: 1,
-});
-
-export const coverageGapTitle = style({
-  margin: 0,
-  fontSize: 15,
-  fontWeight: 600,
-  color: vars.color.textPrimary,
-  flex: 1,
-});
-
-export const coverageGapBadge = style({
-  fontSize: 12,
-  fontWeight: 600,
-  padding: "2px 8px",
-  borderRadius: 10,
-  background: vars.color.panelBgSecondary,
-  color: vars.color.textPrimary,
-});
-
-export const coverageGapDesc = style({
-  margin: 0,
-  fontSize: 13,
-  color: vars.color.textSecondary,
-  lineHeight: 1.5,
-});
-
 // ── Suggest Rule button + inline suggestion ───────────────────────────────────
-
-export const suggestRuleButton = style({
-  fontSize: 12,
-  fontWeight: 500,
-  color: vars.color.primaryText,
-  background: vars.color.primary,
-  border: `1px solid ${vars.color.primary}`,
-  borderRadius: 5,
-  padding: "3px 10px",
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-  transition: "all 0.15s ease",
-  selectors: {
-    "&:hover:not(:disabled)": {
-      background: vars.color.primaryHover,
-      borderColor: vars.color.primaryHover,
-    },
-    "&:disabled": {
-      opacity: 0.5,
-      cursor: "not-allowed",
-    },
-  },
-});
-
-export const addRuleManualLink = style({
-  fontSize: 11,
-  color: vars.color.textSecondary,
-  textDecoration: "none",
-  whiteSpace: "nowrap",
-  selectors: {
-    "&:hover": {
-      textDecoration: "underline",
-      color: vars.color.textPrimary,
-    },
-  },
-});
 
 export const rowActions = style({
   display: "flex",
   alignItems: "center",
   gap: 8,
-});
-
-export const rowGeneratingText = style({
-  fontSize: 12,
-  color: vars.color.textSecondary,
-  fontStyle: "italic",
-});
-
-export const inlineSuggestionRow = style({
-  background: vars.color.panelBgSecondary,
-  borderBottom: `1px solid ${vars.color.borderColor}`,
-});
-
-export const inlineSuggestionCell = style({
-  padding: "12px 16px",
-});
-
-export const inlineErrorText = style({
-  fontSize: 12,
-  color: vars.color.errorText,
-  padding: "6px 12px",
 });
 
 // ── Bulk rule selection + review ──────────────────────────────────────────────

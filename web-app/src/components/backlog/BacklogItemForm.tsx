@@ -13,6 +13,7 @@ import { RadioGroup } from "@/components/ui/RadioGroup";
 import type { RadioGroupOption } from "@/components/ui/RadioGroup";
 import { radioBtn, radioBtnActive } from "@/components/ui/RadioGroup.css";
 import { isGitHubRef } from "@/lib/github/urlParser";
+import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { getApiBaseUrl } from "@/lib/config";
 import { routes } from "@/lib/routes";
 import { BACKLOG_CATEGORIES, CATEGORY_DEFAULTS } from "@/lib/backlog/categoryDefaults";
@@ -96,6 +97,7 @@ export function BacklogItemForm({
   const [skipReviewGate, setSkipReviewGate] = useState(initialValues?.skipReviewGate ?? false);
   const [autoSpawnSession, setAutoSpawnSession] = useState(initialValues?.autoSpawnSession ?? false);
   const [autoCreatePR, setAutoCreatePR] = useState(initialValues?.autoCreatePR ?? false);
+  const [autoApprovePlan, setAutoApprovePlan] = useState(initialValues?.autoApprovePlan ?? false);
   const [acCriteria, setAcCriteria] = useState<AcCriterion[]>(
     initialValues?.acCriteria ?? []
   );
@@ -217,6 +219,7 @@ export function BacklogItemForm({
       setSkipPlanning(defaults.skipPlanning);
       setAutoSpawnSession(defaults.autoSpawnSession);
       setAutoCreatePR(defaults.autoCreatePR);
+      setAutoApprovePlan(defaults.autoApprovePlan);
       pipelineModeTouchedRef.current = true;
       setPipelineMode(defaults.pipelineMode);
     },
@@ -344,6 +347,7 @@ export function BacklogItemForm({
           skipReviewGate,
           autoSpawnSession,
           autoCreatePR,
+          autoApprovePlan,
           acCriteria: acCriteria.map((c, i) => ({ ...c, index: i })),
           skipTriage: isVague,
           pipelineMode,
@@ -353,7 +357,23 @@ export function BacklogItemForm({
         setSubmitting(false);
       }
     },
-    [title, description, repoPath, priority, skipPlanning, skipReviewGate, autoSpawnSession, autoCreatePR, acCriteria, pipelineMode, category, initialValues?.id, onSubmit, validate]
+    [
+      title,
+      description,
+      repoPath,
+      priority,
+      skipPlanning,
+      skipReviewGate,
+      autoSpawnSession,
+      autoCreatePR,
+      autoApprovePlan,
+      acCriteria,
+      pipelineMode,
+      category,
+      initialValues?.id,
+      onSubmit,
+      validate,
+    ]
   );
 
   const addCriterion = useCallback(() => {
@@ -456,7 +476,11 @@ export function BacklogItemForm({
   );
 
   const busy = submitting || isLoading;
-  const isCloningRepo = useMemo(() => isGitHubRef(repoPath), [repoPath]);
+  const { hosts: enterpriseHosts } = useGitHubEnterpriseHosts();
+  const isCloningRepo = useMemo(
+    () => isGitHubRef(repoPath, enterpriseHosts),
+    [repoPath, enterpriseHosts]
+  );
 
   return (
     <form
@@ -726,6 +750,24 @@ export function BacklogItemForm({
             </label>
             <span className={styles.checkboxHint}>
               Skip the manual Review Queue &quot;Create PR&quot; click — a PR is opened automatically once a work session finishes. The prompt still runs unattended, so review the diff before merging.
+            </span>
+          </div>
+
+          <div className={styles.fieldGroup}>
+            <label className={styles.checkboxRow} htmlFor="backlog-auto-approve-plan">
+              <input
+                id="backlog-auto-approve-plan"
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={autoApprovePlan}
+                onChange={(e) => setAutoApprovePlan(e.target.checked)}
+                disabled={busy}
+                data-testid="backlog-auto-approve-plan-checkbox"
+              />
+              <span className={styles.checkboxLabel}>Auto-approve plan</span>
+            </label>
+            <span className={styles.checkboxHint}>
+              Skip the manual &quot;Approve Plan&quot; click — a plan produced by triage is approved automatically and moves straight to implementation. Review the plan afterward instead of before.
             </span>
           </div>
         </div>

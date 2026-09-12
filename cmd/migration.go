@@ -6,7 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/tstapler/stapler-squad/cmd/interfaces"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -63,48 +62,6 @@ func (b *Bridge) GetCurrentContext() ContextID {
 	return b.contextStack[len(b.contextStack)-1]
 }
 
-// GetRegistry returns the command registry
-func (b *Bridge) GetRegistry() *CommandRegistry {
-	return b.registry
-}
-
-// HandleLegacyKey is disabled since legacy keys package has been removed
-func (b *Bridge) HandleLegacyKey(keyName interface{}) error {
-	// Legacy key handling disabled - use HandleKeyString directly
-	return nil
-}
-
-// HandleKeyString processes a key string through the new command system
-func (b *Bridge) HandleKeyString(key string) error {
-	currentContext := b.GetCurrentContext()
-	log.Debug("HandleKeyString", "key", key, "context", currentContext)
-	command := b.registry.ResolveCommand(currentContext, key)
-	log.Debug("HandleKeyString command resolved", "found", command != nil, "has_handler", command != nil && command.Handler != nil)
-
-	if command != nil && command.Handler != nil {
-		// Create command context
-		ctx := &interfaces.CommandContext{
-			Args: make(map[string]interface{}),
-		}
-
-		// Execute the command
-		return command.Handler(ctx)
-	}
-
-	return nil
-}
-
-// GetLegacyStatusLine generates status line compatible with old menu system
-func (b *Bridge) GetLegacyStatusLine() string {
-	// TODO: Generate status line from current context commands
-	return "Command system active"
-}
-
-// GetContextualHelp generates help for current context
-func (b *Bridge) GetContextualHelp() string {
-	return "Help system temporarily disabled - using legacy help"
-}
-
 // SetContext switches to a different application context
 func (b *Bridge) SetContext(contextID ContextID) {
 	log.Info("SetContext: changing context", "from", b.GetCurrentContext(), "to", contextID)
@@ -115,23 +72,6 @@ func (b *Bridge) SetContext(contextID ContextID) {
 	}
 	log.Info("SetContext: context stack updated", "stack", b.contextStack)
 	// No need to invalidate cache - it's per-context
-}
-
-// PushContext adds a context to the stack (for modal operations)
-func (b *Bridge) PushContext(contextID ContextID) {
-	b.contextStack = append(b.contextStack, contextID)
-	// No need to invalidate cache - it's per-context
-}
-
-// PopContext removes the top context from the stack
-func (b *Bridge) PopContext() ContextID {
-	if len(b.contextStack) <= 1 {
-		return ContextGlobal
-	}
-	popped := b.contextStack[len(b.contextStack)-1]
-	b.contextStack = b.contextStack[:len(b.contextStack)-1]
-	// No need to invalidate cache - it's per-context
-	return popped
 }
 
 // ValidateSetup checks if the bridge is properly configured
@@ -151,51 +91,6 @@ func (b *Bridge) ValidateSetup() []string {
 	}
 
 	return issues
-}
-
-// GetAvailableKeys returns all keys available in the current context
-func (b *Bridge) GetAvailableKeys() map[string]string {
-	commands := b.registry.GetCommandsForContext(b.GetCurrentContext())
-	keyMap := make(map[string]string)
-
-	for _, command := range commands {
-		keys := b.registry.GetKeysForCommand(command.ID)
-		for _, key := range keys {
-			keyMap[key] = command.Description
-		}
-	}
-
-	return keyMap
-}
-
-// GetAvailableKeysForInstance returns keys available based on instance permissions
-// This filters commands to only show what the user is allowed to execute for the given instance
-func (b *Bridge) GetAvailableKeysForInstance(instance interfaces.Instance) map[string]string {
-	// Get all commands for current context
-	commands := b.registry.GetCommandsForContext(b.GetCurrentContext())
-
-	// Get instance permissions
-	perms := instance.GetPermissions()
-
-	// Filter commands based on permissions
-	filtered := FilterCommandsByPermissions(commands, perms)
-
-	// Build key map from filtered commands
-	keyMap := make(map[string]string)
-	for _, command := range filtered {
-		keys := b.registry.GetKeysForCommand(command.ID)
-		for _, key := range keys {
-			keyMap[key] = command.Description
-		}
-	}
-
-	return keyMap
-}
-
-// IsKeyBound checks if a key is bound to any command in current context
-func (b *Bridge) IsKeyBound(key string) bool {
-	command := b.registry.ResolveCommand(b.GetCurrentContext(), key)
-	return command != nil
 }
 
 // GetKeyCategories returns keys organized by category for dynamic help generation
@@ -246,11 +141,6 @@ func (b *Bridge) GetKeyCategories() map[string][]string {
 	b.cacheMutex.Unlock()
 
 	return categories
-}
-
-// GetCommandForKey returns the command bound to a key
-func (b *Bridge) GetCommandForKey(key string) *Command {
-	return b.registry.ResolveCommand(b.GetCurrentContext(), key)
 }
 
 // ReloadConfig refreshes the configuration from disk

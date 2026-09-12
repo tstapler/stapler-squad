@@ -561,8 +561,24 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 			log.WarningLog().Printf("[BacklogLifecycle] item %s: review session %s has an unprocessed %s verdict — applying it now",
 				item.ID, latest.SessionUUID, latest.Edges.ReviewVerdict.OverallOutcome)
 		} else {
-			log.WarningLog().Printf("[BacklogLifecycle] item %s: review session %s (the most recent review attempt) exited without ever writing a verdict — processing as a failed review now",
-				item.ID, latest.SessionUUID)
+			// BUG-046 left this exact detection log uncovered: it fires here, before
+			// handleReviewSessionExited is even reached, so that function's own
+			// RemediationBlocked(bouncing) dedup (added by BUG-046, see its no-verdict
+			// branch above) never gets a chance to suppress it. Nothing transitions the
+			// item out of "review" while the "bouncing" gate is blocked/parked, so this
+			// sweep re-matches the SAME dead SessionUUID and re-logs this WARNING on
+			// every ~60s tick, forever — confirmed live 2026-09-11, item
+			// 09e91e3e-e13d-4166-a5f2-447242447f77 / session 7ce35db9, firing once a
+			// minute for 20+ minutes straight. Apply the identical check here. Fails
+			// open on a query error (still logs) rather than going silent.
+			blocked, blockedErr := l.storage.RemediationBlocked(ctx, item.ID.String(), domain.StuckReasonBouncing)
+			if blockedErr != nil {
+				log.WarningLog().Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts RemediationBlocked(bouncing) item=%s: %v", item.ID, blockedErr)
+			}
+			if !blocked {
+				log.WarningLog().Printf("[BacklogLifecycle] item %s: review session %s (the most recent review attempt) exited without ever writing a verdict — processing as a failed review now",
+					item.ID, latest.SessionUUID)
+			}
 		}
 		// forcePush=true: this is the crash-recovery sweep for a review session that
 		// died before its exit event ever reached handleReviewSessionExited normally

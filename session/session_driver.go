@@ -411,7 +411,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// Inactivity detection: only after initial prompt sent.
 		// Use GetEffectiveStatus() (acquires stateMutex.RLock) to avoid data race on Status field.
 		if st == Ready {
-			cont, ret := handleInactivityTick(inst, allowedPath, policy, stop, initialPromptSentAt, &nudgeSentAt)
+			cont, ret := handleInactivityTick(ctx, inst, allowedPath, policy, stop, initialPromptSentAt, &nudgeSentAt)
 			if ret {
 				return
 			}
@@ -672,7 +672,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 	// that the keystrokes were actually received (read-back confirmation).
 	contentBefore, _ := inst.PreviewContext(ctx)
 
-	if err := inst.SendKeys(initialPrompt + EnterKeySequence); err != nil {
+	if err := SubmitDriverContent(ctx, inst, initialPrompt, defaultPaneSettlePollInterval, defaultPaneSettleMaxWait); err != nil {
 		log.Warn("SessionDriver: failed to send initial prompt",
 			"session", inst.Title,
 			"claudeAtPrompt", claudeAtPrompt,
@@ -709,19 +709,27 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		return
 	}
 
-	// Wait for PTY echo + pane-capture latency before reading back.
-	time.Sleep(500 * time.Millisecond)
-	contentAfter, verifyErr := inst.PreviewContext(ctx)
-	if verifyErr == nil && contentBefore != "" && contentAfter == contentBefore {
-		// Terminal content identical to before the send — the
-		// keystrokes were likely swallowed before readline consumed
-		// them.  Retry on the next tick.
-		log.Warn("SessionDriver: terminal content unchanged after send — keystrokes may have been swallowed, retrying",
-			"session", inst.Title,
-			"attempt", *sendAttempts,
-		)
-		// sentInitial stays false
-		return
+	// Wait for PTY echo + pane-capture latency before reading back. Adaptive
+	// (poll for an actual pane change, up to 1.5s) rather than a fixed sleep:
+	// a fixed 500ms sleep is a race — a slower-than-usual capture-pane round
+	// trip under load makes a genuinely successful send look "swallowed,"
+	// which resent the identical prompt on the next tick (the user-visible
+	// "same message delivered repeatedly" bug this replaces the sleep to fix).
+	// Only fall back to the exact-content comparison (the real swallow case)
+	// if the pane never reported any change at all within the wait window.
+	if !waitForPaneUpdate(ctx, inst, defaultPaneSettlePollInterval, 1500*time.Millisecond) {
+		contentAfter, verifyErr := inst.PreviewContext(ctx)
+		if verifyErr == nil && contentBefore != "" && contentAfter == contentBefore {
+			// Terminal content identical to before the send — the
+			// keystrokes were likely swallowed before readline consumed
+			// them.  Retry on the next tick.
+			log.Warn("SessionDriver: terminal content unchanged after send — keystrokes may have been swallowed, retrying",
+				"session", inst.Title,
+				"attempt", *sendAttempts,
+			)
+			// sentInitial stays false
+			return
+		}
 	}
 	// Content changed (or verification read failed) — treat as success.
 	log.Info("SessionDriver: read-back confirmed initial prompt received",
@@ -736,7 +744,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 // has been sent, sending a backlog-work nudge or escalating to
 // handleDriverFailure as needed. shouldContinue and shouldReturn tell the
 // caller which loop control-flow to apply; at most one is ever true.
-func handleInactivityTick(inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, initialPromptSentAt time.Time, nudgeSentAt *time.Time) (shouldContinue, shouldReturn bool) {
+func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, initialPromptSentAt time.Time, nudgeSentAt *time.Time) (shouldContinue, shouldReturn bool) {
 	last := inst.LastMeaningfulOutputTime()
 	// Use the later of initialPromptSentAt or LastMeaningfulOutput as the activity
 	// reference. After a service restart, LastMeaningfulOutput may be stale (loaded
@@ -757,7 +765,7 @@ func handleInactivityTick(inst *Instance, allowedPath string, policy RetryPolicy
 	// This preserves conversational context when Claude finishes but forgets to
 	// call /backlog/review or report_progress.
 	if inst.HasTag(TagBacklogWork) && nudgeSentAt.IsZero() && idle > driverBacklogNudgeDelay {
-		*nudgeSentAt = attemptBacklogNudge(inst, idle)
+		*nudgeSentAt = attemptBacklogNudge(ctx, inst, idle)
 		return true, false
 	}
 
@@ -841,11 +849,11 @@ func scanAndLinkPRURL(inst *Instance, sentInitial bool, prURLLinked bool, previe
 // driverBacklogNudgeGrace of continued silence it logs "session stuck" and calls
 // handleDriverFailure, which restarts the session once and marks it for human attention
 // on a second failure — the give-up signal this nudge path previously lacked.
-func attemptBacklogNudge(inst *Instance, idle time.Duration) time.Time {
+func attemptBacklogNudge(ctx context.Context, inst *Instance, idle time.Duration) time.Time {
 	nudge := "You appear to have paused. Run `/backlog/status` to see remaining " +
 		"acceptance criteria. Mark each complete criterion with `/backlog/done-N`, " +
 		"then submit with `/backlog/review` once all are done."
-	if sendErr := inst.SendKeys(nudge + EnterKeySequence); sendErr != nil {
+	if sendErr := SubmitDriverContent(ctx, inst, nudge, defaultPaneSettlePollInterval, defaultPaneSettleMaxWait); sendErr != nil {
 		log.Warn("SessionDriver: failed to send backlog nudge, will not retry — falling through to inactivity timeout",
 			"session", inst.Title, "err", sendErr)
 	} else {

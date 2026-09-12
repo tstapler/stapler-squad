@@ -690,6 +690,7 @@ function SessionCardInner({
               owner={session.githubOwner}
               repo={session.githubRepo}
               sourceRef={session.githubSourceRef}
+              host={session.githubHost}
               prPriority={session.githubPrPriority}
               prState={session.githubPrState}
               isDraft={session.githubPrIsDraft}
@@ -1033,7 +1034,7 @@ function SessionCardInner({
               <span className={label}>Repository:</span>
               <span className={value}>
                 <a
-                  href={`https://github.com/${session.githubOwner}/${session.githubRepo}`}
+                  href={`https://${session.githubHost || "github.com"}/${session.githubOwner}/${session.githubRepo}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}

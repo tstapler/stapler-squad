@@ -155,7 +155,13 @@ func (p *WorktreePRPoller) GetPRData(repoPath, branch string) *github.PRInfo {
 // persistent per-worktree index to target one, so up to one PollInterval of
 // staleness is an accepted trade-off for worktrees with no active session.
 func (p *WorktreePRPoller) InvalidateCache(owner, repo string, prNumber int) {
-	p.etagCache.Invalidate(owner, repo, prNumber)
+	// Host unknown at this call site (webhook's repoFullName carries no host) —
+	// github.com is the safe default; see poller_invalidation_adapter.go.
+	ref, err := github.NewRepoRef(owner, repo)
+	if err != nil {
+		return
+	}
+	p.etagCache.Invalidate(ref, prNumber)
 }
 
 // pollLoop drives the poller: react to scanner completions and a fallback ticker.
@@ -245,7 +251,7 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem) {
 
 // fetchAndStore fetches PR info for one worktree and stores it in the cache.
 func (p *WorktreePRPoller) fetchAndStore(ctx context.Context, item WorktreeScanItem) {
-	repoRef, err := github.GetOwnerRepoFromRemote(item.RepoPath)
+	repoRef, err := github.GetOwnerRepoFromRemote(item.RepoPath, enterpriseHostsForRemoteParsing())
 	if err != nil {
 		log.Warn("worktree PR poller: could not read remote URL", "path", item.RepoPath, "err", err)
 		return
@@ -258,7 +264,7 @@ func (p *WorktreePRPoller) fetchAndStore(ctx context.Context, item WorktreeScanI
 
 	// Use ETag conditional fetch when we already know the PR number.
 	if existing := p.GetPRData(item.RepoPath, item.Branch); existing != nil && existing.Number > 0 {
-		info, changed, fetchErr := github.GetPRInfoConditional(ctx, repoRef.Owner(), repoRef.Repo(), existing.Number, p.etagCache)
+		info, changed, fetchErr := github.GetPRInfoConditional(ctx, repoRef, existing.Number, p.etagCache)
 		if fetchErr != nil {
 			if !p.handleFetchError(fetchErr) {
 				log.Warn("worktree PR poller: failed to fetch PR status", "branch", item.Branch, "err", fetchErr)
@@ -278,7 +284,7 @@ func (p *WorktreePRPoller) fetchAndStore(ctx context.Context, item WorktreeScanI
 		listEtag = v.(listCacheEntry).etag
 	}
 
-	info, newEtag, changed, fetchErr := github.GetPRForBranchConditional(ctx, repoRef.Owner(), repoRef.Repo(), item.Branch, listEtag)
+	info, newEtag, changed, fetchErr := github.GetPRForBranchConditional(ctx, repoRef, item.Branch, listEtag)
 	if changed && newEtag != "" {
 		p.listEtags.Store(key, listCacheEntry{etag: newEtag, noPR: errors.Is(fetchErr, github.ErrNoPR)})
 	}
