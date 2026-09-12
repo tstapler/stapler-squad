@@ -10,28 +10,18 @@ import (
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
-// TestKillSessionThenStart_DoesNotRebuildLaunchCommand is the Epic 1.0
-// verification spike from project_plans/cold-restart-uuid-recovery/implementation/plan.md
-// (Task 1.0.1a). It traces whether Instance.KillSession() + Instance.Start(false) —
-// the exact sequence session/health.go's dead-pane recovery loop uses — rebuilds the
-// tmux launch command from the current i.claudeSession.ConversationUUID, or reuses
-// whatever program string was baked in at the last SetSession() call.
+// TestKillSessionThenStart_DoesNotRebuildLaunchCommand traces whether
+// Instance.KillSession() + Instance.Start(false) — the exact sequence
+// session/health.go's dead-pane recovery loop uses — rebuilds the tmux launch
+// command from the current i.claudeSession.ConversationUUID.
 //
-// Result: it does NOT rebuild. TmuxProcessManager.Close() (called by KillSession())
-// never nils the underlying atomic.Pointer[tmux.TmuxSession], so initTmuxSession()'s
-// `if i.pm().HasSession() { ...; return }` early-return skips buildLaunchCommand()
-// entirely on this path. Contrast with Instance.Restart(), which explicitly calls
-// buildLaunchCommand() and SetSession() every time.
-//
-// Consequence for this plan: Epic 1.1's reorder (moving tryExtractConversationUUID()
-// before initTmuxSession()) fixes the true process-boot cold-start case (a fresh
-// Instance whose TmuxSession has never been constructed — exactly what
-// TestColdRestore_WithoutUUID_RecoversFromJSONL exercises), but does NOT by itself
-// close the in-process restart-churn case captured in requirements.md's timeline,
-// where health.go's KillSession()+Start(false) reuses an already-constructed
-// TmuxSession. That gap is tracked as a named follow-up in plan.md's Risk Control
-// (item 5 references pre-mortem #4; the HasSession()-reuse gap itself is a distinct,
-// separately-scoped follow-up — see ADR-001) rather than fixed in this plan.
+// TmuxProcessManager.Close() (called by KillSession()) never nils the underlying
+// atomic.Pointer[tmux.TmuxSession], so initTmuxSession()'s reuse guard must check
+// liveness (IsAlive()), not just object existence (HasSession()), or it skips
+// buildLaunchCommand() on this path and silently drops --resume on recovery — the
+// root cause of the 2026-09-12 mass tmux-kill incident. See
+// project_plans/cold-restart-uuid-recovery/implementation/plan.md's Risk Control
+// item 8 and ADR-001 for the original gap this test's name still references.
 func TestKillSessionThenStart_DoesNotRebuildLaunchCommand(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -84,11 +74,11 @@ func TestKillSessionThenStart_DoesNotRebuildLaunchCommand(t *testing.T) {
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after KillSession()+Start(false)")
 
 	t.Logf("LaunchCommand after KillSession()+Start(false): %q", inst.LaunchCommand)
-	assert.NotContains(t, inst.LaunchCommand, "--resume",
-		"KillSession()+Start(false) is expected NOT to rebuild the launch command from "+
-			"the newly-set ConversationUUID (see this test's doc comment) — if this now "+
-			"fails, the premise behind Epic 1.0/ADR-001 has changed and plan.md's scope "+
-			"note needs to be revisited")
+	assert.Contains(t, inst.LaunchCommand, "--resume",
+		"KillSession()+Start(false) must rebuild the launch command from the "+
+			"newly-set ConversationUUID — initTmuxSession()'s reuse guard must not "+
+			"treat a dead tmux session as still alive")
+	assert.Contains(t, inst.LaunchCommand, "550e8400-e29b-41d4-a716-446655440000")
 
 	// Contrast: Restart() DOES explicitly rebuild the launch command every call.
 	// Re-set the UUID first: the cold-restore branch just exercised above clears

@@ -88,6 +88,51 @@ func TestRestoreProcess_DelegatesToProcessManager(t *testing.T) {
 
 var errRestoreFailedForTest = errors.New("restore failed (test)")
 
+// TestInitTmuxSession_ReuseRequiresAliveNotJustConstructed is the fast, mocked
+// counterpart to TestKillSessionThenStart_DoesNotRebuildLaunchCommand: it
+// exercises initTmuxSession()'s reuse guard directly against the three
+// HasSession()/IsAlive() combinations, without spinning up a real tmux binary.
+// HasSession()=true alone must NOT be enough to reuse — the gate must also
+// require IsAlive(), or a stale *tmux.TmuxSession pointer left behind by a
+// crashed tmux server silently skips buildLaunchCommand() (and its --resume
+// rebuild) forever. See instance_tmux.go's initTmuxSession doc comment.
+func TestInitTmuxSession_ReuseRequiresAliveNotJustConstructed(t *testing.T) {
+	t.Parallel()
+
+	const sentinel = "sentinel-unchanged-launch-command"
+	cases := []struct {
+		name        string
+		hasSession  bool
+		isAlive     bool
+		wantRebuild bool
+	}{
+		{"stale pointer, dead session: rebuilds", true, false, true},
+		{"live session: reuses, no rebuild", true, true, false},
+		{"cold start, never constructed: rebuilds", false, false, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mock := &mockTmuxManager{hasSessionReturn: tc.hasSession, isAliveReturn: tc.isAlive}
+			inst := &Instance{
+				Title:          "t",
+				Program:        "some-other-program",
+				processManager: NewTmuxBackend(mock),
+				LaunchCommand:  sentinel,
+			}
+
+			inst.initTmuxSession()
+
+			rebuilt := inst.LaunchCommand != sentinel
+			if rebuilt != tc.wantRebuild {
+				t.Errorf("HasSession=%v IsAlive=%v: LaunchCommand rebuilt = %v, want %v (LaunchCommand=%q)",
+					tc.hasSession, tc.isAlive, rebuilt, tc.wantRebuild, inst.LaunchCommand)
+			}
+		})
+	}
+}
+
 // TestBuildSubmittableInput_UsesCarriageReturnNotNewline is a regression test
 // for BUG-047: WriteToSession (the ConnectRPC handler backing the web UI's
 // session chat box) and the write_to_session/run_command MCP tools appended
