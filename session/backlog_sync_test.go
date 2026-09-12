@@ -1255,7 +1255,7 @@ type alwaysDenyWorkflowEngine struct{}
 func (alwaysDenyWorkflowEngine) CanTransition(from, to BacklogStatus, _ ...*StageConfigSnapshot) bool {
 	return false
 }
-func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus) ([]GateStatus, error) {
+func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ ...*StageConfigSnapshot) ([]GateStatus, error) {
 	return nil, nil
 }
 func (alwaysDenyWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus) error {

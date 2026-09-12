@@ -1194,7 +1194,7 @@ func (alwaysAllowWorkflowEngine) CanTransition(_, _ session.BacklogStatus, _ ...
 	return true
 }
 
-func (alwaysAllowWorkflowEngine) PendingGates(_ session.BacklogItemTransitionInput, _ session.BacklogStatus) ([]session.GateStatus, error) {
+func (alwaysAllowWorkflowEngine) PendingGates(_ session.BacklogItemTransitionInput, _ session.BacklogStatus, _ ...*session.StageConfigSnapshot) ([]session.GateStatus, error) {
 	return nil, nil
 }
 

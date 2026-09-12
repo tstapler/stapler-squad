@@ -23,8 +23,13 @@ type WorkflowEngine interface {
 	// PendingGates returns the per-gate satisfaction status for transitioning
 	// item to to — an empty/nil slice means no gates block this transition.
 	// ValidateGates is a thin wrapper over this: nil exactly when every
-	// entry here is Satisfied.
-	PendingGates(item BacklogItemTransitionInput, to BacklogStatus) ([]GateStatus, error)
+	// entry here is Satisfied. fallback is the same optional, caller-supplied
+	// StageConfigSnapshot documented on CanTransition (ADR-004) — pass the
+	// item's own captured snapshot so a from-stage absent from the live cache
+	// (deleted) can still report a synthetic blocking gate instead of
+	// silently reporting zero pending gates. DefaultWorkflowEngine ignores it
+	// entirely, same as CanTransition/AllowedTransitions.
+	PendingGates(item BacklogItemTransitionInput, to BacklogStatus, fallback ...*StageConfigSnapshot) ([]GateStatus, error)
 	// ValidateGates runs guard rules for the transition. Returns nil if gates pass.
 	ValidateGates(item BacklogItemTransitionInput, to BacklogStatus) error
 	// AllowedTransitions returns the set of statuses reachable from from. See
@@ -69,8 +74,10 @@ func (e *DefaultWorkflowEngine) CanTransition(from, to BacklogStatus, _ ...*Stag
 // identical to today's guard logic, just exposed as structured data. Returns
 // a single GateKindStructural entry for a (from,to) pair TransitionGuard has
 // a specific branch for, or a nil slice for its `default:` (no additional
-// guards) branch.
-func (e *DefaultWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus) ([]GateStatus, error) {
+// guards) branch. fallback is unused: the built-in stage graph is static and
+// never deleted, so there is never a stage for a per-item snapshot to fall
+// back for — see CanTransition's identical fallback doc comment above.
+func (e *DefaultWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ ...*StageConfigSnapshot) ([]GateStatus, error) {
 	id, description, ok := builtInGuardGate(item.Status, to)
 	if !ok {
 		return nil, nil

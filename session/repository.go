@@ -212,7 +212,15 @@ type BacklogStatusEventData struct {
 	// or deleted. Nil for a row written before this field existed, or when no
 	// matching BacklogStage row was found at write time.
 	StageNameSnapshot *string
-	CreatedAt         time.Time
+	// AllowedTransitionsSnapshot is ADR-004's sibling snapshot: the destination
+	// BacklogStage's legal outgoing transition slugs (as BacklogStatus string
+	// values) at the moment of this transition, so CanTransition/
+	// AllowedTransitions/PendingGates can fall back to it when that stage is
+	// later deleted. Nil (not just empty) for a row written before this field
+	// existed, or when no matching BacklogStage row was found at write time —
+	// distinguishing "no snapshot captured" from "captured, zero transitions."
+	AllowedTransitionsSnapshot []string
+	CreatedAt                  time.Time
 }
 
 // ProgressNoteData is the domain DTO replacing *ent.BacklogProgressNote in Storage returns.

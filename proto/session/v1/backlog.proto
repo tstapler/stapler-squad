@@ -138,6 +138,18 @@ message BacklogStatusEvent {
   // item-detail history keeps rendering the original name after that
   // BacklogStage row is later renamed or deleted.
   optional string stage_name_snapshot = 7;
+  // allowed_transitions_snapshot is the destination stage's legal outgoing
+  // transition slugs, frozen at the moment of this transition (ADR-004's
+  // StageConfigSnapshot discipline, sibling to stage_name_snapshot —
+  // session.BacklogStatusEventData.AllowedTransitionsSnapshot) so
+  // CanTransition/AllowedTransitions/PendingGates can keep answering per this
+  // item's captured graph after that stage's transitions are later edited or
+  // the stage itself is deleted. Empty when no snapshot was captured (a row
+  // written before this field existed, or no matching BacklogStage row was
+  // found at write time) — distinct from a captured-but-empty snapshot, which
+  // this repeated field cannot represent, matching proto3's usual
+  // empty-vs-absent limitation for repeated fields.
+  repeated string allowed_transitions_snapshot = 8;
 }
 
 // BacklogProgressNote records a single report_progress call against one of a

@@ -144,14 +144,38 @@ func (e *ConfiguredWorkflowEngine) AllowedTransitions(from BacklogStatus, fallba
 	return result
 }
 
+// stageConfigUnresolvableGateID identifies the single synthetic blocking gate
+// PendingGates returns when the live stageConfigCache has no edge for
+// (item.Status, to) but a supplied fallback confirms the edge legally existed
+// when the item entered its current stage (ADR-004, Decision 4 — the
+// adversarial review's fail-closed-for-gates fix).
+const stageConfigUnresolvableGateID = "stage-config-unresolvable"
+
 // PendingGates implements WorkflowEngine. It looks up the configured edge for
 // (item.Status, to) and evaluates each of its gates in order_index order. An
 // edge with no configured gates (including an edge that doesn't exist in the
 // loaded graph at all — CanTransition governs legality separately) returns a
 // nil slice, never an error.
-func (e *ConfiguredWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus) ([]GateStatus, error) {
+//
+// fallback is ADR-004's cache-miss fail-closed fix: when the live cache has
+// no edge for (item.Status, to) at all — the from-stage was deleted or
+// disabled — silently returning nil, nil would let ValidateGates (a thin
+// wrapper over this) report zero pending gates, inverting this project's
+// fail-closed-for-gates rule. If a supplied fallback's AllowedTransitions
+// confirms to was once a legal destination from this stage, this returns a
+// single synthetic blocking GateStatus instead. When the fallback doesn't
+// contain to either (never a legal edge), today's nil, nil is preserved —
+// CanTransition already governs legality separately.
+func (e *ConfiguredWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, fallback ...*StageConfigSnapshot) ([]GateStatus, error) {
 	edge, ok := e.cache.Get(item.Status, to)
-	if !ok || len(edge.Gates) == 0 {
+	if !ok {
+		if status, blocked := stageConfigUnresolvableGateStatus(to, stageConfigSnapshotFallback(fallback)); blocked {
+			log.WarningLog().Printf("[ConfiguredWorkflowEngine] stage %q not found in live cache (likely deleted); blocking %s->%s pending manual override (edge once existed per item's captured StageConfigSnapshot)", item.Status, item.Status, to)
+			return []GateStatus{status}, nil
+		}
+		return nil, nil
+	}
+	if len(edge.Gates) == 0 {
 		return nil, nil
 	}
 
@@ -167,6 +191,30 @@ func (e *ConfiguredWorkflowEngine) PendingGates(item BacklogItemTransitionInput,
 
 	log.InfoLog().Printf("[ConfiguredWorkflowEngine] resolved transition %s->%s, %d gate(s) pending", item.Status, to, unsatisfied)
 	return statuses, nil
+}
+
+// stageConfigUnresolvableGateStatus returns ADR-004's synthetic blocking
+// GateStatus (ok=true) when snap confirms to was once a legal destination
+// from the item's current stage, or ok=false when snap is nil or doesn't
+// contain to — preserving PendingGates' "not a legal edge" nil, nil case for
+// a transition that never existed even in the frozen snapshot.
+func stageConfigUnresolvableGateStatus(to BacklogStatus, snap *StageConfigSnapshot) (status GateStatus, ok bool) {
+	if snap == nil {
+		return GateStatus{}, false
+	}
+	for _, allowed := range snap.AllowedTransitions {
+		if allowed != to {
+			continue
+		}
+		return GateStatus{
+			GateID:      stageConfigUnresolvableGateID,
+			Kind:        GateKindStructural,
+			Satisfied:   false,
+			Description: fmt.Sprintf("This item's current stage configuration is no longer available (the stage may have been deleted or disabled) — the transition to %s cannot be automatically evaluated.", to),
+			ActionHint:  "An operator must restore or reconfigure the stage in Stages settings, or force this transition via Manual Override.",
+		}, true
+	}
+	return GateStatus{}, false
 }
 
 // ValidateGates implements WorkflowEngine as a thin wrapper over PendingGates

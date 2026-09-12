@@ -890,12 +890,13 @@ func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
 			continue
 		}
 		recordStatusEvent(ctx, statusEventInput{
-			evClient:          tx.BacklogStatusEvent,
-			itemID:            item.ID,
-			fromStatus:        item.Status,
-			toStatus:          string(BacklogStatusReview),
-			triggeredBy:       TriggeredBySystem,
-			stageNameSnapshot: resolveStageNameSnapshot(ctx, tx.BacklogStage, BacklogStatusReview),
+			evClient:                   tx.BacklogStatusEvent,
+			itemID:                     item.ID,
+			fromStatus:                 item.Status,
+			toStatus:                   string(BacklogStatusReview),
+			triggeredBy:                TriggeredBySystem,
+			stageNameSnapshot:          resolveStageNameSnapshot(ctx, tx.BacklogStage, BacklogStatusReview),
+			allowedTransitionsSnapshot: resolveAllowedTransitionsSnapshot(ctx, tx.BacklogStage, tx.StageTransition, BacklogStatusReview),
 		})
 		transitionedIDs = append(transitionedIDs, item.ID)
 	}

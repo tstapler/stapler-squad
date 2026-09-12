@@ -448,6 +448,158 @@ func TestPendingGates_should_ReportUnsatisfied_When_PreviouslySatisfiedStructura
 	require.False(t, statuses[0].Satisfied, "structural gate must recompute fresh and report unsatisfied once an AC regresses, never reuse the prior satisfied result")
 }
 
+// deletedEdgeFixture creates two custom stages with one enabled StageTransition
+// between them, invalidates the cache so it's live, then deletes the from-stage
+// (cascading away the StageTransition row too) and invalidates the cache again
+// — leaving engine's live cache with no edge for (from,to) at all, the
+// cache-miss precondition ADR-004's fail-closed PendingGates fix targets.
+// Returns the (from,to) BacklogStatus pair.
+func deletedEdgeFixture(t *testing.T, client *ent.Client, engine *ConfiguredWorkflowEngine) (from, to BacklogStatus) {
+	t.Helper()
+	ctx := context.Background()
+
+	fromStage, err := client.BacklogStage.Create().SetSlug("gone-from").SetName("Gone From").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	toStage, err := client.BacklogStage.Create().SetSlug("gone-to").SetName("Gone To").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	_, err = client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	require.NoError(t, engine.InvalidateCache(ctx))
+
+	require.NoError(t, client.BacklogStage.DeleteOneID(fromStage.ID).Exec(ctx))
+	require.NoError(t, engine.InvalidateCache(ctx))
+
+	return BacklogStatus(fromStage.Slug), BacklogStatus(toStage.Slug)
+}
+
+// TestPendingGates_should_ReturnSyntheticBlockingGate_When_CacheMissButFallbackConfirmsEdgeOnceExisted
+// covers ADR-004's Decision 4, the adversarial review's fail-closed-for-gates
+// fix: when the live cache has no edge for (item.Status, to) at all — the
+// from-stage was deleted — but a supplied fallback's AllowedTransitions
+// confirms to was legal when the item entered its current stage, PendingGates
+// must return the single synthetic blocking "stage-config-unresolvable" gate,
+// never a silent nil, nil that would let ValidateGates report zero pending
+// gates for a deleted-stage item.
+func TestPendingGates_should_ReturnSyntheticBlockingGate_When_CacheMissButFallbackConfirmsEdgeOnceExisted(t *testing.T) {
+	t.Parallel()
+	engine, client := newSeededConfiguredWorkflowEngine(t)
+	from, to := deletedEdgeFixture(t, client, engine)
+
+	fallback := &StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
+	statuses, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, to, fallback)
+	require.NoError(t, err)
+	require.Len(t, statuses, 1, "expected exactly one synthetic blocking gate, not an empty slice")
+
+	got := statuses[0]
+	assert.Equal(t, stageConfigUnresolvableGateID, got.GateID)
+	assert.Equal(t, GateKindStructural, got.Kind)
+	assert.False(t, got.Satisfied, "the synthetic gate must always report unsatisfied — a deleted stage's config can never be automatically evaluated")
+	assert.Contains(t, got.Description, "no longer available")
+	assert.Contains(t, got.ActionHint, "Manual Override")
+
+	// Without a fallback at all, PendingGates keeps its pre-ADR-004 nil, nil —
+	// the synthetic gate only fires when a fallback is present and confirms
+	// the edge.
+	statuses, err = engine.PendingGates(BacklogItemTransitionInput{Status: from}, to)
+	require.NoError(t, err)
+	assert.Empty(t, statuses, "no fallback supplied: PendingGates must still degrade to nil/empty, unchanged")
+}
+
+// TestPendingGates_should_ReturnNilNil_When_CacheMissAndFallbackDoesNotContainDestination
+// covers the negative case ADR-004 explicitly preserves: even with a
+// fallback present, if it never listed to as a legal destination (this edge
+// never legally existed), PendingGates keeps today's nil, nil — CanTransition
+// already governs legality separately.
+func TestPendingGates_should_ReturnNilNil_When_CacheMissAndFallbackDoesNotContainDestination(t *testing.T) {
+	t.Parallel()
+	engine, client := newSeededConfiguredWorkflowEngine(t)
+	from, to := deletedEdgeFixture(t, client, engine)
+	require.NotEqual(t, BacklogStatusDone, to, "test fixture bug: deletedEdgeFixture's to-stage must not collide with the destination probed below")
+
+	fallback := &StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{BacklogStatusReady}}
+	statuses, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, BacklogStatusDone, fallback)
+	require.NoError(t, err)
+	assert.Empty(t, statuses, "a destination never present in the snapshot must not trigger the synthetic blocking gate")
+}
+
+// newDeletedStageItemFixture creates a real item (via the EntRepository write
+// path) transitioned into a custom stage with one outgoing transition,
+// captures its ADR-004 snapshot fields at write time, then deletes that stage
+// (cascading away its StageTransition row) and invalidates engine's cache —
+// the end-to-end precondition
+// TestConfiguredWorkflowEngine_should_HonorCapturedSnapshot_When_ItemsStageIsDeletedAfterTransition
+// asserts against. Returns the engine, the item's (from,to) BacklogStatus
+// pair, and the item reloaded post-deletion (for BuildStageConfigSnapshotFallback).
+func newDeletedStageItemFixture(t *testing.T) (engine *ConfiguredWorkflowEngine, from, to BacklogStatus, reloaded *BacklogItemData) {
+	t.Helper()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	client := repo.client
+
+	fromStage, err := client.BacklogStage.Create().SetSlug("e2e-from").SetName("E2E From").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	toStage, err := client.BacklogStage.Create().SetSlug("e2e-to").SetName("E2E To").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	_, err = client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+
+	stageRepo := NewEntStageConfigRepository(client)
+	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
+	engine, err = NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo)
+	require.NoError(t, err)
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "e2e item entering a stage that will be deleted",
+		Status: string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatus(fromStage.Slug), nil, TriggeredByUser)
+	require.NoError(t, err)
+
+	require.NoError(t, client.BacklogStage.DeleteOneID(fromStage.ID).Exec(ctx))
+	require.NoError(t, engine.InvalidateCache(ctx))
+
+	reloaded, err = repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	return engine, BacklogStatus(fromStage.Slug), BacklogStatus(toStage.Slug), reloaded
+}
+
+// TestConfiguredWorkflowEngine_should_HonorCapturedSnapshot_When_ItemsStageIsDeletedAfterTransition
+// is ADR-004's end-to-end acceptance test: given a real item transitioned
+// into a custom stage that is later deleted, reconstruct the fallback via
+// BuildStageConfigSnapshotFallback from the reloaded item, and confirm
+// AllowedTransitions/CanTransition/PendingGates all behave per the frozen
+// snapshot when called with that fallback — instead of the fail-open/empty
+// answers they give when called without one.
+func TestConfiguredWorkflowEngine_should_HonorCapturedSnapshot_When_ItemsStageIsDeletedAfterTransition(t *testing.T) {
+	t.Parallel()
+	engine, from, to, reloaded := newDeletedStageItemFixture(t)
+
+	fallback := BuildStageConfigSnapshotFallback(reloaded)
+	require.NotNil(t, fallback, "expected a reconstructed snapshot from the item's own status-event history")
+	require.Equal(t, "E2E From", fallback.StageName)
+	require.Equal(t, []BacklogStatus{to}, fallback.AllowedTransitions)
+
+	// Without the fallback: the deleted stage reports empty/false/nil, the
+	// fail-open behavior ADR-004's fallback plumbing exists to avoid.
+	assert.False(t, engine.CanTransition(from, to), "sanity: without a fallback, the deleted stage reports false")
+	assert.Empty(t, engine.AllowedTransitions(from), "sanity: without a fallback, the deleted stage reports empty")
+	gatesNoFallback, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, to)
+	require.NoError(t, err)
+	assert.Empty(t, gatesNoFallback, "sanity: without a fallback, PendingGates reports zero pending gates")
+
+	// With the reconstructed fallback: all three answer per the frozen snapshot.
+	assert.True(t, engine.CanTransition(from, to, fallback), "CanTransition must honor the captured snapshot")
+	assert.Equal(t, []BacklogStatus{to}, engine.AllowedTransitions(from, fallback), "AllowedTransitions must honor the captured snapshot")
+
+	gates, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, to, fallback)
+	require.NoError(t, err)
+	require.Len(t, gates, 1, "PendingGates must report the synthetic blocking gate, not silently pass the item through")
+	assert.Equal(t, stageConfigUnresolvableGateID, gates[0].GateID)
+	assert.False(t, gates[0].Satisfied)
+}
+
 // --- Epic 2.4 follow-up: resolver + evaluateGate wiring for
 // automated_review/custom gates (the gap this task closes) ---
 

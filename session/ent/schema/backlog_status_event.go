@@ -32,6 +32,9 @@ func (BacklogStatusEvent) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("The destination BacklogStage's human-readable Name at the moment of this transition (Epic 2.5's StageConfigSnapshot discipline) — frozen here so item-detail history keeps rendering the original stage name after that stage row is later renamed or deleted."),
+		field.JSON("allowed_transitions_snapshot", []string{}).
+			Optional().
+			Comment("The destination BacklogStage's legal outgoing transition slugs at the moment of this transition (ADR-004's StageConfigSnapshot discipline, sibling to stage_name_snapshot) — frozen here so CanTransition/AllowedTransitions/PendingGates keep answering per this item's captured graph after that stage's transitions are later edited or the stage itself is deleted."),
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable(),

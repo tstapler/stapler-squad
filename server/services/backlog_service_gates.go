@@ -120,8 +120,9 @@ func (s *BacklogService) GetPendingGates(
 
 	to := session.BacklogStatus(req.Msg.ToStatus)
 	guardInput := s.buildPendingGatesGuardInput(ctx, item, to)
+	fallback := session.BuildStageConfigSnapshotFallback(item)
 
-	gates, err := s.engine.PendingGates(guardInput, to)
+	gates, err := s.engine.PendingGates(guardInput, to, fallback)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("pending gates: %w", err))
 	}
