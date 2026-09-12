@@ -68,7 +68,14 @@ var cmCommandsEnabled atomic.Bool
 const controlModeSlowSubscriberGrace = 250 * time.Millisecond
 
 func init() {
-	cmCommandsEnabled.Store(os.Getenv("STAPLER_SQUAD_CM_COMMANDS") != "false")
+	cmCommandsEnabled.Store(parseCMCommandsEnabled(os.Getenv("STAPLER_SQUAD_CM_COMMANDS")))
+}
+
+// parseCMCommandsEnabled implements cmCommandsEnabled's default-on policy:
+// only the exact value "false" opts out, so an unset/empty/misspelled env var
+// never silently disables the zero-fork control-mode command path.
+func parseCMCommandsEnabled(raw string) bool {
+	return raw != "false"
 }
 
 // StartControlMode begins streaming terminal output via tmux control mode (-C flag).

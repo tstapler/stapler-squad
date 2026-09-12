@@ -12,6 +12,7 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAnalytics } from "@/lib/analytics";
 import { useCurrentWorkSession } from "@/lib/backlog/currentWorkSession";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
+import { summarizeStuckItemGroup } from "@/components/backlog-stuck/stuckReason";
 import { classifySessionKind } from "@/lib/backlog/sessionKind";
 import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
@@ -117,6 +118,19 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Guards the Edit action against the #146 loading-gate's other half: `item`
+  // can become non-null (and the full detail view, including Edit, render)
+  // from the shared backlogItemsSlice store's synchronous hydration (the
+  // liveRawItem effect below) *before* this item's own authoritative
+  // getBacklogItem() fetch has resolved even once. If that store entry is a
+  // stale/incomplete snapshot (e.g. cached before triage assigned a
+  // category), opening Edit against it seeds BacklogItemForm's local state
+  // from stale data — and, worse, a correction that lands afterward while
+  // editMode is true only gets buffered (Story 5.3.2), never applied to the
+  // open form. Blocking Edit specifically (not the read-only view) until at
+  // least one authoritative response has confirmed `item` closes that
+  // window without reintroducing #146's remount/loading-flash regression.
+  const [itemConfirmed, setItemConfirmed] = useState(false);
   /** The action key currently in flight (e.g. "mark_ready"), or null when idle. */
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -216,7 +230,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // on every remount (this component remounts via `key={selectedItemId}` on
   // every backlog item click — see stapler-squad PR #208 review).
   const { items: stuckItems, triggerRemediationNow } = useStuckBacklogItems();
-  const stuckItem = item ? stuckItems.find((i) => i.itemId === item.id) : undefined;
+  // BUG-105: an item can have several simultaneous open StuckBacklogItem rows
+  // (e.g. BOUNCING + BOUNCE_CAP_EXHAUSTED + MULTIPLE_REASONS all open at
+  // once) — `summarizeStuckItemGroup` resolves the SAME shared-priority
+  // primary reason BacklogBoard/BacklogItemCard resolve for the same item,
+  // instead of this component picking array order 0 (`.find()`) on its own.
+  const stuckItemGroup = item ? stuckItems.filter((i) => i.itemId === item.id) : [];
+  const stuckSummary = summarizeStuckItemGroup(stuckItemGroup);
+  const stuckItem = stuckSummary?.primary;
 
   // Version control state for the most recent work session's worktree.
   const latestWorkSession = useCurrentWorkSession(item);
@@ -488,6 +509,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           setItem(result);
           setNotesValue(result.notes ?? "");
         }
+        // Set regardless of whether this particular result "won" the
+        // staleness comparison above: either way, the server has now been
+        // consulted at least once for this itemId, so whatever `item` holds
+        // has been reconciled against it — safe to allow editing.
+        setItemConfirmed(true);
       }
     } catch (e) {
       if (mountedRef.current) setError(getErrorMessage(e, "Failed to load item."));
@@ -495,6 +521,13 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       if (mountedRef.current) setLoading(false);
     }
   }, [itemId, getBacklogItem]);
+
+  // Re-arms the itemConfirmed gate whenever the viewed item changes, so a
+  // second item opened in the same mounted component instance can't inherit
+  // the previous item's already-confirmed state.
+  useEffect(() => {
+    setItemConfirmed(false);
+  }, [itemId]);
 
   useEffect(() => {
     void load();
@@ -1378,6 +1411,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               <button
                 className={styles.editButton}
                 onClick={() => setEditMode(true)}
+                disabled={!itemConfirmed}
+                title={itemConfirmed ? undefined : "Confirming latest data before editing…"}
                 aria-label="Edit item"
                 data-testid="backlog-detail-edit"
               >
@@ -1402,6 +1437,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           item={item}
           pipelineDisplay={pipelineDisplay}
           stuckItem={stuckItem}
+          otherStuckReasons={stuckSummary?.otherReasons}
           onTriggerRemediationNow={triggerRemediationNow}
         />
       </div>

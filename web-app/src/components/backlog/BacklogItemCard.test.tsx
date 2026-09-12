@@ -877,3 +877,38 @@ describe("BacklogBoard — cross-card independence", () => {
     expect(cards[1]).toHaveTextContent("Mark Ready");
   });
 });
+
+describe("BacklogBoard — multi-reason stuck items (BUG-105)", () => {
+  // Same benign jest/vanilla-extract mock warning silencing as
+  // BlockerChip.test.tsx.
+  beforeAll(() => {
+    jest.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterAll(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("BacklogBoard_should_ResolveBounceCapExhaustedAsPrimaryAndIndicateOthers_When_ItemHasFourOpenStuckReasons", () => {
+    // BUG-105: live item 09e91e3e-e13d-4166-a5f2-447242447f77 had 4 reasons
+    // open at once. See BacklogItemDetail.test.tsx's matching test — both
+    // must resolve the same primary reason from this fixture.
+    mockUseWatchBacklogItems.mockReturnValue({
+      items: [makeItem({ id: "item-1", status: "in_progress" })],
+      connectionState: "live",
+    });
+    const stuckRows = [
+      makeStuckItem({ reason: StuckReason.BOUNCING }),
+      makeStuckItem({ reason: StuckReason.REWORK_BLOCKED_STALE }),
+      makeStuckItem({ reason: StuckReason.MULTIPLE_REASONS }),
+      makeStuckItem({ reason: StuckReason.BOUNCE_CAP_EXHAUSTED }),
+    ];
+
+    render(<BacklogBoard onAction={jest.fn()} onItemClick={jest.fn()} stuckItems={stuckRows} />);
+
+    expect(screen.getByText("Bounce cap exhausted")).toBeInTheDocument();
+    expect(screen.queryByText("Not converging")).not.toBeInTheDocument();
+    // The 3 dropped reasons must be indicated, not silently invisible.
+    expect(screen.getByTestId("blocker-chip-more")).toHaveTextContent("+3 more");
+  });
+});

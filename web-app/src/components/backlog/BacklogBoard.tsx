@@ -6,6 +6,7 @@ import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogServi
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { filterBacklogItems, type BacklogFilterState } from "@/lib/hooks/useBacklogFilters";
 import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import { groupStuckItemsByItemId, summarizeStuckItemGroup } from "@/components/backlog-stuck/stuckReason";
 import { BacklogItemCard } from "./BacklogItemCard";
 import { ConnectionIndicator } from "./ConnectionIndicator";
 import { deriveStageDisplay, type Stage } from "./detail/StageTracker";
@@ -96,7 +97,10 @@ function BoardColumn({
   onItemClick: (itemId: string) => void;
   isLoading: boolean;
   pending: Record<string, string>;
-  stuckItemsById: Map<string, StuckBacklogItem>;
+  /** itemId -> every currently-open StuckBacklogItem row for that item (BUG-105: an
+   * item can have several at once) — grouped once by the parent via
+   * `groupStuckItemsByItemId`, resolved to a primary + "more" count per card below. */
+  stuckItemsById: Map<string, StuckBacklogItem[]>;
   /** True when this column has items upstream but the active filter excluded all of them (AC 5). */
   isEmptyDueToFilter: boolean;
 }) {
@@ -133,6 +137,8 @@ function BoardColumn({
           items.map((item) => {
             const isExiting = exitingIds.has(item.id);
             const isEntering = !isExiting && enteringIds.has(item.id);
+            const stuckGroup = stuckItemsById.get(item.id);
+            const stuckSummary = stuckGroup ? summarizeStuckItemGroup(stuckGroup) : undefined;
             return (
               <div
                 key={item.id}
@@ -147,7 +153,8 @@ function BoardColumn({
                   onClick={onItemClick}
                   pendingAction={pending[item.id] ?? null}
                   forceJustChanged={isEntering}
-                  stuckItem={stuckItemsById.get(item.id)}
+                  stuckItem={stuckSummary?.primary}
+                  otherStuckReasons={stuckSummary?.otherReasons}
                 />
               </div>
             );
@@ -305,7 +312,13 @@ export function BacklogBoard({
     };
   }, []);
 
-  const stuckItemsById = new Map(stuckItems.map((s) => [s.itemId, s]));
+  // BUG-105: an item can have several simultaneous open StuckBacklogItem
+  // rows (e.g. BOUNCING + BOUNCE_CAP_EXHAUSTED + MULTIPLE_REASONS all open at
+  // once) — grouping here (instead of the old `new Map(stuckItems.map(s =>
+  // [s.itemId, s]))`, which silently kept whichever row happened to be last
+  // in the array) lets each card resolve the SAME shared-priority primary
+  // reason BacklogItemDetail resolves for the same item.
+  const stuckItemsById = groupStuckItemsByItemId(stuckItems);
 
   return (
     <div className={styles.boardWrapper}>
