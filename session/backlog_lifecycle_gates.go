@@ -164,8 +164,8 @@ func (l *BacklogLifecycleListener) reconcileCustomGateChecks(ctx context.Context
 		l.notify(item.ID,
 			"Custom gate check may be stuck",
 			fmt.Sprintf("%s — a custom transition gate check has been running longer than expected. Investigate or re-run it.", item.Title),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+			8,            // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			false, false, // urgent, important — a "may be stuck" poll notification, like its stale-work/triage siblings
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonGateTimeout); notifyErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileCustomGateChecks MarkStuckNotified item=%s: %v", item.ID, notifyErr)

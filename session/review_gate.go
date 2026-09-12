@@ -338,8 +338,8 @@ func (r *ReviewGateRunner) Run(
 				n.Notify(item.ID,
 					"Review blocked — no changes to review",
 					fmt.Sprintf("%s — the work session ended without any committed changes.", item.Title),
-					7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-					3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+					7,           // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+					false, true, // urgent, important — auto-reopen is attempted next, so not yet a dead end
 				)
 			}
 		}
@@ -375,8 +375,8 @@ func (r *ReviewGateRunner) Run(
 				n.Notify(item.ID,
 					"Review blocked by security check",
 					fmt.Sprintf("%s — override required to proceed.", item.Title),
-					7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-					3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+					7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+					true, true, // urgent, important — a security block needs immediate operator attention
 				)
 			}
 		}
@@ -599,8 +599,8 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, gateContext Gat
 					n.Notify(item.ID,
 						"Review auto-repaired a broken diff",
 						fmt.Sprintf("%s — the recorded base commit was missing/corrupted; recomputed it from the branch and continued the review normally. The stored value should still be corrected so this doesn't repeat every run.", item.Title),
-						8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-						2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+						8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+						false, true, // urgent, important — already self-healed; the stored value still needs eventual correction
 					)
 				}
 			}
@@ -655,8 +655,8 @@ func (r *ReviewGateRunner) blockReviewWithTerminalVerdict(
 	if r.getNotifier != nil {
 		if n := r.getNotifier(); n != nil {
 			n.Notify(item.ID, notifyTitle, notifyBody,
-				7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-				3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+				7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+				true, true, // urgent, important — every caller of blockReviewWithTerminalVerdict is a "needs investigation, not rework" dead end
 			)
 		}
 	}

@@ -569,7 +569,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// restore as a fresh launch. Without this, HasSession() is false on this
 		// freshly-constructed Instance regardless of whether the real tmux session
 		// is alive, so every LoadInstances() call (health checks, MCP tool handlers,
-		// etc.) logs a spurious "creating tmux session" and re-runs launch bookkeeping
+		// etc.) logs a spurious "creating session" and re-runs launch bookkeeping
 		// for every Active session, even ones that were never actually down.
 		tmuxPrefix := instance.TmuxPrefix
 		if tmuxPrefix == "" {

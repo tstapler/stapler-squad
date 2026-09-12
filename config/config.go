@@ -299,6 +299,11 @@ type Config struct {
 	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
 	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
+	// AutonomousMaxTurns caps how many turns a single AutonomousDriver run gets before
+	// stopping without a DONE signal (session/autonomous_driver.go). 0 = use the default
+	// (60); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
+	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
+	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`
 	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
@@ -424,9 +429,10 @@ type Config struct {
 	// "reconnect cleanly under the legacy path"; tymux's rollback cannot mean
 	// that, since it means "new sessions honor the reverted default while
 	// existing tymux-backed sessions stay pinned to tymux for their
-	// lifetime". nil means "never completed". ResolveGlobalTymuxDefault
-	// refuses to let the *global* tymux default resolve to true until this
-	// is set. Set via RecordTymuxRollbackRehearsalCompleted.
+	// lifetime". nil means "never completed". Purely a historical record now
+	// — the global default no longer gates on it (see EffectiveTymuxEnabled;
+	// SetTymuxGlobalOverride sets the "tymux" feature flag unconditionally).
+	// Set via RecordTymuxRollbackRehearsalCompleted.
 	TymuxRollbackRehearsalCompletedAt *time.Time `json:"tymux_rollback_rehearsal_completed_at,omitempty"`
 	// TymuxSessionOverrides forces the tymux-bundled-integration project's
 	// process-manager backend for specific named tmux sessions, regardless of
@@ -497,10 +503,10 @@ func EffectiveNativeMergeEnabled(cfg *Config) bool {
 }
 
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
-// backend default is active. Read once at process startup
-// (main.go's resolveStartupBackend) — deliberately not live-settable, so
-// switching the default backend for every new session stays a conscious
-// operator action rather than a live UI toggle.
+// backend default is active. Resolved fresh on every call (session.getSelectedBackend)
+// via SetTymuxGlobalOverride — live-settable, no process restart required.
+// main.go's own startup-time read of this (via ResolveSessionBackend) is only
+// for tymuxNeeded's supervision decision, not a cache of this value.
 func EffectiveTymuxEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(TymuxFeatureFlag, false)
 }
@@ -509,8 +515,9 @@ func EffectiveTymuxEnabled(cfg *Config) bool {
 // TymuxRollbackRehearsalCompletedAt and saves the config — intended to be
 // called exactly once, after manually verifying a tymux rollback rehearsal
 // (new sessions honor the reverted default while existing tymux-backed
-// sessions stay pinned) passed against a real disposable session. Unblocks
-// ResolveGlobalTymuxDefault from refusing to enable the global default.
+// sessions stay pinned) passed against a real disposable session.
+// TymuxRollbackRehearsalCompletedAt's own doc comment covers why this is a
+// historical record only, not an enforced gate.
 func (c *Config) RecordTymuxRollbackRehearsalCompleted() error {
 	now := time.Now()
 	c.TymuxRollbackRehearsalCompletedAt = &now
@@ -1049,6 +1056,28 @@ func (c *Config) MaxAutoReworkIterationsOrDefault() int {
 		return 20
 	}
 	return c.MaxAutoReworkIterations
+}
+
+// autonomousMaxTurnsDefault is used when the config value is unset (0 or negative).
+// Raised from the driver's own historical fallback of 20, which was observed cutting
+// off recoverable multi-round work. autonomousMaxTurnsHardCeiling guards against a
+// runaway config value burning billed turns on a non-converging run.
+const (
+	autonomousMaxTurnsDefault     = 60
+	autonomousMaxTurnsHardCeiling = 200
+)
+
+// AutonomousMaxTurnsOrDefault returns the configured autonomous-driver turn cap,
+// clamped to [1, autonomousMaxTurnsHardCeiling]. Falls back to the default (60)
+// if unset (<=0) or c is nil.
+func (c *Config) AutonomousMaxTurnsOrDefault() int {
+	if c == nil || c.AutonomousMaxTurns <= 0 {
+		return autonomousMaxTurnsDefault
+	}
+	if c.AutonomousMaxTurns > autonomousMaxTurnsHardCeiling {
+		return autonomousMaxTurnsHardCeiling
+	}
+	return c.AutonomousMaxTurns
 }
 
 // maxConcurrentBacklogWorkItemsDefault is used when the config value is unset (0

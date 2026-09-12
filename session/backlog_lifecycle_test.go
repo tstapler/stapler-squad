@@ -1121,6 +1121,10 @@ func TestReconcileStuckReviewItems_NotifiesOncePerItem(t *testing.T) {
 	listener.reconcileStuckReviewItems(ctx, er)
 	assert.Equal(t, []string{"Review item needs attention"}, notifier.titles())
 	require.Len(t, notifier.calls, 1)
+	// Push-gate classification table: important but not urgent — automation isn't
+	// actively retrying, but it isn't a drop-everything alert either.
+	assert.False(t, notifier.calls[0].Urgent, "Review item needs attention must not be urgent")
+	assert.True(t, notifier.calls[0].Important, "Review item needs attention must be important")
 	// The message body must interpolate the item's title, not just fire a generic
 	// notification — this is the actionable content an operator needs to triage
 	// the stuck item without digging further.
@@ -2441,15 +2445,16 @@ func (f *fakeOneShotShipRunner) RunOneShotForSession(ctx context.Context, sessio
 }
 
 // fakeNotifierCall records a single Notify invocation's title, message body,
-// and notification type/priority, so tests can assert on interpolated
-// message content (e.g. that a verdict/outcome actually reached the
-// message) and on differentiated ERROR/URGENT vs WARNING/HIGH severity, not
-// just which notification fired.
+// notification type, and urgent/important axes, so tests can assert on
+// interpolated message content (e.g. that a verdict/outcome actually reached
+// the message) and on differentiated ERROR/URGENT vs WARNING/HIGH severity,
+// not just which notification fired.
 type fakeNotifierCall struct {
 	Title            string
 	Message          string
 	NotificationType int32
-	Priority         int32
+	Urgent           bool
+	Important        bool
 }
 
 // fakeNotifier is a test double implementing Notifier, recording every call.
@@ -2457,8 +2462,8 @@ type fakeNotifier struct {
 	calls []fakeNotifierCall // one per Notify call, in order
 }
 
-func (f *fakeNotifier) Notify(itemID, title, message string, notificationType, priority int32) {
-	f.calls = append(f.calls, fakeNotifierCall{Title: title, Message: message, NotificationType: notificationType, Priority: priority})
+func (f *fakeNotifier) Notify(itemID, title, message string, notificationType int32, urgent, important bool) {
+	f.calls = append(f.calls, fakeNotifierCall{Title: title, Message: message, NotificationType: notificationType, Urgent: urgent, Important: important})
 }
 
 // titles returns just the Title of every recorded call, in order — for tests (the
@@ -2534,6 +2539,15 @@ func TestPushAndCreatePR_PushFails_LeavesItemInReview_AndNotifies(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "item must stay in review, not silently become done")
 	assert.Contains(t, notifier.titles(), "PR creation failed")
+	for _, c := range notifier.calls {
+		if c.Title != "PR creation failed" {
+			continue
+		}
+		// Push-gate classification table: urgent and important — a genuine failure
+		// needing manual retry/investigation.
+		assert.True(t, c.Urgent, "PR creation failed must be urgent")
+		assert.True(t, c.Important, "PR creation failed must be important")
+	}
 }
 
 // TestPushAndCreatePR_RepeatedPushFailure_DedupsToast verifies the fix for a
@@ -3868,6 +3882,10 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener(t *t
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 	assert.Contains(t, notifier.titles(), "Review session ended without a verdict")
+	require.Len(t, notifier.calls, 1)
+	// Push-gate classification table: urgent and important.
+	assert.True(t, notifier.calls[0].Urgent, "Review session ended without a verdict must be urgent")
+	assert.True(t, notifier.calls[0].Important, "Review session ended without a verdict must be important")
 }
 
 // TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSweepTicks
@@ -3999,7 +4017,8 @@ func TestAutoReopenWithBackoffGate_should_MarkBounceCapExhausted_When_JustParked
 
 	require.Len(t, notifier.calls, 1)
 	assert.Equal(t, int32(7), notifier.calls[0].NotificationType, "must use NOTIFICATION_TYPE_ERROR, not the generic WARNING")
-	assert.Equal(t, int32(4), notifier.calls[0].Priority, "must use NOTIFICATION_PRIORITY_URGENT, not the generic HIGH")
+	assert.True(t, notifier.calls[0].Urgent, "bounce-cap-exhausted must be urgent")
+	assert.True(t, notifier.calls[0].Important, "bounce-cap-exhausted must be important, so it derives to NOTIFICATION_PRIORITY_URGENT")
 }
 
 // TestAutoReopenWithBackoffGate_should_NotMarkBounceCapExhausted_When_NotYetParked
