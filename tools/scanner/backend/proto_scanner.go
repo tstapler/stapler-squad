@@ -228,6 +228,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ListWorkflows":  "workflow:list",
 	"UpdateWorkflow": "workflow:update",
 	"RunWorkflow":    "workflow:run",
+	"WatchWorkflows": "workflow:watch",
 	// Trigger fire audit trail RPC (webhook-triggers Epic 1.2, Task 1.2.1d)
 	"ListTriggerFireEvents": "workflow:list-trigger-fire-events",
 	// Outbound callback config RPCs (webhook-triggers Phase 5, FR7)
