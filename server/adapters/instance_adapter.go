@@ -93,6 +93,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		GithubPrUrl:     snap.GitHub.GitHubPRURL,
 		GithubOwner:     snap.GitHub.GitHubOwner,
 		GithubRepo:      snap.GitHub.GitHubRepo,
+		GithubHost:      snap.GitHub.GitHubHost,
 		GithubSourceRef: snap.GitHub.GitHubSourceRef,
 		ClonedRepoPath:  snap.GitHub.ClonedRepoPath,
 		// Instance type and external metadata

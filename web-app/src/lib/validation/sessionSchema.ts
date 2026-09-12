@@ -1,5 +1,21 @@
 import { z } from "zod";
 
+// GHE hostnames configured on the server (see useGitHubEnterpriseHosts).
+// sessionSchema is a module-level constant built outside any component, so it
+// can't call the hook directly -- mirrors GitHubEnterpriseURLDetector's
+// setHosts() pattern: a mutable list callers update as the host list loads.
+let enterpriseHosts: string[] = [];
+
+export function setSessionSchemaEnterpriseHosts(hosts: string[]): void {
+  enterpriseHosts = hosts.filter(Boolean);
+}
+
+function matchesEnterpriseHost(path: string): boolean {
+  return enterpriseHosts.some(
+    (host) => path.includes(`${host}/`) || path.startsWith(`git@${host}:`)
+  );
+}
+
 export const sessionSchema = z.object({
   title: z
     .string()
@@ -19,7 +35,8 @@ export const sessionSchema = z.object({
         path.startsWith("~") ||
         path.includes("github.com/") ||
         path.startsWith("git@github.com:") ||
-        path.startsWith("ssh://"),
+        path.startsWith("ssh://") ||
+        matchesEnterpriseHost(path),
       "Path must be an absolute path (start with / or ~) or a GitHub URL"
     ),
 

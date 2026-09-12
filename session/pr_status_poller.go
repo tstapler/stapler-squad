@@ -26,20 +26,20 @@ type pollerAuthResult struct {
 // to exercise). realGHClient below is the only production implementation.
 type prGitHubClient interface {
 	CheckGHAuth() error
-	GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (info *github.PRInfo, newEtag string, changed bool, err error)
-	GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int, cache *github.ETagCache) (info *github.PRInfo, changed bool, err error)
+	GetPRForBranchConditional(ctx context.Context, ref github.RepoRef, branch, etag string) (info *github.PRInfo, newEtag string, changed bool, err error)
+	GetPRInfoConditional(ctx context.Context, ref github.RepoRef, prNumber int, cache *github.ETagCache) (info *github.PRInfo, changed bool, err error)
 }
 
 type realGHClient struct{}
 
 func (realGHClient) CheckGHAuth() error { return github.CheckGHAuth() }
 
-func (realGHClient) GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (*github.PRInfo, string, bool, error) {
-	return github.GetPRForBranchConditional(ctx, owner, repo, branch, etag)
+func (realGHClient) GetPRForBranchConditional(ctx context.Context, ref github.RepoRef, branch, etag string) (*github.PRInfo, string, bool, error) {
+	return github.GetPRForBranchConditional(ctx, ref, branch, etag)
 }
 
-func (realGHClient) GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int, cache *github.ETagCache) (*github.PRInfo, bool, error) {
-	return github.GetPRInfoConditional(ctx, owner, repo, prNumber, cache)
+func (realGHClient) GetPRInfoConditional(ctx context.Context, ref github.RepoRef, prNumber int, cache *github.ETagCache) (*github.PRInfo, bool, error) {
+	return github.GetPRInfoConditional(ctx, ref, prNumber, cache)
 }
 
 // PRStatusPollerConfig contains configuration for the PR status poller.
@@ -320,6 +320,10 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 	prNumber := snap.GitHub.GitHubPRNumber
 	owner := snap.GitHub.GitHubOwner
 	repo := snap.GitHub.GitHubRepo
+	ref, refErr := github.NewRepoRefWithHost(owner, repo, snap.GitHub.GitHubHost)
+	if refErr != nil {
+		return // owner/repo empty — already guarded by caller, but stay defensive
+	}
 
 	// Auto-discovery: find PR for branch when PR number not yet known.
 	// CurrentBranch() reads live from git for directory sessions (Branch field is empty).
@@ -333,7 +337,7 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 		if v, ok := p.listEtags.Load(listKey); ok {
 			listEtag = v.(string)
 		}
-		prInfo, newEtag, changed, err := p.ghClient.GetPRForBranchConditional(ctx, owner, repo, branch, listEtag)
+		prInfo, newEtag, changed, err := p.ghClient.GetPRForBranchConditional(ctx, ref, branch, listEtag)
 		if newEtag != "" {
 			p.listEtags.Store(listKey, newEtag)
 		}
@@ -372,7 +376,7 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 	}
 
 	// Conditional fetch using ETag cache (304 = no change)
-	prInfo, changed, err := p.ghClient.GetPRInfoConditional(ctx, owner, repo, prNumber, p.etagCache)
+	prInfo, changed, err := p.ghClient.GetPRInfoConditional(ctx, ref, prNumber, p.etagCache)
 	if err != nil {
 		if p.handleFetchError(err) {
 			return

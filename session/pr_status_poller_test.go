@@ -18,11 +18,11 @@ type fakeGHClient struct {
 
 func (f *fakeGHClient) CheckGHAuth() error { return nil }
 
-func (f *fakeGHClient) GetPRForBranchConditional(_ context.Context, _, _, _, etag string) (*github.PRInfo, string, bool, error) {
+func (f *fakeGHClient) GetPRForBranchConditional(_ context.Context, _ github.RepoRef, _, etag string) (*github.PRInfo, string, bool, error) {
 	return nil, etag, false, github.ErrNoPR
 }
 
-func (f *fakeGHClient) GetPRInfoConditional(_ context.Context, _, _ string, _ int, _ *github.ETagCache) (*github.PRInfo, bool, error) {
+func (f *fakeGHClient) GetPRInfoConditional(_ context.Context, _ github.RepoRef, _ int, _ *github.ETagCache) (*github.PRInfo, bool, error) {
 	f.getPRInfoCalls.Add(1)
 	return &github.PRInfo{State: "open"}, true, nil
 }

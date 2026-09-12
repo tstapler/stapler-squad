@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo, useId } from "react";
 import { usePathCompletions } from "@/lib/hooks/usePathCompletions";
 import { useSessionRepoPaths } from "@/lib/hooks/useSessionRepoPaths";
+import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { PathCompletionDropdown, type CompletionEntry } from "@/components/ui/PathCompletionDropdown";
 import { isGitHubRef, parseGitHubRef, getRepoFullName } from "@/lib/github/urlParser";
 import * as styles from "./RepoPathInput.css";
@@ -61,11 +62,12 @@ export function RepoPathInput({
     enabled: value.length > 0,
     directoriesOnly: true,
   });
+  const { hosts: enterpriseHosts } = useGitHubEnterpriseHosts();
 
   const detectedRepo = useMemo(() => {
-    if (!detectGitHubUrl || !value.trim() || !isGitHubRef(value)) return null;
-    return parseGitHubRef(value);
-  }, [detectGitHubUrl, value]);
+    if (!detectGitHubUrl || !value.trim() || !isGitHubRef(value, enterpriseHosts)) return null;
+    return parseGitHubRef(value, enterpriseHosts);
+  }, [detectGitHubUrl, value, enterpriseHosts]);
 
   const { allEntries, historyCount } = useMemo(() => {
     const filtered = historyPaths.filter(
@@ -216,8 +218,8 @@ export function RepoPathInput({
       {detectedRepo ? (
         <span className={styles.githubHint} data-testid="repo-path-github-hint">
           Will clone {getRepoFullName(detectedRepo)} to{" "}
-          {`~/.stapler-squad/repos/github.com/${detectedRepo.owner}/${detectedRepo.repo}`} when
-          you save.
+          {`~/.stapler-squad/repos/${detectedRepo.host || "github.com"}/${detectedRepo.owner}/${detectedRepo.repo}`}{" "}
+          when you save.
         </span>
       ) : (
         hint && <span className={styles.hint}>{hint}</span>

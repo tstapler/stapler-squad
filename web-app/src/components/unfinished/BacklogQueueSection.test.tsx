@@ -74,6 +74,7 @@ function makeIssue(overrides: Partial<GitHubIssue> = {}): GitHubIssue {
     url: "",
     labels: [],
     isPR: false,
+    host: "",
     ...overrides,
   };
 }

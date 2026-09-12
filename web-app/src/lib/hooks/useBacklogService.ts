@@ -599,6 +599,8 @@ export interface GitHubRepo {
   isLocal: boolean;
   localPath: string;
   description: string;
+  /** GitHub host this repo lives on ("" means github.com). */
+  host: string;
 }
 
 export interface GitHubIssue {
@@ -612,6 +614,8 @@ export interface GitHubIssue {
   createdAt?: string;
   updatedAt?: string;
   isPR: boolean;
+  /** GitHub host this issue lives on ("" means github.com). */
+  host: string;
 }
 
 export class GitHubAuthError extends Error {
@@ -633,7 +637,7 @@ interface UseBacklogServiceReturn {
   createBacklogItemFromChat: (message: string, existingItemId?: string) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   importGitHubIssue: (issueUrl: string, options?: { repoPath?: string; skipPlanning?: boolean }) => Promise<{ item: BacklogItem; triageTriggered: boolean; alreadyExisted: boolean } | null>;
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
-  listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number }) => Promise<GitHubIssue[]>;
+  listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number; host?: string }) => Promise<GitHubIssue[]>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
   archiveBacklogItem: (id: string) => Promise<boolean>;
   unarchiveBacklogItem: (id: string) => Promise<boolean>;
@@ -1176,6 +1180,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           isLocal: r.isLocal,
           localPath: r.localPath,
           description: r.description,
+          host: r.host,
         }));
       } catch (err) {
         if (err instanceof Error && err.message.toLowerCase().includes("token")) {
@@ -1191,7 +1196,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
     async (
       owner: string,
       repo: string,
-      options?: { state?: string; search?: string; limit?: number }
+      options?: { state?: string; search?: string; limit?: number; host?: string }
     ): Promise<GitHubIssue[]> => {
       if (!clientRef.current) return [];
       try {
@@ -1201,6 +1206,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           state: options?.state ?? "open",
           search: options?.search ?? "",
           limit: options?.limit ?? 30,
+          host: options?.host ?? "",
         });
         return resp.issues.map((i) => ({
           number: i.number,
@@ -1213,6 +1219,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           createdAt: i.createdAt ? new Date(Number(i.createdAt.seconds) * 1000).toISOString() : undefined,
           updatedAt: i.updatedAt ? new Date(Number(i.updatedAt.seconds) * 1000).toISOString() : undefined,
           isPR: i.isPr ?? false,
+          host: i.host,
         }));
       } catch (err) {
         if (err instanceof Error && err.message.toLowerCase().includes("token")) {

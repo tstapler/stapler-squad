@@ -2642,6 +2642,7 @@ func (s *SessionService) CreateSession(
 	if gitHubRef != nil {
 		instanceOpts.GitHubOwner = gitHubRef.Owner
 		instanceOpts.GitHubRepo = gitHubRef.Repo
+		instanceOpts.GitHubHost = gitHubRef.Host
 		instanceOpts.GitHubSourceRef = req.Msg.Path
 		instanceOpts.ClonedRepoPath = clonedRepoPath
 		if gitHubRef.PRNumber > 0 {

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
@@ -170,6 +171,46 @@ func payloadRepoFullName(payload map[string]interface{}) (string, bool) {
 	return fullName, true
 }
 
+// enterpriseHostsFor returns cfg's configured GitHub Enterprise hostnames, or nil
+// if cfg is nil -- the []string shape github.ParseGitHubRefWithHosts and
+// payloadRepoHost expect. Mirrors SessionService.enterpriseHosts and
+// BacklogService.EnterpriseHosts (minus the cached-account union those two add,
+// which isn't needed here: a webhook only ever names the host it was delivered
+// from, never one this instance discovers only via a cached account).
+func enterpriseHostsFor(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	configured := cfg.GetGitHubEnterpriseHosts()
+	hosts := make([]string, 0, len(configured))
+	for _, h := range configured {
+		hosts = append(hosts, h.Host)
+	}
+	return hosts
+}
+
+// payloadRepoHost extracts the GitHub host a webhook delivery came from, for the
+// self-actor filter (ADR-001). repository.full_name is host-less ("owner/repo"),
+// but every GitHub webhook's repository object also carries html_url — a full URL
+// (e.g. "https://github.example.com/owner/repo" for a GHE delivery) that does
+// encode the host. Parsed via github.ParseGitHubRefWithHosts against the
+// configured GHE hosts (mirroring how every other host-aware call site in this
+// codebase resolves a host) rather than a new one-off URL parser. Returns "" —
+// github.com — when html_url is missing/malformed or matches no known host,
+// which is also github.com's own encoding, so this degrades safely.
+func payloadRepoHost(payload map[string]interface{}, enterpriseHosts []string) string {
+	repoObj, _ := payload["repository"].(map[string]interface{})
+	htmlURL, _ := repoObj["html_url"].(string)
+	if htmlURL == "" {
+		return ""
+	}
+	ref, err := github.ParseGitHubRefWithHosts(htmlURL, enterpriseHosts)
+	if err != nil {
+		return ""
+	}
+	return ref.Host
+}
+
 // payloadPullRequestNumbers reads a check_run/workflow_run object's pull_requests
 // array of PR numbers. GitHub documents this as empty for a fork PR (the check run
 // can't be associated with a PR from a different repo) — an empty result is not an
@@ -205,46 +246,51 @@ func payloadRunID(payload map[string]interface{}, key string) (int64, bool) {
 // reused before GetCurrentUserLogin is called again.
 const selfLoginCacheTTL = 5 * time.Minute
 
-// selfLoginCache TTL-caches this instance's own GitHub login (via
-// github.GetCurrentUserLogin) for ADR-001's self-actor filter — avoids one GitHub API
-// call per issue_comment/pull_request_review delivery.
-type selfLoginCache struct {
-	mu        sync.RWMutex
+// selfLoginCacheEntry is one host's cached (or failed) self-login lookup.
+type selfLoginCacheEntry struct {
 	login     string
 	fetchedAt time.Time
 }
 
-func newSelfLoginCache() *selfLoginCache {
-	return &selfLoginCache{}
+// selfLoginCache TTL-caches this instance's own GitHub login per host (via
+// github.GetCurrentUserLogin) for ADR-001's self-actor filter — avoids one GitHub API
+// call per issue_comment/pull_request_review delivery. Keyed by host ("" =
+// github.com) because a GHE-hosted webhook's self-actor filter must be checked
+// against that GHE host's own authenticated identity, not github.com's.
+type selfLoginCache struct {
+	mu      sync.RWMutex
+	entries map[string]selfLoginCacheEntry
 }
 
-// Get returns the cached login, refreshing it if stale. On a lookup error or an
-// unauthenticated ("", nil) result, it caches "" and logs a Warn once per refresh
-// (not once per event) — callers must treat "" as "cannot determine, don't suppress"
-// per ADR-001's fail-open contract.
-func (c *selfLoginCache) Get(ctx context.Context) string {
+func newSelfLoginCache() *selfLoginCache {
+	return &selfLoginCache{entries: make(map[string]selfLoginCacheEntry)}
+}
+
+// Get returns the cached login for host, refreshing it if stale. On a lookup error
+// or an unauthenticated ("", nil) result, it caches "" and logs a Warn once per
+// refresh (not once per event) — callers must treat "" as "cannot determine, don't
+// suppress" per ADR-001's fail-open contract.
+func (c *selfLoginCache) Get(ctx context.Context, host string) string {
 	c.mu.RLock()
-	fresh := time.Since(c.fetchedAt) < selfLoginCacheTTL
-	login := c.login
+	entry, exists := c.entries[host]
 	c.mu.RUnlock()
-	if fresh {
-		return login
+	if exists && time.Since(entry.fetchedAt) < selfLoginCacheTTL {
+		return entry.login
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Re-check under the write lock in case another goroutine refreshed first.
-	if time.Since(c.fetchedAt) < selfLoginCacheTTL {
-		return c.login
+	if entry, exists := c.entries[host]; exists && time.Since(entry.fetchedAt) < selfLoginCacheTTL {
+		return entry.login
 	}
-	login, err := github.GetCurrentUserLogin(ctx)
+	login, err := github.GetCurrentUserLogin(ctx, host)
 	if err != nil || login == "" {
-		log.Warn("[GitHubWebhookHandler] could not resolve this instance's own GitHub login for the self-actor filter; PR-fix webhook events will not be self-filtered until this succeeds", "err", err)
+		log.Warn("[GitHubWebhookHandler] could not resolve this instance's own GitHub login for the self-actor filter; PR-fix webhook events will not be self-filtered until this succeeds", "host", host, "err", err)
 		login = ""
 	}
-	c.login = login
-	c.fetchedAt = time.Now()
-	return c.login
+	c.entries[host] = selfLoginCacheEntry{login: login, fetchedAt: time.Now()}
+	return login
 }
 
 // --- CI-budget-exceeded marker detection (Epic 4.2 Story 4.2.1) ------------
@@ -520,7 +566,8 @@ func (h *GitHubWebhookHandler) handlePRFixEvent(w http.ResponseWriter, r *http.R
 	// Self-actor filter (ADR-001): only reachable once the delivery is verified, so an
 	// unauthenticated request can never force selfLogin's GitHub API call.
 	if eventType == "issue_comment" || eventType == "pull_request_review" {
-		if actorLogin := extractActorLogin(eventType, payload); actorLogin != "" && strings.EqualFold(actorLogin, h.selfLogin.Get(ctx)) {
+		host := payloadRepoHost(payload, enterpriseHostsFor(h.cfg))
+		if actorLogin := extractActorLogin(eventType, payload); actorLogin != "" && strings.EqualFold(actorLogin, h.selfLogin.Get(ctx, host)) {
 			persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{Outcome: "no_match", DeliveryID: deliveryID})
 			w.WriteHeader(http.StatusOK)
 			return

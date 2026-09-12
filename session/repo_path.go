@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
@@ -529,6 +529,9 @@ type WorktreeInfo struct {
 	GitHubOwner string
 	// GitHubRepo is the repo name extracted from a GitHub remote URL
 	GitHubRepo string
+	// GitHubHost is the GitHub Enterprise host owning GitHubOwner/GitHubRepo,
+	// or "" for github.com.
+	GitHubHost string
 }
 
 // DetectWorktree checks if the given path is a git worktree and extracts relevant info.
@@ -594,35 +597,38 @@ func detectWorktreeUncached(path string) (*WorktreeInfo, error) {
 	output, err := cmd.Output()
 	if err == nil {
 		info.RemoteURL = strings.TrimSpace(string(output))
-		// Try to parse GitHub owner/repo from the URL
-		info.GitHubOwner, info.GitHubRepo = parseGitHubRemoteURL(info.RemoteURL)
+		// Try to parse GitHub owner/repo/host from the URL
+		info.GitHubOwner, info.GitHubRepo, info.GitHubHost = parseGitHubRemoteURL(info.RemoteURL)
 	}
 
 	return info, nil
 }
 
-// parseGitHubRemoteURL extracts owner and repo from various GitHub URL formats.
-// Supports:
+// enterpriseHostsForRemoteParsing returns the statically-configured GitHub
+// Enterprise hostnames so parseGitHubRemoteURL can recognize a GHE remote
+// (e.g. git@github.netflix.net:owner/repo.git), not just github.com.
+func enterpriseHostsForRemoteParsing() []string {
+	configured := config.LoadConfig().GetGitHubEnterpriseHosts()
+	hosts := make([]string, 0, len(configured))
+	for _, h := range configured {
+		hosts = append(hosts, h.Host)
+	}
+	return hosts
+}
+
+// parseGitHubRemoteURL extracts owner, repo, and host from a GitHub remote
+// URL, recognizing both github.com and any configured GitHub Enterprise host.
+// Supports HTTPS and SSH formats, e.g.:
 //   - https://github.com/owner/repo.git
-//   - https://github.com/owner/repo
 //   - git@github.com:owner/repo.git
-//   - git@github.com:owner/repo
-func parseGitHubRemoteURL(url string) (owner, repo string) {
-	url = strings.TrimSpace(url)
-
-	// HTTPS format: https://github.com/owner/repo.git
-	httpsPattern := regexp.MustCompile(`^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?$`)
-	if match := httpsPattern.FindStringSubmatch(url); match != nil {
-		return match[1], match[2]
+//   - https://github.netflix.net/owner/repo
+//   - git@github.netflix.net:owner/repo.git
+func parseGitHubRemoteURL(remoteURL string) (owner, repo, host string) {
+	ref, err := github.ParseGitHubRefWithHosts(remoteURL, enterpriseHostsForRemoteParsing())
+	if err != nil {
+		return "", "", ""
 	}
-
-	// SSH format: git@github.com:owner/repo.git
-	sshPattern := regexp.MustCompile(`^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$`)
-	if match := sshPattern.FindStringSubmatch(url); match != nil {
-		return match[1], match[2]
-	}
-
-	return "", ""
+	return ref.Owner, ref.Repo, ref.Host
 }
 
 // GetMainRepoPath uses git rev-parse --git-common-dir to get the main repo path.

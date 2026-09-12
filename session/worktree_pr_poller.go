@@ -233,7 +233,7 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem) {
 
 // fetchAndStore fetches PR info for one worktree and stores it in the cache.
 func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
-	repoRef, err := github.GetOwnerRepoFromRemote(item.RepoPath)
+	repoRef, err := github.GetOwnerRepoFromRemote(item.RepoPath, enterpriseHostsForRemoteParsing())
 	if err != nil {
 		log.Warn("worktree PR poller: could not read remote URL", "path", item.RepoPath, "err", err)
 		return
@@ -249,7 +249,7 @@ func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
 
 	// Use ETag conditional fetch when we already know the PR number.
 	if existing := p.GetPRData(item.RepoPath, item.Branch); existing != nil && existing.Number > 0 {
-		info, changed, fetchErr := github.GetPRInfoConditional(ctx, repoRef.Owner(), repoRef.Repo(), existing.Number, p.etagCache)
+		info, changed, fetchErr := github.GetPRInfoConditional(ctx, repoRef, existing.Number, p.etagCache)
 		if fetchErr != nil {
 			if !p.handleFetchError(fetchErr) {
 				log.Warn("worktree PR poller: failed to fetch PR status", "branch", item.Branch, "err", fetchErr)
@@ -269,7 +269,7 @@ func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
 		listEtag = v.(listCacheEntry).etag
 	}
 
-	info, newEtag, changed, fetchErr := github.GetPRForBranchConditional(ctx, repoRef.Owner(), repoRef.Repo(), item.Branch, listEtag)
+	info, newEtag, changed, fetchErr := github.GetPRForBranchConditional(ctx, repoRef, item.Branch, listEtag)
 	if changed && newEtag != "" {
 		p.listEtags.Store(key, listCacheEntry{etag: newEtag, noPR: errors.Is(fetchErr, github.ErrNoPR)})
 	}

@@ -126,6 +126,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		GitHubPRURL:     snap.GitHub.GitHubPRURL,
 		GitHubOwner:     snap.GitHub.GitHubOwner,
 		GitHubRepo:      snap.GitHub.GitHubRepo,
+		GitHubHost:      snap.GitHub.GitHubHost,
 		GitHubSourceRef: snap.GitHub.GitHubSourceRef,
 		ClonedRepoPath:  snap.GitHub.ClonedRepoPath,
 		// GitHub integration fields
@@ -304,6 +305,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		GitHubPRURL:     data.GitHubPRURL,
 		GitHubOwner:     data.GitHubOwner,
 		GitHubRepo:      data.GitHubRepo,
+		GitHubHost:      data.GitHubHost,
 		GitHubSourceRef: data.GitHubSourceRef,
 		ClonedRepoPath:  data.ClonedRepoPath,
 		GitHubIsFork:    data.GitHubIsFork,

@@ -17,9 +17,15 @@ import { AutocompleteInput } from "@/components/ui/AutocompleteInput";
 import { useRepositorySuggestions } from "@/lib/hooks/useRepositorySuggestions";
 import { useBranchSuggestions } from "@/lib/hooks/useBranchSuggestions";
 import { useSessionDefaults } from "@/lib/hooks/useSessionDefaults";
-import { sessionSchema, SessionFormData, defaultValues } from "@/lib/validation/sessionSchema";
+import {
+  sessionSchema,
+  setSessionSchemaEnterpriseHosts,
+  SessionFormData,
+  defaultValues,
+} from "@/lib/validation/sessionSchema";
 import { getProgramDisplay, PROGRAMS, DEFAULT_PROGRAM } from "@/lib/constants/programs";
 import { parseGitHubRef, isGitHubRef } from "@/lib/github/urlParser";
+import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { generateUniqueName } from "@/utils/sessionNameUtils";
 import { SourceBadge } from "./SourceBadge";
 import {
@@ -112,6 +118,13 @@ export function SessionWizard({ onComplete, onCancel, initialData, existingTitle
   }, [isSubmitting, creationPhases.length]);
 
   // Get autocomplete suggestions
+  const { hosts: enterpriseHosts } = useGitHubEnterpriseHosts();
+
+  // Keep sessionSchema's path validation in sync with configured GHE hosts.
+  useEffect(() => {
+    setSessionSchemaEnterpriseHosts(enterpriseHosts);
+  }, [enterpriseHosts]);
+
   const { suggestions: repositorySuggestions, isLoading: isLoadingRepos } = useRepositorySuggestions();
   const { suggestions: branchSuggestions, isLoading: isLoadingBranches } = useBranchSuggestions({
     repositoryPath,
@@ -151,8 +164,8 @@ export function SessionWizard({ onComplete, onCancel, initialData, existingTitle
     if (editedFieldsRef.current.has("title")) return;
 
     let repoName: string;
-    if (isGitHubRef(repositoryPath)) {
-      const parsed = parseGitHubRef(repositoryPath);
+    if (isGitHubRef(repositoryPath, enterpriseHosts)) {
+      const parsed = parseGitHubRef(repositoryPath, enterpriseHosts);
       repoName = parsed?.repo || repositoryPath.split("/").pop() || "";
     } else {
       repoName = repositoryPath.split("/").pop() || "";
@@ -166,7 +179,7 @@ export function SessionWizard({ onComplete, onCancel, initialData, existingTitle
     const suffix = Math.random().toString(36).slice(2, 6).replace(/[^a-z0-9]/g, "x").padEnd(4, "x");
     const suggested = generateUniqueName(`${repoName}-${suffix}`, existingTitles);
     setValue("title", suggested);
-  }, [repositoryPath, existingTitles, setValue]);
+  }, [repositoryPath, existingTitles, setValue, enterpriseHosts]);
 
   // Apply resolved defaults to form, preserving user-edited fields
   useEffect(() => {

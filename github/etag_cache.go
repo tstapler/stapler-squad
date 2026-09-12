@@ -28,8 +28,12 @@ func NewETagCache() *ETagCache {
 	return &ETagCache{}
 }
 
-func (c *ETagCache) cacheKey(owner, repo string, prNumber int) string {
-	return fmt.Sprintf("%s/%s/%d", owner, repo, prNumber)
+func (c *ETagCache) cacheKey(ref RepoRef, prNumber int) string {
+	host := ref.Host()
+	if host == "" {
+		host = "github.com"
+	}
+	return fmt.Sprintf("%s/%s/%s/%d", host, ref.Owner(), ref.Repo(), prNumber)
 }
 
 func (c *ETagCache) get(key string) (etagEntry, bool) {
@@ -50,18 +54,19 @@ func (c *ETagCache) set(key string, e etagEntry) {
 //   - changed=false means 304 Not Modified; info contains the cached value.
 //   - changed=true means 200 OK; info contains freshly fetched data.
 //   - Both info and changed may be zero values when an error is returned.
-func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int, cache *ETagCache) (*PRInfo, bool, error) {
-	if getGHToken(ctx) == "" {
+func GetPRInfoConditional(ctx context.Context, ref RepoRef, prNumber int, cache *ETagCache) (*PRInfo, bool, error) {
+	owner, repo, host := ref.Owner(), ref.Repo(), ref.Host()
+	if getGHTokenForAccount(ctx, AccountRef{Host: host}) == "" {
 		return nil, false, ErrNotAuthenticated
 	}
 
-	key := cache.cacheKey(owner, repo, prNumber)
+	key := cache.cacheKey(ref, prNumber)
 
 	entry, hasCached := cache.get(key)
 
 	apiPath := fmt.Sprintf("repos/%s/%s/pulls/%d",
 		url.PathEscape(owner), url.PathEscape(repo), prNumber)
-	req, err := newGHRequest(ctx, apiPath)
+	req, err := newGHRequestForHost(ctx, host, apiPath)
 	if err != nil {
 		return nil, false, fmt.Errorf("build conditional PR request: %w", err)
 	}
@@ -106,7 +111,7 @@ func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int,
 		// Drain body so the connection can be reused.
 		_, _ = io.Copy(io.Discard, resp.Body)
 		// Fall back to a full fetch.
-		info, fetchErr := GetPRInfoCtx(ctx, owner, repo, prNumber)
+		info, fetchErr := GetPRInfoCtx(ctx, ref, prNumber)
 		if fetchErr != nil {
 			return nil, false, fetchErr
 		}
@@ -119,7 +124,7 @@ func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int,
 	newEtag := resp.Header.Get("ETag")
 
 	// PR changed — fetch full review/CI data (requires gh CLI for reviews+statusCheckRollup).
-	newInfo, err := GetPRInfoCtx(ctx, owner, repo, prNumber)
+	newInfo, err := GetPRInfoCtx(ctx, ref, prNumber)
 	if err != nil {
 		return nil, false, err
 	}

@@ -58,6 +58,7 @@ const SELECTED_ISSUE: GitHubIssue = {
   url: "https://github.com/octocat/hello-world/issues/42",
   labels: [],
   isPR: false,
+  host: "",
 };
 
 jest.mock("@/components/backlog/GitHubIssuePicker", () => ({

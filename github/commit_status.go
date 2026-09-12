@@ -64,12 +64,14 @@ func NewCommitStatusRequest(sha string, state CommitStatusState, statusContext, 
 
 // SetCommitStatus posts a commit status to the GitHub Statuses API
 // (POST /repos/{owner}/{repo}/statuses/{sha}) via the gh CLI.
+// repo.Host() "" means github.com; a GHE host is targeted via --hostname/GH_HOST,
+// mirroring IsForkRepo/GetPRComments in github/client.go.
 //
 // This targets the Statuses API rather than the Checks API because Checks API writes
 // are restricted to GitHub Apps, and this repo's entire GitHub write path is
 // PAT/OAuth-token-based via the gh CLI (see ADR-001 in project_plans/pr-comment-check-runs).
 func SetCommitStatus(repo RepoRef, req CommitStatusRequest) error {
-	if err := CheckGHAuth(); err != nil {
+	if err := CheckGHAuthForHost(context.Background(), repo.Host()); err != nil {
 		return err
 	}
 
@@ -86,8 +88,12 @@ func SetCommitStatus(repo RepoRef, req CommitStatusRequest) error {
 	if req.TargetURL != "" {
 		args = append(args, "-f", fmt.Sprintf("target_url=%s", req.TargetURL))
 	}
+	if repo.Host() != "" {
+		args = append(args, "--hostname", NormalizeHost(repo.Host()))
+	}
 
 	cmd := safeexec.CommandContext(ctx, "gh", args...)
+	setGHHostEnv(cmd, repo.Host())
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("failed to set commit status on %s: %s", req.SHA, string(exitErr.Stderr))

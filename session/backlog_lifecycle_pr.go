@@ -131,14 +131,14 @@ func defaultPRPendingCheckerFactory(repoPath string) prPendingChecker {
 // unchanged when no PR exists — see reconcileOrphanedAgentPRs, which treats
 // that as "no match yet", not a failure.
 func defaultOrphanedPRFinder(ctx context.Context, repoPath, branch string) (*github.PRInfo, error) {
-	ref, err := github.GetOwnerRepoFromRemote(repoPath)
+	ref, err := github.GetOwnerRepoFromRemote(repoPath, enterpriseHostsForRemoteParsing())
 	if err != nil {
 		return nil, err
 	}
 	if !ref.IsValid() {
 		return nil, fmt.Errorf("could not resolve a GitHub owner/repo from the git remote at %s", repoPath)
 	}
-	return github.GetPRForBranch(ctx, ref.Owner(), ref.Repo(), branch)
+	return github.GetPRForBranch(ctx, ref, branch)
 }
 
 // defaultPRByNumberFinder resolves repoPath's GitHub owner/repo from its git
@@ -147,14 +147,14 @@ func defaultOrphanedPRFinder(ctx context.Context, repoPath, branch string) (*git
 // production default installed by newListenerBase for
 // verifyPRHeadBranchMatchesTracked's live-GitHub re-check.
 func defaultPRByNumberFinder(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error) {
-	ref, err := github.GetOwnerRepoFromRemote(repoPath)
+	ref, err := github.GetOwnerRepoFromRemote(repoPath, enterpriseHostsForRemoteParsing())
 	if err != nil {
 		return nil, err
 	}
 	if !ref.IsValid() {
 		return nil, fmt.Errorf("could not resolve a GitHub owner/repo from the git remote at %s", repoPath)
 	}
-	return github.GetPRByNumber(ctx, ref.Owner(), ref.Repo(), prNumber)
+	return github.GetPRByNumber(ctx, ref, prNumber)
 }
 
 // reconcilePRPendingWithoutPRItems is the pr_pending_no_pr detector (BUG-040):
@@ -1613,7 +1613,7 @@ func findPRPendingItemForEvent(ctx context.Context, er *EntRepository, repoFullN
 		if item.PrNumber != prNumber {
 			continue
 		}
-		ref, refErr := github.GetOwnerRepoFromRemote(item.RepoPath)
+		ref, refErr := github.GetOwnerRepoFromRemote(item.RepoPath, enterpriseHostsForRemoteParsing())
 		if refErr != nil || !ref.IsValid() {
 			continue
 		}

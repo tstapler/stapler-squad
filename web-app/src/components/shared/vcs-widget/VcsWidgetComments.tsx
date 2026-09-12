@@ -15,6 +15,11 @@ interface VcsWidgetCommentsProps {
   repo: string;
   prNumber: number;
   /**
+   * GitHub Enterprise host owning owner/repo, e.g. "github.netflix.net".
+   * Empty/undefined means github.com — mirrors GitHubBadge's `host` prop.
+   */
+  host?: string;
+  /**
    * `GetPRComments` is keyed by session ID, not owner/repo/prNumber (see
    * `GetPRCommentsRequest`) — required for the fetch. owner/repo/prNumber
    * are used to build each comment's "View on GitHub" link.
@@ -30,7 +35,7 @@ type LoadState = "idle" | "loading" | "loaded" | "error";
  * `Accordion.Content` on collapse/expand — see Collapsible.tsx) since grouped
  * mode makes `onExpandedChange` inert.
  */
-export function VcsWidgetComments({ owner, repo, prNumber, sessionId }: VcsWidgetCommentsProps) {
+export function VcsWidgetComments({ owner, repo, prNumber, host, sessionId }: VcsWidgetCommentsProps) {
   const [comments, setComments] = useState<PRComment[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const fetchedRef = useRef(false);
@@ -69,6 +74,7 @@ export function VcsWidgetComments({ owner, repo, prNumber, sessionId }: VcsWidge
         owner={owner}
         repo={repo}
         prNumber={prNumber}
+        host={host}
         comments={comments}
         loadState={loadState}
         onMount={fetchComments}
@@ -81,6 +87,7 @@ interface VcsWidgetCommentsBodyProps {
   owner: string;
   repo: string;
   prNumber: number;
+  host?: string;
   comments: PRComment[];
   loadState: LoadState;
   onMount: () => void;
@@ -90,6 +97,7 @@ function VcsWidgetCommentsBody({
   owner,
   repo,
   prNumber,
+  host,
   comments,
   loadState,
   onMount,
@@ -127,7 +135,7 @@ function VcsWidgetCommentsBody({
               VcsWidgetReviewFeedback's body rendering). */}
           <p className={styles.body}>{comment.body}</p>
           <a
-            href={`https://github.com/${owner}/${repo}/pull/${prNumber}#${
+            href={`https://${host || "github.com"}/${owner}/${repo}/pull/${prNumber}#${
               comment.isReview ? "discussion_r" : "issuecomment-"
             }${comment.id}`}
             target="_blank"
