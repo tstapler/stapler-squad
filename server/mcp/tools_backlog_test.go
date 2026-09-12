@@ -6979,9 +6979,15 @@ func TestReportBlocked_should_ReturnPermissionDenied_When_CallerRoleNotWork(t *t
 // caught report_blocked and report_duplicate missing this exact guard after a
 // stale-base merge with origin/main.
 func TestBacklogHandlers_should_HaveNoRemainingRawLinkCheck_When_SourceIsScanned(t *testing.T) {
-	data, err := os.ReadFile("tools_backlog.go")
-	require.NoError(t, err, "read tools_backlog.go")
-	content := string(data)
+	// report_pr_created's resolveItemLink call site lives in
+	// tools_backlog_pr.go, not tools_backlog.go — see
+	// docs/reference/hotspot-ranking.md row 5's extraction.
+	var content string
+	for _, f := range []string{"tools_backlog.go", "tools_backlog_pr.go"} {
+		data, err := os.ReadFile(f)
+		require.NoError(t, err, "read %s", f)
+		content += string(data)
+	}
 
 	const staleMessage = "this session is not linked to the specified backlog item"
 	assert.Equal(t, 0, strings.Count(content, staleMessage),
