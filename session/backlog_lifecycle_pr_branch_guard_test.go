@@ -196,6 +196,35 @@ func TestCloseIfSupersededByMain_should_NotClosePR_When_HeadBranchMismatchDetect
 // ReconcilePRPending's merge-detected done transition (Task 6.4): a merged
 // PR whose head branch doesn't match the item's tracked branch must not
 // auto-complete the item.
+// TestPRMergeDone_TriggersCleanup proves AC1: the PR-merge-detected done
+// transition (ReconcilePRPending's merged branch) synchronously invokes the
+// injected WorktreeCleaner right after the done transition succeeds, rather
+// than depending solely on the 60s reconcileTerminalItemSessions sweep.
+func TestPRMergeDone_TriggersCleanup(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 149)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/tracked-branch-cleanup", "")
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/tracked-branch-cleanup")
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	er := storage.repo
+	listener.ReconcilePRPending(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusDone), fetched.Status)
+	assert.Contains(t, cleaner.calls(), item.ID,
+		"ReconcilePRPending's merge-detected done transition must trigger synchronous cleanup, not rely solely on the 60s sweep")
+}
+
 func TestReconcilePRPending_should_NotTransitionToDone_When_HeadBranchMismatchDetected(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)

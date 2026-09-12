@@ -1318,6 +1318,16 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		}
 	}
 
+	// Belt-and-suspenders layer 2: reject if any acceptance criterion isn't
+	// marked pass via report_progress yet. Applies to the SkipReviewGate
+	// branch too — that flag skips the independent LLM review, not this
+	// deterministic completeness check, otherwise a SkipReviewGate item could
+	// self-declare done with zero verification of any kind.
+	if err := unmetAcCriteriaError(item); err != nil {
+		log.InfoLog().Printf("[mcp:request_review] rejected: %v session=%s item=%s", err, callerUUID, itemID)
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
 	// Scope boundary (Story 2.1.4): review/done are hardcoded built-in
 	// targets, not sourced from any stage engine — same "does not
 	// automatically inherit" resolution as allowedSelfResolveSourceStatuses
@@ -1518,6 +1528,35 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 		return mcpgo.NewToolResultText(fmt.Sprintf("Item %s has been blocked %d times — escalated to review for a human/reviewer to look at instead of returning to ready.", itemID, priorBlockedCycles+1)), nil
 	}
 	return mcpgo.NewToolResultText(fmt.Sprintf("Item %s reported blocked and returned to ready status.", itemID)), nil
+}
+
+// unmetAcCriteriaError reports which acceptance criteria on item aren't yet
+// marked done (report_progress's "pass") — pending, in_progress, or
+// explicitly failed all count as unmet. Returns nil when every criterion is
+// done, including when the item has zero criteria (nothing to verify, and
+// items created before ACs were mandatory must not be rejected forever).
+// Malformed criteria JSON fails open (logged, not rejected) rather than
+// permanently blocking an item on a parse bug.
+func unmetAcCriteriaError(item *session.BacklogItemData) error {
+	criteria, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+	if err != nil {
+		log.WarningLog().Printf("[mcp:request_review] failed to parse acceptance criteria for item=%s: %v", item.ID, err)
+		return nil
+	}
+	var unmet []string
+	for _, c := range criteria {
+		if c.Status != session.AcStatusDone {
+			unmet = append(unmet, fmt.Sprintf("%d: %s (status=%s)", c.Index, c.Text, c.Status))
+		}
+	}
+	if len(unmet) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"request_review rejected: %d acceptance criteria are not yet marked pass via report_progress: %s. "+
+			"Call report_progress for each remaining criterion, or report_blocked if genuinely stuck.",
+		len(unmet), strings.Join(unmet, "; "),
+	)
 }
 
 // --- resume_work ---
