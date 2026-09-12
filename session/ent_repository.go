@@ -278,6 +278,12 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.Note != "" {
 		sessionCreate.SetNote(data.Note)
 	}
+	if len(data.RuleTagProvenance) > 0 {
+		sessionCreate.SetRuleTagProvenance(data.RuleTagProvenance)
+	}
+	if len(data.SuppressedRuleTags) > 0 {
+		sessionCreate.SetSuppressedRuleTags(suppressedRuleTagsToSlice(data.SuppressedRuleTags))
+	}
 	if data.SessionType != "" {
 		sessionCreate.SetSessionType(string(data.SessionType))
 	}
@@ -510,6 +516,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	// meaningful, intentionally-reachable state ("cleared"), not an "unset" sentinel, so the
 	// guarded-update convention would silently prevent a user from ever clearing it.
 	sessionUpdate.SetNote(data.Note)
+	// RuleTagProvenance/SuppressedRuleTags are set unconditionally too: retracting the last
+	// rule-owned tag or un-suppressing the last tag are meaningful "cleared to empty" states
+	// (same rationale as Note above), not an "unset" sentinel a guarded update would preserve.
+	sessionUpdate.SetRuleTagProvenance(data.RuleTagProvenance)
+	sessionUpdate.SetSuppressedRuleTags(suppressedRuleTagsToSlice(data.SuppressedRuleTags))
 	if data.SessionType != "" {
 		sessionUpdate.SetSessionType(string(data.SessionType))
 	}
@@ -1224,6 +1235,36 @@ func nilIfEmptyJSON(j AcCriteriaJSON) *string {
 	return &s
 }
 
+// suppressedRuleTagsToSlice converts Instance.SuppressedRuleTags' in-memory
+// map[string]bool representation to the []string set persisted in the
+// suppressed_rule_tags JSON column (session/ent/schema/session.go) — a simpler
+// on-disk shape than a bool-valued JSON object, per Task 3.1.2a.
+func suppressedRuleTagsToSlice(m map[string]bool) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for tag, suppressed := range m {
+		if suppressed {
+			out = append(out, tag)
+		}
+	}
+	return out
+}
+
+// suppressedRuleTagsFromSlice is suppressedRuleTagsToSlice's inverse, used when
+// loading a session back from the suppressed_rule_tags JSON column.
+func suppressedRuleTagsFromSlice(s []string) map[string]bool {
+	if len(s) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(s))
+	for _, tag := range s {
+		out[tag] = true
+	}
+	return out
+}
+
 // sessionToInstanceData converts an Ent Session entity to InstanceData
 func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	data := &InstanceData{
@@ -1326,6 +1367,12 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 			data.Tags[i] = t.Name
 		}
 	}
+
+	// RuleTagProvenance/SuppressedRuleTags (ADR-002). A pre-migration row lacking
+	// these JSON columns decodes both to nil maps via ent's Default(), never an
+	// error — same backward-compat shape as the Category->Tags shim above.
+	data.RuleTagProvenance = sess.RuleTagProvenance
+	data.SuppressedRuleTags = suppressedRuleTagsFromSlice(sess.SuppressedRuleTags)
 
 	// Populate project ID from project edge (stored as name for string compatibility)
 	if sess.Edges.Project != nil {

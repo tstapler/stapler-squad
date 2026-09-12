@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -260,6 +261,17 @@ type Instance struct {
 	// Sessions can have multiple tags and appear in multiple groups simultaneously
 	// Examples: ["frontend", "urgent", "client-work"]
 	Tags []string
+	// RuleTagProvenance maps a tag value to the TaggingRule.ID (or the "llm"
+	// sentinel, llmSentinelRuleID) that most recently applied it (ADR-002).
+	// Absence of a tag here means it is user-owned and is never auto-retracted
+	// by reclassifyTagsLocked. Guarded by i.mu, same as Tags.
+	RuleTagProvenance map[string]string
+	// SuppressedRuleTags records tags the user explicitly removed while they
+	// carried rule provenance (ADR-002). The fixpoint/LLM apply paths
+	// (filterSuppressedTags) never re-add a tag present here until the user
+	// re-adds it explicitly via AddTag/SetTags, which clears its entry.
+	// Guarded by i.mu, same as Tags.
+	SuppressedRuleTags map[string]bool
 	// AutonomousMode enables autonomous Earpiece mode (crew autonomy).
 	// When true, the Fixer will inject correction prompts without user confirmation.
 	// When false (default), the session runs in supervised mode.
@@ -554,6 +566,12 @@ type Instance struct {
 	// Backed by a pointer to Instance.Tags for zero-sync compatibility with
 	// callers that read inst.Tags directly.
 	tagManager TagManager
+
+	// taggingEngine drives reclassifyTagsLocked's sync fixpoint (session-classifier-pipeline
+	// Epic 3.3). nil is a valid value — mirrors tagFireRecorder's nil-tolerant convention —
+	// and means "automatic tagging disabled" (e.g. a bare struct-literal test Instance),
+	// not an error. Injected via SetTaggingEngine.
+	taggingEngine *classifier.TaggingEngine
 
 	// tagFireRecorder records tagging-rule fires for analytics (see TagFireRecorder's doc
 	// comment). nil is a valid value — mirrors analyticsStore's existing nil-tolerant
@@ -1118,6 +1136,37 @@ func (i *Instance) SetTagFireRecorder(recorder TagFireRecorder) {
 	i.tagFireRecorder = recorder
 }
 
+// SetTaggingEngine injects the sync tagging engine that reclassifyTagsLocked evaluates on
+// every tag-relevant mutation (session-classifier-pipeline Epic 3.3). Pass nil to disable
+// automatic tagging for this Instance (the default) — see the taggingEngine field's doc
+// comment. Not actor-routed: like SetTagFireRecorder/SetShellRepository, this is
+// construction-time wiring, not a runtime mutation that needs mailbox serialization.
+func (i *Instance) SetTaggingEngine(engine *classifier.TaggingEngine) {
+	i.taggingEngine = engine
+}
+
+// ReclassifyTagsAfterCreate runs the tagging fixpoint (and the Unclassified coexistence
+// rule) for a brand-new session immediately after its worktree has been created, so a
+// matching seeded rule's tag is present by the time Start() returns — the plan's headline
+// Success Metric for new-session creation, not just for a later rename (session-classifier-
+// pipeline Story 3.3.2).
+//
+// Acquires its own, fresh i.mu.Lock() — it must NEVER be called from anywhere that already
+// holds i.mu (that would deadlock), which is exactly why this is a distinct, non-"*Locked"
+// wrapper rather than reusing reclassifyTagsLocked's convention of assuming the lock is
+// already held by the caller. Callers rely on setupFirstTimeWorktree() having already fully
+// released Instance.startMu on the same call stack before this runs — see the call site in
+// Start() for the lock-order invariant this depends on (pre-mortem.md Failure #5, P3).
+func (i *Instance) ReclassifyTagsAfterCreate() {
+	i.mu.Lock()
+	s := &instanceState{inst: i}
+	reclassifyTagsLocked(s, i.taggingEngine)
+	dropUnclassifiedIfOtherTagsPresentLocked(s)
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
+}
+
 // GetSessionGoal returns a thread-safe shallow copy of the current SessionGoalData (nil if not set).
 // A copy is returned so callers cannot mutate the shared struct.
 func (i *Instance) GetSessionGoal() *SessionGoalData {
@@ -1328,6 +1377,12 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		if err := i.setupFirstTimeWorktree(); err != nil {
 			return err
 		}
+		// setupFirstTimeWorktree() runs under Instance.startMu, never i.mu (see its own doc
+		// comment / git_worktree_manager.go:22-26) — by the time it returns here, startMu is
+		// fully released on this call stack, so ReclassifyTagsAfterCreate's own i.mu.Lock()
+		// below never nests under startMu. No lock-ordering cycle is possible between the
+		// two on this or any other path (pre-mortem.md Failure #5, P3).
+		i.ReclassifyTagsAfterCreate()
 	} else {
 		// No unbounded-duration setup (git worktree creation) happens between here
 		// and pm().Start() below for a restart/resume of an already-existing
@@ -1582,6 +1637,12 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		if err := i.setupFirstTimeWorktree(); err != nil {
 			return err
 		}
+		// setupFirstTimeWorktree() runs under Instance.startMu, never i.mu (see its own doc
+		// comment / git_worktree_manager.go:22-26) — by the time it returns here, startMu is
+		// fully released on this call stack, so ReclassifyTagsAfterCreate's own i.mu.Lock()
+		// below never nests under startMu. No lock-ordering cycle is possible between the
+		// two on this or any other path (pre-mortem.md Failure #5, P3).
+		i.ReclassifyTagsAfterCreate()
 	} else {
 		// No unbounded-duration setup (git worktree creation) happens between here
 		// and pm().Start() below for a restart/resume of an already-existing

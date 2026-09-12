@@ -3,11 +3,15 @@ package session
 import (
 	"context"
 	"errors"
+	"os"
+	"regexp"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 )
 
 func TestSetAutoApprove_should_NotRestart_When_StatusPaused(t *testing.T) {
@@ -121,4 +125,195 @@ func TestSetAutoApprove_SerializesWithSwitchProgram_When_ConcurrentCalls(t *test
 	case <-time.After(2 * time.Second):
 		t.Fatal("SwitchProgram never completed after SetAutoApprove released restartTriggerMu")
 	}
+}
+
+// --- Story 3.3.1: reclassifyTagsLocked fixpoint hook ---
+
+// bugfixSeedRule is a minimal TaggingRule mirroring SeedTaggingRules()' seed-tag-bugfix entry,
+// used directly (rather than the full seed set) so these tests assert against one predictable
+// rule instead of every seed rule's incidental side effects.
+func bugfixSeedRule() classifier.TaggingRule {
+	return classifier.TaggingRule{
+		RuleMeta:      classifier.RuleMeta{ID: "seed-bugfix", Name: "Bugfix branch", Priority: 100, Enabled: true, Source: "seed"},
+		BranchPattern: regexp.MustCompile(`^(bugfix|fix)/`),
+		OutputTag:     "Bugfix",
+	}
+}
+
+func TestReclassifyTagsLocked_should_ApplyMatchingSeedRuleTagSynchronously_When_BranchSetterCalled(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	inst.Program = "claude"
+	inst.Branch = "main"
+	engine := classifier.NewTaggingEngine()
+	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
+	inst.SetTaggingEngine(engine)
+
+	inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: "bugfix/pr-poller"})
+
+	assert.Contains(t, inst.GetTags(), "Bugfix")
+	assert.Equal(t, "seed-bugfix", inst.RuleTagProvenance["Bugfix"])
+}
+
+func TestReclassifyTagsLocked_should_RetractRuleOwnedTag_When_ConditionNoLongerHolds(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	inst.Branch = "bugfix/x"
+	inst.Tags = []string{"Important"}
+	engine := classifier.NewTaggingEngine()
+	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
+	inst.SetTaggingEngine(engine)
+
+	// Prime: apply the rule via a mutating setter (SetGitHubResolution with an unchanged
+	// branch — Branch stays "bugfix/x", Path is set for the first time).
+	inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: "bugfix/x"})
+	require.Contains(t, inst.GetTags(), "Bugfix")
+
+	// Rename off the matching branch.
+	inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: "main"})
+
+	tags := inst.GetTags()
+	assert.NotContains(t, tags, "Bugfix", "rule-owned tag must be retracted once its condition no longer holds")
+	assert.Contains(t, tags, "Important", "an unrelated user tag must never be touched by retraction")
+}
+
+func TestReclassifyTagsLocked_should_NotReAddSuppressedTag_When_RuleConditionMatchesAgain(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	inst.Branch = "bugfix/x"
+	inst.SuppressedRuleTags = map[string]bool{"Bugfix": true}
+	engine := classifier.NewTaggingEngine()
+	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
+	inst.SetTaggingEngine(engine)
+
+	inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: "bugfix/x"})
+
+	assert.NotContains(t, inst.GetTags(), "Bugfix", "a suppressed tag must never be re-added by the fixpoint")
+}
+
+func TestReclassifyTagsLocked_should_PreserveLLMProvenancedTag_When_UnrelatedSetterRuns(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	inst.Tags = []string{"Feature"}
+	inst.RuleTagProvenance = map[string]string{"Feature": llmSentinelRuleID}
+	engine := classifier.NewTaggingEngine()
+	engine.ReplaceRules(nil) // no sync rule can match "Feature" -- and none has ID "llm"
+	inst.SetTaggingEngine(engine)
+
+	inst.SetProgram("aider")
+
+	assert.Contains(t, inst.GetTags(), "Feature", "an LLM-provenanced tag must survive the sync retraction loop")
+	assert.Equal(t, llmSentinelRuleID, inst.RuleTagProvenance["Feature"])
+}
+
+func TestReclassifyTagsLocked_should_RetractTag_When_OwningRuleDeletedViaCRUD(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	inst.Branch = "bugfix/x"
+	inst.Tags = []string{"Bugfix"}
+	inst.RuleTagProvenance = map[string]string{"Bugfix": "seed-bugfix"}
+	engine := classifier.NewTaggingEngine()
+	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
+	inst.SetTaggingEngine(engine)
+
+	// Simulate a CRUD DeleteTaggingRule: the rule with ID "seed-bugfix" no longer exists.
+	engine.ReplaceRules(nil)
+
+	inst.SetProgram("aider")
+
+	assert.NotContains(t, inst.GetTags(), "Bugfix", "a tag whose owning rule was deleted must be retracted, not orphaned")
+	_, hasProvenance := inst.RuleTagProvenance["Bugfix"]
+	assert.False(t, hasProvenance)
+}
+
+// TestAllTagRelevantSetters_should_CallReclassifyTagsLocked_When_SourceScanned re-runs Task
+// 3.3.1d's grep/AST enumeration of every xxxLocked setter that mutates
+// Branch/Path/Program/Title in instance_actor_setters.go, and asserts each one's function
+// body calls reclassifyTagsLocked — a structural safeguard against a future setter being
+// wired incorrectly (architecture-review.md Blocker 3). Deliberately scoped to
+// instance_actor_setters.go only; instance_worktree.go's unlocked setupFirstTimeWorktree
+// path is covered separately by Story 3.3.2's ReclassifyTagsAfterCreate tests.
+func TestAllTagRelevantSetters_should_CallReclassifyTagsLocked_When_SourceScanned(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("instance_actor_setters.go")
+	require.NoError(t, err)
+
+	funcRe := regexp.MustCompile(`(?ms)^func (\w+Locked)\([^)]*\) [^{]*\{(.*?)\n\}\n`)
+	mutatesFieldRe := regexp.MustCompile(`s\.inst\.(Branch|Path|Program|Title)\s*=`)
+
+	matches := funcRe.FindAllStringSubmatch(string(src), -1)
+	require.NotEmpty(t, matches, "expected to find at least one xxxLocked function in instance_actor_setters.go")
+
+	checked := 0
+	for _, m := range matches {
+		name, body := m[1], m[2]
+		if !mutatesFieldRe.MatchString(body) {
+			continue
+		}
+		checked++
+		assert.Contains(t, body, "reclassifyTagsLocked(", "%s mutates Branch/Path/Program/Title but never calls reclassifyTagsLocked", name)
+	}
+	assert.GreaterOrEqual(t, checked, 3, "expected at least the 3 setters enumerated by Task 3.3.1d (setProgramLocked, setTitleDirectLocked, setGitHubResolutionLocked)")
+}
+
+// --- Story 3.4.1: Unclassified coexistence rule ---
+
+func TestDropUnclassifiedIfOtherTagsPresentLocked_should_RemoveUnclassified_When_RealTagAdded(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	inst.Branch = "bugfix/x"
+	inst.Tags = []string{UnclassifiedTag}
+	inst.RuleTagProvenance = map[string]string{UnclassifiedTag: llmSentinelRuleID}
+	engine := classifier.NewTaggingEngine()
+	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
+	inst.SetTaggingEngine(engine)
+
+	inst.SetProgram("aider")
+
+	tags := inst.GetTags()
+	assert.Contains(t, tags, "Bugfix")
+	assert.NotContains(t, tags, UnclassifiedTag)
+}
+
+func TestDropUnclassifiedIfOtherTagsPresentLocked_should_LeaveUnclassified_When_NoOtherTagPresent(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	inst.Tags = []string{UnclassifiedTag}
+	engine := classifier.NewTaggingEngine()
+	engine.ReplaceRules(nil)
+	inst.SetTaggingEngine(engine)
+
+	inst.SetProgram("aider")
+
+	assert.Equal(t, []string{UnclassifiedTag}, inst.GetTags())
+}
+
+// --- Story 2.3.3 addendum: fire-count recording from reclassifyTagsLocked ---
+
+// fakeTagFireRecorder records every RecordTaggingRuleFire call for assertion, satisfying
+// session.TagFireRecorder structurally (no import needed the other way — see that
+// interface's doc comment).
+type fakeTagFireRecorder struct {
+	fired []string
+}
+
+func (f *fakeTagFireRecorder) RecordTaggingRuleFire(ruleID string) {
+	f.fired = append(f.fired, ruleID)
+}
+
+func TestReclassifyTagsLocked_should_RecordTagFire_When_RuleMatchesRegardlessOfSuppression(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	inst.Branch = "bugfix/x"
+	inst.SuppressedRuleTags = map[string]bool{"Bugfix": true}
+	engine := classifier.NewTaggingEngine()
+	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
+	inst.SetTaggingEngine(engine)
+	recorder := &fakeTagFireRecorder{}
+	inst.SetTagFireRecorder(recorder)
+
+	inst.SetProgram("aider")
+
+	assert.Equal(t, []string{"seed-bugfix"}, recorder.fired, "the rule fired (and must be recorded) even though \"Bugfix\" is suppressed and never actually applied")
+	assert.NotContains(t, inst.GetTags(), "Bugfix", "sanity check: the tag itself must indeed be suppressed")
 }

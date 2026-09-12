@@ -47,6 +47,11 @@ type InstanceData struct {
 	IsExpanded bool     `json:"is_expanded,omitempty"`
 	Tags       []string `json:"tags,omitempty"` // Multi-valued tags for flexible organization
 
+	// RuleTagProvenance/SuppressedRuleTags back Instance's ADR-002 tag-provenance
+	// fields — see their doc comments on Instance for the full semantics.
+	RuleTagProvenance  map[string]string `json:"rule_tag_provenance,omitempty"`
+	SuppressedRuleTags map[string]bool   `json:"suppressed_rule_tags,omitempty"`
+
 	// Session type determines the workflow (directory, new_worktree, existing_worktree)
 	SessionType SessionType `json:"session_type,omitempty"`
 

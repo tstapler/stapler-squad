@@ -778,6 +778,49 @@ func TestStorage_SaveInstancesSync(t *testing.T) {
 	assert.Equal(t, "sync-category", instances[0].Category, "Category should be persisted by SaveInstancesSync")
 }
 
+// TestStorage_should_RoundTripRuleTagProvenance_When_SessionSavedAndReloaded implements
+// plan.md Story 3.1.2's Given-When-Then: RuleTagProvenance/SuppressedRuleTags survive a
+// SaveInstancesSync -> LoadInstances round trip through the Ent SQLite backend.
+func TestStorage_should_RoundTripRuleTagProvenance_When_SessionSavedAndReloaded(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("provenance-round-trip")
+	require.NoError(t, storage.AddInstance(inst))
+
+	inst.Tags = []string{"Bugfix"}
+	inst.RuleTagProvenance = map[string]string{"Bugfix": "seed-bugfix"}
+	inst.SuppressedRuleTags = map[string]bool{"Suppressed": true}
+	require.NoError(t, storage.SaveInstancesSync([]*Instance{inst}))
+
+	instances, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, map[string]string{"Bugfix": "seed-bugfix"}, instances[0].RuleTagProvenance)
+	assert.Equal(t, map[string]bool{"Suppressed": true}, instances[0].SuppressedRuleTags)
+}
+
+// TestStorage_should_DecodeNilProvenance_When_LoadingPreExistingRowWithoutNewColumns
+// mirrors the Category->Tags backward-compat shim: a session saved with no
+// RuleTagProvenance/SuppressedRuleTags ever set decodes cleanly, never an error — the ent
+// schema's Default(map[string]string{})/Default([]string{}) means "never set" reads back
+// as empty rather than nil, which is exactly the same "nothing suppressed/attributed" state.
+func TestStorage_should_DecodeNilProvenance_When_LoadingPreExistingRowWithoutNewColumns(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("no-provenance-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	instances, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Empty(t, instances[0].RuleTagProvenance)
+	assert.Empty(t, instances[0].SuppressedRuleTags)
+}
+
 // TestSaveInstances_WorktreeDataQueryableImmediately is a regression test for the
 // backlog review-gate "(no diff available)" bug: a review can fire (via
 // request_review, from inside the spawned session) as soon as SpawnSessionFromItem

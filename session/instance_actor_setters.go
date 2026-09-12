@@ -16,7 +16,11 @@ package session
 
 import (
 	"context"
+	"slices"
 	"time"
+
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 )
 
 // ---- MCPServerURL ----------------------------------------------------------------
@@ -301,6 +305,7 @@ func (i *Instance) SetArchivedAtIfNilAndStop(t time.Time) bool {
 func setProgramLocked(s *instanceState, program string) {
 	s.inst.mu.Lock()
 	s.inst.Program = program
+	reclassifyTagsLocked(s, s.inst.taggingEngine)
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
@@ -353,6 +358,7 @@ func (i *Instance) SetAutoYes(v bool) {
 func setTitleDirectLocked(s *instanceState, title string) {
 	s.inst.mu.Lock()
 	s.inst.Title = title
+	reclassifyTagsLocked(s, s.inst.taggingEngine)
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
@@ -745,6 +751,7 @@ func setGitHubResolutionLocked(s *instanceState, r GitHubResolution) {
 		s.inst.GitHubPRURL = r.PRURL
 	}
 	s.inst.touchUpdatedAt()
+	reclassifyTagsLocked(s, s.inst.taggingEngine)
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
@@ -779,4 +786,196 @@ func applyWorktreeDetectionLocked(s *instanceState, info *WorktreeInfo) {
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
+}
+
+// ---- Session tagging fixpoint hook (session-classifier-pipeline Epic 3.3) --------
+
+// llmSentinelRuleID is the RuleTagProvenance value used for LLM-applied tags (Phase 4's
+// SessionTagClassificationPoller) — there is no per-rule TaggingRule.ID for the LLM step,
+// so this sentinel drives the same retraction/suppression bookkeeping tag-by-tag. Defined
+// here (not in session/session_tag_poller.go, per the plan's Domain Glossary) because
+// reclassifyTagsLocked's retraction loop needs to skip it ahead of Phase 4's poller landing
+// — see this function's own doc comment and pre-mortem.md Failure #1.
+const llmSentinelRuleID = "llm"
+
+// filterSuppressedTags drops any candidate present in suppressed. Pure and receiver-less so
+// both apply paths — reclassifyTagsLocked (sync fixpoint, this file) and the Phase 4 LLM
+// poller's ApplyLLMTagResult — call the exact same choke point and cannot drift apart
+// (architecture-review.md Blocker 4).
+func filterSuppressedTags(candidates []string, suppressed map[string]bool) []string {
+	if len(suppressed) == 0 {
+		return candidates
+	}
+	kept := make([]string, 0, len(candidates))
+	for _, tag := range candidates {
+		if !suppressed[tag] {
+			kept = append(kept, tag)
+		}
+	}
+	return kept
+}
+
+// sessionTaggingContextFromState builds a classifier.SessionTaggingContext from the
+// in-progress instanceState. Tags is defensively copied since ApplyToFixpoint/EvalOnce
+// only ever read it, but callers of this function must not alias s.inst.Tags into a
+// context that outlives the current critical section.
+func sessionTaggingContextFromState(s *instanceState) classifier.SessionTaggingContext {
+	return classifier.SessionTaggingContext{
+		Name:    s.inst.Title,
+		Branch:  s.inst.Branch,
+		Path:    s.inst.Path,
+		Program: s.inst.Program,
+		Tags:    append([]string(nil), s.inst.Tags...),
+	}
+}
+
+// reclassifyTagsLocked runs one fixpoint tagging pass against s's current field values and
+// merges the result into s.inst.Tags/RuleTagProvenance, retracting any rule-owned tag whose
+// condition no longer holds. Must be called with s.inst.mu already held by the caller (the
+// xxxLocked convention) — every actor setter that mutates Name/Branch/Path/Program calls this
+// before its own buildSnapshot, so tag changes land in the same published snapshot as the
+// field change that triggered them. engine may be nil (tagging not wired for this Instance,
+// e.g. bare struct-literal tests) — a no-op in that case.
+func reclassifyTagsLocked(s *instanceState, engine *classifier.TaggingEngine) {
+	if engine == nil {
+		return
+	}
+	ctx := sessionTaggingContextFromState(s)
+	matches, capHit, stillChurning := engine.ApplyToFixpoint(ctx)
+	if capHit {
+		log.Warn("tagging fixpoint hit iteration cap without converging", "session", s.inst.Title, "still_churning", stillChurning)
+	}
+	recordTagFires(s.inst, matches)
+	applyTagMatchesLocked(s.inst, matches)
+	// Re-read Tags after applyTagMatchesLocked so RequiredTags-dependent rules are checked
+	// against the post-apply tag set, not the pre-fixpoint snapshot captured above.
+	ctx.Tags = s.inst.Tags
+	retractStaleTagsLocked(s.inst, engine, ctx)
+	dropUnclassifiedIfOtherTagsPresentLocked(s)
+}
+
+// recordTagFires notifies i.tagFireRecorder (if any) of every rule that matched this pass,
+// independent of whether the resulting tag survives suppression filtering (Task 2.3.3c) —
+// "the rule fired" is a fact about its condition matching, not about the tag's final state.
+func recordTagFires(i *Instance, matches []classifier.TagMatch) {
+	if i.tagFireRecorder == nil {
+		return
+	}
+	for _, m := range matches {
+		i.tagFireRecorder.RecordTaggingRuleFire(m.RuleID)
+	}
+}
+
+// applyTagMatchesLocked merges matches into i.Tags/RuleTagProvenance, attributing each tag to
+// the exact rule that matched it (never a post-hoc OutputTag lookup — see TagMatch's doc
+// comment) and skipping anything the user has suppressed. Must be called with i.mu held.
+func applyTagMatchesLocked(i *Instance, matches []classifier.TagMatch) {
+	if i.RuleTagProvenance == nil {
+		i.RuleTagProvenance = make(map[string]string)
+	}
+	candidates := make([]string, 0, len(matches))
+	ruleIDByTag := make(map[string]string, len(matches))
+	for _, m := range matches {
+		candidates = append(candidates, m.Tag)
+		ruleIDByTag[m.Tag] = m.RuleID
+	}
+	for _, tag := range filterSuppressedTags(candidates, i.SuppressedRuleTags) {
+		if !slices.Contains(i.Tags, tag) {
+			i.Tags = append(i.Tags, tag)
+		}
+		i.RuleTagProvenance[tag] = ruleIDByTag[tag]
+	}
+}
+
+// retractStaleTagsLocked removes any rule-owned tag from i.Tags/RuleTagProvenance whose
+// owning rule no longer matches ctx — including a rule deleted via CRUD, treated identically
+// to "condition no longer holds" (pre-mortem.md Failure #4, P2: not a separate branch).
+// LLM-provenanced entries (RuleID == llmSentinelRuleID) are skipped entirely: the sync engine
+// has no authority over LLM-owned tags (pre-mortem.md Failure #1, P1) — only the Phase 4 LLM
+// path's own logic ever retracts those. Must be called with i.mu held.
+func retractStaleTagsLocked(i *Instance, engine *classifier.TaggingEngine, ctx classifier.SessionTaggingContext) {
+	rulesByID := make(map[string]classifier.TaggingRule, len(engine.Rules()))
+	for _, rule := range engine.Rules() {
+		rulesByID[rule.ID] = rule
+	}
+	for tag, ruleID := range i.RuleTagProvenance {
+		if ruleID == llmSentinelRuleID {
+			continue
+		}
+		rule, found := rulesByID[ruleID]
+		if found && ruleConditionHolds(rule, ctx) {
+			continue
+		}
+		log.Warn("retracting rule-owned tag", "session", i.Title, "tag", tag, "rule_id", ruleID, "rule_found", found)
+		i.Tags = removeTagValue(i.Tags, tag)
+		delete(i.RuleTagProvenance, tag)
+	}
+}
+
+// ruleConditionHolds reports whether rule's own condition matches ctx right now, independent
+// of whether ctx.Tags already contains rule.OutputTag (unlike EvalOnce, which deliberately
+// skips a rule once its tag is already present — the wrong behavior for a retraction check,
+// which must ask "does this rule still apply" and not "would EvalOnce emit a new match").
+// Mirrors pkg/classifier's unexported matchesTaggingRule (duplicated rather than exported
+// solely for this one caller, per pitfalls.md #1 — one ~15-line function).
+func ruleConditionHolds(rule classifier.TaggingRule, ctx classifier.SessionTaggingContext) bool {
+	if !rule.Enabled {
+		return false
+	}
+	if rule.NamePattern != nil && !rule.NamePattern.MatchString(ctx.Name) {
+		return false
+	}
+	if rule.BranchPattern != nil && !rule.BranchPattern.MatchString(ctx.Branch) {
+		return false
+	}
+	if rule.PathPattern != nil && !rule.PathPattern.MatchString(ctx.Path) {
+		return false
+	}
+	if rule.ProgramPattern != nil && !rule.ProgramPattern.MatchString(ctx.Program) {
+		return false
+	}
+	for _, required := range rule.RequiredTags {
+		if !slices.Contains(ctx.Tags, required) {
+			return false
+		}
+	}
+	return true
+}
+
+// removeTagValue returns tags with every occurrence of value removed, preserving order.
+func removeTagValue(tags []string, value string) []string {
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t != value {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// dropUnclassifiedIfOtherTagsPresentLocked removes UnclassifiedTag the moment any other tag
+// is present on s.inst (Epic 3.4) — codifies architecture.md's coexistence rule so
+// Unclassified never lingers alongside a genuine classification, whether the real tag came
+// from the sync fixpoint above or (Phase 4) the LLM poller. Unclassified is never
+// suppressible (ux.md), so this never touches SuppressedRuleTags. Must be called with
+// s.inst.mu already held.
+func dropUnclassifiedIfOtherTagsPresentLocked(s *instanceState) {
+	i := s.inst
+	if !slices.Contains(i.Tags, UnclassifiedTag) {
+		return
+	}
+	hasOtherTag := false
+	for _, t := range i.Tags {
+		if t != UnclassifiedTag {
+			hasOtherTag = true
+			break
+		}
+	}
+	if !hasOtherTag {
+		return
+	}
+	i.Tags = removeTagValue(i.Tags, UnclassifiedTag)
+	if i.RuleTagProvenance != nil {
+		delete(i.RuleTagProvenance, UnclassifiedTag)
+	}
 }

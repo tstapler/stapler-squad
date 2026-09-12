@@ -115,6 +115,11 @@ type SessionService struct {
 	// Not yet exposed over any RPC (Phase 5 of the session-classifier-pipeline project); wired
 	// here so its persistence/rebuild plumbing exists ahead of that surface.
 	taggingRulesSvc *TaggingRulesService
+	// taggingEngine is the same live engine taggingRulesSvc mutates on CRUD — injected into
+	// every Instance (wireCallbacks) so session/instance_actor_setters.go's reclassifyTagsLocked
+	// fixpoint hook has a real rule set to evaluate (session-classifier-pipeline Epic 3.3/Task
+	// 2.3.3d). nil-safe like taggingRulesSvc; SetTaggingEngine(nil) just disables auto-tagging.
+	taggingEngine *classifier.TaggingEngine
 
 	// External session discovery (for mux-enabled sessions from external terminals)
 	externalDiscovery *session.ExternalSessionDiscovery
@@ -820,6 +825,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		utilitySvc:                  utilitySvc,
 		rulesSvc:                    rulesSvc,
 		taggingRulesSvc:             taggingRulesSvc,
+		taggingEngine:               taggingEngine,
 		approvalStore:               approvalStore,
 		databaseSvc:                 NewDatabaseService(),
 		fileSvc:                     NewFileService(workspaceSvc),
@@ -1546,6 +1552,11 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	if err != nil {
 		return nil, fmt.Errorf("CreateDirectorySession: %w", err)
 	}
+	// Wire callbacks (including the tagging engine/fire recorder, session-classifier-pipeline
+	// Task 2.3.3d) before Start() so a first-time-setup session's ReclassifyTagsAfterCreate
+	// call has a real engine to evaluate, matching the primary CreateSession pipeline's
+	// wire-before-start ordering (session_creation_pipeline.go).
+	s.wireCallbacks(instance)
 	if err := instance.Start(true); err != nil {
 		return nil, fmt.Errorf("CreateDirectorySession start: %w", err)
 	}
@@ -1556,7 +1567,6 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 		}
 	}
 	session.StartSessionDriver(instance, path)
-	s.wireCallbacks(instance)
 	if err := s.storage.AddInstance(instance); err != nil {
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateDirectorySession save: %w", err)
@@ -1603,6 +1613,9 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 	if err != nil {
 		return nil, fmt.Errorf("CreateWorktreeSession: %w", err)
 	}
+	// See CreateDirectorySession's matching comment: wire callbacks (tagging engine/fire
+	// recorder included) before Start() so ReclassifyTagsAfterCreate has a real engine.
+	s.wireCallbacks(instance)
 	if err := instance.Start(true); err != nil {
 		return nil, fmt.Errorf("CreateWorktreeSession start: %w", err)
 	}
@@ -1613,7 +1626,6 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 		}
 	}
 	session.StartSessionDriver(instance, repoPath)
-	s.wireCallbacks(instance)
 	if err := s.storage.AddInstance(instance); err != nil {
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateWorktreeSession save: %w", err)
@@ -1656,6 +1668,19 @@ func (s *SessionService) SetLifecycleContext(ctx context.Context) {
 // wireCallbacks wires all per-instance lifecycle callbacks on inst.
 // Consolidates the five wire* helpers that are always called together.
 func (s *SessionService) wireCallbacks(inst *session.Instance) {
+	// Tagging engine + fire-count recorder (session-classifier-pipeline Epic 3.3/Task
+	// 2.3.3d) — wired here, the single per-instance callback chokepoint every construction
+	// path (fresh CreateSession, CreateDirectorySession/CreateWorktreeSession, and every
+	// instance loaded at startup via loadInstancesWithWiring) already calls, so
+	// reclassifyTagsLocked has a real engine/recorder on every session, not just some paths.
+	inst.SetTaggingEngine(s.taggingEngine)
+	if analyticsStore := s.GetAnalyticsStore(); analyticsStore != nil {
+		// Guard against the typed-nil-interface gotcha: passing a nil *AnalyticsStore
+		// straight into the session.TagFireRecorder interface parameter would make
+		// inst.tagFireRecorder != nil true even though the underlying pointer is nil,
+		// and RecordTaggingRuleFire is not nil-receiver-safe.
+		inst.SetTagFireRecorder(analyticsStore)
+	}
 	s.wireRateLimitCallbacks(inst)
 	s.wireStatusChangeCallback(inst)
 	s.wireClaudeSessionIDCallback(inst)

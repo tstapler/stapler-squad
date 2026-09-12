@@ -217,3 +217,160 @@ func TestSetTags_EmptySlice(t *testing.T) {
 		t.Errorf("expected 0 tags, got %d: %v", len(tags), tags)
 	}
 }
+
+// --- Story 3.2.1: provenance-aware suppression/retraction (RemoveTag/AddTag/SetTags) ---
+
+func TestRemoveTag_should_SuppressTag_When_TagHasRuleProvenance(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:             "test",
+		Tags:              []string{"Bugfix", "MyTag"},
+		RuleTagProvenance: map[string]string{"Bugfix": "seed-bugfix"},
+	}
+
+	inst.RemoveTag("Bugfix")
+
+	if !inst.SuppressedRuleTags["Bugfix"] {
+		t.Fatal("expected SuppressedRuleTags[\"Bugfix\"] == true after removing a provenanced tag")
+	}
+	if _, ok := inst.RuleTagProvenance["Bugfix"]; ok {
+		t.Fatal("expected RuleTagProvenance[\"Bugfix\"] to be deleted after suppression")
+	}
+}
+
+func TestRemoveTag_should_NotSuppress_When_TagHasNoProvenance(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:             "test",
+		Tags:              []string{"Bugfix", "MyTag"},
+		RuleTagProvenance: map[string]string{"Bugfix": "seed-bugfix"},
+	}
+
+	inst.RemoveTag("MyTag")
+
+	if _, ok := inst.SuppressedRuleTags["MyTag"]; ok {
+		t.Fatal("expected SuppressedRuleTags to have no entry for a plain user tag with no provenance")
+	}
+}
+
+func TestAddTag_should_ClearSuppression_When_SuppressedTagReAdded(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:              "test",
+		SuppressedRuleTags: map[string]bool{"Bugfix": true},
+	}
+
+	if err := inst.AddTag("Bugfix"); err != nil {
+		t.Fatalf("AddTag(Bugfix) failed: %v", err)
+	}
+
+	if _, ok := inst.SuppressedRuleTags["Bugfix"]; ok {
+		t.Fatal("expected SuppressedRuleTags[\"Bugfix\"] to be cleared after re-adding the tag")
+	}
+}
+
+func TestSetTags_should_ApplySameSuppressionLogicAsRemoveTag_When_ProvenancedTagDroppedFromEditedList(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:             "test",
+		Tags:              []string{"Bugfix", "MyTag"},
+		RuleTagProvenance: map[string]string{"Bugfix": "seed-bugfix"},
+	}
+
+	if err := inst.SetTags([]string{"MyTag"}); err != nil {
+		t.Fatalf("SetTags failed: %v", err)
+	}
+
+	if !inst.SuppressedRuleTags["Bugfix"] {
+		t.Fatal("expected SuppressedRuleTags[\"Bugfix\"] == true after SetTags drops a provenanced tag")
+	}
+	if _, ok := inst.RuleTagProvenance["Bugfix"]; ok {
+		t.Fatal("expected RuleTagProvenance[\"Bugfix\"] to be deleted after SetTags suppression")
+	}
+}
+
+func TestSetTags_should_ClearSuppression_When_UserReAddsPreviouslySuppressedTag(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:              "test",
+		Tags:               []string{"MyTag"},
+		SuppressedRuleTags: map[string]bool{"Bugfix": true},
+	}
+
+	if err := inst.SetTags([]string{"MyTag", "Bugfix"}); err != nil {
+		t.Fatalf("SetTags failed: %v", err)
+	}
+
+	if _, ok := inst.SuppressedRuleTags["Bugfix"]; ok {
+		t.Fatal("expected SuppressedRuleTags[\"Bugfix\"] to be cleared after SetTags re-adds the tag")
+	}
+}
+
+func TestSetTags_should_LeaveNoDanglingProvenanceEntry_When_TagRemovedViaFullReplace(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:             "test",
+		Tags:              []string{"Bugfix"},
+		RuleTagProvenance: map[string]string{"Bugfix": "seed-bugfix"},
+	}
+
+	if err := inst.SetTags([]string{}); err != nil {
+		t.Fatalf("SetTags failed: %v", err)
+	}
+
+	for tag := range inst.RuleTagProvenance {
+		if !inst.HasTag(tag) {
+			t.Fatalf("dangling RuleTagProvenance entry %q for a tag absent from Tags", tag)
+		}
+	}
+}
+
+func TestRemoveTag_should_NeverSuppressUnclassifiedSentinel_When_UnclassifiedRemoved(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:             "test",
+		Tags:              []string{UnclassifiedTag},
+		RuleTagProvenance: map[string]string{UnclassifiedTag: "llm"},
+	}
+
+	inst.RemoveTag(UnclassifiedTag)
+
+	if _, ok := inst.SuppressedRuleTags[UnclassifiedTag]; ok {
+		t.Fatal("Unclassified must never enter SuppressedRuleTags, even via direct RemoveTag")
+	}
+}
+
+func TestSetTags_should_NeverSuppressUnclassifiedSentinel_When_UnclassifiedClearedViaFullReplace(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:             "test",
+		Tags:              []string{UnclassifiedTag},
+		RuleTagProvenance: map[string]string{UnclassifiedTag: "llm"},
+	}
+
+	if err := inst.SetTags([]string{}); err != nil {
+		t.Fatalf("SetTags failed: %v", err)
+	}
+
+	if _, ok := inst.SuppressedRuleTags[UnclassifiedTag]; ok {
+		t.Fatal("Unclassified must never enter SuppressedRuleTags, even via SetTags full replace")
+	}
+}
+
+func TestFilterSuppressedTags_should_DropOnlySuppressedCandidates_When_MixedCandidateListGiven(t *testing.T) {
+	t.Parallel()
+	candidates := []string{"Bugfix", "Feature", "Urgent"}
+	suppressed := map[string]bool{"Feature": true}
+
+	got := filterSuppressedTags(candidates, suppressed)
+
+	want := []string{"Bugfix", "Urgent"}
+	if len(got) != len(want) {
+		t.Fatalf("filterSuppressedTags(%v, %v) = %v, want %v", candidates, suppressed, got, want)
+	}
+	for idx, tag := range want {
+		if got[idx] != tag {
+			t.Fatalf("filterSuppressedTags(%v, %v) = %v, want %v", candidates, suppressed, got, want)
+		}
+	}
+}
