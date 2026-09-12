@@ -39,6 +39,26 @@ Note: the default (on vs. off), whether a rollback-rehearsal timestamp field
 exists (`<X>RollbackRehearsalCompletedAt`), and whether session-level
 overrides exist alongside the global one.
 
+**Also check observability parity, not just correctness.** A flag can work
+and still be un-shippable as a default if there's no way to see whether it
+performs acceptably. Grep for OTel instruments and spans in the flag's own
+package and compare against a rollout that already did this well:
+
+```bash
+grep -rn "Histogram\|Counter\|Gauge\|tracer\.Start\|otel\.Tracer" session/<pkg>/*.go | grep -v _test.go
+```
+
+`session/git/native_rollout.go` is this repo's reference implementation: a
+`git_operation_duration_ms` histogram labeled `operation × implementation`
+plus a span per dispatch point, built specifically to let an operator compare
+the new path's latency against the old one before trusting it as a default.
+A flag whose only instrument is a reliability counter (e.g. a reconnect
+count) or a generic cross-backend histogram with no backend/implementation
+label (functionally correct, but unable to isolate the new path's latency)
+cannot answer "does this feel slower" — file that as its own gap (this
+review's `docs/bugs/open/BUG-108` is the worked example) rather than treating
+Step 3/4's functional pass as sufficient proof of readiness.
+
 ## Step 2 — Static readiness checks
 
 - **Doc-vs-behavior drift.** Read every doc comment touching the flag's
