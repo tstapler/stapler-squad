@@ -176,15 +176,25 @@ func NewNotificationHistoryStore(filePath string) (*NotificationHistoryStore, er
 // For APPROVAL_NEEDED notifications the record ID is also updated to the incoming
 // approval UUID so that SetMetadata outcome-stamping (which looks up by record ID)
 // continues to correlate with the most recent approval for this session.
+//
+// Callers that use a stable, caller-chosen ID across a whole episode (e.g.
+// fork-pressure's "fork-pressure-status" -- see server/server.go's
+// buildForkPressureNotification) hit the exact-ID-match branch below instead:
+// identical content is a true no-op (idempotent retry), but changed content
+// (e.g. an escalation from Warning to Critical under the same ID) still merges
+// into the existing record rather than being silently dropped.
 func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check for exact duplicates by ID (idempotency guard)
 	for _, existing := range s.records {
-		if existing.ID == record.ID {
-			return nil // Already exists, skip
+		if existing.ID != record.ID {
+			continue
 		}
+		if recordContentEqual(existing, record) {
+			return nil // Genuinely unchanged -- idempotent no-op.
+		}
+		return s.mergeOccurrence(existing, record)
 	}
 
 	// Check for a duplicate by (sessionID, notificationType) and collapse.
@@ -194,25 +204,7 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 		if record.NotificationType == notifTypeApprovalNeeded {
 			existing.ID = record.ID
 		}
-		// Update existing record with latest data
-		existing.OccurrenceCount++
-		existing.LastOccurredAt = &record.CreatedAt
-		existing.Message = record.Message
-		existing.Metadata = record.Metadata
-		existing.Title = record.Title
-		// A recurrence means the event happened again -- surface it as unread again,
-		// except for AUTO_APPROVED, which stays silently pre-read across recurrence.
-		if record.NotificationType != notifTypeAutoApproved {
-			existing.IsRead = false
-			existing.ReadAt = nil
-		}
-		// Sweep retention on the collapse path too, not just the new-record path below --
-		// otherwise a frequently-recurring record only gets swept when some other,
-		// unrelated new notification happens to arrive.
-		s.enforceRetention()
-		// Move updated record to front (newest-first ordering)
-		s.moveToFront(existing)
-		return s.saveToDisk()
+		return s.mergeOccurrence(existing, record)
 	}
 
 	// No duplicate found -- insert as new record with count=1
@@ -223,6 +215,49 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 
 	s.enforceRetention()
 
+	return s.saveToDisk()
+}
+
+// recordContentEqual reports whether two records carry the same user-visible
+// content, used by Append's exact-ID-match branch to tell a true idempotent
+// retry (safe to no-op) apart from a stable-ID record whose content changed.
+func recordContentEqual(a, b *NotificationRecord) bool {
+	if a.Title != b.Title || a.Message != b.Message || a.NotificationType != b.NotificationType {
+		return false
+	}
+	if len(a.Metadata) != len(b.Metadata) {
+		return false
+	}
+	for k, v := range a.Metadata {
+		if b.Metadata[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// mergeOccurrence folds record's latest data into existing (occurrence count,
+// message/title/metadata, unread state) and persists -- the update-in-place
+// path shared by Append's exact-ID-match and (sessionID, notificationType)
+// collapse branches. Must be called with s.mu held.
+func (s *NotificationHistoryStore) mergeOccurrence(existing, record *NotificationRecord) error {
+	existing.OccurrenceCount++
+	existing.LastOccurredAt = &record.CreatedAt
+	existing.Message = record.Message
+	existing.Metadata = record.Metadata
+	existing.Title = record.Title
+	// A recurrence means the event happened again -- surface it as unread again,
+	// except for AUTO_APPROVED, which stays silently pre-read across recurrence.
+	if record.NotificationType != notifTypeAutoApproved {
+		existing.IsRead = false
+		existing.ReadAt = nil
+	}
+	// Sweep retention on the collapse path too, not just the new-record path in
+	// Append -- otherwise a frequently-recurring record only gets swept when
+	// some other, unrelated new notification happens to arrive.
+	s.enforceRetention()
+	// Move updated record to front (newest-first ordering)
+	s.moveToFront(existing)
 	return s.saveToDisk()
 }
 

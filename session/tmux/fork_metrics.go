@@ -34,6 +34,15 @@ const (
 	spawnFailureAlertThreshold = 10  // failures/window → critical
 	spawnRateWarnThreshold     = 120 // spawns/window → warning (4/s avg)
 	zombieAlertThreshold       = 10  // zombie children/window → alert
+
+	// Clear thresholds sit strictly below their alert-threshold counterparts,
+	// giving checkPressure hysteresis: an episode that fires at the alert
+	// threshold doesn't re-clear the instant a single event ages out of the
+	// window, only once the metric drops meaningfully below where it fired.
+	// Halving the alert threshold is a simple, tunable starting gap.
+	spawnFailureClearThreshold = spawnFailureAlertThreshold / 2
+	spawnRateClearThreshold    = spawnRateWarnThreshold / 2
+	zombieClearThreshold       = zombieAlertThreshold / 2
 )
 
 // ForkPressureStats is a point-in-time snapshot of fork pressure metrics.
@@ -141,15 +150,20 @@ var forkMonitor = struct {
 	zombieRing    *timestampRing
 	alertMu       deadlock.Mutex
 	lastAlertAt   time.Time
-	// Baseline fields for condition-change gating (FR-1, FR-2).
-	// All three are read and written only under alertMu.
-	lastAlertZombieCount  int64
-	lastAlertFailureCount int64
-	lastAlertLevel        ForkPressureLevel
-	alertFns              []AlertFunc
+	// Hysteresis state for checkPressure (fields below are read and written
+	// only under alertMu):
+	//   - episodeActive is true from the moment an episode's first alert fires
+	//     until every metric drops below its clear threshold.
+	//   - peakLevel is the highest ForkPressureLevel reached so far in the
+	//     current episode; a re-alert only fires when the current level
+	//     exceeds it (a genuine escalation), never on a same-level trickle.
+	episodeActive bool
+	peakLevel     ForkPressureLevel
+	alertFns      []AlertFunc
 	// alertWG tracks in-flight alert-dispatch goroutines spawned by checkPressure,
 	// so tests can deterministically wait for them to finish (see
-	// waitForPendingAlerts in fork_metrics_test.go) instead of sleeping.
+	// resetForkMonitor's forkMonitor.alertWG.Wait() in fork_metrics_test.go)
+	// instead of sleeping.
 	alertWG sync.WaitGroup
 }{
 	spawnRing:   newTimestampRing(int(forkPressureWindow/time.Second) * 5),
@@ -262,51 +276,71 @@ func snapshotAt(now time.Time) ForkPressureStats {
 	}
 }
 
+// forkPressureTransition is the pure result of nextForkPressureTransition:
+// what checkPressure should fire (if anything) and the episode state to store.
+type forkPressureTransition struct {
+	fire      bool
+	fireLevel ForkPressureLevel
+	active    bool
+	peak      ForkPressureLevel
+}
+
+// nextForkPressureTransition is the pure decision function behind checkPressure's
+// hysteresis, mirroring server/services/memory_pressure_notifier.go's
+// notified-flag shape: fire once entering an elevated state, fire again only
+// on a genuine escalation (Warning -> Critical) within the same episode, fire
+// an explicit ForkPressureOK clear once every metric drops below its separate,
+// lower clear threshold (FR-4/AC4), and otherwise stay silent even as counts
+// drift up and down above the alert threshold or in the clear/alert gap — the
+// sustained-trickle case a per-count ratchet used to mis-fire on (FR-1/AC1).
+// The notification record this feeds (buildForkPressureNotification) keeps a
+// stable ID and NotificationType for the whole episode, so an escalation fire
+// updates that record in place rather than creating a second one (AC2).
+func nextForkPressureTransition(wasActive bool, peak ForkPressureLevel, stats ForkPressureStats, belowClearThresholds bool) forkPressureTransition {
+	switch {
+	case wasActive && belowClearThresholds:
+		return forkPressureTransition{fire: true, fireLevel: ForkPressureOK, active: false, peak: ForkPressureOK}
+	case !wasActive && stats.Level != ForkPressureOK:
+		return forkPressureTransition{fire: true, fireLevel: stats.Level, active: true, peak: stats.Level}
+	case wasActive && stats.Level > peak:
+		return forkPressureTransition{fire: true, fireLevel: stats.Level, active: true, peak: stats.Level}
+	default:
+		return forkPressureTransition{active: wasActive, peak: peak}
+	}
+}
+
 func checkPressure(now time.Time) {
 	stats := snapshotAt(now)
-	if stats.Level == ForkPressureOK {
-		// Only pay the mutex cost when we actually need to reset the baseline.
-		// Read lastAlertLevel under the lock to avoid data races.
-		forkMonitor.alertMu.Lock()
-		if forkMonitor.lastAlertLevel != ForkPressureOK {
-			// Condition cleared — reset baseline so next re-occurrence fires a fresh alert (FR-5).
-			forkMonitor.lastAlertZombieCount = 0
-			forkMonitor.lastAlertFailureCount = 0
-			forkMonitor.lastAlertLevel = ForkPressureOK
-		}
-		forkMonitor.alertMu.Unlock()
-		return
-	}
+	belowClearThresholds := stats.FailuresInWindow < spawnFailureClearThreshold &&
+		stats.ZombiesInWindow < zombieClearThreshold &&
+		stats.SpawnsInWindow < spawnRateClearThreshold
 
 	forkMonitor.alertMu.Lock()
-	// Condition-change check: worsened means strictly higher counts OR level escalated.
-	// We use strict > (not >=) intentionally: if the ring-buffer count drops due to
-	// entry expiry and then rises again, we only re-alert when it exceeds the baseline
-	// set at the last alert — not just when it equals it. This prevents re-alerts on
-	// oscillation around the threshold boundary.
-	worsened := stats.Level > forkMonitor.lastAlertLevel ||
-		stats.ZombiesInWindow > forkMonitor.lastAlertZombieCount ||
-		stats.FailuresInWindow > forkMonitor.lastAlertFailureCount
-
-	if !worsened {
-		// Conditions unchanged — suppress. Re-alerts only fire when the situation
-		// genuinely worsens (higher count or escalated level), never on cooldown expiry alone.
-		forkMonitor.alertMu.Unlock()
-		return
+	t := nextForkPressureTransition(forkMonitor.episodeActive, forkMonitor.peakLevel, stats, belowClearThresholds)
+	forkMonitor.episodeActive = t.active
+	forkMonitor.peakLevel = t.peak
+	var fns []AlertFunc
+	if t.fire {
+		forkMonitor.lastAlertAt = now
+		fns = forkMonitor.alertFns
 	}
-	// Conditions worsened — alert immediately.
-	forkMonitor.lastAlertAt = now
-	forkMonitor.lastAlertZombieCount = stats.ZombiesInWindow
-	forkMonitor.lastAlertFailureCount = stats.FailuresInWindow
-	forkMonitor.lastAlertLevel = stats.Level
-	fns := forkMonitor.alertFns
 	forkMonitor.alertMu.Unlock()
 
+	if t.fire {
+		dispatchAlert(t.fireLevel, stats, fns)
+	}
+}
+
+// dispatchAlert spawns the alert-fns dispatch goroutine, tracked via alertWG so
+// tests can deterministically wait for it (see waitAlertCount/resetForkMonitor
+// in fork_metrics_test.go) instead of sleeping. Must be called with alertMu
+// already released (fns is captured under the lock by the caller).
+func dispatchAlert(level ForkPressureLevel, stats ForkPressureStats, fns []AlertFunc) {
 	forkMonitor.alertWG.Add(1)
 	go func() {
 		defer forkMonitor.alertWG.Done()
 		for _, fn := range fns {
-			fn(stats.Level, stats)
+			fn(level, stats)
 		}
 	}()
 }

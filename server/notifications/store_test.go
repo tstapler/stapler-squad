@@ -1318,3 +1318,88 @@ func TestDemoteExpiredUrgency_should_IgnoreNonUrgentRecords(t *testing.T) {
 		t.Errorf("expected priority to remain HIGH (%d), got %d", priorityHigh, got.Priority)
 	}
 }
+
+// TestAppendDedup_ExactIDMatch_ChangedContentMergesInPlace is the regression
+// test for backlog item cfda07b7-73fb-42e1-a21b-7fdf8a052a14 (AC2): a caller
+// using a stable, caller-chosen ID across an episode (e.g. fork-pressure's
+// "fork-pressure-status") must have a second Append() with the SAME ID but
+// DIFFERENT content (e.g. an escalation from Warning to Critical) merge into
+// the existing record — occurrence count incremented, fields updated, surfaced
+// unread again — not silently no-op as a duplicate.
+func TestAppendDedup_ExactIDMatch_ChangedContentMergesInPlace(t *testing.T) {
+	store := newTestStore(t)
+
+	r1 := makeRecord("fork-pressure-status", "fork-pressure", notifTypeWarning)
+	r1.Title = "Fork Pressure: warning"
+	r1.Message = "Spawns: 130/30s"
+	r1.Metadata = map[string]string{"fork_pressure_level": "warning"}
+	if err := store.Append(r1); err != nil {
+		t.Fatalf("Append r1: %v", err)
+	}
+	if _, err := store.MarkRead([]string{"fork-pressure-status"}); err != nil {
+		t.Fatalf("MarkRead: %v", err)
+	}
+
+	r2 := makeRecord("fork-pressure-status", "fork-pressure", notifTypeWarning)
+	r2.Title = "Fork Pressure: critical"
+	r2.Message = "Failures: 12/30s"
+	r2.Metadata = map[string]string{"fork_pressure_level": "critical"}
+	if err := store.Append(r2); err != nil {
+		t.Fatalf("Append r2: %v", err)
+	}
+
+	records, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected exactly 1 record (updated in place, not duplicated), got %d", total)
+	}
+
+	rec := records[0]
+	if rec.Title != "Fork Pressure: critical" {
+		t.Errorf("expected Title updated to escalated content, got %q", rec.Title)
+	}
+	if rec.Metadata["fork_pressure_level"] != "critical" {
+		t.Errorf("expected metadata updated to escalated content, got %q", rec.Metadata["fork_pressure_level"])
+	}
+	if rec.OccurrenceCount != 2 {
+		t.Errorf("expected OccurrenceCount=2, got %d", rec.OccurrenceCount)
+	}
+	if rec.IsRead {
+		t.Error("expected escalation to surface the record as unread again")
+	}
+}
+
+// TestAppendDedup_ExactIDMatch_UnchangedContentIsNoOp verifies that a genuinely
+// idempotent retry (same stable ID, identical content) does not bump
+// OccurrenceCount or flip the record back to unread — distinguishing it from
+// the changed-content merge path above.
+func TestAppendDedup_ExactIDMatch_UnchangedContentIsNoOp(t *testing.T) {
+	store := newTestStore(t)
+
+	r1 := makeRecord("fork-pressure-status", "fork-pressure", notifTypeWarning)
+	if err := store.Append(r1); err != nil {
+		t.Fatalf("Append r1: %v", err)
+	}
+	if _, err := store.MarkRead([]string{"fork-pressure-status"}); err != nil {
+		t.Fatalf("MarkRead: %v", err)
+	}
+
+	// Identical content, same ID -- a true idempotent retry.
+	r2 := makeRecord("fork-pressure-status", "fork-pressure", notifTypeWarning)
+	if err := store.Append(r2); err != nil {
+		t.Fatalf("Append r2: %v", err)
+	}
+
+	rec, ok := store.GetByID("fork-pressure-status")
+	if !ok {
+		t.Fatal("GetByID: record not found")
+	}
+	if rec.OccurrenceCount != 1 {
+		t.Errorf("expected OccurrenceCount to stay 1 for an unchanged retry, got %d", rec.OccurrenceCount)
+	}
+	if !rec.IsRead {
+		t.Error("expected an unchanged retry to leave the record's read state untouched")
+	}
+}
