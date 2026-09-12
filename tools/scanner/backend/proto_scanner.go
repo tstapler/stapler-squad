@@ -137,6 +137,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// Backlog RPCs (BacklogService in backlog.proto)
 	"CreateBacklogItem":           "backlog:create-item",
 	"CreateBacklogItemFromChat":   "backlog:create-item-from-chat",
+	"ParseBacklogItemIntent":      "backlog:parse-item-intent",
 	"GetBacklogItem":              "backlog:get-item",
 	"ListBacklogItems":            "backlog:list-items",
 	"UpdateBacklogItem":           "backlog:update-item",
