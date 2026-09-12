@@ -1,0 +1,117 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// GuidanceRequestService lets an agent (an interactive session, headless
+// triage, or an automated workflow) ask a human a structured question
+// durably — the question survives session restarts/respawns — and lets the
+// web UI answer it. Mirrors TymuxRolloutService's registration shape
+// (proto/session/v1/tymux_rollout.proto). See
+// project_plans/durable-guidance-request/implementation/plan.md Phase 2.
+service GuidanceRequestService {
+  // CreateGuidanceRequest creates a new durable question, or resolves to a
+  // pre-existing IDENTICAL open question for the same scope instead of
+  // creating a duplicate (see session.EntRepository.CreateGuidanceRequest's
+  // doc comment for the dedup-then-cap ordering).
+  rpc CreateGuidanceRequest(CreateGuidanceRequestRequest) returns (CreateGuidanceRequestResponse) {}
+
+  // AnswerGuidanceRequest records a human's answer. Answering an
+  // already-answered or already-cancelled request is not an error — the
+  // response reflects the CURRENT persisted state (applied=false) instead of
+  // a conflict error.
+  rpc AnswerGuidanceRequest(AnswerGuidanceRequestRequest) returns (AnswerGuidanceRequestResponse) {}
+
+  // GetGuidanceRequest reads a single GuidanceRequest by id.
+  rpc GetGuidanceRequest(GetGuidanceRequestRequest) returns (GetGuidanceRequestResponse) {}
+
+  // ListGuidanceRequests lists open GuidanceRequests for one (scope,
+  // scope_key) pair, alongside the current pending count and cap.
+  rpc ListGuidanceRequests(ListGuidanceRequestsRequest) returns (ListGuidanceRequestsResponse) {}
+
+  // ListAllPendingGuidanceRequests lists every open GuidanceRequest across
+  // every scope — backs the global nav badge (Epic 7).
+  rpc ListAllPendingGuidanceRequests(ListAllPendingGuidanceRequestsRequest) returns (ListAllPendingGuidanceRequestsResponse) {}
+}
+
+// GuidanceRequest is the wire representation of one durable question/answer
+// row. scope/question_type/status are plain strings validated Go-side by
+// domain.RequestScope/domain.QuestionType's IsValid() and
+// session.GuidanceRequestData.Status() — matching this proto package's
+// existing status-as-string convention (e.g. AcCriterion.status,
+// BacklogStatusEvent.status in backlog.proto) rather than a proto enum.
+message GuidanceRequest {
+  string id = 1;
+  string scope = 2; // "backlog-item" | "session" | "standalone"
+  optional string item_id = 3; // set only when scope == "backlog-item"
+  string session_uuid = 4; // set only when scope == "session"
+  string question_text = 5;
+  string question_type = 6; // "yes-no" | "multiple-choice" | "short-answer"
+  repeated string options = 7; // only meaningful when question_type == "multiple-choice"
+  string answer = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp notified_at = 10;
+  google.protobuf.Timestamp answered_at = 11;
+  google.protobuf.Timestamp cancelled_at = 12;
+  // status is derived (never stored) from answered_at/cancelled_at — see
+  // session.GuidanceRequestData.Status(). "pending" | "answered" | "cancelled".
+  string status = 13;
+}
+
+message CreateGuidanceRequestRequest {
+  string scope = 1;
+  optional string item_id = 2; // required when scope == "backlog-item"
+  string session_uuid = 3; // required when scope == "session" (the target session this question is about)
+  string question_text = 4;
+  string question_type = 5;
+  repeated string options = 6;
+  // caller_session_uuid identifies the session asking the question. Used for
+  // the ownership check on scope == "backlog-item" (caller must be linked to
+  // item_id, via the same check every other mutating backlog MCP tool uses)
+  // and scope == "session" (caller must equal session_uuid). Not checked for
+  // scope == "standalone".
+  string caller_session_uuid = 7;
+}
+
+message CreateGuidanceRequestResponse {
+  GuidanceRequest request = 1;
+}
+
+message AnswerGuidanceRequestRequest {
+  string id = 1;
+  string answer = 2;
+}
+
+message AnswerGuidanceRequestResponse {
+  GuidanceRequest request = 1;
+  // applied is true when THIS call's answer was the one persisted; false
+  // when the request was already answered/cancelled by a prior call, in
+  // which case request reflects that pre-existing state.
+  bool applied = 2;
+}
+
+message GetGuidanceRequestRequest {
+  string id = 1;
+}
+
+message GetGuidanceRequestResponse {
+  GuidanceRequest request = 1;
+}
+
+message ListGuidanceRequestsRequest {
+  string scope = 1;
+  string scope_key = 2; // item_id or session_uuid depending on scope; "" for standalone
+}
+
+message ListGuidanceRequestsResponse {
+  repeated GuidanceRequest requests = 1;
+  int32 pending_count = 2;
+  int32 cap = 3;
+}
+
+message ListAllPendingGuidanceRequestsRequest {}
+
+message ListAllPendingGuidanceRequestsResponse {
+  repeated GuidanceRequest requests = 1;
+}

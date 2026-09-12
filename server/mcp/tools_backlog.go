@@ -578,42 +578,26 @@ func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID s
 // ItemSession on success. On failure it returns a ready-to-return
 // *mcpgo.CallToolResult that distinguishes ITEM_NOT_FOUND (the item itself
 // doesn't exist) from PERMISSION_DENIED (the item exists but this session has
-// no link to it) — GetItemSessionBySessionAndItem's ent join predicate
-// (itemsession.HasBacklogItemWith) returns ErrNotFound for both cases and
-// cannot tell them apart on its own. See
-// project_plans/backlog-link-error-consistency/research/stack.md.
+// no link to it). A thin adapter over session.ResolveItemLink, which holds
+// the actual disambiguation logic — see that function's doc comment and
+// project_plans/backlog-link-error-consistency/research/stack.md. Extracted
+// (not reimplemented) so the ConnectRPC GuidanceRequestService's own
+// backlog-item ownership check shares this exact logic instead of an
+// independently-maintained copy (durable-guidance-request plan, Task
+// 2.1.2a-pre).
 func (h *backlogHandlers) resolveItemLink(ctx context.Context, callerUUID, itemID string) (session.ItemSessionSummary, *mcpgo.CallToolResult) {
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	itemSession, linkErr := session.ResolveItemLink(ctx, h.storage, callerUUID, itemID)
 	if linkErr == nil {
 		return itemSession, nil
 	}
-	if !errors.Is(linkErr, session.ErrNotFound) {
-		return session.ItemSessionSummary{}, errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), "")
+	switch linkErr.Code {
+	case session.ItemLinkNotFound:
+		return session.ItemSessionSummary{}, errResult(ErrItemNotFound, linkErr.Message, linkErr.Remediation)
+	case session.ItemLinkPermissionDenied:
+		return session.ItemSessionSummary{}, errResult(ErrPermissionDenied, linkErr.Message, linkErr.Remediation)
+	default:
+		return session.ItemSessionSummary{}, errResult(ErrInternalError, linkErr.Message, "")
 	}
-
-	// Disambiguate: does the item itself exist?
-	if _, itemErr := h.storage.GetBacklogItem(ctx, itemID); itemErr != nil {
-		if errors.Is(itemErr, session.ErrNotFound) {
-			return session.ItemSessionSummary{}, errResult(ErrItemNotFound,
-				fmt.Sprintf("backlog item %q not found", itemID), itemNotFoundRemediation)
-		}
-		return session.ItemSessionSummary{}, errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", itemErr), "")
-	}
-
-	log.InfoLog().Printf("[mcp:resolveItemLink] session=%s not linked to existing item=%s", callerUUID, itemID)
-	// otherToolsWarning lists every other mutating tool this same missing-link would also
-	// reject, so an agent that gives up on link_session_to_item (or hits it repeatedly
-	// without success) knows not to bother retrying any of them either.
-	otherToolsWarning := "If you don't fix this, stop calling ANY backlog MCP tool for this item — " +
-		"report_progress, request_review, submit_review_verdict, report_pr_created, submit_triage_result, " +
-		"report_blocked, report_duplicate will all fail identically for the same reason."
-	remediation := fmt.Sprintf("Call link_session_to_item with item_id=%s to link this session before retrying. %s", itemID, otherToolsWarning)
-	if prior, priorErr := h.storage.GetItemSessionBySessionUUID(ctx, callerUUID); priorErr == nil && prior.BacklogItemID != "" && prior.BacklogItemID != itemID {
-		remediation = fmt.Sprintf("This session is currently linked to a different item (%s). Call link_session_to_item with item_id=%s to relink, or use item_id=%s if that's what you meant. %s", prior.BacklogItemID, itemID, prior.BacklogItemID, otherToolsWarning)
-	}
-	return session.ItemSessionSummary{}, errResult(ErrPermissionDenied,
-		fmt.Sprintf("session %s is not linked to backlog item %s", callerUUID, itemID),
-		remediation)
 }
 
 // --- wait_for_backlog_event ---
