@@ -314,6 +314,13 @@ message Session {
   // server restart legitimately resets it back to Unknown until the extension's
   // periodic re-ping (Story 4.2.3) re-arms it.
   PiExtensionHealth pi_extension_health = 89;
+
+  // Maps a tag value in `tags` to the rule/mechanism that applied it: a
+  // TaggingRule.ID for rule-derived tags, or the sentinel "llm" for
+  // LLM-classifier-derived tags (session-classifier-pipeline Epic 6.2).
+  // Absent entries mean the tag was added manually. Mirrors
+  // session.Instance's RuleTagProvenance field.
+  map<string, string> rule_tag_provenance = 90;
 }
 
 // PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi

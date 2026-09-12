@@ -19,6 +19,7 @@ import { RuleBuilderForm } from "@/components/rules/RuleBuilderForm";
 import { TemplateLibrary } from "@/components/rules/TemplateLibrary";
 import { MatchDescription } from "@/components/rules/MatchDescription";
 import { SeverityBadge } from "./SeverityBadge";
+import { TaggingRulesPanel } from "./TaggingRulesPanel";
 import {
   panel, header, titleRow, title, subtitle, refreshButton,
   analyticsBar, analyticsTotal, analyticsRate, rateAllow, rateManual, analyticsTopTool,
@@ -110,6 +111,10 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
   const [cmdSampleText, setCmdSampleText] = useState("");
 
   const [sourceFilter, setSourceFilter] = useState<string>("all");
+  // ux.md Surface 4: the "Tagging Rules" tab lives alongside the existing
+  // approval-rule source-filter tabs but renders a wholly separate panel
+  // (TaggingRulesPanel), rather than filtering the same table.
+  const [showTaggingRulesTab, setShowTaggingRulesTab] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("priority");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -444,16 +449,18 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
       )}
 
       {/* ── Search ── */}
-      <input
-        className={searchBar}
-        type="search"
-        placeholder="Search by name, tool, program, pattern…"
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-        aria-label="Search rules"
-      />
+      {!showTaggingRulesTab && (
+        <input
+          className={searchBar}
+          type="search"
+          placeholder="Search by name, tool, program, pattern…"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          aria-label="Search rules"
+        />
+      )}
 
-      {/* ── Source filter tabs ── */}
+      {/* ── Source filter tabs (+ Tagging Rules, ux.md Surface 4) ── */}
       <div className={tabs}>
         {(["all", "user", "config", "seed", "claude-settings"] as const).map((src) => {
           const count = src === "all" ? rules.length : rules.filter((r) => r.source === src).length;
@@ -462,8 +469,8 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
           return (
             <button
               key={src}
-              className={`${tab} ${sourceFilter === src ? tabActive : ""}`}
-              onClick={() => setSourceFilter(src)}
+              className={`${tab} ${!showTaggingRulesTab && sourceFilter === src ? tabActive : ""}`}
+              onClick={() => { setShowTaggingRulesTab(false); setSourceFilter(src); }}
             >
               <span className={tabLabelFull}>{fullLabel}</span>
               <span className={tabLabelShort}>{shortLabel}</span>
@@ -471,15 +478,23 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
             </button>
           );
         })}
+        <button
+          className={`${tab} ${showTaggingRulesTab ? tabActive : ""}`}
+          onClick={() => setShowTaggingRulesTab(true)}
+          data-testid="tagging-rules-tab"
+        >
+          Tagging Rules
+        </button>
       </div>
+      {showTaggingRulesTab && <TaggingRulesPanel />}
       {/* ── Config file path hint (shown when viewing config tab) ── */}
-      {sourceFilter === "config" && (
+      {!showTaggingRulesTab && sourceFilter === "config" && (
         <div className={configFileHint}>
           Stored in ~/.config/stapler-squad/shared_rules.yaml
         </div>
       )}
       {/* ── Claude settings reload hint (shown when viewing claude-settings tab) ── */}
-      {sourceFilter === "claude-settings" && (
+      {!showTaggingRulesTab && sourceFilter === "claude-settings" && (
         <div className={configFileHint}>
           Loaded from ~/.claude/settings.json{" "}
           <button
@@ -493,7 +508,7 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
       )}
 
       {/* ── Error ── */}
-      {error && (
+      {!showTaggingRulesTab && error && (
         <div className={errorClass}>
           Failed to load rules: {error.message}
           <button onClick={refresh} className={retryButton}>Retry</button>
@@ -501,6 +516,7 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
       )}
 
       {/* ── Rules table ── */}
+      {!showTaggingRulesTab && (
       <div className={tableWrapper}>
         {loading && visibleRules.length === 0 ? (
           <div className={loadingClass}>Loading rules…</div>
@@ -654,10 +670,11 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
           </table>
         )}
       </div>
+      )}
 
 
       {/* ── Row count indicator ── */}
-      {visibleRules.length > 0 && (
+      {!showTaggingRulesTab && visibleRules.length > 0 && (
         <div className={rowCount}>
           {visibleRules.length} rule{visibleRules.length !== 1 ? "s" : ""}
           {(sourceFilter !== "all" || searchQuery.trim()) && ` (filtered from ${rules.length} total)`}
@@ -665,6 +682,7 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
       )}
 
       {/* ── Mobile FAB ── */}
+      {!showTaggingRulesTab && (
       <button
         className={mobileAddFab}
         onClick={() => { setTemplateSeed(null); setEditingRule(null); setShowBuilder(true); }}
@@ -673,8 +691,10 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
       >
         +
       </button>
+      )}
 
       {/* ── Rule Builder ── */}
+      {!showTaggingRulesTab && (
       <div className={formSection} id="rule-builder" {...(showBuilder ? { role: "dialog" } : {})}>
         {!showBuilder ? (
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
@@ -743,6 +763,7 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
           </>
         )}
       </div>
+      )}
 
       <TemplateLibrary
         open={showTemplates}
