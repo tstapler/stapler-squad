@@ -122,7 +122,7 @@ func (n *MemoryPressureNotifier) notify(ratio float64) {
 	n.eventBus.Publish(events.NewNotificationEvent(
 		"system", "System", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+		derivePriority(true, true), // urgent, important — approaching the memory limit risks an OOM kill right now
 		"Memory usage near limit",
 		fmt.Sprintf("Process memory is at %.0f%% of its configured limit. %s Dashboard: http://localhost:3000",
 			ratio*100, n.reclaimOptionsText()),

@@ -82,17 +82,27 @@ func StartPushSubscriber(ctx context.Context, bus *events.EventBus, pushService 
 
 // shouldNotify returns true when the event/priority/type combination warrants a
 // push notification. Extracted as a pure function for easy table-driven testing.
+//
+// Push only fires for priority == URGENT (both the urgent and important axes true —
+// see session.Notifier's doc comment), tightened down from the old ">= HIGH" threshold
+// because HIGH also covered "important but not urgent" notifications that shouldn't
+// interrupt the user. age additionally gates URGENT on urgentTTL: urgency is time-bound
+// ("a 1-hour-old notification is no longer urgent") even when importance isn't, so an
+// event older than urgentTTL by the time it's evaluated here no longer pushes on
+// priority alone — only the notificationType == typeApproval override still fires
+// regardless of age, since an approval request stays actionable until resolved.
 func shouldNotify(
 	eventType events.EventType,
 	priority int32,
 	notificationType int32,
 	newStatus session.Status,
+	age time.Duration,
 ) bool {
 	switch eventType {
 	case events.EventSessionUpdated:
 		return newStatus == session.Stopped
 	case events.EventNotification:
-		if priority >= priorityHigh {
+		if priority == priorityUrgent && age < urgentTTL {
 			return true
 		}
 		if notificationType == typeApproval {
@@ -146,7 +156,7 @@ func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, b
 }
 
 func buildInlineNotification(event *events.Event) (DeliveryNotification, bool) {
-	if !shouldNotify(event.Type, event.NotificationPriority, event.NotificationType, 0) {
+	if !shouldNotify(event.Type, event.NotificationPriority, event.NotificationType, 0, time.Since(event.Timestamp)) {
 		return DeliveryNotification{}, false
 	}
 	if event.NotificationTitle == "" || event.NotificationMessage == "" {

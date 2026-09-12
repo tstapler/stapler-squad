@@ -386,7 +386,7 @@ func (g *QuotaGate) notifyPaused(cfg config.QuotaConfig, reason string, estimate
 	g.eventBus.Publish(events.NewNotificationEvent(
 		quotaGateNotifierKey, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+		derivePriority(true, true), // urgent, important — automation just stopped dispatching work right now
 		"Backlog Automation Paused", msg,
 		map[string]string{"type": quotaGatePausedType, "reason": reason},
 	))
@@ -405,7 +405,7 @@ func (g *QuotaGate) notifyResumed(cfg config.QuotaConfig, estimate HeadroomEstim
 	g.eventBus.Publish(events.NewNotificationEvent(
 		quotaGateNotifierKey, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		derivePriority(false, false), // urgent, important — good-news recovery, purely informational
 		"Backlog Automation Resumed", msg,
 		map[string]string{"type": quotaGateResumedType},
 	))
