@@ -11,6 +11,7 @@ function makeDeps(): jest.Mocked<ActionDeps> {
     close: jest.fn(),
     setTheme: jest.fn(),
     createBacklogItemFromChat: jest.fn().mockResolvedValue(undefined),
+    openBacklogItemReview: jest.fn(),
   };
 }
 
@@ -284,6 +285,25 @@ describe("dispatchOmnibarAction", () => {
       dispatchOmnibarAction(action, deps);
       expect(deps.createBacklogItemFromChat).toHaveBeenCalledWith("Add dark mode support");
       expect(deps.close).toHaveBeenCalled();
+    });
+  });
+
+  describe("parse_backlog_item", () => {
+    it("dispatchOmnibarAction_should_callOpenBacklogItemReview_When_parseBacklogItemAction", () => {
+      const deps = makeDeps();
+      const action: OmnibarAction = { type: "parse_backlog_item", text: "Add CSV export" };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.openBacklogItemReview).toHaveBeenCalledWith("Add CSV export");
+    });
+
+    it("dispatchOmnibarAction_should_notCloseOmnibar_When_parseBacklogItemAction", () => {
+      // Inverse of chat_backlog_item's close() assertion above — this action
+      // transitions into a review UI rather than firing-and-closing, so a
+      // copy-pasted deps.close() call here would be a real regression.
+      const deps = makeDeps();
+      const action: OmnibarAction = { type: "parse_backlog_item", text: "Add CSV export" };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.close).not.toHaveBeenCalled();
     });
   });
 });
