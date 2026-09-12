@@ -1101,6 +1101,33 @@ message RecordGateApprovalResponse {
   GateSatisfactionRecord record = 1;
 }
 
+// GateStatus mirrors session.GateStatus — one gate's current satisfaction
+// state for a pending transition attempt, driving the item-detail "what's
+// blocking this" checklist (Epic 2.10). gate_id is a string, not always a
+// persisted TransitionGate id: DefaultWorkflowEngine's built-in gates have no
+// row to key on and use a stable human-readable identifier instead.
+message GateStatus {
+  string gate_id = 1;
+  // kind is one of "human_approval", "automated_review", "structural",
+  // "custom" (session.GateKind's sealed set).
+  string kind = 2;
+  bool satisfied = 3;
+  string description = 4;
+  string action_hint = 5;
+}
+
+// GetPendingGatesRequest asks which gates (if any) block item_id from
+// transitioning to to_status, without attempting the transition.
+message GetPendingGatesRequest {
+  string item_id = 1;
+  string to_status = 2;
+}
+
+message GetPendingGatesResponse {
+  // Empty means no gates block this transition.
+  repeated GateStatus gates = 1;
+}
+
 // ============================================================================
 // Backlog Item Events (for WatchBacklogItems streaming)
 // ============================================================================
@@ -1442,6 +1469,12 @@ service BacklogService {
   // human_approval-kind gate (Epic 2.4, Story 2.4.1) — one-shot, not
   // re-askable once recorded.
   rpc RecordGateApproval(RecordGateApprovalRequest) returns (RecordGateApprovalResponse) {}
+
+  // GetPendingGates previews which gates (if any) currently block item_id
+  // from transitioning to to_status — read-only, does not attempt the
+  // transition. Backs the item-detail "what's blocking this" checklist
+  // (Epic 2.10).
+  rpc GetPendingGates(GetPendingGatesRequest) returns (GetPendingGatesResponse) {}
 
   // ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
   rpc ImportGitHubIssue(ImportGitHubIssueRequest) returns (ImportGitHubIssueResponse) {}
