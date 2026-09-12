@@ -62,6 +62,7 @@ import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { ActivityLogSection } from "./detail/ActivityLogSection";
 import { NotesSection } from "./detail/NotesSection";
 import { ManualOverrideSection } from "./detail/ManualOverrideSection";
+import { GateBlockingSection } from "./GateBlockingSection";
 import * as styles from "./BacklogItemDetail.css";
 
 interface BacklogItemDetailProps {
@@ -1442,6 +1443,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       </div>
 
       <div className={styles.scrollArea}>
+        {/* ADR-005: "what's blocking this transition" gate checklist —
+            immediately below LifecycleSummary (which occupies the
+            top-billed liveness-panel slot) and above the rest of the
+            scroll-area content. */}
+        <GateBlockingSection item={item} />
+
         {/* Inline action error banner */}
         {error && (
           <div className={styles.errorBanner} role="alert">
