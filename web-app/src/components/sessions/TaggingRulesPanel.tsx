@@ -83,6 +83,7 @@ export function TaggingRulesPanel() {
                 <th className={th}>Priority</th>
                 <th
                   className={th}
+                  data-testid="tagging-rule-fire-count-header"
                   title="Number of times this rule fired in the last 7 days"
                 >
                   Fires (7d)
