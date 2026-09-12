@@ -28,6 +28,10 @@ func (BacklogStatusEvent) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Human-readable reason stored alongside the transition, e.g. 'auto-reopened after FAIL verdict'."),
+		field.String("stage_name_snapshot").
+			Optional().
+			Nillable().
+			Comment("The destination BacklogStage's human-readable Name at the moment of this transition (Epic 2.5's StageConfigSnapshot discipline) — frozen here so item-detail history keeps rendering the original stage name after that stage row is later renamed or deleted."),
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable(),
