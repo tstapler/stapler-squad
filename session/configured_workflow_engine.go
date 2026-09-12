@@ -114,7 +114,7 @@ func (e *ConfiguredWorkflowEngine) CanTransition(from, to BacklogStatus, fallbac
 	if _, ok := e.cache.Get(from, to); ok {
 		return true
 	}
-	if len(e.cache.AllowedTransitions(from)) > 0 {
+	if e.cache.HasStage(from) {
 		return false
 	}
 	snap := stageConfigSnapshotFallback(fallback)
@@ -139,7 +139,7 @@ func (e *ConfiguredWorkflowEngine) CanTransition(from, to BacklogStatus, fallbac
 // dead-end) never consults the fallback.
 func (e *ConfiguredWorkflowEngine) AllowedTransitions(from BacklogStatus, fallback ...*StageConfigSnapshot) []BacklogStatus {
 	result := e.cache.AllowedTransitions(from)
-	if len(result) == 0 {
+	if !e.cache.HasStage(from) {
 		if snap := stageConfigSnapshotFallback(fallback); snap != nil {
 			log.WarningLog().Printf("[ConfiguredWorkflowEngine] stage %q not found in live cache (likely deleted); falling back to item's captured StageConfigSnapshot with %d transition(s)", from, len(snap.AllowedTransitions))
 			result = append([]BacklogStatus(nil), snap.AllowedTransitions...)

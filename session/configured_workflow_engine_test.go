@@ -610,6 +610,47 @@ func TestConfiguredWorkflowEngine_should_HonorCapturedSnapshot_When_ItemsStageIs
 	assert.False(t, gates[0].Satisfied)
 }
 
+// TestConfiguredWorkflowEngine_should_NeverConsultFallback_When_StageIsLiveButHasZeroOutgoingTransitions
+// is a regression test for a bug sdd:6-verify's Layer 1 review caught: a
+// live, enabled stage with zero outgoing transitions (a legitimate
+// dead-end) had no key at all in stageConfigCache's edges map — identical
+// to a genuinely deleted stage — so CanTransition/AllowedTransitions
+// couldn't tell the two apart and would incorrectly consult (and honor) a
+// stale per-item StageConfigSnapshot fallback, potentially resurrecting a
+// transition an operator deliberately removed from a still-live stage.
+func TestConfiguredWorkflowEngine_should_NeverConsultFallback_When_StageIsLiveButHasZeroOutgoingTransitions(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	client := repo.client
+
+	deadEndStage, err := client.BacklogStage.Create().SetSlug("e2e-dead-end").SetName("E2E Dead End").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	// No StageTransition row is ever created from deadEndStage — it is live
+	// and enabled, just terminal by construction (no outgoing edges).
+
+	stageRepo := NewEntStageConfigRepository(client)
+	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
+	require.NoError(t, err)
+
+	from := BacklogStatus(deadEndStage.Slug)
+	fabricatedTo := BacklogStatus("some-other-stage")
+
+	// A fallback that (incorrectly, if honored) claims fabricatedTo was once
+	// legal from this stage — must never be consulted for a stage the live
+	// cache still knows about, dead-end or not.
+	fallback := &StageConfigSnapshot{
+		StageName:          deadEndStage.Name,
+		AllowedTransitions: []BacklogStatus{fabricatedTo},
+	}
+
+	assert.False(t, engine.CanTransition(from, fabricatedTo, fallback),
+		"a live dead-end stage must never fall back to a stale snapshot, even when one is supplied")
+	assert.Empty(t, engine.AllowedTransitions(from, fallback),
+		"a live dead-end stage's AllowedTransitions must stay empty, not resurrect the fallback's transitions")
+}
+
 // --- Epic 2.4 follow-up: resolver + evaluateGate wiring for
 // automated_review/custom gates (the gap this task closes) ---
 

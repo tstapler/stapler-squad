@@ -170,6 +170,15 @@ function BacklogStagesPageInner() {
         {formOpen && (
           <div className={styles.formOverlay}>
             <StageForm
+              // Forces a clean remount when switching which stage is being
+              // edited (or between edit and create) — StageForm seeds its
+              // fields via useState(stage?.slug ?? "") and loads its
+              // transitions in a mount-only effect, so without a key that
+              // changes identity, clicking Edit on a different stage while
+              // the form is already open would keep showing stale field
+              // values against the new stage's id (sdd:6-verify Layer 1
+              // finding).
+              key={editingStage?.id ?? "new"}
               stage={editingStage}
               allStages={stages}
               onSaved={handleSaved}

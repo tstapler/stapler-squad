@@ -133,6 +133,19 @@ func (c *stageConfigCache) refresh(ctx context.Context, repo StageConfigReposito
 		edgeCount++
 	}
 
+	// Seed an (empty, if needed) entry for every enabled stage, even one with
+	// zero outgoing transitions — a legitimate live dead-end stage. Without
+	// this, such a stage has no key in next.edges at all, identical to a
+	// stage that was actually deleted, and CanTransition/AllowedTransitions
+	// (session/configured_workflow_engine.go) can't tell the two apart to
+	// decide whether ADR-004's per-item StageConfigSnapshot fallback should
+	// ever be consulted.
+	for _, s := range stages {
+		if next.edges[s.Slug] == nil {
+			next.edges[s.Slug] = make(map[string]resolvedTransitionEdge)
+		}
+	}
+
 	c.ptr.Store(next)
 	log.DebugLog().Printf("[ConfiguredWorkflowEngine] cache refreshed: %d stages, %d transitions, %d gates", len(stages), edgeCount, gateCount)
 	return nil
@@ -144,6 +157,23 @@ func (c *stageConfigCache) refresh(ctx context.Context, repo StageConfigReposito
 // all. Lock-free: a single atomic Load + two map lookups. Takes BacklogStatus
 // (the widened open stage-slug type, per plan.md's Domain Glossary) rather
 // than a bare string so from/to can't be transposed by mistake at call sites.
+// HasStage reports whether from is a live, enabled stage in the current
+// cache snapshot — true even for a legitimate dead-end stage with zero
+// outgoing transitions, since refresh seeds an entry for every enabled
+// stage regardless of edge count. false means the stage was deleted (or
+// disabled, or the cache has never loaded), which is exactly the signal
+// CanTransition/AllowedTransitions (session/configured_workflow_engine.go)
+// need to decide whether to consult a per-item StageConfigSnapshot fallback
+// instead of trusting the live graph.
+func (c *stageConfigCache) HasStage(from BacklogStatus) bool {
+	snap := c.ptr.Load()
+	if snap == nil {
+		return false
+	}
+	_, ok := snap.edges[string(from)]
+	return ok
+}
+
 func (c *stageConfigCache) Get(from, to BacklogStatus) (resolvedTransitionEdge, bool) {
 	snap := c.ptr.Load()
 	if snap == nil {
