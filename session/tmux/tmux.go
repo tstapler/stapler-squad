@@ -1285,12 +1285,12 @@ func (t *TmuxSession) preconfigureServerBeforeSession() error {
 			// every retry with "exec: already started" instead of actually
 			// retrying (see TestComprehensiveSessionCreation flakiness).
 			preconfigureCmd := t.buildTmuxCommand("start-server", ";", "set-option", "-g", "exit-empty", "off", ";", "set-option", "-g", "remain-on-exit", "on")
-			return nil, t.cmdExec.Run(preconfigureCmd)
+			return t.cmdExec.CombinedOutput(preconfigureCmd)
 		})
 	}
-	_, err := ensureServerRunningWithRetry(run, func() bool { return checkServerNotRunning(t.serverSocket) }, serverStartAttempts, serverStartBackoffStart, serverStartBackoffMax)
+	out, err := ensureServerRunningWithRetry(run, func() bool { return checkServerNotRunning(t.serverSocket) }, serverStartAttempts, serverStartBackoffStart, serverStartBackoffMax)
 	if err != nil {
-		return fmt.Errorf("failed to pre-configure tmux server before session creation: %w", err)
+		return fmt.Errorf("failed to pre-configure tmux server before session creation: %w (output: %s)", err, out)
 	}
 	return nil
 }
