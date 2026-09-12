@@ -244,6 +244,12 @@ func getGHToken(_ context.Context) string {
 }
 
 // newGHRequest creates an authenticated GET request to the github.com REST API.
+//
+//nolint:unused // documented approved constructor (see .claude/rules/norawghrequest.md) for
+// no-host GitHub.com calls; no current call site needs it now that existing
+// callers went through the multi-host newGHRequestForHostWithToken, but it
+// stays available so future GitHub.com-only code doesn't reach for raw
+// http.NewRequest instead.
 func newGHRequest(ctx context.Context, path string) (*http.Request, error) {
 	return newGHRequestForHostWithToken(ctx, "", path, getGHToken(ctx))
 }

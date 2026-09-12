@@ -1774,8 +1774,9 @@ var prNumFromTitle = regexp.MustCompile(`(?i)^pr-(\d+)-`)
 // UserPR list. Called in the UserPRCache onUpdated callback. Lives here (not
 // in the github package) to avoid an import cycle: github → session → github.
 func annotateUserPRCache(cache *githubpkg.UserPRCache, poller *session.PRStatusPoller, scanner *unfinished.Scanner) {
-	var enterpriseHosts []string
-	for _, h := range config.LoadConfig().GetGitHubEnterpriseHosts() {
+	ghHosts := config.LoadConfig().GetGitHubEnterpriseHosts()
+	enterpriseHosts := make([]string, 0, len(ghHosts))
+	for _, h := range ghHosts {
 		enterpriseHosts = append(enterpriseHosts, h.Host)
 	}
 	var annSessions []githubpkg.PRAnnotationSession
