@@ -81,7 +81,7 @@ func TestGetPRInfoCtx_should_UseUnchangedCLIPath_When_FlagOff(t *testing.T) {
 		"statusCheckRollup": []
 	}`)
 
-	info, err := GetPRInfoCtx(context.Background(), "tstapler", "stapler-squad", 704)
+	info, err := GetPRInfoCtx(context.Background(), tstaplerSquadRef(), 704)
 	require.NoError(t, err)
 	assert.Equal(t, 704, info.Number)
 	assert.Equal(t, "CLI path PR", info.Title)
@@ -114,7 +114,7 @@ func TestGetPRInfoCtx_should_DispatchToGraphQL_When_FlagOn(t *testing.T) {
 	defer resetGhBaseURLForTest(ts)()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
-	info, err := GetPRInfoCtx(context.Background(), "tstapler", "stapler-squad", 802)
+	info, err := GetPRInfoCtx(context.Background(), tstaplerSquadRef(), 802)
 	require.NoError(t, err)
 	assert.Equal(t, 802, info.Number)
 	assert.Equal(t, "approved", info.ReviewDecision)
@@ -132,8 +132,8 @@ func TestGetPRInfoCtx_should_DispatchToGraphQL_When_FlagOn(t *testing.T) {
 // TestWorktreePRPoller_InvalidateCache_NextFetchIsCacheMiss flaking with
 // exactly this error from an unrelated concurrently-running test).
 func TestCheckGHAuth_JoinerUnaffectedByLeaderContextCancellation(t *testing.T) {
-	ghAuthState.Store(authResult{err: errors.New("force cache miss"), expiry: time.Now().Add(-time.Hour)})
-	t.Cleanup(func() { ghAuthState.Store(authResult{err: nil, expiry: time.Now().Add(-time.Hour)}) })
+	ghAuthCache.Store("", authResult{err: errors.New("force cache miss"), expiry: time.Now().Add(-time.Hour)})
+	t.Cleanup(func() { ghAuthCache.Store("", authResult{err: nil, expiry: time.Now().Add(-time.Hour)}) })
 
 	started := make(chan struct{})
 	release := make(chan struct{})

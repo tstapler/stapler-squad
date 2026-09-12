@@ -99,7 +99,7 @@ export function BacklogQueueSection() {
       setShowImport(false);
       let successCount = 0;
       for (const issue of issues) {
-        const url = issue.url || `https://github.com/${owner}/${repo}/issues/${issue.number}`;
+        const url = issue.url || `https://${issue.host || "github.com"}/${owner}/${repo}/issues/${issue.number}`;
         const result = await importGitHubIssue(url);
         if (result) successCount++;
       }

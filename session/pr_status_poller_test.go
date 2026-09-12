@@ -30,11 +30,11 @@ type fakeGHClient struct {
 
 func (f *fakeGHClient) CheckGHAuth(ctx context.Context) error { return nil }
 
-func (f *fakeGHClient) GetPRForBranchConditional(_ context.Context, _, _, _, etag string) (*github.PRInfo, string, bool, error) {
+func (f *fakeGHClient) GetPRForBranchConditional(_ context.Context, _ github.RepoRef, _, etag string) (*github.PRInfo, string, bool, error) {
 	return nil, etag, false, github.ErrNoPR
 }
 
-func (f *fakeGHClient) GetPRInfoConditional(_ context.Context, _, _ string, _ int, _ *github.ETagCache) (*github.PRInfo, bool, error) {
+func (f *fakeGHClient) GetPRInfoConditional(_ context.Context, _ github.RepoRef, _ int, _ *github.ETagCache) (*github.PRInfo, bool, error) {
 	f.getPRInfoCalls.Add(1)
 	return &github.PRInfo{State: "open"}, true, nil
 }
@@ -387,7 +387,11 @@ func TestFetchAndUpdatePRStatus_AdmissionControlRejection_SkipsCleanly(t *testin
 	// Sanity-check the rejection actually reaches GetPRInfoConditional as a plain
 	// error (not a panic, not a false "unchanged" result) before exercising the
 	// full fetchAndUpdatePRStatus path below.
-	_, changed, err := github.GetPRInfoConditional(context.Background(), "acme", "widgets", 42, p.ETagCache())
+	acmeWidgets, refErr := github.NewRepoRef("acme", "widgets")
+	if refErr != nil {
+		t.Fatalf("NewRepoRef: %v", refErr)
+	}
+	_, changed, err := github.GetPRInfoConditional(context.Background(), acmeWidgets, 42, p.ETagCache())
 	if err == nil {
 		t.Fatal("GetPRInfoConditional() error = nil, want an admission-control rejection error")
 	}

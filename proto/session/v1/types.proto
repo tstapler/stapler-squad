@@ -92,6 +92,10 @@ message Session {
   // Repository name.
   string github_repo = 28;
 
+  // GitHub Enterprise host owning github_owner/github_repo, e.g.
+  // "github.netflix.net". Empty means github.com.
+  string github_host = 90;
+
   // Original URL or reference used to create this session.
   // Could be a PR URL, repository URL, or git URL.
   string github_source_ref = 29;
