@@ -1453,6 +1453,43 @@ func TestReconcileOrphanedTriageItems_should_tombstoneStaleSession_When_Detected
 	assert.NotNil(t, sessions[0].EndedAt, "a confirmed-stale triage session must be tombstoned, not left open indefinitely")
 }
 
+// TestReconcileOrphanedTriageItems_should_notFlag_When_OpenGuidanceRequestExists
+// covers durable-guidance-request AC2/Story 5.1.3: a triage session that has
+// gone stale (or ended without a plan) but deliberately halted behind an open
+// GuidanceRequest for this item must not be tombstoned/MarkStuck-ed as an
+// anomaly — that would retry-with-backoff-penalize a legitimately-halted item
+// and defeat the halt.
+func TestReconcileOrphanedTriageItems_should_notFlag_When_OpenGuidanceRequestExists(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond staleness, would normally be flagged
+	itemID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	_, err = storage.CreateGuidanceRequest(ctx, CreateGuidanceRequestInput{
+		Scope:        domain.RequestScopeBacklogItem,
+		ItemID:       &itemID,
+		QuestionText: "Should this include the mobile client changes?",
+		QuestionType: domain.QuestionTypeYesNo,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Nil(t, sessions[0].EndedAt, "a triage session halted behind an open GuidanceRequest must not be tombstoned")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "an item halted behind an open GuidanceRequest must not be marked stuck")
+}
+
 func TestReconcileOrphanedTriageItems_should_notFlag_When_TriageSessionRecent(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)

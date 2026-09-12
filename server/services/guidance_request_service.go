@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -26,12 +28,101 @@ import (
 // single-implementation services (StreamHubRolloutService et al.) already
 // follow.
 type GuidanceRequestService struct {
-	storage *session.Storage
+	storage         *session.Storage
+	notifier        *EventBusNotifier
+	triageRespawner TriageRespawner
 }
 
-// NewGuidanceRequestService creates a GuidanceRequestService backed by storage.
-func NewGuidanceRequestService(storage *session.Storage) *GuidanceRequestService {
-	return &GuidanceRequestService{storage: storage}
+// TriageRespawner is the narrow slice of *BacklogService's existing
+// AutoRespawnTriage (server/services/backlog_service_triage.go) that
+// GuidanceRequestService needs to satisfy AC2's "resuming only once an
+// answer is available": once a backlog-item-scoped guidance request created
+// by an automated triage session is answered, respawn a fresh triage session
+// for that item. AutoRespawnTriage already no-ops for any item not in
+// idea/queued status, so calling it unconditionally on every backlog-item
+// answer (not just ones that actually halted triage) is safe.
+type TriageRespawner interface {
+	AutoRespawnTriage(ctx context.Context, itemID string) error
+}
+
+// NewGuidanceRequestService creates a GuidanceRequestService backed by
+// storage. bus may be nil (e.g. stdio fallback path) — answer notifications
+// are then skipped rather than panicking, matching EventBusNotifier.Notify's
+// own nil-safety. triageRespawner may also be nil (e.g. in tests exercising
+// only AC0/AC1/AC5/AC6) — the resume step is then skipped rather than
+// panicking.
+func NewGuidanceRequestService(storage *session.Storage, bus *events.EventBus, triageRespawner TriageRespawner) *GuidanceRequestService {
+	return &GuidanceRequestService{storage: storage, notifier: &EventBusNotifier{Bus: bus}, triageRespawner: triageRespawner}
+}
+
+// notifyAnswered durably records (via EventBusNotifier -> NotificationHistoryStore,
+// NOT just the in-memory EventBus) that data's question was answered, addressed to
+// its originating scope: the backlog item (coalescing key = item_id, matching every
+// other item-scoped notification) for scope=backlog-item, or the session itself for
+// scope=session. scope=standalone has no addressable originator and is skipped —
+// there is no session/item to notify. This is what makes AC2 ("notified via a
+// durable record ... survives that session being paused, restarted, or no longer
+// running") true even when nothing is subscribed to the live EventBus at answer
+// time: NotificationHistoryStore.List/GetByID reads the persisted record back
+// later regardless of whether anything was listening when it was published.
+func (s *GuidanceRequestService) notifyAnswered(data *session.GuidanceRequestData) {
+	title := "Your guidance request was answered"
+	message := truncateForNotification(data.QuestionText) + " → " + truncateForNotification(data.Answer)
+	const notifyTypeInputRequired = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED)
+	switch data.Scope {
+	case domain.RequestScopeBacklogItem:
+		if data.ItemID != nil {
+			s.notifier.Notify(data.ItemID.String(), title, message, notifyTypeInputRequired, true, true)
+		}
+	case domain.RequestScopeSession:
+		if data.SessionUUID != "" {
+			s.notifier.Notify(data.SessionUUID, title, message, notifyTypeInputRequired, true, true)
+		}
+	}
+}
+
+// resumeTriageIfHalted implements AC2's "resuming only once an answer is
+// available": for a backlog-item-scoped answer, it records the answer as an
+// activity note (already surfaced in get_backlog_item's "Activity Log"
+// section — see tools_backlog.go — so a freshly-spawned triage session sees
+// it without any new context-plumbing) and then asks triageRespawner to
+// respawn triage for that item. Fire-and-forget: TriggerTriage (which
+// AutoRespawnTriage delegates to) itself only launches a goroutine and
+// returns quickly, but this runs in its own goroutine anyway so a slow
+// storage call never blocks the AnswerGuidanceRequest response, mirroring
+// reconcileOrphanedTriageItems' shutdown-respawn dispatch
+// (session/backlog_lifecycle_triage.go). Errors are logged, never returned —
+// this is a best-effort convenience on top of the durable answer record,
+// which is already retrievable via GetGuidanceRequest regardless.
+func (s *GuidanceRequestService) resumeTriageIfHalted(data *session.GuidanceRequestData) {
+	if s.triageRespawner == nil || data.Scope != domain.RequestScopeBacklogItem || data.ItemID == nil {
+		return
+	}
+	itemID := data.ItemID.String()
+	note := fmt.Sprintf("Guidance request answered — %q → %q", data.QuestionText, data.Answer)
+	go func() {
+		ctx := context.Background()
+		if err := s.storage.AppendActivityNote(ctx, itemID, "", "Guidance Request", note); err != nil {
+			log.WarningLog().Printf("[GuidanceRequestService] resumeTriageIfHalted: AppendActivityNote item=%s: %v", itemID, err)
+		}
+		if err := s.triageRespawner.AutoRespawnTriage(ctx, itemID); err != nil {
+			log.WarningLog().Printf("[GuidanceRequestService] resumeTriageIfHalted: AutoRespawnTriage item=%s: %v", itemID, err)
+		}
+	}()
+}
+
+// maxNotificationFieldLen bounds how much of the question/answer text is
+// echoed into the notification title/message toast.
+const maxNotificationFieldLen = 80
+
+// truncateForNotification truncates s to maxNotificationFieldLen runes,
+// appending "..." when truncation occurs. Safe for any UTF-8 content.
+func truncateForNotification(s string) string {
+	runes := []rune(s)
+	if len(runes) <= maxNotificationFieldLen {
+		return s
+	}
+	return string(runes[:maxNotificationFieldLen]) + "..."
 }
 
 // connectErrorForItemLink translates a *session.ItemLinkError into the
@@ -216,11 +307,11 @@ func (s *GuidanceRequestService) CreateGuidanceRequest(
 // Security classification). If the request was already answered or
 // cancelled, applied is false and the response reflects that CURRENT
 // persisted state instead of a conflict error, per ux.md's "answer-to-
-// already-answered returns the actual answer" requirement.
-//
-// TODO(phase 3): publish events.GuidanceRequestEventPayload via
-// GuidanceRequestEventPublisher when applied==true, so
-// GuidanceRequestDeliveryService can resume the asker without polling.
+// already-answered returns the actual answer" requirement. On applied==true,
+// notifyAnswered durably records the notification so the originating
+// session/LLM can discover the answer even if nothing was listening live
+// (AC2) — a fresh/resumed session can also always fall back to
+// GetGuidanceRequest, which is durable on its own.
 //
 // +api: guidance-request:answer
 func (s *GuidanceRequestService) AnswerGuidanceRequest(
@@ -243,6 +334,10 @@ func (s *GuidanceRequestService) AnswerGuidanceRequest(
 			return nil, connect.NewError(connect.CodeNotFound, err)
 		}
 		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if applied {
+		s.notifyAnswered(data)
+		s.resumeTriageIfHalted(data)
 	}
 
 	return connect.NewResponse(&sessionv1.AnswerGuidanceRequestResponse{

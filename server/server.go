@@ -504,7 +504,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// through deps.Storage rather than constructed with zero args like the
 	// config-only rollout services above.
 	if deps.Storage != nil {
-		guidanceRequestSvc := services.NewGuidanceRequestService(deps.Storage)
+		// deps.BacklogService is passed only when non-nil: a nil *BacklogService
+		// boxed into the TriageRespawner interface would be a non-nil interface
+		// wrapping a nil pointer, defeating GuidanceRequestService's own
+		// triageRespawner == nil guard and panicking on first use.
+		var triageRespawner services.TriageRespawner
+		if deps.BacklogService != nil {
+			triageRespawner = deps.BacklogService
+		}
+		guidanceRequestSvc := services.NewGuidanceRequestService(deps.Storage, deps.EventBus, triageRespawner)
 		guidanceRequestPath, guidanceRequestHandler := sessionv1connect.NewGuidanceRequestServiceHandler(guidanceRequestSvc, ConnectOptions(deps.ErrorRegistry)...)
 		guidanceRequestAPIPath := "/api" + guidanceRequestPath
 		srv.RegisterConnectHandler(guidanceRequestAPIPath, http.StripPrefix("/api", guidanceRequestHandler))

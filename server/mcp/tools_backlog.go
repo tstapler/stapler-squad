@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
@@ -521,6 +522,13 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Run parallel research subagents → write research/*.md files\n")
 		sb.WriteString("2. Synthesize into plan.md + validation.md\n")
 		sb.WriteString("3. Write acceptance criteria: call submit_triage_result with item_id, summary, acceptance_criteria (full AC list), suggestions (gaps/questions), tasks (max 12), plan_artifact_path, priority (1-5, real assessment — this drives automatic implementation order), item_category (bugfix/feature/chore/refactor)\n")
+		// durable-guidance-request AC2: read fresh at the exact halt-decision
+		// instant, not cached earlier in this (potentially long-running)
+		// triage pass — a config change mid-pass must take effect for the
+		// very next prompt build, not the one already in flight.
+		if config.EffectiveTriageGuidanceHaltEnabled(config.LoadConfig()) {
+			sb.WriteString("4. If this item is genuinely ambiguous (not merely under-specified in a way you can resolve with reasonable judgment), do NOT guess: call create_guidance_request(scope=\"backlog-item\", item_id=<this item>, question_type, question_text) describing exactly what you need clarified, then end your turn WITHOUT calling submit_triage_result. You will be automatically re-triaged once the human answers — the answer will appear in this item's Activity Log on your next run.\n")
+		}
 	case "work":
 		sb.WriteString("## Your Role: Work\n")
 		sb.WriteString("Implement the acceptance criteria. Do NOT call submit_triage_result or submit_review_verdict.\n\n")

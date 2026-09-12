@@ -194,6 +194,18 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			continue // no triage session has ever run for this item
 		}
 
+		// durable-guidance-request AC2/Story 5.1.3: a triage session that ended
+		// (or is sitting open) with an open GuidanceRequest against this item is
+		// expected once triage_guidance_halt is on — it deliberately halted to
+		// ask instead of guessing — not an anomaly. Skip it entirely this tick
+		// rather than tombstoning/MarkStuck-ing it, which would retry-with-
+		// backoff-penalize a legitimately-halted item and defeat the halt.
+		if _, pendingCount, _, guidanceErr := l.storage.ListPendingGuidanceRequests(ctx, domain.RequestScopeBacklogItem, item.ID, 0); guidanceErr != nil {
+			log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedTriageItems ListPendingGuidanceRequests item=%s: %v", item.ID, guidanceErr)
+		} else if pendingCount > 0 {
+			continue
+		}
+
 		isIdea := item.Status == string(BacklogStatusIdea)
 
 		var reasonDetail string
