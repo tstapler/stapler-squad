@@ -1259,6 +1259,97 @@ func TestRequestReview_RejectsWhenCriteriaIncomplete(t *testing.T) {
 		"a rejected request_review must never transition the item's status")
 }
 
+// TestRequestReview_RejectionPersistsVisibleAuditNote verifies AC2: a
+// rejected request_review call must leave a human-readable trace on the item
+// describing what's left, not just an error returned to the calling session
+// (which the item's status alone would never reveal, since it doesn't
+// change) — per the "document AI decisions in edge cases" convention.
+func TestRequestReview_RejectionPersistsVisibleAuditNote(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Incomplete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"done"},{"index":1,"text":"Criterion B","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	_, err = handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Think I'm done.",
+	}))
+	require.NoError(t, err)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Contains(t, fetched.Notes, rejectedNoteMarker)
+	require.Contains(t, fetched.Notes, "Criterion B")
+}
+
+// TestReportBlocked_EscalatesAfterRequestReviewRejectionsPlusOneBlock verifies
+// the shared-counter edge case from validation.md: request_review's
+// AC-completeness rejections and explicit report_blocked calls must escalate
+// on their combined total, not two independent counters that could each stay
+// under blockedCycleThreshold forever. Two rejected request_review calls
+// followed by a single report_blocked call must hit the threshold of 3 and
+// escalate to review.
+func TestReportBlocked_EscalatesAfterRequestReviewRejectionsPlusOneBlock(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Combined escalation counter",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	for i := 0; i < 2; i++ {
+		_, err = handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{
+			"item_id": item.ID,
+			"message": "Think I'm done.",
+		}))
+		require.NoError(t, err)
+	}
+
+	blockedResult, err := handler.reportBlocked(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "rationale": "stuck on Criterion A",
+	}))
+	require.NoError(t, err)
+	tc := requireToolTextResult(t, blockedResult)
+	require.Contains(t, tc, "escalated to review")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status,
+		"2 rejected request_review calls + 1 report_blocked call must cross blockedCycleThreshold together")
+}
+
 // TestRequestReview_AcceptsWhenAllCriteriaPass is the positive-path
 // counterpart to TestRequestReview_RejectsWhenCriteriaIncomplete: every
 // criterion marked "done" must let the transition through as before.
