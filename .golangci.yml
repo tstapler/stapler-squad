@@ -102,6 +102,10 @@ linters:
             - "!**/server/services/backlog_service_query.go"
             - "!**/server/services/backlog_service_lifecycle.go"
             - "!**/server/services/backlog_service_triage.go"
+            # TriggerTriage's ent.IsNotFound check moved here from
+            # backlog_service_triage.go above (2026-09-12 hotspot split) — same
+            # pre-existing usage, not newly introduced.
+            - "!**/server/services/backlog_service_trigger_triage.go"
             - "!**/server/services/session_service.go"
             # Newly surfaced (2026-08-23) by fixing the files: glob bug above — this rule was
             # silently matching 0 files in server/services/ before the fix, so these pre-existing
