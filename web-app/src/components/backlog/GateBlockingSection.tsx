@@ -26,13 +26,6 @@ export interface GateBlockingSectionProps {
 const FROZEN_SNAPSHOT_NOTICE =
   "This item is on a stage no longer in the current configuration. Transitions shown reflect the configuration when it entered this stage.";
 
-/** RecordGateApproval (session/gate_approval.go) has no reject counterpart yet — see ADR-005 follow-up note in this component's doc comment below. */
-function rejectNotSupported(): Promise<void> {
-  return Promise.reject(
-    new Error("Rejecting a gate isn't supported yet — no backend action exists for it")
-  );
-}
-
 /**
  * ADR-005 Decision point 3: must check `.enabled`, not merely slug presence —
  * useBacklogStages()'s listStages({}) returns disabled stages too, but the
@@ -41,6 +34,16 @@ function rejectNotSupported(): Promise<void> {
  */
 function isFrozenSnapshot(stages: { slug: string; enabled: boolean }[], status: string): boolean {
   return !stages.some((s) => s.slug === status && s.enabled);
+}
+
+/** Builds the Approve/Reject callbacks GateChecklist needs from useGateApproval's single decision RPC (ADR-006 Part A). */
+function useGateDecisionHandlers(
+  recordApproval: (itemId: string, gateId: string, approved: boolean) => Promise<void>,
+  itemId: string
+) {
+  const handleApprove = useCallback((gateId: string) => recordApproval(itemId, gateId, true), [recordApproval, itemId]);
+  const handleReject = useCallback((gateId: string) => recordApproval(itemId, gateId, false), [recordApproval, itemId]);
+  return { handleApprove, handleReject };
 }
 
 function GateBlockingSectionError({ error, onRetry }: { error: string; onRetry: () => void }) {
@@ -64,22 +67,15 @@ function GateBlockingSectionError({ error, onRetry }: { error: string; onRetry: 
  * frozen-config-snapshot notice when the item's current stage is disabled or
  * absent from the live stage list (useBacklogStages).
  *
- * Deviation from design/ux.md's mockup: `[Reject]` calls a stub that always
- * rejects, surfaced via GateChecklist's existing row-scoped InlineError.
- * session.RecordGateApproval (the only gate-satisfaction RPC that exists
- * today) can only ever record `Satisfied: true` — there is no reject/deny
- * RPC in the backend to wire this to, and adding one is out of this ADR's
- * (frontend-only) scope.
+ * `[Approve]`/`[Reject]` both call ADR-006 Part A's `RecordGateApproval(itemId,
+ * gateId, approved)` — approving is permanently one-shot, rejecting is
+ * reversible by a later approve.
  */
 export function GateBlockingSection({ item }: GateBlockingSectionProps) {
   const { candidates, isLoading, error, refetch } = useGateChecklist(item.id, item.allowedTransitions ?? []);
   const { stages } = useBacklogStages();
   const { recordApproval } = useGateApproval();
-
-  const handleApprove = useCallback(
-    (gateId: string) => recordApproval(item.id, gateId),
-    [recordApproval, item.id]
-  );
+  const { handleApprove, handleReject } = useGateDecisionHandlers(recordApproval, item.id);
 
   if (isLoading) return null;
   if (error) return <GateBlockingSectionError error={error} onRetry={refetch} />;
@@ -103,7 +99,7 @@ export function GateBlockingSection({ item }: GateBlockingSectionProps) {
           gates={candidate.gates}
           transitionLabel={`${fromLabel} → ${getStatusLabel(candidate.toStatus)}`}
           onApprove={handleApprove}
-          onReject={rejectNotSupported}
+          onReject={handleReject}
           stagesSettingsHref={stagesSettingsHref}
         />
       ))}

@@ -27,12 +27,7 @@ function mapGateStatus(g: GateStatusProto): GateChecklistItem {
     satisfied: g.satisfied,
     description: g.description || undefined,
     actionHint: g.actionHint || undefined,
-    // GetPendingGatesResponse carries no config-error signal today (see
-    // session/gate_status.go's GateStatus) — every gate kind's evaluator
-    // (session/configured_workflow_engine.go) only ever returns
-    // satisfied/description/actionHint, never a distinct "can't be
-    // evaluated" state. configError stays unset until that lands
-    // server-side; GateChecklist already renders correctly without it.
+    configError: g.configError || undefined,
   };
 }
 
@@ -137,27 +132,33 @@ export function useGateChecklist(itemId: string, allowedTransitions: string[]): 
 }
 
 export interface UseGateApprovalReturn {
-  /** Calls RecordGateApproval(itemId, gateId). Rejects on RPC failure — caller (GateChecklist) shows a row-scoped error. */
-  recordApproval: (itemId: string, gateId: string) => Promise<void>;
+  /**
+   * Calls RecordGateApproval(itemId, gateId, approved) — ADR-006 Part A.
+   * `approved: true` is permanently one-shot (a second call once approved is
+   * always rejected); `approved: false` is reversible (a later call with
+   * `approved: true` overwrites it). Rejects on RPC failure — caller
+   * (GateChecklist) shows a row-scoped error.
+   */
+  recordApproval: (itemId: string, gateId: string, approved: boolean) => Promise<void>;
 }
 
 /**
- * Thin client wrapper for BacklogService.RecordGateApproval (Epic 2.4.1),
- * following useBacklogStagesAdmin's self-contained-client convention rather
- * than folding into useBacklogService.ts.
+ * Thin client wrapper for BacklogService.RecordGateApproval (Epic 2.4.1,
+ * ADR-006 Part A), following useBacklogStagesAdmin's self-contained-client
+ * convention rather than folding into useBacklogService.ts.
  */
 export function useGateApproval(): UseGateApprovalReturn {
   const clientRef = useRef<ReturnType<typeof createClient<typeof BacklogService>> | null>(null);
 
-  const recordApproval = useCallback(async (itemId: string, gateId: string): Promise<void> => {
+  const recordApproval = useCallback(async (itemId: string, gateId: string, approved: boolean): Promise<void> => {
     if (!clientRef.current) {
       clientRef.current = createClient(BacklogService, getConnectTransport());
     }
     try {
-      await clientRef.current.recordGateApproval({ itemId, gateId, satisfiedBy: "" });
+      await clientRef.current.recordGateApproval({ itemId, gateId, satisfiedBy: "", approved });
     } catch (err) {
       console.error("[useGateApproval] recordGateApproval:", err);
-      throw new Error(getErrorMessage(err, "Couldn't record approval"));
+      throw new Error(getErrorMessage(err, approved ? "Couldn't record approval" : "Couldn't record rejection"));
     }
   }, []);
 

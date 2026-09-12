@@ -53,6 +53,13 @@ function makeCandidate(toStatus: string): GateBlockingCandidate {
   };
 }
 
+function makeApprovalCandidate(toStatus: string): GateBlockingCandidate {
+  return {
+    toStatus,
+    gates: [{ gateId: `gate-${toStatus}`, kind: "human_approval", satisfied: false, description: "requires explicit human approval" }],
+  };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockUseGateApproval.mockReturnValue({ recordApproval: jest.fn().mockResolvedValue(undefined) });
@@ -121,6 +128,42 @@ describe("GateBlockingSection — N candidates", () => {
   it("renders nothing when there are no gated candidates", () => {
     const { container } = render(<GateBlockingSection item={{ id: "item-1", status: "review" }} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("GateBlockingSection — Approve/Reject wiring (ADR-006 Part A)", () => {
+  it("calls recordApproval(itemId, gateId, true) when Approve is clicked", async () => {
+    const recordApproval = jest.fn().mockResolvedValue(undefined);
+    mockUseGateApproval.mockReturnValue({ recordApproval });
+    mockUseGateChecklist.mockReturnValue({
+      candidates: [makeApprovalCandidate("ready")],
+      isLoading: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    const user = userEvent.setup();
+    render(<GateBlockingSection item={{ id: "item-1", status: "review" }} />);
+    await user.click(screen.getByRole("button", { name: /approve/i }));
+
+    expect(recordApproval).toHaveBeenCalledWith("item-1", "gate-ready", true);
+  });
+
+  it("calls recordApproval(itemId, gateId, false) when Reject is clicked", async () => {
+    const recordApproval = jest.fn().mockResolvedValue(undefined);
+    mockUseGateApproval.mockReturnValue({ recordApproval });
+    mockUseGateChecklist.mockReturnValue({
+      candidates: [makeApprovalCandidate("ready")],
+      isLoading: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    const user = userEvent.setup();
+    render(<GateBlockingSection item={{ id: "item-1", status: "review" }} />);
+    await user.click(screen.getByRole("button", { name: /reject/i }));
+
+    expect(recordApproval).toHaveBeenCalledWith("item-1", "gate-ready", false);
   });
 });
 

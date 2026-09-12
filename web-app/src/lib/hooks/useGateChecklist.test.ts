@@ -122,16 +122,31 @@ describe("useGateChecklist — RPC failure", () => {
 });
 
 describe("useGateApproval — recordApproval", () => {
-  it("calls RecordGateApproval with itemId/gateId", async () => {
+  it("calls RecordGateApproval with itemId/gateId/approved:true", async () => {
     mockRecordGateApproval.mockResolvedValue({ record: {} });
 
     const { result } = renderHook(() => useGateApproval());
-    await result.current.recordApproval("item-1", "gate-1");
+    await result.current.recordApproval("item-1", "gate-1", true);
 
     expect(mockRecordGateApproval).toHaveBeenCalledWith({
       itemId: "item-1",
       gateId: "gate-1",
       satisfiedBy: "",
+      approved: true,
+    });
+  });
+
+  it("calls RecordGateApproval with approved:false for a reject", async () => {
+    mockRecordGateApproval.mockResolvedValue({ record: {} });
+
+    const { result } = renderHook(() => useGateApproval());
+    await result.current.recordApproval("item-1", "gate-1", false);
+
+    expect(mockRecordGateApproval).toHaveBeenCalledWith({
+      itemId: "item-1",
+      gateId: "gate-1",
+      satisfiedBy: "",
+      approved: false,
     });
   });
 
@@ -140,6 +155,6 @@ describe("useGateApproval — recordApproval", () => {
 
     const { result } = renderHook(() => useGateApproval());
 
-    await expect(result.current.recordApproval("item-1", "gate-1")).rejects.toThrow("already recorded");
+    await expect(result.current.recordApproval("item-1", "gate-1", true)).rejects.toThrow("already recorded");
   });
 });
