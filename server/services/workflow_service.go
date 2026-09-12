@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -42,6 +43,10 @@ type WorkflowService struct {
 	// makes the RPC return an empty list rather than erroring, matching this file's
 	// other nil-degradation conventions (e.g. ListWorkflows with a nil repo).
 	fireEventRepo session.TriggerFireEventRepository
+	// eventBus backs WatchWorkflows (workflow_service_events.go). Optional — nil
+	// degrades gracefully: publishes become no-ops and WatchWorkflows returns
+	// CodeUnavailable, matching backlog_service_events.go's convention.
+	eventBus *events.EventBus
 }
 
 // NewWorkflowService creates a new WorkflowService.
@@ -61,6 +66,21 @@ func (ws *WorkflowService) SetPoller(p *session.ReviewQueuePoller) {
 // ListTriggerFireEvents. Optional — see fireEventRepo's doc comment.
 func (ws *WorkflowService) SetTriggerFireEventRepo(repo session.TriggerFireEventRepository) {
 	ws.fireEventRepo = repo
+}
+
+// SetEventBus wires the shared event bus backing WatchWorkflows. Optional —
+// see eventBus's doc comment.
+func (ws *WorkflowService) SetEventBus(bus *events.EventBus) {
+	ws.eventBus = bus
+}
+
+// publishWorkflowEvent publishes a workflow mutation/run event if an event bus is
+// wired. No-op otherwise (matches this file's other nil-degradation conventions).
+func (ws *WorkflowService) publishWorkflowEvent(payload *events.WorkflowEventPayload) {
+	if ws.eventBus == nil {
+		return
+	}
+	ws.eventBus.Publish(events.NewWorkflowChangedEvent(payload))
 }
 
 // entWorkflowToProto converts an ent.Workflow to its proto representation.
@@ -304,6 +324,8 @@ func (s *WorkflowService) CreateWorkflow(
 		}
 	}
 
+	s.publishWorkflowEvent(&events.WorkflowEventPayload{Kind: events.WorkflowChangeCreated, Workflow: wf})
+
 	return connect.NewResponse(&sessionv1.CreateWorkflowResponse{
 		Workflow: entWorkflowToProto(wf),
 	}), nil
@@ -461,6 +483,8 @@ func (s *WorkflowService) UpdateWorkflow(
 		}
 	}
 
+	s.publishWorkflowEvent(&events.WorkflowEventPayload{Kind: events.WorkflowChangeUpdated, Workflow: wf})
+
 	return connect.NewResponse(&sessionv1.UpdateWorkflowResponse{
 		Workflow: entWorkflowToProto(wf),
 	}), nil
@@ -491,6 +515,8 @@ func (s *WorkflowService) DeleteWorkflow(
 	if s.scheduler != nil {
 		_ = s.scheduler.Remove(req.Msg.Id)
 	}
+
+	s.publishWorkflowEvent(&events.WorkflowEventPayload{Kind: events.WorkflowChangeDeleted, WorkflowID: req.Msg.Id})
 
 	return connect.NewResponse(&sessionv1.DeleteWorkflowResponse{}), nil
 }
@@ -551,6 +577,12 @@ func (s *WorkflowService) RunWorkflow(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("run workflow: %w", err))
 	}
+
+	s.publishWorkflowEvent(&events.WorkflowEventPayload{
+		Kind:       events.WorkflowChangeRun,
+		WorkflowID: req.Msg.Id,
+		SessionID:  sessionID,
+	})
 
 	return connect.NewResponse(&sessionv1.RunWorkflowResponse{
 		SessionId: sessionID,

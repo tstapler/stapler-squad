@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -26,7 +28,10 @@ func TestMemoryPressureNotifier_checkOnce_should_FireOnce_When_RatioCrossesWarnT
 	notifier.ratioFunc = fakeRatio(0.95)
 
 	notifier.checkOnce()
-	drainOneNotification(t, ch)
+	ev := drainOneNotification(t, ch)
+	// Push-gate classification table: urgent and important — approaching the
+	// memory limit risks an OOM kill right now.
+	assert.Equal(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT), ev.NotificationPriority, "Memory usage near limit must derive to URGENT (urgent=true, important=true)")
 
 	// Still over the warn threshold on later ticks -- must not re-notify.
 	notifier.checkOnce()

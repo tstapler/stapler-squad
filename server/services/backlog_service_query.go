@@ -83,7 +83,7 @@ func (s *BacklogService) GetBacklogItem(
 		item.ItemSessions = isSessions
 	}
 
-	p := backlogItemToProto(item, s.buildCostLookup())
+	p := backlogItemToProto(item, s.engine, s.buildCostLookup())
 	enrichItemSessionsWorktreeData(ctx, s.storage, p)
 
 	return connect.NewResponse(&sessionv1.GetBacklogItemResponse{
@@ -159,7 +159,7 @@ func (s *BacklogService) ListBacklogItems(
 	protoItems := make([]*sessionv1.BacklogItem, len(summaries))
 	costFor := s.buildCostLookup()
 	for i := range summaries {
-		protoItems[i] = backlogItemSummaryToProto(&summaries[i], costFor)
+		protoItems[i] = backlogItemSummaryToProto(&summaries[i], s.engine, costFor)
 	}
 
 	return connect.NewResponse(&sessionv1.ListBacklogItemsResponse{
@@ -218,7 +218,7 @@ func (s *BacklogService) SuggestNextItem(
 
 	top := &items[0]
 	return connect.NewResponse(&sessionv1.SuggestNextItemResponse{
-		Item: backlogItemToProto(top, s.buildCostLookup()),
+		Item: backlogItemToProto(top, s.engine, s.buildCostLookup()),
 	}), nil
 }
 

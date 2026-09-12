@@ -164,3 +164,21 @@ jest.mock("@/lib/hooks/useHandoffSummary", () => ({
     refetch: jest.fn(),
   }),
 }));
+
+// useBacklogStages (BacklogBoard/StageTracker, Epic 2.9
+// backlog-custom-workflow-stages) calls ListStages via the real ConnectRPC
+// transport on mount. Stub it globally with the built-in-only default so
+// tests that render these components without caring about live custom-stage
+// config don't trigger a fetch jsdom can't satisfy (same rationale as
+// useSlashCommands/useAvailablePrograms above). Tests that DO need to
+// exercise stage-fetching override this locally with their own
+// jest.mock("@/lib/hooks/useBacklogStages", ...), same override pattern as
+// useHandoffSummary below.
+jest.mock("@/lib/hooks/useBacklogStages", () => ({
+  ...jest.requireActual("@/lib/hooks/useBacklogStages"),
+  useBacklogStages: () => ({
+    stages: jest.requireActual("@/lib/hooks/useBacklogStages").BUILTIN_BACKLOG_STAGES,
+    isLoading: false,
+    error: null,
+  }),
+}));

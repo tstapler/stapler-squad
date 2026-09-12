@@ -965,8 +965,8 @@ func markSessionPermanentlyFailed(inst *Instance, reason string) {
 		n.Notify(inst.UUID,
 			"Session gave up after repeated failures",
 			fmt.Sprintf("%s failed to recover after %d attempt(s) (last reason: %s) and will not be retried automatically. Use \"Retry now\" to try again.", inst.Title, attempt, reason),
-			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			true, true, // urgent, important — automatic recovery gave up; a genuine dead end
 		)
 	}
 }

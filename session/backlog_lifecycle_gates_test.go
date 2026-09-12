@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
+	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 )
 
 // newGateTimeoutTestFixture creates a real TransitionGate row (fromSlug ->
@@ -146,4 +148,98 @@ func TestReconcileCustomGateChecks_should_BeNoOp_When_NoGateSatisfactionRepoWire
 	require.NotPanics(t, func() {
 		listener.reconcileCustomGateChecks(ctx, er)
 	})
+}
+
+// --- Epic 2.4 follow-up: production call sites for resolveReviewGateContext/
+// resolveCustomCheckGateContext (the gap this task closes) ---
+
+// TestResolveCustomCheckGateContext_should_ReturnNotOK_When_NoWorkflowEngineWired
+// covers the nil-safe default: an unwired workflowEngine (today's production
+// default) must never spawn a custom-check gate.
+func TestResolveCustomCheckGateContext_should_ReturnNotOK_When_NoWorkflowEngineWired(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	listener := NewBacklogLifecycleListener(storage)
+	_, _, ok := listener.resolveCustomCheckGateContext(BacklogStatusInProgress, BacklogStatusReview)
+	assert.False(t, ok)
+}
+
+// TestResolveCustomCheckGateContext_should_ReturnGateAndConfig_When_TransitionHasCustomCheckGate
+// covers Story 2.4.4's follow-up resolver wired through the listener: a
+// GateKindCustom gate configured on the in_progress->review edge (the exact
+// edge onSessionExited's session-exit event drives) resolves to its own
+// GateID + CustomCheckConfig via the listener's wired ConfiguredWorkflowEngine.
+func TestResolveCustomCheckGateContext_should_ReturnGateAndConfig_When_TransitionHasCustomCheckGate(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	client := storage.GetEntClient()
+
+	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, client))
+	fromStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(BacklogStatusInProgress))).Only(ctx)
+	require.NoError(t, err)
+	toStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(BacklogStatusReview))).Only(ctx)
+	require.NoError(t, err)
+	transition, err := client.StageTransition.Query().
+		Where(stagetransition.FromStageID(fromStage.ID), stagetransition.ToStageID(toStage.ID)).
+		Only(ctx)
+	require.NoError(t, err)
+	gate, err := client.TransitionGate.Create().
+		SetTransitionID(transition.ID).
+		SetKind(string(GateKindCustom)).
+		SetStateful(true).
+		SetEnabled(true).
+		SetConfig(map[string]interface{}{"skill": "review-feasibility"}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	stageRepo := NewEntStageConfigRepository(client)
+	gateRepo := NewEntGateSatisfactionRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetWorkflowEngine(engine)
+
+	gateID, cfg, ok := listener.resolveCustomCheckGateContext(BacklogStatusInProgress, BacklogStatusReview)
+	require.True(t, ok)
+	assert.Equal(t, gate.ID, gateID)
+	assert.Equal(t, "review-feasibility", cfg.SkillID)
+}
+
+// TestRunCustomGateCheckWithCaller_should_InvokeCallerAndRecordOutcome_When_Triggered
+// covers Story 2.4.4's follow-up (gap #4): runCustomGateCheckWithCaller —
+// the seam runCustomGateCheck delegates to once it has a real *headless.Pool
+// — actually invokes InvokeCustomGateCheck via a test double CustomCheckCaller,
+// and the terminal outcome becomes visible via a subsequent PendingGates call.
+// This is the previously-unreachable production path: before this Epic's
+// follow-up, InvokeCustomGateCheck had zero call sites outside tests (see
+// gate_custom_check.go's own doc comment).
+func TestRunCustomGateCheckWithCaller_should_InvokeCallerAndRecordOutcome_When_Triggered(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	client := storage.GetEntClient()
+
+	gateID := newCustomCheckTestGate(t, storage)
+	item := newCustomCheckTestItem(t, storage, "runCustomGateCheckWithCaller wiring test")
+
+	repo := NewEntGateSatisfactionRepository(client)
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetGateSatisfactionRepository(repo)
+
+	caller := &fakeCustomCheckCaller{output: "Looks buildable.\n\nVERDICT: PASS"}
+	cfg := CustomCheckConfig{SkillID: "review-feasibility"}
+
+	listener.runCustomGateCheckWithCaller(ctx, caller, gateID, cfg, BacklogStatusReady, item)
+
+	assert.True(t, caller.called, "InvokeCustomGateCheck must actually invoke the caller")
+
+	record, getErr := repo.GetByItemAndGate(ctx, uuid.MustParse(item.ID), gateID)
+	require.NoError(t, getErr)
+	assert.True(t, record.Satisfied, "a VERDICT: PASS output must record a satisfied outcome")
 }

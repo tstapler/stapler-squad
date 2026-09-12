@@ -21,6 +21,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
@@ -1186,7 +1187,7 @@ func (f *fakePtyFactory) StartWithSize(_ *exec.Cmd, _ *pty.Winsize) (*os.File, *
 	f.mu.Lock()
 	f.created = append(f.created, master)
 	f.mu.Unlock()
-	return master, exec.Command("true"), nil
+	return master, safeexec.CommandContext(context.Background(), "true"), nil
 }
 
 func (f *fakePtyFactory) Close() {

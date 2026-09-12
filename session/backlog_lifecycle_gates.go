@@ -5,9 +5,77 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
+
+// maxConcurrentCustomGateChecks bounds runCustomGateCheck goroutine fan-out,
+// mirroring maxConcurrentReviewGates' rationale (backlog_lifecycle_review.go)
+// for the sibling stateful-gate spawn path.
+const maxConcurrentCustomGateChecks = 8
+
+// defaultCustomCheckExpectedDuration/defaultCustomCheckStalenessMargin bound a
+// custom-check invocation when no LivenessEngine is wired, or it has no
+// override for the target stage — sized for a single headless
+// feasibility-style call (session/gate_custom_check.go's
+// customCheckReviewFeasibilitySystemPrompt), not a full triage session.
+// Matches the (10m, 5m) pair backlog_lifecycle_gates_test.go's fixtures
+// already exercise for this same bound.
+const (
+	defaultCustomCheckExpectedDuration = 10 * time.Minute
+	defaultCustomCheckStalenessMargin  = 5 * time.Minute
+)
+
+// runCustomGateCheck invokes InvokeCustomGateCheck for a GateKindCustom gate
+// matched on a from->to transition (Story 2.4.4's follow-up: this was
+// previously unreachable in production — see gate_custom_check.go's own doc
+// comment). No-op when no headless pool is configured to run the call.
+// Best-effort: errors are logged, never returned — this runs on its own
+// goroutine off onSessionExited's synchronous path, bounded by
+// l.customCheckSem.
+func (l *BacklogLifecycleListener) runCustomGateCheck(ctx context.Context, gateID uuid.UUID, cfg CustomCheckConfig, targetStage BacklogStatus, item *BacklogItemData) {
+	pool := l.getHeadlessPool()
+	if pool == nil {
+		log.WarningLog().Printf("[BacklogLifecycle] runCustomGateCheck item=%s gate=%s: no headless pool configured", item.ID, gateID)
+		return
+	}
+	l.runCustomGateCheckWithCaller(ctx, pool, gateID, cfg, targetStage, item)
+}
+
+// runCustomGateCheckWithCaller implements runCustomGateCheck's logic against
+// an injected CustomCheckCaller rather than reading l.getHeadlessPool()
+// directly — a free seam so a test can exercise the wiring with a fake caller
+// (mirrors resolveCustomCheckStalenessThresholdWithEngine's identical
+// extraction below, done for the same reason: l.headlessPool is a concrete
+// *headless.Pool, not an interface, so it can't be substituted in tests).
+func (l *BacklogLifecycleListener) runCustomGateCheckWithCaller(ctx context.Context, caller CustomCheckCaller, gateID uuid.UUID, cfg CustomCheckConfig, targetStage BacklogStatus, item *BacklogItemData) {
+	mode := PipelineMode(item.PipelineMode)
+	livenessDef := l.resolveCustomCheckLivenessDef(targetStage, mode)
+	if _, err := InvokeCustomGateCheck(ctx, caller, l.getGateSatisfactionRepo(), item, gateID, cfg, livenessDef, targetStage, mode); err != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] runCustomGateCheck item=%s gate=%s: %v", item.ID, gateID, err)
+	}
+}
+
+// resolveCustomCheckLivenessDef resolves the LivenessDefinition bound to a
+// custom-check invocation at spawn time (Task 2.4.4b2), preferring a live
+// l.livenessEngine.LivenessFor(targetStage, mode) resolution and falling back
+// to the package defaults above when no engine is wired or it reports
+// IsNoTimeout — same fallback shape as
+// resolveCustomCheckStalenessThresholdWithEngine's read-side counterpart
+// below.
+func (l *BacklogLifecycleListener) resolveCustomCheckLivenessDef(targetStage BacklogStatus, mode PipelineMode) LivenessDefinition {
+	if l.livenessEngine != nil {
+		if def, err := l.livenessEngine.LivenessFor(targetStage, mode); err == nil && !def.IsNoTimeout() {
+			return def
+		}
+	}
+	return LivenessDefinition{
+		Kind:             LivenessKindDurationBudget,
+		ExpectedDuration: defaultCustomCheckExpectedDuration,
+		StalenessMargin:  defaultCustomCheckStalenessMargin,
+	}
+}
 
 // backlog_lifecycle_gates.go — Task 2.4.4c's reconcileCustomGateChecks: the
 // stuck-detection sweep for an overdue InvokeCustomGateCheck invocation
@@ -96,8 +164,8 @@ func (l *BacklogLifecycleListener) reconcileCustomGateChecks(ctx context.Context
 		l.notify(item.ID,
 			"Custom gate check may be stuck",
 			fmt.Sprintf("%s — a custom transition gate check has been running longer than expected. Investigate or re-run it.", item.Title),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+			8,            // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			false, false, // urgent, important — a "may be stuck" poll notification, like its stale-work/triage siblings
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonGateTimeout); notifyErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileCustomGateChecks MarkStuckNotified item=%s: %v", item.ID, notifyErr)

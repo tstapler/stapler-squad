@@ -3810,7 +3810,7 @@ func TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden(t *testing.
 		notifs := drainNotificationEvents(ch)
 		require.Len(t, notifs, 1, "expected exactly one cold-restore-lost-history notification")
 		assert.Equal(t, int32(8), notifs[0].NotificationType, "must be NotificationType_WARNING")
-		assert.Equal(t, int32(2), notifs[0].NotificationPriority, "must be NotificationPriority_MEDIUM")
+		assert.Equal(t, int32(3), notifs[0].NotificationPriority, "must be NotificationPriority_HIGH (important-but-not-urgent)")
 		assert.Contains(t, notifs[0].NotificationTitle, inst.Title)
 	})
 

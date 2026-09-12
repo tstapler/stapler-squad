@@ -45,7 +45,7 @@ func (e *ItemLinkError) Error() string { return e.Message }
 // link_session_to_item knows not to bother retrying any of them either.
 const otherBacklogToolsWarning = "If you don't fix this, stop calling ANY backlog MCP tool for this item — " +
 	"report_progress, request_review, submit_review_verdict, report_pr_created, submit_triage_result, " +
-	"report_blocked, report_duplicate will all fail identically for the same reason."
+	"report_blocked, report_duplicate, resume_work will all fail identically for the same reason."
 
 // ItemNotFoundRemediation is the shared not-found remediation text, exported
 // so every caller of ResolveItemLink (and getBacklogItem's own existence

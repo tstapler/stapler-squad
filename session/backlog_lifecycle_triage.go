@@ -314,8 +314,8 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		l.notify(item.ID,
 			"Triage may be stuck",
 			fmt.Sprintf("%s — its triage session ended without producing a usable plan and nothing is running. Re-trigger triage or investigate.", item.Title),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+			8,            // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			false, false, // urgent, important — routine stuck-poll, matches "Work session may be stuck"
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonOrphanedTriage); notifyErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuckNotified item=%s: %v", item.ID, notifyErr)
@@ -384,8 +384,8 @@ func (l *BacklogLifecycleListener) retryOrphanedTriageWithBackoffGate(ctx contex
 		l.notify(itemID,
 			"Auto-triage paused",
 			fmt.Sprintf("%s — automated triage retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			true, true, // urgent, important — automated retry gave up; a genuine dead end
 		)
 	}
 	if !due {

@@ -424,9 +424,10 @@ type Config struct {
 	// "reconnect cleanly under the legacy path"; tymux's rollback cannot mean
 	// that, since it means "new sessions honor the reverted default while
 	// existing tymux-backed sessions stay pinned to tymux for their
-	// lifetime". nil means "never completed". ResolveGlobalTymuxDefault
-	// refuses to let the *global* tymux default resolve to true until this
-	// is set. Set via RecordTymuxRollbackRehearsalCompleted.
+	// lifetime". nil means "never completed". Purely a historical record now
+	// — the global default no longer gates on it (see EffectiveTymuxEnabled;
+	// SetTymuxGlobalOverride sets the "tymux" feature flag unconditionally).
+	// Set via RecordTymuxRollbackRehearsalCompleted.
 	TymuxRollbackRehearsalCompletedAt *time.Time `json:"tymux_rollback_rehearsal_completed_at,omitempty"`
 	// TymuxSessionOverrides forces the tymux-bundled-integration project's
 	// process-manager backend for specific named tmux sessions, regardless of
@@ -497,10 +498,10 @@ func EffectiveNativeMergeEnabled(cfg *Config) bool {
 }
 
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
-// backend default is active. Read once at process startup
-// (main.go's resolveStartupBackend) — deliberately not live-settable, so
-// switching the default backend for every new session stays a conscious
-// operator action rather than a live UI toggle.
+// backend default is active. Resolved fresh on every call (session.getSelectedBackend)
+// via SetTymuxGlobalOverride — live-settable, no process restart required.
+// main.go's own startup-time read of this (via ResolveSessionBackend) is only
+// for tymuxNeeded's supervision decision, not a cache of this value.
 func EffectiveTymuxEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(TymuxFeatureFlag, false)
 }
@@ -509,8 +510,9 @@ func EffectiveTymuxEnabled(cfg *Config) bool {
 // TymuxRollbackRehearsalCompletedAt and saves the config — intended to be
 // called exactly once, after manually verifying a tymux rollback rehearsal
 // (new sessions honor the reverted default while existing tymux-backed
-// sessions stay pinned) passed against a real disposable session. Unblocks
-// ResolveGlobalTymuxDefault from refusing to enable the global default.
+// sessions stay pinned) passed against a real disposable session.
+// TymuxRollbackRehearsalCompletedAt's own doc comment covers why this is a
+// historical record only, not an enforced gate.
 func (c *Config) RecordTymuxRollbackRehearsalCompleted() error {
 	now := time.Now()
 	c.TymuxRollbackRehearsalCompletedAt = &now

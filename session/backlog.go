@@ -240,5 +240,25 @@ var (
 // Type alias — session.BacklogItemTransitionInput and domain.BacklogItemTransitionInput are identical types.
 type BacklogItemTransitionInput = domain.BacklogItemTransitionInput
 
+// NewBacklogItemTransitionInput builds a BacklogItemTransitionInput from item,
+// always setting ItemID alongside the fields every transition-guard call site
+// needs. ItemID must be set for ConfiguredWorkflowEngine's evaluateRecordedGate
+// to look up a persisted GateSatisfactionRecord for automated_review/custom
+// gates (session/configured_workflow_engine.go) — a hand-built literal that
+// forgets it silently and permanently blocks those gate kinds. status is the
+// item's current ("from") status; callers needing OverallOutcome,
+// OverrideReason, HasUnshippedCode, or HasUnresolvedBlockers set those on the
+// returned value afterward.
+func NewBacklogItemTransitionInput(item *BacklogItemData, status BacklogStatus) BacklogItemTransitionInput {
+	return BacklogItemTransitionInput{
+		ItemID:            item.ID,
+		Status:            status,
+		AcCriteria:        item.AcceptanceCriteria,
+		PlanApproved:      item.PlanApproved,
+		SkipPlanning:      item.SkipPlanning,
+		PlanArtifactsPath: item.PlanArtifactsPath,
+	}
+}
+
 // TransitionGuard validates business rules before a status transition.
 var TransitionGuard = domain.TransitionGuard

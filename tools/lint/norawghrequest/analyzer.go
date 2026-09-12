@@ -2,8 +2,9 @@
 // to net/http.NewRequest or net/http.NewRequestWithContext whose URL targets a
 // GitHub host, outside github/http_client.go's own approved constructors.
 //
-// Background: github.newGHRequest/newGHRequestForHostWithToken are the only
-// call sites meant to build native GitHub HTTP requests — GetPRInfoConditional
+// Background: github.newGHRequestForHostWithToken, NewConditionalRequest, and
+// NewConditionalRequestNoCache are the only call sites meant to build native
+// GitHub HTTP requests — GetPRInfoConditional
 // (github/etag_cache.go) relies on every such request going through a path
 // that can attach an If-None-Match header, so GitHub can answer with a
 // zero-rate-limit-cost 304 instead of a full 200. A new call site that builds
@@ -29,7 +30,7 @@ import (
 // Analyzer is the exported analysis.Analyzer for the norawghrequest check.
 var Analyzer = &analysis.Analyzer{
 	Name:     "norawghrequest",
-	Doc:      "detects direct http.NewRequest/NewRequestWithContext calls to a GitHub host outside github's approved constructors; use github.newGHRequest()/newGHRequestForHostWithToken() so conditional-request (ETag) semantics are available",
+	Doc:      "detects direct http.NewRequest/NewRequestWithContext calls to a GitHub host outside github's approved constructors; use github.NewConditionalRequest()/NewConditionalRequestNoCache()/newGHRequestForHostWithToken() so conditional-request (ETag) semantics are available",
 	Run:      run,
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 }
@@ -83,7 +84,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return true
 		}
 		pass.Reportf(call.Pos(),
-			"direct call to http.%s to a GitHub host — use github.newGHRequest()/newGHRequestForHostWithToken() so conditional-request semantics are available; add //nolint:norawghrequest with a justification if this genuinely cannot use the wrapper",
+			"direct call to http.%s to a GitHub host — use github.NewConditionalRequest()/NewConditionalRequestNoCache()/newGHRequestForHostWithToken() so conditional-request semantics are available; add //nolint:norawghrequest with a justification if this genuinely cannot use the wrapper",
 			name)
 		return true
 	})
