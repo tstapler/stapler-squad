@@ -147,6 +147,41 @@ type TmuxSession struct {
 	existsSF       singleflight.Group //nolint:exhaustruct
 	existsCacheTTL time.Duration      // read-only after construction
 
+	// recreateMu serializes RestoreWithWorkDir's "does the session still
+	// exist, and if not, recreate it" decision so two concurrent callers
+	// (e.g. ensureHubBackendAlive and ensureControlModeStarted both racing to
+	// restore the same instance) can't both observe "session missing" and
+	// both spawn a replacement `new-session`. It intentionally guards only
+	// that decide-and-maybe-create prefix of RestoreWithWorkDir, not the PTY
+	// attach that follows -- that part already has its own concurrency-safe
+	// CAS design (see ptyGen/tryInstallPTYTriple) and must keep running
+	// concurrently for AttachToExisting/RestoreWithWorkDir callers.
+	recreateMu sync.Mutex
+
+	// programProviderFunc, when set, supplies the command RestoreWithWorkDir
+	// uses to relaunch a session it has confirmed is truly gone, instead of
+	// the `program` field frozen at construction time. A relaunch needs the
+	// CURRENT command (e.g. --resume with whatever conversation UUID is now
+	// current, not whichever was current when this TmuxSession was first
+	// built) -- see launchProgram's doc comment. Nil for every construction
+	// site that doesn't opt in via WithProgramProvider, which keeps using
+	// the frozen `program` string (pre-fix behavior, unchanged).
+	programProviderFunc func() string
+
+	// priorProcessAliveFunc and killPriorProcessFunc implement the guard
+	// RestoreWithWorkDir runs before concluding a fresh `new-session` is
+	// safe once it has confirmed tmux itself has no record of this session:
+	// that is NOT the same as the process tmux originally launched being
+	// dead -- if the tmux server was killed/restarted out from under it, the
+	// child process can survive as an orphan and keep running (and keep
+	// writing its own transcript) even though `tmux has-session` now fails.
+	// Relaunching unconditionally in that case produces two live processes
+	// writing two competing transcripts (2026-09-12 incident). Both nil
+	// (the default for every construction site that doesn't opt in via
+	// WithOrphanProcessGuard) disables the guard entirely.
+	priorProcessAliveFunc func() bool
+	killPriorProcessFunc  func() error
+
 	// noCacheSF coalesces concurrent DoesSessionExistNoCache callers (health
 	// checker, hibernation sweeper, session-create retry loop, bulk restore,
 	// etc.) into a single in-flight subprocess. NoCache intentionally skips
@@ -979,6 +1014,42 @@ func WithCommandRunner(r CommandRunner) TmuxSessionOption {
 	return func(t *TmuxSession) {
 		t.runner = r
 	}
+}
+
+// WithProgramProvider overrides the command RestoreWithWorkDir relaunches
+// with when it has confirmed the session must be recreated -- see
+// TmuxSession.programProviderFunc's doc comment for why the frozen `program`
+// string is wrong for that path.
+func WithProgramProvider(fn func() string) TmuxSessionOption {
+	return func(t *TmuxSession) {
+		t.programProviderFunc = fn
+	}
+}
+
+// WithOrphanProcessGuard wires RestoreWithWorkDir's pre-relaunch check: isAlive
+// reports whether the process behind a since-vanished tmux session might still
+// be running (orphaned), and kill terminates it. See
+// TmuxSession.priorProcessAliveFunc's doc comment for the failure mode this
+// closes. Nil (the default) disables the guard.
+func WithOrphanProcessGuard(isAlive func() bool, kill func() error) TmuxSessionOption {
+	return func(t *TmuxSession) {
+		t.priorProcessAliveFunc = isAlive
+		t.killPriorProcessFunc = kill
+	}
+}
+
+// launchProgram returns the command RestoreWithWorkDir should use to relaunch
+// a confirmed-missing session: programProviderFunc's current output when set
+// and non-empty, falling back to the frozen `program` field otherwise (no
+// provider configured, or the provider returned "" -- treated as "defer to
+// the frozen command" rather than launching an empty program).
+func (t *TmuxSession) launchProgram() string {
+	if t.programProviderFunc != nil {
+		if p := t.programProviderFunc(); p != "" {
+			return p
+		}
+	}
+	return t.program
 }
 
 // newTmuxSessionWithSocket creates a TmuxSession with both prefix and server socket isolation
