@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from "react";
 import { Tree } from "react-arborist";
-import type { NodeApi, TreeApi } from "react-arborist";
+import type { NodeApi, TreeApi, RowRendererProps } from "react-arborist";
 import type { FileNode } from "@/gen/session/v1/types_pb";
 import { fetchDirectoryFiles, searchFiles } from "@/lib/hooks/useFileService";
 import { getFileIcon } from "@/lib/utils/fileIcons";
@@ -386,6 +386,28 @@ function NodeRenderer({
   );
 }
 
+// ---- Row renderer ----
+
+// react-arborist's DefaultRow hardcodes tabIndex=-1 forever (it relies on
+// imperative .focus() calls, not real tab stops), which breaks any
+// [tabindex]:not([tabindex="-1"]) based focus-trap query (see useFocusTrap.ts)
+// the instant a row receives DOM focus. Override to a real roving-tabindex
+// pattern: exactly the focused row is a tab stop, everything else isn't.
+// Exported for unit testing.
+export function TreeRow<T>({ node, innerRef, attrs, children }: RowRendererProps<T>) {
+  return (
+    <div
+      {...attrs}
+      tabIndex={node.isFocused ? 0 : -1}
+      ref={innerRef}
+      onFocus={(e) => e.stopPropagation()}
+      onClick={node.handleClick}
+    >
+      {children}
+    </div>
+  );
+}
+
 // ---- Imperative handle ----
 
 export interface FileTreeHandle {
@@ -725,6 +747,36 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       if (!visible || visible.length === 0) return;
 
       switch (e.key) {
+        case "Tab": {
+          // react-arborist's own <Tree> container (a descendant of this div,
+          // rendered by the unexported DefaultContainer) already intercepted
+          // this event on its way up (bubble fires inside-out) and called
+          // preventDefault() + moved DOM focus via its own document-wide,
+          // dialog-unaware walk (react-arborist has no public API to disable
+          // this — DefaultContainer isn't safely replaceable via the
+          // renderContainer prop, since it depends on unexported internals
+          // like useTreeApi()/useDataUpdates() with no way to reimplement it
+          // from application code). tree.focusedNode still correctly reflects
+          // the row that had focus before that walk ran, since it moves DOM
+          // focus directly rather than going through tree.focus() — use it to
+          // redo the move correctly: step within the tree like j/k, or hand
+          // off to our own stable container element at the boundary so
+          // useFocusTrap's document-level listener (which sees this event
+          // next) resolves the surrounding dialog's wrap correctly.
+          if (!focusedNode) break;
+          e.preventDefault();
+          const idx = visible.findIndex((n) => n.id === focusedNode.id);
+          if (e.shiftKey) {
+            const prev = idx > 0 ? visible[idx - 1] : undefined;
+            if (prev) tree.focus(prev.id);
+            else containerRef.current?.focus();
+          } else {
+            const next = idx >= 0 && idx < visible.length - 1 ? visible[idx + 1] : undefined;
+            if (next) tree.focus(next.id);
+            else containerRef.current?.focus();
+          }
+          break;
+        }
         case "j": {
           e.preventDefault();
           const idx = focusedNode ? visible.findIndex((n) => n.id === focusedNode.id) : -1;
@@ -892,6 +944,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           }}
           disableDrag={true}
           disableDrop={true}
+          renderRow={TreeRow}
           onActivate={handleActivate}
           onToggle={handleToggle}
           rowHeight={rowHeight}

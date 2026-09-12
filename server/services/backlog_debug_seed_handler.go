@@ -16,6 +16,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -459,6 +460,12 @@ type seedWorkSessionWithWorktreeRequest struct {
 	// produces, and a known repo path to (un)acknowledge). Omitted defaults
 	// to "", unchanged from before this field existed.
 	RepoPath string `json:"repoPath"`
+	// FileCount, when > 2, seeds that many flat fixture files instead of the
+	// default two — needed by tests that must force react-arborist to
+	// virtualize (and later recycle) rows, e.g. the FileTree Tab-boundary
+	// scroll test in accessibility.spec.ts. 0 keeps the original two-file
+	// (README.md, NOTES.md) behavior unchanged.
+	FileCount int `json:"fileCount"`
 }
 
 type seedWorkSessionWithWorktreeResponse struct {
@@ -529,6 +536,18 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 		log.Error("backlog debug seed: write second worktree fixture file failed", "err", err)
 		http.Error(w, "failed to write second worktree fixture file: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// Extra flat fixture files beyond the two above, only when the caller
+	// asked for enough rows to force react-arborist's row virtualization
+	// (default rowHeight * ~20-30 visible rows) to kick in and later recycle
+	// rows on scroll.
+	for i := 3; i <= req.FileCount; i++ {
+		name := fmt.Sprintf("file-%03d.md", i)
+		if err := os.WriteFile(filepath.Join(worktreePath, name), []byte("# fixture\n"), 0o600); err != nil {
+			log.Error("backlog debug seed: write extra worktree fixture file failed", "err", err, "file", name)
+			http.Error(w, "failed to write extra worktree fixture file: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	// A real (tiny) git repo, not just a bare directory: GetVCSStatus (the
 	// backend behind the VcsWidget the "Browse Files" trigger lives in) 404s
