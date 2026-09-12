@@ -43,6 +43,33 @@ function draftToInitialValues(
   };
 }
 
+function ParsingIndicator() {
+  return (
+    <div role="status" aria-live="polite" style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>
+      Parsing your message into a backlog item…
+    </div>
+  );
+}
+
+function ParseFailedBanner() {
+  return (
+    <p
+      role="alert"
+      data-testid="backlog-intent-review-parse-failed-banner"
+      style={{
+        margin: "0 0 12px",
+        padding: "8px 12px",
+        fontSize: "13px",
+        borderRadius: "6px",
+        background: "var(--warning-bg, rgba(234, 179, 8, 0.12))",
+        color: "var(--warning-text, #b45309)",
+      }}
+    >
+      Couldn&rsquo;t parse this into a structured item — review the fields below before creating.
+    </p>
+  );
+}
+
 /**
  * Renders in place of the omnibar's fire-and-close raw-text creation once a
  * "backlog: <message>" submission is parsed by an LLM (ParseBacklogItemIntent)
@@ -98,31 +125,12 @@ export function BacklogItemIntentReview({
   };
 
   if (phase === "parsing") {
-    return (
-      <div role="status" aria-live="polite" style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>
-        Parsing your message into a backlog item…
-      </div>
-    );
+    return <ParsingIndicator />;
   }
 
   return (
     <div>
-      {parseFailed && (
-        <p
-          role="alert"
-          data-testid="backlog-intent-review-parse-failed-banner"
-          style={{
-            margin: "0 0 12px",
-            padding: "8px 12px",
-            fontSize: "13px",
-            borderRadius: "6px",
-            background: "var(--warning-bg, rgba(234, 179, 8, 0.12))",
-            color: "var(--warning-text, #b45309)",
-          }}
-        >
-          Couldn&rsquo;t parse this into a structured item — review the fields below before creating.
-        </p>
-      )}
+      {parseFailed && <ParseFailedBanner />}
       <BacklogItemForm
         initialValues={initialValues}
         onSubmit={handleSubmit}
