@@ -11,6 +11,7 @@ import {
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
 import { getConnectTransport } from "@/lib/api/transport";
+import { invalidateTaggingRuleNamesCache } from "@/lib/hooks/useTaggingRuleNames";
 
 interface UseTaggingRulesReturn {
   rules: TaggingRuleProto[];
@@ -89,6 +90,7 @@ export function useTaggingRules(): UseTaggingRulesReturn {
       const rule = buildTaggingRuleProto(ruleData);
       const req = create(UpsertTaggingRuleRequestSchema, { rule });
       await clientRef.current.upsertTaggingRule(req);
+      invalidateTaggingRuleNamesCache();
       await refresh();
     },
     [refresh]
@@ -99,6 +101,7 @@ export function useTaggingRules(): UseTaggingRulesReturn {
       if (!clientRef.current) return;
       const req = create(DeleteTaggingRuleRequestSchema, { id });
       await clientRef.current.deleteTaggingRule(req);
+      invalidateTaggingRuleNamesCache();
       setRules((prev) => prev.filter((r) => r.id !== id));
     },
     []

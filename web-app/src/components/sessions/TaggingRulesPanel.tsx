@@ -7,7 +7,7 @@ import { TaggingRuleBuilderForm } from "@/components/rules/TaggingRuleBuilderFor
 import {
   loading as loadingClass, empty, tableWrapper, table, th, td, tdCenter, row, rowDisabled,
   ruleName, sourceBadge, toggle, toggleOn, toggleOff, deleteButton, builtInBadge,
-  addButton, formSection, hitBadge, hitBadgeActive, rowCount,
+  addButton, formSection, hitBadge, hitBadgeActive, rowCount, error as errorClass,
 } from "./ApprovalRulesPanel.css";
 
 /** Describes which single field a rule matches against, for display purposes. */
@@ -31,6 +31,7 @@ export function TaggingRulesPanel() {
   const { rules, loading, upsertRule, deleteRule } = useTaggingRules();
   const [showBuilder, setShowBuilder] = useState(false);
   const [editingRule, setEditingRule] = useState<TaggingRuleProto | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const handleSave = async (rule: Partial<TaggingRuleProto> & { id: string }) => {
     await upsertRule(rule);
@@ -46,6 +47,17 @@ export function TaggingRulesPanel() {
   const handleEdit = (rule: TaggingRuleProto) => {
     setEditingRule(rule);
     setShowBuilder(true);
+  };
+
+  const handleDelete = async (rule: TaggingRuleProto) => {
+    try {
+      setDeleteError(null);
+      await deleteRule(rule.id);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to delete tagging rule";
+      setDeleteError(message);
+      console.error("Failed to delete tagging rule:", err);
+    }
   };
 
   const handleToggle = async (rule: TaggingRuleProto) => {
@@ -66,6 +78,11 @@ export function TaggingRulesPanel() {
 
   return (
     <div data-testid="tagging-rules-panel">
+      {deleteError && (
+        <div className={errorClass} role="alert" data-testid="tagging-rule-delete-error">
+          Failed to delete tagging rule: {deleteError}
+        </div>
+      )}
       <div className={tableWrapper}>
         {loading && rules.length === 0 ? (
           <div className={loadingClass}>Loading tagging rules…</div>
@@ -136,7 +153,7 @@ export function TaggingRulesPanel() {
                         </button>
                         <button
                           className={deleteButton}
-                          onClick={() => deleteRule(rule.id)}
+                          onClick={() => { void handleDelete(rule); }}
                           aria-label={`Delete tagging rule ${rule.name}`}
                           title="Delete tagging rule"
                         >

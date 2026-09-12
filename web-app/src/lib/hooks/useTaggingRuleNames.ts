@@ -17,6 +17,14 @@ import { getConnectTransport } from "@/lib/api/transport";
  */
 let cachedNamesPromise: Promise<Record<string, string>> | null = null;
 
+/**
+ * Mounted `useTaggingRuleNames` instances register a refetch callback here so
+ * `invalidateTaggingRuleNamesCache` can push fresh data to them directly —
+ * without this, invalidation would only affect the *next* mount (empty-deps
+ * `useEffect`), leaving already-mounted SessionCards stuck on stale names.
+ */
+const cacheListeners = new Set<() => void>();
+
 async function fetchRuleNames(): Promise<Record<string, string>> {
   try {
     const client = createClient(SessionService, getConnectTransport());
@@ -32,6 +40,9 @@ async function fetchRuleNames(): Promise<Record<string, string>> {
     return names;
   } catch (err) {
     console.error("Failed to fetch tagging rule names:", err);
+    // Don't cache a failed fetch: a transient RPC error would otherwise leave
+    // every tooltip blank for the rest of the page's life with no retry.
+    cachedNamesPromise = null;
     return {};
   }
 }
@@ -39,6 +50,17 @@ async function fetchRuleNames(): Promise<Record<string, string>> {
 /** Resets the module-level cache — for tests only. */
 export function _resetTaggingRuleNamesCacheForTesting(): void {
   cachedNamesPromise = null;
+}
+
+/**
+ * Invalidates the module-level rule-names cache so the next render refetches
+ * fresh data. Call after a tagging rule mutation (upsert/delete) so already-
+ * mounted SessionCards' provenance tooltips pick up the new name/removal
+ * instead of showing stale data until a full page reload.
+ */
+export function invalidateTaggingRuleNamesCache(): void {
+  cachedNamesPromise = null;
+  for (const listener of cacheListeners) listener();
 }
 
 /**
@@ -53,13 +75,25 @@ export function useTaggingRuleNames(): Record<string, string> {
 
   useEffect(() => {
     let cancelled = false;
-    if (!cachedNamesPromise) {
-      cachedNamesPromise = fetchRuleNames();
-    }
-    cachedNamesPromise.then((resolved) => {
-      if (!cancelled) setNames(resolved);
-    });
-    return () => { cancelled = true; };
+
+    const applyResolved = (resolved: Record<string, string>) => {
+      if (cancelled) return;
+      setNames(resolved);
+    };
+
+    const load = () => {
+      if (!cachedNamesPromise) {
+        cachedNamesPromise = fetchRuleNames();
+      }
+      cachedNamesPromise.then(applyResolved);
+    };
+
+    load();
+    cacheListeners.add(load);
+    return () => {
+      cancelled = true;
+      cacheListeners.delete(load);
+    };
   }, []);
 
   return names;
