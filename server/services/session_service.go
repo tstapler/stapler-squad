@@ -1290,6 +1290,14 @@ func (s *SessionService) GetClassifier() *classifier.RuleBasedClassifier {
 	return s.rulesSvc.classifier
 }
 
+// GetTaggingEngine returns the live TaggingEngine (the same instance taggingRulesSvc
+// mutates on CRUD) for wiring up SessionTagClassificationPoller (session-classifier-pipeline
+// Epic 4.4) — nil-safe like GetClassifier, though taggingEngine is currently always
+// constructed alongside the SessionService, unlike rulesSvc which can be nil in some paths.
+func (s *SessionService) GetTaggingEngine() *classifier.TaggingEngine {
+	return s.taggingEngine
+}
+
 // GetAnalyticsStore returns the analytics store for wiring up the ApprovalHandler.
 func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
 	if s.rulesSvc == nil {

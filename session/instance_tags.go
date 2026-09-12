@@ -1,5 +1,7 @@
 package session
 
+import "slices"
+
 // instance_tags.go contains tag management delegation methods for Instance.
 // All methods delegate to TagManager with stateMutex protection.
 
@@ -148,4 +150,28 @@ func (i *Instance) SetTags(tags []string) error {
 
 	i.snapshot.Store(buildSnapshot(i))
 	return nil
+}
+
+// ApplyLLMTagResult applies tags produced by the Phase 4 LLM fallback poller
+// (headless.GenerateSessionTags), attributing each surviving tag to ruleID (llmSentinelRuleID
+// in production) and otherwise following the exact same suppression/coexistence rules as the
+// sync fixpoint path (reclassifyTagsLocked, instance_actor_setters.go) — see Story 4.3.2. The
+// poller is an external caller rather than an actor setter, so this takes i.mu itself, the
+// same direct-lock pattern AddTag/RemoveTag/SetTags already use.
+func (i *Instance) ApplyLLMTagResult(tags []string, ruleID string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	if i.RuleTagProvenance == nil {
+		i.RuleTagProvenance = make(map[string]string)
+	}
+	for _, tag := range filterSuppressedTags(tags, i.SuppressedRuleTags) {
+		if !slices.Contains(i.Tags, tag) {
+			i.Tags = append(i.Tags, tag)
+		}
+		i.RuleTagProvenance[tag] = ruleID
+	}
+	dropUnclassifiedIfOtherTagsPresentLocked(&instanceState{inst: i})
+
+	i.snapshot.Store(buildSnapshot(i))
 }

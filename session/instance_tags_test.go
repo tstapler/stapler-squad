@@ -357,6 +357,58 @@ func TestSetTags_should_NeverSuppressUnclassifiedSentinel_When_UnclassifiedClear
 	}
 }
 
+// ── Story 4.3.2: ApplyLLMTagResult ──────────────────────────────────────────
+
+func TestApplyLLMTagResult_should_RecordLLMProvenance_When_TagApplied(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "test"}
+
+	inst.ApplyLLMTagResult([]string{"Feature"}, llmSentinelRuleID)
+
+	if !inst.HasTag("Feature") {
+		t.Fatalf("expected Feature tag to be applied, got tags=%v", inst.GetTags())
+	}
+	if inst.RuleTagProvenance["Feature"] != llmSentinelRuleID {
+		t.Errorf("RuleTagProvenance[Feature] = %q, want %q", inst.RuleTagProvenance["Feature"], llmSentinelRuleID)
+	}
+}
+
+func TestApplyLLMTagResult_should_DropSuppressedCandidate_When_UserPreviouslyRemovedSameTag(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:              "test",
+		SuppressedRuleTags: map[string]bool{"Feature": true},
+	}
+
+	inst.ApplyLLMTagResult([]string{"Feature"}, llmSentinelRuleID)
+
+	if inst.HasTag("Feature") {
+		t.Fatal("ApplyLLMTagResult must not re-add a tag the user previously suppressed")
+	}
+	if _, ok := inst.RuleTagProvenance["Feature"]; ok {
+		t.Fatal("ApplyLLMTagResult must not record provenance for a suppressed candidate")
+	}
+}
+
+func TestApplyLLMTagResult_should_DropUnclassified_When_RealTagAppliedByLaterPoll(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:             "test",
+		Tags:              []string{UnclassifiedTag},
+		RuleTagProvenance: map[string]string{UnclassifiedTag: llmSentinelRuleID},
+	}
+
+	inst.ApplyLLMTagResult([]string{"Feature"}, llmSentinelRuleID)
+
+	tags := inst.GetTags()
+	if len(tags) != 1 || tags[0] != "Feature" {
+		t.Fatalf("expected tags=[Feature] with Unclassified dropped, got %v", tags)
+	}
+	if _, ok := inst.RuleTagProvenance[UnclassifiedTag]; ok {
+		t.Fatal("Unclassified provenance entry must be removed once a real tag is present")
+	}
+}
+
 func TestFilterSuppressedTags_should_DropOnlySuppressedCandidates_When_MixedCandidateListGiven(t *testing.T) {
 	t.Parallel()
 	candidates := []string{"Bugfix", "Feature", "Urgent"}

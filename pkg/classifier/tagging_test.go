@@ -250,3 +250,32 @@ func TestSeedTaggingRules_should_NotIncludeDisabledOrUserSourcedRules_When_Calle
 		}
 	}
 }
+
+// ── Story 4.2.1: TagContentHash ─────────────────────────────────────────────
+
+func TestTagContentHash_should_BeOrderInvariantOnTags_When_TagSetIdenticalButUnordered(t *testing.T) {
+	ctx1 := SessionTaggingContext{Name: "a", Branch: "b", Path: "/p", Program: "claude", Tags: []string{"X", "Y"}}
+	ctx2 := SessionTaggingContext{Name: "a", Branch: "b", Path: "/p", Program: "claude", Tags: []string{"Y", "X"}}
+
+	if TagContentHash(ctx1) != TagContentHash(ctx2) {
+		t.Errorf("TagContentHash differs for identical tag sets in different order: %q vs %q", TagContentHash(ctx1), TagContentHash(ctx2))
+	}
+}
+
+func TestTagContentHash_should_ChangeHash_When_AnySingleFieldDiffers(t *testing.T) {
+	base := SessionTaggingContext{Name: "a", Branch: "b", Path: "/p", Program: "claude", Tags: []string{"X", "Y"}}
+	baseHash := TagContentHash(base)
+
+	variants := []SessionTaggingContext{
+		{Name: "different", Branch: base.Branch, Path: base.Path, Program: base.Program, Tags: base.Tags},
+		{Name: base.Name, Branch: "different", Path: base.Path, Program: base.Program, Tags: base.Tags},
+		{Name: base.Name, Branch: base.Branch, Path: "different", Program: base.Program, Tags: base.Tags},
+		{Name: base.Name, Branch: base.Branch, Path: base.Path, Program: "different", Tags: base.Tags},
+		{Name: base.Name, Branch: base.Branch, Path: base.Path, Program: base.Program, Tags: []string{"Z"}},
+	}
+	for i, v := range variants {
+		if TagContentHash(v) == baseHash {
+			t.Errorf("variant %d: TagContentHash unchanged (%q) despite a differing field, ctx=%+v", i, baseHash, v)
+		}
+	}
+}

@@ -1,8 +1,12 @@
 package classifier
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"regexp"
 	"slices"
+	"sort"
+	"strings"
 
 	"github.com/linkdata/deadlock"
 )
@@ -220,6 +224,19 @@ func SeedTaggingRules() []TaggingRule {
 		// one fixpoint iteration after seed-tag-bugfix fires.
 		{RuleMeta: seedTagMeta("seed-tag-bugfix-needs-review", "Bugfix needs review", 10), RequiredTags: []string{"Bugfix"}, OutputTag: "NeedsReview"},
 	}
+}
+
+// TagContentHash hashes the fields of ctx that the Phase 4 LLM fallback poller uses to decide
+// whether a session needs re-classification. Tags are sorted before hashing so two contexts
+// with the same tag set in a different order hash identically — the poller's cache key and its
+// prompt-scoping logic both call this one function so they can never silently desync
+// (pitfalls.md #5d).
+func TagContentHash(ctx SessionTaggingContext) string {
+	sortedTags := append([]string(nil), ctx.Tags...)
+	sort.Strings(sortedTags)
+	joined := strings.Join([]string{ctx.Name, ctx.Branch, ctx.Path, ctx.Program, strings.Join(sortedTags, "\x00")}, "\x00")
+	sum := sha256.Sum256([]byte(joined))
+	return hex.EncodeToString(sum[:])
 }
 
 // seedTagMeta builds the RuleMeta shared by every SeedTaggingRules() entry: seed-sourced and

@@ -195,6 +195,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	deps.PRStatusPoller.Start(serverCtx)
 	log.Info("PRStatusPoller started")
 
+	if deps.SessionTagClassificationPoller != nil {
+		deps.SessionTagClassificationPoller.Start(serverCtx)
+		log.Info("SessionTagClassificationPoller started")
+	}
+
 	// Start SessionHealthChecker: polls for dead tmux panes (remain-on-exit
 	// placeholders left after the wrapped program exits) and stale
 	// started-but-tmux-missing instances, marking dead panes Crashed/Stopped so
