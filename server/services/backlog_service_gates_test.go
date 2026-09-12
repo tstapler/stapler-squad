@@ -37,7 +37,7 @@ func TestGetPendingGates_should_ReturnEmpty_When_TransitionHasNoConfiguredGates(
 
 	repo := session.NewEntStageConfigRepository(storage.GetEntClient())
 	gateSatisfactionRepo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
-	engine, err := session.NewConfiguredWorkflowEngine(repo, gateSatisfactionRepo)
+	engine, err := session.NewConfiguredWorkflowEngine(repo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
 	svc := NewBacklogService(storage, nil, nil, engine, nil, nil)

@@ -198,7 +198,7 @@ func TestResolveCustomCheckGateContext_should_ReturnGateAndConfig_When_Transitio
 
 	stageRepo := NewEntStageConfigRepository(client)
 	gateRepo := NewEntGateSatisfactionRepository(client)
-	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)

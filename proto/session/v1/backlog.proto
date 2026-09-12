@@ -1124,6 +1124,11 @@ message RecordGateApprovalRequest {
   // satisfied_by identifies the approving actor (e.g. a username) — optional,
   // purely for audit display.
   string satisfied_by = 3;
+  // approved is true to approve the gate, false to reject it. Approval is
+  // permanently one-shot (a second call once approved is always rejected); a
+  // rejection can be reversed by a later call with approved = true, or
+  // re-rejected idempotently (ADR-006).
+  bool approved = 4;
 }
 
 message RecordGateApprovalResponse {
@@ -1143,6 +1148,11 @@ message GateStatus {
   bool satisfied = 3;
   string description = 4;
   string action_hint = 5;
+  // config_error is non-empty when this gate's configuration references
+  // something that no longer resolves (a removed custom-check skill, an
+  // unresolvable pipeline mode) — set instead of the normal satisfied/
+  // unsatisfied evaluation. Empty means no config error (ADR-006).
+  string config_error = 6;
 }
 
 // GetPendingGatesRequest asks which gates (if any) block item_id from

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tslog "github.com/tstapler/stapler-squad/log"
@@ -161,7 +162,7 @@ func newSeededConfiguredWorkflowEngine(t *testing.T) (*ConfiguredWorkflowEngine,
 
 	stageRepo := NewEntStageConfigRepository(client)
 	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
-	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 	return engine, client
 }
@@ -373,8 +374,17 @@ func newCustomTransitionWithGates(t *testing.T, client *ent.Client, engine *Conf
 		// evaluateStructuralGate fails closed with "unrecognized structural
 		// check id" — every existing caller of this helper wants the
 		// pre-Epic-2.4.2 "all AC done" semantics, so default to ac_complete.
-		if kind == GateKindStructural {
+		// A GateKindCustom fixture likewise needs a registered skill (ADR-006
+		// Part B's config-error check, session/configured_workflow_engine.go)
+		// or evaluateGate now reports a config error before ever reaching
+		// evaluateRecordedGate — every existing caller of this helper wants
+		// the pre-ADR-006 "consult GateSatisfactionRepository" semantics, so
+		// default to the one pre-registered skill.
+		switch kind {
+		case GateKindStructural:
 			c = c.SetConfig(map[string]interface{}{"check_id": StructuralCheckACComplete})
+		case GateKindCustom:
+			c = c.SetConfig(map[string]interface{}{"skill": "review-feasibility"})
 		}
 		_, err := c.Save(ctx)
 		require.NoError(t, err)
@@ -545,7 +555,7 @@ func newDeletedStageItemFixture(t *testing.T) (engine *ConfiguredWorkflowEngine,
 
 	stageRepo := NewEntStageConfigRepository(client)
 	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
-	engine, err = NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo)
+	engine, err = NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
 	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
@@ -750,4 +760,215 @@ func TestEvaluateGate_AutomatedReviewAndCustom_should_ConsultGateSatisfactionRep
 			assert.Equal(t, "needs rework", statuses[0].Description)
 		})
 	}
+}
+
+// --- ADR-006 Part B: config-error detection ahead of the satisfaction lookup ---
+
+// failOnCallGateSatisfactionRepo is a GateSatisfactionRepository test double
+// that fails the test immediately if any method is called — used to prove
+// evaluateGate's config-error short-circuit never reaches the satisfaction
+// lookup at all for a gate whose config doesn't resolve.
+type failOnCallGateSatisfactionRepo struct {
+	t *testing.T
+}
+
+func (f *failOnCallGateSatisfactionRepo) Create(context.Context, GateSatisfactionCreateInput) (*GateSatisfactionData, error) {
+	f.t.Fatal("GateSatisfactionRepository.Create must not be called when a config error short-circuits evaluation")
+	return nil, nil
+}
+
+func (f *failOnCallGateSatisfactionRepo) GetByItemAndGate(context.Context, uuid.UUID, uuid.UUID) (*GateSatisfactionData, error) {
+	f.t.Fatal("GateSatisfactionRepository.GetByItemAndGate must not be called when a config error short-circuits evaluation")
+	return nil, nil
+}
+
+func (f *failOnCallGateSatisfactionRepo) Update(context.Context, uuid.UUID, uuid.UUID, GateSatisfactionUpdateInput) (*GateSatisfactionData, error) {
+	f.t.Fatal("GateSatisfactionRepository.Update must not be called when a config error short-circuits evaluation")
+	return nil, nil
+}
+
+func (f *failOnCallGateSatisfactionRepo) ListUnsatisfied(context.Context) ([]*GateSatisfactionData, error) {
+	f.t.Fatal("GateSatisfactionRepository.ListUnsatisfied must not be called when a config error short-circuits evaluation")
+	return nil, nil
+}
+
+var _ GateSatisfactionRepository = (*failOnCallGateSatisfactionRepo)(nil)
+
+// newGateWithConfig creates a fresh custom stage pair plus one enabled gate of
+// kind on the transition between them, carrying config, invalidates engine's
+// cache, and returns the (from,to) pair plus the gate's ID. Sibling to
+// newCustomTransitionWithGates above, for tests that need an explicit,
+// possibly-invalid Config map (e.g. a skill/pipeline_mode that no longer
+// resolves) rather than that helper's structural-check-only default.
+func newGateWithConfig(t *testing.T, client *ent.Client, engine *ConfiguredWorkflowEngine, kind GateKind, config map[string]interface{}) (from, to BacklogStatus, gateID uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+
+	fromStage, err := client.BacklogStage.Create().SetSlug("cfgerr-from-" + uuid.NewString()).SetName("From").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	toStage, err := client.BacklogStage.Create().SetSlug("cfgerr-to-" + uuid.NewString()).SetName("To").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	transition, err := client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	gate, err := client.TransitionGate.Create().
+		SetTransitionID(transition.ID).
+		SetKind(string(kind)).
+		SetStateful(true).
+		SetEnabled(true).
+		SetConfig(config).
+		Save(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, engine.InvalidateCache(ctx))
+	return BacklogStatus(fromStage.Slug), BacklogStatus(toStage.Slug), gate.ID
+}
+
+// TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_CustomGateSkillNoLongerRegistered
+// covers ADR-006 Part B's custom-gate branch: a GateKindCustom gate whose
+// configured skill is no longer in registeredCustomCheckSkills (it was valid
+// at save time, since ParseGateConfig enforces the allowlist then, but has
+// since been deregistered) must report ConfigError/Satisfied:false and must
+// never reach GateSatisfactionRepository at all — proven here via a repo
+// double that fails the test if any method is called.
+func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_CustomGateSkillNoLongerRegistered(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	client := repo.client
+	stageRepo := NewEntStageConfigRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, &failOnCallGateSatisfactionRepo{t: t}, nil)
+	require.NoError(t, err)
+
+	from, to, _ := newGateWithConfig(t, client, engine, GateKindCustom, map[string]interface{}{"skill": "no-longer-registered-skill"})
+
+	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to)
+	require.NoError(t, err)
+	require.Len(t, statuses, 1)
+	assert.False(t, statuses[0].Satisfied)
+	assert.NotEmpty(t, statuses[0].ConfigError, "expected a config error for a deregistered custom-check skill")
+	assert.Contains(t, statuses[0].ConfigError, "no-longer-registered-skill")
+	assert.Equal(t, statuses[0].ConfigError, statuses[0].Description, "ConfigError and Description must carry the same reason")
+}
+
+// TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_AutomatedReviewPipelineModeUnresolvable
+// covers ADR-006 Part B's automated_review branch: a GateKindAutomatedReview
+// gate whose configured pipeline_mode no longer resolves via
+// PipelineModeRepository.GetBySlug must report ConfigError/Satisfied:false
+// and must never reach GateSatisfactionRepository — same short-circuit proof
+// as the custom-gate case above.
+func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_AutomatedReviewPipelineModeUnresolvable(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	client := repo.client
+	stageRepo := NewEntStageConfigRepository(client)
+	pipelineModeRepo := NewEntPipelineModeRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, &failOnCallGateSatisfactionRepo{t: t}, pipelineModeRepo)
+	require.NoError(t, err)
+
+	from, to, _ := newGateWithConfig(t, client, engine, GateKindAutomatedReview, map[string]interface{}{"pipeline_mode": "ghost-mode"})
+
+	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to)
+	require.NoError(t, err)
+	require.Len(t, statuses, 1)
+	assert.False(t, statuses[0].Satisfied)
+	assert.NotEmpty(t, statuses[0].ConfigError, "expected a config error for an unresolvable pipeline mode")
+	assert.Contains(t, statuses[0].ConfigError, "ghost-mode")
+	assert.Equal(t, statuses[0].ConfigError, statuses[0].Description)
+}
+
+// TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_AutomatedReviewPipelineModeRepoUnwired
+// covers the nil-pipelineModeRepo branch explicitly: a gate naming a
+// pipeline_mode with no pipelineModeRepo wired at all (mirrors
+// gateSatisfactionRepo's own nil-guarded-optional-dependency pattern) must
+// degrade to the same blocking config error, never a nil-pointer panic.
+func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_AutomatedReviewPipelineModeRepoUnwired(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	client := repo.client
+	stageRepo := NewEntStageConfigRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, &failOnCallGateSatisfactionRepo{t: t}, nil)
+	require.NoError(t, err)
+
+	from, to, _ := newGateWithConfig(t, client, engine, GateKindAutomatedReview, map[string]interface{}{"pipeline_mode": "sdd"})
+
+	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to)
+	require.NoError(t, err)
+	require.Len(t, statuses, 1)
+	assert.False(t, statuses[0].Satisfied)
+	assert.NotEmpty(t, statuses[0].ConfigError, "a nil pipelineModeRepo must degrade to a config error, not a panic")
+}
+
+// TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_CustomGateConfigIsValid
+// is the regression test for ADR-006 Part B: a custom gate whose skill IS
+// registered must behave exactly as before this change — falling through to
+// the existing GateSatisfactionRepository lookup — proven here via the same
+// spy-repo trick used by the config-error tests above, but this time the spy
+// answers GetByItemAndGate instead of failing, confirming the call is
+// actually reached (not short-circuited).
+func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_CustomGateConfigIsValid(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	client := repo.client
+	stageRepo := NewEntStageConfigRepository(client)
+	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	from, to, gateID := newGateWithConfig(t, client, engine, GateKindCustom, map[string]interface{}{"skill": "review-feasibility"})
+
+	// No record yet: falls through to evaluateRecordedGate's unchanged
+	// "nothing has run yet" placeholder — proving evaluateGate did NOT
+	// short-circuit into a config error for a still-valid skill.
+	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to)
+	require.NoError(t, err)
+	require.Len(t, statuses, 1)
+	assert.Empty(t, statuses[0].ConfigError)
+	assert.False(t, statuses[0].Satisfied)
+	assert.Contains(t, statuses[0].Description, "nothing has run yet")
+
+	// And a recorded satisfaction is still honored exactly as before.
+	itemID := uuid.New()
+	_, err = gateSatisfactionRepo.Create(ctx, GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: true})
+	require.NoError(t, err)
+	statuses, err = engine.PendingGates(BacklogItemTransitionInput{ItemID: itemID.String(), Status: from}, to)
+	require.NoError(t, err)
+	require.Len(t, statuses, 1)
+	assert.Empty(t, statuses[0].ConfigError)
+	assert.True(t, statuses[0].Satisfied)
+}
+
+// TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_AutomatedReviewPipelineModeIsEmptyOrResolvable
+// is the regression test for automated_review: an empty pipeline_mode ("use
+// the item's own PipelineMode") and a pipeline_mode that actually resolves via
+// PipelineModeRepository must both fall through unchanged, never reporting a
+// config error.
+func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_AutomatedReviewPipelineModeIsEmptyOrResolvable(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	client := repo.client
+	stageRepo := NewEntStageConfigRepository(client)
+	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
+	pipelineModeRepo := NewEntPipelineModeRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, pipelineModeRepo)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	t.Run("empty pipeline_mode", func(t *testing.T) {
+		from, to, _ := newGateWithConfig(t, client, engine, GateKindAutomatedReview, map[string]interface{}{})
+		statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to)
+		require.NoError(t, err)
+		require.Len(t, statuses, 1)
+		assert.Empty(t, statuses[0].ConfigError)
+	})
+
+	t.Run("resolvable pipeline_mode", func(t *testing.T) {
+		_, err := pipelineModeRepo.Create(ctx, PipelineModeCreateInput{Slug: "real-mode", Name: "Real Mode", Enabled: true})
+		require.NoError(t, err)
+
+		from, to, _ := newGateWithConfig(t, client, engine, GateKindAutomatedReview, map[string]interface{}{"pipeline_mode": "real-mode"})
+		statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to)
+		require.NoError(t, err)
+		require.Len(t, statuses, 1)
+		assert.Empty(t, statuses[0].ConfigError)
+	})
 }

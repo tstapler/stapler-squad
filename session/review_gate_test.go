@@ -1915,7 +1915,7 @@ func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFails
 	// PendingGates must report the SAME outcome for this transition, replacing
 	// evaluateGate's pre-follow-up unconditional Satisfied:false placeholder.
 	stageRepo := NewEntStageConfigRepository(client)
-	engine, err := NewConfiguredWorkflowEngine(stageRepo, repo)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, repo, nil)
 	require.NoError(t, err)
 
 	statuses, pgErr := engine.PendingGates(BacklogItemTransitionInput{ItemID: item.ID, Status: BacklogStatus(fromStage.Slug)}, BacklogStatus(toStage.Slug))

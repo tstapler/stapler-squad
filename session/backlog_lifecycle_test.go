@@ -4314,7 +4314,7 @@ func TestResolveReviewGateContext_should_ReturnBuiltIn_When_ToIsReview_Regardles
 
 	stageRepo := NewEntStageConfigRepository(client)
 	gateRepo := NewEntGateSatisfactionRepository(client)
-	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -4353,7 +4353,7 @@ func TestResolveReviewGateContext_should_ReturnConfiguredGate_When_CustomTransit
 
 	stageRepo := NewEntStageConfigRepository(client)
 	gateRepo := NewEntGateSatisfactionRepository(client)
-	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -4386,7 +4386,7 @@ func TestResolveReviewGateContext_should_ReturnNotOK_When_NoGateConfiguredForCus
 
 	stageRepo := NewEntStageConfigRepository(client)
 	gateRepo := NewEntGateSatisfactionRepository(client)
-	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)

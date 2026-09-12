@@ -712,7 +712,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		stageCRUDRepo = entStageRepo
 		entGateSatisfactionRepo := session.NewEntGateSatisfactionRepository(entClient)
 		gateSatisfactionRepo = entGateSatisfactionRepo
-		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo); err != nil {
+		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo, pipelineModeRepo); err != nil {
 			log.Warn("stageConfigEngine construction failed; stage/transition/gate CRUD writes will not invalidate a cache", "err", err)
 		} else {
 			stageConfigEngine = engine

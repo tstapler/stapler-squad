@@ -41,13 +41,15 @@ func gateSatisfactionToProto(rec *session.GateSatisfactionData) *sessionv1.GateS
 	return out
 }
 
-// RecordGateApproval records one explicit human-approval action for a
-// human_approval-kind gate (Epic 2.4, Story 2.4.1). A duplicate call for the
-// same (item_id, gate_id) pair — the gate was already approved — is rejected
-// with connect.CodeAlreadyExists rather than silently succeeding a second
-// time, per the schema's UNIQUE(item_id, gate_id) index (defense in depth:
-// the one-shot guarantee is enforced at the DB layer, not just by this
-// handler's own logic).
+// RecordGateApproval records one explicit approve/reject decision for a
+// human_approval-kind gate (Epic 2.4, Story 2.4.1; reject semantics added by
+// ADR-006). A call that can't be applied — the gate is already approved
+// (permanently final), or another concurrent call already changed its state
+// out from under this one — is rejected with connect.CodeAlreadyExists rather
+// than silently succeeding or clobbering, per session.RecordGateApproval's
+// Create/Update branching (schema UNIQUE(item_id, gate_id) index plus a
+// compare-and-swap on Update; defense in depth, not just this handler's own
+// logic).
 // +api: backlog:record-gate-approval
 func (s *BacklogService) RecordGateApproval(
 	ctx context.Context,
@@ -66,11 +68,11 @@ func (s *BacklogService) RecordGateApproval(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid gate id: %w", err))
 	}
 
-	record, err := session.RecordGateApproval(ctx, s.gateSatisfactionRepo, itemID, gateID, req.Msg.SatisfiedBy)
+	record, err := session.RecordGateApproval(ctx, s.gateSatisfactionRepo, itemID, gateID, req.Msg.SatisfiedBy, req.Msg.Approved)
 	if err != nil {
 		if errors.Is(err, session.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists,
-				fmt.Errorf("gate %s for item %s is already satisfied", gateID, itemID))
+				fmt.Errorf("gate %s for item %s cannot be updated: already approved, or changed concurrently", gateID, itemID))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("record gate approval: %w", err))
 	}
@@ -88,6 +90,7 @@ func gateStatusToProto(g session.GateStatus) *sessionv1.GateStatus {
 		Satisfied:   g.Satisfied,
 		Description: g.Description,
 		ActionHint:  g.ActionHint,
+		ConfigError: g.ConfigError,
 	}
 }
 

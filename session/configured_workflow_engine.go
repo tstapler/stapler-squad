@@ -38,6 +38,13 @@ type ConfiguredWorkflowEngine struct {
 	// only exercise CanTransition/AllowedTransitions) — every lookup through
 	// it is nil-guarded and degrades to "unsatisfied", never panics.
 	gateSatisfactionRepo GateSatisfactionRepository
+
+	// pipelineModeRepo backs the automated_review config-error check
+	// (ADR-006, Part B): resolves a gate's configured pipeline_mode slug to
+	// confirm it still exists. May be nil (e.g. in tests) — the check
+	// degrades to treating any non-empty pipeline_mode as unresolvable rather
+	// than panicking.
+	pipelineModeRepo PipelineModeRepository
 }
 
 var _ WorkflowEngine = (*ConfiguredWorkflowEngine)(nil)
@@ -77,9 +84,10 @@ func stageConfigSnapshotFallback(fallback []*StageConfigSnapshot) *StageConfigSn
 // a cache.Load failure here never aborts construction, only logs at Warn and
 // leaves the engine backed by an empty cache — CanTransition/
 // AllowedTransitions/PendingGates all degrade to "no configured graph"
-// rather than panicking. gateSatisfactionRepo may be nil.
-func NewConfiguredWorkflowEngine(repo StageConfigRepository, gateSatisfactionRepo GateSatisfactionRepository) (*ConfiguredWorkflowEngine, error) {
-	e := &ConfiguredWorkflowEngine{repo: repo, cache: &stageConfigCache{}, gateSatisfactionRepo: gateSatisfactionRepo}
+// rather than panicking. gateSatisfactionRepo and pipelineModeRepo may both
+// be nil (e.g. in tests that don't exercise those paths).
+func NewConfiguredWorkflowEngine(repo StageConfigRepository, gateSatisfactionRepo GateSatisfactionRepository, pipelineModeRepo PipelineModeRepository) (*ConfiguredWorkflowEngine, error) {
+	e := &ConfiguredWorkflowEngine{repo: repo, cache: &stageConfigCache{}, gateSatisfactionRepo: gateSatisfactionRepo, pipelineModeRepo: pipelineModeRepo}
 	if err := e.cache.Load(context.Background(), repo); err != nil {
 		log.WarningLog().Printf("[ConfiguredWorkflowEngine] cache.Load failed at startup, continuing with an empty cache: %v", err)
 	}
@@ -250,8 +258,14 @@ func (e *ConfiguredWorkflowEngine) evaluateGate(g resolvedGate, item BacklogItem
 	case GateKindHumanApproval:
 		return e.evaluateHumanApprovalGate(g, item)
 	case GateKindAutomatedReview:
+		if status, hasError := e.checkAutomatedReviewGateConfig(g); hasError {
+			return status
+		}
 		return e.evaluateRecordedGate(g, item, "automated review")
 	case GateKindCustom:
+		if status, hasError := e.checkCustomCheckGateConfig(g); hasError {
+			return status
+		}
 		return e.evaluateRecordedGate(g, item, "custom check")
 	default:
 		log.WarningLog().Printf("[ConfiguredWorkflowEngine] gate %s unresolved, blocking transition: unrecognized kind %q", g.ID, g.Kind)
@@ -296,6 +310,63 @@ func (e *ConfiguredWorkflowEngine) evaluateHumanApprovalGate(g resolvedGate, ite
 		Description: "requires explicit human approval",
 		ActionHint:  "call RecordGateApproval to approve this gate",
 	}
+}
+
+// gateConfigErrorStatus builds ADR-006 Part B's blocking GateStatus for a
+// gate whose configuration no longer resolves — ConfigError and Description
+// both carry reason so the frontend's plain-satisfaction rendering path (which
+// only reads Description) still shows something sensible even before it's
+// updated to specifically branch on ConfigError.
+func gateConfigErrorStatus(g resolvedGate, reason string) GateStatus {
+	return GateStatus{
+		GateID:      g.ID.String(),
+		Kind:        g.Kind,
+		Satisfied:   false,
+		ConfigError: reason,
+		Description: reason,
+	}
+}
+
+// checkCustomCheckGateConfig runs ADR-006 Part B's config-error resolution
+// check for a GateKindCustom gate, ahead of any GateSatisfactionRepository
+// lookup: g.Config must still parse and its skill must still be present in
+// registeredCustomCheckSkills (session/gate_config.go) — ParseGateConfig
+// already enforces exactly that allowlist membership, so any parse failure
+// here means the skill that was valid at save time is no longer registered.
+// hasError=false means evaluateGate should fall through to
+// evaluateRecordedGate as usual.
+func (e *ConfiguredWorkflowEngine) checkCustomCheckGateConfig(g resolvedGate) (status GateStatus, hasError bool) {
+	if _, err := parseResolvedGateConfig(g); err != nil {
+		skillID, _ := g.Config["skill"].(string)
+		return gateConfigErrorStatus(g, fmt.Sprintf("the custom check skill %q is no longer registered", skillID)), true
+	}
+	return GateStatus{}, false
+}
+
+// checkAutomatedReviewGateConfig runs ADR-006 Part B's config-error
+// resolution check for a GateKindAutomatedReview gate, ahead of any
+// GateSatisfactionRepository lookup: an empty pipeline_mode ("use the item's
+// own PipelineMode") never errors here. A non-empty pipeline_mode must
+// resolve via pipelineModeRepo.GetBySlug — a nil pipelineModeRepo (not
+// wired) or any lookup error (not found) both surface as the same blocking
+// config error. hasError=false means evaluateGate should fall through to
+// evaluateRecordedGate as usual.
+func (e *ConfiguredWorkflowEngine) checkAutomatedReviewGateConfig(g resolvedGate) (status GateStatus, hasError bool) {
+	parsed, err := parseResolvedGateConfig(g)
+	if err != nil {
+		return gateConfigErrorStatus(g, fmt.Sprintf("this gate's automated-review configuration is invalid: %v", err)), true
+	}
+	cfg, _ := parsed.(AutomatedReviewConfig)
+	if cfg.PipelineMode == "" {
+		return GateStatus{}, false
+	}
+	if e.pipelineModeRepo == nil {
+		return gateConfigErrorStatus(g, fmt.Sprintf("the pipeline mode %q cannot be resolved (pipeline mode storage not available)", cfg.PipelineMode)), true
+	}
+	if _, err := e.pipelineModeRepo.GetBySlug(context.Background(), cfg.PipelineMode); err != nil {
+		return gateConfigErrorStatus(g, fmt.Sprintf("the pipeline mode %q no longer exists", cfg.PipelineMode)), true
+	}
+	return GateStatus{}, false
 }
 
 // evaluateRecordedGate resolves a GateKindAutomatedReview or GateKindCustom
