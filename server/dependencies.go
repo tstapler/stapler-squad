@@ -1343,7 +1343,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// verdict is actually recorded, not just this listener's separate
 	// reconcile-sweep copy above.
 	backlogLifecycleListener.SetReviewGateSatisfactionRepository(gateSatisfactionRepo)
-	// Wires transitionHasAutomatedReviewGate/resolveCustomCheckGateContext's
+	// Wires resolveReviewGateContext/resolveCustomCheckGateContext's
 	// ConfiguredWorkflowEngine consultation (Epic 2.4 follow-up) — without
 	// this, a custom transition's automated-review/custom-check gates can
 	// never fire, degrading to the built-in `to == BacklogStatusReview`

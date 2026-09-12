@@ -67,17 +67,6 @@ type StageConfigSnapshot struct {
 	AllowedTransitions []BacklogStatus
 }
 
-// stageConfigSnapshotFallback returns the first element of fallback, or nil
-// if fallback is empty — centralizing the "optional trailing parameter"
-// unwrap CanTransition/AllowedTransitions both need for their variadic
-// fallback argument.
-func stageConfigSnapshotFallback(fallback []*StageConfigSnapshot) *StageConfigSnapshot {
-	if len(fallback) == 0 {
-		return nil
-	}
-	return fallback[0]
-}
-
 // NewConfiguredWorkflowEngine constructs a ConfiguredWorkflowEngine backed by
 // repo, doing one synchronous cache.Load at construction time. Mirrors
 // NewPipelineEngine's non-fatal-boot-failure posture (session/pipeline_engine.go):
@@ -110,18 +99,17 @@ func (e *ConfiguredWorkflowEngine) InvalidateCache(ctx context.Context) error {
 // the live config is stale. A from-stage still present in the live cache
 // (even with a different edge set than the snapshot) never consults the
 // fallback — the live graph is always authoritative when it has an opinion.
-func (e *ConfiguredWorkflowEngine) CanTransition(from, to BacklogStatus, fallback ...*StageConfigSnapshot) bool {
+func (e *ConfiguredWorkflowEngine) CanTransition(from, to BacklogStatus, fallback *StageConfigSnapshot) bool {
 	if _, ok := e.cache.Get(from, to); ok {
 		return true
 	}
 	if e.cache.HasStage(from) {
 		return false
 	}
-	snap := stageConfigSnapshotFallback(fallback)
-	if snap == nil {
+	if fallback == nil {
 		return false
 	}
-	for _, allowed := range snap.AllowedTransitions {
+	for _, allowed := range fallback.AllowedTransitions {
 		if allowed == to {
 			log.WarningLog().Printf("[ConfiguredWorkflowEngine] stage %q not found in live cache (likely deleted); allowing %s->%s from item's captured StageConfigSnapshot", from, from, to)
 			return true
@@ -137,12 +125,12 @@ func (e *ConfiguredWorkflowEngine) CanTransition(from, to BacklogStatus, fallbac
 // slice, logging a Warn that the live config is stale. A from-stage still
 // present in the live cache (even with zero live edges, e.g. a legitimate
 // dead-end) never consults the fallback.
-func (e *ConfiguredWorkflowEngine) AllowedTransitions(from BacklogStatus, fallback ...*StageConfigSnapshot) []BacklogStatus {
+func (e *ConfiguredWorkflowEngine) AllowedTransitions(from BacklogStatus, fallback *StageConfigSnapshot) []BacklogStatus {
 	result := e.cache.AllowedTransitions(from)
 	if !e.cache.HasStage(from) {
-		if snap := stageConfigSnapshotFallback(fallback); snap != nil {
-			log.WarningLog().Printf("[ConfiguredWorkflowEngine] stage %q not found in live cache (likely deleted); falling back to item's captured StageConfigSnapshot with %d transition(s)", from, len(snap.AllowedTransitions))
-			result = append([]BacklogStatus(nil), snap.AllowedTransitions...)
+		if fallback != nil {
+			log.WarningLog().Printf("[ConfiguredWorkflowEngine] stage %q not found in live cache (likely deleted); falling back to item's captured StageConfigSnapshot with %d transition(s)", from, len(fallback.AllowedTransitions))
+			result = append([]BacklogStatus(nil), fallback.AllowedTransitions...)
 		}
 	}
 	if result == nil {
@@ -174,10 +162,10 @@ const stageConfigUnresolvableGateID = "stage-config-unresolvable"
 // single synthetic blocking GateStatus instead. When the fallback doesn't
 // contain to either (never a legal edge), today's nil, nil is preserved —
 // CanTransition already governs legality separately.
-func (e *ConfiguredWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, fallback ...*StageConfigSnapshot) ([]GateStatus, error) {
+func (e *ConfiguredWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *StageConfigSnapshot) ([]GateStatus, error) {
 	edge, ok := e.cache.Get(item.Status, to)
 	if !ok {
-		if status, blocked := stageConfigUnresolvableGateStatus(to, stageConfigSnapshotFallback(fallback)); blocked {
+		if status, blocked := stageConfigUnresolvableGateStatus(to, fallback); blocked {
 			log.WarningLog().Printf("[ConfiguredWorkflowEngine] stage %q not found in live cache (likely deleted); blocking %s->%s pending manual override (edge once existed per item's captured StageConfigSnapshot)", item.Status, item.Status, to)
 			return []GateStatus{status}, nil
 		}
@@ -228,8 +216,8 @@ func stageConfigUnresolvableGateStatus(to BacklogStatus, snap *StageConfigSnapsh
 // ValidateGates implements WorkflowEngine as a thin wrapper over PendingGates
 // (ADR-002's Decision 2): nil exactly when every gate PendingGates reports
 // for this transition is satisfied.
-func (e *ConfiguredWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus) error {
-	statuses, err := e.PendingGates(item, to)
+func (e *ConfiguredWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *StageConfigSnapshot) error {
+	statuses, err := e.PendingGates(item, to, fallback)
 	if err != nil {
 		return err
 	}

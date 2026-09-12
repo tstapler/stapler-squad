@@ -1178,11 +1178,11 @@ type disabledEdgeWorkflowEngine struct {
 	deniedFrom, deniedTo session.BacklogStatus
 }
 
-func (e disabledEdgeWorkflowEngine) CanTransition(from, to session.BacklogStatus, fallback ...*session.StageConfigSnapshot) bool {
+func (e disabledEdgeWorkflowEngine) CanTransition(from, to session.BacklogStatus, fallback *session.StageConfigSnapshot) bool {
 	if from == e.deniedFrom && to == e.deniedTo {
 		return false
 	}
-	return e.WorkflowEngine.CanTransition(from, to, fallback...)
+	return e.WorkflowEngine.CanTransition(from, to, fallback)
 }
 
 // alwaysAllowWorkflowEngine allows every transition, including ones the
@@ -1190,19 +1190,19 @@ func (e disabledEdgeWorkflowEngine) CanTransition(from, to session.BacklogStatus
 // injected engine rather than session.CanTransitionBacklog (Story 2.1.1).
 type alwaysAllowWorkflowEngine struct{}
 
-func (alwaysAllowWorkflowEngine) CanTransition(_, _ session.BacklogStatus, _ ...*session.StageConfigSnapshot) bool {
+func (alwaysAllowWorkflowEngine) CanTransition(_, _ session.BacklogStatus, _ *session.StageConfigSnapshot) bool {
 	return true
 }
 
-func (alwaysAllowWorkflowEngine) PendingGates(_ session.BacklogItemTransitionInput, _ session.BacklogStatus, _ ...*session.StageConfigSnapshot) ([]session.GateStatus, error) {
+func (alwaysAllowWorkflowEngine) PendingGates(_ session.BacklogItemTransitionInput, _ session.BacklogStatus, _ *session.StageConfigSnapshot) ([]session.GateStatus, error) {
 	return nil, nil
 }
 
-func (alwaysAllowWorkflowEngine) ValidateGates(_ session.BacklogItemTransitionInput, _ session.BacklogStatus) error {
+func (alwaysAllowWorkflowEngine) ValidateGates(_ session.BacklogItemTransitionInput, _ session.BacklogStatus, _ *session.StageConfigSnapshot) error {
 	return nil
 }
 
-func (alwaysAllowWorkflowEngine) AllowedTransitions(_ session.BacklogStatus, _ ...*session.StageConfigSnapshot) []session.BacklogStatus {
+func (alwaysAllowWorkflowEngine) AllowedTransitions(_ session.BacklogStatus, _ *session.StageConfigSnapshot) []session.BacklogStatus {
 	return nil
 }
 

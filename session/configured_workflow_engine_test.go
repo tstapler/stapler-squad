@@ -181,8 +181,8 @@ func TestConfiguredWorkflowEngine_should_MatchDefaultWorkflowEngineByteForByte_W
 	checked := 0
 	for _, from := range builtInStageOrder {
 		for _, to := range builtInStageOrder {
-			wantAllowed := def.CanTransition(from, to)
-			gotAllowed := configured.CanTransition(from, to)
+			wantAllowed := def.CanTransition(from, to, nil)
+			gotAllowed := configured.CanTransition(from, to, nil)
 			require.Equalf(t, wantAllowed, gotAllowed,
 				"CanTransition(%s, %s): DefaultWorkflowEngine=%v, ConfiguredWorkflowEngine=%v", from, to, wantAllowed, gotAllowed)
 			checked++
@@ -192,14 +192,14 @@ func TestConfiguredWorkflowEngine_should_MatchDefaultWorkflowEngineByteForByte_W
 
 	// AllowedTransitions must also agree, stage by stage.
 	for _, from := range builtInStageOrder {
-		require.ElementsMatchf(t, def.AllowedTransitions(from), configured.AllowedTransitions(from),
+		require.ElementsMatchf(t, def.AllowedTransitions(from, nil), configured.AllowedTransitions(from, nil),
 			"AllowedTransitions(%s) mismatch", from)
 	}
 
 	// Sanity-check the specific pair named in Story 2.3.1's acceptance
 	// criteria explicitly.
-	require.True(t, def.CanTransition(BacklogStatusReview, BacklogStatusPRPending))
-	require.True(t, configured.CanTransition(BacklogStatusReview, BacklogStatusPRPending))
+	require.True(t, def.CanTransition(BacklogStatusReview, BacklogStatusPRPending, nil))
+	require.True(t, configured.CanTransition(BacklogStatusReview, BacklogStatusPRPending, nil))
 }
 
 // TestConfiguredWorkflowEngine_should_AllowNewCustomTransitionImmediately_When_CreateStageTransitionRPCJustSucceeded
@@ -215,7 +215,7 @@ func TestConfiguredWorkflowEngine_should_AllowNewCustomTransitionImmediately_Whe
 	ctx := context.Background()
 
 	const customSlug = "design-review"
-	require.False(t, engine.CanTransition(BacklogStatusIdea, BacklogStatus(customSlug)),
+	require.False(t, engine.CanTransition(BacklogStatusIdea, BacklogStatus(customSlug), nil),
 		"custom transition must not be legal before it exists")
 
 	ideaStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(BacklogStatusIdea))).Only(ctx)
@@ -238,12 +238,12 @@ func TestConfiguredWorkflowEngine_should_AllowNewCustomTransitionImmediately_Whe
 	// Before invalidation, the stale cache must not yet reflect the new row —
 	// otherwise this test couldn't distinguish "cache invalidation works" from
 	// "the cache happens to already contain it."
-	require.False(t, engine.CanTransition(BacklogStatusIdea, BacklogStatus(customSlug)),
+	require.False(t, engine.CanTransition(BacklogStatusIdea, BacklogStatus(customSlug), nil),
 		"new transition must not be visible before InvalidateCache is called")
 
 	require.NoError(t, engine.InvalidateCache(ctx))
 
-	require.True(t, engine.CanTransition(BacklogStatusIdea, BacklogStatus(customSlug)),
+	require.True(t, engine.CanTransition(BacklogStatusIdea, BacklogStatus(customSlug), nil),
 		"new transition must be legal immediately after InvalidateCache, with no redeploy")
 }
 
@@ -279,9 +279,9 @@ func TestAllowedTransitions_should_ReturnSnapshottedTransitionsWithWarnLog_When_
 	require.NoError(t, engine.InvalidateCache(ctx))
 
 	const customSlug = BacklogStatus("design-review")
-	require.True(t, engine.CanTransition(customSlug, BacklogStatusReady),
+	require.True(t, engine.CanTransition(customSlug, BacklogStatusReady, nil),
 		"sanity: transition must be legal while the stage is still live")
-	require.ElementsMatch(t, []BacklogStatus{BacklogStatusReady}, engine.AllowedTransitions(customSlug))
+	require.ElementsMatch(t, []BacklogStatus{BacklogStatusReady}, engine.AllowedTransitions(customSlug, nil))
 
 	// Delete the stage while an item is still sitting on it — cascades away
 	// its outgoing StageTransition row too.
@@ -289,8 +289,8 @@ func TestAllowedTransitions_should_ReturnSnapshottedTransitionsWithWarnLog_When_
 	require.NoError(t, engine.InvalidateCache(ctx))
 
 	// No fallback supplied: a defined empty/false answer, never a panic.
-	require.Empty(t, engine.AllowedTransitions(customSlug))
-	require.False(t, engine.CanTransition(customSlug, BacklogStatusReady))
+	require.Empty(t, engine.AllowedTransitions(customSlug, nil))
+	require.False(t, engine.CanTransition(customSlug, BacklogStatusReady, nil))
 
 	var buf bytes.Buffer
 	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
@@ -411,7 +411,7 @@ func TestValidateGates_should_ReturnError_When_PendingGatesReportsAnyUnsatisfied
 
 	item := BacklogItemTransitionInput{Status: from, AcCriteria: acCriteriaAllDone(t)}
 
-	statuses, err := engine.PendingGates(item, to)
+	statuses, err := engine.PendingGates(item, to, nil)
 	require.NoError(t, err)
 	require.Len(t, statuses, 2, "expected one GateStatus per configured gate")
 
@@ -426,7 +426,7 @@ func TestValidateGates_should_ReturnError_When_PendingGatesReportsAnyUnsatisfied
 	require.Equal(t, 1, satisfiedCount, "exactly one gate (structural, AC complete) must be satisfied")
 	require.Equal(t, 1, unsatisfiedCount, "exactly one gate (human_approval, no recorded action) must be unsatisfied")
 
-	err = engine.ValidateGates(item, to)
+	err = engine.ValidateGates(item, to, nil)
 	require.Error(t, err, "ValidateGates must return a non-nil error when any gate is unsatisfied")
 	require.ErrorIs(t, err, ErrGateNotSatisfied)
 }
@@ -446,13 +446,13 @@ func TestPendingGates_should_ReportUnsatisfied_When_PreviouslySatisfiedStructura
 	)
 
 	satisfiedItem := BacklogItemTransitionInput{Status: from, AcCriteria: acCriteriaAllDone(t)}
-	statuses, err := engine.PendingGates(satisfiedItem, to)
+	statuses, err := engine.PendingGates(satisfiedItem, to, nil)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
 	require.True(t, statuses[0].Satisfied, "structural gate must report satisfied while every AC is done")
 
 	regressedItem := BacklogItemTransitionInput{Status: from, AcCriteria: acCriteriaOneUnchecked(t)}
-	statuses, err = engine.PendingGates(regressedItem, to)
+	statuses, err = engine.PendingGates(regressedItem, to, nil)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
 	require.False(t, statuses[0].Satisfied, "structural gate must recompute fresh and report unsatisfied once an AC regresses, never reuse the prior satisfied result")
@@ -510,9 +510,114 @@ func TestPendingGates_should_ReturnSyntheticBlockingGate_When_CacheMissButFallba
 	// Without a fallback at all, PendingGates keeps its pre-ADR-004 nil, nil —
 	// the synthetic gate only fires when a fallback is present and confirms
 	// the edge.
-	statuses, err = engine.PendingGates(BacklogItemTransitionInput{Status: from}, to)
+	statuses, err = engine.PendingGates(BacklogItemTransitionInput{Status: from}, to, nil)
 	require.NoError(t, err)
 	assert.Empty(t, statuses, "no fallback supplied: PendingGates must still degrade to nil/empty, unchanged")
+}
+
+// TestValidateGates_should_FailClosed_When_CacheMissButFallbackConfirmsEdgeOnceExisted
+// is the real-transition-path regression test for the BLOCKER
+// sdd:6-verify's correctness gate found: ADR-004's fail-closed fallback was
+// wired into PendingGates (proven above) but NOT into ValidateGates, the
+// method TransitionBacklogItemStatus/transitionWithGuard actually call to
+// authorize a real transition — so a deleted/disabled-stage item silently
+// sailed through real transitions with zero pending gates even though
+// PendingGates itself reported the synthetic blocking gate. This calls
+// ValidateGates directly (not PendingGates) with a fallback confirming the
+// edge once existed, and asserts a non-nil, ErrGateNotSatisfied-wrapped
+// error — proving the real enforcement path also fails closed now.
+func TestValidateGates_should_FailClosed_When_CacheMissButFallbackConfirmsEdgeOnceExisted(t *testing.T) {
+	t.Parallel()
+	engine, client := newSeededConfiguredWorkflowEngine(t)
+	from, to := deletedEdgeFixture(t, client, engine)
+
+	fallback := &StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
+	err := engine.ValidateGates(BacklogItemTransitionInput{Status: from}, to, fallback)
+	require.Error(t, err, "ValidateGates must fail closed for a deleted-stage item whose edge once existed, not silently allow the transition")
+	require.ErrorIs(t, err, ErrGateNotSatisfied)
+}
+
+// TestValidateGates_should_SeeRecordedGateSatisfaction_When_InputBuiltViaSharedConstructor
+// is the second real-transition-path regression test: hand-built
+// BacklogItemTransitionInput literals at the TransitionBacklogItemStatus/
+// transitionWithGuard call sites never set ItemID, so
+// evaluateRecordedGate (backing automated_review/custom gates) could never
+// resolve a persisted GateSatisfactionRecord via the real transition path —
+// it would report "not yet actionable" forever even after a legitimate
+// approval. This builds the guard input via the new shared
+// NewBacklogItemTransitionInput constructor (which always sets ItemID) for
+// an item/gate pair with a Satisfied:true GateSatisfactionRecord, and asserts
+// ValidateGates returns nil — the transition is no longer permanently
+// blocked.
+func TestValidateGates_should_SeeRecordedGateSatisfaction_When_InputBuiltViaSharedConstructor(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	client := repo.client
+
+	stageRepo := NewEntStageConfigRepository(client)
+	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
+	require.NoError(t, err)
+
+	from, to := newCustomTransitionWithGates(t, client, engine, []GateKind{GateKindAutomatedReview}, []bool{true})
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "real transition path ItemID regression",
+		Status: string(from),
+	})
+	require.NoError(t, err)
+
+	edge, ok := engine.cache.Get(from, to)
+	require.True(t, ok)
+	require.Len(t, edge.Gates, 1)
+	gateID := edge.Gates[0].ID
+
+	_, err = gateSatisfactionRepo.Create(ctx, GateSatisfactionCreateInput{
+		ItemID:    uuid.MustParse(item.ID),
+		GateID:    gateID,
+		Satisfied: true,
+	})
+	require.NoError(t, err)
+
+	guardInput := NewBacklogItemTransitionInput(item, BacklogStatus(item.Status))
+	require.Equal(t, item.ID, guardInput.ItemID, "the shared constructor must populate ItemID")
+
+	require.NoError(t, engine.ValidateGates(guardInput, to, nil),
+		"ValidateGates must see the recorded gate satisfaction once ItemID is populated by the shared constructor")
+}
+
+// TestWorkflowEngine_should_TakePlainStageConfigSnapshotPointer_When_CalledWithNilOrRealFallback
+// proves CanTransition/AllowedTransitions/PendingGates/ValidateGates all take
+// a plain *StageConfigSnapshot parameter (not a variadic ...*StageConfigSnapshot
+// pretending to be optional) — the shape both a Layer 1 idiom review and the
+// architecture review flagged. This is primarily a compile-time assertion: if
+// any of the four methods were still variadic, `fallback` below would still
+// compile when passed as a single argument, but nil would then be
+// ambiguous/inconsistent across call sites; the table instead exercises both
+// nil and a real pointer through every method identically, which only
+// type-checks against a plain, non-variadic parameter.
+func TestWorkflowEngine_should_TakePlainStageConfigSnapshotPointer_When_CalledWithNilOrRealFallback(t *testing.T) {
+	t.Parallel()
+	engine, client := newSeededConfiguredWorkflowEngine(t)
+	from, to := deletedEdgeFixture(t, client, engine)
+	fallback := &StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
+
+	for _, tc := range []struct {
+		name     string
+		fallback *StageConfigSnapshot
+	}{
+		{"nil fallback", nil},
+		{"real fallback", fallback},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_ = engine.CanTransition(from, to, tc.fallback)
+			_ = engine.AllowedTransitions(from, tc.fallback)
+			_, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, to, tc.fallback)
+			require.NoError(t, err)
+			_ = engine.ValidateGates(BacklogItemTransitionInput{Status: from}, to, tc.fallback)
+		})
+	}
 }
 
 // TestPendingGates_should_ReturnNilNil_When_CacheMissAndFallbackDoesNotContainDestination
@@ -593,9 +698,9 @@ func TestConfiguredWorkflowEngine_should_HonorCapturedSnapshot_When_ItemsStageIs
 
 	// Without the fallback: the deleted stage reports empty/false/nil, the
 	// fail-open behavior ADR-004's fallback plumbing exists to avoid.
-	assert.False(t, engine.CanTransition(from, to), "sanity: without a fallback, the deleted stage reports false")
-	assert.Empty(t, engine.AllowedTransitions(from), "sanity: without a fallback, the deleted stage reports empty")
-	gatesNoFallback, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, to)
+	assert.False(t, engine.CanTransition(from, to, nil), "sanity: without a fallback, the deleted stage reports false")
+	assert.Empty(t, engine.AllowedTransitions(from, nil), "sanity: without a fallback, the deleted stage reports empty")
+	gatesNoFallback, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, to, nil)
 	require.NoError(t, err)
 	assert.Empty(t, gatesNoFallback, "sanity: without a fallback, PendingGates reports zero pending gates")
 
@@ -762,7 +867,7 @@ func TestEvaluateGate_AutomatedReviewAndCustom_should_ConsultGateSatisfactionRep
 			gateID := edge.Gates[0].ID
 
 			// No record yet: falls back to the "not yet actionable" placeholder.
-			statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: item.ID.String(), Status: from}, to)
+			statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: item.ID.String(), Status: from}, to, nil)
 			require.NoError(t, err)
 			require.Len(t, statuses, 1)
 			assert.False(t, statuses[0].Satisfied)
@@ -780,7 +885,7 @@ func TestEvaluateGate_AutomatedReviewAndCustom_should_ConsultGateSatisfactionRep
 			})
 			require.NoError(t, err)
 
-			statuses, err = engine.PendingGates(BacklogItemTransitionInput{ItemID: item.ID.String(), Status: from}, to)
+			statuses, err = engine.PendingGates(BacklogItemTransitionInput{ItemID: item.ID.String(), Status: from}, to, nil)
 			require.NoError(t, err)
 			require.Len(t, statuses, 1)
 			assert.True(t, statuses[0].Satisfied)
@@ -794,7 +899,7 @@ func TestEvaluateGate_AutomatedReviewAndCustom_should_ConsultGateSatisfactionRep
 			})
 			require.NoError(t, err)
 
-			statuses, err = engine.PendingGates(BacklogItemTransitionInput{ItemID: item.ID.String(), Status: from}, to)
+			statuses, err = engine.PendingGates(BacklogItemTransitionInput{ItemID: item.ID.String(), Status: from}, to, nil)
 			require.NoError(t, err)
 			require.Len(t, statuses, 1)
 			assert.False(t, statuses[0].Satisfied)
@@ -881,7 +986,7 @@ func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_Cus
 
 	from, to, _ := newGateWithConfig(t, client, engine, GateKindCustom, map[string]interface{}{"skill": "no-longer-registered-skill"})
 
-	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to)
+	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to, nil)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
 	assert.False(t, statuses[0].Satisfied)
@@ -907,7 +1012,7 @@ func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_Aut
 
 	from, to, _ := newGateWithConfig(t, client, engine, GateKindAutomatedReview, map[string]interface{}{"pipeline_mode": "ghost-mode"})
 
-	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to)
+	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to, nil)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
 	assert.False(t, statuses[0].Satisfied)
@@ -931,7 +1036,7 @@ func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_Aut
 
 	from, to, _ := newGateWithConfig(t, client, engine, GateKindAutomatedReview, map[string]interface{}{"pipeline_mode": "sdd"})
 
-	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to)
+	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to, nil)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
 	assert.False(t, statuses[0].Satisfied)
@@ -960,7 +1065,7 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_CustomGateConf
 	// No record yet: falls through to evaluateRecordedGate's unchanged
 	// "nothing has run yet" placeholder — proving evaluateGate did NOT
 	// short-circuit into a config error for a still-valid skill.
-	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to)
+	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to, nil)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
 	assert.Empty(t, statuses[0].ConfigError)
@@ -971,7 +1076,7 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_CustomGateConf
 	itemID := uuid.New()
 	_, err = gateSatisfactionRepo.Create(ctx, GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: true})
 	require.NoError(t, err)
-	statuses, err = engine.PendingGates(BacklogItemTransitionInput{ItemID: itemID.String(), Status: from}, to)
+	statuses, err = engine.PendingGates(BacklogItemTransitionInput{ItemID: itemID.String(), Status: from}, to, nil)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
 	assert.Empty(t, statuses[0].ConfigError)
@@ -996,7 +1101,7 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_AutomatedRevie
 
 	t.Run("empty pipeline_mode", func(t *testing.T) {
 		from, to, _ := newGateWithConfig(t, client, engine, GateKindAutomatedReview, map[string]interface{}{})
-		statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to)
+		statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to, nil)
 		require.NoError(t, err)
 		require.Len(t, statuses, 1)
 		assert.Empty(t, statuses[0].ConfigError)
@@ -1007,7 +1112,7 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_AutomatedRevie
 		require.NoError(t, err)
 
 		from, to, _ := newGateWithConfig(t, client, engine, GateKindAutomatedReview, map[string]interface{}{"pipeline_mode": "real-mode"})
-		statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to)
+		statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to, nil)
 		require.NoError(t, err)
 		require.Len(t, statuses, 1)
 		assert.Empty(t, statuses[0].ConfigError)

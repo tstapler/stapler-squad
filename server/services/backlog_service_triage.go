@@ -740,18 +740,13 @@ func (s *BacklogService) hasUnresolvedBlockers(ctx context.Context, itemID strin
 // storage.UnresolvedBlockerItemIDs before the claim loop).
 func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error) {
 	from := session.BacklogStatus(item.Status)
-	if !s.engine.CanTransition(from, to) {
+	fallback := session.BuildStageConfigSnapshotFallback(item)
+	if !s.engine.CanTransition(from, to, fallback) {
 		return nil, fmt.Errorf("invalid transition from %q to %q", from, to)
 	}
-	guardInput := session.BacklogItemTransitionInput{
-		Status:                from,
-		AcCriteria:            item.AcceptanceCriteria,
-		PlanApproved:          item.PlanApproved,
-		SkipPlanning:          item.SkipPlanning,
-		PlanArtifactsPath:     item.PlanArtifactsPath,
-		HasUnresolvedBlockers: hasUnresolvedBlockers,
-	}
-	if guardErr := s.engine.ValidateGates(guardInput, to); guardErr != nil {
+	guardInput := session.NewBacklogItemTransitionInput(item, from)
+	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
+	if guardErr := s.engine.ValidateGates(guardInput, to, fallback); guardErr != nil {
 		return nil, guardErr
 	}
 	return s.storage.TransitionBacklogItemStatus(ctx, item.ID, to, precondition, triggeredBy)

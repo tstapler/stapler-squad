@@ -742,18 +742,12 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	}
 
 	// Run transition guard for business rules.
-	guardInput := session.BacklogItemTransitionInput{
-		Status:                from,
-		AcCriteria:            item.AcceptanceCriteria,
-		PlanApproved:          item.PlanApproved,
-		SkipPlanning:          item.SkipPlanning,
-		PlanArtifactsPath:     item.PlanArtifactsPath,
-		OverallOutcome:        overallOutcome,
-		OverrideReason:        req.Msg.OverrideReason,
-		HasUnshippedCode:      hasUnshippedCode,
-		HasUnresolvedBlockers: hasUnresolvedBlockers,
-	}
-	if guardErr := s.engine.ValidateGates(guardInput, to); guardErr != nil {
+	guardInput := session.NewBacklogItemTransitionInput(item, from)
+	guardInput.OverallOutcome = overallOutcome
+	guardInput.OverrideReason = req.Msg.OverrideReason
+	guardInput.HasUnshippedCode = hasUnshippedCode
+	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
+	if guardErr := s.engine.ValidateGates(guardInput, to, fallback); guardErr != nil {
 		if errors.Is(guardErr, session.ErrACRequired) ||
 			errors.Is(guardErr, session.ErrPlanRequired) ||
 			errors.Is(guardErr, session.ErrPlanArtifactsRequired) ||

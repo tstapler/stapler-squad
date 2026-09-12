@@ -1252,16 +1252,16 @@ func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.
 // determineBackwardSyncTarget-returns-false branch, a different code path.
 type alwaysDenyWorkflowEngine struct{}
 
-func (alwaysDenyWorkflowEngine) CanTransition(from, to BacklogStatus, _ ...*StageConfigSnapshot) bool {
+func (alwaysDenyWorkflowEngine) CanTransition(from, to BacklogStatus, _ *StageConfigSnapshot) bool {
 	return false
 }
-func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ ...*StageConfigSnapshot) ([]GateStatus, error) {
+func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) ([]GateStatus, error) {
 	return nil, nil
 }
-func (alwaysDenyWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus) error {
+func (alwaysDenyWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) error {
 	return nil
 }
-func (alwaysDenyWorkflowEngine) AllowedTransitions(from BacklogStatus, _ ...*StageConfigSnapshot) []BacklogStatus {
+func (alwaysDenyWorkflowEngine) AllowedTransitions(from BacklogStatus, _ *StageConfigSnapshot) []BacklogStatus {
 	return nil
 }
 

@@ -169,15 +169,9 @@ func (s *BacklogService) buildPendingGatesGuardInput(
 		log.WarningLog().Printf("[GetPendingGates] failed to load review verdict for item %s: %v", item.ID, err)
 	}
 
-	return session.BacklogItemTransitionInput{
-		ItemID:                item.ID,
-		Status:                session.BacklogStatus(item.Status),
-		AcCriteria:            item.AcceptanceCriteria,
-		PlanApproved:          item.PlanApproved,
-		SkipPlanning:          item.SkipPlanning,
-		PlanArtifactsPath:     item.PlanArtifactsPath,
-		OverallOutcome:        overallOutcome,
-		HasUnshippedCode:      hasUnshippedCode,
-		HasUnresolvedBlockers: hasUnresolvedBlockers,
-	}
+	guardInput := session.NewBacklogItemTransitionInput(item, session.BacklogStatus(item.Status))
+	guardInput.OverallOutcome = overallOutcome
+	guardInput.HasUnshippedCode = hasUnshippedCode
+	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
+	return guardInput
 }

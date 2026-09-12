@@ -185,7 +185,7 @@ func TestUpdateStage_should_InvalidateStageConfigCache_When_UpdateSucceeds(t *te
 	svc, repo, engine, _ := newStageCRUDTestService(t)
 	ctx := t.Context()
 
-	require.True(t, engine.CanTransition(session.BacklogStatusIdea, session.BacklogStatusRefining),
+	require.True(t, engine.CanTransition(session.BacklogStatusIdea, session.BacklogStatusRefining, nil),
 		"precondition: idea -> refining is a built-in enabled edge")
 
 	refiningStage, err := repo.GetStageBySlug(ctx, string(session.BacklogStatusRefining))
@@ -197,7 +197,7 @@ func TestUpdateStage_should_InvalidateStageConfigCache_When_UpdateSucceeds(t *te
 	}))
 	require.NoError(t, err)
 
-	assert.False(t, engine.CanTransition(session.BacklogStatusIdea, session.BacklogStatusRefining),
+	assert.False(t, engine.CanTransition(session.BacklogStatusIdea, session.BacklogStatusRefining, nil),
 		"expected the cache to be invalidated synchronously so the disabled stage's edge disappears immediately")
 }
 

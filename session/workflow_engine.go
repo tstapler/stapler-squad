@@ -17,9 +17,9 @@ type WorkflowEngine interface {
 	// (Epic 2.5) — pass the item's own captured snapshot when from may be a
 	// since-deleted custom stage, so ConfiguredWorkflowEngine has a defined
 	// answer instead of always returning false for an in-flight item stranded
-	// on a deleted stage. At most the first element is used; DefaultWorkflowEngine
+	// on a deleted stage. nil means "no fallback". DefaultWorkflowEngine
 	// ignores it entirely (its built-in stages are never deleted).
-	CanTransition(from, to BacklogStatus, fallback ...*StageConfigSnapshot) bool
+	CanTransition(from, to BacklogStatus, fallback *StageConfigSnapshot) bool
 	// PendingGates returns the per-gate satisfaction status for transitioning
 	// item to to — an empty/nil slice means no gates block this transition.
 	// ValidateGates is a thin wrapper over this: nil exactly when every
@@ -29,12 +29,15 @@ type WorkflowEngine interface {
 	// (deleted) can still report a synthetic blocking gate instead of
 	// silently reporting zero pending gates. DefaultWorkflowEngine ignores it
 	// entirely, same as CanTransition/AllowedTransitions.
-	PendingGates(item BacklogItemTransitionInput, to BacklogStatus, fallback ...*StageConfigSnapshot) ([]GateStatus, error)
-	// ValidateGates runs guard rules for the transition. Returns nil if gates pass.
-	ValidateGates(item BacklogItemTransitionInput, to BacklogStatus) error
+	PendingGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *StageConfigSnapshot) ([]GateStatus, error)
+	// ValidateGates runs guard rules for the transition. Returns nil if gates
+	// pass. fallback is the same optional StageConfigSnapshot documented on
+	// CanTransition/PendingGates above — DefaultWorkflowEngine ignores it,
+	// ConfiguredWorkflowEngine threads it into its internal PendingGates call.
+	ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *StageConfigSnapshot) error
 	// AllowedTransitions returns the set of statuses reachable from from. See
 	// CanTransition's fallback doc above — same optional-snapshot contract.
-	AllowedTransitions(from BacklogStatus, fallback ...*StageConfigSnapshot) []BacklogStatus
+	AllowedTransitions(from BacklogStatus, fallback *StageConfigSnapshot) []BacklogStatus
 }
 
 // DefaultWorkflowEngine implements WorkflowEngine using the hardcoded
@@ -60,7 +63,7 @@ func NewDefaultWorkflowEngine() *DefaultWorkflowEngine {
 // CanTransition implements WorkflowEngine. fallback is unused: the built-in
 // stage graph is static and never deleted, so there is never a stage for a
 // per-item snapshot to fall back for.
-func (e *DefaultWorkflowEngine) CanTransition(from, to BacklogStatus, _ ...*StageConfigSnapshot) bool {
+func (e *DefaultWorkflowEngine) CanTransition(from, to BacklogStatus, _ *StageConfigSnapshot) bool {
 	targets, ok := e.transitions[from]
 	if !ok {
 		return false
@@ -77,7 +80,7 @@ func (e *DefaultWorkflowEngine) CanTransition(from, to BacklogStatus, _ ...*Stag
 // guards) branch. fallback is unused: the built-in stage graph is static and
 // never deleted, so there is never a stage for a per-item snapshot to fall
 // back for — see CanTransition's identical fallback doc comment above.
-func (e *DefaultWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ ...*StageConfigSnapshot) ([]GateStatus, error) {
+func (e *DefaultWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) ([]GateStatus, error) {
 	id, description, ok := builtInGuardGate(item.Status, to)
 	if !ok {
 		return nil, nil
@@ -127,8 +130,8 @@ func builtInGuardGate(from, to BacklogStatus) (id, description string, ok bool) 
 // callers matching on TransitionGuard's specific sentinel errors (ErrACRequired,
 // ErrVerdictRequired, etc. — session/domain/backlog.go) keep seeing the exact
 // same error values as before this method became a wrapper.
-func (e *DefaultWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus) error {
-	statuses, err := e.PendingGates(item, to)
+func (e *DefaultWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) error {
+	statuses, err := e.PendingGates(item, to, nil)
 	if err != nil {
 		return err
 	}
@@ -142,7 +145,7 @@ func (e *DefaultWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, t
 
 // AllowedTransitions implements WorkflowEngine. fallback is unused — see
 // CanTransition's doc comment above.
-func (e *DefaultWorkflowEngine) AllowedTransitions(from BacklogStatus, _ ...*StageConfigSnapshot) []BacklogStatus {
+func (e *DefaultWorkflowEngine) AllowedTransitions(from BacklogStatus, _ *StageConfigSnapshot) []BacklogStatus {
 	targets, ok := e.transitions[from]
 	if !ok {
 		return []BacklogStatus{}
@@ -163,8 +166,8 @@ func (e *DefaultWorkflowEngine) AllowedTransitions(from BacklogStatus, _ ...*Sta
 // (server/services/backlog_service_triage.go), for callers in package
 // session (like SyncOne) that cannot import server/services.
 func GuardedTransitionAllowed(engine WorkflowEngine, item BacklogItemTransitionInput, to BacklogStatus) bool {
-	if !engine.CanTransition(item.Status, to) {
+	if !engine.CanTransition(item.Status, to, nil) {
 		return false
 	}
-	return engine.ValidateGates(item, to) == nil
+	return engine.ValidateGates(item, to, nil) == nil
 }

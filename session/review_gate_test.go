@@ -1918,7 +1918,7 @@ func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFails
 	engine, err := NewConfiguredWorkflowEngine(stageRepo, repo, nil)
 	require.NoError(t, err)
 
-	statuses, pgErr := engine.PendingGates(BacklogItemTransitionInput{ItemID: item.ID, Status: BacklogStatus(fromStage.Slug)}, BacklogStatus(toStage.Slug))
+	statuses, pgErr := engine.PendingGates(BacklogItemTransitionInput{ItemID: item.ID, Status: BacklogStatus(fromStage.Slug)}, BacklogStatus(toStage.Slug), nil)
 	require.NoError(t, pgErr)
 	require.Len(t, statuses, 1)
 	assert.False(t, statuses[0].Satisfied)

@@ -907,9 +907,9 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 var protoWorkflowEngine = session.NewDefaultWorkflowEngine()
 
 // allowedTransitionStrings returns the string form of
-// protoWorkflowEngine.AllowedTransitions(from), for BacklogItem.allowed_transitions.
+// protoWorkflowEngine.AllowedTransitions(from, nil), for BacklogItem.allowed_transitions.
 func allowedTransitionStrings(from session.BacklogStatus) []string {
-	targets := protoWorkflowEngine.AllowedTransitions(from)
+	targets := protoWorkflowEngine.AllowedTransitions(from, nil)
 	out := make([]string, len(targets))
 	for i, t := range targets {
 		out[i] = string(t)

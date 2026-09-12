@@ -88,7 +88,7 @@ func TestResolveAllowedTransitionsSnapshot_should_ReturnSortedEnabledDestination
 	_, err = client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toDisabledEdge.ID).SetEnabled(false).Save(ctx)
 	require.NoError(t, err)
 
-	got := resolveAllowedTransitionsSnapshot(ctx, client.BacklogStage, client.StageTransition, BacklogStatus("triage"))
+	_, got := resolveStageSnapshotFields(ctx, client.BacklogStage, client.StageTransition, BacklogStatus("triage"))
 	require.Equal(t, []string{"triage-a", "triage-b"}, got)
 }
 
@@ -104,7 +104,7 @@ func TestResolveAllowedTransitionsSnapshot_should_ReturnEmptyNonNilSlice_When_St
 	_, err := client.BacklogStage.Create().SetSlug("dead-end").SetName("Dead End").SetEnabled(true).Save(ctx)
 	require.NoError(t, err)
 
-	got := resolveAllowedTransitionsSnapshot(ctx, client.BacklogStage, client.StageTransition, BacklogStatus("dead-end"))
+	_, got := resolveStageSnapshotFields(ctx, client.BacklogStage, client.StageTransition, BacklogStatus("dead-end"))
 	require.NotNil(t, got, "a stage with zero outgoing transitions must still resolve to an empty slice, not nil")
 	require.Empty(t, got)
 }
@@ -119,7 +119,7 @@ func TestResolveAllowedTransitionsSnapshot_should_ReturnNil_When_NoMatchingBackl
 	ctx := context.Background()
 	client := repo.client
 
-	got := resolveAllowedTransitionsSnapshot(ctx, client.BacklogStage, client.StageTransition, BacklogStatus("no-such-slug"))
+	_, got := resolveStageSnapshotFields(ctx, client.BacklogStage, client.StageTransition, BacklogStatus("no-such-slug"))
 	require.Nil(t, got)
 }
 
