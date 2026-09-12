@@ -355,6 +355,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetTransitionGate":     "backlog:get-transition-gate",
 	"ListTransitionGates":   "backlog:list-transition-gates",
 	"RecordGateApproval":    "backlog:record-gate-approval",
+	"GetPendingGates":       "backlog:get-pending-gates",
 	// Native git rollout RPCs (NativeGitRolloutService in native_git_rollout.proto)
 	// -- pre-existing collateral debt found by TestMethodToIDCompleteness: must
 	// match the "// +api: native-git-rollout:*" markers in

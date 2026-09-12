@@ -132,6 +132,24 @@ message BacklogStatusEvent {
   // captured durably (session.BacklogStatusEventData.Note) but previously never
   // surfaced over the wire — the "why" behind reviewer/system decisions.
   optional string note = 6;
+  // stage_name_snapshot is the destination stage's human-readable name,
+  // frozen at the moment of this transition (Epic 2.5's StageConfigSnapshot
+  // discipline — session.BacklogStatusEventData.StageNameSnapshot) so
+  // item-detail history keeps rendering the original name after that
+  // BacklogStage row is later renamed or deleted.
+  optional string stage_name_snapshot = 7;
+  // allowed_transitions_snapshot is the destination stage's legal outgoing
+  // transition slugs, frozen at the moment of this transition (ADR-004's
+  // StageConfigSnapshot discipline, sibling to stage_name_snapshot —
+  // session.BacklogStatusEventData.AllowedTransitionsSnapshot) so
+  // CanTransition/AllowedTransitions/PendingGates can keep answering per this
+  // item's captured graph after that stage's transitions are later edited or
+  // the stage itself is deleted. Empty when no snapshot was captured (a row
+  // written before this field existed, or no matching BacklogStage row was
+  // found at write time) — distinct from a captured-but-empty snapshot, which
+  // this repeated field cannot represent, matching proto3's usual
+  // empty-vs-absent limitation for repeated fields.
+  repeated string allowed_transitions_snapshot = 8;
 }
 
 // BacklogProgressNote records a single report_progress call against one of a
@@ -1132,10 +1150,47 @@ message RecordGateApprovalRequest {
   // satisfied_by identifies the approving actor (e.g. a username) — optional,
   // purely for audit display.
   string satisfied_by = 3;
+  // approved is true to approve the gate, false to reject it. Approval is
+  // permanently one-shot (a second call once approved is always rejected); a
+  // rejection can be reversed by a later call with approved = true, or
+  // re-rejected idempotently (ADR-006).
+  bool approved = 4;
 }
 
 message RecordGateApprovalResponse {
   GateSatisfactionRecord record = 1;
+}
+
+// GateStatus mirrors session.GateStatus — one gate's current satisfaction
+// state for a pending transition attempt, driving the item-detail "what's
+// blocking this" checklist (Epic 2.10). gate_id is a string, not always a
+// persisted TransitionGate id: DefaultWorkflowEngine's built-in gates have no
+// row to key on and use a stable human-readable identifier instead.
+message GateStatus {
+  string gate_id = 1;
+  // kind is one of "human_approval", "automated_review", "structural",
+  // "custom" (session.GateKind's sealed set).
+  string kind = 2;
+  bool satisfied = 3;
+  string description = 4;
+  string action_hint = 5;
+  // config_error is non-empty when this gate's configuration references
+  // something that no longer resolves (a removed custom-check skill, an
+  // unresolvable pipeline mode) — set instead of the normal satisfied/
+  // unsatisfied evaluation. Empty means no config error (ADR-006).
+  string config_error = 6;
+}
+
+// GetPendingGatesRequest asks which gates (if any) block item_id from
+// transitioning to to_status, without attempting the transition.
+message GetPendingGatesRequest {
+  string item_id = 1;
+  string to_status = 2;
+}
+
+message GetPendingGatesResponse {
+  // Empty means no gates block this transition.
+  repeated GateStatus gates = 1;
 }
 
 // ============================================================================
@@ -1488,6 +1543,12 @@ service BacklogService {
   // human_approval-kind gate (Epic 2.4, Story 2.4.1) — one-shot, not
   // re-askable once recorded.
   rpc RecordGateApproval(RecordGateApprovalRequest) returns (RecordGateApprovalResponse) {}
+
+  // GetPendingGates previews which gates (if any) currently block item_id
+  // from transitioning to to_status — read-only, does not attempt the
+  // transition. Backs the item-detail "what's blocking this" checklist
+  // (Epic 2.10).
+  rpc GetPendingGates(GetPendingGatesRequest) returns (GetPendingGatesResponse) {}
 
   // ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
   rpc ImportGitHubIssue(ImportGitHubIssueRequest) returns (ImportGitHubIssueResponse) {}

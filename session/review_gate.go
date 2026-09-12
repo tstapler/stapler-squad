@@ -2,9 +2,11 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
@@ -32,6 +34,83 @@ type ReviewGateRunner struct {
 	// (server/services/backlog_service_triage.go). Set once at construction,
 	// never mutated afterward — mirrors BacklogLifecycleListener.pipelineEngine.
 	pipelineEngine PipelineEngine
+
+	// gateSatisfactionRepoMu guards gateSatisfactionRepo for concurrent
+	// Set/get access, same pattern as BacklogLifecycleListener's optional
+	// dependencies.
+	gateSatisfactionRepoMu sync.RWMutex
+	// gateSatisfactionRepo records a configured automated_review gate's
+	// terminal outcome (Epic 2.4 follow-up — see recordGateSatisfaction).
+	// nil (the default) makes recordGateSatisfaction a no-op, matching every
+	// other optional-dependency's nil-safe convention in this package. Wired
+	// via SetGateSatisfactionRepository.
+	gateSatisfactionRepo GateSatisfactionRepository
+}
+
+// SetGateSatisfactionRepository wires the repository recordGateSatisfaction
+// writes a configured automated_review gate's terminal outcome to. nil (the
+// default) is safe — see the field's doc comment.
+func (r *ReviewGateRunner) SetGateSatisfactionRepository(repo GateSatisfactionRepository) {
+	r.gateSatisfactionRepoMu.Lock()
+	defer r.gateSatisfactionRepoMu.Unlock()
+	r.gateSatisfactionRepo = repo
+}
+
+// getGateSatisfactionRepo returns the currently-wired GateSatisfactionRepository (nil if none).
+func (r *ReviewGateRunner) getGateSatisfactionRepo() GateSatisfactionRepository {
+	r.gateSatisfactionRepoMu.RLock()
+	defer r.gateSatisfactionRepoMu.RUnlock()
+	return r.gateSatisfactionRepo
+}
+
+// recordGateSatisfaction persists a configured automated_review gate's
+// terminal outcome (Epic 2.4 follow-up: PendingGates' automated_review branch,
+// session/configured_workflow_engine.go, needs a real record to report
+// against instead of an unconditional Satisfied:false placeholder). No-op for
+// the built-in review->pr_pending gate (gateContext.GateID == "", which has
+// no persisted TransitionGate row to key on) or when no repository is wired.
+//
+// Mirrors recordCustomCheckTerminalOutcome's shape (session/gate_custom_check.go)
+// for the sibling stateful gate kind, but Create-then-Update rather than a
+// bare Update: unlike InvokeCustomGateCheck, Run's terminal-verdict paths
+// (empty diff, security block, worktree/diff pre-check failures) complete
+// synchronously with no prior in-flight row, so the first call for a given
+// (item, gate) pair must Create it; a conflict (a later rework cycle
+// re-running the same gate) falls back to Update instead.
+func (r *ReviewGateRunner) recordGateSatisfaction(gateContext GateContext, itemID string, satisfied bool, detail string) {
+	repo := r.getGateSatisfactionRepo()
+	if repo == nil || gateContext.GateID == "" {
+		return
+	}
+	itemUUID, err := uuid.Parse(itemID)
+	if err != nil {
+		log.WarningLog().Printf("[ReviewGateRunner] recordGateSatisfaction: invalid item id %q: %v", itemID, err)
+		return
+	}
+	gateUUID, err := uuid.Parse(gateContext.GateID)
+	if err != nil {
+		log.WarningLog().Printf("[ReviewGateRunner] recordGateSatisfaction: invalid gate id %q: %v", gateContext.GateID, err)
+		return
+	}
+	outcomeDetail := map[string]interface{}{"detail": detail}
+	ctx := context.Background()
+	if _, createErr := repo.Create(ctx, GateSatisfactionCreateInput{
+		ItemID:        itemUUID,
+		GateID:        gateUUID,
+		Satisfied:     satisfied,
+		OutcomeDetail: outcomeDetail,
+	}); createErr != nil {
+		if !errors.Is(createErr, ErrConflict) {
+			log.ErrorLog().Printf("[ReviewGateRunner] recordGateSatisfaction create item=%s gate=%s: %v", itemID, gateContext.GateID, createErr)
+			return
+		}
+		if _, updateErr := repo.Update(ctx, itemUUID, gateUUID, GateSatisfactionUpdateInput{
+			Satisfied:     &satisfied,
+			OutcomeDetail: outcomeDetail,
+		}); updateErr != nil {
+			log.ErrorLog().Printf("[ReviewGateRunner] recordGateSatisfaction update item=%s gate=%s: %v", itemID, gateContext.GateID, updateErr)
+		}
+	}
 }
 
 // NewReviewGateRunner constructs a ReviewGateRunner.
@@ -104,6 +183,16 @@ type GateContext struct {
 	// check has nothing to do with a code diff (e.g. an idea-feasibility
 	// review).
 	RequiresDiff bool
+	// PipelineMode, when non-empty, overrides the item's own PipelineMode for
+	// this run only (AutomatedReviewConfig.PipelineMode, session/gate_config.go)
+	// — a configured gate can ask for a different mode's review prompt/verdict
+	// template than the item's own. Empty (the built-in review gate's zero
+	// value) means "use the item's own PipelineMode", unchanged from before
+	// this field existed. Applied in reviewPromptFor via a shallow item copy
+	// rather than a PipelineEngine signature change, since
+	// InteractiveReviewPromptFor/ReviewPromptFor resolve their mode from
+	// item.PipelineMode and are shared with callers this Epic does not touch.
+	PipelineMode string
 }
 
 // noDiffAvailableSection and noDiffExpectedSection mirror BuildReviewPrompt's
@@ -132,11 +221,17 @@ const (
 // review path in particular — that this Epic does not touch). A no-op when
 // the substring isn't present, e.g. a custom PipelineMode's own template.
 func (r *ReviewGateRunner) reviewPromptFor(gateContext GateContext, item *BacklogItemData, acSnapshot []AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
+	effectiveItem := item
+	if gateContext.PipelineMode != "" && gateContext.PipelineMode != item.PipelineMode {
+		clone := *item
+		clone.PipelineMode = gateContext.PipelineMode
+		effectiveItem = &clone
+	}
 	var prompt string
 	if r.pipelineEngine == nil {
-		prompt = BuildReviewPrompt(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
+		prompt = BuildReviewPrompt(effectiveItem, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
 	} else {
-		prompt = r.pipelineEngine.InteractiveReviewPromptFor(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
+		prompt = r.pipelineEngine.InteractiveReviewPromptFor(effectiveItem, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
 	}
 	if !gateContext.RequiresDiff {
 		prompt = strings.Replace(prompt, noDiffAvailableSection, noDiffExpectedSection, 1)
@@ -184,7 +279,7 @@ func (r *ReviewGateRunner) Run(
 	var uncommittedWarning string
 	if gateContext.RequiresDiff {
 		var blocked bool
-		diff, truncated, uncommittedWarning, blocked = r.runDiffPreChecks(ctx, item, is)
+		diff, truncated, uncommittedWarning, blocked = r.runDiffPreChecks(ctx, gateContext, item, is)
 		if blocked {
 			return
 		}
@@ -236,6 +331,7 @@ func (r *ReviewGateRunner) Run(
 			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (empty diff) item=%s: %v", item.ID, createErr)
 			return
 		}
+		r.recordGateSatisfaction(gateContext, item.ID, false, summary)
 		log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate empty diff for item %s — FAIL verdict recorded (session %s)", item.ID, emptyDiffIS.ID)
 		if r.getNotifier != nil {
 			if n := r.getNotifier(); n != nil {
@@ -272,6 +368,7 @@ func (r *ReviewGateRunner) Run(
 			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (security block) item=%s: %v", item.ID, secCreateErr)
 			return
 		}
+		r.recordGateSatisfaction(gateContext, item.ID, false, summary)
 		log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate security check blocked for item %s — FAIL verdict recorded (session %s)", item.ID, secIS.ID)
 		if r.getNotifier != nil {
 			if n := r.getNotifier(); n != nil {
@@ -372,7 +469,7 @@ func (r *ReviewGateRunner) Run(
 // worktreeDiffErr for: blocked=true is sufficient, since Run's own
 // committedDiffEmpty check can never fire on this path (diff is always ""
 // when this returns blocked=true).
-func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) (diff string, truncated bool, uncommittedWarning string, blocked bool) {
+func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, gateContext GateContext, item *BacklogItemData, is ItemSessionSummary) (diff string, truncated bool, uncommittedWarning string, blocked bool) {
 	// worktreeDiffErr is set only when we positively know a worktree/base-commit exists
 	// for this session but the diff still couldn't be computed (e.g. a stale/corrupted
 	// base_commit_sha pointing at a pruned or otherwise nonexistent git object). That is
@@ -402,7 +499,7 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, item *BacklogIt
 				"The worktree path may have been reused or recreated for a different item — this needs investigation, not rework.",
 				wt.WorktreePath, mismatchReason)
 			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate worktree identity mismatch item=%s worktree=%s branch=%s: %s", item.ID, wt.WorktreePath, wt.BranchName, mismatchReason)
-			return r.blockReviewWithTerminalVerdict(ctx, item, is, "worktree-identity", "worktree identity mismatch", summary,
+			return r.blockReviewWithTerminalVerdict(ctx, gateContext, item, is, "worktree-identity", "worktree identity mismatch", summary,
 				"Review blocked — worktree identity mismatch",
 				fmt.Sprintf("%s — the session's recorded worktree %s. See the item's review history for details.", item.Title, mismatchReason))
 		}
@@ -416,7 +513,7 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, item *BacklogIt
 		// actionable reason instead of silently producing a misleading diff.
 		if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, bounceMainBranch, git.DefaultBranchDriftThreshold); !ok {
 			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate branch drift blocked review item=%s branch=%s: %s", item.ID, wt.BranchName, blockedSummary)
-			return r.blockReviewWithTerminalVerdict(ctx, item, is, "branch-drift", "branch drift", blockedSummary,
+			return r.blockReviewWithTerminalVerdict(ctx, gateContext, item, is, "branch-drift", "branch drift", blockedSummary,
 				"Review blocked — branch drifted too far behind main",
 				fmt.Sprintf("%s — the branch could not be automatically synced with main. See the item's review history for the conflict details.", item.Title))
 		}
@@ -526,7 +623,7 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, item *BacklogIt
 	if worktreeDiffErr != nil {
 		summary := fmt.Sprintf("Review blocked: could not compute a diff for this session (%v). "+
 			"The recorded base commit may be missing or corrupted — this needs investigation, not rework.", worktreeDiffErr)
-		return r.blockReviewWithTerminalVerdict(ctx, item, is, "diff-error", "diff computation failed", summary,
+		return r.blockReviewWithTerminalVerdict(ctx, gateContext, item, is, "diff-error", "diff computation failed", summary,
 			"Review blocked — diff computation failed",
 			fmt.Sprintf("%s — recorded base commit may be missing or corrupted. Needs investigation.", item.Title))
 	}
@@ -543,6 +640,7 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, item *BacklogIt
 // Always returns runDiffPreChecks' "review blocked" result.
 func (r *ReviewGateRunner) blockReviewWithTerminalVerdict(
 	ctx context.Context,
+	gateContext GateContext,
 	item *BacklogItemData,
 	is ItemSessionSummary,
 	verdictKeyPrefix, reason, summary, notifyTitle, notifyBody string,
@@ -552,6 +650,7 @@ func (r *ReviewGateRunner) blockReviewWithTerminalVerdict(
 		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (%s) item=%s: %v", reason, item.ID, createErr)
 		return "", false, "", true
 	}
+	r.recordGateSatisfaction(gateContext, item.ID, false, summary)
 	log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate %s: blocked review for item %s — FAIL verdict recorded (session %s)", reason, item.ID, blockedIS.ID)
 	if r.getNotifier != nil {
 		if n := r.getNotifier(); n != nil {

@@ -1,6 +1,16 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { StageTracker, deriveStageDisplay } from "./StageTracker";
+import { useBacklogStages } from "@/lib/hooks/useBacklogStages";
+
+// jest.setup.js globally mocks useBacklogStages to the built-in-only default
+// (see its own comment); override it locally here for the one test below
+// that needs a configured custom stage in the fetched list.
+jest.mock("@/lib/hooks/useBacklogStages", () => ({
+  ...jest.requireActual("@/lib/hooks/useBacklogStages"),
+  useBacklogStages: jest.fn(),
+}));
+const mockUseBacklogStages = useBacklogStages as jest.Mock;
 
 // The jest styleMock for `.css.ts` files wraps every export in a callable
 // proxy function, which triggers a benign "Invalid value for prop
@@ -59,9 +69,38 @@ describe("deriveStageDisplay", () => {
     const display = deriveStageDisplay("archived");
     expect(display.archived).toBe(true);
   });
+
+  // Epic 2.9 (backlog-custom-workflow-stages), Task 2.9.1c: an unrecognized
+  // status now consults the fetched stage list before falling back to the
+  // dimmed "unknown" shape.
+  it("StageTracker_should_FoldConfiguredCustomStageIntoIdeaWithNameModifier_When_StatusMatchesAFetchedStage", () => {
+    expect(deriveStageDisplay("design-review", [{ slug: "design-review", name: "Design Review", enabled: true }])).toEqual({
+      activeStage: "idea",
+      modifier: "Design Review",
+      archived: false,
+    });
+  });
+
+  it("StageTracker_should_KeepDimmedArchivedFallback_When_StatusMatchesNoFetchedStage", () => {
+    // Regression guard: a genuinely unresolvable status (e.g. a deleted
+    // custom stage) must keep the exact pre-Epic-2.9 fallback shape, not the
+    // new custom-stage modifier treatment.
+    expect(deriveStageDisplay("some-deleted-stage", [{ slug: "design-review", name: "Design Review", enabled: true }])).toEqual({
+      activeStage: "idea",
+      archived: true,
+    });
+  });
 });
 
 describe("StageTracker", () => {
+  beforeEach(() => {
+    mockUseBacklogStages.mockReturnValue({ stages: [], isLoading: false, error: null });
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
   it("StageTracker_should_HighlightInProgressWithQueuedModifier_When_StatusIsQueued", () => {
     render(<StageTracker status="queued" />);
 
@@ -101,6 +140,20 @@ describe("StageTracker", () => {
 
   it("StageTracker_should_RenderExactlyFiveNodes_When_StatusIsAnyKnownValue", () => {
     render(<StageTracker status="done" />);
+    expect(screen.getAllByTestId(/^stage-node-/)).toHaveLength(5);
+  });
+
+  it("StageTracker_should_ShowCustomStageNameAsModifierOnIdeaNode_When_StatusMatchesAFetchedCustomStage", () => {
+    mockUseBacklogStages.mockReturnValue({
+      stages: [{ slug: "design-review", name: "Design Review", enabled: true }],
+      isLoading: false,
+      error: null,
+    });
+    render(<StageTracker status="design-review" />);
+
+    expect(screen.getByTestId("stage-node-idea")).toHaveAttribute("aria-current", "step");
+    expect(screen.getByTestId("stage-modifier-badge")).toHaveTextContent("Design Review");
+    expect(screen.queryByTestId("stage-archived-ribbon")).not.toBeInTheDocument();
     expect(screen.getAllByTestId(/^stage-node-/)).toHaveLength(5);
   });
 });

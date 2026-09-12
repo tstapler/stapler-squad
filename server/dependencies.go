@@ -712,7 +712,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		stageCRUDRepo = entStageRepo
 		entGateSatisfactionRepo := session.NewEntGateSatisfactionRepository(entClient)
 		gateSatisfactionRepo = entGateSatisfactionRepo
-		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo); err != nil {
+		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo, pipelineModeRepo); err != nil {
 			log.Warn("stageConfigEngine construction failed; stage/transition/gate CRUD writes will not invalidate a cache", "err", err)
 		} else {
 			stageConfigEngine = engine
@@ -1338,6 +1338,22 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// invocations (Epic 2.4, Task 2.4.4c) — same gateSatisfactionRepo instance
 	// already wired into backlogSvc above, guarded nil-safe by both consumers.
 	backlogLifecycleListener.SetGateSatisfactionRepository(gateSatisfactionRepo)
+	// Wires the underlying ReviewGateRunner's own GateSatisfactionRepository
+	// (Epic 2.4 follow-up) so a configured automated_review gate's terminal
+	// verdict is actually recorded, not just this listener's separate
+	// reconcile-sweep copy above.
+	backlogLifecycleListener.SetReviewGateSatisfactionRepository(gateSatisfactionRepo)
+	// Wires resolveReviewGateContext/resolveCustomCheckGateContext's
+	// ConfiguredWorkflowEngine consultation (Epic 2.4 follow-up) — without
+	// this, a custom transition's automated-review/custom-check gates can
+	// never fire, degrading to the built-in `to == BacklogStatusReview`
+	// literal only. Guarded the same way backlogSvc.SetStageConfigEngine is
+	// above: stageConfigEngine is a concrete *session.ConfiguredWorkflowEngine,
+	// and passing a nil one through SetWorkflowEngine's interface parameter
+	// would box it as a non-nil-interface-wrapping-nil-pointer.
+	if stageConfigEngine != nil {
+		backlogLifecycleListener.SetWorkflowEngine(stageConfigEngine)
+	}
 	// Wire the orphaned_triage respawner so an idea-status item whose triage
 	// session orphaned (crashed, was killed, or a server restart happened
 	// mid-triage) gets triage automatically re-triggered instead of sitting
