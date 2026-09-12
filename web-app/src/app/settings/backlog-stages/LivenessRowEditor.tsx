@@ -51,7 +51,11 @@ export function rowFormFromDefinition(def: LivenessDefinition): RowFormState {
   };
 }
 
-/** Replicates LivenessDefinition.validate()'s shape rule plus positivity checks the server doesn't enforce (pitfalls.md §3). */
+function assertNever(x: never): never {
+  throw new Error(`Unhandled LivenessKind: ${JSON.stringify(x)}`);
+}
+
+/** Replicates LivenessDefinition.validate()'s shape rule plus positivity checks the server doesn't enforce (pitfalls.md §4). */
 export function validateRowForm(form: RowFormState): string | null {
   const positiveInt = (raw: string) => Number.isInteger(Number(raw)) && Number(raw) > 0;
   switch (form.kind) {
@@ -66,6 +70,8 @@ export function validateRowForm(form: RowFormState): string | null {
       if (!positiveInt(form.cycleThreshold)) return "Cycle threshold must be a positive whole number.";
       if (!positiveInt(form.cycleLookbackMinutes)) return "Cycle lookback must be a positive number of minutes.";
       return null;
+    default:
+      return assertNever(form.kind);
   }
 }
 
@@ -153,6 +159,8 @@ function DurationFields(props: DurationFieldsProps) {
       return <HeartbeatFields {...props} />;
     case "cycle_frequency":
       return <CycleFrequencyFields {...props} />;
+    default:
+      return assertNever(props.form.kind);
   }
 }
 

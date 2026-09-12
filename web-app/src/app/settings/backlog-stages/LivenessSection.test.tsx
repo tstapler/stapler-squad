@@ -83,6 +83,7 @@ describe("LivenessSection", () => {
     expect(await screen.findByTestId("liveness-row-default")).toHaveTextContent("All modes (default)");
     expect(screen.getByTestId("liveness-row-sdd")).toHaveTextContent("Mode: sdd");
     expect(screen.getByTestId("liveness-row-sdd")).toHaveTextContent('Overrides mode "sdd" only');
+    expect(screen.getByTestId("liveness-row-sdd")).toHaveTextContent("fall through to the stage default above");
     expect(screen.getByTestId("liveness-fallback-note")).toHaveTextContent("Modes without their own override use the stage-wide default row above.");
   });
 
@@ -92,6 +93,7 @@ describe("LivenessSection", () => {
     render(<LivenessSection stageSlug="idea" pipelineModeOptions={[SDD_MODE]} />);
 
     await screen.findByTestId("liveness-row-sdd");
+    expect(screen.getByTestId("liveness-row-sdd")).toHaveTextContent("fall back to the built-in default");
     expect(screen.getByTestId("liveness-fallback-note")).toHaveTextContent("built-in default (duration budget: 3h expected + 15m margin)");
   });
 
@@ -114,6 +116,76 @@ describe("LivenessSection", () => {
       )
     );
     expect(await screen.findByTestId("liveness-row-default")).toBeInTheDocument();
+  });
+
+  it("AC1: creates a new heartbeat override and round-trips it into the list", async () => {
+    mockList.mockResolvedValue([]);
+    const created = makeDefinition({ id: "new-2", stageSlug: "idea", kind: "heartbeat", maxNoProgressDurationMs: 120 * 60000 });
+    mockCreate.mockResolvedValue(created);
+
+    render(<LivenessSection stageSlug="idea" pipelineModeOptions={[]} />);
+    await screen.findByText("No liveness overrides configured for this stage.");
+
+    fireEvent.click(screen.getByTestId("liveness-add"));
+    fireEvent.change(screen.getByTestId("liveness-editor-kind"), { target: { value: "heartbeat" } });
+    fireEvent.change(screen.getByTestId("liveness-editor-no-progress"), { target: { value: "120" } });
+    fireEvent.click(screen.getByTestId("liveness-editor-save"));
+
+    await waitFor(() =>
+      expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ stageSlug: "idea", kind: "heartbeat", maxNoProgressDurationMs: 7200000 }))
+    );
+    expect(await screen.findByTestId("liveness-row-default")).toHaveTextContent("max no-progress 2h");
+  });
+
+  it("AC1: rejects a zero max no-progress duration for heartbeat client-side without calling the RPC", async () => {
+    mockList.mockResolvedValue([]);
+    render(<LivenessSection stageSlug="idea" pipelineModeOptions={[]} />);
+    await screen.findByText("No liveness overrides configured for this stage.");
+
+    fireEvent.click(screen.getByTestId("liveness-add"));
+    fireEvent.change(screen.getByTestId("liveness-editor-kind"), { target: { value: "heartbeat" } });
+    fireEvent.change(screen.getByTestId("liveness-editor-no-progress"), { target: { value: "0" } });
+    fireEvent.click(screen.getByTestId("liveness-editor-save"));
+
+    expect(await screen.findByTestId("liveness-editor-error")).toHaveTextContent("Max no-progress duration must be a positive number of minutes.");
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("AC1: creates a new cycle_frequency override and round-trips it into the list", async () => {
+    mockList.mockResolvedValue([]);
+    const created = makeDefinition({ id: "new-3", stageSlug: "idea", kind: "cycle_frequency", cycleThreshold: 3, cycleLookbackMs: 24 * 3600000 });
+    mockCreate.mockResolvedValue(created);
+
+    render(<LivenessSection stageSlug="idea" pipelineModeOptions={[]} />);
+    await screen.findByText("No liveness overrides configured for this stage.");
+
+    fireEvent.click(screen.getByTestId("liveness-add"));
+    fireEvent.change(screen.getByTestId("liveness-editor-kind"), { target: { value: "cycle_frequency" } });
+    fireEvent.change(screen.getByTestId("liveness-editor-threshold"), { target: { value: "3" } });
+    fireEvent.change(screen.getByTestId("liveness-editor-lookback"), { target: { value: "1440" } });
+    fireEvent.click(screen.getByTestId("liveness-editor-save"));
+
+    await waitFor(() =>
+      expect(mockCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ stageSlug: "idea", kind: "cycle_frequency", cycleThreshold: 3, cycleLookbackMs: 86400000 })
+      )
+    );
+    expect(await screen.findByTestId("liveness-row-default")).toHaveTextContent("3 cycles / 24h lookback");
+  });
+
+  it("AC1: rejects a zero cycle threshold client-side without calling the RPC", async () => {
+    mockList.mockResolvedValue([]);
+    render(<LivenessSection stageSlug="idea" pipelineModeOptions={[]} />);
+    await screen.findByText("No liveness overrides configured for this stage.");
+
+    fireEvent.click(screen.getByTestId("liveness-add"));
+    fireEvent.change(screen.getByTestId("liveness-editor-kind"), { target: { value: "cycle_frequency" } });
+    fireEvent.change(screen.getByTestId("liveness-editor-threshold"), { target: { value: "0" } });
+    fireEvent.change(screen.getByTestId("liveness-editor-lookback"), { target: { value: "1440" } });
+    fireEvent.click(screen.getByTestId("liveness-editor-save"));
+
+    expect(await screen.findByTestId("liveness-editor-error")).toHaveTextContent("Cycle threshold must be a positive whole number.");
+    expect(mockCreate).not.toHaveBeenCalled();
   });
 
   it("AC1: rejects a zero/negative duration client-side without calling the RPC", async () => {
@@ -158,7 +230,8 @@ describe("LivenessSection", () => {
     mockDelete.mockResolvedValue(true);
 
     render(<LivenessSection stageSlug="idea" pipelineModeOptions={[]} />);
-    fireEvent.click(await screen.findByTestId("liveness-row-default-delete"));
+    expect(await screen.findByTestId("liveness-row-default")).toHaveTextContent("Heartbeat — max no-progress 2h — enabled");
+    fireEvent.click(screen.getByTestId("liveness-row-default-delete"));
 
     fireEvent.click(screen.getByTestId("liveness-row-default-cancel-delete"));
     expect(screen.getByTestId("liveness-row-default")).toBeInTheDocument();

@@ -1,25 +1,24 @@
 "use client";
 // +feature: settings-stage-liveness
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useLivenessDefinitions } from "@/lib/hooks/useLivenessDefinitions";
 import type { LivenessDefinition, LivenessKind } from "@/lib/hooks/useLivenessDefinitions";
 import type { PipelineMode } from "@/lib/hooks/useBacklogService";
 import { errorMessage } from "./StageForm";
-import { RowEditor, emptyRowForm, rowFormFromDefinition, toMs, validateRowForm } from "./LivenessRowEditor";
+import { KIND_OPTIONS, RowEditor, emptyRowForm, rowFormFromDefinition, toMs, validateRowForm } from "./LivenessRowEditor";
 import type { RowFormState } from "./LivenessRowEditor";
 import * as styles from "./StageForm.css";
 
-const KIND_LABELS: Record<LivenessKind, string> = {
-  duration_budget: "Duration budget",
-  heartbeat: "Heartbeat",
-  cycle_frequency: "Cycle frequency",
-};
+const KIND_LABELS: Record<LivenessKind, string> = Object.fromEntries(KIND_OPTIONS.map((o) => [o.value, o.label])) as Record<
+  LivenessKind,
+  string
+>;
 
 /**
  * DefaultLivenessEngine's hardcoded built-in table (session/liveness_engine.go)
- * mirrored here for display only, per architecture.md §4 — no RPC surfaces
- * the resolved-effective value, and this 3-entry table is effectively static.
+ * mirrored here for display only — no RPC surfaces the resolved-effective
+ * value, and this 3-entry table is effectively static.
  */
 const BUILTIN_DEFAULTS: Partial<Record<string, string>> = {
   idea: "duration budget: 3h expected + 15m margin",
@@ -35,6 +34,10 @@ function msToLabel(ms: number): string {
   return `${Number.isInteger(hours) ? hours : hours.toFixed(1)}h`;
 }
 
+function assertNever(x: never): never {
+  throw new Error(`Unhandled LivenessKind: ${JSON.stringify(x)}`);
+}
+
 function summaryFor(def: LivenessDefinition): string {
   switch (def.kind) {
     case "duration_budget":
@@ -43,6 +46,8 @@ function summaryFor(def: LivenessDefinition): string {
       return `max no-progress ${msToLabel(def.maxNoProgressDurationMs)}`;
     case "cycle_frequency":
       return `${def.cycleThreshold} cycles / ${msToLabel(def.cycleLookbackMs)} lookback`;
+    default:
+      return assertNever(def.kind);
   }
 }
 
@@ -60,7 +65,7 @@ function toUpdatePayload(form: RowFormState) {
 interface LivenessRowProps {
   def: LivenessDefinition;
   pipelineModeOptions: PipelineMode[];
-  hasOverrideRows: boolean;
+  hasBaseRow: boolean;
   isEditing: boolean;
   editForm: RowFormState | null;
   confirmingDelete: boolean;
@@ -119,7 +124,7 @@ function RowActions({
 function LivenessRow({
   def,
   pipelineModeOptions,
-  hasOverrideRows,
+  hasBaseRow,
   isEditing,
   editForm,
   confirmingDelete,
@@ -142,7 +147,9 @@ function LivenessRow({
 
   const scopeLabel = def.pipelineMode ? `Mode: ${def.pipelineMode}` : "All modes (default)";
   const resolutionHint = def.pipelineMode
-    ? `Overrides mode "${def.pipelineMode}" only — other modes ${hasOverrideRows ? "resolve independently" : "fall through"}.`
+    ? `Overrides mode "${def.pipelineMode}" only — other modes without their own override ${
+        hasBaseRow ? "fall through to the stage default above" : "fall back to the built-in default"
+      }.`
     : "Applies to any mode without its own override.";
 
   return (
@@ -176,8 +183,10 @@ export interface LivenessSectionProps {
 }
 
 /**
- * "Liveness overrides" sub-section nested in StageForm — see architecture.md
- * §4 (client-side filtering) and pitfalls.md §4 (fallback-chain display).
+ * "Liveness overrides" sub-section nested in StageForm. Fetches the full
+ * (unfiltered — no server-side filter RPC exists) ListLivenessDefinitions
+ * response and filters to this stage client-side; acceptable at the
+ * expected "dozens of rows" table size.
  */
 export function LivenessSection({ stageSlug, pipelineModeOptions }: LivenessSectionProps) {
   const { listLivenessDefinitions, createLivenessDefinition, updateLivenessDefinition, deleteLivenessDefinition } = useLivenessDefinitions();
@@ -192,16 +201,13 @@ export function LivenessSection({ stageSlug, pipelineModeOptions }: LivenessSect
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const stageSlugRef = useRef(stageSlug);
-  stageSlugRef.current = stageSlug;
-
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const all = await listLivenessDefinitions();
         if (cancelled) return;
-        setDefinitions(all.filter((d) => d.stageSlug === stageSlugRef.current));
+        setDefinitions(all.filter((d) => d.stageSlug === stageSlug));
       } catch (err) {
         if (!cancelled) setLoadError(errorMessage(err));
       } finally {
@@ -290,7 +296,7 @@ export function LivenessSection({ stageSlug, pipelineModeOptions }: LivenessSect
         key={def.id}
         def={def}
         pipelineModeOptions={pipelineModeOptions}
-        hasOverrideRows={overrideRows.length > 0}
+        hasBaseRow={Boolean(baseRow)}
         isEditing={editingKey === def.id}
         editForm={editingKey === def.id ? editForm : null}
         confirmingDelete={confirmingDeleteId === def.id}
