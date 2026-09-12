@@ -29,12 +29,6 @@ export interface ActionDeps {
   analytics?: Pick<AnalyticsProvider, "track">;
   /** Creates a backlog item from a free-text chat message, then navigates to the Backlog page */
   createBacklogItemFromChat: (text: string) => Promise<void>;
-  /**
-   * Opens the LLM-parsed backlog item review UI for the given free-text
-   * message, replacing the omnibar's fire-and-close chat_backlog_item flow.
-   * Does not create anything itself — the review UI's own confirm step does.
-   */
-  openBacklogItemReview: (text: string) => void;
 }
 
 export function dispatchOmnibarAction(
@@ -131,13 +125,6 @@ export function dispatchOmnibarAction(
       if (track) track({ name: "omnibar.chat_backlog_item", category: "user_action" });
       void deps.createBacklogItemFromChat(action.text);
       deps.close();
-      return;
-    case "parse_backlog_item":
-      // Deliberately does NOT call deps.close() — this transitions the omnibar
-      // into a review UI (spinner → editable draft), not a fire-and-forget
-      // creation. See BacklogItemIntentReview.tsx.
-      if (track) track({ name: "omnibar.parse_backlog_item", category: "user_action" });
-      deps.openBacklogItemReview(action.text);
       return;
     // TypeScript exhaustiveness: adding a new OmnibarAction variant without a case → compile error ✅
   }
