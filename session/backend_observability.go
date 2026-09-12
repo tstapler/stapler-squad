@@ -20,9 +20,32 @@ import (
 type backendLabel string
 
 const (
-	backendLabelTmux  backendLabel = "tmux"
-	backendLabelTymux backendLabel = "tymux"
+	backendLabelTmux    backendLabel = "tmux"
+	backendLabelTymux   backendLabel = "tymux"
+	backendLabelNative  backendLabel = "native"
+	backendLabelUnknown backendLabel = "unknown"
 )
+
+// processManagerBackendLabel derives a session's actual resolved backend
+// from its concrete ProcessManager type, for log lines that need to say
+// which backend is really running rather than hardcode "tmux" (BUG-109:
+// initTmuxSession's own log line did exactly that unconditionally,
+// misleading anyone checking whether the tymux rollout flag took effect for
+// a given session -- the accurate confirmation came seconds later from
+// session/tymux's own "tymux: session ready" log, easy to miss if you're
+// specifically watching session-creation time).
+func processManagerBackendLabel(pm ProcessManager) backendLabel {
+	switch pm.(type) {
+	case *TmuxBackend:
+		return backendLabelTmux
+	case *TymuxBackend:
+		return backendLabelTymux
+	case *NativeProcessManager:
+		return backendLabelNative
+	default:
+		return backendLabelUnknown
+	}
+}
 
 // mustFloat64HistogramBackend registers an OTel histogram or panics, matching
 // this repo's existing telemetry.GetMeter() idiom (e.g.

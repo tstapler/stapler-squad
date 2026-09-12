@@ -179,6 +179,18 @@ func TestTmuxBackend_Start_RecordsSpanWithTmuxBackendLabel(t *testing.T) {
 	assert.Equal(t, "tmux", backendAttr.Value.AsString())
 }
 
+// TestProcessManagerBackendLabel_MatchesConcreteType is BUG-109's regression
+// guard: initTmuxSession's log line trusted its own name instead of asking
+// what backend actually got constructed, so a tymux-backed session's log
+// said "tmux" the whole time. This locks the type switch to the concrete
+// wrapper types, not to whatever ProcessManagerBackend string an Instance's
+// (possibly stale/empty) Backend field happens to hold.
+func TestProcessManagerBackendLabel_MatchesConcreteType(t *testing.T) {
+	assert.Equal(t, backendLabelTmux, processManagerBackendLabel(NewTmuxBackend(&mockTmuxManager{})))
+	assert.Equal(t, backendLabelTymux, processManagerBackendLabel(NewTymuxBackend(&fakeTymuxManagerForStartRestore{})))
+	assert.Equal(t, backendLabelUnknown, processManagerBackendLabel(nil))
+}
+
 func TestTymuxBackend_Start_RecordsSpanWithTymuxBackendLabel(t *testing.T) {
 	recorder := installBackendSpanRecorder(t)
 	defer stubEnsureDaemonRunning(func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
