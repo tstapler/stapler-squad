@@ -5,6 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"connectrpc.com/connect"
+	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 )
@@ -101,4 +106,118 @@ func (ts *TaggingRulesService) DeleteTaggingRule(ctx context.Context, id string)
 // so no additional lock is needed beyond the store's own.
 func (ts *TaggingRulesService) rebuildEngine() {
 	ts.engine.ReplaceRules(ts.rulesStore.ToRules())
+}
+
+// taggingRuleSpecToProto converts a TaggingRuleSpec plus its 7-day fire count to the
+// wire representation, mirroring rules_service.go's specToProto.
+func taggingRuleSpecToProto(spec TaggingRuleSpec, fireCount7d int) *sessionv1.TaggingRuleProto {
+	p := &sessionv1.TaggingRuleProto{
+		Id:             spec.ID,
+		Name:           spec.Name,
+		NamePattern:    spec.NamePattern,
+		BranchPattern:  spec.BranchPattern,
+		PathPattern:    spec.PathPattern,
+		ProgramPattern: spec.ProgramPattern,
+		RequiredTags:   spec.RequiredTags,
+		OutputTag:      spec.OutputTag,
+		Priority:       int32(spec.Priority), // #nosec G115 -- bounded the same way as ApprovalRuleProto.Priority (see specToProto)
+		Enabled:        spec.Enabled,
+		Source:         spec.Source,
+		FireCount_7D:   int32(fireCount7d), // #nosec G115 -- fire counts are small, bounded by the 7-day analytics window
+	}
+	if !spec.CreatedAt.IsZero() {
+		p.CreatedAt = timestamppb.New(spec.CreatedAt)
+	}
+	return p
+}
+
+// protoToTaggingRuleSpec converts the wire representation back to a TaggingRuleSpec for
+// persistence. FireCount7d is server-computed and never round-tripped back in.
+func protoToTaggingRuleSpec(p *sessionv1.TaggingRuleProto) TaggingRuleSpec {
+	spec := TaggingRuleSpec{
+		ID:             p.GetId(),
+		Name:           p.GetName(),
+		NamePattern:    p.GetNamePattern(),
+		BranchPattern:  p.GetBranchPattern(),
+		PathPattern:    p.GetPathPattern(),
+		ProgramPattern: p.GetProgramPattern(),
+		RequiredTags:   p.GetRequiredTags(),
+		OutputTag:      p.GetOutputTag(),
+		Priority:       int(p.GetPriority()),
+		Enabled:        p.GetEnabled(),
+		Source:         p.GetSource(),
+	}
+	if p.GetCreatedAt() != nil {
+		spec.CreatedAt = p.GetCreatedAt().AsTime()
+	}
+	return spec
+}
+
+// ListTaggingRulesRPC is the ConnectRPC-facing counterpart of ListTaggingRules, returning
+// the wire proto shape instead of TaggingRuleWithFireCount.
+func (ts *TaggingRulesService) ListTaggingRulesRPC(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListTaggingRulesRequest],
+) (*connect.Response[sessionv1.ListTaggingRulesResponse], error) {
+	rules, err := ts.ListTaggingRules(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	out := make([]*sessionv1.TaggingRuleProto, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, taggingRuleSpecToProto(r.TaggingRuleSpec, r.FireCount7d))
+	}
+	return connect.NewResponse(&sessionv1.ListTaggingRulesResponse{Rules: out}), nil
+}
+
+// UpsertTaggingRuleRPC is the ConnectRPC-facing counterpart of UpsertTaggingRule. Unlike
+// UpsertApprovalRule's RPC (which requires a caller-supplied id — see tools_rules.go's
+// documented discrepancy), this generates an id via uuid.New() when the caller omits one,
+// matching Story 5.1.1's acceptance criterion of upserting a rule with no id.
+func (ts *TaggingRulesService) UpsertTaggingRuleRPC(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UpsertTaggingRuleRequest],
+) (*connect.Response[sessionv1.UpsertTaggingRuleResponse], error) {
+	if req.Msg.GetRule() == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("rule is required"))
+	}
+	r := req.Msg.GetRule()
+	if r.GetOutputTag() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("rule.output_tag is required"))
+	}
+
+	spec := protoToTaggingRuleSpec(r)
+	isCreate := spec.ID == ""
+	if isCreate {
+		spec.ID = uuid.New().String()
+	}
+	if spec.Source == "" {
+		spec.Source = "user"
+	}
+
+	saved, err := ts.UpsertTaggingRule(ctx, spec)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	return connect.NewResponse(&sessionv1.UpsertTaggingRuleResponse{
+		Rule:    taggingRuleSpecToProto(saved, 0),
+		Created: isCreate,
+	}), nil
+}
+
+// DeleteTaggingRuleRPC is the ConnectRPC-facing counterpart of DeleteTaggingRule.
+func (ts *TaggingRulesService) DeleteTaggingRuleRPC(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeleteTaggingRuleRequest],
+) (*connect.Response[sessionv1.DeleteTaggingRuleResponse], error) {
+	if req.Msg.GetId() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("id is required"))
+	}
+	if err := ts.DeleteTaggingRule(ctx, req.Msg.GetId()); err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+	return connect.NewResponse(&sessionv1.DeleteTaggingRuleResponse{
+		Success: true,
+		Message: fmt.Sprintf("Rule %s deleted", req.Msg.GetId()),
+	}), nil
 }

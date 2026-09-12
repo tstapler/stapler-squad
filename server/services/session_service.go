@@ -5209,6 +5209,31 @@ func (s *SessionService) ReloadClaudeSettingsRules(
 	return s.rulesSvc.ReloadClaudeSettingsRules(ctx, req)
 }
 
+// ListTaggingRules returns all session-tagging rules (user and seed), each with its 7-day
+// fire count.
+func (s *SessionService) ListTaggingRules(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListTaggingRulesRequest],
+) (*connect.Response[sessionv1.ListTaggingRulesResponse], error) {
+	return s.taggingRulesSvc.ListTaggingRulesRPC(ctx, req)
+}
+
+// UpsertTaggingRule creates or updates a user-defined session-tagging rule.
+func (s *SessionService) UpsertTaggingRule(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UpsertTaggingRuleRequest],
+) (*connect.Response[sessionv1.UpsertTaggingRuleResponse], error) {
+	return s.taggingRulesSvc.UpsertTaggingRuleRPC(ctx, req)
+}
+
+// DeleteTaggingRule removes a user-defined session-tagging rule by ID.
+func (s *SessionService) DeleteTaggingRule(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeleteTaggingRuleRequest],
+) (*connect.Response[sessionv1.DeleteTaggingRuleResponse], error) {
+	return s.taggingRulesSvc.DeleteTaggingRuleRPC(ctx, req)
+}
+
 // GetApprovalAnalytics returns aggregated analytics for classification decisions.
 func (s *SessionService) GetApprovalAnalytics(
 	ctx context.Context,

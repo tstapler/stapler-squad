@@ -70,6 +70,7 @@ func NewCore(
 	if svc != nil {
 		registerWorkflowTools(s, &workflowHandlers{svc: svc})
 		registerRulesTools(s, &rulesHandlers{svc: svc})
+		registerTaggingRulesTools(s, &taggingRulesHandlers{svc: svc})
 		registerNotificationTools(s, &notificationHandlers{svc: svc})
 		registerHistoryTools(s, &historyHandlers{svc: svc})
 	}

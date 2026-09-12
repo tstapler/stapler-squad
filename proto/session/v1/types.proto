@@ -1325,6 +1325,28 @@ message ApprovalRuleProto {
   int32 min_session_idle_minutes = 30;
 }
 
+// TaggingRuleProto represents a single session-tagging rule. Mirrors
+// ApprovalRuleProto's field shape for the sibling auto-tagging rule system.
+message TaggingRuleProto {
+  string id = 1;
+  string name = 2;
+  string name_pattern = 3;
+  string branch_pattern = 4;
+  string path_pattern = 5;
+  string program_pattern = 6;
+  repeated string required_tags = 7;
+  string output_tag = 8;
+  int32 priority = 9;
+  bool enabled = 10;
+  string source = 11;
+  google.protobuf.Timestamp created_at = 12;
+  // fire_count_7d is the number of times this rule matched in the last 7
+  // days; populated server-side by ListTaggingRules from
+  // AnalyticsStore.GetTaggingRuleFireCounts (ux.md Surface 6's "Fires(7d)"
+  // column).
+  int32 fire_count_7d = 13;
+}
+
 // AnalyticsSummaryProto aggregates classification decisions over a time window.
 message AnalyticsSummaryProto {
   int32 total_decisions = 1;
