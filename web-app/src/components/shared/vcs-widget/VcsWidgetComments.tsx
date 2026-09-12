@@ -7,7 +7,9 @@ import { SessionService } from "@/gen/session/v1/session_pb";
 import type { PRComment } from "@/gen/session/v1/types_pb";
 import { getConnectTransport } from "@/lib/api/transport";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
+import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { formatRelativeTime } from "@/lib/utils/datetime";
+import { getGitHubRateLimitMessage } from "@/lib/vcs/githubRateLimit";
 import * as styles from "./VcsWidgetComments.css";
 
 interface VcsWidgetCommentsProps {
@@ -33,6 +35,10 @@ type LoadState = "idle" | "loading" | "loaded" | "error";
 export function VcsWidgetComments({ owner, repo, prNumber, sessionId }: VcsWidgetCommentsProps) {
   const [comments, setComments] = useState<PRComment[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
+  // Captured (not discarded) so the failure body can classify it via
+  // getGitHubRateLimitMessage instead of always showing the fixed generic
+  // string — see design/ux.md State A/B.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const fetchedRef = useRef(false);
   // Guards against a setState after unmount: queue navigation remounts this
   // component (keyed by sessionId in VcsWidget.tsx) while a fetch from the
@@ -59,9 +65,19 @@ export function VcsWidgetComments({ owner, repo, prNumber, sessionId }: VcsWidge
       .catch((err) => {
         if (unmountedRef.current) return;
         console.error("[VcsWidgetComments] failed to load PR comments", err);
+        setLoadError(err);
         setLoadState("error");
       });
   }, [sessionId]);
+
+  // Retry: today's only escape hatch is collapsing/re-expanding the section
+  // (which remounts this subtree); this makes that reset explicit and gives
+  // the error state a real, visible action (design/ux.md's "No dead ends"
+  // acceptance criterion).
+  const retryFetchComments = useCallback(() => {
+    fetchedRef.current = false;
+    fetchComments();
+  }, [fetchComments]);
 
   return (
     <CollapsibleSection sectionKey="pr-comments" title="Comments" defaultExpanded={false}>
@@ -71,7 +87,9 @@ export function VcsWidgetComments({ owner, repo, prNumber, sessionId }: VcsWidge
         prNumber={prNumber}
         comments={comments}
         loadState={loadState}
+        loadError={loadError}
         onMount={fetchComments}
+        onRetry={retryFetchComments}
       />
     </CollapsibleSection>
   );
@@ -83,7 +101,9 @@ interface VcsWidgetCommentsBodyProps {
   prNumber: number;
   comments: PRComment[];
   loadState: LoadState;
+  loadError: unknown;
   onMount: () => void;
+  onRetry: () => void;
 }
 
 function VcsWidgetCommentsBody({
@@ -92,8 +112,11 @@ function VcsWidgetCommentsBody({
   prNumber,
   comments,
   loadState,
+  loadError,
   onMount,
+  onRetry,
 }: VcsWidgetCommentsBodyProps) {
+  const { track } = useAnalytics();
   // Fires once per mount of this subtree, which only mounts while the
   // section is expanded — see the module doc comment above for why.
   useEffect(() => {
@@ -101,11 +124,23 @@ function VcsWidgetCommentsBody({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const handleRetry = () => {
+    track({ name: "toolbar_button_click", category: "user_action", component: "VcsWidgetComments", labels: { button: "retry" } });
+    onRetry();
+  };
+
   if (loadState === "idle" || loadState === "loading") {
     return <p className={styles.status}>Loading…</p>;
   }
   if (loadState === "error") {
-    return <p className={styles.status}>Failed to load comments</p>;
+    return (
+      <div className={styles.status} role="status" aria-live="polite">
+        <p style={{ margin: 0 }}>{getGitHubRateLimitMessage(loadError, "Failed to load comments", { autoRetries: false })}</p>
+        <button type="button" onClick={handleRetry} style={{ marginTop: 4 }}>
+          Retry
+        </button>
+      </div>
+    );
   }
   if (comments.length === 0) {
     return <p className={styles.status}>No comments yet.</p>;

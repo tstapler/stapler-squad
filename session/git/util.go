@@ -191,7 +191,7 @@ func (g *GitWorktree) checkGHCLI() error {
 	// Check if gh is authenticated
 	authCtx, authCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer authCancel()
-	if _, err := g.commandRunner().Run(authCtx, g.worktreePath, "gh", "auth", "status"); err != nil {
+	if _, err := g.runGHCommand(authCtx, "auth.status", "auth", "status"); err != nil {
 		return fmt.Errorf("GitHub CLI is not configured. Please run 'gh auth login' first")
 	}
 
