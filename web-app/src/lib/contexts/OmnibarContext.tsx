@@ -6,6 +6,8 @@ import { Omnibar, OmnibarSessionData } from "@/components/sessions/Omnibar";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { useAuth } from "@/lib/contexts/AuthContext";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import { SessionType } from "@/gen/session/v1/types_pb";
 import { RemoteTargetSchema } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
@@ -62,6 +64,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
     enabled: !authLoading && (!authEnabled || authenticated),
   });
   const { workflows } = useWorkflows();
+  const { showActionToast } = useNotifications();
 
   // Lean WorkflowEntry[] for the detector and @ autocomplete dropdown.
   const workflowEntries = useMemo<WorkflowEntry[]>(
@@ -291,21 +294,33 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   // then navigates to the newly created session so the user can see it running.
   const handleRunWorkflow = useCallback(
     async (slug: string, arg: string) => {
+      const toastKey = `run-workflow:${slug}`;
       const wf = workflows.find((w) => w.slug === slug);
       if (!wf) {
+        // Slug matched at detection time but is gone from the (possibly stale) local
+        // workflow list by the time Enter is pressed -- surface it rather than
+        // swallowing the input silently. Root cause (list going stale) is tracked
+        // separately via the in-flight WatchWorkflows streaming RPC.
         console.error("Unknown workflow slug:", slug);
+        showActionToast(`Workflow '@${slug}' not found — try reloading`, "error", toastKey);
         return;
       }
       try {
+        // runWorkflowRPC (useSessionService.runWorkflow) never throws -- it catches
+        // internally and returns null on failure -- so a falsy sessionId is the
+        // actual failure signal, not just an absent-navigation no-op.
         const sessionId = await runWorkflowRPC({ id: wf.id, arg });
         if (sessionId) {
           router.push(`/?session=${sessionId}`);
+        } else {
+          showActionToast(`Failed to run workflow '@${slug}' — try again`, "error", toastKey);
         }
       } catch (err) {
         console.error("Failed to run workflow:", err);
+        showActionToast(getErrorMessage(err, `Failed to run workflow '@${slug}'`), "error", toastKey);
       }
     },
-    [runWorkflowRPC, workflows, router]
+    [runWorkflowRPC, workflows, router, showActionToast]
   );
 
   const value: OmnibarContextValue = {
