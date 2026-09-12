@@ -279,3 +279,45 @@ func TestTagContentHash_should_ChangeHash_When_AnySingleFieldDiffers(t *testing.
 		}
 	}
 }
+
+// ── Epic 7.3: ApplyToFixpoint performance regression guard ─────────────────
+
+// BenchmarkApplyToFixpoint establishes a baseline ns/op for ApplyToFixpoint against a
+// representative rule set: SeedTaggingRules()' 7 seed entries, 15 synthetic filler rules
+// (independent name/branch/path/program patterns that never match, mirroring a realistic
+// mix of unrelated user-authored rules), and a 3-deep RequiredTags chain seeded off "Bugfix"
+// so the fixpoint loop actually iterates more than once per call — 25 enabled rules total,
+// within the plan's 20-50 target range. ApplyToFixpoint takes ctx by value and never mutates
+// it or the engine, so calling it b.N times against the same ctx already gives each iteration
+// a fresh start (no explicit per-iteration reset needed, unlike a benchmark over stateful
+// mutation).
+func BenchmarkApplyToFixpoint(b *testing.B) {
+	rules := SeedTaggingRules()
+	for i := 0; i < 15; i++ {
+		rules = append(rules, TaggingRule{
+			RuleMeta:    seedTagMeta(fmt.Sprintf("bench-filler-%d", i), fmt.Sprintf("Filler %d", i), 20),
+			NamePattern: regexp.MustCompile(fmt.Sprintf("^never-matches-%d$", i)),
+			OutputTag:   fmt.Sprintf("FillerTag%d", i),
+		})
+	}
+	rules = append(rules,
+		TaggingRule{RuleMeta: seedTagMeta("bench-chain-1", "Chain 1", 5), RequiredTags: []string{"Bugfix"}, OutputTag: "BenchChain1"},
+		TaggingRule{RuleMeta: seedTagMeta("bench-chain-2", "Chain 2", 4), RequiredTags: []string{"BenchChain1"}, OutputTag: "BenchChain2"},
+		TaggingRule{RuleMeta: seedTagMeta("bench-chain-3", "Chain 3", 3), RequiredTags: []string{"BenchChain2"}, OutputTag: "BenchChain3"},
+	)
+
+	engine := NewTaggingEngine()
+	engine.ReplaceRules(rules)
+
+	ctx := SessionTaggingContext{
+		Name:    "fix-flaky-tests",
+		Branch:  "bugfix/pr-poller",
+		Path:    "/home/user/repo/server/services",
+		Program: "claude",
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		engine.ApplyToFixpoint(ctx)
+	}
+}

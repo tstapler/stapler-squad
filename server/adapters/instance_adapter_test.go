@@ -454,3 +454,30 @@ func TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackN
 		t.Errorf("expected empty GithubMergeable, got %q", proto.GithubMergeable)
 	}
 }
+
+// TestInstanceToProto_should_PopulateRuleTagProvenance_When_TagsHaveRuleProvenance closes
+// the session-classifier-pipeline Phase 6 gap: RuleTagProvenance was added to the wire proto
+// (types.proto field 90) but InstanceToProto never copied Instance.RuleTagProvenance into it,
+// so the frontend provenance tooltip had no data to read. See ADR-002 tag-provenance data
+// model.
+func TestInstanceToProto_should_PopulateRuleTagProvenance_When_TagsHaveRuleProvenance(t *testing.T) {
+	inst := &session.Instance{
+		Tags:              []string{"Bugfix", "Feature"},
+		RuleTagProvenance: map[string]string{"Bugfix": "seed-bugfix", "Feature": "llm"},
+	}
+
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+
+	want := map[string]string{"Bugfix": "seed-bugfix", "Feature": "llm"}
+	if len(proto.RuleTagProvenance) != len(want) {
+		t.Fatalf("RuleTagProvenance = %+v, want %+v", proto.RuleTagProvenance, want)
+	}
+	for tag, ruleID := range want {
+		if got := proto.RuleTagProvenance[tag]; got != ruleID {
+			t.Errorf("RuleTagProvenance[%q] = %q, want %q", tag, got, ruleID)
+		}
+	}
+}
