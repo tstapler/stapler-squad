@@ -277,7 +277,7 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 	// needed since a manual import has no source row to scope by.
 	if existing, lookupErr := s.storage.GetBacklogItemByExternalURL(ctx, issue.URL); lookupErr == nil {
 		return connect.NewResponse(&sessionv1.ImportGitHubIssueResponse{
-			Item:           backlogItemToProto(existing, s.buildCostLookup()),
+			Item:           backlogItemToProto(existing, s.engine, s.buildCostLookup()),
 			AlreadyExisted: true,
 		}), nil
 	} else if !errors.Is(lookupErr, session.ErrNotFound) {
@@ -311,7 +311,7 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 	triageTriggered := s.MaybeTriggerTriage(ctx, created.ID, req.Msg.SkipPlanning, created.RepoPath)
 
 	return connect.NewResponse(&sessionv1.ImportGitHubIssueResponse{
-		Item:            backlogItemToProto(created, s.buildCostLookup()),
+		Item:            backlogItemToProto(created, s.engine, s.buildCostLookup()),
 		TriageTriggered: triageTriggered,
 	}), nil
 }

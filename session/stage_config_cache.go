@@ -151,12 +151,6 @@ func (c *stageConfigCache) refresh(ctx context.Context, repo StageConfigReposito
 	return nil
 }
 
-// Get returns the resolved edge for (from,to), or (resolvedTransitionEdge{},
-// false) if no such legal/enabled edge is present in the current cache
-// snapshot — including the case where the cache has never been loaded at
-// all. Lock-free: a single atomic Load + two map lookups. Takes BacklogStatus
-// (the widened open stage-slug type, per plan.md's Domain Glossary) rather
-// than a bare string so from/to can't be transposed by mistake at call sites.
 // HasStage reports whether from is a live, enabled stage in the current
 // cache snapshot — true even for a legitimate dead-end stage with zero
 // outgoing transitions, since refresh seeds an entry for every enabled
@@ -174,6 +168,9 @@ func (c *stageConfigCache) HasStage(from BacklogStatus) bool {
 	return ok
 }
 
+// Get returns the resolved edge for (from,to), or (resolvedTransitionEdge{},
+// false) if no such legal/enabled edge exists. Lock-free: one atomic Load +
+// two map lookups.
 func (c *stageConfigCache) Get(from, to BacklogStatus) (resolvedTransitionEdge, bool) {
 	snap := c.ptr.Load()
 	if snap == nil {

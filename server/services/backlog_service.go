@@ -828,7 +828,12 @@ type triageResultJSON struct {
 
 // backlogItemSummaryToProto maps a BacklogItemSummary to the proto BacklogItem message.
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
-func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+// engine must be the caller's s.engine (see allowedTransitionStrings); no
+// per-item StageConfigSnapshot fallback is passed here — unlike
+// backlogItemToProto, BacklogItemSummary doesn't carry StatusEvents (that's
+// the whole point of the "summary" — avoid over-hydration), so
+// BuildStageConfigSnapshotFallback has nothing to reconstruct from.
+func backlogItemSummaryToProto(item *session.BacklogItemSummary, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
 		Id:       item.ID,
 		PublicId: item.PublicIDRaw,
@@ -846,7 +851,7 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 		PrNumber:           int32(item.PrNumber),
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
-		AllowedTransitions: allowedTransitionStrings(item.Status),
+		AllowedTransitions: allowedTransitionStrings(engine, item.Status, nil),
 		// Plan-gating fields: board/list-view cards derive their primary
 		// action (getAvailableActions in itemActions.ts) from
 		// SkipPlanning/PlanApproved/PlanArtifactsPath directly, so this
@@ -898,18 +903,15 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 	return p
 }
 
-// protoWorkflowEngine is a stateless, read-only WorkflowEngine used only to
-// surface AllowedTransitions on the wire (backlogItemToProto below) — package
-// state is safe here since the underlying transitions map is never mutated
-// after construction. Not s.engine: backlogItemToProto is a free function
-// called from many BacklogService methods, and threading an engine parameter
-// through every call site would be a much larger change for the same result.
-var protoWorkflowEngine = session.NewDefaultWorkflowEngine()
-
 // allowedTransitionStrings returns the string form of
-// protoWorkflowEngine.AllowedTransitions(from, nil), for BacklogItem.allowed_transitions.
-func allowedTransitionStrings(from session.BacklogStatus) []string {
-	targets := protoWorkflowEngine.AllowedTransitions(from, nil)
+// engine.AllowedTransitions(from, fallback), for BacklogItem.allowed_transitions.
+// engine must be the caller's real, request-scoped s.engine (not a hardcoded
+// DefaultWorkflowEngine) so a CUSTOM-stage item gets its actual configured
+// transitions rather than an empty slice (#585) — see the docstrings on
+// backlogItemToProto/backlogItemSummaryToProto below for how fallback is
+// derived per caller.
+func allowedTransitionStrings(engine session.WorkflowEngine, from session.BacklogStatus, fallback *session.StageConfigSnapshot) []string {
+	targets := engine.AllowedTransitions(from, fallback)
 	out := make([]string, len(targets))
 	for i, t := range targets {
 		out[i] = string(t)
@@ -918,7 +920,8 @@ func allowedTransitionStrings(from session.BacklogStatus) []string {
 }
 
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
-func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+// engine must be the caller's s.engine — see allowedTransitionStrings.
+func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
 		Id:          item.ID,
 		Title:       item.Title,
@@ -947,7 +950,7 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		PrNumber:           int32(item.PrNumber),
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
-		AllowedTransitions: allowedTransitionStrings(session.BacklogStatus(item.Status)),
+		AllowedTransitions: allowedTransitionStrings(engine, session.BacklogStatus(item.Status), session.BuildStageConfigSnapshotFallback(item)),
 		PublicId:           item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {

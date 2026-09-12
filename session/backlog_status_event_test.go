@@ -9,6 +9,7 @@ package session
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -156,6 +157,67 @@ func TestBuildStageConfigSnapshotFallback_should_ReconstructSnapshotFromMostRece
 	require.NotNil(t, fallback)
 	require.Equal(t, "Review A", fallback.StageName)
 	require.Equal(t, []BacklogStatus{BacklogStatus("review-b")}, fallback.AllowedTransitions)
+}
+
+// TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_ItemHasTransitionedIntoSameStageTwice
+// covers the "most recent" tie-breaking logic the happy-path test above never
+// actually exercises (only one matching event there, so a bug that picked the
+// OLDEST matching event by mistake would still pass it). This transitions the
+// item into "review-a" twice, with the destination's outgoing transition
+// graph changed in between (its original edge to "review-b-v1" disabled, a
+// new edge to "review-b-v2" added), and asserts the reconstructed snapshot
+// reflects the SECOND entry's graph, not the first.
+func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_ItemHasTransitionedIntoSameStageTwice(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	client := repo.client
+
+	fromStage, err := client.BacklogStage.Create().SetSlug("review-a").SetName("Review A").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	toStageV1, err := client.BacklogStage.Create().SetSlug("review-b-v1").SetName("Review B v1").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	edgeV1, err := client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStageV1.ID).SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "item entering review-a twice",
+		Status: string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	// First entry into review-a: captures the v1 graph (review-a -> review-b-v1).
+	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
+	require.NoError(t, err)
+
+	// Force a measurable CreatedAt delta between the two matching events.
+	time.Sleep(10 * time.Millisecond)
+
+	// Leave review-a, then change its outgoing graph before re-entering.
+	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusIdea, nil, TriggeredByUser)
+	require.NoError(t, err)
+
+	_, err = client.StageTransition.UpdateOne(edgeV1).SetEnabled(false).Save(ctx)
+	require.NoError(t, err)
+	toStageV2, err := client.BacklogStage.Create().SetSlug("review-b-v2").SetName("Review B v2").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	_, err = client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStageV2.ID).SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Second entry into review-a: must capture the v2 graph (review-a -> review-b-v2).
+	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
+	require.NoError(t, err)
+
+	reloaded, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+
+	fallback := BuildStageConfigSnapshotFallback(reloaded)
+	require.NotNil(t, fallback)
+	require.Equal(t, "Review A", fallback.StageName)
+	require.Equal(t, []BacklogStatus{BacklogStatus("review-b-v2")}, fallback.AllowedTransitions,
+		"fallback must reconstruct from the SECOND (most recent) entry into review-a, not the first")
 }
 
 // TestBuildStageConfigSnapshotFallback_should_ReturnNil_When_NoStatusEventMatchesCurrentStatus

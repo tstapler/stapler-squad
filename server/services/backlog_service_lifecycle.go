@@ -222,7 +222,7 @@ func (s *BacklogService) CreateBacklogItem(
 	triageTriggered := s.MaybeTriggerTriage(ctx, created.ID, req.Msg.SkipTriage, created.RepoPath)
 
 	return connect.NewResponse(&sessionv1.CreateBacklogItemResponse{
-		Item:            backlogItemToProto(created, s.buildCostLookup()),
+		Item:            backlogItemToProto(created, s.engine, s.buildCostLookup()),
 		TriageTriggered: triageTriggered,
 	}), nil
 }
@@ -468,7 +468,7 @@ func (s *BacklogService) UpdateBacklogItem(
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateBacklogItemResponse{
-		Item: backlogItemToProto(updated, s.buildCostLookup()),
+		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -503,7 +503,7 @@ func (s *BacklogService) ArchiveBacklogItem(
 	}
 
 	return connect.NewResponse(&sessionv1.ArchiveBacklogItemResponse{
-		Item: backlogItemToProto(archived, s.buildCostLookup()),
+		Item: backlogItemToProto(archived, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -529,7 +529,7 @@ func (s *BacklogService) UnarchiveBacklogItem(
 	}
 
 	return connect.NewResponse(&sessionv1.UnarchiveBacklogItemResponse{
-		Item: backlogItemToProto(unarchived, s.buildCostLookup()),
+		Item: backlogItemToProto(unarchived, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -589,7 +589,7 @@ func (s *BacklogService) AddBacklogItemDependency(
 	}
 
 	return connect.NewResponse(&sessionv1.AddBacklogItemDependencyResponse{
-		Item: backlogItemToProto(updated, s.buildCostLookup()),
+		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -830,7 +830,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	}
 
 	return connect.NewResponse(&sessionv1.TransitionBacklogItemStatusResponse{
-		Item: backlogItemToProto(updated, s.buildCostLookup()),
+		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -879,7 +879,7 @@ func (s *BacklogService) ApprovePlan(
 	}
 
 	return connect.NewResponse(&sessionv1.ApprovePlanResponse{
-		Item: backlogItemToProto(updated, s.buildCostLookup()),
+		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -942,7 +942,7 @@ func (s *BacklogService) RejectPlan(
 	}
 
 	return connect.NewResponse(&sessionv1.RejectPlanResponse{
-		Item: backlogItemToProto(updated, s.buildCostLookup()),
+		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -1149,7 +1149,7 @@ func (s *BacklogService) OverrideVerdict(
 	}
 
 	return connect.NewResponse(&sessionv1.OverrideVerdictResponse{
-		Item: backlogItemToProto(updatedItem, s.buildCostLookup()),
+		Item: backlogItemToProto(updatedItem, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -1263,6 +1263,6 @@ func (s *BacklogService) SubmitManualReview(
 	}
 
 	return connect.NewResponse(&sessionv1.SubmitManualReviewResponse{
-		Item: backlogItemToProto(updated, s.buildCostLookup()),
+		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil
 }
