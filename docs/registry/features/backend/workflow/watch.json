@@ -6,7 +6,13 @@
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
   "handlerFile": "server/services/workflow_service_events.go",
-  "tested": false,
-  "testIds": [],
+  "tested": true,
+  "testIds": [
+    "TestWatchWorkflows_should_sendSnapshotEventForEachWorkflow_When_AfterSeqIsZero",
+    "TestWatchWorkflows_should_sendSnapshotCompleteMarker_When_NoWorkflowsExist",
+    "TestWatchWorkflows_should_broadcastLiveEvents_When_CreateUpdateDeleteRunSucceed",
+    "TestWatchWorkflows_should_broadcastRunEvent_When_RunWorkflowSucceeds",
+    "TestWatchWorkflows_should_returnUnavailable_When_EventBusNotWired"
+  ],
   "lastModified": "2026-09-11T22:30:51.644307667-07:00"
 }
