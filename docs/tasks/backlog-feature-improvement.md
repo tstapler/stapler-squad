@@ -2434,3 +2434,106 @@ internal logic bug in the review path itself).
 4. `db288a47` — too fresh (1 remediation attempt, detected 2026-09-02) to call a repeat of any
    named shape yet; worth a follow-up check next pass to see whether it joins the "no escalation
    retry" pattern once it accumulates more attempts, rather than routing a fix now.
+
+## Update — 2026-09-11: full 4-phase pass (live state + UI walkthrough + architecture-gap check + review-item root cause)
+
+Live `ListStuckBacklogItems` shows **24 stuck items**: 20× `STUCK_REASON_ORPHANED_TRIAGE` (all
+`idea`, remediationAttempts=5, fully parked) — 12 are the exact same items from the 09-03 entry,
+plus 8 new ones from a different bulk-import batch — and one `review`-stage item (`09e91e3e`)
+carrying 4 simultaneous stuck reasons at once (`BOUNCING`, `REWORK_BLOCKED_STALE`,
+`MULTIPLE_REASONS`, `BOUNCE_CAP_EXHAUSTED`).
+
+### Meta-finding: this doc's "fix failed" calls may sometimes be "fix not deployed yet"
+
+The 09-03 orphaned-triage items are *still* parked today, which looked at first like the 09-08
+`triageCallBudget` fix (30min→3h) failing to hold. It didn't fail — **it was never deployed to
+the item that retried.** `306bbc57`'s last retry ran 2026-09-08T23:01:32Z; the fix (commit
+`db3b89327`) merged 2026-09-08T20:01:30Z (3h earlier, so it *was* in source), but the running
+service's binary wasn't rebuilt until 2026-09-10T17:52 (`make install-service` is manual, no
+auto-deploy) — the last service restart before that retry was 2026-09-08T08:57:27Z, so the retry
+ran on the pre-fix binary. Two more relevant commits (`0d7c2fa9e`, `34717d327`) merged
+2026-09-11 morning are *also* not yet deployed as of this pass. No retry has occurred since the
+09-10 redeploy — all 20 items are on the 7-day cold-retry schedule (`nextRemediationAt`
+2026-09-12 through 09-15), so root cause 1 from the 09-03 entry remains **genuinely unverified**,
+not confirmed-fixed or confirmed-still-broken. **Recommendation**: before declaring a fix
+verified or failed in a future pass, check binary mtime / running-process start time against the
+merge commit time — this doc has likely misjudged fix efficacy before without that check.
+
+### Bucket 1 — reconciliation bugs (new)
+
+1. **`reconcileUnprocessedReviewVerdicts` log-spam** (`session/backlog_lifecycle_review.go:564`) —
+   logs "review session … exited without ever writing a verdict" **unconditionally on every ~60s
+   reconcile tick**, live-confirmed firing every minute for over 20 minutes straight for an
+   already-dead, already-parked session (`7ce35db9`, item `09e91e3e`), almost certainly
+   continuous since the bounce cap exhausted on 2026-09-09. BUG-046's `RemediationBlocked` dedup
+   guard (line 119) covers the downstream notify/log in `handleReviewSessionExited` but not this
+   sweep's own detection log — a leftover, uncovered corner of that fix, not a new shape. Cheap
+   fix: apply the same `RemediationBlocked` check before this log line.
+2. **Board card primary-action flips silently on client-side nav** (`itemActions.ts:260`
+   `getPrimaryCardAction`) — live-reproduced: navigating within `/backlog/board` (not a full
+   reload) causes all READY-column cards to show "Trigger Triage" instead of "Approve Plan"
+   because the live-update payload is missing `planArtifactsPath`; reverts on full navigation.
+   Risk: a user could re-trigger triage on an item that already has a plan awaiting approval.
+3. **Stuck-reason display disagrees across screens and drops 3 of 4 reasons** — `BacklogItemDetail.tsx:219`
+   and `BacklogBoard.tsx:308` each keep exactly one `StuckReason` per item (`.find`/`Map` keyed by
+   itemId). Verified live on `09e91e3e` (4 simultaneous reasons): detail panel shows "🔁 Not
+   converging", the board card shows "🔴 Bounce cap exhausted" — two different reasons, neither
+   view showing all four, no shared priority order between the two dedup sites.
+4. **Edit form shows the wrong category for an item** (`BacklogItemForm.tsx` vs
+   `LifecycleSummary.tsx`, same `item.category` field) — verified live on `09e91e3e`: form shows
+   "Uncategorized" checked, detail panel 2 components over shows "Category: bugfix" from the same
+   field. Since `categoryDefaults.ts` re-applies `skipPlanning`/`skipReviewGate`/`pipelineMode`
+   defaults whenever category is (re)selected in the form, an Edit-and-save on an item hitting
+   this bug could silently reset its configured automation profile — highest-severity of this
+   pass's new findings since it's a silent data-loss risk, not just a display bug.
+
+### Bucket 1 — confirmed correct-by-design (not bugs)
+
+`09e91e3e`'s stuck state itself is working as intended: two review sessions exited without
+calling `submit_review_verdict`, correctly bounced, correctly hit the bounce cap and parked
+needing human "Reopen for Revision" — same shape as `eabee433` (09-03 entry), not new.
+
+### Bucket 2 — manual gates (new)
+
+5. **"Approve Plan" requires an individual human click per ready item, with no auto-approve
+   policy/toggle anywhere** (board + `itemActions.ts`) — `/rules` looks like it could be this but
+   is unrelated (CLI tool-permission allowlisting, not backlog plan approval). This is the single
+   most visible remaining manual gate blocking full autonomy.
+6. **No glanceable read-only summary of an item's automation profile** (pipeline mode / skip-review
+   / skip-planning / auto-spawn / auto-create-PR) on the card or detail header — these toggles do
+   exist in the Edit form (real progress since 07-14), but confirming them today requires opening
+   Edit, and the item-detail "Workflow" accordion meant to show stage history reads "No status
+   history recorded" even for an item with 7 linked sessions across 4 statuses.
+
+### Bucket 3 — core configurability gap: re-confirmed, but already deliberately scoped out
+
+Re-verified against current code, not re-derived from the 07-14 framing:
+
+- **`PipelineMode` is a closed "select one named preset" model** (DB row: slug + 9 whole-content
+  template fields), not an open-ended per-item skill/stage composition — there's still no way to
+  say "run `/sdd:full` then skip review" without authoring a whole new preset. This is the actual
+  remaining core gap, but it's a **deliberate, already-recorded decision**, not an oversight:
+  `project_plans/backlog-configurable-pipeline/decisions/ADR-001-pipeline-mode-db-persisted.md`
+  and `requirements.md:73-131` (Runtime Configurability Decision) explicitly chose whole-mode CRUD
+  over a composable stage list.
+- `ConfiguredWorkflowEngine` is fully built (`session/configured_workflow_engine.go`) but **not
+  wired into production** — `server/dependencies.go:606` still constructs the hardcoded
+  `NewDefaultWorkflowEngine()` as the live engine; the configured one is only used to back
+  Stage/Transition/Gate CRUD RPCs' cache invalidation. Also a documented deferral
+  (`requirements.md:236-238`, ADR-013 Phase 2), not new.
+- `AutonomousDriver`'s system prompt (`session/autonomous_driver.go:639`) is still a fixed
+  package-level const, unaffected by `PipelineMode`. Documented deferral
+  (`requirements.md:241-244`, "follow-up project once PipelineEngine exists").
+- **Now confirmed solved** (no longer a gap, contra the 07-14 framing): `WriteSlashCommands`
+  does vary per `PipelineMode` now; `maxAutoReworkIterations`/`maxConcurrentBacklogWorkItems` are
+  operator-tunable via `config.Config` (still global, not per-item, by explicit scope decision in
+  `requirements.md:247-250`).
+
+### Recommended routing (Phase 5)
+
+Per this doc's own "prefer systemic fixes over instance patches" rule and the standing WIP-limit
+note (cap concurrent backlog work sessions at 2 — live check showed 0 in_progress / 1 review at
+audit time, so headroom exists but should stay conservative): items 1-4 are independent,
+`sdd:fix-bug`-sized, and safe to run in parallel worktree agents; items 5-6 are `sdd:quick`-sized
+UX/policy changes with no data-model change. Bucket 3's gaps are intentionally deferred per
+existing ADRs — re-open only if the user wants to revisit those scope decisions, not as new work.
