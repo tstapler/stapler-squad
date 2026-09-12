@@ -477,7 +477,14 @@ If genuinely ambiguous or no vocabulary tag fits, output {"tags": ["Unclassified
 // uniform "no real tag" signal for every failure mode, and never returns an error to the
 // caller: callers apply the same handling in every case, and cost is always the real spent
 // amount (0 on a hard failure).
-func GenerateSessionTags(ctx context.Context, pool PoolClient, meta classifier.SessionTaggingContext, vocabulary []string) ([]string, float64, error) {
+//
+// The returned degraded bool distinguishes WHY the result is []string{UnclassifiedTag}: true
+// when it was forced by an internal failure (CallBlocking error, unparseable JSON, or the
+// model's response containing zero in-vocabulary tags), false when the model was called
+// successfully and legitimately chose Unclassified itself (or any other in-vocabulary tag).
+// Callers that only care about tags/cost may discard it; SessionTagClassificationPoller uses
+// it to log an accurate "failed_unclassified" vs "applied" outcome — see classifyOne.
+func GenerateSessionTags(ctx context.Context, pool PoolClient, meta classifier.SessionTaggingContext, vocabulary []string) ([]string, float64, bool) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Vocabulary (choose only from these): %s\n\n", strings.Join(vocabulary, ", "))
 	sb.WriteString("<session_metadata>\n")
@@ -492,14 +499,14 @@ func GenerateSessionTags(ctx context.Context, pool PoolClient, meta classifier.S
 	raw, err := pool.CallBlocking(ctx, FeatureKeySessionTagging, sessionTaggingSystemPrompt, sb.String(),
 		CallOptions{Model: "haiku"}, func(usd float64) { cost = usd })
 	if err != nil {
-		return []string{UnclassifiedTag}, cost, nil
+		return []string{UnclassifiedTag}, cost, true
 	}
 
 	var resp struct {
 		Tags []string `json:"tags"`
 	}
 	if jsonErr := json.Unmarshal([]byte(raw), &resp); jsonErr != nil {
-		return []string{UnclassifiedTag}, cost, nil
+		return []string{UnclassifiedTag}, cost, true
 	}
 
 	allowed := make(map[string]bool, len(vocabulary))
@@ -513,7 +520,7 @@ func GenerateSessionTags(ctx context.Context, pool PoolClient, meta classifier.S
 		}
 	}
 	if len(valid) == 0 {
-		return []string{UnclassifiedTag}, cost, nil
+		return []string{UnclassifiedTag}, cost, true
 	}
-	return valid, cost, nil
+	return valid, cost, false
 }

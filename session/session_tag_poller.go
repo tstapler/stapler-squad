@@ -260,20 +260,22 @@ func (p *SessionTagClassificationPoller) dispatchIfChanged(ctx context.Context, 
 	}()
 }
 
-// classifyOne calls GenerateSessionTags for a single instance, applies the result (or
-// UnclassifiedTag on failure) via Instance.ApplyLLMTagResult, and updates the cache entry
-// regardless of success/failure — a failed call must not be retried every tick.
+// classifyOne calls GenerateSessionTags for a single instance, applies the result via
+// Instance.ApplyLLMTagResult, and updates the cache entry regardless of outcome — a degraded
+// call must not be retried every tick. GenerateSessionTags itself never returns an error (see
+// its doc comment); degraded distinguishes a genuine classification (outcome "applied", even
+// when the model legitimately chose Unclassified) from a result forced by an internal failure
+// (outcome "failed_unclassified") — see that function's doc comment for the exact conditions.
 func (p *SessionTagClassificationPoller) classifyOne(ctx context.Context, inst *Instance, meta classifier.SessionTaggingContext, hash string, vocabulary []string) {
 	callCtx, cancel := context.WithTimeout(ctx, p.config.CallTimeout)
 	defer cancel()
 
 	start := time.Now()
-	tags, cost, err := headless.GenerateSessionTags(callCtx, p.pool, meta, vocabulary)
+	tags, cost, degraded := headless.GenerateSessionTags(callCtx, p.pool, meta, vocabulary)
 	latency := time.Since(start)
 	outcome := "applied"
-	if err != nil {
-		log.Warn("session tag classification poller: GenerateSessionTags failed", "session", meta.Name, "err", err)
-		tags = []string{UnclassifiedTag}
+	if degraded {
+		log.Warn("session tag classification poller: GenerateSessionTags degraded to Unclassified", "session", meta.Name)
 		outcome = "failed_unclassified"
 	}
 	log.Info("session tag poller: LLM classification", "session", meta.Name, "outcome", outcome, "tags", tags, "cost_usd", cost, "latency_ms", latency.Milliseconds())

@@ -1,12 +1,17 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
+	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
@@ -175,6 +180,52 @@ func TestSessionTagPoller_should_ApplyUnclassifiedAndUpdateCache_When_LLMCallFai
 	if got := fake.callCount(); got != 1 {
 		t.Fatalf("second tick after failure with no session change: CallBlocking called %d times total, want still 1 (skipped)", got)
 	}
+}
+
+// TestSessionTagPoller_should_LogFailedUnclassifiedOutcome_When_GenerateSessionTagsDegrades is
+// the regression test for the bug fixed alongside this test (commit 55cd5ac24 added this
+// structured logging specifically for classification-outcome visibility, but classifyOne was
+// keying the "failed_unclassified" label off GenerateSessionTags' err return, which that
+// function's doc comment says is never non-nil — every call, successful or not, logged
+// "applied"). GenerateSessionTags' new degraded return value now carries this signal instead,
+// derived from a real internal failure (here: a hard CallBlocking error) rather than a
+// never-populated error.
+func TestSessionTagPoller_should_LogFailedUnclassifiedOutcome_When_GenerateSessionTagsDegrades(t *testing.T) {
+	var buf bytes.Buffer
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
+
+	fake := &fakeTagPoolClient{err: errors.New("fake pool client error")}
+	fx := newTagPollerFixture(fake, "Feature")
+	inst := primedInstance("sess-degraded", "feature/x")
+	fx.poller.SetInstances([]*Instance{inst})
+
+	fx.poller.pollOnce()
+
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, `outcome=failed_unclassified`)
+	assert.NotContains(t, logOutput, `outcome=applied`)
+}
+
+// TestSessionTagPoller_should_LogAppliedOutcome_When_ModelLegitimatelyReturnsUnclassified is the
+// companion case: the model itself decided no vocabulary tag fit and returned Unclassified as a
+// genuine, in-vocabulary classification (not a CallBlocking/JSON/filtering failure) — this must
+// still log "applied", not "failed_unclassified".
+func TestSessionTagPoller_should_LogAppliedOutcome_When_ModelLegitimatelyReturnsUnclassified(t *testing.T) {
+	var buf bytes.Buffer
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
+
+	fake := &fakeTagPoolClient{response: `{"tags":["Unclassified"]}`}
+	fx := newTagPollerFixture(fake, "Feature")
+	inst := primedInstance("sess-genuine-unclassified", "feature/x")
+	fx.poller.SetInstances([]*Instance{inst})
+
+	fx.poller.pollOnce()
+
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, `outcome=applied`)
+	assert.NotContains(t, logOutput, `outcome=failed_unclassified`)
 }
 
 // vocabularyFromPrompt extracts the "Vocabulary (choose only from these): ..." line's
