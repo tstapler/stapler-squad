@@ -60,13 +60,20 @@ export interface WorkspacePeersPanelProps {
 // `backlog-panel-${sessionId}` localStorage key.
 const dismissedKey = (sessionId: string) => `workspace-peers-dismissed-${sessionId}`;
 
+// effectiveSessionPath mirrors Instance.GetEffectiveRootDir() (session/instance_worktree.go):
+// session.path is the original repo path and never updates for worktree sessions, so it
+// alone can't distinguish two sessions in separate worktrees of the same repo.
+function effectiveSessionPath(s: Session): string {
+  return s.gitWorktree?.worktreePath || s.path;
+}
+
 /**
  * WorkspacePeersPanel lists other active sessions in this exact working directory
- * (session.path), live-updated via the existing WatchSessions Redux store — no extra
- * polling or RPC needed. Scoped to the literal path, not workspaceKey (which also
- * matches sibling worktrees/branches of the same repo) — a peer editing a different
- * worktree isn't touching this directory's files. Renders nothing when the session has
- * no path, no peers, or the user dismissed it for this session.
+ * (effectiveSessionPath), live-updated via the existing WatchSessions Redux store — no
+ * extra polling or RPC needed. Scoped to the literal effective directory, not workspaceKey
+ * (which also matches sibling worktrees/branches of the same repo) — a peer editing a
+ * different worktree isn't touching this directory's files. Renders nothing when the
+ * session has no path, no peers, or the user dismissed it for this session.
  */
 export function WorkspacePeersPanel({ session, now }: WorkspacePeersPanelProps) {
   const allSessions = useAppSelector(selectAllSessions);
@@ -76,12 +83,13 @@ export function WorkspacePeersPanel({ session, now }: WorkspacePeersPanelProps) 
     return localStorage.getItem(dismissedKey(session.id)) === "1";
   });
 
+  const selfEffectivePath = effectiveSessionPath(session);
   const peers = useMemo(() => {
     if (!session.path) return [];
     return allSessions.filter(
-      (s) => s.id !== session.id && s.path === session.path
+      (s) => s.id !== session.id && effectiveSessionPath(s) === selfEffectivePath
     );
-  }, [allSessions, session.path, session.id]);
+  }, [allSessions, session.path, session.id, selfEffectivePath]);
 
   if (!session.path || peers.length === 0 || dismissed) return null;
 
