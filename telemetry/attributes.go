@@ -8,36 +8,22 @@ import (
 // Semantic attribute keys for stapler-squad operations
 const (
 	// Session attributes
-	AttrSessionID       = "session.id"
-	AttrSessionTitle    = "session.title"
-	AttrSessionStatus   = "session.status"
 	AttrSessionProgram  = "session.program"
 	AttrSessionCategory = "session.category"
 
 	// History attributes
 	AttrHistoryProject      = "history.project"
 	AttrHistorySessionID    = "history.session_id"
-	AttrHistoryEntryCount   = "history.entry_count"
 	AttrHistoryMessageCount = "history.message_count"
 
 	// Search attributes
-	AttrSearchQuery       = "search.query"
-	AttrSearchResultCount = "search.result_count"
-	AttrSearchDurationMs  = "search.duration_ms"
-	AttrSearchIndexSize   = "search.index_size"
+	AttrSearchQuery     = "search.query"
+	AttrSearchIndexSize = "search.index_size"
 
 	// Storage attributes
-	AttrStorageOperation  = "storage.operation"
-	AttrStorageCount      = "storage.count"
 	AttrStorageDurationMs = "storage.duration_ms"
 
-	// Database attributes (SQLite)
-	AttrDBOperation = "db.operation"
-	AttrDBTable     = "db.table"
-	AttrDBRowCount  = "db.row_count"
-
 	// Review queue attributes
-	AttrReviewQueueSize     = "review_queue.size"
 	AttrReviewQueuePriority = "review_queue.priority"
 	AttrReviewQueueReason   = "review_queue.reason"
 

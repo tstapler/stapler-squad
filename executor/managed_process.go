@@ -25,10 +25,7 @@ type processConfig struct {
 	stdin       io.Reader
 	stdout      io.Writer // when set, used directly as cmd.Stdout; no reader exposed
 	stderr      io.Writer // when set, used directly as cmd.Stderr; no reader exposed
-	redactArgs  []int
-	rlimits     RlimitConfig
 	gracePeriod time.Duration
-	noProcGroup bool
 	noctty      bool // add Noctty: true to SysProcAttr (safe default for background processes)
 	setsid      bool // add Setsid: true (strongest isolation, implies no controlling terminal)
 }
@@ -130,8 +127,8 @@ type ManagedProcess struct {
 //
 // The process is started with Setpgid: true and Noctty: true by default,
 // making it safe for background use. Callers that need a controlling terminal
-// should use WithoutProcessGroupMP() and avoid this API (use raw exec.Cmd +
-// pty.Start() instead, with //nolint:norawexec justification).
+// should avoid this API and use raw exec.Cmd + pty.Start() instead (see
+// session/tmux/pty.go), with a //nolint:norawexec justification.
 //
 // ctx governs the audit hook extraction. The process is not killed when ctx
 // is done — use Stop() or WithNewSession() + a context that owns the lifetime.
@@ -172,12 +169,6 @@ func StartProcess(ctx context.Context, name string, args []string, opts ...Proce
 			return nil
 		}
 		return killProcessGroup(cmd.Process.Pid, syscall.SIGTERM)
-	}
-
-	// Apply resource limits (Linux: save/restore setrlimit; others: no-op).
-	if err := applyRlimits(cmd, cfg.rlimits); err != nil {
-		cancel()
-		return nil, err
 	}
 
 	// Wire I/O.
@@ -276,14 +267,14 @@ func StartProcess(ctx context.Context, name string, args []string, opts ...Proce
 
 	// Launch the reaper goroutine. This is the ONLY goroutine that calls
 	// cmd.Wait(); it is created exactly once per ManagedProcess.
-	go p.reap(cfg.redactArgs)
+	go p.reap()
 
 	return p, nil
 }
 
 // reap calls cmd.Wait() and handles the result. It is the sole owner of
 // cmd.Wait() and runs as a goroutine launched by StartProcess.
-func (p *ManagedProcess) reap(redactIndices []int) {
+func (p *ManagedProcess) reap() {
 	err := p.cmd.Wait()
 
 	// exec.ErrWaitDelay means WaitDelay fired before pipes drained: the process
@@ -321,7 +312,7 @@ func (p *ManagedProcess) reap(redactIndices []int) {
 	}
 
 	emitAudit(p.auditCtx, AuditEntry{
-		Command:      redactArgs(append([]string{p.name}, p.args...), redactIndices),
+		Command:      append([]string{p.name}, p.args...),
 		WorkDir:      p.cmd.Dir,
 		StartTime:    p.startAt,
 		Duration:     time.Since(p.startAt),

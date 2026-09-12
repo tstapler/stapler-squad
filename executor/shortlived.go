@@ -14,8 +14,8 @@ import (
 )
 
 // config holds all optional parameters for a ShortLivedCmd invocation.
-// The zero value is valid: no timeout override, inherited environment, no
-// rlimits, no process group override, no stdin.
+// The zero value is valid: no timeout override, inherited environment,
+// no process group override, no stdin.
 type config struct {
 	// timeout, if non-zero, overrides the context deadline when shorter.
 	timeout time.Duration
@@ -37,9 +37,6 @@ type config struct {
 	// redactIndices lists argv positions to replace with "<redacted>" in
 	// AuditEntry.Command. Secrets (tokens, passwords) should be redacted.
 	redactIndices []int
-
-	// rlimits configures per-subprocess resource limits (Linux only).
-	rlimits RlimitConfig
 
 	// noProcGroup disables Setpgid. Use for processes that need to share
 	// the parent's process group (e.g. terminal-owning processes, PTY sessions).
@@ -158,18 +155,6 @@ func (c *ShortLivedCmd) build() (ctx context.Context, cancel context.CancelFunc,
 	}
 	// If neither replaceEnv nor extraEnv is set, cmd.Env remains nil,
 	// which causes exec.Cmd to inherit the parent's environment.
-
-	// Resource limits (Linux: save/restore via setrlimit; others: no-op).
-	// Note: applyRlimits must be called after the SysProcAttr is set by
-	// CommandContextPG (which sets Setpgid) so it can merge Pdeathsig in.
-	if err := applyRlimits(cmd, c.cfg.rlimits); err != nil {
-		// applyRlimits failures are non-fatal on Darwin (no-op). On Linux,
-		// if setrlimit fails (e.g. raising above hard limit), we still run
-		// the command — the rlimit simply won't be applied.
-		// In a future iteration, this could be surfaced as a warning via
-		// the audit log.
-		_ = err
-	}
 
 	return ctx, cancel, cmd
 }
