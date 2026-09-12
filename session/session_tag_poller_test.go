@@ -96,6 +96,22 @@ func renameAndResnapshot(inst *Instance, title, branch string) {
 	inst.mu.Unlock()
 }
 
+// TestSessionTagPoller_should_NotRaceOrPanic_When_StartStopCalledRepeatedly is a regression test
+// for a data race between pollLoop's read of p.ctx and Stop()'s write to it (p.ctx/p.cancel are
+// reset to nil under p.mu to make the poller restartable). Both Start and pollLoop now pass the
+// goroutine's context down as a local value rather than re-reading the mutable p.ctx field, so
+// this stays race- and panic-free under -race regardless of Start/Stop timing.
+func TestSessionTagPoller_should_NotRaceOrPanic_When_StartStopCalledRepeatedly(t *testing.T) {
+	t.Parallel()
+	fake := &fakeTagPoolClient{response: `{"tags":["Feature"]}`}
+	fx := newTagPollerFixture(fake, "Feature")
+
+	for range 100 {
+		fx.poller.Start(context.Background())
+		fx.poller.Stop()
+	}
+}
+
 func TestSessionTagPoller_should_SkipLLMCall_When_ContentHashUnchanged(t *testing.T) {
 	t.Parallel()
 	fake := &fakeTagPoolClient{response: `{"tags":["Feature"]}`}

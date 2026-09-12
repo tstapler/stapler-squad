@@ -117,10 +117,13 @@ func (p *SessionTagClassificationPoller) Start(ctx context.Context) {
 		return
 	}
 	p.ctx, p.cancel = context.WithCancel(ctx)
+	loopCtx := p.ctx
 	p.wg.Add(1)
 	p.mu.Unlock()
 
-	go p.pollLoop()
+	// loopCtx is passed directly rather than having pollLoop re-read p.ctx itself: a re-read
+	// would still race a fast Stop() that nils p.ctx out before this goroutine gets scheduled.
+	go p.pollLoop(loopCtx)
 	log.Info("session tag classification poller started", "interval", p.config.PollInterval, "concurrency", p.config.ConcurrentCalls)
 }
 
@@ -136,8 +139,13 @@ func (p *SessionTagClassificationPoller) Stop() {
 	log.Info("session tag classification poller stopped")
 }
 
-// pollLoop runs the main ticker loop.
-func (p *SessionTagClassificationPoller) pollLoop() {
+// pollLoop runs the main ticker loop. ctx is passed in by Start rather than read from p.ctx:
+// Stop() resets p.ctx to nil under p.mu to make the poller restartable, so any read of p.ctx from
+// this goroutine — even a lock-guarded one — races against a Stop() that runs before this
+// goroutine gets scheduled, or against later ticks after Stop() runs. Each Start() call spawns a
+// fresh pollLoop goroutine with its own ctx parameter, so it stays valid for the lifetime of this
+// goroutine even after a later Stop() nils out p.ctx.
+func (p *SessionTagClassificationPoller) pollLoop(ctx context.Context) {
 	defer p.wg.Done()
 	ticker := time.NewTicker(p.config.PollInterval)
 	defer ticker.Stop()
@@ -146,7 +154,7 @@ func (p *SessionTagClassificationPoller) pollLoop() {
 
 	for {
 		select {
-		case <-p.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			p.pollOnce()
