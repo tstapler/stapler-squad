@@ -20,6 +20,10 @@ const (
 	FeatureKeyAutonomousFix      FeatureKey = "autonomous_fix"
 	FeatureKeyAutonomousApproval FeatureKey = "autonomous_approval"
 	FeatureKeyTriage             FeatureKey = "triage"
+	// FeatureKeyBacklogIntentParse: excluded from AllowedFeatureKeys, same
+	// rationale as FeatureKeyTriage — called directly from BacklogService,
+	// not exposed via the public MCP headless-call gate.
+	FeatureKeyBacklogIntentParse FeatureKey = "backlog-intent-parse"
 	// FeatureKeySessionCompletionSummary is distinct from the existing unused
 	// FeatureKeySummarize so per-feature session rotation doesn't mix narrative
 	// styles between the two features.

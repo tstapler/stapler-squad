@@ -272,6 +272,10 @@ type Instance struct {
 	GitHubOwner string `json:"github_owner,omitempty"`
 	// GitHubRepo is the repository name
 	GitHubRepo string `json:"github_repo,omitempty"`
+	// GitHubHost is the GitHub Enterprise host that owns GitHubOwner/GitHubRepo,
+	// or "" for github.com. Needed to poll/link the right PR for GHE sessions —
+	// see session/repo_path.go's parseGitHubRemoteURL and github.RepoRef.Host().
+	GitHubHost string `json:"github_host,omitempty"`
 	// GitHubSourceRef is the original URL or reference used to create this session
 	GitHubSourceRef string `json:"github_source_ref,omitempty"`
 	// ClonedRepoPath is the path where we cloned the repo (if cloned)
@@ -837,6 +841,7 @@ type InstanceOptions struct {
 	GitHubPRURL     string // Full URL to the PR
 	GitHubOwner     string // Repository owner
 	GitHubRepo      string // Repository name
+	GitHubHost      string // GitHub Enterprise host owning owner/repo, or "" for github.com
 	GitHubSourceRef string // Original URL/reference used to create session
 	ClonedRepoPath  string // Path where repo was cloned (if cloned)
 
@@ -991,6 +996,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		GitHubPRURL:     opts.GitHubPRURL,
 		GitHubOwner:     opts.GitHubOwner,
 		GitHubRepo:      opts.GitHubRepo,
+		GitHubHost:      opts.GitHubHost,
 		GitHubSourceRef: opts.GitHubSourceRef,
 		ClonedRepoPath:  opts.ClonedRepoPath,
 		// One-shot mode, hidden flag, project, and workflow linkage
@@ -1225,12 +1231,11 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 // (pre-mortem failure mode #4). Falls through to tryExtractConversationUUID's
 // DetectByPath fallback, guarded by conversationClearedAt.
 //
-// Only changes the actual launch command for a genuinely fresh Instance:
-// initTmuxSession() early-returns via HasSession() whenever a TmuxSession object
-// already exists in-process (e.g. after KillSession()), so this recovery is a
-// no-op for in-process restart-churn — confirmed by
-// TestKillSessionThenStart_DoesNotRebuildLaunchCommand; see plan.md Risk Control
-// item 8.
+// No-op whenever the underlying tmux session is still alive (i.pm().IsAlive()):
+// initTmuxSession() reuses it as-is in that case, so there's nothing to embed
+// --resume into yet. Once it's dead -- including in-process restart-churn via
+// KillSession() -- initTmuxSession() rebuilds the launch command, so recovering
+// the UUID here actually matters. See TestKillSessionThenStart_RebuildsLaunchCommand.
 func (i *Instance) recoverConversationBeforeLaunch(firstTimeSetup bool) {
 	if firstTimeSetup || i.pm().IsAlive() || i.HasClaudeSession() {
 		return

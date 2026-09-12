@@ -1,19 +1,6 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
-export const container = style({
-  padding: "20px",
-  maxWidth: "1200px",
-  margin: "0 auto",
-});
-
-export const title = style({
-  marginBottom: "20px",
-  fontSize: "24px",
-  fontWeight: "bold",
-  color: vars.color.textPrimary,
-});
-
 export const content = style({
   display: "flex",
   gap: "20px",
@@ -187,26 +174,6 @@ export const modifiedIndicator = style({
 export const buttonGroup = style({
   display: "flex",
   gap: "10px",
-});
-
-export const textarea = style({
-  width: "100%",
-  height: "600px",
-  fontFamily: "monospace",
-  fontSize: "14px",
-  padding: "10px",
-  backgroundColor: vars.color.inputBackground,
-  border: `1px solid ${vars.color.inputBorder}`,
-  borderRadius: "4px",
-  color: vars.color.inputText,
-  resize: "vertical",
-  transition: "border-color 0.2s",
-  selectors: {
-    "&:focus": {
-      outline: "none",
-      borderColor: vars.color.inputFocusBorder,
-    },
-  },
 });
 
 export const emptyState = style({
@@ -458,11 +425,6 @@ export const securityLabel = style({
 export const statusEnabled = style({
   color: vars.color.success,
   fontWeight: 600,
-  fontSize: "14px",
-});
-
-export const statusDisabled = style({
-  color: vars.color.textMuted,
   fontSize: "14px",
 });
 

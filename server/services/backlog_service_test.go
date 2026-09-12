@@ -929,7 +929,7 @@ func TestBacklogItemToProto_should_IncludePipelineMode_When_ItemHasNonDefaultMod
 		PipelineMode: "quick",
 	}
 
-	p := backlogItemToProto(item, nil)
+	p := backlogItemToProto(item, session.NewDefaultWorkflowEngine(), nil)
 
 	require.NotNil(t, p.PipelineMode)
 	assert.Equal(t, "quick", *p.PipelineMode)
@@ -965,7 +965,7 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 		},
 	}
 
-	p := backlogItemToProto(item, nil)
+	p := backlogItemToProto(item, session.NewDefaultWorkflowEngine(), nil)
 
 	require.Len(t, p.StatusEvents, 2)
 	require.NotNil(t, p.StatusEvents[0].Note)
@@ -985,6 +985,49 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 	assert.Equal(t, "Helper", p.ActivityNotes[0].AuthorSessionTitle)
 	require.NotNil(t, p.ActivityNotes[0].CreatedAt)
 	assert.True(t, p.ActivityNotes[0].CreatedAt.AsTime().Equal(activityCreatedAt))
+}
+
+// TestBacklogItemToProto_should_PopulateAllowedTransitions_When_ItemIsOnCustomStage
+// is the regression test for the CRITICAL wire-up bug: backlogItemToProto used
+// to compute AllowedTransitions from a hardcoded, package-level
+// DefaultWorkflowEngine (protoWorkflowEngine) instead of the caller's real
+// s.engine, so any item sitting on a CUSTOM stage always got an empty
+// AllowedTransitions slice on the wire — silently breaking both the Manual
+// Override dropdown and the gate-checklist feature for exactly the items
+// backlog-custom-workflow-stages exists to support. This wires a real
+// ConfiguredWorkflowEngine with a custom stage/transition as s.engine and
+// asserts GetBacklogItem's response carries the real, non-empty transitions.
+func TestBacklogItemToProto_should_PopulateAllowedTransitions_When_ItemIsOnCustomStage(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	ctx := t.Context()
+	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
+
+	stageRepo := session.NewEntStageConfigRepository(storage.GetEntClient())
+	gateSatisfactionRepo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
+	require.NoError(t, err)
+
+	fromStage, err := stageRepo.CreateStage(ctx, session.StageCreateInput{Slug: "design-review", Name: "Design Review", Enabled: true})
+	require.NoError(t, err)
+	toStage, err := stageRepo.CreateStage(ctx, session.StageCreateInput{Slug: "design-approved", Name: "Design Approved", Enabled: true})
+	require.NoError(t, err)
+	_, err = stageRepo.CreateTransition(ctx, session.TransitionCreateInput{FromStageSlug: fromStage.Slug, ToStageSlug: toStage.Slug, Enabled: true})
+	require.NoError(t, err)
+	require.NoError(t, engine.InvalidateCache(ctx))
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "item on a custom stage",
+		Status: "design-review",
+	})
+	require.NoError(t, err)
+
+	svc := NewBacklogService(storage, nil, nil, engine, nil, nil)
+
+	resp, err := svc.GetBacklogItem(ctx, connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"design-approved"}, resp.Msg.Item.AllowedTransitions,
+		"a custom-stage item must see its real configured transitions, not an empty slice from a hardcoded DefaultWorkflowEngine")
 }
 
 // ─── backlogItemSummaryToProto ─────────────────────────────────────────────────
@@ -1009,16 +1052,61 @@ func TestBacklogItemSummaryToProto_should_SetAllowedTransitions_When_ItemHasAnyS
 
 	for _, status := range statuses {
 		t.Run(string(status), func(t *testing.T) {
+			engine := session.NewDefaultWorkflowEngine()
 			summary := &session.BacklogItemSummary{ID: "item-1", Status: status}
-			summaryProto := backlogItemSummaryToProto(summary, nil)
+			summaryProto := backlogItemSummaryToProto(summary, engine, nil)
 
 			full := &session.BacklogItemData{ID: "item-1", Status: string(status)}
-			fullProto := backlogItemToProto(full, nil)
+			fullProto := backlogItemToProto(full, engine, nil)
 
 			assert.Equal(t, fullProto.AllowedTransitions, summaryProto.AllowedTransitions)
 			assert.NotEmpty(t, summaryProto.AllowedTransitions, "status %q should have outbound transitions", status)
 		})
 	}
+}
+
+// TestBacklogItemSummaryToProto_should_SetPlanGatingFields is the regression
+// test for the board-card "Approve Plan" flip-to-"Trigger Triage" bug:
+// ListBacklogItems (backed by backlogItemSummaryToProto) previously zero-
+// valued SkipPlanning/PlanApproved/PlanArtifactsPath/PlanRejectionReason
+// entirely, unlike GetBacklogItem (backed by backlogItemToProto). The web
+// UI's getAvailableActions (itemActions.ts) derives a ready item's primary
+// card action directly from these fields, so any live-update/resync path
+// that happened to route through the summary conversion (e.g. a second
+// WatchBacklogItems connection's fresh-snapshot phase racing the REST
+// ListBacklogItems fallback poll, both of which share this conversion) could
+// clobber an already-correct item with one that read as "no plan" even
+// though the plan itself was never touched. Same class of gap as
+// AllowedTransitions (#585) — summary and full protos must agree on every
+// field a card action derives from.
+func TestBacklogItemSummaryToProto_should_SetPlanGatingFields(t *testing.T) {
+	summary := &session.BacklogItemSummary{
+		ID:                  "item-1",
+		Status:              session.BacklogStatusReady,
+		SkipPlanning:        true,
+		PlanApproved:        true,
+		PlanArtifactsPath:   "/repo/.stapler-squad/plans/item-1",
+		PlanRejectionReason: "needs more detail",
+	}
+	engine := session.NewDefaultWorkflowEngine()
+	summaryProto := backlogItemSummaryToProto(summary, engine, nil)
+
+	full := &session.BacklogItemData{
+		ID:                  "item-1",
+		Status:              string(session.BacklogStatusReady),
+		SkipPlanning:        true,
+		PlanApproved:        true,
+		PlanArtifactsPath:   "/repo/.stapler-squad/plans/item-1",
+		PlanRejectionReason: "needs more detail",
+	}
+	fullProto := backlogItemToProto(full, engine, nil)
+
+	assert.Equal(t, fullProto.SkipPlanning, summaryProto.SkipPlanning)
+	assert.Equal(t, fullProto.PlanApproved, summaryProto.PlanApproved)
+	assert.Equal(t, fullProto.PlanArtifactsPath, summaryProto.PlanArtifactsPath)
+	assert.Equal(t, fullProto.PlanRejectionReason, summaryProto.PlanRejectionReason)
+	assert.True(t, summaryProto.PlanApproved)
+	assert.NotEmpty(t, summaryProto.PlanArtifactsPath)
 }
 
 // ─── ApprovePlan ──────────────────────────────────────────────────────────────
@@ -3974,6 +4062,45 @@ func TestTriggerTriage_AutoSpawnSessionFalse_LeavesItemAtReadyForManualSpawn(t *
 	}, 20*time.Second, 50*time.Millisecond)
 
 	assert.Empty(t, creator.calls, "no session should be spawned without the opt-in toggle")
+}
+
+// TestCreateBacklogItem_should_SpawnSDDSession_When_PipelineModeSDDAndAutoSpawn is
+// the omnibar-driven-implementation combination guard: an sdd pipeline mode and
+// an auto-spawn-session opt-in are each individually proven elsewhere (see the
+// sibling tests above and TestSpawnSessionFromItem_should_UseModeSpecificInitialPrompt_When_
+// AutoSpawnSessionAndNonDefaultPipelineMode), but nothing previously exercised BOTH
+// together through the actual CreateBacklogItem RPC + TriggerTriage's automatic
+// completion-goroutine spawn path — the exact shape the new ParseBacklogItemIntent
+// review UI's "hand off to SDD" checkbox produces.
+func TestCreateBacklogItem_should_SpawnSDDSession_When_PipelineModeSDDAndAutoSpawn(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+	svc.SetTriageCleanupTimeout(30 * time.Second)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	pipelineMode := session.DefaultSDDPipelineModeSlug
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:            "sdd auto-handoff item",
+		RepoPath:         repoPath,
+		PipelineMode:     &pipelineMode,
+		AutoSpawnSession: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	assert.Equal(t, session.DefaultSDDPipelineModeSlug, *createResp.Msg.Item.PipelineMode)
+
+	wait.RequireEventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), itemID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusInProgress)
+	}, 20*time.Second, 50*time.Millisecond, "auto-handoff must carry the sdd-mode item all the way to in_progress")
+
+	assert.Len(t, creator.calls, 1, "a work session should be auto-spawned for the sdd+auto_spawn_session combination")
 }
 
 // TestTriggerTriage_PersistFailurePublishesNotification verifies the fix for the

@@ -910,16 +910,6 @@ func NewTmuxSessionWithPrefix(name string, program string, prefix string, opts .
 	return s
 }
 
-// NewTmuxSessionWithCleanup creates a new TmuxSession and returns it along with a cleanup function.
-// Usage: session, cleanup := NewTmuxSessionWithCleanup(name, program); defer cleanup()
-func NewTmuxSessionWithCleanup(name string, program string, opts ...TmuxSessionOption) (*TmuxSession, CleanupFunc) {
-	session := NewTmuxSession(name, program, opts...)
-	cleanup := CleanupFunc(func() error {
-		return session.Close()
-	})
-	return session, cleanup
-}
-
 // NewTmuxSessionWithPrefixAndCleanup creates a new TmuxSession with custom prefix and cleanup function.
 // Usage: session, cleanup := NewTmuxSessionWithPrefixAndCleanup(name, program, prefix); defer cleanup()
 func NewTmuxSessionWithPrefixAndCleanup(name string, program string, prefix string, opts ...TmuxSessionOption) (*TmuxSession, CleanupFunc) {
@@ -952,16 +942,6 @@ func NewTmuxSessionWithServerSocket(name string, program string, prefix string, 
 	s := newTmuxSessionWithSocket(name, program, MakePtyFactory(), cbExec, prefix, serverSocket, opts...)
 	s.registryKey = key
 	return s
-}
-
-// NewTmuxSessionWithServerSocketAndCleanup creates a TmuxSession with server isolation and cleanup.
-// Usage: session, cleanup := NewTmuxSessionWithServerSocketAndCleanup(name, program, prefix, socket); defer cleanup()
-func NewTmuxSessionWithServerSocketAndCleanup(name string, program string, prefix string, serverSocket string, opts ...TmuxSessionOption) (*TmuxSession, CleanupFunc) {
-	session := NewTmuxSessionWithServerSocket(name, program, prefix, serverSocket, opts...)
-	cleanup := CleanupFunc(func() error {
-		return session.Close()
-	})
-	return session, cleanup
 }
 
 // NewTmuxSessionWithDeps creates a new TmuxSession with provided dependencies for testing.

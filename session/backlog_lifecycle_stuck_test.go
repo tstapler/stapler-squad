@@ -1,8 +1,10 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	stdlog "log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -727,6 +730,93 @@ func TestReconcileUnprocessedReviewVerdicts_should_invokeAutoReopener_When_Newes
 	}
 }
 
+// TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRepeatedSweepTicksWhileBouncingBlocked
+// is a follow-up BUG-046 regression test: BUG-046 fixed handleReviewSessionExited's
+// own notify+log for a no-verdict exit to check RemediationBlocked(bouncing) first,
+// but this sweep's OWN detection log — fired here, before
+// handleReviewSessionExited is even reached — was never covered by that guard.
+// Live-confirmed 2026-09-11: item 09e91e3e-e13d-4166-a5f2-447242447f77 / session
+// 7ce35db9 logged "exited without ever writing a verdict" once a minute for 20+
+// minutes straight (Story: same dead SessionUUID re-matched every ~60s tick
+// because nothing transitions the item out of "review" while the "bouncing"
+// gate is blocked/parked). Reproduces the realistic timeline: tick 1 fires
+// before any "bouncing" row exists (a genuinely fresh detection — must log),
+// then a "bouncing" row opens mid-backoff between ticks (mirroring
+// reconcileBouncingItems tripping independently, the same live DB shape
+// TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSweepTicks
+// seeds), then tick 2 reprocesses the identical dead SessionUUID with the gate
+// now blocked and must NOT log the detection line a second time.
+func TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRepeatedSweepTicksWhileBouncingBlocked(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// FindReviewItemsWithUnprocessedVerdict's item-level filter requires SOME
+	// review-role session on the item to have a verdict — newStuckReviewTestItem
+	// (older, dead, FAIL-verdicted review session) satisfies that, mirroring
+	// TestReconcileUnprocessedReviewVerdicts_should_invokeAutoReopener_When_NewestReviewSessionHasNoVerdictButIsDead's
+	// identical fixture shape. A newer, dead, verdict-less review session on top
+	// of it is what actually exercises this test's target: the "latest" the
+	// sweep inspects has no verdict of its own.
+	item := newStuckReviewTestItem(t, storage, ReviewVerdictFail, true, false)
+
+	newerReviewUUID := "headless-review-" + uuid.New().String()
+	_, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: newerReviewUUID,
+		SessionRole: SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // everything dead
+	reopener := newFakeAutoReopenSpawner()
+	listener.SetAutoReopener(reopener)
+	er := storage.repo
+
+	const detectionMsg = "exited without ever writing a verdict"
+
+	var buf bytes.Buffer
+	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
+	t.Cleanup(func() { tslog.SetWarningLogForTest(orig) })
+
+	// Sweep tick 1: no "bouncing" row exists yet, so RemediationBlocked reports
+	// false (ungated default) — a genuinely fresh detection, must log and reach
+	// the auto-reopener (which is itself ungated for the same reason).
+	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+	select {
+	case <-reopener.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for AutoReopenAfterFailedReview on tick 1 (ungated — no bouncing row yet)")
+	}
+	assert.Equal(t, 1, strings.Count(buf.String(), detectionMsg),
+		"tick 1 is a fresh detection and must log the WARNING once")
+
+	// Between ticks: a "bouncing" stuck row opens mid-backoff — mirrors
+	// reconcileBouncingItems tripping its own bounceThreshold independently.
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusReview, "bounced previously")
+	require.NoError(t, err)
+	future := time.Now().Add(2 * time.Hour)
+	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, 1, &future)
+	require.NoError(t, err)
+
+	// Sweep tick 2: the item never left "review" (nothing transitioned it), so
+	// the SAME dead SessionUUID is reprocessed. The bouncing gate is now
+	// mid-backoff, so the reopen correctly no-ops, and the detection log must
+	// not fire a second time either.
+	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+	select {
+	case gotItemID := <-reopener.called:
+		t.Fatalf("bouncing gate is mid-backoff on tick 2 — AutoReopenAfterFailedReview must not be invoked, got call for item=%s", gotItemID)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	assert.Equal(t, 1, strings.Count(buf.String(), detectionMsg),
+		"must not log the detection WARNING a second time for the same dead session once the bouncing gate is blocking")
+}
+
 // TestReconcileStuckReviewItems_should_resolveAbandonedRow_When_ReviewGateBackInFlightWhileStillReview
 // is the C2 regression test for abandoned_review: when the review gate comes
 // back in flight (a new active session appears) while the item is still
@@ -788,6 +878,10 @@ func TestReconcileStaleWorkSessions_should_writeDurableStaleWorkRow_When_ActiveS
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonStaleWork, open[0].Reason)
 	assert.Equal(t, []string{"Work session may be stuck"}, notifier.titles())
+	// Push-gate classification table: neither urgent nor important — a routine
+	// self-monitoring poll, not yet a confirmed dead end.
+	assert.False(t, notifier.calls[0].Urgent, "Work session may be stuck must not be urgent")
+	assert.False(t, notifier.calls[0].Important, "Work session may be stuck must not be important")
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcileStaleWorkSessions(ctx, er)
@@ -1326,6 +1420,9 @@ func TestReconcileOrphanedTriageItems_should_writeDurableRowNotifyOnce_When_Tria
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
 	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+	// Push-gate classification table: neither urgent nor important.
+	assert.False(t, notifier.calls[0].Urgent, "Triage may be stuck must not be urgent")
+	assert.False(t, notifier.calls[0].Important, "Triage may be stuck must not be important")
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -4985,6 +5082,9 @@ func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillO
 
 	require.Len(t, notifier.calls, 1)
 	assert.Equal(t, "Multiple stuck reasons open", notifier.calls[0].Title)
+	// Push-gate classification table: urgent and important.
+	assert.True(t, notifier.calls[0].Urgent, "Multiple stuck reasons open must be urgent")
+	assert.True(t, notifier.calls[0].Important, "Multiple stuck reasons open must be important")
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)

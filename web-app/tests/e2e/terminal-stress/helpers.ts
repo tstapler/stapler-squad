@@ -221,13 +221,6 @@ export function assertNoMemoryLeak(metrics: StressTestMetrics, maxGrowthBytesPer
 }
 
 /**
- * Assert minimum frame count achieved
- */
-export function assertFrameCount(metrics: StressTestMetrics, minFrames: number): void {
-  expect(metrics.framesRendered).toBeGreaterThanOrEqual(minFrames);
-}
-
-/**
  * Get memory snapshots at intervals (for Chrome DevTools Protocol)
  */
 export async function collectMemorySnapshots(

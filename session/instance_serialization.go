@@ -126,6 +126,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		GitHubPRURL:     snap.GitHub.GitHubPRURL,
 		GitHubOwner:     snap.GitHub.GitHubOwner,
 		GitHubRepo:      snap.GitHub.GitHubRepo,
+		GitHubHost:      snap.GitHub.GitHubHost,
 		GitHubSourceRef: snap.GitHub.GitHubSourceRef,
 		ClonedRepoPath:  snap.GitHub.ClonedRepoPath,
 		// GitHub integration fields
@@ -304,6 +305,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		GitHubPRURL:     data.GitHubPRURL,
 		GitHubOwner:     data.GitHubOwner,
 		GitHubRepo:      data.GitHubRepo,
+		GitHubHost:      data.GitHubHost,
 		GitHubSourceRef: data.GitHubSourceRef,
 		ClonedRepoPath:  data.ClonedRepoPath,
 		GitHubIsFork:    data.GitHubIsFork,
@@ -567,7 +569,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// restore as a fresh launch. Without this, HasSession() is false on this
 		// freshly-constructed Instance regardless of whether the real tmux session
 		// is alive, so every LoadInstances() call (health checks, MCP tool handlers,
-		// etc.) logs a spurious "creating tmux session" and re-runs launch bookkeeping
+		// etc.) logs a spurious "creating session" and re-runs launch bookkeeping
 		// for every Active session, even ones that were never actually down.
 		tmuxPrefix := instance.TmuxPrefix
 		if tmuxPrefix == "" {

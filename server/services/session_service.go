@@ -572,7 +572,7 @@ func publishClaudeSettingsNotification(eventBus *events.EventBus, title, message
 	eventBus.Publish(events.NewNotificationEvent(
 		"", "System", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		derivePriority(false, false), // urgent, important — informational config-reload notice
 		title, message,
 		map[string]string{"type": "claude_settings_reload", "origin": origin},
 	))
@@ -2642,6 +2642,7 @@ func (s *SessionService) CreateSession(
 	if gitHubRef != nil {
 		instanceOpts.GitHubOwner = gitHubRef.Owner
 		instanceOpts.GitHubRepo = gitHubRef.Repo
+		instanceOpts.GitHubHost = gitHubRef.Host
 		instanceOpts.GitHubSourceRef = req.Msg.Path
 		instanceOpts.ClonedRepoPath = clonedRepoPath
 		if gitHubRef.PRNumber > 0 {
@@ -3336,8 +3337,8 @@ func (s *SessionService) notifySteerSent(instance *session.Instance, steerMessag
 	log.Info("[UpdateSession] steering message sent", "session", instance.Title)
 	s.eventBus.Publish(events.NewNotificationEvent(
 		instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
-		int32(10), // NotificationType_INFO
-		int32(2),  // NotificationPriority_MEDIUM
+		int32(10),                    // NotificationType_INFO
+		derivePriority(false, false), // urgent, important — confirms a user-initiated action, no decision needed
 		"Steering input sent",
 		fmt.Sprintf("%s: %s", instance.Title, steerMessage),
 		nil,
@@ -5495,7 +5496,7 @@ func (s *SessionService) onColdRestoreLostHistory(inst *session.Instance) {
 	s.eventBus.Publish(events.NewNotificationEvent(
 		inst.UUID, inst.Title, notifID,
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		derivePriority(false, true), // urgent, important — real context loss, but not a drop-everything alert
 		fmt.Sprintf("Session %q started fresh — previous conversation could not be resumed", inst.Title),
 		"The session's tmux pane restarted and the previous conversation history could not be found on disk. Earlier context is not available.",
 		events.SessionScopedMetadata(nil, linkedItemID),
@@ -5611,8 +5612,8 @@ func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID s
 		notifID := fmt.Sprintf("rl-detect-%s", sessionID)
 		s.eventBus.Publish(events.NewNotificationEvent(
 			sessionID, inst.Title, notifID,
-			int32(8), // NotificationType_WARNING
-			int32(3), // NotificationPriority_HIGH
+			int32(8),                   // NotificationType_WARNING
+			derivePriority(true, true), // urgent, important — the session just stopped making progress right now
 			title,
 			fmt.Sprintf("Session hit the usage limit%s.", resetMsg),
 			events.SessionScopedMetadata(nil, linkedItemID),
@@ -5647,13 +5648,17 @@ func (s *SessionService) onRateLimitRecovery(inst *session.Instance, sessionID s
 			message = fmt.Sprintf("Auto-resume failed: %s", errMsg)
 		}
 		notifType := int32(10) // NotificationType_INFO
+		// success: good-news recovery, informational. failure: auto-resume didn't
+		// work, a genuine failure needing attention.
+		urgent, important := false, false
 		if !success {
 			notifType = int32(9) // NotificationType_FAILURE
+			urgent, important = true, true
 		}
 		s.eventBus.Publish(events.NewNotificationEvent(
 			sessionID, inst.Title, notifID,
 			notifType,
-			int32(2), // NotificationPriority_MEDIUM
+			derivePriority(urgent, important),
 			title, message,
 			events.SessionScopedMetadata(nil, linkedItemID),
 		))
@@ -5864,6 +5869,15 @@ func (s *SessionService) RunWorkflow(ctx context.Context, req *connect.Request[s
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
 	}
 	return s.workflowSvc.RunWorkflow(ctx, req)
+}
+
+// +api: workflow:watch
+// WatchWorkflows delegates to WorkflowService.
+func (s *SessionService) WatchWorkflows(ctx context.Context, req *connect.Request[sessionv1.WatchWorkflowsRequest], stream *connect.ServerStream[sessionv1.WorkflowEvent]) error {
+	if s.workflowSvc == nil {
+		return connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
+	}
+	return s.workflowSvc.WatchWorkflows(ctx, req, stream)
 }
 
 // +api: workflow:list-trigger-fire-events

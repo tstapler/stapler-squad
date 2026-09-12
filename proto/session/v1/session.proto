@@ -386,14 +386,14 @@ service SessionService {
   rpc SetStreamHubSessionOverride(SetStreamHubSessionOverrideRequest) returns (StreamHubRolloutStatus) {}
 
   // SetStreamHubGlobalOverride sets or clears a live, config.json-backed
-  // override of the global stream-hub default, taking effect immediately
-  // for every session connection resolved after this call — no process
-  // restart required. Forcing it on still goes through the same rollback
-  // rehearsal gate as the env var path (ResolveGlobalStreamHubDefault);
-  // clearing it (force_hub unset) reverts to the STAPLER_SQUAD_USE_STREAM_HUB
-  // env var default. Like all stream-hub resolution, this can only affect
-  // sessions whose ownership lock hasn't resolved yet — an already-connected
-  // session's resolution is cached for its lifetime and cannot be moved.
+  // override of the global stream-hub default (the "stream_hub" feature
+  // flag), taking effect immediately for every session connection resolved
+  // after this call — no process restart required, and no rollback-rehearsal
+  // gate on either direction (config.EffectiveStreamHubEnabled). Clearing it
+  // (force_hub unset) reverts to that flag's on-by-default resolution. Like
+  // all stream-hub resolution, this can only affect sessions whose ownership
+  // lock hasn't resolved yet — an already-connected session's resolution is
+  // cached for its lifetime and cannot be moved.
   rpc SetStreamHubGlobalOverride(SetStreamHubGlobalOverrideRequest) returns (StreamHubRolloutStatus) {}
 
   // ListWorktrees returns the git worktrees for a given repository path.
@@ -519,6 +519,13 @@ service SessionService {
 
   // RunWorkflow immediately fires a workflow (outside of cron schedule).
   rpc RunWorkflow(RunWorkflowRequest) returns (RunWorkflowResponse) {}
+
+  // WatchWorkflows streams real-time workflow definition events
+  // (created/updated/deleted/run). Server-streaming RPC so every open
+  // Workflows panel reflects changes from any client (MCP tool, another
+  // tab, a cron fire) without a manual refresh -- mirrors WatchBacklogItems'
+  // snapshot-then-live-fanout shape.
+  rpc WatchWorkflows(WatchWorkflowsRequest) returns (stream WorkflowEvent) {}
 
   // ListTriggerFireEvents returns the trigger-fire audit trail (fired/no-match/
   // rejected) for a workflow, newest first. Query-only — shipped in Phase 1 ahead of
@@ -3341,6 +3348,73 @@ message ListSlashCommandsResponse {
 message RunWorkflowResponse {
   string session_id = 1;
 }
+
+message WatchWorkflowsRequest {
+  // Optional: if non-zero, replay buffered events with seq > after_seq
+  // before going live, instead of sending a fresh initial snapshot. Pass
+  // the last seq received before disconnecting. Mirrors
+  // WatchSessionsRequest.after_seq / WatchBacklogItemsRequest.after_seq.
+  uint64 after_seq = 1;
+}
+
+// WorkflowEvent represents a real-time change to a saved workflow
+// definition. Used by the WatchWorkflows streaming RPC.
+message WorkflowEvent {
+  google.protobuf.Timestamp timestamp = 1;
+
+  oneof event {
+    WorkflowCreatedEvent workflow_created = 2;
+    WorkflowUpdatedEvent workflow_updated = 3;
+    WorkflowDeletedEvent workflow_deleted = 4;
+    WorkflowRunEvent workflow_run = 5;
+    // Synthetic marker (no corresponding bus event) sent exactly once, at
+    // the end of WatchWorkflows' initial phase (fresh snapshot or after_seq
+    // replay), but ONLY when that phase sent zero other events -- e.g. no
+    // workflows saved yet. Without it, a zero-workflow connection produces
+    // zero bytes on the wire and the client's `for await` loop never
+    // resolves past its first iteration -- see
+    // BacklogItemEvent.snapshot_complete's identical doc comment.
+    WorkflowSnapshotCompleteEvent snapshot_complete = 6;
+  }
+
+  // Monotonically increasing sequence number assigned by the server
+  // EventBus, mirroring SessionEvent.seq/BacklogItemEvent.seq. Zero means
+  // "no sequence information" -- used for the synthetic initial-snapshot
+  // events, which don't correspond to a single published bus event.
+  uint64 seq = 7;
+}
+
+// WorkflowCreatedEvent is emitted when a new workflow is saved.
+message WorkflowCreatedEvent {
+  WorkflowProto workflow = 1;
+  // True when sent as part of WatchWorkflows' initial snapshot rather than
+  // a live creation. The frontend should not flash/notify for these.
+  bool is_snapshot = 2;
+}
+
+// WorkflowUpdatedEvent is emitted when an existing workflow is modified.
+message WorkflowUpdatedEvent {
+  WorkflowProto workflow = 1;
+  bool is_snapshot = 2;
+}
+
+// WorkflowDeletedEvent is emitted when a workflow is permanently removed.
+message WorkflowDeletedEvent {
+  string id = 1;
+}
+
+// WorkflowRunEvent is emitted when RunWorkflow fires a workflow manually
+// (including via the MCP run_workflow tool) -- distinct from a
+// cron-triggered fire, which does not go through the RunWorkflow RPC and is
+// not broadcast here.
+message WorkflowRunEvent {
+  string workflow_id = 1;
+  string session_id = 2;
+}
+
+// WorkflowSnapshotCompleteEvent carries no data -- see
+// WorkflowEvent.snapshot_complete's doc comment.
+message WorkflowSnapshotCompleteEvent {}
 
 // TriggerFireEventProto is the wire representation of a single trigger evaluation
 // attempt (fired/no-match/rejected) — the durable audit trail behind

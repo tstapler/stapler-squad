@@ -57,31 +57,6 @@ func WithCostSink(sink headless.CostSink) DriverOption {
 	return func(a *AutonomousDriver) { a.costSink = sink }
 }
 
-// WithIdleSettlePollInterval overrides the default 500ms poll interval used
-// while waiting for the idle-settle window (see idleSettleWindow doc comment
-// on the AutonomousDriver struct). Tests use this to shrink real timers
-// instead of waiting them out.
-func WithIdleSettlePollInterval(d time.Duration) DriverOption {
-	return func(a *AutonomousDriver) { a.idleSettlePollInterval = d }
-}
-
-// WithIdleSettleWindow overrides the default 60s idle-settle debounce window.
-func WithIdleSettleWindow(d time.Duration) DriverOption {
-	return func(a *AutonomousDriver) { a.idleSettleWindow = d }
-}
-
-// WithPaneSettlePollInterval overrides the default 150ms poll interval used
-// by waitForPaneSettle.
-func WithPaneSettlePollInterval(d time.Duration) DriverOption {
-	return func(a *AutonomousDriver) { a.paneSettlePollInterval = d }
-}
-
-// WithPaneSettleMaxWait overrides the default 2s max wait used by
-// waitForPaneSettle.
-func WithPaneSettleMaxWait(d time.Duration) DriverOption {
-	return func(a *AutonomousDriver) { a.paneSettleMaxWait = d }
-}
-
 // panePreviewer is the narrow interface AutonomousDriver needs to read the
 // current pane content. *Instance satisfies it directly via Preview().
 // Extracted (mirroring paneSettleChecker below) so driver-level tests can
@@ -413,20 +388,11 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		// text into the multiline buffer without submitting — identical to steer_session
 		// which uses inst.SendKeys(msg + "\r") directly and is known to work.
 		//
-		// content and "\r" are sent as two SEPARATE writes, not concatenated into one
-		// (BUG-031): a single large write lands its trailing "\r" inside the TUI's
-		// paste-detection window for sufficiently long prompts, folding it into the
-		// pasted block instead of submitting — live-confirmed via a stuck session
-		// showing an unsubmitted "[Pasted text #N +1 lines]" block at the input line.
-		// waitForPaneSettle gives the TUI's paste detector a chance to close before
-		// the submit keystroke arrives as its own write.
-		if sendErr := d.inst.SendKeys(nextMsg); sendErr != nil {
-			log.Warn("AutonomousDriver: SendKeys failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
-			break
-		}
-		waitForPaneSettle(ctx, d.inst, d.paneSettlePollInterval, d.paneSettleMaxWait)
-		if sendErr := d.inst.SendKeys(EnterKeySequence); sendErr != nil {
-			log.Warn("AutonomousDriver: submit keystroke failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
+		// SubmitDriverContent sends content and the submit keystroke as two SEPARATE
+		// writes, not concatenated into one (BUG-031): see its doc comment
+		// (pane_submit.go) for why a single write is unsafe for long content.
+		if sendErr := SubmitDriverContent(ctx, d.inst, nextMsg, d.paneSettlePollInterval, d.paneSettleMaxWait); sendErr != nil {
+			log.Warn("AutonomousDriver: failed to submit turn", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			break
 		}
 		// Re-capture the pane AFTER delivery completes, rather than reusing the

@@ -245,9 +245,3 @@ const shimmerMove = keyframes({
   "100%": { backgroundPosition: "-200% 0" },
 });
 
-export const shimmer = style({
-  height: "100%",
-  background: "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.04) 50%, transparent 100%)",
-  backgroundSize: "200% 100%",
-  animation: `${shimmerMove} 1.5s linear infinite`,
-});

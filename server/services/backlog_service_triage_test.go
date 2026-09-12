@@ -4983,6 +4983,81 @@ func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirect
 	assert.Equal(t, string(session.SessionRoleTriage), sessions[0].Role)
 }
 
+// TestTriggerTriage_should_AutoApprovePlan_When_AutoApprovePlanSet is a
+// regression/coverage test for the opt-in "auto-approve plan" automation
+// setting: an item with AutoApprovePlan=true must have PlanApproved set true
+// automatically once TriggerTriage's plan artifacts exist on disk, mirroring
+// a manual ApprovePlan call and skipping the READY-column "Approve Plan"
+// click — the single most visible manual gate in an otherwise automated
+// pipeline (see AutoSpawnSession/AutoCreatePR for the same opt-in-bool
+// precedent).
+func TestTriggerTriage_should_AutoApprovePlan_When_AutoApprovePlanSet(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:           "auto-approve-plan item",
+		Status:          string(session.BacklogStatusIdea),
+		Priority:        3,
+		RepoPath:        t.TempDir(),
+		AutoApprovePlan: true,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	wait.RequireEventually(t, func() bool {
+		got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return getErr == nil && got.PlanApproved
+	}, 5*time.Second, 50*time.Millisecond, "expected PlanApproved to be set automatically once triage produced plan artifacts")
+
+	got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, getErr)
+	assert.NotNil(t, got.PlanApprovedAt, "PlanApprovedAt must be stamped the same as a manual ApprovePlan call")
+	assert.NotEmpty(t, got.PlanArtifactsPath)
+}
+
+// TestTriggerTriage_should_NotAutoApprovePlan_When_AutoApprovePlanUnset proves
+// the existing manual "Approve Plan" flow is unchanged for every item that
+// hasn't explicitly opted in — the default false must never silently start
+// auto-approving plans.
+func TestTriggerTriage_should_NotAutoApprovePlan_When_AutoApprovePlanUnset(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "manual-approve-plan item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	wait.RequireEventually(t, func() bool {
+		got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return getErr == nil && got.PlanArtifactsPath != ""
+	}, 5*time.Second, 50*time.Millisecond, "expected triage to persist plan artifacts path")
+
+	got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, getErr)
+	assert.False(t, got.PlanApproved, "PlanApproved must stay false without the opt-in AutoApprovePlan flag")
+	assert.Nil(t, got.PlanApprovedAt)
+}
+
 // TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown
 // is a regression test for BUG-065: an item whose triage goroutine was still
 // blocked waiting for a free concurrency slot (all 8 taken) when the server's

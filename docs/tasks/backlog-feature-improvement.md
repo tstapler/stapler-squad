@@ -2434,3 +2434,135 @@ internal logic bug in the review path itself).
 4. `db288a47` — too fresh (1 remediation attempt, detected 2026-09-02) to call a repeat of any
    named shape yet; worth a follow-up check next pass to see whether it joins the "no escalation
    retry" pattern once it accumulates more attempts, rather than routing a fix now.
+
+## Update — 2026-09-11: full 4-phase pass (live state + UI walkthrough + architecture-gap check + review-item root cause)
+
+Live `ListStuckBacklogItems` shows **24 stuck items**: 20× `STUCK_REASON_ORPHANED_TRIAGE` (all
+`idea`, remediationAttempts=5, fully parked) — 12 are the exact same items from the 09-03 entry,
+plus 8 new ones from a different bulk-import batch — and one `review`-stage item (`09e91e3e`)
+carrying 4 simultaneous stuck reasons at once (`BOUNCING`, `REWORK_BLOCKED_STALE`,
+`MULTIPLE_REASONS`, `BOUNCE_CAP_EXHAUSTED`).
+
+### Meta-finding: this doc's "fix failed" calls may sometimes be "fix not deployed yet"
+
+The 09-03 orphaned-triage items are *still* parked today, which looked at first like the 09-08
+`triageCallBudget` fix (30min→3h) failing to hold. It didn't fail — **it was never deployed to
+the item that retried.** `306bbc57`'s last retry ran 2026-09-08T23:01:32Z; the fix (commit
+`db3b89327`) merged 2026-09-08T20:01:30Z (3h earlier, so it *was* in source), but the running
+service's binary wasn't rebuilt until 2026-09-10T17:52 (`make install-service` is manual, no
+auto-deploy) — the last service restart before that retry was 2026-09-08T08:57:27Z, so the retry
+ran on the pre-fix binary. Two more relevant commits (`0d7c2fa9e`, `34717d327`) merged
+2026-09-11 morning are *also* not yet deployed as of this pass. No retry has occurred since the
+09-10 redeploy — all 20 items are on the 7-day cold-retry schedule (`nextRemediationAt`
+2026-09-12 through 09-15), so root cause 1 from the 09-03 entry remains **genuinely unverified**,
+not confirmed-fixed or confirmed-still-broken. **Recommendation**: before declaring a fix
+verified or failed in a future pass, check binary mtime / running-process start time against the
+merge commit time — this doc has likely misjudged fix efficacy before without that check.
+
+### Bucket 1 — reconciliation bugs (new)
+
+1. **`reconcileUnprocessedReviewVerdicts` log-spam** (`session/backlog_lifecycle_review.go:564`) —
+   logs "review session … exited without ever writing a verdict" **unconditionally on every ~60s
+   reconcile tick**, live-confirmed firing every minute for over 20 minutes straight for an
+   already-dead, already-parked session (`7ce35db9`, item `09e91e3e`), almost certainly
+   continuous since the bounce cap exhausted on 2026-09-09. BUG-046's `RemediationBlocked` dedup
+   guard (line 119) covers the downstream notify/log in `handleReviewSessionExited` but not this
+   sweep's own detection log — a leftover, uncovered corner of that fix, not a new shape. Cheap
+   fix: apply the same `RemediationBlocked` check before this log line.
+2. **Board card primary-action flips silently on client-side nav** (`itemActions.ts:260`
+   `getPrimaryCardAction`) — live-reproduced: navigating within `/backlog/board` (not a full
+   reload) causes all READY-column cards to show "Trigger Triage" instead of "Approve Plan"
+   because the live-update payload is missing `planArtifactsPath`; reverts on full navigation.
+   Risk: a user could re-trigger triage on an item that already has a plan awaiting approval.
+3. **Stuck-reason display disagrees across screens and drops 3 of 4 reasons** — `BacklogItemDetail.tsx:219`
+   and `BacklogBoard.tsx:308` each keep exactly one `StuckReason` per item (`.find`/`Map` keyed by
+   itemId). Verified live on `09e91e3e` (4 simultaneous reasons): detail panel shows "🔁 Not
+   converging", the board card shows "🔴 Bounce cap exhausted" — two different reasons, neither
+   view showing all four, no shared priority order between the two dedup sites.
+4. **Edit form shows the wrong category for an item** (`BacklogItemForm.tsx` vs
+   `LifecycleSummary.tsx`, same `item.category` field) — verified live on `09e91e3e`: form shows
+   "Uncategorized" checked, detail panel 2 components over shows "Category: bugfix" from the same
+   field. Since `categoryDefaults.ts` re-applies `skipPlanning`/`skipReviewGate`/`pipelineMode`
+   defaults whenever category is (re)selected in the form, an Edit-and-save on an item hitting
+   this bug could silently reset its configured automation profile — highest-severity of this
+   pass's new findings since it's a silent data-loss risk, not just a display bug.
+
+### Bucket 1 — confirmed correct-by-design (not bugs)
+
+`09e91e3e`'s stuck state itself is working as intended: two review sessions exited without
+calling `submit_review_verdict`, correctly bounced, correctly hit the bounce cap and parked
+needing human "Reopen for Revision" — same shape as `eabee433` (09-03 entry), not new.
+
+### Bucket 2 — manual gates (new)
+
+5. **"Approve Plan" requires an individual human click per ready item, with no auto-approve
+   policy/toggle anywhere** (board + `itemActions.ts`) — `/rules` looks like it could be this but
+   is unrelated (CLI tool-permission allowlisting, not backlog plan approval). This is the single
+   most visible remaining manual gate blocking full autonomy.
+6. **No glanceable read-only summary of an item's automation profile** (pipeline mode / skip-review
+   / skip-planning / auto-spawn / auto-create-PR) on the card or detail header — these toggles do
+   exist in the Edit form (real progress since 07-14), but confirming them today requires opening
+   Edit, and the item-detail "Workflow" accordion meant to show stage history reads "No status
+   history recorded" even for an item with 7 linked sessions across 4 statuses.
+
+### Bucket 3 — core configurability gap: re-confirmed, but already deliberately scoped out
+
+Re-verified against current code, not re-derived from the 07-14 framing:
+
+- **`PipelineMode` is a closed "select one named preset" model** (DB row: slug + 9 whole-content
+  template fields), not an open-ended per-item skill/stage composition — there's still no way to
+  say "run `/sdd:full` then skip review" without authoring a whole new preset. This is the actual
+  remaining core gap, but it's a **deliberate, already-recorded decision**, not an oversight:
+  `project_plans/backlog-configurable-pipeline/decisions/ADR-001-pipeline-mode-db-persisted.md`
+  and `requirements.md:73-131` (Runtime Configurability Decision) explicitly chose whole-mode CRUD
+  over a composable stage list.
+- `ConfiguredWorkflowEngine` is fully built (`session/configured_workflow_engine.go`) but **not
+  wired into production** — `server/dependencies.go:606` still constructs the hardcoded
+  `NewDefaultWorkflowEngine()` as the live engine; the configured one is only used to back
+  Stage/Transition/Gate CRUD RPCs' cache invalidation. Also a documented deferral
+  (`requirements.md:236-238`, ADR-013 Phase 2), not new.
+- `AutonomousDriver`'s system prompt (`session/autonomous_driver.go:639`) is still a fixed
+  package-level const, unaffected by `PipelineMode`. Documented deferral
+  (`requirements.md:241-244`, "follow-up project once PipelineEngine exists").
+- **Now confirmed solved** (no longer a gap, contra the 07-14 framing): `WriteSlashCommands`
+  does vary per `PipelineMode` now; `maxAutoReworkIterations`/`maxConcurrentBacklogWorkItems` are
+  operator-tunable via `config.Config` (still global, not per-item, by explicit scope decision in
+  `requirements.md:247-250`).
+
+### Recommended routing (Phase 5)
+
+Per this doc's own "prefer systemic fixes over instance patches" rule and the standing WIP-limit
+note (cap concurrent backlog work sessions at 2 — live check showed 0 in_progress / 1 review at
+audit time, so headroom exists but should stay conservative): items 1-4 are independent,
+`sdd:fix-bug`-sized, and safe to run in parallel worktree agents; items 5-6 are `sdd:quick`-sized
+UX/policy changes with no data-model change. Bucket 3's gaps are intentionally deferred per
+existing ADRs — re-open only if the user wants to revisit those scope decisions, not as new work.
+
+## Update — 2026-09-11: full skill re-run using Phase 1b (parallel background-agent root-cause) — 1 new bug fixed, 1 pre-existing systemic bug found, 2 confirmed instances of already-documented shapes
+
+`ListStuckBacklogItems` live: 6 unique items, 19 rows. Grouped by suspected root cause and
+dispatched one background agent per cluster (worktree-isolated) per this skill's new Phase 1b.
+
+| Item | Reason(s) | Finding | Status |
+|---|---|---|---|
+| `5eaaa473`, `1828108a` | `BOUNCING` — "no committed changes were found for this session" | Confirmed instance of the already-documented (2026-07-17) "no escalation/different-approach retry once non-converging" shape: `AutoReopenAfterFailedReview` respawns via an identical `SpawnSessionFromItemRequest` every time. Separately, `5eaaa473`'s `LIKELY_FLAKY` flag may be a distinct bug — `DiffHashBetween`/`ComputeCurrentDiffHash` (`session/git/ops.go:714`, `session/storage.go:1327`) collapse to a constant hash when the *latest* work session shipped zero new commits, even if the branch's cumulative diff isn't empty, which can falsely trigger the verdict-flip-flop detector. **Inferred, not verified** (couldn't confirm the actual base/head SHAs without deeper DB access). | Not fixed — (a) is a policy/architecture gap already tracked, (b) needs verification before touching a function guarded by an existing intentional-behavior test |
+| `1828108a`, `61371a09` | `PUSH_FAILED` — `gh pr create`: "none of the git remotes configured for this repository point to a known GitHub host" | Both items target `corp/compute-nop` (internal GHE repo). `gh pr create` (`session/git/worktree_git.go:466`) runs with no `--repo`/`GH_HOST` override and no remote-URL setup anywhere in worktree creation — it relies entirely on `gh`'s local host-matching. Most likely cause (inferred; worktrees were already pruned so the literal remote string couldn't be re-checked): the repo's `origin` uses the `git.netflix.net` alias rather than the canonical `github.netflix.net` that `gh auth status` actually has authenticated. Same "no escalation retry" shape — `attemptPushRemediation` (`session/backlog_lifecycle_pr.go:898`) only handles non-fast-forward rejections and reruns the identical failing command otherwise. | Environment/git-config issue, not a stapler-squad code bug — needs a `url.insteadOf` rewrite or remote fix on the host running these sessions. Recommend hardening `retryPushFailedWithBackoffGate` to detect this specific `gh` error string and escalate to a distinct stuck reason instead of silently re-capping |
+| `61371a09` | (separate from the above) `BOUNCING` verdict `PARTIAL` | **False alarm, corrected 2026-09-11.** Not a regression: `compute-nop` PR #537 (merged to `main` 2026-08-21, commit `345ab5f`) *deliberately* replaced `UpdatePolicyOwner`'s old silent `slog.Warn`-and-continue on `removeIDGroupMembers` failure with `errors.Join`-and-return — the code comment explains why ("a removal failure means the old owner wasn't revoked, so surface it as an error rather than silently reporting success... both add and remove are idempotent"). The stuck branch flagged here is itself a duplicate of #537, 50 commits behind `main`; its own activity log already says so ("STOP — do not ship a new PR for this item... duplicate of #537"). The original PARTIAL verdict compared the stuck branch against a stale pre-#537 baseline instead of current `main`, which is why it looked like a regression. | No fix needed — item should be closed as a duplicate of #537, not reopened for rework |
+| `4657b31e` | `ORPHANED_TRIAGE` (5 attempts, capped) | 13th confirmed instance of the 2026-09-03-documented "sdd pipeline-mode triage can't fit the flat 30-min `triageCallBudget`" shape (inferred — this item predates the original 12-item batch's IDs but goes through the identical `defaultPipelineModeForNewItem` default path). **The fix already exists** as [PR #761](https://github.com/tstapler/stapler-squad/pull/761) ("replace flat call timeout with real progress detection") but is still open/unmerged (`db3b89327` not an ancestor of `main` as of this check). | Not fixed here — merge PR #761, then bulk-reset parked `ORPHANED_TRIAGE` rows including this one |
+| `65de9ebc` | `AUTONOMOUS_STUCK` + `RESPAWN_BLOCKED_ACTIVE` | **New bug, isolated.** The work-role branch of `onAutonomousDriverComplete` (`server/services/autonomous_orchestration_service.go:348-408`) dispatches `AutoRespawnAutonomousWork` without closing the just-failed `ItemSession` first — the exact defect BUG-048 already fixed on the sibling review-role branch, never applied here. `findActiveWorkSession`/`IsSessionLive` then see a live pane (not a live driver) and self-block the respawn. | **Fixed**: added a synchronous `UpdateItemSessionEnded` call before the respawn dispatch (18-line diff, `server/services/autonomous_orchestration_service.go:364-378`). `go build ./server/services/...` and `go test ./server/services/...` both pass. Sitting unmerged in worktree branch `worktree-agent-a9d559a5b8ffc2b0e` — needs review + merge |
+| `bd337ac9` | `BOUNCING`, verdict `UNVERIFIABLE` — "codebase-read capability self-check failed" | **New systemic bug, not item-specific.** `CodebaseReadCapabilitySelfCheck.Ensure()` (`session/headless/capability_check.go:51-63`) runs its smoke test once behind `sync.Once` and caches the boolean **for the life of the process**, shared via the `DefaultCapabilitySelfCheck` singleton across `ReviewGateRunner` and `TriggerReReview`. One transient failure permanently short-circuits every subsequent empty-diff ("codebase-read") review in that process to UNVERIFIABLE, with no retry/reset short of a full restart. Diff-based reviews are unaffected. | Not fixed — deliberately architectural (an existing test, `backlog_service_test.go:3161`, encodes the current caching as intentional Story 2.2.6c behavior). Recommend a bounded retry/expiry instead of permanent caching, reviewed deliberately rather than patched inline |
+
+**Recurring-shape tally after this pass**: "no escalation/different-approach retry" now confirmed
+across 4 independent stuck-reason families (`bouncing`/no-commits, `push_failed`, and the
+2026-07-17/09-03 originals) — this is the single most-repeated unfixed shape in this doc's
+history and the highest-leverage systemic fix available: a shared retry-escalation policy (e.g.
+track prior-failure-reason on the `ItemSession`/backoff-gate row, and refuse to respawn with an
+unchanged prompt after N identical failures) would close all four at once instead of one at a time.
+
+### Recommended routing (Phase 5)
+
+1. Merge PR #761 (already fixes `orphaned_triage`'s root cause), then bulk-reset capped `ORPHANED_TRIAGE` rows.
+2. Review + merge the `65de9ebc` work-role respawn fix (worktree branch `worktree-agent-a9d559a5b8ffc2b0e`).
+3. `sdd:fix-bug` — shared retry-escalation policy across `bouncing`/`push_failed`'s backoff gates (highest leverage, closes the most-repeated shape in this doc at once).
+4. `sdd:fix-bug` — bounded retry/expiry for `CodebaseReadCapabilitySelfCheck` instead of permanent `sync.Once` caching.
+5. Manual: fix `compute-nop`'s git remote/host config on the session-spawning host; manually reopen `61371a09` for its own AC2 regression once push is unblocked.

@@ -66,7 +66,7 @@ func (s *BacklogService) CreateBacklogItemFromChat(
 		}
 
 		return connect.NewResponse(&sessionv1.CreateBacklogItemFromChatResponse{
-			Item:            backlogItemToProto(updated, s.buildCostLookup()),
+			Item:            backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 			TriageTriggered: true,
 		}), nil
 	}

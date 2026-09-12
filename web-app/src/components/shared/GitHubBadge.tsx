@@ -19,6 +19,9 @@ interface GitHubBadgeProps {
   owner?: string;
   repo?: string;
   sourceRef?: string;
+  // GitHub Enterprise host owning owner/repo, e.g. "github.netflix.net".
+  // Empty/undefined means github.com.
+  host?: string;
 
   // PR status props (populated by PRStatusPoller)
   prPriority?: PRPriority | string;
@@ -75,6 +78,7 @@ export function GitHubBadge({
   owner,
   repo,
   sourceRef,
+  host,
   prPriority,
   prState,
   isDraft,
@@ -95,7 +99,7 @@ export function GitHubBadge({
   if (hasPR) {
     // Construct URL from owner/repo when prUrl is missing (older sessions may not have it stored)
     const resolvedPrUrl = prUrl || (owner && repo
-      ? `https://github.com/${owner}/${repo}/pull/${prNumber}`
+      ? `https://${host || "github.com"}/${owner}/${repo}/pull/${prNumber}`
       : undefined);
 
     const handleClick = (e: React.MouseEvent) => {
@@ -143,7 +147,7 @@ export function GitHubBadge({
 
   // Repository Badge (for non-PR GitHub sessions)
   if (hasRepo) {
-    const repoUrl = `https://github.com/${owner}/${repo}`;
+    const repoUrl = `https://${host || "github.com"}/${owner}/${repo}`;
     const handleClick = (e: React.MouseEvent) => {
       e.stopPropagation();
       window.open(repoUrl, "_blank", "noopener,noreferrer");

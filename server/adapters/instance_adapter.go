@@ -93,6 +93,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		GithubPrUrl:     snap.GitHub.GitHubPRURL,
 		GithubOwner:     snap.GitHub.GitHubOwner,
 		GithubRepo:      snap.GitHub.GitHubRepo,
+		GithubHost:      snap.GitHub.GitHubHost,
 		GithubSourceRef: snap.GitHub.GitHubSourceRef,
 		ClonedRepoPath:  snap.GitHub.ClonedRepoPath,
 		// Instance type and external metadata
@@ -524,20 +525,6 @@ func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
 		return session.PermanentlyFailed
 	default:
 		return session.Creating // Default to Creating for unknown statuses
-	}
-}
-
-// ProtoToSessionType converts proto SessionType enum to session.SessionType.
-func ProtoToSessionType(sessionType sessionv1.SessionType) session.SessionType {
-	switch sessionType {
-	case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
-		return session.SessionTypeDirectory
-	case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
-		return session.SessionTypeNewWorktree
-	case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
-		return session.SessionTypeExistingWorktree
-	default:
-		return session.SessionTypeDirectory // Default to Directory for unknown types
 	}
 }
 

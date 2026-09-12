@@ -139,21 +139,6 @@ export function shouldNotify(sessionId: string): boolean {
 }
 
 /**
- * Check if a session is currently within the acknowledgment grace period.
- */
-export function isInGracePeriod(sessionId: string): boolean {
-  const records = getNotifiedSessions();
-  const record = records.get(sessionId);
-
-  if (!record?.acknowledgedAt) {
-    return false;
-  }
-
-  const timeSinceAck = Date.now() - record.acknowledgedAt;
-  return timeSinceAck < GRACE_PERIOD_MS;
-}
-
-/**
  * Get all sessions that are currently acknowledged (within grace period).
  */
 export function getAcknowledgedSessions(): Set<string> {

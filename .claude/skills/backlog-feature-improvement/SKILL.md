@@ -53,6 +53,61 @@ Goal: find items stuck/looping/silently stalled *right now*, not just theoretica
 
 Flag: items where `session/workflow_engine.go` / `session/backlog.go` allow a transition into a dead-end state, or a status-event log that flaps (idea→ready→idea repeatedly).
 
+## Phase 1b — Dispatch Background Agents on Hung/Repeating Sessions
+
+Phase 1 finds *candidates* (stuck items, flapping status events). This phase turns each
+candidate into a root-caused, documented, and (where safe) fixed finding, using one background
+agent per item so items are diagnosed in parallel instead of one at a time in the main session.
+
+1. **Classify each Phase 1 candidate** before spawning anything:
+   - **Hung** — no status-event/session activity past a stale threshold (compare
+     `updated_at`/last status event against `defaultTriageCleanupTimeout` and typical stage
+     duration; several multiples past normal counts as hung, not just "still running").
+   - **Repeating** — the same status transition (or the same rework/re-review cycle) appears
+     ≥3 times in `backlog_status_events` for one item, or `TriggerReReview` has fired more than
+     `maxAutoReworkIterations` would allow without the item ever reaching a terminal state.
+   - Group items by which reconciliation-loop hotspot they likely implicate (`SpawnSessionFromItem`,
+     `TransitionBacklogItemStatus`, `onAutonomousDriverComplete`, `AttachSessionToItem`, or a
+     notify-once/notification path) — this becomes the agent's starting hypothesis, not blind
+     re-derivation.
+   - **Recall before dispatch**: hung/repeating shapes recur (see Phase 4's recurring-shape note
+     and the dated `## Update` sections in `docs/tasks/backlog-feature-improvement.md`) — check
+     whether an item's symptom already matches a documented shape so the agent verifies against a
+     known cause first rather than starting from zero.
+
+2. **Spawn one background agent per hung/repeating item** (or per small cluster of items sharing
+   the same suspected root cause), using the `Agent` tool with `isolation: "worktree"` so
+   diagnosis reads/writes without disturbing the main working tree. Each agent's brief must
+   include: the item ID, its status-event history (or a command to fetch it), the suspected
+   hotspot file/function from step 1, and the exact deliverable:
+   - Root-cause hypothesis, confirmed against the actual code/logs (not guessed)
+   - Whether the item itself is salvageable (transition it out of the dead end) vs. only the
+     underlying bug is fixable
+   - A finding entry: `file:line`, failure scenario, and which recurring shape (if any) it matches
+   - If the fix is a small, isolated, no-architecture-change bug (bucket 1 shape): implement it
+     directly in the worktree, run the relevant tests, and report a diff — do not stop at
+     diagnosis for these
+   - If the fix would touch the data model, proto, or multiple services: stop at the documented
+     finding — do not implement; this routes through `sdd:full` in Phase 5 instead
+   - Run these agents in parallel (single message, multiple `Agent` tool calls) since items are
+     independent by construction from step 1's grouping
+
+3. **Collect and dedupe.** Multiple hung items often share one root cause (e.g. all stuck items
+   from the same week map to one `onAutonomousDriverComplete` race) — merge agent reports that
+   converge on the same `file:line` into a single finding before it reaches Phase 4, rather than
+   reporting N duplicate bugs.
+
+4. **Unstick the items themselves**, separately from fixing the underlying bug: for each
+   confirmed-hung item, either drive its recovery through the existing MCP tools
+   (`mcp__stapler-squad__resume_session`, `steer_session`, `report_blocked`, or a manual
+   `TransitionBacklogItemStatus` call if the state machine allows a recovery edge) or, if no
+   recovery edge exists, note that gap itself as a bucket-1 finding — "no recovery path from
+   state X" is exactly the kind of reconciliation-loop hole this skill exists to surface.
+
+Feed every agent's finding (fixed or documented-only) into Phase 4's bucket list, tagged with
+which items it explains so Phase 5's routing and the audit doc both show the item-level evidence
+behind each bucketed finding.
+
 ## Phase 2 — Walk the UI
 
 Load `/backlog` and `/backlog/board` (`make install-service` first if the server isn't running) with the claude-in-chrome tool. Click through: board → item card → item detail panel → triage review panel → review-changes modal → GitHub PR picker.

@@ -189,7 +189,7 @@ func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTit
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		derivePriority(true, true), // urgent, important — hit the rework cap; left for manual review
 		"Auto-rework cap reached",
 		fmt.Sprintf("%s — hit the %d-iteration rework cap %s. Left for manual review.", itemTitle, reworkCap, capContext),
 		map[string]string{"item_id": itemID},
@@ -224,7 +224,7 @@ func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, item
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		derivePriority(true, true), // urgent, important
 		"Auto-rework stopped — repeated failure",
 		fmt.Sprintf("%s — the last %d attempts (including one escalated retry) failed the same way, so auto-rework stopped instead of retrying again. Left for manual review.", itemTitle, attemptCount),
 		map[string]string{"item_id": itemID},
@@ -333,7 +333,7 @@ func (s *BacklogService) notifySpawnAndRollbackFailed(ctx context.Context, itemI
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+		derivePriority(true, true), // urgent, important — stranded in_progress with no active session, needs manual action
 		"Rework failed to start",
 		fmt.Sprintf("%s — a rework session failed to spawn and the automatic rollback also failed. The item is stranded in_progress with no active session; needs manual action.", itemTitle),
 		map[string]string{"item_id": itemID},
@@ -363,7 +363,7 @@ func (s *BacklogService) notifyTransitionFailed(itemID, itemTitle, failureContex
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+		derivePriority(true, true), // urgent, important — a silent status/reality mismatch is a genuine correctness bug
 		"Status update failed after work completed",
 		fmt.Sprintf("%s — %s: %v. The item's status may not reflect reality; check manually.", itemTitle, failureContext, writeErr),
 		map[string]string{"item_id": itemID},
@@ -385,7 +385,7 @@ func (s *BacklogService) notifyManualOverride(itemID, itemTitle, message string)
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		derivePriority(false, false), // urgent, important — human-initiated success path, purely informational
 		"Manual override applied",
 		fmt.Sprintf("%s — %s", itemTitle, message),
 		map[string]string{"item_id": itemID},
@@ -652,18 +652,13 @@ func (s *BacklogService) hasUnresolvedBlockers(ctx context.Context, itemID strin
 // storage.UnresolvedBlockerItemIDs before the claim loop).
 func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error) {
 	from := session.BacklogStatus(item.Status)
-	if !s.engine.CanTransition(from, to) {
+	fallback := session.BuildStageConfigSnapshotFallback(item)
+	if !s.engine.CanTransition(from, to, fallback) {
 		return nil, fmt.Errorf("invalid transition from %q to %q", from, to)
 	}
-	guardInput := session.BacklogItemTransitionInput{
-		Status:                from,
-		AcCriteria:            item.AcceptanceCriteria,
-		PlanApproved:          item.PlanApproved,
-		SkipPlanning:          item.SkipPlanning,
-		PlanArtifactsPath:     item.PlanArtifactsPath,
-		HasUnresolvedBlockers: hasUnresolvedBlockers,
-	}
-	if guardErr := s.engine.ValidateGates(guardInput, to); guardErr != nil {
+	guardInput := session.NewBacklogItemTransitionInput(item, from)
+	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
+	if guardErr := s.engine.ValidateGates(guardInput, to, fallback); guardErr != nil {
 		return nil, guardErr
 	}
 	return s.storage.TransitionBacklogItemStatus(ctx, item.ID, to, precondition, triggeredBy)
@@ -1335,7 +1330,7 @@ func (s *BacklogService) notifyRespawnBlockedByActiveSession(ctx context.Context
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		derivePriority(false, false), // urgent, important — informational, no action needed
 		"Auto-respawn skipped — session already active",
 		fmt.Sprintf("%s — automatic respawn (%s) was skipped because a session is already active: %s.", itemTitle, caller, progress),
 		map[string]string{"item_id": itemID},
@@ -1450,7 +1445,7 @@ func (s *BacklogService) notifyIfActiveWorkSessionStale(ctx context.Context, ite
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		derivePriority(false, true), // urgent, important
 		"Rework blocked by a stale-but-alive session",
 		fmt.Sprintf("%s — a failed review can't reopen for another rework attempt because its active work session hasn't produced output in over %s. The session is still running, so it will not be stopped automatically; check it manually, or use \"Reopen for Revision\" once you've confirmed it's actually stuck.", itemTitle, idle.Round(time.Second)),
 		map[string]string{"item_id": itemID},
@@ -2606,7 +2601,7 @@ func (s *BacklogService) TriggerReReview(
 					s.eventBus.Publish(events.NewNotificationEvent(
 						item.ID, "", uuid.New().String(),
 						int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
-						int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+						derivePriority(true, true), // urgent, important — needs investigation, not rework
 						"Review blocked — branch drifted too far behind main",
 						fmt.Sprintf("%s — the branch could not be automatically synced with main. See the item's review history for the conflict details.", item.Title),
 						map[string]string{"item_id": item.ID},
@@ -2697,7 +2692,7 @@ Do not modify the code. Only write the review verdict.
 				s.eventBus.Publish(events.NewNotificationEvent(
 					item.ID, "", uuid.New().String(),
 					int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
-					int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+					derivePriority(true, true), // urgent, important — needs investigation, not rework
 					"Review blocked — codebase directory missing",
 					fmt.Sprintf("%s — no diff could be computed and the fallback review directory is gone. Needs investigation.", item.Title),
 					map[string]string{"item_id": item.ID},

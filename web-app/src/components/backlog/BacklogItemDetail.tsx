@@ -62,6 +62,7 @@ import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { ActivityLogSection } from "./detail/ActivityLogSection";
 import { NotesSection } from "./detail/NotesSection";
 import { ManualOverrideSection } from "./detail/ManualOverrideSection";
+import { GateBlockingSection } from "./GateBlockingSection";
 import * as styles from "./BacklogItemDetail.css";
 
 interface BacklogItemDetailProps {
@@ -264,6 +265,17 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // Sessions section resolves per-row, just also glanceable at the top.
   const pipelineDisplay = latestWorkSession
     ? resolvePipelineModeDisplay(latestWorkSession, pipelineModes)
+    : undefined;
+
+  // CONFIGURABILITY GAP fix (UX audit 2026-09-11): the item's own configured
+  // pipeline mode, resolved to a display name for LifecycleSummary's
+  // automation-profile chips. Distinct from pipelineDisplay above — that
+  // reflects what actually ran in the latest work session (or is undefined
+  // before any session exists), while this reflects the item's current
+  // configuration regardless of session history, so it's the only glanceable
+  // signal available before a session has ever spawned.
+  const configuredPipelineModeName = item?.pipelineMode
+    ? (pipelineModes.find((m) => m.slug === item.pipelineMode)?.name ?? item.pipelineMode)
     : undefined;
 
   // Epic 5.3 (Story 5.3.1, backlog-event-driven-updates): live updates
@@ -822,17 +834,18 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     }
   }, [item, manualReviewOutcome, manualReviewSummary, submitManualReview, showActionToast, load]);
 
-  // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR
-  // unconditionally on every UpdateBacklogItem call (they're plain proto bools, not
-  // optional — no "unset" wire representation), so any partial update that omits them
-  // silently resets them to false. Every partial updateBacklogItem call below must
-  // spread these current values.
+  // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR/
+  // autoApprovePlan unconditionally on every UpdateBacklogItem call (they're plain
+  // proto bools, not optional — no "unset" wire representation), so any partial
+  // update that omits them silently resets them to false. Every partial
+  // updateBacklogItem call below must spread these current values.
   const currentFlags = useCallback(
     () => ({
       skipPlanning: item?.skipPlanning ?? false,
       skipReviewGate: item?.skipReviewGate ?? false,
       autoSpawnSession: item?.autoSpawnSession ?? false,
       autoCreatePR: item?.autoCreatePR ?? false,
+      autoApprovePlan: item?.autoApprovePlan ?? false,
     }),
     [item]
   );
@@ -1435,6 +1448,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         <LifecycleSummary
           item={item}
           pipelineDisplay={pipelineDisplay}
+          configuredPipelineModeName={configuredPipelineModeName}
           stuckItem={stuckItem}
           otherStuckReasons={stuckSummary?.otherReasons}
           onTriggerRemediationNow={triggerRemediationNow}
@@ -1442,6 +1456,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       </div>
 
       <div className={styles.scrollArea}>
+        {/* ADR-005: "what's blocking this transition" gate checklist —
+            immediately below LifecycleSummary (which occupies the
+            top-billed liveness-panel slot) and above the rest of the
+            scroll-area content. */}
+        <GateBlockingSection item={item} />
+
         {/* Inline action error banner */}
         {error && (
           <div className={styles.errorBanner} role="alert">

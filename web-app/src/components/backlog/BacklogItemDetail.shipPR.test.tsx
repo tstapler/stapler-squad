@@ -100,6 +100,7 @@ function makeReviewItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [
       { index: 0, text: "AC 1", status: "done" },

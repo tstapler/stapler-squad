@@ -45,21 +45,22 @@ func (h *backlogHandlers) sessionBranch(ctx context.Context, sessionUUID string)
 
 // verifyPR runs the GitHub cross-check via the overridable verifyPRMatchesBranch
 // seam when set, otherwise the real VerifyPRMatchesBranch (tools_github.go).
-func (h *backlogHandlers) verifyPR(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (PRVerification, error) {
+func (h *backlogHandlers) verifyPR(ctx context.Context, ref githubpkg.RepoRef, prNumber int, expectedBranch string) (PRVerification, error) {
 	if h.verifyPRMatchesBranch != nil {
-		return h.verifyPRMatchesBranch(ctx, owner, repo, prNumber, expectedBranch)
+		return h.verifyPRMatchesBranch(ctx, ref, prNumber, expectedBranch)
 	}
-	return VerifyPRMatchesBranch(ctx, owner, repo, prNumber, expectedBranch)
+	return VerifyPRMatchesBranch(ctx, ref, prNumber, expectedBranch)
 }
 
 // callerGitHubLogin resolves the GitHub login this server is authenticated
-// as, via the overridable resolveCallerGitHubLogin seam when set, otherwise
-// the real githubpkg.GetCurrentUserLogin.
-func (h *backlogHandlers) callerGitHubLogin(ctx context.Context) (string, error) {
+// as on host ("" means github.com), via the overridable resolveCallerGitHubLogin
+// seam when set (host is ignored on that seam — tests only ever exercise
+// github.com), otherwise the real githubpkg.GetCurrentUserLogin.
+func (h *backlogHandlers) callerGitHubLogin(ctx context.Context, host string) (string, error) {
 	if h.resolveCallerGitHubLogin != nil {
 		return h.resolveCallerGitHubLogin(ctx)
 	}
-	return githubpkg.GetCurrentUserLogin(ctx)
+	return githubpkg.GetCurrentUserLogin(ctx, host)
 }
 
 // decideOverridePolicy is the pure decision function behind
@@ -237,7 +238,12 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 				"could not parse the currently tracked PR URL (%q) to verify it isn't merged before reassigning — retry, or contact an operator if this persists: %v",
 				item.PrURL, curParseErr), ""), nil
 		}
-		curVerification, curErr := h.verifyPR(ctx, curRef.Owner, curRef.Repo, item.PrNumber, "")
+		curRepoRef, curRefErr := githubpkg.NewRepoRefWithHost(curRef.Owner, curRef.Repo, curRef.Host)
+		if curRefErr != nil {
+			return errResult(ErrInternalError, fmt.Sprintf(
+				"could not build a GitHub repo reference for the currently tracked PR (%q): %v", item.PrURL, curRefErr), ""), nil
+		}
+		curVerification, curErr := h.verifyPR(ctx, curRepoRef, item.PrNumber, "")
 		if curErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf("could not verify the currently tracked PR #%d against GitHub — retry: %v", item.PrNumber, curErr), ""), nil
 		}
@@ -268,7 +274,11 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrInternalError, "could not resolve this session's git branch to verify the reported PR", ""), nil
 	}
 
-	verification, verifyErr := h.verifyPR(ctx, ref.Owner, ref.Repo, prNumber, branch)
+	repoRef, repoRefErr := githubpkg.NewRepoRefWithHost(ref.Owner, ref.Repo, ref.Host)
+	if repoRefErr != nil {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url is not a recognizable GitHub PR URL: %v", repoRefErr), ""), nil
+	}
+	verification, verifyErr := h.verifyPR(ctx, repoRef, prNumber, branch)
 	if verifyErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("could not verify PR #%d against GitHub — retry: %v", prNumber, verifyErr), ""), nil
 	}
@@ -285,7 +295,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 	// non-empty overrideReason (the early reject above guarantees it).
 	var callerLogin string
 	if verification.Exists && overrideReason != "" && (isReassignment || !verification.Matched) {
-		login, loginErr := h.callerGitHubLogin(ctx)
+		login, loginErr := h.callerGitHubLogin(ctx, repoRef.Host())
 		if loginErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf("could not resolve your GitHub identity to verify the override — retry: %v", loginErr), ""), nil
 		}

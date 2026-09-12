@@ -873,6 +873,11 @@ func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	// toStatus is BacklogStatusReview for every item in this loop, so the
+	// snapshot fields are loop-invariant — resolve them once rather than
+	// re-querying per item.
+	stageNameSnapshot, allowedTransitionsSnapshot := resolveStageSnapshotFields(ctx, tx.BacklogStage, tx.StageTransition, BacklogStatusReview)
+
 	var transitionedIDs []uuid.UUID
 	now := time.Now()
 	for _, item := range items {
@@ -889,7 +894,15 @@ func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
 		if updateErr != nil {
 			continue
 		}
-		recordStatusEvent(ctx, tx.BacklogStatusEvent, item.ID, item.Status, string(BacklogStatusReview), TriggeredBySystem, "")
+		recordStatusEvent(ctx, statusEventInput{
+			evClient:                   tx.BacklogStatusEvent,
+			itemID:                     item.ID,
+			fromStatus:                 item.Status,
+			toStatus:                   string(BacklogStatusReview),
+			triggeredBy:                TriggeredBySystem,
+			stageNameSnapshot:          stageNameSnapshot,
+			allowedTransitionsSnapshot: allowedTransitionsSnapshot,
+		})
 		transitionedIDs = append(transitionedIDs, item.ID)
 	}
 
