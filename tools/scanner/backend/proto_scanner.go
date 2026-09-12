@@ -356,9 +356,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// Native git rollout RPCs (NativeGitRolloutService in native_git_rollout.proto)
 	// -- pre-existing collateral debt found by TestMethodToIDCompleteness: must
 	// match the "// +api: native-git-rollout:*" markers in
-	// server/services/native_git_rollout_service.go verbatim, or ScanProto's
-	// method-name fallback produces a second, non-marker-matching id and file
-	// (see the SearchGitHubRepos comment above for the failure mode).
+	// server/services/native_git_rollout_service.go verbatim, same failure mode
+	// as the SearchGitHubRepos comment above.
 	"GetNativeGitRolloutStatus":        "native-git-rollout:get",
 	"SetNativeWorktreeGlobalOverride":  "native-git-rollout:set-worktree-global-override",
 	"SetNativeWorktreeSessionOverride": "native-git-rollout:set-worktree-session-override",

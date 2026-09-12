@@ -1083,7 +1083,7 @@ func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAn
 // Previously, if that write itself failed, it was only log.Warn'd — and the
 // caller returns immediately afterward without ever reaching any other
 // notification path — reproducing BUG-048's original gap one layer
-// underneath its own fix. notifyStuckReviewBookkeepingFailed (extracted from
+// underneath its own fix. notifyStuckBookkeepingFailed (extracted from
 // that call site so it's directly testable, at the same fidelity as
 // TestNotifySpawnAndRollbackFailed_should_markStuckAndNotify_When_Called
 // covers BUG-030's equivalent fix) is the closure of that gap.
@@ -1096,7 +1096,7 @@ func TestNotifyStuckReviewBookkeepingFailed_should_publishFailureNotification_Wh
 	defer cancel()
 	ch, _ := eventBus.Subscribe(subCtx)
 
-	svc.notifyStuckReviewBookkeepingFailed("item-456", "Stuck review item", "item-session-789",
+	svc.notifyStuckBookkeepingFailed("item-456", "Stuck review item", "item-session-789", stuckSessionRoleReview,
 		fmt.Errorf("failed to set ended_at on item session item-session-789: item_session not found"))
 
 	var notif *events.Event
@@ -1121,11 +1121,9 @@ func TestNotifyStuckReviewBookkeepingFailed_should_publishFailureNotification_Wh
 }
 
 // TestNotifyStuckWorkBookkeepingFailed_should_publishFailureNotification_When_Called
-// is notifyStuckReviewBookkeepingFailed's sibling regression test for the
-// SessionRoleWork turn-cap branch (onAutonomousDriverComplete): that branch also
-// calls UpdateItemSessionEnded — closing out the stuck session so the respawn
-// dispatched right after doesn't self-block on its own still-open row — and,
-// like the review branch, a failure there must reach the operator, not just the log.
+// is the previous test's sibling regression test for the SessionRoleWork
+// turn-cap branch: that branch also calls UpdateItemSessionEnded, and like
+// the review branch, a failure there must reach the operator, not just the log.
 func TestNotifyStuckWorkBookkeepingFailed_should_publishFailureNotification_When_Called(t *testing.T) {
 	t.Parallel()
 	eventBus := events.NewEventBus(4)
@@ -1135,7 +1133,7 @@ func TestNotifyStuckWorkBookkeepingFailed_should_publishFailureNotification_When
 	defer cancel()
 	ch, _ := eventBus.Subscribe(subCtx)
 
-	svc.notifyStuckWorkBookkeepingFailed("item-123", "Stuck work item", "item-session-456",
+	svc.notifyStuckBookkeepingFailed("item-123", "Stuck work item", "item-session-456", stuckSessionRoleWork,
 		fmt.Errorf("failed to set ended_at on item session item-session-456: item_session not found"))
 
 	var notif *events.Event
