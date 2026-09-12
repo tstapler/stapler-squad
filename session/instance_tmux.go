@@ -518,11 +518,8 @@ func (i *Instance) initTmuxSession() {
 	}
 	enrichedProgram := i.buildLaunchCommand(claudeSessionID)
 	i.LaunchCommand = enrichedProgram
-	// backend reflects i.processManager's actual concrete type, not just
-	// this func's name -- despite being called "initTmuxSession", it runs
-	// for every backend (only the *TmuxBackend branch below actually wires
-	// its constructed tmux.TmuxSession anywhere), so hardcoding "tmux" here
-	// misrepresented tymux-backed sessions (BUG-109).
+	// This func runs for every backend despite its name (BUG-109) -- log the
+	// real one instead of hardcoding "tmux".
 	log.Info("creating session", "session", i.Title, "program", enrichedProgram, "backend", string(processManagerBackendLabel(i.processManager)))
 
 	// Pre-trust the working directory so claude never blocks this
