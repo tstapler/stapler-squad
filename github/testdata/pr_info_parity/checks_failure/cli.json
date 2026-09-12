@@ -1,0 +1,43 @@
+{
+  "number": 803,
+  "title": "Rework session teardown",
+  "body": "Fixes a leaked goroutine on teardown.",
+  "headRefName": "fix/session-teardown-leak",
+  "headRefOid": "aaa789failure00000000000000000000000000",
+  "baseRefName": "main",
+  "state": "OPEN",
+  "url": "https://github.com/tstapler/stapler-squad/pull/803",
+  "createdAt": "2026-09-03T08:15:00Z",
+  "updatedAt": "2026-09-03T14:45:00Z",
+  "isDraft": false,
+  "mergeable": "CONFLICTING",
+  "additions": 55,
+  "deletions": 40,
+  "changedFiles": 4,
+  "author": { "login": "tstapler" },
+  "labels": [{ "name": "bug" }],
+  "reviewDecision": "CHANGES_REQUESTED",
+  "reviews": [
+    {
+      "author": { "login": "carol" },
+      "state": "CHANGES_REQUESTED",
+      "body": "Please fix the failing test before merging."
+    }
+  ],
+  "statusCheckRollup": [
+    {
+      "name": "build",
+      "context": "",
+      "state": "",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+    },
+    {
+      "name": "test",
+      "context": "",
+      "state": "",
+      "status": "COMPLETED",
+      "conclusion": "FAILURE"
+    }
+  ]
+}
