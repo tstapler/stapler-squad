@@ -1231,12 +1231,11 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 // (pre-mortem failure mode #4). Falls through to tryExtractConversationUUID's
 // DetectByPath fallback, guarded by conversationClearedAt.
 //
-// Only changes the actual launch command for a genuinely fresh Instance:
-// initTmuxSession() early-returns via HasSession() whenever a TmuxSession object
-// already exists in-process (e.g. after KillSession()), so this recovery is a
-// no-op for in-process restart-churn — confirmed by
-// TestKillSessionThenStart_DoesNotRebuildLaunchCommand; see plan.md Risk Control
-// item 8.
+// No-op whenever the underlying tmux session is still alive (i.pm().IsAlive()):
+// initTmuxSession() reuses it as-is in that case, so there's nothing to embed
+// --resume into yet. Once it's dead -- including in-process restart-churn via
+// KillSession() -- initTmuxSession() rebuilds the launch command, so recovering
+// the UUID here actually matters. See TestKillSessionThenStart_RebuildsLaunchCommand.
 func (i *Instance) recoverConversationBeforeLaunch(firstTimeSetup bool) {
 	if firstTimeSetup || i.pm().IsAlive() || i.HasClaudeSession() {
 		return

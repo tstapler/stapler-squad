@@ -502,8 +502,13 @@ func (i *Instance) claudeMCPConfigArgs() (string, string) {
 }
 
 // initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
+//
+// Reuse requires HasSession() AND IsAlive(): the pointer alone stays non-nil
+// forever once set, even after the tmux server backing it is killed, which
+// let recovery skip buildLaunchCommand() and relaunch without --resume after
+// a tmux-kill-server crash (2026-09-12 incident).
 func (i *Instance) initTmuxSession() {
-	if i.pm().HasSession() {
+	if i.pm().HasSession() && i.pm().IsAlive() {
 		log.Info("reusing existing tmux session", "session", i.Title)
 		return
 	}
