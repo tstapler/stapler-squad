@@ -20,7 +20,11 @@ func (i *Instance) RefreshPRInfo(ctx context.Context) (*github.PRInfo, error) {
 
 	log.Info("refreshing PR info", "session", i.Title, "pr", gh.PRNumber, "owner", gh.Owner, "repo", gh.Repo)
 
-	prInfo, err := github.GetPRInfoCtx(ctx, gh.Owner, gh.Repo, gh.PRNumber)
+	ref, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
+	if err != nil {
+		return nil, fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+	}
+	prInfo, err := github.GetPRInfoCtx(ctx, ref, gh.PRNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch PR info for instance '%s': %w", i.Title, err)
 	}
@@ -40,7 +44,11 @@ func (i *Instance) GetPRComments(ctx context.Context) ([]github.PRComment, error
 
 	log.Info("fetching PR comments", "session", i.Title, "pr", gh.PRNumber, "owner", gh.Owner, "repo", gh.Repo)
 
-	comments, err := github.GetPRComments(ctx, gh.Owner, gh.Repo, gh.PRNumber)
+	ref, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
+	if err != nil {
+		return nil, fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+	}
+	comments, err := github.GetPRComments(ctx, ref, gh.PRNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch PR comments for instance '%s': %w", i.Title, err)
 	}
@@ -60,7 +68,11 @@ func (i *Instance) GetPRDiff(ctx context.Context) (string, error) {
 
 	log.Info("fetching PR diff", "session", i.Title, "pr", gh.PRNumber, "owner", gh.Owner, "repo", gh.Repo)
 
-	diff, err := github.GetPRDiff(ctx, gh.Owner, gh.Repo, gh.PRNumber)
+	ref, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
+	if err != nil {
+		return "", fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+	}
+	diff, err := github.GetPRDiff(ctx, ref, gh.PRNumber)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch PR diff for instance '%s': %w", i.Title, err)
 	}
@@ -84,7 +96,11 @@ func (i *Instance) PostComment(ctx context.Context, body string) error {
 
 	log.Info("posting comment to PR", "pr", gh.PRNumber, "session", i.Title)
 
-	if err := github.PostPRComment(ctx, gh.Owner, gh.Repo, gh.PRNumber, body); err != nil {
+	ref, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
+	if err != nil {
+		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+	}
+	if err := github.PostPRComment(ctx, ref, gh.PRNumber, body); err != nil {
 		return fmt.Errorf("failed to post comment to PR for instance '%s': %w", i.Title, err)
 	}
 
@@ -116,7 +132,7 @@ func (i *Instance) SetCommitStatus(ctx context.Context, state github.CommitStatu
 		return fmt.Errorf("invalid commit status request for instance '%s': %w", i.Title, err)
 	}
 
-	repo, err := github.NewRepoRef(gh.Owner, gh.Repo)
+	repo, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
 	if err != nil {
 		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -153,7 +169,11 @@ func (i *Instance) MergePR(ctx context.Context, method string) error {
 
 	log.Info("merging PR", "pr", gh.PRNumber, "session", i.Title, "method", method)
 
-	if err := github.MergePR(ctx, gh.Owner, gh.Repo, gh.PRNumber, method); err != nil {
+	ref, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
+	if err != nil {
+		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+	}
+	if err := github.MergePR(ctx, ref, gh.PRNumber, method); err != nil {
 		return fmt.Errorf("failed to merge PR for instance '%s': %w", i.Title, err)
 	}
 
@@ -172,7 +192,11 @@ func (i *Instance) ClosePR(ctx context.Context) error {
 
 	log.Info("closing PR without merging", "pr", gh.PRNumber, "session", i.Title)
 
-	if err := github.ClosePR(ctx, gh.Owner, gh.Repo, gh.PRNumber); err != nil {
+	ref, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
+	if err != nil {
+		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+	}
+	if err := github.ClosePR(ctx, ref, gh.PRNumber); err != nil {
 		return fmt.Errorf("failed to close PR for instance '%s': %w", i.Title, err)
 	}
 

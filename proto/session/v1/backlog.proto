@@ -1559,6 +1559,8 @@ message GitHubRepoEntry {
   bool is_local = 3;
   string local_path = 4;
   string description = 5;
+  // GitHub host this repo was found on ("" means github.com).
+  string host = 6;
 }
 
 message GitHubIssueEntry {
@@ -1573,6 +1575,8 @@ message GitHubIssueEntry {
   bool is_pr = 9;
   // GitHub login of the issue's author.
   string author = 10;
+  // GitHub host this issue was found on ("" means github.com).
+  string host = 11;
 }
 
 message SearchGitHubReposRequest {
@@ -1590,6 +1594,8 @@ message ListGitHubIssuesRequest {
   string state = 3;
   string search = 4;
   int32 limit = 5;
+  // GitHub host the repo lives on ("" means github.com).
+  string host = 6;
 }
 
 message ListGitHubIssuesResponse {

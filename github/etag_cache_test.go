@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+// acmeWidgetsRef builds a RepoRef for "acme/widgets" test fixtures.
+func acmeWidgetsRef() RepoRef {
+	ref, err := NewRepoRef("acme", "widgets")
+	if err != nil {
+		panic(err)
+	}
+	return ref
+}
+
 // TestETagCache_Invalidate_NextFetchSendsNoIfNoneMatch is Task 5.1.1b's unit
 // test: invalidating a cached entry forces the next GetPRInfoConditional call
 // to omit If-None-Match, so GitHub sees an unconditional request instead of a
@@ -53,12 +62,12 @@ func TestETagCache_Invalidate_NextFetchSendsNoIfNoneMatch(t *testing.T) {
 	defer resetGhBaseURL(ts)()
 
 	cache := NewETagCache()
-	key := cache.cacheKey("acme", "widgets", 42)
+	key := cache.cacheKey(acmeWidgetsRef(), 42)
 	cache.set(key, etagEntry{etag: `"stale-etag"`, prInfo: &PRInfo{Number: 42}})
 
-	cache.Invalidate("acme", "widgets", 42)
+	cache.Invalidate(acmeWidgetsRef(), 42)
 
-	_, _, _ = GetPRInfoConditional(context.Background(), "acme", "widgets", 42, cache)
+	_, _, _ = GetPRInfoConditional(context.Background(), acmeWidgetsRef(), 42, cache)
 
 	if !sawRequest {
 		t.Fatal("expected a request to reach the fake GitHub server")
@@ -75,7 +84,7 @@ func TestETagCache_Invalidate_NextFetchSendsNoIfNoneMatch(t *testing.T) {
 // deterministically instead of waiting on real time.
 func TestETagCache_SweepExpired_EvictsOldEntries(t *testing.T) {
 	cache := NewETagCache()
-	key := cache.cacheKey("acme", "widgets", 1)
+	key := cache.cacheKey(acmeWidgetsRef(), 1)
 	cache.set(key, etagEntry{etag: "e1", prInfo: &PRInfo{Number: 1}})
 
 	removed := cache.sweepExpired(time.Now().Add(etagCacheEntryTTL + time.Minute))
@@ -91,7 +100,7 @@ func TestETagCache_SweepExpired_EvictsOldEntries(t *testing.T) {
 // an entry written within the TTL window untouched.
 func TestETagCache_SweepExpired_KeepsFreshEntries(t *testing.T) {
 	cache := NewETagCache()
-	key := cache.cacheKey("acme", "widgets", 2)
+	key := cache.cacheKey(acmeWidgetsRef(), 2)
 	cache.set(key, etagEntry{etag: "e2", prInfo: &PRInfo{Number: 2}})
 
 	removed := cache.sweepExpired(time.Now())
@@ -109,7 +118,7 @@ func TestETagCache_SweepExpired_KeepsFreshEntries(t *testing.T) {
 // GetPRInfoConditional actually drives.
 func TestETagCache_SetTriggersOpportunisticSweep(t *testing.T) {
 	cache := NewETagCache()
-	staleKey := cache.cacheKey("acme", "widgets", 3)
+	staleKey := cache.cacheKey(acmeWidgetsRef(), 3)
 	cache.set(staleKey, etagEntry{etag: "stale", prInfo: &PRInfo{Number: 3}})
 
 	// Backdate the entry directly (same package) so it's already expired.
@@ -118,7 +127,7 @@ func TestETagCache_SetTriggersOpportunisticSweep(t *testing.T) {
 	cache.store.Store(staleKey, entry)
 
 	for i := 0; i < etagCacheSweepEveryNWrites; i++ {
-		cache.set(cache.cacheKey("acme", "widgets", 100+i), etagEntry{etag: "x", prInfo: &PRInfo{Number: 100 + i}})
+		cache.set(cache.cacheKey(acmeWidgetsRef(), 100+i), etagEntry{etag: "x", prInfo: &PRInfo{Number: 100 + i}})
 	}
 
 	if _, ok := cache.get(staleKey); ok {
@@ -132,9 +141,9 @@ func TestETagCache_SetTriggersOpportunisticSweep(t *testing.T) {
 // no-tracked-instance case.
 func TestETagCache_Invalidate_UnknownKeyIsNoOp(t *testing.T) {
 	cache := NewETagCache()
-	cache.Invalidate("acme", "widgets", 999)
+	cache.Invalidate(acmeWidgetsRef(), 999)
 
-	if _, ok := cache.get(cache.cacheKey("acme", "widgets", 999)); ok {
+	if _, ok := cache.get(cache.cacheKey(acmeWidgetsRef(), 999)); ok {
 		t.Fatal("expected no entry after Invalidate on an unknown key")
 	}
 }
