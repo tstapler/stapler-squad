@@ -94,6 +94,18 @@ type ApprovalRuleData struct {
 	MinSessionIdleMinutes int32
 }
 
+// DismissedFindingData is the domain model for a dismissed WasteFinding
+// record. FindingID is the stable content-addressed dismissal key (see
+// tokens.ComputeFindingID); SessionID/ConversationID/FindingType are kept
+// alongside it only for debuggability, not for lookups.
+type DismissedFindingData struct {
+	FindingID      string
+	SessionID      string
+	ConversationID string
+	FindingType    int32
+	DismissedAt    time.Time
+}
+
 // SubcommandDecisionCount holds a (subcommand, decision) aggregate count.
 // Returned by GetSubcommandBreakdown.
 type SubcommandDecisionCount struct {

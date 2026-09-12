@@ -41,3 +41,8 @@ export function fmtDate(ts: { seconds: bigint } | undefined): string {
 export function shortId(id: string): string {
   return id.length > 8 ? id.slice(0, 8) + "…" : id;
 }
+
+/** Return a project path's final path segment (its directory name). */
+export function pathBasename(p: string): string {
+  return p.split("/").pop() || p;
+}

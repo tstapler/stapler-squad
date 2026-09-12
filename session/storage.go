@@ -781,6 +781,16 @@ func (s *Storage) DeleteRule(ctx context.Context, id string) error {
 	return s.repo.DeleteRule(ctx, id)
 }
 
+// DismissFinding persists a WasteFinding dismissal in the repository.
+func (s *Storage) DismissFinding(ctx context.Context, data DismissedFindingData) error {
+	return s.repo.DismissFinding(ctx, data)
+}
+
+// ListDismissedFindingIDs returns the set of currently-dismissed finding_id values.
+func (s *Storage) ListDismissedFindingIDs(ctx context.Context) (map[string]bool, error) {
+	return s.repo.ListDismissedFindingIDs(ctx)
+}
+
 // RecordAnalytics logs a classification decision to the repository.
 func (s *Storage) RecordAnalytics(ctx context.Context, data AnalyticsData) error {
 	return s.repo.RecordAnalytics(ctx, data)

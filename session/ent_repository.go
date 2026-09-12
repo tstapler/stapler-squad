@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/dismissedfinding"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/session"
@@ -1593,6 +1594,46 @@ func (r *EntRepository) DeleteRule(ctx context.Context, id string) error {
 		Where(approvalrule.RuleID(id)).
 		Exec(ctx)
 	return err
+}
+
+// DismissFinding upserts a DismissedFinding row keyed by data.FindingID.
+// Idempotent — dismissing an already-dismissed finding_id just refreshes
+// session_id/conversation_id/finding_type (dismissed_at is immutable, so a
+// re-dismiss never resets it).
+func (r *EntRepository) DismissFinding(ctx context.Context, data DismissedFindingData) error {
+	dismissedAt := data.DismissedAt
+	if dismissedAt.IsZero() {
+		dismissedAt = time.Now()
+	}
+	return r.client.DismissedFinding.Create().
+		SetFindingID(data.FindingID).
+		SetSessionID(data.SessionID).
+		SetConversationID(data.ConversationID).
+		SetFindingType(data.FindingType).
+		SetDismissedAt(dismissedAt).
+		OnConflictColumns(dismissedfinding.FieldFindingID).
+		UpdateNewValues().
+		Exec(ctx)
+}
+
+// ListDismissedFindingIDs returns the set of currently-dismissed finding_id
+// values, for GetInsightsSummary to filter against.
+func (r *EntRepository) ListDismissedFindingIDs(ctx context.Context) (map[string]bool, error) {
+	//nolint:entfullscan dismissed findings are a small table (bounded by the
+	// findingsCap-capped panel's realistic dismissal volume); the whole set is
+	// needed to filter every request's freshly computed findings, same
+	// rationale as AllRules above.
+	rows, err := r.client.DismissedFinding.Query().
+		Select(dismissedfinding.FieldFindingID).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		ids[row.FindingID] = true
+	}
+	return ids, nil
 }
 
 func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData) error {
