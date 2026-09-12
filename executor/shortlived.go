@@ -89,12 +89,6 @@ func WithRedactArgs(indices ...int) Option {
 	return func(c *config) { c.redactIndices = append(c.redactIndices, indices...) }
 }
 
-// WithRlimits sets per-subprocess resource limits. On Linux, limits are applied
-// to the child process via setrlimit. On other platforms this is a no-op.
-func WithRlimits(cfg RlimitConfig) Option {
-	return func(c *config) { c.rlimits = cfg }
-}
-
 // WithoutProcessGroup disables Setpgid for this command. Use when the process
 // needs to remain in the parent's process group (e.g. when a terminal or
 // controlling PTY is involved). By default, all ShortLivedCmd instances run

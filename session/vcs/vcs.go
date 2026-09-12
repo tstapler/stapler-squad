@@ -3,7 +3,6 @@
 package vcs
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -37,20 +36,6 @@ func (s ChangeStrategy) String() string {
 		return "abandon"
 	default:
 		return "unknown"
-	}
-}
-
-// ParseChangeStrategy converts a string to ChangeStrategy
-func ParseChangeStrategy(s string) (ChangeStrategy, error) {
-	switch s {
-	case "keep_as_wip", "keep":
-		return KeepAsWIP, nil
-	case "bring_along", "bring":
-		return BringAlong, nil
-	case "abandon", "discard":
-		return Abandon, nil
-	default:
-		return KeepAsWIP, fmt.Errorf("unknown change strategy: %s", s)
 	}
 }
 

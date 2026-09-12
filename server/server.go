@@ -131,7 +131,9 @@ func newServerBase(addr string) (*Server, context.Context) {
 	return srv, connCtx
 }
 
-// NewServer creates a new HTTP server instance with SessionService registered.
+// NewServerWithDeps creates a Server using pre-built dependencies.
+// Use this when deps are constructed externally (e.g. via Warren lifecycle phases)
+// so the build phases can be observed and timed independently.
 //
 // Initialization Order (dependencies flow downward):
 //
@@ -151,26 +153,6 @@ func newServerBase(addr string) (*Server, context.Context) {
 // Violating this order causes nil pointer panics or silent failures.
 // Dependency construction is encapsulated in BuildDependencies (server/dependencies.go).
 // See docs/tasks/architecture-refactor.md for the ongoing simplification plan.
-func NewServer(addr string) *Server {
-	srv, connCtx := newServerBase(addr)
-
-	log.Info("Building server dependencies...")
-	startTime := time.Now()
-	deps, err := BuildDependencies()
-	if err != nil {
-		log.Error("Failed to build server dependencies", "err", err)
-		// Continue without services — all RPC calls will return errors
-	} else {
-		log.Info("Server dependencies built", "elapsed", time.Since(startTime))
-		wireDepsIntoServer(srv, deps, connCtx)
-	}
-	registerStaticRoutes(srv)
-	return srv
-}
-
-// NewServerWithDeps creates a Server using pre-built dependencies.
-// Use this when deps are constructed externally (e.g. via Warren lifecycle phases)
-// so the build phases can be observed and timed independently.
 func NewServerWithDeps(addr string, deps *ServerDependencies) *Server {
 	srv, connCtx := newServerBase(addr)
 	wireDepsIntoServer(srv, deps, connCtx)

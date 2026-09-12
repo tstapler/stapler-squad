@@ -80,18 +80,6 @@ func WithGracePeriod(d time.Duration) ProcessOption {
 	return func(c *processConfig) { c.gracePeriod = d }
 }
 
-// WithProcessRlimits sets per-subprocess resource limits (Linux only).
-func WithProcessRlimits(cfg RlimitConfig) ProcessOption {
-	return func(c *processConfig) { c.rlimits = cfg }
-}
-
-// WithoutProcessGroupMP disables Setpgid for this process. Use for processes
-// that need to remain in the parent's process group (rare; most background
-// processes should use the default Setpgid: true).
-func WithoutProcessGroupMP() ProcessOption {
-	return func(c *processConfig) { c.noProcGroup = true }
-}
-
 // WithNoControllingTerminal sets Noctty: true on SysProcAttr. Use for background
 // processes that must not receive SIGHUP when a terminal closes (e.g. tmux
 // control-mode processes, daemons). This is the safe default and is set
@@ -106,12 +94,6 @@ func WithNoControllingTerminal() ProcessOption {
 // Use with caution — some processes (like tmux) require session membership.
 func WithNewSession() ProcessOption {
 	return func(c *processConfig) { c.setsid = true }
-}
-
-// WithProcessRedactArgs specifies argv positions containing secrets.
-// These positions are replaced with "<redacted>" in audit log entries.
-func WithProcessRedactArgs(indices ...int) ProcessOption {
-	return func(c *processConfig) { c.redactArgs = append(c.redactArgs, indices...) }
 }
 
 // ManagedProcess is a lifecycle handle for a long-running subprocess started

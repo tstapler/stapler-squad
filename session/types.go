@@ -177,20 +177,6 @@ func (dm DiscoveryMode) String() string {
 	}
 }
 
-// ParseDiscoveryMode parses a string into a DiscoveryMode
-func ParseDiscoveryMode(s string) DiscoveryMode {
-	switch s {
-	case "managed":
-		return DiscoveryModeManaged
-	case "extended":
-		return DiscoveryModeExtended
-	case "full":
-		return DiscoveryModeFull
-	default:
-		return DiscoveryModeManaged // Safe default
-	}
-}
-
 // PTYDiscoveryConfig controls PTY discovery scope and behavior
 type PTYDiscoveryConfig struct {
 	// Primary tmux server socket for squad-managed sessions

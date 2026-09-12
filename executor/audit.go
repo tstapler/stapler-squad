@@ -12,7 +12,7 @@ import (
 // It is passed to AuditHook.OnExec after cmd.Wait() returns.
 type AuditEntry struct {
 	// Command is the argv for the subprocess. Secret positions are replaced
-	// with "<redacted>" when WithRedactArgs or WithProcessRedactArgs is used.
+	// with "<redacted>" when WithRedactArgs is used.
 	Command []string
 
 	// WorkDir is cmd.Dir at invocation time. Empty string means the process
