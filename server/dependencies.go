@@ -1580,6 +1580,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			log.Warn("failed to resolve config dir, skipping model family override, using defaults", "err", cfgErr)
 		}
 		workflowSvc := services.NewWorkflowService(workflowRepo, workflowScheduler, storage)
+		workflowSvc.SetEventBus(eventBus)
 		sessionService.SetWorkflowService(workflowSvc)
 		sessionService.SetWorkflowRepository(workflowRepo)
 		// Close the WIP-gate bypass (webhook-triggers Epic 1.3): every trigger-fired
@@ -1789,6 +1790,11 @@ var prNumFromTitle = regexp.MustCompile(`(?i)^pr-(\d+)-`)
 // UserPR list. Called in the UserPRCache onUpdated callback. Lives here (not
 // in the github package) to avoid an import cycle: github → session → github.
 func annotateUserPRCache(cache *githubpkg.UserPRCache, poller *session.PRStatusPoller, scanner *unfinished.Scanner) {
+	ghHosts := config.LoadConfig().GetGitHubEnterpriseHosts()
+	enterpriseHosts := make([]string, 0, len(ghHosts))
+	for _, h := range ghHosts {
+		enterpriseHosts = append(enterpriseHosts, h.Host)
+	}
 	var annSessions []githubpkg.PRAnnotationSession
 	if poller != nil {
 		for _, inst := range poller.GetInstances() {
@@ -1805,18 +1811,18 @@ func annotateUserPRCache(cache *githubpkg.UserPRCache, poller *session.PRStatusP
 			// 4. PR number from session title (e.g. "pr-1255-...").
 			var repoRef githubpkg.RepoRef
 			if snap.GitHub.GitHubOwner != "" && snap.GitHub.GitHubRepo != "" {
-				repoRef, _ = githubpkg.NewRepoRef(snap.GitHub.GitHubOwner, snap.GitHub.GitHubRepo)
+				repoRef, _ = githubpkg.NewRepoRefWithHost(snap.GitHub.GitHubOwner, snap.GitHub.GitHubRepo, snap.GitHub.GitHubHost)
 			}
 			if !repoRef.IsValid() && snap.GitHub.GitHubPRURL != "" {
-				if parsed, err := session.ParseGitHubURL(snap.GitHub.GitHubPRURL); err == nil {
-					repoRef, _ = githubpkg.NewRepoRef(parsed.Owner, parsed.Repo)
+				if parsed, err := session.ParseGitHubURLWithHosts(snap.GitHub.GitHubPRURL, enterpriseHosts); err == nil {
+					repoRef, _ = githubpkg.NewRepoRefWithHost(parsed.Owner, parsed.Repo, parsed.Host)
 					if prNumber == 0 {
 						prNumber = parsed.PRNumber
 					}
 				}
 			}
 			if !repoRef.IsValid() && snap.Path != "" {
-				repoRef, _ = githubpkg.GetOwnerRepoFromRemote(snap.Path)
+				repoRef, _ = githubpkg.GetOwnerRepoFromRemote(snap.Path, enterpriseHosts)
 			}
 			if !repoRef.IsValid() {
 				continue
@@ -1839,7 +1845,7 @@ func annotateUserPRCache(cache *githubpkg.UserPRCache, poller *session.PRStatusP
 	var annWorktrees []githubpkg.PRAnnotationWorktree
 	if scanner != nil {
 		for _, r := range scanner.GetAllResults() {
-			repoRef, err := githubpkg.GetOwnerRepoFromRemote(r.RepoPath)
+			repoRef, err := githubpkg.GetOwnerRepoFromRemote(r.RepoPath, enterpriseHosts)
 			if err != nil || !repoRef.IsValid() || r.Branch == "" {
 				continue
 			}

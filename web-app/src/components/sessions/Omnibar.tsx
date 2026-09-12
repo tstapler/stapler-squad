@@ -71,6 +71,8 @@ import {
   createButton,
   error as errorClass,
 } from "./Omnibar.css";
+import { BacklogItemIntentReview } from "@/components/backlog/BacklogItemIntentReview";
+import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
 import { useAliases } from "@/lib/hooks/useAliases";
@@ -99,8 +101,6 @@ interface OmnibarProps {
   onNavigateToSession: (sessionId: string) => void;
   onNavigateToSessionInNewPane?: (sessionId: string) => void;
   onRunWorkflow?: (slug: string, arg: string) => Promise<void>;
-  /** Creates a backlog item from a free-text chat message (the "backlog: <message>" trigger). */
-  onCreateBacklogItemFromChat?: (text: string) => Promise<void>;
   initialMode?: "discovery" | "creation";
   initialInput?: string;
   initialTitle?: string;
@@ -261,7 +261,6 @@ export function Omnibar({
   onNavigateToSession,
   onNavigateToSessionInNewPane,
   onRunWorkflow,
-  onCreateBacklogItemFromChat,
   initialMode,
   initialInput,
   initialTitle,
@@ -320,6 +319,12 @@ export function Omnibar({
   // Submission state
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Non-null while reviewing an LLM-parsed backlog item draft (the
+  // "backlog: <message>" trigger) — holds the raw text passed to
+  // BacklogItemIntentReview. Replaces the entire omnibar body with the
+  // review UI until the user confirms or cancels; see the early return
+  // near this component's bottom.
+  const [backlogReviewText, setBacklogReviewText] = useState<string | null>(null);
   // Synchronous double-submit guard: `isSubmitting` state only becomes visible to
   // handleSubmit's closure after React commits the re-render, which leaves a window
   // for a second rapid click (e.g. a fast double-click) to read the same stale
@@ -920,6 +925,7 @@ export function Omnibar({
         atSuggestIndex: -1,
       });
       setError(null);
+      setBacklogReviewText(null);
       // Defense-in-depth: handleSubmit's own finally blocks already reset this on
       // success/failure, but this instance never unmounts across open/close cycles, so
       // also clear it here in case onClose() didn't synchronously flip isOpen after a
@@ -1406,23 +1412,14 @@ export function Omnibar({
       return;
     }
 
-    // Chat backlog item creation (backlog: <message>) — no session-creation flow, just
-    // hands the free-text message off to the backlog RPC and closes the omnibar.
+    // Chat backlog item creation (backlog: <message>) — opens the LLM-parsed
+    // review UI instead of creating immediately; see backlogReviewText's
+    // early-return render branch below. isSubmittingRef is cleared here (not
+    // in a finally block) since control doesn't return to this function once
+    // the review UI takes over.
     if (detection?.type === InputType.ChatBacklogItem) {
-      const message = detection.parsedValue;
-      setIsSubmitting(true);
-      setError(null);
-      try {
-        await onCreateBacklogItemFromChat?.(message);
-        onClose();
-      } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Failed to create backlog item",
-        );
-      } finally {
-        setIsSubmitting(false);
-        isSubmittingRef.current = false;
-      }
+      isSubmittingRef.current = false;
+      setBacklogReviewText(detection.parsedValue);
       return;
     }
 
@@ -1676,7 +1673,6 @@ export function Omnibar({
     onCreateSession,
     onClose,
     onRunWorkflow,
-    onCreateBacklogItemFromChat,
     formState.firstPrompt,
     formState.autonomousMode,
     formState.extraArgs,
@@ -1691,6 +1687,34 @@ export function Omnibar({
   }, [handleSubmit]);
 
   if (!isOpen) return null;
+
+  // Reviewing an LLM-parsed backlog item draft (backlog: <message>) replaces
+  // the entire omnibar body — a different UI mode from session creation, not
+  // another branch of the input/results form below.
+  if (backlogReviewText !== null) {
+    return (
+      <div
+        className={overlay}
+        onClick={onClose}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="omnibar-title"
+        data-testid="omnibar"
+      >
+        <div className={modal} data-testid="omnibar-modal" onClick={(e) => e.stopPropagation()}>
+          <BacklogItemIntentReview
+            initialText={backlogReviewText}
+            onDone={(item: BacklogItem) => {
+              setBacklogReviewText(null);
+              onClose();
+              router.push(`/backlog?item=${item.id}`);
+            }}
+            onCancel={() => setBacklogReviewText(null)}
+          />
+        </div>
+      </div>
+    );
+  }
 
   const isMac = (() => {
     try {

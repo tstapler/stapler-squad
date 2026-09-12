@@ -166,14 +166,23 @@ export async function seedWorkItemSessionDirect(
  * so a Playwright test can reach BacklogFileBrowserModal's real "Browse
  * files in this worktree" trigger, which is gated on a truthy worktreePath
  * (unlike ReviewChangesModal's trigger — see seedWorkItemSessionDirect).
+ *
+ * `fileCount`, when > 2, seeds that many flat fixture files instead of the
+ * default two — use it to force react-arborist's row virtualization (and
+ * later row recycling on scroll) in a FileTree e2e test.
  */
 export async function seedWorkSessionWithWorktreeDirect(
   request: APIRequestContext,
-  opts: { title: string; status?: string; repoPath?: string }
+  opts: { title: string; status?: string; repoPath?: string; fileCount?: number }
 ): Promise<{ itemId: string; sessionId: string; worktreePath: string }> {
   const resp = await request.post(`${BASE_URL}/api/debug/backlog/seed-work-session-with-worktree`, {
     headers: { "Content-Type": "application/json" },
-    data: { title: opts.title, status: opts.status ?? "review", repoPath: opts.repoPath ?? "" },
+    data: {
+      title: opts.title,
+      status: opts.status ?? "review",
+      repoPath: opts.repoPath ?? "",
+      fileCount: opts.fileCount ?? 0,
+    },
   });
   if (!resp.ok()) {
     throw new Error(`seedWorkSessionWithWorktreeDirect failed (${resp.status()}): ${await resp.text().catch(() => "")}`);

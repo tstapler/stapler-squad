@@ -33,6 +33,14 @@ jest.mock("@/lib/hooks/usePathCompletions", () => ({
   usePathCompletions: () => ({ entries: [], isLoading: false }),
 }));
 
+// RepoPathInput and BacklogItemForm itself both call useGitHubEnterpriseHosts
+// (ListGitHubAccounts RPC) to recognize GHE repo URLs. Stub it so tests don't
+// need a ConnectRPC transport and so it can't be mistaken for the file-upload
+// fetch calls asserted on below.
+jest.mock("@/lib/hooks/useGitHubEnterpriseHosts", () => ({
+  useGitHubEnterpriseHosts: () => ({ hosts: [], refetch: jest.fn() }),
+}));
+
 // BacklogItemForm now calls useBacklogService() directly for listPipelineModes.
 // Mock the whole hook so tests control the fetch's pending/resolved/rejected
 // state deterministically, without a real ConnectRPC transport.

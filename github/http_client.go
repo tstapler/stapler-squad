@@ -243,9 +243,11 @@ func getGHToken(_ context.Context) string {
 	return tok
 }
 
-// newGHRequest creates an authenticated GET request to the github.com REST API.
-func newGHRequest(ctx context.Context, path string) (*http.Request, error) {
-	return newGHRequestForHostWithToken(ctx, "", path, getGHToken(ctx))
+// newGHRequestForHost creates an authenticated GET request to host's REST API
+// (host "" means github.com), resolving the token via the same per-host
+// precedence as getGHTokenForAccount.
+func newGHRequestForHost(ctx context.Context, host, path string) (*http.Request, error) {
+	return newGHRequestForHostWithToken(ctx, host, path, getGHTokenForAccount(ctx, AccountRef{Host: host}))
 }
 
 // getGHTokenForAccount resolves a token for account, mirroring the per-host

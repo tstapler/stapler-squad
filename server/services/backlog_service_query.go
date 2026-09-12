@@ -260,16 +260,34 @@ func (s *BacklogService) SearchGitHubRepos(ctx context.Context, req *connect.Req
 	if limit <= 0 {
 		limit = 30
 	}
-	results, err := gh.SearchUserRepos(ctx, gh.AccountRef{}, req.Msg.Query, limit)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("search repos: %w", err))
+
+	hosts := append([]string{""}, s.EnterpriseHosts()...)
+	var results []gh.RepoResult
+	var lastErr error
+	for _, host := range hosts {
+		hostResults, err := gh.SearchUserRepos(ctx, gh.AccountRef{Host: host}, req.Msg.Query, limit)
+		if err != nil {
+			// A single host's account may not be authenticated; keep searching
+			// the rest and only fail outright if every host errors.
+			lastErr = err
+			continue
+		}
+		results = append(results, hostResults...)
 	}
+	if results == nil && lastErr != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("search repos: %w", lastErr))
+	}
+	if len(results) > limit {
+		results = results[:limit]
+	}
+
 	entries := make([]*sessionv1.GitHubRepoEntry, 0, len(results))
 	for _, r := range results {
 		entries = append(entries, &sessionv1.GitHubRepoEntry{
 			Owner:       r.Owner,
 			Repo:        r.Repo,
 			Description: r.Description,
+			Host:        r.Host,
 		})
 	}
 	return connect.NewResponse(&sessionv1.SearchGitHubReposResponse{Repos: entries}), nil
@@ -292,11 +310,11 @@ func (s *BacklogService) ListGitHubIssues(ctx context.Context, req *connect.Requ
 	if limit <= 0 {
 		limit = 30
 	}
-	repo, err := gh.NewRepoRef(req.Msg.Owner, req.Msg.Repo)
+	repo, err := gh.NewRepoRefWithHost(req.Msg.Owner, req.Msg.Repo, req.Msg.Host)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	results, err := gh.ListRepoIssues(ctx, gh.AccountRef{}, repo, req.Msg.State, req.Msg.Search, limit)
+	results, err := gh.ListRepoIssues(ctx, gh.AccountRef{Host: req.Msg.Host}, repo, req.Msg.State, req.Msg.Search, limit)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list issues: %w", err))
 	}
@@ -313,6 +331,7 @@ func (s *BacklogService) ListGitHubIssues(ctx context.Context, req *connect.Requ
 			Url:    r.URL,
 			Labels: r.Labels,
 			IsPr:   r.IsPR,
+			Host:   req.Msg.Host,
 		}
 		if !r.CreatedAt.IsZero() {
 			entry.CreatedAt = timestamppb.New(r.CreatedAt)

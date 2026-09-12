@@ -468,7 +468,7 @@ func TestAttemptBacklogNudge_FailedSend_StillReturnsNonZeroTime(t *testing.T) {
 	}
 
 	before := time.Now()
-	got := attemptBacklogNudge(inst, 6*time.Minute)
+	got := attemptBacklogNudge(context.Background(), inst, 6*time.Minute)
 
 	if got.IsZero() {
 		t.Fatal("attemptBacklogNudge returned zero time on failed send — this reproduces BUG-041: " +
@@ -497,7 +497,7 @@ func TestAttemptBacklogNudge_FailedSend_RateLimitsRetry(t *testing.T) {
 	if !nudgeSentAt.IsZero() || idle <= driverBacklogNudgeDelay {
 		t.Fatal("test setup invalid: nudge guard should be open before the first attempt")
 	}
-	nudgeSentAt = attemptBacklogNudge(inst, idle)
+	nudgeSentAt = attemptBacklogNudge(context.Background(), inst, idle)
 
 	// Second tick (simulating the very next driver poll, "idle" recomputed relative to the
 	// just-set nudgeSentAt so it is effectively ~0): guard must now be closed even though
