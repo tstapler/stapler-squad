@@ -37,6 +37,8 @@ const (
 // over its custom websocket transport before they reach here. This handler
 // exists to satisfy the ConnectRPC service interface and could be used by
 // non-browser gRPC/Connect clients.
+//
+//nolint:gocognit,gocyclo,funlen // pre-existing complexity relocated verbatim by the session_service.go split (sdd:fix-hotspot, 2026-09-12); reducing it is a separate follow-up, not a file move
 func (s *SessionService) StreamTerminal(
 	ctx context.Context,
 	stream *connect.BidiStream[sessionv1.TerminalData, sessionv1.TerminalData],
