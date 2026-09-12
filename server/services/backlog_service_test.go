@@ -3976,6 +3976,45 @@ func TestTriggerTriage_AutoSpawnSessionFalse_LeavesItemAtReadyForManualSpawn(t *
 	assert.Empty(t, creator.calls, "no session should be spawned without the opt-in toggle")
 }
 
+// TestCreateBacklogItem_should_SpawnSDDSession_When_PipelineModeSDDAndAutoSpawn is
+// the omnibar-driven-implementation combination guard: an sdd pipeline mode and
+// an auto-spawn-session opt-in are each individually proven elsewhere (see the
+// sibling tests above and TestSpawnSessionFromItem_should_UseModeSpecificInitialPrompt_When_
+// AutoSpawnSessionAndNonDefaultPipelineMode), but nothing previously exercised BOTH
+// together through the actual CreateBacklogItem RPC + TriggerTriage's automatic
+// completion-goroutine spawn path — the exact shape the new ParseBacklogItemIntent
+// review UI's "hand off to SDD" checkbox produces.
+func TestCreateBacklogItem_should_SpawnSDDSession_When_PipelineModeSDDAndAutoSpawn(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+	svc.SetTriageCleanupTimeout(30 * time.Second)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	pipelineMode := session.DefaultSDDPipelineModeSlug
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:            "sdd auto-handoff item",
+		RepoPath:         repoPath,
+		PipelineMode:     &pipelineMode,
+		AutoSpawnSession: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	assert.Equal(t, session.DefaultSDDPipelineModeSlug, *createResp.Msg.Item.PipelineMode)
+
+	wait.RequireEventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), itemID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusInProgress)
+	}, 20*time.Second, 50*time.Millisecond, "auto-handoff must carry the sdd-mode item all the way to in_progress")
+
+	assert.Len(t, creator.calls, 1, "a work session should be auto-spawned for the sdd+auto_spawn_session combination")
+}
+
 // TestTriggerTriage_PersistFailurePublishesNotification verifies the fix for the
 // swallowed-persistence-error bug: when the final idea->ready status transition fails
 // after a successful triage (e.g. a concurrent status change broke its precondition), the
