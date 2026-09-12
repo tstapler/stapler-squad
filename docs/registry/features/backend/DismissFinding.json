@@ -1,0 +1,12 @@
+{
+  "id": "DismissFinding",
+  "type": "backend",
+  "service": "InsightsService",
+  "method": "DismissFinding",
+  "protoFile": "proto/session/v1/insights.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/insights_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-12T11:13:00.459199541-07:00"
+}

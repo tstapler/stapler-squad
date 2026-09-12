@@ -1,6 +1,8 @@
 package tokens
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -295,6 +297,34 @@ func ComputeWasteScore(r *ParseResult, pt *PricingTable) *WasteScore {
 
 	ws := WasteScore(score)
 	return &ws
+}
+
+// ComputeFindingID derives a stable, content-addressed dismissal key for a
+// computed Finding. Basis is sessionID, falling back to conversationID for
+// orphan sessions — mirroring FindingCard's `finding.sessionId ||
+// finding.conversationId` fallback in the frontend.
+//
+// Hashing in the formatted message (not just sessionID+findingType) is
+// deliberate: ComputeFindings recomputes from the live *ParseResult on every
+// GetInsightsSummary call, and a still-ACTIVE session's transcript keeps
+// growing between calls, so a detector's verdict can change materially
+// (e.g. cache-hit rate crossing back above cacheHitFloor and later back
+// below it for an unrelated reason). Message text embeds every number the
+// detector's severity/impact decision depends on, so a materially different
+// recomputation always yields a different ID and is never mistaken for an
+// old dismissal — while a FINISHED session's immutable transcript
+// reproduces byte-identical text (and therefore the same ID) on every
+// recompute forever, so a dismissal there survives normal recomputation as
+// intended. This makes the ID self-correcting without needing to special-case
+// "is this session still active" — see the backlog acceptance criteria this
+// implements.
+func ComputeFindingID(sessionID, conversationID string, findingType FindingType, message string) string {
+	basis := sessionID
+	if basis == "" {
+		basis = conversationID
+	}
+	sum := sha256.Sum256([]byte(basis + "|" + findingType.String() + "|" + message))
+	return hex.EncodeToString(sum[:])[:24]
 }
 
 // clamp01 clamps v into [0, 1].

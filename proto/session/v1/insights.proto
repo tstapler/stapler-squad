@@ -22,6 +22,11 @@ service InsightsService {
   // on-demand when the session detail drawer opens (not embedded in list responses).
   rpc GetSessionTurnTimeline(GetSessionTurnTimelineRequest)
       returns (GetSessionTurnTimelineResponse) {}
+
+  // DismissFinding persists a waste finding as dismissed by its stable
+  // finding_id, so future GetInsightsSummary calls exclude it — see
+  // WasteFinding.finding_id's doc comment for the identity/recurrence contract.
+  rpc DismissFinding(DismissFindingRequest) returns (DismissFindingResponse) {}
 }
 
 // Severity classifies how urgently a WasteFinding should be acted on.
@@ -63,6 +68,14 @@ message WasteFinding {
   string      session_id        = 4;
   string      conversation_id   = 5;
   string      message           = 6;
+  // finding_id is a stable, content-addressed identity derived from
+  // (session_id or conversation_id) + finding_type + message, used as the
+  // DismissFinding key. Content-addressed rather than purely
+  // (session_id, finding_type) so a still-active session whose underlying
+  // condition changes (message/impact numbers change) gets a new finding_id
+  // and is never silently suppressed by an old dismissal — see
+  // ComputeFindingID's doc comment (session/tokens/findings.go).
+  string      finding_id        = 7;
 }
 
 // SessionTokenSummary is the per-session aggregated token record.
@@ -249,4 +262,19 @@ message GetSessionTurnTimelineRequest {
 // GetSessionTurnTimelineResponse returns the per-turn breakdown for one session.
 message GetSessionTurnTimelineResponse {
   repeated TurnTokenStat turns = 1;
+}
+
+// DismissFindingRequest identifies one WasteFinding to dismiss. session_id/
+// conversation_id/finding_type are redundant with finding_id (which already
+// encodes them) but are stored alongside it for debuggability/introspection.
+message DismissFindingRequest {
+  string      finding_id      = 1;
+  string      session_id      = 2;
+  string      conversation_id = 3;
+  FindingType finding_type    = 4;
+}
+
+// DismissFindingResponse confirms the dismissal was persisted.
+message DismissFindingResponse {
+  bool success = 1;
 }

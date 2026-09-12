@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -24,12 +25,27 @@ const findingsCap = 20
 // Compile-time check: InsightsService must implement the generated handler.
 var _ sessionv1connect.InsightsServiceHandler = (*InsightsService)(nil)
 
+// DismissedFindingsRepository is the seam for finding-dismissal persistence.
+// Satisfied implicitly by *session.Storage. nil (the zero value of
+// InsightsService.dismissedFindings) means the feature is unavailable — the
+// same "nil means unavailable" idiom as RulesService's configStore/aiClient —
+// so tests that construct InsightsService without wiring it still work.
+type DismissedFindingsRepository interface {
+	DismissFinding(ctx context.Context, data session.DismissedFindingData) error
+	ListDismissedFindingIDs(ctx context.Context) (map[string]bool, error)
+}
+
 // InsightsService implements the ConnectRPC InsightsServiceHandler.
 // It reads from a TokenStoreReader to serve token usage analytics.
 type InsightsService struct {
 	store      tokens.TokenStoreReader
 	pricing    *tokens.PricingTable
 	associator *tokens.Associator
+
+	// dismissedFindings persists DismissFinding calls and is consulted by
+	// GetInsightsSummary to filter dismissed findings out of the response.
+	// nil means dismissal is unavailable (see doc comment on the interface).
+	dismissedFindings DismissedFindingsRepository
 
 	// logMu guards loggedUnpricedFamilies.
 	logMu sync.Mutex
@@ -53,6 +69,12 @@ func NewInsightsService(
 		associator:             associator,
 		loggedUnpricedFamilies: make(map[string]bool),
 	}
+}
+
+// SetDismissedFindingsStore wires dismissal persistence (nil disables it —
+// see DismissedFindingsRepository's doc comment).
+func (s *InsightsService) SetDismissedFindingsStore(store DismissedFindingsRepository) {
+	s.dismissedFindings = store
 }
 
 // warnNewUnpricedFamilies logs a warning for each family in families that has
@@ -138,7 +160,7 @@ func buildSessionSummary(
 
 // GetInsightsSummary returns aggregated token and cost data for a time range.
 func (s *InsightsService) GetInsightsSummary(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[sessionv1.GetInsightsSummaryRequest],
 ) (*connect.Response[sessionv1.GetInsightsSummaryResponse], error) {
 	results := s.store.GetAll()
@@ -178,6 +200,17 @@ func (s *InsightsService) GetInsightsSummary(
 	var sessionSnapshot []tokens.SessionRecord
 	if s.associator != nil {
 		sessionSnapshot = s.associator.Snapshot()
+	}
+
+	// Fetched once per request (not per-finding) — see AllRules's identical
+	// small-table-full-scan rationale.
+	var dismissedFindingIDs map[string]bool
+	if s.dismissedFindings != nil {
+		if ids, err := s.dismissedFindings.ListDismissedFindingIDs(ctx); err != nil {
+			log.Warn("insights: failed to load dismissed finding IDs, findings will not be filtered", "err", err)
+		} else {
+			dismissedFindingIDs = ids
+		}
 	}
 
 	for _, r := range results {
@@ -256,6 +289,10 @@ func (s *InsightsService) GetInsightsSummary(
 		// response-level list (ADR-002) — not a SessionTokenSummary field, so
 		// buildSessionSummary doesn't compute them.
 		for _, f := range tokens.ComputeFindings(r, s.pricing) {
+			findingID := tokens.ComputeFindingID(sessionID, r.SessionUUID, f.Type, f.Message)
+			if dismissedFindingIDs[findingID] {
+				continue
+			}
 			allFindings = append(allFindings, &sessionv1.WasteFinding{
 				FindingType:     f.Type,
 				Severity:        f.Severity,
@@ -263,6 +300,7 @@ func (s *InsightsService) GetInsightsSummary(
 				SessionId:       sessionID,
 				ConversationId:  r.SessionUUID,
 				Message:         f.Message,
+				FindingId:       findingID,
 			})
 		}
 
@@ -670,6 +708,35 @@ func (s *InsightsService) GetSessionTurnTimeline(
 		turns = append(turns, stat)
 	}
 	return connect.NewResponse(&sessionv1.GetSessionTurnTimelineResponse{Turns: turns}), nil
+}
+
+// DismissFinding persists a WasteFinding dismissal keyed by its finding_id,
+// so subsequent GetInsightsSummary calls exclude it. Returns CodeUnimplemented
+// when no DismissedFindingsRepository has been wired (see
+// SetDismissedFindingsStore).
+// +api: DismissFinding
+func (s *InsightsService) DismissFinding(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DismissFindingRequest],
+) (*connect.Response[sessionv1.DismissFindingResponse], error) {
+	if s.dismissedFindings == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("finding dismissal is not available"))
+	}
+	if req.Msg.FindingId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("finding_id is required"))
+	}
+
+	err := s.dismissedFindings.DismissFinding(ctx, session.DismissedFindingData{
+		FindingID:      req.Msg.FindingId,
+		SessionID:      req.Msg.SessionId,
+		ConversationID: req.Msg.ConversationId,
+		FindingType:    int32(req.Msg.FindingType),
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("dismiss finding: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.DismissFindingResponse{Success: true}), nil
 }
 
 // ---------- helpers ----------

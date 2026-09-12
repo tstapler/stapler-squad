@@ -1492,6 +1492,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 		associator := tokens.NewAssociator(storage)
 		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator)
+		insightsSvc.SetDismissedFindingsStore(storage)
 		sessionService.SetTokenStoreReader(tokenStore)
 		backlogSvc.SetTokenStore(tokenStore, pricing)
 		if sessionSummaryGenerator != nil {
