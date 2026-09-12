@@ -5418,3 +5418,57 @@ func TestCountLiveBacklogWorkSessions_should_ExcludeJulesWorkRows_When_MixedRole
 	require.NoError(t, err)
 	assert.Equal(t, 0, count, "an open jules_work row alone must not count toward MaxConcurrentBacklogWorkItems")
 }
+
+// TestCancelTriage_should_EndRunningSessionAndReportCancelled_When_TriageIsActive
+// covers CancelTriage's happy path (docs/registry/features/backend/backlog/cancel-triage.json
+// previously had no test coverage at all).
+func TestCancelTriage_should_EndRunningSessionAndReportCancelled_When_TriageIsActive(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	liveUUID := "cancel-triage-live"
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{liveUUID: true}}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item with a running triage session",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: liveUUID,
+		SessionRole: string(session.SessionRoleTriage),
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.CancelTriage(t.Context(), connect.NewRequest(&sessionv1.CancelTriageRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Cancelled)
+
+	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, is.ID, sessions[0].ID)
+	assert.NotNil(t, sessions[0].EndedAt, "CancelTriage must mark the triage session ended")
+}
+
+// TestCancelTriage_should_ReportNotCancelled_When_NoTriageSessionRunning covers the
+// no-op path: an item with no active triage session should not error, just report
+// that nothing was cancelled.
+func TestCancelTriage_should_ReportNotCancelled_When_NoTriageSessionRunning(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item with no triage session",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.CancelTriage(t.Context(), connect.NewRequest(&sessionv1.CancelTriageRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Cancelled)
+}
