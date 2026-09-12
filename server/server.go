@@ -328,9 +328,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	tmux.RegisterForkPressureAlert(func(level tmux.ForkPressureLevel, stats tmux.ForkPressureStats) {
 		event, body := buildForkPressureNotification(level, stats)
 		deps.EventBus.Publish(event)
+
+		if level == tmux.ForkPressureOK {
+			log.Info("[ForkPressure] cleared", "body", body)
+			return
+		}
 		log.Warn("[ForkPressure] alert dispatched", "level", level, "body", body)
 
 		// Immediately reconcile to mark dead sessions Stopped, cutting spawn rate.
+		// Nothing to reconcile on a clear (handled above), so this only runs for
+		// a genuinely elevated level.
 		if deps.ReviewQueuePoller != nil {
 			deps.ReviewQueuePoller.ForceReconcile()
 		}
@@ -1672,34 +1679,52 @@ const pruneOrphanedMinUptime = 5 * time.Minute
 // cause the pruning sweep to delete every session-scoped notification record on a
 // fresh start or after a transient ListInstanceData error — hence the explicit nil
 // returns below rather than returning an empty map in those cases.
+// forkPressureNotificationID is the stable notification-record ID used across a
+// whole fork-pressure episode (fire, escalate, and clear), so repeated calls
+// update one record in place instead of each becoming a new, separately-tracked
+// notification. See server/notifications/store.go's Append, whose exact-ID-match
+// branch now merges changed content into the existing record instead of
+// silently no-op'ing (backlog item cfda07b7-73fb-42e1-a21b-7fdf8a052a14).
+const forkPressureNotificationID = "fork-pressure-status"
+
 // buildForkPressureNotification builds the event and body text for a fork-pressure
-// alert. Extracted from RegisterForkPressureAlert's closure so it's unit-testable
-// without spinning up the whole server. Always urgent-but-not-important: fork
-// pressure (dead sessions flooding the poller with fork() calls) is transient
-// self-monitoring telemetry that resolves on its own once ForceReconcile marks the
-// dead sessions Stopped, cutting spawn rate — not a real, lasting outcome problem
-// (see the classification table in the notification push-gate redesign PR), so it
-// must never push regardless of warning-vs-critical level.
+// alert, including the clear signal (level == tmux.ForkPressureOK) that
+// checkPressure now emits once an episode ends. Extracted from
+// RegisterForkPressureAlert's closure so it's unit-testable without spinning up
+// the whole server. Always urgent-but-not-important: fork pressure (dead
+// sessions flooding the poller with fork() calls) is transient self-monitoring
+// telemetry that resolves on its own once ForceReconcile marks the dead
+// sessions Stopped, cutting spawn rate — not a real, lasting outcome problem
+// (see the classification table in the notification push-gate redesign PR), so
+// it must never push regardless of warning/critical/cleared level.
+//
+// NotificationType is intentionally held constant (WARNING) across every level,
+// including the clear -- not swapped to ERROR at Critical as before -- so the
+// store's (SessionID, NotificationType) dedup key keeps matching the same
+// record through an escalation instead of a level change spawning a second
+// one. Severity is instead conveyed via the title and the "fork_pressure_level"
+// metadata key, which the frontend status banner reads.
 func buildForkPressureNotification(level tmux.ForkPressureLevel, stats tmux.ForkPressureStats) (*events.Event, string) {
+	title := fmt.Sprintf("Fork Pressure: %s", level)
 	body := fmt.Sprintf(
 		"Subprocess failures: %d/%ds | Spawns: %d/%ds | Zombies: %d | Level: %s",
 		stats.FailuresInWindow, int(stats.WindowDuration.Seconds()),
 		stats.SpawnsInWindow, int(stats.WindowDuration.Seconds()),
 		stats.ZombiesInWindow, level,
 	)
-	notifType := int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING)
-	if level == tmux.ForkPressureCritical {
-		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR)
+	if level == tmux.ForkPressureOK {
+		title = "Fork Pressure: cleared"
+		body = "Fork pressure has returned to normal."
 	}
 	event := events.NewNotificationEvent(
 		"fork-pressure",
 		"System",
-		uuid.New().String(),
-		notifType,
+		forkPressureNotificationID,
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
 		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM), // urgent, important = true, false
-		fmt.Sprintf("Fork Pressure: %s", level),
+		title,
 		body,
-		nil,
+		map[string]string{"fork_pressure_level": level.String()},
 	)
 	return event, body
 }

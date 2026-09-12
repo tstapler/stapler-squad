@@ -71,6 +71,14 @@ func TestMemoryPressureNotifier_checkOnce_should_NotNotify_When_RatioFuncReports
 // regression test for the hysteresis gap (memoryPressureWarnRatio=0.90,
 // memoryPressureClearRatio=0.75): usage sitting between the two thresholds must neither
 // re-notify nor re-arm, only a drop below the clear threshold re-arms.
+//
+// The clear step DOES fire an explicit clear notification (backlog item
+// cfda07b7-73fb-42e1-a21b-7fdf8a052a14, AC4) -- intentionally updated from the
+// prior "clearing itself doesn't notify" behavior, which left the persisted
+// notification record (and the status banner reading it) stuck at "near
+// limit" forever after the condition actually ended. Same stable ID and
+// NotificationType as the warn notification, so it updates that record in
+// place instead of creating a second one.
 func TestMemoryPressureNotifier_checkOnce_should_ReArm_When_RatioDropsBelowClearThreshold(t *testing.T) {
 	poller := newTestNotifierPoller()
 	bus := events.NewEventBus(4)
@@ -82,17 +90,21 @@ func TestMemoryPressureNotifier_checkOnce_should_ReArm_When_RatioDropsBelowClear
 
 	notifier.ratioFunc = fakeRatio(0.95)
 	notifier.checkOnce()
-	drainOneNotification(t, ch)
+	warnEvent := drainOneNotification(t, ch)
 
 	// Dropped, but still inside the hysteresis gap -- not re-armed yet.
 	notifier.ratioFunc = fakeRatio(0.80)
 	notifier.checkOnce()
 	assertNoNotification(t, ch)
 
-	// Below the clear threshold -- re-armed.
+	// Below the clear threshold -- re-armed, and fires an explicit clear signal
+	// carrying the same stable ID/type as the warn notification.
 	notifier.ratioFunc = fakeRatio(0.70)
 	notifier.checkOnce()
-	assertNoNotification(t, ch) // clearing itself doesn't notify
+	clearEvent := drainOneNotification(t, ch)
+	assert.Equal(t, warnEvent.NotificationID, clearEvent.NotificationID, "clear must reuse the warn notification's stable ID")
+	assert.Equal(t, warnEvent.NotificationType, clearEvent.NotificationType, "clear must keep NotificationType constant so the dedup key still matches")
+	assert.Equal(t, "ok", clearEvent.NotificationMetadata["memory_pressure_level"])
 
 	// Back over the warn threshold -- fires again now that it's re-armed.
 	notifier.ratioFunc = fakeRatio(0.95)
