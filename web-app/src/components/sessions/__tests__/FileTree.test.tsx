@@ -553,6 +553,24 @@ describe("TreeRow – roving tabindex", () => {
     fireEvent.click(container.querySelector("[tabindex]")!);
     expect(node.handleClick).toHaveBeenCalledTimes(1);
   });
+
+  it("stops a focus event from bubbling to an ancestor listener", () => {
+    const parentOnFocus = jest.fn();
+    const node = { isFocused: true, handleClick: jest.fn() } as unknown as Parameters<
+      typeof TreeRow
+    >[0]["node"];
+    const { container } = render(
+      <div onFocus={parentOnFocus}>
+        <TreeRow node={node} innerRef={() => {}} attrs={{}}>
+          <span>row content</span>
+        </TreeRow>
+      </div>
+    );
+
+    fireEvent.focus(container.querySelector("[tabindex]")!);
+
+    expect(parentOnFocus).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

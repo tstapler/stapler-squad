@@ -454,6 +454,14 @@ test.describe('Accessibility — backlog live updates (WCAG 4.1.3 AA)', () => {
       el.scrollTop = el.scrollHeight;
     });
 
+    // Not assertTabWrapsWithinDialog here: that helper's "wraps back to the
+    // exact starting element" check assumes stable DOM node identity, which
+    // virtualization deliberately breaks — a row scrolled out of view can be
+    // unmounted and a different row's DOM node recycled into its place, so
+    // the specific node focus started on may never literally recur (verified
+    // by running this with the strict check: it timed out, not because focus
+    // escaped, but because that exact node was gone). Only the containment
+    // guarantee is a valid invariant across a scroll.
     for (let i = 0; i < 30; i++) {
       await page.keyboard.press('Tab');
       const stillInside = await dialog.evaluate(

@@ -388,11 +388,8 @@ function NodeRenderer({
 
 // ---- Row renderer ----
 
-// react-arborist's DefaultRow hardcodes tabIndex=-1 forever (it relies on
-// imperative .focus() calls, not real tab stops), which breaks any
-// [tabindex]:not([tabindex="-1"]) based focus-trap query (see useFocusTrap.ts)
-// the instant a row receives DOM focus. Override to a real roving-tabindex
-// pattern: exactly the focused row is a tab stop, everything else isn't.
+// Real roving tabindex: react-arborist's DefaultRow hardcodes tabIndex=-1
+// forever, which breaks useFocusTrap's [tabindex]:not([tabindex="-1"]) query.
 // Exported for unit testing.
 export function TreeRow<T>({ node, innerRef, attrs, children }: RowRendererProps<T>) {
   return (
@@ -748,21 +745,11 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
 
       switch (e.key) {
         case "Tab": {
-          // react-arborist's own <Tree> container (a descendant of this div,
-          // rendered by the unexported DefaultContainer) already intercepted
-          // this event on its way up (bubble fires inside-out) and called
-          // preventDefault() + moved DOM focus via its own document-wide,
-          // dialog-unaware walk (react-arborist has no public API to disable
-          // this — DefaultContainer isn't safely replaceable via the
-          // renderContainer prop, since it depends on unexported internals
-          // like useTreeApi()/useDataUpdates() with no way to reimplement it
-          // from application code). tree.focusedNode still correctly reflects
-          // the row that had focus before that walk ran, since it moves DOM
-          // focus directly rather than going through tree.focus() — use it to
-          // redo the move correctly: step within the tree like j/k, or hand
-          // off to our own stable container element at the boundary so
-          // useFocusTrap's document-level listener (which sees this event
-          // next) resolves the surrounding dialog's wrap correctly.
+          // react-arborist's own DefaultContainer already moved DOM focus via
+          // its document-wide walk (not safely overridable — depends on
+          // unexported internals). Redo the move correctly using the row it
+          // moved focus from: step within the tree like j/k, or at a boundary
+          // hand off to our own container so useFocusTrap resolves the wrap.
           if (!focusedNode) break;
           e.preventDefault();
           const idx = visible.findIndex((n) => n.id === focusedNode.id);
