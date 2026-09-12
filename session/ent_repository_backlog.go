@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
@@ -40,24 +41,61 @@ func (r *EntRepository) SetItemChangePublisher(p ItemChangePublisher) {
 	r.itemChangePublisher = p
 }
 
+// statusEventInput bundles recordStatusEvent's write fields — kept as one
+// struct rather than a long same-typed-string parameter list (see the
+// primitive-obsession-checklist skill).
+type statusEventInput struct {
+	evClient *ent.BacklogStatusEventClient
+	itemID   uuid.UUID
+	// fromStatus/toStatus/triggeredBy/note/stageNameSnapshot mirror the
+	// BacklogStatusEvent ent schema fields 1:1 — see that schema
+	// (session/ent/schema/backlog_status_event.go) for field semantics.
+	fromStatus, toStatus, triggeredBy, note, stageNameSnapshot string
+}
+
 // recordStatusEvent appends an immutable BacklogStatusEvent audit row. Pass
 // r.client.BacklogStatusEvent for a standalone write, or tx.BacklogStatusEvent to
 // write inside an existing transaction — required when called from ReconcileStuckItems
 // since SQLite is capped to one connection (SetMaxOpenConns(1)) and calling back through
 // the non-tx client would self-deadlock. A write failure is logged, not returned: an
-// audit-log gap must never block the status transition itself.
-func recordStatusEvent(ctx context.Context, evClient *ent.BacklogStatusEventClient, itemID uuid.UUID, fromStatus, toStatus, triggeredBy, note string) {
-	evCreate := evClient.Create().
-		SetItemID(itemID).
-		SetFromStatus(fromStatus).
-		SetToStatus(toStatus).
-		SetTriggeredBy(triggeredBy)
-	if note != "" {
-		evCreate = evCreate.SetNote(note)
+// audit-log gap must never block the status transition itself. in.stageNameSnapshot is
+// Epic 2.5's frozen-at-entry StageConfigSnapshot name (empty when the destination
+// status has no matching BacklogStage row, e.g. before seeding has run) — see
+// resolveStageNameSnapshot.
+func recordStatusEvent(ctx context.Context, in statusEventInput) {
+	evCreate := in.evClient.Create().
+		SetItemID(in.itemID).
+		SetFromStatus(in.fromStatus).
+		SetToStatus(in.toStatus).
+		SetTriggeredBy(in.triggeredBy)
+	if in.note != "" {
+		evCreate = evCreate.SetNote(in.note)
+	}
+	if in.stageNameSnapshot != "" {
+		evCreate = evCreate.SetStageNameSnapshot(in.stageNameSnapshot)
 	}
 	if _, err := evCreate.Save(ctx); err != nil {
-		log.ErrorLog().Printf("[recordStatusEvent] failed to record item=%s %s->%s triggeredBy=%s: %v", itemID, fromStatus, toStatus, triggeredBy, err)
+		log.ErrorLog().Printf("[recordStatusEvent] failed to record item=%s %s->%s triggeredBy=%s: %v", in.itemID, in.fromStatus, in.toStatus, in.triggeredBy, err)
 	}
+}
+
+// resolveStageNameSnapshot looks up the human-readable Name of the BacklogStage
+// row matching toStatus's slug, for Epic 2.5's stage_name_snapshot audit-trail
+// column: captured once, at transition-write time, so history keeps rendering
+// the stage's original name even after that row is later renamed or deleted.
+// Returns "" (never an error) when no matching row exists — e.g. the
+// EnsureBuiltInWorkflowStages seed hasn't run yet — since a resolution miss
+// must never block the transition itself, mirroring recordStatusEvent's own
+// best-effort discipline. Takes *ent.BacklogStageClient rather than *ent.Client
+// so callers already inside a transaction can pass tx.BacklogStage — the same
+// "standalone client or tx client" seam recordStatusEvent's evClient parameter
+// uses (see its doc comment).
+func resolveStageNameSnapshot(ctx context.Context, stageClient *ent.BacklogStageClient, toStatus BacklogStatus) string {
+	stage, err := stageClient.Query().Where(backlogstage.Slug(string(toStatus))).Only(ctx)
+	if err != nil {
+		return ""
+	}
+	return stage.Name
 }
 
 // --- converters ---
@@ -141,12 +179,13 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 // backlogStatusEventToData maps an *ent.BacklogStatusEvent to a BacklogStatusEventData DTO.
 func backlogStatusEventToData(e *ent.BacklogStatusEvent) BacklogStatusEventData {
 	return BacklogStatusEventData{
-		ID:          e.ID.String(),
-		FromStatus:  e.FromStatus,
-		ToStatus:    e.ToStatus,
-		TriggeredBy: e.TriggeredBy,
-		Note:        e.Note,
-		CreatedAt:   e.CreatedAt,
+		ID:                e.ID.String(),
+		FromStatus:        e.FromStatus,
+		ToStatus:          e.ToStatus,
+		TriggeredBy:       e.TriggeredBy,
+		Note:              e.Note,
+		StageNameSnapshot: e.StageNameSnapshot,
+		CreatedAt:         e.CreatedAt,
 	}
 }
 
@@ -1226,7 +1265,15 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string, preco
 		return nil, fmt.Errorf("failed to reload backlog item %s after archive: %w", id, err)
 	}
 
-	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, current.Status, string(BacklogStatusArchived), triggeredBy, note)
+	recordStatusEvent(ctx, statusEventInput{
+		evClient:          r.client.BacklogStatusEvent,
+		itemID:            parsedID,
+		fromStatus:        current.Status,
+		toStatus:          string(BacklogStatusArchived),
+		triggeredBy:       triggeredBy,
+		note:              note,
+		stageNameSnapshot: resolveStageNameSnapshot(ctx, r.client.BacklogStage, BacklogStatusArchived),
+	})
 
 	result := backlogItemToData(item)
 
@@ -1273,7 +1320,14 @@ func (r *EntRepository) UnarchiveBacklogItem(ctx context.Context, id string) (*B
 		return nil, fmt.Errorf("failed to unarchive backlog item %s: %w", id, err)
 	}
 
-	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, current.Status, string(BacklogStatusIdea), TriggeredByUser, "")
+	recordStatusEvent(ctx, statusEventInput{
+		evClient:          r.client.BacklogStatusEvent,
+		itemID:            parsedID,
+		fromStatus:        current.Status,
+		toStatus:          string(BacklogStatusIdea),
+		triggeredBy:       TriggeredByUser,
+		stageNameSnapshot: resolveStageNameSnapshot(ctx, r.client.BacklogStage, BacklogStatusIdea),
+	})
 
 	result := backlogItemToData(item)
 
@@ -1461,7 +1515,15 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 	if precondition != nil {
 		note = precondition.Note
 	}
-	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, fromStatus, string(toStatus), triggeredBy, note)
+	recordStatusEvent(ctx, statusEventInput{
+		evClient:          r.client.BacklogStatusEvent,
+		itemID:            parsedID,
+		fromStatus:        fromStatus,
+		toStatus:          string(toStatus),
+		triggeredBy:       triggeredBy,
+		note:              note,
+		stageNameSnapshot: resolveStageNameSnapshot(ctx, r.client.BacklogStage, toStatus),
+	})
 
 	result := backlogItemToData(item)
 
@@ -1658,7 +1720,15 @@ func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Cont
 	if precondition != nil {
 		note = precondition.Note
 	}
-	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, fromStatus, string(toStatus), triggeredBy, note)
+	recordStatusEvent(ctx, statusEventInput{
+		evClient:          r.client.BacklogStatusEvent,
+		itemID:            parsedID,
+		fromStatus:        fromStatus,
+		toStatus:          string(toStatus),
+		triggeredBy:       triggeredBy,
+		note:              note,
+		stageNameSnapshot: resolveStageNameSnapshot(ctx, r.client.BacklogStage, toStatus),
+	})
 
 	result := backlogItemToData(item)
 

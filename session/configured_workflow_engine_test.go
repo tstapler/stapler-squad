@@ -7,12 +7,15 @@ package session
 // ConfiguredWorkflowEngine.
 
 import (
+	"bytes"
 	"context"
+	stdlog "log"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
@@ -241,6 +244,68 @@ func TestConfiguredWorkflowEngine_should_AllowNewCustomTransitionImmediately_Whe
 
 	require.True(t, engine.CanTransition(BacklogStatusIdea, BacklogStatus(customSlug)),
 		"new transition must be legal immediately after InvalidateCache, with no redeploy")
+}
+
+// TestAllowedTransitions_should_ReturnSnapshottedTransitionsWithWarnLog_When_ItemsCurrentStageWasSinceDeleted
+// covers Epic 2.5, Story 2.5.2's acceptance criterion: once a custom stage an
+// item is currently sitting on is deleted (cascading away its
+// StageTransition rows too — session/ent/schema/backlog_stage.go's
+// OnDelete(Cascade) edges), AllowedTransitions/CanTransition must fall back
+// to the item's own captured StageConfigSnapshot rather than reporting an
+// empty slice/false, and must log a Warn noting the live config is stale.
+// Not run with t.Parallel(): SetWarningLogForTest swaps a shared
+// package-level logger (see liveness_cache_test.go's identical convention).
+func TestAllowedTransitions_should_ReturnSnapshottedTransitionsWithWarnLog_When_ItemsCurrentStageWasSinceDeleted(t *testing.T) {
+	engine, client := newSeededConfiguredWorkflowEngine(t)
+	ctx := context.Background()
+
+	customStage, err := client.BacklogStage.Create().
+		SetSlug("design-review").
+		SetName("Design Review").
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	readyStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(BacklogStatusReady))).Only(ctx)
+	require.NoError(t, err)
+
+	_, err = client.StageTransition.Create().
+		SetFromStageID(customStage.ID).
+		SetToStageID(readyStage.ID).
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+	require.NoError(t, engine.InvalidateCache(ctx))
+
+	const customSlug = BacklogStatus("design-review")
+	require.True(t, engine.CanTransition(customSlug, BacklogStatusReady),
+		"sanity: transition must be legal while the stage is still live")
+	require.ElementsMatch(t, []BacklogStatus{BacklogStatusReady}, engine.AllowedTransitions(customSlug))
+
+	// Delete the stage while an item is still sitting on it — cascades away
+	// its outgoing StageTransition row too.
+	require.NoError(t, client.BacklogStage.DeleteOneID(customStage.ID).Exec(ctx))
+	require.NoError(t, engine.InvalidateCache(ctx))
+
+	// No fallback supplied: a defined empty/false answer, never a panic.
+	require.Empty(t, engine.AllowedTransitions(customSlug))
+	require.False(t, engine.CanTransition(customSlug, BacklogStatusReady))
+
+	var buf bytes.Buffer
+	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
+	t.Cleanup(func() { tslog.SetWarningLogForTest(orig) })
+
+	// With the item's own captured StageConfigSnapshot: the transitions legal
+	// at the moment it entered the now-deleted stage.
+	fallback := &StageConfigSnapshot{
+		StageName:          "Design Review",
+		AllowedTransitions: []BacklogStatus{BacklogStatusReady},
+	}
+	assert.Equal(t, []BacklogStatus{BacklogStatusReady}, engine.AllowedTransitions(customSlug, fallback))
+	assert.True(t, engine.CanTransition(customSlug, BacklogStatusReady, fallback))
+	assert.False(t, engine.CanTransition(customSlug, BacklogStatusDone, fallback),
+		"fallback must only legalize transitions actually present in the snapshot")
+	assert.Contains(t, buf.String(), "design-review", "expected a Warn log naming the stale stage")
 }
 
 // acCriteriaAllDone / acCriteriaOneUnchecked build serialized AcCriteriaJSON

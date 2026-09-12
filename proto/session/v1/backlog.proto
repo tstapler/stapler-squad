@@ -132,6 +132,12 @@ message BacklogStatusEvent {
   // captured durably (session.BacklogStatusEventData.Note) but previously never
   // surfaced over the wire — the "why" behind reviewer/system decisions.
   optional string note = 6;
+  // stage_name_snapshot is the destination stage's human-readable name,
+  // frozen at the moment of this transition (Epic 2.5's StageConfigSnapshot
+  // discipline — session.BacklogStatusEventData.StageNameSnapshot) so
+  // item-detail history keeps rendering the original name after that
+  // BacklogStage row is later renamed or deleted.
+  optional string stage_name_snapshot = 7;
 }
 
 // BacklogProgressNote records a single report_progress call against one of a

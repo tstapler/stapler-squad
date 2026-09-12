@@ -42,6 +42,35 @@ type ConfiguredWorkflowEngine struct {
 
 var _ WorkflowEngine = (*ConfiguredWorkflowEngine)(nil)
 
+// StageConfigSnapshot is a frozen, per-item snapshot of the stage config a
+// BacklogItem's current stage carried when captured, used as a fallback
+// answer for CanTransition/AllowedTransitions when that stage has since been
+// deleted from the live stageConfigCache (Epic 2.5, Story 2.5.2). Mirrors
+// AcSnapshot's "history/behavior survives later config edits" discipline —
+// see plan.md's Domain Glossary entry for StageConfigSnapshot. Building and
+// persisting this snapshot per item is a follow-up concern; this type only
+// defines the shape CanTransition/AllowedTransitions consume when a caller
+// already has one in hand.
+type StageConfigSnapshot struct {
+	// StageName is the stage's human-readable name at snapshot time — the
+	// same value Story 2.5.1 freezes onto BacklogStatusEvent.StageNameSnapshot.
+	StageName string
+	// AllowedTransitions is the set of destination stages that were legal
+	// from this stage at snapshot time.
+	AllowedTransitions []BacklogStatus
+}
+
+// stageConfigSnapshotFallback returns the first element of fallback, or nil
+// if fallback is empty — centralizing the "optional trailing parameter"
+// unwrap CanTransition/AllowedTransitions both need for their variadic
+// fallback argument.
+func stageConfigSnapshotFallback(fallback []*StageConfigSnapshot) *StageConfigSnapshot {
+	if len(fallback) == 0 {
+		return nil
+	}
+	return fallback[0]
+}
+
 // NewConfiguredWorkflowEngine constructs a ConfiguredWorkflowEngine backed by
 // repo, doing one synchronous cache.Load at construction time. Mirrors
 // NewPipelineEngine's non-fatal-boot-failure posture (session/pipeline_engine.go):
@@ -65,15 +94,49 @@ func (e *ConfiguredWorkflowEngine) InvalidateCache(ctx context.Context) error {
 	return e.cache.Invalidate(ctx, e.repo)
 }
 
-// CanTransition implements WorkflowEngine.
-func (e *ConfiguredWorkflowEngine) CanTransition(from, to BacklogStatus) bool {
-	_, ok := e.cache.Get(from, to)
-	return ok
+// CanTransition implements WorkflowEngine. When from is not present at all in
+// the live stageConfigCache — the from-stage was since deleted — and a
+// non-nil fallback StageConfigSnapshot is supplied, it falls back to
+// checking to against the snapshot's own frozen AllowedTransitions (Story
+// 2.5.2) rather than unconditionally reporting false, logging a Warn that
+// the live config is stale. A from-stage still present in the live cache
+// (even with a different edge set than the snapshot) never consults the
+// fallback — the live graph is always authoritative when it has an opinion.
+func (e *ConfiguredWorkflowEngine) CanTransition(from, to BacklogStatus, fallback ...*StageConfigSnapshot) bool {
+	if _, ok := e.cache.Get(from, to); ok {
+		return true
+	}
+	if len(e.cache.AllowedTransitions(from)) > 0 {
+		return false
+	}
+	snap := stageConfigSnapshotFallback(fallback)
+	if snap == nil {
+		return false
+	}
+	for _, allowed := range snap.AllowedTransitions {
+		if allowed == to {
+			log.WarningLog().Printf("[ConfiguredWorkflowEngine] stage %q not found in live cache (likely deleted); allowing %s->%s from item's captured StageConfigSnapshot", from, from, to)
+			return true
+		}
+	}
+	return false
 }
 
-// AllowedTransitions implements WorkflowEngine.
-func (e *ConfiguredWorkflowEngine) AllowedTransitions(from BacklogStatus) []BacklogStatus {
+// AllowedTransitions implements WorkflowEngine. When from is not present at
+// all in the live stageConfigCache — the from-stage was since deleted — and a
+// non-nil fallback StageConfigSnapshot is supplied, it returns the
+// snapshot's own frozen AllowedTransitions (Story 2.5.2) rather than an empty
+// slice, logging a Warn that the live config is stale. A from-stage still
+// present in the live cache (even with zero live edges, e.g. a legitimate
+// dead-end) never consults the fallback.
+func (e *ConfiguredWorkflowEngine) AllowedTransitions(from BacklogStatus, fallback ...*StageConfigSnapshot) []BacklogStatus {
 	result := e.cache.AllowedTransitions(from)
+	if len(result) == 0 {
+		if snap := stageConfigSnapshotFallback(fallback); snap != nil {
+			log.WarningLog().Printf("[ConfiguredWorkflowEngine] stage %q not found in live cache (likely deleted); falling back to item's captured StageConfigSnapshot with %d transition(s)", from, len(snap.AllowedTransitions))
+			result = append([]BacklogStatus(nil), snap.AllowedTransitions...)
+		}
+	}
 	if result == nil {
 		result = []BacklogStatus{}
 	}
