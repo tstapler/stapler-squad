@@ -83,6 +83,111 @@ export const STUCK_REASON_CLASS: Record<StuckReason, string> = {
   [StuckReason.STEER_FAILED]: styles.chipSteerFailed,
 };
 
+/**
+ * Display priority when a single backlog item has multiple simultaneous open
+ * StuckReason rows — ListStuckBacklogItems can return more than one row per
+ * item_id (e.g. BOUNCING + BOUNCE_CAP_EXHAUSTED + MULTIPLE_REASONS all open
+ * at once). Lower number = shown as the primary reason first. Keyed as
+ * `Record<StuckReason, number>` for the same exhaustiveness reason as the
+ * maps above: a new StuckReason value with no priority entry is a TypeScript
+ * compile error here, not a silent tie (every unmapped value defaulting to
+ * `undefined`, which breaks the `<` comparison) at runtime.
+ *
+ * BacklogItemDetail and BacklogBoard/BacklogItemCard previously each
+ * collapsed a multi-reason item to one reason independently (`.find()` vs.
+ * `Map` construction order) with no shared order between them, so the same
+ * item could show two different "the" reasons in two different views — see
+ * BUG-105. Both call `selectPrimaryStuckItem`/`summarizeStuckItemGroup`
+ * below instead of picking a reason themselves.
+ *
+ * Ordering rationale: the two synthetic "automated remediation has given up"
+ * signals (BOUNCE_CAP_EXHAUSTED, then the generic MULTIPLE_REASONS escalation
+ * flag) outrank every specific in-progress reason, since they mean "stop
+ * auto-retrying, a human needs to look" — showing a lower-severity reason
+ * like BOUNCING instead would read as "still auto-retrying" and could steer
+ * an operator into the wrong action. Reasons with an available remediation
+ * action outrank purely informational/positive ones (LIKELY_FLAKY,
+ * PR_READY_UNMERGED), and UNSPECIFIED always sorts last.
+ */
+export const STUCK_REASON_PRIORITY: Record<StuckReason, number> = {
+  [StuckReason.BOUNCE_CAP_EXHAUSTED]: 0,
+  [StuckReason.MULTIPLE_REASONS]: 1,
+  [StuckReason.STEER_FAILED]: 2,
+  [StuckReason.PUSH_FAILED]: 3,
+  [StuckReason.SPAWN_FAILED]: 4,
+  [StuckReason.PR_PENDING_NO_PR]: 5,
+  [StuckReason.REWORK_BLOCKED_STALE]: 6,
+  [StuckReason.PR_NEEDS_FIX]: 7,
+  [StuckReason.ABANDONED_REVIEW]: 8,
+  [StuckReason.REWORK_CAP]: 9,
+  [StuckReason.RESPAWN_BLOCKED_ACTIVE]: 10,
+  [StuckReason.ORPHANED_TRIAGE]: 11,
+  [StuckReason.AUTONOMOUS_STUCK]: 12,
+  [StuckReason.BLOCKED_BY_DEPENDENCY]: 13,
+  [StuckReason.PLAN_NOT_APPROVED]: 14,
+  [StuckReason.STALE_WORK]: 15,
+  [StuckReason.BOUNCING]: 16,
+  [StuckReason.PR_READY_UNMERGED]: 17,
+  [StuckReason.LIKELY_FLAKY]: 18,
+  [StuckReason.UNSPECIFIED]: 19,
+};
+
+/**
+ * Picks the single highest-priority row (lowest `STUCK_REASON_PRIORITY`
+ * value) from a list of open StuckBacklogItem rows for ONE backlog item —
+ * the shared tie-break every rendering call site must use so two views never
+ * disagree on "the" primary reason. Callers pre-filter to one item_id (or
+ * pass an already-grouped list from `groupStuckItemsByItemId`); this
+ * function does not filter by itemId itself.
+ */
+export function selectPrimaryStuckItem<T extends Pick<StuckBacklogItem, "reason">>(
+  items: readonly T[]
+): T | undefined {
+  return items.reduce<T | undefined>((best, cur) => {
+    if (!best) return cur;
+    return STUCK_REASON_PRIORITY[cur.reason] < STUCK_REASON_PRIORITY[best.reason] ? cur : best;
+  }, undefined);
+}
+
+/** Groups open StuckBacklogItem rows by item_id — a board/list rendering many
+ * cards builds this once (O(n)) instead of filtering the full array per card. */
+export function groupStuckItemsByItemId(
+  items: readonly StuckBacklogItem[]
+): Map<string, StuckBacklogItem[]> {
+  const map = new Map<string, StuckBacklogItem[]>();
+  for (const item of items) {
+    const group = map.get(item.itemId);
+    if (group) group.push(item);
+    else map.set(item.itemId, [item]);
+  }
+  return map;
+}
+
+export interface StuckItemGroupSummary {
+  /** The highest-priority row — render this as the item's reason/BlockerChip. */
+  primary: StuckBacklogItem;
+  /**
+   * Every other currently-open reason for the same item, so a UI can surface
+   * a "+N more" indicator instead of silently dropping them (BUG-105) —
+   * never render `primary` alone as if it were the only open reason when
+   * this array is non-empty.
+   */
+  otherReasons: StuckReason[];
+}
+
+/** Resolves the primary reason + any additional open reasons for one item's
+ * StuckBacklogItem group. Returns undefined for an empty group (item isn't stuck). */
+export function summarizeStuckItemGroup(
+  items: readonly StuckBacklogItem[]
+): StuckItemGroupSummary | undefined {
+  const primary = selectPrimaryStuckItem(items);
+  if (!primary) return undefined;
+  return {
+    primary,
+    otherReasons: items.filter((i) => i !== primary).map((i) => i.reason),
+  };
+}
+
 /** Derived (not stored) reason label/class for a stale GitHub-status check (design/ux.md Surface 8). */
 export const PR_STATUS_UNKNOWN_LABEL = "Couldn't check PR status";
 export const PR_STATUS_UNKNOWN_ICON = "⚪";

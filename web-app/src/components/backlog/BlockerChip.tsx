@@ -28,6 +28,14 @@ interface BlockerChipProps {
    * sites share one useStuckBacklogItems() poller's triggerRemediationNow.
    */
   onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
+  /**
+   * Every OTHER currently-open StuckReason for this same item, from
+   * `summarizeStuckItemGroup` (stuckReason.ts) — a backlog item can have
+   * several simultaneous open StuckBacklogItem rows (BUG-105). `item.reason`
+   * above is always the shared-priority primary; when this is non-empty a
+   * "+N more" indicator renders instead of silently dropping the rest.
+   */
+  otherReasons?: StuckReason[];
 }
 
 type RetryState = "idle" | "pending" | "error";
@@ -35,18 +43,26 @@ type RetryState = "idle" | "pending" | "error";
 const PARKED_LABEL = "Retry unavailable — max attempts reached";
 
 /**
- * Derived (never stored) "waiting on X" indicator, sourced from
- * useStuckBacklogItems()/StuckBacklogItem.reason. Reuses
- * stuckReason.ts's icon/label/duration formatting and color-class mapping
- * verbatim — one source of truth shared by the detail view and board card,
- * instead of two independent implementations drifting apart.
+ * "+N more" indicator for any other currently-open StuckReason on this same
+ * item — never let `item.reason` render as if it were the only open reason
+ * when `otherReasons` is non-empty (BUG-105). The full list is available via
+ * the native `title` tooltip rather than dropped silently.
  */
-export function BlockerChip({ item, variant, onTriggerRemediationNow }: BlockerChipProps) {
-  const icon = getStuckReasonIcon(item.reason);
-  const label = getStuckReasonLabel(item.reason);
-  const chipClass = getStuckReasonClass(item.reason);
-  const parked = isRemediationParked(item);
+function MoreReasonsBadge({ otherReasons }: { otherReasons: StuckReason[] }) {
+  if (otherReasons.length === 0) return null;
+  const title = `Also stuck for: ${otherReasons.map(getStuckReasonLabel).join(", ")}`;
+  return (
+    <span className={styles.moreCount} data-testid="blocker-chip-more" title={title}>
+      +{otherReasons.length} more
+    </span>
+  );
+}
 
+/** Retry-now state machine for the interactive "full" variant. */
+function useRetryNow(
+  item: StuckBacklogItem,
+  onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>
+) {
   const [retryState, setRetryState] = useState<RetryState>("idle");
   const [retryErrorMessage, setRetryErrorMessage] = useState<string | null>(null);
 
@@ -63,22 +79,45 @@ export function BlockerChip({ item, variant, onTriggerRemediationNow }: BlockerC
     }
   }, [onTriggerRemediationNow, retryState, item.itemId, item.reason]);
 
-  const interactive = variant === "full" && !!onTriggerRemediationNow;
+  return { retryState, retryErrorMessage, handleRetryNow };
+}
 
-  if (!interactive) {
-    return (
-      <span className={chipClass} aria-label={label} data-testid="blocker-chip">
-        <span aria-hidden="true">{icon}</span>
-        <span>{label}</span>
-        {variant === "full" && (
-          <span className={styles.duration} data-testid="blocker-chip-duration">
-            {formatStuckDuration(item.firstDetectedAt)}
-          </span>
-        )}
-      </span>
-    );
-  }
+interface ChipVisualProps {
+  item: StuckBacklogItem;
+  icon: string;
+  label: string;
+  chipClass: string;
+  otherReasons: StuckReason[];
+}
 
+/** Read-only chip — the "compact" board-card variant, and the "full" variant
+ * when no `onTriggerRemediationNow` handler was supplied. */
+function NonInteractiveChip({ item, variant, icon, label, chipClass, otherReasons }: ChipVisualProps & { variant: "full" | "compact" }) {
+  return (
+    <span className={chipClass} aria-label={label} data-testid="blocker-chip">
+      <span aria-hidden="true">{icon}</span>
+      <span>{label}</span>
+      {variant === "full" && (
+        <span className={styles.duration} data-testid="blocker-chip-duration">
+          {formatStuckDuration(item.firstDetectedAt)}
+        </span>
+      )}
+      <MoreReasonsBadge otherReasons={otherReasons} />
+    </span>
+  );
+}
+
+/** Clickable "full" variant — retries the reason's remediation action. */
+function InteractiveChip({
+  item,
+  icon,
+  label,
+  chipClass,
+  otherReasons,
+  onTriggerRemediationNow,
+}: ChipVisualProps & { onTriggerRemediationNow: (itemId: string, reason: StuckReason) => Promise<void> }) {
+  const parked = isRemediationParked(item);
+  const { retryState, retryErrorMessage, handleRetryNow } = useRetryNow(item, onTriggerRemediationNow);
   const ariaLabel = parked ? PARKED_LABEL : retryState === "pending" ? `${label} — retrying` : `${label} — retry now`;
 
   return (
@@ -98,6 +137,7 @@ export function BlockerChip({ item, variant, onTriggerRemediationNow }: BlockerC
           {retryState === "pending" ? "Retrying…" : formatStuckDuration(item.firstDetectedAt)}
         </span>
       </button>
+      <MoreReasonsBadge otherReasons={otherReasons} />
       {retryState === "error" && retryErrorMessage && (
         <span className={styles.errorText} data-testid="blocker-chip-error" role="alert">
           {retryErrorMessage}
@@ -105,4 +145,26 @@ export function BlockerChip({ item, variant, onTriggerRemediationNow }: BlockerC
       )}
     </span>
   );
+}
+
+/**
+ * Derived (never stored) "waiting on X" indicator, sourced from
+ * useStuckBacklogItems()/StuckBacklogItem.reason. Reuses
+ * stuckReason.ts's icon/label/duration formatting and color-class mapping
+ * verbatim — one source of truth shared by the detail view and board card,
+ * instead of two independent implementations drifting apart.
+ */
+export function BlockerChip({ item, variant, onTriggerRemediationNow, otherReasons = [] }: BlockerChipProps) {
+  const visual: ChipVisualProps = {
+    item,
+    icon: getStuckReasonIcon(item.reason),
+    label: getStuckReasonLabel(item.reason),
+    chipClass: getStuckReasonClass(item.reason),
+    otherReasons,
+  };
+
+  if (variant === "full" && onTriggerRemediationNow) {
+    return <InteractiveChip {...visual} onTriggerRemediationNow={onTriggerRemediationNow} />;
+  }
+  return <NonInteractiveChip {...visual} variant={variant} />;
 }

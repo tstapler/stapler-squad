@@ -43,11 +43,57 @@ export interface LifecycleSummaryProps {
    */
   stuckItem?: StuckBacklogItem;
   /**
+   * Every OTHER currently-open StuckReason for this item beyond `stuckItem`
+   * itself, from BacklogItemDetail's `summarizeStuckItemGroup` call (a
+   * backlog item can have several simultaneous open StuckBacklogItem rows —
+   * BUG-105). Threaded straight through to BlockerChip's "+N more" indicator.
+   */
+  otherStuckReasons?: StuckReason[];
+  /**
    * Same signature as StuckItem.tsx's "Retry now" handler — sourced from the
    * single useStuckBacklogItems() call in BacklogItemDetail.tsx and threaded
    * down, mirroring how `stuckItem` itself is resolved once and passed down.
    */
   onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
+}
+
+/** BlockerChip + "View in Unfinished" link, rendered only while the item is
+ * currently flagged stuck. */
+function StuckBlock({
+  itemId,
+  stuckItem,
+  otherStuckReasons,
+  onTriggerRemediationNow,
+}: {
+  itemId: string;
+  stuckItem: StuckBacklogItem;
+  otherStuckReasons?: StuckReason[];
+  onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
+}) {
+  return (
+    <>
+      <BlockerChip
+        variant="full"
+        item={stuckItem}
+        otherReasons={otherStuckReasons}
+        onTriggerRemediationNow={onTriggerRemediationNow}
+      />
+      <a href={routes.unfinishedItem(itemId)} className={styles.unfinishedLink} data-testid="lifecycle-unfinished-link">
+        View in Unfinished
+      </a>
+    </>
+  );
+}
+
+/** Rework-cap override badge — hidden entirely when no override is set. */
+function ReworkCapBadge({ reworkCapOverride }: { reworkCapOverride: BacklogItem["reworkCapOverride"] }) {
+  const reworkCap = resolveReworkCapOverride(reworkCapOverride);
+  if (reworkCap.kind === "unset") return null;
+  return (
+    <span className={styles.pipelineBadge} data-testid="lifecycle-rework-cap-badge">
+      Rework cap: {reworkCap.kind === "unlimited" ? "unlimited" : reworkCap.rounds}
+    </span>
+  );
 }
 
 /**
@@ -108,6 +154,7 @@ export function LifecycleSummary({
   pipelineDisplay,
   configuredPipelineModeName,
   stuckItem,
+  otherStuckReasons,
   onTriggerRemediationNow,
 }: LifecycleSummaryProps) {
   // Only a "resolved" mode with a non-default name is glanceable-worthy —
@@ -118,16 +165,12 @@ export function LifecycleSummary({
     <div className={styles.container} data-testid="lifecycle-summary">
       <StageTracker status={item.status} />
       {stuckItem && (
-        <>
-          <BlockerChip variant="full" item={stuckItem} onTriggerRemediationNow={onTriggerRemediationNow} />
-          <a
-            href={routes.unfinishedItem(item.id)}
-            className={styles.unfinishedLink}
-            data-testid="lifecycle-unfinished-link"
-          >
-            View in Unfinished
-          </a>
-        </>
+        <StuckBlock
+          itemId={item.id}
+          stuckItem={stuckItem}
+          otherStuckReasons={otherStuckReasons}
+          onTriggerRemediationNow={onTriggerRemediationNow}
+        />
       )}
       {item.category && (
         <span className={styles.pipelineBadge} data-testid="lifecycle-category-badge">
@@ -144,15 +187,7 @@ export function LifecycleSummary({
         showPipelineBadge={showPipelineBadge}
         configuredPipelineModeName={configuredPipelineModeName}
       />
-      {(() => {
-        const reworkCap = resolveReworkCapOverride(item.reworkCapOverride);
-        if (reworkCap.kind === "unset") return null;
-        return (
-          <span className={styles.pipelineBadge} data-testid="lifecycle-rework-cap-badge">
-            Rework cap: {reworkCap.kind === "unlimited" ? "unlimited" : reworkCap.rounds}
-          </span>
-        );
-      })()}
+      <ReworkCapBadge reworkCapOverride={item.reworkCapOverride} />
       <LivenessLine item={item} />
     </div>
   );

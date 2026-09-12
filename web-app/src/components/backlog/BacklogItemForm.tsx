@@ -106,6 +106,14 @@ export function BacklogItemForm({
   // pre-selection has already applied once — see handlePipelineModeChange
   // and the effect below.
   const pipelineModeTouchedRef = useRef(!!initialValues?.id);
+  // Edit-mode-only guard against submitting a stale `category` (see
+  // handleCategoryChange and handleSubmit below): initialValues.category can
+  // lag the item's real, server-side category if the caller passed a
+  // not-yet-reconciled snapshot (BacklogItemDetail.tsx's `item` can be
+  // populated from the shared live-item store before its own authoritative
+  // fetch resolves). Only an explicit click on the category selector — never
+  // this state's initial mount value — sets this true.
+  const categoryTouchedRef = useRef(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const [descriptionTab, setDescriptionTab] = useState<"write" | "preview">("write");
@@ -200,6 +208,7 @@ export function BacklogItemForm({
   // are intentionally left untouched.
   const handleCategoryChange = useCallback(
     (value: string) => {
+      categoryTouchedRef.current = true;
       setCategory(value);
       if (initialValues?.id) return;
       const defaults = CATEGORY_DEFAULTS[value];
@@ -312,6 +321,20 @@ export function BacklogItemForm({
         // Evaluate vagueness before submitting: short description + no AC = vague
         const descriptionText = description.trim();
         const isVague = descriptionText.length < 80 && acCriteria.length === 0;
+        // On an existing item, only send `category` if the user actually
+        // touched the selector this session. `category`'s local state is
+        // seeded once from initialValues.category at mount, which can be
+        // stale (see categoryTouchedRef's comment above); omitting an
+        // untouched field lets the server's presence-gated partial-update
+        // semantics (session.v1.UpdateBacklogItemRequest.category is an
+        // `optional string`) leave the item's real, already-stored category
+        // — and thus whatever automation profile it implies — untouched,
+        // instead of silently overwriting it with a possibly-wrong value on
+        // every save. Create mode has no existing value to protect, so it
+        // always sends the current selection (including "" for
+        // Uncategorized).
+        const categoryForSubmit =
+          !initialValues?.id || categoryTouchedRef.current ? category : undefined;
         await onSubmit({
           title: title.trim(),
           description: descriptionText || undefined,
@@ -324,13 +347,13 @@ export function BacklogItemForm({
           acCriteria: acCriteria.map((c, i) => ({ ...c, index: i })),
           skipTriage: isVague,
           pipelineMode,
-          category,
+          category: categoryForSubmit,
         });
       } finally {
         setSubmitting(false);
       }
     },
-    [title, description, repoPath, priority, skipPlanning, skipReviewGate, autoSpawnSession, autoCreatePR, acCriteria, pipelineMode, category, onSubmit, validate]
+    [title, description, repoPath, priority, skipPlanning, skipReviewGate, autoSpawnSession, autoCreatePR, acCriteria, pipelineMode, category, initialValues?.id, onSubmit, validate]
   );
 
   const addCriterion = useCallback(() => {

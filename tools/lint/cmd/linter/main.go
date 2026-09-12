@@ -17,6 +17,8 @@
 //     anywhere in the enclosing function — a full-table scan
 //   - norawgitopen: detects direct go-git PlainOpen/PlainOpenWithOptions calls
 //     outside session/git.OpenRepo, the approved wrapper
+//   - norawghrequest: detects direct http.NewRequest/NewRequestWithContext
+//     calls to a GitHub host outside github's approved constructors
 package main
 
 import (
@@ -26,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/tools/lint/hotpolllog"
 	"github.com/tstapler/stapler-squad/tools/lint/nocommandpattern"
 	"github.com/tstapler/stapler-squad/tools/lint/norawexec"
+	"github.com/tstapler/stapler-squad/tools/lint/norawghrequest"
 	"github.com/tstapler/stapler-squad/tools/lint/norawgitopen"
 	"github.com/tstapler/stapler-squad/tools/lint/silenttransition"
 	"github.com/tstapler/stapler-squad/tools/lint/tmuxsocketscope"
@@ -37,6 +40,7 @@ func main() {
 		hotpolllog.Analyzer,
 		nocommandpattern.Analyzer,
 		norawexec.Analyzer,
+		norawghrequest.Analyzer,
 		norawgitopen.Analyzer,
 		silenttransition.Analyzer,
 		tmuxsocketscope.Analyzer,
