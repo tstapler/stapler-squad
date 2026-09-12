@@ -1,0 +1,15 @@
+{
+  "id": "native-git-rollout:set-merge-worktree-override",
+  "type": "backend",
+  "service": "NativeGitRolloutService",
+  "method": "SetNativeMergeWorktreeOverride",
+  "protoFile": "proto/session/v1/native_git_rollout.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/native_git_rollout_service.go",
+  "tested": true,
+  "testIds": [
+    "TestNativeGitRolloutService_SetThenGet_ReflectsLiveState",
+    "TestNativeGitRolloutService_should_ReturnError_When_MergeOverrideKeyIsEmpty"
+  ],
+  "lastModified": "2026-09-11T22:59:12.781345429-07:00"
+}

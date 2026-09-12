@@ -378,6 +378,12 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 							// stale liveness signal.
 							if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil {
 								log.Warn("[AutonomousDriver] onAutonomousDriverComplete: UpdateItemSessionEnded(work, stuck) failed", "item", item.ID, "itemSession", is.ID, "err", endErr)
+								// Mirrors the SessionRoleReview branch's notifyStuckReviewBookkeepingFailed
+								// below: this bookkeeping write is what makes a stuck session visible to
+								// auto-respawn's own liveness checks (see the comment above this call), so
+								// a silent failure here would leave the item invisible to recovery with
+								// only a log line to show for it.
+								a.notifyStuckWorkBookkeepingFailed(item.ID, item.Title, is.ID, endErr)
 							}
 							if a.autonomousStuckRespawner != nil {
 								respawner := a.autonomousStuckRespawner
@@ -625,6 +631,25 @@ func (a *AutonomousOrchestrationService) notifyStuckReviewBookkeepingFailed(item
 		int32(3), // NotificationPriority_HIGH
 		"Stuck-review bookkeeping failed",
 		fmt.Sprintf("%s: could not mark the stalled review session ended (%v) — it may stay invisible to automatic recovery until this is fixed manually.", itemTitle, endErr),
+		nil,
+	))
+}
+
+// notifyStuckWorkBookkeepingFailed publishes an operator-facing notification
+// when onAutonomousDriverComplete's UpdateItemSessionEnded call — closing out a
+// turn-cap-stopped SessionRoleWork session so the respawn dispatched right after
+// it doesn't self-block on its own still-open row (see the call site's comment)
+// — itself fails. Unlike notifyStuckReviewBookkeepingFailed's branch, this one
+// still falls through to the generic "Autonomous fix stuck" notification below,
+// so this is an additional signal, not the only one. Mirrors
+// notifyStuckReviewBookkeepingFailed's shape rather than inventing a new one.
+func (a *AutonomousOrchestrationService) notifyStuckWorkBookkeepingFailed(itemID, itemTitle, itemSessionID string, endErr error) {
+	a.bus.Publish(events.NewNotificationEvent(
+		itemID, "", fmt.Sprintf("stuck-work-bookkeeping-failed-%s", itemSessionID),
+		int32(9), // NotificationType_FAILURE
+		int32(3), // NotificationPriority_HIGH
+		"Stuck-work bookkeeping failed",
+		fmt.Sprintf("%s: could not mark the stalled work session ended (%v) — it may stay invisible to automatic recovery until this is fixed manually.", itemTitle, endErr),
 		nil,
 	))
 }

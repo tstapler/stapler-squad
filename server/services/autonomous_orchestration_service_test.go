@@ -1120,6 +1120,45 @@ func TestNotifyStuckReviewBookkeepingFailed_should_publishFailureNotification_Wh
 	assert.Contains(t, notif.NotificationMessage, "could not mark the stalled review session ended")
 }
 
+// TestNotifyStuckWorkBookkeepingFailed_should_publishFailureNotification_When_Called
+// is notifyStuckReviewBookkeepingFailed's sibling regression test for the
+// SessionRoleWork turn-cap branch (onAutonomousDriverComplete): that branch also
+// calls UpdateItemSessionEnded — closing out the stuck session so the respawn
+// dispatched right after doesn't self-block on its own still-open row — and,
+// like the review branch, a failure there must reach the operator, not just the log.
+func TestNotifyStuckWorkBookkeepingFailed_should_publishFailureNotification_When_Called(t *testing.T) {
+	t.Parallel()
+	eventBus := events.NewEventBus(4)
+	svc := &AutonomousOrchestrationService{bus: eventBus}
+
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	svc.notifyStuckWorkBookkeepingFailed("item-123", "Stuck work item", "item-session-456",
+		fmt.Errorf("failed to set ended_at on item session item-session-456: item_session not found"))
+
+	var notif *events.Event
+	for i := 0; i < 3; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.EventNotification {
+				notif = ev
+			}
+		case <-time.After(2 * time.Second):
+			i = 3
+		}
+		if notif != nil {
+			break
+		}
+	}
+	require.NotNil(t, notif, "expected an operator-facing notification when the stuck-work bookkeeping write fails, instead of only being logged")
+	assert.Equal(t, "Stuck-work bookkeeping failed", notif.NotificationTitle)
+	assert.Equal(t, int32(9), notif.NotificationType, "must surface as a FAILURE notification")
+	assert.Contains(t, notif.NotificationMessage, "Stuck work item")
+	assert.Contains(t, notif.NotificationMessage, "could not mark the stalled work session ended")
+}
+
 // fakeFailingAutonomousStuckRespawner always returns err from
 // AutoRespawnAutonomousWork, simulating a headless respawn attempt that
 // fails (timeout, pool exhaustion, etc.) rather than a wiring/no-op gap.
