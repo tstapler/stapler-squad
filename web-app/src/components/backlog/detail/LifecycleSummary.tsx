@@ -21,6 +21,16 @@ export interface LifecycleSummaryProps {
    */
   pipelineDisplay?: PipelineModeDisplay;
   /**
+   * The item's own configured pipeline mode (BacklogItemForm.tsx's "Pipeline
+   * mode" field), already resolved to a display name — undefined for the
+   * built-in default. Distinct from `pipelineDisplay` above: that one
+   * reflects what a session actually ran and is unavailable until a work
+   * session exists, so this is the only glanceable pipeline signal for an
+   * item that hasn't spawned one yet. Only rendered when `pipelineDisplay`
+   * isn't already showing a badge, to avoid two "Pipeline: …" chips at once.
+   */
+  configuredPipelineModeName?: string;
+  /**
    * This item's entry from useStuckBacklogItems()'s open list, or undefined
    * when the item isn't currently flagged stuck. Resolved once at the
    * BacklogItemDetail level (not per-render-of-this-component) and passed
@@ -87,6 +97,54 @@ function ReworkCapBadge({ reworkCapOverride }: { reworkCapOverride: BacklogItem[
 }
 
 /**
+ * Compact, read-only automation-profile chips (CONFIGURABILITY GAP fix, UX
+ * audit 2026-09-11): Pipeline mode / skip planning / skip review gate /
+ * auto-spawn / auto-create PR were previously only visible by opening Edit
+ * (BacklogItemForm.tsx). Each chip only renders when it deviates from the
+ * default (off, or default pipeline), keeping the common unconfigured item
+ * uncluttered.
+ */
+function AutomationProfileBadges({
+  item,
+  showPipelineBadge,
+  configuredPipelineModeName,
+}: {
+  item: BacklogItem;
+  showPipelineBadge: boolean;
+  configuredPipelineModeName?: string;
+}) {
+  return (
+    <>
+      {!showPipelineBadge && configuredPipelineModeName && (
+        <span className={styles.pipelineBadge} data-testid="lifecycle-configured-pipeline-badge">
+          Pipeline: {configuredPipelineModeName}
+        </span>
+      )}
+      {item.skipPlanning && (
+        <span className={styles.pipelineBadge} data-testid="lifecycle-skip-planning-badge">
+          Skip planning
+        </span>
+      )}
+      {item.skipReviewGate && (
+        <span className={styles.pipelineBadge} data-testid="lifecycle-skip-review-badge">
+          Skip review gate
+        </span>
+      )}
+      {item.autoSpawnSession && (
+        <span className={styles.pipelineBadge} data-testid="lifecycle-auto-spawn-badge">
+          Auto-spawn
+        </span>
+      )}
+      {item.autoCreatePR && (
+        <span className={styles.pipelineBadge} data-testid="lifecycle-auto-create-pr-badge">
+          Auto-create PR
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
  * Always-visible header region — Stage Tracker + Blocker Chip + Pipeline
  * badge + Liveness Line — replacing the old standalone status badge (D1).
  * The single authoritative place lifecycle status is shown.
@@ -94,6 +152,7 @@ function ReworkCapBadge({ reworkCapOverride }: { reworkCapOverride: BacklogItem[
 export function LifecycleSummary({
   item,
   pipelineDisplay,
+  configuredPipelineModeName,
   stuckItem,
   otherStuckReasons,
   onTriggerRemediationNow,
@@ -123,6 +182,11 @@ export function LifecycleSummary({
           Pipeline: {pipelineDisplay.name}
         </span>
       )}
+      <AutomationProfileBadges
+        item={item}
+        showPipelineBadge={showPipelineBadge}
+        configuredPipelineModeName={configuredPipelineModeName}
+      />
       <ReworkCapBadge reworkCapOverride={item.reworkCapOverride} />
       <LivenessLine item={item} />
     </div>
