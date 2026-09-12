@@ -224,7 +224,7 @@ func InfoLog() *log.Logger { return infoLog.Load() }
 func ErrorLog() *log.Logger { return errorLog.Load() }
 
 // DebugLog returns the current debug-level logger. Safe to call concurrently
-// with SetDebugLogForTest or initializeWithConfig replacing it.
+// with initializeWithConfig replacing it.
 func DebugLog() *log.Logger { return debugLog.Load() }
 
 // SetWarningLogForTest atomically replaces the warning logger and returns the
@@ -247,10 +247,6 @@ func SetInfoLogForTest(l *log.Logger) *log.Logger { return infoLog.Swap(l) }
 // SetErrorLogForTest atomically replaces the error logger and returns the
 // previous value, so callers can restore it via t.Cleanup.
 func SetErrorLogForTest(l *log.Logger) *log.Logger { return errorLog.Swap(l) }
-
-// SetDebugLogForTest atomically replaces the debug logger and returns the
-// previous value, so callers can restore it via t.Cleanup.
-func SetDebugLogForTest(l *log.Logger) *log.Logger { return debugLog.Swap(l) }
 
 // LogConfig holds logging configuration
 type LogConfig struct {
@@ -378,20 +374,6 @@ func (sl *StructuredLogger) Log(level LogLevel, message string, fields map[strin
 	_, _ = sl.writer.Write([]byte("\n"))
 }
 
-// LogWithFields logs a message with additional fields
-func (sl *StructuredLogger) LogWithFields(level LogLevel, message string, fields map[string]interface{}) {
-	sl.Log(level, message, fields)
-}
-
-// Debug logs a debug message
-func (sl *StructuredLogger) Debug(message string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	sl.Log(DEBUG, message, f)
-}
-
 // Info logs an info message
 func (sl *StructuredLogger) Info(message string, fields ...map[string]interface{}) {
 	var f map[string]interface{}
@@ -399,33 +381,6 @@ func (sl *StructuredLogger) Info(message string, fields ...map[string]interface{
 		f = fields[0]
 	}
 	sl.Log(INFO, message, f)
-}
-
-// Warning logs a warning message
-func (sl *StructuredLogger) Warning(message string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	sl.Log(WARNING, message, f)
-}
-
-// Error logs an error message
-func (sl *StructuredLogger) Error(message string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	sl.Log(ERROR, message, f)
-}
-
-// Fatal logs a fatal message
-func (sl *StructuredLogger) Fatal(message string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	sl.Log(FATAL, message, f)
 }
 
 // GetConfigDir returns the path to the application's configuration directory,
@@ -696,46 +651,11 @@ type SessionLoggers struct {
 	LogFile    io.Closer
 }
 
-// SessionLogger is a session-scoped logger that automatically injects the session ID
-// into every log call, eliminating the need to pass the session ID manually.
-//
-// Usage:
-//
-//	logger := log.ForSession(i.Title)
-//	logger.Error("Failed to setup git worktree: %v", err)
-type SessionLogger struct {
-	sessionID string
-}
-
 // ForSession returns a *slog.Logger pre-populated with "session" = sessionID.
 // All calls route through the async slog handler — no stdlib mutex serialization.
 // Session-specific log files still receive the entry via LogForSession when needed.
 func ForSession(sessionID string) *slog.Logger {
 	return slogDefault.Load().With("session", sessionID)
-}
-
-// ForSessionLegacy returns the old SessionLogger for callers that write to
-// per-session log files. New code should use ForSession instead.
-//
-// Deprecated: use ForSession.
-func ForSessionLegacy(sessionID string) *SessionLogger {
-	return &SessionLogger{sessionID: sessionID}
-}
-
-func (sl *SessionLogger) Debug(format string, v ...interface{}) {
-	LogForSession(sl.sessionID, "debug", format, v...)
-}
-
-func (sl *SessionLogger) Info(format string, v ...interface{}) {
-	LogForSession(sl.sessionID, "info", format, v...)
-}
-
-func (sl *SessionLogger) Warning(format string, v ...interface{}) {
-	LogForSession(sl.sessionID, "warning", format, v...)
-}
-
-func (sl *SessionLogger) Error(format string, v ...interface{}) {
-	LogForSession(sl.sessionID, "error", format, v...)
 }
 
 // logAt builds and emits a slog.Record with the PC of Info/Warn/Error/Debug's
@@ -773,38 +693,10 @@ func Debug(msg string, args ...any) { logAt(slog.LevelDebug, msg, args...) }
 
 // Global convenience functions for structured logging (legacy — prefer Info/Warn/Error/Debug)
 
-// DebugS logs a structured debug message
-func DebugS(message string, fields ...map[string]interface{}) {
-	if structuredLogger != nil {
-		structuredLogger.Debug(message, fields...)
-	}
-}
-
 // InfoS logs a structured info message
 func InfoS(message string, fields ...map[string]interface{}) {
 	if structuredLogger != nil {
 		structuredLogger.Info(message, fields...)
-	}
-}
-
-// WarningS logs a structured warning message
-func WarningS(message string, fields ...map[string]interface{}) {
-	if structuredLogger != nil {
-		structuredLogger.Warning(message, fields...)
-	}
-}
-
-// ErrorS logs a structured error message
-func ErrorS(message string, fields ...map[string]interface{}) {
-	if structuredLogger != nil {
-		structuredLogger.Error(message, fields...)
-	}
-}
-
-// FatalS logs a structured fatal message
-func FatalS(message string, fields ...map[string]interface{}) {
-	if structuredLogger != nil {
-		structuredLogger.Fatal(message, fields...)
 	}
 }
 

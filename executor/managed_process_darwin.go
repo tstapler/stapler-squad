@@ -12,11 +12,11 @@ import "syscall"
 // supported by device" errors. Instead, Setsid provides equivalent session
 // isolation when callers use WithNewSession().
 //
-// Setpgid places the child in a new process group (default unless noProcGroup).
+// Setpgid places the child in a new process group by default.
 // Setsid creates a new session (strongest isolation; safe on all platforms).
 func buildSysProcAttr(cfg processConfig) *syscall.SysProcAttr {
 	attr := &syscall.SysProcAttr{}
-	if !cfg.noProcGroup && !cfg.setsid {
+	if !cfg.setsid {
 		// Setpgid is implied by Setsid: setsid(2) automatically makes the caller
 		// the process group leader of a new process group. Setting Setpgid at the
 		// same time causes setpgid(0,0) to run on a session leader, which returns

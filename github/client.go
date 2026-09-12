@@ -603,27 +603,6 @@ func GetPRByNumber(ctx context.Context, owner, repo string, prNumber int) (*PRIn
 	}, nil
 }
 
-// IsForkRepo reports whether the given repo is a fork of another repository.
-func IsForkRepo(ctx context.Context, owner, repo string) (bool, error) {
-	if err := CheckGHAuth(ctx); err != nil {
-		return false, err
-	}
-
-	cmd := safeexec.CommandContext(ctx, "gh", "api",
-		fmt.Sprintf("repos/%s/%s", owner, repo),
-		"--jq", ".fork",
-	)
-	output, err := runGHCLICommand(ctx, "repo.fork_check", func() ([]byte, error) { return cmd.Output() })
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return false, fmt.Errorf("failed to check fork status: %s", string(exitErr.Stderr))
-		}
-		return false, fmt.Errorf("failed to check fork status: %w", err)
-	}
-
-	return strings.TrimSpace(string(output)) == "true", nil
-}
-
 // GetPRComments fetches all comments on a pull request
 func GetPRComments(ctx context.Context, owner, repo string, prNumber int) ([]PRComment, error) {
 	if err := CheckGHAuth(ctx); err != nil {
@@ -764,60 +743,6 @@ func ClosePR(ctx context.Context, owner, repo string, prNumber int) error {
 			return fmt.Errorf("failed to close PR: %s", string(exitErr.Stderr))
 		}
 		return fmt.Errorf("failed to close PR: %w", err)
-	}
-
-	return nil
-}
-
-// CloneRepository clones a GitHub repository
-func CloneRepository(owner, repo, targetPath string) error {
-	// CloneRepository has no ctx parameter of its own (out of scope to add
-	// one here); context.Background() preserves CheckGHAuth's prior behavior
-	// exactly for this call site.
-	if err := CheckGHAuth(context.Background()); err != nil {
-		return err
-	}
-
-	repoRef := fmt.Sprintf("%s/%s", owner, repo)
-	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cloneCancel()
-	cmd := safeexec.CommandContext(cloneCtx, "gh", "repo", "clone", repoRef, targetPath)
-	if _, err := runGHCLICommand(cloneCtx, "repo.clone", func() ([]byte, error) { return nil, cmd.Run() }); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to clone repository: %s", string(exitErr.Stderr))
-		}
-		return fmt.Errorf("failed to clone repository: %w", err)
-	}
-
-	return nil
-}
-
-// FetchBranch fetches a specific branch in an existing repository
-func FetchBranch(repoPath, branchName string) error {
-	// Fetch the branch from origin
-	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer fetchCancel()
-	cmd := safeexec.CommandContext(fetchCtx, "git", "-C", repoPath, "fetch", "origin", branchName)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to fetch branch: %s", string(exitErr.Stderr))
-		}
-		return fmt.Errorf("failed to fetch branch: %w", err)
-	}
-
-	return nil
-}
-
-// CheckoutBranch checks out a branch in an existing repository
-func CheckoutBranch(repoPath, branchName string) error {
-	checkoutCtx, checkoutCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer checkoutCancel()
-	cmd := safeexec.CommandContext(checkoutCtx, "git", "-C", repoPath, "checkout", branchName)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to checkout branch: %s", string(exitErr.Stderr))
-		}
-		return fmt.Errorf("failed to checkout branch: %w", err)
 	}
 
 	return nil

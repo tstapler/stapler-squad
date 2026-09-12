@@ -457,23 +457,6 @@ func (m *RepoPathManager) ResolveGitHubInput(input string) (localPath string, re
 	return localPath, ref, nil
 }
 
-// ResolveGitHubInputCtx takes a GitHub URL/shorthand and returns a resolved path,
-// threading ctx down to EnsureRepoCloned so the underlying git clone/fetch
-// subprocess is actually cancelled if ctx is cancelled or times out.
-func (m *RepoPathManager) ResolveGitHubInputCtx(ctx context.Context, input string) (localPath string, ref *GitHubRef, err error) {
-	ref, err = ParseGitHubURL(input)
-	if err != nil {
-		return "", nil, err
-	}
-
-	localPath, err = m.EnsureRepoCloned(ctx, ref)
-	if err != nil {
-		return "", nil, err
-	}
-
-	return localPath, ref, nil
-}
-
 // ResolveGitHubInputCtxWithHosts takes a GitHub URL/shorthand and returns a
 // resolved path, recognizing URLs against the given GitHub Enterprise
 // hostnames in addition to github.com, and threading ctx down to
@@ -499,12 +482,6 @@ var DefaultRepoPathManager = NewRepoPathManager()
 // ResolveGitHubInput is a convenience function using the default manager.
 func ResolveGitHubInput(input string) (localPath string, ref *GitHubRef, err error) {
 	return DefaultRepoPathManager.ResolveGitHubInput(input)
-}
-
-// ResolveGitHubInputCtx is a convenience function using the default manager,
-// threading ctx down to the underlying git clone/fetch subprocess.
-func ResolveGitHubInputCtx(ctx context.Context, input string) (localPath string, ref *GitHubRef, err error) {
-	return DefaultRepoPathManager.ResolveGitHubInputCtx(ctx, input)
 }
 
 // ResolveGitHubInputCtxWithHosts is a convenience function using the default
