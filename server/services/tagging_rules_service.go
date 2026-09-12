@@ -48,10 +48,16 @@ func NewTaggingRulesService(rulesStore *TaggingRulesStore, engine *classifier.Ta
 	}
 }
 
-// ListTaggingRules returns every stored tagging rule, each merged with its 7-day fire
-// count by RuleID.
+// ListTaggingRules returns every tagging rule — DB-backed user rules plus the live
+// engine's seed rules (Source: classifier.SourceSeed) — each merged with its 7-day fire
+// count by RuleID. Seed rules are read-only here: they're never upsertable/deletable via
+// this service (see UpsertTaggingRule/DeleteTaggingRule, which only ever touch
+// ts.rulesStore), so including them in the list doesn't risk making them editable.
 func (ts *TaggingRulesService) ListTaggingRules(ctx context.Context) ([]TaggingRuleWithFireCount, error) {
 	specs := ts.rulesStore.All()
+	for _, r := range filterTaggingRulesBySource(ts.engine.Rules(), classifier.SourceSeed) {
+		specs = append(specs, taggingRuleToSpec(r))
+	}
 
 	fireCounts := map[string]int{}
 	if ts.analyticsStore != nil {
@@ -121,6 +127,34 @@ func filterTaggingRulesBySource(rules []classifier.TaggingRule, allowed ...class
 		}
 	}
 	return out
+}
+
+// taggingRuleToSpec converts a live classifier.TaggingRule (e.g. a seed rule) into the
+// wire-adjacent TaggingRuleSpec shape ListTaggingRules works with, inverting
+// taggingSpecsToRules's regex compilation. Mirrors rules_service.go's ruleToSpec.
+func taggingRuleToSpec(r classifier.TaggingRule) TaggingRuleSpec {
+	spec := TaggingRuleSpec{
+		ID:           r.ID,
+		Name:         r.Name,
+		RequiredTags: r.RequiredTags,
+		OutputTag:    r.OutputTag,
+		Priority:     r.Priority,
+		Enabled:      r.Enabled,
+		Source:       r.Source,
+	}
+	if r.NamePattern != nil {
+		spec.NamePattern = r.NamePattern.String()
+	}
+	if r.BranchPattern != nil {
+		spec.BranchPattern = r.BranchPattern.String()
+	}
+	if r.PathPattern != nil {
+		spec.PathPattern = r.PathPattern.String()
+	}
+	if r.ProgramPattern != nil {
+		spec.ProgramPattern = r.ProgramPattern.String()
+	}
+	return spec
 }
 
 // taggingRuleSpecToProto converts a TaggingRuleSpec plus its 7-day fire count to the

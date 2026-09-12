@@ -185,3 +185,81 @@ func TestTaggingRulesService_ListTaggingRules_should_SurfaceFireCount_When_Analy
 	require.Len(t, rules, 1)
 	assert.Equal(t, 2, rules[0].FireCount7d)
 }
+
+// TestTaggingRulesService_ListTaggingRules_should_IncludeSeedRules_When_NoUserRulesExist is the
+// regression test for the bug where ListTaggingRules returned only ts.rulesStore.All() (DB-backed
+// user rules), never the live engine's seed rules — leaving the "Tagging Rules" tab showing "No
+// tagging rules configured" even with active, firing seed rules. Uses a real seeded engine (no
+// ReplaceRules(nil) reset), mirroring
+// TestTaggingRulesService_rebuildEngine_should_PreserveSeedRules_When_CRUDMutatesUserRules.
+func TestTaggingRulesService_ListTaggingRules_should_IncludeSeedRules_When_NoUserRulesExist(t *testing.T) {
+	svc, engine := newRealSeededTaggingRulesService(t)
+	seedCount := len(engine.Rules())
+
+	rules, err := svc.ListTaggingRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, seedCount, "ListTaggingRules must surface seed rules even with zero user rules")
+	for _, r := range rules {
+		assert.Equal(t, string(classifier.SourceSeed), r.Source, "every rule must be seed-sourced when no user rules exist")
+	}
+}
+
+// TestTaggingRulesService_ListTaggingRules_should_MarkSeedRulesDistinctlyFromUserRules covers the
+// merge case: a user rule and the engine's seed rules must both appear, each carrying its own
+// correct Source so the frontend can render seed rules read-only (TaggingRulesPanel's "Built-in"
+// badge).
+func TestTaggingRulesService_ListTaggingRules_should_MarkSeedRulesDistinctlyFromUserRules(t *testing.T) {
+	svc, engine := newRealSeededTaggingRulesService(t)
+	seedCount := len(engine.Rules())
+
+	_, err := svc.UpsertTaggingRule(context.Background(), TaggingRuleSpec{
+		ID:            "user-rule-1",
+		Name:          "Custom user rule",
+		BranchPattern: "^chore/",
+		OutputTag:     "Chore",
+		Enabled:       true,
+		Source:        "user",
+	})
+	require.NoError(t, err)
+
+	rules, err := svc.ListTaggingRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, seedCount+1)
+	assertSourceByID(t, rules, "user-rule-1", "user", string(classifier.SourceSeed))
+}
+
+// newRealSeededTaggingRulesService builds a TaggingRulesService wired to a real seeded
+// TaggingEngine (unlike newTestTaggingRulesService, which clears seed rules) — for tests that
+// need to assert on seed-rule behavior against production wiring.
+func newRealSeededTaggingRulesService(t *testing.T) (*TaggingRulesService, *classifier.TaggingEngine) {
+	t.Helper()
+	repo := session.NewTestEntRepository(t)
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+
+	rulesStore, err := NewTaggingRulesStore(storage)
+	require.NoError(t, err)
+
+	engine := classifier.NewTaggingEngine()
+	require.NotZero(t, len(engine.Rules()), "NewTaggingEngine should install seed rules")
+
+	return NewTaggingRulesService(rulesStore, engine, nil), engine
+}
+
+// assertSourceByID checks that the rule with wantID has wantSource, and every other rule has
+// otherSource — for TestTaggingRulesService_ListTaggingRules_should_MarkSeedRulesDistinctlyFromUserRules.
+func assertSourceByID(t *testing.T, rules []TaggingRuleWithFireCount, wantID, wantSource, otherSource string) {
+	t.Helper()
+	var sawWant, sawOther bool
+	for _, r := range rules {
+		if r.ID == wantID {
+			sawWant = true
+			assert.Equal(t, wantSource, r.Source)
+		} else {
+			sawOther = true
+			assert.Equal(t, otherSource, r.Source)
+		}
+	}
+	assert.True(t, sawWant, "rule %q must be present with Source=%s", wantID, wantSource)
+	assert.True(t, sawOther, "other rules must be present with Source=%s", otherSource)
+}

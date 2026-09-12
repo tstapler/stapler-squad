@@ -95,4 +95,21 @@ describe("TaggingRulesPanel", () => {
     expect(screen.getByText("Always on")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /Disable tagging rule/ })).toBeNull();
   });
+
+  it("TaggingRulesPanel_should_ShowBuiltInBadgeAndHideEditDelete_When_RuleIsSeedSourced", () => {
+    mockRules = [buildRule({ source: "seed", name: "Feature branch" })];
+    render(<TaggingRulesPanel />);
+
+    expect(screen.getByTitle("Built-in")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /Edit tagging rule/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Delete tagging rule/ })).toBeNull();
+  });
+
+  it("TaggingRulesPanel_should_NotShowBuiltInBadge_When_RuleIsUserSourced", () => {
+    mockRules = [buildRule({ source: "user", name: "My rule" })];
+    render(<TaggingRulesPanel />);
+
+    expect(screen.queryByTitle("Built-in")).toBeNull();
+    expect(screen.getByRole("button", { name: /Edit tagging rule/ })).not.toBeNull();
+  });
 });
