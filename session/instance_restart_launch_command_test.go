@@ -10,19 +10,21 @@ import (
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
-// TestKillSessionThenStart_DoesNotRebuildLaunchCommand traces whether
+// TestKillSessionThenStart_RebuildsLaunchCommand traces whether
 // Instance.KillSession() + Instance.Start(false) — the exact sequence
 // session/health.go's dead-pane recovery loop uses — rebuilds the tmux launch
-// command from the current i.claudeSession.ConversationUUID.
+// command from the current i.claudeSession.ConversationUUID, or reuses
+// whatever program string was baked in at the last SetSession() call.
 //
-// TmuxProcessManager.Close() (called by KillSession()) never nils the underlying
-// atomic.Pointer[tmux.TmuxSession], so initTmuxSession()'s reuse guard must check
-// liveness (IsAlive()), not just object existence (HasSession()), or it skips
-// buildLaunchCommand() on this path and silently drops --resume on recovery — the
-// root cause of the 2026-09-12 mass tmux-kill incident. See
-// project_plans/cold-restart-uuid-recovery/implementation/plan.md's Risk Control
-// item 8 and ADR-001 for the original gap this test's name still references.
-func TestKillSessionThenStart_DoesNotRebuildLaunchCommand(t *testing.T) {
+// It must rebuild. Before the fix, initTmuxSession()'s
+// `if i.pm().HasSession() { ...; return }` early-return skipped
+// buildLaunchCommand() whenever an in-process TmuxSession pointer already
+// existed, regardless of whether the OS-level tmux session it pointed to was
+// still alive — the root cause of the 2026-09-12 mass tmux-kill-server
+// incident (every session's recovery hit this early-return and silently
+// relaunched without --resume). See initTmuxSession()'s doc comment for the
+// fix (HasSession() && IsAlive()).
+func TestKillSessionThenStart_RebuildsLaunchCommand(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
@@ -75,12 +77,12 @@ func TestKillSessionThenStart_DoesNotRebuildLaunchCommand(t *testing.T) {
 
 	t.Logf("LaunchCommand after KillSession()+Start(false): %q", inst.LaunchCommand)
 	assert.Contains(t, inst.LaunchCommand, "--resume",
-		"KillSession()+Start(false) must rebuild the launch command from the "+
-			"newly-set ConversationUUID — initTmuxSession()'s reuse guard must not "+
-			"treat a dead tmux session as still alive")
+		"KillSession()+Start(false) must rebuild the launch command from the newly-set "+
+			"ConversationUUID — regression check for the 2026-09-12 mass tmux-kill-server "+
+			"incident (see this test's doc comment)")
 	assert.Contains(t, inst.LaunchCommand, "550e8400-e29b-41d4-a716-446655440000")
 
-	// Contrast: Restart() DOES explicitly rebuild the launch command every call.
+	// Contrast: Restart() also explicitly rebuilds the launch command every call.
 	// Re-set the UUID first: the cold-restore branch just exercised above clears
 	// i.claudeSession.ConversationUUID by design (see startLocked's comment on
 	// "Clear the stored session ID so HistoryLinker re-detects...") before

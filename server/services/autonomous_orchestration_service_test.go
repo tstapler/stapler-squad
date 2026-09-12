@@ -1241,7 +1241,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOpera
 	}
 	require.NotNil(t, notif, "a failed respawn attempt must publish an operator-facing notification, not just a log line")
 	assert.Equal(t, int32(8), notif.NotificationType, "must surface as a WARNING, not a terminal FAILURE")
-	assert.Equal(t, int32(2), notif.NotificationPriority, "non-terminal — must not demand acknowledgment like the justParked notification does")
+	assert.Equal(t, int32(1), notif.NotificationPriority, "non-terminal, no operator action needed yet — must not demand acknowledgment like the justParked notification does")
 	assert.Contains(t, notif.NotificationMessage, "headless pool exhausted")
 	assert.Contains(t, notif.NotificationMessage, "will retry automatically")
 }

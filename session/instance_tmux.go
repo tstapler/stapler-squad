@@ -502,11 +502,11 @@ func (i *Instance) claudeMCPConfigArgs() (string, string) {
 }
 
 // initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
-// Reuse requires both HasSession() (a *tmux.TmuxSession was constructed) and
-// IsAlive() (the underlying OS tmux session/server is still up) — HasSession()
-// alone stays true forever once constructed, even after the tmux server has
-// crashed, which would otherwise skip buildLaunchCommand()'s --resume rebuild
-// on every recovery path (health checker, crash-resume, manual retry).
+//
+// Reuse requires HasSession() AND IsAlive(): the pointer alone stays non-nil
+// forever once set, even after the tmux server backing it is killed, which
+// let recovery skip buildLaunchCommand() and relaunch without --resume after
+// a tmux-kill-server crash (2026-09-12 incident).
 func (i *Instance) initTmuxSession() {
 	if i.pm().HasSession() && i.pm().IsAlive() {
 		log.Info("reusing existing tmux session", "session", i.Title)
@@ -518,7 +518,9 @@ func (i *Instance) initTmuxSession() {
 	}
 	enrichedProgram := i.buildLaunchCommand(claudeSessionID)
 	i.LaunchCommand = enrichedProgram
-	log.Info("creating tmux session", "session", i.Title, "program", enrichedProgram)
+	// This func runs for every backend despite its name (BUG-109) -- log the
+	// real one instead of hardcoding "tmux".
+	log.Info("creating session", "session", i.Title, "program", enrichedProgram, "backend", string(processManagerBackendLabel(i.processManager)))
 
 	// Pre-trust the working directory so claude never blocks this
 	// (possibly-unattended) session on its interactive "trust this folder?"

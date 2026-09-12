@@ -386,14 +386,14 @@ service SessionService {
   rpc SetStreamHubSessionOverride(SetStreamHubSessionOverrideRequest) returns (StreamHubRolloutStatus) {}
 
   // SetStreamHubGlobalOverride sets or clears a live, config.json-backed
-  // override of the global stream-hub default, taking effect immediately
-  // for every session connection resolved after this call — no process
-  // restart required. Forcing it on still goes through the same rollback
-  // rehearsal gate as the env var path (ResolveGlobalStreamHubDefault);
-  // clearing it (force_hub unset) reverts to the STAPLER_SQUAD_USE_STREAM_HUB
-  // env var default. Like all stream-hub resolution, this can only affect
-  // sessions whose ownership lock hasn't resolved yet — an already-connected
-  // session's resolution is cached for its lifetime and cannot be moved.
+  // override of the global stream-hub default (the "stream_hub" feature
+  // flag), taking effect immediately for every session connection resolved
+  // after this call — no process restart required, and no rollback-rehearsal
+  // gate on either direction (config.EffectiveStreamHubEnabled). Clearing it
+  // (force_hub unset) reverts to that flag's on-by-default resolution. Like
+  // all stream-hub resolution, this can only affect sessions whose ownership
+  // lock hasn't resolved yet — an already-connected session's resolution is
+  // cached for its lifetime and cannot be moved.
   rpc SetStreamHubGlobalOverride(SetStreamHubGlobalOverrideRequest) returns (StreamHubRolloutStatus) {}
 
   // ListWorktrees returns the git worktrees for a given repository path.

@@ -25,6 +25,7 @@ import { useBacklogStagesAdmin } from "@/lib/hooks/useBacklogStages";
 import type { BacklogStage, StageTransition } from "@/lib/hooks/useBacklogStages";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import type { PipelineMode } from "@/lib/hooks/useBacklogService";
+import { useLivenessDefinitions } from "@/lib/hooks/useLivenessDefinitions";
 
 jest.mock("@/lib/hooks/useBacklogStages", () => {
   const actual = jest.requireActual("@/lib/hooks/useBacklogStages");
@@ -35,8 +36,14 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
   useBacklogService: jest.fn(),
 }));
 
+jest.mock("@/lib/hooks/useLivenessDefinitions", () => ({
+  useLivenessDefinitions: jest.fn(),
+}));
+
 const mockUseBacklogStages = useBacklogStagesAdmin as jest.MockedFunction<typeof useBacklogStagesAdmin>;
 const mockUseBacklogService = useBacklogService as jest.MockedFunction<typeof useBacklogService>;
+const mockUseLivenessDefinitions = useLivenessDefinitions as jest.MockedFunction<typeof useLivenessDefinitions>;
+const mockListLivenessDefinitions = jest.fn();
 
 const mockCreateStage = jest.fn();
 const mockUpdateStage = jest.fn();
@@ -100,6 +107,13 @@ beforeEach(() => {
   mockUseBacklogService.mockReturnValue({
     listPipelineModes: mockListPipelineModes,
   } as unknown as ReturnType<typeof useBacklogService>);
+  mockListLivenessDefinitions.mockResolvedValue([]);
+  mockUseLivenessDefinitions.mockReturnValue({
+    listLivenessDefinitions: mockListLivenessDefinitions,
+    createLivenessDefinition: jest.fn(),
+    updateLivenessDefinition: jest.fn(),
+    deleteLivenessDefinition: jest.fn(),
+  } as unknown as ReturnType<typeof useLivenessDefinitions>);
 });
 
 const STAGE_A = makeStage({ id: "1", slug: "idea", name: "Idea", isEntry: true });

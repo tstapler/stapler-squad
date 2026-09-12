@@ -1236,3 +1236,85 @@ func TestIsActionableType(t *testing.T) {
 		}
 	}
 }
+
+// TestDemoteExpiredUrgency_should_DemoteToHigh_When_OlderThanTTL verifies the urgency-decay
+// half of the push-gate redesign: a URGENT record older than the TTL is demoted to HIGH —
+// dropped from the push path but never deleted, archived, or marked read, since importance
+// (unlike urgency) doesn't decay.
+func TestDemoteExpiredUrgency_should_DemoteToHigh_When_OlderThanTTL(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now()
+
+	record := makeRecord("aged-urgent", "session-1", notifTypeWarning)
+	record.Priority = priorityUrgent
+	record.CreatedAt = now.Add(-2 * time.Hour)
+	if err := store.Append(record); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	demoted := store.DemoteExpiredUrgency(now, UrgentTTL)
+	if demoted != 1 {
+		t.Fatalf("expected 1 record demoted, got %d", demoted)
+	}
+
+	got, ok := store.GetByID("aged-urgent")
+	if !ok {
+		t.Fatal("record must still exist after demotion — DemoteExpiredUrgency must never delete")
+	}
+	if got.Priority != priorityHigh {
+		t.Errorf("expected priority demoted to HIGH (%d), got %d", priorityHigh, got.Priority)
+	}
+	if got.IsRead {
+		t.Error("demotion must not mark the record read — importance is preserved, not archived")
+	}
+}
+
+// TestDemoteExpiredUrgency_should_NotDemote_When_WithinTTL is the 5-minutes-old
+// counterpart: a fresh URGENT record must stay URGENT (and therefore push-eligible).
+func TestDemoteExpiredUrgency_should_NotDemote_When_WithinTTL(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now()
+
+	record := makeRecord("fresh-urgent", "session-1", notifTypeWarning)
+	record.Priority = priorityUrgent
+	record.CreatedAt = now.Add(-5 * time.Minute)
+	if err := store.Append(record); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	demoted := store.DemoteExpiredUrgency(now, UrgentTTL)
+	if demoted != 0 {
+		t.Fatalf("expected 0 records demoted, got %d", demoted)
+	}
+
+	got, ok := store.GetByID("fresh-urgent")
+	if !ok {
+		t.Fatal("record must still exist")
+	}
+	if got.Priority != priorityUrgent {
+		t.Errorf("expected priority to remain URGENT (%d), got %d", priorityUrgent, got.Priority)
+	}
+}
+
+// TestDemoteExpiredUrgency_should_IgnoreNonUrgentRecords verifies only URGENT records are
+// touched — a HIGH/MEDIUM/LOW record's priority (and importance) is never time-boxed.
+func TestDemoteExpiredUrgency_should_IgnoreNonUrgentRecords(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now()
+
+	record := makeRecord("aged-high", "session-1", notifTypeWarning)
+	record.Priority = priorityHigh
+	record.CreatedAt = now.Add(-2 * time.Hour)
+	if err := store.Append(record); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	demoted := store.DemoteExpiredUrgency(now, UrgentTTL)
+	if demoted != 0 {
+		t.Fatalf("expected 0 records demoted, got %d", demoted)
+	}
+	got, _ := store.GetByID("aged-high")
+	if got.Priority != priorityHigh {
+		t.Errorf("expected priority to remain HIGH (%d), got %d", priorityHigh, got.Priority)
+	}
+}
