@@ -3,6 +3,7 @@ package notifications
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -174,11 +175,30 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check for exact duplicates by ID (idempotency guard)
+	// Check for exact duplicates by ID (idempotency guard) -- but an ID that's
+	// intentionally stable across an episode (e.g. fork-pressure's per-episode alert
+	// ID, threaded through unchanged on escalation) may carry updated content on a
+	// later call. Treat that as an update-in-place rather than a silent no-op, or an
+	// escalation's new title/level would never reach the stored record.
 	for _, existing := range s.records {
-		if existing.ID == record.ID {
-			return nil // Already exists, skip
+		if existing.ID != record.ID {
+			continue
 		}
+		if existing.Title == record.Title && existing.Message == record.Message && maps.Equal(existing.Metadata, record.Metadata) {
+			return nil // Identical content already recorded, skip
+		}
+		existing.OccurrenceCount++
+		existing.LastOccurredAt = &record.CreatedAt
+		existing.Title = record.Title
+		existing.Message = record.Message
+		existing.Metadata = record.Metadata
+		if record.NotificationType != notifTypeAutoApproved {
+			existing.IsRead = false
+			existing.ReadAt = nil
+		}
+		s.enforceRetention()
+		s.moveToFront(existing)
+		return s.saveToDisk()
 	}
 
 	// Check for a duplicate by (sessionID, notificationType) and collapse.

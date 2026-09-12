@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ForkPressureLevel describes the current subprocess pressure state.
@@ -36,6 +38,17 @@ const (
 	zombieAlertThreshold       = 10  // zombie children/window → alert
 )
 
+// spawnRateClearThreshold/spawnFailureClearThreshold/zombieClearThreshold are the
+// falling-edge counterparts to the entry thresholds above. The gap between enter and
+// clear (hysteresis) exists so a count oscillating around the old single threshold
+// (e.g. 118/122/119/121 spawns/window) doesn't flap the alert on every crossing —
+// mirrors memoryPressureWarnRatio/ClearRatio's pattern (memory_pressure_notifier.go).
+const (
+	spawnRateClearThreshold    = 90 // spawns/window → warning clears
+	spawnFailureClearThreshold = 5  // failures/window → critical clears
+	zombieClearThreshold       = 5  // zombie children/window → critical clears
+)
+
 // ForkPressureStats is a point-in-time snapshot of fork pressure metrics.
 type ForkPressureStats struct {
 	TotalSpawns      int64
@@ -47,6 +60,17 @@ type ForkPressureStats struct {
 	WindowDuration   time.Duration
 	Level            ForkPressureLevel
 	LastAlertAt      time.Time
+	// AlertID is a stable identifier for the current pressure episode (minted when
+	// pressure first rises above OK, reused for every escalation within that episode,
+	// and carried on the final "cleared" callback too) — only populated on the
+	// ForkPressureStats passed to an AlertFunc callback, never on ForkPressureSnapshot's
+	// point-in-time reads. Lets a notification consumer (server.go) update one record
+	// in place across an episode instead of minting a fresh ID per call.
+	AlertID string
+	// Cleared is true only on the single callback fired when pressure returns to OK
+	// after an active episode — distinguishes "episode ended" from "episode
+	// entered/escalated" for consumers building a persistent status signal.
+	Cleared bool
 }
 
 // AlertFunc is called when fork pressure crosses a threshold.
@@ -141,12 +165,25 @@ var forkMonitor = struct {
 	zombieRing    *timestampRing
 	alertMu       deadlock.Mutex
 	lastAlertAt   time.Time
-	// Baseline fields for condition-change gating (FR-1, FR-2).
-	// All three are read and written only under alertMu.
-	lastAlertZombieCount  int64
-	lastAlertFailureCount int64
-	lastAlertLevel        ForkPressureLevel
-	alertFns              []AlertFunc
+	// Hysteresis state for alert gating. All fields are read and written only
+	// under alertMu.
+	//
+	// currentLevel is the latched (hysteretic) pressure level — distinct from a raw
+	// snapshotAt() Level, which reflects only the entry thresholds. currentLevel only
+	// rises when a raw level's entry threshold is crossed and only falls to OK when
+	// warningActive and criticalActive have both cleared (dropped below their own,
+	// lower clear thresholds) — see nextHystereticLevel.
+	currentLevel ForkPressureLevel
+	// warningActive/criticalActive are independent latches (Critical is driven by
+	// failures/zombies, Warning by spawn rate — see nextHystereticLevel) so each can
+	// clear on its own falling edge without resetting the other.
+	warningActive  bool
+	criticalActive bool
+	// episodeID is the stable AlertFunc/notification ID for the current non-OK
+	// episode, minted on entry and reused for every escalation within it. Empty
+	// while currentLevel == ForkPressureOK.
+	episodeID string
+	alertFns  []AlertFunc
 	// alertWG tracks in-flight alert-dispatch goroutines spawned by checkPressure,
 	// so tests can deterministically wait for them to finish (see
 	// waitForPendingAlerts in fork_metrics_test.go) instead of sleeping.
@@ -262,45 +299,87 @@ func snapshotAt(now time.Time) ForkPressureStats {
 	}
 }
 
+// nextHystereticLevel updates forkMonitor's warningActive/criticalActive latches from
+// the raw window counts in stats and returns the resulting hysteretic level. Must be
+// called with alertMu held.
+//
+// Each latch only rises on its entry threshold and only falls on its own, lower clear
+// threshold — a count sitting in the gap between the two (the old flapping zone) leaves
+// the latch exactly as it was. This is the fix for the trickle-flapping bug: the old
+// code compared each new count to the count recorded at the last alert, which a slow,
+// never-worsening trickle could still creep past on every window slide.
+func nextHystereticLevel(stats ForkPressureStats) ForkPressureLevel {
+	switch {
+	case stats.FailuresInWindow >= spawnFailureAlertThreshold || stats.ZombiesInWindow >= zombieAlertThreshold:
+		forkMonitor.criticalActive = true
+	case stats.FailuresInWindow < spawnFailureClearThreshold && stats.ZombiesInWindow < zombieClearThreshold:
+		forkMonitor.criticalActive = false
+	}
+
+	switch {
+	case stats.SpawnsInWindow >= spawnRateWarnThreshold:
+		forkMonitor.warningActive = true
+	case stats.SpawnsInWindow < spawnRateClearThreshold:
+		forkMonitor.warningActive = false
+	}
+
+	switch {
+	case forkMonitor.criticalActive:
+		return ForkPressureCritical
+	case forkMonitor.warningActive:
+		return ForkPressureWarning
+	default:
+		return ForkPressureOK
+	}
+}
+
+// episodeTransition decides whether the level change from current to next is
+// user-visible (a genuine worsening, or a full clear back to OK) and, if so, the
+// episode ID to report and whether it clears. Must be called with alertMu held;
+// mutates forkMonitor.episodeID for entry/clear transitions.
+func episodeTransition(current, next ForkPressureLevel) (alertID string, fire, cleared bool) {
+	switch {
+	case next == current:
+		return "", false, false
+	case next == ForkPressureOK:
+		// Full clear, regardless of which level it fell from.
+		id := forkMonitor.episodeID
+		forkMonitor.episodeID = ""
+		return id, true, true
+	case current == ForkPressureOK:
+		id := uuid.New().String()
+		forkMonitor.episodeID = id
+		return id, true, false
+	case next < current:
+		// Partial de-escalation that's still elevated (e.g. Critical -> Warning
+		// without fully clearing) — update the latched level silently, no alert.
+		return "", false, false
+	default:
+		// Escalation within the active episode — reuse its ID so the notification
+		// consumer updates the same record instead of minting a new one.
+		return forkMonitor.episodeID, true, false
+	}
+}
+
 func checkPressure(now time.Time) {
 	stats := snapshotAt(now)
-	if stats.Level == ForkPressureOK {
-		// Only pay the mutex cost when we actually need to reset the baseline.
-		// Read lastAlertLevel under the lock to avoid data races.
-		forkMonitor.alertMu.Lock()
-		if forkMonitor.lastAlertLevel != ForkPressureOK {
-			// Condition cleared — reset baseline so next re-occurrence fires a fresh alert (FR-5).
-			forkMonitor.lastAlertZombieCount = 0
-			forkMonitor.lastAlertFailureCount = 0
-			forkMonitor.lastAlertLevel = ForkPressureOK
-		}
-		forkMonitor.alertMu.Unlock()
-		return
-	}
 
 	forkMonitor.alertMu.Lock()
-	// Condition-change check: worsened means strictly higher counts OR level escalated.
-	// We use strict > (not >=) intentionally: if the ring-buffer count drops due to
-	// entry expiry and then rises again, we only re-alert when it exceeds the baseline
-	// set at the last alert — not just when it equals it. This prevents re-alerts on
-	// oscillation around the threshold boundary.
-	worsened := stats.Level > forkMonitor.lastAlertLevel ||
-		stats.ZombiesInWindow > forkMonitor.lastAlertZombieCount ||
-		stats.FailuresInWindow > forkMonitor.lastAlertFailureCount
-
-	if !worsened {
-		// Conditions unchanged — suppress. Re-alerts only fire when the situation
-		// genuinely worsens (higher count or escalated level), never on cooldown expiry alone.
+	current := forkMonitor.currentLevel
+	next := nextHystereticLevel(stats)
+	forkMonitor.currentLevel = next
+	alertID, fire, cleared := episodeTransition(current, next)
+	if !fire {
 		forkMonitor.alertMu.Unlock()
 		return
 	}
-	// Conditions worsened — alert immediately.
 	forkMonitor.lastAlertAt = now
-	forkMonitor.lastAlertZombieCount = stats.ZombiesInWindow
-	forkMonitor.lastAlertFailureCount = stats.FailuresInWindow
-	forkMonitor.lastAlertLevel = stats.Level
 	fns := forkMonitor.alertFns
 	forkMonitor.alertMu.Unlock()
+
+	stats.Level = next
+	stats.AlertID = alertID
+	stats.Cleared = cleared
 
 	forkMonitor.alertWG.Add(1)
 	go func() {

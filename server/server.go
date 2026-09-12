@@ -319,31 +319,39 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Fires when capture-pane subprocess failures or zombie counts exceed thresholds,
 	// indicating that dead sessions are flooding the poller with fork() calls.
 	tmux.RegisterForkPressureAlert(func(level tmux.ForkPressureLevel, stats tmux.ForkPressureStats) {
+		title := fmt.Sprintf("Fork Pressure: %s", level)
 		body := fmt.Sprintf(
 			"Subprocess failures: %d/%ds | Spawns: %d/%ds | Zombies: %d | Level: %s",
 			stats.FailuresInWindow, int(stats.WindowDuration.Seconds()),
 			stats.SpawnsInWindow, int(stats.WindowDuration.Seconds()),
 			stats.ZombiesInWindow, level,
 		)
-		notifType := int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING)
-		if level == tmux.ForkPressureCritical {
-			notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR)
+		state := "active"
+		if stats.Cleared {
+			title = "Fork Pressure: cleared"
+			body = "Fork pressure has returned to normal."
+			state = "cleared"
 		}
+		// NotificationType stays constant across an episode (never swapped between
+		// WARNING/ERROR by level) so the store's (SessionID, NotificationType) dedup
+		// key keeps matching the same record as pressure escalates — see
+		// server/notifications/store.go's Append(). The level itself is carried in
+		// the title/metadata instead.
 		event := events.NewNotificationEvent(
 			"fork-pressure",
 			"System",
-			uuid.New().String(),
-			notifType,
+			stats.AlertID,
+			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
 			int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
-			fmt.Sprintf("Fork Pressure: %s", level),
+			title,
 			body,
-			nil,
+			map[string]string{"reason": "fork_pressure", "level": level.String(), "state": state},
 		)
 		deps.EventBus.Publish(event)
-		log.Warn("[ForkPressure] alert dispatched", "level", level, "body", body)
+		log.Warn("[ForkPressure] alert dispatched", "level", level, "cleared", stats.Cleared, "body", body)
 
 		// Immediately reconcile to mark dead sessions Stopped, cutting spawn rate.
-		if deps.ReviewQueuePoller != nil {
+		if !stats.Cleared && deps.ReviewQueuePoller != nil {
 			deps.ReviewQueuePoller.ForceReconcile()
 		}
 	})
