@@ -16,7 +16,7 @@ export interface RepoPathWorktreeInfo {
 }
 
 /** Strips a trailing slash so a candidate path matches its ListWorktrees entry regardless of how it was typed/stored. */
-function normalizePath(p: string): string {
+export function normalizePath(p: string): string {
   return p.length > 1 ? p.replace(/\/+$/, "") : p;
 }
 
@@ -40,53 +40,44 @@ function mergeWorktreeFamily(
   return changed;
 }
 
-/** Resolves the still-unresolved candidates and merges any newly-discovered families into `cache`. Returns true if the cache changed. */
+/**
+ * Resolves the still-unresolved candidates and merges each one into `cache`
+ * as soon as its own request settles, calling `onChange` per merge — so one
+ * slow candidate doesn't hold up surfacing the others that already resolved.
+ */
 async function resolveUnresolvedPaths(
   candidates: string[],
   cache: Map<string, RepoPathWorktreeInfo>,
-  signal: AbortSignal
-): Promise<boolean> {
+  signal: AbortSignal,
+  onChange: () => void
+): Promise<void> {
   const unresolved = Array.from(new Set(candidates.map(normalizePath))).filter(
     (p) => p && !cache.has(p)
   );
-  if (unresolved.length === 0) return false;
+  if (unresolved.length === 0) return;
 
   const client = createClient(SessionService, getConnectTransport());
-  const results = await Promise.allSettled(
-    unresolved.map((repoPath) => client.listWorktrees({ repoPath }, { signal }))
+  await Promise.all(
+    unresolved.map(async (repoPath) => {
+      let worktrees: WorktreeEntry[];
+      try {
+        const result = await client.listWorktrees({ repoPath }, { signal });
+        worktrees = result.worktrees || [];
+      } catch {
+        return;
+      }
+      if (signal.aborted) return;
+      if (mergeWorktreeFamily(cache, worktrees)) {
+        onChange();
+      }
+    })
   );
-  if (signal.aborted) return false;
-
-  let changed = false;
-  for (const result of results) {
-    if (result.status !== "fulfilled") continue;
-    if (mergeWorktreeFamily(cache, result.value.worktrees || [])) {
-      changed = true;
-    }
-  }
-  return changed;
 }
 
 /**
- * Resolves each candidate path's git-worktree family (root + siblings) via
- * SessionService.ListWorktrees, so callers can group a churny worktree path
- * under its primary repo checkout instead of treating every path as an
- * independent, unranked entry.
- *
- * Debounces on the candidate set (mirrors useWorktreeSuggestions), then
- * fetches via useAbortableEffect so a fast-changing candidate list (the user
- * still typing) cancels stale in-flight requests instead of piling them up.
- * A repo's worktree topology doesn't change mid-session, so resolved paths
- * are cached for the component's lifetime rather than re-fetched.
- *
- * An RPC failure or timeout for a given path just leaves it out of the
- * returned map — callers treat an absent entry as "not a worktree" and fall
- * back to today's plain, ungrouped behavior rather than surfacing an error.
- *
- * The returned `resolutions` map is mutated in place (not replaced) as new
- * results land, so its reference never changes — the returned `version`
- * counter is what actually changes, and is what a caller should list in a
- * useMemo dependency array instead of `resolutions` itself.
+ * `resolutions` is mutated in place (not replaced) as results land, so its
+ * reference never changes — `version` is the signal that actually changes,
+ * and is what a caller should list in a useMemo dependency array instead.
  */
 export interface RepoPathSuggestions {
   resolutions: Map<string, RepoPathWorktreeInfo>;
@@ -108,10 +99,10 @@ export function useRepoPathSuggestions(paths: string[]): RepoPathSuggestions {
   const debouncedKey = debounced.join("\n");
 
   useAbortableEffect(
-    async (signal) => {
-      const changed = await resolveUnresolvedPaths(debounced, cacheRef.current, signal);
-      if (changed) setVersion((v) => v + 1);
-    },
+    (signal) =>
+      resolveUnresolvedPaths(debounced, cacheRef.current, signal, () =>
+        setVersion((v) => v + 1)
+      ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [debouncedKey]
   );

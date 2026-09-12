@@ -32,6 +32,7 @@ jest.mock("@/lib/hooks/usePathCompletions", () => ({
 }));
 
 jest.mock("@/lib/hooks/useRepoPathSuggestions", () => ({
+  ...jest.requireActual("@/lib/hooks/useRepoPathSuggestions"),
   useRepoPathSuggestions: jest.fn(() => ({ resolutions: new Map(), version: 0 })),
 }));
 

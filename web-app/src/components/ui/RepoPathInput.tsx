@@ -3,7 +3,11 @@
 import { useState, useCallback, useRef, useEffect, useMemo, useId } from "react";
 import { usePathCompletions } from "@/lib/hooks/usePathCompletions";
 import { useSessionRepoPaths } from "@/lib/hooks/useSessionRepoPaths";
-import { useRepoPathSuggestions, type RepoPathWorktreeInfo } from "@/lib/hooks/useRepoPathSuggestions";
+import {
+  useRepoPathSuggestions,
+  normalizePath,
+  type RepoPathWorktreeInfo,
+} from "@/lib/hooks/useRepoPathSuggestions";
 import { PathCompletionDropdown, type CompletionEntry } from "@/components/ui/PathCompletionDropdown";
 import { isGitHubRef, parseGitHubRef, getRepoFullName } from "@/lib/github/urlParser";
 import * as styles from "./RepoPathInput.css";
@@ -36,11 +40,6 @@ function tildeAbbreviate(p: string): string {
   return m ? `~${m[2] ?? ""}` : p;
 }
 
-/** Strips a trailing slash — mirrors useRepoPathSuggestions' normalization so lookups match regardless of how a path was typed/stored. */
-function normalizePath(p: string): string {
-  return p.length > 1 ? p.replace(/\/+$/, "") : p;
-}
-
 function makeHistoryEntry(p: string, worktreeOf?: string): CompletionEntry {
   return {
     name: tildeAbbreviate(p),
@@ -52,12 +51,8 @@ function makeHistoryEntry(p: string, worktreeOf?: string): CompletionEntry {
 }
 
 /**
- * Groups history candidates by resolved repo root (via `resolutions`, from
- * useRepoPathSuggestions) so a repo's primary checkout always sorts at or
- * above its own worktrees, and is synthesized into the list even when no
- * session is currently rooted there (AC2). An unresolved candidate (RPC
- * failure/timeout, or genuinely not a git repo) falls back to being listed
- * as its own standalone entry, matching today's plain-history behavior.
+ * Groups history candidates by resolved repo root. The root is synthesized
+ * into the list even when no session is currently rooted there (AC2).
  */
 interface RepoGroup {
   rootPath: string | null;

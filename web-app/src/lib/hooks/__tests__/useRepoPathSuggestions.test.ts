@@ -159,6 +159,31 @@ describe("useRepoPathSuggestions", () => {
     expect(result.current.resolutions.size).toBe(0);
   });
 
+  // Covers the `if (!main) return false;` guard: a response with worktree
+  // entries but no `isMain: true` entry must be discarded, not partially cached.
+  it("discards a response with no main entry instead of partially caching it", async () => {
+    mockListWorktrees.mockResolvedValue({
+      worktrees: [{ path: "/repo/worktrees/wt-a", branch: "feature-a", isMain: false }],
+    });
+
+    const { result } = renderHook(() => useRepoPathSuggestions(["/repo/worktrees/wt-a"]));
+    await act(async () => { jest.advanceTimersByTime(150); });
+
+    expect(result.current.resolutions.size).toBe(0);
+  });
+
+  // Covers the `new Set(candidates.map(normalizePath))` dedup: equivalent
+  // candidate paths (including a trailing-slash variant) must not each issue
+  // their own RPC call.
+  it("issues one RPC call for duplicate/equivalent candidate paths", async () => {
+    renderHook(() =>
+      useRepoPathSuggestions(["/repo/root", "/repo/root/", "/repo/root"])
+    );
+    await act(async () => { jest.advanceTimersByTime(150); });
+
+    expect(mockListWorktrees).toHaveBeenCalledTimes(1);
+  });
+
   it("does not re-fetch a path already resolved (cached for the component's lifetime)", async () => {
     mockListWorktrees.mockResolvedValue({
       worktrees: [{ path: "/repo/root", branch: "main", isMain: true }],
