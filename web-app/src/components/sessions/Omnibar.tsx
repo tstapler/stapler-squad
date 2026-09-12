@@ -71,6 +71,8 @@ import {
   createButton,
   error as errorClass,
 } from "./Omnibar.css";
+import { BacklogItemIntentReview } from "@/components/backlog/BacklogItemIntentReview";
+import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
 import { useAliases } from "@/lib/hooks/useAliases";
@@ -99,8 +101,6 @@ interface OmnibarProps {
   onNavigateToSession: (sessionId: string) => void;
   onNavigateToSessionInNewPane?: (sessionId: string) => void;
   onRunWorkflow?: (slug: string, arg: string) => Promise<void>;
-  /** Creates a backlog item from a free-text chat message (the "backlog: <message>" trigger). */
-  onCreateBacklogItemFromChat?: (text: string) => Promise<void>;
   initialMode?: "discovery" | "creation";
   initialInput?: string;
   initialTitle?: string;
@@ -261,7 +261,6 @@ export function Omnibar({
   onNavigateToSession,
   onNavigateToSessionInNewPane,
   onRunWorkflow,
-  onCreateBacklogItemFromChat,
   initialMode,
   initialInput,
   initialTitle,
@@ -320,6 +319,12 @@ export function Omnibar({
   // Submission state
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Non-null while reviewing an LLM-parsed backlog item draft (the
+  // "backlog: <message>" trigger) — holds the raw text passed to
+  // BacklogItemIntentReview. Replaces the entire omnibar body with the
+  // review UI until the user confirms or cancels; see the early return
+  // near this component's bottom.
+  const [backlogReviewText, setBacklogReviewText] = useState<string | null>(null);
   // Synchronous double-submit guard: `isSubmitting` state only becomes visible to
   // handleSubmit's closure after React commits the re-render, which leaves a window
   // for a second rapid click (e.g. a fast double-click) to read the same stale
@@ -920,6 +925,7 @@ export function Omnibar({
         atSuggestIndex: -1,
       });
       setError(null);
+      setBacklogReviewText(null);
       // Defense-in-depth: handleSubmit's own finally blocks already reset this on
       // success/failure, but this instance never unmounts across open/close cycles, so
       // also clear it here in case onClose() didn't synchronously flip isOpen after a
@@ -1053,8 +1059,10 @@ export function Omnibar({
           setAliasSuggestIndex((i) => Math.max(i - 1, -1));
           return;
         }
-        if (e.key === "Tab" || (e.key === "Enter" && aliasSuggestIndex >= 0)) {
+        if (e.key === "Tab" || e.key === "Enter") {
           e.preventDefault();
+          // Default to the top suggestion when nothing has been arrow-key-highlighted,
+          // matching Tab's fallback so a bare Enter accepts the best match.
           const idx = aliasSuggestIndex >= 0 ? aliasSuggestIndex : 0;
           if (filteredAliases[idx]) {
             setInput(completeAlias(filteredAliases[idx]));
@@ -1089,23 +1097,15 @@ export function Omnibar({
           setUIField("atSuggestIndex", Math.max(atSuggestIndex - 1, -1));
           return;
         }
-        if (e.key === "Tab") {
-          e.preventDefault();
+        if (e.key === "Tab" || e.key === "Enter") {
+          // Default to the top suggestion when nothing has been arrow-key-highlighted,
+          // matching Tab's existing fallback so a bare Enter accepts the best match.
           const idx = atSuggestIndex >= 0 ? atSuggestIndex : 0;
           if (atSuggestions[idx]) {
+            e.preventDefault();
             setInput(completeAtCommand(atSuggestions[idx]));
             setUIField("atSuggestIndex", -1);
           }
-          return;
-        }
-        if (
-          e.key === "Enter" &&
-          atSuggestIndex >= 0 &&
-          atSuggestions[atSuggestIndex]
-        ) {
-          e.preventDefault();
-          setInput(completeAtCommand(atSuggestions[atSuggestIndex]));
-          setUIField("atSuggestIndex", -1);
           return;
         }
         if (e.key === "Escape") {
@@ -1221,8 +1221,10 @@ export function Omnibar({
       } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         // Cmd+Enter (Mac) / Ctrl+Enter (Linux/Windows) to submit.
         handleSubmitRef.current();
-      } else if (e.key === "Enter" && !isDiscoveryMode) {
-        // Plain Enter in creation mode submits when the form is ready.
+      } else if (e.key === "Enter") {
+        // Plain Enter submits when the form is ready (creation mode), or fires a
+        // fire-and-forget detection like @workflow invocation (discovery mode) —
+        // reached here only when no result/dropdown entry consumed Enter above.
         // handleSubmit guards on canSubmit internally, so this is a no-op when the form is incomplete.
         handleSubmitRef.current();
       }
@@ -1322,6 +1324,12 @@ export function Omnibar({
       return true;
     // Chat backlog item creation (backlog: <message>) needs no sessionName/path.
     if (detection?.type === InputType.ChatBacklogItem) return true;
+    // Workflow invocation (@slug [arg]) is fire-and-forget, no sessionName/path needed.
+    if (
+      detection?.type === InputType.Workflow &&
+      detection.metadata?.workflowFound
+    )
+      return true;
 
     if (!input.trim()) return false;
     if (!sessionName.trim()) return false;
@@ -1404,23 +1412,14 @@ export function Omnibar({
       return;
     }
 
-    // Chat backlog item creation (backlog: <message>) — no session-creation flow, just
-    // hands the free-text message off to the backlog RPC and closes the omnibar.
+    // Chat backlog item creation (backlog: <message>) — opens the LLM-parsed
+    // review UI instead of creating immediately; see backlogReviewText's
+    // early-return render branch below. isSubmittingRef is cleared here (not
+    // in a finally block) since control doesn't return to this function once
+    // the review UI takes over.
     if (detection?.type === InputType.ChatBacklogItem) {
-      const message = detection.parsedValue;
-      setIsSubmitting(true);
-      setError(null);
-      try {
-        await onCreateBacklogItemFromChat?.(message);
-        onClose();
-      } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Failed to create backlog item",
-        );
-      } finally {
-        setIsSubmitting(false);
-        isSubmittingRef.current = false;
-      }
+      isSubmittingRef.current = false;
+      setBacklogReviewText(detection.parsedValue);
       return;
     }
 
@@ -1674,7 +1673,6 @@ export function Omnibar({
     onCreateSession,
     onClose,
     onRunWorkflow,
-    onCreateBacklogItemFromChat,
     formState.firstPrompt,
     formState.autonomousMode,
     formState.extraArgs,
@@ -1689,6 +1687,34 @@ export function Omnibar({
   }, [handleSubmit]);
 
   if (!isOpen) return null;
+
+  // Reviewing an LLM-parsed backlog item draft (backlog: <message>) replaces
+  // the entire omnibar body — a different UI mode from session creation, not
+  // another branch of the input/results form below.
+  if (backlogReviewText !== null) {
+    return (
+      <div
+        className={overlay}
+        onClick={onClose}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="omnibar-title"
+        data-testid="omnibar"
+      >
+        <div className={modal} data-testid="omnibar-modal" onClick={(e) => e.stopPropagation()}>
+          <BacklogItemIntentReview
+            initialText={backlogReviewText}
+            onDone={(item: BacklogItem) => {
+              setBacklogReviewText(null);
+              onClose();
+              router.push(`/backlog?item=${item.id}`);
+            }}
+            onCancel={() => setBacklogReviewText(null)}
+          />
+        </div>
+      </div>
+    );
+  }
 
   const isMac = (() => {
     try {
@@ -1854,6 +1880,30 @@ export function Omnibar({
                 {m.extraFlags ? (
                   <span> · {String(m.extraFlags)} (appended)</span>
                 ) : null}
+              </div>
+            );
+          })()}
+        {detection?.type === InputType.Workflow &&
+          !!detection.metadata?.workflowFound &&
+          (() => {
+            const { workflow, workflowArg } = detection.metadata as {
+              workflow?: WorkflowEntry;
+              workflowArg?: string;
+            };
+            return (
+              <div
+                role="status"
+                aria-live="polite"
+                data-testid="workflow-resolution-chip"
+              >
+                <span>
+                  Workflow: @{workflow?.slug}
+                  {workflow?.name ? ` (${workflow.name})` : ""}
+                </span>
+                {workflow?.description ? (
+                  <span> · {workflow.description}</span>
+                ) : null}
+                <span> · arg: {workflowArg ? workflowArg : "(none)"}</span>
               </div>
             );
           })()}

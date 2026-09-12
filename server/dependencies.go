@@ -68,6 +68,15 @@ type ServerDependencies struct {
 	UnfinishedWorkService *services.UnfinishedWorkService
 	WorktreePRPoller      *session.WorktreePRPoller
 
+	// UnfinishedWatchDirWatcher discovers repos under the user-configured
+	// watch directories (Settings → Unfinished Work Sources) and registers
+	// them with UnfinishedScanner. Nil under the same conditions
+	// UnfinishedScanner is nil (see BuildRuntimeDeps' unfinished-work
+	// wiring block) — its own field, not folded into UnfinishedScanner,
+	// because Start needs to run once from wireDepsIntoServer alongside
+	// (not replacing) UnfinishedScanner.Start.
+	UnfinishedWatchDirWatcher *unfinished.WatchDirWatcher
+
 	// JulesSessionPoller polls open Jules sessions (google-jules-integration
 	// Epic 2.3/2.4). Nil unless config.Config.Jules.Enabled and the API key
 	// resolves at startup — see BuildRuntimeDeps' jules wiring block.
@@ -141,46 +150,47 @@ type ServerDependencies struct {
 // by NewServerWithDeps. This mirrors the projection done inside BuildDependencies.
 func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 	return &ServerDependencies{
-		SessionService:           rt.SessionService,
-		Storage:                  rt.Storage,
-		Instances:                rt.Instances,
-		EventBus:                 rt.EventBus,
-		StatusManager:            rt.StatusManager,
-		ReviewQueue:              rt.ReviewQueue,
-		ReviewQueuePoller:        rt.ReviewQueuePoller,
-		PRStatusPoller:           rt.PRStatusPoller,
-		ReactiveQueueMgr:         rt.ReactiveQueueMgr,
-		ScrollbackManager:        rt.ScrollbackManager,
-		TmuxStreamerManager:      rt.TmuxStreamerManager,
-		ExternalDiscovery:        rt.ExternalDiscovery,
-		ExternalApprovalMonitor:  rt.ExternalApprovalMonitor,
-		HistoryLinker:            rt.HistoryLinker,
-		ErrorRegistry:            rt.ErrorRegistry,
-		ClaudeSettingsWatcher:    rt.ClaudeSettingsWatcher,
-		SlackNotifier:            rt.SlackNotifier,
-		UnfinishedScanner:        rt.UnfinishedScanner,
-		UnfinishedStateStore:     rt.UnfinishedStateStore,
-		UnfinishedWorkService:    rt.UnfinishedWorkService,
-		WorktreePRPoller:         rt.WorktreePRPoller,
-		JulesSessionPoller:       rt.JulesSessionPoller,
-		UserPRCache:              rt.UserPRCache,
-		GitHubUserService:        rt.GitHubUserService,
-		InsightsService:          rt.InsightsService,
-		BacklogService:           rt.BacklogService,
-		QuotaGate:                rt.QuotaGate,
-		SyncLoop:                 rt.SyncLoop,
-		BacklogEnabledCheck:      rt.BacklogEnabledCheck,
-		AnalyticsEntClient:       rt.AnalyticsEntClient,
-		VNCDeps:                  rt.VNCDeps,
-		CDPDeps:                  rt.CDPDeps,
-		HeadlessPool:             rt.HeadlessPool,
-		WorkflowRepo:             rt.WorkflowRepo,
-		WorkflowScheduler:        rt.WorkflowScheduler,
-		TriggerFireEventRepo:     rt.TriggerFireEventRepo,
-		Registry:                 rt.Registry,
-		SessionSummaryGenerator:  rt.SessionSummaryGenerator,
-		HandoffSummaryGenerator:  rt.HandoffSummaryGenerator,
-		BacklogLifecycleListener: rt.BacklogLifecycleListener,
+		SessionService:            rt.SessionService,
+		Storage:                   rt.Storage,
+		Instances:                 rt.Instances,
+		EventBus:                  rt.EventBus,
+		StatusManager:             rt.StatusManager,
+		ReviewQueue:               rt.ReviewQueue,
+		ReviewQueuePoller:         rt.ReviewQueuePoller,
+		PRStatusPoller:            rt.PRStatusPoller,
+		ReactiveQueueMgr:          rt.ReactiveQueueMgr,
+		ScrollbackManager:         rt.ScrollbackManager,
+		TmuxStreamerManager:       rt.TmuxStreamerManager,
+		ExternalDiscovery:         rt.ExternalDiscovery,
+		ExternalApprovalMonitor:   rt.ExternalApprovalMonitor,
+		HistoryLinker:             rt.HistoryLinker,
+		ErrorRegistry:             rt.ErrorRegistry,
+		ClaudeSettingsWatcher:     rt.ClaudeSettingsWatcher,
+		SlackNotifier:             rt.SlackNotifier,
+		UnfinishedScanner:         rt.UnfinishedScanner,
+		UnfinishedStateStore:      rt.UnfinishedStateStore,
+		UnfinishedWorkService:     rt.UnfinishedWorkService,
+		UnfinishedWatchDirWatcher: rt.UnfinishedWatchDirWatcher,
+		WorktreePRPoller:          rt.WorktreePRPoller,
+		JulesSessionPoller:        rt.JulesSessionPoller,
+		UserPRCache:               rt.UserPRCache,
+		GitHubUserService:         rt.GitHubUserService,
+		InsightsService:           rt.InsightsService,
+		BacklogService:            rt.BacklogService,
+		QuotaGate:                 rt.QuotaGate,
+		SyncLoop:                  rt.SyncLoop,
+		BacklogEnabledCheck:       rt.BacklogEnabledCheck,
+		AnalyticsEntClient:        rt.AnalyticsEntClient,
+		VNCDeps:                   rt.VNCDeps,
+		CDPDeps:                   rt.CDPDeps,
+		HeadlessPool:              rt.HeadlessPool,
+		WorkflowRepo:              rt.WorkflowRepo,
+		WorkflowScheduler:         rt.WorkflowScheduler,
+		TriggerFireEventRepo:      rt.TriggerFireEventRepo,
+		Registry:                  rt.Registry,
+		SessionSummaryGenerator:   rt.SessionSummaryGenerator,
+		HandoffSummaryGenerator:   rt.HandoffSummaryGenerator,
+		BacklogLifecycleListener:  rt.BacklogLifecycleListener,
 	}
 }
 
@@ -451,6 +461,10 @@ type RuntimeDeps struct {
 	UnfinishedWorkService *services.UnfinishedWorkService
 	WorktreePRPoller      *session.WorktreePRPoller
 
+	// UnfinishedWatchDirWatcher (see the identically-named field on
+	// ServerDependencies for its full doc comment).
+	UnfinishedWatchDirWatcher *unfinished.WatchDirWatcher
+
 	// JulesSessionPoller (see the identically-named field on ServerDependencies
 	// for its full doc comment).
 	JulesSessionPoller *session.JulesSessionPoller
@@ -698,7 +712,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		stageCRUDRepo = entStageRepo
 		entGateSatisfactionRepo := session.NewEntGateSatisfactionRepository(entClient)
 		gateSatisfactionRepo = entGateSatisfactionRepo
-		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo); err != nil {
+		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo, pipelineModeRepo); err != nil {
 			log.Warn("stageConfigEngine construction failed; stage/transition/gate CRUD writes will not invalidate a cache", "err", err)
 		} else {
 			stageConfigEngine = engine
@@ -1118,18 +1132,20 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	// Initialize UnfinishedWork scanner and state store.
 	var (
-		unfinishedScanner    *unfinished.Scanner
-		unfinishedStateStore *unfinished.StateStore
-		unfinishedWorkSvc    *services.UnfinishedWorkService
-		worktreePRPoller     *session.WorktreePRPoller
-		userPRCache          *githubpkg.UserPRCache
+		unfinishedScanner         *unfinished.Scanner
+		unfinishedStateStore      *unfinished.StateStore
+		unfinishedWorkSvc         *services.UnfinishedWorkService
+		unfinishedWatchDirWatcher *unfinished.WatchDirWatcher
+		worktreePRPoller          *session.WorktreePRPoller
+		userPRCache               *githubpkg.UserPRCache
 	)
 	if configDir, configErr := config.GetConfigDir(); configErr == nil {
 		statePath := filepath.Join(configDir, "unfinished_state.json")
 		unfinishedStateStore, _ = unfinished.NewStateStore(statePath)
 		if unfinishedStateStore != nil {
 			unfinishedScanner = unfinished.NewScanner(eventBus, unfinishedStateStore)
-			unfinishedWorkSvc = services.NewUnfinishedWorkService(unfinishedScanner, unfinishedStateStore, eventBus, storage)
+			unfinishedWatchDirWatcher = unfinished.NewWatchDirWatcher(unfinishedScanner, unfinishedStateStore)
+			unfinishedWorkSvc = services.NewUnfinishedWorkService(unfinishedScanner, unfinishedStateStore, eventBus, storage, unfinishedWatchDirWatcher)
 			log.Info("UnfinishedWorkService initialized", "state", statePath)
 			if err := unfinished.RegisterMetrics(); err != nil {
 				log.Warn("failed to register unfinished OTel metrics", "err", err)
@@ -1322,6 +1338,22 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// invocations (Epic 2.4, Task 2.4.4c) — same gateSatisfactionRepo instance
 	// already wired into backlogSvc above, guarded nil-safe by both consumers.
 	backlogLifecycleListener.SetGateSatisfactionRepository(gateSatisfactionRepo)
+	// Wires the underlying ReviewGateRunner's own GateSatisfactionRepository
+	// (Epic 2.4 follow-up) so a configured automated_review gate's terminal
+	// verdict is actually recorded, not just this listener's separate
+	// reconcile-sweep copy above.
+	backlogLifecycleListener.SetReviewGateSatisfactionRepository(gateSatisfactionRepo)
+	// Wires resolveReviewGateContext/resolveCustomCheckGateContext's
+	// ConfiguredWorkflowEngine consultation (Epic 2.4 follow-up) — without
+	// this, a custom transition's automated-review/custom-check gates can
+	// never fire, degrading to the built-in `to == BacklogStatusReview`
+	// literal only. Guarded the same way backlogSvc.SetStageConfigEngine is
+	// above: stageConfigEngine is a concrete *session.ConfiguredWorkflowEngine,
+	// and passing a nil one through SetWorkflowEngine's interface parameter
+	// would box it as a non-nil-interface-wrapping-nil-pointer.
+	if stageConfigEngine != nil {
+		backlogLifecycleListener.SetWorkflowEngine(stageConfigEngine)
+	}
 	// Wire the orphaned_triage respawner so an idea-status item whose triage
 	// session orphaned (crashed, was killed, or a server restart happened
 	// mid-triage) gets triage automatically re-triggered instead of sitting
@@ -1548,6 +1580,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			log.Warn("failed to resolve config dir, skipping model family override, using defaults", "err", cfgErr)
 		}
 		workflowSvc := services.NewWorkflowService(workflowRepo, workflowScheduler, storage)
+		workflowSvc.SetEventBus(eventBus)
 		sessionService.SetWorkflowService(workflowSvc)
 		sessionService.SetWorkflowRepository(workflowRepo)
 		// Close the WIP-gate bypass (webhook-triggers Epic 1.3): every trigger-fired
@@ -1660,42 +1693,43 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}()
 
 	return &RuntimeDeps{
-		HeadlessPool:             headlessPool,
-		ServiceDeps:              svc,
-		Instances:                instances,
-		ReactiveQueueMgr:         reactiveQueueMgr,
-		ScrollbackManager:        scrollbackManager,
-		TmuxStreamerManager:      tmuxStreamerManager,
-		ExternalDiscovery:        externalDiscovery,
-		ExternalApprovalMonitor:  externalApprovalMonitor,
-		PRStatusPoller:           svc.PRStatusPoller,
-		HistoryLinker:            historyLinker,
-		ErrorRegistry:            svc.ErrorRegistry,
-		ClaudeSettingsWatcher:    sessionService.GetClaudeSettingsWatcher(),
-		SlackNotifier:            slackNotifier,
-		UnfinishedScanner:        unfinishedScanner,
-		UnfinishedStateStore:     unfinishedStateStore,
-		UnfinishedWorkService:    unfinishedWorkSvc,
-		WorktreePRPoller:         worktreePRPoller,
-		JulesSessionPoller:       julesPoller,
-		UserPRCache:              userPRCache,
-		GitHubUserService:        githubUserSvc,
-		InsightsService:          insightsSvc,
-		BacklogService:           backlogSvc,
-		QuotaGate:                quotaGate,
-		SyncLoop:                 nil, // managed by BacklogController
-		BacklogEnabledCheck:      backlogCtrl.IsEnabled,
-		Config:                   cfg,
-		AnalyticsEntClient:       analyticsClient,
-		VNCDeps:                  vncDeps,
-		CDPDeps:                  cdpDeps,
-		WorkflowRepo:             workflowRepo,
-		WorkflowScheduler:        workflowScheduler,
-		TriggerFireEventRepo:     triggerFireEventRepo,
-		Registry:                 svc.Registry,
-		SessionSummaryGenerator:  sessionSummaryGenerator,
-		HandoffSummaryGenerator:  handoffSummaryGenerator,
-		BacklogLifecycleListener: backlogLifecycleListener,
+		HeadlessPool:              headlessPool,
+		ServiceDeps:               svc,
+		Instances:                 instances,
+		ReactiveQueueMgr:          reactiveQueueMgr,
+		ScrollbackManager:         scrollbackManager,
+		TmuxStreamerManager:       tmuxStreamerManager,
+		ExternalDiscovery:         externalDiscovery,
+		ExternalApprovalMonitor:   externalApprovalMonitor,
+		PRStatusPoller:            svc.PRStatusPoller,
+		HistoryLinker:             historyLinker,
+		ErrorRegistry:             svc.ErrorRegistry,
+		ClaudeSettingsWatcher:     sessionService.GetClaudeSettingsWatcher(),
+		SlackNotifier:             slackNotifier,
+		UnfinishedScanner:         unfinishedScanner,
+		UnfinishedStateStore:      unfinishedStateStore,
+		UnfinishedWorkService:     unfinishedWorkSvc,
+		UnfinishedWatchDirWatcher: unfinishedWatchDirWatcher,
+		WorktreePRPoller:          worktreePRPoller,
+		JulesSessionPoller:        julesPoller,
+		UserPRCache:               userPRCache,
+		GitHubUserService:         githubUserSvc,
+		InsightsService:           insightsSvc,
+		BacklogService:            backlogSvc,
+		QuotaGate:                 quotaGate,
+		SyncLoop:                  nil, // managed by BacklogController
+		BacklogEnabledCheck:       backlogCtrl.IsEnabled,
+		Config:                    cfg,
+		AnalyticsEntClient:        analyticsClient,
+		VNCDeps:                   vncDeps,
+		CDPDeps:                   cdpDeps,
+		WorkflowRepo:              workflowRepo,
+		WorkflowScheduler:         workflowScheduler,
+		TriggerFireEventRepo:      triggerFireEventRepo,
+		Registry:                  svc.Registry,
+		SessionSummaryGenerator:   sessionSummaryGenerator,
+		HandoffSummaryGenerator:   handoffSummaryGenerator,
+		BacklogLifecycleListener:  backlogLifecycleListener,
 	}, nil
 }
 
@@ -1756,6 +1790,11 @@ var prNumFromTitle = regexp.MustCompile(`(?i)^pr-(\d+)-`)
 // UserPR list. Called in the UserPRCache onUpdated callback. Lives here (not
 // in the github package) to avoid an import cycle: github → session → github.
 func annotateUserPRCache(cache *githubpkg.UserPRCache, poller *session.PRStatusPoller, scanner *unfinished.Scanner) {
+	ghHosts := config.LoadConfig().GetGitHubEnterpriseHosts()
+	enterpriseHosts := make([]string, 0, len(ghHosts))
+	for _, h := range ghHosts {
+		enterpriseHosts = append(enterpriseHosts, h.Host)
+	}
 	var annSessions []githubpkg.PRAnnotationSession
 	if poller != nil {
 		for _, inst := range poller.GetInstances() {
@@ -1772,18 +1811,18 @@ func annotateUserPRCache(cache *githubpkg.UserPRCache, poller *session.PRStatusP
 			// 4. PR number from session title (e.g. "pr-1255-...").
 			var repoRef githubpkg.RepoRef
 			if snap.GitHub.GitHubOwner != "" && snap.GitHub.GitHubRepo != "" {
-				repoRef, _ = githubpkg.NewRepoRef(snap.GitHub.GitHubOwner, snap.GitHub.GitHubRepo)
+				repoRef, _ = githubpkg.NewRepoRefWithHost(snap.GitHub.GitHubOwner, snap.GitHub.GitHubRepo, snap.GitHub.GitHubHost)
 			}
 			if !repoRef.IsValid() && snap.GitHub.GitHubPRURL != "" {
-				if parsed, err := session.ParseGitHubURL(snap.GitHub.GitHubPRURL); err == nil {
-					repoRef, _ = githubpkg.NewRepoRef(parsed.Owner, parsed.Repo)
+				if parsed, err := session.ParseGitHubURLWithHosts(snap.GitHub.GitHubPRURL, enterpriseHosts); err == nil {
+					repoRef, _ = githubpkg.NewRepoRefWithHost(parsed.Owner, parsed.Repo, parsed.Host)
 					if prNumber == 0 {
 						prNumber = parsed.PRNumber
 					}
 				}
 			}
 			if !repoRef.IsValid() && snap.Path != "" {
-				repoRef, _ = githubpkg.GetOwnerRepoFromRemote(snap.Path)
+				repoRef, _ = githubpkg.GetOwnerRepoFromRemote(snap.Path, enterpriseHosts)
 			}
 			if !repoRef.IsValid() {
 				continue
@@ -1806,7 +1845,7 @@ func annotateUserPRCache(cache *githubpkg.UserPRCache, poller *session.PRStatusP
 	var annWorktrees []githubpkg.PRAnnotationWorktree
 	if scanner != nil {
 		for _, r := range scanner.GetAllResults() {
-			repoRef, err := githubpkg.GetOwnerRepoFromRemote(r.RepoPath)
+			repoRef, err := githubpkg.GetOwnerRepoFromRemote(r.RepoPath, enterpriseHosts)
 			if err != nil || !repoRef.IsValid() || r.Branch == "" {
 				continue
 			}

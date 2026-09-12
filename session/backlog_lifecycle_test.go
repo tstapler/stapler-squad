@@ -21,6 +21,8 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
+	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -724,18 +726,18 @@ type fakePRPendingChecker struct {
 	onIsPRMerged func()
 }
 
-func (f *fakePRPendingChecker) IsPRMerged(prNumber int) (bool, error) {
+func (f *fakePRPendingChecker) IsPRMerged(ctx context.Context, prNumber int) (bool, error) {
 	if f.onIsPRMerged != nil {
 		f.onIsPRMerged()
 	}
 	return f.merged, f.mergedErr
 }
 
-func (f *fakePRPendingChecker) GetPRStatus(prNumber int) (*git.PRStatus, error) {
+func (f *fakePRPendingChecker) GetPRStatus(ctx context.Context, prNumber int) (*git.PRStatus, error) {
 	return f.status, f.statusErr
 }
 
-func (f *fakePRPendingChecker) ClosePR(prNumber int, comment string) error {
+func (f *fakePRPendingChecker) ClosePR(ctx context.Context, prNumber int, comment string) error {
 	f.closeCalled = true
 	f.closedPR = prNumber
 	f.closeComment = comment
@@ -2402,8 +2404,10 @@ func (f *fakePRCreator) CreatePR(opts git.PRCreateOptions) (string, int, error) 
 	f.createdBody = opts.Body
 	return f.createURL, f.createNumber, f.createErr
 }
-func (f *fakePRCreator) EnablePRAutoMerge(prNumber int) error { return f.autoMergeErr }
-func (f *fakePRCreator) RequestCopilotReview(prNumber int) error {
+func (f *fakePRCreator) EnablePRAutoMerge(ctx context.Context, prNumber int) error {
+	return f.autoMergeErr
+}
+func (f *fakePRCreator) RequestCopilotReview(ctx context.Context, prNumber int) error {
 	f.copilotReviewCalled = true
 	return f.copilotReviewErr
 }
@@ -4273,6 +4277,123 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 	}
 	require.NotNil(t, reviewEntry, "a review ItemSession must be created")
 	assert.Equal(t, reviewInstance.UUID, reviewEntry.SessionUUID)
+}
+
+// TestResolveReviewGateContext_should_ReturnBuiltIn_When_ToIsReview_RegardlessOfWiredEngine
+// is this Epic's follow-up zero-regression guard at the resolver level
+// (complementing the onSessionExited-level regression test above): even with
+// a *ConfiguredWorkflowEngine wired and a matching automated_review gate
+// configured on the exact in_progress->review edge, resolveReviewGateContext
+// must still resolve to builtInReviewGateContext, never that gate's own
+// fields — the built-in review status always short-circuits (see the
+// function's doc comment).
+func TestResolveReviewGateContext_should_ReturnBuiltIn_When_ToIsReview_RegardlessOfWiredEngine(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	client := storage.GetEntClient()
+
+	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, client))
+	fromStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(BacklogStatusInProgress))).Only(ctx)
+	require.NoError(t, err)
+	toStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(BacklogStatusReview))).Only(ctx)
+	require.NoError(t, err)
+	transition, err := client.StageTransition.Query().
+		Where(stagetransition.FromStageID(fromStage.ID), stagetransition.ToStageID(toStage.ID)).
+		Only(ctx)
+	require.NoError(t, err)
+	_, err = client.TransitionGate.Create().
+		SetTransitionID(transition.ID).
+		SetKind(string(GateKindAutomatedReview)).
+		SetStateful(true).
+		SetEnabled(true).
+		SetConfig(map[string]interface{}{"requires_diff": false, "pipeline_mode": "sdd"}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	stageRepo := NewEntStageConfigRepository(client)
+	gateRepo := NewEntGateSatisfactionRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetWorkflowEngine(engine)
+
+	gateContext, ok := listener.resolveReviewGateContext(BacklogStatusInProgress, BacklogStatusReview)
+	require.True(t, ok)
+	assert.Equal(t, builtInReviewGateContext, gateContext, "to==BacklogStatusReview must always resolve to the built-in literal, even when a configured gate also matches this edge")
+}
+
+// TestResolveReviewGateContext_should_ReturnConfiguredGate_When_CustomTransition
+// covers Story 2.4.3's follow-up: a genuinely custom transition (to !=
+// BacklogStatusReview) with a configured automated_review gate resolves to
+// that gate's own GateID/RequiresDiff/PipelineMode, not the built-in default.
+func TestResolveReviewGateContext_should_ReturnConfiguredGate_When_CustomTransition(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	client := storage.GetEntClient()
+
+	fromStage, err := client.BacklogStage.Create().SetSlug("rgc-from").SetName("From").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	toStage, err := client.BacklogStage.Create().SetSlug("rgc-to").SetName("To").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	transition, err := client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	gate, err := client.TransitionGate.Create().
+		SetTransitionID(transition.ID).
+		SetKind(string(GateKindAutomatedReview)).
+		SetStateful(true).
+		SetEnabled(true).
+		SetConfig(map[string]interface{}{"requires_diff": false, "pipeline_mode": "sdd"}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	stageRepo := NewEntStageConfigRepository(client)
+	gateRepo := NewEntGateSatisfactionRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetWorkflowEngine(engine)
+
+	gateContext, ok := listener.resolveReviewGateContext(BacklogStatus(fromStage.Slug), BacklogStatus(toStage.Slug))
+	require.True(t, ok)
+	assert.Equal(t, gate.ID.String(), gateContext.GateID)
+	assert.False(t, gateContext.RequiresDiff)
+	assert.Equal(t, "sdd", gateContext.PipelineMode)
+	assert.Equal(t, BacklogStatus(toStage.Slug), gateContext.TargetTransition)
+}
+
+// TestResolveReviewGateContext_should_ReturnNotOK_When_NoGateConfiguredForCustomTransition
+// covers the negative case: a custom transition with no automated_review gate
+// attached must not spawn a review gate at all.
+func TestResolveReviewGateContext_should_ReturnNotOK_When_NoGateConfiguredForCustomTransition(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	client := storage.GetEntClient()
+
+	fromStage, err := client.BacklogStage.Create().SetSlug("rgc-nogate-from").SetName("From").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	toStage, err := client.BacklogStage.Create().SetSlug("rgc-nogate-to").SetName("To").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	_, err = client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+
+	stageRepo := NewEntStageConfigRepository(client)
+	gateRepo := NewEntGateSatisfactionRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetWorkflowEngine(engine)
+
+	_, ok := listener.resolveReviewGateContext(BacklogStatus(fromStage.Slug), BacklogStatus(toStage.Slug))
+	assert.False(t, ok)
 }
 
 // --- Story 3.3.1: CaptureShipSnapshot ---

@@ -1687,6 +1687,7 @@ func (s *SessionService) SetReviewQueuePoller(poller *session.ReviewQueuePoller)
 	s.autonomousSvc.SetInstanceFinder(s.FindLiveInstance)
 	s.reviewQueueSvc.SetReviewQueuePoller(poller)
 	s.notificationSvc.SetReviewQueuePoller(poller)
+	s.notificationSvc.SetStorage(s.storage)
 	s.utilitySvc.SetReviewQueuePoller(poller)
 	s.checkpointSvc.SetPoller(poller)
 	s.terminalSvc.SetPoller(poller)
@@ -2641,6 +2642,7 @@ func (s *SessionService) CreateSession(
 	if gitHubRef != nil {
 		instanceOpts.GitHubOwner = gitHubRef.Owner
 		instanceOpts.GitHubRepo = gitHubRef.Repo
+		instanceOpts.GitHubHost = gitHubRef.Host
 		instanceOpts.GitHubSourceRef = req.Msg.Path
 		instanceOpts.ClonedRepoPath = clonedRepoPath
 		if gitHubRef.PRNumber > 0 {
@@ -4637,8 +4639,8 @@ func (s *SessionService) GetSessionDiff(
 
 	instance := s.findInstance(req.Msg.Id)
 	if instance != nil {
-		// Live session: update and read cached diff.
-		if err := instance.UpdateDiffStats(); err != nil {
+		// Live session: refresh (if the cached value is stale) and read.
+		if err := instance.RefreshDiffStatsIfStale(); err != nil {
 			log.Warn("failed to update diff stats", "session", req.Msg.Id, "err", err)
 		}
 		diffStats = instance.GetDiffStats()
@@ -6443,6 +6445,15 @@ func (s *SessionService) RunWorkflow(ctx context.Context, req *connect.Request[s
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
 	}
 	return s.workflowSvc.RunWorkflow(ctx, req)
+}
+
+// +api: workflow:watch
+// WatchWorkflows delegates to WorkflowService.
+func (s *SessionService) WatchWorkflows(ctx context.Context, req *connect.Request[sessionv1.WatchWorkflowsRequest], stream *connect.ServerStream[sessionv1.WorkflowEvent]) error {
+	if s.workflowSvc == nil {
+		return connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
+	}
+	return s.workflowSvc.WatchWorkflows(ctx, req, stream)
 }
 
 // +api: workflow:list-trigger-fire-events

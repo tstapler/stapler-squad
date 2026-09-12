@@ -234,11 +234,13 @@ type BacklogService struct {
 	// goroutine in the new process could possibly still be running an old triage call.
 	triageInFlight sync.Map
 
-	// capabilityCheck gates the first codebase-read call per process lifetime (Story
-	// 2.2.6). Defaults to headless.DefaultCapabilitySelfCheck (shared with
-	// ReviewGateRunner so a failure discovered via either call site short-circuits
-	// the other) but is a field — not a hardcoded package-var reference — so tests
-	// can inject a fresh instance instead of fighting the singleton's sync.Once.
+	// capabilityCheck gates codebase-read calls with a cached smoke-test result
+	// (Story 2.2.6): a success is cached for the process lifetime, a failure only
+	// for a bounded window before it's re-attempted. Defaults to
+	// headless.DefaultCapabilitySelfCheck (shared with ReviewGateRunner so a
+	// failure discovered via either call site short-circuits the other) but is a
+	// field — not a hardcoded package-var reference — so tests can inject a fresh
+	// instance instead of fighting the shared singleton's cached state.
 	capabilityCheck *headless.CodebaseReadCapabilitySelfCheck
 
 	// triageCleanupTimeout bounds the post-LLM-call DB writes in TriggerTriage's
@@ -826,7 +828,12 @@ type triageResultJSON struct {
 
 // backlogItemSummaryToProto maps a BacklogItemSummary to the proto BacklogItem message.
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
-func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+// engine must be the caller's s.engine (see allowedTransitionStrings); no
+// per-item StageConfigSnapshot fallback is passed here — unlike
+// backlogItemToProto, BacklogItemSummary doesn't carry StatusEvents (that's
+// the whole point of the "summary" — avoid over-hydration), so
+// BuildStageConfigSnapshotFallback has nothing to reconstruct from.
+func backlogItemSummaryToProto(item *session.BacklogItemSummary, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
 		Id:       item.ID,
 		PublicId: item.PublicIDRaw,
@@ -844,7 +851,21 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 		PrNumber:           int32(item.PrNumber),
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
-		AllowedTransitions: allowedTransitionStrings(item.Status),
+		AllowedTransitions: allowedTransitionStrings(engine, item.Status, nil),
+		// Plan-gating fields: board/list-view cards derive their primary
+		// action (getAvailableActions in itemActions.ts) from
+		// SkipPlanning/PlanApproved/PlanArtifactsPath directly, so this
+		// "lightweight" summary must carry them too, not just GetBacklogItem's
+		// full backlogItemToProto — omitting them here silently zero-valued
+		// PlanArtifactsPath for any item whose data reached the client via
+		// ListBacklogItems (or a WatchBacklogItems reconnect resync, which
+		// shares this same conversion), flipping a ready item with an
+		// approved-pending plan to show "Trigger Triage" instead of "Approve
+		// Plan". Same class of gap as AllowedTransitions (#585).
+		SkipPlanning:        item.SkipPlanning,
+		PlanApproved:        item.PlanApproved,
+		PlanArtifactsPath:   item.PlanArtifactsPath,
+		PlanRejectionReason: item.PlanRejectionReason,
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
@@ -882,18 +903,15 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 	return p
 }
 
-// protoWorkflowEngine is a stateless, read-only WorkflowEngine used only to
-// surface AllowedTransitions on the wire (backlogItemToProto below) — package
-// state is safe here since the underlying transitions map is never mutated
-// after construction. Not s.engine: backlogItemToProto is a free function
-// called from many BacklogService methods, and threading an engine parameter
-// through every call site would be a much larger change for the same result.
-var protoWorkflowEngine = session.NewDefaultWorkflowEngine()
-
 // allowedTransitionStrings returns the string form of
-// protoWorkflowEngine.AllowedTransitions(from), for BacklogItem.allowed_transitions.
-func allowedTransitionStrings(from session.BacklogStatus) []string {
-	targets := protoWorkflowEngine.AllowedTransitions(from)
+// engine.AllowedTransitions(from, fallback), for BacklogItem.allowed_transitions.
+// engine must be the caller's real, request-scoped s.engine (not a hardcoded
+// DefaultWorkflowEngine) so a CUSTOM-stage item gets its actual configured
+// transitions rather than an empty slice (#585) — see the docstrings on
+// backlogItemToProto/backlogItemSummaryToProto below for how fallback is
+// derived per caller.
+func allowedTransitionStrings(engine session.WorkflowEngine, from session.BacklogStatus, fallback *session.StageConfigSnapshot) []string {
+	targets := engine.AllowedTransitions(from, fallback)
 	out := make([]string, len(targets))
 	for i, t := range targets {
 		out[i] = string(t)
@@ -902,7 +920,8 @@ func allowedTransitionStrings(from session.BacklogStatus) []string {
 }
 
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
-func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+// engine must be the caller's s.engine — see allowedTransitionStrings.
+func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
 		Id:          item.ID,
 		Title:       item.Title,
@@ -915,6 +934,7 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		SkipPlanning:        item.SkipPlanning,
 		AutoSpawnSession:    item.AutoSpawnSession,
 		AutoCreatePr:        item.AutoCreatePR,
+		AutoApprovePlan:     item.AutoApprovePlan,
 		PipelineMode:        &item.PipelineMode,
 		Category:            &item.Category,
 		PlanApproved:        item.PlanApproved,
@@ -930,7 +950,7 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		PrNumber:           int32(item.PrNumber),
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
-		AllowedTransitions: allowedTransitionStrings(session.BacklogStatus(item.Status)),
+		AllowedTransitions: allowedTransitionStrings(engine, session.BacklogStatus(item.Status), session.BuildStageConfigSnapshotFallback(item)),
 		PublicId:           item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {
@@ -992,12 +1012,14 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		protoEvents := make([]*sessionv1.BacklogStatusEvent, len(item.StatusEvents))
 		for i, ev := range item.StatusEvents {
 			protoEvents[i] = &sessionv1.BacklogStatusEvent{
-				Id:          ev.ID,
-				FromStatus:  ev.FromStatus,
-				ToStatus:    ev.ToStatus,
-				TriggeredBy: ev.TriggeredBy,
-				CreatedAt:   timestamppb.New(ev.CreatedAt),
-				Note:        ev.Note,
+				Id:                         ev.ID,
+				FromStatus:                 ev.FromStatus,
+				ToStatus:                   ev.ToStatus,
+				TriggeredBy:                ev.TriggeredBy,
+				CreatedAt:                  timestamppb.New(ev.CreatedAt),
+				Note:                       ev.Note,
+				StageNameSnapshot:          ev.StageNameSnapshot,
+				AllowedTransitionsSnapshot: ev.AllowedTransitionsSnapshot,
 			}
 		}
 		p.StatusEvents = protoEvents

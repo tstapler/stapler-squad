@@ -12,6 +12,7 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAnalytics } from "@/lib/analytics";
 import { useCurrentWorkSession } from "@/lib/backlog/currentWorkSession";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
+import { summarizeStuckItemGroup } from "@/components/backlog-stuck/stuckReason";
 import { classifySessionKind } from "@/lib/backlog/sessionKind";
 import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
@@ -61,6 +62,7 @@ import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { ActivityLogSection } from "./detail/ActivityLogSection";
 import { NotesSection } from "./detail/NotesSection";
 import { ManualOverrideSection } from "./detail/ManualOverrideSection";
+import { GateBlockingSection } from "./GateBlockingSection";
 import * as styles from "./BacklogItemDetail.css";
 
 interface BacklogItemDetailProps {
@@ -117,6 +119,19 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Guards the Edit action against the #146 loading-gate's other half: `item`
+  // can become non-null (and the full detail view, including Edit, render)
+  // from the shared backlogItemsSlice store's synchronous hydration (the
+  // liveRawItem effect below) *before* this item's own authoritative
+  // getBacklogItem() fetch has resolved even once. If that store entry is a
+  // stale/incomplete snapshot (e.g. cached before triage assigned a
+  // category), opening Edit against it seeds BacklogItemForm's local state
+  // from stale data — and, worse, a correction that lands afterward while
+  // editMode is true only gets buffered (Story 5.3.2), never applied to the
+  // open form. Blocking Edit specifically (not the read-only view) until at
+  // least one authoritative response has confirmed `item` closes that
+  // window without reintroducing #146's remount/loading-flash regression.
+  const [itemConfirmed, setItemConfirmed] = useState(false);
   /** The action key currently in flight (e.g. "mark_ready"), or null when idle. */
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -216,7 +231,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // on every remount (this component remounts via `key={selectedItemId}` on
   // every backlog item click — see stapler-squad PR #208 review).
   const { items: stuckItems, triggerRemediationNow } = useStuckBacklogItems();
-  const stuckItem = item ? stuckItems.find((i) => i.itemId === item.id) : undefined;
+  // BUG-105: an item can have several simultaneous open StuckBacklogItem rows
+  // (e.g. BOUNCING + BOUNCE_CAP_EXHAUSTED + MULTIPLE_REASONS all open at
+  // once) — `summarizeStuckItemGroup` resolves the SAME shared-priority
+  // primary reason BacklogBoard/BacklogItemCard resolve for the same item,
+  // instead of this component picking array order 0 (`.find()`) on its own.
+  const stuckItemGroup = item ? stuckItems.filter((i) => i.itemId === item.id) : [];
+  const stuckSummary = summarizeStuckItemGroup(stuckItemGroup);
+  const stuckItem = stuckSummary?.primary;
 
   // Version control state for the most recent work session's worktree.
   const latestWorkSession = useCurrentWorkSession(item);
@@ -243,6 +265,17 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // Sessions section resolves per-row, just also glanceable at the top.
   const pipelineDisplay = latestWorkSession
     ? resolvePipelineModeDisplay(latestWorkSession, pipelineModes)
+    : undefined;
+
+  // CONFIGURABILITY GAP fix (UX audit 2026-09-11): the item's own configured
+  // pipeline mode, resolved to a display name for LifecycleSummary's
+  // automation-profile chips. Distinct from pipelineDisplay above — that
+  // reflects what actually ran in the latest work session (or is undefined
+  // before any session exists), while this reflects the item's current
+  // configuration regardless of session history, so it's the only glanceable
+  // signal available before a session has ever spawned.
+  const configuredPipelineModeName = item?.pipelineMode
+    ? (pipelineModes.find((m) => m.slug === item.pipelineMode)?.name ?? item.pipelineMode)
     : undefined;
 
   // Epic 5.3 (Story 5.3.1, backlog-event-driven-updates): live updates
@@ -488,6 +521,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           setItem(result);
           setNotesValue(result.notes ?? "");
         }
+        // Set regardless of whether this particular result "won" the
+        // staleness comparison above: either way, the server has now been
+        // consulted at least once for this itemId, so whatever `item` holds
+        // has been reconciled against it — safe to allow editing.
+        setItemConfirmed(true);
       }
     } catch (e) {
       if (mountedRef.current) setError(getErrorMessage(e, "Failed to load item."));
@@ -495,6 +533,13 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       if (mountedRef.current) setLoading(false);
     }
   }, [itemId, getBacklogItem]);
+
+  // Re-arms the itemConfirmed gate whenever the viewed item changes, so a
+  // second item opened in the same mounted component instance can't inherit
+  // the previous item's already-confirmed state.
+  useEffect(() => {
+    setItemConfirmed(false);
+  }, [itemId]);
 
   useEffect(() => {
     void load();
@@ -789,17 +834,18 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     }
   }, [item, manualReviewOutcome, manualReviewSummary, submitManualReview, showActionToast, load]);
 
-  // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR
-  // unconditionally on every UpdateBacklogItem call (they're plain proto bools, not
-  // optional — no "unset" wire representation), so any partial update that omits them
-  // silently resets them to false. Every partial updateBacklogItem call below must
-  // spread these current values.
+  // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR/
+  // autoApprovePlan unconditionally on every UpdateBacklogItem call (they're plain
+  // proto bools, not optional — no "unset" wire representation), so any partial
+  // update that omits them silently resets them to false. Every partial
+  // updateBacklogItem call below must spread these current values.
   const currentFlags = useCallback(
     () => ({
       skipPlanning: item?.skipPlanning ?? false,
       skipReviewGate: item?.skipReviewGate ?? false,
       autoSpawnSession: item?.autoSpawnSession ?? false,
       autoCreatePR: item?.autoCreatePR ?? false,
+      autoApprovePlan: item?.autoApprovePlan ?? false,
     }),
     [item]
   );
@@ -1377,6 +1423,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               <button
                 className={styles.editButton}
                 onClick={() => setEditMode(true)}
+                disabled={!itemConfirmed}
+                title={itemConfirmed ? undefined : "Confirming latest data before editing…"}
                 aria-label="Edit item"
                 data-testid="backlog-detail-edit"
               >
@@ -1400,12 +1448,20 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         <LifecycleSummary
           item={item}
           pipelineDisplay={pipelineDisplay}
+          configuredPipelineModeName={configuredPipelineModeName}
           stuckItem={stuckItem}
+          otherStuckReasons={stuckSummary?.otherReasons}
           onTriggerRemediationNow={triggerRemediationNow}
         />
       </div>
 
       <div className={styles.scrollArea}>
+        {/* ADR-005: "what's blocking this transition" gate checklist —
+            immediately below LifecycleSummary (which occupies the
+            top-billed liveness-panel slot) and above the rest of the
+            scroll-area content. */}
+        <GateBlockingSection item={item} />
+
         {/* Inline action error banner */}
         {error && (
           <div className={styles.errorBanner} role="alert">

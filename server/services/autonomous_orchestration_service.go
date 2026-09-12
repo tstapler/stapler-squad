@@ -362,6 +362,28 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 							// budget directly instead, gated by the same rework cap the
 							// review-side auto-reopen loop uses.
 							log.Info("[AutonomousDriver] work session hit turn cap without DONE; leaving in_progress instead of forcing review", "item", item.ID, "reason", outcome.Reason)
+							// BUG-048's review-role fix (below, in the SessionRoleReview branch)
+							// established that a driver stopping (turn cap, or here a startup
+							// timeout with 0 turns) does NOT kill the underlying tmux/CLI
+							// session -- AutonomousDriver.run just stops injecting turns, so the
+							// ItemSession row stays EndedAt == nil and the pane keeps producing
+							// output. That fact was never applied to this branch: without ending
+							// `is` first, AutoRespawnAutonomousWork dispatched below immediately
+							// finds this very session via findActiveWorkSession (EndedAt == nil)
+							// and/or tombstoneOrphanWorkSessions' IsSessionLive (pane still
+							// alive) and self-blocks with RESPAWN_BLOCKED_ACTIVE, citing the
+							// pane's leftover output recency as "still active" even though the
+							// driver that was using it already reported Stuck. End it now,
+							// synchronously, exactly like the review branch does, so the respawn
+							// below sees an accurately-closed session instead of racing its own
+							// stale liveness signal.
+							if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil {
+								log.Warn("[AutonomousDriver] onAutonomousDriverComplete: UpdateItemSessionEnded(work, stuck) failed", "item", item.ID, "itemSession", is.ID, "err", endErr)
+								// Mirrors the SessionRoleReview branch's notifyStuckBookkeepingFailed
+								// call below: this bookkeeping write is what makes a stuck session visible
+								// to auto-respawn's own liveness checks (see the comment above this call).
+								a.notifyStuckBookkeepingFailed(item.ID, item.Title, is.ID, stuckSessionRoleWork, endErr)
+							}
 							if a.autonomousStuckRespawner != nil {
 								respawner := a.autonomousStuckRespawner
 								itemID := item.ID
@@ -510,7 +532,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 								// without ever reaching the generic "Autonomous fix
 								// stuck" notification further down (SessionRoleReview
 								// deliberately skips it, see comment above).
-								a.notifyStuckReviewBookkeepingFailed(item.ID, item.Title, is.ID, endErr)
+								a.notifyStuckBookkeepingFailed(item.ID, item.Title, is.ID, stuckSessionRoleReview, endErr)
 							}
 						}
 						log.Info("[AutonomousDriver] skipping status transition for role", "role", is.Role, "item", item.ID)
@@ -590,24 +612,32 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 	}
 }
 
-// notifyStuckReviewBookkeepingFailed publishes an operator-facing notification
-// when onAutonomousDriverComplete's UpdateItemSessionEnded call — the exact
-// mechanism BUG-048's fix added to make a stuck review session visible to the
-// abandoned_review/bouncing detectors — itself fails. Previously this was
-// only log.Warn'd, and the caller returns immediately afterward without ever
-// reaching any other notification path (SessionRoleReview deliberately skips
-// the generic "Autonomous fix stuck" notification below, see the call site's
-// doc comment), reproducing BUG-048's original silent-stranding gap one layer
-// underneath its own fix. Mirrors the "Auto-rework paused" direct
-// a.bus.Publish call used elsewhere in this same file (SessionRoleWork
-// branch) rather than inventing a new pattern.
-func (a *AutonomousOrchestrationService) notifyStuckReviewBookkeepingFailed(itemID, itemTitle, itemSessionID string, endErr error) {
+// stuckSessionRole distinguishes which onAutonomousDriverComplete branch a
+// stuck-bookkeeping notification came from, matching the call site's session
+// role rather than passing an untyped string.
+type stuckSessionRole string
+
+const (
+	stuckSessionRoleReview stuckSessionRole = "review"
+	stuckSessionRoleWork   stuckSessionRole = "work"
+)
+
+// notifyStuckBookkeepingFailed publishes an operator-facing notification when
+// onAutonomousDriverComplete's UpdateItemSessionEnded call — the mechanism
+// BUG-048's fix added to make a stuck session visible to recovery — itself
+// fails for either the SessionRoleReview or SessionRoleWork branch. Previously
+// this was only log.Warn'd, reproducing BUG-048's original silent-stranding
+// gap one layer underneath its own fix. See each call site's own comment for
+// why that branch needs this (SessionRoleReview skips the generic "Autonomous
+// fix stuck" notification below and relies on this as its only signal;
+// SessionRoleWork falls through to it as an additional one).
+func (a *AutonomousOrchestrationService) notifyStuckBookkeepingFailed(itemID, itemTitle, itemSessionID string, role stuckSessionRole, endErr error) {
 	a.bus.Publish(events.NewNotificationEvent(
-		itemID, "", fmt.Sprintf("stuck-review-bookkeeping-failed-%s", itemSessionID),
+		itemID, "", fmt.Sprintf("stuck-%s-bookkeeping-failed-%s", role, itemSessionID),
 		int32(9), // NotificationType_FAILURE
 		int32(3), // NotificationPriority_HIGH
-		"Stuck-review bookkeeping failed",
-		fmt.Sprintf("%s: could not mark the stalled review session ended (%v) — it may stay invisible to automatic recovery until this is fixed manually.", itemTitle, endErr),
+		fmt.Sprintf("Stuck-%s bookkeeping failed", role),
+		fmt.Sprintf("%s: could not mark the stalled %s session ended (%v) — it may stay invisible to automatic recovery until this is fixed manually.", itemTitle, role, endErr),
 		nil,
 	))
 }
@@ -625,7 +655,7 @@ func (a *AutonomousOrchestrationService) notifyStuckReviewBookkeepingFailed(item
 // non-terminal — WARNING/MEDIUM rather than justParked's WARNING/HIGH, since
 // no operator action is required yet: the item will still retry
 // automatically on the next backoff-eligible tick. Mirrors
-// notifyStuckReviewBookkeepingFailed's direct a.bus.Publish shape.
+// notifyStuckBookkeepingFailed's direct a.bus.Publish shape.
 func (a *AutonomousOrchestrationService) notifyAutonomousRespawnAttemptFailed(itemID, itemTitle string, respawnErr error) {
 	a.bus.Publish(events.NewNotificationEvent(
 		itemID, "", fmt.Sprintf("stuck-autonomous-respawn-failed-%s", itemID),

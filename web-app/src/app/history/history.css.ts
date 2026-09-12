@@ -109,12 +109,6 @@ export const sectionTitle = style({
   color: vars.color.textPrimary,
 });
 
-export const loadMoreContainer = style({
-  display: "flex",
-  justifyContent: "center",
-  padding: "16px 0 8px",
-});
-
 export const keyboardHints = style({
   display: "flex",
   justifyContent: "center",

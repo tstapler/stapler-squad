@@ -21,19 +21,66 @@ const capabilityCheckMarkerValue = "STAPLER_SQUAD_CAPABILITY_CHECK_9f3a2b71"
 // claude CLI doesn't block the first real codebase-read review indefinitely.
 const capabilityCheckTimeout = 30 * time.Second
 
-// CodebaseReadCapabilitySelfCheck lazily verifies, once per process lifetime, that a
-// WorkDir+AllowedTools+PermissionMode headless call actually grants read access — the
-// same empirical fact TestPool_RealClaude_WorkDirWithToolFlags_GrantsReadAccess checks
-// in CI, re-verified here against the actual running process's claude CLI/config.
+// capabilityCheckFailureCacheWindow bounds how long a FAILED smoke-test result is
+// trusted before Ensure re-attempts the probe. A transient hiccup (subprocess
+// spawn flake, momentary env issue) must not permanently poison every future
+// codebase-read review for the rest of the process's lifetime — see the incident
+// that motivated this: bd337ac9 stuck UNVERIFIABLE with no real check attempted
+// after one early failure. 20 minutes is long enough that a real, persistent
+// misconfiguration doesn't cause the probe subprocess to run on every single
+// review (reviews fire far more often than every 20m), but short enough that a
+// genuinely transient failure self-heals within roughly one engineer's coffee
+// break rather than requiring a destructive full server restart.
 //
-// A zero-value CodebaseReadCapabilitySelfCheck is ready to use. Each instance runs its
-// underlying smoke test at most once (guarded by sync.Once); construct a fresh instance
-// (rather than reusing DefaultCapabilitySelfCheck) when a test needs to exercise the
-// check logic more than once within a process.
+// A cached SUCCESS is trusted for the life of the process (no expiry): once a
+// WorkDir+AllowedTools+PermissionMode call is empirically shown to grant read
+// access, that capability is a property of the process's fixed claude CLI/config,
+// which is not expected to regress mid-process without an explicit config change —
+// and any such change is worth re-verifying via a fresh check.Checked()-aware
+// process restart, not a background timer.
+const capabilityCheckFailureCacheWindow = 20 * time.Minute
+
+// CodebaseReadCapabilitySelfCheck lazily verifies that a WorkDir+AllowedTools+
+// PermissionMode headless call actually grants read access — the same empirical
+// fact TestPool_RealClaude_WorkDirWithToolFlags_GrantsReadAccess checks in CI,
+// re-verified here against the actual running process's claude CLI/config.
+//
+// A zero-value CodebaseReadCapabilitySelfCheck is ready to use. A successful smoke
+// test result is cached for the life of the process; a failed one is cached only
+// for capabilityCheckFailureCacheWindow, after which Ensure re-runs the probe
+// rather than trusting a stale failure forever. Construct a fresh instance (rather
+// than reusing DefaultCapabilitySelfCheck) when a test needs to exercise the check
+// logic in isolation from other tests/production callers.
 type CodebaseReadCapabilitySelfCheck struct {
-	once    sync.Once
-	ok      atomic.Bool
-	checked atomic.Bool
+	mu        sync.Mutex
+	ok        atomic.Bool
+	checked   atomic.Bool
+	checkedAt atomic.Int64 // UnixNano of the last completed probe; 0 if never run.
+
+	// now is overridable in tests so failure-window expiry can be exercised
+	// deterministically without a real sleep. Nil means time.Now.
+	now func() time.Time
+}
+
+func (c *CodebaseReadCapabilitySelfCheck) clockNow() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// resultFresh reports whether the currently cached result (if any) is still
+// trusted: a cached success always is; a cached failure only within
+// capabilityCheckFailureCacheWindow of when it was recorded.
+func (c *CodebaseReadCapabilitySelfCheck) resultFresh() bool {
+	if !c.checked.Load() {
+		return false
+	}
+	if c.ok.Load() {
+		return true
+	}
+	checkedAt := time.Unix(0, c.checkedAt.Load())
+	return c.clockNow().Sub(checkedAt) < capabilityCheckFailureCacheWindow
 }
 
 // DefaultCapabilitySelfCheck is the package-level singleton shared by production
@@ -43,23 +90,35 @@ type CodebaseReadCapabilitySelfCheck struct {
 // instead of calling through the package var directly.
 var DefaultCapabilitySelfCheck = &CodebaseReadCapabilitySelfCheck{}
 
-// Ensure runs the once-guarded marker-file smoke test on first call (blocking
-// concurrent callers until it resolves) and returns the cached result on every
-// subsequent call. pool is accepted as the narrow PoolClient interface so both
-// *Pool (ReviewGateRunner) and interface-typed fields (BacklogService.headlessPool)
-// can call it without an adapter.
+// Ensure returns the cached result if it is still fresh (see resultFresh), or
+// else runs the marker-file smoke test — blocking concurrent callers until it
+// resolves — and caches the new result. pool is accepted as the narrow
+// PoolClient interface so both *Pool (ReviewGateRunner) and interface-typed
+// fields (BacklogService.headlessPool) can call it without an adapter.
 func (c *CodebaseReadCapabilitySelfCheck) Ensure(ctx context.Context, pool PoolClient) bool {
-	c.once.Do(func() {
-		ok := c.run(pool)
-		c.ok.Store(ok)
-		c.checked.Store(true)
-		if ok {
-			log.InfoLog().Printf("[headless] codebase-read capability self-check passed")
-		} else {
-			log.WarningLog().Printf("[headless] codebase-read capability self-check FAILED")
-		}
-	})
-	return c.ok.Load()
+	if c.resultFresh() {
+		return c.ok.Load()
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Re-check under the lock: another goroutine may have just refreshed the
+	// result while we were waiting for it.
+	if c.resultFresh() {
+		return c.ok.Load()
+	}
+
+	ok := c.run(pool)
+	c.ok.Store(ok)
+	c.checked.Store(true)
+	c.checkedAt.Store(c.clockNow().UnixNano())
+	if ok {
+		log.InfoLog().Printf("[headless] codebase-read capability self-check passed")
+	} else {
+		log.WarningLog().Printf("[headless] codebase-read capability self-check FAILED (cached for %s)", capabilityCheckFailureCacheWindow)
+	}
+	return ok
 }
 
 // Checked reports whether the self-check has run (successfully or not) yet.
@@ -76,9 +135,9 @@ func (c *CodebaseReadCapabilitySelfCheck) Checked() bool {
 // self-check's marker string.
 func NewPassedCapabilitySelfCheckForTesting() *CodebaseReadCapabilitySelfCheck {
 	c := &CodebaseReadCapabilitySelfCheck{}
-	c.once.Do(func() {})
 	c.ok.Store(true)
 	c.checked.Store(true)
+	c.checkedAt.Store(time.Now().UnixNano())
 	return c
 }
 
@@ -88,9 +147,9 @@ func NewPassedCapabilitySelfCheckForTesting() *CodebaseReadCapabilitySelfCheck {
 // degrade path without needing to script a failing fake claude subprocess.
 func NewFailedCapabilitySelfCheckForTesting() *CodebaseReadCapabilitySelfCheck {
 	c := &CodebaseReadCapabilitySelfCheck{}
-	c.once.Do(func() {})
 	c.ok.Store(false)
 	c.checked.Store(true)
+	c.checkedAt.Store(time.Now().UnixNano())
 	return c
 }
 
@@ -100,15 +159,16 @@ func NewFailedCapabilitySelfCheckForTesting() *CodebaseReadCapabilitySelfCheck {
 // BuildReviewCallOptions grants on the empty-diff codebase-read path), and check
 // the marker content round-trips.
 //
-// run takes no ctx parameter deliberately: Ensure's result is cached for the
-// lifetime of the process (sync.Once), seeded by whichever caller wins the race to
-// run this method first. If the probe's context were derived from that caller's
-// (possibly short-lived, per-review) ctx, a transient cancellation/deadline on the
-// FIRST caller would permanently poison the process-lifetime cached verdict for
-// every later caller, even though the underlying capability is fine. Deriving from
-// context.Background() (bounded only by capabilityCheckTimeout) ensures the cached
-// verdict reflects a real capability determination, not an artifact of the first
-// caller's context lifetime — so there is no legitimate use for a ctx parameter here.
+// run takes no ctx parameter deliberately: each result run() produces is cached
+// (permanently on success, for capabilityCheckFailureCacheWindow on failure) and
+// seeds every caller that races to invoke Ensure while that cache is fresh. If the
+// probe's context were derived from the winning caller's (possibly short-lived,
+// per-review) ctx, a transient cancellation/deadline on that one caller would
+// poison the cached verdict for every other caller sharing it, even though the
+// underlying capability is fine. Deriving from context.Background() (bounded only
+// by capabilityCheckTimeout) ensures the cached verdict reflects a real capability
+// determination, not an artifact of one caller's context lifetime — so there is no
+// legitimate use for a ctx parameter here.
 func (c *CodebaseReadCapabilitySelfCheck) run(pool PoolClient) bool {
 	if pool == nil {
 		return false

@@ -13,6 +13,7 @@ import { RadioGroup } from "@/components/ui/RadioGroup";
 import type { RadioGroupOption } from "@/components/ui/RadioGroup";
 import { radioBtn, radioBtnActive } from "@/components/ui/RadioGroup.css";
 import { isGitHubRef } from "@/lib/github/urlParser";
+import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { getApiBaseUrl } from "@/lib/config";
 import { routes } from "@/lib/routes";
 import { BACKLOG_CATEGORIES, CATEGORY_DEFAULTS } from "@/lib/backlog/categoryDefaults";
@@ -96,6 +97,7 @@ export function BacklogItemForm({
   const [skipReviewGate, setSkipReviewGate] = useState(initialValues?.skipReviewGate ?? false);
   const [autoSpawnSession, setAutoSpawnSession] = useState(initialValues?.autoSpawnSession ?? false);
   const [autoCreatePR, setAutoCreatePR] = useState(initialValues?.autoCreatePR ?? false);
+  const [autoApprovePlan, setAutoApprovePlan] = useState(initialValues?.autoApprovePlan ?? false);
   const [acCriteria, setAcCriteria] = useState<AcCriterion[]>(
     initialValues?.acCriteria ?? []
   );
@@ -106,6 +108,14 @@ export function BacklogItemForm({
   // pre-selection has already applied once — see handlePipelineModeChange
   // and the effect below.
   const pipelineModeTouchedRef = useRef(!!initialValues?.id);
+  // Edit-mode-only guard against submitting a stale `category` (see
+  // handleCategoryChange and handleSubmit below): initialValues.category can
+  // lag the item's real, server-side category if the caller passed a
+  // not-yet-reconciled snapshot (BacklogItemDetail.tsx's `item` can be
+  // populated from the shared live-item store before its own authoritative
+  // fetch resolves). Only an explicit click on the category selector — never
+  // this state's initial mount value — sets this true.
+  const categoryTouchedRef = useRef(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const [descriptionTab, setDescriptionTab] = useState<"write" | "preview">("write");
@@ -200,6 +210,7 @@ export function BacklogItemForm({
   // are intentionally left untouched.
   const handleCategoryChange = useCallback(
     (value: string) => {
+      categoryTouchedRef.current = true;
       setCategory(value);
       if (initialValues?.id) return;
       const defaults = CATEGORY_DEFAULTS[value];
@@ -208,6 +219,7 @@ export function BacklogItemForm({
       setSkipPlanning(defaults.skipPlanning);
       setAutoSpawnSession(defaults.autoSpawnSession);
       setAutoCreatePR(defaults.autoCreatePR);
+      setAutoApprovePlan(defaults.autoApprovePlan);
       pipelineModeTouchedRef.current = true;
       setPipelineMode(defaults.pipelineMode);
     },
@@ -312,6 +324,20 @@ export function BacklogItemForm({
         // Evaluate vagueness before submitting: short description + no AC = vague
         const descriptionText = description.trim();
         const isVague = descriptionText.length < 80 && acCriteria.length === 0;
+        // On an existing item, only send `category` if the user actually
+        // touched the selector this session. `category`'s local state is
+        // seeded once from initialValues.category at mount, which can be
+        // stale (see categoryTouchedRef's comment above); omitting an
+        // untouched field lets the server's presence-gated partial-update
+        // semantics (session.v1.UpdateBacklogItemRequest.category is an
+        // `optional string`) leave the item's real, already-stored category
+        // — and thus whatever automation profile it implies — untouched,
+        // instead of silently overwriting it with a possibly-wrong value on
+        // every save. Create mode has no existing value to protect, so it
+        // always sends the current selection (including "" for
+        // Uncategorized).
+        const categoryForSubmit =
+          !initialValues?.id || categoryTouchedRef.current ? category : undefined;
         await onSubmit({
           title: title.trim(),
           description: descriptionText || undefined,
@@ -321,16 +347,33 @@ export function BacklogItemForm({
           skipReviewGate,
           autoSpawnSession,
           autoCreatePR,
+          autoApprovePlan,
           acCriteria: acCriteria.map((c, i) => ({ ...c, index: i })),
           skipTriage: isVague,
           pipelineMode,
-          category,
+          category: categoryForSubmit,
         });
       } finally {
         setSubmitting(false);
       }
     },
-    [title, description, repoPath, priority, skipPlanning, skipReviewGate, autoSpawnSession, autoCreatePR, acCriteria, pipelineMode, category, onSubmit, validate]
+    [
+      title,
+      description,
+      repoPath,
+      priority,
+      skipPlanning,
+      skipReviewGate,
+      autoSpawnSession,
+      autoCreatePR,
+      autoApprovePlan,
+      acCriteria,
+      pipelineMode,
+      category,
+      initialValues?.id,
+      onSubmit,
+      validate,
+    ]
   );
 
   const addCriterion = useCallback(() => {
@@ -433,7 +476,11 @@ export function BacklogItemForm({
   );
 
   const busy = submitting || isLoading;
-  const isCloningRepo = useMemo(() => isGitHubRef(repoPath), [repoPath]);
+  const { hosts: enterpriseHosts } = useGitHubEnterpriseHosts();
+  const isCloningRepo = useMemo(
+    () => isGitHubRef(repoPath, enterpriseHosts),
+    [repoPath, enterpriseHosts]
+  );
 
   return (
     <form
@@ -703,6 +750,24 @@ export function BacklogItemForm({
             </label>
             <span className={styles.checkboxHint}>
               Skip the manual Review Queue &quot;Create PR&quot; click — a PR is opened automatically once a work session finishes. The prompt still runs unattended, so review the diff before merging.
+            </span>
+          </div>
+
+          <div className={styles.fieldGroup}>
+            <label className={styles.checkboxRow} htmlFor="backlog-auto-approve-plan">
+              <input
+                id="backlog-auto-approve-plan"
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={autoApprovePlan}
+                onChange={(e) => setAutoApprovePlan(e.target.checked)}
+                disabled={busy}
+                data-testid="backlog-auto-approve-plan-checkbox"
+              />
+              <span className={styles.checkboxLabel}>Auto-approve plan</span>
+            </label>
+            <span className={styles.checkboxHint}>
+              Skip the manual &quot;Approve Plan&quot; click — a plan produced by triage is approved automatically and moves straight to implementation. Review the plan afterward instead of before.
             </span>
           </div>
         </div>

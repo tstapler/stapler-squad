@@ -137,6 +137,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// Backlog RPCs (BacklogService in backlog.proto)
 	"CreateBacklogItem":           "backlog:create-item",
 	"CreateBacklogItemFromChat":   "backlog:create-item-from-chat",
+	"ParseBacklogItemIntent":      "backlog:parse-item-intent",
 	"GetBacklogItem":              "backlog:get-item",
 	"ListBacklogItems":            "backlog:list-items",
 	"UpdateBacklogItem":           "backlog:update-item",
@@ -228,6 +229,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ListWorkflows":  "workflow:list",
 	"UpdateWorkflow": "workflow:update",
 	"RunWorkflow":    "workflow:run",
+	"WatchWorkflows": "workflow:watch",
 	// Trigger fire audit trail RPC (webhook-triggers Epic 1.2, Task 1.2.1d)
 	"ListTriggerFireEvents": "workflow:list-trigger-fire-events",
 	// Outbound callback config RPCs (webhook-triggers Phase 5, FR7)
@@ -353,6 +355,23 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetTransitionGate":     "backlog:get-transition-gate",
 	"ListTransitionGates":   "backlog:list-transition-gates",
 	"RecordGateApproval":    "backlog:record-gate-approval",
+	"GetPendingGates":       "backlog:get-pending-gates",
+	// Native git rollout RPCs (NativeGitRolloutService in native_git_rollout.proto)
+	// -- pre-existing collateral debt found by TestMethodToIDCompleteness: must
+	// match the "// +api: native-git-rollout:*" markers in
+	// server/services/native_git_rollout_service.go verbatim, same failure mode
+	// as the SearchGitHubRepos comment above.
+	"GetNativeGitRolloutStatus":        "native-git-rollout:get",
+	"SetNativeWorktreeGlobalOverride":  "native-git-rollout:set-worktree-global-override",
+	"SetNativeWorktreeSessionOverride": "native-git-rollout:set-worktree-session-override",
+	"SetNativeMergeGlobalOverride":     "native-git-rollout:set-merge-global-override",
+	"SetNativeMergeWorktreeOverride":   "native-git-rollout:set-merge-worktree-override",
+	// Tmux client/server version mismatch RPCs (session.proto) -- pre-existing
+	// collateral debt found by TestMethodToIDCompleteness: must match the
+	// "// +api: tmux:*" markers in server/services/tmux_version_status_service.go
+	// verbatim, same failure mode as the SearchGitHubRepos comment above.
+	"GetTmuxVersionStatus": "tmux:version-status",
+	"RestartTmuxServer":    "tmux:restart-server",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

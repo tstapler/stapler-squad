@@ -19,6 +19,7 @@ import { useEffect, useRef, RefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 import { isMouseTracking as isMouseTrackingUtil } from "@/lib/terminal/mouseTracking";
+import { pointToCell, rafThrottlePoint, type CellGeometry } from "@/lib/terminal/touchDrag";
 
 // Re-export for consumers that import from this module
 export { getCellDimensions };
@@ -83,6 +84,27 @@ export function useTerminalGestures({
     const DOUBLE_TAP_MS = 300;
     const DOUBLE_TAP_RADIUS_PX = 20;
 
+    // Geometry + per-frame throttling for the current gesture. `getBoundingClientRect()`
+    // and `getCellDimensions()` both force a layout read — measuring them on every raw
+    // touchmove (Android fires these far more densely than iOS Safari coalesces them) is
+    // what made scroll/select feel jumpy. Cache once per gesture instead, and coalesce
+    // multiple touchmove events into a single update per animation frame.
+    let cellGeometry: CellGeometry | null = null;
+    let cachedCellH = 0;
+    let scrollThrottled: ((clientX: number, clientY: number) => void) | null = null;
+    let cancelScrollThrottle: (() => void) | null = null;
+    let selectThrottled: ((clientX: number, clientY: number) => void) | null = null;
+    let cancelSelectThrottle: (() => void) | null = null;
+
+    const cancelPendingFrames = () => {
+      cancelScrollThrottle?.();
+      cancelSelectThrottle?.();
+      scrollThrottled = null;
+      cancelScrollThrottle = null;
+      selectThrottled = null;
+      cancelSelectThrottle = null;
+    };
+
     const clearLongPressTimer = () => {
       if (longPressTimer !== null) {
         clearTimeout(longPressTimer);
@@ -103,7 +125,39 @@ export function useTerminalGestures({
     // ---- Transition helpers ----
     const transitionToIdle = () => {
       clearLongPressTimer();
+      cancelPendingFrames();
       state = 'IDLE';
+    };
+
+    // Non-mouse-tracking drag: xterm owns selection via real DOM mouse events. Coalesce
+    // touchmove-driven mousemove dispatches to one per frame — xterm's own
+    // SelectionService re-renders on every dispatched mousemove, which otherwise stacks
+    // on top of our own per-event work.
+    const beginSyntheticMouseSelection = () => {
+      [selectThrottled, cancelSelectThrottle] = rafThrottlePoint((clientX, clientY) => {
+        getScreenEl()?.dispatchEvent(new MouseEvent('mousemove', {
+          clientX, clientY, bubbles: true, cancelable: true, button: 0, buttons: 1,
+        }));
+      });
+      getScreenEl()?.dispatchEvent(new MouseEvent('mousedown', {
+        clientX: startX, clientY: startY, bubbles: true, cancelable: true, button: 0, buttons: 1,
+      }));
+    };
+
+    // Mouse-tracking-mode drag: bypass xterm's mouse handling and call the public
+    // select() API directly. Cache rect/cell geometry once for the whole drag —
+    // re-measuring on every touchmove is the main source of the jump-during-drag feel
+    // on Android.
+    const beginDirectSelectDrag = (t: Terminal, el: HTMLElement) => {
+      const { cellH, cellW } = getCellDimensions(t);
+      cellGeometry = { rect: el.getBoundingClientRect(), cellW, cellH, maxCol: t.cols - 1, maxRow: t.rows - 1 };
+      [selectThrottled, cancelSelectThrottle] = rafThrottlePoint((clientX, clientY) => {
+        if (!cellGeometry) return;
+        const { col: currentCol, row: currentRow } = pointToCell(clientX, clientY, cellGeometry);
+        const length = Math.max(1, (currentRow - startRow) * t.cols + (currentCol - startCol) + 1);
+        t.select(startCol, startRow, length);
+      });
+      t.select(startCol, startRow, 1);
     };
 
     const enterSelecting = () => {
@@ -117,18 +171,9 @@ export function useTerminalGestures({
       navigator.vibrate?.(10);
 
       if (!isMouseTracking()) {
-        // Dispatch synthetic mousedown to .xterm-screen for native xterm.js selection
-        getScreenEl()?.dispatchEvent(new MouseEvent('mousedown', {
-          clientX: startX,
-          clientY: startY,
-          bubbles: true,
-          cancelable: true,
-          button: 0,
-          buttons: 1,
-        }));
-      } else {
-        // Use public terminal.select() API — bypasses mouse tracking mode
-        t.select(startCol, startRow, 1);
+        beginSyntheticMouseSelection();
+      } else if (t.element) {
+        beginDirectSelectDrag(t, t.element);
       }
     };
 
@@ -187,47 +232,35 @@ export function useTerminalGestures({
           clearLongPressTimer();
           state = 'SCROLLING';
           lastY = touch.clientY;
+
+          // Cache cell height once for the drag and coalesce touchmove into one
+          // scrollLines() per frame — same rationale as the SELECTING geometry cache.
+          const t = terminalRef.current;
+          cachedCellH = t ? getCellDimensions(t).cellH : 0;
+          [scrollThrottled, cancelScrollThrottle] = rafThrottlePoint((_clientX, clientY) => {
+            const terminal = terminalRef.current;
+            if (!terminal || cachedCellH <= 0) return;
+            const moveDy = clientY - lastY;
+            lastY = clientY;
+            const lines = Math.round(-moveDy / cachedCellH);
+            if (lines !== 0) terminal.scrollLines(lines);
+          });
         }
         // Stay in PENDING if movement is small
         return;
       }
 
       if (state === 'SCROLLING') {
-        // Task 3.1.4 — per-event delta scroll with public cell height
-        const t = terminalRef.current;
-        if (t) {
-          const moveDy = touch.clientY - lastY;
-          lastY = touch.clientY;
-          const { cellH } = getCellDimensions(t);
-          const lines = Math.round(-moveDy / cellH);
-          if (lines !== 0) t.scrollLines(lines);
-        }
+        scrollThrottled?.(0, touch.clientY);
         e.preventDefault();
         return;
       }
 
       if (state === 'SELECTING') {
-        // Task 3.1.5 — extend selection (both tracking modes)
-        const t = terminalRef.current;
-        if (!isMouseTracking()) {
-          getScreenEl()?.dispatchEvent(new MouseEvent('mousemove', {
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            bubbles: true,
-            cancelable: true,
-            button: 0,
-            buttons: 1,
-          }));
-        } else if (t?.element) {
-          const { cellH, cellW } = getCellDimensions(t);
-          const rect = t.element.getBoundingClientRect();
-          const currentCol = Math.max(0, Math.floor((touch.clientX - rect.left) / cellW));
-          const currentRow = Math.max(0, Math.floor((touch.clientY - rect.top) / cellH));
-          const rowDiff = currentRow - startRow;
-          const colDiff = currentCol - startCol;
-          const length = Math.max(1, rowDiff * t.cols + colDiff + 1);
-          t.select(startCol, startRow, length);
-        }
+        // Task 3.1.5 — extend selection (both tracking modes), coalesced to one
+        // update per animation frame via the throttled callback set up in
+        // beginSyntheticMouseSelection/beginDirectSelectDrag.
+        selectThrottled?.(touch.clientX, touch.clientY);
         e.preventDefault();
         return;
       }
@@ -301,6 +334,14 @@ export function useTerminalGestures({
             button: 0,
             buttons: 0,
           }));
+          // xterm.js's platform check for "Linux" matches Android's user agent too, so
+          // completing a real mouse-event-driven selection makes it focus+select the
+          // hidden input textarea (to populate the X11 primary-selection clipboard for a
+          // desktop middle-click paste) — that focus() call is what pops the Android soft
+          // keyboard mid text-selection. Desktop Linux wants that; touch doesn't. The
+          // focus already happened synchronously inside dispatchEvent above, so blur
+          // it back immediately.
+          t?.textarea?.blur();
         }
         // Selection preserved in xterm's buffer — just transition back
       }
@@ -323,6 +364,7 @@ export function useTerminalGestures({
 
     return () => {
       clearLongPressTimer();
+      cancelPendingFrames();
       containerEl.removeEventListener('touchstart', onTouchStart);
       document.removeEventListener('touchmove', onTouchMove);
       document.removeEventListener('touchend', onTouchEnd);

@@ -12,20 +12,6 @@ export {
 
 export const badge = style([badgeBase, { marginLeft: vars.space["2"] }]);
 
-export const username = style({
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
-  marginLeft: "auto",
-  fontFamily: vars.font.mono,
-});
-
-export const prList = style({
-  display: "flex",
-  flexDirection: "column",
-  gap: vars.space["2"],
-  paddingLeft: vars.space["4"],
-});
-
 export const prCard = style({
   background: vars.color.cardBackground,
   border: `1px solid ${vars.color.borderColor}`,
@@ -119,15 +105,6 @@ export const chipSuccess = style([
     background: vars.color.successBg,
     color: vars.color.success,
     border: `1px solid ${vars.color.success}`,
-  },
-]);
-
-export const chipWarning = style([
-  chipBase,
-  {
-    background: vars.color.warningBg,
-    color: vars.color.warningText,
-    border: `1px solid ${vars.color.warning}`,
   },
 ]);
 

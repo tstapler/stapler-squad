@@ -234,10 +234,13 @@ describe('useTerminalGestures', () => {
       const { terminalRef } = mount();
 
       fireTouchStart(100, 100);
-      // First move > 8px to enter SCROLLING
+      // First move > 15px to enter SCROLLING
       fireTouchMove(80, 100);
       // Second move while SCROLLING — should call scrollLines
       fireTouchMove(40, 100);
+      // scrollLines is coalesced to one call per animation frame (rafThrottlePoint) —
+      // flush the pending rAF callback under fake timers.
+      jest.advanceTimersByTime(16);
 
       expect((terminalRef.current as any).scrollLines).toHaveBeenCalled();
     });

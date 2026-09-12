@@ -120,6 +120,104 @@ unclosed instances have previously exhausted this machine's memory.
 8. After `+"`/backlog/review`"+`, stay in this session — do not exit. Wait roughly 2-3 minutes, then run `+"`/backlog/status`"+` again to check for a verdict. PASS → immediately run `+"`/backlog/ship`"+` yourself to open the pull request (it drives `+"`/github:pr-ship`"+`, which can rebase, resolve merge conflicts, and react to failing CI checks) — shipping the PR is part of this task, not a separate step someone else does; do not stop here. FAIL/PARTIAL → fix the noted gaps yourself and run `+"`/backlog/review`"+` again.
 9. `+"`/backlog/review`"+`'s underlying request_review call reports which attempt you're on out of %d allowed in THIS session — the count is tracked server-side, so trust what it reports. Once it says you've hit the cap, STOP looping: run `+"`/backlog/ship`"+` anyway to open a PR so a human can pick up the review directly, rather than retrying `+"`/backlog/review`"+` again. Nothing will kill or replace this session while you do any of this.`, MaxSameSessionReviewAttempts)
 
+// reviewVerdictSummariesMostRecentFirst extracts the review verdicts from
+// priorSessions (ordered oldest-first, as Storage.ListItemSessions returns)
+// into a most-recent-first []ReviewVerdictSummary — mirroring exactly what
+// Storage.GetRecentReviewVerdictSummaries returns (that query filters on
+// itemsession.HasReviewVerdict() only, NOT on whether the session has ended
+// — a review session can write a verdict and be inspected here before its
+// own EndedAt is recorded), but computed from data already in hand rather
+// than a second query. Only review-role sessions that actually wrote a
+// verdict are included, same as that storage query's own filter. Takes the
+// full priorSessions, not the EndedAt-filtered "ended" subset other
+// rendering in this file uses — filtering by EndedAt here would silently
+// diverge from AutoReopenAfterFailedReview's own decision logic (a real bug
+// caught by TestAutoReopenAfterFailedReview_RepeatedFailureTwice_GrantsOneEscalatedRetry
+// asserting on the actual respawned prompt, not just the status transition).
+func reviewVerdictSummariesMostRecentFirst(priorSessions []ItemSessionSummary) []ReviewVerdictSummary {
+	var out []ReviewVerdictSummary
+	for i := len(priorSessions) - 1; i >= 0; i-- {
+		s := priorSessions[i]
+		if s.Role == SessionRoleReview && s.ReviewVerdict != nil {
+			out = append(out, *s.ReviewVerdict)
+		}
+	}
+	return out
+}
+
+// reviewHadVerdictMostRecentFirst extracts, most-recent-first, one bool per
+// review-role session in priorSessions — true if that session ever wrote a
+// verdict — mirroring server/services/backlog_service_triage.go's
+// recentReviewHadVerdict exactly (that helper also does not filter on
+// EndedAt, for the identical reason given on
+// reviewVerdictSummariesMostRecentFirst above), computed from data already
+// in hand.
+func reviewHadVerdictMostRecentFirst(priorSessions []ItemSessionSummary) []bool {
+	var out []bool
+	for i := len(priorSessions) - 1; i >= 0; i-- {
+		s := priorSessions[i]
+		if s.Role == SessionRoleReview {
+			out = append(out, s.ReviewVerdict != nil)
+		}
+	}
+	return out
+}
+
+// escalationNotice returns an explicit "try something different" instruction
+// when priorSessions' review history shows a streak of exactly
+// RepeatedFailureEscalationThreshold consecutive identical failures — the ONE
+// escalated retry AutoReopenAfterFailedReview grants before parking the item
+// (see RepeatedFailureParkThreshold's doc comment in stuck_decisions.go).
+// Requires no new field on SpawnSessionFromItemRequest: it recomputes the
+// identical streak AutoReopenAfterFailedReview already inspected, from the
+// same priorSessions history every prompt-building call site already passes
+// in. Deliberately fires only at streak == threshold, not >=: once the
+// streak reaches RepeatedFailureParkThreshold, AutoReopenAfterFailedReview
+// parks the item and never respawns at all, so this never needs to render a
+// "third strike" framing.
+func escalationNotice(priorSessions []ItemSessionSummary) string {
+	verdicts := reviewVerdictSummariesMostRecentFirst(priorSessions)
+	if streak := ReviewFailureStreakLen(verdicts); streak == RepeatedFailureEscalationThreshold {
+		return fmt.Sprintf(
+			"## Escalation Notice\nThe last %d review attempts failed for the identical reason: %q. Repeating the same fix will fail again. Before writing any code, diagnose why the previous fix did not resolve this, and take a genuinely different approach this time (different root cause, different files touched, or a different fix strategy).\n\n",
+			streak, sanitizeField(verdicts[0].Summary, 300))
+	}
+
+	if streak := NoVerdictStreakLen(reviewHadVerdictMostRecentFirst(priorSessions)); streak == RepeatedFailureEscalationThreshold {
+		return fmt.Sprintf(
+			"## Escalation Notice\nThe last %d review sessions exited without ever recording a verdict (crash, kill, or turn cap). Before repeating the same review flow, consider whether the diff is too large, the worktree is broken, or the review step is hanging — and adjust your approach accordingly.\n\n",
+			streak)
+	}
+
+	return ""
+}
+
+// endedItemSessions filters priorSessions down to completed (EndedAt != nil)
+// sessions, preserving order. Shared by BuildSessionInitialPrompt and
+// EscalationNoticeFor so both compute "prior attempts" identically.
+func endedItemSessions(priorSessions []ItemSessionSummary) []ItemSessionSummary {
+	var ended []ItemSessionSummary
+	for _, s := range priorSessions {
+		if s.EndedAt != nil {
+			ended = append(ended, s)
+		}
+	}
+	return ended
+}
+
+// EscalationNoticeFor is escalationNotice's exported wrapper — for callers
+// that render a prompt without going through
+// BuildSessionInitialPrompt/BuildTokenBudgetedPrompt. CachingPipelineEngine's
+// custom-pipeline-mode branch (pipeline_engine.go) is the one caller today:
+// PipelineEngine's InitialPromptFor renders a per-mode template instead of
+// this file's prompt, and would otherwise never surface the escalation
+// nudge for an item on a non-default pipeline mode even though
+// AutoReopenAfterFailedReview's escalate-once-then-park decision applies to
+// those items identically.
+func EscalationNoticeFor(priorSessions []ItemSessionSummary) string {
+	return escalationNotice(priorSessions)
+}
+
 // BuildSessionInitialPrompt renders the full context prompt for an agent session.
 func BuildSessionInitialPrompt(item *BacklogItemData, priorSessions []ItemSessionSummary) string {
 	var sb strings.Builder
@@ -148,12 +246,7 @@ func BuildSessionInitialPrompt(item *BacklogItemData, priorSessions []ItemSessio
 	}
 
 	// Prior attempts: only include sessions with a non-nil ended_at.
-	var ended []ItemSessionSummary
-	for _, s := range priorSessions {
-		if s.EndedAt != nil {
-			ended = append(ended, s)
-		}
-	}
+	ended := endedItemSessions(priorSessions)
 	if len(ended) > 0 {
 		sb.WriteString("\n## Prior Attempts\n")
 		// ended preserves the caller's ordering (ListItemSessions orders ascending by
@@ -194,6 +287,12 @@ func BuildSessionInitialPrompt(item *BacklogItemData, priorSessions []ItemSessio
 	}
 
 	sb.WriteString("--- END BACKLOG ITEM DATA ---\n\n")
+
+	// Deliberately priorSessions here, not the EndedAt-filtered "ended" local
+	// above: escalationNotice must match AutoReopenAfterFailedReview's own
+	// decision inputs (GetRecentReviewVerdictSummaries/recentReviewHadVerdict),
+	// neither of which filters on EndedAt — see escalationNotice's doc comment.
+	sb.WriteString(escalationNotice(priorSessions))
 
 	if item.PlanArtifactsPath != "" {
 		fmt.Fprintf(&sb, "Your plan is at `%s/plan.md`. Read plan.md and validation.md before writing code.\n\n",

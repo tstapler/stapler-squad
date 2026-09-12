@@ -47,18 +47,6 @@ func WithBaseURL(baseURL string) Option {
 	return func(c *Client) { c.baseURL = baseURL }
 }
 
-// WithHTTPClient overrides the underlying *http.Client. The rate-limit
-// transport (rate_limit.go) is installed around whatever Transport the
-// passed client carries (nil means http.DefaultTransport).
-func WithHTTPClient(hc *http.Client) Option {
-	return func(c *Client) {
-		if hc == nil {
-			return
-		}
-		c.httpClient = hc
-	}
-}
-
 // NewClient builds a Client. tokens resolves the API key on every request;
 // the default HTTP client has a 30s timeout, mirroring
 // github/http_client.go's ghHTTPClient.

@@ -402,6 +402,7 @@ function SessionRowInner({
             owner={session.githubOwner}
             repo={session.githubRepo}
             sourceRef={session.githubSourceRef}
+            host={session.githubHost}
             prPriority={session.githubPrPriority}
             prState={session.githubPrState}
             isDraft={session.githubPrIsDraft}

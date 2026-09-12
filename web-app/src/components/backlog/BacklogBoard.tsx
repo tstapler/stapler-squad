@@ -1,11 +1,13 @@
 "use client";
 // +feature: backlog:board
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { filterBacklogItems, type BacklogFilterState } from "@/lib/hooks/useBacklogFilters";
+import { useBacklogStages, BUILTIN_BACKLOG_STAGES } from "@/lib/hooks/useBacklogStages";
 import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import { groupStuckItemsByItemId, summarizeStuckItemGroup } from "@/components/backlog-stuck/stuckReason";
 import { BacklogItemCard } from "./BacklogItemCard";
 import { ConnectionIndicator } from "./ConnectionIndicator";
 import { deriveStageDisplay, type Stage } from "./detail/StageTracker";
@@ -57,6 +59,31 @@ const COLUMNS: { status: BacklogItemStatus; label: string }[] = [
   { status: "done", label: "Done" },
 ];
 
+// Slugs already represented by COLUMNS above (directly or folded via
+// stageOf()) — a fetched BacklogStage matching one of these is a built-in,
+// not a custom stage, and must not get a second, duplicate column (Task
+// 2.9.1a).
+const BUILTIN_STATUS_SLUGS = new Set(BUILTIN_BACKLOG_STAGES.map((s) => s.slug));
+
+// Sentinel status for the trailing overflow column (Task 2.9.1b): any live
+// item whose status matches neither a built-in fold destination nor a
+// fetched custom stage lands here instead of disappearing off the board
+// entirely — this is BUG-037's exact failure mode (an item silently
+// unrenderable anywhere), now guarded a third time for a third root cause
+// (unrecognized/deleted custom stage, after the original status/column
+// mismatch and the later archived-item edge case).
+const UNRECOGNIZED_STAGE_STATUS = "__unrecognized_stage__" as BacklogItemStatus;
+const UNRECOGNIZED_COLUMN: { status: BacklogItemStatus; label: string } = {
+  status: UNRECOGNIZED_STAGE_STATUS,
+  label: "Unrecognized stage",
+};
+
+// The overflow column never has an exiting/animating card of its own
+// (Task 2.9.1b keeps this out of scope of the Epic 6.4 animation tracker,
+// see BacklogBoard()'s comment above unrecognizedItems) — a stable shared
+// empty Set avoids allocating a new one on every render.
+const EMPTY_ID_SET: Set<string> = new Set();
+
 // Epic 6.4 (backlog-event-driven-updates): how long a card's exit fade plays
 // in its origin column before it's removed from the DOM, and how long the
 // "just changed" flash is forced on for a card that just entered a new
@@ -96,7 +123,10 @@ function BoardColumn({
   onItemClick: (itemId: string) => void;
   isLoading: boolean;
   pending: Record<string, string>;
-  stuckItemsById: Map<string, StuckBacklogItem>;
+  /** itemId -> every currently-open StuckBacklogItem row for that item (BUG-105: an
+   * item can have several at once) — grouped once by the parent via
+   * `groupStuckItemsByItemId`, resolved to a primary + "more" count per card below. */
+  stuckItemsById: Map<string, StuckBacklogItem[]>;
   /** True when this column has items upstream but the active filter excluded all of them (AC 5). */
   isEmptyDueToFilter: boolean;
 }) {
@@ -133,6 +163,8 @@ function BoardColumn({
           items.map((item) => {
             const isExiting = exitingIds.has(item.id);
             const isEntering = !isExiting && enteringIds.has(item.id);
+            const stuckGroup = stuckItemsById.get(item.id);
+            const stuckSummary = stuckGroup ? summarizeStuckItemGroup(stuckGroup) : undefined;
             return (
               <div
                 key={item.id}
@@ -147,7 +179,8 @@ function BoardColumn({
                   onClick={onItemClick}
                   pendingAction={pending[item.id] ?? null}
                   forceJustChanged={isEntering}
-                  stuckItem={stuckItemsById.get(item.id)}
+                  stuckItem={stuckSummary?.primary}
+                  otherStuckReasons={stuckSummary?.otherReasons}
                 />
               </div>
             );
@@ -175,6 +208,24 @@ export function BacklogBoard({
   // reconnect must keep showing last-known state, not blank/spinner-out
   // (ux.md §1 "Error / edge cases", shared by this surface per §2).
   const isLoading = connectionState === "connecting" && items.length === 0;
+
+  // Task 2.9.1a: the board's columns are the fixed 5 built-in stages above
+  // plus one column per enabled *custom* stage the operator has configured
+  // (useBacklogStages() falls back to the built-in set synchronously, so
+  // this never regresses to zero columns while the fetch is in flight).
+  const { stages } = useBacklogStages();
+  const customColumns = useMemo(
+    () =>
+      stages
+        .filter((s) => s.enabled && !BUILTIN_STATUS_SLUGS.has(s.slug))
+        .map((s) => ({ status: s.slug as BacklogItemStatus, label: s.name })),
+    [stages]
+  );
+  const customColumnStatuses = useMemo(
+    () => new Set(customColumns.map((c) => c.status)),
+    [customColumns]
+  );
+  const columns = useMemo(() => [...COLUMNS, ...customColumns], [customColumns]);
 
   // Epic 6.4 (backlog-event-driven-updates): when a genuine live status
   // change (gated on `item.liveVersion` advancing, same signal as
@@ -305,7 +356,28 @@ export function BacklogBoard({
     };
   }, []);
 
-  const stuckItemsById = new Map(stuckItems.map((s) => [s.itemId, s]));
+  // BUG-105: an item can have several simultaneous open StuckBacklogItem
+  // rows (e.g. BOUNCING + BOUNCE_CAP_EXHAUSTED + MULTIPLE_REASONS all open at
+  // once) — grouping here (instead of the old `new Map(stuckItems.map(s =>
+  // [s.itemId, s]))`, which silently kept whichever row happened to be last
+  // in the array) lets each card resolve the SAME shared-priority primary
+  // reason BacklogItemDetail resolves for the same item.
+  const stuckItemsById = groupStuckItemsByItemId(stuckItems);
+
+  // Task 2.9.1b: an item whose status matches neither a built-in fold
+  // destination (stageOf()) nor a fetched custom stage column must still
+  // render somewhere — this is BUG-037's exact failure mode (silently
+  // unrenderable) recurring for a third root cause (a deleted/unrecognized
+  // custom stage). "archived" is excluded deliberately: it has its own
+  // defined "no column" behavior (stageOf's comment above), not an
+  // unrecognized one.
+  const knownColumnStatuses = useMemo(() => new Set(columns.map((c) => c.status)), [columns]);
+  const unrecognizedItems = useMemo(() => {
+    const unfiltered = items.filter(
+      (i) => stageOf(i.status) === null && i.status !== "archived" && !knownColumnStatuses.has(i.status)
+    );
+    return filters ? filterBacklogItems(unfiltered, filters) : unfiltered;
+  }, [items, knownColumnStatuses, filters]);
 
   return (
     <div className={styles.boardWrapper}>
@@ -320,18 +392,24 @@ export function BacklogBoard({
         aria-label="Backlog board"
         data-testid="backlog-board"
       >
-        {COLUMNS.map((column) => {
+        {columns.map((column) => {
+          // A custom stage (Task 2.9.1a) has no fold mapping in stageOf() —
+          // it matches an item by its raw status/slug equality instead.
+          const isCustomColumn = customColumnStatuses.has(column.status);
+          const columnMatches = (status: BacklogItemStatus) =>
+            isCustomColumn ? status === column.status : stageOf(status) === column.status;
+
           // Filtering (AC 0, 1, 2) applies only to this column's settled
           // items — `items` itself stays unfiltered so the exit/enter
           // animation tracking above keeps seeing every status transition
           // regardless of the active filter. Sort/group-by are list-only
           // (AC 6) and never reach the board.
-          const unfilteredBaseItems = items.filter((i) => stageOf(i.status) === column.status);
+          const unfilteredBaseItems = items.filter((i) => columnMatches(i.status));
           const baseItems = filters ? filterBacklogItems(unfilteredBaseItems, filters) : unfilteredBaseItems;
           const isEmptyDueToFilter = baseItems.length === 0 && unfilteredBaseItems.length > 0;
           const baseIds = new Set(baseItems.map((i) => i.id));
           const exitingForColumn = Array.from(exitingItems.values()).filter(
-            (e) => stageOf(e.fromStatus) === column.status && !baseIds.has(e.item.id)
+            (e) => columnMatches(e.fromStatus) && !baseIds.has(e.item.id)
           );
           const displayItems =
             exitingForColumn.length === 0
@@ -355,6 +433,23 @@ export function BacklogBoard({
             />
           );
         })}
+        {/* Rendered only when non-empty (Task 2.9.1b) so a normally-configured
+            board never shows a permanent empty overflow column. */}
+        {unrecognizedItems.length > 0 && (
+          <BoardColumn
+            key={UNRECOGNIZED_COLUMN.status}
+            column={UNRECOGNIZED_COLUMN}
+            items={unrecognizedItems}
+            exitingIds={EMPTY_ID_SET}
+            enteringIds={enteringIds}
+            onAction={onAction}
+            onItemClick={onItemClick}
+            isLoading={isLoading}
+            pending={pending}
+            stuckItemsById={stuckItemsById}
+            isEmptyDueToFilter={false}
+          />
+        )}
       </div>
     </div>
   );

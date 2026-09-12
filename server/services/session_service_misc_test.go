@@ -238,7 +238,7 @@ func newMinimalUnfinishedWorkService(t *testing.T) *UnfinishedWorkService {
 	require.NoError(t, err)
 	bus := events.NewEventBus(16)
 	scanner := unfinished.NewScanner(bus, stateStore)
-	return NewUnfinishedWorkService(scanner, stateStore, bus, nil)
+	return NewUnfinishedWorkService(scanner, stateStore, bus, nil, nil)
 }
 
 // TestGetWorktreeDiff_EmptyRepoPath verifies that missing repo_path or branch

@@ -20,13 +20,17 @@ jest.mock("next/navigation", () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
 }));
 
-// RepoPathInput pulls in useSessionRepoPaths (Redux) and usePathCompletions (RPC).
-// Stub both so this test doesn't need a Redux store or ConnectRPC transport.
+// RepoPathInput pulls in useSessionRepoPaths (Redux), usePathCompletions (RPC),
+// and useGitHubEnterpriseHosts (RPC). Stub all three so this test doesn't need
+// a Redux store or ConnectRPC transport.
 jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({
   useSessionRepoPaths: () => [],
 }));
 jest.mock("@/lib/hooks/usePathCompletions", () => ({
   usePathCompletions: () => ({ entries: [], isLoading: false }),
+}));
+jest.mock("@/lib/hooks/useGitHubEnterpriseHosts", () => ({
+  useGitHubEnterpriseHosts: () => ({ hosts: [], refetch: jest.fn() }),
 }));
 
 const createSession = jest.fn();

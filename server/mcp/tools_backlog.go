@@ -338,7 +338,7 @@ type backlogHandlers struct {
 	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
 	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;
 	// overridable in tests to avoid making real GitHub API calls.
-	verifyPRMatchesBranch func(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (PRVerification, error)
+	verifyPRMatchesBranch func(ctx context.Context, ref githubpkg.RepoRef, prNumber int, expectedBranch string) (PRVerification, error)
 	// resolveSessionBranch resolves the git branch a session UUID is working
 	// on, used by report_pr_created to determine "this item's own branch"
 	// before trusting a self-reported PR against it. Defaults to
@@ -606,7 +606,7 @@ func (h *backlogHandlers) resolveItemLink(ctx context.Context, callerUUID, itemI
 	// without success) knows not to bother retrying any of them either.
 	otherToolsWarning := "If you don't fix this, stop calling ANY backlog MCP tool for this item — " +
 		"report_progress, request_review, submit_review_verdict, report_pr_created, submit_triage_result, " +
-		"report_blocked, report_duplicate will all fail identically for the same reason."
+		"report_blocked, report_duplicate, resume_work will all fail identically for the same reason."
 	remediation := fmt.Sprintf("Call link_session_to_item with item_id=%s to link this session before retrying. %s", itemID, otherToolsWarning)
 	if prior, priorErr := h.storage.GetItemSessionBySessionUUID(ctx, callerUUID); priorErr == nil && prior.BacklogItemID != "" && prior.BacklogItemID != itemID {
 		remediation = fmt.Sprintf("This session is currently linked to a different item (%s). Call link_session_to_item with item_id=%s to relink, or use item_id=%s if that's what you meant. %s", prior.BacklogItemID, itemID, prior.BacklogItemID, otherToolsWarning)
@@ -1392,11 +1392,21 @@ const blockedCycleThreshold = 3
 // convention) without needing a dedicated DB column.
 const blockedNoteMarker = "[report_blocked]"
 
-// countBlockedCycles counts how many blockedNoteMarker-prefixed lines already
-// exist in notes.
+// countBlockedCycles counts how many blockedNoteMarker-prefixed lines exist
+// in notes since the most recent resumeNoteMarker line (or from the start,
+// if there is none) — a successful resume_work call starts a fresh blocked
+// count, since a block reported after a resume is a new blocking episode,
+// not a continuation of whatever sent the item to ready before.
 func countBlockedCycles(notes string) int {
+	lines := strings.Split(notes, "\n")
+	start := 0
+	for i, line := range lines {
+		if strings.HasPrefix(line, resumeNoteMarker) {
+			start = i + 1
+		}
+	}
 	count := 0
-	for _, line := range strings.Split(notes, "\n") {
+	for _, line := range lines[start:] {
 		if strings.HasPrefix(line, blockedNoteMarker) {
 			count++
 		}
@@ -1508,6 +1518,82 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 		return mcpgo.NewToolResultText(fmt.Sprintf("Item %s has been blocked %d times — escalated to review for a human/reviewer to look at instead of returning to ready.", itemID, priorBlockedCycles+1)), nil
 	}
 	return mcpgo.NewToolResultText(fmt.Sprintf("Item %s reported blocked and returned to ready status.", itemID)), nil
+}
+
+// --- resume_work ---
+
+// resumeNoteMarker prefixes the note resume_work appends when it transitions
+// an item ready -> in_progress. Also the reset point countBlockedCycles
+// scans from (see that function's doc comment).
+const resumeNoteMarker = "[resume_work]"
+
+// resumeWork is report_blocked's inverse: it lets the linked work-role
+// session move an item back from ready to in_progress once whatever blocked
+// it (per report_blocked) is resolved, so request_review/report_pr_created
+// become reachable again. Without this, a session that reported blocked had
+// no way to record finished work — both of those tools reject 'ready' as a
+// source status. See this tool's originating bug report for the repro.
+func (h *backlogHandlers) resumeWork(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+	args := req.GetArguments()
+	itemID, ok := args["item_id"].(string)
+	if !ok || itemID == "" {
+		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
+	}
+	if err := validateUUID(itemID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	itemSession, errRes := h.resolveItemLink(ctx, callerUUID, itemID)
+	if errRes != nil {
+		return errRes, nil
+	}
+	if itemSession.Role != session.SessionRoleWork {
+		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may resume work on an item", itemSession.Role), ""), nil
+	}
+
+	item, itemErr := h.getBacklogItemFor(ctx, itemID)
+	if itemErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("failed to load item: %v", itemErr), ""), nil
+	}
+	// Scope boundary (Story 2.1.4 precedent): hardcoded built-in-only source
+	// status, same rationale as report_blocked's switch above — resume_work
+	// only ever bridges ready -> in_progress.
+	if session.BacklogStatus(item.Status) != session.BacklogStatusReady {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("item is at status %q — resume_work only allowed from ready", item.Status), ""), nil
+	}
+
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "resume_work"}
+	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition, session.TriggeredByAgent); transErr != nil {
+		log.InfoLog().Printf("[mcp:resume_work] transition to in_progress failed: %v", transErr)
+		if errors.Is(transErr, session.ErrPreconditionFailed) {
+			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("transition to in_progress failed: %v", transErr), ""), nil
+	}
+
+	// Best-effort: persists a resume marker that also resets the blocked-cycle
+	// count (see countBlockedCycles). A failure here should not undo the
+	// status transition that already succeeded.
+	priorBlockedCycles := countBlockedCycles(item.Notes)
+	noteLine := fmt.Sprintf("%s resumed after %d blocked cycle(s)", resumeNoteMarker, priorBlockedCycles)
+	newNotes := noteLine
+	if item.Notes != "" {
+		newNotes = item.Notes + "\n" + noteLine
+	}
+	if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{Notes: &newNotes}, nil); updateErr != nil {
+		log.WarningLog().Printf("[mcp:resume_work] failed to persist resume note session=%s item=%s: %v", callerUUID, itemID, updateErr)
+	}
+
+	log.InfoLog().Printf("[mcp:resume_work] session=%s item=%s transitioned to in_progress", callerUUID, itemID)
+	return mcpgo.NewToolResultText(fmt.Sprintf("Item %s resumed — transitioned from ready to in_progress.", itemID)), nil
 }
 
 // maxRejectionMessagePaths caps how many dirty paths formatDirtyPathsRejectionMessage
@@ -1748,21 +1834,22 @@ func (h *backlogHandlers) sessionBranch(ctx context.Context, sessionUUID string)
 
 // verifyPR runs the GitHub cross-check via the overridable verifyPRMatchesBranch
 // seam when set, otherwise the real VerifyPRMatchesBranch (tools_github.go).
-func (h *backlogHandlers) verifyPR(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (PRVerification, error) {
+func (h *backlogHandlers) verifyPR(ctx context.Context, ref githubpkg.RepoRef, prNumber int, expectedBranch string) (PRVerification, error) {
 	if h.verifyPRMatchesBranch != nil {
-		return h.verifyPRMatchesBranch(ctx, owner, repo, prNumber, expectedBranch)
+		return h.verifyPRMatchesBranch(ctx, ref, prNumber, expectedBranch)
 	}
-	return VerifyPRMatchesBranch(ctx, owner, repo, prNumber, expectedBranch)
+	return VerifyPRMatchesBranch(ctx, ref, prNumber, expectedBranch)
 }
 
 // callerGitHubLogin resolves the GitHub login this server is authenticated
-// as, via the overridable resolveCallerGitHubLogin seam when set, otherwise
-// the real githubpkg.GetCurrentUserLogin.
-func (h *backlogHandlers) callerGitHubLogin(ctx context.Context) (string, error) {
+// as on host ("" means github.com), via the overridable resolveCallerGitHubLogin
+// seam when set (host is ignored on that seam — tests only ever exercise
+// github.com), otherwise the real githubpkg.GetCurrentUserLogin.
+func (h *backlogHandlers) callerGitHubLogin(ctx context.Context, host string) (string, error) {
 	if h.resolveCallerGitHubLogin != nil {
 		return h.resolveCallerGitHubLogin(ctx)
 	}
-	return githubpkg.GetCurrentUserLogin(ctx)
+	return githubpkg.GetCurrentUserLogin(ctx, host)
 }
 
 // decideOverridePolicy is the pure decision function behind
@@ -1938,7 +2025,12 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 				"could not parse the currently tracked PR URL (%q) to verify it isn't merged before reassigning — retry, or contact an operator if this persists: %v",
 				item.PrURL, curParseErr), ""), nil
 		}
-		curVerification, curErr := h.verifyPR(ctx, curRef.Owner, curRef.Repo, item.PrNumber, "")
+		curRepoRef, curRefErr := githubpkg.NewRepoRefWithHost(curRef.Owner, curRef.Repo, curRef.Host)
+		if curRefErr != nil {
+			return errResult(ErrInternalError, fmt.Sprintf(
+				"could not build a GitHub repo reference for the currently tracked PR (%q): %v", item.PrURL, curRefErr), ""), nil
+		}
+		curVerification, curErr := h.verifyPR(ctx, curRepoRef, item.PrNumber, "")
 		if curErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf("could not verify the currently tracked PR #%d against GitHub — retry: %v", item.PrNumber, curErr), ""), nil
 		}
@@ -1969,7 +2061,11 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrInternalError, "could not resolve this session's git branch to verify the reported PR", ""), nil
 	}
 
-	verification, verifyErr := h.verifyPR(ctx, ref.Owner, ref.Repo, prNumber, branch)
+	repoRef, repoRefErr := githubpkg.NewRepoRefWithHost(ref.Owner, ref.Repo, ref.Host)
+	if repoRefErr != nil {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url is not a recognizable GitHub PR URL: %v", repoRefErr), ""), nil
+	}
+	verification, verifyErr := h.verifyPR(ctx, repoRef, prNumber, branch)
 	if verifyErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("could not verify PR #%d against GitHub — retry: %v", prNumber, verifyErr), ""), nil
 	}
@@ -1986,7 +2082,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 	// non-empty overrideReason (the early reject above guarantees it).
 	var callerLogin string
 	if verification.Exists && overrideReason != "" && (isReassignment || !verification.Matched) {
-		login, loginErr := h.callerGitHubLogin(ctx)
+		login, loginErr := h.callerGitHubLogin(ctx, repoRef.Host())
 		if loginErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf("could not resolve your GitHub identity to verify the override — retry: %v", loginErr), ""), nil
 		}
@@ -3008,6 +3104,17 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 		),
 		h.reportBlocked,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("resume_work",
+			mcpgo.WithDescription("Resume work on an item you previously reported blocked (or that is otherwise sitting at ready while still linked to you) once the blocker is resolved — transitions it from ready back to in_progress. Role: work only. Call this before request_review or report_pr_created if the item is at ready; both reject that status."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("UUID of the backlog item"),
+				mcpgo.Required(),
+			),
+		),
+		h.resumeWork,
 	)
 
 	s.AddTool(

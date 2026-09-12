@@ -776,6 +776,9 @@ func applyWorktreeDetectionLocked(s *instanceState, info *WorktreeInfo) {
 	if s.inst.GitHubRepo == "" && info.GitHubRepo != "" {
 		s.inst.GitHubRepo = info.GitHubRepo
 	}
+	if s.inst.GitHubHost == "" && info.GitHubHost != "" {
+		s.inst.GitHubHost = info.GitHubHost
+	}
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)

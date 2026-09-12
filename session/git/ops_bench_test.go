@@ -20,7 +20,7 @@ func deepHistoryRepoForBench(b *testing.B, baseDepth, aheadCount int) (repoDir, 
 	b.Helper()
 	repoDir = setupBenchRepo(b)
 
-	repo, err := git.PlainOpen(repoDir)
+	repo, err := OpenRepo(repoDir)
 	if err != nil {
 		b.Fatal(err)
 	}
