@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -35,6 +34,15 @@ const (
 // before it's suggested as a pause candidate in the notification body. Higher
 // than a "just thinking" pause, low enough to still be a useful list.
 const memoryPressureIdleFloor = 10 * time.Minute
+
+// memoryPressureNotificationID is the stable notification-record ID for this
+// host-wide monitor, held constant across both the warn and the clear signal
+// (mirrors fork-pressure's forkPressureNotificationID in server/server.go) so
+// server/notifications/store.go's Append() updates the one record in place
+// instead of leaving a stale "near limit" record after the condition ends.
+// Read by the frontend status banner (backlog item
+// cfda07b7-73fb-42e1-a21b-7fdf8a052a14, AC3/AC4).
+const memoryPressureNotificationID = "memory-pressure-status"
 
 // MemoryPressureNotifier is a small, independent, periodic sweeper — same
 // shape as StaleSessionNotifier — that fires an edge-triggered,
@@ -89,13 +97,18 @@ func (n *MemoryPressureNotifier) Start(ctx context.Context) {
 
 // checkOnce evaluates the current ratio against the warn/clear thresholds
 // and fires or re-arms the single (host-wide, not per-session) notification.
+// The clear transition also publishes an explicit signal (notifyCleared) so a
+// consumer reading the persisted record's latest state -- the frontend status
+// banner -- doesn't see the "near limit" alert linger forever after the
+// condition actually ends (backlog item cfda07b7-73fb-42e1-a21b-7fdf8a052a14,
+// AC4).
 func (n *MemoryPressureNotifier) checkOnce() {
 	ratio, ok := n.ratioFunc()
 	if !ok {
 		return // non-Linux, or memory.high is unset ("max") — nothing to warn about
 	}
 
-	shouldNotify := false
+	var shouldNotify, shouldClear bool
 	n.mu.Lock()
 	switch {
 	case ratio >= memoryPressureWarnRatio && !n.notified:
@@ -103,11 +116,15 @@ func (n *MemoryPressureNotifier) checkOnce() {
 		shouldNotify = true
 	case ratio < memoryPressureClearRatio && n.notified:
 		n.notified = false
+		shouldClear = true
 	}
 	n.mu.Unlock()
 
-	if shouldNotify {
+	switch {
+	case shouldNotify:
 		n.notify(ratio)
+	case shouldClear:
+		n.notifyCleared(ratio)
 	}
 }
 
@@ -120,13 +137,31 @@ func (n *MemoryPressureNotifier) notify(ratio float64) {
 		return
 	}
 	n.eventBus.Publish(events.NewNotificationEvent(
-		"system", "System", uuid.New().String(),
+		"system", "System", memoryPressureNotificationID,
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
 		derivePriority(true, true), // urgent, important — approaching the memory limit risks an OOM kill right now
 		"Memory usage near limit",
 		fmt.Sprintf("Process memory is at %.0f%% of its configured limit. %s Dashboard: http://localhost:3000",
 			ratio*100, n.reclaimOptionsText()),
-		map[string]string{"reason": "memory_pressure"},
+		map[string]string{"reason": "memory_pressure", "memory_pressure_level": "warning"},
+	))
+}
+
+// notifyCleared publishes the host-wide clear signal once usage recovers below
+// memoryPressureClearRatio. Uses the same stable ID and NotificationType as
+// notify() so it updates that one record in place instead of creating a
+// second one -- see memoryPressureNotificationID's doc comment.
+func (n *MemoryPressureNotifier) notifyCleared(ratio float64) {
+	if n.eventBus == nil {
+		return
+	}
+	n.eventBus.Publish(events.NewNotificationEvent(
+		"system", "System", memoryPressureNotificationID,
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		derivePriority(false, false), // cleared -- no longer urgent or important
+		"Memory usage cleared",
+		fmt.Sprintf("Process memory has dropped back below %.0f%% of its configured limit.", memoryPressureClearRatio*100),
+		map[string]string{"reason": "memory_pressure", "memory_pressure_level": "ok"},
 	))
 }
 

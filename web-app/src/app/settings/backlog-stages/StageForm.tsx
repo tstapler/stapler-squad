@@ -22,6 +22,7 @@ import {
   validateTransition,
 } from "./TransitionRow";
 import type { GateFormState, TransitionFormState } from "./TransitionRow";
+import { LivenessSection } from "./LivenessSection";
 import * as styles from "./StageForm.css";
 
 function transitionToFormState(t: StageTransition, key: string): TransitionFormState {
@@ -45,7 +46,7 @@ function transitionToFormState(t: StageTransition, key: string): TransitionFormS
 }
 
 /** Extracts a human-readable message from a failure, preferring the ConnectError message — mirrors PipelineModeForm.tsx's errorMessage() helper. */
-function errorMessage(err: unknown): string {
+export function errorMessage(err: unknown): string {
   if (err instanceof ConnectError) return err.message;
   if (err instanceof Error) return err.message;
   return String(err);
@@ -441,6 +442,12 @@ export function StageForm({ stage, allStages, onSaved, onDeleted, onCancel }: St
           ))}
         </div>
       </div>
+
+      {stage && (
+        <div>
+          <LivenessSection stageSlug={stage.slug} pipelineModeOptions={pipelineModes} />
+        </div>
+      )}
 
       <div className={styles.graphSection}>
         <span className={styles.sectionHeading}>Graph preview (read-only)</span>
