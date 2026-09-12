@@ -774,17 +774,17 @@ type failOnCallGateSatisfactionRepo struct {
 
 func (f *failOnCallGateSatisfactionRepo) Create(context.Context, GateSatisfactionCreateInput) (*GateSatisfactionData, error) {
 	f.t.Fatal("GateSatisfactionRepository.Create must not be called when a config error short-circuits evaluation")
-	return nil, nil
+	return nil, nil //nolint:nilnil // unreachable after t.Fatal (which calls runtime.Goexit); only here to satisfy the compiler's return requirement
 }
 
 func (f *failOnCallGateSatisfactionRepo) GetByItemAndGate(context.Context, uuid.UUID, uuid.UUID) (*GateSatisfactionData, error) {
 	f.t.Fatal("GateSatisfactionRepository.GetByItemAndGate must not be called when a config error short-circuits evaluation")
-	return nil, nil
+	return nil, nil //nolint:nilnil // unreachable after t.Fatal (which calls runtime.Goexit); only here to satisfy the compiler's return requirement
 }
 
 func (f *failOnCallGateSatisfactionRepo) Update(context.Context, uuid.UUID, uuid.UUID, GateSatisfactionUpdateInput) (*GateSatisfactionData, error) {
 	f.t.Fatal("GateSatisfactionRepository.Update must not be called when a config error short-circuits evaluation")
-	return nil, nil
+	return nil, nil //nolint:nilnil // unreachable after t.Fatal (which calls runtime.Goexit); only here to satisfy the compiler's return requirement
 }
 
 func (f *failOnCallGateSatisfactionRepo) ListUnsatisfied(context.Context) ([]*GateSatisfactionData, error) {
