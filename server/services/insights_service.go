@@ -88,8 +88,11 @@ func buildSessionSummary(
 	firstTs, lastTs := sessionTimestamps(r)
 
 	sessionID, isOrphan := "", true
+	var tags []string
 	if associator != nil {
-		sessionID, isOrphan = associator.AssociateWithSnapshot(r, snapshot)
+		var rec tokens.SessionRecord
+		rec, isOrphan = associator.AssociateRecordWithSnapshot(r, snapshot)
+		sessionID, tags = rec.SessionID, rec.Tags
 	}
 
 	costUSD, unpriced := pt.EstimateCost(r)
@@ -120,6 +123,7 @@ func buildSessionSummary(
 		TopTools:         topTools,
 		UnpricedModels:   unpriced,
 		ActivityType:     activityType,
+		Tags:             tags,
 	}
 	if !firstTs.IsZero() {
 		summary.FirstMessageAt = timestamppb.New(firstTs)

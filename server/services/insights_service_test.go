@@ -981,6 +981,75 @@ func TestBuildSessionSummary_WhenCalledDirectly_ExpectProtoEqualToHandBuiltExpec
 }
 
 // --------------------------------------------------------------------------
+// Tags sourced from Instance.Tags through the association pipeline
+// --------------------------------------------------------------------------
+
+func TestGetInsightsSummary_WhenSessionHasTags_ExpectTagsPopulated(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-tagged", "claude-sonnet-4", "/home/user/tagged", 1000, 500, 0, now),
+	}
+	sessionRecords := []tokens.SessionRecord{
+		{SessionID: "sess-1", ConversationID: "uuid-tagged", Path: "/home/user/tagged", Tags: []string{"backend", "urgent"}},
+	}
+	svc := newInsightsFixture(results, sessionRecords)
+
+	resp, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.ElementsMatch(t, []string{"backend", "urgent"}, resp.Msg.Sessions[0].Tags)
+}
+
+func TestGetInsightsSummary_WhenSessionOrphaned_ExpectTagsEmpty(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-orphan", "claude-sonnet-4", "/home/user/orphan", 1000, 500, 0, now),
+	}
+	// No matching session record — orphan.
+	svc := newInsightsFixture(results, []tokens.SessionRecord{})
+
+	resp, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.True(t, resp.Msg.Sessions[0].IsOrphan)
+	assert.Empty(t, resp.Msg.Sessions[0].Tags)
+}
+
+func TestBuildSessionSummary_WhenSessionHasNoTags_ExpectTagsFieldEmptySlice(t *testing.T) {
+	t.Parallel()
+	pt := tokens.DefaultPricingTable()
+	result := &tokens.ParseResult{
+		SessionUUID:  "conv-no-tags",
+		ProjectPath:  "/home/user/proj",
+		PrimaryModel: "claude-sonnet-4",
+		TotalInput:   100,
+		TotalOutput:  50,
+		ToolUsage:    map[string]tokens.ToolTokenStats{},
+	}
+	// Matched record with a nil Tags field.
+	sessionRecords := []tokens.SessionRecord{
+		{SessionID: "sess-no-tags", ConversationID: "conv-no-tags", Path: "/home/user/proj"},
+	}
+	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
+	snapshot := associator.Snapshot()
+
+	got := buildSessionSummary(result, pt, associator, snapshot)
+
+	assert.False(t, got.IsOrphan)
+	assert.Empty(t, got.Tags, "Tags should be empty (not causing a proto nil-vs-empty-slice issue) when the matched record has no tags")
+}
+
+// --------------------------------------------------------------------------
 // Epic 1.5 Story 1.5.3: watchInsights populates InsightsEvent.Session
 // --------------------------------------------------------------------------
 
