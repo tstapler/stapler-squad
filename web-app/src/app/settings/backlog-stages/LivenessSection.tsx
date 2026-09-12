@@ -176,13 +176,8 @@ export interface LivenessSectionProps {
 }
 
 /**
- * "Liveness overrides" sub-section nested in StageForm (Epic 1.3's CRUD RPCs
- * finally get a UI). Loads this stage's LivenessDefinition rows on mount
- * (client-filtered from the unfiltered ListLivenessDefinitions response —
- * architecture.md §4, no server-side filter RPC needed at this table size),
- * and surfaces the (stage, mode) -> (stage, nil) -> built-in fallback chain
- * (session/liveness_cache.go) so an operator can see which tier actually
- * governs a mode instead of assuming stage-wide coverage (pitfalls.md §4).
+ * "Liveness overrides" sub-section nested in StageForm — see architecture.md
+ * §4 (client-side filtering) and pitfalls.md §4 (fallback-chain display).
  */
 export function LivenessSection({ stageSlug, pipelineModeOptions }: LivenessSectionProps) {
   const { listLivenessDefinitions, createLivenessDefinition, updateLivenessDefinition, deleteLivenessDefinition } = useLivenessDefinitions();

@@ -72,12 +72,9 @@ export interface UseLivenessDefinitionsReturn {
 }
 
 /**
- * RPC-backed CRUD for the 5 LivenessDefinition RPCs (Epic 1.3 of
- * backlog-custom-workflow-stages), feeding the settings UI's "Liveness
- * overrides" section (nested in StageForm). Self-contained (its own
- * ConnectRPC client) rather than folded into useBacklogStagesAdmin — same
- * precedent as that hook's own PipelineMode CRUD split in
- * useBacklogService.ts.
+ * RPC-backed CRUD for the 5 LivenessDefinition RPCs, feeding the "Liveness
+ * overrides" settings section. Self-contained client, mirroring
+ * useBacklogService.ts's own PipelineMode CRUD split.
  */
 export function useLivenessDefinitions(): UseLivenessDefinitionsReturn {
   const clientRef = useRef<ReturnType<typeof createClient<typeof BacklogService>> | null>(null);

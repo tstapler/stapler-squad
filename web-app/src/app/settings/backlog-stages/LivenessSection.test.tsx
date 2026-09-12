@@ -170,4 +170,66 @@ describe("LivenessSection", () => {
     await waitFor(() => expect(mockDelete).toHaveBeenCalledWith("d1"));
     await waitFor(() => expect(screen.queryByTestId("liveness-row-default")).not.toBeInTheDocument());
   });
+
+  it("AC1: surfaces a create RPC failure without losing the form", async () => {
+    mockList.mockResolvedValue([]);
+    mockCreate.mockRejectedValue(new Error("stage not found"));
+    render(<LivenessSection stageSlug="idea" pipelineModeOptions={[]} />);
+    await screen.findByText("No liveness overrides configured for this stage.");
+    fireEvent.click(screen.getByTestId("liveness-add"));
+    fireEvent.change(screen.getByTestId("liveness-editor-expected"), { target: { value: "60" } });
+    fireEvent.click(screen.getByTestId("liveness-editor-save"));
+    expect(await screen.findByTestId("liveness-editor-error")).toHaveTextContent("stage not found");
+  });
+
+  it("AC0: surfaces a list-load RPC failure", async () => {
+    mockList.mockRejectedValue(new Error("boom"));
+    render(<LivenessSection stageSlug="idea" pipelineModeOptions={[]} />);
+    expect(await screen.findByTestId("liveness-section-error")).toHaveTextContent("boom");
+  });
+
+  it("AC1: creates a new cycle_frequency override with threshold/lookback fields", async () => {
+    mockList.mockResolvedValue([]);
+    const created = makeDefinition({ id: "new-2", stageSlug: "review", kind: "cycle_frequency", cycleThreshold: 3, cycleLookbackMs: 24 * 3600000 });
+    mockCreate.mockResolvedValue(created);
+
+    render(<LivenessSection stageSlug="review" pipelineModeOptions={[]} />);
+    await screen.findByText("No liveness overrides configured for this stage.");
+
+    fireEvent.click(screen.getByTestId("liveness-add"));
+    fireEvent.change(screen.getByTestId("liveness-editor-kind"), { target: { value: "cycle_frequency" } });
+    fireEvent.change(screen.getByTestId("liveness-editor-threshold"), { target: { value: "3" } });
+    fireEvent.change(screen.getByTestId("liveness-editor-lookback"), { target: { value: "1440" } });
+    fireEvent.click(screen.getByTestId("liveness-editor-save"));
+
+    await waitFor(() =>
+      expect(mockCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ stageSlug: "review", kind: "cycle_frequency", cycleThreshold: 3, cycleLookbackMs: 86400000 })
+      )
+    );
+    expect(await screen.findByTestId("liveness-row-default")).toHaveTextContent("3 cycles / 24h lookback");
+  });
+
+  it("AC1: cancels the new-row editor without saving", async () => {
+    mockList.mockResolvedValue([]);
+    render(<LivenessSection stageSlug="idea" pipelineModeOptions={[]} />);
+    await screen.findByText("No liveness overrides configured for this stage.");
+
+    fireEvent.click(screen.getByTestId("liveness-add"));
+    expect(screen.getByTestId("liveness-row-editor")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("liveness-editor-cancel"));
+
+    expect(screen.queryByTestId("liveness-row-editor")).not.toBeInTheDocument();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("AC0: with no base row and no built-in default, states that no liveness check runs", async () => {
+    mockList.mockResolvedValue([]);
+    render(<LivenessSection stageSlug="queued" pipelineModeOptions={[]} />);
+    await screen.findByText("No liveness overrides configured for this stage.");
+    expect(screen.getByTestId("liveness-fallback-note")).toHaveTextContent(
+      "No stage-wide default configured — modes without an override have no timeout (no liveness check runs)."
+    );
+  });
 });
