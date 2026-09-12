@@ -917,6 +917,7 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		SkipPlanning:        item.SkipPlanning,
 		AutoSpawnSession:    item.AutoSpawnSession,
 		AutoCreatePr:        item.AutoCreatePR,
+		AutoApprovePlan:     item.AutoApprovePlan,
 		PipelineMode:        &item.PipelineMode,
 		Category:            &item.Category,
 		PlanApproved:        item.PlanApproved,
