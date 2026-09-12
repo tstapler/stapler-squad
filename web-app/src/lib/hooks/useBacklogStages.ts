@@ -313,7 +313,7 @@ export function useBacklogStagesAdmin(): UseBacklogStagesAdminReturn {
     if (!clientRef.current) return [];
     try {
       const resp = await clientRef.current.listStages({});
-      return (resp.items ?? []).map(mapStage);
+      return (resp.items ?? []).map(mapFullStage);
     } catch (err) {
       console.error("[useBacklogStages] listStages:", err);
       throw err;
