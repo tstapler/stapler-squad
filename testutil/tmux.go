@@ -182,10 +182,14 @@ func CreateIsolatedTmuxServer(t *testing.T) *TmuxTestServer {
 		t.Skip("tmux not available, skipping test")
 	}
 
-	// Generate unique socket name from test name + atomic counter
-	// This ensures multiple servers in the same test get unique names
+	// Generate unique socket name from test name + PID + atomic counter.
+	// The PID lets testutil/tmuxreap.ReapLeakedTestServers identify sockets
+	// whose owning process has died (vs. still-running concurrent test
+	// binaries) instead of guessing from an arbitrary age cutoff — see
+	// BUG-105. The counter still disambiguates multiple servers within one
+	// test/process.
 	counter := atomic.AddUint64(&serverCounter, 1)
-	socketName := fmt.Sprintf("test_%s_%d", sanitizeTestName(t.Name()), counter)
+	socketName := fmt.Sprintf("test_%s_%d_%d", sanitizeTestName(t.Name()), os.Getpid(), counter)
 
 	// Remove any stale socket from a previous crashed run before starting.
 	// A stale socket file causes tmux to report "server exited unexpectedly"
