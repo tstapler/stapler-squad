@@ -95,9 +95,9 @@ const oneShotShipTimeoutSeconds = 1800
 // ReconcilePRPending depends on. Defined here (the consumer) rather than in
 // package git, scoped to exactly what's called.
 type prPendingChecker interface {
-	IsPRMerged(prNumber int) (bool, error)
-	GetPRStatus(prNumber int) (*git.PRStatus, error)
-	ClosePR(prNumber int, comment string) error
+	IsPRMerged(ctx context.Context, prNumber int) (bool, error)
+	GetPRStatus(ctx context.Context, prNumber int) (*git.PRStatus, error)
+	ClosePR(ctx context.Context, prNumber int, comment string) error
 }
 
 // prCreator is the subset of GitWorktree's push/PR-creation behavior that
@@ -107,8 +107,8 @@ type prCreator interface {
 	CommitChanges(commitMessage string) error
 	PushBranch() error
 	CreatePR(opts git.PRCreateOptions) (prURL string, prNumber int, err error)
-	EnablePRAutoMerge(prNumber int) error
-	RequestCopilotReview(prNumber int) error
+	EnablePRAutoMerge(ctx context.Context, prNumber int) error
+	RequestCopilotReview(ctx context.Context, prNumber int) error
 	HasCommitsAheadOfMain(mainBranch string) (bool, error)
 }
 
@@ -650,7 +650,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 	// operator must merge it manually, so this needs a notification, not just a log line
 	// (same silent-failure pattern found and fixed elsewhere in this codebase — see
 	// docs/tasks/backlog-feature-improvement.md).
-	if autoErr := g.EnablePRAutoMerge(prNumber); autoErr != nil {
+	if autoErr := g.EnablePRAutoMerge(ctx, prNumber); autoErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR auto-merge item=%s pr=%d: %v", item.ID, prNumber, autoErr)
 		l.notify(item.ID,
 			"Auto-merge not enabled",
@@ -666,7 +666,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 	// to land before the item goes unwatched at pr_pending. Best-effort: a
 	// missing Copilot review is a missed nicety, not a missed auto-merge path
 	// (lower notification priority than the auto-merge failure above).
-	if reviewErr := g.RequestCopilotReview(prNumber); reviewErr != nil {
+	if reviewErr := g.RequestCopilotReview(ctx, prNumber); reviewErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR RequestCopilotReview item=%s pr=%d: %v", item.ID, prNumber, reviewErr)
 		l.notify(item.ID,
 			"Copilot review not requested",
@@ -880,8 +880,72 @@ func (l *BacklogLifecycleListener) reconcilePushFailedItems(ctx context.Context,
 		if row.ItemStatus != BacklogStatusReview {
 			continue // no longer applicable to this item's current state
 		}
-		l.retryPushFailedWithBackoffGate(ctx, row.ItemID, row.ItemTitle)
+		l.retryPushFailedWithBackoffGate(ctx, row.ItemID, row.ItemTitle, row.Context)
 	}
+}
+
+// unrecoverableByMergeSignatures are substrings (case-insensitive) of a
+// push_failed row's stored Context (set by stayInReviewAndNotify as
+// "<reason>: <err>") that indicate the original failure was NOT a
+// non-fast-forward rejection and therefore cannot be fixed by
+// attemptPushRemediation's fetch+merge+retry — the only remediation it knows
+// how to do (see its doc comment: it reconciles the exact "something else
+// advanced origin's copy of this branch" shape). Auth/permission/protection
+// failures need a human (rotate a token, request access, adjust branch
+// protection); retrying the identical push after a no-op merge only wastes a
+// remediation attempt and repeats a notification that already told the
+// operator nothing new. Deliberately a narrow, conservative list: an
+// unmatched (unknown or genuinely FF-shaped) error still falls through to
+// the existing merge+retry path unchanged — see
+// isNonFastForwardRecoverable's doc comment for why false positives here
+// (skipping a retry that might have worked) are worse than the reverse.
+// Deliberately no bare "403"/"401": failureContext embeds the raw
+// error text, which routinely contains commit SHAs, refs, or URLs — a hex
+// SHA has a real chance of containing that digit sequence by coincidence,
+// which would misclassify a genuinely recoverable non-fast-forward failure
+// as unrecoverable. Each signature below instead requires enough
+// surrounding context (a status-code phrase, or prose specific to
+// auth/permission/branch-protection) that a coincidental substring match in
+// unrelated hex/URL text is implausible. Likewise no bare "not permitted"
+// (matches unrelated OS/filesystem errors like sandboxed "operation not
+// permitted") — "you don't have push access"/"you are not permitted to
+// push" below cover the git-specific phrasing without that breadth.
+var unrecoverableByMergeSignatures = []string{
+	"permission denied",
+	"authentication failed",
+	"could not read username",
+	"could not read password",
+	"403 forbidden",
+	"http 403",
+	"401 unauthorized",
+	"http 401",
+	"bad credentials",
+	"protected branch",
+	"required status check",
+	"required review",
+	"you don't have push access",
+	"you are not permitted to push",
+	"signed commits",
+}
+
+// isNonFastForwardRecoverable reports whether failureContext (a push_failed
+// row's stored Context) looks like something attemptPushRemediation's
+// fetch+merge+retry can plausibly fix, as opposed to a cause
+// unrecoverableByMergeSignatures already knows a merge cannot touch.
+// Defaults to true (assume recoverable, attempt the retry) for an empty or
+// unrecognized context — this stays fail-open on purpose, matching
+// retryPushFailedWithBackoffGate's own RemediationDue fail-open rationale:
+// skipping a retry that might have worked (a false "unrecoverable") is worse
+// than running one more harmless no-op merge+push against a cause this
+// classifier doesn't recognize.
+func isNonFastForwardRecoverable(failureContext string) bool {
+	lower := strings.ToLower(failureContext)
+	for _, sig := range unrecoverableByMergeSignatures {
+		if strings.Contains(lower, sig) {
+			return false
+		}
+	}
+	return true
 }
 
 // retryPushFailedWithBackoffGate dispatches attemptPushRemediation through
@@ -894,8 +958,14 @@ func (l *BacklogLifecycleListener) reconcilePushFailedItems(ctx context.Context,
 // review-gate respawns share is not needed here). Best-effort: gate
 // query/write errors are logged, never returned, and fail OPEN (still
 // attempts the retry) rather than silently stranding the item — same
-// rationale as autoReopenWithBackoffGate.
-func (l *BacklogLifecycleListener) retryPushFailedWithBackoffGate(ctx context.Context, itemID, itemTitle string) {
+// rationale as autoReopenWithBackoffGate. failureContext is the stuck row's
+// stored Context, threaded through to attemptPushRemediation so it can tell
+// a recoverable non-fast-forward rejection apart from a cause a merge cannot
+// fix (see isNonFastForwardRecoverable) — RemediationDue's own backoff/park
+// bookkeeping is unaffected either way, so an item still eventually parks
+// via MaxRemediationAttempts even when every attempt below is skipped as
+// unrecoverable.
+func (l *BacklogLifecycleListener) retryPushFailedWithBackoffGate(ctx context.Context, itemID, itemTitle, failureContext string) {
 	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonPushFailed)
 	if gateErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] retryPushFailedWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
@@ -915,7 +985,7 @@ func (l *BacklogLifecycleListener) retryPushFailedWithBackoffGate(ctx context.Co
 	}
 
 	go func() {
-		l.attemptPushRemediation(l.shutdownCtx, itemID, itemTitle)
+		l.attemptPushRemediation(l.shutdownCtx, itemID, itemTitle, failureContext)
 	}()
 }
 
@@ -937,7 +1007,26 @@ func (l *BacklogLifecycleListener) retryPushFailedWithBackoffGate(ctx context.Co
 // item is left stuck (still governed by the normal backoff schedule, so it
 // eventually parks after MaxRemediationAttempts) with a notification naming
 // the conflicting files.
-func (l *BacklogLifecycleListener) attemptPushRemediation(ctx context.Context, itemID, itemTitle string) {
+//
+// failureContext (the push_failed row's stored Context) is checked via
+// isNonFastForwardRecoverable BEFORE any of the above runs: when it matches
+// a known unrecoverable-by-merge signature (auth/permission/branch
+// protection — see unrecoverableByMergeSignatures), this skips the
+// merge+retry entirely and surfaces a distinct notification explaining why,
+// rather than blindly rerunning the identical failing push every backoff
+// tick with no new information for the operator.
+func (l *BacklogLifecycleListener) attemptPushRemediation(ctx context.Context, itemID, itemTitle, failureContext string) {
+	if !isNonFastForwardRecoverable(failureContext) {
+		log.InfoLog().Printf("[BacklogLifecycle] attemptPushRemediation item=%s: recorded failure (%q) doesn't look like a non-fast-forward rejection; skipping merge+retry", itemID, failureContext)
+		l.notify(itemID,
+			"Automated push retry skipped",
+			fmt.Sprintf("%s — the recorded push failure (%s) doesn't look like something a fetch+merge retry can fix (looks like an auth/permission/branch-protection issue). Investigate manually, then use Reset to try again automatically.", itemTitle, failureContext),
+			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+		return
+	}
+
 	item, err := l.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] attemptPushRemediation GetBacklogItem item=%s: %v", itemID, err)
@@ -1294,8 +1383,19 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 	}
 	g := l.getPRPendingCheckerFactory()(repoPath)
 
+	// Tag outbound GitHub calls with the same trigger source already recorded
+	// on ctx (ReconcilePRPending's 60s tick vs. TriggerPRFixForEvent's
+	// webhook-driven call — see prFixTriggerSourceFrom's doc comment), so
+	// they're attributable by github.CallOrigin too, not just the AC8
+	// fix-attempt log.
+	ghOrigin := github.OriginPRStatusPoller
+	if prFixTriggerSourceFrom(ctx) == prFixTriggerSourceWebhook {
+		ghOrigin = github.OriginWebhookReconcile
+	}
+	ghCtx := github.WithGitHubCallOrigin(ctx, ghOrigin)
+
 	// 1. Check if the PR has been merged → done.
-	merged, mergedErr := g.IsPRMerged(item.PrNumber)
+	merged, mergedErr := g.IsPRMerged(ghCtx, item.PrNumber)
 	if mergedErr != nil {
 		log.DebugLog().Printf("[BacklogLifecycle] ReconcilePRPending IsPRMerged item=%s pr=%d: %v", item.ID, item.PrNumber, mergedErr)
 		return
@@ -1310,7 +1410,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		// rather than skipping capture entirely, since CaptureShipSnapshot
 		// treats a nil prStatus as "group A already failed" and still
 		// captures group B (file stats) independently.
-		snapshotPRStatus, snapshotStatusErr := g.GetPRStatus(item.PrNumber)
+		snapshotPRStatus, snapshotStatusErr := g.GetPRStatus(ghCtx, item.PrNumber)
 		if snapshotStatusErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending GetPRStatus (ship snapshot) item=%s pr=%d: %v", item.ID, item.PrNumber, snapshotStatusErr)
 			snapshotPRStatus = nil
@@ -1398,7 +1498,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 	}
 
 	// 2. PR still open — check CI status and reviews.
-	prStatus, statusErr := g.GetPRStatus(item.PrNumber)
+	prStatus, statusErr := g.GetPRStatus(ghCtx, item.PrNumber)
 	if statusErr != nil {
 		log.DebugLog().Printf("[BacklogLifecycle] ReconcilePRPending GetPRStatus item=%s pr=%d: %v", item.ID, item.PrNumber, statusErr)
 		return
@@ -1887,7 +1987,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 	closeComment := fmt.Sprintf(
 		"Closing as superseded: this branch's last known commit (%s) is already present on %s, so this item's work has already shipped through another path. No further fix is needed here.",
 		lastCommitSha, bounceMainBranch)
-	if closeErr := checker.ClosePR(item.PrNumber, closeComment); closeErr != nil {
+	if closeErr := checker.ClosePR(ctx, item.PrNumber, closeComment); closeErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] closeIfSupersededByMain ClosePR item=%s pr=%d: %v", item.ID, item.PrNumber, closeErr)
 		// Still proceed — the item's code is on main regardless of whether the
 		// close-comment API call itself succeeded.

@@ -4639,8 +4639,8 @@ func (s *SessionService) GetSessionDiff(
 
 	instance := s.findInstance(req.Msg.Id)
 	if instance != nil {
-		// Live session: update and read cached diff.
-		if err := instance.UpdateDiffStats(); err != nil {
+		// Live session: refresh (if the cached value is stale) and read.
+		if err := instance.RefreshDiffStatsIfStale(); err != nil {
 			log.Warn("failed to update diff stats", "session", req.Msg.Id, "err", err)
 		}
 		diffStats = instance.GetDiffStats()

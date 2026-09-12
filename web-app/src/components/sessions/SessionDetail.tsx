@@ -52,6 +52,8 @@ interface SessionDetailProps {
   canGoBack?: boolean;
   /** Backlog item ID to display in right-side panel. If provided, shows BacklogItemPanel. */
   backlogItemId?: string;
+  /** Whether this session's pane currently has focus — forwarded to SessionVcsProvider. Defaults to true. */
+  isActive?: boolean;
 }
 
 export function SessionDetail({
@@ -73,6 +75,7 @@ export function SessionDetail({
   onBack,
   canGoBack,
   backlogItemId,
+  isActive,
 }: SessionDetailProps) {
   const actions = useSessionActions(session.id);
   const allSessions = useAppSelector(selectAllSessions);
@@ -84,7 +87,7 @@ export function SessionDetail({
   }, [session.id]);
 
   return (
-    <SessionVcsProvider sessionId={session.id} baseUrl={getApiBaseUrl()}>
+    <SessionVcsProvider sessionId={session.id} baseUrl={getApiBaseUrl()} isActive={isActive}>
       <SessionDetailView
         session={session}
         allSessions={allSessions}

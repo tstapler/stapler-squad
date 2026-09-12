@@ -71,6 +71,9 @@ func NewCommitStatusRequest(sha string, state CommitStatusState, statusContext, 
 // are restricted to GitHub Apps, and this repo's entire GitHub write path is
 // PAT/OAuth-token-based via the gh CLI (see ADR-001 in project_plans/pr-comment-check-runs).
 func SetCommitStatus(repo RepoRef, req CommitStatusRequest) error {
+	// SetCommitStatus has no ctx parameter of its own (out of scope to add
+	// one here); context.Background() preserves CheckGHAuth's prior behavior
+	// exactly for this call site.
 	if err := CheckGHAuthForHost(context.Background(), repo.Host()); err != nil {
 		return err
 	}
@@ -94,7 +97,7 @@ func SetCommitStatus(repo RepoRef, req CommitStatusRequest) error {
 
 	cmd := safeexec.CommandContext(ctx, "gh", args...)
 	setGHHostEnv(cmd, repo.Host())
-	if err := cmd.Run(); err != nil {
+	if _, err := runGHCLICommand(ctx, "commit_status.set", func() ([]byte, error) { return nil, cmd.Run() }); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("failed to set commit status on %s: %s", req.SHA, string(exitErr.Stderr))
 		}

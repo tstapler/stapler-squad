@@ -2185,6 +2185,112 @@ reality. Should be marked done/archived rather than left reading as not-yet-star
    (`PipelineModeRepository`/`Repository`), and `be676dab`'s plan-approval decision (from 08-03,
    still needs a human).
 
+## Update — 2026-09-08: 18-day gap again — why triage keeps "churning": a shared 5-slot headless-LLM pool lets queued triage calls burn their own 30-minute budget waiting for a slot, so a burst of near-simultaneous item creation reliably produces false `timeout` classifications and parks the whole batch
+
+**[FIXED same day, routed via `sdd:fix-bug`] See `docs/bugs/fixed/BUG-093-headless-pool-queue-wait-counts-against-callers-own-budget.md`.**
+Recommended Action #1 below is implemented: `session/headless/caller.go`'s `Pool.call` now bounds
+the concurrency-semaphore wait by a separate, much shorter `maxQueueWait` (2 minutes) and returns
+a distinct `ErrPoolSaturated` — bucketed as `"pool_saturated"` by `classifyHeadlessCallError`,
+checked ahead of the `"timeout"` case — instead of silently consuming the caller's full 30-minute
+budget and reporting an indistinguishable timeout. Action #2 (pool sizing) deliberately left
+untouched, per explicit user scope. Action #3 (bulk-reset the 20 parked items) intentionally
+deferred until after this fix, per the user's own stated preference — not yet done as of this
+entry.
+
+Prompted by a direct user question ("why are some backlog items churning and never completing
+triage?"). Scoped narrowly to that question (Phase 1 only — no UI walkthrough or quality-skill
+sweep this pass) since it has a single, well-evidenced root cause, not a sprawl of findings.
+
+**Live state**: `ListStuckBacklogItems` returns **21 items** — 20× `STUCK_REASON_ORPHANED_TRIAGE`
+(all at `remediationAttempts: 5`, the hard cap — i.e. all fully parked, per `MaxRemediationAttempts`
+in `session/backlog_remediation.go:51`), 1× `STUCK_REASON_BOUNCING`. Of the 20 parked triage items,
+17 ended with `EndReason=timeout`, 2 `unknown`, 1 `other`. Confirmed live via today's
+`staplersquad.log` (`grep retryOrphanedTriageWithBackoffGate`) that all 20 are currently sitting in
+"orphaned_triage remediation backoff not yet due, skipping retry" — genuinely parked, not silently
+dropped; the remediation machinery itself (30m/2h/8h/24h/72h fast backoff → 7-day cold-retry
+heartbeat, BUG-083's fix) is running exactly as designed.
+
+**These items aren't bouncing back and forth ("churning" in the bounce sense) — they're each stuck
+on repeated, identical `timeout` failures across every one of their 5 retry attempts, so
+"never completing triage" is the more accurate framing.** `firstDetectedAt` timestamps cluster into
+three tight bursts, not a steady trickle: 7 items created within 2026-08-30T17:32:06.267–.378
+(110ms), 2 more at 2026-08-30T18:48:52 (34ms apart), and 8 at 2026-09-04T17:22:32–17:40:33 (7 of
+those 8 within 60ms of each other at 17:23:32). Each burst reads as a bulk import (titles span
+unrelated features — Mermaid rendering, table views, a REST API, WASM git stubs — consistent with
+an external-tool feature-request import, not organic one-at-a-time creation).
+
+**Root cause, verified by reading the call path end to end**: every backlog item created with a
+`repo_path` fires `MaybeTriggerTriage` → `TriggerTriage` immediately
+(`server/services/backlog_service_triage.go:2506,2564`), gated only by an 8-wide per-service
+semaphore (`s.triageSem`, capacity 8 — `server/services/backlog_service.go:419`). Once through that
+gate, `TriggerTriage` opens its real call budget — `triageCtx, cancel :=
+context.WithTimeout(s.shutdownCtx, triageCallBudget)` where `triageCallBudget = 30 * time.Minute`
+(`backlog_service_triage.go:2770,434`) — **before** calling
+`s.headlessPool.CallBlocking(triageCtx, ...)` (`:2801`). That pool is a single **global** semaphore
+shared by triage, review (`:3298`), one-shot PR creation (`session_service.go:5296`), and autonomous
+approval classification (`approval_handler.go:446`), sized `MaxConcurrentSessions: 5`
+(`server/dependencies.go:642`). Inside the pool, acquiring a slot is itself bound by the caller's
+own context: `select { case p.concurrencySem <- struct{}{}: ...; case <-ctx.Done(): return ch,
+ctx.Err() }` (`session/headless/caller.go:274-280`). So a triage call that loses the race for one of
+5 pool slots doesn't wait indefinitely — it waits against its own 30-minute budget, and if it's
+still queued when that budget expires, `ctx.Err()` is `context.DeadlineExceeded`, which
+`classifyHeadlessCallError` (`:2446-2459`) buckets as `"timeout"` — **structurally indistinguishable
+from a genuine 30-minute-long hung LLM call.** A burst of 7-8 items created within 100ms of each
+other trivially exceeds the pool's 5 slots (the 8-wide `triageSem` doesn't even try to prevent
+this — it's sized larger than the pool it feeds into), so several of each burst's triage calls were
+very likely never dispatched to the LLM at all, just starved out waiting for a slot already
+occupied by their siblings from the same burst.
+
+**Why retries don't help**: because all the items in one burst share nearly the same original
+timestamp, they also share nearly the same backoff schedule (the schedule is relative to each
+item's own first failure, and all the first failures in a burst land within the same tick or two of
+the reconciliation sweep). Every retry attempt for the whole batch becomes its own smaller burst,
+recreating the same 5-slot contention on every one of the 5 scheduled attempts — so a batch-created
+item's odds of ever completing triage without manual intervention are structurally worse than a
+lone item's, not just unlucky once. All 20 items here exhausted their full 5-attempt budget and are
+now parked; the fast-backoff schedule is fully spent, and each is waiting on next week's cold-retry
+heartbeat (`remediationColdRetryInterval = 7 * 24h`) — which, if another burst happens to land in
+the same window, will very plausibly collide and fail the same way again.
+
+**This is a close relative, not a duplicate, of the 08-21 entry above** (20 items parked by a
+different `classifyHeadlessCallError` bug, fixed by PR #535). That fix addressed **misclassifying a
+real failure** (subprocess-start errors falling into `other`); this is **a false failure** — the
+`timeout` label is technically accurate (the context really did expire) but the underlying cause is
+pool contention from correlated creation timing, not a slow or hung LLM call, and nothing today
+distinguishes "genuinely ran the model for 30 minutes" from "sat in the semaphore queue for 30
+minutes and never got a slot." Recommended Action #3 from 08-21 ("watch the 20 freshly-reset items…
+if any re-park… that's a live regression") was never followed up — this 18-day gap is itself the
+**seventh** recurrence of the doc's standing "fix lands, no sweep/watch of items it affects" shape.
+
+### Recommended Next Actions
+
+1. **Root fix** (`sdd:fix-bug` candidate): distinguish "waited for a pool slot and never ran" from
+   "ran and genuinely timed out." Cheapest version: acquire `p.concurrencySem` under a short-lived
+   context (or check remaining budget before entering the select) so a call that never got dispatched
+   fails fast with a distinct, retry-friendly reason instead of silently consuming its entire budget
+   queued — and/or don't start `triageCallBudget`'s clock until after the pool slot is acquired,
+   mirroring how `cleanupCtx` was deliberately created *after* the call for the analogous reason
+   (comment at `:2822-2828`).
+2. Consider raising `MaxConcurrentSessions` above 5, or giving triage its own smaller sub-pool
+   separate from review/PR-creation/approval calls, so one feature's burst can't starve another's
+   in-flight work (or itself, as here) — needs a resource/cost tradeoff decision, not a pure bug fix.
+3. Immediate recovery for the 20 currently-parked items: `BulkResetStuckRemediation(reason=
+   STUCK_REASON_ORPHANED_TRIAGE, onlyParked=true)`, same action taken 08-21 — but only after (1) or a
+   pool-capacity change, or this simply re-parks them the same way on the next burst.
+4. Structural version of the recurring-shape note: a "bug fix → sweep the bucket it fixes" follow-up
+   was proposed 08-21 and not built. Worth promoting from "worth naming" to actually routed, now that
+   this is confirmed to recur.
+
+**Same-day follow-up (2026-09-08, later)**: `triageCallBudget` (referenced throughout as "30
+minutes"/"30m" above) is now 3 hours, and a real per-line progress signal (`headless.idleTimeout`,
+10 minutes) replaces the flat wall-clock deadline as the primary hang defense — every duration
+cited in this entry as "30m"/"30-minute" describes the value at the time this entry was written,
+not the current one. See `session/headless/pool.go`'s `idleTimeout`/`maxQueueWait` doc comments
+and `server/services/backlog_service_triage.go`'s `triageCallBudget` doc comment for the current
+values and rationale. Not written up as a separate `docs/bugs/` entry — this was a direct feature
+request, not a bug — but flagged here so a future reader of this history doesn't treat "30m" as
+still accurate.
+
 ## Update — 2026-08-21 (later same day): the 3 `hasActiveWorkSession` sibling call sites were already fixed, this doc just never crossed them off
 
 A fix-bug pass dispatched to close this item found nothing to fix: all 3 sites

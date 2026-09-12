@@ -855,4 +855,123 @@ describe("BacklogItemForm — category selector", () => {
       )
     );
   });
+
+  // Regression test for the 2026-09-11 UI audit finding: an item with a real
+  // category (e.g. "bugfix") must show that category selected on mount, not
+  // "Uncategorized" — a mismatch here means the submit payload silently sends
+  // category:"" and clobbers the item's real category (and, via
+  // handleCategoryChange in create mode, its automation defaults) on save.
+  it("mounts with the item's actual category selected, not Uncategorized", async () => {
+    mockListPipelineModes(() => Promise.resolve([SDD_MODE]));
+
+    render(
+      <BacklogItemForm
+        initialValues={{
+          id: "item-1",
+          title: "Existing item",
+          repoPath: "/home/user/project",
+          skipPlanning: true,
+          skipReviewGate: false,
+          autoSpawnSession: true,
+          autoCreatePR: false,
+          category: "bugfix",
+        }}
+        onSubmit={jest.fn()}
+        onCancel={jest.fn()}
+      />
+    );
+
+    await screen.findByTestId("backlog-category-bugfix");
+
+    expect(screen.getByTestId("backlog-category-bugfix")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("backlog-category-uncategorized")).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("submitting without touching category preserves the item's existing toggle state and omits category (never re-sends a possibly-stale value)", async () => {
+    mockListPipelineModes(() => Promise.resolve([SDD_MODE]));
+    const onSubmit = jest.fn().mockResolvedValue(undefined);
+
+    render(
+      <BacklogItemForm
+        initialValues={{
+          id: "item-1",
+          title: "Existing item",
+          repoPath: "/home/user/project",
+          skipPlanning: true,
+          skipReviewGate: false,
+          autoSpawnSession: true,
+          autoCreatePR: false,
+          category: "bugfix",
+        }}
+        onSubmit={onSubmit}
+        onCancel={jest.fn()}
+      />
+    );
+
+    await screen.findByTestId("backlog-category-bugfix");
+    fireEvent.click(screen.getByTestId("backlog-form-submit"));
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: undefined,
+          skipPlanning: true,
+          skipReviewGate: false,
+          autoSpawnSession: true,
+          autoCreatePR: false,
+        })
+      )
+    );
+  });
+
+  // Root-cause regression (2026-09-11 UI audit, data-loss risk): if
+  // initialValues.category is ever stale relative to the item's real,
+  // server-side category (e.g. BacklogItemDetail.tsx opened Edit against a
+  // not-yet-reconciled snapshot), an untouched category selector must never
+  // clobber the real value on save — the update payload must omit
+  // `category` entirely so the server's presence-gated partial update
+  // leaves it (and the automation profile it implies) alone.
+  it("never sends category on an untouched edit-mode save, even when the displayed selection is wrong (stale initialValues)", async () => {
+    mockListPipelineModes(() => Promise.resolve([SDD_MODE]));
+    const onSubmit = jest.fn().mockResolvedValue(undefined);
+
+    render(
+      <BacklogItemForm
+        initialValues={{
+          id: "item-1",
+          title: "Existing item",
+          repoPath: "/home/user/project",
+          skipPlanning: true,
+          skipReviewGate: false,
+          autoSpawnSession: true,
+          autoCreatePR: false,
+          // Simulates the stale-snapshot race: the form mounts believing
+          // the item is uncategorized, even though its real, stored
+          // category (unknown to this render) is "bugfix".
+          category: "",
+        }}
+        onSubmit={onSubmit}
+        onCancel={jest.fn()}
+      />
+    );
+
+    await screen.findByTestId("backlog-category-uncategorized");
+    expect(screen.getByTestId("backlog-category-uncategorized")).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(screen.getByTestId("backlog-form-submit"));
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: undefined,
+          // The stale display never triggered a defaults reapplication —
+          // the item's real automation profile is untouched either way.
+          skipPlanning: true,
+          skipReviewGate: false,
+          autoSpawnSession: true,
+          autoCreatePR: false,
+        })
+      )
+    );
+  });
 });
