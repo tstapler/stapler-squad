@@ -1049,6 +1049,41 @@ describe("BacklogItemDetail — Story 2.1.4: LifecycleSummary replaces the old s
     expect(triggerRemediationNow).toHaveBeenCalledTimes(1);
     expect(triggerRemediationNow).toHaveBeenCalledWith("item-1", StuckReason.STALE_WORK);
   });
+
+  it("BacklogItemDetail_should_ResolveBounceCapExhaustedAsPrimaryAndIndicateOthers_When_ItemHasFourOpenStuckReasons", async () => {
+    // BUG-105: live item 09e91e3e-e13d-4166-a5f2-447242447f77 had 4 reasons
+    // open at once. See BacklogItemCard.test.tsx's matching BacklogBoard
+    // test — both must resolve the same primary reason from this fixture.
+    const baseRow = {
+      title: "Refactor auth middleware",
+      status: "in_progress",
+      firstDetectedAt: timestampFromDate(new Date(Date.now() - 4 * 60 * 60 * 1000)),
+      lastCheckedAt: timestampFromDate(new Date()),
+      prNumber: 0,
+      prUrl: "",
+      context: "",
+    };
+    const stuckRows: StuckBacklogItem[] = [
+      { itemId: "item-1", ...baseRow, reason: StuckReason.BOUNCING } as StuckBacklogItem,
+      { itemId: "item-1", ...baseRow, reason: StuckReason.REWORK_BLOCKED_STALE } as StuckBacklogItem,
+      { itemId: "item-1", ...baseRow, reason: StuckReason.MULTIPLE_REASONS } as StuckBacklogItem,
+      { itemId: "item-1", ...baseRow, reason: StuckReason.BOUNCE_CAP_EXHAUSTED } as StuckBacklogItem,
+    ];
+    useStuckBacklogItemsMock.mockReturnValue({ items: stuckRows, isLoading: false, error: null });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Bounce cap exhausted")).toBeInTheDocument();
+    expect(screen.queryByText("Not converging")).not.toBeInTheDocument();
+    // The 3 dropped reasons must be indicated, not silently invisible.
+    expect(screen.getByTestId("blocker-chip-more")).toHaveTextContent("+3 more");
+  });
 });
 
 describe("BacklogItemDetail — Story 3.1.3: polling suspends for manual-review + in-flight actions", () => {
