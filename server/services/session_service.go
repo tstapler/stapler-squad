@@ -111,9 +111,10 @@ type SessionService struct {
 	approvalSvc     *ApprovalService
 	utilitySvc      *UtilityService
 	rulesSvc        *RulesService
-	// taggingRulesSvc is nil-safe like rulesSvc — see NewTaggingRulesService's doc comment.
-	// Not yet exposed over any RPC (Phase 5 of the session-classifier-pipeline project); wired
-	// here so its persistence/rebuild plumbing exists ahead of that surface.
+	// taggingRulesSvc is exposed over ListTaggingRules/UpsertTaggingRule/DeleteTaggingRule
+	// (Phase 5 of the session-classifier-pipeline project). nil-safe: those RPC handlers
+	// guard with `if s.taggingRulesSvc == nil` and return CodeUnimplemented, mirroring the
+	// pattern documented for rulesSvc's own nil-safe accessors below.
 	taggingRulesSvc *TaggingRulesService
 	// taggingEngine is the same live engine taggingRulesSvc mutates on CRUD — injected into
 	// every Instance (wireCallbacks) so session/instance_actor_setters.go's reclassifyTagsLocked
@@ -5223,6 +5224,9 @@ func (s *SessionService) ListTaggingRules(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListTaggingRulesRequest],
 ) (*connect.Response[sessionv1.ListTaggingRulesResponse], error) {
+	if s.taggingRulesSvc == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("tagging rules are not available on this server"))
+	}
 	return s.taggingRulesSvc.ListTaggingRulesRPC(ctx, req)
 }
 
@@ -5231,6 +5235,9 @@ func (s *SessionService) UpsertTaggingRule(
 	ctx context.Context,
 	req *connect.Request[sessionv1.UpsertTaggingRuleRequest],
 ) (*connect.Response[sessionv1.UpsertTaggingRuleResponse], error) {
+	if s.taggingRulesSvc == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("tagging rules are not available on this server"))
+	}
 	return s.taggingRulesSvc.UpsertTaggingRuleRPC(ctx, req)
 }
 
@@ -5239,6 +5246,9 @@ func (s *SessionService) DeleteTaggingRule(
 	ctx context.Context,
 	req *connect.Request[sessionv1.DeleteTaggingRuleRequest],
 ) (*connect.Response[sessionv1.DeleteTaggingRuleResponse], error) {
+	if s.taggingRulesSvc == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("tagging rules are not available on this server"))
+	}
 	return s.taggingRulesSvc.DeleteTaggingRuleRPC(ctx, req)
 }
 

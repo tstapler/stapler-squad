@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -197,7 +198,10 @@ func (ts *TaggingRulesService) UpsertTaggingRuleRPC(
 
 	saved, err := ts.UpsertTaggingRule(ctx, spec)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		if errors.Is(err, ErrTaggingRuleValidation) {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(&sessionv1.UpsertTaggingRuleResponse{
 		Rule:    taggingRuleSpecToProto(saved, 0),
@@ -214,7 +218,10 @@ func (ts *TaggingRulesService) DeleteTaggingRuleRPC(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("id is required"))
 	}
 	if err := ts.DeleteTaggingRule(ctx, req.Msg.GetId()); err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, err)
+		if errors.Is(err, ErrTaggingRuleNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, err)
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(&sessionv1.DeleteTaggingRuleResponse{
 		Success: true,

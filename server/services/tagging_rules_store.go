@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sync"
@@ -11,6 +12,16 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
 )
+
+// ErrTaggingRuleNotFound is returned by Delete when no rule with the given ID exists,
+// so RPC handlers can distinguish "not found" (CodeNotFound) from a genuine storage
+// failure (CodeInternal) via errors.Is.
+var ErrTaggingRuleNotFound = errors.New("tagging rule not found")
+
+// ErrTaggingRuleValidation wraps every error validateTaggingRuleSpec returns, so callers
+// can distinguish a rejected (bad-regex/missing-field) spec (CodeInvalidArgument) from a
+// downstream persistence failure (CodeInternal) via errors.Is.
+var ErrTaggingRuleValidation = errors.New("tagging rule validation failed")
 
 // TaggingRuleSpec is the JSON-serializable form of a classifier.TaggingRule.
 // Pattern fields are stored as strings (compiled on load), mirroring RuleSpec's convention.
@@ -74,17 +85,17 @@ func (s *TaggingRulesStore) ToRules() []classifier.TaggingRule {
 // criterion: an invalid regex must be rejected without touching storage).
 func validateTaggingRuleSpec(spec TaggingRuleSpec) error {
 	if spec.ID == "" {
-		return fmt.Errorf("rule ID is required")
+		return fmt.Errorf("%w: rule ID is required", ErrTaggingRuleValidation)
 	}
 	if spec.OutputTag == "" {
-		return fmt.Errorf("output tag is required")
+		return fmt.Errorf("%w: output tag is required", ErrTaggingRuleValidation)
 	}
 	for _, pat := range []string{spec.NamePattern, spec.BranchPattern, spec.PathPattern, spec.ProgramPattern} {
 		if pat == "" {
 			continue
 		}
 		if _, err := regexp.Compile(pat); err != nil {
-			return fmt.Errorf("invalid regex %q: %w", pat, err)
+			return fmt.Errorf("%w: invalid regex %q: %v", ErrTaggingRuleValidation, pat, err)
 		}
 	}
 	return nil
@@ -154,7 +165,7 @@ func (s *TaggingRulesStore) Delete(ctx context.Context, id string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("tagging rule %q not found", id)
+	return fmt.Errorf("tagging rule %q: %w", id, ErrTaggingRuleNotFound)
 }
 
 // WatchAndReload is a no-op — we use the shared DB, mirroring RulesStore's identical method.

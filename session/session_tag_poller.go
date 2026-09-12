@@ -117,9 +117,9 @@ func (p *SessionTagClassificationPoller) Start(ctx context.Context) {
 		return
 	}
 	p.ctx, p.cancel = context.WithCancel(ctx)
+	p.wg.Add(1)
 	p.mu.Unlock()
 
-	p.wg.Add(1)
 	go p.pollLoop()
 	log.Info("session tag classification poller started", "interval", p.config.PollInterval, "concurrency", p.config.ConcurrentCalls)
 }
@@ -130,6 +130,7 @@ func (p *SessionTagClassificationPoller) Stop() {
 	if p.cancel != nil {
 		p.cancel()
 	}
+	p.ctx, p.cancel = nil, nil
 	p.mu.Unlock()
 	p.wg.Wait()
 	log.Info("session tag classification poller stopped")
@@ -238,6 +239,7 @@ func (p *SessionTagClassificationPoller) dispatchIfChanged(ctx context.Context, 
 	hash := classifier.TagContentHash(hashCtx)
 
 	if cached, ok := p.cache.Load(snap.Title); ok && cached.hash == hash {
+		log.Info("session tag poller: LLM classification", "session", snap.Title, "outcome", "cache_hit", "tags", cached.tags)
 		return // unchanged since last classification (Success Metric requirement)
 	}
 
@@ -257,11 +259,16 @@ func (p *SessionTagClassificationPoller) classifyOne(ctx context.Context, inst *
 	callCtx, cancel := context.WithTimeout(ctx, p.config.CallTimeout)
 	defer cancel()
 
-	tags, _, err := headless.GenerateSessionTags(callCtx, p.pool, meta, vocabulary)
+	start := time.Now()
+	tags, cost, err := headless.GenerateSessionTags(callCtx, p.pool, meta, vocabulary)
+	latency := time.Since(start)
+	outcome := "applied"
 	if err != nil {
 		log.Warn("session tag classification poller: GenerateSessionTags failed", "session", meta.Name, "err", err)
 		tags = []string{UnclassifiedTag}
+		outcome = "failed_unclassified"
 	}
+	log.Info("session tag poller: LLM classification", "session", meta.Name, "outcome", outcome, "tags", tags, "cost_usd", cost, "latency_ms", latency.Milliseconds())
 
 	inst.ApplyLLMTagResult(tags, llmSentinelRuleID)
 	p.cache.Store(meta.Name, cachedTagResult{hash: hash, tags: tags})

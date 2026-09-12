@@ -1161,7 +1161,6 @@ func (i *Instance) ReclassifyTagsAfterCreate() {
 	i.mu.Lock()
 	s := &instanceState{inst: i}
 	reclassifyTagsLocked(s, i.taggingEngine)
-	dropUnclassifiedIfOtherTagsPresentLocked(s)
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
 	i.snapshot.Store(snap)
