@@ -7380,7 +7380,7 @@ func TestResumeWork_ThenRequestReview_Succeeds(t *testing.T) {
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:              "Full repro sequence",
-		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pass"}]`,
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"done"}]`,
 		Status:             string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
