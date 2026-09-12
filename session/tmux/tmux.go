@@ -147,6 +147,41 @@ type TmuxSession struct {
 	existsSF       singleflight.Group //nolint:exhaustruct
 	existsCacheTTL time.Duration      // read-only after construction
 
+	// recreateMu serializes RestoreWithWorkDir's "does the session still
+	// exist, and if not, recreate it" decision so two concurrent callers
+	// (e.g. ensureHubBackendAlive and ensureControlModeStarted both racing to
+	// restore the same instance) can't both observe "session missing" and
+	// both spawn a replacement `new-session`. It intentionally guards only
+	// that decide-and-maybe-create prefix of RestoreWithWorkDir, not the PTY
+	// attach that follows -- that part already has its own concurrency-safe
+	// CAS design (see ptyGen/tryInstallPTYTriple) and must keep running
+	// concurrently for AttachToExisting/RestoreWithWorkDir callers.
+	recreateMu sync.Mutex
+
+	// programProviderFunc, when set, supplies the command RestoreWithWorkDir
+	// uses to relaunch a session it has confirmed is truly gone, instead of
+	// the `program` field frozen at construction time. A relaunch needs the
+	// CURRENT command (e.g. --resume with whatever conversation UUID is now
+	// current, not whichever was current when this TmuxSession was first
+	// built) -- see launchProgram's doc comment. Nil for every construction
+	// site that doesn't opt in via WithProgramProvider, which keeps using
+	// the frozen `program` string (pre-fix behavior, unchanged).
+	programProviderFunc func() string
+
+	// priorProcessAliveFunc and killPriorProcessFunc implement the guard
+	// RestoreWithWorkDir runs before concluding a fresh `new-session` is
+	// safe once it has confirmed tmux itself has no record of this session:
+	// that is NOT the same as the process tmux originally launched being
+	// dead -- if the tmux server was killed/restarted out from under it, the
+	// child process can survive as an orphan and keep running (and keep
+	// writing its own transcript) even though `tmux has-session` now fails.
+	// Relaunching unconditionally in that case produces two live processes
+	// writing two competing transcripts (2026-09-12 incident). Both nil
+	// (the default for every construction site that doesn't opt in via
+	// WithOrphanProcessGuard) disables the guard entirely.
+	priorProcessAliveFunc func() bool
+	killPriorProcessFunc  func() error
+
 	// noCacheSF coalesces concurrent DoesSessionExistNoCache callers (health
 	// checker, hibernation sweeper, session-create retry loop, bulk restore,
 	// etc.) into a single in-flight subprocess. NoCache intentionally skips
@@ -981,6 +1016,42 @@ func WithCommandRunner(r CommandRunner) TmuxSessionOption {
 	}
 }
 
+// WithProgramProvider overrides the command RestoreWithWorkDir relaunches
+// with when it has confirmed the session must be recreated -- see
+// TmuxSession.programProviderFunc's doc comment for why the frozen `program`
+// string is wrong for that path.
+func WithProgramProvider(fn func() string) TmuxSessionOption {
+	return func(t *TmuxSession) {
+		t.programProviderFunc = fn
+	}
+}
+
+// WithOrphanProcessGuard wires RestoreWithWorkDir's pre-relaunch check: isAlive
+// reports whether the process behind a since-vanished tmux session might still
+// be running (orphaned), and kill terminates it. See
+// TmuxSession.priorProcessAliveFunc's doc comment for the failure mode this
+// closes. Nil (the default) disables the guard.
+func WithOrphanProcessGuard(isAlive func() bool, kill func() error) TmuxSessionOption {
+	return func(t *TmuxSession) {
+		t.priorProcessAliveFunc = isAlive
+		t.killPriorProcessFunc = kill
+	}
+}
+
+// launchProgram returns the command RestoreWithWorkDir should use to relaunch
+// a confirmed-missing session: programProviderFunc's current output when set
+// and non-empty, falling back to the frozen `program` field otherwise (no
+// provider configured, or the provider returned "" -- treated as "defer to
+// the frozen command" rather than launching an empty program).
+func (t *TmuxSession) launchProgram() string {
+	if t.programProviderFunc != nil {
+		if p := t.programProviderFunc(); p != "" {
+			return p
+		}
+	}
+	return t.program
+}
+
 // newTmuxSessionWithSocket creates a TmuxSession with both prefix and server socket isolation
 func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor, prefix string, serverSocket string, opts ...TmuxSessionOption) *TmuxSession {
 	// Resolve once, here, at construction -- not per-command. Every TmuxSession's
@@ -1648,100 +1719,183 @@ func (t *TmuxSession) Restore() error {
 }
 
 func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
-	// First check if the session actually exists
-	// Try multiple times with increasing delays to handle slow tmux startup or temporary unavailability
-	const maxRetries = 5
+	// recreateMu serializes the existence-check-then-maybe-create section
+	// below across concurrent callers (see its doc comment) -- released
+	// before the PTY-attach section, which has its own concurrency-safe
+	// design and must keep running for concurrent callers.
+	t.recreateMu.Lock()
+	if err := t.ensureSessionExistsLocked(workDir); err != nil {
+		t.recreateMu.Unlock()
+		return err
+	}
+	t.recreateMu.Unlock()
+
+	return t.attachPTYAfterRestore()
+}
+
+// sessionExistsMaxRetries bounds probeSessionExistsWithRetries's exponential
+// backoff loop (100ms, 200ms, 400ms, 800ms).
+const sessionExistsMaxRetries = 5
+
+// ensureSessionExistsLocked implements RestoreWithWorkDir's "does the
+// session still exist, and if not, recreate it" decision. Must be called
+// with recreateMu held.
+func (t *TmuxSession) ensureSessionExistsLocked(workDir string) error {
 	// ponytail: caller already ran DoesSessionExistNoCache() and got false — cache is stale, flush it.
 	t.invalidateExistsCache()
-	sessionExists := false
-	for i := 0; i < maxRetries; i++ {
+	if t.probeSessionExistsWithRetries() {
+		log.Info("found existing tmux session, will reattach to preserve history", "session", t.sanitizedName)
+		return nil
+	}
+
+	// Session doesn't exist after multiple retries
+	// CRITICAL: One final check without cache before recreating to prevent accidental destruction
+	log.Info("tmux session not found, performing final non-cached verification", "session", t.sanitizedName, "cachedChecks", sessionExistsMaxRetries)
+	if t.DoesSessionExistNoCache() {
+		// Session actually exists - cache was stale or timing issue
+		log.Info("found existing tmux session on final non-cached check (cache was stale), will reattach", "session", t.sanitizedName)
+		return nil
+	}
+
+	// Session truly doesn't exist after all checks - safe to create new one,
+	// once ensureNoLiveOrphan confirms the prior process is actually gone.
+	return t.recreateMissingSession(workDir)
+}
+
+// probeSessionExistsWithRetries retries DoesSessionExist() with exponential
+// backoff to ride out slow tmux startup or transient unavailability before
+// RestoreWithWorkDir treats a session as truly gone.
+func (t *TmuxSession) probeSessionExistsWithRetries() bool {
+	for i := 0; i < sessionExistsMaxRetries; i++ {
 		if t.DoesSessionExist() {
-			sessionExists = true
-			break
+			return true
 		}
-		if i < maxRetries-1 {
+		if i < sessionExistsMaxRetries-1 {
 			// Wait before retrying (exponential backoff: 100ms, 200ms, 400ms, 800ms)
 			delay := time.Duration(100*(1<<uint(i))) * time.Millisecond
-			log.Info("tmux session not found, retrying", "session", t.sanitizedName, "attempt", i+1, "maxRetries", maxRetries, "delay", delay)
+			log.Info("tmux session not found, retrying", "session", t.sanitizedName, "attempt", i+1, "maxRetries", sessionExistsMaxRetries, "delay", delay)
 			time.Sleep(delay)
 			t.invalidateExistsCache() // Clear cache before retry
 		}
 	}
+	return false
+}
 
-	if !sessionExists {
-		// Session doesn't exist after multiple retries
-		// CRITICAL: One final check without cache before recreating to prevent accidental destruction
-		log.Info("tmux session not found, performing final non-cached verification", "session", t.sanitizedName, "cachedChecks", maxRetries)
-		finalCheck := t.DoesSessionExistNoCache()
-
-		if finalCheck {
-			// Session actually exists - cache was stale or timing issue
-			log.Info("found existing tmux session on final non-cached check (cache was stale), will reattach", "session", t.sanitizedName)
-			// Continue with PTY attachment below (session exists, just wasn't detected earlier)
-		} else {
-			// Session truly doesn't exist after all checks - safe to create new one
-			log.Warn("tmux session doesn't exist after all attempts, creating new session instead of restoring", "session", t.sanitizedName, "attempts", maxRetries)
-
-			// ponytail: never guess a directory here (e.g. os.Getwd(), which for a
-			// long-running server process is often $HOME) — a wrong guess silently
-			// reconnects the session to the wrong workspace. Fail loudly instead so
-			// the caller can surface a clear status to the user.
-			if err := ValidateWorkDir(workDir); err != nil {
-				return fmt.Errorf("cannot recreate tmux session %s: %w", t.sanitizedName, err)
-			}
-
-			// Create a new detached tmux session directly (avoid recursive call to Start).
-			// Pass -e CLAUDECODE= to unset CLAUDECODE in the child environment so that
-			// nested Claude Code sessions are not blocked by the "nested session" guard.
-			restoreArgs := make([]string, 0, 6+2*len(t.ExtraEnv)+2*len(t.extraEnv)+3)
-			restoreArgs = append(restoreArgs, "new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE=")
-			for _, kv := range t.ExtraEnv {
-				restoreArgs = append(restoreArgs, "-e", kv)
-			}
-			for _, kv := range t.extraEnv {
-				restoreArgs = append(restoreArgs, "-e", kv)
-			}
-			restoreArgs = append(restoreArgs, "-c", workDir, t.program)
-			cmd := t.buildTmuxCommand(restoreArgs...)
-			err := runGatedErr(context.Background(), t.serverSocket, func() error {
-				return t.cmdExec.Run(cmd)
-			})
-			if err != nil {
-				// Session creation failed - but it might be because the session already exists
-				// (DoesSessionExist may have timed out and returned false incorrectly)
-				// Invalidate cache and re-check before returning error
-				t.invalidateExistsCache()
-				if t.DoesSessionExist() {
-					// Session actually exists - the initial check was wrong (likely timeout)
-					// Continue with restore instead of returning error
-					log.Info("tmux session already exists (initial check was incorrect), continuing with restore", "session", t.sanitizedName)
-				} else {
-					return fmt.Errorf("failed to create tmux session '%s': %w", t.sanitizedName, err)
-				}
-			} else {
-				log.Info("created new tmux session", "session", t.sanitizedName, "dir", workDir, "program", t.program)
-				t.invalidateExistsCache() // Session was created, invalidate cache
-				// new-session started the tmux server; reset this session's circuit breakers
-				// so subsequent DoesSessionExist() calls can verify the session is running.
-				if r, ok := t.cmdExec.(executor.Resettable); ok {
-					r.Reset()
-				}
-				t.setRemainOnExit()
-			}
-		}
-	} else {
-		log.Info("found existing tmux session, will reattach to preserve history", "session", t.sanitizedName)
+// recreateMissingSession creates a fresh tmux session for a name
+// RestoreWithWorkDir has confirmed tmux has no record of. Must be called
+// with recreateMu held (ensureSessionExistsLocked's only caller).
+//
+// Uses launchProgram(), not the frozen `program` field, so a relaunch here
+// carries the current command (e.g. --resume <uuid>) rather than whatever was
+// current when this TmuxSession was first built -- see launchProgram's doc
+// comment (BUG matching #791, a different call site: initTmuxSession's own
+// reuse guard).
+func (t *TmuxSession) recreateMissingSession(workDir string) error {
+	// ponytail: never guess a directory here (e.g. os.Getwd(), which for a
+	// long-running server process is often $HOME) — a wrong guess silently
+	// reconnects the session to the wrong workspace. Fail loudly instead so
+	// the caller can surface a clear status to the user.
+	if err := ValidateWorkDir(workDir); err != nil {
+		return fmt.Errorf("cannot recreate tmux session %s: %w", t.sanitizedName, err)
 	}
 
-	// Session exists - create PTY connection for detached operations
-	// This is needed for SetDetachedSize(), SendKeys(), and the Direct Claude Command Interface
-	// We use tmux attach-session to get a PTY handle without actually attaching interactively.
-	// Always close any existing PTY before creating a new one: the old attach-session may have
-	// exited (returning EIO on reads) but left t.ptmx non-nil, which would cause the new
-	// response stream to immediately get EIO. Closing and reopening guarantees a live connection.
-	// Check-then-act, made race-free the same way as AttachToExisting: snapshot the slot,
-	// run the blocking ptyFactory.StartWithSize() unlocked, then compare-and-swap install --
-	// see tryInstallPTYTriple's doc comment.
+	t.terminateOrphanedPriorProcess()
+
+	log.Warn("tmux session doesn't exist after all attempts, creating new session instead of restoring", "session", t.sanitizedName, "attempts", sessionExistsMaxRetries)
+
+	program := t.launchProgram()
+	cmd := t.buildTmuxCommand(t.newSessionArgs(workDir, program)...)
+	return t.runNewSessionCommand(cmd, workDir, program)
+}
+
+// newSessionArgs builds the `tmux new-session` argv for recreateMissingSession
+// (avoiding a recursive call to Start). -e CLAUDECODE= unsets CLAUDECODE in
+// the child environment so a nested Claude Code session isn't blocked by the
+// "nested session" guard.
+func (t *TmuxSession) newSessionArgs(workDir, program string) []string {
+	args := make([]string, 0, 6+2*len(t.ExtraEnv)+2*len(t.extraEnv)+3)
+	args = append(args, "new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE=")
+	for _, kv := range t.ExtraEnv {
+		args = append(args, "-e", kv)
+	}
+	for _, kv := range t.extraEnv {
+		args = append(args, "-e", kv)
+	}
+	return append(args, "-c", workDir, program)
+}
+
+// runNewSessionCommand executes cmd (built by newSessionArgs) and interprets
+// the result: a failure is tolerated when a concurrent creator already won
+// (the session now exists) since DoesSessionExist may have timed out and
+// returned false incorrectly rather than the create genuinely failing.
+func (t *TmuxSession) runNewSessionCommand(cmd *exec.Cmd, workDir, program string) error {
+	err := runGatedErr(context.Background(), t.serverSocket, func() error {
+		return t.cmdExec.Run(cmd)
+	})
+	if err != nil {
+		// Session creation failed - but it might be because the session already exists
+		// (DoesSessionExist may have timed out and returned false incorrectly)
+		// Invalidate cache and re-check before returning error
+		t.invalidateExistsCache()
+		if t.DoesSessionExist() {
+			// Session actually exists - the initial check was wrong (likely timeout)
+			// Continue with restore instead of returning error
+			log.Info("tmux session already exists (initial check was incorrect), continuing with restore", "session", t.sanitizedName)
+			return nil
+		}
+		return fmt.Errorf("failed to create tmux session '%s': %w", t.sanitizedName, err)
+	}
+
+	log.Info("created new tmux session", "session", t.sanitizedName, "dir", workDir, "program", program)
+	t.invalidateExistsCache() // Session was created, invalidate cache
+	// new-session started the tmux server; reset this session's circuit breakers
+	// so subsequent DoesSessionExist() calls can verify the session is running.
+	if r, ok := t.cmdExec.(executor.Resettable); ok {
+		r.Reset()
+	}
+	t.setRemainOnExit()
+	return nil
+}
+
+// terminateOrphanedPriorProcess runs the orphan guard (see
+// priorProcessAliveFunc's doc comment) immediately before a confirmed
+// recreate: `tmux has-session` failing proves tmux itself lost track of the
+// session, not that the process it originally launched is dead -- if the
+// tmux server was killed/restarted out from under it, that child can survive
+// as an orphan. Terminating it here (rather than launching a replacement
+// unconditionally) prevents two live processes writing two competing
+// transcripts (2026-09-12 incident). No-op when the guard isn't wired up
+// (priorProcessAliveFunc is nil, the default).
+func (t *TmuxSession) terminateOrphanedPriorProcess() {
+	if t.priorProcessAliveFunc == nil || !t.priorProcessAliveFunc() {
+		return
+	}
+	log.Warn("tmux session gone but a previously-launched process for it may still be alive (orphaned by a killed/restarted tmux server); terminating it before relaunching",
+		"session", t.sanitizedName)
+	if t.killPriorProcessFunc == nil {
+		return
+	}
+	if err := t.killPriorProcessFunc(); err != nil {
+		log.Warn("failed to terminate orphaned prior process before relaunch", "session", t.sanitizedName, "err", err)
+	}
+}
+
+// attachPTYAfterRestore creates (or reuses) the PTY connection for detached
+// operations once ensureSessionExistsLocked has confirmed the session
+// exists. Split out of RestoreWithWorkDir so recreateMu (held only for the
+// existence-check-then-maybe-create decision) is released before this runs --
+// see recreateMu's doc comment for why this part must stay concurrency-safe
+// for parallel callers rather than being serialized too.
+//
+// This is needed for SetDetachedSize(), SendKeys(), and the Direct Claude Command Interface.
+// We use tmux attach-session to get a PTY handle without actually attaching interactively.
+// Always close any existing PTY before creating a new one: the old attach-session may have
+// exited (returning EIO on reads) but left t.ptmx non-nil, which would cause the new
+// response stream to immediately get EIO. Closing and reopening guarantees a live connection.
+// Check-then-act, made race-free the same way as AttachToExisting: snapshot the slot,
+// run the blocking ptyFactory.StartWithSize() unlocked, then compare-and-swap install --
+// see tryInstallPTYTriple's doc comment.
+func (t *TmuxSession) attachPTYAfterRestore() error {
 	const ptyMaxRetries = 3
 	var lastPTYErr error
 	file, gen, closed := t.ptySnapshot()
