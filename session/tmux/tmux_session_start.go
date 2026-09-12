@@ -129,17 +129,21 @@ func ValidateWorkDir(workDir string) error {
 // then set-option invocation reintroduces the race PR #445 fixed (a
 // zero-session server can exit before the second call reaches it).
 func (t *TmuxSession) preconfigureServerBeforeSession() error {
-	preconfigureCmd := t.buildTmuxCommand("start-server", ";", "set-option", "-g", "exit-empty", "off", ";", "set-option", "-g", "remain-on-exit", "on")
 	run := func() ([]byte, error) {
 		runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return runGated(runCtx, t.serverSocket, func() ([]byte, error) {
-			return nil, t.cmdExec.Run(preconfigureCmd)
+			// A fresh *exec.Cmd every attempt: exec.Cmd can only be Run() once,
+			// so reusing one built outside this closure across retries failed
+			// every retry with "exec: already started" instead of actually
+			// retrying (see TestComprehensiveSessionCreation flakiness).
+			preconfigureCmd := t.buildTmuxCommand("start-server", ";", "set-option", "-g", "exit-empty", "off", ";", "set-option", "-g", "remain-on-exit", "on")
+			return t.cmdExec.CombinedOutput(preconfigureCmd)
 		})
 	}
-	_, err := ensureServerRunningWithRetry(run, func() bool { return checkServerNotRunning(t.serverSocket) }, serverStartAttempts, serverStartBackoffStart, serverStartBackoffMax)
+	out, err := ensureServerRunningWithRetry(run, func() bool { return checkServerNotRunning(t.serverSocket) }, serverStartAttempts, serverStartBackoffStart, serverStartBackoffMax)
 	if err != nil {
-		return fmt.Errorf("failed to pre-configure tmux server before session creation: %w", err)
+		return fmt.Errorf("failed to pre-configure tmux server before session creation: %w (output: %s)", err, out)
 	}
 	return nil
 }
