@@ -299,6 +299,11 @@ type Config struct {
 	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
 	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
+	// AutonomousMaxTurns caps how many turns a single AutonomousDriver run gets before
+	// stopping without a DONE signal (session/autonomous_driver.go). 0 = use the default
+	// (60); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
+	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
+	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`
 	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
@@ -1051,6 +1056,28 @@ func (c *Config) MaxAutoReworkIterationsOrDefault() int {
 		return 20
 	}
 	return c.MaxAutoReworkIterations
+}
+
+// autonomousMaxTurnsDefault is used when the config value is unset (0 or negative).
+// Raised from the driver's own historical fallback of 20, which was observed cutting
+// off recoverable multi-round work. autonomousMaxTurnsHardCeiling guards against a
+// runaway config value burning billed turns on a non-converging run.
+const (
+	autonomousMaxTurnsDefault     = 60
+	autonomousMaxTurnsHardCeiling = 200
+)
+
+// AutonomousMaxTurnsOrDefault returns the configured autonomous-driver turn cap,
+// clamped to [1, autonomousMaxTurnsHardCeiling]. Falls back to the default (60)
+// if unset (<=0) or c is nil.
+func (c *Config) AutonomousMaxTurnsOrDefault() int {
+	if c == nil || c.AutonomousMaxTurns <= 0 {
+		return autonomousMaxTurnsDefault
+	}
+	if c.AutonomousMaxTurns > autonomousMaxTurnsHardCeiling {
+		return autonomousMaxTurnsHardCeiling
+	}
+	return c.AutonomousMaxTurns
 }
 
 // maxConcurrentBacklogWorkItemsDefault is used when the config value is unset (0
