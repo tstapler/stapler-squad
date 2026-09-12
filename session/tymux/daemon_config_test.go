@@ -1,6 +1,8 @@
 package tymux
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -39,6 +41,7 @@ func TestResolveDaemonConfig_should_UseDefaultAddr_When_InstanceIsShared(t *test
 func TestResolveDaemonConfig_should_DeriveDistinctPort_When_InstanceSet(t *testing.T) {
 	t.Setenv("TYMUXD_ADDR", "")
 	t.Setenv("STAPLER_SQUAD_INSTANCE", "claude-manual-test")
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir()) // resolveSocketPath now touches config.GetConfigDir()
 
 	cfg := ResolveDaemonConfig()
 
@@ -52,6 +55,7 @@ func TestResolveDaemonConfig_should_DeriveDistinctPort_When_InstanceSet(t *testi
 func TestResolveDaemonConfig_should_BeDeterministic_When_SameInstanceNameUsedTwice(t *testing.T) {
 	t.Setenv("TYMUXD_ADDR", "")
 	t.Setenv("STAPLER_SQUAD_INSTANCE", "e2e-local")
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 
 	first := ResolveDaemonConfig()
 	second := ResolveDaemonConfig()
@@ -67,6 +71,7 @@ func TestResolveDaemonConfig_should_BeDeterministic_When_SameInstanceNameUsedTwi
 
 func TestResolveDaemonConfig_should_DeriveDifferentPorts_When_DifferentInstanceNamesUsed(t *testing.T) {
 	t.Setenv("TYMUXD_ADDR", "")
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 
 	t.Setenv("STAPLER_SQUAD_INSTANCE", "instance-a")
 	addrA := ResolveDaemonConfig().Addr
@@ -89,12 +94,65 @@ func TestResolveDaemonConfig_should_DeriveDifferentPorts_When_DifferentInstanceN
 
 func TestResolveDaemonConfig_should_PreferTymuxdAddrEnvVar_When_InstanceAlsoSet(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_INSTANCE", "some-instance")
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	t.Setenv("TYMUXD_ADDR", "http://127.0.0.1:9999")
 
 	cfg := ResolveDaemonConfig()
 
 	if cfg.Addr != "http://127.0.0.1:9999" {
 		t.Errorf("Addr = %q, want TYMUXD_ADDR override %q", cfg.Addr, "http://127.0.0.1:9999")
+	}
+}
+
+func TestResolveDaemonConfig_should_LeaveSocketPathEmpty_When_InstanceUnsetOrShared(t *testing.T) {
+	for _, instanceID := range []string{"", "shared"} {
+		t.Setenv("TYMUXD_ADDR", "")
+		t.Setenv("TYMUXD_SOCKET_PATH", "")
+		t.Setenv("STAPLER_SQUAD_INSTANCE", instanceID)
+
+		if got := resolveSocketPath(); got != "" {
+			t.Errorf("instanceID %q: SocketPath = %q, want empty (tymuxd's own default)", instanceID, got)
+		}
+	}
+}
+
+func TestResolveDaemonConfig_should_DeriveSocketPathUnderInstanceConfigDir_When_InstanceSet(t *testing.T) {
+	// This is the fix for the confirmed collision: two STAPLER_SQUAD_INSTANCEs
+	// with distinct TYMUXD_ADDR ports still fought over tymuxd's single
+	// process-wide default Unix-socket lock. Regression guard for that.
+	testDir := t.TempDir()
+	t.Setenv("TYMUXD_ADDR", "")
+	t.Setenv("TYMUXD_SOCKET_PATH", "")
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "claude-manual-test")
+
+	got := resolveSocketPath()
+
+	sockDir := filepath.Join(testDir, "tymuxd-sock")
+	want := filepath.Join(sockDir, "tymuxd.sock")
+	if got != want {
+		t.Errorf("SocketPath = %q, want %q", got, want)
+	}
+	// tymuxd refuses to bind a socket whose parent directory isn't owned by
+	// the caller at exactly mode 0700 (confirmed empirically against the real
+	// binary) — a regression here would silently reintroduce a startup
+	// failure indistinguishable from the original collision this fixes.
+	info, err := os.Stat(sockDir)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("expected socket dir %q to exist after resolveSocketPath, stat err = %v", sockDir, err)
+	}
+	if perm := info.Mode().Perm(); perm != 0700 {
+		t.Errorf("socket dir %q mode = %o, want 0700 (tymuxd requires exactly this)", sockDir, perm)
+	}
+}
+
+func TestResolveDaemonConfig_should_PreferTymuxdSocketPathEnvVar_When_InstanceAlsoSet(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "some-instance")
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	t.Setenv("TYMUXD_SOCKET_PATH", "/custom/tymuxd.sock")
+
+	if got := resolveSocketPath(); got != "/custom/tymuxd.sock" {
+		t.Errorf("SocketPath = %q, want TYMUXD_SOCKET_PATH override %q", got, "/custom/tymuxd.sock")
 	}
 }
 

@@ -181,6 +181,12 @@ func startDaemonAttempt(cfg DaemonConfig) (*os.Process, error) {
 
 	cmd := safeexec.CommandContext(context.Background(), cfg.BinaryPath)
 	cmd.Env = append(os.Environ(), "TYMUXD_ADDR="+hostPort)
+	if cfg.SocketPath != "" {
+		// Without this, two STAPLER_SQUAD_INSTANCEs both collide on tymuxd's
+		// own default Unix-socket lock even though they bind different
+		// TYMUXD_ADDR ports — see resolveSocketPath's doc comment.
+		cmd.Env = append(cmd.Env, "TYMUXD_SOCKET_PATH="+cfg.SocketPath)
+	}
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
