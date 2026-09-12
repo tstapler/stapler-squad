@@ -306,6 +306,7 @@ func (e *ConfiguredWorkflowEngine) evaluateHumanApprovalGate(g resolvedGate, ite
 // only reads Description) still shows something sensible even before it's
 // updated to specifically branch on ConfigError.
 func gateConfigErrorStatus(g resolvedGate, reason string) GateStatus {
+	log.WarningLog().Printf("[ConfiguredWorkflowEngine] gate %s (%s) config error: %s", g.ID, g.Kind, reason)
 	return GateStatus{
 		GateID:      g.ID.String(),
 		Kind:        g.Kind,
