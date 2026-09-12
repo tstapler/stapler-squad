@@ -1554,7 +1554,7 @@ func unmetAcCriteriaError(item *session.BacklogItemData) error {
 	}
 	return fmt.Errorf(
 		"request_review rejected: %d acceptance criteria are not yet marked pass via report_progress: %s. "+
-			"Call report_progress for each remaining criterion, or report_blocked if genuinely stuck.",
+			"Call report_progress for each remaining criterion, or report_blocked if genuinely stuck",
 		len(unmet), strings.Join(unmet, "; "),
 	)
 }
