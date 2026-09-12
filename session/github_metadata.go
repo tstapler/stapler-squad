@@ -10,6 +10,7 @@ type GitHubMetadataView struct {
 	PRURL          string
 	Owner          string
 	Repo           string
+	Host           string // GitHub Enterprise host owning Owner/Repo, or "" for github.com
 	SourceRef      string
 	ClonedRepoPath string
 }

@@ -13,6 +13,7 @@ import { RadioGroup } from "@/components/ui/RadioGroup";
 import type { RadioGroupOption } from "@/components/ui/RadioGroup";
 import { radioBtn, radioBtnActive } from "@/components/ui/RadioGroup.css";
 import { isGitHubRef } from "@/lib/github/urlParser";
+import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { getApiBaseUrl } from "@/lib/config";
 import { routes } from "@/lib/routes";
 import { BACKLOG_CATEGORIES, CATEGORY_DEFAULTS } from "@/lib/backlog/categoryDefaults";
@@ -475,7 +476,11 @@ export function BacklogItemForm({
   );
 
   const busy = submitting || isLoading;
-  const isCloningRepo = useMemo(() => isGitHubRef(repoPath), [repoPath]);
+  const { hosts: enterpriseHosts } = useGitHubEnterpriseHosts();
+  const isCloningRepo = useMemo(
+    () => isGitHubRef(repoPath, enterpriseHosts),
+    [repoPath, enterpriseHosts]
+  );
 
   return (
     <form

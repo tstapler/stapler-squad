@@ -23,7 +23,7 @@ export interface UseGitHubIssuePickerOptions {
   listGitHubIssues: (
     owner: string,
     repo: string,
-    options?: { state?: string; search?: string; limit?: number }
+    options?: { state?: string; search?: string; limit?: number; host?: string }
   ) => Promise<GitHubIssue[]>;
   onSelect: (owner: string, repo: string, issues: GitHubIssue[]) => void;
 }
@@ -82,7 +82,7 @@ const selectLocalRepos = createSelector([selectAllSessions], (sessions) => {
     const key = `${owner}/${repo}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    results.push({ owner, repo, isLocal: true, localPath: s.path, description: s.title ?? "" });
+    results.push({ owner, repo, isLocal: true, localPath: s.path, description: s.title ?? "", host: "" });
   }
   return results;
 });
@@ -118,7 +118,7 @@ export function useGitHubIssuePicker({
     // network response arrives.
     const cached = getCachedRepos();
     if (cached && cached.length > 0) {
-      const mapped = cached.map((r) => ({ ...r, isLocal: false, localPath: "" }));
+      const mapped = cached.map((r) => ({ ...r, isLocal: false, localPath: "", host: r.host ?? "" }));
       allReposRef.current = mapped;
       setRepos(mapped);
     }
@@ -132,7 +132,7 @@ export function useGitHubIssuePicker({
         allReposRef.current = results;
         setRepos(results);
         setCachedRepos(
-          results.map((r) => ({ owner: r.owner, repo: r.repo, description: r.description }))
+          results.map((r) => ({ owner: r.owner, repo: r.repo, description: r.description, host: r.host }))
         );
         setAuthError(false);
       })
@@ -155,14 +155,14 @@ export function useGitHubIssuePicker({
     if (phase !== "issue" || !selectedRepo) return;
 
     const gen = ++issueGenRef.current;
-    const { owner, repo } = selectedRepo;
+    const { owner, repo, host } = selectedRepo;
 
     // Check cache (only for no-search case).
     if (issueSearch === "") {
       const cached = getCachedIssues(owner, repo, issueState);
       if (cached) {
         if (gen === issueGenRef.current) {
-          setIssues(cached.map((c) => ({ ...c, isPR: c.isPR ?? false })));
+          setIssues(cached.map((c) => ({ ...c, isPR: c.isPR ?? false, host: c.host ?? "" })));
         }
         return;
       }
@@ -178,6 +178,7 @@ export function useGitHubIssuePicker({
           state: issueState,
           search: issueSearch,
           limit: 50,
+          host,
         });
         if (gen !== issueGenRef.current) return;
         setIssues(results);

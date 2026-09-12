@@ -4,7 +4,6 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, us
 import { useRouter } from "next/navigation";
 import { Omnibar, OmnibarSessionData } from "@/components/sessions/Omnibar";
 import { useSessionService } from "@/lib/hooks/useSessionService";
-import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
@@ -64,7 +63,6 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   const { createSession, runWorkflow: runWorkflowRPC } = useSessionService({
     enabled: !authLoading && (!authEnabled || authenticated),
   });
-  const { createBacklogItemFromChat } = useBacklogService();
   const { workflows } = useWorkflows();
   const { showActionToast } = useNotifications();
 
@@ -325,19 +323,6 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
     [runWorkflowRPC, workflows, router, showActionToast]
   );
 
-  // Handle chat_backlog_item: create a backlog item from a free-text message with no
-  // structured form fields — title/description both come from the raw message, and the
-  // normal auto-triage pipeline (skipTriage defaults to false) takes it from there.
-  const handleCreateBacklogItemFromChat = useCallback(
-    async (text: string) => {
-      const result = await createBacklogItemFromChat(text);
-      if (result) {
-        router.push(`/backlog?item=${result.item.id}`);
-      }
-    },
-    [createBacklogItemFromChat, router]
-  );
-
   const value: OmnibarContextValue = {
     isOpen,
     open,
@@ -357,7 +342,6 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         onNavigateToSession={handleNavigateToSession}
         onNavigateToSessionInNewPane={handleNavigateToSessionInNewPane}
         onRunWorkflow={handleRunWorkflow}
-        onCreateBacklogItemFromChat={handleCreateBacklogItemFromChat}
         initialMode={initialMode}
         initialInput={initialInput}
         initialTitle={initialTitle}
