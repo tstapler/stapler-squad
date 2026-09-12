@@ -1009,12 +1009,14 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		protoEvents := make([]*sessionv1.BacklogStatusEvent, len(item.StatusEvents))
 		for i, ev := range item.StatusEvents {
 			protoEvents[i] = &sessionv1.BacklogStatusEvent{
-				Id:          ev.ID,
-				FromStatus:  ev.FromStatus,
-				ToStatus:    ev.ToStatus,
-				TriggeredBy: ev.TriggeredBy,
-				CreatedAt:   timestamppb.New(ev.CreatedAt),
-				Note:        ev.Note,
+				Id:                         ev.ID,
+				FromStatus:                 ev.FromStatus,
+				ToStatus:                   ev.ToStatus,
+				TriggeredBy:                ev.TriggeredBy,
+				CreatedAt:                  timestamppb.New(ev.CreatedAt),
+				Note:                       ev.Note,
+				StageNameSnapshot:          ev.StageNameSnapshot,
+				AllowedTransitionsSnapshot: ev.AllowedTransitionsSnapshot,
 			}
 		}
 		p.StatusEvents = protoEvents

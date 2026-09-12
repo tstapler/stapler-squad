@@ -705,8 +705,9 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 
 	from := session.BacklogStatus(item.Status)
 	to := session.BacklogStatus(req.Msg.TargetStatus)
+	fallback := session.BuildStageConfigSnapshotFallback(item)
 
-	if !s.engine.CanTransition(from, to) {
+	if !s.engine.CanTransition(from, to, fallback) {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			fmt.Errorf("invalid transition from %q to %q", from, to))
 	}
@@ -1123,7 +1124,7 @@ func (s *BacklogService) OverrideVerdict(
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load item for transition: %w", currentErr))
 		}
 		from := session.BacklogStatus(currentItem.Status)
-		if !s.engine.CanTransition(from, toStatus) {
+		if !s.engine.CanTransition(from, toStatus, session.BuildStageConfigSnapshotFallback(currentItem)) {
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("cannot transition item from %q to %q", from, toStatus))
 		}

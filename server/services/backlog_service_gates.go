@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -77,4 +78,103 @@ func (s *BacklogService) RecordGateApproval(
 	return connect.NewResponse(&sessionv1.RecordGateApprovalResponse{
 		Record: gateSatisfactionToProto(record),
 	}), nil
+}
+
+// gateStatusToProto converts a session.GateStatus to its proto representation.
+func gateStatusToProto(g session.GateStatus) *sessionv1.GateStatus {
+	return &sessionv1.GateStatus{
+		GateId:      g.GateID,
+		Kind:        string(g.Kind),
+		Satisfied:   g.Satisfied,
+		Description: g.Description,
+		ActionHint:  g.ActionHint,
+	}
+}
+
+// GetPendingGates previews which gates (if any) block item_id from
+// transitioning to to_status, without attempting the transition — backs the
+// item-detail "what's blocking this" checklist (Epic 2.10). Read-only:
+// unlike TransitionBacklogItemStatus this never calls s.engine.ValidateGates
+// or mutates anything, only s.engine.PendingGates.
+//
+// hasUnshippedCode/hasUnresolvedBlockers are computed under the same
+// to-status-gated conditions TransitionBacklogItemStatus uses, so a
+// structural gate's preview here matches what the real transition attempt
+// would see.
+// +api: backlog:get-pending-gates
+func (s *BacklogService) GetPendingGates(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetPendingGatesRequest],
+) (*connect.Response[sessionv1.GetPendingGatesResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("storage not available"))
+	}
+
+	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
+	}
+
+	to := session.BacklogStatus(req.Msg.ToStatus)
+	guardInput := s.buildPendingGatesGuardInput(ctx, item, to)
+	fallback := session.BuildStageConfigSnapshotFallback(item)
+
+	gates, err := s.engine.PendingGates(guardInput, to, fallback)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("pending gates: %w", err))
+	}
+
+	protoGates := make([]*sessionv1.GateStatus, 0, len(gates))
+	for _, g := range gates {
+		protoGates = append(protoGates, gateStatusToProto(g))
+	}
+
+	return connect.NewResponse(&sessionv1.GetPendingGatesResponse{Gates: protoGates}), nil
+}
+
+// buildPendingGatesGuardInput assembles the BacklogItemTransitionInput
+// GetPendingGates hands to PendingGates, computing hasUnshippedCode/
+// hasUnresolvedBlockers under the same to-status-gated conditions
+// TransitionBacklogItemStatus uses so this preview matches what a real
+// transition attempt would see. Query failures are logged and degrade the
+// corresponding field to its zero value — this is a read-only preview, never
+// worth failing the whole request over.
+func (s *BacklogService) buildPendingGatesGuardInput(
+	ctx context.Context,
+	item *session.BacklogItemData,
+	to session.BacklogStatus,
+) session.BacklogItemTransitionInput {
+	var hasUnshippedCode bool
+	if to == session.BacklogStatusDone {
+		hasUnshippedCode = !s.isCodeShippedToMain(ctx, item.ID, item.RepoPath, "GetPendingGates")
+	}
+
+	var hasUnresolvedBlockers bool
+	if to == session.BacklogStatusInProgress {
+		var err error
+		hasUnresolvedBlockers, err = s.hasUnresolvedBlockers(ctx, item.ID)
+		if err != nil {
+			log.WarningLog().Printf("[GetPendingGates] failed to check unresolved blockers for item %s: %v", item.ID, err)
+		}
+	}
+
+	overallOutcome, err := s.storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+	if err != nil {
+		log.WarningLog().Printf("[GetPendingGates] failed to load review verdict for item %s: %v", item.ID, err)
+	}
+
+	return session.BacklogItemTransitionInput{
+		ItemID:                item.ID,
+		Status:                session.BacklogStatus(item.Status),
+		AcCriteria:            item.AcceptanceCriteria,
+		PlanApproved:          item.PlanApproved,
+		SkipPlanning:          item.SkipPlanning,
+		PlanArtifactsPath:     item.PlanArtifactsPath,
+		OverallOutcome:        overallOutcome,
+		HasUnshippedCode:      hasUnshippedCode,
+		HasUnresolvedBlockers: hasUnresolvedBlockers,
+	}
 }
