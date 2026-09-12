@@ -341,6 +341,7 @@ func (i *Instance) GitHub() GitHubMetadataView {
 		PRURL:          gh.GitHubPRURL,
 		Owner:          gh.GitHubOwner,
 		Repo:           gh.GitHubRepo,
+		Host:           gh.GitHubHost,
 		SourceRef:      gh.GitHubSourceRef,
 		ClonedRepoPath: gh.ClonedRepoPath,
 	}

@@ -1083,7 +1083,7 @@ func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAn
 // Previously, if that write itself failed, it was only log.Warn'd — and the
 // caller returns immediately afterward without ever reaching any other
 // notification path — reproducing BUG-048's original gap one layer
-// underneath its own fix. notifyStuckReviewBookkeepingFailed (extracted from
+// underneath its own fix. notifyStuckBookkeepingFailed (extracted from
 // that call site so it's directly testable, at the same fidelity as
 // TestNotifySpawnAndRollbackFailed_should_markStuckAndNotify_When_Called
 // covers BUG-030's equivalent fix) is the closure of that gap.
@@ -1096,7 +1096,7 @@ func TestNotifyStuckReviewBookkeepingFailed_should_publishFailureNotification_Wh
 	defer cancel()
 	ch, _ := eventBus.Subscribe(subCtx)
 
-	svc.notifyStuckReviewBookkeepingFailed("item-456", "Stuck review item", "item-session-789",
+	svc.notifyStuckBookkeepingFailed("item-456", "Stuck review item", "item-session-789", stuckSessionRoleReview,
 		fmt.Errorf("failed to set ended_at on item session item-session-789: item_session not found"))
 
 	var notif *events.Event
@@ -1118,6 +1118,43 @@ func TestNotifyStuckReviewBookkeepingFailed_should_publishFailureNotification_Wh
 	assert.Equal(t, int32(9), notif.NotificationType, "must surface as a FAILURE notification")
 	assert.Contains(t, notif.NotificationMessage, "Stuck review item")
 	assert.Contains(t, notif.NotificationMessage, "could not mark the stalled review session ended")
+}
+
+// TestNotifyStuckWorkBookkeepingFailed_should_publishFailureNotification_When_Called
+// is the previous test's sibling regression test for the SessionRoleWork
+// turn-cap branch: that branch also calls UpdateItemSessionEnded, and like
+// the review branch, a failure there must reach the operator, not just the log.
+func TestNotifyStuckWorkBookkeepingFailed_should_publishFailureNotification_When_Called(t *testing.T) {
+	t.Parallel()
+	eventBus := events.NewEventBus(4)
+	svc := &AutonomousOrchestrationService{bus: eventBus}
+
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	svc.notifyStuckBookkeepingFailed("item-123", "Stuck work item", "item-session-456", stuckSessionRoleWork,
+		fmt.Errorf("failed to set ended_at on item session item-session-456: item_session not found"))
+
+	var notif *events.Event
+	for i := 0; i < 3; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.EventNotification {
+				notif = ev
+			}
+		case <-time.After(2 * time.Second):
+			i = 3
+		}
+		if notif != nil {
+			break
+		}
+	}
+	require.NotNil(t, notif, "expected an operator-facing notification when the stuck-work bookkeeping write fails, instead of only being logged")
+	assert.Equal(t, "Stuck-work bookkeeping failed", notif.NotificationTitle)
+	assert.Equal(t, int32(9), notif.NotificationType, "must surface as a FAILURE notification")
+	assert.Contains(t, notif.NotificationMessage, "Stuck work item")
+	assert.Contains(t, notif.NotificationMessage, "could not mark the stalled work session ended")
 }
 
 // fakeFailingAutonomousStuckRespawner always returns err from

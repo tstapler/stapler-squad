@@ -310,21 +310,20 @@ func TestExtractIssueCommentEvent_should_HandleNonPRIssues(t *testing.T) {
 func TestSelfLoginCache_should_ReturnCachedLogin_When_CacheIsFresh(t *testing.T) {
 	cache := newSelfLoginCache()
 	cache.mu.Lock()
-	cache.login = "stapler-squad-bot"
-	cache.fetchedAt = time.Now()
+	cache.entries[""] = selfLoginCacheEntry{login: "stapler-squad-bot", fetchedAt: time.Now()}
 	cache.mu.Unlock()
 
-	assert.Equal(t, "stapler-squad-bot", cache.Get(context.Background()))
+	assert.Equal(t, "stapler-squad-bot", cache.Get(context.Background(), ""))
 }
 
 func TestSelfLoginCache_should_NotSuppressAnything_When_CacheEmpty(t *testing.T) {
 	cache := newSelfLoginCache()
 	cache.mu.Lock()
-	cache.login = ""
-	cache.fetchedAt = time.Now() // fresh cached empty result — fails open, no live lookup needed
+	// fresh cached empty result — fails open, no live lookup needed
+	cache.entries[""] = selfLoginCacheEntry{login: "", fetchedAt: time.Now()}
 	cache.mu.Unlock()
 
-	got := cache.Get(context.Background())
+	got := cache.Get(context.Background(), "")
 	assert.Equal(t, "", got, "empty cached login must never equal a real actor login, so the self-filter never suppresses")
 }
 
@@ -618,8 +617,7 @@ func TestHandlePRFixEvent_should_NeverApplySelfFilter_When_EventTypeIsCheckRunOr
 	// were (incorrectly) consulted for check_run — it never has an actor field, so this
 	// only proves the filter path isn't reached, not that it's bypassed.
 	h.selfLogin.mu.Lock()
-	h.selfLogin.login = "irrelevant"
-	h.selfLogin.fetchedAt = time.Now()
+	h.selfLogin.entries[""] = selfLoginCacheEntry{login: "irrelevant", fetchedAt: time.Now()}
 	h.selfLogin.mu.Unlock()
 
 	body := checkRunFailureBody(t)
@@ -636,8 +634,7 @@ func TestHandlePRFixEvent_should_SuppressActionable_When_CommentAuthorIsSelf(t *
 	router := &fakePRFixEventRouter{matched: true}
 	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
 	h.selfLogin.mu.Lock()
-	h.selfLogin.login = "stapler-squad-bot"
-	h.selfLogin.fetchedAt = time.Now()
+	h.selfLogin.entries[""] = selfLoginCacheEntry{login: "stapler-squad-bot", fetchedAt: time.Now()}
 	h.selfLogin.mu.Unlock()
 
 	body := jsonBody(t, map[string]interface{}{

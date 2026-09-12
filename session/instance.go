@@ -272,6 +272,10 @@ type Instance struct {
 	GitHubOwner string `json:"github_owner,omitempty"`
 	// GitHubRepo is the repository name
 	GitHubRepo string `json:"github_repo,omitempty"`
+	// GitHubHost is the GitHub Enterprise host that owns GitHubOwner/GitHubRepo,
+	// or "" for github.com. Needed to poll/link the right PR for GHE sessions —
+	// see session/repo_path.go's parseGitHubRemoteURL and github.RepoRef.Host().
+	GitHubHost string `json:"github_host,omitempty"`
 	// GitHubSourceRef is the original URL or reference used to create this session
 	GitHubSourceRef string `json:"github_source_ref,omitempty"`
 	// ClonedRepoPath is the path where we cloned the repo (if cloned)
@@ -837,6 +841,7 @@ type InstanceOptions struct {
 	GitHubPRURL     string // Full URL to the PR
 	GitHubOwner     string // Repository owner
 	GitHubRepo      string // Repository name
+	GitHubHost      string // GitHub Enterprise host owning owner/repo, or "" for github.com
 	GitHubSourceRef string // Original URL/reference used to create session
 	ClonedRepoPath  string // Path where repo was cloned (if cloned)
 
@@ -991,6 +996,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		GitHubPRURL:     opts.GitHubPRURL,
 		GitHubOwner:     opts.GitHubOwner,
 		GitHubRepo:      opts.GitHubRepo,
+		GitHubHost:      opts.GitHubHost,
 		GitHubSourceRef: opts.GitHubSourceRef,
 		ClonedRepoPath:  opts.ClonedRepoPath,
 		// One-shot mode, hidden flag, project, and workflow linkage

@@ -418,6 +418,32 @@ message CreateBacklogItemFromChatResponse {
   bool triage_triggered = 2;
 }
 
+// ParseBacklogItemIntentRequest carries the omnibar's free-text message.
+message ParseBacklogItemIntentRequest {
+  string message = 1;
+  // repo_path optionally narrows title/AC phrasing to a known repo. Unset is
+  // fine — the LLM parses from the message text alone.
+  string repo_path = 2;
+}
+
+// ParsedBacklogItemDraft is the LLM's structured read of a free-text message,
+// meant to be reviewed/edited by the user, never created verbatim.
+message ParsedBacklogItemDraft {
+  string title = 1;
+  string description = 2;
+  repeated string acceptance_criteria = 3;
+  // confidence is 0..1; a low value is a hint for the review UI to flag the
+  // draft for closer scrutiny, not a threshold that blocks creation.
+  float confidence = 4;
+}
+
+message ParseBacklogItemIntentResponse {
+  ParsedBacklogItemDraft draft = 1;
+  // error is set (with draft empty) when parsing failed — the caller should
+  // fall back to CreateBacklogItemFromChat rather than surface a hard error.
+  string error = 2;
+}
+
 message GetBacklogItemRequest {
   string item_id = 1;
 }
@@ -1262,6 +1288,15 @@ service BacklogService {
   // turns delegate to TriggerTriage with feedback = message.
   rpc CreateBacklogItemFromChat(CreateBacklogItemFromChatRequest) returns (CreateBacklogItemFromChatResponse) {}
 
+  // ParseBacklogItemIntent runs a free-text task description through an LLM
+  // to produce a structured draft (title, description, acceptance criteria)
+  // for the caller to review/edit before calling CreateBacklogItem. This does
+  // NOT create anything — pure parsing, mirroring TriggerTriage's separation
+  // between "generate a plan" and "the user acts on it." Best-effort: on
+  // parse failure, response.error is set and draft is empty so the caller can
+  // fall back to raw-text creation (CreateBacklogItemFromChat).
+  rpc ParseBacklogItemIntent(ParseBacklogItemIntentRequest) returns (ParseBacklogItemIntentResponse) {}
+
   // GetBacklogItem retrieves a single backlog item by ID.
   rpc GetBacklogItem(GetBacklogItemRequest) returns (GetBacklogItemResponse) {}
 
@@ -1559,6 +1594,8 @@ message GitHubRepoEntry {
   bool is_local = 3;
   string local_path = 4;
   string description = 5;
+  // GitHub host this repo was found on ("" means github.com).
+  string host = 6;
 }
 
 message GitHubIssueEntry {
@@ -1573,6 +1610,8 @@ message GitHubIssueEntry {
   bool is_pr = 9;
   // GitHub login of the issue's author.
   string author = 10;
+  // GitHub host this issue was found on ("" means github.com).
+  string host = 11;
 }
 
 message SearchGitHubReposRequest {
@@ -1590,6 +1629,8 @@ message ListGitHubIssuesRequest {
   string state = 3;
   string search = 4;
   int32 limit = 5;
+  // GitHub host the repo lives on ("" means github.com).
+  string host = 6;
 }
 
 message ListGitHubIssuesResponse {

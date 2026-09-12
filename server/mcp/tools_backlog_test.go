@@ -1864,7 +1864,7 @@ func TestReportPRCreated_should_TransitionToPRPending_When_ValidPR(t *testing.T)
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
 	}
@@ -1912,7 +1912,7 @@ func TestReportPRCreated_should_ReturnError_When_PersistFails(t *testing.T) {
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
 	}
@@ -1952,7 +1952,7 @@ func TestReportPRCreated_should_RejectCall_When_ItemStatusIneligible(t *testing.
 			handler := &backlogHandlers{
 				storage:              storage,
 				resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-				verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+				verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 					verifyCalled = true
 					return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 				},
@@ -2017,7 +2017,7 @@ func TestReportPRCreated_should_NoOp_When_AlreadyPRPendingSamePR(t *testing.T) {
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			verifyCalled = true
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
@@ -2091,7 +2091,7 @@ func TestReportPRCreated_should_RejectCall_When_BranchMismatch(t *testing.T) {
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, _ int, expectedBranch string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, _ int, expectedBranch string) (PRVerification, error) {
 			assert.Equal(t, "backlog/ship-it", expectedBranch)
 			// definitive mismatch — a real PR exists, but for a different branch/number
 			return NewPRVerification(true, false, "totally-unrelated-branch", githubpkg.PRStateOpen, "tstapler"), nil
@@ -2133,7 +2133,7 @@ func TestReportPRCreated_should_ReturnRetryableError_When_GitHubLookupTransientl
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return PRVerification{}, fmt.Errorf("GitHub API: rate limited (403)")
 		},
 	}
@@ -2225,7 +2225,7 @@ func TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails(t *testin
 		storage:              storage,
 		getBacklogItemFn:     getBacklogItemFn,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
 	}
@@ -2675,7 +2675,7 @@ func TestReportPRCreated_should_TransitionToPRPending_When_FallbackBranchWithOve
 		resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, false, "feature/ci-status-diff-viewer", githubpkg.PRStateMerged, "tstapler"), nil
 		},
 		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
@@ -2729,7 +2729,7 @@ func TestReportPRCreated_should_RejectCall_When_FallbackBranchMissingOverrideRea
 		resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, false, "feature/ci-status-diff-viewer", githubpkg.PRStateMerged, "tstapler"), nil
 		},
 		resolveCallerGitHubLogin: func(context.Context) (string, error) {
@@ -2776,7 +2776,7 @@ func TestReportPRCreated_should_DocumentOverrideWorkaround_When_BranchMismatchRe
 		resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, false, "feature/ci-status-diff-viewer", githubpkg.PRStateMerged, "tstapler"), nil
 		},
 	}
@@ -2816,7 +2816,7 @@ func TestReportPRCreated_should_RejectCall_When_UnrelatedClosedPRWithOverrideRea
 		resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, false, "totally-unrelated-branch", githubpkg.PRStateClosed, "tstapler"), nil
 		},
 		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
@@ -2861,7 +2861,7 @@ func TestReportPRCreated_should_RejectCall_When_UnrelatedPRAuthorMismatch(t *tes
 		resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, false, "totally-unrelated-branch", githubpkg.PRStateOpen, "a-different-github-user"), nil
 		},
 		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
@@ -2909,7 +2909,7 @@ func TestReportPRCreated_should_RejectCall_When_PRNumberDoesNotExist(t *testing.
 		resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(false, false, "", "", ""), nil
 		},
 		resolveCallerGitHubLogin: func(context.Context) (string, error) {
@@ -2992,7 +2992,7 @@ func TestReportPRCreated_should_ReassignPR_When_AlreadyPRPendingWithOverrideReas
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 			}
@@ -3037,7 +3037,7 @@ func TestReportPRCreated_should_RejectReassignment_When_AlreadyPRPendingMissingO
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			verifyCalled = true
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
@@ -3085,7 +3085,7 @@ func TestReportPRCreated_should_RejectReassignment_When_CurrentPRAlreadyMerged(t
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateMerged, "tstapler"), nil
 			}
@@ -3149,7 +3149,7 @@ func TestReportPRCreated_should_RejectSecondReassignment_When_ConcurrentCASRace(
 		storage:              storage,
 		getBacklogItemFn:     getBacklogItemFn,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 			}
@@ -3231,7 +3231,7 @@ func TestReportPRCreated_should_RecordDistinctAuditNote_When_Reassigned(t *testi
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 			}
@@ -3276,7 +3276,7 @@ func TestReportPRCreated_should_ClearPrFeedbackAddressedAt_When_Reassigned(t *te
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 			}
@@ -3328,7 +3328,7 @@ func TestReportPRCreated_should_ReturnFriendlyError_When_CASFailsOutOfBand(t *te
 		storage:              storage,
 		getBacklogItemFn:     getBacklogItemFn,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
 	}
@@ -3366,7 +3366,7 @@ func TestReportPRCreated_should_RejectReassignment_When_AuthorMismatch(t *testin
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 			}
@@ -4762,7 +4762,7 @@ func TestReportDuplicate_RejectsThirdCall_AfterSequentialReportPRCreatedThenRepo
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
 		verifyGitHubRef: func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },

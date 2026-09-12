@@ -55,6 +55,7 @@ type InstanceData struct {
 	GitHubPRURL     string `json:"github_pr_url,omitempty"`
 	GitHubOwner     string `json:"github_owner,omitempty"`
 	GitHubRepo      string `json:"github_repo,omitempty"`
+	GitHubHost      string `json:"github_host,omitempty"`
 	GitHubSourceRef string `json:"github_source_ref,omitempty"`
 	ClonedRepoPath  string `json:"cloned_repo_path,omitempty"`
 	// Worktree detection fields
