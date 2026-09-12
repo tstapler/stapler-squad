@@ -266,6 +266,17 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     ? resolvePipelineModeDisplay(latestWorkSession, pipelineModes)
     : undefined;
 
+  // CONFIGURABILITY GAP fix (UX audit 2026-09-11): the item's own configured
+  // pipeline mode, resolved to a display name for LifecycleSummary's
+  // automation-profile chips. Distinct from pipelineDisplay above — that
+  // reflects what actually ran in the latest work session (or is undefined
+  // before any session exists), while this reflects the item's current
+  // configuration regardless of session history, so it's the only glanceable
+  // signal available before a session has ever spawned.
+  const configuredPipelineModeName = item?.pipelineMode
+    ? (pipelineModes.find((m) => m.slug === item.pipelineMode)?.name ?? item.pipelineMode)
+    : undefined;
+
   // Epic 5.3 (Story 5.3.1, backlog-event-driven-updates): live updates
   // replace the old 5s poll entirely. Subscribed unfiltered (no status/
   // category filter) so this panel keeps showing the item's current state
@@ -822,17 +833,18 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     }
   }, [item, manualReviewOutcome, manualReviewSummary, submitManualReview, showActionToast, load]);
 
-  // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR
-  // unconditionally on every UpdateBacklogItem call (they're plain proto bools, not
-  // optional — no "unset" wire representation), so any partial update that omits them
-  // silently resets them to false. Every partial updateBacklogItem call below must
-  // spread these current values.
+  // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR/
+  // autoApprovePlan unconditionally on every UpdateBacklogItem call (they're plain
+  // proto bools, not optional — no "unset" wire representation), so any partial
+  // update that omits them silently resets them to false. Every partial
+  // updateBacklogItem call below must spread these current values.
   const currentFlags = useCallback(
     () => ({
       skipPlanning: item?.skipPlanning ?? false,
       skipReviewGate: item?.skipReviewGate ?? false,
       autoSpawnSession: item?.autoSpawnSession ?? false,
       autoCreatePR: item?.autoCreatePR ?? false,
+      autoApprovePlan: item?.autoApprovePlan ?? false,
     }),
     [item]
   );
@@ -1435,6 +1447,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         <LifecycleSummary
           item={item}
           pipelineDisplay={pipelineDisplay}
+          configuredPipelineModeName={configuredPipelineModeName}
           stuckItem={stuckItem}
           otherStuckReasons={stuckSummary?.otherReasons}
           onTriggerRemediationNow={triggerRemediationNow}

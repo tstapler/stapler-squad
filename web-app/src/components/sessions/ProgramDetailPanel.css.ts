@@ -89,7 +89,9 @@ export const exampleItem = style({
   whiteSpace: "nowrap",
 });
 
-export const coverageBadge = style({
+// Used only as a base composed into coverageYes/coverageNo/coveragePartial below
+// (no longer imported directly elsewhere).
+const coverageBadge = style({
   display: "inline-flex",
   alignItems: "center",
   fontSize: vars.fontSize.xs,

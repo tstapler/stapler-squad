@@ -466,15 +466,3 @@ func (g *GitClient) ListWorktrees() ([]Worktree, error) {
 
 	return worktrees, nil
 }
-
-// GetGitVersion returns the installed Git version
-func GetGitVersion() (string, error) {
-	vCtx, vCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer vCancel()
-	cmd := safeexec.CommandContext(vCtx, "git", "--version")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(output)), nil
-}

@@ -156,7 +156,7 @@ describe("BacklogItemForm — checkbox help text", () => {
     ).toBeInTheDocument();
   });
 
-  it("wraps the 4 checkboxes in an 'Overrides' fieldset", async () => {
+  it("wraps the 5 checkboxes in an 'Overrides' fieldset", async () => {
     render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
     await screen.findByTestId("backlog-pipeline-mode-default");
 
@@ -167,6 +167,7 @@ describe("BacklogItemForm — checkbox help text", () => {
     expect(fieldset).toContainElement(screen.getByTestId("backlog-skip-review-checkbox"));
     expect(fieldset).toContainElement(screen.getByTestId("backlog-auto-spawn-session-checkbox"));
     expect(fieldset).toContainElement(screen.getByTestId("backlog-auto-create-pr-checkbox"));
+    expect(fieldset).toContainElement(screen.getByTestId("backlog-auto-approve-plan-checkbox"));
   });
 
   it("explains auto-create-pr in plain language", async () => {
@@ -178,6 +179,55 @@ describe("BacklogItemForm — checkbox help text", () => {
         /Skip the manual Review Queue "Create PR" click — a PR is opened automatically/
       )
     ).toBeInTheDocument();
+  });
+
+  it("explains auto-approve-plan in plain language", async () => {
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
+
+    expect(
+      screen.getByText(/Skip the manual "Approve Plan" click — a plan produced by triage/)
+    ).toBeInTheDocument();
+  });
+});
+
+// fillMinimalRequiredFormFields fills the title/repo-path fields every
+// submit-payload assertion below needs, then submits — extracted so each
+// toggle test stays a one-liner instead of repeating the same 3 fireEvents.
+function fillMinimalRequiredFormFields() {
+  fireEvent.change(screen.getByTestId("backlog-title-input"), { target: { value: "Some title" } });
+  fireEvent.change(screen.getByTestId("backlog-repo-path-input"), {
+    target: { value: "/home/user/project" },
+  });
+  fireEvent.click(screen.getByTestId("backlog-form-submit"));
+}
+
+describe("BacklogItemForm — auto-approve-plan toggle", () => {
+  it("defaults to unchecked and submits autoApprovePlan: false when left untouched", async () => {
+    const onSubmit = jest.fn(() => Promise.resolve());
+    render(<BacklogItemForm onSubmit={onSubmit} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
+
+    expect(screen.getByTestId("backlog-auto-approve-plan-checkbox")).not.toBeChecked();
+    fillMinimalRequiredFormFields();
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ autoApprovePlan: false }))
+    );
+  });
+
+  it("submits autoApprovePlan: true once the checkbox is checked", async () => {
+    const onSubmit = jest.fn(() => Promise.resolve());
+    render(<BacklogItemForm onSubmit={onSubmit} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
+
+    fireEvent.click(screen.getByTestId("backlog-auto-approve-plan-checkbox"));
+    expect(screen.getByTestId("backlog-auto-approve-plan-checkbox")).toBeChecked();
+    fillMinimalRequiredFormFields();
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ autoApprovePlan: true }))
+    );
   });
 });
 

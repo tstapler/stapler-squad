@@ -57,31 +57,6 @@ func WithCostSink(sink headless.CostSink) DriverOption {
 	return func(a *AutonomousDriver) { a.costSink = sink }
 }
 
-// WithIdleSettlePollInterval overrides the default 500ms poll interval used
-// while waiting for the idle-settle window (see idleSettleWindow doc comment
-// on the AutonomousDriver struct). Tests use this to shrink real timers
-// instead of waiting them out.
-func WithIdleSettlePollInterval(d time.Duration) DriverOption {
-	return func(a *AutonomousDriver) { a.idleSettlePollInterval = d }
-}
-
-// WithIdleSettleWindow overrides the default 60s idle-settle debounce window.
-func WithIdleSettleWindow(d time.Duration) DriverOption {
-	return func(a *AutonomousDriver) { a.idleSettleWindow = d }
-}
-
-// WithPaneSettlePollInterval overrides the default 150ms poll interval used
-// by waitForPaneSettle.
-func WithPaneSettlePollInterval(d time.Duration) DriverOption {
-	return func(a *AutonomousDriver) { a.paneSettlePollInterval = d }
-}
-
-// WithPaneSettleMaxWait overrides the default 2s max wait used by
-// waitForPaneSettle.
-func WithPaneSettleMaxWait(d time.Duration) DriverOption {
-	return func(a *AutonomousDriver) { a.paneSettleMaxWait = d }
-}
-
 // panePreviewer is the narrow interface AutonomousDriver needs to read the
 // current pane content. *Instance satisfies it directly via Preview().
 // Extracted (mirroring paneSettleChecker below) so driver-level tests can

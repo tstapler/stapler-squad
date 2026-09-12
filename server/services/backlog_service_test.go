@@ -1021,6 +1021,49 @@ func TestBacklogItemSummaryToProto_should_SetAllowedTransitions_When_ItemHasAnyS
 	}
 }
 
+// TestBacklogItemSummaryToProto_should_SetPlanGatingFields is the regression
+// test for the board-card "Approve Plan" flip-to-"Trigger Triage" bug:
+// ListBacklogItems (backed by backlogItemSummaryToProto) previously zero-
+// valued SkipPlanning/PlanApproved/PlanArtifactsPath/PlanRejectionReason
+// entirely, unlike GetBacklogItem (backed by backlogItemToProto). The web
+// UI's getAvailableActions (itemActions.ts) derives a ready item's primary
+// card action directly from these fields, so any live-update/resync path
+// that happened to route through the summary conversion (e.g. a second
+// WatchBacklogItems connection's fresh-snapshot phase racing the REST
+// ListBacklogItems fallback poll, both of which share this conversion) could
+// clobber an already-correct item with one that read as "no plan" even
+// though the plan itself was never touched. Same class of gap as
+// AllowedTransitions (#585) — summary and full protos must agree on every
+// field a card action derives from.
+func TestBacklogItemSummaryToProto_should_SetPlanGatingFields(t *testing.T) {
+	summary := &session.BacklogItemSummary{
+		ID:                  "item-1",
+		Status:              session.BacklogStatusReady,
+		SkipPlanning:        true,
+		PlanApproved:        true,
+		PlanArtifactsPath:   "/repo/.stapler-squad/plans/item-1",
+		PlanRejectionReason: "needs more detail",
+	}
+	summaryProto := backlogItemSummaryToProto(summary, nil)
+
+	full := &session.BacklogItemData{
+		ID:                  "item-1",
+		Status:              string(session.BacklogStatusReady),
+		SkipPlanning:        true,
+		PlanApproved:        true,
+		PlanArtifactsPath:   "/repo/.stapler-squad/plans/item-1",
+		PlanRejectionReason: "needs more detail",
+	}
+	fullProto := backlogItemToProto(full, nil)
+
+	assert.Equal(t, fullProto.SkipPlanning, summaryProto.SkipPlanning)
+	assert.Equal(t, fullProto.PlanApproved, summaryProto.PlanApproved)
+	assert.Equal(t, fullProto.PlanArtifactsPath, summaryProto.PlanArtifactsPath)
+	assert.Equal(t, fullProto.PlanRejectionReason, summaryProto.PlanRejectionReason)
+	assert.True(t, summaryProto.PlanApproved)
+	assert.NotEmpty(t, summaryProto.PlanArtifactsPath)
+}
+
 // ─── ApprovePlan ──────────────────────────────────────────────────────────────
 
 // UT-032a: ApprovePlan when plan_artifacts_path is empty → CodeFailedPrecondition

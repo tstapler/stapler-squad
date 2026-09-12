@@ -136,6 +136,8 @@ export interface BacklogItem {
   autoSpawnSession: boolean;
   /** When true, a PR is created automatically (same one-shot prompt as the manual Review Queue "Create PR" button) once a work session reaches TASK_COMPLETE — no manual click required. */
   autoCreatePR: boolean;
+  /** When true, a plan TriggerTriage produces is approved automatically (mirroring a manual "Approve Plan" click) once its artifacts exist on disk — no manual click required. */
+  autoApprovePlan: boolean;
   planApproved: boolean;
   planArtifactsPath?: string;
   /**
@@ -317,6 +319,7 @@ export interface BacklogItemInput {
   skipReviewGate?: boolean;
   autoSpawnSession?: boolean;
   autoCreatePR?: boolean;
+  autoApprovePlan?: boolean;
   acCriteria?: AcCriterion[];
   notes?: string;
   skipTriage?: boolean;
@@ -538,6 +541,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     skipReviewGate: p.skipReviewGate,
     autoSpawnSession: p.autoSpawnSession,
     autoCreatePR: p.autoCreatePr,
+    autoApprovePlan: p.autoApprovePlan,
     planApproved: p.planApproved,
     planArtifactsPath: p.planArtifactsPath || undefined,
     planRejectionReason: p.planRejectionReason || undefined,
@@ -773,6 +777,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           skipReviewGate: data.skipReviewGate ?? false,
           autoSpawnSession: data.autoSpawnSession ?? false,
           autoCreatePr: data.autoCreatePR ?? false,
+          autoApprovePlan: data.autoApprovePlan ?? false,
           acceptanceCriteria: toProtoAcCriteria(data.acCriteria ?? []),
           notes: data.notes ?? "",
           skipTriage: data.skipTriage ?? false,
@@ -827,6 +832,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           skipReviewGate: data.skipReviewGate,
           autoSpawnSession: data.autoSpawnSession,
           autoCreatePr: data.autoCreatePR,
+          autoApprovePlan: data.autoApprovePlan,
           acceptanceCriteria: data.acCriteria ? toProtoAcCriteria(data.acCriteria) : undefined,
           notes: data.notes,
           pipelineMode: data.pipelineMode,

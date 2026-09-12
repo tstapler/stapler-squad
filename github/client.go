@@ -622,32 +622,6 @@ func GetPRByNumber(ctx context.Context, ref RepoRef, prNumber int) (*PRInfo, err
 	}, nil
 }
 
-// IsForkRepo reports whether ref is a fork of another repository.
-// Zero callers currently — kept host-aware anyway for consistency with the
-// rest of this file, mirroring cli_import.go's --hostname pattern, since
-// leaving a host-unaware dead function around invites someone wiring it up
-// wrong later.
-func IsForkRepo(ctx context.Context, ref RepoRef) (bool, error) {
-	if err := CheckGHAuthForHost(ctx, ref.Host()); err != nil {
-		return false, err
-	}
-
-	args := []string{"api", fmt.Sprintf("repos/%s/%s", ref.Owner(), ref.Repo()), "--jq", ".fork"}
-	if ref.Host() != "" {
-		args = append(args, "--hostname", NormalizeHost(ref.Host()))
-	}
-	cmd := safeexec.CommandContext(ctx, "gh", args...)
-	output, err := runGHCLICommand(ctx, "repo.fork_check", func() ([]byte, error) { return cmd.Output() })
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return false, fmt.Errorf("failed to check fork status: %s", string(exitErr.Stderr))
-		}
-		return false, fmt.Errorf("failed to check fork status: %w", err)
-	}
-
-	return strings.TrimSpace(string(output)) == "true", nil
-}
-
 // ghRepoArg formats ref as gh's --repo flag value: "OWNER/REPO" for
 // github.com, or "HOST/OWNER/REPO" for a GitHub Enterprise host — gh's --repo
 // flag accepts both forms ("[HOST/]OWNER/REPO").
@@ -814,61 +788,6 @@ func ClosePR(ctx context.Context, ref RepoRef, prNumber int) error {
 			return fmt.Errorf("failed to close PR: %s", string(exitErr.Stderr))
 		}
 		return fmt.Errorf("failed to close PR: %w", err)
-	}
-
-	return nil
-}
-
-// CloneRepository clones a GitHub repository via the gh CLI.
-func CloneRepository(ref RepoRef, targetPath string) error {
-	// CloneRepository has no ctx parameter of its own (out of scope to add
-	// one here); context.Background() preserves CheckGHAuth's prior behavior
-	// exactly for this call site.
-	if err := CheckGHAuthForHost(context.Background(), ref.Host()); err != nil {
-		return err
-	}
-
-	repoRef := ghRepoArg(ref)
-	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cloneCancel()
-	cmd := safeexec.CommandContext(cloneCtx, "gh", "repo", "clone", repoRef, targetPath)
-	setGHHostEnv(cmd, ref.Host())
-	if _, err := runGHCLICommand(cloneCtx, "repo.clone", func() ([]byte, error) { return nil, cmd.Run() }); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to clone repository: %s", string(exitErr.Stderr))
-		}
-		return fmt.Errorf("failed to clone repository: %w", err)
-	}
-
-	return nil
-}
-
-// FetchBranch fetches a specific branch in an existing repository
-func FetchBranch(repoPath, branchName string) error {
-	// Fetch the branch from origin
-	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer fetchCancel()
-	cmd := safeexec.CommandContext(fetchCtx, "git", "-C", repoPath, "fetch", "origin", branchName)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to fetch branch: %s", string(exitErr.Stderr))
-		}
-		return fmt.Errorf("failed to fetch branch: %w", err)
-	}
-
-	return nil
-}
-
-// CheckoutBranch checks out a branch in an existing repository
-func CheckoutBranch(repoPath, branchName string) error {
-	checkoutCtx, checkoutCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer checkoutCancel()
-	cmd := safeexec.CommandContext(checkoutCtx, "git", "-C", repoPath, "checkout", branchName)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to checkout branch: %s", string(exitErr.Stderr))
-		}
-		return fmt.Errorf("failed to checkout branch: %w", err)
 	}
 
 	return nil

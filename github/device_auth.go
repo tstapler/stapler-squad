@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"time"
 )
 
 // defaultClientID is the GitHub OAuth App client ID for Stapler Squad.
@@ -176,34 +175,4 @@ func StoreTokenForDiscoveredUser(ctx context.Context, host, token string) error 
 		return SetKeychainToken(token)
 	}
 	return err
-}
-
-// WaitForDeviceAuth polls GitHub repeatedly until the user completes
-// authorization, the code expires, or ctx is cancelled.
-// On success it stores the token in the OS keychain and returns it.
-func WaitForDeviceAuth(ctx context.Context, host, clientIDOverride string, da *DeviceAuthStart) (string, error) {
-	interval := time.Duration(da.Interval) * time.Second
-	deadline := time.Now().Add(time.Duration(da.ExpiresIn) * time.Second)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-time.After(interval):
-		}
-
-		if time.Now().After(deadline) {
-			return "", ErrDeviceFlowExpired
-		}
-
-		token, err := PollDeviceAuth(ctx, host, clientIDOverride, da.DeviceCode)
-		if err == nil {
-			_ = StoreTokenForDiscoveredUser(ctx, host, token)
-			return token, nil
-		}
-		if errors.Is(err, ErrAuthorizationPending) {
-			continue
-		}
-		return "", err
-	}
 }

@@ -154,12 +154,12 @@ func addrToHostPort(addr string) (string, error) {
 }
 
 // startDaemonAttempt spawns tymuxd from cfg.BinaryPath and returns its
-// *os.Process. Mirrors daemon/daemon.go's LaunchDaemon construction: detached
-// Stdin/Stdout/Stderr, a parent-death-aware SysProcAttr (EnsurePdeathsig,
-// below), a PID file written to $configDir/tymuxd.pid (daemon.go:361-370's
-// daemon.pid pattern, distinct filename), and cmd.Process.Release()
-// (daemon.go:372-376) so the child is never left as a zombie-risk once this
-// process no longer needs to wait on it.
+// *os.Process. Follows the same detached-daemon pattern used elsewhere in
+// this codebase: detached Stdin/Stdout/Stderr, a parent-death-aware
+// SysProcAttr (EnsurePdeathsig, below), a PID file written to
+// $configDir/tymuxd.pid (distinct filename from other daemons' PID files),
+// and cmd.Process.Release() so the child is never left as a zombie-risk once
+// this process no longer needs to wait on it.
 //
 // Explicitly sets TYMUXD_ADDR on the child's environment (never relies on
 // inheriting it from this process's own environment): tymuxd itself reads

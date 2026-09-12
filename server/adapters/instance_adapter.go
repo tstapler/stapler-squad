@@ -528,20 +528,6 @@ func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
 	}
 }
 
-// ProtoToSessionType converts proto SessionType enum to session.SessionType.
-func ProtoToSessionType(sessionType sessionv1.SessionType) session.SessionType {
-	switch sessionType {
-	case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
-		return session.SessionTypeDirectory
-	case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
-		return session.SessionTypeNewWorktree
-	case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
-		return session.SessionTypeExistingWorktree
-	default:
-		return session.SessionTypeDirectory // Default to Directory for unknown types
-	}
-}
-
 // instanceTypeToProto converts session.InstanceType to proto InstanceType enum.
 func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceType {
 	switch instanceType {

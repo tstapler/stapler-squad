@@ -229,6 +229,10 @@ message BacklogItem {
   // Unset means the default: origin's default branch tip, not repo_path's
   // own ambient HEAD (see git.ResolveWorktreeBaseCommit).
   optional string base_branch = 37;
+  // auto_approve_plan, when true, approves a plan TriggerTriage produces
+  // automatically (mirroring a manual ApprovePlan call) once its artifacts
+  // exist on disk — no manual "Approve Plan" click required. Off by default.
+  bool auto_approve_plan = 38;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -389,6 +393,9 @@ message CreateBacklogItemRequest {
   // fork from — see BacklogItem.base_branch. Unset means the default
   // (origin's default branch tip), not repo_path's own ambient HEAD.
   optional string base_branch = 14;
+  // auto_approve_plan — see BacklogItem.auto_approve_plan. Unset/false means
+  // the manual "Approve Plan" click is still required.
+  bool auto_approve_plan = 15;
 }
 
 message CreateBacklogItemResponse {
@@ -553,6 +560,10 @@ message UpdateBacklogItemRequest {
   // stored override untouched, a non-nil pointer (including one pointing at
   // "") explicitly sets/clears it. See BacklogItem.base_branch.
   optional string base_branch = 19;
+  // auto_approve_plan — see BacklogItem.auto_approve_plan. Unconditionally
+  // set on every UpdateBacklogItem call, same as skip_review_gate/
+  // skip_planning/auto_spawn_session above (not presence-gated).
+  bool auto_approve_plan = 20;
 }
 
 message UpdateBacklogItemResponse {

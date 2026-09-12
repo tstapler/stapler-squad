@@ -3113,6 +3113,24 @@ func (s *BacklogService) TriggerTriage(
 			PlanRejectionReason: &clearedReason,
 			ClearPlanRejectedAt: true,
 		}
+		// Opt-in: skip the manual "Approve Plan" click when the item is configured
+		// to auto-approve, same precedent as AutoSpawnSession/AutoCreatePR (default
+		// false; existing manual approval flow is unchanged unless explicitly opted
+		// in). Only approves when pap actually exists on disk — mirroring
+		// ApprovePlan's own os.Stat precondition — so a triage run that produced no
+		// usable plan content still leaves the item gated for a human to notice via
+		// the "Retry Triage" / plan_not_approved stuck-detector paths, rather than
+		// silently marking a nonexistent plan approved.
+		if item.AutoApprovePlan {
+			if _, statErr := os.Stat(pap); statErr == nil {
+				approved := true
+				approvedAt := time.Now()
+				update.PlanApproved = &approved
+				update.PlanApprovedAt = &approvedAt
+			} else {
+				log.WarningLog().Printf("[TriggerTriage] auto_approve_plan set but plan artifacts path %q missing item=%s: %v", pap, itemID, statErr)
+			}
+		}
 		applyTriageResultToUpdate(&result, &update)
 		if _, updateErr := s.storage.UpdateBacklogItem(persistCtx, itemID, update, nil); updateErr != nil {
 			log.ErrorLog().Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)

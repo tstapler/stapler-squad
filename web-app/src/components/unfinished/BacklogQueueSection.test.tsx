@@ -62,6 +62,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     totalEstimatedCostUsd: 0,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     ...overrides,
   };
 }
