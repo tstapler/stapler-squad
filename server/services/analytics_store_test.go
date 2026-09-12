@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -431,4 +432,40 @@ func TestAnalyticsStore_Record_AfterStop_NoPanic(t *testing.T) {
 	require.NotPanics(t, func() {
 		store.Record(AnalyticsEntry{SessionID: "sess-1", ToolName: "Bash"})
 	})
+}
+
+// ── Story 2.3.3: Tagging-rule fire-count analytics ──────────────────────────
+
+// TestAnalyticsStore_RecordTaggingRuleFire_should_PersistFire_When_Called covers the
+// fire-and-forget insert path: RecordTaggingRuleFire is async (spawns a goroutine, per its
+// doc comment), so the assertion polls via require.Eventually rather than sleeping.
+func TestAnalyticsStore_RecordTaggingRuleFire_should_PersistFire_When_Called(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	store := NewAnalyticsStore(storage)
+
+	store.RecordTaggingRuleFire("seed-bugfix")
+
+	require.Eventually(t, func() bool {
+		counts, err := store.GetTaggingRuleFireCounts(context.Background(), time.Now().Add(-time.Hour))
+		return err == nil && counts["seed-bugfix"] == 1
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+// TestAnalyticsStore_GetTaggingRuleFireCounts_should_ExcludeFiresOlderThanWindow_When_TwoRecentAndOneStale
+// covers Story 2.3.3's second acceptance criterion: two fires within the last 7 days and one
+// fire 10 days ago must yield a count of 2, not 3.
+func TestAnalyticsStore_GetTaggingRuleFireCounts_should_ExcludeFiresOlderThanWindow_When_TwoRecentAndOneStale(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+
+	now := time.Now()
+	require.NoError(t, storage.RecordTaggingRuleFire(context.Background(), "seed-bugfix", now.Add(-1*time.Hour)))
+	require.NoError(t, storage.RecordTaggingRuleFire(context.Background(), "seed-bugfix", now.Add(-2*time.Hour)))
+	require.NoError(t, storage.RecordTaggingRuleFire(context.Background(), "seed-bugfix", now.Add(-10*24*time.Hour)))
+
+	store := NewAnalyticsStore(storage)
+	counts, err := store.GetTaggingRuleFireCounts(context.Background(), now.Add(-7*24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 2, counts["seed-bugfix"])
 }

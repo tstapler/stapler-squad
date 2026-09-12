@@ -780,6 +780,32 @@ func (s *Storage) DeleteRule(ctx context.Context, id string) error {
 	return s.repo.DeleteRule(ctx, id)
 }
 
+// AllTaggingRules returns all tagging rules from the repository.
+func (s *Storage) AllTaggingRules(ctx context.Context) ([]TaggingRuleData, error) {
+	return s.repo.AllTaggingRules(ctx)
+}
+
+// UpsertTaggingRule creates or updates a tagging rule in the repository.
+func (s *Storage) UpsertTaggingRule(ctx context.Context, rule TaggingRuleData) error {
+	return s.repo.UpsertTaggingRule(ctx, rule)
+}
+
+// DeleteTaggingRule removes a tagging rule from the repository.
+func (s *Storage) DeleteTaggingRule(ctx context.Context, id string) error {
+	return s.repo.DeleteTaggingRule(ctx, id)
+}
+
+// RecordTaggingRuleFire records that a tagging rule matched at the given instant.
+func (s *Storage) RecordTaggingRuleFire(ctx context.Context, ruleID string, firedAt time.Time) error {
+	return s.repo.RecordTaggingRuleFire(ctx, ruleID, firedAt)
+}
+
+// GetTaggingRuleFireCounts returns the number of recorded fires per rule ID since the
+// given instant.
+func (s *Storage) GetTaggingRuleFireCounts(ctx context.Context, since time.Time) (map[string]int, error) {
+	return s.repo.GetTaggingRuleFireCounts(ctx, since)
+}
+
 // RecordAnalytics logs a classification decision to the repository.
 func (s *Storage) RecordAnalytics(ctx context.Context, data AnalyticsData) error {
 	return s.repo.RecordAnalytics(ctx, data)

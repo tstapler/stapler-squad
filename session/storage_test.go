@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1049,4 +1050,122 @@ func TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
 	assert.Equal(t, Creating, loaded[0].Status, "the persisted row must be unchanged when epochs mismatch")
+}
+
+// ── Epic 2.2: TaggingRule Storage CRUD ──────────────────────────────────────
+
+// TestStorage_UpsertTaggingRule_should_PersistRow_When_ValidDataGiven covers
+// Story 2.2.1's first acceptance criterion.
+func TestStorage_UpsertTaggingRule_should_PersistRow_When_ValidDataGiven(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	err := storage.UpsertTaggingRule(context.Background(), TaggingRuleData{
+		RuleID:        "seed-bugfix",
+		Name:          "Bugfix branch",
+		BranchPattern: "^(bugfix|fix)/",
+		OutputTag:     "Bugfix",
+		Priority:      50,
+		Enabled:       true,
+		Source:        "seed",
+	})
+	require.NoError(t, err)
+
+	rules, err := storage.AllTaggingRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, "Bugfix", rules[0].OutputTag)
+}
+
+// TestStorage_DeleteTaggingRule_should_RemoveRow_When_RuleIDExists covers
+// Story 2.2.1's second acceptance criterion.
+func TestStorage_DeleteTaggingRule_should_RemoveRow_When_RuleIDExists(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	require.NoError(t, storage.UpsertTaggingRule(context.Background(), TaggingRuleData{
+		RuleID:        "seed-bugfix",
+		Name:          "Bugfix branch",
+		BranchPattern: "^(bugfix|fix)/",
+		OutputTag:     "Bugfix",
+		Priority:      50,
+		Enabled:       true,
+		Source:        "seed",
+	}))
+
+	require.NoError(t, storage.DeleteTaggingRule(context.Background(), "seed-bugfix"))
+
+	rules, err := storage.AllTaggingRules(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, rules)
+}
+
+// TestStorage_DeleteTaggingRule_should_NoOpWithoutError_When_RuleIDNotFound mirrors
+// DeleteRule's existing convention: deleting a nonexistent rule_id doesn't
+// panic/error the caller.
+func TestStorage_DeleteTaggingRule_should_NoOpWithoutError_When_RuleIDNotFound(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	err := storage.DeleteTaggingRule(context.Background(), "does-not-exist")
+	require.NoError(t, err)
+}
+
+// TestStorage_UpsertTaggingRule_should_NotDuplicateOrCorrupt_When_TwoConcurrentUpsertsTargetSameRuleID
+// pins the pre-mortem.md Failure #2 (P2) concurrent-upsert guarantee: the unique
+// index on rule_id plus the atomic ON CONFLICT DO UPDATE upsert (mirroring
+// ApprovalRule's verified-safe path, see Task 2.1.1c) must hold under two
+// simultaneous writers targeting the same rule_id.
+func TestStorage_UpsertTaggingRule_should_NotDuplicateOrCorrupt_When_TwoConcurrentUpsertsTargetSameRuleID(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	const ruleID = "concurrent-rule"
+	writeA := TaggingRuleData{
+		RuleID:        ruleID,
+		Name:          "Writer A",
+		BranchPattern: "^a/",
+		OutputTag:     "A",
+		Priority:      10,
+		Enabled:       true,
+		Source:        "seed",
+	}
+	writeB := TaggingRuleData{
+		RuleID:        ruleID,
+		Name:          "Writer B",
+		BranchPattern: "^b/",
+		OutputTag:     "B",
+		Priority:      20,
+		Enabled:       true,
+		Source:        "seed",
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		errs[0] = storage.UpsertTaggingRule(context.Background(), writeA)
+	}()
+	go func() {
+		defer wg.Done()
+		errs[1] = storage.UpsertTaggingRule(context.Background(), writeB)
+	}()
+	wg.Wait()
+
+	require.NoError(t, errs[0])
+	require.NoError(t, errs[1])
+
+	rules, err := storage.AllTaggingRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 1, "exactly one row must exist for the shared rule_id — no duplicate row")
+
+	got := rules[0]
+	matchesA := got.Priority == writeA.Priority && got.OutputTag == writeA.OutputTag
+	matchesB := got.Priority == writeB.Priority && got.OutputTag == writeB.OutputTag
+	assert.True(t, matchesA || matchesB, "persisted row must match one write's values entirely, never a corrupted merge of both: got %+v", got)
 }

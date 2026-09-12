@@ -111,6 +111,10 @@ type SessionService struct {
 	approvalSvc     *ApprovalService
 	utilitySvc      *UtilityService
 	rulesSvc        *RulesService
+	// taggingRulesSvc is nil-safe like rulesSvc — see NewTaggingRulesService's doc comment.
+	// Not yet exposed over any RPC (Phase 5 of the session-classifier-pipeline project); wired
+	// here so its persistence/rebuild plumbing exists ahead of that surface.
+	taggingRulesSvc *TaggingRulesService
 
 	// External session discovery (for mux-enabled sessions from external terminals)
 	externalDiscovery *session.ExternalSessionDiscovery
@@ -703,6 +707,21 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		classifierObj.AddRules(userRules)
 	}
 
+	// Build tagging rules store/service. The live TaggingEngine itself is wired into
+	// Instance construction by a later phase of this project (session-classifier-pipeline
+	// Phase 3) — constructing it here just gives TaggingRulesService's CRUD/rebuild
+	// plumbing a real engine to target ahead of that wiring.
+	taggingRulesStore, taggingRulesErr := NewTaggingRulesStore(concStorage)
+	if taggingRulesErr != nil {
+		log.Warn("failed to load tagging rules store, using empty store", "err", taggingRulesErr)
+		taggingRulesStore = &TaggingRulesStore{storage: concStorage}
+	}
+	taggingEngine := classifier.NewTaggingEngine()
+	if userTaggingRules := taggingRulesStore.ToRules(); len(userTaggingRules) > 0 {
+		taggingEngine.AddRules(userTaggingRules)
+	}
+	taggingRulesSvc := NewTaggingRulesService(taggingRulesStore, taggingEngine, analyticsStore)
+
 	// Determine the server process's own working directory for claude-settings
 	// project-level scope. Empty cwd makes LoadClaudeSettingsRulesDetailed skip
 	// project-level paths gracefully. Global-only for v1 — this is always the
@@ -800,6 +819,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		approvalSvc:                 approvalSvc,
 		utilitySvc:                  utilitySvc,
 		rulesSvc:                    rulesSvc,
+		taggingRulesSvc:             taggingRulesSvc,
 		approvalStore:               approvalStore,
 		databaseSvc:                 NewDatabaseService(),
 		fileSvc:                     NewFileService(workspaceSvc),

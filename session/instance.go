@@ -159,6 +159,14 @@ type LifecycleListener interface {
 	OnLifecycleEvent(event LifecycleEvent, reason string)
 }
 
+// TagFireRecorder records that a tagging rule matched, independent of whether the
+// resulting tag survives suppression filtering. Declared here (not imported from
+// server/services) because session cannot import that package; *services.AnalyticsStore
+// satisfies this interface structurally, with no import needed in that direction.
+type TagFireRecorder interface {
+	RecordTaggingRuleFire(ruleID string)
+}
+
 // ==== Instance -- Core Fields and Construction ====
 
 // MaxNoteLength is the maximum length, in bytes, of Instance.Note. Cross-referenced with the
@@ -546,6 +554,11 @@ type Instance struct {
 	// Backed by a pointer to Instance.Tags for zero-sync compatibility with
 	// callers that read inst.Tags directly.
 	tagManager TagManager
+
+	// tagFireRecorder records tagging-rule fires for analytics (see TagFireRecorder's doc
+	// comment). nil is a valid value — mirrors analyticsStore's existing nil-tolerant
+	// convention elsewhere in this codebase — and means "recording disabled," not an error.
+	tagFireRecorder TagFireRecorder
 
 	// snapshot is a lock-free atomic copy of all mutable Instance fields, published
 	// by every mutator before it releases mu. Readers can call Snapshot()
@@ -1097,6 +1110,12 @@ func finishInstanceConstruction(i *Instance) {
 // loading or creating an instance. Pass nil to disable persistence (e.g., in tests).
 func (i *Instance) SetShellRepository(repo ShellRepository) {
 	i.shellRepo = repo
+}
+
+// SetTagFireRecorder injects the tagging-rule fire-count recorder. Pass nil to disable
+// recording (the default) — see TagFireRecorder's doc comment.
+func (i *Instance) SetTagFireRecorder(recorder TagFireRecorder) {
+	i.tagFireRecorder = recorder
 }
 
 // GetSessionGoal returns a thread-safe shallow copy of the current SessionGoalData (nil if not set).

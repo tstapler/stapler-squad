@@ -22,6 +22,8 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	entshell "github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
+	"github.com/tstapler/stapler-squad/session/ent/taggingrule"
+	"github.com/tstapler/stapler-squad/session/ent/taggingrulefire"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 
 	"entgo.io/ent/dialect"
@@ -1586,6 +1588,96 @@ func (r *EntRepository) DeleteRule(ctx context.Context, id string) error {
 		Where(approvalrule.RuleID(id)).
 		Exec(ctx)
 	return err
+}
+
+func (r *EntRepository) AllTaggingRules(ctx context.Context) ([]TaggingRuleData, error) {
+	//nolint:entfullscan tagging rules are a small, admin-configured table; the whole set is needed to evaluate rule precedence.
+	rules, err := r.client.TaggingRule.Query().
+		Order(ent.Asc(taggingrule.FieldPriority)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]TaggingRuleData, len(rules))
+	for i, rule := range rules {
+		result[i] = TaggingRuleData{
+			RuleID:         rule.RuleID,
+			Name:           rule.Name,
+			NamePattern:    rule.NamePattern,
+			BranchPattern:  rule.BranchPattern,
+			PathPattern:    rule.PathPattern,
+			ProgramPattern: rule.ProgramPattern,
+			RequiredTags:   rule.RequiredTags,
+			OutputTag:      rule.OutputTag,
+			Priority:       rule.Priority,
+			Enabled:        rule.Enabled,
+			Source:         rule.Source,
+			CreatedAt:      rule.CreatedAt,
+			UpdatedAt:      rule.UpdatedAt,
+		}
+	}
+	return result, nil
+}
+
+func (r *EntRepository) UpsertTaggingRule(ctx context.Context, data TaggingRuleData) error {
+	requiredTags := data.RequiredTags
+	if requiredTags == nil {
+		requiredTags = []string{}
+	}
+	return r.client.TaggingRule.Create().
+		SetRuleID(data.RuleID).
+		SetName(data.Name).
+		SetNamePattern(data.NamePattern).
+		SetBranchPattern(data.BranchPattern).
+		SetPathPattern(data.PathPattern).
+		SetProgramPattern(data.ProgramPattern).
+		SetRequiredTags(requiredTags).
+		SetOutputTag(data.OutputTag).
+		SetPriority(data.Priority).
+		SetEnabled(data.Enabled).
+		SetSource(data.Source).
+		OnConflictColumns(taggingrule.FieldRuleID).
+		UpdateNewValues().
+		Exec(ctx)
+}
+
+func (r *EntRepository) DeleteTaggingRule(ctx context.Context, id string) error {
+	_, err := r.client.TaggingRule.Delete().
+		Where(taggingrule.RuleID(id)).
+		Exec(ctx)
+	return err
+}
+
+// RecordTaggingRuleFire inserts a fire record for ruleID at firedAt.
+func (r *EntRepository) RecordTaggingRuleFire(ctx context.Context, ruleID string, firedAt time.Time) error {
+	return r.client.TaggingRuleFire.Create().
+		SetRuleID(ruleID).
+		SetFiredAt(firedAt).
+		Exec(ctx)
+}
+
+// GetTaggingRuleFireCounts returns a rule_id -> count map of fires recorded at or after since.
+func (r *EntRepository) GetTaggingRuleFireCounts(ctx context.Context, since time.Time) (map[string]int, error) {
+	type fireCountRow struct {
+		RuleID string `json:"rule_id"`
+		Count  int    `json:"count"`
+	}
+	var rows []fireCountRow
+	err := r.client.TaggingRuleFire.Query().
+		Where(taggingrulefire.FiredAtGTE(since)).
+		GroupBy(taggingrulefire.FieldRuleID).
+		Aggregate(ent.Count()).
+		Scan(ctx, &rows)
+	if err != nil {
+		return nil, fmt.Errorf("get tagging rule fire counts since %s: %w", since.Format(time.RFC3339), err)
+	}
+
+	result := make(map[string]int, len(rows))
+	for _, row := range rows {
+		result[row.RuleID] = row.Count
+	}
+	return result, nil
 }
 
 func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData) error {
