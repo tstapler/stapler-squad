@@ -6,7 +6,8 @@
 // page is exempt from analytics/require-page-analytics's literal-call check
 // — same pattern as pipeline-modes/page.tsx.
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useBacklogStagesAdmin, isBuiltInStage } from "@/lib/hooks/useBacklogStages";
 import type { BacklogStage } from "@/lib/hooks/useBacklogStages";
 import { PageViewTracker } from "@/components/analytics/PageViewTracker";
@@ -26,8 +27,9 @@ import * as styles from "./page.css";
  * Naming: this page and its copy say "Backlog Stages"/"Stage(s)" only, never
  * "Workflow(s)" — locked by research/ux.md §0's naming-collision finding.
  */
-export default function BacklogStagesPage() {
+function BacklogStagesPageInner() {
   const { listStages, updateStage } = useBacklogStagesAdmin();
+  const searchParams = useSearchParams();
 
   const [stages, setStages] = useState<BacklogStage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,6 +56,29 @@ export default function BacklogStagesPage() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // ADR-005 Decision point 4: a `?editStage=<slug>` link (e.g. from the
+  // item-detail gate checklist's "Fix in Stages settings" link) opens that
+  // stage's edit form directly, instead of landing on the bare list. Read
+  // once via useSearchParams on mount, matching this app's existing
+  // search-param-driven state precedent (web-app/src/app/backlog/page.tsx's
+  // `item` param). A no-op when the param is absent or matches no fetched
+  // stage — never overrides a form the operator already has open by hand.
+  const editStageAppliedRef = useRef(false);
+  useEffect(() => {
+    if (editStageAppliedRef.current || loading || stages.length === 0) return;
+    const slug = searchParams.get("editStage");
+    if (!slug) {
+      editStageAppliedRef.current = true;
+      return;
+    }
+    const match = stages.find((s) => s.slug === slug);
+    if (match) {
+      setCreating(false);
+      setEditingStage(match);
+    }
+    editStageAppliedRef.current = true;
+  }, [loading, stages, searchParams]);
 
   const handleNewStage = useCallback(() => {
     setEditingStage(null);
@@ -211,5 +236,15 @@ export default function BacklogStagesPage() {
         </div>
       </div>
     </>
+  );
+}
+
+// useSearchParams requires a Suspense boundary — same wrapping pattern as
+// web-app/src/app/backlog/page.tsx's BacklogPage/BacklogPageInner split.
+export default function BacklogStagesPage() {
+  return (
+    <Suspense>
+      <BacklogStagesPageInner />
+    </Suspense>
   );
 }

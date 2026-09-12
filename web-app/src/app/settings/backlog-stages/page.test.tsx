@@ -12,6 +12,7 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import BacklogStagesPage from "./page";
 import { useBacklogStagesAdmin } from "@/lib/hooks/useBacklogStages";
 import type { BacklogStage } from "@/lib/hooks/useBacklogStages";
+import { useSearchParams } from "next/navigation";
 
 jest.mock("@/lib/hooks/useBacklogStages", () => {
   const actual = jest.requireActual("@/lib/hooks/useBacklogStages");
@@ -21,8 +22,25 @@ jest.mock("@/lib/hooks/useBacklogStages", () => {
   };
 });
 
+// Overrides jest.setup.js's global next/navigation stub (which always
+// returns an empty URLSearchParams) so the ?editStage= tests below can
+// control what the page reads on mount.
+jest.mock("next/navigation", () => ({
+  useSearchParams: jest.fn(() => new URLSearchParams()),
+}));
+const mockUseSearchParams = useSearchParams as jest.Mock;
+
 jest.mock("@/components/analytics/PageViewTracker", () => ({
   PageViewTracker: () => null,
+}));
+
+// StageForm's own render/data-fetching behavior (transitions, gates,
+// pipeline modes) is covered by StageForm.test.tsx — stubbed here so these
+// page-level tests only assert what `editingStage` was initialized to.
+jest.mock("./StageForm", () => ({
+  StageForm: ({ stage }: { stage: { slug: string } | null }) => (
+    <div data-testid="stage-form-stub">{stage ? `editing:${stage.slug}` : "creating"}</div>
+  ),
 }));
 
 const mockUseBacklogStages = useBacklogStagesAdmin as jest.MockedFunction<typeof useBacklogStagesAdmin>;
@@ -55,6 +73,7 @@ beforeEach(() => {
     listStages: mockListStages,
     updateStage: mockUpdateStage,
   } as unknown as ReturnType<typeof useBacklogStagesAdmin>);
+  mockUseSearchParams.mockReturnValue(new URLSearchParams());
 });
 
 describe("BacklogStagesPage", () => {
@@ -107,5 +126,38 @@ describe("BacklogStagesPage", () => {
         screen.getByText("No stages configured — the built-in 9-stage workflow is active by default.")
       ).toBeInTheDocument()
     );
+  });
+});
+
+describe("BacklogStagesPage — ?editStage= query param (ADR-005 Decision point 4)", () => {
+  it("opens the matching stage's edit form on load", async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams("editStage=design-review"));
+    mockListStages.mockResolvedValue([
+      makeStage({ id: "1", slug: "idea", name: "Idea", isEntry: true }),
+      makeStage({ id: "2", slug: "design-review", name: "Design Review" }),
+    ]);
+
+    render(<BacklogStagesPage />);
+
+    await waitFor(() => expect(screen.getByTestId("stage-form-stub")).toHaveTextContent("editing:design-review"));
+  });
+
+  it("is a no-op when the param is absent, leaving the page in its normal closed-form state", async () => {
+    mockListStages.mockResolvedValue([makeStage({ id: "1", slug: "idea", name: "Idea", isEntry: true })]);
+
+    render(<BacklogStagesPage />);
+
+    await waitFor(() => expect(screen.getByTestId("backlog-stage-row-idea")).toBeInTheDocument());
+    expect(screen.queryByTestId("stage-form-stub")).not.toBeInTheDocument();
+  });
+
+  it("is a no-op when the param matches no fetched stage", async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams("editStage=does-not-exist"));
+    mockListStages.mockResolvedValue([makeStage({ id: "1", slug: "idea", name: "Idea", isEntry: true })]);
+
+    render(<BacklogStagesPage />);
+
+    await waitFor(() => expect(screen.getByTestId("backlog-stage-row-idea")).toBeInTheDocument());
+    expect(screen.queryByTestId("stage-form-stub")).not.toBeInTheDocument();
   });
 });
