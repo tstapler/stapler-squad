@@ -43,6 +43,48 @@ function draftToInitialValues(
   };
 }
 
+/**
+ * Wraps ParseBacklogItemIntent with the omnibar review UI's loading/result
+ * state — mirrors the abandoned llm-omnibar design's useParseIntent.ts shape,
+ * scoped down to this feature's needs.
+ */
+function useParseBacklogItemIntent(initialText: string) {
+  const { parseBacklogItemIntent } = useBacklogService();
+  const [phase, setPhase] = useState<"parsing" | "review">("parsing");
+  const [initialValues, setInitialValues] = useState<Partial<BacklogItem>>({});
+  const [parseFailed, setParseFailed] = useState(false);
+
+  // Guards against a stale parse response applying after the user has already
+  // moved on (e.g. pressed Escape, or the omnibar re-opened with new text)
+  // before the in-flight RPC resolves — mirrors the abandoned design's
+  // "abort-on-change" intent without needing an AbortController, since
+  // ParseBacklogItemIntent has no side effects to actually cancel.
+  const cancelledRef = useRef(false);
+  useEffect(() => {
+    cancelledRef.current = false;
+    return () => {
+      cancelledRef.current = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setPhase("parsing");
+    parseBacklogItemIntent(initialText).then((draft) => {
+      if (!active || cancelledRef.current) return;
+      setParseFailed(!draft);
+      setInitialValues(draftToInitialValues(draft, initialText));
+      setPhase("review");
+    });
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per mount; initialText is fixed for this hook's lifetime
+  }, []);
+
+  return { phase, initialValues, parseFailed };
+}
+
 function ParsingIndicator() {
   return (
     <div role="status" aria-live="polite" style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>
@@ -86,38 +128,8 @@ export function BacklogItemIntentReview({
   onDone,
   onCancel,
 }: BacklogItemIntentReviewProps) {
-  const { parseBacklogItemIntent, createBacklogItem } = useBacklogService();
-  const [phase, setPhase] = useState<"parsing" | "review">("parsing");
-  const [initialValues, setInitialValues] = useState<Partial<BacklogItem>>({});
-  const [parseFailed, setParseFailed] = useState(false);
-
-  // Guards against a stale parse response applying after the user has already
-  // moved on (e.g. pressed Escape, or the omnibar re-opened with new text)
-  // before the in-flight RPC resolves — mirrors the abandoned llm-omnibar
-  // design's "abort-on-change" intent without needing an AbortController,
-  // since ParseBacklogItemIntent has no side effects to actually cancel.
-  const cancelledRef = useRef(false);
-  useEffect(() => {
-    cancelledRef.current = false;
-    return () => {
-      cancelledRef.current = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    setPhase("parsing");
-    parseBacklogItemIntent(initialText).then((draft) => {
-      if (!active || cancelledRef.current) return;
-      setParseFailed(!draft);
-      setInitialValues(draftToInitialValues(draft, initialText));
-      setPhase("review");
-    });
-    return () => {
-      active = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per mount; initialText is fixed for this component's lifetime
-  }, []);
+  const { createBacklogItem } = useBacklogService();
+  const { phase, initialValues, parseFailed } = useParseBacklogItemIntent(initialText);
 
   const handleSubmit = async (data: BacklogItemInput) => {
     const result = await createBacklogItem(data);
