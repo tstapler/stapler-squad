@@ -1355,13 +1355,26 @@ func (t *TmuxSession) preconfigureServerBeforeSession() error {
 			// so reusing one built outside this closure across retries failed
 			// every retry with "exec: already started" instead of actually
 			// retrying (see TestComprehensiveSessionCreation flakiness).
+			//
+			// Deliberately still Run(), not CombinedOutput(): tmuxCircuitBreakerConfig's
+			// IsFailure only trips the breaker via serverNotRunning(output), and Run()
+			// always passes it nil output, so a real failure here is never counted as a
+			// breaker-failure -- every one of ensureServerRunningWithRetry's up-to-8
+			// attempts always runs for real, matching that function's own stated intent
+			// ("ride out a transient start-server failure ... under sustained heavy
+			// system load"). Switching to CombinedOutput to get real error text in the
+			// wrapped error (tempting, since EnsureServerRunning does this) was tried and
+			// reverted: it let the breaker see real output, so it started tripping after
+			// 3 consecutive real failures under heavy load and burned the rest of the
+			// retry budget on instant ErrCircuitOpen rejections instead of real attempts
+			// -- a regression in exactly the scenario this retry loop exists for.
 			preconfigureCmd := t.buildTmuxCommand("start-server", ";", "set-option", "-g", "exit-empty", "off", ";", "set-option", "-g", "remain-on-exit", "on")
-			return t.cmdExec.CombinedOutput(preconfigureCmd)
+			return nil, t.cmdExec.Run(preconfigureCmd)
 		})
 	}
-	out, err := ensureServerRunningWithRetry(run, func() bool { return checkServerNotRunning(t.serverSocket) }, serverStartAttempts, serverStartBackoffStart, serverStartBackoffMax)
+	_, err := ensureServerRunningWithRetry(run, func() bool { return checkServerNotRunning(t.serverSocket) }, serverStartAttempts, serverStartBackoffStart, serverStartBackoffMax)
 	if err != nil {
-		return fmt.Errorf("failed to pre-configure tmux server before session creation: %w (output: %s)", err, out)
+		return fmt.Errorf("failed to pre-configure tmux server before session creation: %w", err)
 	}
 	return nil
 }
