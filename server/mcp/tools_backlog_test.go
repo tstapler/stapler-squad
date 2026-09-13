@@ -1210,6 +1210,327 @@ func TestRequestReview_TransitionsDirectlyToDone_When_SkipReviewGateEnabled(t *t
 	require.Equal(t, string(session.BacklogStatusDone), fetched.Status)
 }
 
+// TestRequestReview_RejectsWhenCriteriaIncomplete verifies the AC-completeness
+// gate: an item with any criterion not yet marked "done" (pass) via
+// report_progress must be rejected with a message naming the unmet
+// criterion, and the item must remain at its source status — no silent
+// transition on a self-declared "done" that report_progress never confirmed.
+func TestRequestReview_RejectsWhenCriteriaIncomplete(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Incomplete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"done"},{"index":1,"text":"Criterion B","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Think I'm done.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	require.Equal(t, ErrInvalidArgument, errObj["code"])
+	require.Contains(t, errObj["message"], "Criterion B")
+	require.Contains(t, errObj["message"], "report_progress")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status,
+		"a rejected request_review must never transition the item's status")
+}
+
+// TestRequestReview_RejectionPersistsVisibleAuditNote verifies AC2: a
+// rejected request_review call must leave a human-readable trace on the item
+// describing what's left, not just an error returned to the calling session
+// (which the item's status alone would never reveal, since it doesn't
+// change) — per the "document AI decisions in edge cases" convention.
+func TestRequestReview_RejectionPersistsVisibleAuditNote(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Incomplete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"done"},{"index":1,"text":"Criterion B","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	_, err = handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Think I'm done.",
+	}))
+	require.NoError(t, err)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Contains(t, fetched.Notes, rejectedNoteMarker)
+	require.Contains(t, fetched.Notes, "Criterion B")
+}
+
+// TestReportBlocked_EscalatesAfterRequestReviewRejectionsPlusOneBlock verifies
+// the shared-counter edge case from validation.md: request_review's
+// AC-completeness rejections and explicit report_blocked calls must escalate
+// on their combined total, not two independent counters that could each stay
+// under blockedCycleThreshold forever. Two rejected request_review calls
+// followed by a single report_blocked call must hit the threshold of 3 and
+// escalate to review.
+func TestReportBlocked_EscalatesAfterRequestReviewRejectionsPlusOneBlock(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Combined escalation counter",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	for i := 0; i < 2; i++ {
+		_, err = handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{
+			"item_id": item.ID,
+			"message": "Think I'm done.",
+		}))
+		require.NoError(t, err)
+	}
+
+	blockedResult, err := handler.reportBlocked(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "rationale": "stuck on Criterion A",
+	}))
+	require.NoError(t, err)
+	tc := requireToolTextResult(t, blockedResult)
+	require.Contains(t, tc, "escalated to review")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status,
+		"2 rejected request_review calls + 1 report_blocked call must cross blockedCycleThreshold together")
+}
+
+// TestRequestReview_AcceptsWhenAllCriteriaPass is the positive-path
+// counterpart to TestRequestReview_RejectsWhenCriteriaIncomplete: every
+// criterion marked "done" must let the transition through as before.
+func TestRequestReview_AcceptsWhenAllCriteriaPass(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Complete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"done"},{"index":1,"text":"Criterion B","status":"done"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "All criteria verified complete.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "review")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+}
+
+// TestRequestReview_SkipReviewGate_StillRequiresCompleteness closes the gap
+// the item's research identified: SkipReviewGate=true must skip the
+// independent LLM review, not the deterministic AC-completeness check —
+// otherwise a SkipReviewGate item could self-declare done with zero
+// verification of any kind.
+func TestRequestReview_SkipReviewGate_StillRequiresCompleteness(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Skip gate, incomplete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		SkipReviewGate:     true,
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Think I'm done.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	require.Equal(t, ErrInvalidArgument, errObj["code"])
+	require.Contains(t, errObj["message"], "Criterion A")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status,
+		"SkipReviewGate must not bypass the AC-completeness gate")
+}
+
+// TestRequestReview_SkipReviewGate_CompleteCriteria_GoesDirectToDone is a
+// regression guard: an item that legitimately opts out of the review gate via
+// SkipReviewGate must still go straight to done once its criteria are
+// actually complete — the completeness gate must not force it through a
+// review stage it explicitly opted out of.
+func TestRequestReview_SkipReviewGate_CompleteCriteria_GoesDirectToDone(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Skip gate, complete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		SkipReviewGate:     true,
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"done"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Implemented the feature, all criteria done.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "SkipReviewGate")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+}
+
+// TestRequestReview_AcceptsWhenNoAcceptanceCriteria verifies the zero-criteria
+// edge case: an item with no acceptance criteria at all (created before ACs
+// were mandatory) must pass the completeness gate trivially rather than being
+// rejected forever with nothing to satisfy it.
+func TestRequestReview_AcceptsWhenNoAcceptanceCriteria(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "No criteria at all",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Nothing to verify.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "review")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+}
+
 // TestRequestReview_PersistsVerificationNotesOnWorkSession verifies that a
 // non-empty verification_notes argument is stored on the caller's ItemSession
 // so the review gate can later surface it in the reviewer's prompt.
@@ -7156,7 +7477,7 @@ func TestResumeWork_ThenRequestReview_Succeeds(t *testing.T) {
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:              "Full repro sequence",
-		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pass"}]`,
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"done"}]`,
 		Status:             string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)

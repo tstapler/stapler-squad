@@ -1304,6 +1304,17 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		}
 	}
 
+	// Belt-and-suspenders layer 2: reject if any acceptance criterion isn't
+	// marked pass via report_progress yet. Applies to the SkipReviewGate
+	// branch too — that flag skips the independent LLM review, not this
+	// deterministic completeness check, otherwise a SkipReviewGate item could
+	// self-declare done with zero verification of any kind.
+	if err := unmetAcCriteriaError(item); err != nil {
+		log.InfoLog().Printf("[mcp:request_review] rejected: %v session=%s item=%s", err, callerUUID, itemID)
+		h.recordRejectedRequestReview(ctx, item, err)
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
 	// Scope boundary (Story 2.1.4): review/done are hardcoded built-in
 	// targets, not sourced from any stage engine — same "does not
 	// automatically inherit" resolution as allowedSelfResolveSourceStatuses
@@ -1369,7 +1380,9 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 // keeps landing back in ready for the same external-blocker reason needs a
 // human/reviewer to look at it rather than looping through work sessions
 // indefinitely (the same failure shape the 78-bounce incident documented in
-// docs/tasks/backlog-feature-improvement.md motivated a breaker for).
+// docs/tasks/backlog-feature-improvement.md motivated a breaker for). Also
+// the threshold a rejected request_review call escalates against — see
+// rejectedNoteMarker and countBlockedCycles.
 const blockedCycleThreshold = 3
 
 // blockedNoteMarker prefixes every note report_blocked appends to
@@ -1378,11 +1391,16 @@ const blockedCycleThreshold = 3
 // convention) without needing a dedicated DB column.
 const blockedNoteMarker = "[report_blocked]"
 
-// countBlockedCycles counts how many blockedNoteMarker-prefixed lines exist
-// in notes since the most recent resumeNoteMarker line (or from the start,
-// if there is none) — a successful resume_work call starts a fresh blocked
-// count, since a block reported after a resume is a new blocking episode,
-// not a continuation of whatever sent the item to ready before.
+// countBlockedCycles counts how many blockedNoteMarker- or
+// rejectedNoteMarker-prefixed lines exist in notes since the most recent
+// resumeNoteMarker line (or from the start, if there is none) — a successful
+// resume_work call starts a fresh blocked count, since a block reported after
+// a resume is a new blocking episode, not a continuation of whatever sent the
+// item to ready before. The two markers share one counter deliberately: a
+// session that fails request_review's AC-completeness gate twice and then
+// calls report_blocked once must escalate on the 3rd combined cycle, not stay
+// under threshold forever by never accumulating more than 1 in either
+// marker's own count.
 func countBlockedCycles(notes string) int {
 	lines := strings.Split(notes, "\n")
 	start := 0
@@ -1393,7 +1411,7 @@ func countBlockedCycles(notes string) int {
 	}
 	count := 0
 	for _, line := range lines[start:] {
-		if strings.HasPrefix(line, blockedNoteMarker) {
+		if strings.HasPrefix(line, blockedNoteMarker) || strings.HasPrefix(line, rejectedNoteMarker) {
 			count++
 		}
 	}
@@ -1504,6 +1522,62 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 		return mcpgo.NewToolResultText(fmt.Sprintf("Item %s has been blocked %d times — escalated to review for a human/reviewer to look at instead of returning to ready.", itemID, priorBlockedCycles+1)), nil
 	}
 	return mcpgo.NewToolResultText(fmt.Sprintf("Item %s reported blocked and returned to ready status.", itemID)), nil
+}
+
+// rejectedNoteMarker prefixes the note request_review appends to
+// BacklogItemData.Notes when the AC-completeness gate rejects a call.
+// Unlike report_blocked, a rejection here leaves the item's status
+// unchanged, so without this note the rejection would otherwise leave no
+// trace anywhere a human or a later session could see it — violating the
+// project's "document AI decisions in edge cases" convention (visible
+// comment, not silent). countBlockedCycles counts this marker together with
+// blockedNoteMarker so the two share one escalation counter (see its doc
+// comment).
+const rejectedNoteMarker = "[request_review:rejected]"
+
+// recordRejectedRequestReview persists rejectErr's message as a
+// rejectedNoteMarker-prefixed line on item's Notes. Best-effort: a failure to
+// persist the audit note must not turn an already-correct rejection into a
+// harder failure for the calling session — it still gets the same error
+// result either way, it just won't be visible in Notes to anyone else.
+func (h *backlogHandlers) recordRejectedRequestReview(ctx context.Context, item *session.BacklogItemData, rejectErr error) {
+	noteLine := fmt.Sprintf("%s %s", rejectedNoteMarker, rejectErr.Error())
+	newNotes := noteLine
+	if item.Notes != "" {
+		newNotes = item.Notes + "\n" + noteLine
+	}
+	if _, updateErr := h.storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{Notes: &newNotes}, nil); updateErr != nil {
+		log.WarningLog().Printf("[mcp:request_review] failed to persist rejection note item=%s: %v", item.ID, updateErr)
+	}
+}
+
+// unmetAcCriteriaError reports which acceptance criteria on item aren't yet
+// marked done (report_progress's "pass") — pending, in_progress, or
+// explicitly failed all count as unmet. Returns nil when every criterion is
+// done, including when the item has zero criteria (nothing to verify, and
+// items created before ACs were mandatory must not be rejected forever).
+// Malformed criteria JSON fails open (logged, not rejected) rather than
+// permanently blocking an item on a parse bug.
+func unmetAcCriteriaError(item *session.BacklogItemData) error {
+	criteria, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+	if err != nil {
+		log.WarningLog().Printf("[mcp:request_review] failed to parse acceptance criteria for item=%s: %v", item.ID, err)
+		return nil
+	}
+	var unmet []string
+	for _, c := range criteria {
+		if c.Status != session.AcStatusDone {
+			unmet = append(unmet, fmt.Sprintf("%d: %s (status=%s)", c.Index, c.Text, c.Status))
+		}
+	}
+	if len(unmet) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"request_review rejected: %d acceptance criteria are not yet marked pass via report_progress: %s. "+
+			"Call report_progress for each remaining criterion, or report_blocked if genuinely stuck",
+		len(unmet), strings.Join(unmet, "; "),
+	)
 }
 
 // --- resume_work ---
