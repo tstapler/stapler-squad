@@ -52,13 +52,13 @@ export function MangleRateIndicator({
       </div>
 
       <p className={styles.subtitle}>
-        Mangle rate — proportion of escape sequences that were altered during processing
+        Mangle rate — proportion of correlated transport outcomes altered during processing
       </p>
 
       <div className={styles.countsRow} data-testid="mangle-counts">
         <div className={styles.countItem}>
           <span className={styles.countValue}>{totalSequences.toString()}</span>
-          <span className={styles.countLabel}>Total sequences</span>
+          <span className={styles.countLabel}>Correlated outcomes</span>
         </div>
         <div className={styles.countItem}>
           <span className={styles.countValue}>{totalMangled.toString()}</span>

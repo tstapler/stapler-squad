@@ -429,11 +429,30 @@ func (r *hubRegistry) GetOrCreate(sessionName string, controller streamhub.Sessi
 	return hub, nil
 }
 
+type escapeAnalyticsStreamSource interface {
+	GetEscapeParser() *analytics.EscapeCodeParser
+	GetTotalBytesWritten() int64
+}
+
+func escapeAnalyticsHubOptions(controller streamhub.SessionController) []streamhub.HubOption {
+	source, ok := controller.(escapeAnalyticsStreamSource)
+	if !ok {
+		return nil
+	}
+	return []streamhub.HubOption{streamhub.WithOutputObserver(func(data []byte) {
+		parser := source.GetEscapeParser()
+		if parser == nil || !parser.IsEnabled() {
+			return
+		}
+		parser.ParseStage2(data, source.GetTotalBytesWritten()-int64(len(data)))
+	})}
+}
+
 func (r *hubRegistry) loadOrCreateHubLocked(sessionName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
 	var hub *streamhub.StreamHub
 	err := streamhub.AcquireOwnershipLock(sessionName).AcquireAndResolveExpecting(true, streamhub.PathHubOwned, func() error {
 		h, loaded := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
-			return streamhub.NewStreamHub(sessionName, controller), false
+			return streamhub.NewStreamHub(sessionName, controller, escapeAnalyticsHubOptions(controller)...), false
 		})
 		if loaded {
 			log.Debug("[hubRegistry] reusing existing StreamHub", "session", sessionName)

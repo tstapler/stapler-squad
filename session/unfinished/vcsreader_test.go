@@ -141,6 +141,41 @@ func testVCSReaderContract(t *testing.T, r unfinished.VCSReader) {
 		}
 	})
 
+	t.Run("HasUncommitted_true_for_same_size_edit_within_index_timestamp_second", func(t *testing.T) {
+		repoPath := initRepo(t)
+		repo, err := gitutil.OpenRepo(repoPath)
+		if err != nil {
+			t.Fatalf("OpenRepo: %v", err)
+		}
+		idx, err := repo.Storer.Index()
+		if err != nil {
+			t.Fatalf("Index: %v", err)
+		}
+		if len(idx.Entries) != 1 {
+			t.Fatalf("index entries = %d, want 1", len(idx.Entries))
+		}
+
+		path := filepath.Join(repoPath, "README.md")
+		if err := os.WriteFile(path, []byte("world\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mtime := idx.Entries[0].ModifiedAt.Truncate(time.Second).Add(123 * time.Millisecond)
+		if mtime.Equal(idx.Entries[0].ModifiedAt) {
+			mtime = mtime.Add(time.Millisecond)
+		}
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+
+		dirty, err := r.HasUncommitted(repoPath)
+		if err != nil {
+			t.Fatalf("HasUncommitted: %v", err)
+		}
+		if !dirty {
+			t.Error("expected a same-size edit within the index timestamp's second to be uncommitted")
+		}
+	})
+
 	t.Run("AheadBehind_zero_on_single_commit_repo", func(t *testing.T) {
 		repo := initRepo(t)
 		// Set up a "base" branch pointing at the same commit.
