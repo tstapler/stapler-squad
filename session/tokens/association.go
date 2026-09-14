@@ -11,7 +11,7 @@ import (
 type SessionRecord struct {
 	SessionID      string
 	ConversationID string // matches ParseResult.SessionUUID
-	Path           string // working directory
+	Path           string // resolved working directory (worktree dir if any, else repo root)
 	CreatedAt      time.Time
 	Tags           []string
 }

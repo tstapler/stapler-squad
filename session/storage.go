@@ -519,7 +519,11 @@ func (s *Storage) ListInstanceIDs() ([]string, error) {
 // column, so it comes back empty under LoadMinimal — see LoadOptions.LoadTags's
 // doc comment and TestStorage_UpdateInstance's identical note.
 func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
-	data, err := s.repo.ListWithOptions(context.Background(), LoadMinimal.WithTags())
+	// LoadWorktree so ActiveDir() below can resolve to the worktree path —
+	// Claude's JSONL ProjectPath is derived from the process cwd (the
+	// worktree), so matching against the identity Path orphans every
+	// worktree session's token records.
+	data, err := s.repo.ListWithOptions(context.Background(), LoadOptions{LoadTags: true, LoadWorktree: true})
 	if err != nil {
 		return nil
 	}
@@ -532,7 +536,7 @@ func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
 		records = append(records, tokens.SessionRecord{
 			SessionID:      sessionID,
 			ConversationID: d.ClaudeSession.ConversationUUID,
-			Path:           d.Path,
+			Path:           d.ActiveDir(),
 			CreatedAt:      d.CreatedAt,
 			Tags:           d.Tags,
 		})
