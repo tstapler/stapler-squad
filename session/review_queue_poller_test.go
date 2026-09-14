@@ -1508,3 +1508,70 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T
 		t.Errorf("pending_approval_id = %q, want %q (queried keys: %v)", got, "approval-title-fallback", provider.queried)
 	}
 }
+
+// TestReviewQueuePoller_ReconcileSessions_ArchivedStoppedWithLivePane_StaysStopped
+// pins guard 3 of ADR-001 (superseded-rework-session-retirement): an archived
+// session is deliberately retired, so a pane that outlived its archive-time
+// kill must not ratchet the row back off Stopped on every tick. This is the
+// status-column half of the fix — the process-spawning half is the health
+// checker (session/health.go).
+//
+// shouldSkipSession is the file's only other ArchivedAt reader and
+// reconcileSessions never calls it, which is why this guard is needed here.
+func TestReviewQueuePoller_ReconcileSessions_ArchivedStoppedWithLivePane_StaysStopped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-archived-live-pane",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     false, // wrapped program still running — the incident's shape
+	}
+	archivedAt := time.Now()
+	inst := &Instance{
+		Title:      "archived-live-pane-session",
+		Status:     Stopped,
+		IsManaged:  true,
+		ArchivedAt: &archivedAt,
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	querier.setLiveSessions("", "session-archived-live-pane")
+
+	poller.reconcileSessions()
+
+	if inst.Status != Stopped {
+		t.Errorf("got status %v, want Stopped (an archived session must never be revived to Active)", inst.Status)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_ArchivedActiveWithNoPane_StillTransitionsToStopped
+// proves guard 3 did not over-apply: the Active → Stopped correction arm is
+// deliberately left unguarded, so an archived row that is still Active with no
+// tmux session must keep converging to Stopped rather than being stranded.
+func TestReviewQueuePoller_ReconcileSessions_ArchivedActiveWithNoPane_StillTransitionsToStopped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	archivedAt := time.Now()
+	inst := makeSocketTestInstance("archived-active-no-pane", "session-archived-gone", "", Active)
+	inst.ArchivedAt = &archivedAt
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	// No live sessions on this socket at all.
+	querier.setLiveSessions("")
+
+	poller.reconcileSessions()
+
+	if inst.Status != Stopped {
+		t.Errorf("got status %v, want Stopped (archived rows must still converge when their pane is gone)", inst.Status)
+	}
+}

@@ -1479,3 +1479,127 @@ func TestScanAndLinkPRURL_RepublishesSnapshot(t *testing.T) {
 		t.Error("GitHub().PRURL is empty, want the linked PR URL (snapshot was not republished after the raw write)")
 	}
 }
+
+// TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
+// pins guard 5 of ADR-001 (superseded-rework-session-retirement). Archiving a
+// session kills its tmux pane (KillTmuxPaneOnly → Instance.KillSession) but
+// deliberately does NOT stop its session driver — driverDestroyed is a one-way
+// latch that would break UnarchiveSession — so the archive's own pane kill
+// arrives here looking like a crash. The guard sits at handleDriverFailure's
+// entry, covering both restarting arms, and not inside restartForRetry, which
+// is also manual RetryNow's choke point.
+//
+// The archived row uses reason "tmux_exited" inside restartGraceWindow: that is
+// the arm that calls restartForRetry directly, i.e. the one that actually
+// spawns a process. The control rows use the scheduled and exhausted arms so
+// they assert the unchanged behaviour without spawning a driver goroutine.
+func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived(t *testing.T) {
+	t.Parallel()
+	archivedAt := time.Now()
+
+	t.Run("archived_restart_grace_is_not_restarted", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "archived-retry-test", Status: Stopped, ArchivedAt: &archivedAt}
+		inst.processManager = NewTmuxBackend(mock)
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"tmux_exited"}}
+		shouldContinue, shouldReturn := handleDriverFailure(inst, "/tmp", policy, "tmux_exited", make(chan struct{}))
+
+		if shouldContinue || !shouldReturn {
+			t.Errorf("got (shouldContinue, shouldReturn) = (%v, %v), want (false, true)", shouldContinue, shouldReturn)
+		}
+		if mock.startCalls != 0 {
+			t.Errorf("expected no restart for an archived session, got %d Start() calls", mock.startCalls)
+		}
+		if got := inst.Snapshot().Status; got != Stopped {
+			t.Errorf("Status = %v, want Stopped (an archived session must not be marked PermanentlyFailed either)", got)
+		}
+		if inst.IsRetryPending() {
+			t.Error("expected no retry to be armed for an archived session")
+		}
+	})
+
+	t.Run("not_archived_still_schedules_a_retry", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "live-retry-scheduled", Status: Stopped}
+		inst.processManager = NewTmuxBackend(mock)
+		inst.RetryAttempt = 0
+		inst.RetryMaxAttempts = 3
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}, InitialDelay: time.Second, MaxDelay: time.Minute}
+		shouldContinue, shouldReturn := handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
+
+		if !shouldContinue || shouldReturn {
+			t.Errorf("got (shouldContinue, shouldReturn) = (%v, %v), want (true, false)", shouldContinue, shouldReturn)
+		}
+		if !inst.IsRetryPending() {
+			t.Error("control: a live session's failure must still arm a scheduled retry")
+		}
+	})
+
+	t.Run("not_archived_still_marks_permanently_failed_when_exhausted", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "live-retry-exhausted", Status: Stopped}
+		inst.processManager = NewTmuxBackend(mock)
+		inst.RetryAttempt = 1
+		inst.RetryMaxAttempts = 1 // already at cap
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed"}}
+		handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
+
+		if got := inst.Snapshot().Status; got != PermanentlyFailed {
+			t.Errorf("control: Status = %v, want PermanentlyFailed for an exhausted live session", got)
+		}
+	})
+}
+
+// TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived
+// covers the other automated entry point into restartForRetry: a backoff-
+// scheduled retry armed *before* the archive landed must be dropped rather
+// than fired when its deadline arrives.
+func TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived(t *testing.T) {
+	t.Parallel()
+
+	t.Run("archived_pending_retry_is_dropped", func(t *testing.T) {
+		t.Parallel()
+		archivedAt := time.Now()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "archived-pending-retry", Status: Stopped, ArchivedAt: &archivedAt}
+		inst.processManager = NewTmuxBackend(mock)
+		inst.NextRetryAt = time.Now().Add(-time.Minute) // already elapsed
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
+		shouldContinue, shouldReturn := handleRetryPendingTick(inst, "/tmp", policy, make(chan struct{}))
+
+		if shouldContinue || !shouldReturn {
+			t.Errorf("got (shouldContinue, shouldReturn) = (%v, %v), want (false, true)", shouldContinue, shouldReturn)
+		}
+		if mock.startCalls != 0 {
+			t.Errorf("expected no restart for an archived session, got %d Start() calls", mock.startCalls)
+		}
+		if inst.IsRetryPending() {
+			t.Error("expected the scheduled retry to be cleared for an archived session")
+		}
+	})
+
+	t.Run("not_archived_pending_but_not_elapsed_keeps_ticking", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "live-pending-retry", Status: Stopped}
+		inst.processManager = NewTmuxBackend(mock)
+		inst.NextRetryAt = time.Now().Add(time.Hour) // not yet elapsed
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
+		shouldContinue, shouldReturn := handleRetryPendingTick(inst, "/tmp", policy, make(chan struct{}))
+
+		if !shouldContinue || shouldReturn {
+			t.Errorf("got (shouldContinue, shouldReturn) = (%v, %v), want (true, false)", shouldContinue, shouldReturn)
+		}
+		if !inst.IsRetryPending() {
+			t.Error("control: a live session's not-yet-elapsed retry must stay pending")
+		}
+	})
+}

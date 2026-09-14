@@ -189,3 +189,53 @@ func TestIsHotRestoreRecoverable_MatchesRecoverFromStopped(t *testing.T) {
 		})
 	}
 }
+
+// TestInstance_IsArchived_should_ReadPublishedSnapshot_When_ArchivedAtSet pins
+// that IsArchived() goes through the published snapshot rather than the raw
+// i.ArchivedAt field (.claude/rules/instance-lock-free-reads.md). Every
+// auto-lifecycle guard added for ADR-001 (health checker, poller, session
+// driver, stale-resume recovery) reads this one predicate from a non-actor
+// goroutine, so a raw-field read here would race the actor setters.
+func TestInstance_IsArchived_should_ReadPublishedSnapshot_When_ArchivedAtSet(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+
+	tests := []struct {
+		name       string
+		status     Status
+		archivedAt *time.Time
+		want       bool
+	}{
+		{name: "stopped_not_archived", status: Stopped, archivedAt: nil, want: false},
+		{name: "stopped_archived", status: Stopped, archivedAt: &now, want: true},
+		{name: "permanently_failed_archived", status: PermanentlyFailed, archivedAt: &now, want: true},
+		{name: "active_archived", status: Active, archivedAt: &now, want: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// ArchivedAt must be set before anything calls Snapshot(): the first
+			// call caches its lazily-built value (see Snapshot's doc comment).
+			inst := &Instance{Title: "archived-predicate-" + tt.name, Status: tt.status, ArchivedAt: tt.archivedAt}
+			assert.Equal(t, tt.want, inst.IsArchived())
+		})
+	}
+}
+
+// TestInstance_IsArchived_should_SeeTheWrite_When_SetViaActorSetter guards the
+// other half of the predicate: an archive written through the actor setter
+// republishes the snapshot, so IsArchived() flips. A raw `inst.ArchivedAt =`
+// write (the defect fixed in server/services/workflow_service.go) leaves this
+// false for the rest of the process lifetime.
+func TestInstance_IsArchived_should_SeeTheWrite_When_SetViaActorSetter(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "archived-via-actor-setter", Status: Stopped}
+	require.False(t, inst.IsArchived(), "precondition: not archived")
+
+	require.True(t, inst.SetArchivedAtIfNil(time.Now()), "first archive should apply (CAS)")
+	assert.True(t, inst.IsArchived(), "IsArchived() must see an actor-routed archive")
+
+	assert.False(t, inst.SetArchivedAtIfNil(time.Now()), "second archive is a no-op (CAS)")
+}

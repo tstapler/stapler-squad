@@ -675,12 +675,23 @@ func (ws *WorkflowService) ArchiveWorkflowSessions(
 	}
 
 	// Update in-memory instances for any that are still in the poller.
+	// SetArchivedAtIfNil is a synchronous actor round-trip, not a field write:
+	// it costs one mailbox hop per *matched* instance (bounded by this
+	// workflow's own session count, since the filter below skips everything
+	// else), and correctness wins over non-blocking here.
 	if ws.poller != nil {
 		for _, inst := range ws.poller.GetInstances() {
-			if inst.WorkflowID == req.Msg.WorkflowId && inst.ArchivedAt == nil {
-				if !inst.IsActive() && !inst.IsCreating() && !inst.IsPaused() {
-					inst.ArchivedAt = &now
-				}
+			if inst.WorkflowID != req.Msg.WorkflowId || inst.IsArchived() {
+				continue
+			}
+			if !inst.IsActive() && !inst.IsCreating() && !inst.IsPaused() {
+				// SetArchivedAtIfNil (not a raw field write) so the published
+				// snapshot is rebuilt: IsArchived() reads Snapshot(), which
+				// caches, so a raw write stays invisible to every ArchivedAt
+				// guard for the process lifetime (ADR-001). It is also the CAS
+				// that closes the check/assign TOCTOU, and it writes ArchivedAt
+				// only — never status — matching this RPC's contract.
+				inst.SetArchivedAtIfNil(now)
 			}
 		}
 	}

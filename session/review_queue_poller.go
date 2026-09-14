@@ -142,6 +142,10 @@ type ReviewQueuePoller struct {
 	// EventUserInteraction. A nil channel is never selected (safe in select statements).
 	activityCh <-chan struct{}
 
+	// archivedLivePaneWarned throttles warnArchivedLivePaneOnce to one record
+	// per session title per process. See that method's doc comment.
+	archivedLivePaneWarned sync.Map
+
 	// Backoff state: tracks consecutive poll errors to apply exponential delay.
 	consecutiveErrors int
 	// tickCount counts poll loop iterations; atomic because pollLoop writes and tests read concurrently.
@@ -498,6 +502,14 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 			// zero-lock way to read status from outside an in-flight actor command --
 			// it's only unsafe to call *inside* one (see the s.inst.mu.RLock() reads
 			// below). Tracked flake: https://github.com/tstapler/stapler-squad/issues/271
+			// Archived sessions are deliberately retired (archiveItemWorkSessions
+			// sets ArchivedAt and kills the pane). Never revive one to Active: a
+			// pane that outlived its kill would otherwise ratchet the row back
+			// off Stopped every tick (ADR-001). The Active case below is
+			// deliberately NOT guarded — an archived row must still converge to
+			// Stopped.
+			archived := inst.IsArchived()
+
 			switch Status(inst.GetStatus()) {
 			case Active:
 				// Active but tmux session gone — mark Stopped.
@@ -541,6 +553,10 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 				// raced a controller's PTY-EOF transition to Stopped against
 				// this poller's next tick).
 				if liveSessions[sessionName] {
+					if archived {
+						rqp.warnArchivedLivePaneOnce(inst, sessionName, serverSocket)
+						continue
+					}
 					if dead, _, _ := inst.paneExitInfoIgnoringStatus(); dead {
 						log.Info("reconcileSessions: stopped session's pane exists but wrapped program has exited, leaving Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 						continue
@@ -572,6 +588,10 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 				// unmanaged underneath it (Preview() short-circuits for Hibernated,
 				// so such a session would otherwise look permanently dead).
 				if liveSessions[sessionName] {
+					if archived {
+						rqp.warnArchivedLivePaneOnce(inst, sessionName, serverSocket)
+						continue
+					}
 					log.Warn("reconcileSessions: hibernated session found alive in tmux, resuming to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
@@ -595,6 +615,10 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 				// than leaving it stuck showing the Crashed banner over a live pane,
 				// mirroring the Hibernated case just above.
 				if liveSessions[sessionName] {
+					if archived {
+						rqp.warnArchivedLivePaneOnce(inst, sessionName, serverSocket)
+						continue
+					}
 					log.Warn("reconcileSessions: crashed session found alive in tmux, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
@@ -617,6 +641,30 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 			}
 		}
 	}
+}
+
+// warnArchivedLivePaneOnce logs, at most once per session title per process,
+// that an archived session still has a tmux pane object. Post-ADR-001 such a
+// row is skipped by every reconciler and hidden from ListSessions, so an
+// orphaned claude process behind it would otherwise surface nowhere; this is
+// the detector for that (the reaper is a separate, destructive change).
+//
+// Throttled because the incident produced ~528 revival records per zombie per
+// day and an unthrottled line would reproduce that volume. Keyed on Title, the
+// codebase's conventional instance key (rqp.queue.Remove, h.recoveryDebounced);
+// a rename re-arms the warning once. The map is never pruned — bounded by
+// session count, the accepted shape for a process-lifetime throttle.
+func (rqp *ReviewQueuePoller) warnArchivedLivePaneOnce(inst *Instance, sessionName, serverSocket string) {
+	if _, dup := rqp.archivedLivePaneWarned.LoadOrStore(inst.Title, struct{}{}); dup {
+		return
+	}
+	// Probed after the de-dup so it costs at most one subprocess pair per
+	// instance per process lifetime.
+	dead, _, _ := inst.paneExitInfoIgnoringStatus()
+	log.Warn("reconcileSessions: archived session still has a live tmux pane object; not reviving",
+		"session", inst.Title, "tmux", sessionName, "socket", serverSocket,
+		"status", Status(inst.GetStatus()), "pane_process_dead", dead,
+		"hint", "if pane_process_dead=false this is an orphaned process — `tmux kill-session -t <tmux>`")
 }
 
 // checkSessionsConcurrency caps the number of sessions checked simultaneously,

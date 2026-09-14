@@ -135,3 +135,82 @@ func TestClearLoggedMissingWorktree_AllowsReWarnAfterSessionRecreated(t *testing
 		t.Fatal("expected title to warn again after its entry was cleared")
 	}
 }
+
+// TestFromInstanceData_should_NotAutoRestoreAndNormalizeOnlyActiveCreating_When_Archived
+// pins guard 1 of ADR-001 (superseded-rework-session-retirement). The final
+// else branch — the bucket holding Creating/Active/Restoring/PermanentlyFailed/
+// Failed — never read ArchivedAt, so an archived row that some path had flipped
+// off Stopped cold-restored a real claude process on every boot forever. The
+// only pre-existing ArchivedAt guard (the fork-pressure fast path) lives inside
+// the Status == Stopped branch and never covered this bucket.
+//
+// started=true is what suppresses the restore (server/dependencies.go's Step 6
+// skips every Started() instance). The status self-heal is deliberately
+// narrowed to Active/Creating: four archive writers set ArchivedAt without
+// touching status, so Restoring/PermanentlyFailed/Failed + archived are
+// legitimate states carrying the failure signal the session was archived with,
+// and nothing restores an overwritten status (UnarchiveSession only restores
+// ArchivedAt). The three "preserved" rows are that regression test.
+func TestFromInstanceData_should_NotAutoRestoreAndNormalizeOnlyActiveCreating_When_Archived(t *testing.T) {
+	t.Parallel()
+	archivedAt := time.Now()
+
+	tests := []struct {
+		name        string
+		status      Status
+		archived    bool
+		wantStatus  Status
+		wantStarted bool
+	}{
+		{name: "active_archived_heals_to_stopped", status: Active, archived: true, wantStatus: Stopped, wantStarted: true},
+		{name: "creating_archived_heals_to_stopped", status: Creating, archived: true, wantStatus: Stopped, wantStarted: true},
+		{name: "restoring_archived_preserves_status", status: Restoring, archived: true, wantStatus: Restoring, wantStarted: true},
+		{name: "permanently_failed_archived_preserves_status", status: PermanentlyFailed, archived: true, wantStatus: PermanentlyFailed, wantStarted: true},
+		{name: "failed_archived_preserves_status", status: Failed, archived: true, wantStatus: Failed, wantStarted: true},
+		// Controls: an unarchived row is untouched, and Paused is handled by its
+		// own earlier branch so the new guard must not reach it.
+		{name: "active_not_archived_control", status: Active, archived: false, wantStatus: Active, wantStarted: false},
+		{name: "paused_archived_control", status: Paused, archived: true, wantStatus: Paused, wantStarted: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			data := InstanceData{
+				Title:   "archived-restore-" + tt.name,
+				Path:    "/tmp/test",
+				Status:  tt.status,
+				Program: "claude",
+			}
+			if tt.archived {
+				data.ArchivedAt = &archivedAt
+			}
+
+			// Deferred entry point: wires the tmux session object but never
+			// spawns a subprocess, the same path LoadInstances uses.
+			restored, err := FromInstanceDataDeferred(data)
+			if err != nil {
+				t.Fatalf("FromInstanceDataDeferred: %v", err)
+			}
+
+			if got := restored.Snapshot().Status; got != tt.wantStatus {
+				t.Errorf("Status = %v, want %v", got, tt.wantStatus)
+			}
+			if got := restored.Started(); got != tt.wantStarted {
+				t.Errorf("Started() = %v, want %v", got, tt.wantStarted)
+			}
+			if tt.archived && restored.Snapshot().ArchivedAt == nil {
+				t.Error("ArchivedAt must survive the restore")
+			}
+			// The tmux session object must still be wired for archived
+			// sessions, so KillTmuxPaneOnly / findConfirmedLiveInstance's
+			// shadow instance keep working through this same constructor.
+			if tb, ok := restored.processManager.(*TmuxBackend); ok {
+				if tb.TmuxManager() == nil {
+					t.Error("expected the tmux session object to be wired even for an archived session")
+				}
+			}
+		})
+	}
+}

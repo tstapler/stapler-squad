@@ -593,7 +593,22 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(instance.Title, instance.Program, tmuxPrefix))
 			}
 		}
-		if deferStart {
+		if instance.ArchivedAt != nil {
+			// Archived means deliberately retired. Never auto-start: the only
+			// ArchivedAt guard used to live in the Status == Stopped branch
+			// above, so an archived row that some path had flipped off Stopped
+			// cold-restored a real claude process on every boot forever
+			// (ADR-001, superseded-rework-session-retirement).
+			//
+			// Normalize Active/Creating only — the other statuses in this bucket
+			// are produced deliberately by archive writers that never touch
+			// status, and rewriting them would destroy the failure signal the
+			// session was archived with, irreversibly.
+			if instance.Status == Active || instance.Status == Creating {
+				instance.loadStatus(Stopped)
+			}
+			instance.started.Store(true)
+		} else if deferStart {
 			// Leave started=false: the async Step 6 loop in BuildRuntimeDeps calls
 			// Start(false) later, off the startup critical path. That loop already
 			// hot-attaches to a live tmux session or cold-restores a dead one —

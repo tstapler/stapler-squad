@@ -878,7 +878,16 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// capture/resync against it fails indefinitely even though the
 		// underlying tmux session is fully functional. IsHotRestoreRecoverable is
 		// the single source of truth for this status set — see its doc comment.
+		// Archived sessions are skipped outright: they were deliberately retired,
+		// and adopting one here flips it back off its terminal status so it
+		// resurrects on every boot forever (ADR-001,
+		// project_plans/superseded-rework-session-retirement). The check short-
+		// circuits before TmuxSessionExists() so no tmux subprocess is spawned
+		// per archived row.
 		for _, inst := range instances {
+			if inst == nil || inst.IsArchived() {
+				continue
+			}
 			if inst.IsHotRestoreRecoverable() && inst.TmuxSessionExists() {
 				log.Info("Reconcile: session is terminal in DB but tmux is alive — restoring", "session", inst.Title, "status", inst.GetLifecycleStatus())
 				inst.RecoverFromStopped()
