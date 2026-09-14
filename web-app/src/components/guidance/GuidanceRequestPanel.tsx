@@ -35,7 +35,10 @@ function useGuidanceAnswering() {
       setAnsweringId(id);
       setAnswerError(null);
       try {
-        await answerGuidanceRequest({ id, answer }).unwrap();
+        const result = await answerGuidanceRequest({ id, answer }).unwrap();
+        if (!result.applied) {
+          setAnswerError("This question was already answered by someone else.");
+        }
       } catch (err) {
         setAnswerError(
           getErrorMessage(err, "Failed to submit answer. It may no longer be pending — reload and try again.")

@@ -4,8 +4,9 @@ import { GuidanceRequestPanel } from "./GuidanceRequestPanel";
 import type { PlainGuidanceRequest } from "@/lib/api/guidanceApi";
 
 let mockRequests: PlainGuidanceRequest[] = [];
+let mockApplied = true;
 const mockAnswer = jest.fn().mockImplementation(() => {
-  const promise = Promise.resolve({ data: undefined });
+  const promise = Promise.resolve({ data: { applied: mockApplied } });
   return Object.assign(promise, { unwrap: () => promise.then((r) => r.data) });
 });
 
@@ -38,6 +39,7 @@ function row(overrides: Partial<PlainGuidanceRequest>): PlainGuidanceRequest {
 beforeEach(() => {
   jest.clearAllMocks();
   mockRequests = [];
+  mockApplied = true;
 });
 
 describe("GuidanceRequestPanel", () => {
@@ -73,6 +75,17 @@ describe("GuidanceRequestPanel", () => {
     fireEvent.change(screen.getByTestId("guidance-answer-input-gr-sa"), { target: { value: "use option B" } });
     fireEvent.click(screen.getByTestId("guidance-answer-submit-gr-sa"));
     await waitFor(() => expect(mockAnswer).toHaveBeenCalledWith({ id: "gr-sa", answer: "use option B" }));
+  });
+
+  it("shows an already-answered message when the answer lost the race (applied=false)", async () => {
+    mockApplied = false;
+    mockRequests = [row({ id: "gr-race" })];
+    render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+
+    fireEvent.click(screen.getByTestId("guidance-answer-yes-gr-race"));
+    await waitFor(() => expect(mockAnswer).toHaveBeenCalledWith({ id: "gr-race", answer: "yes" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("This question was already answered by someone else.");
   });
 
   it("shows the answer and no form for an answered question", () => {

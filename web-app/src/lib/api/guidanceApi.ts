@@ -44,13 +44,16 @@ export const guidanceApi = connectApi.injectEndpoints({
       },
       providesTags: ["GuidanceRequests"],
     }),
-    answerGuidanceRequest: builder.mutation<void, { id: string; answer: string }>({
+    answerGuidanceRequest: builder.mutation<{ applied: boolean }, { id: string; answer: string }>({
       queryFn: async ({ id, answer }) => {
         try {
           const client = getClient();
           const req = create(AnswerGuidanceRequestRequestSchema, { id, answer });
-          await client.answerGuidanceRequest(req);
-          return { data: undefined };
+          // applied is false when a losing racer answers an already-answered/cancelled
+          // request (server-side dedup guard) — callers must surface that, not treat it
+          // as a normal success.
+          const response = await client.answerGuidanceRequest(req);
+          return { data: { applied: response.applied } };
         } catch (err) {
           const msg = err instanceof Error ? err.message : "Failed to submit answer";
           return { error: { status: -1, error: msg } };
