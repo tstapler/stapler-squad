@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
@@ -277,4 +278,28 @@ func TestUndismissWorktree_NoOpOnUnknown(t *testing.T) {
 
 	// Undismiss of an unknown entry is expected to succeed (no-op).
 	require.NoError(t, err)
+}
+
+// TestInstanceIndexes_WhenSessionIsWorktree_ExpectKeyedByWorktreePath is the
+// regression test for backlog item 7cfdb43e: the scanner's ScanResult.WorktreePath
+// is the resolved worktree directory, so instanceIndexes' pathIdx/prIdx must be
+// keyed on that same resolved directory (InstanceData.ActiveDir()), not the
+// identity Instance.Path (the main repo root) that a worktree session's
+// InstanceData still carries. The identity-path version of this index must fail
+// this assertion.
+func TestInstanceIndexes_WhenSessionIsWorktree_ExpectKeyedByWorktreePath(t *testing.T) {
+	t.Parallel()
+	svc, cleanup := setupUWSFixture(t)
+	t.Cleanup(cleanup)
+
+	const worktreePath = "/repo/../worktrees/instance-indexes-worktree"
+	inst := &session.Instance{Title: "instance-indexes-worktree", Path: "/repo", Program: "claude", UUID: "44444444-4444-4444-4444-444444444444"}
+	inst.SetGitWorktree(git.NewGitWorktreeFromStorage(
+		"/repo", worktreePath, "instance-indexes-worktree", "backlog/some-item", "abc123def"))
+	require.NoError(t, svc.storage.AddInstance(inst))
+
+	pathIdx, _ := svc.instanceIndexes()
+
+	assert.ElementsMatch(t, []string{inst.UUID}, pathIdx[worktreePath],
+		"pathIdx must be keyed by the resolved worktree path, not the identity repo path %q", inst.Path)
 }

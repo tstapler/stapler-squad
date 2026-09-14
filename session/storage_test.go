@@ -666,6 +666,30 @@ func TestListSessionRecords_WhenInstanceHasTags_ExpectSessionRecordTagsPopulated
 	assert.ElementsMatch(t, []string{"backend", "urgent"}, records[0].Tags)
 }
 
+// TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDir is
+// the regression test for backlog item 7cfdb43e: Claude's JSONL ProjectPath is
+// derived from the process cwd (the worktree), so association.go's path-prefix
+// match needs SessionRecord.Path to be the resolved worktree directory, not the
+// identity Path (the main repo root) that a worktree session's Instance.Path
+// still carries. The identity-path version of this lookup (records[0].Path ==
+// inst.Path) must fail this assertion.
+func TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDir(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("worktree-session-records")
+	inst.UUID = "33333333-3333-3333-3333-333333333333"
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+		"/repo", "/repo/../worktrees/worktree-session-records", "worktree-session-records", "backlog/some-item", "abc123def")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	records := storage.ListSessionRecords()
+	require.Len(t, records, 1)
+	assert.Equal(t, "/repo/../worktrees/worktree-session-records", records[0].Path,
+		"SessionRecord.Path must be the resolved worktree dir, not the identity repo path %q", inst.Path)
+}
+
 // TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExistsInStorageOnly
 // is the regression test for the fix in server/services/session_service.go's
 // ArchiveSessionByUUID: a session that is not resident in the live in-memory
