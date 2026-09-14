@@ -14,52 +14,43 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
 
-// programExtension is implemented by a per-coding-agent-program controller
-// lifecycle manager, so StartController/StopController dispatch through one
-// interface instead of growing an if-branch per new program (mirroring
-// instance_tmux.go's programKind sum type for command building). Currently
-// only *piExtension implements this: the default (Claude/plain) path below
-// isn't itself an "extension" -- ClaudeController's lifecycle is separate
-// business logic that happens to also be named "claude" (claudeExtension,
-// by contrast, only holds resume-session data unrelated to controller
-// lifecycle -- see its doc comment in instance_claude.go).
-type programExtension interface {
-	// supported reports whether i's current Program/config should route
-	// through this extension for a NEW StartController call.
-	supported(i *Instance) bool
-	// running reports whether this extension currently owns live
-	// controller-lifecycle state for i, independent of supported() -- see
-	// StopController's Bug 2 fix doc comment for why StopController routes
-	// on this instead of re-evaluating supported().
-	running() bool
-	// startController starts this extension's controller-equivalent
-	// lifecycle for i.
-	startController(i *Instance) error
-	// stopController stops it. Safe to call even if nothing was ever started.
-	stopController(i *Instance)
+// programExtensions holds all registered custom program extensions.
+// This slice can be modified at runtime by the RegisterProgramExtension function
+to allow users to add custom program definitions via API/UI/MCP.
+var programExtensions []programExtension
+
+// RegisterProgramExtension registers a new program extension for runtime program
+// detection and command building. This allows users to define custom program
+// behaviors dynamically via API/UI/MCP without needing to modify source code.
+func RegisterProgramExtension(ext programExtension) {
+	programExtensions = append(programExtensions, ext)
 }
 
-// controllerExtensions returns the ordered set of program extensions
-// StartController/StopController check before falling back to the default
-// Claude-controller path below. A future program gets a new programExtension
-// implementation appended to this slice instead of a new if-branch in either
-// method.
-func (i *Instance) controllerExtensions() []programExtension {
-	return []programExtension{&i.piExtension}
-}
-
-// StartController creates and starts a ClaudeController for this instance,
-// UNLESS a programExtension (currently: a pi-support-enabled pi session) is
-// supported, in which case it starts that extension instead (Epic 5.2) — pi
-// has no PTY output for ClaudeController's regex-based detector to scrape,
-// so the two are mutually exclusive per instance, not layered.
-// The controller enables automated idle detection and queue management.
-func (i *Instance) StartController() error {
-	for _, ext := range i.controllerExtensions() {
-		if ext.supported(i) {
-			return ext.startController(i)
+// UnregisterProgramExtension removes a program extension from runtime detection.
+func UnregisterProgramExtension(ext programExtension) {
+	for i, e := range programExtensions {
+		if e == ext {
+			programExtensions = append(programExtensions[:i], programExtensions[i+1:]...)
+			break
 		}
 	}
+}
+
+func (i *Instance) controllerExtensions() []programExtension {
+	extensions := []programExtension{&i.piExtension}
+
+	// Allow runtime registration of custom program extensions
+	// Users can register custom extensions via API/UI/MCP before instance creation
+	// or dynamically at runtime by calling RegisterProgramExtension()
+	for _, ext := range programExtensions {
+		// Only include extensions that match the instance's current program
+		if ext.Supported(i) {
+			extensions = append([]programExtension{ext}, extensions...)
+		}
+	}
+
+	return extensions
+}
 
 	// Check preconditions under lock
 	i.mu.Lock()
