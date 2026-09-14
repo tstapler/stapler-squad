@@ -1,26 +1,21 @@
 package session
 
+import "sync"
+
 // instance_program_extension.go contains the programExtension contract and
 // the runtime extension registry StartController/StopController dispatch
 // through (session/instance_controller.go). Split out of that file to keep
 // it under the file-size lint threshold -- this registry is a self-contained
 // concept with no dependency on ClaudeController's own lifecycle code.
 
-// programExtension is implemented by a per-coding-agent-program controller
-// lifecycle manager, so StartController/StopController dispatch through one
-// interface instead of growing an if-branch per new program (mirroring
-// instance_tmux.go's programKind sum type for command building). Currently
-// only *piExtension implements this: the default (Claude/plain) path below
-// isn't itself an "extension" -- ClaudeController's lifecycle is separate
-// business logic that happens to also be named "claude" (claudeExtension,
-// by contrast, only holds resume-session data unrelated to controller
-// lifecycle -- see its doc comment in instance_claude.go).
-//
-// The method set is exported even though the interface type itself is not:
-// Go's interface satisfaction is structural, so a program extension
-// registered from another package via RegisterProgramExtension only needs
-// to implement these exported methods -- it never needs to name
-// programExtension itself.
+// programExtension lets StartController/StopController dispatch through one
+// interface instead of an if-branch per program (mirroring
+// instance_tmux.go's programKind sum type). The method set is exported even
+// though the interface itself is not, since Go's structural typing means a
+// registered extension never needs to name programExtension directly.
+// Implementations must be pointer types: UnregisterProgramExtension compares
+// values with ==, which panics for a non-pointer type containing a slice,
+// map, or func field.
 type programExtension interface {
 	// Supported reports whether i's current Program/config should route
 	// through this extension for a NEW StartController call.
@@ -42,17 +37,29 @@ type programExtension interface {
 // piExtension every Instance already carries (see controllerExtensions).
 // This lets callers (API/UI/MCP) add support for new coding-agent programs
 // without modifying this package.
-var programExtensions []programExtension
+//
+// programExtensionsMu guards all reads/writes of programExtensions:
+// Register/Unregister are rare, config-time events while controllerExtensions
+// is read on every controller lifecycle event, but neither side is hot
+// enough to justify atomic.Pointer copy-on-write over a plain RWMutex.
+var (
+	programExtensionsMu sync.RWMutex
+	programExtensions   []programExtension
+)
 
 // RegisterProgramExtension registers a new program extension for runtime program
 // detection and command building. This allows users to define custom program
 // behaviors dynamically via API/UI/MCP without needing to modify source code.
 func RegisterProgramExtension(ext programExtension) {
+	programExtensionsMu.Lock()
+	defer programExtensionsMu.Unlock()
 	programExtensions = append(programExtensions, ext)
 }
 
 // UnregisterProgramExtension removes a program extension from runtime detection.
 func UnregisterProgramExtension(ext programExtension) {
+	programExtensionsMu.Lock()
+	defer programExtensionsMu.Unlock()
 	for i, e := range programExtensions {
 		if e == ext {
 			programExtensions = append(programExtensions[:i], programExtensions[i+1:]...)
@@ -61,18 +68,21 @@ func UnregisterProgramExtension(ext programExtension) {
 	}
 }
 
-// controllerExtensions returns the ordered set of program extensions
-// StartController/StopController check before falling back to the default
-// Claude-controller path below. A future built-in program gets a new
-// programExtension implementation appended to this slice instead of a new
-// if-branch in either method; a third-party program gets registered at
-// runtime via RegisterProgramExtension instead and is checked first.
+// controllerExtensions returns every registered extension plus the built-in
+// &i.piExtension, most-recently-registered first with piExtension always
+// last as the fallback (pinned by
+// TestControllerExtensions_MostRecentlyRegisteredWins). Supported()/Running()
+// are deliberately not evaluated here -- StartController and StopController
+// are the sole places those predicates are checked, so a
+// Running()-but-unsupported extension is still returned and can still be
+// stopped.
 func (i *Instance) controllerExtensions() []programExtension {
-	extensions := []programExtension{&i.piExtension}
-	for _, ext := range programExtensions {
-		if ext.Supported(i) {
-			extensions = append([]programExtension{ext}, extensions...)
-		}
+	programExtensionsMu.RLock()
+	defer programExtensionsMu.RUnlock()
+
+	extensions := make([]programExtension, 0, len(programExtensions)+1)
+	for j := len(programExtensions) - 1; j >= 0; j-- {
+		extensions = append(extensions, programExtensions[j])
 	}
-	return extensions
+	return append(extensions, &i.piExtension)
 }
