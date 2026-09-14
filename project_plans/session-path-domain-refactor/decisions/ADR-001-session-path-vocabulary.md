@@ -190,14 +190,22 @@ not under this repo's deploy control. Additive fields plus `[deprecated = true]`
 matching the repo's existing precedent (`types.proto:437-442`), and removal as a later,
 separately-scoped change.
 
-**Deprecating `Session.working_dir` alongside `Session.path`.** Rejected. It is not a
-read-only wire field: `SessionDetailView.tsx:496` seeds an editable input from
-`session.workingDir` and `:678` writes it back through `UpdateSession`, which lands in
-`Instance.WorkingDir` — the *relative* subdirectory
-(`server/services/session_service.go:3135`). The field therefore reads absolute and
-writes relative, and deprecating it in favour of `active_dir` would hand that consumer a
-field it cannot write. The asymmetry is a real, separate bug; this ADR corrects the
-field's doc comment to state it and leaves the field undeprecated pending its own fix.
+**Leaving `Session.working_dir` undeprecated.** Initially accepted, then reversed during
+implementation review. The argument was that it is not a read-only wire field:
+`SessionDetailView.tsx:496` seeds an editable input from `session.workingDir` and `:678`
+writes it back, landing in the *relative* `Instance.WorkingDir`
+(`server/services/session_service.go:3135`), so a replacement it could not write would
+break the editor.
+
+That write goes to `UpdateSessionRequest.working_dir` — a **different message**.
+Deprecating `Session.working_dir` costs that consumer nothing, and leaving two
+non-deprecated fields carrying byte-identical values (`active_dir` and `working_dir` are
+both `ws.ActiveDir`) with no invariant tying them together is how fields drift apart.
+Both are now deprecated.
+
+The read/write asymmetry is real and unaffected either way: the field reads absolute and
+writes relative, so round-tripping it corrupts the value. Its corrected doc comment
+records that; the fix is tracked separately.
 
 **Extending the same four fields to `ReviewItem`.** Rejected for this change.
 `ReviewItem.path` is populated from raw `inst.Path` (`server/dependencies.go:292`), so —

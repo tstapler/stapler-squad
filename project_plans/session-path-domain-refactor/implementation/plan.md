@@ -52,7 +52,7 @@ Additive. No existing field changes value; no consumer is migrated. Reviewable a
 **Acceptance Criteria**:
 - `Session` gains `repo_root = 91`, `worktree_dir = 92`, `active_dir = 93`, `existing_dir = 94`. Highest current field number is 90; no `reserved` ranges — verified.
 - `path = 3` gets `[deprecated = true]` and its comment corrected: it says "Path to workspace repository root" and carries `Workspace().EffectivePath`.
-- `working_dir = 4` gets its comment corrected — it says "Directory within repository to start in" and carries an absolute `GetWorkingDirectory()` — but is **not** deprecated: `SessionDetailView.tsx:496`/`:678` round-trips it through `UpdateSession` into `Instance.WorkingDir` (the relative subdir), so a replacement it cannot write would break the editor. The corrected comment states the read/write asymmetry and points at the follow-up item.
+- `working_dir = 4` gets its comment corrected — it says "Directory within repository to start in" and carries an absolute `GetWorkingDirectory()` — and is deprecated too. (Planned as undeprecated because `SessionDetailView.tsx:496`/`:678` writes it back; review established that write targets `UpdateSessionRequest.working_dir`, a different message, so nothing is lost. See ADR alternatives.) The corrected comment states the read/write asymmetry and points at the follow-up item.
 - `worktree_dir`'s comment explains why it differs from `git_worktree.worktree_path` (that submessage is gated on `i.started`, so it is nil for stopped sessions while `worktree_dir` is populated).
 - `ReviewItem` is **not** touched — its `path`/`working_dir` carry different concepts than `Session`'s and their comments are already accurate (see ADR alternatives).
 
