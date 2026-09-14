@@ -816,26 +816,14 @@ jobs:
   #
   # Previously built and launched a separate `stapler-squad-cov` binary under
   # GOCOVERDIR to capture runtime coverage from a live process. Removed
-  # 2026-08-22: none of the `//go:build integration` test files actually talk
+  # 2026-08-22: none of the 4 `//go:build integration` test files actually talk
   # to that background process over HTTP -- server/mcp/server_integration_test.go
-  # builds and launches its own binary directly, and the tmux/tymux/mcp
-  # integration tests shell out to the real `tmux`/`tymuxd` binaries, not to a
-  # live stapler-squad server. The background binary was only ever measuring
-  # its own idle startup path. Standard in-process `-coverprofile` (same
-  # mechanism the `test` job already uses) captures everything these tests
-  # actually exercise, with no live process to launch or reap.
-  #
-  # session/tymux/supervise_integration_test.go (added alongside BUG-106/
-  # BUG-110) and its sibling integration_test.go's daemon-restart drill both
-  # gate on findTymuxdBinary, which silently t.Skip()s without a real tymuxd
-  # binary -- exactly how these bugs went uncaught until they hit production
-  # (see docs/bugs/fixed/BUG-110-*.md). Fetched below via ADR-001's pinned-
-  # release-download path (no cargo/rustc toolchain needed) and pointed at via
-  # TYMUXD_BIN, so these actually run instead of skip. NOT fixed by this:
-  # integration_test.go's TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose
-  # has no skip guard at all and assumes an externally-managed daemon already
-  # listening -- it still fails here the same way it always has; harmless
-  # only because this job is advisory (continue-on-error below).
+  # builds and launches its own binary directly, and the tmux/mcp integration
+  # tests shell out to the real `tmux` CLI, not to a live stapler-squad server.
+  # The background binary was only ever measuring its own idle startup path.
+  # Standard in-process `-coverprofile` (same mechanism the `test` job already
+  # uses) captures everything these tests actually exercise, with no live
+  # process to launch or reap.
   # ─────────────────────────────────────────────────────────────────────────────
   integration-coverage:
     name: Integration coverage (advisory)
@@ -863,9 +851,6 @@ jobs:
         with:
           install-socat: 'true'
 
-      - name: Fetch pinned tymuxd binary
-        uses: ./.github/actions/fetch-tymuxd
-
       - name: Integration coverage (advisory)
         # Same tmux-under-CPU-contention rationale as the "test" job's "Run tests
         # with coverage" step -- this step's `-tags integration` run spawns real
@@ -874,7 +859,7 @@ jobs:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
-          TMUX_BIN="$(pwd)/bin/tmux" TYMUXD_BIN="$(pwd)/session/tymux/embed/tymuxd" timeout 20m go test -race -tags integration \
+          TMUX_BIN="$(pwd)/bin/tmux" timeout 20m go test -race -tags integration \
             -coverprofile=integration.out -covermode=atomic ./... \
             || { echo "::error::CI-BUDGET-EXCEEDED: 'integration-coverage' exceeded its 20m budget"; echo "CI-BUDGET-EXCEEDED: 'integration-coverage' exceeded its 20m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
         continue-on-error: true
