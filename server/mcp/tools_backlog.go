@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
@@ -507,6 +508,13 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Run parallel research subagents → write research/*.md files\n")
 		sb.WriteString("2. Synthesize into plan.md + validation.md\n")
 		sb.WriteString("3. Write acceptance criteria: call submit_triage_result with item_id, summary, acceptance_criteria (full AC list), suggestions (gaps/questions), tasks (max 12), plan_artifact_path, priority (1-5, real assessment — this drives automatic implementation order), item_category (bugfix/feature/chore/refactor)\n")
+		// durable-guidance-request AC2: read fresh at the exact halt-decision
+		// instant, not cached earlier in this (potentially long-running)
+		// triage pass — a config change mid-pass must take effect for the
+		// very next prompt build, not the one already in flight.
+		if config.EffectiveTriageGuidanceHaltEnabled(config.LoadConfig()) {
+			sb.WriteString("4. If this item is genuinely ambiguous (not merely under-specified in a way you can resolve with reasonable judgment), do NOT guess: call create_guidance_request(scope=\"backlog-item\", item_id=<this item>, question_type, question_text) describing exactly what you need clarified, then end your turn WITHOUT calling submit_triage_result. You will be automatically re-triaged once the human answers — the answer will appear in this item's Activity Log on your next run.\n")
+		}
 	case "work":
 		sb.WriteString("## Your Role: Work\n")
 		sb.WriteString("Implement the acceptance criteria. Do NOT call submit_triage_result or submit_review_verdict.\n\n")
@@ -564,42 +572,26 @@ func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID s
 // ItemSession on success. On failure it returns a ready-to-return
 // *mcpgo.CallToolResult that distinguishes ITEM_NOT_FOUND (the item itself
 // doesn't exist) from PERMISSION_DENIED (the item exists but this session has
-// no link to it) — GetItemSessionBySessionAndItem's ent join predicate
-// (itemsession.HasBacklogItemWith) returns ErrNotFound for both cases and
-// cannot tell them apart on its own. See
-// project_plans/backlog-link-error-consistency/research/stack.md.
+// no link to it). A thin adapter over session.ResolveItemLink, which holds
+// the actual disambiguation logic — see that function's doc comment and
+// project_plans/backlog-link-error-consistency/research/stack.md. Extracted
+// (not reimplemented) so the ConnectRPC GuidanceRequestService's own
+// backlog-item ownership check shares this exact logic instead of an
+// independently-maintained copy (durable-guidance-request plan, Task
+// 2.1.2a-pre).
 func (h *backlogHandlers) resolveItemLink(ctx context.Context, callerUUID, itemID string) (session.ItemSessionSummary, *mcpgo.CallToolResult) {
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	itemSession, linkErr := session.ResolveItemLink(ctx, h.storage, callerUUID, itemID)
 	if linkErr == nil {
 		return itemSession, nil
 	}
-	if !errors.Is(linkErr, session.ErrNotFound) {
-		return session.ItemSessionSummary{}, errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), "")
+	switch linkErr.Code {
+	case session.ItemLinkNotFound:
+		return session.ItemSessionSummary{}, errResult(ErrItemNotFound, linkErr.Message, linkErr.Remediation)
+	case session.ItemLinkPermissionDenied:
+		return session.ItemSessionSummary{}, errResult(ErrPermissionDenied, linkErr.Message, linkErr.Remediation)
+	default:
+		return session.ItemSessionSummary{}, errResult(ErrInternalError, linkErr.Message, "")
 	}
-
-	// Disambiguate: does the item itself exist?
-	if _, itemErr := h.storage.GetBacklogItem(ctx, itemID); itemErr != nil {
-		if errors.Is(itemErr, session.ErrNotFound) {
-			return session.ItemSessionSummary{}, errResult(ErrItemNotFound,
-				fmt.Sprintf("backlog item %q not found", itemID), itemNotFoundRemediation)
-		}
-		return session.ItemSessionSummary{}, errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", itemErr), "")
-	}
-
-	log.InfoLog().Printf("[mcp:resolveItemLink] session=%s not linked to existing item=%s", callerUUID, itemID)
-	// otherToolsWarning lists every other mutating tool this same missing-link would also
-	// reject, so an agent that gives up on link_session_to_item (or hits it repeatedly
-	// without success) knows not to bother retrying any of them either.
-	otherToolsWarning := "If you don't fix this, stop calling ANY backlog MCP tool for this item — " +
-		"report_progress, request_review, submit_review_verdict, report_pr_created, submit_triage_result, " +
-		"report_blocked, report_duplicate, resume_work will all fail identically for the same reason."
-	remediation := fmt.Sprintf("Call link_session_to_item with item_id=%s to link this session before retrying. %s", itemID, otherToolsWarning)
-	if prior, priorErr := h.storage.GetItemSessionBySessionUUID(ctx, callerUUID); priorErr == nil && prior.BacklogItemID != "" && prior.BacklogItemID != itemID {
-		remediation = fmt.Sprintf("This session is currently linked to a different item (%s). Call link_session_to_item with item_id=%s to relink, or use item_id=%s if that's what you meant. %s", prior.BacklogItemID, itemID, prior.BacklogItemID, otherToolsWarning)
-	}
-	return session.ItemSessionSummary{}, errResult(ErrPermissionDenied,
-		fmt.Sprintf("session %s is not linked to backlog item %s", callerUUID, itemID),
-		remediation)
 }
 
 // --- wait_for_backlog_event ---

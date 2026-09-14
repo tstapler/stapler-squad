@@ -505,6 +505,27 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered NativeGitRolloutService handler", "path", nativeGitRolloutAPIPath)
 	}
 
+	// Register GuidanceRequestService handler (durable-guidance-request Phase
+	// 2: create/answer/read a durable question/answer, mirroring
+	// TymuxRolloutService's registration). Storage-backed, so it's threaded
+	// through deps.Storage rather than constructed with zero args like the
+	// config-only rollout services above.
+	if deps.Storage != nil {
+		// deps.BacklogService is passed only when non-nil: a nil *BacklogService
+		// boxed into the TriageRespawner interface would be a non-nil interface
+		// wrapping a nil pointer, defeating GuidanceRequestService's own
+		// triageRespawner == nil guard and panicking on first use.
+		var triageRespawner services.TriageRespawner
+		if deps.BacklogService != nil {
+			triageRespawner = deps.BacklogService
+		}
+		guidanceRequestSvc := services.NewGuidanceRequestService(deps.Storage, deps.EventBus, triageRespawner)
+		guidanceRequestPath, guidanceRequestHandler := sessionv1connect.NewGuidanceRequestServiceHandler(guidanceRequestSvc, ConnectOptions(deps.ErrorRegistry)...)
+		guidanceRequestAPIPath := "/api" + guidanceRequestPath
+		srv.RegisterConnectHandler(guidanceRequestAPIPath, http.StripPrefix("/api", guidanceRequestHandler))
+		log.Info("Registered GuidanceRequestService handler", "path", guidanceRequestAPIPath)
+	}
+
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
 	// host-key confirmation flow for configured SSH remotes). KnownHostsStore
 	// construction is the only fallible step (it touches disk under

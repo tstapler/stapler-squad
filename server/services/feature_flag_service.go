@@ -227,6 +227,10 @@ var knownFeatureFlags = []struct {
 		name:        piSupportFlagName,
 		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
 	},
+	{
+		name:        config.TriageGuidanceHaltFeatureFlag,
+		description: "Automated triage halts and asks a durable guidance request instead of guessing when a backlog item is genuinely ambiguous. Default: off — baseline guess-and-proceed triage behavior is unchanged until enabled.",
+	},
 }
 
 // featureFlagDefault looks up name's defaultValue in knownFeatureFlags — the single

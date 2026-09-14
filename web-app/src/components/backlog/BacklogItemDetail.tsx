@@ -21,6 +21,7 @@ import { useBacklogItemShipStatus } from "@/lib/hooks/useBacklogItemShipStatus";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
+import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { useAppSelector } from "@/lib/store";
 import { store } from "@/lib/store/store";
@@ -1461,6 +1462,17 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             top-billed liveness-panel slot) and above the rest of the
             scroll-area content. */}
         <GateBlockingSection item={item} />
+
+        {/* Durable guidance requests scoped to this item (AC3) — same shared
+            component also embedded in TriageReviewPanel and SessionDetailView.
+            Skipped here while TriageReviewPanel is shown below — that panel
+            renders its own copy inline with the triage-generated content it's
+            about, instead of showing the list twice for the same scope. */}
+        {!(item.triageStatus === "completed" && item.status === "idea" && item.triageResult) && (
+          <div className={styles.section}>
+            <GuidanceRequestPanel scope="backlog-item" scopeKey={item.id} />
+          </div>
+        )}
 
         {/* Inline action error banner */}
         {error && (
