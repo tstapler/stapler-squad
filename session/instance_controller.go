@@ -14,9 +14,42 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
 
-// programExtensions holds all registered custom program extensions.
-// This slice can be modified at runtime by the RegisterProgramExtension function
-to allow users to add custom program definitions via API/UI/MCP.
+// programExtension is implemented by a per-coding-agent-program controller
+// lifecycle manager, so StartController/StopController dispatch through one
+// interface instead of growing an if-branch per new program (mirroring
+// instance_tmux.go's programKind sum type for command building). Currently
+// only *piExtension implements this: the default (Claude/plain) path below
+// isn't itself an "extension" -- ClaudeController's lifecycle is separate
+// business logic that happens to also be named "claude" (claudeExtension,
+// by contrast, only holds resume-session data unrelated to controller
+// lifecycle -- see its doc comment in instance_claude.go).
+//
+// The method set is exported even though the interface type itself is not:
+// Go's interface satisfaction is structural, so a program extension
+// registered from another package via RegisterProgramExtension only needs
+// to implement these exported methods -- it never needs to name
+// programExtension itself.
+type programExtension interface {
+	// Supported reports whether i's current Program/config should route
+	// through this extension for a NEW StartController call.
+	Supported(i *Instance) bool
+	// Running reports whether this extension currently owns live
+	// controller-lifecycle state for i, independent of Supported() -- see
+	// StopController's Bug 2 fix doc comment for why StopController routes
+	// on this instead of re-evaluating Supported().
+	Running() bool
+	// StartController starts this extension's controller-equivalent
+	// lifecycle for i.
+	StartController(i *Instance) error
+	// StopController stops it. Safe to call even if nothing was ever started.
+	StopController(i *Instance)
+}
+
+// programExtensions holds custom program extensions registered at runtime
+// via RegisterProgramExtension, checked in addition to the built-in
+// piExtension every Instance already carries (see controllerExtensions).
+// This lets callers (API/UI/MCP) add support for new coding-agent programs
+// without modifying this package.
 var programExtensions []programExtension
 
 // RegisterProgramExtension registers a new program extension for runtime program
@@ -36,21 +69,34 @@ func UnregisterProgramExtension(ext programExtension) {
 	}
 }
 
+// controllerExtensions returns the ordered set of program extensions
+// StartController/StopController check before falling back to the default
+// Claude-controller path below. A future built-in program gets a new
+// programExtension implementation appended to this slice instead of a new
+// if-branch in either method; a third-party program gets registered at
+// runtime via RegisterProgramExtension instead and is checked first.
 func (i *Instance) controllerExtensions() []programExtension {
 	extensions := []programExtension{&i.piExtension}
-
-	// Allow runtime registration of custom program extensions
-	// Users can register custom extensions via API/UI/MCP before instance creation
-	// or dynamically at runtime by calling RegisterProgramExtension()
 	for _, ext := range programExtensions {
-		// Only include extensions that match the instance's current program
 		if ext.Supported(i) {
 			extensions = append([]programExtension{ext}, extensions...)
 		}
 	}
-
 	return extensions
 }
+
+// StartController creates and starts a ClaudeController for this instance,
+// UNLESS a programExtension (currently: a pi-support-enabled pi session) is
+// supported, in which case it starts that extension instead (Epic 5.2) — pi
+// has no PTY output for ClaudeController's regex-based detector to scrape,
+// so the two are mutually exclusive per instance, not layered.
+// The controller enables automated idle detection and queue management.
+func (i *Instance) StartController() error {
+	for _, ext := range i.controllerExtensions() {
+		if ext.Supported(i) {
+			return ext.StartController(i)
+		}
+	}
 
 	// Check preconditions under lock
 	i.mu.Lock()
@@ -223,10 +269,10 @@ func (i *Instance) SetControllerForTest(c *ClaudeController) {
 // instance, or the running programExtension (currently: the PiStatusSource
 // for a pi-support-enabled pi session) — see StartController's doc comment.
 //
-// Routing is gated on actual live registration state (ext.running()), not on
-// re-evaluating ext.supported() (Bug 2 fix): the pi-support feature flag is
+// Routing is gated on actual live registration state (ext.Running()), not on
+// re-evaluating ext.Supported() (Bug 2 fix): the pi-support feature flag is
 // mutable at runtime (Story 2.1.2's disable-warning dialog), and
-// supported() re-checks it live. If a user disables the flag while a pi
+// Supported() re-checks it live. If a user disables the flag while a pi
 // session's PiStatusSource is still running, re-checking the flag here
 // would route to the Claude-controller branch instead and never call
 // Stop() on the still-live PiStatusSource — a goroutine/subprocess leak, and
@@ -237,8 +283,8 @@ func (i *Instance) SetControllerForTest(c *ClaudeController) {
 // always be stoppable regardless of the flag's current value.
 func (i *Instance) StopController() {
 	for _, ext := range i.controllerExtensions() {
-		if ext.running() {
-			ext.stopController(i)
+		if ext.Running() {
+			ext.StopController(i)
 			return
 		}
 	}
@@ -269,13 +315,13 @@ func (i *Instance) StopController() {
 // programExtension, e.g. PiStatusSource for a pi-support-enabled pi
 // session — see StartController's doc comment) from within an actor
 // command. See StopController's doc comment for why routing is gated on
-// ext.running() (live registration state) rather than ext.supported()
+// ext.Running() (live registration state) rather than ext.Supported()
 // (Bug 2 fix).
 func stopControllerLocked(s *instanceState) {
 	i := s.inst
 	for _, ext := range i.controllerExtensions() {
-		if ext.running() {
-			ext.stopController(i)
+		if ext.Running() {
+			ext.StopController(i)
 			return
 		}
 	}
