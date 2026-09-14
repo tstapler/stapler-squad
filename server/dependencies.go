@@ -1393,6 +1393,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// BacklogService's SessionStopper uses for the transition-hook/rework-respawn
 	// archival paths.
 	backlogLifecycleListener.SetSessionArchiver(sessionService)
+	// Wire the worktree cleaner so internal transition paths that drive an
+	// item straight to done (bounce-to-done, PR-merge/superseded-by-main
+	// detection) trigger the same synchronous git-worktree cleanup +
+	// session archival the manual TransitionBacklogItemStatus RPC already
+	// runs inline, instead of relying solely on the 60s
+	// reconcileTerminalItemSessions safety-net sweep.
+	backlogLifecycleListener.SetWorktreeCleaner(backlogSvc)
 	// Wire the agent-driven ship runner (shipViaAgentOrFallback,
 	// session/backlog_lifecycle.go) so a PASS verdict whose work session has
 	// already exited ships via a headless one-shot /backlog/ship run (CI
