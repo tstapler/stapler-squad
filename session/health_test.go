@@ -623,3 +623,78 @@ func TestSessionHealthChecker_CheckInstances_HealthySocketInstancesAllChecked(t 
 		t.Fatalf("expected both instances to be checked, got %d results: %+v", len(results), results)
 	}
 }
+
+// If this fails, the 15s health checker respawns archived sessions as real tmux
+// sessions and real `claude` processes (ADR-001,
+// superseded-rework-session-retirement). The table covers exactly the four
+// statuses IsSuspended() omits; the control row proves live sessions are still
+// recovered.
+func TestHealthCheckerRecovery_ArchivedInstance_SkippedNotAutoRestarted(t *testing.T) {
+	t.Parallel()
+	archivedAt := time.Now()
+
+	tests := []struct {
+		name     string
+		status   Status
+		archived bool
+		// wantRecovery is the expected RecoveryAttempted on the second
+		// checkSingleSession call (past the failure debounce).
+		wantRecovery bool
+	}{
+		{name: "active_archived", status: Active, archived: true},
+		{name: "creating_archived", status: Creating, archived: true},
+		{name: "restoring_archived", status: Restoring, archived: true},
+		{name: "failed_archived", status: Failed, archived: true},
+		{name: "active_not_archived_control", status: Active, archived: false, wantRecovery: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			checker := NewSessionHealthChecker(nil)
+
+			mock := &mockTmuxManager{hasSessionReturn: false} // TmuxAlive() is false
+			inst := &Instance{Title: "archived-health-" + tt.name, Status: tt.status}
+			if tt.archived {
+				// Set before anything calls Snapshot(): it caches its first build.
+				inst.ArchivedAt = &archivedAt
+			}
+			inst.started.Store(true)
+			inst.processManager = NewTmuxBackend(mock)
+
+			// Two calls: the first is below the failure debounce threshold, the
+			// second reaches recoverMissingSession's Start(false).
+			var last HealthCheckResult
+			for i := 0; i < 2; i++ {
+				last = checker.checkSingleSession(inst, nil)
+			}
+
+			if last.RecoveryAttempted != tt.wantRecovery {
+				t.Errorf("RecoveryAttempted = %v, want %v (actions: %v)", last.RecoveryAttempted, tt.wantRecovery, last.Actions)
+			}
+
+			if !tt.archived {
+				if mock.startCalls == 0 {
+					t.Error("control: expected a live session's missing tmux session to still be recreated")
+				}
+				return
+			}
+
+			if mock.startCalls != 0 {
+				t.Errorf("expected Start() never to be called for an archived instance, got %d calls", mock.startCalls)
+			}
+			found := false
+			for _, a := range last.Actions {
+				if strings.Contains(a, "archived") {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected an Actions entry naming the archived skip, got %v", last.Actions)
+			}
+			if got := inst.Snapshot().Status; got != tt.status {
+				t.Errorf("Status = %v, want %v (the guard must not rewrite status)", got, tt.status)
+			}
+		})
+	}
+}

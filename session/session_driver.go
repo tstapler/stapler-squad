@@ -487,6 +487,16 @@ func handleRetryPendingTick(inst *Instance, allowedPath string, policy RetryPoli
 	if !elapsed {
 		return true, false
 	}
+	// A retry scheduled before the archive landed must be dropped, not fired
+	// (ADR-001). Placed after the pending/elapsed gates so a non-pending
+	// session pays no snapshot read on every tick; the only observable
+	// difference is that the pending NextRetryAt is cleared at its deadline
+	// rather than the moment the archive lands — no restart happens between.
+	if inst.IsArchived() {
+		inst.clearNextRetryAt()
+		log.Info("SessionDriver: dropping scheduled retry, session is archived", "session", inst.Title)
+		return false, true
+	}
 	reason := inst.lastRetryFailureReason()
 	prompt := buildRetryContinuationPrompt(inst, reason)
 	if err := restartForRetry(inst, allowedPath, prompt, policy, stop); err != nil {
@@ -882,6 +892,17 @@ func attemptBacklogNudge(ctx context.Context, inst *Instance, idle time.Duration
 // The caller must apply the returned signal immediately (continue/return),
 // mirroring handleInactivityTick's existing pattern.
 func handleDriverFailure(inst *Instance, allowedPath string, policy RetryPolicy, reason string, stop <-chan struct{}) (shouldContinue, shouldReturn bool) {
+	// An archived session is deliberately retired — archiveItemWorkSessions
+	// kills its pane without stopping this driver, so the kill arrives here
+	// looking like a crash. Never answer that with a restart (ADR-001).
+	// Returns "this goroutine is done" rather than falling through to
+	// markSessionPermanentlyFailed: writing a failure status and firing a
+	// notification for a session the system already retired is noise.
+	if inst.IsArchived() {
+		log.Info("SessionDriver: session is archived; not retrying", "session", inst.Title, "reason", reason)
+		return false, true
+	}
+
 	now := time.Now()
 	inst.mu.RLock()
 	rs := inst.RetryState

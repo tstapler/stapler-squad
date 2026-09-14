@@ -999,6 +999,7 @@ actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exi
 	@echo "actor-field-guard: scanning for direct Instance field writes..."
 	@if grep -rEn '\b(inst|instance|liveInst)\.[A-Z][a-zA-Z0-9]+ = [^=]' \
 	    server/services/session_service.go \
+	    server/services/workflow_service.go \
 	    session/pr_status_poller.go \
 	    session/review_queue_poller.go \
 	    session/autonomous_driver.go \
