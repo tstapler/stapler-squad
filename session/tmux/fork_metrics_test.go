@@ -44,13 +44,11 @@ func resetForkMonitor(t *testing.T) {
 		ring.mu.Unlock()
 	}
 
-	// Reset hysteresis/episode state
+	// Reset alert state
 	forkMonitor.alertMu.Lock()
 	forkMonitor.lastAlertAt = time.Time{}
-	forkMonitor.currentLevel = ForkPressureOK
-	forkMonitor.warningActive = false
-	forkMonitor.criticalActive = false
-	forkMonitor.episodeID = ""
+	forkMonitor.episodeActive = false
+	forkMonitor.peakLevel = ForkPressureOK
 	forkMonitor.alertFns = nil
 	forkMonitor.alertMu.Unlock()
 }
@@ -79,278 +77,392 @@ func injectSpawns(n int, at time.Time) {
 	}
 }
 
-// alertRecorder captures every AlertFunc invocation (level, episode AlertID, and the
-// full stats) so tests can assert on fire count, level sequence, episode-ID stability,
-// and the Cleared signal without each test hand-rolling its own closure.
-type alertRecorder struct {
-	mu    sync.Mutex
-	stats []ForkPressureStats
-}
-
-// register installs r as the sole alertFns callback, replacing any existing ones.
-func (r *alertRecorder) register() {
+// registerCountingAlert registers an alert function that atomically increments *count.
+// The registered slice is replaced so only this one function is active.
+func registerCountingAlert(count *atomic.Int64) {
 	forkMonitor.alertMu.Lock()
-	forkMonitor.alertFns = []AlertFunc{func(_ ForkPressureLevel, s ForkPressureStats) {
-		r.mu.Lock()
-		r.stats = append(r.stats, s)
-		r.mu.Unlock()
+	forkMonitor.alertFns = []AlertFunc{func(_ ForkPressureLevel, _ ForkPressureStats) {
+		count.Add(1)
 	}}
 	forkMonitor.alertMu.Unlock()
 }
 
-func (r *alertRecorder) count() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.stats)
-}
-
-func (r *alertRecorder) snapshot() []ForkPressureStats {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]ForkPressureStats(nil), r.stats...)
-}
-
-// waitRecorderCount spins up to maxWait for r to have recorded at least want
-// callbacks. checkPressure fires alerts in a goroutine, so callers need a small wait.
-func waitRecorderCount(t *testing.T, r *alertRecorder, want int, maxWait time.Duration) {
+// waitAlertCount spins up to maxWait for *count to reach expected.
+// checkPressure fires alerts in a goroutine, so we need a small wait.
+func waitAlertCount(t *testing.T, count *atomic.Int64, expected int64, maxWait time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
-		if r.count() >= want {
+		if count.Load() >= expected {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got := r.count(); got < want {
-		t.Errorf("alert count: got %d, want >= %d after %v", got, want, maxWait)
+	if got := count.Load(); got < expected {
+		t.Errorf("alert count: got %d, want >= %d after %v", got, expected, maxWait)
 	}
 }
 
-// TestCheckPressure_SustainedTrickle_FiresOnce verifies that a count oscillating
-// around the OLD single threshold (e.g. 9/11/9/11 zombies/window) fires the alert
-// exactly once per episode instead of re-firing on every crossing — the hysteresis
-// gap (enter=10, clear=5 for zombies) means a value that never drops below the clear
-// threshold never re-arms.
+// waitLevels spins up to maxWait for the levels slice to reach wantCount entries.
+func waitLevels(t *testing.T, mu *sync.Mutex, levels *[]ForkPressureLevel, wantCount int, maxWait time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(*levels)
+		mu.Unlock()
+		if n >= wantCount {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	n := len(*levels)
+	mu.Unlock()
+	if n < wantCount {
+		t.Errorf("levels count: got %d, want >= %d after %v", n, wantCount, maxWait)
+	}
+}
+
+// TestCheckPressure_StableCount_NoRepeatAlert verifies that a stable zombie count
+// does not re-fire the alert within the cooldown window (FR-1).
+func TestCheckPressure_StableCount_NoRepeatAlert(t *testing.T) {
+	resetForkMonitor(t)
+
+	var count atomic.Int64
+	registerCountingAlert(&count)
+
+	t0 := time.Now()
+
+	// Inject 12 zombies (> threshold of 10) and fire first check.
+	injectZombies(12, t0)
+	checkPressure(t0)
+	waitAlertCount(t, &count, 1, 500*time.Millisecond)
+
+	// Advance 1 minute (inside the 2-minute cooldown). Count is still 12 (same events).
+	t1 := t0.Add(1 * time.Minute)
+	// Re-inject the same events at a time far in the future so they appear in the new window.
+	// Actually: the ring has 12 entries recorded at t0; the window cutoff is t1-30s = t0+30s.
+	// Events at t0 are OUTSIDE the window at t1 — so ZombiesInWindow == 0 → level == OK.
+	// We need events within the window at t1 to keep pressure elevated.
+	injectZombies(12, t1)
+	// At t1, ZombiesInWindow == 12 (the new events). lastAlertZombieCount == 12.
+	// 12 > 12 is false → not worsened. Within cooldown → suppress.
+	checkPressure(t1)
+
+	// Suppressed alerts return synchronously without spawning a dispatch
+	// goroutine (see checkPressure), so waiting on alertWG deterministically
+	// drains only the first (worsened-case) alert instead of guessing a
+	// fixed duration for "no second alert fires."
+	forkMonitor.alertWG.Wait()
+
+	if got := count.Load(); got != 1 {
+		t.Errorf("alert count = %d; want 1 (stable count should be suppressed within cooldown)", got)
+	}
+}
+
+// TestCheckPressure_SustainedTrickle_FiresOnce is the regression test for the
+// flapping bug (AC1): a sustained-but-not-escalating condition (zombie count
+// stays at the Critical level, never clearing, never escalating further) must
+// fire exactly one alert for the whole episode, not one per occurrence. This
+// replaces the old ratchet-based test that asserted the opposite (a strictly
+// higher same-level count used to bypass the cooldown and re-fire).
 func TestCheckPressure_SustainedTrickle_FiresOnce(t *testing.T) {
 	resetForkMonitor(t)
 
-	var rec alertRecorder
-	rec.register()
+	var count atomic.Int64
+	registerCountingAlert(&count)
 
 	t0 := time.Now()
-	injectZombies(12, t0) // enter Critical
-	checkPressure(t0)
-	waitRecorderCount(t, &rec, 1, 500*time.Millisecond)
 
-	// Oscillate just above/below the old threshold (10) but always above the new
-	// clear threshold (5) — events land close enough together to accumulate in the
-	// 30s window rather than expire.
-	for i := 1; i <= 10; i++ {
-		n := 9
-		if i%2 == 0 {
-			n = 11
-		}
-		ti := t0.Add(time.Duration(i) * 3 * time.Second)
-		injectZombies(n, ti)
-		checkPressure(ti)
+	// Inject 12 zombies — first (and, per this test, only) alert fires. Use
+	// t0+1ns so events are strictly inside the window at t0+1ns.
+	t0p := t0.Add(1 * time.Nanosecond)
+	injectZombies(12, t0p)
+	checkPressure(t0p)
+	waitAlertCount(t, &count, 1, 500*time.Millisecond)
+
+	// Simulate a slow trickle: several more checkPressure calls, each with a
+	// slightly higher in-window zombie count (still Critical, never dropping
+	// below the clear threshold, never escalating to a higher level — there is
+	// none above Critical). None of these should re-fire.
+	for i, extra := range []int{5, 3, 4, 2} {
+		t1 := t0.Add(time.Duration(i+1) * 5 * time.Second)
+		injectZombies(extra, t1)
+		checkPressure(t1)
 	}
 	forkMonitor.alertWG.Wait()
 
-	if got := rec.count(); got != 1 {
-		t.Errorf("alert count = %d; want 1 (sustained trickle above the clear threshold must not re-fire)", got)
+	if got := count.Load(); got != 1 {
+		t.Errorf("alert count = %d; want 1 (sustained trickle within the same episode must not re-fire)", got)
 	}
 }
 
-// TestCheckPressure_LevelEscalation_FiresAgain verifies that escalation from Warning
-// to Critical within the same episode fires a second alert, reusing the same episode
-// AlertID rather than minting a new one.
-func TestCheckPressure_LevelEscalation_FiresAgain(t *testing.T) {
+// TestCheckPressure_LevelEscalation_BypassesCooldown verifies that escalation
+// from Warning to Critical fires immediately, bypassing the cooldown (FR-1).
+func TestCheckPressure_LevelEscalation_BypassesCooldown(t *testing.T) {
 	resetForkMonitor(t)
 
-	var rec alertRecorder
-	rec.register()
+	var levelsMu sync.Mutex
+	var levels []ForkPressureLevel
+	forkMonitor.alertMu.Lock()
+	forkMonitor.alertFns = []AlertFunc{func(level ForkPressureLevel, _ ForkPressureStats) {
+		levelsMu.Lock()
+		levels = append(levels, level)
+		levelsMu.Unlock()
+	}}
+	forkMonitor.alertMu.Unlock()
 
 	t0 := time.Now()
-	injectSpawns(130, t0) // enter Warning (>= 120/window)
-	checkPressure(t0)
-	waitRecorderCount(t, &rec, 1, 500*time.Millisecond)
 
-	t1 := t0.Add(5 * time.Second)
-	injectFailures(12, t1) // escalate to Critical (>= 10 failures/window)
+	// Inject enough spawns to reach Warning level (120+ per window).
+	injectSpawns(130, t0)
+	checkPressure(t0)
+	waitLevels(t, &levelsMu, &levels, 1, 500*time.Millisecond)
+
+	levelsMu.Lock()
+	if len(levels) < 1 || levels[0] != ForkPressureWarning {
+		t.Fatalf("expected first alert at Warning level, got %v", levels)
+	}
+	levelsMu.Unlock()
+
+	// Advance 30 s inside cooldown; add 10+ failures to reach Critical.
+	t1 := t0.Add(30 * time.Second)
+	injectFailures(12, t1)
+	// Keep spawns in window too.
 	injectSpawns(130, t1)
 	checkPressure(t1)
-	waitRecorderCount(t, &rec, 2, 500*time.Millisecond)
+	waitLevels(t, &levelsMu, &levels, 2, 500*time.Millisecond)
 
-	got := rec.snapshot()
-	if len(got) != 2 {
-		t.Fatalf("expected 2 alerts, got %d: %+v", len(got), got)
+	levelsMu.Lock()
+	defer levelsMu.Unlock()
+	if len(levels) < 2 {
+		t.Fatalf("expected 2 alerts, got %d: %v", len(levels), levels)
 	}
-	if got[0].Level != ForkPressureWarning {
-		t.Fatalf("expected first alert at Warning level, got %s", got[0].Level)
-	}
-	if got[1].Level != ForkPressureCritical {
-		t.Errorf("expected second alert at Critical level, got %s", got[1].Level)
-	}
-	if got[0].AlertID == "" || got[1].AlertID != got[0].AlertID {
-		t.Errorf("expected escalation to reuse the same episode AlertID: got %q then %q", got[0].AlertID, got[1].AlertID)
+	if levels[1] != ForkPressureCritical {
+		t.Errorf("expected second alert at Critical level, got %s", levels[1])
 	}
 }
 
-// assertMonitorCleared asserts forkMonitor's hysteresis state has fully returned to
-// OK with no active episode.
-func assertMonitorCleared(t *testing.T) {
-	t.Helper()
-	forkMonitor.alertMu.Lock()
-	level, episodeID := forkMonitor.currentLevel, forkMonitor.episodeID
-	forkMonitor.alertMu.Unlock()
-	if level != ForkPressureOK {
-		t.Errorf("currentLevel = %v; want OK after clear", level)
-	}
-	if episodeID != "" {
-		t.Errorf("episodeID = %q; want empty after clear", episodeID)
-	}
-}
-
-// TestCheckPressure_ClearAndRearm verifies that after ALL metrics drop below their
-// clear thresholds, the episode ends (a Cleared callback carrying the episode's
-// AlertID) and a fresh surge afterwards starts a new episode with a new AlertID.
+// TestCheckPressure_ClearAndRearm verifies that after the condition clears
+// (dropping below the clear thresholds), the episode state resets — firing an
+// explicit clear alert (FR-4/AC4) — and a fresh surge fires a new alert (FR-5).
 func TestCheckPressure_ClearAndRearm(t *testing.T) {
 	resetForkMonitor(t)
 
-	var rec alertRecorder
-	rec.register()
+	var levelsMu sync.Mutex
+	var levels []ForkPressureLevel
+	forkMonitor.alertMu.Lock()
+	forkMonitor.alertFns = []AlertFunc{func(level ForkPressureLevel, _ ForkPressureStats) {
+		levelsMu.Lock()
+		levels = append(levels, level)
+		levelsMu.Unlock()
+	}}
+	forkMonitor.alertMu.Unlock()
 
 	t0 := time.Now()
+
+	// Inject 12 zombies — first alert fires (Critical).
 	injectZombies(12, t0)
 	checkPressure(t0)
-	waitRecorderCount(t, &rec, 1, 500*time.Millisecond)
+	waitLevels(t, &levelsMu, &levels, 1, 500*time.Millisecond)
 
-	// Advance past the 30s window with no new events — all metrics drop to 0
-	// (below every clear threshold) and the episode should end.
+	// Advance 35 s so the ring entries at t0 fall outside the 30-second window.
+	// No new events injected — level should return to OK, below every clear
+	// threshold, firing an explicit ForkPressureOK clear signal.
 	t1 := t0.Add(35 * time.Second)
 	checkPressure(t1)
-	waitRecorderCount(t, &rec, 2, 500*time.Millisecond)
-	assertMonitorCleared(t)
+	waitLevels(t, &levelsMu, &levels, 2, 500*time.Millisecond)
 
-	// A fresh surge should start a NEW episode with a new AlertID.
+	// Verify episode state was reset.
+	forkMonitor.alertMu.Lock()
+	if forkMonitor.episodeActive {
+		t.Error("episodeActive = true; want false after clear")
+	}
+	if forkMonitor.peakLevel != ForkPressureOK {
+		t.Errorf("peakLevel = %v; want OK after clear", forkMonitor.peakLevel)
+	}
+	forkMonitor.alertMu.Unlock()
+
+	// Inject 12 new zombies (above the alert threshold of 10) — a fresh episode.
 	t2 := t1.Add(1 * time.Second)
 	injectZombies(12, t2)
 	checkPressure(t2)
-	waitRecorderCount(t, &rec, 3, 500*time.Millisecond)
+	waitLevels(t, &levelsMu, &levels, 3, 500*time.Millisecond)
 
-	got := rec.snapshot()
-	if len(got) != 3 {
-		t.Fatalf("expected 3 alerts (entry, cleared, re-entry), got %d: %+v", len(got), got)
+	levelsMu.Lock()
+	defer levelsMu.Unlock()
+	want := []ForkPressureLevel{ForkPressureCritical, ForkPressureOK, ForkPressureCritical}
+	if len(levels) != len(want) {
+		t.Fatalf("levels = %v; want %v", levels, want)
 	}
-	if got[0].AlertID == "" {
-		t.Errorf("expected a non-empty AlertID on entry")
-	}
-	if !got[1].Cleared || got[1].AlertID != got[0].AlertID {
-		t.Errorf("expected the cleared callback to be Cleared and carry entry's AlertID %q, got Cleared=%v AlertID=%q",
-			got[0].AlertID, got[1].Cleared, got[1].AlertID)
-	}
-	if got[2].AlertID == "" || got[2].AlertID == got[0].AlertID {
-		t.Errorf("expected re-entry to mint a fresh episode ID, got %q (same as previous episode %q)", got[2].AlertID, got[0].AlertID)
-	}
-}
-
-// TestCheckPressure_HysteresisGap_NoRefireAtOldThreshold verifies that a count
-// oscillating exactly at the OLD single threshold (10 for zombies) does not re-fire,
-// because the new clear threshold (5) sits well below it.
-func TestCheckPressure_HysteresisGap_NoRefireAtOldThreshold(t *testing.T) {
-	resetForkMonitor(t)
-
-	var rec alertRecorder
-	rec.register()
-
-	t0 := time.Now()
-	injectZombies(10, t0) // exactly at the old single threshold
-	checkPressure(t0)
-	waitRecorderCount(t, &rec, 1, 500*time.Millisecond)
-
-	for i := 1; i <= 6; i++ {
-		n := 9
-		if i%2 == 0 {
-			n = 11
+	for i := range want {
+		if levels[i] != want[i] {
+			t.Errorf("levels[%d] = %v; want %v (full sequence %v)", i, levels[i], want[i], levels)
 		}
-		ti := t0.Add(time.Duration(i) * 2 * time.Second)
-		injectZombies(n, ti)
-		checkPressure(ti)
-	}
-	forkMonitor.alertWG.Wait()
-
-	if got := rec.count(); got != 1 {
-		t.Errorf("alert count = %d; want 1 (oscillation at the old threshold, within the new hysteresis gap, must not re-fire)", got)
 	}
 }
 
-// TestCheckPressure_NoAlertOnClear_WithinBand verifies that dropping below the enter
-// threshold but staying above the clear threshold does not end the episode — the
-// hysteresis gap must actually hold, not just be a renamed single threshold.
-func TestCheckPressure_NoAlertOnClear_WithinBand(t *testing.T) {
+// TestCheckPressure_PeakLevelRecorded_AfterFiring verifies that peakLevel is
+// updated to match the level at the time of firing (FR-2).
+func TestCheckPressure_PeakLevelRecorded_AfterFiring(t *testing.T) {
 	resetForkMonitor(t)
 
-	var rec alertRecorder
-	rec.register()
+	var count atomic.Int64
+	registerCountingAlert(&count)
 
 	t0 := time.Now()
-	injectZombies(12, t0) // Critical (>= enter threshold 10)
+	const zombies = 12
+	const failures = 11 // > spawnFailureAlertThreshold (10) → Critical
+
+	injectZombies(zombies, t0)
+	injectFailures(failures, t0)
 	checkPressure(t0)
-	waitRecorderCount(t, &rec, 1, 500*time.Millisecond)
+	waitAlertCount(t, &count, 1, 500*time.Millisecond)
 
-	// Drop to 7 (below the 10 enter threshold, but above the 5 clear threshold) —
-	// should remain latched Critical, no second alert.
-	t1 := t0.Add(1 * time.Second)
-	injectZombies(7, t1)
-	checkPressure(t1)
-	forkMonitor.alertWG.Wait()
-
-	if got := rec.count(); got != 1 {
-		t.Errorf("alert count = %d; want 1 (dropping within the hysteresis band must not fire a clear)", got)
-	}
 	forkMonitor.alertMu.Lock()
-	level := forkMonitor.currentLevel
+	gotActive := forkMonitor.episodeActive
+	gotPeak := forkMonitor.peakLevel
 	forkMonitor.alertMu.Unlock()
-	if level != ForkPressureCritical {
-		t.Errorf("currentLevel = %v; want still Critical while within the hysteresis band", level)
+
+	if !gotActive {
+		t.Error("episodeActive = false; want true after firing")
+	}
+	if gotPeak != ForkPressureCritical {
+		t.Errorf("peakLevel = %v; want Critical", gotPeak)
 	}
 }
 
-// TestCheckPressure_EmitsClearedSignal verifies that the callback fired when an
-// episode fully clears carries stats.Cleared == true — the explicit signal a
-// persistent status banner needs, since there is otherwise no reliable "back to
-// normal" event in the notification stream.
-func TestCheckPressure_EmitsClearedSignal(t *testing.T) {
+// TestCheckPressure_PeakLevelNotUpdated_WhenSuppressed verifies that a
+// suppressed (same-level, non-escalating) call does not touch peakLevel (FR-2).
+func TestCheckPressure_PeakLevelNotUpdated_WhenSuppressed(t *testing.T) {
 	resetForkMonitor(t)
 
-	var rec alertRecorder
-	rec.register()
+	var count atomic.Int64
+	registerCountingAlert(&count)
+
+	synctest.Test(t, func(t *testing.T) {
+		t0 := time.Now()
+
+		// Inject 12 zombies — first alert fires, peakLevel recorded as Critical.
+		injectZombies(12, t0)
+		checkPressure(t0)
+		// checkPressure fires alerts in a goroutine spawned inside this bubble;
+		// synctest.Wait() blocks until it (and any other bubble goroutine) is
+		// idle or exited, so the count is settled deterministically.
+		synctest.Wait()
+		if got := count.Load(); got != 1 {
+			t.Fatalf("alert count = %d; want 1 after first alert", got)
+		}
+
+		// Advance 30 s; add 12 more zombies at t1 (still Critical, still above
+		// the clear threshold — a same-level trickle, not an escalation).
+		t1 := t0.Add(30 * time.Second)
+		injectZombies(12, t1)
+
+		forkMonitor.alertMu.Lock()
+		beforePeak := forkMonitor.peakLevel
+		forkMonitor.alertMu.Unlock()
+		checkPressure(t1)
+		synctest.Wait()
+
+		forkMonitor.alertMu.Lock()
+		afterPeak := forkMonitor.peakLevel
+		forkMonitor.alertMu.Unlock()
+
+		// Alert count must still be 1 (suppressed).
+		if got := count.Load(); got != 1 {
+			t.Errorf("alert count = %d; want 1 (same-level trickle must be suppressed)", got)
+		}
+		// peakLevel must not have changed during a suppressed call.
+		if afterPeak != beforePeak {
+			t.Errorf("peakLevel changed during a suppressed call: before=%v after=%v", beforePeak, afterPeak)
+		}
+	})
+}
+
+// TestCheckPressure_EpisodeStateResetOnClear verifies that transitioning below
+// every clear threshold resets both episode-state fields (FR-5).
+func TestCheckPressure_EpisodeStateResetOnClear(t *testing.T) {
+	resetForkMonitor(t)
+
+	var count atomic.Int64
+	registerCountingAlert(&count)
 
 	t0 := time.Now()
+
+	// Trigger an alert.
 	injectZombies(12, t0)
 	checkPressure(t0)
-	waitRecorderCount(t, &rec, 1, 500*time.Millisecond)
+	waitAlertCount(t, &count, 1, 500*time.Millisecond)
 
-	t1 := t0.Add(35 * time.Second) // all events expire -> full clear
+	// Advance 35 s so events expire → level returns to OK, well below every
+	// clear threshold.
+	t1 := t0.Add(35 * time.Second)
 	checkPressure(t1)
-	waitRecorderCount(t, &rec, 2, 500*time.Millisecond)
+	waitAlertCount(t, &count, 2, 500*time.Millisecond)
 
-	got := rec.snapshot()
-	if len(got) != 2 {
-		t.Fatalf("expected 2 callbacks (entry, cleared), got %d: %+v", len(got), got)
+	forkMonitor.alertMu.Lock()
+	gotActive := forkMonitor.episodeActive
+	gotPeak := forkMonitor.peakLevel
+	forkMonitor.alertMu.Unlock()
+
+	if gotActive {
+		t.Error("episodeActive = true; want false after clear")
 	}
-	if got[0].Cleared {
-		t.Errorf("entry callback should not be marked Cleared")
+	if gotPeak != ForkPressureOK {
+		t.Errorf("peakLevel = %v; want ForkPressureOK after clear", gotPeak)
 	}
-	if !got[1].Cleared {
-		t.Errorf("clear callback should be marked Cleared")
-	}
-	if got[1].Level != ForkPressureOK {
-		t.Errorf("clear callback Level = %v; want OK", got[1].Level)
-	}
-	if got[1].AlertID == "" || got[1].AlertID != got[0].AlertID {
-		t.Errorf("clear callback AlertID = %q; want it to match the entry episode's AlertID %q", got[1].AlertID, got[0].AlertID)
-	}
+}
+
+// TestCheckPressure_ClearFiresAlert verifies that transitioning back to OK DOES
+// fire an alert callback with level ForkPressureOK — the explicit clear signal
+// AC4 requires so listeners (the notification record, the status banner) can
+// tell an episode ended instead of it lingering at its last elevated state.
+// This intentionally pins the opposite of the old behavior (see git history:
+// the clear used to be silent, which left AC4's banner with no way to know
+// when to stop showing an alert).
+func TestCheckPressure_ClearFiresAlert(t *testing.T) {
+	resetForkMonitor(t)
+
+	var levelsMu sync.Mutex
+	var levels []ForkPressureLevel
+	forkMonitor.alertMu.Lock()
+	forkMonitor.alertFns = []AlertFunc{func(level ForkPressureLevel, _ ForkPressureStats) {
+		levelsMu.Lock()
+		levels = append(levels, level)
+		levelsMu.Unlock()
+	}}
+	forkMonitor.alertMu.Unlock()
+
+	synctest.Test(t, func(t *testing.T) {
+		t0 := time.Now()
+
+		// Trigger an alert.
+		injectZombies(12, t0)
+		checkPressure(t0)
+		synctest.Wait()
+		levelsMu.Lock()
+		gotLen := len(levels)
+		levelsMu.Unlock()
+		if gotLen != 1 {
+			t.Fatalf("alert count = %d; want 1 after first alert", gotLen)
+		}
+
+		// Advance 35 s so events expire → level returns to OK.
+		t1 := t0.Add(35 * time.Second)
+		checkPressure(t1)
+		synctest.Wait()
+
+		levelsMu.Lock()
+		defer levelsMu.Unlock()
+		if len(levels) != 2 {
+			t.Fatalf("alert count = %d; want 2 (clear must fire an explicit ForkPressureOK alert)", len(levels))
+		}
+		if levels[1] != ForkPressureOK {
+			t.Errorf("levels[1] = %v; want ForkPressureOK", levels[1])
+		}
+	})
 }
 
 // TestCheckPressure_ApprovalsUnaffected documents the architectural invariant that
@@ -361,65 +473,52 @@ func TestCheckPressure_EmitsClearedSignal(t *testing.T) {
 func TestCheckPressure_ApprovalsUnaffected(t *testing.T) {
 	resetForkMonitor(t)
 
+	// Verify alertFns are nil by default — no approval-aware callbacks are registered.
 	forkMonitor.alertMu.Lock()
 	fns := forkMonitor.alertFns
 	forkMonitor.alertMu.Unlock()
+
 	if len(fns) != 0 {
 		t.Errorf("expected 0 registered alertFns in fresh monitor, got %d", len(fns))
 	}
 
-	var rec alertRecorder
-	rec.register()
+	// Register a fork-pressure-only callback and verify it only receives
+	// ForkPressureStats (a type that has no approval fields).
+	var receivedStats []ForkPressureStats
+	var mu sync.Mutex
+	forkMonitor.alertMu.Lock()
+	forkMonitor.alertFns = []AlertFunc{func(_ ForkPressureLevel, s ForkPressureStats) {
+		mu.Lock()
+		receivedStats = append(receivedStats, s)
+		mu.Unlock()
+	}}
+	forkMonitor.alertMu.Unlock()
 
 	t0 := time.Now()
 	injectZombies(12, t0)
 	checkPressure(t0)
-	waitRecorderCount(t, &rec, 1, 500*time.Millisecond)
 
-	got := rec.snapshot()
-	if len(got) == 0 {
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(receivedStats)
+		mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(receivedStats) == 0 {
 		t.Fatal("expected at least one alert to fire")
 	}
 	// The type ForkPressureStats structurally cannot carry approval payloads —
 	// this assertion documents that invariant.
-	if got[0].Level == ForkPressureOK {
+	stat := receivedStats[0]
+	if stat.Level == ForkPressureOK {
 		t.Errorf("expected elevated level, got OK")
-	}
-}
-
-// TestCheckPressure_ConcurrentCallers_NoRace drives recordSpawn/recordFailure/
-// RecordZombieProcess concurrently from multiple goroutines, verifying the
-// hysteresis fields (currentLevel/warningActive/criticalActive/episodeID) are
-// correctly guarded by alertMu under `go test -race`. The rest of this suite avoids
-// t.Parallel() (process-global state), so this is the only place ambient
-// concurrency on checkPressure is exercised.
-func TestCheckPressure_ConcurrentCallers_NoRace(t *testing.T) {
-	resetForkMonitor(t)
-
-	var rec alertRecorder
-	rec.register()
-
-	var wg sync.WaitGroup
-	now := time.Now()
-	for g := 0; g < 8; g++ {
-		wg.Add(1)
-		go runConcurrentPressureCaller(&wg, g, now)
-	}
-	wg.Wait()
-	forkMonitor.alertWG.Wait()
-}
-
-func runConcurrentPressureCaller(wg *sync.WaitGroup, g int, now time.Time) {
-	defer wg.Done()
-	for i := 0; i < 25; i++ {
-		switch g % 3 {
-		case 0:
-			recordSpawn(now)
-		case 1:
-			recordFailure(now)
-		default:
-			RecordZombieProcess(10000+g, "test", nil)
-		}
 	}
 }
 

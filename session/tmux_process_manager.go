@@ -10,8 +10,18 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/procinfo"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// panePIDInspector supplies the OS-level process introspection backing
+// TmuxProcessManager's orphan-detection cache below -- narrower than
+// procinfo's own inspector type so tests can inject a fake without touching
+// real OS processes.
+type panePIDInspector interface {
+	CreateTime(pid int32) (int64, error)
+	IsAlive(pid int32, expectedCreateTimeMs int64) bool
+}
 
 // capturePaneCacheTTL is the TTL for the CapturePaneContent result cache.
 // Avoids spawning a tmux subprocess on every poll tick.
@@ -44,6 +54,23 @@ type TmuxProcessManager struct {
 	// panePID caches the foreground PID after first successful lookup (stable per pane).
 	panePIDCached atomic.Int32
 	panePIDSet    atomic.Bool
+	// panePIDCreateTimeMs caches that PID's process-start timestamp (epoch ms),
+	// captured alongside it, so CachedPanePIDStillAlive can rule out PID reuse
+	// rather than trusting a bare "some process with this number exists".
+	panePIDCreateTimeMs atomic.Int64
+	// processInspector backs CachedPanePIDStillAlive/TerminateCachedPanePID.
+	// Nil (every construction site today) falls back to the real
+	// procinfo.NewProcessInspector() via inspector() below; tests inject a fake.
+	processInspector panePIDInspector
+}
+
+// inspector returns processInspector, defaulting to the real OS-backed
+// procinfo implementation when unset.
+func (tm *TmuxProcessManager) inspector() panePIDInspector {
+	if tm.processInspector != nil {
+		return tm.processInspector
+	}
+	return procinfo.NewProcessInspector()
 }
 
 // HasSession reports whether a tmux session has been initialized.
@@ -484,8 +511,40 @@ func (tm *TmuxProcessManager) GetPanePID() (int32, error) {
 		return 0, fmt.Errorf("failed to get pane pid: %w", err)
 	}
 	tm.panePIDCached.Store(pid)
+	if createTimeMs, ctErr := tm.inspector().CreateTime(pid); ctErr == nil {
+		tm.panePIDCreateTimeMs.Store(createTimeMs)
+	}
 	tm.panePIDSet.Store(true)
 	return pid, nil
+}
+
+// CachedPanePIDStillAlive reports whether the most recently cached pane PID
+// (see GetPanePID) is still running as the same process it was when cached
+// -- the cached creation timestamp rules out a PID-reuse false positive.
+// False if no PID has ever been cached.
+//
+// This is RestoreWithWorkDir's orphan guard (wired via
+// tmux.WithOrphanProcessGuard in initTmuxSession): `tmux has-session` failing
+// proves tmux lost track of the session, not that the process it originally
+// launched is dead -- if the tmux server was killed/restarted out from under
+// it, that child can survive as an orphan and keep writing its own
+// transcript alongside a freshly relaunched duplicate (2026-09-12 incident).
+func (tm *TmuxProcessManager) CachedPanePIDStillAlive() bool {
+	if !tm.panePIDSet.Load() {
+		return false
+	}
+	return tm.inspector().IsAlive(tm.panePIDCached.Load(), tm.panePIDCreateTimeMs.Load())
+}
+
+// TerminateCachedPanePID sends SIGTERM to the most recently cached pane PID
+// (see CachedPanePIDStillAlive) so RestoreWithWorkDir can reap a confirmed
+// orphan before launching its replacement. No-op if no PID has ever been
+// cached.
+func (tm *TmuxProcessManager) TerminateCachedPanePID() error {
+	if !tm.panePIDSet.Load() {
+		return nil
+	}
+	return terminateProcess(tm.panePIDCached.Load())
 }
 
 // SetOnExitCallback registers a callback that fires when the tmux session exits

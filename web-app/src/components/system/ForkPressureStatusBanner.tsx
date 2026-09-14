@@ -1,77 +1,133 @@
 "use client";
 // +feature: ui:fork-pressure-status-banner
 
-import { useEffect } from "react";
-import { timestampDate } from "@bufbuild/protobuf/wkt";
-import { SystemBanner } from "@/components/ui/SystemBanner";
-import { useNotificationHistory } from "@/lib/hooks/useNotificationHistory";
-import { useSystemMemory } from "@/lib/contexts/SystemMemoryContext";
+import { useMemo } from "react";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
+import type { NotificationHistoryItem } from "@/lib/types/notification";
+import { SystemBanner, type SystemBannerSeverity } from "@/components/ui/SystemBanner";
 
+/** SessionID fork-pressure notifications are published under (server/server.go's buildForkPressureNotification). */
 const FORK_PRESSURE_SESSION_ID = "fork-pressure";
-// Matches TmuxVersionMismatchBanner's poll cadence -- this is a persistent
-// system-health signal, not a live event stream, so a slow interval is fine.
-const POLL_INTERVAL_MS = 60_000;
+/** metadata.reason value memory-pressure notifications carry (server/services/memory_pressure_notifier.go). */
+const MEMORY_PRESSURE_REASON = "memory_pressure";
 
-type NotificationRecord = ReturnType<typeof useNotificationHistory>["notifications"][number];
+type MonitorLevel = "ok" | "warning" | "critical";
 
-// lastOccurredAt tracks the most recent occurrence of a deduplicated record
-// (createdAt is fixed at first occurrence) -- see NotificationHistoryRecord's
-// proto doc comment.
-function occurredAtMs(record: NotificationRecord): number {
-  const ts = record.lastOccurredAt ?? record.createdAt;
-  return ts ? timestampDate(ts).getTime() : 0;
+interface MonitorStatus {
+  level: MonitorLevel;
+  message: string;
+}
+
+const OK_STATUS: MonitorStatus = { level: "ok", message: "" };
+
+/**
+ * Finds the most recently occurring history item matching sessionId (and, if
+ * given, a metadata predicate), or undefined if none match. "Most recent" is
+ * by timestamp, not array position -- notificationHistory's ordering mixes
+ * items added live (prepended) with items merged in from a backend fetch, so
+ * position alone isn't a reliable recency signal.
+ */
+function latestMatching(
+  items: NotificationHistoryItem[],
+  sessionId: string,
+  metadataPredicate?: (metadata: Record<string, string>) => boolean
+): NotificationHistoryItem | undefined {
+  let latest: NotificationHistoryItem | undefined;
+  for (const item of items) {
+    if (item.sessionId !== sessionId) continue;
+    if (metadataPredicate && !metadataPredicate(item.metadata ?? {})) continue;
+    if (!latest || item.timestamp > latest.timestamp) latest = item;
+  }
+  return latest;
 }
 
 /**
- * Persistent status banner for ongoing system-health monitors (Fork Pressure,
- * memory usage) -- distinct from the discrete notification feed/toast stack,
- * which shows a stream of point-in-time events rather than "what's true right
- * now." Renders via the generic SystemBanner primitive, same as
- * TmuxVersionMismatchBanner.
+ * Reads Fork Pressure's current status from the "fork_pressure_level"
+ * metadata key that every fork-pressure notification carries (warning,
+ * critical, or ok -- the explicit clear signal checkPressure now emits on
+ * episode end). Missing metadata (a record predating this field, or none at
+ * all) is treated as "ok" -- the safe default for a status indicator.
+ */
+export function computeForkPressureStatus(history: NotificationHistoryItem[]): MonitorStatus {
+  const latest = latestMatching(history, FORK_PRESSURE_SESSION_ID);
+  const level = latest?.metadata?.["fork_pressure_level"];
+  if (!latest || level === "ok" || level === undefined) return OK_STATUS;
+  return {
+    level: level === "critical" ? "critical" : "warning",
+    message: latest.message || latest.title || "Fork pressure is elevated.",
+  };
+}
+
+/**
+ * Reads Memory Pressure's current status the same way, scoped to the
+ * "system"-sessioned, reason=memory_pressure notifications
+ * MemoryPressureNotifier publishes.
+ */
+export function computeMemoryPressureStatus(history: NotificationHistoryItem[]): MonitorStatus {
+  const latest = latestMatching(
+    history,
+    "system",
+    (metadata) => metadata["reason"] === MEMORY_PRESSURE_REASON
+  );
+  const level = latest?.metadata?.["memory_pressure_level"];
+  if (!latest || level === "ok" || level === undefined) return OK_STATUS;
+  return {
+    level: "warning", // memory pressure has no separate critical tier today
+    message: latest.message || latest.title || "Memory usage is elevated.",
+  };
+}
+
+function toBannerSeverity(level: "warning" | "critical"): SystemBannerSeverity {
+  return level === "critical" ? "error" : "warning";
+}
+
+/**
+ * Persistent, always-current status banner for the host-wide system-health
+ * monitors (Fork Pressure, Memory usage) -- distinct from the discrete
+ * notification feed/toast stream, which surfaces point-in-time events that
+ * get read and dismissed. This shows nothing when both monitors are normal,
+ * and a small persistent indicator per elevated monitor otherwise, reflecting
+ * its current severity. Reads the already-polled/streamed
+ * NotificationContext history rather than adding a second poll loop: each
+ * monitor publishes to one stable notification ID
+ * (server/server.go's forkPressureNotificationID,
+ * server/services/memory_pressure_notifier.go's memoryPressureNotificationID)
+ * that updates in place -- including an explicit clear signal on episode
+ * end -- so its latest entry here always reflects current state.
  *
- * Fork Pressure has no live-state RPC, so this reads its latest record from
- * notification history (server/server.go's buildForkPressureNotification
- * keeps one stable per-episode id and metadata.state, so the latest record
- * IS the current state -- see docs/registry/features/frontend for the
- * backend fix this depends on). Memory pressure has real live state via
- * useSystemMemory(), so it's read directly rather than round-tripped through
- * notification history.
+ * Renders via the generic SystemBanner primitive, one instance per elevated
+ * monitor. capacity_monitor.go (per-session API-rate-limit tracking) is a
+ * different shape and out of scope for v1.
  */
 export function ForkPressureStatusBanner() {
-  const { notifications, refresh } = useNotificationHistory();
-  const { systemMemoryPct, isUnderPressure } = useSystemMemory();
+  const { notificationHistory } = useNotifications();
 
-  useEffect(() => {
-    const id = setInterval(refresh, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [refresh]);
+  const forkPressure = useMemo(() => computeForkPressureStatus(notificationHistory), [notificationHistory]);
+  const memoryPressure = useMemo(() => computeMemoryPressureStatus(notificationHistory), [notificationHistory]);
 
-  const latestForkPressure = notifications
-    .filter((n) => n.sessionId === FORK_PRESSURE_SESSION_ID)
-    .sort((a, b) => occurredAtMs(b) - occurredAtMs(a))[0];
+  const monitors: Array<{ id: string; label: string; status: MonitorStatus }> = [
+    { id: "fork-pressure-status", label: "Fork pressure", status: forkPressure },
+    { id: "memory-pressure-status", label: "Memory", status: memoryPressure },
+  ].filter((m) => m.status.level !== "ok");
 
-  const forkPressureActive = latestForkPressure && latestForkPressure.metadata?.state !== "cleared";
+  if (monitors.length === 0) return null;
 
   return (
     <>
-      {forkPressureActive && (
+      {monitors.map(({ id, label, status }) => (
         <SystemBanner
-          id="fork-pressure-status"
-          severity={latestForkPressure.metadata?.level === "critical" ? "error" : "warning"}
-          icon="⚠"
-          testId="fork-pressure-status-banner"
-          message={latestForkPressure.message || latestForkPressure.title}
+          key={id}
+          id={id}
+          severity={toBannerSeverity(status.level as "warning" | "critical")}
+          icon={status.level === "critical" ? "⛔" : "⚠"}
+          testId={id}
+          message={
+            <>
+              {label}: {status.message}
+            </>
+          }
         />
-      )}
-      {isUnderPressure && (
-        <SystemBanner
-          id="memory-pressure-status"
-          severity="warning"
-          icon="⚠"
-          testId="memory-pressure-status-banner"
-          message={`System memory usage is high (${systemMemoryPct.toFixed(0)}%).`}
-        />
-      )}
+      ))}
     </>
   );
 }
