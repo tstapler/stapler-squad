@@ -34,12 +34,15 @@ type supersededSessionStore interface {
 // retry, and this sweeper is the self-heal; (2) it converges on rows already
 // persisted as stale, not just ones created after this sweeper exists.
 //
-// "Which round is current" is decided by findSupersededSessions, the same
-// pure decision function spawnSessionAfterGates' own guards
-// (findActiveWorkSession/findConfirmedLiveWorkSession) are built to agree
-// with -- this sweeper deliberately does not re-derive that logic itself, to
-// avoid two independent "is this current" answers disagreeing under a
-// concurrent respawn (see pitfalls.md #3).
+// "Which round is current" is decided by findSupersededSessions, which
+// reuses findMostRecentSessions' latest-CreatedAt-wins tie-break -- the same
+// helper TriggerReReview itself already calls to find the prior review round
+// to archive -- rather than this sweeper re-deriving its own, third
+// definition of "current" (see findSupersededSessions' doc comment for why
+// that's a distinct question from spawnSessionAfterGates' EndedAt/IsSessionLive-based
+// "is a work session already open" guards, and why archiveIfNotLive's own
+// liveness check, not tie-break agreement, is what protects a genuinely-live
+// session from an incorrect archive).
 //
 // Never hard-kills: a superseded session that is still confirmed-live (a user
 // may be mid-conversation or steering it) is skipped for this tick rather

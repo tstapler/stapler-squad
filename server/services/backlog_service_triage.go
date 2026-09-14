@@ -1227,10 +1227,18 @@ func findConfirmedLiveWorkSession(stopper SessionStopper, priorSessions []sessio
 // ItemSession in sessions that is NOT the current round for its role — i.e.
 // a strictly newer ItemSession of the same role exists for this item. This is
 // the single source of truth for "which round is current," reusing
-// findMostRecentSessions' exact per-role tie-break (latest CreatedAt wins) so
-// SupersededSessionSweeper never disagrees with findActiveWorkSession/
-// findConfirmedLiveWorkSession about which round is live (pitfalls.md #3: two
-// independent "is this current" derivations racing to different answers).
+// findMostRecentSessions' exact per-role tie-break (latest CreatedAt wins) —
+// the same helper TriggerReReview itself already calls to find the prior
+// review round to archive — rather than defining a second, competing notion
+// of "current." findActiveWorkSession/findConfirmedLiveWorkSession answer a
+// different question ("is there a still-open/still-live work session at
+// all," by EndedAt/IsSessionLive, not CreatedAt) for spawnSessionAfterGates'
+// concurrency guard, not "which round is current," so this deliberately does
+// not reuse their tie-break. The two can disagree in theory (e.g. the
+// newest-by-CreatedAt round already ended while an older one is still open) —
+// archiveIfNotLive's IsSessionLive check is what actually protects a
+// genuinely-attached session from being archived on such a disagreement, not
+// this function agreeing with those two on "current."
 // Pure — no I/O, no locking — so it's table-testable without tmux/storage.
 func findSupersededSessions(sessions []session.ItemSessionSummary) []session.ItemSessionSummary {
 	currentReview, currentWork := findMostRecentSessions(sessions)
