@@ -58,12 +58,21 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// synchronisation and are left as-is. Fields absent from InstanceSnapshot
 	// (LaunchCommand, CreationProgress) remain as direct reads.
 	snap := inst.Snapshot()
+	// One Workspace() call for every path field, so the conversion keeps
+	// costing at most the single os.Stat it always did.
+	ws := inst.Workspace()
 
 	protoSession := &sessionv1.Session{
-		Id:                 inst.GetStableID(),
-		Title:              snap.Title,
-		Path:               inst.Workspace().EffectivePath,
-		WorkingDir:         inst.GetWorkingDirectory(),
+		Id:         inst.GetStableID(),
+		Title:      snap.Title,
+		Path:       ws.ExistingDir,
+		WorkingDir: ws.ActiveDir,
+
+		RepoRoot:    ws.RepoRoot,
+		WorktreeDir: ws.WorktreeDir,
+		ActiveDir:   ws.ActiveDir,
+		ExistingDir: ws.ExistingDir,
+
 		Branch:             snap.Branch,
 		Status:             statusToProto(inst.GetEffectiveStatus()),
 		Program:            snap.Program,

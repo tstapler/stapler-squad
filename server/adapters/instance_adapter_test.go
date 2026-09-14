@@ -1,8 +1,10 @@
 package adapters
 
 import (
+	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -10,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -453,4 +456,57 @@ func TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackN
 	if proto.GithubMergeable != "" {
 		t.Errorf("expected empty GithubMergeable, got %q", proto.GithubMergeable)
 	}
+}
+
+// newWorktreeInstance builds an Instance whose worktree points at worktreePath.
+// A path never created on disk models a session whose worktree pause_session
+// removed while keeping the branch.
+func newWorktreeInstance(repoPath, worktreePath string) *session.Instance {
+	const title = "worktree-session"
+	inst := &session.Instance{Title: title, Path: repoPath, Status: session.Active}
+	inst.SetGitWorktree(git.NewGitWorktreeFromStorage(repoPath, worktreePath, title, "test-branch", "abc123"))
+	return inst
+}
+
+// TestInstanceToProto_PopulatesPathVocabulary covers the four path fields at the
+// adapter boundary, which had no path-field assertions at all before this.
+func TestInstanceToProto_PopulatesPathVocabulary(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(t.TempDir(), "gone-worktree")
+
+	got := InstanceToProto(newWorktreeInstance(repoPath, worktreePath), nil)
+
+	require.Equal(t, repoPath, got.RepoRoot)
+	require.Equal(t, worktreePath, got.WorktreeDir)
+	require.Equal(t, worktreePath, got.ActiveDir)
+	require.Equal(t, repoPath, got.ExistingDir, "worktree is absent from disk, so ExistingDir falls back")
+}
+
+// TestInstanceToProto_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing checks
+// the divergence survives the adapter, not just the domain layer — wiring the
+// wrong one of the two into a field is exactly the mistake that shipped.
+func TestInstanceToProto_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing(t *testing.T) {
+	repoPath := t.TempDir()
+	gone := t.TempDir()
+
+	first := InstanceToProto(newWorktreeInstance(repoPath, filepath.Join(gone, "alpha")), nil)
+	second := InstanceToProto(newWorktreeInstance(repoPath, filepath.Join(gone, "beta")), nil)
+
+	require.Equal(t, first.ExistingDir, second.ExistingDir)
+	require.NotEqual(t, first.ActiveDir, second.ActiveDir,
+		"two isolated worktree sessions must stay distinguishable on the wire")
+}
+
+// TestInstanceToProto_LegacyPathFields_Unchanged is the additive guarantee: the
+// deprecated fields keep the values they carried before the new ones existed, so
+// no current consumer sees a change.
+func TestInstanceToProto_LegacyPathFields_Unchanged(t *testing.T) {
+	repoPath := t.TempDir()
+	inst := newWorktreeInstance(repoPath, filepath.Join(t.TempDir(), "gone-worktree"))
+
+	got := InstanceToProto(inst, nil)
+
+	//nolint:staticcheck // asserting the deprecated fields is the point: they must not change.
+	require.Equal(t, inst.Workspace().ExistingDir, got.Path)
+	require.Equal(t, inst.Workspace().ActiveDir, got.WorkingDir)
 }

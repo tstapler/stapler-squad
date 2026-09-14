@@ -389,6 +389,18 @@ func pathEscapesRoot(root, candidate string) bool {
 // callers that need to actually read from the filesystem, use Workspace(),
 // which falls back to the repo root when the worktree is gone.
 func (i *Instance) GetEffectiveRootDir() string {
+	return i.activeDir()
+}
+
+// activeDir computes Workspace.ActiveDir: the worktree directory when this
+// session has one, else the repo root.
+//
+// Kept pure -- no os.Stat, no logging -- because it backs GetEffectiveRootDir
+// and GetWorkingDirectory, which between them have ~37 call sites including
+// cmd.Dir, session start, and poll loops. Routing those through Workspace()
+// instead would add a syscall per call and, for every paused session whose
+// worktree pause_session removed, a log.Warn per call.
+func (i *Instance) activeDir() string {
 	if i.gitManager.HasWorktree() {
 		if p := i.gitManager.GetWorktreePath(); p != "" {
 			return p
@@ -405,27 +417,32 @@ func (i *Instance) GetPath() string {
 	return i.Snapshot().Path
 }
 
-// Workspace returns where this session is operating.
-// Use this as the single source of truth for path resolution instead of
-// accessing inst.Path directly, which is wrong for worktree sessions.
-//
-// Falls back to RepoRoot if the worktree path no longer exists on disk (e.g.
-// a paused session's worktree was removed while its branch/metadata
-// persisted) — otherwise filesystem-reading callers like ListFiles would try
-// to read a directory that's gone and surface a bare "directory not found: ."
-// with no indication why.
+// Workspace returns every path concept this session has, named. See the
+// Workspace type for which field answers which question — in particular
+// ActiveDir to compare sessions, ExistingDir to open files. Prefer it to
+// reading inst.Path directly, which is wrong for worktree sessions.
 func (i *Instance) Workspace() Workspace {
 	repoRoot := i.GetPath()
-	effectivePath := i.GetEffectiveRootDir()
-	if effectivePath != repoRoot {
-		if _, err := os.Stat(effectivePath); err != nil {
-			log.Warn("worktree path no longer exists on disk, falling back to repo path", "session", i.Title, "worktreePath", effectivePath)
-			effectivePath = repoRoot
+	worktreeDir := ""
+	if i.gitManager.HasWorktree() {
+		worktreeDir = i.gitManager.GetWorktreePath()
+	}
+	activeDir := i.activeDir()
+
+	// Only stat when the two can actually differ, so directory sessions cost no
+	// syscall at all.
+	existingDir := activeDir
+	if existingDir != repoRoot {
+		if _, err := os.Stat(existingDir); err != nil {
+			log.Warn("worktree path no longer exists on disk, falling back to repo path", "session", i.Title, "worktreePath", existingDir)
+			existingDir = repoRoot
 		}
 	}
 	return Workspace{
-		EffectivePath: effectivePath,
-		RepoRoot:      repoRoot,
+		RepoRoot:    repoRoot,
+		WorktreeDir: worktreeDir,
+		ActiveDir:   activeDir,
+		ExistingDir: existingDir,
 	}
 }
 
@@ -629,12 +646,13 @@ func computeDirDiffStats(repoPath, baseSHA string) *git.DiffStats {
 	return stats
 }
 
-// GetWorkingDirectory returns the working directory for this instance.
+// GetWorkingDirectory returns Workspace().ActiveDir. Despite the name it does
+// not read the Instance.WorkingDir field, which is the user's relative
+// subdirectory (see resolveStartPath).
+//
+// Deprecated: use Workspace().ActiveDir, or ExistingDir to open a file.
 func (i *Instance) GetWorkingDirectory() string {
-	if i.gitManager.HasWorktree() {
-		return i.gitManager.GetWorktreePath()
-	}
-	return i.GetPath()
+	return i.activeDir()
 }
 
 // DetectAndPopulateWorktreeInfo detects if the instance path is a worktree

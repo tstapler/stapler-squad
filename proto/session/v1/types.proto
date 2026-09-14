@@ -13,10 +13,21 @@ message Session {
   // Human-readable session title.
   string title = 2;
 
-  // Path to workspace repository root.
-  string path = 3;
+  // Deprecated: use existing_dir to open files, or active_dir to compare
+  // sessions. Despite the name this is NOT the repository root — it carries
+  // Workspace().ExistingDir, so for a worktree session whose directory was
+  // cleaned up it silently becomes the repo root, which is how two isolated
+  // worktree sessions came to report the same path.
+  string path = 3 [deprecated = true];
 
-  // Directory within repository to start in.
+  // The directory this session works in, absolute (Workspace().ActiveDir).
+  //
+  // Not the "directory within the repository to start in" — that is the
+  // relative subdirectory this field is *written* with: UpdateSession routes
+  // working_dir into Instance.WorkingDir. The field therefore reads absolute
+  // and writes relative, so round-tripping it corrupts the value. Prefer
+  // active_dir for reads; this field stays for the write path until that
+  // asymmetry is fixed separately.
   string working_dir = 4;
 
   // Git branch name for this session.
@@ -95,6 +106,38 @@ message Session {
   // GitHub Enterprise host owning github_owner/github_repo, e.g.
   // "github.netflix.net". Empty means github.com.
   string github_host = 90;
+
+  // Where this session's code lives. Four concepts, because the domain has
+  // four — picking the wrong one has already shipped a bug.
+  //
+  //   comparing two sessions' locations -> active_dir
+  //   reading or writing files          -> existing_dir
+  //   "same repository?"                -> repo_root, or workspace_key
+
+  // The path this session was created against. For a session created from a
+  // pre-existing worktree this is that worktree, not the main checkout.
+  string repo_root = 91;
+
+  // The git worktree created for this session, empty when it works directly in
+  // repo_root.
+  //
+  // Differs from git_worktree.worktree_path, which is only populated once the
+  // session has started — this field is set for stopped sessions too, so it is
+  // the one to use when a session may not be running.
+  string worktree_dir = 92;
+
+  // Where this session works: worktree_dir if it has one, else repo_root.
+  // Stable whether or not the directory currently exists, so this is the
+  // correct key for comparing, correlating, or identifying sessions — and the
+  // right default when unsure.
+  string active_dir = 93;
+
+  // active_dir when that directory exists on disk, else repo_root. Use it only
+  // to open files.
+  //
+  // Lossy by construction: two sessions whose worktrees were both cleaned up
+  // share an existing_dir without being in the same place. Never compare it.
+  string existing_dir = 94;
 
   // Original URL or reference used to create this session.
   // Could be a PR URL, repository URL, or git URL.

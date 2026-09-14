@@ -27,7 +27,7 @@ func (f *fakeWorkspaceProvider) GetWorkspace(sessionID string) (session.Workspac
 	if sessionID != "test-session" {
 		return session.Workspace{}, connect.NewError(connect.CodeNotFound, nil)
 	}
-	return session.Workspace{EffectivePath: f.effectivePath}, nil
+	return session.Workspace{ExistingDir: f.effectivePath}, nil
 }
 
 // testFileService wraps FileService with a fake findInstance for unit tests.

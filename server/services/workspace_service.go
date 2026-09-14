@@ -143,7 +143,7 @@ func (ws *WorkspaceService) GetVCSStatus(
 		return nil, err
 	}
 
-	workDir := instance.Workspace().EffectivePath
+	workDir := instance.Workspace().ExistingDir
 	if workDir == "" {
 		return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
 			Error: "session has no working directory",
@@ -361,7 +361,7 @@ func (ws *WorkspaceService) SwitchWorkspace(
 		return nil, err
 	}
 
-	preWorkDir := instance.Workspace().EffectivePath
+	preWorkDir := instance.Workspace().ExistingDir
 
 	var switchType session.WorkspaceSwitchType
 	switch req.Msg.SwitchType {
