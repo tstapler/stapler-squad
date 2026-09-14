@@ -1,6 +1,6 @@
 # BUG-112: Production's tymuxd is unpinned (PATH-resolved), and no tagged release has the Unix-socket feature BUG-106's fix depends on [SEVERITY: High]
 
-**Status**: 🐛 Open
+**Status**: 🐛 Open (gap 2 fixed 2026-09-14; gap 1 remains, blocked on upstream)
 **Discovered**: 2026-09-12, wiring CI to fetch a real tymuxd binary for `session/tymux/supervise_integration_test.go` (BUG-106/BUG-110's coverage): the fetched, checksum-pinned `TYMUX_VERSION` release behaved differently from the `tymuxd` this machine had on `$PATH`, which is what this session's earlier live-incident investigation and manual verification actually exercised. Filed upstream as `tstapler/tymux#46`.
 
 ## Problem Description
@@ -53,18 +53,25 @@ than one that happens to have a newer build lying around.
 
 ## Fix Approach
 
-Two independent decisions, likely both needed:
+Two independent decisions:
 
 1. **Bump `TYMUX_VERSION`** once an upstream `tymux` release ships the Unix-socket feature
    (tracked: `tstapler/tymux#46`) — `scripts/tymuxd-checksums.txt` needs a new pinned entry per the
-   file's own header instructions once one exists.
-2. **Make `make install-service` (or `build`) actually embed the pinned binary** — either default
-   `build`/`stapler-squad` to `build-embedded-tymux`'s behavior, or make the deploy scripts
-   explicitly build with `-tags embed_tymux` and fail loudly if `session/tymux/embed/tymuxd` is
-   missing, so production can never silently fall back to an unpinned `$PATH` resolution. Needs a
-   design decision on backward compatibility (does this change break anyone currently relying on
-   the `$PATH` fallback, e.g. a dev machine without network access to fetch the release?) — flagging
-   for a decision, not deciding here.
+   file's own header instructions once one exists. **Still open.** `TYMUX_VERSION` was bumped to
+   the current latest tag, `v1.1.0` (2026-09-14, `Makefile`), but that release still lacks the
+   feature (confirmed via the same `strings`/two-processes-no-collision checks as `v1.0.0` — see
+   `scripts/tymuxd-checksums.txt`'s v1.1.0 comment block) — this is a version bump, not this gap's
+   fix, done because it was the latest available tag regardless.
+2. **Make `make install-service` actually embed the pinned binary.** ✅ Fixed 2026-09-14:
+   `install-service` now depends on `build-embedded-tymux` instead of plain `build`, and
+   `build-embedded`/`build-embedded-tymux` gained the `ensure-tools proto-gen ent-gen
+   server/web/dist` prerequisite chain plain `build` always had (a pre-existing gap, since neither
+   embedded target had it before). Verified via `make build-embedded-tymux` (clean build, tmux +
+   tymuxd both embedded) and the full `session/tymux` unit + `-tags integration` suites passing
+   against the resulting embedded v1.1.0 binary. Production no longer falls back to an unpinned
+   `$PATH` resolution — it now always deploys the checksum-verified, embedded binary. Note this
+   doesn't resolve gap 1: `DaemonConfig.SocketPath` remains inert under the now-correctly-embedded
+   v1.1.0 binary, exactly as before — only the deploy path was unpinned, not this feature gap.
 
 Two adjacent upstream gaps found during the same investigation, filed but not blocking this repo's
 own fix: `tstapler/tymux#48` (dead-flagged session records accumulate unbounded — 4400+ observed,
