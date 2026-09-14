@@ -2778,11 +2778,16 @@ func (r *EntRepository) FinishSourceSync(ctx context.Context, sourceID string, c
 }
 
 // GetAllItemSessionsWithBacklogInfo returns all item sessions joined with their parent
-// backlog item's ID, title, and status. Used by the Insights dashboard index.
+// backlog item's ID, title, and status. Used by the Insights dashboard index. Ordered
+// newest-first (session_uuid is not unique across records, per GetItemSessionBySessionUUID's
+// doc comment) so callers folding this into a map keyed by session UUID can deterministically
+// keep the first (most recent) role/status seen per UUID, rather than depending on undefined
+// ent iteration order (ADR-029).
 func (r *EntRepository) GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]ItemSessionBacklogEntry, error) {
 	//nolint:entfullscan feeds the Insights dashboard, which needs the full join across all item sessions.
 	sessions, err := r.client.ItemSession.Query().
 		WithBacklogItem().
+		Order(ent.Desc(itemsession.FieldCreatedAt)).
 		All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query item sessions with backlog info: %w", err)

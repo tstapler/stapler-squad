@@ -917,6 +917,19 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if active := findActiveWorkSession(priorSessions); active != nil {
 		return nil, connect.NewError(connect.CodeAlreadyExists, s.activeWorkSessionBlockedError(active))
 	}
+	// 8b2. Concurrent-liveness cap: independent of both reworkCap (a
+	// historical-attempt-count cap, not a right-now-concurrency cap) and the
+	// 8b guard above (which trusts priorSessions' EndedAt column). Re-asks the
+	// OS/tmux truth question directly via sessionStopper.IsSessionLive rather
+	// than DB bookkeeping, as a second, independent line of defense against
+	// the exact failure mode fixed in findConfirmedLiveInstance: a work
+	// session wrongly tombstoned by a transient liveness-check miss would
+	// pass the 8b guard above (its EndedAt is now set) but still fail here if
+	// IsSessionLive's OS-truth fallback confirms it's actually still running.
+	if live := findConfirmedLiveWorkSession(s.sessionStopper, priorSessions); live != nil {
+		return nil, connect.NewError(connect.CodeAlreadyExists,
+			fmt.Errorf("a work session (%s) is already confirmed live for this item; refusing to spawn a concurrent one", live.SessionUUID))
+	}
 	// 8b (Jules). Guard against starting a competing local session while a Jules
 	// session for this item is already running on Google's infrastructure — see
 	// session.HasActiveJulesSession's doc comment.
@@ -1181,6 +1194,30 @@ func findActiveWorkSession(priorSessions []session.ItemSessionSummary) *session.
 	for i := range priorSessions {
 		if priorSessions[i].Role == session.SessionRoleWork && priorSessions[i].EndedAt == nil {
 			return &priorSessions[i]
+		}
+	}
+	return nil
+}
+
+// findConfirmedLiveWorkSession is spawnSessionAfterGates' 8b2 concurrent-liveness
+// cap: it re-derives "is a work session already running for this item" straight
+// from sessionStopper.IsSessionLive (OS/tmux truth, via
+// SessionService.findConfirmedLiveInstance) instead of priorSessions' EndedAt
+// column, which findActiveWorkSession relies on and tombstoneOrphanWorkSessions
+// writes. Returns nil (never blocks) if stopper is nil, matching this file's
+// existing "unknown liveness assumes alive is not assumed, tombstoning is
+// skipped" conservative-nil convention elsewhere (e.g. tombstoneOrphanWorkSessions).
+func findConfirmedLiveWorkSession(stopper SessionStopper, priorSessions []session.ItemSessionSummary) *session.ItemSessionSummary {
+	if stopper == nil {
+		return nil
+	}
+	for i := range priorSessions {
+		is := &priorSessions[i]
+		if is.Role != string(session.SessionRoleWork) || is.EndedAt != nil {
+			continue
+		}
+		if stopper.IsSessionLive(is.SessionUUID) {
+			return is
 		}
 	}
 	return nil

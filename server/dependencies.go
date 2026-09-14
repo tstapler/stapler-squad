@@ -1498,7 +1498,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			log.Warn("pricing table is stale (an entry's EffectiveDate is 30+ days old)", "loadedAt", pricing.LoadedAt)
 		}
 		associator := tokens.NewAssociator(storage)
-		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator)
+		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator, storage)
+		insightsSvc.SetDismissedFindingsStore(storage)
 		sessionService.SetTokenStoreReader(tokenStore)
 		backlogSvc.SetTokenStore(tokenStore, pricing)
 		if sessionSummaryGenerator != nil {
