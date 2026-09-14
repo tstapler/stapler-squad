@@ -372,6 +372,20 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// verbatim, same failure mode as the SearchGitHubRepos comment above.
 	"GetTmuxVersionStatus": "tmux:version-status",
 	"RestartTmuxServer":    "tmux:restart-server",
+	// Durable guidance-request RPCs (GuidanceRequestService in
+	// guidance_request.proto, #809) -- must match the "// +api:
+	// guidance-request:*" markers in server/services/guidance_request_service.go
+	// verbatim, same failure mode as the SearchGitHubRepos comment above.
+	"CreateGuidanceRequest":          "guidance-request:create",
+	"AnswerGuidanceRequest":          "guidance-request:answer",
+	"GetGuidanceRequest":             "guidance-request:get",
+	"ListGuidanceRequests":           "guidance-request:list",
+	"ListAllPendingGuidanceRequests": "guidance-request:list-all-pending",
+	// DismissFinding (InsightsService in insights.proto) -- its
+	// "// +api: DismissFinding" marker in server/services/insights_service.go
+	// already uses the method-name-as-id convention (see the SearchGitHubRepos
+	// comment above), so match it verbatim rather than a kebab-case id.
+	"DismissFinding": "DismissFinding",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)
