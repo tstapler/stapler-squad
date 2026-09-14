@@ -281,25 +281,45 @@ func TestUndismissWorktree_NoOpOnUnknown(t *testing.T) {
 }
 
 // TestInstanceIndexes_WhenSessionIsWorktree_ExpectKeyedByWorktreePath is the
-// regression test for backlog item 7cfdb43e: the scanner's ScanResult.WorktreePath
-// is the resolved worktree directory, so instanceIndexes' pathIdx/prIdx must be
-// keyed on that same resolved directory (InstanceData.ActiveDir()), not the
-// identity Instance.Path (the main repo root) that a worktree session's
-// InstanceData still carries. The identity-path version of this index must fail
-// this assertion.
+// regression test for backlog item 7cfdb43e: pathIdx/prIdx must be keyed on the
+// resolved worktree dir (InstanceData.ActiveDir()), not the identity Instance.Path
+// — the identity-path version of this index must fail this assertion.
 func TestInstanceIndexes_WhenSessionIsWorktree_ExpectKeyedByWorktreePath(t *testing.T) {
 	t.Parallel()
 	svc, cleanup := setupUWSFixture(t)
 	t.Cleanup(cleanup)
 
 	const worktreePath = "/repo/../worktrees/instance-indexes-worktree"
-	inst := &session.Instance{Title: "instance-indexes-worktree", Path: "/repo", Program: "claude", UUID: "44444444-4444-4444-4444-444444444444"}
+	inst := &session.Instance{
+		Title: "instance-indexes-worktree", Path: "/repo", Program: "claude",
+		UUID:           "44444444-4444-4444-4444-444444444444",
+		GitHubPRNumber: 42, GitHubPRURL: "https://github.com/o/r/pull/42", GitHubPRState: "open",
+	}
 	inst.SetGitWorktree(git.NewGitWorktreeFromStorage(
 		"/repo", worktreePath, "instance-indexes-worktree", "backlog/some-item", "abc123def"))
 	require.NoError(t, svc.storage.AddInstance(inst))
 
-	pathIdx, _ := svc.instanceIndexes()
+	pathIdx, prIdx := svc.instanceIndexes()
 
 	assert.ElementsMatch(t, []string{inst.UUID}, pathIdx[worktreePath],
 		"pathIdx must be keyed by the resolved worktree path, not the identity repo path %q", inst.Path)
+	require.Contains(t, prIdx, worktreePath,
+		"prIdx must be keyed by the resolved worktree path, not the identity repo path %q", inst.Path)
+	assert.Equal(t, 42, prIdx[worktreePath].Number)
+}
+
+// TestInstanceIndexes_WhenSessionHasNoWorktree_ExpectKeyedByIdentityPath covers
+// InstanceData.ActiveDir()'s fallback branch (no worktree recorded): pathIdx
+// must key on the plain Instance.Path.
+func TestInstanceIndexes_WhenSessionHasNoWorktree_ExpectKeyedByIdentityPath(t *testing.T) {
+	t.Parallel()
+	svc, cleanup := setupUWSFixture(t)
+	t.Cleanup(cleanup)
+
+	inst := &session.Instance{Title: "no-worktree-instance", Path: "/repo/no-worktree", Program: "claude", UUID: "55555555-5555-5555-5555-555555555555"}
+	require.NoError(t, svc.storage.AddInstance(inst))
+
+	pathIdx, _ := svc.instanceIndexes()
+
+	assert.ElementsMatch(t, []string{inst.UUID}, pathIdx[inst.Path])
 }

@@ -667,12 +667,9 @@ func TestListSessionRecords_WhenInstanceHasTags_ExpectSessionRecordTagsPopulated
 }
 
 // TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDir is
-// the regression test for backlog item 7cfdb43e: Claude's JSONL ProjectPath is
-// derived from the process cwd (the worktree), so association.go's path-prefix
-// match needs SessionRecord.Path to be the resolved worktree directory, not the
-// identity Path (the main repo root) that a worktree session's Instance.Path
-// still carries. The identity-path version of this lookup (records[0].Path ==
-// inst.Path) must fail this assertion.
+// the regression test for backlog item 7cfdb43e: SessionRecord.Path must be the
+// resolved worktree dir (InstanceData.ActiveDir()), not the identity Instance.Path
+// — the identity-path version of this lookup must fail this assertion.
 func TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDir(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
@@ -688,6 +685,22 @@ func TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDi
 	require.Len(t, records, 1)
 	assert.Equal(t, "/repo/../worktrees/worktree-session-records", records[0].Path,
 		"SessionRecord.Path must be the resolved worktree dir, not the identity repo path %q", inst.Path)
+}
+
+// TestListSessionRecords_WhenSessionHasNoWorktree_ExpectPathIsIdentityPath covers
+// InstanceData.ActiveDir()'s fallback branch (no worktree recorded): SessionRecord.Path
+// must be the plain Instance.Path.
+func TestListSessionRecords_WhenSessionHasNoWorktree_ExpectPathIsIdentityPath(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("plain-session-records")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	records := storage.ListSessionRecords()
+	require.Len(t, records, 1)
+	assert.Equal(t, inst.Path, records[0].Path)
 }
 
 // TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExistsInStorageOnly
