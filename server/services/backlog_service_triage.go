@@ -1223,6 +1223,32 @@ func findConfirmedLiveWorkSession(stopper SessionStopper, priorSessions []sessio
 	return nil
 }
 
+// findSupersededSessions returns every tmux-backed (work or review role)
+// ItemSession in sessions that is NOT the current round for its role — i.e.
+// a strictly newer ItemSession of the same role exists for this item. This is
+// the single source of truth for "which round is current," reusing
+// findMostRecentSessions' exact per-role tie-break (latest CreatedAt wins) so
+// SupersededSessionSweeper never disagrees with findActiveWorkSession/
+// findConfirmedLiveWorkSession about which round is live (pitfalls.md #3: two
+// independent "is this current" derivations racing to different answers).
+// Pure — no I/O, no locking — so it's table-testable without tmux/storage.
+func findSupersededSessions(sessions []session.ItemSessionSummary) []session.ItemSessionSummary {
+	currentReview, currentWork := findMostRecentSessions(sessions)
+
+	var superseded []session.ItemSessionSummary
+	for i := range sessions {
+		is := &sessions[i]
+		if !session.IsTmuxBackedSessionRole(is.Role) {
+			continue
+		}
+		if is == currentReview || is == currentWork {
+			continue
+		}
+		superseded = append(superseded, *is)
+	}
+	return superseded
+}
+
 // findActiveJulesSession returns the open (not yet ended) jules_work-role
 // ItemSession, if any — the Jules-specific counterpart to findActiveWorkSession,
 // used alongside it (not instead of it — see Story 2.1.3's design note on why
@@ -2973,6 +2999,15 @@ Do not modify the code. Only write the review verdict.
 	// old, idle session that was left behind from a previous (possibly crashed) attempt.
 	if s.sessionStopper != nil {
 		_ = s.sessionStopper.KillTmuxSessionByTitle(ctx, title)
+	}
+
+	// Archive the prior review round's Instance before spawning its replacement —
+	// unlike spawnSessionAfterGates' isReopen path, this tmux-backed re-review spawn
+	// had no archive-on-supersede call at all, leaving every abandoned-review round
+	// (AutoRespawnReview's repeated TriggerReReview calls) as a live Active row that
+	// LoadInstances cold-restores on every future restart.
+	if mostRecentReviewSession != nil {
+		s.archiveItemWorkSessions(ctx, []session.ItemSessionSummary{*mostRecentReviewSession})
 	}
 
 	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, title, item.RepoPath, reReviewPrompt,
