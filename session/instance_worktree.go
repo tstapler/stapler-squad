@@ -441,7 +441,7 @@ func (i *Instance) Workspace() Workspace {
 	existingDir := activeDir
 	if existingDir != repoRoot {
 		if _, err := os.Stat(existingDir); err != nil {
-			log.Warn("worktree path no longer exists on disk, falling back to repo path", "session", i.Title, "worktreePath", existingDir)
+			log.Warn("worktree path no longer exists on disk, falling back to repo path", "session", i.GetTitle(), "worktreePath", existingDir)
 			existingDir = repoRoot
 		}
 	}

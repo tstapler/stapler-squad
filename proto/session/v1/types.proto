@@ -15,20 +15,18 @@ message Session {
 
   // Deprecated: use existing_dir to open files, or active_dir to compare
   // sessions. Despite the name this is NOT the repository root — it carries
-  // Workspace().ExistingDir, so for a worktree session whose directory was
-  // cleaned up it silently becomes the repo root, which is how two isolated
-  // worktree sessions came to report the same path.
+  // Workspace().ExistingDir, which falls back to the repo root when a worktree
+  // is gone from disk.
   string path = 3 [deprecated = true];
 
-  // The directory this session works in, absolute (Workspace().ActiveDir).
+  // Deprecated: use active_dir, which this now duplicates exactly.
   //
-  // Not the "directory within the repository to start in" — that is the
-  // relative subdirectory this field is *written* with: UpdateSession routes
-  // working_dir into Instance.WorkingDir. The field therefore reads absolute
-  // and writes relative, so round-tripping it corrupts the value. Prefer
-  // active_dir for reads; this field stays for the write path until that
-  // asymmetry is fixed separately.
-  string working_dir = 4;
+  // Despite the name it is an absolute directory, not the "directory within the
+  // repository to start in" — that is the relative subdirectory
+  // UpdateSessionRequest.working_dir writes into Instance.WorkingDir. Reading
+  // this field and saving it back therefore corrupts the value; see the
+  // read/write asymmetry noted on UpdateSessionRequest.
+  string working_dir = 4 [deprecated = true];
 
   // Git branch name for this session.
   string branch = 5;

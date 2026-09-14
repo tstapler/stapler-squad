@@ -170,17 +170,24 @@ func (vh *vcsHandlers) findInstance(sessionID string) (*session.Instance, *mcpgo
 // openWorktree reconstructs a GitWorktree from the instance's stored paths.
 // This does not require the session to be running.
 func (vh *vcsHandlers) openWorktree(inst *session.Instance) (*git.GitWorktree, error) {
-	worktreePath := inst.ActiveDir()
-	if worktreePath == "" {
+	ws := inst.Workspace()
+	if ws.ActiveDir == "" {
 		return nil, fmt.Errorf("session has no working directory")
 	}
+	// A session that claims a worktree but has no path for it has corrupt stored
+	// state. ActiveDir would quietly fall back to the repo root and we would
+	// diff the main checkout instead, so refuse rather than answer about the
+	// wrong repository.
+	if inst.HasGitWorktree() && ws.WorktreeDir == "" {
+		return nil, fmt.Errorf("session claims a git worktree but has no worktree path stored")
+	}
+	worktreePath := ws.ActiveDir
 	// Try to get repoPath from gitManager; fall back to worktreePath (non-worktree sessions).
 	repoPath := ""
 	if inst.HasGitWorktree() {
-		// For worktree sessions, try to derive the repo path from stored state.
-		// GetWorkingDirectory returns the worktree path; the repo path is the parent repo.
-		// Use NewGitWorktreeFromStorage with empty repoPath — Diff() will find merge-base.
-		repoPath = worktreePath // intentionally same; Diff() resolves via git internally
+		// Deliberately the worktree path, not the parent repo: Diff() resolves the
+		// merge-base through git itself, so it does not need the real repo root.
+		repoPath = worktreePath
 	}
 	return git.NewGitWorktreeFromStorage(repoPath, worktreePath, inst.Title, inst.Branch, ""), nil
 }

@@ -58,10 +58,10 @@ cleaned-up worktrees share an `ExistingDir`**. Comparing it is what made
 (PR #801, whose own commit message misattributes the cause — the field it blamed,
 `session.path`, already carried the resolved value). Use `ActiveDir` to compare.
 
-`GetEffectiveRootDir()` and `GetWorkingDirectory()` both return `ActiveDir` and are
-deprecated in favour of naming the concept you mean. Note `GetWorkingDirectory()` has
-never read the `Instance.WorkingDir` field, which is the user's *relative*
-subdirectory — a separate concept that happens to share the name.
+`GetEffectiveRootDir()` and `GetWorkingDirectory()` both return `ActiveDir`; prefer
+`ActiveDir()`, which names it. Note `GetWorkingDirectory()` has never read the
+`Instance.WorkingDir` field, which is the user's *relative* subdirectory — a separate
+concept that happens to share the name.
 
 If the field isn't in `InstanceSnapshot` (`session/instance_snapshot.go`) yet, add it there first (it's the single authoritative field list per that file's header comment) rather than reaching for an ad hoc `i.mu.RLock()`. A raw `i.mu.RLock()`-guarded read is only appropriate for state genuinely excluded from the snapshot (manager/dependency objects — see the exclusion list in `instance_snapshot.go`'s doc comment).
 

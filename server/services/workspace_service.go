@@ -361,6 +361,9 @@ func (ws *WorkspaceService) SwitchWorkspace(
 		return nil, err
 	}
 
+	// ExistingDir despite the "never compare it" rule on Workspace: this keys the
+	// VCS status cache, and that status is genuinely a property of the directory
+	// git actually ran in, not of which session asked.
 	preWorkDir := instance.Workspace().ExistingDir
 
 	var switchType session.WorkspaceSwitchType

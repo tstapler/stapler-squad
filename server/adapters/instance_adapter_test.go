@@ -502,11 +502,15 @@ func TestInstanceToProto_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing(t *
 // no current consumer sees a change.
 func TestInstanceToProto_LegacyPathFields_Unchanged(t *testing.T) {
 	repoPath := t.TempDir()
-	inst := newWorktreeInstance(repoPath, filepath.Join(t.TempDir(), "gone-worktree"))
+	worktreePath := filepath.Join(t.TempDir(), "gone-worktree")
 
-	got := InstanceToProto(inst, nil)
+	got := InstanceToProto(newWorktreeInstance(repoPath, worktreePath), nil)
 
+	// Concrete values, not a re-derivation from Workspace() — asserting against
+	// the implementation under test would still pass if its semantics changed,
+	// which is the one thing this test exists to catch.
 	//nolint:staticcheck // asserting the deprecated fields is the point: they must not change.
-	require.Equal(t, inst.Workspace().ExistingDir, got.Path)
-	require.Equal(t, inst.Workspace().ActiveDir, got.WorkingDir)
+	require.Equal(t, repoPath, got.Path, "path carried the disk-checked value, which falls back here")
+	//nolint:staticcheck // ditto.
+	require.Equal(t, worktreePath, got.WorkingDir, "working_dir carried the disk-agnostic value")
 }

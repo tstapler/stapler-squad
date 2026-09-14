@@ -312,10 +312,8 @@ func isValidTitle(title string) bool {
 }
 
 // Workspace describes where a session is operating. It names the four path
-// concepts the domain actually has, because picking the wrong one already
-// shipped a bug -- WorkspacePeersPanel comparing the disk-checked value and so
-// reporting isolated worktree sessions as colliding. Rationale:
-// project_plans/session-path-domain-refactor/decisions/ADR-001-session-path-vocabulary.md
+// concepts the domain actually has; picking the wrong one has already shipped a
+// bug. Why, and the full story: .claude/rules/instance-lock-free-reads.md.
 //
 // Which one you want:
 //
@@ -349,7 +347,6 @@ type Workspace struct {
 	//
 	// Lossy by construction -- two sessions whose worktrees were both cleaned up
 	// share an ExistingDir without being in the same place, so never compare it.
-	// Doing exactly that caused the WorkspacePeersPanel false-collision bug.
 	ExistingDir string
 }
 

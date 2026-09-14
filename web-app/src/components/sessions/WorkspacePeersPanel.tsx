@@ -60,9 +60,10 @@ export interface WorkspacePeersPanelProps {
 // `backlog-panel-${sessionId}` localStorage key.
 const dismissedKey = (sessionId: string) => `workspace-peers-dismissed-${sessionId}`;
 
-// effectiveSessionPath mirrors Instance.GetEffectiveRootDir() (session/instance_worktree.go):
-// session.path is the original repo path and never updates for worktree sessions, so it
-// alone can't distinguish two sessions in separate worktrees of the same repo.
+// Approximates Workspace().ActiveDir (session/types.go). session.path carries
+// the disk-checked ExistingDir, which collapses to the repo root once a worktree
+// is cleaned up — hence the false collisions. Still wrong for stopped sessions,
+// where gitWorktree is unset; session.activeDir replaces this (backlog a9e7edc4).
 function effectiveSessionPath(s: Session): string {
   return s.gitWorktree?.worktreePath || s.path;
 }

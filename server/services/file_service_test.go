@@ -20,14 +20,14 @@ import (
 
 // fakeWorkspaceProvider implements WorkspaceProvider for tests.
 type fakeWorkspaceProvider struct {
-	effectivePath string
+	existingDir string
 }
 
 func (f *fakeWorkspaceProvider) GetWorkspace(sessionID string) (session.Workspace, error) {
 	if sessionID != "test-session" {
 		return session.Workspace{}, connect.NewError(connect.CodeNotFound, nil)
 	}
-	return session.Workspace{ExistingDir: f.effectivePath}, nil
+	return session.Workspace{ExistingDir: f.existingDir}, nil
 }
 
 // testFileService wraps FileService with a fake findInstance for unit tests.
@@ -883,7 +883,7 @@ func TestServeFileRaw_PDF(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	svc := NewFileService(&fakeWorkspaceProvider{existingDir: root})
 	resp := serveFileRawRequest(t, svc, "doc.pdf", "")
 	defer resp.Body.Close()
 
@@ -914,7 +914,7 @@ func TestServeFileRaw_SVG(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	svc := NewFileService(&fakeWorkspaceProvider{existingDir: root})
 	resp := serveFileRawRequest(t, svc, "image.svg", "")
 	defer resp.Body.Close()
 
@@ -942,7 +942,7 @@ func TestServeFileRaw_HTML_RewritesRelativeLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	svc := NewFileService(&fakeWorkspaceProvider{existingDir: root})
 	resp := serveFileRawRequest(t, svc, "logos%2Fpreview.html", "")
 	defer resp.Body.Close()
 
@@ -972,7 +972,7 @@ func TestServeFileRaw_VideoMP4(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	svc := NewFileService(&fakeWorkspaceProvider{existingDir: root})
 	resp := serveFileRawRequest(t, svc, "clip.mp4", "")
 	defer resp.Body.Close()
 
@@ -993,7 +993,7 @@ func TestServeFileRaw_VideoOGV(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	svc := NewFileService(&fakeWorkspaceProvider{existingDir: root})
 	resp := serveFileRawRequest(t, svc, "clip.ogv", "")
 	defer resp.Body.Close()
 
@@ -1016,7 +1016,7 @@ func TestServeFileRaw_LargeFilePDF(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	svc := NewFileService(&fakeWorkspaceProvider{existingDir: root})
 	resp := serveFileRawRequest(t, svc, "large.pdf", "")
 	defer resp.Body.Close()
 
@@ -1034,7 +1034,7 @@ func TestServeFileRaw_LargeFileBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	svc := NewFileService(&fakeWorkspaceProvider{existingDir: root})
 	resp := serveFileRawRequest(t, svc, "large.bin", "")
 	defer resp.Body.Close()
 
