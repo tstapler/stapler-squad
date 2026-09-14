@@ -4942,3 +4942,108 @@ func TestCreateBacklogItem_CanonicalizesRepoPathToMainRepo(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, wantMain, gotRepoPath, "RepoPath must be canonicalized to the main repo, not stored as the filing agent's worktree")
 }
+
+// fakeWorktreeCleaner is a test stub implementing WorktreeCleaner. It records
+// every item ID CleanupTerminalItem was called with, in order, so a test can
+// assert an internal (system-driven) terminal transition triggers cleanup
+// synchronously rather than depending solely on the 60s
+// reconcileTerminalItemSessions safety-net sweep.
+type fakeWorktreeCleaner struct {
+	mu           sync.Mutex
+	cleanedItems []string
+}
+
+func (f *fakeWorktreeCleaner) CleanupTerminalItem(_ context.Context, itemID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cleanedItems = append(f.cleanedItems, itemID)
+}
+
+func (f *fakeWorktreeCleaner) calls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.cleanedItems...)
+}
+
+// TestTransitionBouncingItemToDone_TriggersCleanup proves the internal
+// bounce-to-done path (an item whose linked PR is externally confirmed
+// merged, reconciled via reconcileBouncingItems/transitionBouncingItemToDone
+// rather than the manual TransitionBacklogItemStatus RPC) invokes the wired
+// WorktreeCleaner synchronously right after the done transition — so cleanup
+// does not depend solely on the 60s reconcileTerminalItemSessions sweep. See
+// WorktreeCleaner's doc comment (session/backlog_lifecycle_archive.go).
+func TestTransitionBouncingItemToDone_TriggersCleanup(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item with merged PR, cleanup wiring",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	prNumber := 173
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/173"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-merged-cleanup", "")
+
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-merged-cleanup")
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusDone), fetched.Status)
+	assert.Contains(t, cleaner.calls(), item.ID,
+		"the internal bounce-to-done transition must trigger synchronous cleanup, not just the 60s sweep")
+}
+
+// TestTransitionBouncingItemToDone_SkipsCleanup_When_TransitionFails guards
+// against calling the cleaner on an item that never actually reached done —
+// cleanupTerminalItemSync must only fire after a confirmed successful
+// transition.
+func TestTransitionBouncingItemToDone_SkipsCleanup_When_TransitionFails(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bouncing item whose done transition fails",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	// Archive the item out from under the in-flight bounce reconciliation so
+	// the review->done precondition inside transitionBouncingItemToDone fails
+	// (item.Status captured before this call is stale).
+	_, err = storage.ArchiveBacklogItem(ctx, item.ID, nil, TriggeredBySystem, "archived mid-reconcile")
+	require.NoError(t, err)
+
+	transErr := listener.transitionBouncingItemToDone(ctx, *item, "test summary")
+
+	require.Error(t, transErr)
+	assert.Empty(t, cleaner.calls(), "cleanup must never fire when the done transition itself failed")
+}

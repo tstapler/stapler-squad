@@ -231,6 +231,17 @@ func (i *Instance) GetTmuxSessionName() string {
 	return i.pm().GetSessionIdentifier()
 }
 
+// currentLaunchCommand rebuilds the launch command from the CURRENT
+// conversation UUID, read fresh via the thread-safe GetConversationUUID
+// rather than whatever was current when this instance's *tmux.TmuxSession
+// was constructed. Passed as tmux.WithProgramProvider so RestoreWithWorkDir
+// uses this -- not the frozen command captured at construction time -- when
+// it must actually relaunch a confirmed-missing session (see that function's
+// doc comment; BUG matching #791, a different call site).
+func (i *Instance) currentLaunchCommand() string {
+	return i.buildLaunchCommand(i.GetConversationUUID())
+}
+
 // buildLaunchCommand constructs the final command string used to launch the program
 // in tmux. It checks each registered launchCommandBuilder in turn (see that
 // type's doc comment); a program none of them recognizes is shell-quoted and
@@ -542,11 +553,23 @@ func (i *Instance) initTmuxSession() {
 	// CreateSession mode-specific block (server/services/session_service.go) already created
 	// the remote tmux session on.
 	runner := i.executionTarget().Runner()
+	opts := []tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand)}
+	// Wires RestoreWithWorkDir's orphan guard (BUG matching #791, a different
+	// call site -- see that method's doc comment) to this instance's cached
+	// pane PID, so a later restore that finds tmux has no record of the
+	// session can tell a genuinely dead pane from one whose OS process
+	// outlived a killed/restarted tmux server.
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		if mgr, ok := tb.TmuxManager().(*TmuxProcessManager); ok {
+			opts = append(opts, tmux.WithOrphanProcessGuard(mgr.CachedPanePIDStillAlive, mgr.TerminateCachedPanePID))
+		}
+	}
 	var session *tmux.TmuxSession
 	if i.TmuxServerSocket != "" {
-		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil), tmux.WithCommandRunner(runner))
+		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket,
+			append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
 	} else {
-		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix, tmux.WithCommandRunner(runner))
+		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix, opts...)
 	}
 	if i.UUID != "" {
 		session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
