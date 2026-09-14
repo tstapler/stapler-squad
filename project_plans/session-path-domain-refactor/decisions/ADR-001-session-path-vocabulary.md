@@ -66,6 +66,26 @@ A frontend developer reading only the `.proto` would pick `path` for "which repo
 this session in" and get the worktree directory, and would never consider `working_dir`
 for "where is this session working" — the opposite of correct in both cases.
 
+### The same collision inside Go
+
+`Instance` carries a field and a method with the same name and different meanings:
+
+- `Instance.WorkingDir` (`session/instance.go:191`) — "the directory within the
+  repository to start in," a relative subdirectory the user configures, consumed by
+  `resolveStartPath` (`session/instance_worktree.go:340`).
+- `Instance.GetWorkingDirectory()` (`session/instance_worktree.go:633`) — an absolute
+  session directory, computed from the worktree. It never reads `i.WorkingDir`.
+
+A Go reader has every reason to assume the getter returns the field. It does not. The
+proto field is populated from the method while its comment describes the field, which is
+how the two drifted apart without anyone noticing.
+
+For completeness, `Instance` also has `MainRepoPath` (`instance_snapshot.go:47`), set by
+`DetectAndPopulateWorktreeInfo` when the session was created from a pre-existing
+worktree. So `Workspace().RepoRoot`'s current doc comment — "the git repository root
+(the main checkout, not the worktree)" — is also wrong: `RepoRoot` is `Instance.Path`,
+which for such a session *is* a worktree, and `MainRepoPath` is the main checkout.
+
 `WorkspacePeersPanel.tsx` compared `s.path === session.path` to answer "are these two
 sessions in the same directory." When two sessions' worktrees are both cleaned up,
 #4 collapses both to the same repo root and the panel falsely reports a collision.
