@@ -340,3 +340,150 @@ func TestGuidanceRequest_should_SurviveHardDeleteOfOwningBacklogItem_When_NoCasc
 	require.NoError(t, err, "GuidanceRequest row must survive its owning BacklogItem's hard delete")
 	assert.Equal(t, GuidanceRequestStatusPending, fetched.Status())
 }
+
+// TestCreateGuidanceRequest_should_CreateFreshRow_When_IdenticalQuestionReAskedAfterAnswered
+// guards the dedup-open-rows-only fix: the (scope, scope_key, question_text)
+// index is no longer unique across ALL rows, only queried against OPEN ones
+// (upsertGuidanceRequest). Re-asking an identical question after the first
+// instance was answered must create a genuinely NEW pending row, not resolve
+// back to the stale answered one.
+func TestCreateGuidanceRequest_should_CreateFreshRow_When_IdenticalQuestionReAskedAfterAnswered(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	itemID := createTestBacklogItemForGuidance(t, repo)
+	const questionText = "Merge PR #780 first?"
+
+	first, err := repo.CreateGuidanceRequest(ctx, backlogItemGuidanceInput(itemID, questionText, 4))
+	require.NoError(t, err)
+	firstID, err := uuid.Parse(first.ID)
+	require.NoError(t, err)
+
+	applied, err := repo.AnswerGuidanceRequest(ctx, firstID, "yes")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	second, err := repo.CreateGuidanceRequest(ctx, backlogItemGuidanceInput(itemID, questionText, 4))
+	require.NoError(t, err)
+	assert.NotEqual(t, first.ID, second.ID, "re-asking an identical question after the first was answered must create a NEW row, not resolve to the stale answered one")
+	assert.Equal(t, GuidanceRequestStatusPending, second.Status())
+
+	// The stale answered row must still be intact and readable, unaffected by
+	// the new row's creation.
+	refetchedFirst, err := repo.GetGuidanceRequest(ctx, firstID)
+	require.NoError(t, err)
+	assert.Equal(t, GuidanceRequestStatusAnswered, refetchedFirst.Status())
+	assert.Equal(t, "yes", refetchedFirst.Answer)
+}
+
+// TestCreateGuidanceRequest_should_CreateFreshRow_When_IdenticalQuestionReAskedAfterCancelled
+// is TestCreateGuidanceRequest_should_CreateFreshRow_When_IdenticalQuestionReAskedAfterAnswered's
+// counterpart for the cancelled terminal state.
+func TestCreateGuidanceRequest_should_CreateFreshRow_When_IdenticalQuestionReAskedAfterCancelled(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	itemID := createTestBacklogItemForGuidance(t, repo)
+	const questionText = "Rebase onto main first?"
+
+	first, err := repo.CreateGuidanceRequest(ctx, backlogItemGuidanceInput(itemID, questionText, 4))
+	require.NoError(t, err)
+	firstID, err := uuid.Parse(first.ID)
+	require.NoError(t, err)
+
+	applied, err := repo.CancelGuidanceRequest(ctx, firstID, "owning session ended")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	second, err := repo.CreateGuidanceRequest(ctx, backlogItemGuidanceInput(itemID, questionText, 4))
+	require.NoError(t, err)
+	assert.NotEqual(t, first.ID, second.ID, "re-asking an identical question after the first was cancelled must create a NEW row")
+	assert.Equal(t, GuidanceRequestStatusPending, second.Status())
+}
+
+// TestCreateGuidanceRequest_should_CoalesceToExistingRow_When_TwoConcurrentIdenticalOpenQuestions
+// is the sequential-shape regression companion to
+// TestCreateGuidanceRequest_ConcurrentDedupCollision: it must keep working
+// after the dedup-open-rows-only fix — two identical open questions on the
+// same scope still coalesce to one row.
+func TestCreateGuidanceRequest_should_CoalesceToExistingRow_When_TwoConcurrentIdenticalOpenQuestions(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	itemID := createTestBacklogItemForGuidance(t, repo)
+	const questionText = "Use approach A or B?"
+
+	first, err := repo.CreateGuidanceRequest(ctx, backlogItemGuidanceInput(itemID, questionText, 4))
+	require.NoError(t, err)
+
+	second, err := repo.CreateGuidanceRequest(ctx, backlogItemGuidanceInput(itemID, questionText, 4))
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, second.ID, "two identical OPEN questions for the same scope must coalesce to one row")
+
+	rows, count, _, err := repo.ListPendingGuidanceRequests(ctx, domain.RequestScopeBacklogItem, itemID.String(), 4)
+	require.NoError(t, err)
+	assert.Len(t, rows, 1)
+	assert.Equal(t, 1, count)
+}
+
+// TestListGuidanceRequestsForScope_should_IncludePendingRow_When_ManyNewerAnsweredRowsWouldPushItOffANaiveWindow
+// guards the pending-row-visibility fix: a pending row created before
+// listGuidanceRequestsForScopeLimit+1 newer answered rows must still appear
+// in the result — a naive single `ORDER BY created_at DESC LIMIT N` query
+// over all non-cancelled rows would silently drop it.
+func TestListGuidanceRequestsForScope_should_IncludePendingRow_When_ManyNewerAnsweredRowsWouldPushItOffANaiveWindow(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	itemID := createTestBacklogItemForGuidance(t, repo)
+
+	// Create the pending row FIRST, so it's the oldest row for this scope.
+	pending, err := repo.CreateGuidanceRequest(ctx, backlogItemGuidanceInput(itemID, "the old still-pending question", 1000))
+	require.NoError(t, err)
+
+	// Create and immediately answer enough NEWER rows to exceed
+	// listGuidanceRequestsForScopeLimit, so a naive LIMIT-50-over-all-rows
+	// query would push the pending row off the page.
+	for i := 0; i < listGuidanceRequestsForScopeLimit+5; i++ {
+		row, err := repo.CreateGuidanceRequest(ctx, backlogItemGuidanceInput(itemID, questionTextForGoroutine(i), 1000))
+		require.NoError(t, err)
+		id, err := uuid.Parse(row.ID)
+		require.NoError(t, err)
+		applied, err := repo.AnswerGuidanceRequest(ctx, id, "answered")
+		require.NoError(t, err)
+		require.True(t, applied)
+	}
+
+	rows, pendingCount, cap, err := repo.ListGuidanceRequestsForScope(ctx, domain.RequestScopeBacklogItem, itemID.String(), 7)
+	require.NoError(t, err)
+	assert.Equal(t, 1, pendingCount)
+	assert.Equal(t, 7, cap)
+
+	var found bool
+	for _, r := range rows {
+		if r.ID == pending.ID {
+			found = true
+			assert.Equal(t, GuidanceRequestStatusPending, r.Status())
+		}
+	}
+	assert.True(t, found, "the old still-pending row must still be present in the result despite many newer answered rows")
+	assert.LessOrEqual(t, len(rows), 1+listGuidanceRequestsForScopeLimit, "result must include the pending row plus at most listGuidanceRequestsForScopeLimit answered rows")
+}
+
+// TestListGuidanceRequestsForScope_should_UseCapParam_When_ProvidedNonZero
+// guards the ListPendingGuidanceRequests-consistency fix: cap is a caller
+// parameter, not a hardcoded DefaultGuidanceRequestPendingCap.
+func TestListGuidanceRequestsForScope_should_UseCapParam_When_ProvidedNonZero(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	itemID := createTestBacklogItemForGuidance(t, repo)
+
+	_, _, cap, err := repo.ListGuidanceRequestsForScope(ctx, domain.RequestScopeBacklogItem, itemID.String(), 12)
+	require.NoError(t, err)
+	assert.Equal(t, 12, cap)
+
+	_, _, defaultedCap, err := repo.ListGuidanceRequestsForScope(ctx, domain.RequestScopeBacklogItem, itemID.String(), 0)
+	require.NoError(t, err)
+	assert.Equal(t, DefaultGuidanceRequestPendingCap, defaultedCap, "zero must fall back to DefaultGuidanceRequestPendingCap")
+}

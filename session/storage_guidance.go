@@ -45,8 +45,8 @@ func (s *Storage) ListPendingGuidanceRequests(ctx context.Context, scope domain.
 }
 
 // ListGuidanceRequestsForScope forwards to EntRepository.ListGuidanceRequestsForScope.
-func (s *Storage) ListGuidanceRequestsForScope(ctx context.Context, scope domain.RequestScope, scopeKey string) ([]*GuidanceRequestData, int, int, error) {
-	return s.repo.ListGuidanceRequestsForScope(ctx, scope, scopeKey)
+func (s *Storage) ListGuidanceRequestsForScope(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*GuidanceRequestData, int, int, error) {
+	return s.repo.ListGuidanceRequestsForScope(ctx, scope, scopeKey, cap)
 }
 
 // ListAllPendingGuidanceRequests forwards to EntRepository.ListAllPendingGuidanceRequests.

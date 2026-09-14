@@ -126,10 +126,15 @@ func guidanceRequestToData(row *ent.GuidanceRequest) *GuidanceRequestData {
 }
 
 // CreateGuidanceRequest atomically creates a new, durable GuidanceRequest row,
-// or resolves to a pre-existing open row asking the IDENTICAL question for the
+// or resolves to a pre-existing OPEN row asking the IDENTICAL question for the
 // same (scope, scope_key) — dedup-first, cap-check second, in that strict
 // order and inside one transaction, mirroring MarkStuck's atomic-upsert shape
 // (session/ent_repository_backlog.go).
+//
+// Dedup is scoped to OPEN rows only (answered_at AND cancelled_at both NULL):
+// once a question is answered or cancelled, re-asking the identical
+// question_text must create a fresh pending row, not silently resolve to the
+// stale resolved one — see upsertGuidanceRequest's doc comment.
 //
 // Ordering matters: a legitimate re-ask of an already-open, IDENTICAL
 // question must resolve to the pre-existing row via dedup even when the scope
@@ -138,14 +143,15 @@ func guidanceRequestToData(row *ent.GuidanceRequest) *GuidanceRequestData {
 // increase. Concretely:
 //  1. Validate Scope/QuestionType via IsValid() before opening a transaction
 //     (fails fast, no DB round trip for a malformed request).
-//  2. Attempt an OnConflictColumns(scope, scope_key, question_text).Ignore()
-//     upsert with a caller-chosen candidate ID. Ignore() means "leave an
-//     existing conflicting row completely untouched" (each column set to
-//     itself) — this is a real dedup, not a refresh.
-//  3. Read back the row's ID via the upsert's own RETURNING (GuidanceRequestUpsertOne.ID):
-//     if it equals the candidate ID, this call's INSERT won and a genuinely
-//     NEW row was created; any other ID means the call resolved to a
-//     pre-existing row.
+//  2. Query for an existing OPEN row matching (scope, scope_key,
+//     question_text) inside the transaction; if found, that row's ID is what
+//     this call resolves to — no new row is created. If not found, Create()
+//     a new row with a caller-chosen candidate ID. This is safe without an
+//     OnConflict upsert because every transaction is serialized process-wide
+//     (session/ent_repository.go's SetMaxOpenConns(1)) — no concurrent
+//     transaction can race this read-then-create.
+//  3. Comparing the resolved ID against the candidate ID is how the caller
+//     distinguishes "created new" from "resolved to existing".
 //  4. Only when a NEW row was created, count open (answered_at AND
 //     cancelled_at both NULL) rows for the same (scope, scope_key) in the
 //     SAME transaction. The newly-created row is already included in this
@@ -211,14 +217,34 @@ func validateCreateGuidanceRequestInput(in CreateGuidanceRequestInput) (capLimit
 	return capLimit, in.scopeKey(), nil
 }
 
-// upsertGuidanceRequest performs the dedup-first atomic upsert: it always
-// attempts to insert a row identified by candidateID, but on a
-// (scope, scope_key, question_text) conflict leaves the existing row
-// completely untouched (Ignore()) instead of creating a duplicate. It returns
-// the ID of whichever row now exists at that dedup key — comparing it against
-// candidateID is how the caller distinguishes "created new" from "resolved to
-// existing".
+// upsertGuidanceRequest performs the dedup-first create: it looks for an
+// existing OPEN row (answered_at AND cancelled_at both NULL) matching
+// (scope, scope_key, question_text) and returns its ID if found; otherwise it
+// creates a new row identified by candidateID. Restricting the dedup lookup
+// to open rows (rather than an unconditional DB-level unique constraint
+// across all rows, which the schema no longer declares — see the
+// GuidanceRequest schema's Indexes() comment) is what lets an identical
+// question be asked again after a prior instance was answered or cancelled,
+// instead of resolving forever to that stale resolved row. Comparing the
+// returned ID against candidateID is how the caller distinguishes "created
+// new" from "resolved to existing".
 func upsertGuidanceRequest(ctx context.Context, tx *ent.Tx, in CreateGuidanceRequestInput, scopeKey string, candidateID uuid.UUID) (uuid.UUID, error) {
+	existing, err := tx.GuidanceRequest.Query().
+		Where(
+			guidancerequest.Scope(string(in.Scope)),
+			guidancerequest.ScopeKey(scopeKey),
+			guidancerequest.QuestionText(in.QuestionText),
+			guidancerequest.AnsweredAtIsNil(),
+			guidancerequest.CancelledAtIsNil(),
+		).
+		First(ctx)
+	switch {
+	case err == nil:
+		return existing.ID, nil
+	case !ent.IsNotFound(err):
+		return uuid.Nil, fmt.Errorf("query existing open guidance request: %w", err)
+	}
+
 	create := tx.GuidanceRequest.Create().
 		SetID(candidateID).
 		SetScope(string(in.Scope)).
@@ -230,14 +256,11 @@ func upsertGuidanceRequest(ctx context.Context, tx *ent.Tx, in CreateGuidanceReq
 	if in.ItemID != nil {
 		create = create.SetItemID(*in.ItemID)
 	}
-	return create.
-		OnConflictColumns(
-			guidancerequest.FieldScope,
-			guidancerequest.FieldScopeKey,
-			guidancerequest.FieldQuestionText,
-		).
-		Ignore().
-		ID(ctx)
+	created, err := create.Save(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("create guidance request row: %w", err)
+	}
+	return created.ID, nil
 }
 
 // enforceGuidanceRequestPendingCap counts open rows for (scope, scopeKey)
@@ -339,65 +362,107 @@ func (r *EntRepository) GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*
 	return guidanceRequestToData(row), nil
 }
 
-// ListPendingGuidanceRequests returns every open (answered_at AND
-// cancelled_at both NULL) GuidanceRequest row for one (scope, scopeKey) pair,
-// alongside the current pending count and the cap passed in — bundled
-// together so an RPC handler can populate a ListGuidanceRequestsResponse's
-// pending_count/cap fields directly from this one call.
-func (r *EntRepository) ListPendingGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*GuidanceRequestData, int, int, error) {
-	rows, err := r.client.GuidanceRequest.Query().
+// guidanceRequestsToData converts a slice of generated ent rows into their
+// plain GuidanceRequestData view, shared by every List* method below.
+func guidanceRequestsToData(rows []*ent.GuidanceRequest) []*GuidanceRequestData {
+	result := make([]*GuidanceRequestData, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, guidanceRequestToData(row))
+	}
+	return result
+}
+
+// queryOpenGuidanceRequests returns every open (answered_at AND cancelled_at
+// both NULL) row for (scope, scopeKey), newest first.
+func (r *EntRepository) queryOpenGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string) ([]*ent.GuidanceRequest, error) {
+	return r.client.GuidanceRequest.Query().
 		Where(
 			guidancerequest.Scope(string(scope)),
 			guidancerequest.ScopeKey(scopeKey),
 			guidancerequest.AnsweredAtIsNil(),
 			guidancerequest.CancelledAtIsNil(),
 		).
+		Order(guidancerequest.ByCreatedAt(sql.OrderDesc())).
 		All(ctx)
+}
+
+// queryAnsweredGuidanceRequests returns up to limit answered (non-cancelled)
+// rows for (scope, scopeKey), newest first.
+func (r *EntRepository) queryAnsweredGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string, limit int) ([]*ent.GuidanceRequest, error) {
+	return r.client.GuidanceRequest.Query().
+		Where(
+			guidancerequest.Scope(string(scope)),
+			guidancerequest.ScopeKey(scopeKey),
+			guidancerequest.AnsweredAtNotNil(),
+			guidancerequest.CancelledAtIsNil(),
+		).
+		Order(guidancerequest.ByCreatedAt(sql.OrderDesc())).
+		Limit(limit).
+		All(ctx)
+}
+
+// ListPendingGuidanceRequests returns every open (answered_at AND
+// cancelled_at both NULL) GuidanceRequest row for one (scope, scopeKey) pair,
+// alongside the current pending count and the cap passed in — bundled
+// together so an RPC handler can populate a ListGuidanceRequestsResponse's
+// pending_count/cap fields directly from this one call.
+func (r *EntRepository) ListPendingGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*GuidanceRequestData, int, int, error) {
+	rows, err := r.queryOpenGuidanceRequests(ctx, scope, scopeKey)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("list pending guidance requests scope=%s scope_key=%s: %w", scope, scopeKey, err)
 	}
-	result := make([]*GuidanceRequestData, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, guidanceRequestToData(row))
-	}
+	result := guidanceRequestsToData(rows)
 	if cap <= 0 {
 		cap = DefaultGuidanceRequestPendingCap
 	}
 	return result, len(result), cap, nil
 }
 
-// listGuidanceRequestsForScopeLimit bounds how many answered rows
-// ListGuidanceRequestsForScope returns, so a scope that has accumulated many
-// answered questions over time can't make the view unbounded.
+// listGuidanceRequestsForScopeLimit bounds the total number of rows
+// ListGuidanceRequestsForScope returns. It only ever trims ANSWERED rows —
+// see the function's doc comment for why pending rows are always included in
+// full regardless of this limit.
 const listGuidanceRequestsForScopeLimit = 50
 
 // ListGuidanceRequestsForScope returns every non-cancelled GuidanceRequest
 // row (pending, and — unlike ListPendingGuidanceRequests — answered too) for
-// one (scope, scopeKey) pair, newest first, alongside the current pending
-// count and the default cap. Backs UI views that must show a question's
-// state after it's been answered (AC3), not just while pending.
-func (r *EntRepository) ListGuidanceRequestsForScope(ctx context.Context, scope domain.RequestScope, scopeKey string) ([]*GuidanceRequestData, int, int, error) {
-	rows, err := r.client.GuidanceRequest.Query().
-		Where(
-			guidancerequest.Scope(string(scope)),
-			guidancerequest.ScopeKey(scopeKey),
-			guidancerequest.CancelledAtIsNil(),
-		).
-		Order(guidancerequest.ByCreatedAt(sql.OrderDesc())).
-		Limit(listGuidanceRequestsForScopeLimit).
-		All(ctx)
+// one (scope, scopeKey) pair, alongside the current pending count and cap
+// (cap is a parameter, matching ListPendingGuidanceRequests' shape, rather
+// than hardcoding DefaultGuidanceRequestPendingCap — 0 falls back to that
+// default). Backs UI views that must show a question's state after it's been
+// answered (AC3), not just while pending.
+//
+// Pending rows are fetched in their own unbounded query and always placed
+// first in the result — cheap, since they're already implicitly capped by
+// the per-scope pending-question cap (at most a handful of rows). The
+// remaining budget up to listGuidanceRequestsForScopeLimit is then filled
+// with the newest answered rows. This two-query shape exists specifically so
+// an old still-pending row can never be pushed out of the result by a flood
+// of newer answered rows — a single `ORDER BY created_at DESC LIMIT N` query
+// over all non-cancelled rows could silently drop a pending row from the page
+// once enough newer rows were answered, directly undermining AC3/AC4's
+// "pending questions must be visible."
+func (r *EntRepository) ListGuidanceRequestsForScope(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*GuidanceRequestData, int, int, error) {
+	if cap <= 0 {
+		cap = DefaultGuidanceRequestPendingCap
+	}
+
+	pendingRows, err := r.queryOpenGuidanceRequests(ctx, scope, scopeKey)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("list guidance requests for scope=%s scope_key=%s: %w", scope, scopeKey, err)
+		return nil, 0, 0, fmt.Errorf("list guidance requests for scope=%s scope_key=%s: list pending: %w", scope, scopeKey, err)
 	}
-	result := make([]*GuidanceRequestData, 0, len(rows))
-	pendingCount := 0
-	for _, row := range rows {
-		if row.AnsweredAt == nil {
-			pendingCount++
+	result := guidanceRequestsToData(pendingRows)
+	pendingCount := len(result)
+
+	if remaining := listGuidanceRequestsForScopeLimit - len(pendingRows); remaining > 0 {
+		answeredRows, err := r.queryAnsweredGuidanceRequests(ctx, scope, scopeKey, remaining)
+		if err != nil {
+			return nil, 0, 0, fmt.Errorf("list guidance requests for scope=%s scope_key=%s: list answered: %w", scope, scopeKey, err)
 		}
-		result = append(result, guidanceRequestToData(row))
+		result = append(result, guidanceRequestsToData(answeredRows)...)
 	}
-	return result, pendingCount, DefaultGuidanceRequestPendingCap, nil
+
+	return result, pendingCount, cap, nil
 }
 
 // ListAllPendingGuidanceRequests returns every open GuidanceRequest row across
@@ -412,9 +477,5 @@ func (r *EntRepository) ListAllPendingGuidanceRequests(ctx context.Context) ([]*
 	if err != nil {
 		return nil, fmt.Errorf("list all pending guidance requests: %w", err)
 	}
-	result := make([]*GuidanceRequestData, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, guidanceRequestToData(row))
-	}
-	return result, nil
+	return guidanceRequestsToData(rows), nil
 }

@@ -89,13 +89,27 @@ func (GuidanceRequest) Edges() []ent.Edge {
 // Indexes of the GuidanceRequest.
 func (GuidanceRequest) Indexes() []ent.Index {
 	return []ent.Index{
-		// Dedup key, built from scope_key (see its field comment) rather than
-		// the raw nullable item_id/session_uuid columns. question_text is
-		// deliberately part of it: an item/session can have more than one
-		// *different* open question, so the guarantee is "don't create two
-		// identical open asks," not "at most one open ask per scope key" —
-		// unlike BacklogStuckState's (item_id, reason) key, GuidanceRequest has
-		// no closed reason enum to key on instead.
-		index.Fields("scope", "scope_key", "question_text").Unique(),
+		// Lookup key for the dedup/coalesce query, built from scope_key (see
+		// its field comment) rather than the raw nullable item_id/session_uuid
+		// columns. Deliberately NOT .Unique(): the "don't create two identical
+		// OPEN asks" guarantee only applies to open (answered_at AND
+		// cancelled_at both NULL) rows, and a plain SQL unique index has no way
+		// to express that partial condition — a DB-level unique constraint
+		// across ALL rows would instead make a resolved (answered/cancelled)
+		// row permanently block re-asking the identical question, which is
+		// wrong. The dedup guarantee is enforced in Go instead, inside
+		// upsertGuidanceRequest's single serialized transaction (see
+		// session/ent_repository.go's SetMaxOpenConns(1), which removes any
+		// cross-transaction race this would otherwise need to guard against).
+		// This index still exists for lookup/COUNT(*) query performance.
+		index.Fields("scope", "scope_key", "question_text"),
+		// Supports ListAllPendingGuidanceRequests' WHERE answered_at IS NULL
+		// AND cancelled_at IS NULL scan, which otherwise has no index to use
+		// and full-table-scans a table that's never pruned.
+		index.Fields("answered_at", "cancelled_at"),
+		// FK lookup/cascade support for item_id, matching every other
+		// FK-bearing table in this schema — without it, a backlog-item
+		// hard-delete's OnDelete:SetNull full-table-scans this table.
+		index.Fields("item_id"),
 	}
 }

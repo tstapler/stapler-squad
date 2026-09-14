@@ -383,7 +383,7 @@ func (s *GuidanceRequestService) ListGuidanceRequests(
 		err          error
 	)
 	if req.Msg.GetIncludeAnswered() {
-		rows, pendingCount, cap, err = s.storage.ListGuidanceRequestsForScope(ctx, scope, req.Msg.GetScopeKey())
+		rows, pendingCount, cap, err = s.storage.ListGuidanceRequestsForScope(ctx, scope, req.Msg.GetScopeKey(), 0)
 	} else {
 		rows, pendingCount, cap, err = s.storage.ListPendingGuidanceRequests(ctx, scope, req.Msg.GetScopeKey(), 0)
 	}
