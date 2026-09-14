@@ -624,18 +624,11 @@ func TestSessionHealthChecker_CheckInstances_HealthySocketInstancesAllChecked(t 
 	}
 }
 
-// TestHealthCheckerRecovery_ArchivedInstance_SkippedNotAutoRestarted pins the
-// primary fix of ADR-001 (superseded-rework-session-retirement): the 15s health
-// checker respawned archived sessions — real tmux sessions and real `claude`
-// processes — because healthCheckSkipReason only skipped Status.IsSuspended()
-// states, and Active/Creating/Restoring/Failed are precisely the ones
-// IsSuspended() omits. On 2026-09-14 that spawned six live agents in 16 seconds
-// for one superseded rework round.
-//
-// The table covers exactly the four statuses IsSuspended() does not, each
-// archived; the control row proves the guard did not over-apply to live
-// sessions (which must still be recovered, including via checkSingleSession's
-// Active force-start).
+// If this fails, the 15s health checker respawns archived sessions as real tmux
+// sessions and real `claude` processes (ADR-001,
+// superseded-rework-session-retirement). The table covers exactly the four
+// statuses IsSuspended() omits; the control row proves live sessions are still
+// recovered.
 func TestHealthCheckerRecovery_ArchivedInstance_SkippedNotAutoRestarted(t *testing.T) {
 	t.Parallel()
 	archivedAt := time.Now()
@@ -656,7 +649,6 @@ func TestHealthCheckerRecovery_ArchivedInstance_SkippedNotAutoRestarted(t *testi
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			checker := NewSessionHealthChecker(nil)

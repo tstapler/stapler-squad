@@ -1480,19 +1480,12 @@ func TestScanAndLinkPRURL_RepublishesSnapshot(t *testing.T) {
 	}
 }
 
-// TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
-// pins guard 5 of ADR-001 (superseded-rework-session-retirement). Archiving a
-// session kills its tmux pane (KillTmuxPaneOnly → Instance.KillSession) but
-// deliberately does NOT stop its session driver — driverDestroyed is a one-way
-// latch that would break UnarchiveSession — so the archive's own pane kill
-// arrives here looking like a crash. The guard sits at handleDriverFailure's
-// entry, covering both restarting arms, and not inside restartForRetry, which
-// is also manual RetryNow's choke point.
-//
-// The archived row uses reason "tmux_exited" inside restartGraceWindow: that is
-// the arm that calls restartForRetry directly, i.e. the one that actually
-// spawns a process. The control rows use the scheduled and exhausted arms so
-// they assert the unchanged behaviour without spawning a driver goroutine.
+// If this fails, the pane kill that archiving performs arrives here looking
+// like a crash and the driver restarts the retired session (ADR-001,
+// superseded-rework-session-retirement). The guard is at handleDriverFailure's
+// entry, not inside restartForRetry, which is also manual RetryNow's choke
+// point. The archived row uses "tmux_exited" inside restartGraceWindow — the
+// arm that actually spawns a process.
 func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived(t *testing.T) {
 	t.Parallel()
 	archivedAt := time.Now()

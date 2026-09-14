@@ -213,7 +213,6 @@ func TestInstance_IsArchived_should_ReadPublishedSnapshot_When_ArchivedAtSet(t *
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			// ArchivedAt must be set before anything calls Snapshot(): the first

@@ -136,21 +136,12 @@ func TestClearLoggedMissingWorktree_AllowsReWarnAfterSessionRecreated(t *testing
 	}
 }
 
-// TestFromInstanceData_should_NotAutoRestoreAndNormalizeOnlyActiveCreating_When_Archived
-// pins guard 1 of ADR-001 (superseded-rework-session-retirement). The final
-// else branch — the bucket holding Creating/Active/Restoring/PermanentlyFailed/
-// Failed — never read ArchivedAt, so an archived row that some path had flipped
-// off Stopped cold-restored a real claude process on every boot forever. The
-// only pre-existing ArchivedAt guard (the fork-pressure fast path) lives inside
-// the Status == Stopped branch and never covered this bucket.
-//
-// started=true is what suppresses the restore (server/dependencies.go's Step 6
-// skips every Started() instance). The status self-heal is deliberately
-// narrowed to Active/Creating: four archive writers set ArchivedAt without
-// touching status, so Restoring/PermanentlyFailed/Failed + archived are
-// legitimate states carrying the failure signal the session was archived with,
-// and nothing restores an overwritten status (UnarchiveSession only restores
-// ArchivedAt). The three "preserved" rows are that regression test.
+// If this fails, an archived row cold-restores a real claude process on boot,
+// or the self-heal over-applies and overwrites the failure signal the session
+// was archived with — irreversibly, since UnarchiveSession only restores
+// ArchivedAt (ADR-001, superseded-rework-session-retirement). started=true is
+// what suppresses the restore; server/dependencies.go's Step 6 skips every
+// Started() instance.
 func TestFromInstanceData_should_NotAutoRestoreAndNormalizeOnlyActiveCreating_When_Archived(t *testing.T) {
 	t.Parallel()
 	archivedAt := time.Now()
@@ -174,7 +165,6 @@ func TestFromInstanceData_should_NotAutoRestoreAndNormalizeOnlyActiveCreating_Wh
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			data := InstanceData{

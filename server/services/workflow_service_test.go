@@ -1016,17 +1016,11 @@ func TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip(t *testing.T) {
 	assert.Contains(t, req.InitialPrompt, "Triage PROJ-1: fix it")
 }
 
-// TestArchiveWorkflowSessions_should_PublishSnapshotSoIsArchivedIsTrue_When_ArchivingInMemoryInstance
-// pins the predicate every ADR-001 guard rests on. The in-memory mirror used a
-// raw `inst.ArchivedAt = &now` field write with no buildSnapshot/snapshot.Store,
-// and Snapshot() returns its cached pointer — so IsArchived() stayed false for
-// the rest of the process lifetime for every session this RPC archived,
-// silently disabling the poller, health-checker, driver and stale-resume guards
-// for that whole population.
-//
-// The assertion is deliberately on IsArchived(), not on the raw inst.ArchivedAt
-// field: the raw field is set in the broken version too, so only the snapshot
-// read distinguishes fixed from broken.
+// If this fails, IsArchived() stays false for every session this RPC archives,
+// silently disabling every ADR-001 guard (poller, health checker, driver,
+// stale-resume) for that population. The assertion is on IsArchived(), not the
+// raw inst.ArchivedAt field: a raw field write sets the field too, so only the
+// snapshot read distinguishes fixed from broken.
 func TestArchiveWorkflowSessions_should_PublishSnapshotSoIsArchivedIsTrue_When_ArchivingInMemoryInstance(t *testing.T) {
 	t.Parallel()
 	_, svc := createTestWorkflowService(t)

@@ -494,8 +494,7 @@ func (i *Instance) IsHotRestoreRecoverable() bool {
 // IsArchived reports whether the session has been archived (deliberately
 // retired, e.g. by archiveItemWorkSessions when a backlog rework round is
 // superseded). Archived sessions must never be auto-started, auto-revived or
-// auto-retried — see
-// project_plans/superseded-rework-session-retirement/decisions/ADR-001-archived-at-is-the-auto-restore-guard.md.
+// auto-retried — see ADR-001 (superseded-rework-session-retirement).
 // Reads the published snapshot, not the raw i.ArchivedAt field
 // (.claude/rules/instance-lock-free-reads.md).
 func (i *Instance) IsArchived() bool {

@@ -224,15 +224,15 @@ func paneDeadStatus(instance *Instance, batch map[string]tmux.PaneDeadStatus) (d
 // silent health-checker recovery. Archived sessions are skipped regardless of
 // status: archival means the session was deliberately retired.
 func healthCheckSkipReason(instance *Instance) (string, bool) {
-	// Archived sessions are deliberately retired and must never be silently
-	// respawned by recoverMissingSession's Start(false) -- the primary revival
-	// path ADR-001 (superseded-rework-session-retirement) fixes. Checked before
-	// IsSuspended() because the statuses that matter here (Active, Creating,
-	// Restoring, Failed) are precisely the ones IsSuspended() omits.
-	if instance.IsArchived() {
+	snap := instance.Snapshot()
+	// Checked before IsSuspended() because the statuses that reach
+	// recoverMissingSession's Start(false) -- Active, Creating, Restoring,
+	// Failed -- are precisely the ones IsSuspended() omits (see ADR-001,
+	// superseded-rework-session-retirement).
+	if snap.ArchivedAt != nil {
 		return "Skipped (session is archived)", true
 	}
-	status := instance.Snapshot().Status
+	status := snap.Status
 	if !status.IsSuspended() {
 		return "", false
 	}

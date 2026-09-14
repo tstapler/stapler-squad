@@ -1509,15 +1509,11 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T
 	}
 }
 
-// TestReviewQueuePoller_ReconcileSessions_ArchivedStoppedWithLivePane_StaysStopped
-// pins guard 3 of ADR-001 (superseded-rework-session-retirement): an archived
-// session is deliberately retired, so a pane that outlived its archive-time
-// kill must not ratchet the row back off Stopped on every tick. This is the
-// status-column half of the fix — the process-spawning half is the health
-// checker (session/health.go).
-//
-// shouldSkipSession is the file's only other ArchivedAt reader and
-// reconcileSessions never calls it, which is why this guard is needed here.
+// If this fails, an archived session whose pane outlived its archive-time kill
+// is ratcheted back off Stopped on every poll tick (ADR-001,
+// superseded-rework-session-retirement). reconcileSessions never calls
+// shouldSkipSession, the file's only other ArchivedAt reader, so the guard has
+// to live here.
 func TestReviewQueuePoller_ReconcileSessions_ArchivedStoppedWithLivePane_StaysStopped(t *testing.T) {
 	t.Parallel()
 	poller := newSimpleTestPoller()
@@ -1545,8 +1541,8 @@ func TestReviewQueuePoller_ReconcileSessions_ArchivedStoppedWithLivePane_StaysSt
 
 	poller.reconcileSessions()
 
-	if inst.Status != Stopped {
-		t.Errorf("got status %v, want Stopped (an archived session must never be revived to Active)", inst.Status)
+	if got := inst.Snapshot().Status; got != Stopped {
+		t.Errorf("got status %v, want Stopped (an archived session must never be revived to Active)", got)
 	}
 }
 
@@ -1571,7 +1567,50 @@ func TestReviewQueuePoller_ReconcileSessions_ArchivedActiveWithNoPane_StillTrans
 
 	poller.reconcileSessions()
 
-	if inst.Status != Stopped {
-		t.Errorf("got status %v, want Stopped (archived rows must still converge when their pane is gone)", inst.Status)
+	if got := inst.Snapshot().Status; got != Stopped {
+		t.Errorf("got status %v, want Stopped (archived rows must still converge when their pane is gone)", got)
+	}
+}
+
+// If this fails, warnArchivedLivePaneOnce's sync.Map throttle is not holding and
+// every poll tick re-runs its tmux probe for the same archived session.
+func TestReviewQueuePoller_WarnArchivedLivePane_ThrottledPerProcess(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-archived-warn-once",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     false,
+	}
+	archivedAt := time.Now()
+	inst := &Instance{
+		Title:      "archived-warn-once-session",
+		Status:     Stopped,
+		IsManaged:  true,
+		ArchivedAt: &archivedAt,
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+	querier.setLiveSessions("", "session-archived-warn-once")
+
+	poller.reconcileSessions()
+	poller.reconcileSessions()
+
+	if mock.paneExitStatusCalls != 1 {
+		t.Errorf("got %d PaneExitStatus() probes across two ticks, want 1 (the warning is throttled per process)", mock.paneExitStatusCalls)
+	}
+
+	// RemoveInstance prunes the entry, so a re-added session warns again.
+	poller.RemoveInstance(inst.Title)
+	poller.SetInstances([]*Instance{inst})
+	poller.reconcileSessions()
+
+	if mock.paneExitStatusCalls != 2 {
+		t.Errorf("got %d PaneExitStatus() probes after RemoveInstance, want 2 (removal must prune the throttle entry)", mock.paneExitStatusCalls)
 	}
 }
