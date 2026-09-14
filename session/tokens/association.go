@@ -13,6 +13,7 @@ type SessionRecord struct {
 	ConversationID string // matches ParseResult.SessionUUID
 	Path           string // working directory
 	CreatedAt      time.Time
+	Tags           []string
 }
 
 // SessionStorage is the interface Associator uses to look up sessions.
@@ -67,12 +68,27 @@ func (a *Associator) AssociateWithSnapshot(result *ParseResult, sessions []Sessi
 	return associate(result, sessions)
 }
 
+// AssociateRecordWithSnapshot is AssociateWithSnapshot but returns the matched
+// SessionRecord itself (not just its ID), for callers that need other fields
+// on the record (e.g. Tags) without a second scan of sessions.
+func (a *Associator) AssociateRecordWithSnapshot(result *ParseResult, sessions []SessionRecord) (SessionRecord, bool) {
+	if a == nil {
+		return SessionRecord{}, true
+	}
+	return associateRecord(result, sessions)
+}
+
 func associate(result *ParseResult, sessions []SessionRecord) (sessionID string, isOrphan bool) {
+	rec, isOrphan := associateRecord(result, sessions)
+	return rec.SessionID, isOrphan
+}
+
+func associateRecord(result *ParseResult, sessions []SessionRecord) (SessionRecord, bool) {
 	// Strategy 1: exact conversation UUID match.
 	if result.SessionUUID != "" {
 		for _, s := range sessions {
 			if s.ConversationID == result.SessionUUID {
-				return s.SessionID, false
+				return s, false
 			}
 		}
 	}
@@ -81,7 +97,7 @@ func associate(result *ParseResult, sessions []SessionRecord) (sessionID string,
 	if result.ProjectPath != "" {
 		for _, s := range sessions {
 			if s.Path != "" && isPathPrefixMatch(result.ProjectPath, s.Path) {
-				return s.SessionID, false
+				return s, false
 			}
 		}
 	}
@@ -98,12 +114,12 @@ func associate(result *ParseResult, sessions []SessionRecord) (sessionID string,
 				diff = -diff
 			}
 			if diff <= window {
-				return s.SessionID, false
+				return s, false
 			}
 		}
 	}
 
-	return "", true
+	return SessionRecord{}, true
 }
 
 // isPathPrefixMatch returns true if resultPath is a path-component prefix of sessionPath,

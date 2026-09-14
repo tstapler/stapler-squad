@@ -340,6 +340,27 @@ func mapCreationOutcome(outcome services.CreationOutcome, err error) *mcpgo.Call
 	}
 }
 
+// refuseIfWorktreeSharedWithOtherLiveSession guards pauseSession/stopSession
+// against deleting a git worktree another currently-live session is actually
+// running in — see SessionService.OtherLiveSessionInsideWorktree's doc
+// comment for why this matters (rework rounds deliberately share one
+// worktree). Returns nil when it's safe to proceed (not a worktree session,
+// or no other live occupant), otherwise the CallToolResult to return
+// unchanged.
+func (lh *lifecycleHandlers) refuseIfWorktreeSharedWithOtherLiveSession(inst *session.Instance) *mcpgo.CallToolResult {
+	if !inst.HasGitWorktree() {
+		return nil
+	}
+	worktreePath := inst.GetEffectiveRootDir()
+	blockingUUID, blocked := lh.svc.OtherLiveSessionInsideWorktree(inst.UUID, worktreePath)
+	if !blocked {
+		return nil
+	}
+	return errResult(ErrConflict,
+		fmt.Sprintf("cannot proceed: worktree %q is still in use by another active session (%s)", worktreePath, blockingUUID),
+		"Stop or pause that session first, or wait for it to finish, before removing this worktree.")
+}
+
 func (lh *lifecycleHandlers) pauseSession(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := req.GetArguments()
 	sessionID, ok := args["session_id"].(string)
@@ -354,6 +375,10 @@ func (lh *lifecycleHandlers) pauseSession(ctx context.Context, req mcpgo.CallToo
 
 	if inst.Status == session.Paused {
 		return errResult("SESSION_ALREADY_PAUSED", fmt.Sprintf("session %q is already paused", sessionID), ""), nil
+	}
+
+	if blockErr := lh.refuseIfWorktreeSharedWithOtherLiveSession(inst); blockErr != nil {
+		return blockErr, nil
 	}
 
 	// MCP tool pause is always user-initiated — record as manual.
@@ -448,6 +473,9 @@ func (lh *lifecycleHandlers) stopSession(ctx context.Context, req mcpgo.CallTool
 	}
 
 	if inst != nil {
+		if blockErr := lh.refuseIfWorktreeSharedWithOtherLiveSession(inst); blockErr != nil {
+			return blockErr, nil
+		}
 		// Hydrate for tmux access if the session is not paused (paused sessions have no tmux session).
 		if inst.Status != session.Paused && !inst.Started() {
 			if startErr := inst.Start(false); startErr != nil {

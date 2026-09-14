@@ -514,12 +514,16 @@ func (i *Instance) claudeMCPConfigArgs() (string, string) {
 
 // initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
 //
-// Reuse requires HasSession() AND IsAlive(): the pointer alone stays non-nil
-// forever once set, even after the tmux server backing it is killed, which
-// let recovery skip buildLaunchCommand() and relaunch without --resume after
-// a tmux-kill-server crash (2026-09-12 incident).
+// Reuse requires HasSession() AND (the cheap cached IsAlive() OR the
+// canonical IsBackendProcessAlive() truth check): the pointer alone stays
+// non-nil forever once set, even after the tmux server backing it is killed,
+// which let recovery skip buildLaunchCommand() and relaunch without --resume
+// after a tmux-kill-server crash (2026-09-12 incident, #791). The cached
+// check is tried first to avoid a subprocess round trip on the hot path; the
+// canonical check only runs when it says no, so a merely-stale cache entry
+// doesn't force an unnecessary rebuild.
 func (i *Instance) initTmuxSession() {
-	if i.pm().HasSession() && i.pm().IsAlive() {
+	if i.pm().HasSession() && (i.pm().IsAlive() || i.IsBackendProcessAlive()) {
 		log.Info("reusing existing tmux session", "session", i.Title)
 		return
 	}
@@ -718,12 +722,44 @@ func (i *Instance) TmuxAlive() bool {
 	return i.pm().IsAlive()
 }
 
-// IsBackendProcessAlive reports raw process liveness with no Status/started
-// gating (unlike TmuxAlive()) and no cached liveness flag — the
-// backend-agnostic replacement for reaching into a concrete
-// *tmux.TmuxSession's DoesSessionExistNoCache().
+// IsBackendProcessAlive is the canonical, direct-to-OS/tmux liveness-truth
+// check for this instance — no Status/started gating (unlike TmuxAlive()), no
+// cached flag, no reliance on a pointer/map merely being non-nil. It is the
+// single primitive initTmuxSession (below), RestoreWithWorkDir's orphan guard
+// (session/tmux, via CachedPanePIDStillAlive), and
+// SessionService.findConfirmedLiveInstance all bottom out in — three
+// independent liveness bugs (#791, #799, and the backlog-layer one this
+// comment was added for) each shipped their own incomplete proxy before this
+// existed.
+//
+// Checks two signals because either alone has a false negative:
+// HasLiveSessionNoCache() (fresh backend round trip) misses a process that
+// outlived a killed/restarted tmux server; CachedPanePIDStillAlive() (OS PID +
+// creation-time, tmux backend only) catches that case but is only meaningful
+// once a pane PID has actually been cached.
 func (i *Instance) IsBackendProcessAlive() bool {
-	return i.pm().HasSession() && i.pm().HasLiveSessionNoCache()
+	if !i.pm().HasSession() {
+		return false
+	}
+	if i.pm().HasLiveSessionNoCache() {
+		return true
+	}
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		if mgr, ok := tb.TmuxManager().(*TmuxProcessManager); ok {
+			return mgr.CachedPanePIDStillAlive()
+		}
+	}
+	return false
+}
+
+// GetCurrentWorkingDirectory returns the actual runtime working directory of
+// the instance's live pane/process (via pane or process introspection) — as
+// opposed to GetPath()/GetEffectiveRootDir(), which report the persisted
+// repo-root/worktree path and can diverge from where the process is really
+// running. Used by worktree-deletion safety checks that must know whether
+// some OTHER session's real cwd sits inside a worktree about to be removed.
+func (i *Instance) GetCurrentWorkingDirectory() (string, error) {
+	return i.pm().GetCurrentWorkingDirectory()
 }
 
 // RestoreProcess is the backend-agnostic replacement for reaching into a

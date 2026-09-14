@@ -19,6 +19,8 @@
 //     outside session/git.OpenRepo, the approved wrapper
 //   - norawghrequest: detects direct http.NewRequest/NewRequestWithContext
 //     calls to a GitHub host outside github's approved constructors
+//   - noliveinstanceraw: detects a raw FindLiveInstance(...) nil-comparison
+//     used as a liveness decision outside findConfirmedLiveInstance
 package main
 
 import (
@@ -27,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/tools/lint/entfullscan"
 	"github.com/tstapler/stapler-squad/tools/lint/hotpolllog"
 	"github.com/tstapler/stapler-squad/tools/lint/nocommandpattern"
+	"github.com/tstapler/stapler-squad/tools/lint/noliveinstanceraw"
 	"github.com/tstapler/stapler-squad/tools/lint/norawexec"
 	"github.com/tstapler/stapler-squad/tools/lint/norawghrequest"
 	"github.com/tstapler/stapler-squad/tools/lint/norawgitopen"
@@ -39,6 +42,7 @@ func main() {
 		entfullscan.Analyzer,
 		hotpolllog.Analyzer,
 		nocommandpattern.Analyzer,
+		noliveinstanceraw.Analyzer,
 		norawexec.Analyzer,
 		norawghrequest.Analyzer,
 		norawgitopen.Analyzer,

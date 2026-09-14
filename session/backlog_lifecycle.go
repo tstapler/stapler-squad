@@ -166,6 +166,10 @@ type BacklogLifecycleListener struct {
 	sessionArchiverMu sync.RWMutex
 	sessionArchiver   SessionArchiver
 
+	// worktreeCleanerMu guards worktreeCleaner for concurrent Set/get access.
+	worktreeCleanerMu sync.RWMutex
+	worktreeCleaner   WorktreeCleaner
+
 	// sessionLivenessCheckerMu guards sessionLivenessChecker for concurrent
 	// Set/get access.
 	sessionLivenessCheckerMu sync.RWMutex
@@ -642,6 +646,37 @@ func (l *BacklogLifecycleListener) getSessionArchiver() SessionArchiver {
 	l.sessionArchiverMu.RLock()
 	defer l.sessionArchiverMu.RUnlock()
 	return l.sessionArchiver
+}
+
+// SetWorktreeCleaner wires in the cleaner used to synchronously remove git
+// worktrees and archive work/review sessions when an internal transition
+// path (not the manual RPC) drives an item straight to a terminal status.
+// Optional — nil means those paths fall back to the 60s
+// reconcileTerminalItemSessions safety-net sweep, same as before this was
+// wired.
+func (l *BacklogLifecycleListener) SetWorktreeCleaner(c WorktreeCleaner) {
+	l.worktreeCleanerMu.Lock()
+	defer l.worktreeCleanerMu.Unlock()
+	l.worktreeCleaner = c
+}
+
+// getWorktreeCleaner returns the current worktree cleaner under a read lock.
+func (l *BacklogLifecycleListener) getWorktreeCleaner() WorktreeCleaner {
+	l.worktreeCleanerMu.RLock()
+	defer l.worktreeCleanerMu.RUnlock()
+	return l.worktreeCleaner
+}
+
+// cleanupTerminalItemSync invokes the injected WorktreeCleaner, if wired, for
+// itemID — the shared synchronous-cleanup call internal transition paths
+// (transitionBouncingItemToDone, the PR-merge-detected done path) make right
+// after a successful terminal transition so cleanup does not depend solely
+// on the 60s sweep. No-op when unwired (matches WorktreeCleaner's nil-safety
+// contract).
+func (l *BacklogLifecycleListener) cleanupTerminalItemSync(ctx context.Context, itemID string) {
+	if c := l.getWorktreeCleaner(); c != nil {
+		c.CleanupTerminalItem(ctx, itemID)
+	}
 }
 
 // SetSessionLivenessChecker wires the function used by the zombie-session
@@ -1733,6 +1768,7 @@ func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Cont
 	if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); err != nil {
 		return fmt.Errorf("review->done: %w", err)
 	}
+	l.cleanupTerminalItemSync(ctx, item.ID)
 	return nil
 }
 
