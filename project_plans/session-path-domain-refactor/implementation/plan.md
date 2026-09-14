@@ -79,7 +79,13 @@ Additive. No existing field changes value; no consumer is migrated. Reviewable a
 
 ## Deferred, with reasoning (requirements' "no consumer silently left behind")
 
-Each gets a backlog item; none is silently dropped.
+None is silently dropped. Filed 2026-09-13:
+
+| Item | Covers |
+|---|---|
+| `a9e7edc4-0055-45d1-8397-626f2bfe3d90` | Phase B — frontend + MCP consumer migration, incl. replacing PR #801's unfalsifiable regression fixture and the stopped-session case its fix still misses |
+| `7cfdb43e-a640-4f08-a7e2-2f5d7bd24775` | `unfinished_work_service.go` and `tokens/association.go` keying an index by identity path and querying it by resolved path |
+| `29bd6922-ce09-41ed-ab04-a9238f4b1a9f` | `working_dir` reading absolute and writing relative |
 
 | Deferred | Why |
 |---|---|
