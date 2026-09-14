@@ -513,8 +513,13 @@ func (s *Storage) ListInstanceIDs() ([]string, error) {
 
 // ListSessionRecords returns a snapshot of all sessions as SessionRecords,
 // for use by the tokens.Associator to match JSONL files to stapler-squad sessions.
+//
+// Uses LoadMinimal.WithTags() rather than plain ListInstanceData() (LoadMinimal):
+// Tags is an eager-loaded ent edge (session/ent/schema/session.go), not a plain
+// column, so it comes back empty under LoadMinimal — see LoadOptions.LoadTags's
+// doc comment and TestStorage_UpdateInstance's identical note.
 func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
-	data, err := s.ListInstanceData()
+	data, err := s.repo.ListWithOptions(context.Background(), LoadMinimal.WithTags())
 	if err != nil {
 		return nil
 	}
@@ -529,6 +534,7 @@ func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
 			ConversationID: d.ClaudeSession.ConversationUUID,
 			Path:           d.Path,
 			CreatedAt:      d.CreatedAt,
+			Tags:           d.Tags,
 		})
 	}
 	return records

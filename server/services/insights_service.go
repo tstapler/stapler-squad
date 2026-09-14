@@ -25,6 +25,12 @@ const findingsCap = 20
 // Compile-time check: InsightsService must implement the generated handler.
 var _ sessionv1connect.InsightsServiceHandler = (*InsightsService)(nil)
 
+// insightsBacklogReader is the narrow interface InsightsService uses to source
+// persisted session_role at summary-build time (ADR-029). Satisfied by *session.Storage.
+type insightsBacklogReader interface {
+	GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]session.ItemSessionBacklogEntry, error)
+}
+
 // DismissedFindingsRepository is the seam for finding-dismissal persistence.
 // Satisfied implicitly by *session.Storage. nil (the zero value of
 // InsightsService.dismissedFindings) means the feature is unavailable — the
@@ -38,9 +44,10 @@ type DismissedFindingsRepository interface {
 // InsightsService implements the ConnectRPC InsightsServiceHandler.
 // It reads from a TokenStoreReader to serve token usage analytics.
 type InsightsService struct {
-	store      tokens.TokenStoreReader
-	pricing    *tokens.PricingTable
-	associator *tokens.Associator
+	store         tokens.TokenStoreReader
+	pricing       *tokens.PricingTable
+	associator    *tokens.Associator
+	backlogReader insightsBacklogReader
 
 	// dismissedFindings persists DismissFinding calls and is consulted by
 	// GetInsightsSummary to filter dismissed findings out of the response.
@@ -62,13 +69,36 @@ func NewInsightsService(
 	store tokens.TokenStoreReader,
 	pricing *tokens.PricingTable,
 	associator *tokens.Associator,
+	backlogReader insightsBacklogReader,
 ) *InsightsService {
 	return &InsightsService{
 		store:                  store,
 		pricing:                pricing,
 		associator:             associator,
+		backlogReader:          backlogReader,
 		loggedUnpricedFamilies: make(map[string]bool),
 	}
+}
+
+// sessionRolesForSessions builds a sessionUUID→role map from one unfiltered
+// GetAllItemSessionsWithBacklogInfo scan, keeping the first (most-recently-created,
+// per that query's explicit Order(Desc(CreatedAt))) role seen per UUID (ADR-029).
+func (s *InsightsService) sessionRolesForSessions(ctx context.Context) map[string]string {
+	if s.backlogReader == nil {
+		return nil
+	}
+	entries, err := s.backlogReader.GetAllItemSessionsWithBacklogInfo(ctx)
+	if err != nil {
+		log.Warn("failed to fetch session roles for insights", "err", err)
+		return nil
+	}
+	roles := make(map[string]string, len(entries))
+	for _, e := range entries {
+		if _, exists := roles[e.SessionUUID]; !exists {
+			roles[e.SessionUUID] = e.SessionRole
+		}
+	}
+	return roles
 }
 
 // SetDismissedFindingsStore wires dismissal persistence (nil disables it —
@@ -106,12 +136,16 @@ func buildSessionSummary(
 	pt *tokens.PricingTable,
 	associator *tokens.Associator,
 	snapshot []tokens.SessionRecord,
+	roleMap map[string]string,
 ) *sessionv1.SessionTokenSummary {
 	firstTs, lastTs := sessionTimestamps(r)
 
 	sessionID, isOrphan := "", true
+	var tags []string
 	if associator != nil {
-		sessionID, isOrphan = associator.AssociateWithSnapshot(r, snapshot)
+		var rec tokens.SessionRecord
+		rec, isOrphan = associator.AssociateRecordWithSnapshot(r, snapshot)
+		sessionID, tags = rec.SessionID, rec.Tags
 	}
 
 	costUSD, unpriced := pt.EstimateCost(r)
@@ -142,6 +176,8 @@ func buildSessionSummary(
 		TopTools:         topTools,
 		UnpricedModels:   unpriced,
 		ActivityType:     activityType,
+		Tags:             tags,
+		SessionRole:      roleMap[sessionID],
 	}
 	if !firstTs.IsZero() {
 		summary.FirstMessageAt = timestamppb.New(firstTs)
@@ -201,6 +237,7 @@ func (s *InsightsService) GetInsightsSummary(
 	if s.associator != nil {
 		sessionSnapshot = s.associator.Snapshot()
 	}
+	roleMap := s.sessionRolesForSessions(ctx)
 
 	// Fetched once per request (not per-finding) — see AllRules's identical
 	// small-table-full-scan rationale.
@@ -263,7 +300,7 @@ func (s *InsightsService) GetInsightsSummary(
 			}
 		}
 
-		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot)
+		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot, roleMap)
 		costUSD, unpriced := summary.EstimatedCostUsd, summary.UnpricedModels
 		for _, f := range unpriced {
 			allUnpricedFamilies[f] = true
@@ -484,7 +521,7 @@ func (s *InsightsService) GetInsightsSummary(
 
 // ListSessionTokens returns per-session token summaries with pagination.
 func (s *InsightsService) ListSessionTokens(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[sessionv1.ListSessionTokensRequest],
 ) (*connect.Response[sessionv1.ListSessionTokensResponse], error) {
 	results := s.store.GetAll()
@@ -505,6 +542,7 @@ func (s *InsightsService) ListSessionTokens(
 	if s.associator != nil {
 		sessionSnapshot = s.associator.Snapshot()
 	}
+	roleMap := s.sessionRolesForSessions(ctx)
 	for _, r := range results {
 		if r == nil {
 			continue
@@ -517,7 +555,7 @@ func (s *InsightsService) ListSessionTokens(
 			continue
 		}
 
-		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot)
+		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot, roleMap)
 		for _, f := range summary.UnpricedModels {
 			allUnpricedFamilies[f] = true
 		}
@@ -656,9 +694,10 @@ func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEven
 				if s.associator != nil {
 					snapshot = s.associator.Snapshot()
 				}
+				roleMap := s.sessionRolesForSessions(ctx)
 				evt = &sessionv1.InsightsEvent{
 					EventType: "update",
-					Session:   buildSessionSummary(result, s.pricing, s.associator, snapshot),
+					Session:   buildSessionSummary(result, s.pricing, s.associator, snapshot, roleMap),
 					AllParsed: !s.store.IsLoading(),
 				}
 			} else {

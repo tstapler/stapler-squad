@@ -647,6 +647,25 @@ func TestStorage_ListInstanceData(t *testing.T) {
 	assert.True(t, titles["list-session-2"], "list-session-2 should be present")
 }
 
+// TestListSessionRecords_WhenInstanceHasTags_ExpectSessionRecordTagsPopulatedFromRealStorage
+// is the integration regression test for wiring Instance.Tags through to
+// tokens.SessionRecord.Tags: it goes through the real Ent-backed Storage
+// (AddInstance -> ListSessionRecords), not just a SessionRecord fixture
+// literal, so it also catches a broken persistence path for Tags.
+func TestListSessionRecords_WhenInstanceHasTags_ExpectSessionRecordTagsPopulatedFromRealStorage(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("tagged-session")
+	inst.Tags = []string{"backend", "urgent"}
+	require.NoError(t, storage.AddInstance(inst))
+
+	records := storage.ListSessionRecords()
+	require.Len(t, records, 1)
+	assert.ElementsMatch(t, []string{"backend", "urgent"}, records[0].Tags)
+}
+
 // TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExistsInStorageOnly
 // is the regression test for the fix in server/services/session_service.go's
 // ArchiveSessionByUUID: a session that is not resident in the live in-memory
