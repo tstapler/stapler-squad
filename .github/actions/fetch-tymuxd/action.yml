@@ -13,7 +13,7 @@ runs:
         # cache key exactly (same manual-bump convention: bump this alongside
         # TYMUX_VERSION in the Makefile, nothing enforces the two staying in
         # sync automatically -- see that variable's own doc comment).
-        key: tymuxd-v1.1.0-${{ runner.os }}-v1
+        key: tymuxd-v1.0.0-${{ runner.os }}-v1
     - name: Fetch pinned tymuxd binary
       if: steps.tymuxd-cache.outputs.cache-hit != 'true'
       shell: bash
