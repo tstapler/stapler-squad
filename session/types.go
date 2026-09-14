@@ -312,8 +312,10 @@ func isValidTitle(title string) bool {
 }
 
 // Workspace describes where a session is operating. It names the four path
-// concepts the domain actually has, because picking the wrong one has already
-// shipped a bug (see ADR-001 and WorkspacePeersPanel's false-collision report).
+// concepts the domain actually has, because picking the wrong one already
+// shipped a bug -- WorkspacePeersPanel comparing the disk-checked value and so
+// reporting isolated worktree sessions as colliding. Rationale:
+// project_plans/session-path-domain-refactor/decisions/ADR-001-session-path-vocabulary.md
 //
 // Which one you want:
 //
