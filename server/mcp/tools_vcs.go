@@ -170,7 +170,7 @@ func (vh *vcsHandlers) findInstance(sessionID string) (*session.Instance, *mcpgo
 // openWorktree reconstructs a GitWorktree from the instance's stored paths.
 // This does not require the session to be running.
 func (vh *vcsHandlers) openWorktree(inst *session.Instance) (*git.GitWorktree, error) {
-	worktreePath := inst.Workspace().ActiveDir
+	worktreePath := inst.ActiveDir()
 	if worktreePath == "" {
 		return nil, fmt.Errorf("session has no working directory")
 	}
