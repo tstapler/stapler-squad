@@ -543,7 +543,9 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 			// ship, so done was the correct terminal state — a failure here
 			// leaves the item stuck with no further signal.
 			l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("%s, so the item should have moved to done, but the transition failed", reason), transErr)
+			return
 		}
+		l.cleanupTerminalItemSync(ctx, item.ID)
 	}
 
 	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
@@ -1473,6 +1475,12 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			l.notifyTransitionFailed(item.ID.String(), item.Title, fmt.Sprintf("PR #%d was confirmed merged but the item's transition to done failed", item.PrNumber), transErr)
 		} else {
 			log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s → done (PR #%d merged)", item.ID, item.PrNumber)
+			// Synchronous cleanup so this internal (system-driven) done
+			// transition doesn't depend solely on the 60s
+			// reconcileTerminalItemSessions safety-net sweep — matches the
+			// manual TransitionBacklogItemStatus RPC path's existing
+			// behavior. See WorktreeCleaner's doc comment.
+			l.cleanupTerminalItemSync(ctx, item.ID.String())
 			// The item just reached done — resolve pr_ready_unmerged
 			// immediately (Task 2.1.5a) rather than waiting for the
 			// self-heal sweep's next tick.
@@ -2011,6 +2019,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 		log.ErrorLog().Printf("[BacklogLifecycle] closeIfSupersededByMain done transition item=%s: %v", item.ID, transErr)
 		return false
 	}
+	l.cleanupTerminalItemSync(ctx, item.ID)
 
 	l.notify(item.ID,
 		"Backlog item already shipped — stale PR closed",
