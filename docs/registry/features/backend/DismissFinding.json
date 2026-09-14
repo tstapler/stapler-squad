@@ -6,7 +6,14 @@
   "protoFile": "proto/session/v1/insights.proto",
   "markerFound": true,
   "handlerFile": "server/services/insights_service.go",
-  "tested": false,
-  "testIds": [],
+  "tested": true,
+  "testIds": [
+    "TestDismissFinding_WhenNoStoreWired_ExpectUnimplemented",
+    "TestDismissFinding_WhenFindingIdEmpty_ExpectInvalidArgument",
+    "TestDismissFinding_WhenPersisted_ExpectSubsequentGetInsightsSummaryExcludesIt",
+    "TestDismissFinding_WhenOnlyOneOfTwoSessionsDismissed_ExpectOtherSessionFindingUnaffected",
+    "TestDismissFinding_WhenActiveSessionConditionChangesAfterDismissal_ExpectNewFindingSurfaces",
+    "TestDismissFinding_WhenFinishedSessionRecomputedIdentically_ExpectDismissalSticks"
+  ],
   "lastModified": "2026-09-12T11:13:00.459199541-07:00"
 }
