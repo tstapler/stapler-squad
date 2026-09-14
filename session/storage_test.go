@@ -1153,3 +1153,40 @@ func TestStorage_DismissFinding_WhenCalledTwiceWithSameID_ExpectIdempotent(t *te
 	require.NoError(t, err)
 	assert.Len(t, ids, 1)
 }
+
+// TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActiveRoundTrips
+// pins the interaction the ADR-001 backfill depends on: fromInstanceData's
+// archived guard heals an Active+archived row to Stopped *and* sets
+// started=true, and saveInstancesToRepo only writes instances where Started()
+// is true — so the heal actually reaches the database on the next
+// LoadInstances/SaveInstances pair (the 15s health-check tick does exactly
+// this, which is how the incident's rows converge without a restart).
+func TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActiveRoundTrips(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	archivedAt := time.Now()
+	inst := &Instance{
+		Title:      "archived-active-roundtrip",
+		Path:       "/tmp/test",
+		Status:     Active,
+		Program:    "claude",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		ArchivedAt: &archivedAt,
+	}
+	inst.started.Store(true)
+	require.NoError(t, storage.AddInstance(inst))
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	require.NoError(t, storage.SaveInstances(loaded))
+
+	persisted, err := storage.FindInstanceDataByID("archived-active-roundtrip")
+	require.NoError(t, err)
+	assert.Equal(t, Stopped, persisted.Status,
+		"the archived Active row must be self-healed to Stopped and that heal must be persisted")
+	require.NotNil(t, persisted.ArchivedAt, "archival itself must be untouched by the heal")
+}
