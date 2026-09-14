@@ -1050,3 +1050,50 @@ func TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale(t *testing.T
 	require.Len(t, loaded, 1)
 	assert.Equal(t, Creating, loaded[0].Status, "the persisted row must be unchanged when epochs mismatch")
 }
+
+// TestStorage_DismissFinding_RoundTripsThroughRealEntBackedSQLite exercises
+// the real ent-generated DismissedFinding code path (unlike
+// server/services/insights_service_test.go's fake repository double), so a
+// mistake in the ent schema/generated accessors (wrong field name, missing
+// upsert conflict column, etc.) fails here even if the service-level fake
+// would have papered over it.
+func TestStorage_DismissFinding_RoundTripsThroughRealEntBackedSQLite(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	ids, err := storage.ListDismissedFindingIDs(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+
+	require.NoError(t, storage.DismissFinding(ctx, DismissedFindingData{
+		FindingID:      "finding-abc123",
+		SessionID:      "sess-1",
+		ConversationID: "conv-1",
+		FindingType:    2,
+	}))
+
+	ids, err = storage.ListDismissedFindingIDs(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]bool{"finding-abc123": true}, ids)
+}
+
+// TestStorage_DismissFinding_WhenCalledTwiceWithSameID_ExpectIdempotent covers
+// the OnConflictColumns upsert path: re-dismissing an already-dismissed
+// finding_id (e.g. a duplicate frontend click) must not error and must not
+// create a second row.
+func TestStorage_DismissFinding_WhenCalledTwiceWithSameID_ExpectIdempotent(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	data := DismissedFindingData{FindingID: "finding-dup", SessionID: "sess-1", FindingType: 1}
+	require.NoError(t, storage.DismissFinding(ctx, data))
+	require.NoError(t, storage.DismissFinding(ctx, data))
+
+	ids, err := storage.ListDismissedFindingIDs(ctx)
+	require.NoError(t, err)
+	assert.Len(t, ids, 1)
+}

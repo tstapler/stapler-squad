@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 	"google.golang.org/protobuf/proto"
@@ -1337,4 +1338,225 @@ func TestGetInsightsSummary_WhenSessionClassified_ExpectActivityTypeSetOnSummary
 	require.NoError(t, err)
 	require.Len(t, resp.Msg.Sessions, 1)
 	assert.Equal(t, sessionv1.ActivityType_ACTIVITY_TYPE_DEBUGGING, resp.Msg.Sessions[0].ActivityType)
+}
+
+// --------------------------------------------------------------------------
+// Finding dismissal (DismissFinding RPC + GetInsightsSummary filtering)
+// --------------------------------------------------------------------------
+
+// fakeDismissedFindingsStore is an in-memory DismissedFindingsRepository test
+// double.
+type fakeDismissedFindingsStore struct {
+	mu           sync.Mutex
+	dismissed    map[string]bool
+	dismissCalls []session.DismissedFindingData
+}
+
+func (f *fakeDismissedFindingsStore) DismissFinding(_ context.Context, data session.DismissedFindingData) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.dismissed == nil {
+		f.dismissed = make(map[string]bool)
+	}
+	f.dismissed[data.FindingID] = true
+	f.dismissCalls = append(f.dismissCalls, data)
+	return nil
+}
+
+func (f *fakeDismissedFindingsStore) ListDismissedFindingIDs(_ context.Context) (map[string]bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]bool, len(f.dismissed))
+	for k := range f.dismissed {
+		out[k] = true
+	}
+	return out, nil
+}
+
+// Compile-time assertion: fakeDismissedFindingsStore must implement DismissedFindingsRepository.
+var _ DismissedFindingsRepository = (*fakeDismissedFindingsStore)(nil)
+
+func TestDismissFinding_WhenNoStoreWired_ExpectUnimplemented(t *testing.T) {
+	t.Parallel()
+	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil)
+
+	_, err := svc.DismissFinding(context.Background(), connect.NewRequest(&sessionv1.DismissFindingRequest{FindingId: "abc"}))
+
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+func TestDismissFinding_WhenFindingIdEmpty_ExpectInvalidArgument(t *testing.T) {
+	t.Parallel()
+	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil)
+	svc.SetDismissedFindingsStore(&fakeDismissedFindingsStore{})
+
+	_, err := svc.DismissFinding(context.Background(), connect.NewRequest(&sessionv1.DismissFindingRequest{}))
+
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+func TestDismissFinding_WhenPersisted_ExpectSubsequentGetInsightsSummaryExcludesIt(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+
+	dismissedStore := &fakeDismissedFindingsStore{}
+	store := &fakeTokenStore{results: []*tokens.ParseResult{findingsFixtureResult(1, now)}}
+	svc := NewInsightsService(store, findingsFixturePricingTable(1), nil)
+	svc.SetDismissedFindingsStore(dismissedStore)
+
+	// First call: finding present, and carries a non-empty FindingId.
+	before, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+	require.NoError(t, err)
+	require.Len(t, before.Msg.Findings, 1)
+	findingID := before.Msg.Findings[0].FindingId
+	require.NotEmpty(t, findingID)
+
+	_, err = svc.DismissFinding(context.Background(), connect.NewRequest(&sessionv1.DismissFindingRequest{
+		FindingId:      findingID,
+		SessionId:      before.Msg.Findings[0].SessionId,
+		ConversationId: before.Msg.Findings[0].ConversationId,
+		FindingType:    before.Msg.Findings[0].FindingType,
+	}))
+	require.NoError(t, err)
+
+	after, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, after.Msg.Findings, "dismissed finding must be excluded from subsequent GetInsightsSummary responses")
+}
+
+// A dismissal on one session/finding-type must not suppress a genuinely
+// different finding (different session here; findings_test.go's
+// TestComputeFindingID_WhenFindingTypeDiffers_ExpectDifferentID covers the
+// different-type case at the unit level).
+func TestDismissFinding_WhenOnlyOneOfTwoSessionsDismissed_ExpectOtherSessionFindingUnaffected(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+
+	dismissedStore := &fakeDismissedFindingsStore{}
+	store := &fakeTokenStore{results: []*tokens.ParseResult{
+		findingsFixtureResult(1, now),
+		findingsFixtureResult(2, now),
+	}}
+	svc := NewInsightsService(store, findingsFixturePricingTable(2), nil)
+	svc.SetDismissedFindingsStore(dismissedStore)
+
+	before, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+	require.NoError(t, err)
+	require.Len(t, before.Msg.Findings, 2)
+
+	// Dismiss only the session-1 finding.
+	var dismissedID, keptConversationID string
+	for _, f := range before.Msg.Findings {
+		if f.ConversationId == "uuid-1" {
+			dismissedID = f.FindingId
+		} else {
+			keptConversationID = f.ConversationId
+		}
+	}
+	require.NotEmpty(t, dismissedID)
+	_, err = svc.DismissFinding(context.Background(), connect.NewRequest(&sessionv1.DismissFindingRequest{FindingId: dismissedID}))
+	require.NoError(t, err)
+
+	after, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+	require.NoError(t, err)
+	require.Len(t, after.Msg.Findings, 1)
+	assert.Equal(t, keptConversationID, after.Msg.Findings[0].ConversationId)
+}
+
+// TestDismissFinding_WhenActiveSessionConditionChangesAfterDismissal_ExpectNewFindingSurfaces
+// is the acceptance-criteria case: a dismissal must survive normal
+// recomputation on a FINISHED session, but must NOT silently suppress a
+// materially different, later occurrence of the same (session_id,
+// finding_type) pair on a STILL-ACTIVE session — because ComputeFindingID
+// hashes the message text, a changed underlying condition produces a
+// different finding_id and is never filtered by the old dismissal.
+func TestDismissFinding_WhenActiveSessionConditionChangesAfterDismissal_ExpectNewFindingSurfaces(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+
+	dismissedStore := &fakeDismissedFindingsStore{}
+	pricing := findingsFixturePricingTable(1)
+
+	// "Before": the session as it stood when the user dismissed the finding.
+	beforeResult := findingsFixtureResult(1, now)
+	beforeStore := &fakeTokenStore{results: []*tokens.ParseResult{beforeResult}}
+	beforeSvc := NewInsightsService(beforeStore, pricing, nil)
+	beforeSvc.SetDismissedFindingsStore(dismissedStore)
+
+	beforeResp, err := beforeSvc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+	require.NoError(t, err)
+	require.Len(t, beforeResp.Msg.Findings, 1)
+	_, err = beforeSvc.DismissFinding(context.Background(), connect.NewRequest(&sessionv1.DismissFindingRequest{
+		FindingId: beforeResp.Msg.Findings[0].FindingId,
+	}))
+	require.NoError(t, err)
+
+	// "After": the same session (same SessionUUID) later grew more output
+	// tokens — a still-active session's transcript mutating between calls —
+	// changing the finding's dollar impact and message text.
+	afterResult := findingsFixtureResult(1, now)
+	afterResult.TotalOutput = 4_000_000
+	for i := range afterResult.TurnTimeline {
+		afterResult.TurnTimeline[i].Output = 800_000
+	}
+	afterStore := &fakeTokenStore{results: []*tokens.ParseResult{afterResult}}
+	afterSvc := NewInsightsService(afterStore, pricing, nil)
+	afterSvc.SetDismissedFindingsStore(dismissedStore)
+
+	afterResp, err := afterSvc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+	require.NoError(t, err)
+	require.Len(t, afterResp.Msg.Findings, 1, "a materially changed finding on the same session must surface as new, not stay suppressed by the earlier dismissal")
+	assert.NotEqual(t, beforeResp.Msg.Findings[0].FindingId, afterResp.Msg.Findings[0].FindingId)
+	assert.NotEqual(t, beforeResp.Msg.Findings[0].DollarImpactUsd, afterResp.Msg.Findings[0].DollarImpactUsd)
+}
+
+// TestDismissFinding_WhenFinishedSessionRecomputedIdentically_ExpectDismissalSticks
+// is the mirror case: a FINISHED session's immutable transcript recomputes
+// byte-identical Findings on every call, so the same finding_id recurs and
+// the dismissal must keep filtering it out indefinitely.
+func TestDismissFinding_WhenFinishedSessionRecomputedIdentically_ExpectDismissalSticks(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+
+	dismissedStore := &fakeDismissedFindingsStore{}
+	pricing := findingsFixturePricingTable(1)
+
+	svc := NewInsightsService(&fakeTokenStore{results: []*tokens.ParseResult{findingsFixtureResult(1, now)}}, pricing, nil)
+	svc.SetDismissedFindingsStore(dismissedStore)
+
+	first, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
+	require.NoError(t, err)
+	require.Len(t, first.Msg.Findings, 1)
+	_, err = svc.DismissFinding(context.Background(), connect.NewRequest(&sessionv1.DismissFindingRequest{FindingId: first.Msg.Findings[0].FindingId}))
+	require.NoError(t, err)
+
+	// Re-parsed from the same (now-finished, immutable) transcript on every
+	// subsequent request — a fresh ParseResult built with identical inputs,
+	// exactly like a real re-parse of an unchanged JSONL file.
+	svc2 := NewInsightsService(&fakeTokenStore{results: []*tokens.ParseResult{findingsFixtureResult(1, now)}}, pricing, nil)
+	svc2.SetDismissedFindingsStore(dismissedStore)
+
+	second, err := svc2.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
+	require.NoError(t, err)
+	assert.Empty(t, second.Msg.Findings, "an unchanged finished session's recomputation must keep matching the earlier dismissal")
 }
