@@ -1,150 +1,118 @@
 # Implementation Plan: session-path-domain-refactor
 
-**Feature**: Give the four session path concepts distinct, self-documenting names across Go, proto, and TypeScript, and make the wrong choice structurally hard.
+**Feature**: Name the four session path concepts distinctly across Go and the wire, and correct the doc comments that describe them wrongly.
 **Date**: 2026-09-13
-**Status**: Draft — call-site enumeration pending audit
+**Status**: Ready for implementation (revised after adversarial review — 4 BLOCKERs resolved)
 **ADRs**: `decisions/ADR-001-session-path-vocabulary.md`
 
 ---
 
-## Vocabulary (from ADR-001)
+## Vocabulary (ADR-001)
 
 | # | Name | Meaning | Safe for |
 |---|---|---|---|
-| 1 | `RepoRoot` / `repo_root_path` | repo root the session was created against | repo identity, grouping |
+| 1 | `RepoRoot` / `repo_root` | path the session was created against | repo identity, grouping |
 | 2 | `WorktreeDir` / `worktree_dir` | this session's worktree, `""` if none | worktree-specific logic |
-| 3 | `SessionDir` / `session_dir` | `WorktreeDir` if set, else `RepoRoot`; disk-agnostic | **comparison, correlation, identity — the default** |
-| 4 | `ReadableDir` / `readable_dir` | `SessionDir` if it exists on disk, else `RepoRoot` | **opening files only** |
+| 3 | `ActiveDir` / `active_dir` | `WorktreeDir` if set, else `RepoRoot`; disk-agnostic | **comparison, correlation, identity — the default** |
+| 4 | `ExistingDir` / `existing_dir` | `ActiveDir` if it exists on disk, else `RepoRoot` | **opening files only** |
 
 ---
 
-## Phase split
+## Phase A (this PR) — Go vocabulary, `Session` wire fields, corrected docs
 
-**Phase A (PR 1)** — backend vocabulary, wire fields, enforcement. Additive only: no
-existing field changes meaning or stops being populated, so nothing consumer-facing
-breaks and the PR is reviewable as pure plumbing.
+Additive. No existing field changes value; no consumer is migrated. Reviewable as plumbing.
 
-**Phase B (PR 2)** — frontend + MCP consumer migration onto the new fields. Mechanical
-per-file swaps, reviewable as an enumerable list.
+### Epic A.1: `Workspace` names all four
 
-**Phase C (out of scope)** — delete the deprecated `path`/`working_dir` fields, once
-external MCP/agent consumers have migrated. Separate breaking-change PR.
-
-This mirrors the repo's own IAC Epic 1 → Epic 2 precedent (`447caed00` additive
-infrastructure, then `e16ab45e1` consumer migration), for the same reason: a missed
-dual-populate site and a consumer migrated to a not-yet-existing field are two different
-review mistakes, and bundling them hides both.
-
----
-
-## Phase A
-
-### Epic A.1: `Workspace` carries all four concepts
-
-**Goal**: one struct, four named fields, each documenting what it is *not* safe for.
-
-#### Story A.1.1: Extend the `Workspace` value type
-**As a** backend engineer, **I want** `Workspace` to name all four path concepts, **so that** I pick the right one without reading `instance_worktree.go`.
+#### Story A.1.1: One pure helper, four fields, no recursion
+**As a** backend engineer, **I want** `Workspace` to name all four concepts, **so that** I pick the right one without reading `instance_worktree.go`.
 
 **Acceptance Criteria**:
-- `session/types.go`'s `Workspace` gains `WorktreeDir`, `SessionDir`, `ReadableDir`.
-- `EffectivePath` remains, marked `// Deprecated: use ReadableDir` and populated with the identical value — no behavior change.
-- Each field's doc comment states its disk-existence semantics and the misuse it guards against; `SessionDir` says it is the default for comparison, `ReadableDir` says two sessions can share one without being co-located.
-- `Workspace()`'s own doc comment stops claiming to be "the single source of truth for path resolution" and instead points at the table.
+- `session/types.go`'s `Workspace` carries `RepoRoot`, `WorktreeDir`, `ActiveDir`, `ExistingDir`, each documenting what it is *not* safe for. `EffectivePath` is **removed**, and its three readers (`server/adapters/instance_adapter.go:65`, `server/services/workspace_service.go:146`, `:364`) move to `ExistingDir` in this PR.
+- A new **pure, unexported** `func (i *Instance) activeDir() string` holds the concept-3 logic (`HasWorktree()` → non-empty `GetWorktreePath()` → else `GetPath()`).
+- `GetEffectiveRootDir()` and `GetWorkingDirectory()` both `return i.activeDir()` — they must **not** call `Workspace()`.
+  - *Why this is a hard constraint*: `Workspace()` does an `os.Stat` and a `log.Warn` on the fallback branch. These two accessors have 37 call sites including `cmd.Dir`, session start, and poll loops (`session/history_linker.go:291`, `session/retry_state.go:352`, `server/services/session_service.go:3566`…). Routing them through `Workspace()` would add a syscall and emit a warning per call for every paused session whose worktree `pause_session` removed — sustained log spam. It would also be unbounded recursion if `Workspace()` still computed `ActiveDir` by calling `GetEffectiveRootDir()`, which is what `instance_worktree.go:419` does today.
+- `Workspace()` calls `activeDir()` too, and keeps its existing `ActiveDir != RepoRoot` guard around the `os.Stat` so directory sessions still cost zero syscalls.
+- `Workspace()`'s doc comment stops claiming to be "the single source of truth for path resolution" and points at the table. `RepoRoot`'s comment stops claiming to be "the main checkout, not the worktree" — for a session created from a pre-existing worktree it *is* the worktree, and `Instance.MainRepoPath` holds the main checkout.
 
-**Files**: `session/types.go`, `session/instance_worktree.go`
+**Files**: `session/types.go`, `session/instance_worktree.go`, `server/adapters/instance_adapter.go`, `server/services/workspace_service.go`
 
-##### Task A.1.1a: Add the three fields + doc comments (~4 min)
-##### Task A.1.1b: Populate them in `Workspace()`; keep `EffectivePath` as an alias of `ReadableDir` (~3 min)
+*(A.1.1 and the former A.1.2 are deliberately one story: split across two subagents, the natural first implementation is `ActiveDir: i.GetEffectiveRootDir()`, and the second change then makes it recurse.)*
 
-#### Story A.1.2: Collapse the `GetEffectiveRootDir` / `GetWorkingDirectory` duplication
-**As a** maintainer, **I want** one implementation of concept #3, **so that** the two accessors cannot drift.
-
+#### Story A.1.2: Pin the one intended behavior change
 **Acceptance Criteria**:
-- Both accessors return `Workspace().SessionDir`; the near-duplicate bodies (identical but for an empty-string guard) are gone.
-- Both carry `// Deprecated: use Workspace().SessionDir` and keep their current return values — verified by the existing tests at `session/instance_worktree_test.go:183` and `:218` passing unchanged.
-- `Workspace()` no longer calls `GetEffectiveRootDir()` (inverted dependency), avoiding recursion.
+- `GetWorkingDirectory()` today returns `""` when `HasWorktree()` is true but `GetWorktreePath()` is `""`; `GetEffectiveRootDir()` returns `RepoRoot` in that case. Converging on `activeDir()` picks the non-empty answer.
+- A test pins this **before** the change (`GetWorkingDirectory` has no behavioral test today — its only mention in `instance_worktree_test.go` is `:290`, a race test that discards the result).
 
-**Files**: `session/instance_worktree.go`
+**Files**: `session/instance_worktree_test.go`
 
-### Epic A.2: Wire fields
+### Epic A.2: `Session` wire fields
 
-#### Story A.2.1: New proto fields on `Session` and `ReviewItem`
+#### Story A.2.1: Add four fields, fix two wrong comments
 **Acceptance Criteria**:
-- `Session` gains `repo_root_path = 91`, `worktree_dir = 92`, `session_dir = 93`, `readable_dir = 94` (highest current field number is 90 — verified).
-- `ReviewItem` gains the same four at `23`–`26` (highest current is 22 — verified).
-- `path` and `working_dir` on both messages get `[deprecated = true]` plus a `// Deprecated: use session_dir` / `use readable_dir` comment, and their **wrong** doc comments are corrected to state what they actually carry.
-- New fields carry doc comments matching the ADR table.
-- `make proto-gen` regenerates; `gen/` output stays uncommitted.
+- `Session` gains `repo_root = 91`, `worktree_dir = 92`, `active_dir = 93`, `existing_dir = 94`. Highest current field number is 90; no `reserved` ranges — verified.
+- `path = 3` gets `[deprecated = true]` and its comment corrected: it says "Path to workspace repository root" and carries `Workspace().EffectivePath`.
+- `working_dir = 4` gets its comment corrected — it says "Directory within repository to start in" and carries an absolute `GetWorkingDirectory()` — but is **not** deprecated: `SessionDetailView.tsx:496`/`:678` round-trips it through `UpdateSession` into `Instance.WorkingDir` (the relative subdir), so a replacement it cannot write would break the editor. The corrected comment states the read/write asymmetry and points at the follow-up item.
+- `worktree_dir`'s comment explains why it differs from `git_worktree.worktree_path` (that submessage is gated on `i.started`, so it is nil for stopped sessions while `worktree_dir` is populated).
+- `ReviewItem` is **not** touched — its `path`/`working_dir` carry different concepts than `Session`'s and their comments are already accurate (see ADR alternatives).
 
 **Files**: `proto/session/v1/types.proto`
 
-#### Story A.2.2: Dual-populate in the adapters
+#### Story A.2.2: Populate from one `Workspace()` call
 **Acceptance Criteria**:
-- `InstanceToProto` populates all four new fields from one `inst.Workspace()` call.
-- `path`/`working_dir` keep their exact current values — no consumer sees a change.
-- The `ReviewItem` producer does the same.
-- Adapter-level tests assert each new field's value, including the case where the worktree is gone from disk (`session_dir` keeps the worktree path, `readable_dir` falls back to the repo root) — the exact divergence that caused the `WorkspacePeersPanel` bug. `server/adapters/instance_adapter_test.go` currently has **zero** assertions on any path field.
+- `InstanceToProto` populates all four from a single `inst.Workspace()`, so the syscall count per conversion is unchanged.
+- `path` and `working_dir` keep their exact current values.
+- Adapter tests assert each new field, including the worktree-missing-from-disk case where `active_dir` keeps the worktree path and `existing_dir` falls back — the divergence that caused the bug. `server/adapters/instance_adapter_test.go` has **zero** path assertions today.
 
 **Files**: `server/adapters/instance_adapter.go`, `server/adapters/instance_adapter_test.go`
 
-#### Story A.2.3: MCP surface
+### Epic A.3: Documentation
+
+#### Story A.3.1: Extend the rule doc
 **Acceptance Criteria**:
-- `server/mcp` session summary/detail types expose the new vocabulary.
-- Raw `inst.Path` / `inst.WorkingDir` reads in the MCP adapters go through `Snapshot()`/`Workspace()`, per `.claude/rules/instance-lock-free-reads.md` — these are live violations of that rule, independently found while tracing this refactor.
-- Existing JSON keys keep their names and values.
-
-**Files**: `server/mcp/types.go`, `server/mcp/tools_discovery.go`
-
-### Epic A.3: Enforcement
-
-#### Story A.3.1: `norawinstancepath` analyzer
-**As a** reviewer, **I want** a raw `Instance.Path` read to fail the build, **so that** the rule stops depending on whether the author read a doc.
-
-**Acceptance Criteria**:
-- New analyzer under `tools/lint/norawinstancepath`, registered in `tools/lint/cmd/linter/main.go` and thereby in `make lint-custom` → `make lint`.
-- Flags `*ast.SelectorExpr` reads of `Path` (and the other snapshot-backed mutable fields it covers) where `pass.TypesInfo.Selections` resolves the receiver to `*session.Instance`.
-- Exempts: writes (assignment LHS), the accessor methods themselves, `instance_actor_setters.go`'s locked writers, `buildSnapshot`, and `DetectAndPopulateWorktreeInfo`'s deliberately-raw read (which documents why it must stay raw).
-- Honours `//nolint:norawinstancepath` via the shared `tools/lint/internal/nolintcomment` helper.
-- `analyzer_test.go` + `testdata` fixture covering a flagged read, an exempt accessor, an exempt write, and a `//nolint` suppression.
-- Sized against `tools/lint/norawgitopen` (101 lines + 14 test) rather than `norawghrequest` (298 + 14).
-
-**Gate**: build this only if the audit shows enough raw-read call sites to justify it. If the count is low, fix the sites and extend the existing rule doc instead, and record the decision in the plan rather than silently dropping it.
-
-**Files**: `tools/lint/norawinstancepath/*`, `tools/lint/cmd/linter/main.go`
-
-#### Story A.3.2: Update the rule doc
-**Acceptance Criteria**:
-- `.claude/rules/instance-lock-free-reads.md` gains the identity-vs-resolved distinction; today it covers only lock safety, which is why it could be cited in support of a wrong explanation in PR #801.
-- Names the analyzer as the enforcement mechanism, matching how `norawghrequest.md` documents its own.
+- `.claude/rules/instance-lock-free-reads.md` gains the identity-vs-resolved distinction. Today it covers only lock safety, which is why PR #801 could cite it by name in support of a wrong mechanism.
+- No lint analyzer in this PR — see ADR alternatives.
 
 **Files**: `.claude/rules/instance-lock-free-reads.md`
 
 ---
 
-## Phase B (PR 2)
+## Deferred, with reasoning (requirements' "no consumer silently left behind")
 
-Migrate each consumer from `path`/`working_dir` to `session_dir`/`readable_dir`/`repo_root_path`. Per-file list filled from the audit.
+Each gets a backlog item; none is silently dropped.
 
-Two non-mechanical items known in advance:
+| Deferred | Why |
+|---|---|
+| **Frontend migration** (~30 files) to `activeDir`/`existingDir`, incl. replacing `WorkspacePeersPanel`'s `effectiveSessionPath()` helper and its stale comment | Phase B. Separate PR: mechanical but wide, and the `jscpd` gate (0.1% used of a 0.12% absolute threshold — measured) needs any shared comparison logic extracted, not copied. |
+| **PR #801's regression fixture is unfalsifiable** — `WorkspacePeersPanel.test.tsx` builds a session with `path` = repo root *and* a distinct `gitWorktree.worktreePath`, a state `instance_adapter.go:65` never produces | Phase B replaces the fixture, not just the field. |
+| **MCP `SessionSummary.Path` / `SessionDetail.WorkingDir`** read raw `inst.Path`/`inst.WorkingDir` (`server/mcp/tools_discovery.go:58`, `:70`) and mean *identity*, while ConnectRPC `Session.path` means *resolved* — same name, two meanings, two protocols | Changing MCP JSON values is consumer-visible for agents outside this repo's deploy. Own item. |
+| **`ReviewItem.path` vs `Session.path`** carry different concepts under identical names and comments; `review-queue/page.tsx:30` converts one into the other | Needs plumbing through the `session.ReviewItem` Go struct and both `server/dependencies.go` enrichment sites. |
+| **`working_dir` read/write asymmetry** (absolute out, relative in) corrupts on round-trip | Real bug, needs a product decision on whether to split the field. |
+| **`server/dependencies.go:292`, `:1103`** and `session/instance_workspace.go:309` (`i.Path = targetWorktree.Path`, no snapshot republish) are live `instance-lock-free-reads.md` violations | Lock-safety, not vocabulary. Belongs with the analyzer item. |
+| **`norawinstancepath` analyzer** | ~90 sites across 34 production files; enforces lock safety, not this vocabulary. See ADR alternatives. |
+| **`unfinished_work_service.go:117-125`** indexes by identity path, looks up by resolved path — worktree sessions never correlate. **`session/tokens/association.go:83`** same shape — worktree sessions get orphaned token records | Genuine behavior bugs found during the audit, out of scope for an additive rename. |
 
-- `WorkspacePeersPanel.tsx`'s `effectiveSessionPath()` helper (added by PR #801) becomes `s.sessionDir` — a single field read. Its explanatory comment, which states a mechanism the code does not have, is replaced.
-- Any other comparison/fallback logic is routed through one shared TS helper rather than copy-pasted, to stay under the `jscpd` absolute threshold (0.12%, no diff scoping — confirm current headroom with `pnpm run lint:duplicates` before the PR).
+## Closed questions (requirements' Open Questions)
+
+1. **Does the `WorkspacePeersPanel` bug reproduce given `Session.path` is already `EffectivePath`?** Yes, by a different mechanism than PR #801 claimed: `EffectivePath`'s disk-existence fallback collapses two cleaned-up worktree sessions onto the same repo root. Additionally `gitWorktree` is nil for stopped sessions, so #801's fix does not cover them.
+2. **What backs Insights' `projectPath`?** `proto/session/v1/insights.proto:72`, fed from `tokens.ParseResult.ProjectPath` — parsed from Claude's own JSONL directory naming, never from an `*Instance`. **Not migratable**; it is a third kind of path, not either of these two.
+3. **Is `ListWorkspacePeers` reachable from the web frontend?** No — backend-internal plus the `list_workspace_peers` MCP tool. No `WorkspacePeer` message exists in any `.proto`. `WorkspacePeersPanel.tsx` is an independent client-side implementation deriving peers from `WatchSessions`, which is why the two can and do disagree.
+4. **Full enumeration** — done; drives the deferral table above.
+5. **Lint-rule proportionality** — ~90 raw-read sites across 34 production files. Proportionate *for the lock-safety rule*, but that is not this ADR's invariant. Deferred with the rule it serves.
 
 ---
 
 ## Explicitly not touched
 
-- Worktree detection/creation (`gitManager`, `DetectWorktree`, `MainRepoRoot`) — per the requirements' constraint. The `SessionDir`/`ReadableDir` split names existing behavior; it does not change when a fallback fires.
-- `InstanceData`'s JSON tags (`json:"path"`, `json:"working_dir"`) — `sessions.json` has no schema version or migration path, so a tag rename silently zero-values the field for every existing session on next load. Go identifiers may be renamed; tags stay.
-- `session/ent/schema/*` — pending audit confirmation of whether these columns are live.
-- Deleting the deprecated proto fields — Phase C.
+- Worktree detection/creation (`gitManager`, `DetectWorktree`, `MainRepoRoot`).
+- `session/ent/schema/session.go`'s `path` / `working_dir` columns. **ent is the live session store** — `Storage` is a facade over `EntRepository` (`session/storage.go:260`), and `session/migrate.go` is a one-shot JSON→ent importer. Renaming a `field.String("path").NotEmpty()` column needs a data migration. Go identifiers may be renamed; schema field names stay.
+- `InstanceData`'s JSON tags, for the same reason at the legacy-JSON layer.
+- Deleting the deprecated `path` field — Phase C.
 
 ---
 
 ## Verification
 
 `make build`, `make test` (affected packages), `make lint`, `make registry-diff`.
-The registry is keyed on `// +api:`/`// +feature:` marker comments and RPC/component
-names, not proto field names, so no regeneration is expected — `make registry-diff`
-confirms rather than assumes.
+Registry baseline measured before any change: **267 committed / 266 generated, 0.37%
+divergence, validation passed** — pre-existing, so it must still read 0.37% afterwards.

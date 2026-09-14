@@ -105,19 +105,39 @@ value is and, where it matters, what it is *not* safe for.
 
 | Concept | Name | Meaning |
 |---|---|---|
-| 1 | `RepoRoot` / `repo_root_path` | the repository root this session was created against; repo-scoped identity and grouping |
+| 1 | `RepoRoot` / `repo_root` | the path this session was created against; repo-scoped identity and grouping |
 | 2 | `WorktreeDir` / `worktree_dir` | this session's dedicated git worktree, empty when it works directly in the repo root |
-| 3 | `SessionDir` / `session_dir` | where this session works: `WorktreeDir` if set, else `RepoRoot`. Disk-agnostic and therefore **stable** — the correct key for comparing, correlating, or identifying sessions. The default answer. |
-| 4 | `ReadableDir` / `readable_dir` | `SessionDir` when it exists on disk, else `RepoRoot`. **Only** for opening files. Two sessions can share a `ReadableDir` without being in the same place. |
+| 3 | `ActiveDir` / `active_dir` | where this session works: `WorktreeDir` if set, else `RepoRoot`. Disk-agnostic and therefore **stable** — the correct key for comparing, correlating, or identifying sessions. The default answer. |
+| 4 | `ExistingDir` / `existing_dir` | `ActiveDir` when it exists on disk, else `RepoRoot`. **Only** for opening files. Two sessions can share an `ExistingDir` without being in the same place. |
 
-`Workspace` becomes the one struct carrying all four. `EffectivePath` is retained as a
-deprecated alias for `ReadableDir` so no behavior changes while callers migrate.
+`Workspace` becomes the one struct carrying all four. `EffectivePath` is replaced by
+`ExistingDir` outright rather than kept as an alias — it has only three readers
+(`server/adapters/instance_adapter.go:65`, `server/services/workspace_service.go:146`
+and `:364`), so a deprecated twin needing manual sync would cost more than the migration.
 
 Rules that follow from the names:
 
-- Comparing two sessions' locations → `SessionDir`. Never `ReadableDir`.
-- Reading or writing files → `ReadableDir`.
+- Comparing two sessions' locations → `ActiveDir`. Never `ExistingDir`.
+- Reading or writing files → `ExistingDir`.
 - "Same repo?" → `RepoRoot`, or the existing `WorkspaceKey()`.
+
+`SessionDir` was the first choice and was rejected: `sessionDir`/`SessionDir` already
+has 24 uses in the tree meaning two other things (Claude's `~/.claude/projects/<hash>`
+directory in `session/claude_session_manager.go`, the scrollback directory in
+`session/scrollback/storage.go`). `ActiveDir` and `ExistingDir` have zero prior uses.
+
+### `worktree_dir` is not redundant with `Session.gitWorktree.worktreePath`
+
+The existing submessage is gated on `inst.GetGitWorktree()`
+(`server/adapters/instance_adapter.go:152`), which returns an error unless
+`i.started.Load()` (`session/instance_worktree.go:443`). `ActiveDir` and `WorktreeDir`
+are gated only on `gitManager.HasWorktree()`. So for a **stopped or not-yet-started
+session, `gitWorktree` is nil while `worktree_dir` is populated.**
+
+That gap means PR #801's fix is incomplete on its own terms: for a stopped session
+`s.gitWorktree?.worktreePath` is undefined, the expression falls back to `s.path`, and
+the false collision recurs. `active_dir` fixes it for every session state. This is the
+single strongest justification for the refactor.
 
 ## Consequences
 
@@ -169,3 +189,30 @@ instead of them.
 not under this repo's deploy control. Additive fields plus `[deprecated = true]`,
 matching the repo's existing precedent (`types.proto:437-442`), and removal as a later,
 separately-scoped change.
+
+**Deprecating `Session.working_dir` alongside `Session.path`.** Rejected. It is not a
+read-only wire field: `SessionDetailView.tsx:496` seeds an editable input from
+`session.workingDir` and `:678` writes it back through `UpdateSession`, which lands in
+`Instance.WorkingDir` — the *relative* subdirectory
+(`server/services/session_service.go:3135`). The field therefore reads absolute and
+writes relative, and deprecating it in favour of `active_dir` would hand that consumer a
+field it cannot write. The asymmetry is a real, separate bug; this ADR corrects the
+field's doc comment to state it and leaves the field undeprecated pending its own fix.
+
+**Extending the same four fields to `ReviewItem`.** Rejected for this change.
+`ReviewItem.path` is populated from raw `inst.Path` (`server/dependencies.go:292`), so —
+unlike `Session.path` — its "Path to workspace repository root" comment is accurate, and
+`ReviewItem.working_dir` genuinely is the relative subdirectory its comment describes.
+The two messages' identically-named, identically-documented fields carrying different
+concepts is its own defect (the frontend converts one into the other at
+`web-app/src/app/review-queue/page.tsx:30`), but fixing it means plumbing through the
+`session.ReviewItem` Go struct and both enrichment sites, which is a separate change.
+
+**A `norawinstancepath` lint analyzer in this change.** Rejected. It would enforce
+`instance-lock-free-reads.md`'s lock-safety rule, not this ADR's vocabulary: it could not
+have caught the `WorkspacePeersPanel` bug (TypeScript), and it cannot tell a caller that
+wants `ActiveDir` from one that wants `ExistingDir` — both are method calls, not field
+reads. It would also fire on roughly 90 pre-existing sites across 34 production files,
+many of them legitimate, so landing it means either a `//nolint` sweep or a large
+behavioral cleanup — each its own PR. Tracked as a follow-up against the lock-safety
+rule it actually serves.
