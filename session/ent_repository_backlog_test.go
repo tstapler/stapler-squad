@@ -1092,3 +1092,55 @@ func TestMigrationShouldBeReversible_WhenBacklogItemPublicIdColumnAddedThenRemov
 
 	require.NoError(t, verifyDB.Close())
 }
+
+// TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestFirst
+// verifies the ADR-029 collateral fix (Story 1.3.1): two ItemSession rows sharing
+// the same session_uuid but different created_at/session_role must come back with
+// the newer row first, so callers folding this into a map keyed by session UUID
+// can deterministically keep the most-recently-created role.
+func TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestFirst(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title: "item with a reused session uuid",
+	})
+	require.NoError(t, err)
+	itemID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+
+	const sharedSessionUUID = "reused-session-uuid-for-ordering-test"
+	older := time.Now().Add(-1 * time.Hour)
+	newer := time.Now()
+
+	_, err = repo.client.ItemSession.Create().
+		SetSessionUUID(sharedSessionUUID).
+		SetSessionRole(SessionRoleTriage).
+		SetBacklogItemID(itemID).
+		SetCreatedAt(older).
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = repo.client.ItemSession.Create().
+		SetSessionUUID(sharedSessionUUID).
+		SetSessionRole(SessionRoleWork).
+		SetBacklogItemID(itemID).
+		SetCreatedAt(newer).
+		Save(ctx)
+	require.NoError(t, err)
+
+	entries, err := repo.GetAllItemSessionsWithBacklogInfo(ctx)
+	require.NoError(t, err)
+
+	var matches []ItemSessionBacklogEntry
+	for _, e := range entries {
+		if e.SessionUUID == sharedSessionUUID {
+			matches = append(matches, e)
+		}
+	}
+	require.Len(t, matches, 2, "expected both rows for the shared session uuid")
+	assert.Equal(t, SessionRoleWork, matches[0].SessionRole, "newer row (session_role=work) must appear first")
+	assert.Equal(t, SessionRoleTriage, matches[1].SessionRole, "older row (session_role=triage) must appear second")
+}

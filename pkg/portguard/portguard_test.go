@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // TestMain re-execs this same test binary as a disposable "stuck server"
@@ -57,7 +59,7 @@ func startHelper(t *testing.T, port int, ignoreTerm bool) *exec.Cmd {
 	// -test.run matches no actual Test function (TestMain is special-cased
 	// and always runs regardless of -run) — we only want TestMain's early
 	// env-var check below to fire, not the rest of the test suite.
-	cmd := exec.Command(os.Args[0], "-test.run=^NoSuchTest$")
+	cmd := safeexec.CommandContext(context.Background(), os.Args[0], "-test.run=^NoSuchTest$")
 	cmd.Env = append(os.Environ(), "PORTGUARD_TEST_HELPER_PORT="+strconv.Itoa(port))
 	if ignoreTerm {
 		cmd.Env = append(cmd.Env, "PORTGUARD_TEST_HELPER_IGNORE_TERM=1")

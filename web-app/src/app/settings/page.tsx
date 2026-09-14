@@ -92,6 +92,15 @@ function SettingsPageInner() {
               </Link>
             </section>
             <section className={styles.section}>
+              <Link
+                href={routes.settingsBacklogStages}
+                className={styles.helpLink}
+                data-testid="settings-backlog-stages-link"
+              >
+                Backlog Stages →
+              </Link>
+            </section>
+            <section className={styles.section}>
               <Link href={routes.settingsRemotes} className={styles.helpLink} data-testid="settings-remotes-link">
                 Remotes (SSH hosts) →
               </Link>

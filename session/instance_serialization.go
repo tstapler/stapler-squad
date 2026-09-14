@@ -217,6 +217,17 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 	return fromInstanceData(data, false)
 }
 
+// FromInstanceDataDeferred reconstructs an *Instance without starting it (no
+// PTY spawn, no cold-restore, no goroutines) — LoadInstances' bulk-startup
+// path, exported for an on-demand, read-only "shadow" instance bound to the
+// same backend/session identity as the persisted record. Lets a caller ask a
+// truth question (IsBackendProcessAlive()) or act on the real session
+// (KillSession()) for a sessionUUID the live in-memory registry doesn't have
+// tracked — see SessionService.findConfirmedLiveInstance.
+func FromInstanceDataDeferred(data InstanceData) (*Instance, error) {
+	return fromInstanceData(data, true)
+}
+
 // fromInstanceData is the shared implementation. When deferStart is true, the
 // Active-branch (and Stopped-but-tmux-alive recovery) code paths still wire the
 // tmux session object (so HasSession()/TmuxAlive() report correctly) but skip
@@ -569,7 +580,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// restore as a fresh launch. Without this, HasSession() is false on this
 		// freshly-constructed Instance regardless of whether the real tmux session
 		// is alive, so every LoadInstances() call (health checks, MCP tool handlers,
-		// etc.) logs a spurious "creating tmux session" and re-runs launch bookkeeping
+		// etc.) logs a spurious "creating session" and re-runs launch bookkeeping
 		// for every Active session, even ones that were never actually down.
 		tmuxPrefix := instance.TmuxPrefix
 		if tmuxPrefix == "" {

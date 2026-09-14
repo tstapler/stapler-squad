@@ -295,7 +295,7 @@ func (s *BacklogService) notifyBulkResetParked(reasonFilter *domain.StuckReason,
 	s.eventBus.Publish(events.NewNotificationEvent(
 		sessionID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		derivePriority(false, false), // urgent, important — a bulk-reset confirmation, purely informational
 		"Parked items reset",
 		fmt.Sprintf("Reset %d parked item%s (%s) — they'll get automated attempts again.",
 			resetCount, pluralSuffix(resetCount), scope),

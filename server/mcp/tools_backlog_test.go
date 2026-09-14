@@ -1210,6 +1210,327 @@ func TestRequestReview_TransitionsDirectlyToDone_When_SkipReviewGateEnabled(t *t
 	require.Equal(t, string(session.BacklogStatusDone), fetched.Status)
 }
 
+// TestRequestReview_RejectsWhenCriteriaIncomplete verifies the AC-completeness
+// gate: an item with any criterion not yet marked "done" (pass) via
+// report_progress must be rejected with a message naming the unmet
+// criterion, and the item must remain at its source status — no silent
+// transition on a self-declared "done" that report_progress never confirmed.
+func TestRequestReview_RejectsWhenCriteriaIncomplete(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Incomplete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"done"},{"index":1,"text":"Criterion B","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Think I'm done.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	require.Equal(t, ErrInvalidArgument, errObj["code"])
+	require.Contains(t, errObj["message"], "Criterion B")
+	require.Contains(t, errObj["message"], "report_progress")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status,
+		"a rejected request_review must never transition the item's status")
+}
+
+// TestRequestReview_RejectionPersistsVisibleAuditNote verifies AC2: a
+// rejected request_review call must leave a human-readable trace on the item
+// describing what's left, not just an error returned to the calling session
+// (which the item's status alone would never reveal, since it doesn't
+// change) — per the "document AI decisions in edge cases" convention.
+func TestRequestReview_RejectionPersistsVisibleAuditNote(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Incomplete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"done"},{"index":1,"text":"Criterion B","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	_, err = handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Think I'm done.",
+	}))
+	require.NoError(t, err)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Contains(t, fetched.Notes, rejectedNoteMarker)
+	require.Contains(t, fetched.Notes, "Criterion B")
+}
+
+// TestReportBlocked_EscalatesAfterRequestReviewRejectionsPlusOneBlock verifies
+// the shared-counter edge case from validation.md: request_review's
+// AC-completeness rejections and explicit report_blocked calls must escalate
+// on their combined total, not two independent counters that could each stay
+// under blockedCycleThreshold forever. Two rejected request_review calls
+// followed by a single report_blocked call must hit the threshold of 3 and
+// escalate to review.
+func TestReportBlocked_EscalatesAfterRequestReviewRejectionsPlusOneBlock(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Combined escalation counter",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	for i := 0; i < 2; i++ {
+		_, err = handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{
+			"item_id": item.ID,
+			"message": "Think I'm done.",
+		}))
+		require.NoError(t, err)
+	}
+
+	blockedResult, err := handler.reportBlocked(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "rationale": "stuck on Criterion A",
+	}))
+	require.NoError(t, err)
+	tc := requireToolTextResult(t, blockedResult)
+	require.Contains(t, tc, "escalated to review")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status,
+		"2 rejected request_review calls + 1 report_blocked call must cross blockedCycleThreshold together")
+}
+
+// TestRequestReview_AcceptsWhenAllCriteriaPass is the positive-path
+// counterpart to TestRequestReview_RejectsWhenCriteriaIncomplete: every
+// criterion marked "done" must let the transition through as before.
+func TestRequestReview_AcceptsWhenAllCriteriaPass(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Complete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"done"},{"index":1,"text":"Criterion B","status":"done"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "All criteria verified complete.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "review")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+}
+
+// TestRequestReview_SkipReviewGate_StillRequiresCompleteness closes the gap
+// the item's research identified: SkipReviewGate=true must skip the
+// independent LLM review, not the deterministic AC-completeness check —
+// otherwise a SkipReviewGate item could self-declare done with zero
+// verification of any kind.
+func TestRequestReview_SkipReviewGate_StillRequiresCompleteness(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Skip gate, incomplete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		SkipReviewGate:     true,
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Think I'm done.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	require.Equal(t, ErrInvalidArgument, errObj["code"])
+	require.Contains(t, errObj["message"], "Criterion A")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status,
+		"SkipReviewGate must not bypass the AC-completeness gate")
+}
+
+// TestRequestReview_SkipReviewGate_CompleteCriteria_GoesDirectToDone is a
+// regression guard: an item that legitimately opts out of the review gate via
+// SkipReviewGate must still go straight to done once its criteria are
+// actually complete — the completeness gate must not force it through a
+// review stage it explicitly opted out of.
+func TestRequestReview_SkipReviewGate_CompleteCriteria_GoesDirectToDone(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Skip gate, complete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		SkipReviewGate:     true,
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"done"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Implemented the feature, all criteria done.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "SkipReviewGate")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+}
+
+// TestRequestReview_AcceptsWhenNoAcceptanceCriteria verifies the zero-criteria
+// edge case: an item with no acceptance criteria at all (created before ACs
+// were mandatory) must pass the completeness gate trivially rather than being
+// rejected forever with nothing to satisfy it.
+func TestRequestReview_AcceptsWhenNoAcceptanceCriteria(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "No criteria at all",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Nothing to verify.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "review")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+}
+
 // TestRequestReview_PersistsVerificationNotesOnWorkSession verifies that a
 // non-empty verification_notes argument is stored on the caller's ItemSession
 // so the review gate can later surface it in the reviewer's prompt.
@@ -6979,9 +7300,15 @@ func TestReportBlocked_should_ReturnPermissionDenied_When_CallerRoleNotWork(t *t
 // caught report_blocked and report_duplicate missing this exact guard after a
 // stale-base merge with origin/main.
 func TestBacklogHandlers_should_HaveNoRemainingRawLinkCheck_When_SourceIsScanned(t *testing.T) {
-	data, err := os.ReadFile("tools_backlog.go")
-	require.NoError(t, err, "read tools_backlog.go")
-	content := string(data)
+	// report_pr_created's resolveItemLink call site lives in
+	// tools_backlog_pr.go, not tools_backlog.go — see
+	// docs/reference/hotspot-ranking.md row 5's extraction.
+	var content string
+	for _, f := range []string{"tools_backlog.go", "tools_backlog_pr.go"} {
+		data, err := os.ReadFile(f)
+		require.NoError(t, err, "read %s", f)
+		content += string(data)
+	}
 
 	const staleMessage = "this session is not linked to the specified backlog item"
 	assert.Equal(t, 0, strings.Count(content, staleMessage),
@@ -6991,6 +7318,388 @@ func TestBacklogHandlers_should_HaveNoRemainingRawLinkCheck_When_SourceIsScanned
 		"resolveItemLink must be defined exactly once")
 
 	callSiteCount := strings.Count(content, "h.resolveItemLink(ctx, callerUUID, itemID)")
-	assert.Equal(t, 7, callSiteCount,
-		"expected exactly 7 mutating handlers (report_progress, request_review, submit_review_verdict, report_pr_created, submit_triage_result, report_blocked, report_duplicate) to call resolveItemLink")
+	assert.Equal(t, 8, callSiteCount,
+		"expected exactly 8 mutating handlers (report_progress, request_review, submit_review_verdict, report_pr_created, submit_triage_result, report_blocked, report_duplicate, resume_work) to call resolveItemLink")
+}
+
+// --- resume_work ---
+
+func TestResumeWork_TransitionsReadyToInProgress(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Resume after blocker cleared",
+		Status: string(session.BacklogStatusReady),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	result, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "in_progress")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+
+	require.NotEmpty(t, fetched.StatusEvents)
+	last := fetched.StatusEvents[len(fetched.StatusEvents)-1]
+	require.Equal(t, session.TriggeredByAgent, last.TriggeredBy)
+}
+
+func TestResumeWork_RejectsWhenCallerRoleNotWork(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Wrong role item",
+		Status: string(session.BacklogStatusReady),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleReview, // wrong role
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	result, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrPermissionDenied, errObj["code"])
+	assert.Contains(t, errObj["message"], "only 'work' role may resume work")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReady), fetched.Status, "rejected call must not mutate item status")
+}
+
+func TestResumeWork_RejectsWhenSessionNotLinked(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Unlinked session item",
+		Status: string(session.BacklogStatusReady),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, uuid.New().String())
+
+	result, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrPermissionDenied, errObj["code"])
+}
+
+// TestResumeWork_RejectsWhenSourceStatusNotReady verifies resume_work refuses
+// any source status other than ready, naming the actual status in the
+// rejection message (AC2).
+func TestResumeWork_RejectsWhenSourceStatusNotReady(t *testing.T) {
+	statuses := []string{
+		string(session.BacklogStatusInProgress),
+		string(session.BacklogStatusReview),
+		string(session.BacklogStatusPRPending),
+		string(session.BacklogStatusDone),
+		string(session.BacklogStatusIdea),
+	}
+
+	for _, status := range statuses {
+		status := status
+		t.Run(status, func(t *testing.T) {
+			storage := newTestBacklogStorage(t)
+			ctx := context.Background()
+
+			item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+				Title:  "Disallowed source status",
+				Status: status,
+			})
+			require.NoError(t, err)
+
+			sessionUUID := uuid.New().String()
+			_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+				ItemID:      item.ID,
+				SessionUUID: sessionUUID,
+				SessionRole: session.SessionRoleWork,
+			})
+			require.NoError(t, err)
+
+			handler := &backlogHandlers{storage: storage}
+			ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+			result, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+			require.NoError(t, err)
+
+			m := parseResult(t, result)
+			require.False(t, m["success"].(bool))
+			errObj := m["error"].(map[string]interface{})
+			require.Equal(t, ErrInvalidArgument, errObj["code"])
+			require.Contains(t, errObj["message"], status)
+
+			fetched, err := storage.GetBacklogItem(ctx, item.ID)
+			require.NoError(t, err)
+			require.Equal(t, status, fetched.Status)
+		})
+	}
+}
+
+// TestResumeWork_ThenRequestReview_Succeeds exercises the exact repro
+// sequence from the originating bug report: report_blocked parks the item at
+// ready, resume_work brings it back to in_progress, and request_review (which
+// rejected 'ready' outright) now succeeds.
+func TestResumeWork_ThenRequestReview_Succeeds(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:              "Full repro sequence",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"done"}]`,
+		Status:             string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	blockedResult, err := handler.reportBlocked(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "rationale": "gh auth token invalid",
+	}))
+	require.NoError(t, err)
+	requireToolTextResult(t, blockedResult)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReady), fetched.Status)
+
+	resumeResult, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	requireToolTextResult(t, resumeResult)
+
+	fetched, err = storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+
+	reviewResult, err := handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "message": "Fixed the gh auth issue, work is done.",
+	}))
+	require.NoError(t, err)
+	text := requireToolTextResult(t, reviewResult)
+	require.Contains(t, text, "review", "request_review should succeed after resume_work: %s", text)
+
+	fetched, err = storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+}
+
+// TestResumeWork_ThenReportPRCreated_Succeeds continues the repro sequence
+// past request_review: once the item reaches review via resume_work,
+// report_pr_created (which also rejects 'ready') succeeds and lands the item
+// at pr_pending with the PR recorded.
+func TestResumeWork_ThenReportPRCreated_Succeeds(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReady)
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+	}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	resumeResult, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	requireToolTextResult(t, resumeResult)
+
+	reviewResult, err := handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "message": "Ready for review.",
+	}))
+	require.NoError(t, err)
+	requireToolTextResult(t, reviewResult)
+
+	prResult, err := handler.reportPRCreated(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/42",
+		"pr_number": float64(42),
+		"summary":   "Implemented the feature and shipped it via /backlog:ship.",
+	}))
+	require.NoError(t, err)
+	requireToolTextResult(t, prResult)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	require.Equal(t, 42, fetched.PrNumber)
+}
+
+// TestResumeWork_PreconditionFailedOnConcurrentTransition forces a
+// concurrent actor to transition the item away from ready between
+// resume_work's read and its CAS write, and asserts the same
+// "state changed since your last read" message report_blocked/request_review
+// use, not silent corruption.
+func TestResumeWork_PreconditionFailedOnConcurrentTransition(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Racing resume",
+		Status: string(session.BacklogStatusReady),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	getBacklogItemFn := func(fnCtx context.Context, itemID string) (*session.BacklogItemData, error) {
+		item, err := storage.GetBacklogItem(fnCtx, itemID)
+		if err != nil {
+			return nil, err
+		}
+		// Simulate another actor (e.g. the dequeuer) transitioning the item
+		// out of ready between this read and resumeWork's own CAS write.
+		_, transErr := storage.TransitionBacklogItemStatus(fnCtx, itemID, session.BacklogStatusInProgress,
+			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}, session.TriggeredByAgent)
+		require.NoError(t, transErr)
+		return item, nil
+	}
+
+	handler := &backlogHandlers{storage: storage, getBacklogItemFn: getBacklogItemFn}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	result, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrInternalError, errObj["code"])
+	assert.Contains(t, errObj["message"], "state changed since your last read")
+}
+
+// TestResumeWork_WorksOnReadyItemWithNoPriorBlock confirms resume_work is a
+// general ready -> in_progress bridge, not report_blocked-specific — an item
+// that reached ready some other way (e.g. straight from queued) resumes the
+// same way.
+func TestResumeWork_WorksOnReadyItemWithNoPriorBlock(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Never blocked",
+		Status: string(session.BacklogStatusReady),
+	})
+	require.NoError(t, err)
+	require.Empty(t, item.Notes)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	result, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	requireToolTextResult(t, result)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+}
+
+// TestResumeWork_ResetsBlockedCycleCounter verifies the plan.md decision:
+// a successful resume starts a fresh blocked-cycle count, so a report_blocked
+// call immediately after a resume does not inherit escalation progress from
+// blocked cycles reported before the resume.
+func TestResumeWork_ResetsBlockedCycleCounter(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Reset cycle counter",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	// Two blocked cycles pre-resume (below blockedCycleThreshold of 3, so
+	// neither escalates to review on its own).
+	for i := 0; i < 2; i++ {
+		blockedResult, err := handler.reportBlocked(ctxWithUUID, makeToolReq(map[string]interface{}{
+			"item_id": item.ID, "rationale": fmt.Sprintf("blocked cycle %d", i),
+		}))
+		require.NoError(t, err)
+		requireToolTextResult(t, blockedResult)
+
+		resumeResult, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+		require.NoError(t, err)
+		requireToolTextResult(t, resumeResult)
+	}
+
+	// A third report_blocked call would hit blockedCycleThreshold (3) if the
+	// counter carried over uncounted resumes — assert it instead still
+	// returns to ready (not escalated), proving the resumes reset the count.
+	thirdBlocked, err := handler.reportBlocked(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "rationale": "blocked cycle after resumes",
+	}))
+	require.NoError(t, err)
+	requireToolTextResult(t, thirdBlocked)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReady), fetched.Status,
+		"blocked-cycle count must reset on each resume, so this single post-resume block should not escalate to review")
 }
