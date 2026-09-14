@@ -102,6 +102,10 @@ message GetGuidanceRequestResponse {
 message ListGuidanceRequestsRequest {
   string scope = 1;
   string scope_key = 2; // item_id or session_uuid depending on scope; "" for standalone
+  // include_answered also returns answered (not just pending) rows, so a
+  // view can show recent answered questions alongside pending ones. Cancelled
+  // rows are never returned either way.
+  bool include_answered = 3;
 }
 
 message ListGuidanceRequestsResponse {

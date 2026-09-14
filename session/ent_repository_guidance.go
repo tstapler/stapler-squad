@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -363,6 +364,40 @@ func (r *EntRepository) ListPendingGuidanceRequests(ctx context.Context, scope d
 		cap = DefaultGuidanceRequestPendingCap
 	}
 	return result, len(result), cap, nil
+}
+
+// listGuidanceRequestsForScopeLimit bounds how many answered rows
+// ListGuidanceRequestsForScope returns, so a scope that has accumulated many
+// answered questions over time can't make the view unbounded.
+const listGuidanceRequestsForScopeLimit = 50
+
+// ListGuidanceRequestsForScope returns every non-cancelled GuidanceRequest
+// row (pending, and — unlike ListPendingGuidanceRequests — answered too) for
+// one (scope, scopeKey) pair, newest first, alongside the current pending
+// count and the default cap. Backs UI views that must show a question's
+// state after it's been answered (AC3), not just while pending.
+func (r *EntRepository) ListGuidanceRequestsForScope(ctx context.Context, scope domain.RequestScope, scopeKey string) ([]*GuidanceRequestData, int, int, error) {
+	rows, err := r.client.GuidanceRequest.Query().
+		Where(
+			guidancerequest.Scope(string(scope)),
+			guidancerequest.ScopeKey(scopeKey),
+			guidancerequest.CancelledAtIsNil(),
+		).
+		Order(guidancerequest.ByCreatedAt(sql.OrderDesc())).
+		Limit(listGuidanceRequestsForScopeLimit).
+		All(ctx)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("list guidance requests for scope=%s scope_key=%s: %w", scope, scopeKey, err)
+	}
+	result := make([]*GuidanceRequestData, 0, len(rows))
+	pendingCount := 0
+	for _, row := range rows {
+		if row.AnsweredAt == nil {
+			pendingCount++
+		}
+		result = append(result, guidanceRequestToData(row))
+	}
+	return result, pendingCount, DefaultGuidanceRequestPendingCap, nil
 }
 
 // ListAllPendingGuidanceRequests returns every open GuidanceRequest row across

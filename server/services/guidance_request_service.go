@@ -376,7 +376,17 @@ func (s *GuidanceRequestService) ListGuidanceRequests(
 	req *connect.Request[sessionv1.ListGuidanceRequestsRequest],
 ) (*connect.Response[sessionv1.ListGuidanceRequestsResponse], error) {
 	scope := domain.RequestScope(req.Msg.GetScope())
-	rows, pendingCount, cap, err := s.storage.ListPendingGuidanceRequests(ctx, scope, req.Msg.GetScopeKey(), 0)
+	var (
+		rows         []*session.GuidanceRequestData
+		pendingCount int
+		cap          int
+		err          error
+	)
+	if req.Msg.GetIncludeAnswered() {
+		rows, pendingCount, cap, err = s.storage.ListGuidanceRequestsForScope(ctx, scope, req.Msg.GetScopeKey())
+	} else {
+		rows, pendingCount, cap, err = s.storage.ListPendingGuidanceRequests(ctx, scope, req.Msg.GetScopeKey(), 0)
+	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}

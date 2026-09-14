@@ -1,0 +1,11 @@
+{
+  "id": "ListGuidanceRequests",
+  "type": "backend",
+  "service": "GuidanceRequestService",
+  "method": "ListGuidanceRequests",
+  "protoFile": "proto/session/v1/guidance_request.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-12T12:01:33.043816668-07:00"
+}

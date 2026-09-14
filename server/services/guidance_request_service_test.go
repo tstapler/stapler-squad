@@ -145,6 +145,39 @@ func TestAnswerGuidanceRequest_should_NotReapplyOrRenotify_When_AlreadyAnswered(
 	assert.Equal(t, "yes", second.Msg.GetRequest().GetAnswer(), "the original answer must be preserved, not overwritten")
 }
 
+// TestListGuidanceRequests_should_IncludeAnsweredRows_When_IncludeAnsweredSet
+// covers AC3's UI needs: the default (include_answered=false) list stays
+// pending-only for existing callers (e.g. the pending-cap check), while
+// include_answered=true also surfaces answered rows so a view can show a
+// question's state after it's been answered, not just while pending.
+func TestListGuidanceRequests_should_IncludeAnsweredRows_When_IncludeAnsweredSet(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewGuidanceRequestService(storage, nil, nil)
+	ctx := context.Background()
+
+	createResp, err := svc.CreateGuidanceRequest(ctx, connect.NewRequest(&sessionv1.CreateGuidanceRequestRequest{
+		Scope:        "standalone",
+		QuestionText: "Ship today?",
+		QuestionType: "yes-no",
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.GetRequest().GetId()
+
+	_, err = svc.AnswerGuidanceRequest(ctx, connect.NewRequest(&sessionv1.AnswerGuidanceRequestRequest{Id: id, Answer: "yes"}))
+	require.NoError(t, err)
+
+	pendingOnly, err := svc.ListGuidanceRequests(ctx, connect.NewRequest(&sessionv1.ListGuidanceRequestsRequest{Scope: "standalone", ScopeKey: ""}))
+	require.NoError(t, err)
+	assert.Empty(t, pendingOnly.Msg.GetRequests(), "answered row must not appear in the pending-only (default) list")
+
+	withAnswered, err := svc.ListGuidanceRequests(ctx, connect.NewRequest(&sessionv1.ListGuidanceRequestsRequest{Scope: "standalone", ScopeKey: "", IncludeAnswered: true}))
+	require.NoError(t, err)
+	require.Len(t, withAnswered.Msg.GetRequests(), 1)
+	assert.Equal(t, "answered", withAnswered.Msg.GetRequests()[0].GetStatus())
+	assert.Equal(t, "yes", withAnswered.Msg.GetRequests()[0].GetAnswer())
+}
+
 // TestCreateGuidanceRequest_should_RejectPermissionDenied_When_CallerNotLinkedToItem
 // covers AC5 at the RPC layer: an unlinked caller is rejected exactly like
 // every other mutating backlog MCP tool.
