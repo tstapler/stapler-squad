@@ -696,3 +696,16 @@ func (i *Instance) WorkspaceKey() string {
 func (d InstanceData) WorkspaceKey() string {
 	return WorkspaceKey(d.GitHubOwner, d.GitHubRepo, d.MainRepoPath, d.Path)
 }
+
+// ActiveDir returns this instance data's resolved working directory: the git
+// worktree path if one was recorded (requires LoadOptions.LoadWorktree), else
+// Path. Mirrors Instance.Workspace().ActiveDir for callers that only have the
+// serialized InstanceData (see .claude/rules/instance-lock-free-reads.md) —
+// use this, not the raw identity Path, wherever a lookup needs to match the
+// directory a worktree session actually runs in.
+func (d InstanceData) ActiveDir() string {
+	if d.Worktree.WorktreePath != "" {
+		return d.Worktree.WorktreePath
+	}
+	return d.Path
+}
