@@ -1112,7 +1112,7 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 // StopSessionByUUID satisfies the BacklogService.SessionStopper interface.
 // It kills the live tmux session identified by UUID (best-effort; errors are non-fatal).
 func (s *SessionService) StopSessionByUUID(ctx context.Context, sessionUUID string) error {
-	inst := s.FindLiveInstance(sessionUUID)
+	inst := s.findConfirmedLiveInstance(sessionUUID)
 	if inst == nil {
 		return nil // already gone
 	}
@@ -1123,10 +1123,58 @@ func (s *SessionService) StopSessionByUUID(ctx context.Context, sessionUUID stri
 	return nil
 }
 
+// findConfirmedLiveInstance is the canonical liveness-truth check backing
+// IsSessionLive, KillTmuxPaneOnly, and StopSessionByUUID. FindLiveInstance's
+// map membership alone is not proof of death: a session can transiently drop
+// out of the live poller's map during a reconciliation hiccup while its real
+// tmux process keeps running (the backlog-orchestration-layer counterpart to
+// the tmux-layer stale-liveness bugs #791/#799 fixed — a map-miss false
+// negative instead of a stale-pointer false positive). Confirmed live 2026-09-12:
+// AutoReopenAfterFailedReview's reuse check and spawnSessionAfterGates' step-8b
+// guard both trusted this map alone, wrongly concluded a still-running work
+// session was dead, and let a duplicate session spawn into the same shared
+// worktree while the original kept writing to it.
+//
+// Fast path: the live poller (cheap, no subprocess). On a miss, reconstructs a
+// read-only "shadow" Instance from persisted data
+// (session.FromInstanceDataDeferred — no Start(), no PTY, no goroutines) bound
+// to the same tmux session identity, and asks it directly via the canonical
+// Instance.IsBackendProcessAlive() truth check before concluding dead. Only a
+// genuine dead-on-both-signals result returns nil; a confirmed-alive shadow
+// instance is returned so callers can act on the real underlying session
+// (e.g. KillTmuxPaneOnly killing it) instead of just answering the liveness
+// question. Caveat: FindInstanceDataByID loads with LoadMinimal, so a shadow
+// instance's worktree metadata is empty — fine for KillTmuxPaneOnly (never
+// touches the worktree) and StopSessionByUUID's existing best-effort,
+// error-dropped cleanup call sites, but not a source of truth for worktree
+// deletion.
+func (s *SessionService) findConfirmedLiveInstance(sessionUUID string) *session.Instance {
+	if inst := s.FindLiveInstance(sessionUUID); inst != nil {
+		return inst
+	}
+	if s.concStorage == nil {
+		return nil // fake InstanceStore (tests) — no direct-check fallback available
+	}
+	data, err := s.concStorage.FindInstanceDataByID(sessionUUID)
+	if err != nil || data == nil {
+		return nil
+	}
+	shadow, err := session.FromInstanceDataDeferred(*data)
+	if err != nil {
+		return nil
+	}
+	if !shadow.IsBackendProcessAlive() {
+		return nil
+	}
+	log.Warn("findConfirmedLiveInstance: session missing from live poller map but tmux/process truth check confirms it is still alive", "uuid", sessionUUID)
+	return shadow
+}
+
 // IsSessionLive satisfies the BacklogService.SessionStopper interface.
-// It returns true if the session UUID is currently tracked in the live in-memory poller.
+// It returns true if sessionUUID is confirmed live — see
+// findConfirmedLiveInstance for why that is not simply map membership.
 func (s *SessionService) IsSessionLive(sessionUUID string) bool {
-	return s.FindLiveInstance(sessionUUID) != nil
+	return s.findConfirmedLiveInstance(sessionUUID) != nil
 }
 
 // TimeSinceLastMeaningfulOutput satisfies the BacklogService.SessionStopper
@@ -1140,6 +1188,45 @@ func (s *SessionService) TimeSinceLastMeaningfulOutput(sessionUUID string) (time
 		return 0, false
 	}
 	return inst.GetTimeSinceLastMeaningfulOutput(), true
+}
+
+// OtherLiveSessionInsideWorktree reports whether some OTHER currently-live
+// session (any UUID besides excludeUUID) has its actual runtime working
+// directory — Instance.GetCurrentWorkingDirectory(), a live pane/process
+// introspection, not the persisted DB path field, which can report the
+// canonical repo root rather than the worktree a session is really running
+// in — resolving inside worktreePath. Defense-in-depth for stop_session/
+// pause_session, which both delete the target session's git worktree:
+// rework rounds of the same backlog item deliberately share one worktree
+// (see spawnSessionAfterGates' backlogWorkBranchSlug), so destroying it out
+// from under a still-running sibling round would corrupt its in-progress
+// work — the exact situation the operator had to route around by killing
+// tmux panes directly during the 2026-09-12 incident this guards against.
+func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePath string) (blockingUUID string, blocked bool) {
+	if s.reviewQueuePoller == nil || worktreePath == "" {
+		return "", false
+	}
+	cleanTarget, err := filepath.Abs(worktreePath)
+	if err != nil {
+		return "", false
+	}
+	for _, inst := range s.reviewQueuePoller.GetInstances() {
+		if inst == nil || inst.UUID == excludeUUID || !inst.IsBackendProcessAlive() {
+			continue
+		}
+		cwd, cwdErr := inst.GetCurrentWorkingDirectory()
+		if cwdErr != nil || cwd == "" {
+			continue
+		}
+		cleanCwd, absErr := filepath.Abs(cwd)
+		if absErr != nil {
+			continue
+		}
+		if cleanCwd == cleanTarget || strings.HasPrefix(cleanCwd, cleanTarget+string(os.PathSeparator)) {
+			return inst.UUID, true
+		}
+	}
+	return "", false
 }
 
 // IsRetryPending satisfies the BacklogService.SessionStopper interface. It
@@ -1161,7 +1248,7 @@ func (s *SessionService) IsRetryPending(sessionUUID string) bool {
 // round. Best-effort: errors are logged, not returned, since this runs as
 // cleanup alongside a new spawn that should proceed regardless.
 func (s *SessionService) KillTmuxPaneOnly(ctx context.Context, sessionUUID string) error {
-	inst := s.FindLiveInstance(sessionUUID)
+	inst := s.findConfirmedLiveInstance(sessionUUID)
 	if inst == nil {
 		return nil // already gone
 	}
