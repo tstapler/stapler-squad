@@ -429,7 +429,12 @@ func (i *Instance) Workspace() Workspace {
 	if i.gitManager.HasWorktree() {
 		worktreeDir = i.gitManager.GetWorktreePath()
 	}
-	activeDir := i.ActiveDir()
+	// Derived from worktreeDir rather than calling ActiveDir(), which would read
+	// the worktree a second time — the two fields must describe one instant.
+	activeDir := worktreeDir
+	if activeDir == "" {
+		activeDir = repoRoot
+	}
 
 	// Only stat when the two can actually differ, so directory sessions cost no
 	// syscall at all.
