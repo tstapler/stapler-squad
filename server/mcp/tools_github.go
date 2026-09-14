@@ -395,8 +395,9 @@ func detectRepoPath(store session.InstanceStore, owner, repo string) string {
 		if strings.Contains(strings.ToLower(inst.Path), strings.ToLower(repo)) {
 			return inst.Path
 		}
-		if strings.Contains(strings.ToLower(inst.GetWorkingDirectory()), target) {
-			dir := inst.GetWorkingDirectory()
+		activeDir := inst.ActiveDir()
+		if strings.Contains(strings.ToLower(activeDir), target) {
+			dir := activeDir
 			// Walk up to find the git root.
 			for dir != "/" && dir != "." {
 				if _, statErr := os.Stat(filepath.Join(dir, ".git")); statErr == nil {

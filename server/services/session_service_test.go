@@ -3251,7 +3251,7 @@ func TestCreateSession_RestartFromSessionId_DerivesPathFromSource(t *testing.T) 
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the source session")
+	assert.Equal(t, sourcePath, resp.Msg.Session.RepoRoot, "path should be derived from the source session")
 	assert.Equal(t, "restart-source", resp.Msg.Session.RestartedFromSessionId)
 }
 
@@ -3282,7 +3282,7 @@ func TestCreateSession_RestartFromSessionId_ExplicitPathWins(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	assert.Equal(t, explicitPath, resp.Msg.Session.Path, "explicit path must win over the restart-derived path")
+	assert.Equal(t, explicitPath, resp.Msg.Session.RepoRoot, "explicit path must win over the restart-derived path")
 	assert.Equal(t, "restart-source-explicit", resp.Msg.Session.RestartedFromSessionId, "lineage must still be recorded even when path is explicit")
 }
 
@@ -3372,7 +3372,7 @@ func TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed(t *t
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the confirmed live source")
+	assert.Equal(t, sourcePath, resp.Msg.Session.RepoRoot, "path should be derived from the confirmed live source")
 	assert.Equal(t, "restart-source-live-confirmed", resp.Msg.Session.RestartedFromSessionId)
 }
 

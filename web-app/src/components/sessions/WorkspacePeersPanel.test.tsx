@@ -70,11 +70,50 @@ describe("WorkspacePeersPanel", () => {
     expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
   });
 
-  it("excludes the caller's own session and sessions in a different directory (e.g. another worktree)", () => {
+  it("excludes the caller's own session and sessions with a different path", () => {
     const self = makeSession({ id: "self" });
     const samePeer = makeSession({ id: "peer-1", title: "peer one" });
-    const otherWorktree = makeSession({ id: "peer-2", path: "/home/user/repo-worktree" });
-    renderWithStore(self, [self, samePeer, otherWorktree]);
+    const otherDirectory = makeSession({ id: "peer-2", path: "/home/user/other-repo" });
+    renderWithStore(self, [self, samePeer, otherDirectory]);
+    const items = screen.getAllByTestId("workspace-peer-item");
+    expect(items).toHaveLength(1);
+    expect(screen.getByText("peer one")).toBeInTheDocument();
+  });
+
+  // Regression test for the false-positive collision bug: session.path is the
+  // original/logical repo path and is never updated for worktree sessions (see
+  // session/instance_snapshot.go's Path field and Instance.GetEffectiveRootDir()), so two
+  // sessions each in their own isolated worktree of the same repo report identical
+  // session.path despite operating in different directories on disk.
+  it("does not flag two sessions in their own separate worktrees of the same repo as peers", () => {
+    const self = makeSession({
+      id: "self",
+      path: "/home/user/repo",
+      gitWorktree: { worktreePath: "/home/user/repo-worktrees/self" } as Session["gitWorktree"],
+    });
+    const otherWorktree = makeSession({
+      id: "peer-1",
+      title: "peer one",
+      path: "/home/user/repo",
+      gitWorktree: { worktreePath: "/home/user/repo-worktrees/peer-1" } as Session["gitWorktree"],
+    });
+    renderWithStore(self, [self, otherWorktree]);
+    expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
+  });
+
+  it("flags two sessions genuinely sharing one worktree directory as peers", () => {
+    const self = makeSession({
+      id: "self",
+      path: "/home/user/repo",
+      gitWorktree: { worktreePath: "/home/user/repo-worktrees/shared" } as Session["gitWorktree"],
+    });
+    const samePeer = makeSession({
+      id: "peer-1",
+      title: "peer one",
+      path: "/home/user/repo",
+      gitWorktree: { worktreePath: "/home/user/repo-worktrees/shared" } as Session["gitWorktree"],
+    });
+    renderWithStore(self, [self, samePeer]);
     const items = screen.getAllByTestId("workspace-peer-item");
     expect(items).toHaveLength(1);
     expect(screen.getByText("peer one")).toBeInTheDocument();
