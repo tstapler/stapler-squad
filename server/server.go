@@ -1180,6 +1180,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			"threshold_minutes", cfg.CreationStale.ThresholdMinutesOrDefault())
 	}
 
+	// Start superseded-rework-round sweeper (archives a work/review session
+	// once a newer round for the same backlog item exists -- see
+	// SupersededSessionSweeper doc comment).
+	if deps.Storage != nil && deps.SessionService != nil {
+		supersededSessionSweeper := services.NewSupersededSessionSweeper(deps.Storage, deps.SessionService)
+		go supersededSessionSweeper.Start(serverCtx)
+		log.Info("Superseded session sweeper started")
+	}
+
 	// Start memory pressure notifier (fires an operator-facing notification the first time
 	// this process's own cgroup memory usage crosses its MemoryHigh ceiling — see
 	// MemoryPressureNotifier doc comment). No-ops on non-Linux (telemetry.CgroupMemoryUsageRatio

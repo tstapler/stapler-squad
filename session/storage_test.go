@@ -666,6 +666,43 @@ func TestListSessionRecords_WhenInstanceHasTags_ExpectSessionRecordTagsPopulated
 	assert.ElementsMatch(t, []string{"backend", "urgent"}, records[0].Tags)
 }
 
+// TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDir is
+// the regression test for backlog item 7cfdb43e: SessionRecord.Path must be the
+// resolved worktree dir (InstanceData.ActiveDir()), not the identity Instance.Path
+// — the identity-path version of this lookup must fail this assertion.
+func TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDir(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("worktree-session-records")
+	inst.UUID = "33333333-3333-3333-3333-333333333333"
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+		"/repo", "/repo/../worktrees/worktree-session-records", "worktree-session-records", "backlog/some-item", "abc123def")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	records := storage.ListSessionRecords()
+	require.Len(t, records, 1)
+	assert.Equal(t, "/repo/../worktrees/worktree-session-records", records[0].Path,
+		"SessionRecord.Path must be the resolved worktree dir, not the identity repo path %q", inst.Path)
+}
+
+// TestListSessionRecords_WhenSessionHasNoWorktree_ExpectPathIsIdentityPath covers
+// InstanceData.ActiveDir()'s fallback branch (no worktree recorded): SessionRecord.Path
+// must be the plain Instance.Path.
+func TestListSessionRecords_WhenSessionHasNoWorktree_ExpectPathIsIdentityPath(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("plain-session-records")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	records := storage.ListSessionRecords()
+	require.Len(t, records, 1)
+	assert.Equal(t, inst.Path, records[0].Path)
+}
+
 // TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExistsInStorageOnly
 // is the regression test for the fix in server/services/session_service.go's
 // ArchiveSessionByUUID: a session that is not resident in the live in-memory
@@ -1115,4 +1152,41 @@ func TestStorage_DismissFinding_WhenCalledTwiceWithSameID_ExpectIdempotent(t *te
 	ids, err := storage.ListDismissedFindingIDs(ctx)
 	require.NoError(t, err)
 	assert.Len(t, ids, 1)
+}
+
+// TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActiveRoundTrips
+// pins the interaction the ADR-001 backfill depends on: fromInstanceData's
+// archived guard heals an Active+archived row to Stopped *and* sets
+// started=true, and saveInstancesToRepo only writes instances where Started()
+// is true — so the heal actually reaches the database on the next
+// LoadInstances/SaveInstances pair (the 15s health-check tick does exactly
+// this, which is how the incident's rows converge without a restart).
+func TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActiveRoundTrips(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	archivedAt := time.Now()
+	inst := &Instance{
+		Title:      "archived-active-roundtrip",
+		Path:       "/tmp/test",
+		Status:     Active,
+		Program:    "claude",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		ArchivedAt: &archivedAt,
+	}
+	inst.started.Store(true)
+	require.NoError(t, storage.AddInstance(inst))
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	require.NoError(t, storage.SaveInstances(loaded))
+
+	persisted, err := storage.FindInstanceDataByID("archived-active-roundtrip")
+	require.NoError(t, err)
+	assert.Equal(t, Stopped, persisted.Status,
+		"the archived Active row must be self-healed to Stopped and that heal must be persisted")
+	require.NotNil(t, persisted.ArchivedAt, "archival itself must be untouched by the heal")
 }

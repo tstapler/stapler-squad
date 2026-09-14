@@ -1043,7 +1043,7 @@ func parseControlModeHandshake(stream *connectWebSocketStream) (*sessionv1.Curre
 func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *session.Instance, sessionID string, streamer SessionStreamer) error {
 	if !instance.IsBackendProcessAlive() {
 		log.Info("[streamViaControlMode] session not alive, restoring before control mode", "session", sessionID)
-		workDir := instance.GetWorkingDirectory()
+		workDir := instance.ActiveDir()
 		if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
 			return handleTmuxRestoreFailure(instance, restoreErr)
 		}
@@ -1751,7 +1751,7 @@ func (h *ConnectRPCWebSocketHandler) ensureHubBackendAlive(instance *session.Ins
 		return true, nil
 	}
 	log.Info("[streamViaHub] session not alive, restoring before control mode", "session", sessionID)
-	workDir := instance.GetWorkingDirectory()
+	workDir := instance.ActiveDir()
 	if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
 		return false, handleTmuxRestoreFailure(instance, restoreErr)
 	}

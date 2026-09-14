@@ -208,7 +208,7 @@ func TestWorkspace_FallsBackToRepoRoot_WhenWorktreePathMissingFromDisk(t *testin
 	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
 
 	ws := inst.Workspace()
-	require.Equal(t, repoPath, ws.EffectivePath, "must fall back to RepoRoot when the worktree path is gone")
+	require.Equal(t, repoPath, ws.ExistingDir, "must fall back to RepoRoot when the worktree path is gone")
 	require.Equal(t, repoPath, ws.RepoRoot)
 }
 
@@ -236,8 +236,80 @@ func TestWorkspace_UsesWorktreePath_WhenPresentOnDisk(t *testing.T) {
 	require.NoError(t, err)
 
 	ws := inst.Workspace()
-	require.Equal(t, resolvedWorktreePath, ws.EffectivePath)
+	require.Equal(t, resolvedWorktreePath, ws.ExistingDir)
 	require.Equal(t, repoPath, ws.RepoRoot)
+}
+
+// TestWorkspace_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing is the
+// regression test for the WorkspacePeersPanel false-collision bug: two sessions
+// in separate worktrees of one repo, both worktrees since cleaned up, must stay
+// distinguishable. ExistingDir collapses them onto the shared repo root (it has
+// to — that is the only directory left to read from), so ActiveDir is what
+// callers comparing two sessions have to use.
+func TestWorkspace_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing(t *testing.T) {
+	t.Parallel()
+	repoPath := t.TempDir()
+	goneWorktrees := t.TempDir()
+
+	newSession := func(name string) Workspace {
+		inst := &Instance{Title: name, Path: repoPath, Status: Running}
+		inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, filepath.Join(goneWorktrees, name)))
+		return inst.Workspace()
+	}
+	first, second := newSession("alpha"), newSession("beta")
+
+	require.Equal(t, first.ExistingDir, second.ExistingDir,
+		"ExistingDir is lossy here by design — both fall back to the shared repo root")
+	require.NotEqual(t, first.ActiveDir, second.ActiveDir,
+		"ActiveDir must keep the sessions distinguishable, which is why comparisons use it")
+}
+
+// TestWorkspace_ActiveDir_KeepsWorktreeDir_WhenMissingFromDisk pins ActiveDir as
+// disk-agnostic. HistoryLinker correlates on this string and must get the
+// nominal worktree path whether or not the directory is still there.
+func TestWorkspace_ActiveDir_KeepsWorktreeDir_WhenMissingFromDisk(t *testing.T) {
+	t.Parallel()
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
+
+	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: Running}
+	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
+
+	ws := inst.Workspace()
+	require.Equal(t, worktreePath, ws.ActiveDir)
+	require.Equal(t, worktreePath, ws.WorktreeDir)
+	require.Equal(t, repoPath, ws.ExistingDir, "ExistingDir alone falls back")
+}
+
+// TestWorkspace_NoWorktree_CollapsesToRepoRoot covers the directory-session
+// shape: no worktree, so three of the four fields are the repo root and
+// WorktreeDir is empty rather than a duplicate of it.
+func TestWorkspace_NoWorktree_CollapsesToRepoRoot(t *testing.T) {
+	t.Parallel()
+	repoPath := t.TempDir()
+
+	ws := (&Instance{Title: "directory-session", Path: repoPath, Status: Running}).Workspace()
+
+	require.Equal(t, repoPath, ws.RepoRoot)
+	require.Equal(t, repoPath, ws.ActiveDir)
+	require.Equal(t, repoPath, ws.ExistingDir)
+	require.Empty(t, ws.WorktreeDir)
+}
+
+// TestGetWorkingDirectory_MatchesGetEffectiveRootDir_WhenWorktreePathEmpty pins
+// the one behaviour this refactor deliberately changed. A worktree set with an
+// empty path made GetWorkingDirectory return "" while GetEffectiveRootDir
+// returned the repo root; both now answer with the repo root, since every
+// caller (cmd.Dir, session start) wants a usable directory.
+func TestGetWorkingDirectory_MatchesGetEffectiveRootDir_WhenWorktreePathEmpty(t *testing.T) {
+	t.Parallel()
+	repoPath := t.TempDir()
+
+	inst := &Instance{Title: "empty-worktree-path", Path: repoPath, Status: Running}
+	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, ""))
+
+	require.Equal(t, repoPath, inst.GetWorkingDirectory())
+	require.Equal(t, inst.GetEffectiveRootDir(), inst.GetWorkingDirectory())
 }
 
 // TestGetEffectiveRootDir_ConcurrentWithSetGitHubResolution_NoRace is a

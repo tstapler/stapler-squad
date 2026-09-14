@@ -209,6 +209,82 @@ func TestAppendDedup_MetadataUpdated(t *testing.T) {
 	}
 }
 
+// TestAppendDedup_ExactIDMatch_UpdatesInPlace verifies that two appends sharing
+// an ID (fork-pressure's stable per-episode alert ID, e.g. on Warning->Critical
+// escalation) collapse to one record with the newer content, even when
+// SessionID/NotificationType differ -- proving the ID-match branch fires
+// independently of the (sessionID, notificationType) dedup path.
+func TestAppendDedup_ExactIDMatch_UpdatesInPlace(t *testing.T) {
+	store := newTestStore(t)
+
+	r1 := makeRecord("episode-1", "fork-pressure", notifTypeDedup)
+	r1.Title = "Fork Pressure: warning"
+	r1.Metadata = map[string]string{"level": "warning"}
+
+	r2 := makeRecord("episode-1", "fork-pressure", notifTypeDedup+1)
+	r2.Title = "Fork Pressure: critical"
+	r2.Metadata = map[string]string{"level": "critical"}
+
+	if err := store.Append(r1); err != nil {
+		t.Fatalf("Append r1: %v", err)
+	}
+	if err := store.Append(r2); err != nil {
+		t.Fatalf("Append r2: %v", err)
+	}
+
+	records, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected 1 record, got %d", total)
+	}
+	if records[0].ID != "episode-1" {
+		t.Errorf("expected ID='episode-1', got %q", records[0].ID)
+	}
+	if records[0].Title != "Fork Pressure: critical" {
+		t.Errorf("expected escalated title, got %q", records[0].Title)
+	}
+	if records[0].Metadata["level"] != "critical" {
+		t.Errorf("expected metadata level='critical', got %q", records[0].Metadata["level"])
+	}
+	if records[0].OccurrenceCount != 2 {
+		t.Errorf("expected OccurrenceCount=2, got %d", records[0].OccurrenceCount)
+	}
+}
+
+// TestAppendDedup_ExactIDMatch_IdenticalContentIsNoOp verifies that re-appending
+// the same ID with unchanged Title/Message/Metadata does not bump OccurrenceCount
+// -- a sustained-pressure re-check at the same level shouldn't look like a new
+// occurrence.
+func TestAppendDedup_ExactIDMatch_IdenticalContentIsNoOp(t *testing.T) {
+	store := newTestStore(t)
+
+	r1 := makeRecord("episode-1", "fork-pressure", notifTypeDedup)
+	r2 := makeRecord("episode-1", "fork-pressure", notifTypeDedup)
+	r2.Title = r1.Title
+	r2.Message = r1.Message
+	r2.Metadata = map[string]string{"key": "value-episode-1"}
+
+	if err := store.Append(r1); err != nil {
+		t.Fatalf("Append r1: %v", err)
+	}
+	if err := store.Append(r2); err != nil {
+		t.Fatalf("Append r2: %v", err)
+	}
+
+	records, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected 1 record, got %d", total)
+	}
+	if records[0].OccurrenceCount != 1 {
+		t.Errorf("expected OccurrenceCount=1 (no-op on identical content), got %d", records[0].OccurrenceCount)
+	}
+}
+
 // TestAppendDedup_OccurrenceCountIncrements verifies the count goes 1->2->3
 // across 3 appends.
 func TestAppendDedup_OccurrenceCountIncrements(t *testing.T) {

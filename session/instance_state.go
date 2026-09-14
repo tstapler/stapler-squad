@@ -491,6 +491,16 @@ func (i *Instance) IsHotRestoreRecoverable() bool {
 	}
 }
 
+// IsArchived reports whether the session has been archived (deliberately
+// retired, e.g. by archiveItemWorkSessions when a backlog rework round is
+// superseded). Archived sessions must never be auto-started, auto-revived or
+// auto-retried — see ADR-001 (superseded-rework-session-retirement).
+// Reads the published snapshot, not the raw i.ArchivedAt field
+// (.claude/rules/instance-lock-free-reads.md).
+func (i *Instance) IsArchived() bool {
+	return i.Snapshot().ArchivedAt != nil
+}
+
 // RecoverFromStopped resets a stale Stopped, PermanentlyFailed, or Failed
 // status to Creating so the instance can be hot-restored via Start(false).
 // Stopped/PermanentlyFailed have no registered edge to Creating, so this
