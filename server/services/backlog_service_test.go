@@ -202,6 +202,12 @@ type mockSessionStopper struct {
 	killedPaneUUIDs   []string
 	archivedUUIDs     []string
 	archiveErrForUUID map[string]error
+	// stoppedUUIDs records every UUID passed to StopSessionByUUID.
+	stoppedUUIDs []string
+	// stopperErr, if non-nil, is returned by StopSessionByUUID (default nil —
+	// every existing test that doesn't set it keeps today's always-succeeds
+	// behavior).
+	stopperErr error
 	// staleFor maps a session UUID to the "time since last meaningful output"
 	// TimeSinceLastMeaningfulOutput should report for it. A UUID present in
 	// liveUUIDs but absent here reports (0, true) — live and fresh.
@@ -247,7 +253,10 @@ func (m *mockSessionStopper) TimeSinceLastMeaningfulOutput(uuid string) (time.Du
 	return m.staleFor[uuid], true
 }
 
-func (m *mockSessionStopper) StopSessionByUUID(_ context.Context, _ string) error { return nil }
+func (m *mockSessionStopper) StopSessionByUUID(_ context.Context, uuid string) error {
+	m.stoppedUUIDs = append(m.stoppedUUIDs, uuid)
+	return m.stopperErr
+}
 
 func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string) error {
 	return nil

@@ -5587,3 +5587,97 @@ func TestTriggerReReview_should_ArchivePriorReviewSession_When_SpawningTmuxBacke
 	assert.Contains(t, stopper.archivedUUIDs, "prior-review-uuid",
 		"TriggerReReview must archive the prior review round before spawning its replacement")
 }
+
+// TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_CalledDirectly
+// is Story 1.1.1's second AC (plan.md): item with two unended sessions
+// ("work-1" role work, "review-1" role review) and one already-ended session
+// ("work-0") — calling stopLiveWorkAndReviewSessions directly must stop only
+// the two unended sessions and mark both their EndedAt non-nil.
+func TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_CalledDirectly(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item with two unended sessions and one already-ended session",
+		Status:   string(session.BacklogStatusInProgress),
+		Priority: 3,
+	})
+	require.NoError(t, err)
+	itemID := item.ID
+
+	// Already-ended session — must be skipped, not stopped again.
+	endedSession, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "work-0",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), endedSession.ID, time.Now()))
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "work-1",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "review-1",
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	svc.stopLiveWorkAndReviewSessions(t.Context(), itemID)
+
+	assert.ElementsMatch(t, []string{"work-1", "review-1"}, stopper.stoppedUUIDs,
+		"only the two unended work/review sessions must be stopped; the already-ended one must be skipped")
+
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	byUUID := make(map[string]session.ItemSessionSummary, len(sessions))
+	for _, is := range sessions {
+		byUUID[is.SessionUUID] = is
+	}
+	assert.NotNil(t, byUUID["work-1"].EndedAt, "work-1 must be marked ended")
+	assert.NotNil(t, byUUID["review-1"].EndedAt, "review-1 must be marked ended")
+}
+
+// TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsError
+// covers stopLiveWorkAndReviewSessions' best-effort semantics (doc comment on
+// the method, backlog_service_triage.go): a StopSessionByUUID error must be
+// logged and not propagated — the row is still marked ended so the item
+// isn't left permanently blocked by hasActiveWorkSession.
+func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsError(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{stopperErr: errors.New("stop failed")}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item with a session whose stop errors",
+		Status:   string(session.BacklogStatusInProgress),
+		Priority: 3,
+	})
+	require.NoError(t, err)
+	itemID := item.ID
+
+	workSession, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "work-err-1",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	svc.stopLiveWorkAndReviewSessions(t.Context(), itemID)
+
+	assert.Contains(t, stopper.stoppedUUIDs, "work-err-1")
+
+	updated, err := storage.GetItemSession(t.Context(), workSession.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, updated.EndedAt, "session must still be marked ended despite the stop error, matching best-effort semantics")
+}

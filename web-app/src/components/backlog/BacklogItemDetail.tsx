@@ -31,6 +31,7 @@ import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
 import { getErrorMessage } from "@/lib/utils/connectError";
+import { SendBackError } from "./detail/SendBackError";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
@@ -89,8 +90,6 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   unarchive: "Unarchived — back in the idea column. Needs a fresh session.",
   reopen: "Reopened for review.",
   send_back_idea: "Sent back to triage.",
-  send_back_refining: "Sent back to refining.",
-  send_back_ready: "Sent back to ready.",
 };
 
 export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
@@ -790,12 +789,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           case "send_back_idea":
             await transitionStatus(item.id, "idea");
             break;
-          case "send_back_refining":
-            await transitionStatus(item.id, "refining");
-            break;
-          case "send_back_ready":
-            await transitionStatus(item.id, "ready");
-            break;
           default:
             return;
         }
@@ -1004,6 +997,68 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       }
     },
     [item, rejectPlan, load, showActionToast]
+  );
+
+  // Story 2.2.1: chains transitionStatus -> rejectPlan -> triggerTriage as
+  // one operator action. Each call is wrapped in its own try/catch (not one
+  // shared try) so the outer catch knows exactly which of the three failed
+  // (resolves BLOCKER 5.2) — SendBackFeedbackBox renders distinct recovery
+  // copy per failedAt. See ux.md Surface 7 and pre-mortem P1 #1.
+  const handleSendBackWithFeedback = useCallback(
+    async (feedback: string) => {
+      if (!item) return;
+      const toastKey = `${item.id}:send_back_ready`;
+      setActionLoading("send_back_ready");
+      try {
+        try {
+          await transitionStatus(item.id, "ready", {
+            expectedStatus: item.status,
+            expectedUpdatedAt: item.updatedAtRaw,
+            overrideReason: feedback,
+          });
+        } catch (e) {
+          // Nothing has changed server-side — item.status is still accurate.
+          throw new SendBackError("transition", item.status, e);
+        }
+        try {
+          await rejectPlan(item.id, feedback);
+        } catch (e) {
+          // transitionStatus committed; the item is "ready" even though this
+          // call failed (rejectPlan doesn't change status).
+          throw new SendBackError("reject", "ready", e);
+        }
+        try {
+          await triggerTriage(item.id, feedback);
+        } catch (e) {
+          // Can't assume "ready" here (pre-mortem P1 #1): triggerTriage's own
+          // internal CAS may have already moved the item to "idea" before
+          // this failure. Re-fetch directly (not via load(), whose result
+          // isn't returned to this scope) to learn the real status.
+          const fresh = await getBacklogItem(item.id);
+          throw new SendBackError("triage", fresh?.status ?? "ready", e);
+        }
+        showActionToast("Feedback sent — retriage started.", "success", toastKey);
+        await load();
+      } catch (e) {
+        // Re-fetch unconditionally: once transitionStatus (call 1) commits, a
+        // stale local `item` would replay it with an outdated CAS precondition
+        // on retry, failing again with a confusing ErrPreconditionFailed.
+        await load();
+        // Partial failure (call 1 committed, call 2/3 failed) gets a neutral
+        // toast so it doesn't contradict SendBackFeedbackBox's more specific
+        // in-form message (ux.md Surface 7); only a true call-1 failure keeps
+        // the "Failed to send back." framing.
+        const toastMessage =
+          e instanceof SendBackError && e.failedAt !== "transition"
+            ? "Send-back needs attention — see details below."
+            : getErrorMessage(e, "Failed to send back.");
+        showActionToast(toastMessage, "error", toastKey);
+        throw e; // still a SendBackError (or the original error) — SendBackFeedbackBox's catch reads it
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, transitionStatus, rejectPlan, triggerTriage, getBacklogItem, load, showActionToast]
   );
 
   const handleRegeneratePlanWithFeedback = useCallback(async () => {
@@ -1658,6 +1713,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             julesDispatchTriggerRef.current = event.currentTarget;
             setShowJulesDispatch(true);
           }}
+          activeWorkSessionCount={activeWorkSessionCount}
+          onSendBackWithFeedback={handleSendBackWithFeedback}
         />
 
         {/* Secondary sections — sibling CollapsibleSections sharing one
