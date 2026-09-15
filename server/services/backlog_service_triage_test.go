@@ -3638,6 +3638,7 @@ func TestTriggerTriage_should_PersistFullRawOutputToDurableFile_When_HeadlessRes
 	is := waitForTriageFailureCaptured(t, storage, item.ID)
 	t.Cleanup(func() { _ = os.Remove(is.FailureCapturePath) })
 
+	assert.Equal(t, "parse_error", is.EndReason, "end_reason must be classified so BlockedNotice.tsx can surface the capture path instead of a generic 'no diagnostic data' fallback")
 	require.True(t, filepath.IsAbs(is.FailureCapturePath), "failure_capture_path should be an absolute, directly-openable path")
 
 	content, readErr := os.ReadFile(is.FailureCapturePath)

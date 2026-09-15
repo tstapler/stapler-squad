@@ -515,9 +515,18 @@ func (s *BacklogService) TriggerTriage(
 		result, parseErr := session.ParseHeadlessTriageResult(raw)
 		if parseErr != nil {
 			capturePath := s.captureHeadlessFailure(triageSessionUUID, raw)
-			log.ErrorLog().Printf("[TriggerTriage] parse result failed item=%s elapsed=%s rawLen=%d capture=%s: %v",
-				itemID, callElapsed.Round(time.Second), len(raw), capturePath, parseErr)
-			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+			log.Error("[TriggerTriage] parse result failed",
+				"item", itemID, "elapsed", callElapsed.Round(time.Second), "rawLen", len(raw), "capture", capturePath, "error", parseErr)
+			// "parse_error" (not the plain UpdateItemSessionEnded): the call itself
+			// succeeded but ParseHeadlessTriageResult rejected its output (e.g. the
+			// model's last line was a mid-task status update instead of the final
+			// JSON block). Without a classified EndReason here, BlockedNotice.tsx's
+			// `session.endReason ? "Headless call failed (...)" : fallbackText`
+			// check falls through to the generic "No diagnostic data recorded." even
+			// though captureHeadlessFailure just wrote the full raw output to
+			// capturePath — the diagnostic exists but the UI has no reason string to
+			// key off, so it never links to it.
+			_ = s.storage.UpdateItemSessionEndedWithReason(cleanupCtx, isID, time.Now(), "parse_error")
 			if capturePath != "" {
 				_ = s.storage.UpdateItemSessionFailureCapture(cleanupCtx, isID, capturePath)
 			}
