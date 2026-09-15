@@ -33,10 +33,22 @@ func TestMangleCorrelator_Mutated(t *testing.T) {
 	}
 }
 
+func TestMangleCorrelator_DoesNotReportStrippedWithoutActiveTransport(t *testing.T) {
+	spy := &spyWriter{}
+	c := NewMangleCorrelator(20*time.Millisecond, 100)
+	c.RecordStage1("no-consumer", "SGR", "abc123", 20)
+	time.Sleep(40 * time.Millisecond)
+	c.EvictExpired(context.Background(), spy)
+	if len(spy.events) != 0 {
+		t.Fatalf("inactive transport produced false stripped events: %+v", spy.events)
+	}
+}
+
 func TestMangleCorrelator_Stripped(t *testing.T) {
 	spy := &spyWriter{}
 	c := NewMangleCorrelator(100*time.Millisecond, 100)
 	c.RecordStage1("sess1", "SGR", "abc123", 20)
+	c.ObserveTransport("sess1")
 	// Wait for TTL to expire
 	time.Sleep(200 * time.Millisecond)
 	c.EvictExpired(context.Background(), spy)
