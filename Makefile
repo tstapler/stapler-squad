@@ -811,10 +811,14 @@ $(LINTER_BIN):
 	@mkdir -p $(CURDIR)/bin
 	@go -C tools/lint build -o $(LINTER_BIN) ./cmd/linter
 
-# Excludes third_party/ (vendored tmux source — not ours to lint) and
-# node_modules/. Includes scripts/ssq-hook-handler, which has no .sh
-# extension but is a real bash script (installed as a hook handler).
-SHELL_SCRIPTS := $(shell find . -not -path "./third_party/*" -not -path "*/node_modules/*" -not -path "./.git/*" -type f \( -name "*.sh" -o -name "ssq-hook-handler" \))
+# Excludes third_party/ (vendored tmux source — not ours to lint),
+# node_modules/, and .claude/worktrees/ (each entry there is itself a full
+# repo checkout with its own nested third_party/ -- *third_party/* rather
+# than ./third_party/* catches those regardless of depth, but worktrees are
+# excluded outright since scanning them just re-lints scripts already
+# covered by their own branch). Includes scripts/ssq-hook-handler, which has
+# no .sh extension but is a real bash script (installed as a hook handler).
+SHELL_SCRIPTS := $(shell find . -not -path "*/third_party/*" -not -path "*/node_modules/*" -not -path "./.git/*" -not -path "./.claude/worktrees/*" -type f \( -name "*.sh" -o -name "ssq-hook-handler" \))
 
 lint-shell: ## Run shellcheck over all first-party shell scripts
 	@which shellcheck >/dev/null 2>&1 || (echo "shellcheck not installed; run 'brew install shellcheck' (macOS) or see https://github.com/koalaman/shellcheck#installing" && exit 1)
