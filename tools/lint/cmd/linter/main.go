@@ -21,6 +21,9 @@
 //     calls to a GitHub host outside github's approved constructors
 //   - noliveinstanceraw: detects a raw FindLiveInstance(...) nil-comparison
 //     used as a liveness decision outside findConfirmedLiveInstance
+//   - nolegacylog: forbids log.<Level>Log().Printf(...) (the legacy,
+//     non-JSON logging API) in files already migrated to the structured
+//     log.Info/Warn/Error/Debug API
 package main
 
 import (
@@ -29,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/tools/lint/entfullscan"
 	"github.com/tstapler/stapler-squad/tools/lint/hotpolllog"
 	"github.com/tstapler/stapler-squad/tools/lint/nocommandpattern"
+	"github.com/tstapler/stapler-squad/tools/lint/nolegacylog"
 	"github.com/tstapler/stapler-squad/tools/lint/noliveinstanceraw"
 	"github.com/tstapler/stapler-squad/tools/lint/norawexec"
 	"github.com/tstapler/stapler-squad/tools/lint/norawghrequest"
@@ -42,6 +46,7 @@ func main() {
 		entfullscan.Analyzer,
 		hotpolllog.Analyzer,
 		nocommandpattern.Analyzer,
+		nolegacylog.Analyzer,
 		noliveinstanceraw.Analyzer,
 		norawexec.Analyzer,
 		norawghrequest.Analyzer,

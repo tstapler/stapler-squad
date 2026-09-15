@@ -801,13 +801,18 @@ lint: ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell ## R
 	CGO_ENABLED=0 golangci-lint run --enable=nilnil,staticcheck,ineffassign,govet
 
 LINTER_BIN := $(CURDIR)/bin/linter
+# Every non-testdata .go file under tools/lint — a real prerequisite list, not
+# just $(LINTER_BIN)'s own existence, so editing or adding an analyzer (e.g.
+# nolegacylog) triggers a rebuild instead of `make lint-custom` silently
+# running a stale binary that predates the change forever.
+LINTER_SRC := $(shell find $(CURDIR)/tools/lint -name '*.go' -not -path '*/testdata/*')
 
-lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, nocommandpattern, noliveinstanceraw, norawexec, norawghrequest, norawgitopen, silenttransition, tmuxsocketscope) in a single pass
+lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, nocommandpattern, nolegacylog, noliveinstanceraw, norawexec, norawghrequest, norawgitopen, silenttransition, tmuxsocketscope) in a single pass
 	@echo "Running custom lint..."
 	@$(LINTER_BIN) $(shell go list ./... | grep -v "^github.com/tstapler/stapler-squad$$")
 	@echo "custom lint: ok"
 
-$(LINTER_BIN):
+$(LINTER_BIN): $(LINTER_SRC)
 	@mkdir -p $(CURDIR)/bin
 	@go -C tools/lint build -o $(LINTER_BIN) ./cmd/linter
 
