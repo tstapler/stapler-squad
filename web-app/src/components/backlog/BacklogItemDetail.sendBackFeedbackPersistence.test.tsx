@@ -22,7 +22,8 @@
 import React from "react";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import { BacklogItemDetail } from "./BacklogItemDetail";
-import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
+import { makeReviewItem as makeReviewItemBase } from "./backlogItemDetailTestFixtures";
+import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 
 jest.mock("./SessionMonitor", () => require("./backlogItemDetailTestFixtures").sessionMonitorMock());
 jest.mock("./GateVerdictBox", () => require("./backlogItemDetailTestFixtures").gateVerdictBoxMock());
@@ -58,27 +59,15 @@ const rejectPlan = jest.fn();
 const triggerTriage = jest.fn();
 const listPipelineModes = jest.fn().mockResolvedValue([]);
 
-jest.mock("@/lib/hooks/useBacklogService", () => ({
-  useBacklogService: () => ({
+jest.mock("@/lib/hooks/useBacklogService", () =>
+  require("./backlogItemDetailTestFixtures").useBacklogServiceMock(() => ({
     getBacklogItem,
     transitionStatus,
-    triggerTriage,
     rejectPlan,
-    cancelTriage: jest.fn(),
-    spawnSessionFromItem: jest.fn(),
-    approvePlan: jest.fn(),
-    overrideVerdict: jest.fn(),
-    triggerReReview: jest.fn(),
-    triggerShipPR: jest.fn(),
-    submitManualReview: jest.fn(),
-    archiveBacklogItem: jest.fn(),
-    unarchiveBacklogItem: jest.fn(),
-    deleteBacklogItem: jest.fn(),
-    updateBacklogItem: jest.fn().mockResolvedValue(null),
+    triggerTriage,
     listPipelineModes,
-    lastError: null,
-  }),
-}));
+  }))
+);
 
 beforeAll(() => {
   jest.spyOn(console, "error").mockImplementation(() => {});
@@ -87,43 +76,11 @@ afterAll(() => {
   jest.restoreAllMocks();
 });
 
-function makeSession(overrides: Partial<LinkedSession> = {}): LinkedSession {
-  return {
-    entityId: "session-entity-1",
-    sessionId: "session-1",
-    role: "work",
-    estimatedCostUsd: 0,
-    pipelineModeSnapshot: "",
-    pipelineModeSnapshotHash: "",
-    ...overrides,
-  };
-}
-
+// This suite's default id ("item-1") differs from the shared fixture's
+// ("item-42") — none of its assertions depend on the exact value, but the
+// per-call getBacklogItem mock below keys its updatedAt bump off it.
 function makeReviewItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
-  return {
-    id: "item-1",
-    title: "Fix mobile layout",
-    description: "desc",
-    status: "review",
-    priority: 3,
-    repoPath: "/tmp/repo",
-    skipPlanning: false,
-    skipReviewGate: false,
-    autoSpawnSession: false,
-    autoCreatePR: false,
-    autoApprovePlan: false,
-    planApproved: false,
-    acCriteria: [{ index: 0, text: "AC 1", status: "done" }],
-    linkedSessions: [makeSession()],
-    notes: "",
-    createdAt: "2026-07-12T14:02:00.000Z",
-    updatedAt: "2026-07-12T14:02:00.000Z",
-    statusEvents: [],
-    progressNotes: [],
-    activityNotes: [],
-    totalEstimatedCostUsd: 0,
-    ...overrides,
-  };
+  return makeReviewItemBase({ id: "item-1", ...overrides });
 }
 
 /** True only when the toggle, the form, AND the partial-failure error copy are ALL absent at once. */

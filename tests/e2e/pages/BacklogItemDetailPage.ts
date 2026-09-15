@@ -33,6 +33,8 @@ export class BacklogItemDetailPage {
   /** The unrelated, unchanged "↩ Return to Triage" button (`send_back_idea`). */
   readonly sendBackIdeaButton: Locator;
   readonly toast: Locator;
+  /** PlanVerdictBox's `role="status" aria-label="Plan review status"` card (shared by plan-review.spec.ts and this file's send-back-feedback coverage). */
+  readonly planReviewStatus: Locator;
 
   constructor(page: Page) {
     this.page = page;
@@ -51,6 +53,7 @@ export class BacklogItemDetailPage {
     this.regeneratePlanButton = page.getByTestId("backlog-action-regenerate-plan");
     this.sendBackIdeaButton = page.getByTestId("backlog-action-send-back-idea");
     this.toast = page.getByTestId("toast");
+    this.planReviewStatus = page.getByRole("status", { name: "Plan review status" });
   }
 
   async submitSendBackFeedback(feedback: string) {

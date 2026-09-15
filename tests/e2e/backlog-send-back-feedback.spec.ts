@@ -89,10 +89,6 @@ async function archiveItem(request: APIRequestContext, itemId: string) {
     });
 }
 
-function planReviewStatus(page: Page) {
-  return page.getByRole("status", { name: "Plan review status" });
-}
-
 /** Fulfills TriggerTriage with a canned success — see file header. */
 async function mockTriggerTriageSuccess(page: Page) {
   await page.route("**/api/session.v1.BacklogService/TriggerTriage", async (route) => {
@@ -246,8 +242,8 @@ test.describe("backlog send-back-with-feedback", () => {
       expect(page.url()).toBe(urlBeforeSubmit);
 
       await expect(page.getByTestId("stage-tracker")).toHaveAttribute("aria-label", "Lifecycle stage: Ready");
-      await expect(planReviewStatus(page)).toContainText("Revisions requested");
-      await expect(planReviewStatus(page)).toContainText(feedback);
+      await expect(detailPage.planReviewStatus).toContainText("Revisions requested");
+      await expect(detailPage.planReviewStatus).toContainText(feedback);
     } finally {
       if (itemId) await archiveItem(request, itemId);
     }
@@ -395,7 +391,7 @@ test.describe("backlog send-back-with-feedback", () => {
 
       await expect(detailPage.sendBackError).toContainText("Sent back, but retriage didn't start");
       await expect(page.getByTestId("stage-tracker")).toHaveAttribute("aria-label", "Lifecycle stage: Ready");
-      await expect(planReviewStatus(page)).toContainText("Revisions requested");
+      await expect(detailPage.planReviewStatus).toContainText("Revisions requested");
 
       // Close the form; PlanVerdictBox's Regenerate affordance is reachable
       // without a reload since rejectPlan already committed server-side.
@@ -462,6 +458,88 @@ test.describe("backlog send-back-with-feedback", () => {
       await expect(detailPage.regeneratePlanButton).toBeEnabled();
     } finally {
       if (itemId2) await archiveItem(request, itemId2);
+    }
+  });
+
+  // Retry affordance for the "landed at idea" case — the single
+  // most-scrutinized path in this feature (see file header's Story
+  // 3.1.1/plan-feedback repair-iteration history). All three send-back RPCs
+  // plus GetBacklogItem are mocked with an in-memory item state, because the
+  // "ready->idea CAS already committed before the later failure" scenario
+  // this exercises is an internal server race that's impractical to
+  // reproduce against the real backend, and the Retry's own second
+  // transitionStatus call needs the client's believed status ("idea") to
+  // stay internally consistent with what the mocked server accepts —
+  // letting only some calls hit the real server would desync that CAS
+  // precondition (ready->ready is not a valid transition; see
+  // session/domain/backlog.go's validTransitions).
+  test("Retry after triggerTriage lands the item at idea resubmits the same feedback and succeeds", async ({
+    page,
+    request,
+  }) => {
+    const title = `send-back-feedback-retry-idea ${Date.now()}`;
+    const feedback = "retry after landing at idea, re-check the mobile layout";
+    let itemId: string | undefined;
+
+    try {
+      itemId = await seedReviewItemWithPlan(request, title);
+
+      let status: "review" | "ready" | "idea" = "review";
+      let triggerTriageCalls = 0;
+
+      await page.route("**/api/session.v1.BacklogService/TransitionBacklogItemStatus", async (route) => {
+        status = "ready";
+        await route.fulfill({ json: { item: { id: itemId, title, status } } });
+      });
+      await page.route("**/api/session.v1.BacklogService/RejectPlan", async (route) => {
+        await route.fulfill({ json: { item: { id: itemId, title, status, planRejectionReason: feedback } } });
+      });
+      await page.route("**/api/session.v1.BacklogService/TriggerTriage", async (route) => {
+        triggerTriageCalls += 1;
+        if (triggerTriageCalls === 1) {
+          // triggerTriage's own internal ready->idea CAS commits before this
+          // simulated later-step failure (pre-mortem P1 #1).
+          status = "idea";
+          await route.fulfill({
+            status: 500,
+            contentType: "application/json",
+            body: JSON.stringify({ code: "internal", message: "simulated e2e triage-after-idea-CAS failure" }),
+          });
+        } else {
+          status = "ready";
+          await route.fulfill({ json: { itemSession: { id: "e2e-fake-retry-session" } } });
+        }
+      });
+      await page.route("**/api/session.v1.BacklogService/GetBacklogItem", async (route) => {
+        const response = await route.fetch();
+        const json = await response.json();
+        if (json?.item?.id === itemId) json.item.status = status;
+        await route.fulfill({ response, json });
+      });
+
+      const backlogPage = new BacklogPage(page);
+      await backlogPage.goto();
+      await backlogPage.waitForItemCards();
+
+      const detailPage = new BacklogItemDetailPage(page);
+      await detailPage.openItemByTitle(title);
+
+      await detailPage.sendBackToggle.click();
+      await detailPage.sendBackTextarea.fill(feedback);
+      await detailPage.sendBackSubmit.click();
+
+      await expect(detailPage.sendBackError).toContainText("Sent back, but retriage didn't start");
+      await expect(detailPage.sendBackError).toContainText('moved back to "idea"');
+      await expect(detailPage.sendBackErrorRetry).toBeVisible();
+      await expect(detailPage.sendBackTextarea).toHaveValue(feedback);
+
+      await detailPage.sendBackErrorRetry.click();
+
+      await expect(detailPage.sendBackError).toHaveCount(0);
+      await expect(detailPage.toast).toContainText("Feedback sent — retriage started.");
+      expect(triggerTriageCalls).toBe(2);
+    } finally {
+      if (itemId) await archiveItem(request, itemId);
     }
   });
 

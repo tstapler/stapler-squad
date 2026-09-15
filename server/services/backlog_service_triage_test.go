@@ -5591,8 +5591,8 @@ func TestTriggerReReview_should_ArchivePriorReviewSession_When_SpawningTmuxBacke
 // TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_CalledDirectly
 // is Story 1.1.1's second AC (plan.md): item with two unended sessions
 // ("work-1" role work, "review-1" role review) and one already-ended session
-// ("work-0") — calling stopLiveWorkSessions directly must stop only the two
-// unended sessions and mark both their EndedAt non-nil.
+// ("work-0") — calling stopLiveWorkAndReviewSessions directly must stop only
+// the two unended sessions and mark both their EndedAt non-nil.
 func TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_CalledDirectly(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
@@ -5631,7 +5631,7 @@ func TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_Calle
 	})
 	require.NoError(t, err)
 
-	svc.stopLiveWorkSessions(t.Context(), itemID)
+	svc.stopLiveWorkAndReviewSessions(t.Context(), itemID)
 
 	assert.ElementsMatch(t, []string{"work-1", "review-1"}, stopper.stoppedUUIDs,
 		"only the two unended work/review sessions must be stopped; the already-ended one must be skipped")
@@ -5647,8 +5647,8 @@ func TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_Calle
 }
 
 // TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsError
-// covers stopLiveWorkSessions' best-effort semantics (doc comment on the
-// method, backlog_service_triage.go): a StopSessionByUUID error must be
+// covers stopLiveWorkAndReviewSessions' best-effort semantics (doc comment on
+// the method, backlog_service_triage.go): a StopSessionByUUID error must be
 // logged and not propagated — the row is still marked ended so the item
 // isn't left permanently blocked by hasActiveWorkSession.
 func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsError(t *testing.T) {
@@ -5673,9 +5673,7 @@ func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsEr
 	})
 	require.NoError(t, err)
 
-	require.NotPanics(t, func() {
-		svc.stopLiveWorkSessions(t.Context(), itemID)
-	})
+	svc.stopLiveWorkAndReviewSessions(t.Context(), itemID)
 
 	assert.Contains(t, stopper.stoppedUUIDs, "work-err-1")
 

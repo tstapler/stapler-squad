@@ -11,7 +11,8 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { BacklogItemDetail } from "./BacklogItemDetail";
-import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
+import { makeReviewItem } from "./backlogItemDetailTestFixtures";
+import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 
 jest.mock("./SessionMonitor", () => require("./backlogItemDetailTestFixtures").sessionMonitorMock());
 jest.mock("./GateVerdictBox", () => require("./backlogItemDetailTestFixtures").gateVerdictBoxMock());
@@ -44,27 +45,15 @@ const rejectPlan = jest.fn();
 const triggerTriage = jest.fn();
 const listPipelineModes = jest.fn().mockResolvedValue([]);
 
-jest.mock("@/lib/hooks/useBacklogService", () => ({
-  useBacklogService: () => ({
+jest.mock("@/lib/hooks/useBacklogService", () =>
+  require("./backlogItemDetailTestFixtures").useBacklogServiceMock(() => ({
     getBacklogItem,
     transitionStatus,
-    triggerTriage,
     rejectPlan,
-    cancelTriage: jest.fn(),
-    spawnSessionFromItem: jest.fn(),
-    approvePlan: jest.fn(),
-    overrideVerdict: jest.fn(),
-    triggerReReview: jest.fn(),
-    triggerShipPR: jest.fn(),
-    submitManualReview: jest.fn(),
-    archiveBacklogItem: jest.fn(),
-    unarchiveBacklogItem: jest.fn(),
-    deleteBacklogItem: jest.fn(),
-    updateBacklogItem: jest.fn().mockResolvedValue(null),
+    triggerTriage,
     listPipelineModes,
-    lastError: null,
-  }),
-}));
+  }))
+);
 
 // Pre-existing jest/vanilla-extract mock limitation — see BacklogItemDetail.test.tsx.
 beforeAll(() => {
@@ -74,48 +63,8 @@ afterAll(() => {
   jest.restoreAllMocks();
 });
 
-function makeSession(overrides: Partial<LinkedSession> = {}): LinkedSession {
-  return {
-    entityId: "session-entity-1",
-    sessionId: "session-1",
-    role: "work",
-    estimatedCostUsd: 0,
-    pipelineModeSnapshot: "",
-    pipelineModeSnapshotHash: "",
-    ...overrides,
-  };
-}
-
 const T1 = timestampFromDate(new Date("2026-07-12T14:02:00.000Z"));
 const FEEDBACK = "missed the mobile layout, redo with touch targets";
-
-function makeReviewItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
-  return {
-    id: "item-42",
-    title: "Fix mobile layout",
-    description: "desc",
-    status: "review",
-    priority: 3,
-    repoPath: "/tmp/repo",
-    skipPlanning: false,
-    skipReviewGate: false,
-    autoSpawnSession: false,
-    autoCreatePR: false,
-    autoApprovePlan: false,
-    planApproved: false,
-    acCriteria: [{ index: 0, text: "AC 1", status: "done" }],
-    linkedSessions: [makeSession()],
-    notes: "",
-    createdAt: "2026-07-12T14:02:00.000Z",
-    updatedAt: "2026-07-12T14:02:00.000Z",
-    updatedAtRaw: T1,
-    statusEvents: [],
-    progressNotes: [],
-    activityNotes: [],
-    totalEstimatedCostUsd: 0,
-    ...overrides,
-  };
-}
 
 async function renderItemAndOpenForm(item: BacklogItem) {
   getBacklogItem.mockReset().mockResolvedValue(item);
@@ -143,7 +92,7 @@ describe("BacklogItemDetail — handleSendBackWithFeedback (Story 2.2.1)", () =>
   });
 
   it("submits feedback through transitionStatus, rejectPlan, and triggerTriage in order, shows a success toast, and reloads", async () => {
-    const item = makeReviewItem();
+    const item = makeReviewItem({ updatedAtRaw: T1 });
     transitionStatus.mockResolvedValue({ ...item, status: "ready" });
     rejectPlan.mockResolvedValue({ ...item, status: "ready", planRejectionReason: FEEDBACK });
     triggerTriage.mockResolvedValue({ itemSessionId: "session-x" });

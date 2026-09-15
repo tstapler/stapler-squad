@@ -138,8 +138,13 @@ describe("SendBackFeedbackBox — active session notice", () => {
   });
 });
 
-describe("SendBackFeedbackBox — failure branches", () => {
-  it("a plain rejected onSubmit (no SendBackError) preserves typed text and shows the generic headline", async () => {
+// Branch-by-branch copy assertions (which headline/message each failedAt +
+// itemStatusAfterFailure combination produces) live in SendBackError.test.ts
+// against deriveSendBackErrorCopy directly. These tests cover only what's
+// genuinely about rendering: does a failure keep the typed text and
+// re-enable Submit, and is the Retry affordance wired to the right cases.
+describe("SendBackFeedbackBox — failure rendering", () => {
+  it("a rejected onSubmit preserves typed text, shows the error headline, and re-enables Submit", async () => {
     const onSubmit = jest.fn().mockRejectedValue(new Error("network exploded"));
     render(<SendBackFeedbackBox {...makeProps({ onSubmit })} />);
     openFormAndType("redo the auth approach");
@@ -151,49 +156,23 @@ describe("SendBackFeedbackBox — failure branches", () => {
     expect(screen.getByTestId("backlog-action-send-back-feedback-submit")).not.toBeDisabled();
   });
 
-  it('SendBackError("transition", ...) shows the same generic "Failed to send back" headline', async () => {
-    const onSubmit = jest.fn().mockRejectedValue(new SendBackError("transition", "review", new Error("cas mismatch")));
-    render(<SendBackFeedbackBox {...makeProps({ onSubmit })} />);
-    openFormAndType("redo the auth approach");
-    fireEvent.click(screen.getByTestId("backlog-action-send-back-feedback-submit"));
-
-    await waitFor(() => expect(screen.getByText("Failed to send back")).toBeInTheDocument());
-    expect(screen.getByTestId("send-back-feedback-textarea")).toHaveValue("redo the auth approach");
-  });
-
-  it('SendBackError("triage", "ready", ...) points at "Regenerate Plan with This Feedback"', async () => {
+  it("a non-retryable SendBackError renders no Retry button", async () => {
     const onSubmit = jest.fn().mockRejectedValue(new SendBackError("triage", "ready", new Error("triage failed")));
     render(<SendBackFeedbackBox {...makeProps({ onSubmit })} />);
     openFormAndType("redo the auth approach");
     fireEvent.click(screen.getByTestId("backlog-action-send-back-feedback-submit"));
 
     await waitFor(() => expect(screen.getByText("Sent back, but retriage didn't start")).toBeInTheDocument());
-    expect(screen.getByText(/Regenerate Plan with This Feedback/)).toBeInTheDocument();
-    expect(screen.queryByText(/Trigger Triage/)).not.toBeInTheDocument();
-    // Not the retryable branch — no Retry affordance.
     expect(screen.queryByRole("button", { name: "Retry send-back with this feedback" })).not.toBeInTheDocument();
   });
 
-  it('SendBackError("reject", "ready", ...) points at "Request Changes"', async () => {
-    const onSubmit = jest.fn().mockRejectedValue(new SendBackError("reject", "ready", new Error("reject failed")));
-    render(<SendBackFeedbackBox {...makeProps({ onSubmit })} />);
-    openFormAndType("redo the auth approach");
-    fireEvent.click(screen.getByTestId("backlog-action-send-back-feedback-submit"));
-
-    await waitFor(() => expect(screen.getByText("Sent back, but retriage didn't start")).toBeInTheDocument());
-    expect(screen.getByText(/Request Changes/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Retry send-back with this feedback" })).not.toBeInTheDocument();
-  });
-
-  it('SendBackError("triage", "idea", ...) names "idea", offers no "will fail" claim, and renders Retry', async () => {
+  it("a retryable SendBackError renders the Retry button and preserves typed text", async () => {
     const onSubmit = jest.fn().mockRejectedValue(new SendBackError("triage", "idea", new Error("triage failed")));
     render(<SendBackFeedbackBox {...makeProps({ onSubmit })} />);
     openFormAndType("redo the auth approach");
     fireEvent.click(screen.getByTestId("backlog-action-send-back-feedback-submit"));
 
     await waitFor(() => expect(screen.getByText("Sent back, but retriage didn't start")).toBeInTheDocument());
-    expect(screen.getByText(/moved back to "idea"/)).toBeInTheDocument();
-    expect(screen.queryByText(/resubmitting.*will fail/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry send-back with this feedback" })).toBeInTheDocument();
     expect(screen.getByTestId("send-back-feedback-textarea")).toHaveValue("redo the auth approach");
   });
@@ -284,6 +263,44 @@ describe("SendBackFeedbackBox — Cancel/Escape inert while pending", () => {
     const cancelBtn = screen.getByRole("button", { name: /^Cancel$/i });
     expect(cancelBtn).toBeDisabled();
     expect(cancelBtn).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("the toggle button is disabled while a submit (or retry) is pending, so it cannot collapse the form and hide recovery UI", async () => {
+    const { promise, resolve } = deferred<void>();
+    const onSubmit = jest.fn().mockReturnValue(promise);
+    render(<SendBackFeedbackBox {...makeProps({ onSubmit })} />);
+    openFormAndType("redo the auth approach");
+    fireEvent.click(screen.getByTestId("backlog-action-send-back-feedback-submit"));
+
+    const toggleBtn = screen.getByTestId("backlog-action-send-back-feedback");
+    expect(toggleBtn).toBeDisabled();
+
+    // Even a click must not collapse the form while pending.
+    fireEvent.click(toggleBtn);
+    expect(screen.getByTestId("send-back-feedback-textarea")).toBeInTheDocument();
+
+    resolve();
+    await waitFor(() => expect(screen.queryByTestId("send-back-feedback-textarea")).not.toBeInTheDocument());
+  });
+
+  it("the toggle button stays disabled during a Retry's own pending window", async () => {
+    const firstAttempt = deferred<void>();
+    const onSubmit = jest.fn().mockReturnValueOnce(firstAttempt.promise);
+    render(<SendBackFeedbackBox {...makeProps({ onSubmit })} />);
+    openFormAndType("redo the auth approach");
+    fireEvent.click(screen.getByTestId("backlog-action-send-back-feedback-submit"));
+
+    firstAttempt.reject(new SendBackError("triage", "idea", new Error("triage failed")));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry send-back with this feedback" })).toBeInTheDocument());
+
+    const secondAttempt = deferred<void>();
+    onSubmit.mockReturnValueOnce(secondAttempt.promise);
+    fireEvent.click(screen.getByRole("button", { name: "Retry send-back with this feedback" }));
+
+    expect(screen.getByTestId("backlog-action-send-back-feedback")).toBeDisabled();
+
+    secondAttempt.resolve();
+    await waitFor(() => expect(screen.queryByTestId("send-back-feedback-textarea")).not.toBeInTheDocument());
   });
 });
 

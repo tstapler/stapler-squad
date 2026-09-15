@@ -4,6 +4,8 @@ import { vars } from "@/styles/theme.css";
 export const section = style({
   display: "flex",
   flexDirection: "column",
+  // Narrower than PlanVerdictBox.css.ts's space["4"] intentionally: this
+  // section has no title/sub-heading, so it doesn't need that extra gap.
   gap: vars.space["2"],
 });
 
@@ -18,7 +20,7 @@ const buttonBase = style({
   fontWeight: vars.fontWeight.medium,
 });
 
-export const toggleButton = style([
+export const secondaryButton = style([
   buttonBase,
   {
     background: "none",
