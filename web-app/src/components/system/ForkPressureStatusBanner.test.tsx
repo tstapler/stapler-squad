@@ -8,7 +8,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { ForkPressureStatusBanner } from "./ForkPressureStatusBanner";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
 
@@ -92,7 +92,7 @@ describe("ForkPressureStatusBanner", () => {
     expect(screen.queryByTestId("fork-pressure-status")).not.toBeInTheDocument();
   });
 
-  it("shows both banners when both monitors are elevated", () => {
+  it("pages between both monitors when both are elevated, instead of stacking both banners at once", () => {
     mockHistory = [
       makeItem({
         sessionId: "fork-pressure",
@@ -108,8 +108,16 @@ describe("ForkPressureStatusBanner", () => {
       }),
     ];
     render(<ForkPressureStatusBanner />);
+
     expect(screen.getByTestId("fork-pressure-status")).toBeInTheDocument();
+    expect(screen.queryByTestId("memory-pressure-status")).not.toBeInTheDocument();
+    expect(screen.getByText("1 / 2")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("Next notification"));
+
     expect(screen.getByTestId("memory-pressure-status")).toBeInTheDocument();
+    expect(screen.queryByTestId("fork-pressure-status")).not.toBeInTheDocument();
+    expect(screen.getByText("2 / 2")).toBeInTheDocument();
   });
 
   it("reflects the cleared state once the fork-pressure record's latest occurrence is 'ok', even though an earlier elevated occurrence exists", () => {
