@@ -100,7 +100,7 @@ func retitleTriageWorktreeToFinalBranch(itemID, repoPath, title string, wt *git.
 	finalBranch := session.BacklogBranchPrefix + backlogWorkBranchSlug(repoPath, title)
 
 	if renameErr := wt.RenameBranch(finalBranch); renameErr != nil {
-		log.WarningLog().Printf("[TriggerTriage] failed to rename triage worktree branch for item=%s to %q: %v", itemID, finalBranch, renameErr)
+		log.Warn("[TriggerTriage] failed to rename triage worktree branch", "item", itemID, "branch", finalBranch, "error", renameErr)
 	}
 }
 
@@ -115,7 +115,7 @@ func cleanupProvisionalTriageWorktree(itemID string, wt *git.GitWorktree) {
 		return
 	}
 	if cleanupErr := wt.Cleanup(); cleanupErr != nil {
-		log.WarningLog().Printf("[TriggerTriage] failed to clean up provisional triage worktree for item=%s: %v", itemID, cleanupErr)
+		log.Warn("[TriggerTriage] failed to clean up provisional triage worktree", "item", itemID, "error", cleanupErr)
 	}
 }
 
@@ -253,7 +253,7 @@ func (s *BacklogService) TriggerTriage(
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId,
 			session.BacklogStatusIdea, precondition, session.TriggeredByUser); transErr != nil {
-			log.WarningLog().Printf("[TriggerTriage] item %s moved past ready before triage reset (race with work-session spawn); aborting re-triage", req.Msg.ItemId)
+			log.Warn("[TriggerTriage] moved past ready before triage reset (race with work-session spawn); aborting re-triage", "item", req.Msg.ItemId)
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("item %s was already moved past ready — a work session may have just started; retry after it completes", req.Msg.ItemId))
 		}
@@ -308,7 +308,7 @@ func (s *BacklogService) TriggerTriage(
 		triagePrompt = s.triagePromptFor(item, artifactAbsPath)
 	}
 
-	log.InfoLog().Printf("[PipelineEngine] item=%s stage=triage mode=%q", item.ID, session.ResolvedModeLabel(item.PipelineMode))
+	log.Info("[PipelineEngine] stage=triage", "item", item.ID, "mode", session.ResolvedModeLabel(item.PipelineMode))
 
 	// 8. Create ItemSession synchronously before goroutine (prevents TOCTOU on orphan guard).
 	// Snapshot the resolved PipelineMode slug + content hash — see the comment on the
@@ -330,7 +330,7 @@ func (s *BacklogService) TriggerTriage(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create triage item session: %w", err))
 	}
 
-	log.InfoLog().Printf("[TriggerTriage] headless triage started item=%s session=%s path=%s", item.ID, triageSessionUUID, artifactAbsPath)
+	log.Info("[TriggerTriage] headless triage started", "item", item.ID, "session", triageSessionUUID, "path", artifactAbsPath)
 
 	// 9. Drive triage asynchronously so the RPC returns immediately.
 	itemID := item.ID
@@ -440,9 +440,9 @@ func (s *BacklogService) TriggerTriage(
 			wt, _, wtErr = git.NewGitWorktree(triageRepoRoot, "triage-"+itemID)
 		}
 		if wtErr != nil {
-			log.WarningLog().Printf("[TriggerTriage] failed to create isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, wtErr)
+			log.Warn("[TriggerTriage] failed to create isolated worktree, running triage directly in repo_path", "item", itemID, "error", wtErr)
 		} else if setupErr := wt.Setup(); setupErr != nil {
-			log.WarningLog().Printf("[TriggerTriage] failed to set up isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, setupErr)
+			log.Warn("[TriggerTriage] failed to set up isolated worktree, running triage directly in repo_path", "item", itemID, "error", setupErr)
 		} else {
 			triageWorktree = wt
 			triageWorkDir = wt.GetWorktreePath()
@@ -486,7 +486,7 @@ func (s *BacklogService) TriggerTriage(
 		// parseable output, so it must not be lost down either failure path.
 		if triageCostUSD > 0 {
 			if costErr := s.storage.UpdateItemSessionCost(cleanupCtx, isID, triageCostUSD); costErr != nil {
-				log.WarningLog().Printf("[TriggerTriage] failed to persist cost item=%s: %v", itemID, costErr)
+				log.Warn("[TriggerTriage] failed to persist cost", "item", itemID, "error", costErr)
 			}
 		}
 
@@ -502,8 +502,8 @@ func (s *BacklogService) TriggerTriage(
 			// answer "how often do we hit each failure mode" without parsing %v text.
 			errType := classifyHeadlessCallError(callErr, callElapsed, triageCallBudget)
 			capturePath := s.captureHeadlessFailure(triageSessionUUID, raw)
-			log.ErrorLog().Printf("[TriggerTriage] headless triage failed item=%s elapsed=%s errType=%s capture=%s: %v",
-				itemID, callElapsed.Round(time.Second), errType, capturePath, callErr)
+			log.Error("[TriggerTriage] headless triage failed",
+				"item", itemID, "elapsed", callElapsed.Round(time.Second), "errType", errType, "capture", capturePath, "error", callErr)
 			_ = s.storage.UpdateItemSessionEndedWithReason(cleanupCtx, isID, time.Now(), errType)
 			if capturePath != "" {
 				_ = s.storage.UpdateItemSessionFailureCapture(cleanupCtx, isID, capturePath)
@@ -564,7 +564,7 @@ func (s *BacklogService) TriggerTriage(
 		// path must never auto-commit into a repo this code didn't create.
 		if triageWorktree != nil {
 			if commitErr := triageWorktree.CommitChanges(fmt.Sprintf("chore(sdd): planning artifacts for %s", sanitizedTitle)); commitErr != nil {
-				log.WarningLog().Printf("[TriggerTriage] failed to commit triage artifacts item=%s worktree=%s: %v", itemID, triageWorkDir, commitErr)
+				log.Warn("[TriggerTriage] failed to commit triage artifacts", "item", itemID, "worktree", triageWorkDir, "error", commitErr)
 			}
 			retitleTriageWorktreeToFinalBranch(itemID, itemRepoPath, sanitizedTitle, triageWorktree)
 		}
@@ -581,7 +581,7 @@ func (s *BacklogService) TriggerTriage(
 
 		payloadJSON, marshalErr := json.Marshal(result)
 		if marshalErr != nil {
-			log.ErrorLog().Printf("[TriggerTriage] marshal triage result item=%s: %v", itemID, marshalErr)
+			log.Error("[TriggerTriage] marshal triage result failed", "item", itemID, "error", marshalErr)
 			_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
 			return
 		}
@@ -592,7 +592,7 @@ func (s *BacklogService) TriggerTriage(
 		var persistFailures []string
 
 		if updateErr := s.storage.UpdateItemSessionTriageResult(persistCtx, isID, string(payloadJSON)); updateErr != nil {
-			log.ErrorLog().Printf("[TriggerTriage] persist triage result item=%s: %v", itemID, updateErr)
+			log.Error("[TriggerTriage] persist triage result failed", "item", itemID, "error", updateErr)
 			persistFailures = append(persistFailures, "saving the triage result")
 		}
 
@@ -633,12 +633,12 @@ func (s *BacklogService) TriggerTriage(
 				update.PlanApproved = &approved
 				update.PlanApprovedAt = &approvedAt
 			} else {
-				log.WarningLog().Printf("[TriggerTriage] auto_approve_plan set but plan artifacts path %q missing item=%s: %v", pap, itemID, statErr)
+				log.Warn("[TriggerTriage] auto_approve_plan set but plan artifacts path missing", "path", pap, "item", itemID, "error", statErr)
 			}
 		}
 		applyTriageResultToUpdate(&result, &update)
 		if _, updateErr := s.storage.UpdateBacklogItem(persistCtx, itemID, update, nil); updateErr != nil {
-			log.ErrorLog().Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)
+			log.Error("[TriggerTriage] update plan_artifacts_path failed", "item", itemID, "error", updateErr)
 			persistFailures = append(persistFailures, "saving the plan artifacts path")
 		}
 
@@ -671,7 +671,7 @@ func (s *BacklogService) TriggerTriage(
 		statusAdvanced := true
 		if _, transErr := s.storage.TransitionBacklogItemStatus(persistCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
 			session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
-			log.ErrorLog().Printf("[TriggerTriage] status transition idea→ready item=%s: %v", itemID, transErr)
+			log.Error("[TriggerTriage] status transition idea→ready failed", "item", itemID, "error", transErr)
 			persistFailures = append(persistFailures, "advancing the item to Ready")
 			statusAdvanced = false
 		}
@@ -690,14 +690,14 @@ func (s *BacklogService) TriggerTriage(
 				ItemId:     itemID,
 				Autonomous: true,
 			})); spawnErr != nil {
-				log.WarningLog().Printf("[TriggerTriage] auto-spawn session item=%s: %v", itemID, spawnErr)
+				log.Warn("[TriggerTriage] auto-spawn session failed", "item", itemID, "error", spawnErr)
 			} else {
-				log.InfoLog().Printf("[TriggerTriage] auto-spawned work session item=%s (auto_spawn_session=true)", itemID)
+				log.Info("[TriggerTriage] auto-spawned work session (auto_spawn_session=true)", "item", itemID)
 			}
 		}
 
-		log.InfoLog().Printf("[TriggerTriage] headless triage complete item=%s elapsed=%s suggestions=%d tasks=%d",
-			itemID, callElapsed.Round(time.Second), len(result.Suggestions), len(result.Tasks))
+		log.Info("[TriggerTriage] headless triage complete",
+			"item", itemID, "elapsed", callElapsed.Round(time.Second), "suggestions", len(result.Suggestions), "tasks", len(result.Tasks))
 	}()
 
 	return connect.NewResponse(&sessionv1.TriggerTriageResponse{
