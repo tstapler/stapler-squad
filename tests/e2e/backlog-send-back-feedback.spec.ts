@@ -144,8 +144,29 @@ interface FakeItemSession {
  * exactly what BacklogItemDetail.tsx's `activeWorkSessionCount` counts
  * (`s.role === "work" && !s.endedAt`, mapped from the wire field
  * `sessionRole` by useBacklogService.ts's `mapItemSession`).
+ *
+ * The returned `injected` promise resolves once the interception has
+ * actually fired for `itemId` at least once. The item detail panel becomes
+ * visible (and `sendBackToggle` renders) as soon as the FIRST
+ * GetBacklogItem response lands, which can race ahead of the intercepted
+ * response landing and being applied to component state under load.
+ * Without awaiting `injected`, `activeWorkSessionCount`-dependent
+ * assertions (the InlineNotice) can flake: the toggle is already
+ * interactive, but the injected session hasn't reached component state
+ * yet. `await injectItemSessions(...)` itself (as before) still guarantees
+ * route registration completes before navigation; callers that depend on
+ * the injected sessions should additionally `await` the returned
+ * `injected` promise after `openItemByTitle`.
  */
-async function injectItemSessions(page: Page, itemId: string, sessions: FakeItemSession[]) {
+async function injectItemSessions(
+  page: Page,
+  itemId: string,
+  sessions: FakeItemSession[]
+): Promise<{ injected: Promise<void> }> {
+  let resolveInjected: () => void;
+  const injected = new Promise<void>((resolve) => {
+    resolveInjected = resolve;
+  });
   await page.route("**/api/session.v1.BacklogService/GetBacklogItem", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
@@ -154,9 +175,11 @@ async function injectItemSessions(page: Page, itemId: string, sessions: FakeItem
         ...(json.item.itemSessions ?? []),
         ...sessions.map((s) => ({ estimatedCostUsd: 0, ...s })),
       ];
+      resolveInjected();
     }
     await route.fulfill({ response, json });
   });
+  return { injected };
 }
 
 test.describe("backlog send-back-with-feedback", () => {
@@ -553,7 +576,7 @@ test.describe("backlog send-back-with-feedback", () => {
 
     try {
       itemId = await createInProgressItem(request, title);
-      await injectItemSessions(page, itemId, [
+      const { injected } = await injectItemSessions(page, itemId, [
         { id: "fake-work-session-1", sessionUuid: "fake-work-session-uuid-1", sessionRole: "work" },
       ]);
 
@@ -563,6 +586,7 @@ test.describe("backlog send-back-with-feedback", () => {
 
       const detailPage = new BacklogItemDetailPage(page);
       await detailPage.openItemByTitle(title);
+      await injected;
 
       await detailPage.sendBackToggle.click();
       await expect(detailPage.sendBackActiveSessionNotice).toBeVisible();
@@ -724,7 +748,7 @@ test.describe("backlog send-back-with-feedback", () => {
 
     try {
       itemId = await createInProgressItem(request, title);
-      await injectItemSessions(page, itemId, [
+      const { injected } = await injectItemSessions(page, itemId, [
         { id: "fake-work-session-tab", sessionUuid: "fake-work-session-uuid-tab", sessionRole: "work" },
       ]);
 
@@ -734,6 +758,7 @@ test.describe("backlog send-back-with-feedback", () => {
 
       const detailPage = new BacklogItemDetailPage(page);
       await detailPage.openItemByTitle(title);
+      await injected;
 
       await detailPage.sendBackToggle.focus();
       await expect(detailPage.sendBackToggle).toBeFocused();
