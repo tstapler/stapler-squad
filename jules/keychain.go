@@ -89,13 +89,18 @@ type KeyringTokenSource struct {
 	// resolves one account), so a single shared Group is fine.
 	sfGroup singleflight.Group
 
-	// stateMu guards only the four fields below -- cheap, never held across
-	// the actual keyring call.
+	// stateMu guards only the fields below -- cheap, never held across the
+	// actual keyring call.
 	stateMu          sync.Mutex
 	cachedKey        JulesAPIKey
 	cachedAt         time.Time
 	circuitOpenUntil time.Time
 	probeInFlight    bool
+	// probeAvailable is armed when a synchronous timeout opens the circuit
+	// and consumed by the first caller that starts a background probe. A
+	// failed probe extends the cooldown without rearming this flag, preventing
+	// every later caller in that cooldown from immediately starting another.
+	probeAvailable bool
 }
 
 // KeyringTokenSourceOption configures a KeyringTokenSource at construction.
@@ -158,8 +163,9 @@ func (s *KeyringTokenSource) APIKey(ctx context.Context) (JulesAPIKey, error) {
 	}
 
 	if now.Before(s.circuitOpenUntil) {
-		launchProbe := !s.probeInFlight
+		launchProbe := s.probeAvailable && !s.probeInFlight
 		if launchProbe {
+			s.probeAvailable = false
 			s.probeInFlight = true
 		}
 		s.stateMu.Unlock()
@@ -272,6 +278,7 @@ func (s *KeyringTokenSource) runProbe() {
 func (s *KeyringTokenSource) openCircuit() {
 	s.stateMu.Lock()
 	s.circuitOpenUntil = s.now().Add(s.cooldown)
+	s.probeAvailable = true
 	s.stateMu.Unlock()
 }
 
@@ -282,6 +289,7 @@ func (s *KeyringTokenSource) resetCacheAndCircuit() {
 	s.stateMu.Lock()
 	s.cachedAt = time.Time{}
 	s.circuitOpenUntil = time.Time{}
+	s.probeAvailable = false
 	s.stateMu.Unlock()
 }
 
