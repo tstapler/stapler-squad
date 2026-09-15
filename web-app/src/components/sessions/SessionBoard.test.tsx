@@ -101,6 +101,7 @@ function makeSession(overrides: Partial<Session> & { id: string; title: string }
     tags: [],
     category: "",
     path: "/tmp/session",
+    activeDir: "/tmp/session",
     branch: "",
     program: "claude",
     ...overrides,

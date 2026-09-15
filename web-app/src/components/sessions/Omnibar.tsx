@@ -995,10 +995,11 @@ export function Omnibar({
 
   const handleCloneSession = useCallback(
     (session: Session) => {
-      // Pre-fill the input with the source session's path and switch to creation mode
-      if (session.path) {
-        setInput(session.path);
-        dispatchMode({ kind: "select_repo", path: session.path });
+      // Pre-fill the input with the source session's repo (not its worktree, which
+      // is unique to that session) and switch to creation mode.
+      if (session.repoRoot) {
+        setInput(session.repoRoot);
+        dispatchMode({ kind: "select_repo", path: session.repoRoot });
         setResultHighlightIndex(-1);
         setDropdownDismissed(false);
         inputRef.current?.focus();
