@@ -158,6 +158,12 @@ func (i *Instance) SetTags(tags []string) error {
 // sync fixpoint path (reclassifyTagsLocked, instance_actor_setters.go) — see Story 4.3.2. The
 // poller is an external caller rather than an actor setter, so this takes i.mu itself, the
 // same direct-lock pattern AddTag/RemoveTag/SetTags already use.
+//
+// Also retracts any tag this same ruleID previously applied but that is absent from this
+// round's result — mirroring retractStaleTagsLocked's removal pattern, since that function
+// deliberately skips LLM-sentinel-owned tags (nothing else retracts them). Without this, a
+// session's classification drifting across poll ticks (e.g. Frontend -> Backend) would
+// accumulate tags forever instead of replacing the old one.
 func (i *Instance) ApplyLLMTagResult(tags []string, ruleID string) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -165,12 +171,24 @@ func (i *Instance) ApplyLLMTagResult(tags []string, ruleID string) {
 	if i.RuleTagProvenance == nil {
 		i.RuleTagProvenance = make(map[string]string)
 	}
-	for _, tag := range filterSuppressedTags(tags, i.SuppressedRuleTags) {
+	kept := filterSuppressedTags(tags, i.SuppressedRuleTags)
+	keptSet := make(map[string]bool, len(kept))
+	for _, tag := range kept {
+		keptSet[tag] = true
 		if !slices.Contains(i.Tags, tag) {
 			i.Tags = append(i.Tags, tag)
 		}
 		i.RuleTagProvenance[tag] = ruleID
 	}
+
+	for tag, owner := range i.RuleTagProvenance {
+		if owner != ruleID || keptSet[tag] {
+			continue
+		}
+		i.Tags = removeTagValue(i.Tags, tag)
+		delete(i.RuleTagProvenance, tag)
+	}
+
 	dropUnclassifiedIfOtherTagsPresentLocked(&instanceState{inst: i})
 
 	i.snapshot.Store(buildSnapshot(i))

@@ -409,6 +409,44 @@ func TestApplyLLMTagResult_should_DropUnclassified_When_RealTagAppliedByLaterPol
 	}
 }
 
+func TestApplyLLMTagResult_should_RetractStaleLLMTag_When_ClassificationDriftsAcrossPolls(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "test"}
+
+	inst.ApplyLLMTagResult([]string{"Frontend"}, llmSentinelRuleID)
+	inst.ApplyLLMTagResult([]string{"Backend"}, llmSentinelRuleID)
+
+	tags := inst.GetTags()
+	if len(tags) != 1 || tags[0] != "Backend" {
+		t.Fatalf("expected tags=[Backend] with stale Frontend retracted, got %v", tags)
+	}
+	if _, ok := inst.RuleTagProvenance["Frontend"]; ok {
+		t.Fatal("stale Frontend provenance entry must be removed once a later poll drops it")
+	}
+	if inst.RuleTagProvenance["Backend"] != llmSentinelRuleID {
+		t.Errorf("RuleTagProvenance[Backend] = %q, want %q", inst.RuleTagProvenance["Backend"], llmSentinelRuleID)
+	}
+}
+
+func TestApplyLLMTagResult_should_NotRetractNonLLMOwnedTag_When_LaterPollDropsLLMTag(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:             "test",
+		Tags:              []string{"Manual"},
+		RuleTagProvenance: map[string]string{"Manual": "some-rule-id"},
+	}
+
+	inst.ApplyLLMTagResult([]string{"Frontend"}, llmSentinelRuleID)
+	inst.ApplyLLMTagResult([]string{"Backend"}, llmSentinelRuleID)
+
+	if !inst.HasTag("Manual") {
+		t.Fatal("ApplyLLMTagResult must not retract a tag owned by a non-LLM rule")
+	}
+	if inst.RuleTagProvenance["Manual"] != "some-rule-id" {
+		t.Errorf("RuleTagProvenance[Manual] = %q, want %q", inst.RuleTagProvenance["Manual"], "some-rule-id")
+	}
+}
+
 func TestFilterSuppressedTags_should_DropOnlySuppressedCandidates_When_MixedCandidateListGiven(t *testing.T) {
 	t.Parallel()
 	candidates := []string{"Bugfix", "Feature", "Urgent"}

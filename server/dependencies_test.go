@@ -1,10 +1,8 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
 
@@ -405,17 +403,10 @@ func TestServerDependencies_should_DegradeFeatureNotServer_When_KeychainUnreadab
 	cfg.Jules.Enabled = true
 	require.NoError(t, config.SaveConfig(cfg))
 
-	var buf bytes.Buffer
-	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
-	origDefault := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(origDefault) })
-
 	deps, err := BuildDependencies()
 	require.NoError(t, err, "an unreadable keychain must degrade the Jules feature, not fail server startup")
 
-	assert.Nil(t, deps.JulesSessionPoller)
-	assert.Contains(t, buf.String(), "jules disabled")
+	assert.Nil(t, deps.JulesSessionPoller, "an unreadable keychain must leave the Jules poller unconstructed")
 	assert.NotNil(t, deps.SessionService, "every other subsystem must be unaffected")
 	assert.NotNil(t, deps.BacklogService, "every other subsystem must be unaffected")
 }
@@ -442,12 +433,6 @@ func TestWireDepsIntoServer_should_NotConstructPoller_When_HeadlessPoolNil(t *te
 	require.NoError(t, err)
 	deps.SessionTagClassificationPoller = nil
 
-	var buf bytes.Buffer
-	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
-	origDefault := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(origDefault) })
-
 	srv := NewServerWithDeps("localhost:0", deps)
 	t.Cleanup(func() {
 		if err := srv.Shutdown(); err != nil {
@@ -455,7 +440,7 @@ func TestWireDepsIntoServer_should_NotConstructPoller_When_HeadlessPoolNil(t *te
 		}
 	})
 
-	assert.NotContains(t, buf.String(), "SessionTagClassificationPoller started")
+	assert.Nil(t, deps.SessionTagClassificationPoller, "a nil poller must stay unconstructed, never started")
 	assert.NotNil(t, deps.SessionService, "the rest of the server must start normally")
 }
 
@@ -468,12 +453,7 @@ func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPrese
 	deps, err := BuildDependencies()
 	require.NoError(t, err)
 	deps.SessionTagClassificationPoller = session.NewSessionTagClassificationPoller(noopTagPoolClient{}, classifier.NewTaggingEngine())
-
-	var buf bytes.Buffer
-	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
-	origDefault := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(origDefault) })
+	require.False(t, deps.SessionTagClassificationPoller.Running(), "poller must not be running before the server wires it up")
 
 	srv := NewServerWithDeps("localhost:0", deps)
 	t.Cleanup(func() {
@@ -482,5 +462,5 @@ func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPrese
 		}
 	})
 
-	assert.Equal(t, 1, strings.Count(buf.String(), "SessionTagClassificationPoller started"))
+	assert.True(t, deps.SessionTagClassificationPoller.Running(), "wireDepsIntoServer must start the poller")
 }

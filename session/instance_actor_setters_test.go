@@ -3,8 +3,11 @@ package session
 import (
 	"context"
 	"errors"
-	"os"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,25 +238,71 @@ func TestReclassifyTagsLocked_should_RetractTag_When_OwningRuleDeletedViaCRUD(t 
 // path is covered separately by Story 3.3.2's ReclassifyTagsAfterCreate tests.
 func TestAllTagRelevantSetters_should_CallReclassifyTagsLocked_When_SourceScanned(t *testing.T) {
 	t.Parallel()
-	src, err := os.ReadFile("instance_actor_setters.go")
-	require.NoError(t, err)
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "instance_actor_setters.go", nil, 0)
+	require.NoError(t, err, "expected to parse instance_actor_setters.go")
 
-	funcRe := regexp.MustCompile(`(?ms)^func (\w+Locked)\([^)]*\) [^{]*\{(.*?)\n\}\n`)
-	mutatesFieldRe := regexp.MustCompile(`s\.inst\.(Branch|Path|Program|Title)\s*=`)
-
-	matches := funcRe.FindAllStringSubmatch(string(src), -1)
-	require.NotEmpty(t, matches, "expected to find at least one xxxLocked function in instance_actor_setters.go")
+	tagRelevantFields := map[string]bool{"Branch": true, "Path": true, "Program": true, "Title": true}
 
 	checked := 0
-	for _, m := range matches {
-		name, body := m[1], m[2]
-		if !mutatesFieldRe.MatchString(body) {
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil || !strings.HasSuffix(fn.Name.Name, "Locked") {
+			continue
+		}
+		if !mutatesTagRelevantFieldOnInst(fn.Body, tagRelevantFields) {
 			continue
 		}
 		checked++
-		assert.Contains(t, body, "reclassifyTagsLocked(", "%s mutates Branch/Path/Program/Title but never calls reclassifyTagsLocked", name)
+		assert.True(t, callsReclassifyTagsLocked(fn.Body),
+			"%s mutates a tag-relevant field (Branch/Path/Program/Title) but never calls reclassifyTagsLocked", fn.Name.Name)
 	}
 	assert.GreaterOrEqual(t, checked, 3, "expected at least the 3 setters enumerated by Task 3.3.1d (setProgramLocked, setTitleDirectLocked, setGitHubResolutionLocked)")
+}
+
+// mutatesTagRelevantFieldOnInst reports whether body contains an assignment to
+// s.inst.<Field> for one of fields — an AST-based replacement for the former
+// `s\.inst\.(Branch|Path|Program|Title)\s*=` regex, which broke on reformatting.
+func mutatesTagRelevantFieldOnInst(body ast.Node, fields map[string]bool) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range assign.Lhs {
+			sel, ok := lhs.(*ast.SelectorExpr)
+			if !ok || !fields[sel.Sel.Name] {
+				continue
+			}
+			inst, ok := sel.X.(*ast.SelectorExpr)
+			if !ok || inst.Sel.Name != "inst" {
+				continue
+			}
+			if recv, ok := inst.X.(*ast.Ident); ok && recv.Name == "s" {
+				found = true
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// callsReclassifyTagsLocked reports whether body contains a call to reclassifyTagsLocked
+// anywhere in its statement tree (including inside nested blocks/closures).
+func callsReclassifyTagsLocked(body ast.Node) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "reclassifyTagsLocked" {
+			found = true
+		}
+		return true
+	})
+	return found
 }
 
 // --- Story 3.4.1: Unclassified coexistence rule ---

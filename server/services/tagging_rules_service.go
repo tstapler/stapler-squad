@@ -240,9 +240,10 @@ func (ts *TaggingRulesService) UpsertTaggingRuleRPC(
 	if isCreate {
 		spec.ID = uuid.New().String()
 	}
-	if spec.Source == "" {
-		spec.Source = "user"
-	}
+	// This RPC only ever creates/edits user rules — force Source rather than trusting the
+	// wire value, or a caller could supply Source: "seed" and persist a fake read-only
+	// "Built-in" rule into the mutable user-rule store.
+	spec.Source = "user"
 
 	saved, err := ts.UpsertTaggingRule(ctx, spec)
 	if err != nil {

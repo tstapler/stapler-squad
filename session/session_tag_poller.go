@@ -137,6 +137,15 @@ func (p *SessionTagClassificationPoller) Start(ctx context.Context) {
 	log.Info("session tag classification poller started", "interval", p.config.PollInterval, "concurrency", p.config.ConcurrentCalls)
 }
 
+// Running reports whether the poll loop is currently active — true between a Start() call and
+// the matching Stop(). Exposed so callers (and tests) can assert the poller's actual state
+// rather than scraping log output for a "started" message.
+func (p *SessionTagClassificationPoller) Running() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.ctx != nil
+}
+
 // Stop gracefully shuts down the poller and waits for in-flight calls.
 func (p *SessionTagClassificationPoller) Stop() {
 	p.mu.Lock()

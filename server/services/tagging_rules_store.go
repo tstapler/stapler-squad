@@ -90,6 +90,9 @@ func validateTaggingRuleSpec(spec TaggingRuleSpec) error {
 	if spec.OutputTag == "" {
 		return fmt.Errorf("%w: output tag is required", ErrTaggingRuleValidation)
 	}
+	if isSeedTaggingRuleID(spec.ID) {
+		return fmt.Errorf("%w: rule ID %q collides with a built-in seed rule", ErrTaggingRuleValidation, spec.ID)
+	}
 	for _, pat := range []string{spec.NamePattern, spec.BranchPattern, spec.PathPattern, spec.ProgramPattern} {
 		if pat == "" {
 			continue
@@ -99,6 +102,18 @@ func validateTaggingRuleSpec(spec TaggingRuleSpec) error {
 		}
 	}
 	return nil
+}
+
+// isSeedTaggingRuleID reports whether id belongs to one of the live engine's built-in
+// (classifier.SourceSeed) rules — e.g. a user rule spec supplying "seed-bugfix" as its own ID,
+// which would otherwise silently shadow or collide with the real built-in rule of that ID.
+func isSeedTaggingRuleID(id string) bool {
+	for _, rule := range classifier.SeedTaggingRules() {
+		if rule.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Upsert creates or updates a tagging rule. Validates every pattern compiles before

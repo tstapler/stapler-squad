@@ -1166,6 +1166,24 @@ func (i *Instance) ReclassifyTagsAfterCreate() {
 	i.snapshot.Store(snap)
 }
 
+// finishFirstTimeSetup creates the first-time worktree and reclassifies tags against the
+// now-known Path/Branch, shared by both of Start()'s firstTimeSetup branches (cold-start and
+// hot-restore-into-first-time-setup) so this pairing — and the lock-ordering invariant it
+// depends on — lives in exactly one place.
+//
+// setupFirstTimeWorktree() runs under Instance.startMu, never i.mu (see its own doc comment /
+// git_worktree_manager.go:22-26) — by the time it returns here, startMu is fully released on
+// this call stack, so ReclassifyTagsAfterCreate's own i.mu.Lock() below never nests under
+// startMu. No lock-ordering cycle is possible between the two on this or any other path
+// (pre-mortem.md Failure #5, P3).
+func (i *Instance) finishFirstTimeSetup() error {
+	if err := i.setupFirstTimeWorktree(); err != nil {
+		return err
+	}
+	i.ReclassifyTagsAfterCreate()
+	return nil
+}
+
 // GetSessionGoal returns a thread-safe shallow copy of the current SessionGoalData (nil if not set).
 // A copy is returned so callers cannot mutate the shared struct.
 func (i *Instance) GetSessionGoal() *SessionGoalData {
@@ -1373,15 +1391,9 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
 
 	if firstTimeSetup {
-		if err := i.setupFirstTimeWorktree(); err != nil {
+		if err := i.finishFirstTimeSetup(); err != nil {
 			return err
 		}
-		// setupFirstTimeWorktree() runs under Instance.startMu, never i.mu (see its own doc
-		// comment / git_worktree_manager.go:22-26) — by the time it returns here, startMu is
-		// fully released on this call stack, so ReclassifyTagsAfterCreate's own i.mu.Lock()
-		// below never nests under startMu. No lock-ordering cycle is possible between the
-		// two on this or any other path (pre-mortem.md Failure #5, P3).
-		i.ReclassifyTagsAfterCreate()
 	} else {
 		// No unbounded-duration setup (git worktree creation) happens between here
 		// and pm().Start() below for a restart/resume of an already-existing
@@ -1633,15 +1645,9 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
 
 	if firstTimeSetup {
-		if err := i.setupFirstTimeWorktree(); err != nil {
+		if err := i.finishFirstTimeSetup(); err != nil {
 			return err
 		}
-		// setupFirstTimeWorktree() runs under Instance.startMu, never i.mu (see its own doc
-		// comment / git_worktree_manager.go:22-26) — by the time it returns here, startMu is
-		// fully released on this call stack, so ReclassifyTagsAfterCreate's own i.mu.Lock()
-		// below never nests under startMu. No lock-ordering cycle is possible between the
-		// two on this or any other path (pre-mortem.md Failure #5, P3).
-		i.ReclassifyTagsAfterCreate()
 	} else {
 		// No unbounded-duration setup (git worktree creation) happens between here
 		// and pm().Start() below for a restart/resume of an already-existing
