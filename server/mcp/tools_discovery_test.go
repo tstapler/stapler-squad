@@ -268,7 +268,7 @@ func TestSessionSummaryFields(t *testing.T) {
 		t.Fatal("session entry is not a map")
 	}
 
-	requiredFields := []string{"id", "title", "status", "tags", "branch", "path", "created_at", "last_activity_at"}
+	requiredFields := []string{"id", "title", "status", "tags", "branch", "path", "active_dir", "existing_dir", "created_at", "last_activity_at"}
 	for _, field := range requiredFields {
 		if _, exists := s[field]; !exists {
 			t.Errorf("session summary missing required field: %q", field)
@@ -280,6 +280,16 @@ func TestSessionSummaryFields(t *testing.T) {
 		if _, exists := s[field]; exists {
 			t.Errorf("session summary must not contain field: %q", field)
 		}
+	}
+
+	// A directory-mode session (no worktree) has RepoRoot == ActiveDir ==
+	// ExistingDir, so active_dir/existing_dir should match the legacy path
+	// field for this fixture — the split only matters once a worktree exists.
+	if s["active_dir"] != "/home/user/project" {
+		t.Errorf("active_dir = %v, want /home/user/project", s["active_dir"])
+	}
+	if s["existing_dir"] != s["active_dir"] {
+		t.Errorf("existing_dir = %v, want to match active_dir %v for a non-worktree session", s["existing_dir"], s["active_dir"])
 	}
 }
 

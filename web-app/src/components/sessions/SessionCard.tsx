@@ -1015,18 +1015,18 @@ function SessionCardInner({
               <span className={value}>{session.branch}</span>
             </div>
           )}
-          {session.path && !isPathRedundantWithTitle(session.path, session.title) && (
+          {session.existingDir && !isPathRedundantWithTitle(session.existingDir, session.title) && (
             <div className={infoRow}>
               <span className={label}>Path:</span>
-              <span className={value} title={session.path}>
-                {session.path}
+              <span className={value} title={session.existingDir}>
+                {session.existingDir}
               </span>
             </div>
           )}
-          {session.workingDir && !isPathRedundantWithTitle(session.workingDir, session.title) && (
+          {session.activeDir && !isPathRedundantWithTitle(session.activeDir, session.title) && (
             <div className={infoRow}>
               <span className={label}>Working Dir:</span>
-              <span className={value}>{session.workingDir}</span>
+              <span className={value}>{session.activeDir}</span>
             </div>
           )}
           {session.githubOwner && session.githubRepo && (

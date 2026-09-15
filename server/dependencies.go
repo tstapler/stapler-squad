@@ -287,10 +287,11 @@ func syncOrphanedApprovalsToQueue(
 
 		// Enrich with instance data if available
 		if inst, ok := instMap[approval.SessionID]; ok {
+			snap := inst.Snapshot()
 			item.Program = inst.Program
 			item.Branch = inst.Branch
-			item.Path = inst.Path
-			item.WorkingDir = inst.WorkingDir
+			item.Path = snap.Path
+			item.WorkingDir = snap.WorkingDir
 			item.Status = inst.GetLifecycleStatus().String()
 			item.Tags = inst.Tags
 			item.Category = inst.Category
@@ -1109,10 +1110,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			Context:     context,
 		}
 		if inst != nil {
+			snap := inst.Snapshot()
 			item.Program = inst.Program
 			item.Branch = inst.Branch
-			item.Path = inst.Path
-			item.WorkingDir = inst.WorkingDir
+			item.Path = snap.Path
+			item.WorkingDir = snap.WorkingDir
 			item.Status = inst.GetLifecycleStatus().String()
 			item.Tags = inst.Tags
 			item.Category = inst.Category

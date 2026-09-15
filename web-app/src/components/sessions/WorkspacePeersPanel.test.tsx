@@ -14,7 +14,8 @@ function makeSession(overrides: Partial<Session>): Session {
     id: "id",
     title: "title",
     status: SessionStatus.ACTIVE,
-    path: "/home/user/repo",
+    activeDir: "/home/user/repo",
+    existingDir: "/home/user/repo",
     ...overrides,
   } as unknown as Session;
 }
@@ -58,8 +59,8 @@ describe("WorkspacePeersPanel", () => {
     localStorage.clear();
   });
 
-  it("renders nothing when the session has no path", () => {
-    const self = makeSession({ id: "self", path: "" });
+  it("renders nothing when the session has no active dir", () => {
+    const self = makeSession({ id: "self", activeDir: "" });
     renderWithStore(self, []);
     expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
   });
@@ -70,53 +71,82 @@ describe("WorkspacePeersPanel", () => {
     expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
   });
 
-  it("excludes the caller's own session and sessions with a different path", () => {
+  it("excludes the caller's own session and sessions with a different active dir", () => {
     const self = makeSession({ id: "self" });
     const samePeer = makeSession({ id: "peer-1", title: "peer one" });
-    const otherDirectory = makeSession({ id: "peer-2", path: "/home/user/other-repo" });
+    const otherDirectory = makeSession({ id: "peer-2", activeDir: "/home/user/other-repo" });
     renderWithStore(self, [self, samePeer, otherDirectory]);
     const items = screen.getAllByTestId("workspace-peer-item");
     expect(items).toHaveLength(1);
     expect(screen.getByText("peer one")).toBeInTheDocument();
   });
 
-  // Regression test for the false-positive collision bug: session.path is the
-  // original/logical repo path and is never updated for worktree sessions (see
-  // session/instance_snapshot.go's Path field and Instance.GetEffectiveRootDir()), so two
-  // sessions each in their own isolated worktree of the same repo report identical
-  // session.path despite operating in different directories on disk.
   it("does not flag two sessions in their own separate worktrees of the same repo as peers", () => {
-    const self = makeSession({
-      id: "self",
-      path: "/home/user/repo",
-      gitWorktree: { worktreePath: "/home/user/repo-worktrees/self" } as Session["gitWorktree"],
-    });
+    const self = makeSession({ id: "self", activeDir: "/home/user/repo-worktrees/self" });
     const otherWorktree = makeSession({
       id: "peer-1",
       title: "peer one",
-      path: "/home/user/repo",
-      gitWorktree: { worktreePath: "/home/user/repo-worktrees/peer-1" } as Session["gitWorktree"],
+      activeDir: "/home/user/repo-worktrees/peer-1",
     });
     renderWithStore(self, [self, otherWorktree]);
     expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
   });
 
   it("flags two sessions genuinely sharing one worktree directory as peers", () => {
-    const self = makeSession({
-      id: "self",
-      path: "/home/user/repo",
-      gitWorktree: { worktreePath: "/home/user/repo-worktrees/shared" } as Session["gitWorktree"],
-    });
+    const self = makeSession({ id: "self", activeDir: "/home/user/repo-worktrees/shared" });
     const samePeer = makeSession({
       id: "peer-1",
       title: "peer one",
-      path: "/home/user/repo",
-      gitWorktree: { worktreePath: "/home/user/repo-worktrees/shared" } as Session["gitWorktree"],
+      activeDir: "/home/user/repo-worktrees/shared",
     });
     renderWithStore(self, [self, samePeer]);
     const items = screen.getAllByTestId("workspace-peer-item");
     expect(items).toHaveLength(1);
     expect(screen.getByText("peer one")).toBeInTheDocument();
+  });
+
+  // Regression fixture for the stopped-session gap PR #801's effectiveSessionPath()
+  // fallback did not cover: session.gitWorktree is gated on i.started, so a stopped
+  // session has no gitWorktree submessage. activeDir is populated by the backend
+  // regardless of session state (session/types.go's Workspace()), so comparing on it
+  // directly — with no gitWorktree fallback — catches this case the old helper missed.
+  it("flags a stopped session sharing activeDir with a live session as a peer", () => {
+    const self = makeSession({ id: "self", activeDir: "/home/user/repo-worktrees/shared" });
+    const stoppedPeer = makeSession({
+      id: "peer-1",
+      title: "peer one",
+      status: SessionStatus.STOPPED,
+      activeDir: "/home/user/repo-worktrees/shared",
+    });
+    renderWithStore(self, [self, stoppedPeer]);
+    const items = screen.getAllByTestId("workspace-peer-item");
+    expect(items).toHaveLength(1);
+    expect(screen.getByText("peer one")).toBeInTheDocument();
+  });
+
+  // Regression fixture for the false-positive collision bug this item's own domain
+  // refactor exists to fix: two stopped sessions with independently cleaned-up
+  // worktrees collapse onto the same existingDir (which falls back to the shared repo
+  // root once a worktree directory no longer exists on disk) but keep distinct
+  // activeDir values (no disk-existence fallback) — the pre-fix effectiveSessionPath()
+  // helper compared on the equivalent of existingDir and would have flagged these as
+  // peers; comparing on activeDir must not.
+  it("does not flag two stopped sessions sharing existingDir but not activeDir as peers", () => {
+    const self = makeSession({
+      id: "self",
+      status: SessionStatus.STOPPED,
+      activeDir: "/home/user/repo-worktrees/self",
+      existingDir: "/home/user/repo",
+    });
+    const otherStopped = makeSession({
+      id: "peer-1",
+      title: "peer one",
+      status: SessionStatus.STOPPED,
+      activeDir: "/home/user/repo-worktrees/peer-1",
+      existingDir: "/home/user/repo",
+    });
+    renderWithStore(self, [self, otherStopped]);
+    expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
   });
 
   it("shows the peer's goal text when set", () => {
