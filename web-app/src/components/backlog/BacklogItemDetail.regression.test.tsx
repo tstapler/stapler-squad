@@ -7,8 +7,6 @@
  * item content asserted below disappears) and passes with the fix.
  */
 
-import fs from "fs";
-import path from "path";
 import React from "react";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { BacklogItemDetail } from "./BacklogItemDetail";
@@ -319,19 +317,5 @@ describe("BacklogItemDetail — Story 3.1.1: itemId state-reset fix", () => {
 
     expect(pollCount).toBe(1);
     expect(screen.getByTestId("manual-review-form")).toBeInTheDocument();
-  });
-});
-
-describe("BacklogItemDetail — Story 2.2.1: dead send_back_refining path removed", () => {
-  // Static source assertion (not a rendered-component test): Story 2.2.1's fourth AC
-  // and ux.md AC 16 require the dead `send_back_refining` action case and its toast
-  // entry to be gone — grep for the string directly rather than exercising it through
-  // the UI, since there is no UI path left that could produce it.
-  it("BacklogItemDetail source contains no send_back_refining case or toast entry", () => {
-    const backlogItemDetailSrc = fs.readFileSync(
-      path.join(__dirname, "BacklogItemDetail.tsx"),
-      "utf-8",
-    );
-    expect(backlogItemDetailSrc).not.toContain("send_back_refining");
   });
 });

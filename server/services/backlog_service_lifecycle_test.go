@@ -705,12 +705,12 @@ func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_Transiti
 // plan and later block the next spawn via hasActiveWorkSession.
 
 // TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToReady
-// is table-driven over all three live source statuses, so a regression that
+// is table-driven over all four live source statuses, so a regression that
 // narrows the teardown's `if` condition (e.g. to just review) is caught.
 func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToReady(t *testing.T) {
 	t.Parallel()
 	for _, from := range []session.BacklogStatus{
-		session.BacklogStatusInProgress, session.BacklogStatusReview, session.BacklogStatusPRPending,
+		session.BacklogStatusInProgress, session.BacklogStatusReview, session.BacklogStatusPRPending, session.BacklogStatusDone,
 	} {
 		t.Run(string(from), func(t *testing.T) {
 			t.Parallel()

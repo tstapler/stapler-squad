@@ -16,7 +16,7 @@ the operator's feedback recorded and retriage started, in one submit.
 | Send-back-with-feedback | The combined operator action: type free-text feedback, submit once, item moves to `ready` and a new triage run starts carrying that feedback. | The feature's name throughout code/tests — do not call it "reject and regenerate" (that's the distinct, unchanged ADR-002 flow at `ready`/`pending_review`). |
 | `SendBackFeedbackBox` | New React component (`web-app/src/components/backlog/detail/SendBackFeedbackBox.tsx`) rendering the toggle button + inline form for send-back-with-feedback. | Forked from `PlanVerdictBox.tsx`'s toggle/form pattern (build-vs-buy.md §4). |
 | `handleSendBackWithFeedback` | New `useCallback` in `BacklogItemDetail.tsx` that sequences the three RPC calls behind one submit. | Mirrors `handleRejectPlan`'s try/catch/`actionLoading`/toast shape (`BacklogItemDetail.tsx:990-1007`). |
-| `stopLiveWorkSessions` | New shared Go helper on `*BacklogService` (`server/services/backlog_service_triage.go`) that stops every unended work/review `ItemSession` for an item (tmux teardown + `EndedAt` marked). | Extracted from `forceResetItem`'s existing inline loop (`backlog_service_triage.go:1122-1144`) — not new logic, a refactor to make it callable from a second site. |
+| `stopLiveWorkAndReviewSessions` | New shared Go helper on `*BacklogService` (`server/services/backlog_service_triage.go`) that stops every unended work/review `ItemSession` for an item (tmux teardown + `EndedAt` marked). | Extracted from `forceResetItem`'s existing inline loop (`backlog_service_triage.go:1122-1144`) — not new logic, a refactor to make it callable from a second site. |
 | `PlanRejectionReason` | Existing persisted field (`session.BacklogItemData`) reused, unchanged, to hold the send-back feedback text. | No new DB field — see ADR-001 and architecture.md §2. |
 | `overrideReason` | Existing `TransitionBacklogItemStatusRequest` field. The feedback text is passed as this transition's `overrideReason`, satisfying `ErrVerdictClearRequiredForReady`'s guard when sending back from `review`/`pr_pending` with a recorded PASS verdict, and producing an audit-trail progress note for every send-back. | `session/domain/backlog.go:644-657`; `backlog_service_lifecycle.go:791-800`. |
 | `activeWorkSessionCount` | Existing derived value (`BacklogItemDetail.tsx:249`) counting unended `role: "work"` linked sessions. | Reused as-is to drive the new `InlineNotice`; not recomputed. |
@@ -33,7 +33,7 @@ the operator's feedback recorded and retriage started, in one submit.
 |-----------|---------------|--------|---------------------|--------|
 | Feedback-capture UI | Inline expand-to-form (fork `PlanVerdictBox`'s toggle/form) | Existing in-repo convention (`PlanVerdictBox.tsx`, `TriageReviewPanel.tsx`) | Radix `Dialog` modal (already a dependency) | Every feedback-capture surface in this codebase is an inline toggle, never a modal (ux.md §1); a modal would need its own focus-trap code for no behavioral gain and would miscalibrate weight (implies something more disruptive than it is). |
 | Combined submit sequencing | Transaction Script — one ordered sequence of `await` calls with no branching business logic of its own | PoEAA (Fowler), Transaction Script | New merged backend RPC (e.g. `SendBackWithFeedback`) | ADR-002 already rejected duplicating `TriggerTriage`'s precondition/guard sequence (in-flight map, semaphore, orphan sweep) into a second handler; a merged RPC would either re-duplicate that machinery or just call `TriggerTriage` internally — no functional difference from calling it from the frontend (architecture.md §3). |
-| Live-session teardown reuse | Extract Method — pull `forceResetItem`'s inline loop into `stopLiveWorkSessions` | Refactoring (Fowler), Extract Method | Write a second, separate copy of the loop inside `TransitionBacklogItemStatus` | Two independently-maintained copies of "stop live work/review sessions" is exactly the drift risk ADR-002 flagged for guard duplication — one small extraction avoids it for a 13-line loop. |
+| Live-session teardown reuse | Extract Method — pull `forceResetItem`'s inline loop into `stopLiveWorkAndReviewSessions` | Refactoring (Fowler), Extract Method | Write a second, separate copy of the loop inside `TransitionBacklogItemStatus` | Two independently-maintained copies of "stop live work/review sessions" is exactly the drift risk ADR-002 flagged for guard duplication — one small extraction avoids it for a 13-line loop. |
 | Send-back target status | Reuse `ready` as the landing state — no new intermediate status | Type-driven design (valid-states-only) | Target `refining` (matches the dead code's literal name) | `refining` is rejected by `TriggerTriage`'s status guard outright and requires a new guard change (requirements.md's Feasibility Risk); `ready` needs zero guard changes and is already `RejectPlan`'s exact post-condition (architecture.md §1). See ADR-001. |
 | Feedback persistence | Reuse existing `PlanRejectionReason` value, no new field | Type-driven design (avoid redundant state) | New `SendBackFeedback` column/proto field | Once target status is fixed at `ready`, `PlanRejectionReason`'s actual contract ("outstanding feedback on the plan currently at ready") already matches this feature exactly — adding a parallel field would model the same concept twice (architecture.md §2). |
 | Session-teardown scope (GoF) | No new creational/structural/behavioral pattern — a bounded, non-recurring loop doesn't warrant Strategy/Observer/Factory | GoF (applicability check) | — | The problem (stop N live sessions) occurs at exactly two call sites after this plan (`forceResetItem`, the new `TransitionBacklogItemStatus` block); Extract Method is sufficient. Revisit only if a third distinct caller with different stop semantics appears. |
@@ -45,8 +45,8 @@ the operator's feedback recorded and retriage started, in one submit.
 | Area | Existing Issue | Disposition | Justification |
 |------|----------------|--------------|----------------|
 | `server/services/backlog_service_trigger_triage.go` (`TriggerTriage`) | Partially remediated hotspot (`docs/reference/hotspot-ranking.md` row 4) | **Extend as-is** | This feature adds zero lines to this file — its status guard already accepts `ready`, its `feedback` param already flows into the prompt builders unchanged (architecture.md §6). |
-| `server/services/backlog_service_lifecycle.go` (`TransitionBacklogItemStatus`, `RejectPlan`) | Not flagged by `docs/reference/hotspot-ranking.md`'s churn×complexity ranking — but a separate, independent check disagrees: `kibitzer run server/services --trigger batch` flags `TransitionBacklogItemStatus` (`backlog_service_lifecycle.go:689`) as `[long-function] body spans 141 lines (over 40)`. Both are accurate on their own terms; this row previously asserted "not a flagged hotspot" unqualified, which only held for the churn-based ranking. | **Extend as-is** | The file already has several status-conditional blocks (`hasUnshippedCode`, `hasUnresolvedBlockers`, the idea/refining reset); one more conditional block for backward-to-`ready` teardown (Task 1.2.1a: a ~7-line `if` calling the already-extracted `stopLiveWorkSessions`, not an inlined loop) follows the file's existing shape and doesn't meaningfully worsen the kibitzer long-function flag — a single-call addition through a helper that already lives elsewhere doesn't compound the violation the way inlining a new loop would. Splitting `TransitionBacklogItemStatus` itself is out of scope for this feature; it's a pre-existing condition this plan doesn't make meaningfully worse. |
-| `server/services/backlog_service_triage.go`'s `forceResetItem` inline teardown loop | Not a hotspot, but about to gain a second call site | **Isolate via seam** (Extract Method into `stopLiveWorkSessions`) | A second, independently-typed copy of "stop live work/review sessions for an item" is the same duplication-drift risk ADR-002 already reasoned about for `TriggerTriage`'s guard sequence — a one-time, low-cost extraction avoids it. |
+| `server/services/backlog_service_lifecycle.go` (`TransitionBacklogItemStatus`, `RejectPlan`) | Not flagged by `docs/reference/hotspot-ranking.md`'s churn×complexity ranking — but a separate, independent check disagrees: `kibitzer run server/services --trigger batch` flags `TransitionBacklogItemStatus` (`backlog_service_lifecycle.go:689`) as `[long-function] body spans 141 lines (over 40)`. Both are accurate on their own terms; this row previously asserted "not a flagged hotspot" unqualified, which only held for the churn-based ranking. | **Extend as-is** | The file already has several status-conditional blocks (`hasUnshippedCode`, `hasUnresolvedBlockers`, the idea/refining reset); one more conditional block for backward-to-`ready` teardown (Task 1.2.1a: a ~7-line `if` calling the already-extracted `stopLiveWorkAndReviewSessions`, not an inlined loop) follows the file's existing shape and doesn't meaningfully worsen the kibitzer long-function flag — a single-call addition through a helper that already lives elsewhere doesn't compound the violation the way inlining a new loop would. Splitting `TransitionBacklogItemStatus` itself is out of scope for this feature; it's a pre-existing condition this plan doesn't make meaningfully worse. |
+| `server/services/backlog_service_triage.go`'s `forceResetItem` inline teardown loop | Not a hotspot, but about to gain a second call site | **Isolate via seam** (Extract Method into `stopLiveWorkAndReviewSessions`) | A second, independently-typed copy of "stop live work/review sessions for an item" is the same duplication-drift risk ADR-002 already reasoned about for `TriggerTriage`'s guard sequence — a one-time, low-cost extraction avoids it. |
 | `web-app/src/components/backlog/BacklogItemDetail.tsx` (growing per-feature `useState`/handler pile) | Not flagged as a hotspot, but visibly accumulating (architecture.md §6) | **Extend as-is** (seam candidate for later) | One more handler (`handleSendBackWithFeedback`) plus two prop pass-throughs to `ActionsSection` follows the file's existing convention (mirrors `handleRejectPlan`). If a 4th/5th similar feedback-box variant appears later, extracting a shared `useFeedbackSubmit`-style hook is the seam — not warranted by this one addition. |
 
 None of the areas this feature touches are flagged hotspots (churn×complexity) requiring a refactor-first pass. `TransitionBacklogItemStatus` is separately flagged by kibitzer's per-function long-function check (see row above) — that's a pre-existing condition this feature's small addition doesn't meaningfully worsen, not a reason to block or refactor-first here.
@@ -59,10 +59,10 @@ None. No schema, proto, or data changes — every RPC and persisted field this f
 
 ## Observability Plan
 
-- **Logs**: `stopLiveWorkSessions`' best-effort failures (if `sessionStopper.StopSessionByUUID`/`storage.UpdateItemSessionEnded` error) are non-fatal and logged via `log.WarningLog()`, matching the existing idea/refining reset block's error-handling convention (`backlog_service_lifecycle.go:823`) — the transition itself is not rolled back on a teardown failure, since a leftover pane is a known, already-recoverable condition (`hasActiveWorkSession` blocks the next spawn until it's cleared, per pitfalls.md §1).
+- **Logs**: `stopLiveWorkAndReviewSessions`' best-effort failures (if `sessionStopper.StopSessionByUUID`/`storage.UpdateItemSessionEnded` error) are non-fatal and logged via `log.WarningLog()`, matching the existing idea/refining reset block's error-handling convention (`backlog_service_lifecycle.go:823`) — the transition itself is not rolled back on a teardown failure, since a leftover pane is a known, already-recoverable condition (`hasActiveWorkSession` blocks the next spawn until it's cleared, per pitfalls.md §1).
 - **Teardown-failure UX (pre-mortem P1 #2 — explicit, justified choice, not an
   oversight):** the operator still sees the unqualified `"Feedback sent —
-  retriage started."` success toast even when `stopLiveWorkSessions`'s teardown
+  retriage started."` success toast even when `stopLiveWorkAndReviewSessions`'s teardown
   fails; the failure is logged server-side only (`log.WarningLog()`), never
   surfaced in the toast or the RPC response. This is a deliberate best-effort
   silent-continue, for three reasons: (1) blocking or degrading the *send-back
@@ -100,7 +100,7 @@ None. No schema, proto, or data changes — every RPC and persisted field this f
   design (requirements.md) and narrowing it is a product decision this plan
   doesn't have standing to make unilaterally. **#4** (`activeWorkSessionCount`
   being a load-time snapshot, not re-derived at submit time, so it can drift
-  stale in either direction) is left as-is because `stopLiveWorkSessions`
+  stale in either direction) is left as-is because `stopLiveWorkAndReviewSessions`
   itself always re-queries live DB state at submit time regardless of what the
   notice displayed — the drift only affects the *notice's* accuracy, not
   correctness of the teardown. **#5** (retrying after a partial failure can
@@ -139,7 +139,7 @@ timing rather than pre-set static state).
 Phase 1 (backend, independent of Phase 2)      Phase 2 (frontend, independent of Phase 1)
 ┌─────────────────────────────────┐            ┌──────────────────────────────────┐
 │ Epic 1.1                         │            │ Epic 2.1                          │
-│ Extract stopLiveWorkSessions     │            │ New SendBackFeedbackBox component │
+│ Extract stopLiveWorkAndReviewSessions     │            │ New SendBackFeedbackBox component │
 │ (Task 1.1.1a)                    │            │ (Tasks 2.1.1a → 2.1.1b → 2.1.1c)  │
 └────────────────┬──────────────────┘            └─────────────────┬──────────────────┘
                  │                                                 │
@@ -175,7 +175,7 @@ Phase 3 depends on both being complete (the e2e spec exercises the full stack).
 **Goal**: Make `forceResetItem`'s "stop every live work/review session" logic callable
 from a second site without duplicating it.
 
-#### Story 1.1.1: Extract `stopLiveWorkSessions`
+#### Story 1.1.1: Extract `stopLiveWorkAndReviewSessions`
 **As a** backend maintainer, **I want** `forceResetItem`'s live-session teardown loop
 extracted into a standalone method, **so that** `TransitionBacklogItemStatus` (Epic
 1.2) can reuse it instead of duplicating the loop.
@@ -190,7 +190,7 @@ extracted into a standalone method, **so that** `TransitionBacklogItemStatus` (E
 - The new helper is independently callable with just an item ID.
   - *Given* an item ID `"item-42"` with two unended sessions (`"work-1"` role
     `work`, `"review-1"` role `review`) and one already-ended session
-    (`"work-0"`), *When* `stopLiveWorkSessions(ctx, "item-42")` is called directly,
+    (`"work-0"`), *When* `stopLiveWorkAndReviewSessions(ctx, "item-42")` is called directly,
     *Then* `StopSessionByUUID` is called for `"work-1"` and `"review-1"` only (not
     `"work-0"`), and both their `ItemSession.EndedAt` fields become non-nil.
 
@@ -200,7 +200,7 @@ extracted into a standalone method, **so that** `TransitionBacklogItemStatus` (E
 - In `server/services/backlog_service_triage.go`, add a new method directly above
   `forceResetItem` (currently at line 1122):
   ```go
-  // stopLiveWorkSessions stops every unended work- or review-role ItemSession for
+  // stopLiveWorkAndReviewSessions stops every unended work- or review-role ItemSession for
   // itemID (tmux teardown via sessionStopper, then marks the row ended) without
   // touching the item's own status. Extracted from forceResetItem so
   // TransitionBacklogItemStatus's backward-to-ready path (Epic 1.2) can reuse the
@@ -208,10 +208,10 @@ extracted into a standalone method, **so that** `TransitionBacklogItemStatus` (E
   // Best-effort: failures are logged, not returned — a leftover live session is a
   // known, already-recoverable condition (hasActiveWorkSession blocks the next
   // spawn until it's cleared), not a reason to fail the caller's transition.
-  func (s *BacklogService) stopLiveWorkSessions(ctx context.Context, itemID string) {
+  func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, itemID string) {
       sessions, err := s.storage.ListItemSessions(ctx, itemID)
       if err != nil {
-          log.WarningLog().Printf("[stopLiveWorkSessions] failed to list sessions for item %s: %v", itemID, err)
+          log.WarningLog().Printf("[stopLiveWorkAndReviewSessions] failed to list sessions for item %s: %v", itemID, err)
           return
       }
       for _, ps := range sessions {
@@ -223,18 +223,18 @@ extracted into a standalone method, **so that** `TransitionBacklogItemStatus` (E
           }
           if s.sessionStopper != nil {
               if stopErr := s.sessionStopper.StopSessionByUUID(ctx, ps.SessionUUID); stopErr != nil {
-                  log.WarningLog().Printf("[stopLiveWorkSessions] failed to stop session %s for item %s: %v", ps.SessionUUID, itemID, stopErr)
+                  log.WarningLog().Printf("[stopLiveWorkAndReviewSessions] failed to stop session %s for item %s: %v", ps.SessionUUID, itemID, stopErr)
               }
           }
           if endErr := s.storage.UpdateItemSessionEnded(ctx, ps.ID, time.Now()); endErr != nil {
-              log.WarningLog().Printf("[stopLiveWorkSessions] failed to mark session %s ended for item %s: %v", ps.SessionUUID, itemID, endErr)
+              log.WarningLog().Printf("[stopLiveWorkAndReviewSessions] failed to mark session %s ended for item %s: %v", ps.SessionUUID, itemID, endErr)
           }
       }
   }
   ```
   (`log` is already imported in this file — `"github.com/tstapler/stapler-squad/log"`.)
 - Replace `forceResetItem`'s existing inline loop (lines 1123-1135) with a single
-  call: `s.stopLiveWorkSessions(ctx, item.ID)`.
+  call: `s.stopLiveWorkAndReviewSessions(ctx, item.ID)`.
 - Run `go build ./...` to confirm it compiles, then `go test ./server/services/... -run TestSpawnSessionFromItem -timeout=5m` to confirm `forceResetItem`'s existing tests still pass.
 - Files: `server/services/backlog_service_triage.go`
 
@@ -317,7 +317,7 @@ silently block my next session spawn (`hasActiveWorkSession`, pitfalls.md §1).
   // spawn-block this prevents).
   if to == session.BacklogStatusReady &&
       (from == session.BacklogStatusInProgress || from == session.BacklogStatusReview || from == session.BacklogStatusPRPending) {
-      s.stopLiveWorkSessions(ctx, req.Msg.ItemId)
+      s.stopLiveWorkAndReviewSessions(ctx, req.Msg.ItemId)
   }
   ```
 - Files: `server/services/backlog_service_lifecycle.go`
@@ -394,7 +394,7 @@ silently block my next session spawn (`hasActiveWorkSession`, pitfalls.md §1).
     would be strictly worse for the operator than a best-effort continue); (2) the
     item's status is `ready`; (3) `stopper.stoppedUUIDs` still contains
     `"work-live-1"` (the stop was attempted); (4) the `ItemSession`'s `EndedAt` is
-    still non-nil (`stopLiveWorkSessions`, Task 1.1.1a, marks the row ended
+    still non-nil (`stopLiveWorkAndReviewSessions`, Task 1.1.1a, marks the row ended
     unconditionally after attempting the stop, regardless of whether the stop
     itself errored — so the row doesn't stay stuck "live" in the DB even though the
     tmux pane may not have actually been killed).
@@ -435,7 +435,7 @@ feedback textarea, **so that** I can describe what should change before submitti
     textarea's value resets to empty, and focus moves to the toggle button.
 - An active session gets a non-blocking notice, not a blocking confirmation —
   and its copy accurately reflects that submitting stops the session (Epic 1.2's
-  `stopLiveWorkSessions` runs synchronously inside the same `transitionStatus`
+  `stopLiveWorkAndReviewSessions` runs synchronously inside the same `transitionStatus`
   call this submit makes; the notice must not claim otherwise).
   - *Given* `activeWorkSessionCount={1}`, *When* the form is open, *Then* an
     `InlineNotice` reading `"This item has an active session — submitting this

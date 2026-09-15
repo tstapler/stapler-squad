@@ -90,7 +90,6 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   unarchive: "Unarchived — back in the idea column. Needs a fresh session.",
   reopen: "Reopened for review.",
   send_back_idea: "Sent back to triage.",
-  send_back_ready: "Sent back to ready.",
 };
 
 export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
@@ -1041,24 +1040,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         showActionToast("Feedback sent — retriage started.", "success", toastKey);
         await load();
       } catch (e) {
-        // Always re-fetch the displayed item here, regardless of which of the
-        // three calls above failed. Once transitionStatus (call 1) succeeds,
-        // the server has already committed a status change — and Epic 1.2's
-        // teardown has already stopped any live session — even if rejectPlan
-        // (call 2) or triggerTriage (call 3) is what actually failed. Without
-        // this, the local `item` stays stale and a retry would replay
-        // transitionStatus with the now-stale expectedStatus/expectedUpdatedAt
-        // CAS precondition against the item's real, already-advanced state,
-        // failing a second time with a confusing, unrelated
-        // ErrPreconditionFailed. Re-fetching unconditionally is a cheap no-op
-        // on the rarer branch where transitionStatus itself is what failed.
+        // Re-fetch unconditionally: once transitionStatus (call 1) commits, a
+        // stale local `item` would replay it with an outdated CAS precondition
+        // on retry, failing again with a confusing ErrPreconditionFailed.
         await load();
-        // Iteration 2 repair pass CONCERN fix: a partial failure (call
-        // 2/3 failed after call 1 already committed the status change)
-        // gets a neutral toast that doesn't contradict the more accurate
-        // in-form message SendBackFeedbackBox now shows for that same
-        // case (ux.md Surface 7) — only a true call-1 failure (nothing
-        // changed server-side) keeps the "Failed to send back." framing.
+        // Partial failure (call 1 committed, call 2/3 failed) gets a neutral
+        // toast so it doesn't contradict SendBackFeedbackBox's more specific
+        // in-form message (ux.md Surface 7); only a true call-1 failure keeps
+        // the "Failed to send back." framing.
         const toastMessage =
           e instanceof SendBackError && e.failedAt !== "transition"
             ? "Send-back needs attention — see details below."

@@ -686,9 +686,12 @@ func (s *BacklogService) isCodeShippedToMain(ctx context.Context, itemID, repoPa
 
 // isLiveBacklogStatusForSendBack is deliberately a superset of
 // superseded_session_sweeper.go's InProgress||Review sweep scope: a PRPending
-// item can still have a live session that this send-back path must stop too.
+// or Done item can still carry a stale, never-torn-down session row (the
+// terminal-transition archive sweep kills the tmux pane but never calls
+// UpdateItemSessionEnded) that this send-back path must stop too.
 func isLiveBacklogStatusForSendBack(from session.BacklogStatus) bool {
-	return from == session.BacklogStatusInProgress || from == session.BacklogStatusReview || from == session.BacklogStatusPRPending
+	return from == session.BacklogStatusInProgress || from == session.BacklogStatusReview ||
+		from == session.BacklogStatusPRPending || from == session.BacklogStatusDone
 }
 
 // TransitionBacklogItemStatus moves an item through the status state machine.
