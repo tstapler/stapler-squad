@@ -15,12 +15,48 @@ export class BacklogItemDetailPage {
   readonly pane: Locator;
   readonly lifecycleSummary: Locator;
   readonly pipelineBadge: Locator;
+  readonly sendBackToggle: Locator;
+  readonly sendBackTextarea: Locator;
+  readonly sendBackSubmit: Locator;
+  /** The `role="form" aria-label="Send back for re-planning"` wrapper — scopes Cancel/error locators below so they never collide with PlanVerdictBox's own similarly-shaped form/Cancel/InlineError. */
+  readonly sendBackForm: Locator;
+  readonly sendBackCancel: Locator;
+  /** `InlineNotice` shown inside the form whenever `activeWorkSessionCount > 0` (SendBackFeedbackBox.tsx) — rendered WITHOUT an `onDismiss` prop, so unlike other InlineNotice usages in this app it has no dismiss button. */
+  readonly sendBackActiveSessionNotice: Locator;
+  /** The `InlineError` (`role="alert" aria-live="assertive"`) SendBackFeedbackBox renders on a failed submit. */
+  readonly sendBackError: Locator;
+  readonly sendBackErrorDismiss: Locator;
+  /** Only rendered for the one retryable failure case (triggerTriage's internal ready->idea CAS already committed) — see SendBackFeedbackBox.tsx's `retryable` branch. */
+  readonly sendBackErrorRetry: Locator;
+  /** PlanVerdictBox's "Regenerate Plan with This Feedback" button (existing ADR-002 flow) — the recovery affordance ux.md Surface 7 points at for the reject/triggerTriage-after-transition-succeeded failure case. */
+  readonly regeneratePlanButton: Locator;
+  /** The unrelated, unchanged "↩ Return to Triage" button (`send_back_idea`). */
+  readonly sendBackIdeaButton: Locator;
+  readonly toast: Locator;
 
   constructor(page: Page) {
     this.page = page;
     this.pane = page.getByTestId("backlog-item-detail");
     this.lifecycleSummary = page.getByTestId("lifecycle-summary");
     this.pipelineBadge = page.getByTestId("lifecycle-pipeline-badge");
+    this.sendBackToggle = page.getByTestId("backlog-action-send-back-feedback");
+    this.sendBackTextarea = page.getByTestId("send-back-feedback-textarea");
+    this.sendBackSubmit = page.getByTestId("backlog-action-send-back-feedback-submit");
+    this.sendBackForm = page.getByRole("form", { name: "Send back for re-planning" });
+    this.sendBackCancel = this.sendBackForm.getByRole("button", { name: "Cancel" });
+    this.sendBackActiveSessionNotice = page.getByTestId("send-back-active-session-notice");
+    this.sendBackError = this.sendBackForm.getByRole("alert");
+    this.sendBackErrorDismiss = this.sendBackError.getByRole("button", { name: "Dismiss error" });
+    this.sendBackErrorRetry = this.sendBackError.getByRole("button", { name: "Retry send-back with this feedback" });
+    this.regeneratePlanButton = page.getByTestId("backlog-action-regenerate-plan");
+    this.sendBackIdeaButton = page.getByTestId("backlog-action-send-back-idea");
+    this.toast = page.getByTestId("toast");
+  }
+
+  async submitSendBackFeedback(feedback: string) {
+    await this.sendBackToggle.click();
+    await this.sendBackTextarea.fill(feedback);
+    await this.sendBackSubmit.click();
   }
 
   /**
