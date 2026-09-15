@@ -1116,12 +1116,21 @@ func (s *BacklogService) spawnSessionAfterGates(
 	}), nil
 }
 
-// forceResetItem stops any in-flight work or review sessions for the item, and — if
-// the item is currently in review — transitions it back to in_progress. Used when
-// SpawnSessionFromItem is called with Force=true so the caller can re-spawn cleanly.
-func (s *BacklogService) forceResetItem(ctx context.Context, item *session.BacklogItemData, triggeredBy string) (*session.BacklogItemData, error) {
-	earlyPrior, _ := s.storage.ListItemSessions(ctx, item.ID)
-	for _, ps := range earlyPrior {
+// stopLiveWorkSessions stops every unended work- or review-role ItemSession for
+// itemID (tmux teardown via sessionStopper, then marks the row ended) without
+// touching the item's own status. Extracted from forceResetItem so
+// TransitionBacklogItemStatus's backward-to-ready path (Epic 1.2) can reuse the
+// same teardown instead of a second, independently-maintained copy of this loop.
+// Best-effort: failures are logged, not returned — a leftover live session is a
+// known, already-recoverable condition (hasActiveWorkSession blocks the next
+// spawn until it's cleared), not a reason to fail the caller's transition.
+func (s *BacklogService) stopLiveWorkSessions(ctx context.Context, itemID string) {
+	sessions, err := s.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		log.WarningLog().Printf("[stopLiveWorkSessions] failed to list sessions for item %s: %v", itemID, err)
+		return
+	}
+	for _, ps := range sessions {
 		if ps.EndedAt != nil {
 			continue
 		}
@@ -1129,10 +1138,21 @@ func (s *BacklogService) forceResetItem(ctx context.Context, item *session.Backl
 			continue
 		}
 		if s.sessionStopper != nil {
-			_ = s.sessionStopper.StopSessionByUUID(ctx, ps.SessionUUID)
+			if stopErr := s.sessionStopper.StopSessionByUUID(ctx, ps.SessionUUID); stopErr != nil {
+				log.WarningLog().Printf("[stopLiveWorkSessions] failed to stop session %s for item %s: %v", ps.SessionUUID, itemID, stopErr)
+			}
 		}
-		_ = s.storage.UpdateItemSessionEnded(ctx, ps.ID, time.Now())
+		if endErr := s.storage.UpdateItemSessionEnded(ctx, ps.ID, time.Now()); endErr != nil {
+			log.WarningLog().Printf("[stopLiveWorkSessions] failed to mark session %s ended for item %s: %v", ps.SessionUUID, itemID, endErr)
+		}
 	}
+}
+
+// forceResetItem stops any in-flight work or review sessions for the item, and — if
+// the item is currently in review — transitions it back to in_progress. Used when
+// SpawnSessionFromItem is called with Force=true so the caller can re-spawn cleanly.
+func (s *BacklogService) forceResetItem(ctx context.Context, item *session.BacklogItemData, triggeredBy string) (*session.BacklogItemData, error) {
+	s.stopLiveWorkSessions(ctx, item.ID)
 	if item.Status == string(session.BacklogStatusReview) {
 		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, triggeredBy)
 		if transErr != nil {

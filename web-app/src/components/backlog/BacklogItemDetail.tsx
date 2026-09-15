@@ -31,6 +31,7 @@ import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
 import { getErrorMessage } from "@/lib/utils/connectError";
+import { SendBackError } from "./detail/SendBackError";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
@@ -89,7 +90,6 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   unarchive: "Unarchived — back in the idea column. Needs a fresh session.",
   reopen: "Reopened for review.",
   send_back_idea: "Sent back to triage.",
-  send_back_refining: "Sent back to refining.",
   send_back_ready: "Sent back to ready.",
 };
 
@@ -790,12 +790,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           case "send_back_idea":
             await transitionStatus(item.id, "idea");
             break;
-          case "send_back_refining":
-            await transitionStatus(item.id, "refining");
-            break;
-          case "send_back_ready":
-            await transitionStatus(item.id, "ready");
-            break;
           default:
             return;
         }
@@ -1004,6 +998,78 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       }
     },
     [item, rejectPlan, load, showActionToast]
+  );
+
+  // Story 2.2.1: chains transitionStatus -> rejectPlan -> triggerTriage as
+  // one operator action. Each call is wrapped in its own try/catch (not one
+  // shared try) so the outer catch knows exactly which of the three failed
+  // (resolves BLOCKER 5.2) — SendBackFeedbackBox renders distinct recovery
+  // copy per failedAt. See ux.md Surface 7 and pre-mortem P1 #1.
+  const handleSendBackWithFeedback = useCallback(
+    async (feedback: string) => {
+      if (!item) return;
+      const toastKey = `${item.id}:send_back_ready`;
+      setActionLoading("send_back_ready");
+      try {
+        try {
+          await transitionStatus(item.id, "ready", {
+            expectedStatus: item.status,
+            expectedUpdatedAt: item.updatedAtRaw,
+            overrideReason: feedback,
+          });
+        } catch (e) {
+          // Nothing has changed server-side — item.status is still accurate.
+          throw new SendBackError("transition", item.status, e);
+        }
+        try {
+          await rejectPlan(item.id, feedback);
+        } catch (e) {
+          // transitionStatus committed; the item is "ready" even though this
+          // call failed (rejectPlan doesn't change status).
+          throw new SendBackError("reject", "ready", e);
+        }
+        try {
+          await triggerTriage(item.id, feedback);
+        } catch (e) {
+          // Can't assume "ready" here (pre-mortem P1 #1): triggerTriage's own
+          // internal CAS may have already moved the item to "idea" before
+          // this failure. Re-fetch directly (not via load(), whose result
+          // isn't returned to this scope) to learn the real status.
+          const fresh = await getBacklogItem(item.id);
+          throw new SendBackError("triage", fresh?.status ?? "ready", e);
+        }
+        showActionToast("Feedback sent — retriage started.", "success", toastKey);
+        await load();
+      } catch (e) {
+        // Always re-fetch the displayed item here, regardless of which of the
+        // three calls above failed. Once transitionStatus (call 1) succeeds,
+        // the server has already committed a status change — and Epic 1.2's
+        // teardown has already stopped any live session — even if rejectPlan
+        // (call 2) or triggerTriage (call 3) is what actually failed. Without
+        // this, the local `item` stays stale and a retry would replay
+        // transitionStatus with the now-stale expectedStatus/expectedUpdatedAt
+        // CAS precondition against the item's real, already-advanced state,
+        // failing a second time with a confusing, unrelated
+        // ErrPreconditionFailed. Re-fetching unconditionally is a cheap no-op
+        // on the rarer branch where transitionStatus itself is what failed.
+        await load();
+        // Iteration 2 repair pass CONCERN fix: a partial failure (call
+        // 2/3 failed after call 1 already committed the status change)
+        // gets a neutral toast that doesn't contradict the more accurate
+        // in-form message SendBackFeedbackBox now shows for that same
+        // case (ux.md Surface 7) — only a true call-1 failure (nothing
+        // changed server-side) keeps the "Failed to send back." framing.
+        const toastMessage =
+          e instanceof SendBackError && e.failedAt !== "transition"
+            ? "Send-back needs attention — see details below."
+            : getErrorMessage(e, "Failed to send back.");
+        showActionToast(toastMessage, "error", toastKey);
+        throw e; // still a SendBackError (or the original error) — SendBackFeedbackBox's catch reads it
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, transitionStatus, rejectPlan, triggerTriage, getBacklogItem, load, showActionToast]
   );
 
   const handleRegeneratePlanWithFeedback = useCallback(async () => {
@@ -1658,6 +1724,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             julesDispatchTriggerRef.current = event.currentTarget;
             setShowJulesDispatch(true);
           }}
+          activeWorkSessionCount={activeWorkSessionCount}
+          onSendBackWithFeedback={handleSendBackWithFeedback}
         />
 
         {/* Secondary sections — sibling CollapsibleSections sharing one

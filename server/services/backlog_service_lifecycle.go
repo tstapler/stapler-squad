@@ -826,6 +826,16 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		}
 	}
 
+	// Backward from a live status to ready: stop any live work/review session so
+	// it doesn't keep running against a now-superseded plan (mirrors
+	// forceResetItem's teardown for "Restart Session" — see pitfalls.md §1: the
+	// 2026-07-29 OOM leak shape this closes, and hasActiveWorkSession's later
+	// spawn-block this prevents).
+	if to == session.BacklogStatusReady &&
+		(from == session.BacklogStatusInProgress || from == session.BacklogStatusReview || from == session.BacklogStatusPRPending) {
+		s.stopLiveWorkSessions(ctx, req.Msg.ItemId)
+	}
+
 	return connect.NewResponse(&sessionv1.TransitionBacklogItemStatusResponse{
 		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil

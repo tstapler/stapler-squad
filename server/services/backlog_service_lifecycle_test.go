@@ -698,6 +698,191 @@ func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_Transiti
 	assert.Empty(t, stopper.archivedUUIDs, "a non-terminal transition must not archive any work session")
 }
 
+// ─── live-session teardown on backward-to-ready transition (Epic 1.2) ─────────
+//
+// pitfalls.md §1: nothing stopped a live work/review session when an item was
+// sent backward to ready, letting it keep running against a now-superseded
+// plan and later block the next spawn via hasActiveWorkSession.
+
+// TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToReady
+// is table-driven over all three live source statuses, so a regression that
+// narrows the teardown's `if` condition (e.g. to just review) is caught.
+func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToReady(t *testing.T) {
+	t.Parallel()
+	for _, from := range []session.BacklogStatus{
+		session.BacklogStatusInProgress, session.BacklogStatusReview, session.BacklogStatusPRPending,
+	} {
+		t.Run(string(from), func(t *testing.T) {
+			t.Parallel()
+			storage := createTestStorage(t)
+			svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+			stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+			svc.SetSessionStopper(stopper)
+
+			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+				Title:  "item sent back to ready",
+				Status: string(from),
+			})
+			require.NoError(t, err)
+
+			_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+				ItemID:      item.ID,
+				SessionUUID: "work-live-1",
+				SessionRole: session.SessionRoleWork,
+			})
+			require.NoError(t, err)
+
+			_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+				ItemId:         item.ID,
+				TargetStatus:   string(session.BacklogStatusReady),
+				OverrideReason: "missed the mobile layout, redo with touch targets",
+			}))
+			require.NoError(t, err)
+
+			assert.Contains(t, stopper.stoppedUUIDs, "work-live-1",
+				"a backward transition to ready must stop the item's live work session")
+
+			fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
+			require.NoError(t, err)
+			assert.Equal(t, string(session.BacklogStatusReady), fetched.Status)
+		})
+	}
+}
+
+// TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdictPresentAndOverrideReasonSet
+// proves the teardown fires correctly even when the real ErrVerdictClearRequiredForReady
+// guard is in play, not just in a case engineered to avoid it — the exact shape
+// handleSendBackWithFeedback produces in production (feedback text doubles as
+// override_reason). The complementary "fails without an override reason" half of
+// this guard is already covered by
+// TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_ReviewToReadyBlockedByPassVerdict.
+func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdictPresentAndOverrideReasonSet(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item with a passing review verdict and a live work session",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session-pass-verdict",
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewVerdictPass,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "work-live-1",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:         item.ID,
+		TargetStatus:   string(session.BacklogStatusReady),
+		OverrideReason: "missed the mobile layout, redo with touch targets",
+	}))
+	require.NoError(t, err, "override_reason must let a PASS-verdict item proceed to ready")
+
+	assert.Contains(t, stopper.stoppedUUIDs, "work-live-1",
+		"the guard-bypass path and the teardown path must compose correctly")
+}
+
+// TestTransitionBacklogItemStatus_should_NotStopLiveWorkSession_When_TransitionIsNotBackwardToReady
+// guards against over-eager teardown: a forward or unrelated transition must not
+// touch any live work session (mirrors
+// TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_TransitionIsNotTerminal
+// for the new teardown block).
+func TestTransitionBacklogItemStatus_should_NotStopLiveWorkSession_When_TransitionIsNotBackwardToReady(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "item moving forward from ready",
+		Status:       string(session.BacklogStatusReady),
+		SkipPlanning: true,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "work-forward-1",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       item.ID,
+		TargetStatus: "in_progress",
+	}))
+	require.NoError(t, err)
+
+	assert.NotContains(t, stopper.stoppedUUIDs, "work-forward-1",
+		"a forward or unrelated transition must not trigger the live-session teardown")
+}
+
+// TestTransitionBacklogItemStatus_should_StillTransition_When_LiveSessionTeardownFails
+// is the pre-mortem P1 #2 regression: a teardown failure
+// (sessionStopper.StopSessionByUUID erroring) must never block the transition, and
+// the session row must still be marked ended so it doesn't stay stuck "live" in the
+// DB — best-effort semantics, since blocking the send-back on a teardown failure
+// would be strictly worse for the operator than a best-effort continue.
+func TestTransitionBacklogItemStatus_should_StillTransition_When_LiveSessionTeardownFails(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}, stopperErr: errors.New("tmux teardown failed")}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item whose live session teardown fails",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "work-live-1",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:         item.ID,
+		TargetStatus:   string(session.BacklogStatusReady),
+		OverrideReason: "missed the mobile layout, redo with touch targets",
+	}))
+	require.NoError(t, err, "a teardown failure must not block the transition")
+
+	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReady), fetched.Status)
+
+	assert.Contains(t, stopper.stoppedUUIDs, "work-live-1", "the stop must still be attempted")
+
+	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, err)
+	var fetchedIS *session.ItemSessionSummary
+	for i := range sessions {
+		if sessions[i].ID == is.ID {
+			fetchedIS = &sessions[i]
+		}
+	}
+	require.NotNil(t, fetchedIS, "expected the created ItemSession to still exist")
+	assert.NotNil(t, fetchedIS.EndedAt, "the session row must still be marked ended even though the tmux teardown failed")
+}
+
 // ─── SubmitManualReview PASS→done guard (2026-07-18 finding) ──────────────────
 //
 // docs/tasks/backlog-feature-improvement.md's 2026-07-18 update: SubmitManualReview
