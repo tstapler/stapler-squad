@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/gitfixture"
 )
 
 // setupTestRepo creates a temporary git repository with an initial commit and configured
@@ -23,12 +24,25 @@ import (
 // the `prefer-go-git-over-subshells` skill.
 func setupTestRepo(t *testing.T) string {
 	t.Helper()
+	return setupTestRepoWithIdentity(t, true)
+}
+
+func setupTestRepoWithoutIdentity(t *testing.T) string {
+	t.Helper()
+	return setupTestRepoWithIdentity(t, false)
+}
+
+func setupTestRepoWithIdentity(t *testing.T, configureIdentity bool) string {
+	t.Helper()
 	dir := t.TempDir()
 
 	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
 		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
 	})
 	require.NoError(t, err)
+	if configureIdentity {
+		gitfixture.ConfigureGoGitIdentity(t, repo)
+	}
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test"), 0644))
 
@@ -37,7 +51,7 @@ func setupTestRepo(t *testing.T) string {
 	_, err = wt.Add(".")
 	require.NoError(t, err)
 	_, err = wt.Commit("Initial commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+		Author: &object.Signature{Name: gitfixture.UserName, Email: gitfixture.UserEmail, When: time.Now()},
 	})
 	require.NoError(t, err)
 

@@ -92,6 +92,12 @@ func WithBatchMaxWindow(d time.Duration) HubOption {
 	return func(h *StreamHub) { h.batchMaxWindow = d }
 }
 
+// WithOutputObserver installs a single pre-fan-out observer. It is invoked
+// once per coalesced output unit, regardless of subscriber count.
+func WithOutputObserver(fn func([]byte)) HubOption {
+	return func(h *StreamHub) { h.outputObserver = fn }
+}
+
 // StreamHub is the single-owner runtime object for one tmux session's output
 // stream: it fans output out to every attached subscriber over a
 // Transport-agnostic interface, and is the sole caller of that session's
@@ -108,6 +114,7 @@ type StreamHub struct {
 	quiescenceTimeout     time.Duration
 	quiescenceQuietPeriod time.Duration
 	batchMaxWindow        time.Duration
+	outputObserver        func([]byte)
 
 	mu sync.Mutex
 	// state only transitions to HubTornDown once ForceTeardown's close/
@@ -238,6 +245,9 @@ func (h *StreamHub) onBatchFlush(unit BroadcastUnit) {
 		"bytes", len(unit.Data),
 		"reason", unit.Reason.String())
 	recordBatchFlushFramesCoalesced(unit.FramesCoalesced)
+	if h.outputObserver != nil {
+		h.outputObserver(unit.Data)
+	}
 	h.Broadcast(unit.Data)
 }
 
