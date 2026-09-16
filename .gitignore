@@ -48,6 +48,7 @@ session/ent/*/
 /server/web/dist/
 /.playwright-mcp
 /tools/ci-gates/node_modules/
+/tools/scanner/frontend/node_modules/
 
 # worktrees
 worktrees/
