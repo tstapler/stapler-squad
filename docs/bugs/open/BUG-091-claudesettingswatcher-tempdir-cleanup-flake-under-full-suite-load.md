@@ -92,6 +92,16 @@ full-suite runs must not reproduce the `TempDir RemoveAll cleanup` failure for t
 
 ## Related
 
+- **2026-09-16 sighting (second, same day)**: 2 more `TempDir RemoveAll cleanup: unlinkat ...
+  directory not empty` failures in the same `make ci` cycle as the sighting below, this time in
+  `make test-integration`'s second (non-`session`/`session/tmux`) invocation — one on
+  `TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_Headless...` (name truncated by the
+  capturing pipe; `server/dependencies_test.go` family), the other not captured due to the same
+  truncation. Immediately re-ran `make test-integration` standalone with output captured to a file
+  instead of a truncating pipe: 7179 tests, 0 failures, 37.7s. Confirms both were transient
+  full-suite-load flakes in this same shared teardown-ordering gap, not a regression from the
+  logging fix being pushed; re-ran rather than investigating further, consistent with this bug's own
+  scope boundary.
 - **2026-09-16 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not
   empty` symptom recurred again on the same test,
   `TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService`
