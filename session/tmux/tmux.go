@@ -473,7 +473,7 @@ func ListAllSessions(serverSocket string) (map[string]bool, error) {
 	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer listCancel()
 	out, err := runGated(listCtx, serverSocket, func() ([]byte, error) {
-		return (LocalRunner{}).Run(listCtx, "", Binary(), args...)
+		return (LocalRunner{}).Run(listCtx, "", ResolveClientForSocket(serverSocket), args...)
 	})
 	if err != nil {
 		// Collect output for server-down detection. Run() returns combined
@@ -517,7 +517,7 @@ func BatchPaneDeadStatus(serverSocket string) (map[string]PaneDeadStatus, error)
 	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer listCancel()
 	out, err := runGated(listCtx, serverSocket, func() ([]byte, error) {
-		return safeexec.CommandContext(listCtx, Binary(), args...).Output()
+		return safeexec.CommandContext(listCtx, ResolveClientForSocket(serverSocket), args...).Output()
 	})
 	if err != nil {
 		combinedOutput := []byte(err.Error())
@@ -566,7 +566,7 @@ func checkServerNotRunning(serverSocket string) bool {
 	checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer checkCancel()
 	out, err := runGated(checkCtx, serverSocket, func() ([]byte, error) {
-		return (LocalRunner{}).Run(checkCtx, "", Binary(), args...)
+		return (LocalRunner{}).Run(checkCtx, "", ResolveClientForSocket(serverSocket), args...)
 	})
 	return err != nil && serverNotRunning(out)
 }
@@ -747,7 +747,7 @@ func EnsureServerRunning(serverSocket string) (TmuxServerReady, error) {
 		startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer startCancel()
 		return runGated(startCtx, serverSocket, func() ([]byte, error) {
-			return (LocalRunner{}).Run(startCtx, "", Binary(), args...)
+			return (LocalRunner{}).Run(startCtx, "", ResolveClientForSocket(serverSocket), args...)
 		})
 	}
 	// Under heavy concurrent tmux usage, the list-sessions check above can itself
@@ -771,7 +771,7 @@ func EnsureServerRunning(serverSocket string) (TmuxServerReady, error) {
 	remainCtx, remainCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer remainCancel()
 	if out, err := runGated(remainCtx, serverSocket, func() ([]byte, error) {
-		return (LocalRunner{}).Run(remainCtx, "", Binary(), remainArgs...)
+		return (LocalRunner{}).Run(remainCtx, "", ResolveClientForSocket(serverSocket), remainArgs...)
 	}); err != nil {
 		log.Warn("[tmux] failed to set global remain-on-exit default", "err", err, "output", string(out))
 	}
@@ -793,7 +793,7 @@ func KillOrphanedControlModeClients(serverSocket string) (int, error) {
 	args := prependSocket(serverSocket, []string{"list-clients", "-F", "#{client_pid} #{client_control_mode}"})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := (LocalRunner{}).Run(ctx, "", Binary(), args...)
+	out, err := (LocalRunner{}).Run(ctx, "", ResolveClientForSocket(serverSocket), args...)
 	if err != nil {
 		// No server running yet, or no clients at all -- nothing to clean up.
 		return 0, nil
@@ -850,7 +850,7 @@ func SetExitEmpty(serverSocket string, enabled bool) error {
 	optCtx, optCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer optCancel()
 	out, err := runGated(optCtx, serverSocket, func() ([]byte, error) {
-		return (LocalRunner{}).Run(optCtx, "", Binary(), args...)
+		return (LocalRunner{}).Run(optCtx, "", ResolveClientForSocket(serverSocket), args...)
 	})
 	if err != nil {
 		return fmt.Errorf("tmux set-option exit-empty %s failed: %w (output: %s)", value, err, out)
@@ -869,7 +869,7 @@ func CreateKeepaliveSession(serverSocket string) error {
 	hasCtx, hasCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer hasCancel()
 	hasErr := runGatedErr(hasCtx, serverSocket, func() error {
-		_, err := (LocalRunner{}).Run(hasCtx, "", Binary(), hasArgs...)
+		_, err := (LocalRunner{}).Run(hasCtx, "", ResolveClientForSocket(serverSocket), hasArgs...)
 		return err
 	})
 	if hasErr == nil {
@@ -881,7 +881,7 @@ func CreateKeepaliveSession(serverSocket string) error {
 	newCtx, newCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer newCancel()
 	out, err := runGated(newCtx, serverSocket, func() ([]byte, error) {
-		return (LocalRunner{}).Run(newCtx, "", Binary(), newArgs...)
+		return (LocalRunner{}).Run(newCtx, "", ResolveClientForSocket(serverSocket), newArgs...)
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create keepalive session: %w (output: %s)", err, out)
@@ -1214,7 +1214,7 @@ func (t *TmuxSession) buildTmuxCommandContext(ctx context.Context, args ...strin
 	// Add the actual tmux command arguments
 	cmdArgs = append(cmdArgs, args...)
 
-	return safeexec.CommandContext(ctx, Binary(), cmdArgs...)
+	return safeexec.CommandContext(ctx, ResolveClientForSocket(t.serverSocket), cmdArgs...)
 }
 
 // buildAttachCommand creates a tmux attach-session command for PTY operations.
@@ -2035,14 +2035,19 @@ func (t *TmuxSession) listSessionsRaw(ctx context.Context) ([]byte, error) {
 		// t.commandRunner() for the same reason (see that function's doc
 		// comment). The fallback below, which bypasses cmdExec entirely, IS
 		// migrated since it's a direct one-shot execution.
-		cmd := safeexec.CommandContext(ctx, Binary(), cmdArgs...)
+		cmd := safeexec.CommandContext(ctx, ResolveClientForSocket(t.serverSocket), cmdArgs...)
 		output, err := t.cmdExec.CombinedOutput(cmd)
 		// If the circuit breaker is open, fall back to direct exec.
 		// "No sessions" (exit 1 when server running but empty) can cause false circuit
 		// breaker trips; the fallback ensures checks always work regardless of breaker state.
 		if errors.Is(err, executor.ErrCircuitOpen) {
 			runner := t.commandRunner()
-			runName, runArgs := Binary(), cmdArgs
+			// ResolveClientForSocket only applies locally -- a remote
+			// server's binary lives on a different machine, out of reach
+			// of the local OS-process lookup it does. wrapRemoteCommand
+			// below still uses the pinned Binary() name shipped to the
+			// remote host, unchanged from before.
+			runName, runArgs := ResolveClientForSocket(t.serverSocket), cmdArgs
 			if runner.IsRemote() {
 				// Unset $TMUX and force a known-good $TERM before this
 				// command reaches a remote tmux server -- see
@@ -2051,7 +2056,7 @@ func (t *TmuxSession) listSessionsRaw(ctx context.Context) ([]byte, error) {
 				// mechanism gating this, never a type switch on runner
 				// (architecture-review.md Blocker 1). Local commands
 				// (LocalRunner.IsRemote() == false) are unaffected.
-				runName, runArgs = wrapRemoteCommand(runName, runArgs)
+				runName, runArgs = wrapRemoteCommand(Binary(), cmdArgs)
 			}
 			output, err = runner.Run(ctx, "", runName, runArgs...)
 		}
@@ -2069,13 +2074,16 @@ func (t *TmuxSession) listSessionsRaw(ctx context.Context) ([]byte, error) {
 func (t *TmuxSession) listSessionsRawPriority(ctx context.Context) ([]byte, error) {
 	return runFastLaneSubprocess(ctx, t.serverSocket, func(ctx context.Context) ([]byte, error) {
 		cmdArgs := Socket(t.serverSocket).Args("list-sessions", "-F", "#{session_name}")
-		cmd := safeexec.CommandContext(ctx, Binary(), cmdArgs...)
+		cmd := safeexec.CommandContext(ctx, ResolveClientForSocket(t.serverSocket), cmdArgs...)
 		output, err := t.cmdExec.CombinedOutput(cmd)
 		if errors.Is(err, executor.ErrCircuitOpen) {
 			runner := t.commandRunner()
-			runName, runArgs := Binary(), cmdArgs
+			// See listSessionsRaw's identical fallback for why this is
+			// local-only: ResolveClientForSocket can't see a remote host's
+			// processes, so the remote branch keeps using Binary() as before.
+			runName, runArgs := ResolveClientForSocket(t.serverSocket), cmdArgs
 			if runner.IsRemote() {
-				runName, runArgs = wrapRemoteCommand(runName, runArgs)
+				runName, runArgs = wrapRemoteCommand(Binary(), cmdArgs)
 			}
 			output, err = runner.Run(ctx, "", runName, runArgs...)
 		}
@@ -2751,7 +2759,7 @@ func CleanupSessionsOnServer(cmdExec executor.Executor, serverSocket string) err
 	lsCtx, lsCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer lsCancel()
 	output, err := runGated(lsCtx, serverSocket, func() ([]byte, error) {
-		cmd := safeexec.CommandContext(lsCtx, Binary(), socket.Args("ls")...)
+		cmd := safeexec.CommandContext(lsCtx, ResolveClientForSocket(serverSocket), socket.Args("ls")...)
 		return cmdExec.Output(cmd)
 	})
 
@@ -2774,7 +2782,7 @@ func CleanupSessionsOnServer(cmdExec executor.Executor, serverSocket string) err
 		log.Info("cleaning up session", "session", match)
 		killCtx, killCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		runErr := runGatedErr(killCtx, serverSocket, func() error {
-			killCmd := safeexec.CommandContext(killCtx, Binary(), socket.Args("kill-session", "-t", match)...)
+			killCmd := safeexec.CommandContext(killCtx, ResolveClientForSocket(serverSocket), socket.Args("kill-session", "-t", match)...)
 			return cmdExec.Run(killCmd)
 		})
 		killCancel()
