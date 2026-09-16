@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -833,6 +834,49 @@ func TestStorage_SaveInstancesSync(t *testing.T) {
 	assert.Equal(t, "sync-category", instances[0].Category, "Category should be persisted by SaveInstancesSync")
 }
 
+// TestStorage_should_RoundTripRuleTagProvenance_When_SessionSavedAndReloaded implements
+// plan.md Story 3.1.2's Given-When-Then: RuleTagProvenance/SuppressedRuleTags survive a
+// SaveInstancesSync -> LoadInstances round trip through the Ent SQLite backend.
+func TestStorage_should_RoundTripRuleTagProvenance_When_SessionSavedAndReloaded(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("provenance-round-trip")
+	require.NoError(t, storage.AddInstance(inst))
+
+	inst.Tags = []string{"Bugfix"}
+	inst.RuleTagProvenance = map[string]string{"Bugfix": "seed-bugfix"}
+	inst.SuppressedRuleTags = map[string]bool{"Suppressed": true}
+	require.NoError(t, storage.SaveInstancesSync([]*Instance{inst}))
+
+	instances, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, map[string]string{"Bugfix": "seed-bugfix"}, instances[0].RuleTagProvenance)
+	assert.Equal(t, map[string]bool{"Suppressed": true}, instances[0].SuppressedRuleTags)
+}
+
+// TestStorage_should_DecodeNilProvenance_When_LoadingPreExistingRowWithoutNewColumns
+// mirrors the Category->Tags backward-compat shim: a session saved with no
+// RuleTagProvenance/SuppressedRuleTags ever set decodes cleanly, never an error — the ent
+// schema's Default(map[string]string{})/Default([]string{}) means "never set" reads back
+// as empty rather than nil, which is exactly the same "nothing suppressed/attributed" state.
+func TestStorage_should_DecodeNilProvenance_When_LoadingPreExistingRowWithoutNewColumns(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("no-provenance-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	instances, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Empty(t, instances[0].RuleTagProvenance)
+	assert.Empty(t, instances[0].SuppressedRuleTags)
+}
+
 // TestSaveInstances_WorktreeDataQueryableImmediately is a regression test for the
 // backlog review-gate "(no diff available)" bug: a review can fire (via
 // request_review, from inside the spawned session) as soon as SpawnSessionFromItem
@@ -1105,6 +1149,124 @@ func TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
 	assert.Equal(t, Creating, loaded[0].Status, "the persisted row must be unchanged when epochs mismatch")
+}
+
+// ── Epic 2.2: TaggingRule Storage CRUD ──────────────────────────────────────
+
+// TestStorage_UpsertTaggingRule_should_PersistRow_When_ValidDataGiven covers
+// Story 2.2.1's first acceptance criterion.
+func TestStorage_UpsertTaggingRule_should_PersistRow_When_ValidDataGiven(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	err := storage.UpsertTaggingRule(context.Background(), TaggingRuleData{
+		RuleID:        "seed-bugfix",
+		Name:          "Bugfix branch",
+		BranchPattern: "^(bugfix|fix)/",
+		OutputTag:     "Bugfix",
+		Priority:      50,
+		Enabled:       true,
+		Source:        "seed",
+	})
+	require.NoError(t, err)
+
+	rules, err := storage.AllTaggingRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, "Bugfix", rules[0].OutputTag)
+}
+
+// TestStorage_DeleteTaggingRule_should_RemoveRow_When_RuleIDExists covers
+// Story 2.2.1's second acceptance criterion.
+func TestStorage_DeleteTaggingRule_should_RemoveRow_When_RuleIDExists(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	require.NoError(t, storage.UpsertTaggingRule(context.Background(), TaggingRuleData{
+		RuleID:        "seed-bugfix",
+		Name:          "Bugfix branch",
+		BranchPattern: "^(bugfix|fix)/",
+		OutputTag:     "Bugfix",
+		Priority:      50,
+		Enabled:       true,
+		Source:        "seed",
+	}))
+
+	require.NoError(t, storage.DeleteTaggingRule(context.Background(), "seed-bugfix"))
+
+	rules, err := storage.AllTaggingRules(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, rules)
+}
+
+// TestStorage_DeleteTaggingRule_should_NoOpWithoutError_When_RuleIDNotFound mirrors
+// DeleteRule's existing convention: deleting a nonexistent rule_id doesn't
+// panic/error the caller.
+func TestStorage_DeleteTaggingRule_should_NoOpWithoutError_When_RuleIDNotFound(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	err := storage.DeleteTaggingRule(context.Background(), "does-not-exist")
+	require.NoError(t, err)
+}
+
+// TestStorage_UpsertTaggingRule_should_NotDuplicateOrCorrupt_When_TwoConcurrentUpsertsTargetSameRuleID
+// pins the pre-mortem.md Failure #2 (P2) concurrent-upsert guarantee: the unique
+// index on rule_id plus the atomic ON CONFLICT DO UPDATE upsert (mirroring
+// ApprovalRule's verified-safe path, see Task 2.1.1c) must hold under two
+// simultaneous writers targeting the same rule_id.
+func TestStorage_UpsertTaggingRule_should_NotDuplicateOrCorrupt_When_TwoConcurrentUpsertsTargetSameRuleID(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	const ruleID = "concurrent-rule"
+	writeA := TaggingRuleData{
+		RuleID:        ruleID,
+		Name:          "Writer A",
+		BranchPattern: "^a/",
+		OutputTag:     "A",
+		Priority:      10,
+		Enabled:       true,
+		Source:        "seed",
+	}
+	writeB := TaggingRuleData{
+		RuleID:        ruleID,
+		Name:          "Writer B",
+		BranchPattern: "^b/",
+		OutputTag:     "B",
+		Priority:      20,
+		Enabled:       true,
+		Source:        "seed",
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		errs[0] = storage.UpsertTaggingRule(context.Background(), writeA)
+	}()
+	go func() {
+		defer wg.Done()
+		errs[1] = storage.UpsertTaggingRule(context.Background(), writeB)
+	}()
+	wg.Wait()
+
+	require.NoError(t, errs[0])
+	require.NoError(t, errs[1])
+
+	rules, err := storage.AllTaggingRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 1, "exactly one row must exist for the shared rule_id — no duplicate row")
+
+	got := rules[0]
+	matchesA := got.Priority == writeA.Priority && got.OutputTag == writeA.OutputTag
+	matchesB := got.Priority == writeB.Priority && got.OutputTag == writeB.OutputTag
+	assert.True(t, matchesA || matchesB, "persisted row must match one write's values entirely, never a corrupted merge of both: got %+v", got)
 }
 
 // TestStorage_DismissFinding_RoundTripsThroughRealEntBackedSQLite exercises

@@ -355,6 +355,17 @@ export const tag = style({
   },
 });
 
+/**
+ * Unclassified pill (ux.md Surface 2): dashed border + muted color as one of
+ * two signals, per WCAG 1.4.1 (use of color) — the `?` glyph rendered inline
+ * in SessionCard.tsx is the required second, non-color signal.
+ */
+export const tagUnclassified = style({
+  border: `1px dashed ${vars.color.borderMuted}`,
+  background: "transparent",
+  color: vars.color.textMuted,
+});
+
 export const editTagsButton = style({
   padding: `${vars.space["1"]} 12px`,
   fontSize: "0.6875rem",

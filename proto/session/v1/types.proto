@@ -359,6 +359,13 @@ message Session {
   // server restart legitimately resets it back to Unknown until the extension's
   // periodic re-ping (Story 4.2.3) re-arms it.
   PiExtensionHealth pi_extension_health = 89;
+
+  // Maps a tag value in `tags` to the rule/mechanism that applied it: a
+  // TaggingRule.ID for rule-derived tags, or the sentinel "llm" for
+  // LLM-classifier-derived tags (session-classifier-pipeline Epic 6.2).
+  // Absent entries mean the tag was added manually. Mirrors
+  // session.Instance's RuleTagProvenance field.
+  map<string, string> rule_tag_provenance = 95;
 }
 
 // PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi
@@ -1368,6 +1375,28 @@ message ApprovalRuleProto {
   // been idle >= N minutes since its last meaningful output. 0 = condition not
   // applied. Combinable (AND) with all other conditions.
   int32 min_session_idle_minutes = 30;
+}
+
+// TaggingRuleProto represents a single session-tagging rule. Mirrors
+// ApprovalRuleProto's field shape for the sibling auto-tagging rule system.
+message TaggingRuleProto {
+  string id = 1;
+  string name = 2;
+  string name_pattern = 3;
+  string branch_pattern = 4;
+  string path_pattern = 5;
+  string program_pattern = 6;
+  repeated string required_tags = 7;
+  string output_tag = 8;
+  int32 priority = 9;
+  bool enabled = 10;
+  string source = 11;
+  google.protobuf.Timestamp created_at = 12;
+  // fire_count_7d is the number of times this rule matched in the last 7
+  // days; populated server-side by ListTaggingRules from
+  // AnalyticsStore.GetTaggingRuleFireCounts (ux.md Surface 6's "Fires(7d)"
+  // column).
+  int32 fire_count_7d = 13;
 }
 
 // AnalyticsSummaryProto aggregates classification decisions over a time window.

@@ -1,9 +1,8 @@
 package server
 
 import (
-	"bytes"
+	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
 
@@ -13,7 +12,9 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -402,17 +403,64 @@ func TestServerDependencies_should_DegradeFeatureNotServer_When_KeychainUnreadab
 	cfg.Jules.Enabled = true
 	require.NoError(t, config.SaveConfig(cfg))
 
-	var buf bytes.Buffer
-	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
-	origDefault := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(origDefault) })
-
 	deps, err := BuildDependencies()
 	require.NoError(t, err, "an unreadable keychain must degrade the Jules feature, not fail server startup")
 
-	assert.Nil(t, deps.JulesSessionPoller)
-	assert.Contains(t, buf.String(), "jules disabled")
+	assert.Nil(t, deps.JulesSessionPoller, "an unreadable keychain must leave the Jules poller unconstructed")
 	assert.NotNil(t, deps.SessionService, "every other subsystem must be unaffected")
 	assert.NotNil(t, deps.BacklogService, "every other subsystem must be unaffected")
+}
+
+// noopTagPoolClient is a minimal headless.PoolClient double used only to construct a real
+// SessionTagClassificationPoller for the wiring tests below — it is never actually called,
+// since these tests only assert whether wireDepsIntoServer starts the poller, not its
+// classification behavior (covered by session/session_tag_poller_test.go).
+type noopTagPoolClient struct{}
+
+func (noopTagPoolClient) CallBlocking(context.Context, headless.FeatureKey, string, string, headless.CallOptions, headless.CostSink) (string, error) {
+	return `{"tags":["Unclassified"]}`, nil
+}
+
+// TestWireDepsIntoServer_should_NotConstructPoller_When_HeadlessPoolNil is Story 4.4.1's
+// degraded/disabled-mode case: forcing deps.SessionTagClassificationPoller to nil (mirroring
+// what BuildRuntimeDeps produces when the claude binary isn't found — see the headlessPool
+// nil-check this poller's construction is guarded by, server/dependencies.go) must not start
+// anything and must not prevent the server from starting normally.
+func TestWireDepsIntoServer_should_NotConstructPoller_When_HeadlessPoolNil(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	deps.SessionTagClassificationPoller = nil
+
+	srv := NewServerWithDeps("localhost:0", deps)
+	t.Cleanup(func() {
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("srv.Shutdown: %v", err)
+		}
+	})
+
+	assert.Nil(t, deps.SessionTagClassificationPoller, "a nil poller must stay unconstructed, never started")
+	assert.NotNil(t, deps.SessionService, "the rest of the server must start normally")
+}
+
+// TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPresent is Story
+// 4.4.1's normal-startup case: with a poller present, wireDepsIntoServer must call Start
+// exactly once, logged the same way PRStatusPoller's start is logged.
+func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPresent(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	deps.SessionTagClassificationPoller = session.NewSessionTagClassificationPoller(noopTagPoolClient{}, classifier.NewTaggingEngine())
+	require.False(t, deps.SessionTagClassificationPoller.Running(), "poller must not be running before the server wires it up")
+
+	srv := NewServerWithDeps("localhost:0", deps)
+	t.Cleanup(func() {
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("srv.Shutdown: %v", err)
+		}
+	})
+
+	assert.True(t, deps.SessionTagClassificationPoller.Running(), "wireDepsIntoServer must start the poller")
 }

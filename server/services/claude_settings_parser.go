@@ -211,14 +211,16 @@ func claudePatternsToRules(patterns []string, priority int, label, idPrefix stri
 	var rules []classifier.Rule
 	for i, pattern := range patterns {
 		rule := classifier.Rule{
-			ID:        fmt.Sprintf("%s-%s-%d", idPrefix, label, i),
-			Name:      fmt.Sprintf("Claude settings %s: %s", verb, pattern),
+			RuleMeta: classifier.RuleMeta{
+				ID:       fmt.Sprintf("%s-%s-%d", idPrefix, label, i),
+				Name:     fmt.Sprintf("Claude settings %s: %s", verb, pattern),
+				Priority: priority,
+				Enabled:  true,
+				Source:   string(classifier.SourceClaudeSettings),
+			},
 			Decision:  decision,
 			RiskLevel: riskLevel,
 			Reason:    fmt.Sprintf("%s by Claude settings (%s): %s", verbPast, label, pattern),
-			Priority:  priority,
-			Enabled:   true,
-			Source:    string(classifier.SourceClaudeSettings),
 		}
 
 		// Parse "ToolName(commandGlob)" or just "ToolName".

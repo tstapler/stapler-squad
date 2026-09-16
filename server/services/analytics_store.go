@@ -254,6 +254,26 @@ func (s *AnalyticsStore) DroppedCount() int64 {
 	return atomic.LoadInt64(&s.dropped)
 }
 
+// RecordTaggingRuleFire asynchronously records that a tagging rule matched, independent of
+// whether the resulting tag survives suppression filtering. Fire-and-forget like
+// RecordFromResult — callers (the tagging pipeline, holding an Instance's actor lock) must
+// never block on this. Backed by a dedicated TaggingRuleFire table (not the buffered
+// AnalyticsEntry channel/table, whose fields are approval/command-decision-specific), so
+// writes go straight to storage in a detached goroutine rather than through s.ch/flush.
+func (s *AnalyticsStore) RecordTaggingRuleFire(ruleID string) {
+	go func() {
+		if err := s.storage.RecordTaggingRuleFire(context.Background(), ruleID, time.Now()); err != nil {
+			log.Warn("[AnalyticsStore] failed to record tagging rule fire", "rule_id", ruleID, "err", err)
+		}
+	}()
+}
+
+// GetTaggingRuleFireCounts returns the number of recorded fires per rule ID since the given
+// instant (e.g. 7 days ago for the "Fires(7d)" UX column).
+func (s *AnalyticsStore) GetTaggingRuleFireCounts(ctx context.Context, since time.Time) (map[string]int, error) {
+	return s.storage.GetTaggingRuleFireCounts(ctx, since)
+}
+
 // analyticsDataToEntry maps a session.AnalyticsData row to an AnalyticsEntry.
 func analyticsDataToEntry(d session.AnalyticsData) AnalyticsEntry {
 	return AnalyticsEntry{

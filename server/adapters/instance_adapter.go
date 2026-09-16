@@ -93,7 +93,8 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		IsExpanded:         snap.IsExpanded,
 		SessionType:        sessionTypeToProto(snap.SessionType),
 		TmuxPrefix:         snap.TmuxPrefix,
-		Tags:               snap.Tags, // Tag-based organization
+		Tags:               snap.Tags,              // Tag-based organization
+		RuleTagProvenance:  snap.RuleTagProvenance, // session-classifier-pipeline: tag -> owning rule ID / "llm"
 		// Terminal activity timestamps for staleness detection
 		LastTerminalUpdate:   timestamppb.New(snap.LastTerminalUpdate),
 		LastMeaningfulOutput: timestamppb.New(snap.LastMeaningfulOutput),

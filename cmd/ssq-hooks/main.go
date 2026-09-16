@@ -591,16 +591,12 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 	for _, r := range rules {
 		// Convert domain model to classifier rule
 		cr := classifier.Rule{
-			ID:          r.ID,
-			Name:        r.Name,
 			ToolName:    r.ToolName,
 			Decision:    classifier.ClassificationDecision(r.Decision),
 			RiskLevel:   classifier.RiskLevel(r.RiskLevel),
 			Reason:      r.Reason,
 			Alternative: r.Alternative,
-			Priority:    r.Priority,
-			Enabled:     r.Enabled,
-			Source:      r.Source,
+			RuleMeta:    classifier.RuleMeta{ID: r.ID, Name: r.Name, Priority: r.Priority, Enabled: r.Enabled, Source: r.Source},
 		}
 		// Pattern compilation happens in AddRules if we use strings,
 		// but here we might need to compile them if we use the Rule struct directly.
@@ -688,13 +684,9 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 					decision = classifier.AutoDeny
 				}
 				cr := classifier.Rule{
-					ID:       "config-" + strings.ReplaceAll(r.Name, " ", "-"),
-					Name:     r.Name,
 					ToolName: r.Tool,
 					Decision: decision,
-					Priority: priority,
-					Enabled:  enabled,
-					Source:   "config",
+					RuleMeta: classifier.RuleMeta{ID: "config-" + strings.ReplaceAll(r.Name, " ", "-"), Name: r.Name, Priority: priority, Enabled: enabled, Source: "config"},
 				}
 				if r.ToolPattern != "" {
 					if compiled, err := regexp.Compile(r.ToolPattern); err == nil {
