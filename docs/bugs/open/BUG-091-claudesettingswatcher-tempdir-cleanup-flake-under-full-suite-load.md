@@ -92,6 +92,16 @@ full-suite runs must not reproduce the `TempDir RemoveAll cleanup` failure for t
 
 ## Related
 
+- **2026-09-16 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not
+  empty` symptom recurred again on the same test,
+  `TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService`
+  (`server/dependencies_test.go`), during `make ci`'s full `test-race` run (7075 tests, 330s) on
+  `main` while syncing a rebase-exposed lint fix — unrelated to that diff (which touched only
+  `server/services/backlog_service_triage.go` logging calls). Passed 10/10 in isolation with `-race`
+  immediately after (`go test ./server -race -run
+  TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
+  -count=10`). Confirms this remains the same shared teardown-ordering gap, not a new regression;
+  re-ran rather than investigating further, consistent with this bug's own scope boundary.
 - **2026-09-13 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not
   empty` symptom recurred on a fourth test, in a different package this time --
   `TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService`
