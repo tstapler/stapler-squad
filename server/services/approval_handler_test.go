@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -235,6 +236,85 @@ func TestHandlePermissionRequest_EscalationReason_ExplicitRule(t *testing.T) {
 	}
 	if captured.EscalationCategory != "explicit-rule" {
 		t.Errorf("EscalationCategory = %q, want %q", captured.EscalationCategory, "explicit-rule")
+	}
+}
+
+// TestNormalizePiPayload_CopiesPathToFilePath covers the dominant pi-harness bug: pi's
+// read/edit/write/grep/find/ls tools key the target path as "path", but classifier.go's
+// matchesRule reads payload.ToolInput["file_path"] verbatim for every FilePattern rule.
+func TestNormalizePiPayload_CopiesPathToFilePath(t *testing.T) {
+	t.Parallel()
+	payload := classifier.PermissionRequestPayload{
+		ToolName:  "write",
+		ToolInput: map[string]interface{}{"content": "x", "path": "/tmp/.env"},
+	}
+	normalizePiPayload(&payload)
+	if got := payload.ToolInput["file_path"]; got != "/tmp/.env" {
+		t.Errorf("ToolInput[file_path] = %v, want /tmp/.env", got)
+	}
+}
+
+// TestNormalizePiPayload_PrefersExistingFilePath ensures normalizePiPayload never
+// clobbers an already-populated file_path (e.g. a future pi version that adopts
+// Claude's convention directly) with a stale "path" value.
+func TestNormalizePiPayload_PrefersExistingFilePath(t *testing.T) {
+	t.Parallel()
+	payload := classifier.PermissionRequestPayload{
+		ToolName:  "write",
+		ToolInput: map[string]interface{}{"file_path": "/tmp/explicit.txt", "path": "/tmp/other.txt"},
+	}
+	normalizePiPayload(&payload)
+	if got := payload.ToolInput["file_path"]; got != "/tmp/explicit.txt" {
+		t.Errorf("ToolInput[file_path] = %v, want /tmp/explicit.txt", got)
+	}
+}
+
+// TestNormalizePiPayload_AliasesToolNames covers the two pi tool names with no
+// case-insensitive-EqualFold overlap onto a Claude tool name: "find" (pi's glob-pattern
+// finder) and "powershell" (pi's Windows shell tool).
+func TestNormalizePiPayload_AliasesToolNames(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{"find": "Glob", "powershell": "Bash", "FIND": "Glob"}
+	for input, want := range cases {
+		payload := classifier.PermissionRequestPayload{ToolName: input}
+		normalizePiPayload(&payload)
+		if payload.ToolName != want {
+			t.Errorf("normalizePiPayload(%q).ToolName = %q, want %q", input, payload.ToolName, want)
+		}
+	}
+}
+
+// TestHandlePermissionRequest_PiEnvFileWrite_AutoDenies is an end-to-end regression test
+// through the real classifier (not a mock): a pi "write" tool call keying its target as
+// "path" (pi's real convention, confirmed against the installed
+// @earendil-works/pi-coding-agent package) must still trip seed-deny-env-write, which
+// matches on ToolInput["file_path"]. Before normalizePiPayload existed, this fell through
+// to Escalate and blocked for the full approval timeout instead of resolving instantly.
+func TestHandlePermissionRequest_PiEnvFileWrite_AutoDenies(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(5 * time.Second)
+	h.SetClassifier(classifier.NewRuleBasedClassifier())
+
+	payload := map[string]interface{}{
+		"tool_name":  "write",
+		"tool_input": map[string]interface{}{"content": "SECRET=x", "path": "/tmp/project/.env"},
+		"cwd":        "/tmp/project",
+		"source":     "pi",
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/hooks/permission-request", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CS-Session-ID", "test-session")
+
+	rr := httptest.NewRecorder()
+	h.HandlePermissionRequest(rr, req)
+
+	var resp hookDecisionResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v (body=%s)", err, rr.Body.String())
+	}
+	if resp.HookSpecificOutput.Decision.Behavior != "deny" {
+		t.Errorf("Decision.Behavior = %q, want %q (pi's path->file_path gap left this escalating instead of auto-denying)", resp.HookSpecificOutput.Decision.Behavior, "deny")
 	}
 }
 
