@@ -59,7 +59,7 @@ type approvalNotificationStamper interface {
 // autoApprovalLogger is a narrow interface for writing silent auto-approval records
 // directly to notification history without triggering toasts or push notifications.
 type autoApprovalLogger interface {
-	AppendAutoApproved(sessionID, sessionName, toolName, filePath, ruleID, ruleName, ruleSource, decision string) error
+	AppendAutoApproved(sessionID, sessionName, toolName, detail, ruleID, ruleName, ruleSource, decision string) error
 }
 
 // headlessPoolApprover is the narrow interface ApprovalHandler needs from the headless pool.
@@ -472,10 +472,9 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 
 		switch result.Decision {
 		case classifier.AutoAllow:
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID)
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID, "detail", approvalDetail(payload.ToolInput))
 			if h.autoApprovalLog != nil {
-				filePath, _ := payload.ToolInput["file_path"].(string)
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "allow")
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "allow")
 			}
 			h.writeDecision(w, "allow", "")
 			return
@@ -484,10 +483,9 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			if result.Alternative != "" {
 				msg = fmt.Sprintf("%s %s", msg, result.Alternative)
 			}
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg)
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg, "detail", approvalDetail(payload.ToolInput))
 			if h.autoApprovalLog != nil {
-				filePath, _ := payload.ToolInput["file_path"].(string)
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "deny")
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "deny")
 			}
 			h.writeDecision(w, "deny", msg)
 			return
@@ -812,13 +810,25 @@ func sanitizeNotificationText(s string) string {
 	}, s)
 }
 
-// buildApprovalMessage builds the human-readable message for an approval notification.
-func buildApprovalMessage(approval *PendingApproval) string {
-	if cmd, ok := approval.ToolInput["command"].(string); ok && cmd != "" {
+// approvalDetail extracts the human-meaningful part of a tool call — the full command
+// (including every sub-command of a compound &&/;/pipe chain, since this is the raw
+// string before classifier.ExtractAllCommands splits it) for Bash/PowerShell, or the
+// target path for file-targeting tools. Returns "" if toolInput has neither, letting the
+// caller supply its own fallback.
+func approvalDetail(toolInput map[string]interface{}) string {
+	if cmd, ok := toolInput["command"].(string); ok && cmd != "" {
 		return truncateString(cmd, maxNotificationMessageLen)
 	}
-	if filePath, ok := approval.ToolInput["file_path"].(string); ok && filePath != "" {
+	if filePath, ok := toolInput["file_path"].(string); ok && filePath != "" {
 		return filePath
+	}
+	return ""
+}
+
+// buildApprovalMessage builds the human-readable message for an approval notification.
+func buildApprovalMessage(approval *PendingApproval) string {
+	if detail := approvalDetail(approval.ToolInput); detail != "" {
+		return detail
 	}
 	return fmt.Sprintf("Claude needs permission to use %s", approval.ToolName)
 }

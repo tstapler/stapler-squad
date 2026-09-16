@@ -318,6 +318,66 @@ func TestHandlePermissionRequest_PiEnvFileWrite_AutoDenies(t *testing.T) {
 	}
 }
 
+// TestApprovalDetail_PrefersCommandOverFilePath covers the fix for the dominant
+// auto-approval-log bug: AppendAutoApproved's detail param used to be derived only from
+// ToolInput["file_path"], which Bash never sets, so every auto-decided Bash command
+// (including pi's, and every sub-command of a compound &&/;/pipe chain) was logged and
+// persisted as just the tool name with zero information about what actually ran.
+func TestApprovalDetail_PrefersCommandOverFilePath(t *testing.T) {
+	t.Parallel()
+	got := approvalDetail(map[string]interface{}{"command": "ls -la && pwd", "file_path": "/tmp/should-not-win"})
+	if want := "ls -la && pwd"; got != want {
+		t.Errorf("approvalDetail() = %q, want %q", got, want)
+	}
+}
+
+func TestApprovalDetail_FallsBackToFilePath(t *testing.T) {
+	t.Parallel()
+	got := approvalDetail(map[string]interface{}{"file_path": "/tmp/foo.txt"})
+	if want := "/tmp/foo.txt"; got != want {
+		t.Errorf("approvalDetail() = %q, want %q", got, want)
+	}
+}
+
+func TestApprovalDetail_EmptyWhenNeitherPresent(t *testing.T) {
+	t.Parallel()
+	if got := approvalDetail(map[string]interface{}{"pattern": "TODO"}); got != "" {
+		t.Errorf("approvalDetail() = %q, want empty string", got)
+	}
+}
+
+// fakeAutoApprovalLogger captures AppendAutoApproved calls for assertion without going
+// through the real notifications.NotificationHistoryStore.
+type fakeAutoApprovalLogger struct {
+	detail string
+}
+
+func (f *fakeAutoApprovalLogger) AppendAutoApproved(_, _, _, detail, _, _, _, _ string) error {
+	f.detail = detail
+	return nil
+}
+
+// TestHandlePermissionRequest_AutoAllowedCompoundBash_LogsFullCommand is an end-to-end
+// regression test through the real classifier: a compound Bash command auto-allowed by
+// seed-allow-bash-ls-pwd must have its full original command text (both sub-commands)
+// reach the auto-approval log, not just "Bash".
+func TestHandlePermissionRequest_AutoAllowedCompoundBash_LogsFullCommand(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(5 * time.Second)
+	h.SetClassifier(classifier.NewRuleBasedClassifier())
+	logger := &fakeAutoApprovalLogger{}
+	h.SetAutoApprovalLogger(logger)
+
+	rr := postPermissionRequestWithCommand(t, h, "test-session", "Bash", "ls -la && pwd")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	if want := "ls -la && pwd"; logger.detail != want {
+		t.Errorf("AppendAutoApproved detail = %q, want %q (full compound command, not just tool name)", logger.detail, want)
+	}
+}
+
 // fakeRDAPTransport is an http.RoundTripper stub that returns a canned RDAP response
 // reporting the given registration date for any request, regardless of host -- avoids
 // a real network call to rdap.org from a unit test.
