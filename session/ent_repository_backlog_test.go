@@ -1144,3 +1144,56 @@ func TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestF
 	assert.Equal(t, SessionRoleWork, matches[0].SessionRole, "newer row (session_role=work) must appear first")
 	assert.Equal(t, SessionRoleTriage, matches[1].SessionRole, "older row (session_role=triage) must appear second")
 }
+
+// TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents is the
+// regression test for the memory-growth incident this cap fixes: a session
+// stuck in a transition crash-loop appends one BacklogStatusEvent row per
+// retry, and attachStatusEventsForPublish previously reloaded and
+// re-broadcast that item's *entire* history on every single subsequent
+// publish -- an O(N) cost per transition that compounded into unbounded live
+// heap growth (confirmed via pprof: 93% of a 7.6GB live heap after ~80
+// minutes of one stuck item's retry storm). Verifies the attached slice is
+// capped at maxPublishedStatusEvents and keeps only the *most recent* rows,
+// still in ascending (oldest-first) order.
+func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "item stuck in a transition crash-loop",
+		Status: string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+	itemID, err := repo.resolveBacklogItemLookup(ctx, created.ID)
+	require.NoError(t, err)
+
+	const totalEvents = maxPublishedStatusEvents + 10
+	for i := 0; i < totalEvents; i++ {
+		recordStatusEvent(ctx, statusEventInput{
+			evClient:    repo.client.BacklogStatusEvent,
+			itemID:      itemID,
+			fromStatus:  string(BacklogStatusIdea),
+			toStatus:    string(BacklogStatusIdea),
+			triggeredBy: TriggeredBySystem,
+			note:        fmt.Sprintf("retry #%d", i),
+		})
+	}
+
+	data := &BacklogItemData{ID: created.ID}
+	repo.attachStatusEventsForPublish(ctx, data)
+
+	require.Len(t, data.StatusEvents, maxPublishedStatusEvents,
+		"attached slice must be capped at maxPublishedStatusEvents even when far more rows exist")
+	// Oldest-first order preserved: the last attached event must be the very
+	// last one recorded (note field carries the retry index).
+	last := data.StatusEvents[len(data.StatusEvents)-1].Note
+	require.NotNil(t, last)
+	assert.Equal(t, fmt.Sprintf("retry #%d", totalEvents-1), *last,
+		"cap must keep the most recent events, not the oldest")
+	first := data.StatusEvents[0].Note
+	require.NotNil(t, first)
+	assert.Equal(t, fmt.Sprintf("retry #%d", totalEvents-maxPublishedStatusEvents), *first,
+		"first retained event must be exactly maxPublishedStatusEvents back from the most recent")
+}

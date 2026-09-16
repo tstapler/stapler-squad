@@ -1979,8 +1979,22 @@ func (r *EntRepository) attachItemSessionsForPublish(ctx context.Context, data *
 	data.ItemSessions = sessions
 }
 
+// maxPublishedStatusEvents caps how many status-transition rows a single
+// attachStatusEventsForPublish call loads and re-broadcasts. Without this,
+// an item stuck in a transition crash-loop (each retry appends one more
+// BacklogStatusEvent row) makes every subsequent publish reload and
+// re-broadcast the item's *entire*, ever-growing history — an O(N) cost per
+// transition that compounds into unbounded live-heap growth under a fast
+// retry loop (confirmed via pprof: this call path was 93% of a 7.6GB live
+// heap after ~80 minutes of a stuck session's retry storm). Same cap/pattern
+// as maxSourceSyncEventsHistory above; 200 is far more than any legitimate
+// transition history needs for the live-update UI merge this exists for
+// (see doc comment below) while bounding the pathological case.
+const maxPublishedStatusEvents = 200
+
 // attachStatusEventsForPublish best-effort loads and attaches this item's
-// status-transition audit trail onto data before it's handed to
+// most recent status-transition audit trail (capped at
+// maxPublishedStatusEvents) onto data before it's handed to
 // publishItemChanged, mirroring attachItemSessionsForPublish above.
 //
 // Every publish-hook call site builds its BacklogItemData from a plain
@@ -2004,9 +2018,12 @@ func (r *EntRepository) attachStatusEventsForPublish(ctx context.Context, data *
 		log.WarningLog().Printf("[EntRepository] attachStatusEventsForPublish: invalid item id %s: %v", data.ID, err)
 		return
 	}
+	// Fetch most-recent-first (capped) then reverse, so the attached slice
+	// keeps its existing ascending (oldest-first) contract for consumers.
 	events, err := r.client.BacklogStatusEvent.Query().
 		Where(backlogstatusevent.ItemID(parsedID)).
-		Order(ent.Asc(backlogstatusevent.FieldCreatedAt)).
+		Order(ent.Desc(backlogstatusevent.FieldCreatedAt)).
+		Limit(maxPublishedStatusEvents).
 		All(ctx)
 	if err != nil {
 		log.WarningLog().Printf("[EntRepository] attachStatusEventsForPublish: failed to load status events for item %s: %v", data.ID, err)
@@ -2014,7 +2031,7 @@ func (r *EntRepository) attachStatusEventsForPublish(ctx context.Context, data *
 	}
 	data.StatusEvents = make([]BacklogStatusEventData, len(events))
 	for i, ev := range events {
-		data.StatusEvents[i] = backlogStatusEventToData(ev)
+		data.StatusEvents[len(events)-1-i] = backlogStatusEventToData(ev)
 	}
 }
 

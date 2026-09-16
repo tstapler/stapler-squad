@@ -675,12 +675,29 @@ func (i *Instance) SetPreviewSize(width, height int) error {
 	return i.pm().SetDetachedSize(width, height, i.Title)
 }
 
-// trackRestartRate records a restart timestamp and logs a warning when the
-// session has restarted more than 5 times in the last 5 minutes (crash loop).
-func (i *Instance) trackRestartRate() {
-	const window = 5 * time.Minute
-	const threshold = 5
+// restartStormWindow/restartStormThreshold bound how many restarts are
+// tolerated before checkRestartStorm starts refusing further Start() calls —
+// see its doc comment for why this must actually block, not just log.
+const restartStormWindow = 5 * time.Minute
+const restartStormThreshold = 5
 
+// restartStormCooldown is how long checkRestartStorm blocks Start() once a
+// storm is detected. Deliberately equal to restartStormWindow: by the time
+// the cooldown expires, every timestamp that tripped the breaker has also
+// aged out of recentRestartTimes, so the next Start() call sees a clean
+// slate instead of immediately re-tripping on stale entries.
+const restartStormCooldown = restartStormWindow
+
+// trackRestartRate records a restart timestamp and, when the session has
+// restarted restartStormThreshold+ times within restartStormWindow, arms a
+// cooldown that checkRestartStorm enforces. Previously this only logged a
+// warning ("restart storm detected") with nothing actually stopping the
+// loop -- a session whose Start() keeps failing (e.g. a wedged tmux server)
+// would retry forever, every retry forking real tmux subprocesses and
+// driving the exact fork/exec-under-memory-pressure failures that caused
+// the crash loop in the first place (see docs/bugs or the incident this
+// fixes: titus-soaktest-followup hit 89+ restarts in under 90 minutes).
+func (i *Instance) trackRestartRate() {
 	now := time.Now()
 	i.restartMu.Lock()
 	defer i.restartMu.Unlock()
@@ -688,7 +705,7 @@ func (i *Instance) trackRestartRate() {
 	i.restartCount++
 
 	// Drop timestamps outside the window.
-	cutoff := now.Add(-window)
+	cutoff := now.Add(-restartStormWindow)
 	kept := i.recentRestartTimes[:0]
 	for _, t := range i.recentRestartTimes {
 		if t.After(cutoff) {
@@ -697,9 +714,26 @@ func (i *Instance) trackRestartRate() {
 	}
 	i.recentRestartTimes = append(kept, now)
 
-	if int64(len(i.recentRestartTimes)) >= threshold {
-		log.Warn("restart storm detected, possible crash loop", "session", i.Title, "count", len(i.recentRestartTimes), "window", window.Seconds(), "total", i.restartCount)
+	if int64(len(i.recentRestartTimes)) >= restartStormThreshold {
+		i.restartStormUntil = now.Add(restartStormCooldown)
+		log.Warn("restart storm detected, possible crash loop -- blocking further restarts until cooldown expires",
+			"session", i.Title, "count", len(i.recentRestartTimes), "window", restartStormWindow.Seconds(),
+			"total", i.restartCount, "cooldownUntil", i.restartStormUntil)
 	}
+}
+
+// checkRestartStorm reports whether Start() should be refused right now
+// because trackRestartRate armed a cooldown. Must be called before any real
+// work in startLocked/start() -- the whole point is to short-circuit before
+// forking tmux subprocesses, not after.
+func (i *Instance) checkRestartStorm() error {
+	i.restartMu.Lock()
+	defer i.restartMu.Unlock()
+	if i.restartStormUntil.IsZero() || time.Now().After(i.restartStormUntil) {
+		return nil
+	}
+	return fmt.Errorf("refusing to start %q: %d+ restarts within %s (crash loop) -- cooldown until %s",
+		i.Title, restartStormThreshold, restartStormWindow, i.restartStormUntil.Format(time.RFC3339))
 }
 
 // TmuxSessionExists reports whether the underlying tmux session is currently alive.
