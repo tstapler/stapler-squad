@@ -1127,7 +1127,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, itemID string) {
 	sessions, err := s.storage.ListItemSessions(ctx, itemID)
 	if err != nil {
-		log.WarningLog().Printf("[stopLiveWorkAndReviewSessions] failed to list sessions for item %s: %v", itemID, err)
+		log.Warn("[stopLiveWorkAndReviewSessions] failed to list sessions", "item", itemID, "error", err)
 		return
 	}
 	for _, itemSession := range sessions {
@@ -1139,11 +1139,12 @@ func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, item
 		}
 		if s.sessionStopper != nil {
 			if stopErr := s.sessionStopper.StopSessionByUUID(ctx, itemSession.SessionUUID); stopErr != nil {
-				log.WarningLog().Printf("[stopLiveWorkAndReviewSessions] failed to stop session %s for item %s: %v", itemSession.SessionUUID, itemID, stopErr)
+				log.Warn("[stopLiveWorkAndReviewSessions] failed to stop session", "session", itemSession.SessionUUID, "item", itemID, "error", stopErr)
 			}
 		}
+		//nolint:silenttransition // best-effort teardown per this function's doc comment: a leftover live session is recoverable (hasActiveWorkSession blocks the next spawn), not worth failing the caller's transition over.
 		if endErr := s.storage.UpdateItemSessionEnded(ctx, itemSession.ID, time.Now()); endErr != nil {
-			log.WarningLog().Printf("[stopLiveWorkAndReviewSessions] failed to mark session %s ended for item %s: %v", itemSession.SessionUUID, itemID, endErr)
+			log.Warn("[stopLiveWorkAndReviewSessions] failed to mark session ended", "session", itemSession.SessionUUID, "item", itemID, "error", endErr)
 		}
 	}
 }
