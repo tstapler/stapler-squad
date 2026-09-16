@@ -122,3 +122,38 @@ func TestAssociator_WhenAssociatingManyResultsViaSnapshot_ExpectStorageQueriedOn
 
 	assert.Equal(t, 1, storage.calls, "expected exactly one ListSessionRecords call for %d results", len(results))
 }
+
+func TestAssociateRecordWithSnapshot_MatchReturnsFullRecord(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	storage := &stubStorage{
+		records: []SessionRecord{
+			{
+				SessionID:      "sess-123",
+				ConversationID: "abc-123",
+				Path:           "/some/path",
+				CreatedAt:      now,
+				Tags:           []string{"backend", "urgent"},
+			},
+		},
+	}
+	a := NewAssociator(storage)
+	result := &ParseResult{SessionUUID: "abc-123"}
+
+	rec, isOrphan := a.AssociateRecordWithSnapshot(result, a.Snapshot())
+	assert.False(t, isOrphan)
+	assert.Equal(t, "sess-123", rec.SessionID)
+	assert.Equal(t, "abc-123", rec.ConversationID)
+	assert.Equal(t, "/some/path", rec.Path)
+	assert.Equal(t, []string{"backend", "urgent"}, rec.Tags)
+}
+
+func TestAssociateRecordWithSnapshot_NoMatchReturnsZeroValueAndOrphanTrue(t *testing.T) {
+	t.Parallel()
+	a := NewAssociator(&stubStorage{records: []SessionRecord{}})
+	result := &ParseResult{SessionUUID: "no-match"}
+
+	rec, isOrphan := a.AssociateRecordWithSnapshot(result, a.Snapshot())
+	assert.True(t, isOrphan)
+	assert.Equal(t, SessionRecord{}, rec)
+}

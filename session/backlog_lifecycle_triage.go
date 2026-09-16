@@ -194,6 +194,18 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			continue // no triage session has ever run for this item
 		}
 
+		// durable-guidance-request AC2/Story 5.1.3: a triage session that ended
+		// (or is sitting open) with an open GuidanceRequest against this item is
+		// expected once triage_guidance_halt is on — it deliberately halted to
+		// ask instead of guessing — not an anomaly. Skip it entirely this tick
+		// rather than tombstoning/MarkStuck-ing it, which would retry-with-
+		// backoff-penalize a legitimately-halted item and defeat the halt.
+		if _, pendingCount, _, guidanceErr := l.storage.ListPendingGuidanceRequests(ctx, domain.RequestScopeBacklogItem, item.ID, 0); guidanceErr != nil {
+			log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedTriageItems ListPendingGuidanceRequests item=%s: %v", item.ID, guidanceErr)
+		} else if pendingCount > 0 {
+			continue
+		}
+
 		isIdea := item.Status == string(BacklogStatusIdea)
 
 		var reasonDetail string
@@ -314,8 +326,8 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		l.notify(item.ID,
 			"Triage may be stuck",
 			fmt.Sprintf("%s — its triage session ended without producing a usable plan and nothing is running. Re-trigger triage or investigate.", item.Title),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+			8,            // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			false, false, // urgent, important — routine stuck-poll, matches "Work session may be stuck"
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonOrphanedTriage); notifyErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuckNotified item=%s: %v", item.ID, notifyErr)
@@ -384,8 +396,8 @@ func (l *BacklogLifecycleListener) retryOrphanedTriageWithBackoffGate(ctx contex
 		l.notify(itemID,
 			"Auto-triage paused",
 			fmt.Sprintf("%s — automated triage retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			true, true, // urgent, important — automated retry gave up; a genuine dead end
 		)
 	}
 	if !due {

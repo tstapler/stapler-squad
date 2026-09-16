@@ -5418,3 +5418,266 @@ func TestCountLiveBacklogWorkSessions_should_ExcludeJulesWorkRows_When_MixedRole
 	require.NoError(t, err)
 	assert.Equal(t, 0, count, "an open jules_work row alone must not count toward MaxConcurrentBacklogWorkItems")
 }
+
+// TestCancelTriage_should_EndRunningSessionAndReportCancelled_When_TriageIsActive
+// covers CancelTriage's happy path (docs/registry/features/backend/backlog/cancel-triage.json
+// previously had no test coverage at all).
+func TestCancelTriage_should_EndRunningSessionAndReportCancelled_When_TriageIsActive(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	liveUUID := "cancel-triage-live"
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{liveUUID: true}}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item with a running triage session",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: liveUUID,
+		SessionRole: string(session.SessionRoleTriage),
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.CancelTriage(t.Context(), connect.NewRequest(&sessionv1.CancelTriageRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Cancelled)
+
+	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, is.ID, sessions[0].ID)
+	assert.NotNil(t, sessions[0].EndedAt, "CancelTriage must mark the triage session ended")
+}
+
+// TestCancelTriage_should_ReportNotCancelled_When_NoTriageSessionRunning covers the
+// no-op path: an item with no active triage session should not error, just report
+// that nothing was cancelled.
+func TestCancelTriage_should_ReportNotCancelled_When_NoTriageSessionRunning(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item with no triage session",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.CancelTriage(t.Context(), connect.NewRequest(&sessionv1.CancelTriageRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Cancelled)
+}
+
+// TestFindSupersededSessions_should_KeepOnlyLatestPerRole_When_MultipleRoundsExist
+// is the table test for AC2/AC1's shared decision function: it must agree with
+// findMostRecentSessions' exact tie-break (latest CreatedAt wins per role) since
+// SupersededSessionSweeper and the archive-on-supersede spawn paths both rely on
+// this single source of truth for "which round is current" — see pitfalls.md #3.
+func TestFindSupersededSessions_should_KeepOnlyLatestPerRole_When_MultipleRoundsExist(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Now().Add(-3 * time.Hour)
+	t1 := t0.Add(time.Hour)
+	t2 := t1.Add(time.Hour)
+
+	work1 := session.ItemSessionSummary{SessionUUID: "work-r1", Role: session.SessionRoleWork, CreatedAt: t0}
+	work2 := session.ItemSessionSummary{SessionUUID: "work-r2", Role: session.SessionRoleWork, CreatedAt: t1}
+	work3 := session.ItemSessionSummary{SessionUUID: "work-r3", Role: session.SessionRoleWork, CreatedAt: t2}
+	review1 := session.ItemSessionSummary{SessionUUID: "review-r1", Role: session.SessionRoleReview, CreatedAt: t0}
+	review2 := session.ItemSessionSummary{SessionUUID: "review-r2", Role: session.SessionRoleReview, CreatedAt: t2}
+	nonTmux := session.ItemSessionSummary{SessionUUID: "jules-1", Role: session.SessionRoleJulesWork, CreatedAt: t0}
+
+	cases := []struct {
+		name           string
+		sessions       []session.ItemSessionSummary
+		wantSuperseded []string
+	}{
+		{
+			name:           "single round is never superseded",
+			sessions:       []session.ItemSessionSummary{work1},
+			wantSuperseded: nil,
+		},
+		{
+			name:           "three work rounds — only the latest survives",
+			sessions:       []session.ItemSessionSummary{work1, work2, work3},
+			wantSuperseded: []string{"work-r1", "work-r2"},
+		},
+		{
+			name:           "work and review rounds are judged independently",
+			sessions:       []session.ItemSessionSummary{work1, work2, review1, review2},
+			wantSuperseded: []string{"work-r1", "review-r1"},
+		},
+		{
+			name:           "non-tmux-backed role is never flagged",
+			sessions:       []session.ItemSessionSummary{work1, nonTmux},
+			wantSuperseded: nil,
+		},
+		{
+			name:           "near-simultaneous rounds tie-break identically to findMostRecentSessions",
+			sessions:       []session.ItemSessionSummary{{SessionUUID: "a", Role: session.SessionRoleWork, CreatedAt: t0}, {SessionUUID: "b", Role: session.SessionRoleWork, CreatedAt: t0}},
+			wantSuperseded: []string{"b"}, // findMostRecentSessions only replaces on strict After, so the first-seen wins ties
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := findSupersededSessions(tc.sessions)
+			gotUUIDs := make([]string, len(got))
+			for i, is := range got {
+				gotUUIDs[i] = is.SessionUUID
+			}
+			assert.ElementsMatch(t, tc.wantSuperseded, gotUUIDs)
+
+			// Cross-check against the existing tie-break truth source directly.
+			currentReview, currentWork := findMostRecentSessions(tc.sessions)
+			for _, is := range got {
+				if is.Role == session.SessionRoleWork {
+					require.NotNil(t, currentWork)
+					assert.NotEqual(t, currentWork.SessionUUID, is.SessionUUID)
+				}
+				if is.Role == session.SessionRoleReview {
+					require.NotNil(t, currentReview)
+					assert.NotEqual(t, currentReview.SessionUUID, is.SessionUUID)
+				}
+			}
+		})
+	}
+}
+
+// TestTriggerReReview_should_ArchivePriorReviewSession_When_SpawningTmuxBacked
+// is AC1's regression test: the tmux-backed re-review spawn path (no
+// headlessPool wired) previously never archived the prior review round's
+// session before spawning its replacement, leaving it Active forever (the
+// most likely concrete source of the 2026-09-14 mass-resurrection incident —
+// see research/architecture.md's "actual gap" finding).
+func TestTriggerReReview_should_ArchivePriorReviewSession_When_SpawningTmuxBacked(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{}
+	svc.SetSessionStopper(stopper)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := setupItemInReview(t, svc, repoPath)
+
+	// Simulates a prior abandoned-review round: an earlier TriggerReReview (or
+	// the original review) left this ItemSession+Instance behind, never ended.
+	priorReview, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "prior-review-uuid",
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+	assert.NotEqual(t, priorReview.SessionUUID, resp.Msg.ItemSession.SessionUuid,
+		"the new re-review session must be a distinct row from the prior round")
+
+	assert.Contains(t, stopper.archivedUUIDs, "prior-review-uuid",
+		"TriggerReReview must archive the prior review round before spawning its replacement")
+}
+
+// TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_CalledDirectly
+// is Story 1.1.1's second AC (plan.md): item with two unended sessions
+// ("work-1" role work, "review-1" role review) and one already-ended session
+// ("work-0") — calling stopLiveWorkAndReviewSessions directly must stop only
+// the two unended sessions and mark both their EndedAt non-nil.
+func TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_CalledDirectly(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item with two unended sessions and one already-ended session",
+		Status:   string(session.BacklogStatusInProgress),
+		Priority: 3,
+	})
+	require.NoError(t, err)
+	itemID := item.ID
+
+	// Already-ended session — must be skipped, not stopped again.
+	endedSession, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "work-0",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), endedSession.ID, time.Now()))
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "work-1",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "review-1",
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	svc.stopLiveWorkAndReviewSessions(t.Context(), itemID)
+
+	assert.ElementsMatch(t, []string{"work-1", "review-1"}, stopper.stoppedUUIDs,
+		"only the two unended work/review sessions must be stopped; the already-ended one must be skipped")
+
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	byUUID := make(map[string]session.ItemSessionSummary, len(sessions))
+	for _, is := range sessions {
+		byUUID[is.SessionUUID] = is
+	}
+	assert.NotNil(t, byUUID["work-1"].EndedAt, "work-1 must be marked ended")
+	assert.NotNil(t, byUUID["review-1"].EndedAt, "review-1 must be marked ended")
+}
+
+// TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsError
+// covers stopLiveWorkAndReviewSessions' best-effort semantics (doc comment on
+// the method, backlog_service_triage.go): a StopSessionByUUID error must be
+// logged and not propagated — the row is still marked ended so the item
+// isn't left permanently blocked by hasActiveWorkSession.
+func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsError(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{stopperErr: errors.New("stop failed")}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item with a session whose stop errors",
+		Status:   string(session.BacklogStatusInProgress),
+		Priority: 3,
+	})
+	require.NoError(t, err)
+	itemID := item.ID
+
+	workSession, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "work-err-1",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	svc.stopLiveWorkAndReviewSessions(t.Context(), itemID)
+
+	assert.Contains(t, stopper.stoppedUUIDs, "work-err-1")
+
+	updated, err := storage.GetItemSession(t.Context(), workSession.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, updated.EndedAt, "session must still be marked ended despite the stop error, matching best-effort semantics")
+}

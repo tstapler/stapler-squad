@@ -120,8 +120,9 @@ export function groupSessions(
         break;
 
       case GroupingStrategy.Path:
-        // Single-membership: One path per session
-        groupKeys = [session.path || "No Path"];
+        // Single-membership: One path per session. activeDir, not path, so
+        // worktree sessions group by where they actually run.
+        groupKeys = [session.activeDir || "No Path"];
         break;
 
       case GroupingStrategy.Program:

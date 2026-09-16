@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/envtest"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -102,7 +104,10 @@ func TestStaleSessionNotifier_checkAll_should_FireExactlyOnce_When_SessionStaysS
 	notifier := NewStaleSessionNotifier(poller, bus)
 
 	notifier.checkAll()
-	drainOneNotification(t, ch)
+	ev := drainOneNotification(t, ch)
+	// Push-gate classification table: neither urgent nor important — routine
+	// self-monitoring telemetry, not actionable on its own.
+	assert.Equal(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW), ev.NotificationPriority, "Session went stale must derive to LOW (urgent=false, important=false)")
 
 	// No new output between ticks -- still stale, but must not re-notify.
 	notifier.checkAll()

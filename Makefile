@@ -310,7 +310,15 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # Bump this and the github.com/tstapler/tymux/clients/go/gen/tymux/v1 require
 # in go.mod together — nothing enforces this automatically; see ADR-001
 # (project_plans/tymux-bundled-integration/decisions/ADR-001-prebuilt-tymuxd-binary-download.md).
-TYMUX_VERSION ?= v1.0.0
+# v1.1.0 bump (from v1.0.0): go.mod's client pin (clients/go v0.1.0) is
+# unchanged — it's the only tagged Go client version that exists, and it's
+# confirmed empirically compatible with the v1.1.0 server (full integration
+# suite, session/tymux/supervise_integration_test.go, passes against it).
+# v1.1.0 still lacks the Unix-socket control plane -- see
+# docs/bugs/open/BUG-112-*.md and tstapler/tymux#46 -- which only affects
+# DaemonConfig.SocketPath's collision protection, not the TCP-based session
+# I/O this repo's tymux backend actually depends on.
+TYMUX_VERSION ?= v1.1.0
 BIN_TYMUXD        := session/tymux/embed/tymuxd
 TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
 
@@ -335,7 +343,7 @@ fetch-tymuxd: $(BIN_TYMUXD) ## Fetch pinned tymuxd release binary (no cargo/rust
 build-tymuxd-embed: fetch-tymuxd ## Confirm tymuxd is present in the embed dir for go build -tags embed_tymux
 	@echo "✅ session/tymux/embed/tymuxd ready ($(shell du -h $(BIN_TYMUXD) 2>/dev/null | cut -f1 || echo unknown))"
 
-build-embedded: build-tmux-embed ## Build stapler-squad with tmux bundled inside the binary
+build-embedded: ensure-tools proto-gen ent-gen server/web/dist build-tmux-embed ## Build stapler-squad with tmux bundled inside the binary
 ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
 		go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad .
@@ -351,7 +359,7 @@ endif
 # CI/release artifacts depending on -tags embed_tmux alone are unaffected.
 # Darwin CGO_LDFLAGS/Info.plist branch mirrors build-embedded unchanged —
 # tymuxd embedding doesn't touch TCC entitlement plumbing.
-build-embedded-tymux: build-tmux-embed build-tymuxd-embed ## Build stapler-squad with tmux AND tymuxd bundled inside the binary
+build-embedded-tymux: ensure-tools proto-gen ent-gen server/web/dist build-tmux-embed build-tymuxd-embed ## Build stapler-squad with tmux AND tymuxd bundled inside the binary
 ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
 		go build -tags "embed_tmux embed_tymux" -ldflags "$(LDFLAGS)" -o stapler-squad .
@@ -420,7 +428,7 @@ backup-binary: ## Snapshot the current binary to stapler-squad.prev before a new
 		echo "==> Saved current binary to ./stapler-squad.prev"; \
 	fi
 
-install-service: backup-binary build install-hooks ## Install stapler-squad as a system service (systemd on Linux, LaunchAgent on macOS)
+install-service: backup-binary build-embedded-tymux install-hooks ## Install stapler-squad as a system service (systemd on Linux, LaunchAgent on macOS)
 ifeq ($(UNAME_S),Darwin)
 	@$(MAKE) _codesign-binary
 endif
@@ -794,7 +802,7 @@ lint: ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell ## R
 
 LINTER_BIN := $(CURDIR)/bin/linter
 
-lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, nocommandpattern, norawexec, norawgitopen, silenttransition, tmuxsocketscope) in a single pass
+lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, nocommandpattern, noliveinstanceraw, norawexec, norawghrequest, norawgitopen, silenttransition, tmuxsocketscope) in a single pass
 	@echo "Running custom lint..."
 	@$(LINTER_BIN) $(shell go list ./... | grep -v "^github.com/tstapler/stapler-squad$$")
 	@echo "custom lint: ok"
@@ -803,10 +811,14 @@ $(LINTER_BIN):
 	@mkdir -p $(CURDIR)/bin
 	@go -C tools/lint build -o $(LINTER_BIN) ./cmd/linter
 
-# Excludes third_party/ (vendored tmux source — not ours to lint) and
-# node_modules/. Includes scripts/ssq-hook-handler, which has no .sh
-# extension but is a real bash script (installed as a hook handler).
-SHELL_SCRIPTS := $(shell find . -not -path "./third_party/*" -not -path "*/node_modules/*" -not -path "./.git/*" -type f \( -name "*.sh" -o -name "ssq-hook-handler" \))
+# Excludes third_party/ (vendored tmux source — not ours to lint),
+# node_modules/, and .claude/worktrees/ (each entry there is itself a full
+# repo checkout with its own nested third_party/ -- *third_party/* rather
+# than ./third_party/* catches those regardless of depth, but worktrees are
+# excluded outright since scanning them just re-lints scripts already
+# covered by their own branch). Includes scripts/ssq-hook-handler, which has
+# no .sh extension but is a real bash script (installed as a hook handler).
+SHELL_SCRIPTS := $(shell find . -not -path "*/third_party/*" -not -path "*/node_modules/*" -not -path "./.git/*" -not -path "./.claude/worktrees/*" -type f \( -name "*.sh" -o -name "ssq-hook-handler" \))
 
 lint-shell: ## Run shellcheck over all first-party shell scripts
 	@which shellcheck >/dev/null 2>&1 || (echo "shellcheck not installed; run 'brew install shellcheck' (macOS) or see https://github.com/koalaman/shellcheck#installing" && exit 1)
@@ -999,6 +1011,7 @@ actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exi
 	@echo "actor-field-guard: scanning for direct Instance field writes..."
 	@if grep -rEn '\b(inst|instance|liveInst)\.[A-Z][a-zA-Z0-9]+ = [^=]' \
 	    server/services/session_service.go \
+	    server/services/workflow_service.go \
 	    session/pr_status_poller.go \
 	    session/review_queue_poller.go \
 	    session/autonomous_driver.go \

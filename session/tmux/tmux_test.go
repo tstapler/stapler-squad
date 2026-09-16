@@ -27,6 +27,10 @@ import (
 type MockPtyFactory struct {
 	t *testing.T
 
+	// mu guards cmds/files: RestoreWithWorkDir intentionally invokes
+	// attachPTYAfterRestore (and therefore Start/StartWithSize) concurrently
+	// across callers by design, so this bookkeeping must be safe for that.
+	mu sync.Mutex
 	// Array of commands and the corresponding file handles representing PTYs.
 	cmds  []*exec.Cmd
 	files []*os.File
@@ -39,8 +43,10 @@ func (pt *MockPtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
 	filePath := filepath.Join(pt.t.TempDir(), fmt.Sprintf("pty-%s-%d", safeName, rand.Int31()))
 	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
 	if err == nil {
+		pt.mu.Lock()
 		pt.cmds = append(pt.cmds, cmd)
 		pt.files = append(pt.files, f)
+		pt.mu.Unlock()
 	}
 	return f, cmd, err
 }

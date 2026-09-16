@@ -107,8 +107,8 @@ function HomeContent() {
     session = sessions.find((s) => {
       if (s.id.startsWith(sessionId)) return true;
       if (s.externalMetadata?.tmuxSessionName === sessionId) return true;
-      if (sessionId.includes("/") && s.path && s.path.includes(sessionId)) return true;
-      if (s.path && s.path.endsWith(`/${sessionId}`)) return true;
+      if (sessionId.includes("/") && s.existingDir && s.existingDir.includes(sessionId)) return true;
+      if (s.existingDir && s.existingDir.endsWith(`/${sessionId}`)) return true;
       return false;
     });
 
@@ -121,7 +121,7 @@ function HomeContent() {
       const searchLower = sessionId.toLowerCase();
       session = sessions.find((s) => {
         if (s.title.toLowerCase() === searchLower) return true;
-        const pathBasename = s.path?.split("/").pop()?.toLowerCase();
+        const pathBasename = s.existingDir?.split("/").pop()?.toLowerCase();
         if (pathBasename === searchLower) return true;
         return false;
       });
@@ -129,7 +129,7 @@ function HomeContent() {
 
     if (!session) {
       console.warn(`[findSessionById] No session found for ID: ${sessionId}`, {
-        availableSessions: sessions.map(s => ({ id: s.id, title: s.title, path: s.path }))
+        availableSessions: sessions.map(s => ({ id: s.id, title: s.title, path: s.existingDir }))
       });
     }
 
@@ -219,7 +219,7 @@ function HomeContent() {
       router.replace("/", { scroll: false });
       track({ name: "session_duplicate_initiated", category: "user_action" });
       getSession(duplicateId).then((session) => {
-        openOmnibar(session?.path);
+        openOmnibar(session?.repoRoot);
       }).catch(() => {
         openOmnibar();
       });
@@ -255,7 +255,7 @@ function HomeContent() {
   const handleNewWorkspaceSession = (sessionId: string) => {
     track({ name: "session_new_workspace_initiated", category: "user_action" });
     getSession(sessionId).then((session) => {
-      openOmnibar(session?.path);
+      openOmnibar(session?.repoRoot);
     }).catch(() => {
       openOmnibar();
     });

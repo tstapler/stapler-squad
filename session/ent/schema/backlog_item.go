@@ -225,6 +225,16 @@ func (BacklogItem) Edges() []ent.Edge {
 			Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("blocked_by_dependencies", BacklogItemDependency.Type).
 			Annotations(entsql.OnDelete(entsql.Cascade)),
+		// Deliberately NOT cascade, unlike every other child edge above:
+		// BacklogItem supports genuine hard deletion (DeleteBacklogItem), and
+		// a cascade here would let a hard delete silently destroy a pending OR
+		// answered-but-undelivered GuidanceRequest row with no trace —
+		// contradicting the "no answer is ever silently lost" bar. A
+		// hard-deleted item's still-open rows go stale instead, and are
+		// caught by Phase 8's self-heal sweep. See
+		// project_plans/durable-guidance-request/implementation/plan.md
+		// Task 1.1.1b.
+		edge.To("guidance_requests", GuidanceRequest.Type),
 	}
 }
 

@@ -68,6 +68,37 @@ func TestIsBackendProcessAlive_ColdStart_HasSessionFalse(t *testing.T) {
 	}
 }
 
+// TestInitTmuxSession_StalePointerAliveFalse_RebuildsWithResume is the
+// regression test for the 2026-09-12 mass tmux-kill-server incident: after a
+// tmux server crash, every instance's in-process TmuxSession pointer is still
+// non-nil (HasSession() true) even though the OS-level session it points to
+// is gone (IsAlive() false) -- exactly what a fake TmuxManager reports here
+// without needing a real tmux server. Before the fix, initTmuxSession()'s
+// guard checked HasSession() alone and returned early, skipping
+// buildLaunchCommand() entirely and leaving i.LaunchCommand as whatever
+// resume-less string was baked in at construction -- while the caller's own
+// "cold restoring with --resume" log line (session/instance.go) claimed
+// otherwise. Asserting on i.LaunchCommand (not a log line) is what makes this
+// a real regression check: it fails against the pre-fix guard and passes once
+// initTmuxSession() also requires IsAlive().
+func TestInitTmuxSession_StalePointerAliveFalse_RebuildsWithResume(t *testing.T) {
+	const uuid = "550e8400-e29b-41d4-a716-446655440000"
+	mock := &mockTmuxManager{hasSessionReturn: true, isAliveReturn: false}
+	inst := &Instance{
+		Title:          "t",
+		Program:        "claude",
+		processManager: NewTmuxBackend(mock),
+		LaunchCommand:  "claude", // stale command baked in before the crash, with no --resume
+	}
+	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: uuid})
+
+	inst.initTmuxSession()
+
+	if !strings.Contains(inst.LaunchCommand, "--resume") || !strings.Contains(inst.LaunchCommand, uuid) {
+		t.Errorf("LaunchCommand = %q, want it rebuilt with \"--resume %s\" (pointer stale but IsAlive()==false must not short-circuit the rebuild)", inst.LaunchCommand, uuid)
+	}
+}
+
 // TestRestoreProcess_DelegatesToProcessManager confirms RestoreProcess is a
 // thin, backend-agnostic pass-through to ProcessManager.RestoreWithWorkDir —
 // the replacement for reaching into a concrete *tmux.TmuxSession via
@@ -87,6 +118,51 @@ func TestRestoreProcess_DelegatesToProcessManager(t *testing.T) {
 }
 
 var errRestoreFailedForTest = errors.New("restore failed (test)")
+
+// TestInitTmuxSession_ReuseRequiresAliveNotJustConstructed is the fast, mocked
+// counterpart to TestKillSessionThenStart_DoesNotRebuildLaunchCommand: it
+// exercises initTmuxSession()'s reuse guard directly against the three
+// HasSession()/IsAlive() combinations, without spinning up a real tmux binary.
+// HasSession()=true alone must NOT be enough to reuse — the gate must also
+// require IsAlive(), or a stale *tmux.TmuxSession pointer left behind by a
+// crashed tmux server silently skips buildLaunchCommand() (and its --resume
+// rebuild) forever. See instance_tmux.go's initTmuxSession doc comment.
+func TestInitTmuxSession_ReuseRequiresAliveNotJustConstructed(t *testing.T) {
+	t.Parallel()
+
+	const sentinel = "sentinel-unchanged-launch-command"
+	cases := []struct {
+		name        string
+		hasSession  bool
+		isAlive     bool
+		wantRebuild bool
+	}{
+		{"stale pointer, dead session: rebuilds", true, false, true},
+		{"live session: reuses, no rebuild", true, true, false},
+		{"cold start, never constructed: rebuilds", false, false, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mock := &mockTmuxManager{hasSessionReturn: tc.hasSession, isAliveReturn: tc.isAlive}
+			inst := &Instance{
+				Title:          "t",
+				Program:        "some-other-program",
+				processManager: NewTmuxBackend(mock),
+				LaunchCommand:  sentinel,
+			}
+
+			inst.initTmuxSession()
+
+			rebuilt := inst.LaunchCommand != sentinel
+			if rebuilt != tc.wantRebuild {
+				t.Errorf("HasSession=%v IsAlive=%v: LaunchCommand rebuilt = %v, want %v (LaunchCommand=%q)",
+					tc.hasSession, tc.isAlive, rebuilt, tc.wantRebuild, inst.LaunchCommand)
+			}
+		})
+	}
+}
 
 // TestBuildSubmittableInput_UsesCarriageReturnNotNewline is a regression test
 // for BUG-047: WriteToSession (the ConnectRPC handler backing the web UI's

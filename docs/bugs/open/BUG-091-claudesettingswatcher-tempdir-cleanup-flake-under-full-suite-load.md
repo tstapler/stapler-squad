@@ -92,6 +92,18 @@ full-suite runs must not reproduce the `TempDir RemoveAll cleanup` failure for t
 
 ## Related
 
+- **2026-09-13 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not
+  empty` symptom recurred on a fourth test, in a different package this time --
+  `TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService`
+  (`server/dependencies_test.go`), during `make quick-check`'s full `test-race` run (6909 tests,
+  288s) on the `backlog/stapler-squad-fix-fork-pressure-flap-and-status-banner` branch (fork-pressure
+  hysteresis + status-banner work, unrelated to this test or its `BuildDependencies()`/
+  `wireDepsIntoServer` construction path). Passed 5/5 in isolation with `-race` immediately after (`go
+  test ./server/... -race -run TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
+  -count=5`). Confirms the failure family isn't confined to `server/services` -- `server`'s own
+  `BuildDependencies()` path (already flagged non-hermetic, starting ~30 real subsystems including
+  sweepers/notifiers/analytics writers) hits the same teardown-ordering gap. Not investigated further,
+  consistent with this bug's own scope boundary.
 - **2026-09-08: `TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo` instance
   root-caused and fixed** (unlike this bug's own still-unconfirmed ClaudeSettingsWatcher hypothesis).
   Hit during `make quick-check` on PR #735 (`fix-control-mode-input-silent-drop`, an unrelated

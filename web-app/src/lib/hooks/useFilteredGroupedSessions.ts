@@ -71,7 +71,7 @@ export function useFilteredGroupedSessions({
         const query = searchQuery.toLowerCase();
         const matchesSearch =
           session.title.toLowerCase().includes(query) ||
-          session.path.toLowerCase().includes(query) ||
+          session.activeDir.toLowerCase().includes(query) ||
           session.branch.toLowerCase().includes(query) ||
           (session.category && session.category.toLowerCase().includes(query)) ||
           (session.tags && session.tags.some(tag => tag.toLowerCase().includes(query))) ||

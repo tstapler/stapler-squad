@@ -94,6 +94,18 @@ type ApprovalRuleData struct {
 	MinSessionIdleMinutes int32
 }
 
+// DismissedFindingData is the domain model for a dismissed WasteFinding
+// record. FindingID is the stable content-addressed dismissal key (see
+// tokens.ComputeFindingID); SessionID/ConversationID/FindingType are kept
+// alongside it only for debuggability, not for lookups.
+type DismissedFindingData struct {
+	FindingID      string
+	SessionID      string
+	ConversationID string
+	FindingType    int32
+	DismissedAt    time.Time
+}
+
 // SubcommandDecisionCount holds a (subcommand, decision) aggregate count.
 // Returned by GetSubcommandBreakdown.
 type SubcommandDecisionCount struct {
@@ -206,7 +218,21 @@ type BacklogStatusEventData struct {
 	ToStatus    string
 	TriggeredBy string
 	Note        *string
-	CreatedAt   time.Time
+	// StageNameSnapshot is Epic 2.5's frozen-at-transition-time human-readable
+	// name of the destination BacklogStage, so item-detail history keeps
+	// rendering the original stage name after that stage row is later renamed
+	// or deleted. Nil for a row written before this field existed, or when no
+	// matching BacklogStage row was found at write time.
+	StageNameSnapshot *string
+	// AllowedTransitionsSnapshot is ADR-004's sibling snapshot: the destination
+	// BacklogStage's legal outgoing transition slugs (as BacklogStatus string
+	// values) at the moment of this transition, so CanTransition/
+	// AllowedTransitions/PendingGates can fall back to it when that stage is
+	// later deleted. Nil (not just empty) for a row written before this field
+	// existed, or when no matching BacklogStage row was found at write time —
+	// distinguishing "no snapshot captured" from "captured, zero transitions."
+	AllowedTransitionsSnapshot []string
+	CreatedAt                  time.Time
 }
 
 // ProgressNoteData is the domain DTO replacing *ent.BacklogProgressNote in Storage returns.

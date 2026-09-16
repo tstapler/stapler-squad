@@ -287,10 +287,11 @@ func syncOrphanedApprovalsToQueue(
 
 		// Enrich with instance data if available
 		if inst, ok := instMap[approval.SessionID]; ok {
+			snap := inst.Snapshot()
 			item.Program = inst.Program
 			item.Branch = inst.Branch
-			item.Path = inst.Path
-			item.WorkingDir = inst.WorkingDir
+			item.Path = snap.Path
+			item.WorkingDir = snap.WorkingDir
 			item.Status = inst.GetLifecycleStatus().String()
 			item.Tags = inst.Tags
 			item.Category = inst.Category
@@ -712,7 +713,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		stageCRUDRepo = entStageRepo
 		entGateSatisfactionRepo := session.NewEntGateSatisfactionRepository(entClient)
 		gateSatisfactionRepo = entGateSatisfactionRepo
-		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo); err != nil {
+		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo, pipelineModeRepo); err != nil {
 			log.Warn("stageConfigEngine construction failed; stage/transition/gate CRUD writes will not invalidate a cache", "err", err)
 		} else {
 			stageConfigEngine = engine
@@ -851,6 +852,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// Stagger starts by 200ms each to avoid a fork burst that saturates the
 		// cgroup pids.max limit when many sessions restore simultaneously.
 		for i, inst := range instances {
+			// Archived sessions are deliberately retired: never auto-start one
+			// (ADR-001, superseded-rework-session-retirement).
+			if inst == nil || inst.IsArchived() {
+				continue
+			}
 			if !inst.Started() {
 				if i > 0 {
 					time.Sleep(200 * time.Millisecond)
@@ -878,7 +884,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// capture/resync against it fails indefinitely even though the
 		// underlying tmux session is fully functional. IsHotRestoreRecoverable is
 		// the single source of truth for this status set — see its doc comment.
+		// Archived sessions are skipped before TmuxSessionExists(): adopting one
+		// flips it back off its terminal status, so it would resurrect on every
+		// boot (see ADR-001, superseded-rework-session-retirement).
 		for _, inst := range instances {
+			if inst == nil || inst.IsArchived() {
+				continue
+			}
 			if inst.IsHotRestoreRecoverable() && inst.TmuxSessionExists() {
 				log.Info("Reconcile: session is terminal in DB but tmux is alive — restoring", "session", inst.Title, "status", inst.GetLifecycleStatus())
 				inst.RecoverFromStopped()
@@ -1098,10 +1110,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			Context:     context,
 		}
 		if inst != nil {
+			snap := inst.Snapshot()
 			item.Program = inst.Program
 			item.Branch = inst.Branch
-			item.Path = inst.Path
-			item.WorkingDir = inst.WorkingDir
+			item.Path = snap.Path
+			item.WorkingDir = snap.WorkingDir
 			item.Status = inst.GetLifecycleStatus().String()
 			item.Tags = inst.Tags
 			item.Category = inst.Category
@@ -1338,6 +1351,22 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// invocations (Epic 2.4, Task 2.4.4c) — same gateSatisfactionRepo instance
 	// already wired into backlogSvc above, guarded nil-safe by both consumers.
 	backlogLifecycleListener.SetGateSatisfactionRepository(gateSatisfactionRepo)
+	// Wires the underlying ReviewGateRunner's own GateSatisfactionRepository
+	// (Epic 2.4 follow-up) so a configured automated_review gate's terminal
+	// verdict is actually recorded, not just this listener's separate
+	// reconcile-sweep copy above.
+	backlogLifecycleListener.SetReviewGateSatisfactionRepository(gateSatisfactionRepo)
+	// Wires resolveReviewGateContext/resolveCustomCheckGateContext's
+	// ConfiguredWorkflowEngine consultation (Epic 2.4 follow-up) — without
+	// this, a custom transition's automated-review/custom-check gates can
+	// never fire, degrading to the built-in `to == BacklogStatusReview`
+	// literal only. Guarded the same way backlogSvc.SetStageConfigEngine is
+	// above: stageConfigEngine is a concrete *session.ConfiguredWorkflowEngine,
+	// and passing a nil one through SetWorkflowEngine's interface parameter
+	// would box it as a non-nil-interface-wrapping-nil-pointer.
+	if stageConfigEngine != nil {
+		backlogLifecycleListener.SetWorkflowEngine(stageConfigEngine)
+	}
 	// Wire the orphaned_triage respawner so an idea-status item whose triage
 	// session orphaned (crashed, was killed, or a server restart happened
 	// mid-triage) gets triage automatically re-triggered instead of sitting
@@ -1377,6 +1406,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// BacklogService's SessionStopper uses for the transition-hook/rework-respawn
 	// archival paths.
 	backlogLifecycleListener.SetSessionArchiver(sessionService)
+	// Wire the worktree cleaner so internal transition paths that drive an
+	// item straight to done (bounce-to-done, PR-merge/superseded-by-main
+	// detection) trigger the same synchronous git-worktree cleanup +
+	// session archival the manual TransitionBacklogItemStatus RPC already
+	// runs inline, instead of relying solely on the 60s
+	// reconcileTerminalItemSessions safety-net sweep.
+	backlogLifecycleListener.SetWorktreeCleaner(backlogSvc)
 	// Wire the agent-driven ship runner (shipViaAgentOrFallback,
 	// session/backlog_lifecycle.go) so a PASS verdict whose work session has
 	// already exited ships via a headless one-shot /backlog/ship run (CI
@@ -1475,7 +1511,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			log.Warn("pricing table is stale (an entry's EffectiveDate is 30+ days old)", "loadedAt", pricing.LoadedAt)
 		}
 		associator := tokens.NewAssociator(storage)
-		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator)
+		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator, storage)
+		insightsSvc.SetDismissedFindingsStore(storage)
 		sessionService.SetTokenStoreReader(tokenStore)
 		backlogSvc.SetTokenStore(tokenStore, pricing)
 		if sessionSummaryGenerator != nil {
@@ -1564,6 +1601,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			log.Warn("failed to resolve config dir, skipping model family override, using defaults", "err", cfgErr)
 		}
 		workflowSvc := services.NewWorkflowService(workflowRepo, workflowScheduler, storage)
+		workflowSvc.SetEventBus(eventBus)
 		sessionService.SetWorkflowService(workflowSvc)
 		sessionService.SetWorkflowRepository(workflowRepo)
 		// Close the WIP-gate bypass (webhook-triggers Epic 1.3): every trigger-fired
@@ -1773,8 +1811,9 @@ var prNumFromTitle = regexp.MustCompile(`(?i)^pr-(\d+)-`)
 // UserPR list. Called in the UserPRCache onUpdated callback. Lives here (not
 // in the github package) to avoid an import cycle: github → session → github.
 func annotateUserPRCache(cache *githubpkg.UserPRCache, poller *session.PRStatusPoller, scanner *unfinished.Scanner) {
-	var enterpriseHosts []string
-	for _, h := range config.LoadConfig().GetGitHubEnterpriseHosts() {
+	ghHosts := config.LoadConfig().GetGitHubEnterpriseHosts()
+	enterpriseHosts := make([]string, 0, len(ghHosts))
+	for _, h := range ghHosts {
 		enterpriseHosts = append(enterpriseHosts, h.Host)
 	}
 	var annSessions []githubpkg.PRAnnotationSession
