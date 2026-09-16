@@ -1,8 +1,10 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	stdlog "log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -727,6 +730,93 @@ func TestReconcileUnprocessedReviewVerdicts_should_invokeAutoReopener_When_Newes
 	}
 }
 
+// TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRepeatedSweepTicksWhileBouncingBlocked
+// is a follow-up BUG-046 regression test: BUG-046 fixed handleReviewSessionExited's
+// own notify+log for a no-verdict exit to check RemediationBlocked(bouncing) first,
+// but this sweep's OWN detection log — fired here, before
+// handleReviewSessionExited is even reached — was never covered by that guard.
+// Live-confirmed 2026-09-11: item 09e91e3e-e13d-4166-a5f2-447242447f77 / session
+// 7ce35db9 logged "exited without ever writing a verdict" once a minute for 20+
+// minutes straight (Story: same dead SessionUUID re-matched every ~60s tick
+// because nothing transitions the item out of "review" while the "bouncing"
+// gate is blocked/parked). Reproduces the realistic timeline: tick 1 fires
+// before any "bouncing" row exists (a genuinely fresh detection — must log),
+// then a "bouncing" row opens mid-backoff between ticks (mirroring
+// reconcileBouncingItems tripping independently, the same live DB shape
+// TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSweepTicks
+// seeds), then tick 2 reprocesses the identical dead SessionUUID with the gate
+// now blocked and must NOT log the detection line a second time.
+func TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRepeatedSweepTicksWhileBouncingBlocked(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// FindReviewItemsWithUnprocessedVerdict's item-level filter requires SOME
+	// review-role session on the item to have a verdict — newStuckReviewTestItem
+	// (older, dead, FAIL-verdicted review session) satisfies that, mirroring
+	// TestReconcileUnprocessedReviewVerdicts_should_invokeAutoReopener_When_NewestReviewSessionHasNoVerdictButIsDead's
+	// identical fixture shape. A newer, dead, verdict-less review session on top
+	// of it is what actually exercises this test's target: the "latest" the
+	// sweep inspects has no verdict of its own.
+	item := newStuckReviewTestItem(t, storage, ReviewVerdictFail, true, false)
+
+	newerReviewUUID := "headless-review-" + uuid.New().String()
+	_, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: newerReviewUUID,
+		SessionRole: SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // everything dead
+	reopener := newFakeAutoReopenSpawner()
+	listener.SetAutoReopener(reopener)
+	er := storage.repo
+
+	const detectionMsg = "exited without ever writing a verdict"
+
+	var buf bytes.Buffer
+	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
+	t.Cleanup(func() { tslog.SetWarningLogForTest(orig) })
+
+	// Sweep tick 1: no "bouncing" row exists yet, so RemediationBlocked reports
+	// false (ungated default) — a genuinely fresh detection, must log and reach
+	// the auto-reopener (which is itself ungated for the same reason).
+	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+	select {
+	case <-reopener.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for AutoReopenAfterFailedReview on tick 1 (ungated — no bouncing row yet)")
+	}
+	assert.Equal(t, 1, strings.Count(buf.String(), detectionMsg),
+		"tick 1 is a fresh detection and must log the WARNING once")
+
+	// Between ticks: a "bouncing" stuck row opens mid-backoff — mirrors
+	// reconcileBouncingItems tripping its own bounceThreshold independently.
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusReview, "bounced previously")
+	require.NoError(t, err)
+	future := time.Now().Add(2 * time.Hour)
+	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, 1, &future)
+	require.NoError(t, err)
+
+	// Sweep tick 2: the item never left "review" (nothing transitioned it), so
+	// the SAME dead SessionUUID is reprocessed. The bouncing gate is now
+	// mid-backoff, so the reopen correctly no-ops, and the detection log must
+	// not fire a second time either.
+	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+	select {
+	case gotItemID := <-reopener.called:
+		t.Fatalf("bouncing gate is mid-backoff on tick 2 — AutoReopenAfterFailedReview must not be invoked, got call for item=%s", gotItemID)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	assert.Equal(t, 1, strings.Count(buf.String(), detectionMsg),
+		"must not log the detection WARNING a second time for the same dead session once the bouncing gate is blocking")
+}
+
 // TestReconcileStuckReviewItems_should_resolveAbandonedRow_When_ReviewGateBackInFlightWhileStillReview
 // is the C2 regression test for abandoned_review: when the review gate comes
 // back in flight (a new active session appears) while the item is still
@@ -788,6 +878,10 @@ func TestReconcileStaleWorkSessions_should_writeDurableStaleWorkRow_When_ActiveS
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonStaleWork, open[0].Reason)
 	assert.Equal(t, []string{"Work session may be stuck"}, notifier.titles())
+	// Push-gate classification table: neither urgent nor important — a routine
+	// self-monitoring poll, not yet a confirmed dead end.
+	assert.False(t, notifier.calls[0].Urgent, "Work session may be stuck must not be urgent")
+	assert.False(t, notifier.calls[0].Important, "Work session may be stuck must not be important")
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcileStaleWorkSessions(ctx, er)
@@ -1312,7 +1406,7 @@ func TestReconcileOrphanedTriageItems_should_writeDurableRowNotifyOnce_When_Tria
 	ctx := context.Background()
 	er := storage.repo
 
-	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour) // beyond maxWorkSessionStaleness (2h)
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
 	notifier := &fakeNotifier{}
@@ -1326,6 +1420,9 @@ func TestReconcileOrphanedTriageItems_should_writeDurableRowNotifyOnce_When_Tria
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
 	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+	// Push-gate classification table: neither urgent nor important.
+	assert.False(t, notifier.calls[0].Urgent, "Triage may be stuck must not be urgent")
+	assert.False(t, notifier.calls[0].Important, "Triage may be stuck must not be important")
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -1345,7 +1442,7 @@ func TestReconcileOrphanedTriageItems_should_tombstoneStaleSession_When_Detected
 	ctx := context.Background()
 	er := storage.repo
 
-	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour) // beyond maxWorkSessionStaleness (2h)
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -1354,6 +1451,43 @@ func TestReconcileOrphanedTriageItems_should_tombstoneStaleSession_When_Detected
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.NotNil(t, sessions[0].EndedAt, "a confirmed-stale triage session must be tombstoned, not left open indefinitely")
+}
+
+// TestReconcileOrphanedTriageItems_should_notFlag_When_OpenGuidanceRequestExists
+// covers durable-guidance-request AC2/Story 5.1.3: a triage session that has
+// gone stale (or ended without a plan) but deliberately halted behind an open
+// GuidanceRequest for this item must not be tombstoned/MarkStuck-ed as an
+// anomaly — that would retry-with-backoff-penalize a legitimately-halted item
+// and defeat the halt.
+func TestReconcileOrphanedTriageItems_should_notFlag_When_OpenGuidanceRequestExists(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond staleness, would normally be flagged
+	itemID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	_, err = storage.CreateGuidanceRequest(ctx, CreateGuidanceRequestInput{
+		Scope:        domain.RequestScopeBacklogItem,
+		ItemID:       &itemID,
+		QuestionText: "Should this include the mobile client changes?",
+		QuestionType: domain.QuestionTypeYesNo,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Nil(t, sessions[0].EndedAt, "a triage session halted behind an open GuidanceRequest must not be tombstoned")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "an item halted behind an open GuidanceRequest must not be marked stuck")
 }
 
 func TestReconcileOrphanedTriageItems_should_notFlag_When_TriageSessionRecent(t *testing.T) {
@@ -1375,22 +1509,29 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_TriageSessionRecent(t 
 	assert.Empty(t, open, "a recently-started triage session must not be flagged as orphaned")
 }
 
-// TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min is the
-// regression test for closing the "triage session died before submit_triage_result,
-// item silently stuck in idea for up to 2h" gap (GAP-20/21): a headless-triage session
-// (the common execution path) must be flagged well before the general-purpose 2h
-// staleness ceiling, since an open headless row reliably means dead, not slow.
-func TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min(t *testing.T) {
+// TestReconcileOrphanedTriageItems_should_notFlagHeadlessSession_BeforeItsOwnLongerThreshold
+// guards headless triage sessions' dedicated staleness threshold in the OTHER direction
+// from its original 2026-08-01 intent: originally (30m real call budget) the headless
+// threshold was much SHORTER than the general-purpose maxWorkSessionStaleness (2h), so this
+// test proved headless sessions got flagged sooner, not held to the slower general ceiling.
+// 2026-09-08 (this session) raised triageCallBudget to 3h alongside headless.idleTimeout
+// becoming the primary hang defense, which pushed maxHeadlessTriageSessionStaleness (now
+// 3h15m, kept in sync per TestMaxHeadlessTriageSessionStaleness_..._ExceedRealTriageCallBudgetWithMargin
+// below) past the general 2h ceiling — inverting the relationship. This test now guards the
+// inverse regression: a headless session must NOT be flagged merely for outliving the
+// general-purpose 2h threshold; it still gets its own (now longer) dedicated patience.
+func TestReconcileOrphanedTriageItems_should_notFlagHeadlessSession_BeforeItsOwnLongerThreshold(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 	er := storage.repo
 
-	// 45 minutes: past maxHeadlessTriageSessionStaleness (30m) but nowhere near the
-	// general-purpose maxWorkSessionStaleness (2h) — would NOT have been flagged
-	// before this fix.
-	item := newOrphanedTriageTestItem(t, storage, er, 45*time.Minute)
+	// 2h30m: past the general-purpose maxWorkSessionStaleness (2h) but still short of
+	// maxHeadlessTriageSessionStaleness (3h15m) — must NOT be flagged if the headless
+	// override is still correctly applied instead of silently falling through to the
+	// shorter general threshold.
+	newOrphanedTriageTestItem(t, storage, er, 2*time.Hour+30*time.Minute)
 
 	listener := NewBacklogLifecycleListener(storage)
 	notifier := &fakeNotifier{}
@@ -1400,10 +1541,8 @@ func TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min(t *t
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	require.Len(t, open, 1, "a headless triage session at 45m must be flagged, not held to the 2h general-purpose threshold")
-	assert.Equal(t, item.ID, open[0].ItemID)
-	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
-	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+	assert.Empty(t, open, "a headless session at 2h30m must not be flagged — it hasn't reached its own (longer) dedicated threshold yet")
+	assert.Empty(t, notifier.titles())
 }
 
 // TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionStaleButGenuinelyLive
@@ -1420,9 +1559,9 @@ func TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionSt
 	ctx := context.Background()
 	er := storage.repo
 
-	// 45 minutes: past maxHeadlessTriageSessionStaleness (35m) — would have been
-	// tombstoned unconditionally before this fix.
-	item := newOrphanedTriageTestItem(t, storage, er, 45*time.Minute)
+	// 4 hours: past maxHeadlessTriageSessionStaleness (3h15m) — would have been
+	// tombstoned unconditionally before BUG-055's fix.
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour)
 
 	listener := NewBacklogLifecycleListener(storage)
 	notifier := &fakeNotifier{}
@@ -1446,14 +1585,14 @@ func TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionSt
 
 // TestMaxHeadlessTriageSessionStaleness_should_ExceedRealTriageCallBudgetWithMargin guards
 // the exact margin regression named in BUG-055: this constant must stay strictly greater
-// than server/services.triageCallBudget (currently 30m — kept as a literal here rather than
+// than server/services.triageCallBudget (currently 3h — kept as a literal here rather than
 // imported, since session cannot depend on server/services) with real headroom, or every
 // slow-but-legitimate headless triage call races this sweep's staleness gate again,
 // regardless of how good IsTriageLive's liveness check is. If server/services.triageCallBudget
 // ever changes, this literal and the one there must be updated together.
 func TestMaxHeadlessTriageSessionStaleness_should_ExceedRealTriageCallBudgetWithMargin(t *testing.T) {
 	t.Parallel()
-	const knownTriageCallBudget = 30 * time.Minute
+	const knownTriageCallBudget = 3 * time.Hour
 	const minMargin = 2 * time.Minute
 	assert.Greater(t, maxHeadlessTriageSessionStaleness, knownTriageCallBudget+minMargin,
 		"maxHeadlessTriageSessionStaleness must exceed the real triage call budget with real margin, not race it")
@@ -1770,7 +1909,7 @@ func TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGa
 	ctx := context.Background()
 	er := storage.repo
 
-	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour)
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetNotifier(&fakeNotifier{})
@@ -3583,7 +3722,7 @@ func TestAttemptPushRemediation_should_resolveStuckRow_When_MergeSucceedsAndRetr
 		return &git.MergeMainResult{Merged: true}, nil
 	})
 
-	listener.attemptPushRemediation(ctx, item.ID, item.Title)
+	listener.attemptPushRemediation(ctx, item.ID, item.Title, "push failed: push rejected: non-fast-forward")
 
 	assert.True(t, fakeCreator.pushCalled, "the retried push must actually be attempted")
 	assert.True(t, fakeCreator.createCalled, "PR creation should proceed once the push succeeds")
@@ -3626,7 +3765,7 @@ func TestAttemptPushRemediation_should_notifyManualRebaseNeeded_When_BranchRecon
 		return &git.MergeMainResult{Conflicted: true, ConflictedFiles: []string{"src/edit.ts"}}, nil
 	})
 
-	listener.attemptPushRemediation(ctx, item.ID, item.Title)
+	listener.attemptPushRemediation(ctx, item.ID, item.Title, "push failed: push rejected: non-fast-forward")
 
 	assert.False(t, fakeCreator.pushCalled, "a real content conflict must not be mechanically retried")
 	assert.Contains(t, notifier.titles(), "Manual rebase needed")
@@ -3635,6 +3774,95 @@ func TestAttemptPushRemediation_should_notifyManualRebaseNeeded_When_BranchRecon
 	require.NoError(t, err)
 	require.Len(t, open, 1)
 	assert.Equal(t, domain.StuckReasonPushFailed, open[0].Reason, "row stays open — a human needs to resolve the real conflict")
+}
+
+// TestIsNonFastForwardRecoverable_should_returnFalse_When_KnownUnrecoverableSignature
+// and its companion below cover isNonFastForwardRecoverable, the classifier
+// backing docs/tasks/backlog-feature-improvement.md's "attemptPushRemediation
+// only handles non-fast-forward rejections and otherwise reruns the
+// identical failing pushAndCreatePR call" finding: an auth/permission/
+// branch-protection failure cannot be fixed by attemptPushRemediation's only
+// remediation action (fetch+merge+retry), so it must be recognized and
+// skipped rather than blindly retried forever.
+func TestIsNonFastForwardRecoverable_should_returnFalse_When_KnownUnrecoverableSignature(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"push failed: remote: Permission denied to user (403)",
+		"push failed: fatal: Authentication failed for 'https://github.com/x/y.git'",
+		"push failed: remote: error: GH006: Protected branch update failed",
+		"PR creation failed: HTTP 401: Bad credentials",
+	}
+	for _, c := range cases {
+		assert.False(t, isNonFastForwardRecoverable(c), "expected %q to be classified unrecoverable-by-merge", c)
+	}
+}
+
+// TestIsNonFastForwardRecoverable_should_returnTrue_When_FastForwardOrUnknown
+// verifies the fail-open default: a genuine non-fast-forward rejection, and
+// anything this classifier doesn't recognize at all, must still be treated
+// as recoverable (attempt the merge+retry) rather than skipped — see the
+// function's own doc comment on why a false "unrecoverable" is worse than
+// one extra harmless retry.
+func TestIsNonFastForwardRecoverable_should_returnTrue_When_FastForwardOrUnknown(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"push failed: push rejected: non-fast-forward",
+		"push failed: ! [rejected] backlog/foo -> backlog/foo (fetch first)",
+		"",
+		"push failed: some completely unclassified transient network blip",
+	}
+	for _, c := range cases {
+		assert.True(t, isNonFastForwardRecoverable(c), "expected %q to be classified recoverable (fail-open)", c)
+	}
+}
+
+// TestAttemptPushRemediation_should_skipRetryAndNotifyDistinctly_When_FailureLooksUnrecoverable
+// is the integration-level counterpart: attemptPushRemediation must not call
+// the branch reconciler (or push again) at all when the recorded push_failed
+// context matches a known unrecoverable-by-merge signature — it must
+// instead surface a distinct, differently-titled notification explaining
+// why, so an operator isn't shown the same generic "PR creation failed"
+// toast on every backoff tick with no new information.
+func TestAttemptPushRemediation_should_skipRetryAndNotifyDistinctly_When_FailureLooksUnrecoverable(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{pushErr: errors.New("remote: Permission denied (403)")}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	listener.pushAndCreatePR(ctx, item, is)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	require.Equal(t, domain.StuckReasonPushFailed, open[0].Reason)
+
+	reconcilerCalled := false
+	listener.SetBranchReconciler(func(worktreePath, branchName string) (*git.MergeMainResult, error) {
+		reconcilerCalled = true
+		return &git.MergeMainResult{Merged: true}, nil
+	})
+	fakeCreator.pushCalled = false
+
+	listener.attemptPushRemediation(ctx, item.ID, item.Title, open[0].Context)
+
+	assert.False(t, reconcilerCalled, "a permission/auth failure cannot be fixed by fetch+merge — the reconciler must not even be invoked")
+	assert.False(t, fakeCreator.pushCalled, "the push must not be blindly retried against an unrecoverable failure")
+	assert.Contains(t, notifier.titles(), "Automated push retry skipped", "expected a distinct notification, not silence or a repeat of the generic push-failed toast")
+
+	stillOpen, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, stillOpen, 1)
+	assert.Equal(t, domain.StuckReasonPushFailed, stillOpen[0].Reason, "row stays open — a human needs to fix the underlying auth/permission issue")
 }
 
 // TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly
@@ -3666,7 +3894,7 @@ func TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_Calle
 	})
 
 	for i := 0; i < 10; i++ {
-		listener.retryPushFailedWithBackoffGate(ctx, item.ID, item.Title)
+		listener.retryPushFailedWithBackoffGate(ctx, item.ID, item.Title, "push failed: push rejected: non-fast-forward")
 	}
 
 	wait.RequireEventually(t, func() bool {
@@ -4891,6 +5119,9 @@ func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillO
 
 	require.Len(t, notifier.calls, 1)
 	assert.Equal(t, "Multiple stuck reasons open", notifier.calls[0].Title)
+	// Push-gate classification table: urgent and important.
+	assert.True(t, notifier.calls[0].Urgent, "Multiple stuck reasons open must be urgent")
+	assert.True(t, notifier.calls[0].Important, "Multiple stuck reasons open must be important")
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)

@@ -197,6 +197,48 @@ func TestIsRepeatedNoVerdictFailure_should_returnFalse_When_EitherReviewHadAVerd
 	assert.False(t, IsRepeatedNoVerdictFailure([]bool{true, true}), "both had verdicts — IsRepeatedFailure's job, not this one")
 }
 
+func TestReviewFailureStreakLen_should_returnStreakLength_When_ConsecutiveIdenticalFailures(t *testing.T) {
+	t.Parallel()
+	recent := []ReviewVerdictSummary{
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: "diff computation failed"},
+	}
+	assert.Equal(t, 3, ReviewFailureStreakLen(recent))
+	assert.Equal(t, 2, ReviewFailureStreakLen(recent[:2]))
+	assert.Equal(t, 1, ReviewFailureStreakLen(recent[:1]))
+}
+
+func TestReviewFailureStreakLen_should_stopAtFirstDifference_When_StreakBreaks(t *testing.T) {
+	t.Parallel()
+	recent := []ReviewVerdictSummary{
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: "missing acceptance criterion 2"},
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: "diff computation failed"},
+	}
+	assert.Equal(t, 2, ReviewFailureStreakLen(recent), "the streak must stop at the first non-matching entry, not skip over it")
+}
+
+func TestReviewFailureStreakLen_should_returnZero_When_EmptyOrLatestIsPassOrUnlabeled(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, 0, ReviewFailureStreakLen(nil))
+	assert.Equal(t, 0, ReviewFailureStreakLen([]ReviewVerdictSummary{
+		{OverallOutcome: string(ReviewOutcomePass), Summary: "looks good"},
+	}))
+	assert.Equal(t, 0, ReviewFailureStreakLen([]ReviewVerdictSummary{
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: ""},
+	}), "an empty summary carries no signal")
+}
+
+func TestNoVerdictStreakLen_should_returnStreakLength_When_ConsecutiveNoVerdictReviews(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, 3, NoVerdictStreakLen([]bool{false, false, false}))
+	assert.Equal(t, 0, NoVerdictStreakLen([]bool{true, false, false}), "latest had a verdict — no streak at all")
+	assert.Equal(t, 1, NoVerdictStreakLen([]bool{false, true, false}), "streak stops at the first true, not further")
+	assert.Equal(t, 0, NoVerdictStreakLen(nil))
+}
+
 func TestIsFlakyVerdictFlipFlop_should_returnTrue_When_SameDiffHashDifferentOutcome(t *testing.T) {
 	t.Parallel()
 	recent := []ReviewVerdictSummary{

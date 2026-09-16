@@ -28,7 +28,7 @@ function externalSession(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: "sess-1",
     title: "My External Session",
-    path: "/home/user/project",
+    existingDir: "/home/user/project",
     program: "claude",
     instanceType: InstanceType.EXTERNAL,
     externalMetadata: {

@@ -57,10 +57,6 @@ jest.mock("../BrowserTab", () => ({
   ),
   VNCStatus: { UNSPECIFIED: 0, STARTING: 1, READY: 2, NO_BROWSER: 3, UNAVAILABLE: 4 },
 }));
-jest.mock("../NoVNCViewer", () => ({
-  __esModule: true,
-  default: () => <div data-testid="novnc-viewer-stub" />,
-}));
 jest.mock("@/components/ui/ActionBar", () => ({
   ActionBar: ({ children, className }: { children: React.ReactNode; className?: string }) => (
     <div className={className}>{children}</div>

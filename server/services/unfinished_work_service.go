@@ -44,10 +44,11 @@ type instanceIndexCache struct {
 
 // UnfinishedWorkService implements the ConnectRPC UnfinishedWorkServiceHandler.
 type UnfinishedWorkService struct {
-	scanner    *unfinished.Scanner
-	stateStore *unfinished.StateStore
-	eventBus   *events.EventBus
-	storage    *session.Storage
+	scanner         *unfinished.Scanner
+	stateStore      *unfinished.StateStore
+	eventBus        *events.EventBus
+	storage         *session.Storage
+	watchDirWatcher *unfinished.WatchDirWatcher
 
 	// perWorktreeMu prevents duplicate AI summary generation for the same worktree.
 	aiMu sync.Map // map[string]*sync.Mutex  key = repoPath+"|"+branch
@@ -55,18 +56,23 @@ type UnfinishedWorkService struct {
 	idxCache instanceIndexCache
 }
 
-// NewUnfinishedWorkService creates a new service instance.
+// NewUnfinishedWorkService creates a new service instance. watchDirWatcher
+// may be nil (e.g. in tests) — UpdateUnfinishedWorkConfig then skips live
+// watch-dir registration and relies on the next process restart's
+// WatchDirWatcher.Start to pick up the persisted config instead.
 func NewUnfinishedWorkService(
 	scanner *unfinished.Scanner,
 	stateStore *unfinished.StateStore,
 	eventBus *events.EventBus,
 	storage *session.Storage,
+	watchDirWatcher *unfinished.WatchDirWatcher,
 ) *UnfinishedWorkService {
 	return &UnfinishedWorkService{
-		scanner:    scanner,
-		stateStore: stateStore,
-		eventBus:   eventBus,
-		storage:    storage,
+		scanner:         scanner,
+		stateStore:      stateStore,
+		eventBus:        eventBus,
+		storage:         storage,
+		watchDirWatcher: watchDirWatcher,
 	}
 }
 
@@ -96,7 +102,11 @@ func (s *UnfinishedWorkService) instanceIndexes() (map[string][]string, map[stri
 		return s.idxCache.pathIdx, s.idxCache.prIdx
 	}
 
-	data, err := s.storage.ListInstanceData()
+	// ListInstanceDataWithWorktree (not ListInstanceData/LoadMinimal) so
+	// ActiveDir() below can see Worktree.WorktreePath — the scanner keys results
+	// by WorktreePath (the resolved directory), so the index must key on the
+	// same resolved concept or worktree sessions never match.
+	data, err := s.storage.ListInstanceDataWithWorktree()
 	if err != nil {
 		if s.idxCache.pathIdx != nil {
 			// Serve the stale cache rather than an empty index on a transient error.
@@ -108,15 +118,16 @@ func (s *UnfinishedWorkService) instanceIndexes() (map[string][]string, map[stri
 	pathIdx := make(map[string][]string, len(data))
 	prIdx := make(map[string]worktreePRInfo, len(data))
 	for _, d := range data {
-		if d.Path != "" && d.UUID != "" {
-			pathIdx[d.Path] = append(pathIdx[d.Path], d.UUID)
+		activeDir := d.ActiveDir()
+		if activeDir != "" && d.UUID != "" {
+			pathIdx[activeDir] = append(pathIdx[activeDir], d.UUID)
 		}
-		if d.Path == "" || d.GitHubPRNumber == 0 {
+		if activeDir == "" || d.GitHubPRNumber == 0 {
 			continue
 		}
 		// Prefer the first (or best-priority) PR we find for a given path.
-		if _, exists := prIdx[d.Path]; !exists {
-			prIdx[d.Path] = worktreePRInfo{
+		if _, exists := prIdx[activeDir]; !exists {
+			prIdx[activeDir] = worktreePRInfo{
 				Number:   d.GitHubPRNumber,
 				URL:      d.GitHubPRURL,
 				State:    d.GitHubPRState,
@@ -568,11 +579,16 @@ func (s *UnfinishedWorkService) UpdateUnfinishedWorkConfig(
 		}
 	}
 
+	// Snapshot the previous watch dirs before overwriting, so the diff below
+	// can tell which dirs are newly added vs. removed.
+	previousWatchDirs := s.stateStore.WatchDirs()
+
 	if err := s.stateStore.SetConfig(cfg.AutoSpiderSessions, cfg.WatchDirs, cfg.PinnedRepos); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	s.scanner.SetAutoSpider(cfg.AutoSpiderSessions)
+	s.applyWatchDirChanges(previousWatchDirs, cfg.WatchDirs)
 
 	// Trigger scan to pick up new repos.
 	s.scanner.TriggerScan()
@@ -583,6 +599,35 @@ func (s *UnfinishedWorkService) UpdateUnfinishedWorkConfig(
 }
 
 // --- helpers ---
+
+// applyWatchDirChanges diffs previous against current watch dirs and applies
+// the delta to watchDirWatcher live — added dirs get walked immediately
+// (their repos show up without a restart), removed dirs release the repos
+// they contributed. No-op if watchDirWatcher is nil (see NewUnfinishedWorkService).
+func (s *UnfinishedWorkService) applyWatchDirChanges(previous, current []string) {
+	if s.watchDirWatcher == nil {
+		return
+	}
+	previousSet := make(map[string]bool, len(previous))
+	for _, dir := range previous {
+		previousSet[dir] = true
+	}
+	currentSet := make(map[string]bool, len(current))
+	for _, dir := range current {
+		currentSet[dir] = true
+	}
+
+	for dir := range currentSet {
+		if !previousSet[dir] {
+			s.watchDirWatcher.AddWatchDir(dir)
+		}
+	}
+	for dir := range previousSet {
+		if !currentSet[dir] {
+			s.watchDirWatcher.RemoveWatchDir(dir)
+		}
+	}
+}
 
 func scanResultToProto(r unfinished.ScanResult, pr worktreePRInfo) *sessionv1.UnfinishedWorktree {
 	wt := &sessionv1.UnfinishedWorktree{

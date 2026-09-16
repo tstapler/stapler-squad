@@ -263,3 +263,22 @@ func worktreeUntrackedMatcher(path string, cache *gitignoreFSCache) gitignore.Ma
 	}
 	return gitignore.NewMatcher(patterns)
 }
+
+// IsDirtyUncached reports whether the worktree has uncommitted changes,
+// bypassing IsDirtyWithHint's own TTL cache (IsDirtyCacheTTL/IsDirtyCleanCacheTTL)
+// -- but still reusing g.gitignoreFS/g.headTreeCache, the per-GitWorktree
+// allocation-avoidance caches worktreeIsDirtyFast itself needs. Those two are
+// safe to share here without reintroducing staleness: headTreeCache is keyed
+// by HEAD's own commit hash (a hit can never be stale) and gitignoreFS has its
+// own independent invalidation (InvalidateDirtyCache) unrelated to the
+// 30s/5min TTL-staleness problem this method's cache bypass exists to fix.
+// Used by session.WorktreeChangeDetector's periodic tick, which needs a fresh
+// per-tick answer to compare against the previous tick -- reusing
+// IsDirtyWithHint's cached *answer* here would just relocate the staleness
+// problem this feature exists to fix, but discarding the inner caches too
+// would reintroduce the exact CPU/allocation cost (full HEAD-tree walk +
+// gitignore-pattern re-read on every 15s tick, across up to 134 worktrees)
+// this session's own commit 4cd1d384a and gitignoreFSCache eliminated.
+func (g *GitWorktree) IsDirtyUncached() (bool, error) {
+	return worktreeIsDirtyFast(g.GetWorktreePath(), &g.gitignoreFS, &g.headTreeCache)
+}

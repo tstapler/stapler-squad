@@ -16,6 +16,12 @@ jest.mock("@connectrpc/connect", () => ({
 jest.mock("@/lib/api/transport", () => ({
   getConnectTransport: jest.fn(() => ({})),
 }));
+// VcsWidgetCommentsBody calls useAnalytics() unconditionally (retry-button
+// click tracking) — mocked here the same way VcsWidgetComments.test.tsx does,
+// since this suite renders VcsWidget's full tree with no AnalyticsContextProvider.
+jest.mock("@/lib/contexts/AnalyticsContext", () => ({
+  useAnalytics: () => ({ track: jest.fn() }),
+}));
 
 function makeData(overrides: Partial<VcsWidgetData> = {}): VcsWidgetData {
   return {

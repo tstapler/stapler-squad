@@ -132,6 +132,24 @@ message BacklogStatusEvent {
   // captured durably (session.BacklogStatusEventData.Note) but previously never
   // surfaced over the wire — the "why" behind reviewer/system decisions.
   optional string note = 6;
+  // stage_name_snapshot is the destination stage's human-readable name,
+  // frozen at the moment of this transition (Epic 2.5's StageConfigSnapshot
+  // discipline — session.BacklogStatusEventData.StageNameSnapshot) so
+  // item-detail history keeps rendering the original name after that
+  // BacklogStage row is later renamed or deleted.
+  optional string stage_name_snapshot = 7;
+  // allowed_transitions_snapshot is the destination stage's legal outgoing
+  // transition slugs, frozen at the moment of this transition (ADR-004's
+  // StageConfigSnapshot discipline, sibling to stage_name_snapshot —
+  // session.BacklogStatusEventData.AllowedTransitionsSnapshot) so
+  // CanTransition/AllowedTransitions/PendingGates can keep answering per this
+  // item's captured graph after that stage's transitions are later edited or
+  // the stage itself is deleted. Empty when no snapshot was captured (a row
+  // written before this field existed, or no matching BacklogStage row was
+  // found at write time) — distinct from a captured-but-empty snapshot, which
+  // this repeated field cannot represent, matching proto3's usual
+  // empty-vs-absent limitation for repeated fields.
+  repeated string allowed_transitions_snapshot = 8;
 }
 
 // BacklogProgressNote records a single report_progress call against one of a
@@ -229,6 +247,10 @@ message BacklogItem {
   // Unset means the default: origin's default branch tip, not repo_path's
   // own ambient HEAD (see git.ResolveWorktreeBaseCommit).
   optional string base_branch = 37;
+  // auto_approve_plan, when true, approves a plan TriggerTriage produces
+  // automatically (mirroring a manual ApprovePlan call) once its artifacts
+  // exist on disk — no manual "Approve Plan" click required. Off by default.
+  bool auto_approve_plan = 38;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -389,6 +411,9 @@ message CreateBacklogItemRequest {
   // fork from — see BacklogItem.base_branch. Unset means the default
   // (origin's default branch tip), not repo_path's own ambient HEAD.
   optional string base_branch = 14;
+  // auto_approve_plan — see BacklogItem.auto_approve_plan. Unset/false means
+  // the manual "Approve Plan" click is still required.
+  bool auto_approve_plan = 15;
 }
 
 message CreateBacklogItemResponse {
@@ -409,6 +434,32 @@ message CreateBacklogItemFromChatRequest {
 message CreateBacklogItemFromChatResponse {
   BacklogItem item = 1;
   bool triage_triggered = 2;
+}
+
+// ParseBacklogItemIntentRequest carries the omnibar's free-text message.
+message ParseBacklogItemIntentRequest {
+  string message = 1;
+  // repo_path optionally narrows title/AC phrasing to a known repo. Unset is
+  // fine — the LLM parses from the message text alone.
+  string repo_path = 2;
+}
+
+// ParsedBacklogItemDraft is the LLM's structured read of a free-text message,
+// meant to be reviewed/edited by the user, never created verbatim.
+message ParsedBacklogItemDraft {
+  string title = 1;
+  string description = 2;
+  repeated string acceptance_criteria = 3;
+  // confidence is 0..1; a low value is a hint for the review UI to flag the
+  // draft for closer scrutiny, not a threshold that blocks creation.
+  float confidence = 4;
+}
+
+message ParseBacklogItemIntentResponse {
+  ParsedBacklogItemDraft draft = 1;
+  // error is set (with draft empty) when parsing failed — the caller should
+  // fall back to CreateBacklogItemFromChat rather than surface a hard error.
+  string error = 2;
 }
 
 message GetBacklogItemRequest {
@@ -553,6 +604,10 @@ message UpdateBacklogItemRequest {
   // stored override untouched, a non-nil pointer (including one pointing at
   // "") explicitly sets/clears it. See BacklogItem.base_branch.
   optional string base_branch = 19;
+  // auto_approve_plan — see BacklogItem.auto_approve_plan. Unconditionally
+  // set on every UpdateBacklogItem call, same as skip_review_gate/
+  // skip_planning/auto_spawn_session above (not presence-gated).
+  bool auto_approve_plan = 20;
 }
 
 message UpdateBacklogItemResponse {
@@ -1095,10 +1150,47 @@ message RecordGateApprovalRequest {
   // satisfied_by identifies the approving actor (e.g. a username) — optional,
   // purely for audit display.
   string satisfied_by = 3;
+  // approved is true to approve the gate, false to reject it. Approval is
+  // permanently one-shot (a second call once approved is always rejected); a
+  // rejection can be reversed by a later call with approved = true, or
+  // re-rejected idempotently (ADR-006).
+  bool approved = 4;
 }
 
 message RecordGateApprovalResponse {
   GateSatisfactionRecord record = 1;
+}
+
+// GateStatus mirrors session.GateStatus — one gate's current satisfaction
+// state for a pending transition attempt, driving the item-detail "what's
+// blocking this" checklist (Epic 2.10). gate_id is a string, not always a
+// persisted TransitionGate id: DefaultWorkflowEngine's built-in gates have no
+// row to key on and use a stable human-readable identifier instead.
+message GateStatus {
+  string gate_id = 1;
+  // kind is one of "human_approval", "automated_review", "structural",
+  // "custom" (session.GateKind's sealed set).
+  string kind = 2;
+  bool satisfied = 3;
+  string description = 4;
+  string action_hint = 5;
+  // config_error is non-empty when this gate's configuration references
+  // something that no longer resolves (a removed custom-check skill, an
+  // unresolvable pipeline mode) — set instead of the normal satisfied/
+  // unsatisfied evaluation. Empty means no config error (ADR-006).
+  string config_error = 6;
+}
+
+// GetPendingGatesRequest asks which gates (if any) block item_id from
+// transitioning to to_status, without attempting the transition.
+message GetPendingGatesRequest {
+  string item_id = 1;
+  string to_status = 2;
+}
+
+message GetPendingGatesResponse {
+  // Empty means no gates block this transition.
+  repeated GateStatus gates = 1;
 }
 
 // ============================================================================
@@ -1250,6 +1342,15 @@ service BacklogService {
   // existing_item_id) creates a minimal item via CreateBacklogItem; later
   // turns delegate to TriggerTriage with feedback = message.
   rpc CreateBacklogItemFromChat(CreateBacklogItemFromChatRequest) returns (CreateBacklogItemFromChatResponse) {}
+
+  // ParseBacklogItemIntent runs a free-text task description through an LLM
+  // to produce a structured draft (title, description, acceptance criteria)
+  // for the caller to review/edit before calling CreateBacklogItem. This does
+  // NOT create anything — pure parsing, mirroring TriggerTriage's separation
+  // between "generate a plan" and "the user acts on it." Best-effort: on
+  // parse failure, response.error is set and draft is empty so the caller can
+  // fall back to raw-text creation (CreateBacklogItemFromChat).
+  rpc ParseBacklogItemIntent(ParseBacklogItemIntentRequest) returns (ParseBacklogItemIntentResponse) {}
 
   // GetBacklogItem retrieves a single backlog item by ID.
   rpc GetBacklogItem(GetBacklogItemRequest) returns (GetBacklogItemResponse) {}
@@ -1443,6 +1544,12 @@ service BacklogService {
   // re-askable once recorded.
   rpc RecordGateApproval(RecordGateApprovalRequest) returns (RecordGateApprovalResponse) {}
 
+  // GetPendingGates previews which gates (if any) currently block item_id
+  // from transitioning to to_status — read-only, does not attempt the
+  // transition. Backs the item-detail "what's blocking this" checklist
+  // (Epic 2.10).
+  rpc GetPendingGates(GetPendingGatesRequest) returns (GetPendingGatesResponse) {}
+
   // ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
   rpc ImportGitHubIssue(ImportGitHubIssueRequest) returns (ImportGitHubIssueResponse) {}
 
@@ -1548,6 +1655,8 @@ message GitHubRepoEntry {
   bool is_local = 3;
   string local_path = 4;
   string description = 5;
+  // GitHub host this repo was found on ("" means github.com).
+  string host = 6;
 }
 
 message GitHubIssueEntry {
@@ -1562,6 +1671,8 @@ message GitHubIssueEntry {
   bool is_pr = 9;
   // GitHub login of the issue's author.
   string author = 10;
+  // GitHub host this issue was found on ("" means github.com).
+  string host = 11;
 }
 
 message SearchGitHubReposRequest {
@@ -1579,6 +1690,8 @@ message ListGitHubIssuesRequest {
   string state = 3;
   string search = 4;
   int32 limit = 5;
+  // GitHub host the repo lives on ("" means github.com).
+  string host = 6;
 }
 
 message ListGitHubIssuesResponse {

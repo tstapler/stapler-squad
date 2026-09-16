@@ -129,6 +129,16 @@ func stripANSISimple(b []byte) []byte {
 // fresh (without --resume) so it does not loop forever on the same bad UUID.
 // Safe to call from a goroutine; uses startMu to serialise concurrent calls.
 func (i *Instance) recoverFromStaleResume() {
+	// An archived session is deliberately retired; a stale --resume on its way
+	// out is not a reason to spawn a brand-new (un-resumed) conversation
+	// (ADR-001, superseded-rework-session-retirement). KillTmuxPaneOnly closes
+	// the pane without stopping the controller, so the archive's own kill is
+	// what delivers the PTY EOF that gets here.
+	if i.IsArchived() {
+		log.Info("stale --resume uuid on an archived session; not restarting", "session", i.Title)
+		return
+	}
+
 	log.Info("stale --resume uuid detected, clearing and restarting fresh", "session", i.Title)
 	log.ForSession(i.Title).Info("stale --resume uuid detected, clearing conversation state and restarting fresh")
 

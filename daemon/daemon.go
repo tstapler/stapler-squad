@@ -1,11 +1,9 @@
 package daemon
 
 import (
-	"context"
 	"fmt"
 	"github.com/fsnotify/fsnotify"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"os"
@@ -329,53 +327,6 @@ func detectAndAddNewSessions(currentInstances *[]*session.Instance, storage *ses
 		}
 	}
 
-	return nil
-}
-
-// LaunchDaemon launches the daemon process.
-func LaunchDaemon() error {
-	// Find the claude squad binary.
-	execPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
-	}
-
-	// Use context.Background(): this is a daemon launch; we only need a context for the
-	// safeexec.CommandContext API. The daemon process runs indefinitely after Start() returns.
-	cmd := safeexec.CommandContext(context.Background(), execPath, "--daemon")
-
-	// Detach the process from the parent
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-
-	// Set process group to prevent signals from propagating
-	cmd.SysProcAttr = getSysProcAttr()
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start child process: %w", err)
-	}
-
-	log.Info("started daemon child process", "pid", cmd.Process.Pid)
-
-	// Save PID to a file for later management
-	pidDir, err := config.GetConfigDir()
-	if err != nil {
-		return fmt.Errorf("failed to get config directory: %w", err)
-	}
-
-	pidFile := filepath.Join(pidDir, "daemon.pid")
-	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644); err != nil {
-		return fmt.Errorf("failed to write PID file: %w", err)
-	}
-
-	// Release the process so it won't become a zombie when it exits
-	// This tells the OS that the parent won't wait for the child
-	if err := cmd.Process.Release(); err != nil {
-		log.Warn("failed to release daemon process (may become zombie on exit)", "err", err)
-	}
-
-	// Don't wait for the child to exit, it's detached and released
 	return nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -99,6 +100,8 @@ func (sl *SyncLoop) Stop() {
 
 // runAllSources fetches all enabled sources and syncs each one.
 func (sl *SyncLoop) runAllSources(ctx context.Context) {
+	ctx = github.WithGitHubCallOrigin(ctx, github.OriginBacklogSync)
+
 	sources, err := sl.storage.ListItemSources(ctx)
 	if err != nil {
 		log.ErrorLog().Printf("[SyncLoop] ListItemSources error: %v", err)

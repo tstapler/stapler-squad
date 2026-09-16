@@ -57,21 +57,6 @@ func recordReconnect(cause string) {
 	c.Add(1)
 }
 
-// ReconnectMetricsSnapshot returns a point-in-time copy of
-// tymux_attach_stream_reconnects_total, keyed by cause — exported so a
-// future Observability Plan wiring (e.g. an HTTP /metrics handler) can
-// read it without reaching into package-private state, mirroring
-// session/tmux's own ForkPressureSnapshot() convention.
-func ReconnectMetricsSnapshot() map[string]int64 {
-	reconnectMetrics.mu.Lock()
-	defer reconnectMetrics.mu.Unlock()
-	out := make(map[string]int64, len(reconnectMetrics.counts))
-	for k, v := range reconnectMetrics.counts {
-		out[k] = v.Load()
-	}
-	return out
-}
-
 // openStandingStream opens the one Attach stream that backs a
 // tymuxGRPCSession for its whole lifetime (Story 2.3.1) — called once from
 // cacheFromSession, the common tail of Start/RestoreWithWorkDir, never

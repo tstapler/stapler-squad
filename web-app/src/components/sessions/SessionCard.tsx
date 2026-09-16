@@ -696,6 +696,7 @@ function SessionCardInner({
               owner={session.githubOwner}
               repo={session.githubRepo}
               sourceRef={session.githubSourceRef}
+              host={session.githubHost}
               prPriority={session.githubPrPriority}
               prState={session.githubPrState}
               isDraft={session.githubPrIsDraft}
@@ -1031,18 +1032,18 @@ function SessionCardInner({
               <span className={value}>{session.branch}</span>
             </div>
           )}
-          {session.path && !isPathRedundantWithTitle(session.path, session.title) && (
+          {session.existingDir && !isPathRedundantWithTitle(session.existingDir, session.title) && (
             <div className={infoRow}>
               <span className={label}>Path:</span>
-              <span className={value} title={session.path}>
-                {session.path}
+              <span className={value} title={session.existingDir}>
+                {session.existingDir}
               </span>
             </div>
           )}
-          {session.workingDir && !isPathRedundantWithTitle(session.workingDir, session.title) && (
+          {session.activeDir && !isPathRedundantWithTitle(session.activeDir, session.title) && (
             <div className={infoRow}>
               <span className={label}>Working Dir:</span>
-              <span className={value}>{session.workingDir}</span>
+              <span className={value}>{session.activeDir}</span>
             </div>
           )}
           {session.githubOwner && session.githubRepo && (
@@ -1050,7 +1051,7 @@ function SessionCardInner({
               <span className={label}>Repository:</span>
               <span className={value}>
                 <a
-                  href={`https://github.com/${session.githubOwner}/${session.githubRepo}`}
+                  href={`https://${session.githubHost || "github.com"}/${session.githubOwner}/${session.githubRepo}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}

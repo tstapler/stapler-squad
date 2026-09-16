@@ -15,9 +15,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessiongit "github.com/tstapler/stapler-squad/session/git"
 	"golang.org/x/sync/singleflight"
@@ -33,11 +33,24 @@ type authResult struct {
 }
 
 var (
-	ghAuthState atomic.Value       // stores authResult
+	// ghAuthCache is keyed by host ("" means github.com) so a github.com auth
+	// failure/success is never conflated with a GHE host's — see CheckGHAuthForHost.
+	ghAuthCache sync.Map           // map[string]authResult
 	ghAuthGroup singleflight.Group //nolint:exhaustruct
 )
 
 const ghAuthTTL = 5 * time.Minute
+
+// githubGraphQLMigrationFlagName gates GetPRInfoCtx's dispatch to
+// GetPRInfoGraphQL below. server/services/feature_flag_service.go's
+// knownFeatureFlags registers this same literal under its own
+// githubGraphQLMigrationFlagName constant — github cannot import
+// server/services (that would be a cycle; server/services already imports
+// github), so the name is duplicated here rather than shared, mirroring
+// githubPriorityAdmissionFlagName's precedent (http_client.go). Keep both
+// constants' string values in sync if this flag is ever renamed. Default
+// off — see plan.md's Risk Control section for the dated flip trigger.
+const githubGraphQLMigrationFlagName = "github:graphql-pr-info"
 
 // PR state strings. These are the single source of truth for the three PR
 // lifecycle states surfaced by PRInfo.State — GetPRByNumber and any other
@@ -168,34 +181,58 @@ type ghCommentResponse struct {
 	Line int    `json:"line,omitempty"`
 }
 
-// CheckGHAuth verifies GitHub authentication via GET /user using the native HTTP
-// client. No subprocess is invoked — avoids forkExec lock contention.
-// Results are cached for 5 minutes. Concurrent callers share a single inflight
-// call via singleflight.
-func CheckGHAuth() error {
+// CheckGHAuth verifies github.com authentication. Equivalent to
+// CheckGHAuthForHost(ctx, "") — kept for callers with no host to give it yet.
+//
+// ctx is threaded through to the underlying request so GitHubCallOriginFrom
+// sees the caller's origin tag (e.g. an interactive PR action) instead of
+// always falling back to the background-tier default — a singleflight-joined
+// call still only uses the first caller's ctx for the shared in-flight
+// request, the same limitation singleflight coalescing always has.
+func CheckGHAuth(ctx context.Context) error {
+	return CheckGHAuthForHost(ctx, "")
+}
+
+// CheckGHAuthForHost verifies GitHub authentication for host ("" means
+// github.com) via GET /user using the native HTTP client. No subprocess is
+// invoked — avoids forkExec lock contention. Results are cached for 5
+// minutes, keyed per host so a github.com auth failure/success is never
+// conflated with a GHE host's. Concurrent callers for the same host share a
+// single inflight call via singleflight.
+func CheckGHAuthForHost(ctx context.Context, host string) error {
 	// Fast path: return cached result if still fresh.
-	if v := ghAuthState.Load(); v != nil {
+	if v, ok := ghAuthCache.Load(host); ok {
 		if r := v.(authResult); time.Now().Before(r.expiry) {
 			return r.err
 		}
 	}
 
 	// Slow path: at most one goroutine calls the API; others wait and reuse the result.
-	res, err, _ := ghAuthGroup.Do("auth", func() (interface{}, error) {
-		authCheckCtx, authCheckCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	res, err, _ := ghAuthGroup.Do("auth:"+host, func() (interface{}, error) {
+		// context.WithoutCancel: ghAuthGroup coalesces every concurrent caller
+		// process-wide onto whichever one's Do() call happened to start the
+		// in-flight request — if that leader's own ctx got canceled first
+		// (e.g. its RPC/test returned), a plain context.WithTimeout(ctx, ...)
+		// here would cancel the shared request out from under every other
+		// still-waiting caller too, surfacing as their result instead of a
+		// real auth failure. Detach from ctx's cancellation, keep its
+		// call-origin/call-site values, and rely solely on the fixed 10s
+		// timeout to bound the request.
+		authCheckCtx, authCheckCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer authCheckCancel()
+		authCheckCtx = WithGitHubCallSite(authCheckCtx, "auth.check")
 
-		req, buildErr := newGHRequest(authCheckCtx, "user")
+		req, buildErr := newGHRequestForHost(authCheckCtx, host, "user")
 		if buildErr != nil {
 			authErr := fmt.Errorf("GitHub auth check: failed to build request: %w", buildErr)
-			ghAuthState.Store(authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
+			ghAuthCache.Store(host, authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
 			return authErr, nil
 		}
 
 		resp, doErr := ghHTTPClient.Do(req)
 		if doErr != nil {
 			authErr := fmt.Errorf("GitHub auth check: request failed: %w", doErr)
-			ghAuthState.Store(authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
+			ghAuthCache.Store(host, authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
 			return authErr, nil
 		}
 		defer resp.Body.Close()
@@ -212,7 +249,7 @@ func CheckGHAuth() error {
 			authErr = classifyGHResponse(resp, "", false)
 		}
 
-		ghAuthState.Store(authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
+		ghAuthCache.Store(host, authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
 		return authErr, nil
 	})
 
@@ -228,12 +265,14 @@ func CheckGHAuth() error {
 	return nil
 }
 
-// GetCurrentUserLogin returns the GitHub login of the authenticated user via
-// GET /user. Returns an empty string (not an error) when unauthenticated so
-// callers can degrade gracefully. Returns a non-nil error when the request
-// is rate limited instead — that isn't the same as being unauthenticated.
-func GetCurrentUserLogin(ctx context.Context) (string, error) {
-	req, err := newGHRequest(ctx, "user")
+// GetCurrentUserLogin returns the GitHub login of the authenticated user on
+// host ("" means github.com) via GET /user. Returns an empty string (not an
+// error) when unauthenticated so callers can degrade gracefully. Returns a
+// non-nil error when the request is rate limited instead — that isn't the
+// same as being unauthenticated.
+func GetCurrentUserLogin(ctx context.Context, host string) (string, error) {
+	ctx = WithGitHubCallSite(ctx, "user.login")
+	req, err := newGHRequestForHost(ctx, host, "user")
 	if err != nil {
 		return "", fmt.Errorf("build /user request: %w", err)
 	}
@@ -245,6 +284,7 @@ func GetCurrentUserLogin(ctx context.Context) (string, error) {
 // Returns ("", nil) when the token is invalid or unauthenticated, and a
 // non-nil error when the request is rate limited instead.
 func GetCurrentUserLoginWithToken(ctx context.Context, host, token string) (string, error) {
+	ctx = WithGitHubCallSite(ctx, "user.login")
 	req, err := newGHRequestForHostWithToken(ctx, host, "user", token)
 	if err != nil {
 		return "", fmt.Errorf("build /user request: %w", err)
@@ -285,22 +325,33 @@ func fetchLoginFromRequest(req *http.Request) (string, error) {
 
 // GetPRInfo fetches metadata for a pull request including review and CI status.
 func GetPRInfo(owner, repo string, prNumber int) (*PRInfo, error) {
-	return GetPRInfoCtx(context.Background(), owner, repo, prNumber)
+	ref, _ := NewRepoRef(owner, repo)
+	return GetPRInfoCtx(context.Background(), ref, prNumber)
 }
 
 // GetPRInfoCtx fetches metadata for a pull request with context support.
-// Includes review decisions and CI/check status.
-func GetPRInfoCtx(ctx context.Context, owner, repo string, prNumber int) (*PRInfo, error) {
-	if err := CheckGHAuth(); err != nil {
+// Includes review decisions and CI/check status. ref.Host() "" means github.com.
+func GetPRInfoCtx(ctx context.Context, ref RepoRef, prNumber int) (*PRInfo, error) {
+	if config.LoadConfig().GetFeatureFlagWithDefault(githubGraphQLMigrationFlagName, false) {
+		// GetPRInfoGraphQL is github.com-only today; this flag defaults off,
+		// so a GHE ref silently falling back to github.com's GraphQL API here
+		// is a pre-existing gap, not something introduced by host-awareness.
+		return GetPRInfoGraphQL(ctx, ref.Owner(), ref.Repo(), prNumber)
+	}
+
+	if err := CheckGHAuthForHost(ctx, ref.Host()); err != nil {
 		return nil, err
 	}
 
-	repoRef := fmt.Sprintf("%s/%s", owner, repo)
+	repoRef := fmt.Sprintf("%s/%s", ref.Owner(), ref.Repo())
+	if ref.Host() != "" {
+		repoRef = fmt.Sprintf("%s/%s", ref.Host(), repoRef)
+	}
 	prRef := strconv.Itoa(prNumber)
 
 	fields := "number,title,body,headRefName,headRefOid,baseRefName,state,url,createdAt,updatedAt,isDraft,mergeable,additions,deletions,changedFiles,author,labels,reviews,reviewDecision,statusCheckRollup"
 	cmd := safeexec.CommandContext(ctx, "gh", "pr", "view", prRef, "--repo", repoRef, "--json", fields)
-	output, err := cmd.Output()
+	output, err := runGHCLICommand(ctx, "pr.view", func() ([]byte, error) { return cmd.Output() })
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return nil, fmt.Errorf("failed to get PR info: %s", string(exitErr.Stderr))
@@ -433,12 +484,14 @@ func getCheckConclusion(checks []ghStatusCheckItem) (conclusion, status string) 
 // GetPRForBranch finds the GitHub PR associated with a branch.
 // Uses the GitHub REST API directly (no gh subprocess) to avoid forkExec lock contention.
 // Returns ErrNoPR when no pull request exists for the branch.
-func GetPRForBranch(ctx context.Context, owner, repo, branch string) (*PRInfo, error) {
+func GetPRForBranch(ctx context.Context, ref RepoRef, branch string) (*PRInfo, error) {
+	ctx = WithGitHubCallSite(ctx, "pr.lookup.by_branch")
+	owner, repo, host := ref.Owner(), ref.Repo(), ref.Host()
 	apiPath := fmt.Sprintf("repos/%s/%s/pulls?head=%s&state=all&per_page=10",
 		url.PathEscape(owner), url.PathEscape(repo),
 		url.QueryEscape(owner+":"+branch))
 
-	req, err := newGHRequest(ctx, apiPath)
+	req, err := newGHRequestForHost(ctx, host, apiPath)
 	if err != nil {
 		return nil, fmt.Errorf("build PR list request: %w", err)
 	}
@@ -476,7 +529,7 @@ func GetPRForBranch(ctx context.Context, owner, repo, branch string) (*PRInfo, e
 		return ti.After(tj)
 	})
 
-	return GetPRInfoCtx(ctx, owner, repo, prs[0].Number)
+	return GetPRInfoCtx(ctx, ref, prs[0].Number)
 }
 
 // GetPRByNumber fetches a single pull request by its number using the GitHub
@@ -490,11 +543,13 @@ func GetPRForBranch(ctx context.Context, owner, repo, branch string) (*PRInfo, e
 // 404). Before returning success, the response's base.repo.full_name is
 // compared against the requested owner/repo; a mismatch returns a non-nil,
 // non-ErrNoPR error rather than trusting the response body blindly.
-func GetPRByNumber(ctx context.Context, owner, repo string, prNumber int) (*PRInfo, error) {
+func GetPRByNumber(ctx context.Context, ref RepoRef, prNumber int) (*PRInfo, error) {
+	ctx = WithGitHubCallSite(ctx, "pr.view.by_number")
+	owner, repo := ref.Owner(), ref.Repo()
 	apiPath := fmt.Sprintf("repos/%s/%s/pulls/%d",
 		url.PathEscape(owner), url.PathEscape(repo), prNumber)
 
-	req, err := newGHRequest(ctx, apiPath)
+	req, err := newGHRequestForHost(ctx, ref.Host(), apiPath)
 	if err != nil {
 		return nil, fmt.Errorf("build PR request: %w", err)
 	}
@@ -567,41 +622,42 @@ func GetPRByNumber(ctx context.Context, owner, repo string, prNumber int) (*PRIn
 	}, nil
 }
 
-// IsForkRepo reports whether the given repo is a fork of another repository.
-func IsForkRepo(ctx context.Context, owner, repo string) (bool, error) {
-	if err := CheckGHAuth(); err != nil {
-		return false, err
+// ghRepoArg formats ref as gh's --repo flag value: "OWNER/REPO" for
+// github.com, or "HOST/OWNER/REPO" for a GitHub Enterprise host — gh's --repo
+// flag accepts both forms ("[HOST/]OWNER/REPO").
+func ghRepoArg(ref RepoRef) string {
+	if ref.Host() != "" {
+		return fmt.Sprintf("%s/%s/%s", ref.Host(), ref.Owner(), ref.Repo())
 	}
-
-	cmd := safeexec.CommandContext(ctx, "gh", "api",
-		fmt.Sprintf("repos/%s/%s", owner, repo),
-		"--jq", ".fork",
-	)
-	output, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return false, fmt.Errorf("failed to check fork status: %s", string(exitErr.Stderr))
-		}
-		return false, fmt.Errorf("failed to check fork status: %w", err)
-	}
-
-	return strings.TrimSpace(string(output)) == "true", nil
+	return fmt.Sprintf("%s/%s", ref.Owner(), ref.Repo())
 }
 
-// GetPRComments fetches all comments on a pull request
-func GetPRComments(owner, repo string, prNumber int) ([]PRComment, error) {
-	if err := CheckGHAuth(); err != nil {
+// setGHHostEnv sets GH_HOST=host on cmd's environment when host is a GitHub
+// Enterprise host. gh's --repo flag alone is not always sufficient to pick
+// the right auth context; GH_HOST is the documented way to point the whole
+// gh invocation at an enterprise instance.
+func setGHHostEnv(cmd *exec.Cmd, host string) {
+	if host == "" {
+		return
+	}
+	cmd.Env = append(os.Environ(), "GH_HOST="+NormalizeHost(host))
+}
+
+// GetPRComments fetches all comments on a pull request.
+func GetPRComments(ctx context.Context, ref RepoRef, prNumber int) ([]PRComment, error) {
+	if err := CheckGHAuthForHost(ctx, ref.Host()); err != nil {
 		return nil, err
 	}
 
-	repoRef := fmt.Sprintf("%s/%s", owner, repo)
+	repoRef := ghRepoArg(ref)
 	prRef := strconv.Itoa(prNumber)
 
 	// Get comments
-	commentsCtx, commentsCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	commentsCtx, commentsCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer commentsCancel()
 	cmd := safeexec.CommandContext(commentsCtx, "gh", "pr", "view", prRef, "--repo", repoRef, "--json", "comments")
-	output, err := cmd.Output()
+	setGHHostEnv(cmd, ref.Host())
+	output, err := runGHCLICommand(commentsCtx, "pr.comments", func() ([]byte, error) { return cmd.Output() })
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return nil, fmt.Errorf("failed to get PR comments: %s", string(exitErr.Stderr))
@@ -633,19 +689,20 @@ func GetPRComments(owner, repo string, prNumber int) ([]PRComment, error) {
 	return comments, nil
 }
 
-// GetPRDiff fetches the diff for a pull request
-func GetPRDiff(owner, repo string, prNumber int) (string, error) {
-	if err := CheckGHAuth(); err != nil {
+// GetPRDiff fetches the diff for a pull request.
+func GetPRDiff(ctx context.Context, ref RepoRef, prNumber int) (string, error) {
+	if err := CheckGHAuthForHost(ctx, ref.Host()); err != nil {
 		return "", err
 	}
 
-	repoRef := fmt.Sprintf("%s/%s", owner, repo)
+	repoRef := ghRepoArg(ref)
 	prRef := strconv.Itoa(prNumber)
 
-	diffCtx, diffCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	diffCtx, diffCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer diffCancel()
 	cmd := safeexec.CommandContext(diffCtx, "gh", "pr", "diff", prRef, "--repo", repoRef)
-	output, err := cmd.Output()
+	setGHHostEnv(cmd, ref.Host())
+	output, err := runGHCLICommand(diffCtx, "pr.diff", func() ([]byte, error) { return cmd.Output() })
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return "", fmt.Errorf("failed to get PR diff: %s", string(exitErr.Stderr))
@@ -656,19 +713,20 @@ func GetPRDiff(owner, repo string, prNumber int) (string, error) {
 	return string(output), nil
 }
 
-// PostPRComment posts a comment on a pull request
-func PostPRComment(owner, repo string, prNumber int, body string) error {
-	if err := CheckGHAuth(); err != nil {
+// PostPRComment posts a comment on a pull request.
+func PostPRComment(ctx context.Context, ref RepoRef, prNumber int, body string) error {
+	if err := CheckGHAuthForHost(ctx, ref.Host()); err != nil {
 		return err
 	}
 
-	repoRef := fmt.Sprintf("%s/%s", owner, repo)
+	repoRef := ghRepoArg(ref)
 	prRef := strconv.Itoa(prNumber)
 
-	commentCtx, commentCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	commentCtx, commentCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer commentCancel()
 	cmd := safeexec.CommandContext(commentCtx, "gh", "pr", "comment", prRef, "--repo", repoRef, "--body", body)
-	if err := cmd.Run(); err != nil {
+	setGHHostEnv(cmd, ref.Host())
+	if _, err := runGHCLICommand(commentCtx, "pr.comment", func() ([]byte, error) { return nil, cmd.Run() }); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("failed to post comment: %s", string(exitErr.Stderr))
 		}
@@ -678,14 +736,14 @@ func PostPRComment(owner, repo string, prNumber int, body string) error {
 	return nil
 }
 
-// MergePR merges a pull request
+// MergePR merges a pull request.
 // method can be: "merge", "squash", or "rebase"
-func MergePR(owner, repo string, prNumber int, method string) error {
-	if err := CheckGHAuth(); err != nil {
+func MergePR(ctx context.Context, ref RepoRef, prNumber int, method string) error {
+	if err := CheckGHAuthForHost(ctx, ref.Host()); err != nil {
 		return err
 	}
 
-	repoRef := fmt.Sprintf("%s/%s", owner, repo)
+	repoRef := ghRepoArg(ref)
 	prRef := strconv.Itoa(prNumber)
 
 	args := []string{"pr", "merge", prRef, "--repo", repoRef}
@@ -698,10 +756,11 @@ func MergePR(owner, repo string, prNumber int, method string) error {
 		args = append(args, "--merge")
 	}
 
-	mergeCtx, mergeCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	mergeCtx, mergeCancel := context.WithTimeout(ctx, 60*time.Second)
 	defer mergeCancel()
 	cmd := safeexec.CommandContext(mergeCtx, "gh", args...)
-	if err := cmd.Run(); err != nil {
+	setGHHostEnv(cmd, ref.Host())
+	if _, err := runGHCLICommand(mergeCtx, "pr.merge", func() ([]byte, error) { return nil, cmd.Run() }); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("failed to merge PR: %s", string(exitErr.Stderr))
 		}
@@ -711,74 +770,24 @@ func MergePR(owner, repo string, prNumber int, method string) error {
 	return nil
 }
 
-// ClosePR closes a pull request without merging
-func ClosePR(owner, repo string, prNumber int) error {
-	if err := CheckGHAuth(); err != nil {
+// ClosePR closes a pull request without merging.
+func ClosePR(ctx context.Context, ref RepoRef, prNumber int) error {
+	if err := CheckGHAuthForHost(ctx, ref.Host()); err != nil {
 		return err
 	}
 
-	repoRef := fmt.Sprintf("%s/%s", owner, repo)
+	repoRef := ghRepoArg(ref)
 	prRef := strconv.Itoa(prNumber)
 
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	closeCtx, closeCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer closeCancel()
 	cmd := safeexec.CommandContext(closeCtx, "gh", "pr", "close", prRef, "--repo", repoRef)
-	if err := cmd.Run(); err != nil {
+	setGHHostEnv(cmd, ref.Host())
+	if _, err := runGHCLICommand(closeCtx, "pr.close", func() ([]byte, error) { return nil, cmd.Run() }); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("failed to close PR: %s", string(exitErr.Stderr))
 		}
 		return fmt.Errorf("failed to close PR: %w", err)
-	}
-
-	return nil
-}
-
-// CloneRepository clones a GitHub repository
-func CloneRepository(owner, repo, targetPath string) error {
-	if err := CheckGHAuth(); err != nil {
-		return err
-	}
-
-	repoRef := fmt.Sprintf("%s/%s", owner, repo)
-	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cloneCancel()
-	cmd := safeexec.CommandContext(cloneCtx, "gh", "repo", "clone", repoRef, targetPath)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to clone repository: %s", string(exitErr.Stderr))
-		}
-		return fmt.Errorf("failed to clone repository: %w", err)
-	}
-
-	return nil
-}
-
-// FetchBranch fetches a specific branch in an existing repository
-func FetchBranch(repoPath, branchName string) error {
-	// Fetch the branch from origin
-	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer fetchCancel()
-	cmd := safeexec.CommandContext(fetchCtx, "git", "-C", repoPath, "fetch", "origin", branchName)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to fetch branch: %s", string(exitErr.Stderr))
-		}
-		return fmt.Errorf("failed to fetch branch: %w", err)
-	}
-
-	return nil
-}
-
-// CheckoutBranch checks out a branch in an existing repository
-func CheckoutBranch(repoPath, branchName string) error {
-	checkoutCtx, checkoutCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer checkoutCancel()
-	cmd := safeexec.CommandContext(checkoutCtx, "git", "-C", repoPath, "checkout", branchName)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to checkout branch: %s", string(exitErr.Stderr))
-		}
-		return fmt.Errorf("failed to checkout branch: %w", err)
 	}
 
 	return nil
@@ -870,16 +879,16 @@ func GetRemoteURL(repoPath string) (string, error) {
 // GetOwnerRepoFromRemote returns a RepoRef for a local git repository by
 // reading the origin remote URL and parsing it. Returns an invalid zero-value
 // RepoRef (not an error) when the remote is not a GitHub URL.
-func GetOwnerRepoFromRemote(repoPath string) (RepoRef, error) {
+func GetOwnerRepoFromRemote(repoPath string, enterpriseHosts []string) (RepoRef, error) {
 	remoteURL, err := GetRemoteURL(repoPath)
 	if err != nil {
 		return RepoRef{}, err
 	}
-	ref, parseErr := ParseGitHubRef(remoteURL)
+	ref, parseErr := ParseGitHubRefWithHosts(remoteURL, enterpriseHosts)
 	if parseErr != nil {
 		return RepoRef{}, nil // not a GitHub URL — callers check IsValid()
 	}
-	r, _ := NewRepoRef(ref.Owner, ref.Repo)
+	r, _ := NewRepoRefWithHost(ref.Owner, ref.Repo, ref.Host)
 	return r, nil
 }
 
@@ -915,8 +924,10 @@ func GeneratePRPrompt(pr *PRInfo, includeDescription bool) string {
 // Every error path also returns changed=false, including ErrNotAuthenticated
 // when no token is configured — callers must check err before treating
 // changed=false as "unchanged, no error."
-func GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (info *PRInfo, newEtag string, changed bool, err error) {
-	if getGHToken(ctx) == "" {
+func GetPRForBranchConditional(ctx context.Context, ref RepoRef, branch, etag string) (info *PRInfo, newEtag string, changed bool, err error) {
+	ctx = WithGitHubCallSite(ctx, "pr.lookup.by_branch.conditional")
+	owner, repo, host := ref.Owner(), ref.Repo(), ref.Host()
+	if getGHTokenForAccount(ctx, AccountRef{Host: host}) == "" {
 		return nil, etag, false, ErrNotAuthenticated
 	}
 
@@ -924,7 +935,7 @@ func GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag st
 		url.PathEscape(owner), url.PathEscape(repo),
 		url.QueryEscape(owner+":"+branch))
 
-	req, err := newGHRequest(ctx, apiPath)
+	req, err := newGHRequestForHost(ctx, host, apiPath)
 	if err != nil {
 		return nil, etag, false, fmt.Errorf("build PR list request: %w", err)
 	}
@@ -990,7 +1001,7 @@ func GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag st
 		return ti.After(tj)
 	})
 
-	prInfo, err := GetPRInfoCtx(ctx, owner, repo, prs[0].Number)
+	prInfo, err := GetPRInfoCtx(ctx, ref, prs[0].Number)
 	if err != nil {
 		return nil, respEtag, false, err
 	}

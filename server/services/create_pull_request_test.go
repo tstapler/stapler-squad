@@ -27,17 +27,20 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// firstCallJSONPR returns a valid first-call JSON response for DraftPullRequest tests,
-// matching the schema headless_service_test.go's firstCallJSONHS uses. Marshaled via
-// encoding/json (rather than string concatenation) so a multi-line result string is
-// escaped correctly.
+// firstCallJSONPR returns a valid first-call stream-json terminal "result" line
+// for DraftPullRequest tests, matching the schema headless_service_test.go's
+// firstCallJSONHS uses. Marshaled via encoding/json (rather than string
+// concatenation) so a multi-line result string is escaped correctly.
+// total_cost_usd (not cost_usd) matches the real CLI's field name — see
+// headless.firstCallJSONResult's doc comment.
 func firstCallJSONPR(t *testing.T, sessionID, result string) string {
 	t.Helper()
 	payload, err := json.Marshal(struct {
+		Type      string  `json:"type"`
 		SessionID string  `json:"session_id"`
 		Result    string  `json:"result"`
-		CostUSD   float64 `json:"cost_usd"`
-	}{SessionID: sessionID, Result: result, CostUSD: 0.001})
+		CostUSD   float64 `json:"total_cost_usd"`
+	}{Type: "result", SessionID: sessionID, Result: result, CostUSD: 0.001})
 	require.NoError(t, err)
 	return string(payload)
 }

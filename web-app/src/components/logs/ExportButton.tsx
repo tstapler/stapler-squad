@@ -188,5 +188,3 @@ export function ExportButton({ logs, disabled, className }: ExportButtonProps) {
     </div>
   );
 }
-
-export default ExportButton;

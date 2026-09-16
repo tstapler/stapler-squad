@@ -130,23 +130,6 @@ export const skeletonCard = style({
   },
 });
 
-export const toolbar = style({
-  display: "flex",
-  alignItems: "center",
-  gap: "0.5rem",
-  padding: "0.5rem 0",
-  fontSize: "0.8125rem",
-  color: vars.color.textSecondary,
-});
-
-export const autoAdvanceLabel = style({
-  display: "flex",
-  alignItems: "center",
-  gap: "0.375rem",
-  cursor: "pointer",
-  userSelect: "none",
-});
-
 export const helpButton = style({
   position: "fixed",
   bottom: "1.5rem",

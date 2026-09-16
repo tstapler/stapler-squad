@@ -49,6 +49,9 @@ func (BacklogItem) Fields() []ent.Field {
 		field.Bool("auto_create_pr").
 			Default(false).
 			Comment("When true, a PR is created automatically (via the same one-shot prompt the manual Review Queue 'Create PR' button uses) once a work session for this item reaches TASK_COMPLETE — no manual click required."),
+		field.Bool("auto_approve_plan").
+			Default(false).
+			Comment("When true, a plan produced by TriggerTriage is approved automatically (PlanApproved set true) once its artifacts exist on disk — no manual 'Approve Plan' click required. See ApprovePlan's precondition, mirrored at the auto-approve call site in TriggerTriage."),
 		field.String("pipeline_mode").
 			Default("").
 			Comment("Slug of the PipelineMode this item uses to drive triage/work/review content. Empty string means the built-in default (today's fixed hardcoded pipeline)."),
@@ -222,6 +225,16 @@ func (BacklogItem) Edges() []ent.Edge {
 			Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("blocked_by_dependencies", BacklogItemDependency.Type).
 			Annotations(entsql.OnDelete(entsql.Cascade)),
+		// Deliberately NOT cascade, unlike every other child edge above:
+		// BacklogItem supports genuine hard deletion (DeleteBacklogItem), and
+		// a cascade here would let a hard delete silently destroy a pending OR
+		// answered-but-undelivered GuidanceRequest row with no trace —
+		// contradicting the "no answer is ever silently lost" bar. A
+		// hard-deleted item's still-open rows go stale instead, and are
+		// caught by Phase 8's self-heal sweep. See
+		// project_plans/durable-guidance-request/implementation/plan.md
+		// Task 1.1.1b.
+		edge.To("guidance_requests", GuidanceRequest.Type),
 	}
 }
 

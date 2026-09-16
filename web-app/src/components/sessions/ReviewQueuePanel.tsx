@@ -16,6 +16,7 @@ import { useFilterState } from "@/lib/hooks/useFilterState";
 import { useFocusRestoreOnRemoval } from "@/lib/hooks/useFocusRestoreOnRemoval";
 import { GroupingStrategy, GroupingStrategyLabels, groupSessions } from "@/lib/grouping/strategies";
 import { parseGitHubRef } from "@/lib/github/urlParser";
+import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
 import { CreatePullRequestModal } from "./CreatePullRequestModal";
@@ -353,6 +354,9 @@ export function ReviewQueuePanel({
   const [isCreatePrOpen, setIsCreatePrOpen] = useState<string | null>(null);
   const createPrTriggerRef = useRef<HTMLElement | null>(null);
   const { draftPullRequest, createPullRequest } = useSessionServiceContext();
+  // ReviewItem carries only a PR URL, not the originating host, so recognize
+  // any configured GHE host when parsing it (same source as GitHubEnterpriseURLDetector).
+  const { hosts: enterpriseHosts } = useGitHubEnterpriseHosts();
 
   // Epic 4: Create Rule modal state
   // activeRuleItemId tracks which item's "Create Rule" modal is currently open.
@@ -1248,7 +1252,9 @@ export function ReviewQueuePanel({
             (disabled, no commits ahead), State C (existing PR — link, never reopens the modal). */}
         {queueItem.reason === AttentionReason.TASK_COMPLETE && (() => {
           const hasCommitsAhead = queueItem.hasCommitsAhead;
-          const prNumber = queueItem.githubPrUrl ? parseGitHubRef(queueItem.githubPrUrl)?.prNumber : undefined;
+          const prNumber = queueItem.githubPrUrl
+            ? parseGitHubRef(queueItem.githubPrUrl, enterpriseHosts)?.prNumber
+            : undefined;
           return (
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               {queueItem.branchDivergedFromBase && (

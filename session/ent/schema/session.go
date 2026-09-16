@@ -139,6 +139,9 @@ func (Session) Fields() []ent.Field {
 		field.String("github_repo").
 			Optional().
 			Comment("GitHub repository name associated with this session."),
+		field.String("github_host").
+			Optional().
+			Comment("GitHub Enterprise host owning github_owner/github_repo, or empty for github.com."),
 		field.String("session_artifacts").
 			Optional().
 			Default("").

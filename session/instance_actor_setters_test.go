@@ -366,3 +366,58 @@ func TestReclassifyTagsLocked_should_RecordTagFire_When_RuleMatchesRegardlessOfS
 	assert.Equal(t, []string{"seed-bugfix"}, recorder.fired, "the rule fired (and must be recorded) even though \"Bugfix\" is suppressed and never actually applied")
 	assert.NotContains(t, inst.GetTags(), "Bugfix", "sanity check: the tag itself must indeed be suppressed")
 }
+
+// If this fails, a caller on a request goroutine can be parked indefinitely by
+// one busy actor: sendSyncErr (which plain SetArchivedAtIfNil uses) has no
+// deadline at all, so ArchiveWorkflowSessions' per-instance loop would stall the
+// whole RPC on a single instance mid-Start.
+func TestSetArchivedAtIfNilCtx_should_ReturnCtxError_When_ActorIsBusy(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "archive-ctx-busy", Status: Stopped}
+	li := NewLiveInstance(inst)
+	t.Cleanup(li.cancel)
+
+	// Occupy the actor goroutine so no further command can be executed.
+	occupied := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	inst.send(func(*instanceState) {
+		close(occupied)
+		<-release
+	})
+	<-occupied
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := inst.SetArchivedAtIfNilCtx(ctx, time.Now())
+		errCh <- err
+	}()
+	cancel() // stands in for the caller's deadline firing
+
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("SetArchivedAtIfNilCtx did not return once its context was cancelled")
+	}
+}
+
+// If this fails, the bounded variant has diverged from SetArchivedAtIfNil's CAS
+// semantics on the normal (uncontended) path.
+func TestSetArchivedAtIfNilCtx_should_ApplyCASOnce_When_ActorIsIdle(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "archive-ctx-idle", Status: Stopped}
+	li := NewLiveInstance(inst)
+	t.Cleanup(li.cancel)
+
+	ctx := context.Background()
+	set, err := inst.SetArchivedAtIfNilCtx(ctx, time.Now())
+	require.NoError(t, err)
+	assert.True(t, set, "first archive should apply (CAS)")
+	assert.True(t, inst.IsArchived(), "IsArchived() must see the published snapshot")
+
+	set, err = inst.SetArchivedAtIfNilCtx(ctx, time.Now())
+	require.NoError(t, err)
+	assert.False(t, set, "second archive is a no-op (CAS)")
+}

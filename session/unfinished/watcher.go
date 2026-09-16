@@ -4,51 +4,53 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
+	"sync"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// WatchDirWatcher discovers git repos under configured watch directories
-// and triggers scans via fsnotify on .git/ changes.
+// WatchDirWatcher discovers git repos under configured watch directories and
+// registers each one with Scanner via AddRepo. It owns no fsnotify watcher of
+// its own — Scanner.AddRepo already registers a .git-dir fsnotify watch and
+// triggers an immediate scan for every repo it's given (see Scanner.watchRepo),
+// so a second watcher here would only double fd usage and event handling for
+// the exact same repos. WatchDirWatcher's only job is discovery: finding which
+// repos exist under a watch dir in the first place, which fsnotify on an
+// already-known repo's .git dir cannot do for a repo that doesn't exist yet.
 type WatchDirWatcher struct {
 	scanner    *Scanner
 	stateStore *StateStore
-	watcher    *fsnotify.Watcher // nil when fallback to polling
+
+	// discovered tracks which repo paths were found under each watch dir, so
+	// RemoveWatchDir can unregister exactly those repos from the scanner
+	// instead of leaving them tracked forever after their watch dir is removed.
+	// map[watchDir]map[repoPath]struct{}, guarded by mu.
+	mu         sync.Mutex
+	discovered map[string]map[string]struct{}
 }
 
-// NewWatchDirWatcher creates a WatchDirWatcher. It attempts to create an fsnotify watcher
-// and falls back to polling if the system doesn't support it.
+// NewWatchDirWatcher creates a WatchDirWatcher.
 func NewWatchDirWatcher(scanner *Scanner, stateStore *StateStore) *WatchDirWatcher {
-	w := &WatchDirWatcher{
+	return &WatchDirWatcher{
 		scanner:    scanner,
 		stateStore: stateStore,
+		discovered: make(map[string]map[string]struct{}),
 	}
-	var err error
-	w.watcher, err = fsnotify.NewWatcher()
-	if err != nil {
-		log.Warn("fsnotify unavailable, falling back to polling", "err", err)
-		w.watcher = nil
-	}
-	return w
 }
 
-// Start begins watching all configured watch dirs and pinned repos.
-// It performs an initial walk then starts the event loop.
+// Start performs an initial walk of every configured watch dir and pinned
+// repo, then begins the periodic re-walk that picks up newly created repos.
+// Changes to already-discovered repos are Scanner's responsibility from here
+// on (its own fsnotify watch, registered by AddRepo below).
 func (w *WatchDirWatcher) Start(ctx context.Context) {
-	// Initial walk.
 	for _, dir := range w.stateStore.WatchDirs() {
 		w.walkDir(dir)
 	}
 	for _, repo := range w.stateStore.PinnedRepos() {
-		w.addRepo(repo)
+		w.scanner.AddRepo(repo)
 	}
 
-	if w.watcher != nil {
-		go w.fsnotifyLoop(ctx)
-	}
 	go w.periodicReWalk(ctx)
 }
 
@@ -57,137 +59,106 @@ func (w *WatchDirWatcher) AddWatchDir(dir string) {
 	w.walkDir(dir)
 }
 
-// RemoveWatchDir removes a watch directory (repos only removed if not covered by other sources).
+// RemoveWatchDir removes a watch directory and unregisters every repo that
+// was discovered under it (via Scanner.RemoveRepo), unless the caller still
+// wants a given repo tracked through another source (pinned repos, active
+// sessions) — RemoveRepo only affects this watcher's own claim; Scanner
+// itself has no per-source refcounting, so a repo also tracked via
+// auto-spider or pinning gets re-added the next time that source fires.
 func (w *WatchDirWatcher) RemoveWatchDir(dir string) {
-	if w.watcher == nil {
-		return
+	w.mu.Lock()
+	repos := w.discovered[dir]
+	delete(w.discovered, dir)
+	w.mu.Unlock()
+
+	pinned := make(map[string]bool)
+	if w.stateStore != nil {
+		for _, p := range w.stateStore.PinnedRepos() {
+			pinned[p] = true
+		}
 	}
-	// Remove the fsnotify watch on dir's git subdirs (best-effort).
-	_ = w.watcher.Remove(dir)
+
+	for repoPath := range repos {
+		if pinned[repoPath] {
+			// Still claimed by the pinned-repo source -- removing it here
+			// would drop tracking until the pinned source happens to fire
+			// again, since Scanner has no per-source refcounting.
+			continue
+		}
+		w.scanner.RemoveRepo(repoPath)
+	}
 }
 
-// AddPinnedRepo adds a pinned repo and triggers an immediate scan.
-func (w *WatchDirWatcher) AddPinnedRepo(repo string) {
-	w.addRepo(repo)
+// watchDirSkipDirs names directories walkDir never descends into, to avoid
+// false-positive repo detection and fd exhaustion under large dependency trees.
+var watchDirSkipDirs = map[string]bool{
+	"node_modules": true,
+	"vendor":       true,
+	".cache":       true,
+	"dist":         true,
+	"build":        true,
+	".git":         true,
 }
 
 // walkDir recursively walks root looking for .git directories at depth <= 5.
-// It skips common build/cache directories to avoid false positives and fd exhaustion.
 func (w *WatchDirWatcher) walkDir(root string) {
-	skipDirs := map[string]bool{
-		"node_modules": true,
-		"vendor":       true,
-		".cache":       true,
-		"dist":         true,
-		"build":        true,
-		".git":         true,
-	}
-
-	var walkFn func(dir string, depth int)
-	walkFn = func(dir string, depth int) {
-		if depth > 5 {
-			return
-		}
-
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			if os.IsPermission(err) {
-				log.Debug("permission denied walking directory", "dir", dir, "err", err)
-			}
-			return
-		}
-
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			if skipDirs[name] {
-				continue
-			}
-			fullPath := filepath.Join(dir, name)
-
-			if name == ".git" {
-				// parent is the repo root
-				repoRoot := dir
-				w.addRepo(repoRoot)
-				return // don't recurse into .git
-			}
-
-			// Check if this subdirectory is itself a repo root.
-			gitDir := filepath.Join(fullPath, ".git")
-			if _, err := os.Stat(gitDir); err == nil {
-				w.addRepo(fullPath)
-				// Still recurse in case of monorepo with nested repos.
-			}
-
-			walkFn(fullPath, depth+1)
-		}
-	}
-
-	walkFn(root, 0)
+	w.walkDirAt(root, root, 0)
 }
 
-// addRepo registers a repo root with the scanner and fsnotify watcher.
-func (w *WatchDirWatcher) addRepo(repoPath string) {
-	w.scanner.AddRepo(repoPath)
-
-	if w.watcher == nil {
+// walkDirAt is walkDir's recursive step: dir is the directory currently being
+// scanned, root is the original watch dir (passed through unchanged, for
+// addRepo's discovered-repos index), depth counts levels below root.
+func (w *WatchDirWatcher) walkDirAt(root, dir string, depth int) {
+	if depth > 5 {
 		return
 	}
-	gitDir := filepath.Join(repoPath, ".git")
-	if err := w.watcher.Add(gitDir); err != nil {
-		log.Debug("could not watch git dir", "dir", gitDir, "err", err)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsPermission(err) {
+			log.Debug("permission denied walking directory", "dir", dir, "err", err)
+		}
+		return
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() || watchDirSkipDirs[entry.Name()] {
+			continue
+		}
+		fullPath := filepath.Join(dir, entry.Name())
+
+		if entry.Name() == ".git" {
+			w.addRepo(root, dir) // parent is the repo root
+			return               // don't recurse into .git
+		}
+
+		// Check if this subdirectory is itself a repo root; still recurse
+		// into it afterward in case of a monorepo with nested repos.
+		if _, err := os.Stat(filepath.Join(fullPath, ".git")); err == nil {
+			w.addRepo(root, fullPath)
+		}
+		w.walkDirAt(root, fullPath, depth+1)
 	}
 }
 
-// fsnotifyLoop handles fsnotify events and enqueues repo scans.
-func (w *WatchDirWatcher) fsnotifyLoop(ctx context.Context) {
-	defer w.watcher.Close()
+// addRepo registers repoPath with the scanner and records it against
+// watchDir in the discovered index, so RemoveWatchDir can later unregister
+// exactly the repos this watch dir contributed.
+func (w *WatchDirWatcher) addRepo(watchDir, repoPath string) {
+	w.scanner.AddRepo(repoPath)
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-w.watcher.Events:
-			if !ok {
-				return
-			}
-			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
-				// Derive the repo root from the watched .git directory.
-				gitDir := event.Name
-				if strings.HasSuffix(gitDir, "/.git") || filepath.Base(gitDir) == ".git" {
-					repoRoot := filepath.Dir(gitDir)
-					w.scanner.InvalidateCache(repoRoot)
-					w.scanner.EnqueueRepo(repoRoot)
-				} else {
-					// Event for a file inside .git/ — walk up to find .git.
-					dir := gitDir
-					for {
-						if filepath.Base(dir) == ".git" {
-							repoRoot := filepath.Dir(dir)
-							w.scanner.InvalidateCache(repoRoot)
-							w.scanner.EnqueueRepo(repoRoot)
-							break
-						}
-						parent := filepath.Dir(dir)
-						if parent == dir {
-							break
-						}
-						dir = parent
-					}
-				}
-			}
-		case err, ok := <-w.watcher.Errors:
-			if !ok {
-				return
-			}
-			log.Warn("fsnotify error", "err", err)
-		}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.discovered[watchDir] == nil {
+		w.discovered[watchDir] = make(map[string]struct{})
 	}
+	w.discovered[watchDir][repoPath] = struct{}{}
 }
 
 // periodicReWalk re-walks watch dirs every 60 seconds to pick up new repos.
+// Scanner's own fsnotify watch on each already-discovered repo's .git dir
+// (registered by AddRepo) handles change detection for known repos; this
+// ticker exists only to notice a brand-new repo appearing under a watch dir,
+// which nothing is watching for yet.
 func (w *WatchDirWatcher) periodicReWalk(ctx context.Context) {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()

@@ -235,24 +235,46 @@ func (i *Instance) SetArchivedAt(t *time.Time) {
 	})
 }
 
+// archiveAtIfNilLocked is the CAS body shared by SetArchivedAtIfNil,
+// SetArchivedAtIfNilCtx and SetArchivedAtIfNilAndStop. Returns whether it set
+// the value. Must run inside an actor command.
+func archiveAtIfNilLocked(s *instanceState, t time.Time) bool {
+	s.inst.mu.Lock()
+	if s.inst.ArchivedAt != nil {
+		s.inst.mu.Unlock()
+		return false
+	}
+	s.inst.ArchivedAt = &t
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+	return true
+}
+
 // SetArchivedAtIfNil sets ArchivedAt to t only if it is currently nil.
 // Returns true if the value was set (CAS semantics).  Now actor-routed.
+// Blocks indefinitely on a busy actor — callers on a request goroutine should
+// use SetArchivedAtIfNilCtx instead.
 func (i *Instance) SetArchivedAtIfNil(t time.Time) bool {
 	var set bool
 	_ = i.sendSyncErr(func(s *instanceState) error {
-		s.inst.mu.Lock()
-		if s.inst.ArchivedAt != nil {
-			s.inst.mu.Unlock()
-			return nil
-		}
-		s.inst.ArchivedAt = &t
-		snap := buildSnapshot(s.inst)
-		s.inst.mu.Unlock()
-		s.inst.snapshot.Store(snap)
-		set = true
+		set = archiveAtIfNilLocked(s, t)
 		return nil
 	})
 	return set
+}
+
+// SetArchivedAtIfNilCtx is SetArchivedAtIfNil bounded by ctx: sendSyncErr has no
+// deadline, so one instance mid-Start would otherwise stall a whole RPC loop.
+// Returns whether the value was set, and ctx's error if the deadline fired
+// before the actor ran the command. A command already on the mailbox still runs
+// afterwards; that is harmless because the write is an idempotent CAS.
+func (i *Instance) SetArchivedAtIfNilCtx(ctx context.Context, t time.Time) (bool, error) {
+	var set bool
+	err := i.sendCtx(ctx, func(s *instanceState) {
+		set = archiveAtIfNilLocked(s, t)
+	})
+	return set, err
 }
 
 // stopIfNotStoppedLocked transitions the instance to Stopped from within an
@@ -285,15 +307,9 @@ func (i *Instance) ArchiveWithStop(t time.Time) error {
 func (i *Instance) SetArchivedAtIfNilAndStop(t time.Time) bool {
 	var set bool
 	_ = i.sendSyncErr(func(s *instanceState) error {
-		s.inst.mu.Lock()
-		if s.inst.ArchivedAt != nil {
-			s.inst.mu.Unlock()
+		if !archiveAtIfNilLocked(s, t) {
 			return nil
 		}
-		s.inst.ArchivedAt = &t
-		snap := buildSnapshot(s.inst)
-		s.inst.mu.Unlock()
-		s.inst.snapshot.Store(snap)
 		set = true
 		return stopIfNotStoppedLocked(s, context.Background())
 	})
@@ -782,6 +798,9 @@ func applyWorktreeDetectionLocked(s *instanceState, info *WorktreeInfo) {
 	}
 	if s.inst.GitHubRepo == "" && info.GitHubRepo != "" {
 		s.inst.GitHubRepo = info.GitHubRepo
+	}
+	if s.inst.GitHubHost == "" && info.GitHubHost != "" {
+		s.inst.GitHubHost = info.GitHubHost
 	}
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()

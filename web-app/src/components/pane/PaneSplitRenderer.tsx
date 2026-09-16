@@ -385,6 +385,7 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
             onTabChange={handleTabChange}
             initialTab={pane.activeTab}
             embedded={true}
+            isActive={isFocused}
           />
         ) : (
           <div className={emptyPaneSlot}>

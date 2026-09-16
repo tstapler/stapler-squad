@@ -129,6 +129,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		GitHubPRURL:     snap.GitHub.GitHubPRURL,
 		GitHubOwner:     snap.GitHub.GitHubOwner,
 		GitHubRepo:      snap.GitHub.GitHubRepo,
+		GitHubHost:      snap.GitHub.GitHubHost,
 		GitHubSourceRef: snap.GitHub.GitHubSourceRef,
 		ClonedRepoPath:  snap.GitHub.ClonedRepoPath,
 		// GitHub integration fields
@@ -217,6 +218,17 @@ func (i *Instance) ToInstanceData() InstanceData {
 // instances asynchronously once the deferred path skips Start() here.
 func FromInstanceData(data InstanceData) (*Instance, error) {
 	return fromInstanceData(data, false)
+}
+
+// FromInstanceDataDeferred reconstructs an *Instance without starting it (no
+// PTY spawn, no cold-restore, no goroutines) — LoadInstances' bulk-startup
+// path, exported for an on-demand, read-only "shadow" instance bound to the
+// same backend/session identity as the persisted record. Lets a caller ask a
+// truth question (IsBackendProcessAlive()) or act on the real session
+// (KillSession()) for a sessionUUID the live in-memory registry doesn't have
+// tracked — see SessionService.findConfirmedLiveInstance.
+func FromInstanceDataDeferred(data InstanceData) (*Instance, error) {
+	return fromInstanceData(data, true)
 }
 
 // fromInstanceData is the shared implementation. When deferStart is true, the
@@ -310,6 +322,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		GitHubPRURL:     data.GitHubPRURL,
 		GitHubOwner:     data.GitHubOwner,
 		GitHubRepo:      data.GitHubRepo,
+		GitHubHost:      data.GitHubHost,
 		GitHubSourceRef: data.GitHubSourceRef,
 		ClonedRepoPath:  data.ClonedRepoPath,
 		GitHubIsFork:    data.GitHubIsFork,
@@ -573,7 +586,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// restore as a fresh launch. Without this, HasSession() is false on this
 		// freshly-constructed Instance regardless of whether the real tmux session
 		// is alive, so every LoadInstances() call (health checks, MCP tool handlers,
-		// etc.) logs a spurious "creating tmux session" and re-runs launch bookkeeping
+		// etc.) logs a spurious "creating session" and re-runs launch bookkeeping
 		// for every Active session, even ones that were never actually down.
 		tmuxPrefix := instance.TmuxPrefix
 		if tmuxPrefix == "" {
@@ -586,7 +599,21 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(instance.Title, instance.Program, tmuxPrefix))
 			}
 		}
-		if deferStart {
+		// Raw ArchivedAt read, not IsArchived(): this runs before
+		// finishInstanceConstruction publishes the first snapshot, so
+		// Snapshot() is not populated yet. The instance is still
+		// goroutine-local here, so the raw read is race-free.
+		if instance.ArchivedAt != nil {
+			// Archived means deliberately retired: never auto-start (see
+			// ADR-001, superseded-rework-session-retirement). Normalize
+			// Active/Creating only — the other statuses in this bucket are
+			// written deliberately by archive writers that never touch status,
+			// and rewriting them would destroy the failure signal irreversibly.
+			if instance.Status == Active || instance.Status == Creating {
+				instance.loadStatus(Stopped)
+			}
+			instance.started.Store(true)
+		} else if deferStart {
 			// Leave started=false: the async Step 6 loop in BuildRuntimeDeps calls
 			// Start(false) later, off the startup critical path. That loop already
 			// hot-attaches to a live tmux session or cold-restores a dead one —

@@ -568,6 +568,70 @@ func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemH
 	}
 }
 
+// TestTransitionBacklogItemStatus_should_embedStatusEvents_When_ItemHasPriorTransitions
+// is the regression test for the UX-audit-2026-09-11 finding: the item
+// detail page's "Workflow" section read "No status history recorded" for an
+// item that had visibly transitioned idea->ready->in_progress->review across
+// several linked sessions. Root cause mirrors the ItemSessions-blanking bug
+// fixed by attachItemSessionsForPublish above: TransitionBacklogItemStatus
+// re-reads the row via a plain BacklogItem.Get() (no WithStatusEvents()) right
+// after recordStatusEvent appends the new audit row, so the published
+// BacklogItemEvent always carried an empty StatusEvents slice even though the
+// rows were persisted correctly. BacklogItemDetail.tsx's live-watch merge
+// effect does a wholesale item replace (not a field merge), so that empty
+// slice immediately stomped whatever a prior GetBacklogItem() REST fetch had
+// loaded. Proves attachStatusEventsForPublish closes the gap: two prior
+// transitions plus the one under test must all be present in the embedded
+// snapshot, in chronological order.
+func TestTransitionBacklogItemStatus_should_embedStatusEvents_When_ItemHasPriorTransitions(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestEntRepositoryForEvents(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	bus := pkgevents.NewEventBus(10)
+	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+
+	sub, subID := bus.Subscribe(ctx)
+	defer bus.Unsubscribe(subID)
+
+	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "item for embedded-statusEvents regression test",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReady, nil, session.TriggeredByUser)
+	require.NoError(t, err)
+
+	// Drain the "idea -> ready" transition's own event — a different publish
+	// than the one under test below.
+	select {
+	case <-sub:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the idea->ready BacklogItemChanged event")
+	}
+
+	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	select {
+	case ev := <-sub:
+		require.NotNil(t, ev.BacklogItemPayload)
+		require.NotNil(t, ev.BacklogItemPayload.Item)
+		require.Len(t, ev.BacklogItemPayload.Item.StatusEvents, 2,
+			"embedded item snapshot must carry the item's full status-transition history, not an empty slice (the blanking regression)")
+		events := ev.BacklogItemPayload.Item.StatusEvents
+		assert.Equal(t, string(session.BacklogStatusIdea), events[0].FromStatus)
+		assert.Equal(t, string(session.BacklogStatusReady), events[0].ToStatus)
+		assert.Equal(t, string(session.BacklogStatusReady), events[1].FromStatus)
+		assert.Equal(t, string(session.BacklogStatusInProgress), events[1].ToStatus)
+		assert.Equal(t, session.TriggeredBySystem, events[1].TriggeredBy)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for BacklogItemChanged event from the second TransitionBacklogItemStatus call")
+	}
+}
+
 // TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionStatusChanges
 // is the regression test for the second Phase 5 sweep finding: UpdateAcCriterionStatus
 // (used for the "N/M done" acceptance-criteria progress badge) mutated AC status

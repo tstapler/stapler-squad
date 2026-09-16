@@ -212,25 +212,6 @@ export const editButton = style({
   },
 });
 
-export const editFormWrapper = style({
-  padding: vars.space["6"],
-});
-
-export const editFormHeader = style({
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  marginBottom: vars.space["4"],
-  paddingBottom: vars.space["3"],
-  borderBottom: `1px solid ${vars.color.borderSubtle}`,
-});
-
-export const editFormTitle = style({
-  fontSize: vars.fontSize.base,
-  fontWeight: vars.fontWeight.semibold,
-  color: vars.color.textPrimary,
-});
-
 export const closeButton = style({
   display: "inline-flex",
   alignItems: "center",
@@ -327,16 +308,6 @@ export const actionButtonDanger = style({
   ":hover": {
     background: vars.color.errorBg,
     borderColor: vars.color.error,
-  },
-});
-
-export const actionButtonSuccess = style({
-  background: vars.statusBadge.completeBg,
-  color: vars.statusBadge.completeFg,
-  borderColor: vars.statusBadge.completeBorder,
-  ":hover": {
-    background: vars.statusBadge.completeBg,
-    borderColor: vars.statusBadge.completeFg,
   },
 });
 
@@ -501,13 +472,6 @@ export const artifactsPath = style({
   padding: `${vars.space["1"]} ${vars.space["2"]}`,
   borderRadius: vars.radii.sm,
   wordBreak: "break-all",
-});
-
-export const worktreePathRow = style({
-  display: "flex",
-  alignItems: "center",
-  gap: vars.space["2"],
-  flexWrap: "wrap",
 });
 
 export const workflowTimeline = style({

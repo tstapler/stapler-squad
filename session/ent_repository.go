@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/dismissedfinding"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/session"
@@ -344,6 +345,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.GitHubRepo != "" {
 		sessionCreate.SetGithubRepo(data.GitHubRepo)
 	}
+	if data.GitHubHost != "" {
+		sessionCreate.SetGithubHost(data.GitHubHost)
+	}
 	if data.ArchivedAt != nil {
 		sessionCreate.SetArchivedAt(*data.ArchivedAt)
 	}
@@ -609,6 +613,9 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 	if data.GitHubRepo != "" {
 		sessionUpdate.SetGithubRepo(data.GitHubRepo)
+	}
+	if data.GitHubHost != "" {
+		sessionUpdate.SetGithubHost(data.GitHubHost)
 	}
 
 	// Update project link (look up by name or clear if empty)
@@ -1334,6 +1341,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	data.GitHubPRStatusTerminal = sess.GithubPrStatusTerminal
 	data.GitHubOwner = sess.GithubOwner
 	data.GitHubRepo = sess.GithubRepo
+	data.GitHubHost = sess.GithubHost
 
 	// Set session type
 	if sess.SessionType != "" {
@@ -1689,6 +1697,26 @@ func (r *EntRepository) UpsertTaggingRule(ctx context.Context, data TaggingRuleD
 		Exec(ctx)
 }
 
+// DismissFinding upserts a DismissedFinding row keyed by data.FindingID.
+// Idempotent — dismissing an already-dismissed finding_id just refreshes
+// session_id/conversation_id/finding_type (dismissed_at is immutable, so a
+// re-dismiss never resets it).
+func (r *EntRepository) DismissFinding(ctx context.Context, data DismissedFindingData) error {
+	dismissedAt := data.DismissedAt
+	if dismissedAt.IsZero() {
+		dismissedAt = time.Now()
+	}
+	return r.client.DismissedFinding.Create().
+		SetFindingID(data.FindingID).
+		SetSessionID(data.SessionID).
+		SetConversationID(data.ConversationID).
+		SetFindingType(data.FindingType).
+		SetDismissedAt(dismissedAt).
+		OnConflictColumns(dismissedfinding.FieldFindingID).
+		UpdateNewValues().
+		Exec(ctx)
+}
+
 func (r *EntRepository) DeleteTaggingRule(ctx context.Context, id string) error {
 	_, err := r.client.TaggingRule.Delete().
 		Where(taggingrule.RuleID(id)).
@@ -1725,6 +1753,26 @@ func (r *EntRepository) GetTaggingRuleFireCounts(ctx context.Context, since time
 		result[row.RuleID] = row.Count
 	}
 	return result, nil
+}
+
+// ListDismissedFindingIDs returns the set of currently-dismissed finding_id
+// values, for GetInsightsSummary to filter against.
+func (r *EntRepository) ListDismissedFindingIDs(ctx context.Context) (map[string]bool, error) {
+	//nolint:entfullscan dismissed findings are a small table (bounded by the
+	// findingsCap-capped panel's realistic dismissal volume); the whole set is
+	// needed to filter every request's freshly computed findings, same
+	// rationale as AllRules above.
+	rows, err := r.client.DismissedFinding.Query().
+		Select(dismissedfinding.FieldFindingID).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		ids[row.FindingID] = true
+	}
+	return ids, nil
 }
 
 func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData) error {

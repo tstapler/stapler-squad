@@ -41,6 +41,7 @@ type GitHubIntegration struct {
 	GitHubPRURL     string
 	GitHubOwner     string
 	GitHubRepo      string
+	GitHubHost      string
 	GitHubSourceRef string
 	ClonedRepoPath  string
 	MainRepoPath    string
@@ -198,6 +199,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 			GitHubPRURL:            i.GitHubPRURL,
 			GitHubOwner:            i.GitHubOwner,
 			GitHubRepo:             i.GitHubRepo,
+			GitHubHost:             i.GitHubHost,
 			GitHubSourceRef:        i.GitHubSourceRef,
 			ClonedRepoPath:         i.ClonedRepoPath,
 			MainRepoPath:           i.MainRepoPath,

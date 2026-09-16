@@ -457,7 +457,13 @@ func (e *CachingPipelineEngine) InitialPromptFor(item *BacklogItemData, priorSes
 		return BuildTokenBudgetedPrompt(item, priorSessions)
 	}
 
-	return renderTemplate(rm.InitialPromptTemplate, itemPlaceholders(item))
+	// A custom-mode template renders no prior-attempt history of its own, so
+	// prepend the same escalation nudge BuildSessionInitialPrompt renders for
+	// default-mode items — AutoReopenAfterFailedReview's escalate-once-then-park
+	// decision (server/services/backlog_service_triage.go) applies identically
+	// regardless of pipeline mode; without this, an item on a custom mode would
+	// silently never receive the nudge on its escalated retry.
+	return EscalationNoticeFor(priorSessions) + renderTemplate(rm.InitialPromptTemplate, itemPlaceholders(item))
 }
 
 // ContentHashFor implements PipelineEngine.

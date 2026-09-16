@@ -46,7 +46,7 @@ function renderPicker(
   return { onSelect, onCancel };
 }
 
-const REPO: GitHubRepo = { owner: "octocat", repo: "hello-world", description: "", isLocal: false, localPath: "" };
+const REPO: GitHubRepo = { owner: "octocat", repo: "hello-world", description: "", isLocal: false, localPath: "", host: "" };
 
 function makeIssue(overrides: Partial<GitHubIssue> = {}): GitHubIssue {
   return {
@@ -56,6 +56,7 @@ function makeIssue(overrides: Partial<GitHubIssue> = {}): GitHubIssue {
     url: "https://github.com/octocat/hello-world/issues/1",
     labels: [],
     isPR: false,
+    host: "",
     ...overrides,
   };
 }

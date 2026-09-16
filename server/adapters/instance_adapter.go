@@ -58,12 +58,21 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// synchronisation and are left as-is. Fields absent from InstanceSnapshot
 	// (LaunchCommand, CreationProgress) remain as direct reads.
 	snap := inst.Snapshot()
+	// One Workspace() call for every path field, so the conversion keeps
+	// costing at most the single os.Stat it always did.
+	ws := inst.Workspace()
 
 	protoSession := &sessionv1.Session{
-		Id:                 inst.GetStableID(),
-		Title:              snap.Title,
-		Path:               inst.Workspace().EffectivePath,
-		WorkingDir:         inst.GetWorkingDirectory(),
+		Id:         inst.GetStableID(),
+		Title:      snap.Title,
+		Path:       ws.ExistingDir,
+		WorkingDir: ws.ActiveDir,
+
+		RepoRoot:    ws.RepoRoot,
+		WorktreeDir: ws.WorktreeDir,
+		ActiveDir:   ws.ActiveDir,
+		ExistingDir: ws.ExistingDir,
+
 		Branch:             snap.Branch,
 		Status:             statusToProto(inst.GetEffectiveStatus()),
 		Program:            snap.Program,
@@ -94,6 +103,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		GithubPrUrl:     snap.GitHub.GitHubPRURL,
 		GithubOwner:     snap.GitHub.GitHubOwner,
 		GithubRepo:      snap.GitHub.GitHubRepo,
+		GithubHost:      snap.GitHub.GitHubHost,
 		GithubSourceRef: snap.GitHub.GitHubSourceRef,
 		ClonedRepoPath:  snap.GitHub.ClonedRepoPath,
 		// Instance type and external metadata
@@ -525,20 +535,6 @@ func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
 		return session.PermanentlyFailed
 	default:
 		return session.Creating // Default to Creating for unknown statuses
-	}
-}
-
-// ProtoToSessionType converts proto SessionType enum to session.SessionType.
-func ProtoToSessionType(sessionType sessionv1.SessionType) session.SessionType {
-	switch sessionType {
-	case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
-		return session.SessionTypeDirectory
-	case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
-		return session.SessionTypeNewWorktree
-	case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
-		return session.SessionTypeExistingWorktree
-	default:
-		return session.SessionTypeDirectory // Default to Directory for unknown types
 	}
 }
 

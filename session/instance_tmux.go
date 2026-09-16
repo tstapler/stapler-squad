@@ -231,6 +231,17 @@ func (i *Instance) GetTmuxSessionName() string {
 	return i.pm().GetSessionIdentifier()
 }
 
+// currentLaunchCommand rebuilds the launch command from the CURRENT
+// conversation UUID, read fresh via the thread-safe GetConversationUUID
+// rather than whatever was current when this instance's *tmux.TmuxSession
+// was constructed. Passed as tmux.WithProgramProvider so RestoreWithWorkDir
+// uses this -- not the frozen command captured at construction time -- when
+// it must actually relaunch a confirmed-missing session (see that function's
+// doc comment; BUG matching #791, a different call site).
+func (i *Instance) currentLaunchCommand() string {
+	return i.buildLaunchCommand(i.GetConversationUUID())
+}
+
 // buildLaunchCommand constructs the final command string used to launch the program
 // in tmux. It checks each registered launchCommandBuilder in turn (see that
 // type's doc comment); a program none of them recognizes is shell-quoted and
@@ -502,8 +513,17 @@ func (i *Instance) claudeMCPConfigArgs() (string, string) {
 }
 
 // initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
+//
+// Reuse requires HasSession() AND (the cheap cached IsAlive() OR the
+// canonical IsBackendProcessAlive() truth check): the pointer alone stays
+// non-nil forever once set, even after the tmux server backing it is killed,
+// which let recovery skip buildLaunchCommand() and relaunch without --resume
+// after a tmux-kill-server crash (2026-09-12 incident, #791). The cached
+// check is tried first to avoid a subprocess round trip on the hot path; the
+// canonical check only runs when it says no, so a merely-stale cache entry
+// doesn't force an unnecessary rebuild.
 func (i *Instance) initTmuxSession() {
-	if i.pm().HasSession() {
+	if i.pm().HasSession() && (i.pm().IsAlive() || i.IsBackendProcessAlive()) {
 		log.Info("reusing existing tmux session", "session", i.Title)
 		return
 	}
@@ -513,7 +533,9 @@ func (i *Instance) initTmuxSession() {
 	}
 	enrichedProgram := i.buildLaunchCommand(claudeSessionID)
 	i.LaunchCommand = enrichedProgram
-	log.Info("creating tmux session", "session", i.Title, "program", enrichedProgram)
+	// This func runs for every backend despite its name (BUG-109) -- log the
+	// real one instead of hardcoding "tmux".
+	log.Info("creating session", "session", i.Title, "program", enrichedProgram, "backend", string(processManagerBackendLabel(i.processManager)))
 
 	// Pre-trust the working directory so claude never blocks this
 	// (possibly-unattended) session on its interactive "trust this folder?"
@@ -535,11 +557,23 @@ func (i *Instance) initTmuxSession() {
 	// CreateSession mode-specific block (server/services/session_service.go) already created
 	// the remote tmux session on.
 	runner := i.executionTarget().Runner()
+	opts := []tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand)}
+	// Wires RestoreWithWorkDir's orphan guard (BUG matching #791, a different
+	// call site -- see that method's doc comment) to this instance's cached
+	// pane PID, so a later restore that finds tmux has no record of the
+	// session can tell a genuinely dead pane from one whose OS process
+	// outlived a killed/restarted tmux server.
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		if mgr, ok := tb.TmuxManager().(*TmuxProcessManager); ok {
+			opts = append(opts, tmux.WithOrphanProcessGuard(mgr.CachedPanePIDStillAlive, mgr.TerminateCachedPanePID))
+		}
+	}
 	var session *tmux.TmuxSession
 	if i.TmuxServerSocket != "" {
-		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil), tmux.WithCommandRunner(runner))
+		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket,
+			append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
 	} else {
-		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix, tmux.WithCommandRunner(runner))
+		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix, opts...)
 	}
 	if i.UUID != "" {
 		session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
@@ -688,12 +722,44 @@ func (i *Instance) TmuxAlive() bool {
 	return i.pm().IsAlive()
 }
 
-// IsBackendProcessAlive reports raw process liveness with no Status/started
-// gating (unlike TmuxAlive()) and no cached liveness flag — the
-// backend-agnostic replacement for reaching into a concrete
-// *tmux.TmuxSession's DoesSessionExistNoCache().
+// IsBackendProcessAlive is the canonical, direct-to-OS/tmux liveness-truth
+// check for this instance — no Status/started gating (unlike TmuxAlive()), no
+// cached flag, no reliance on a pointer/map merely being non-nil. It is the
+// single primitive initTmuxSession (below), RestoreWithWorkDir's orphan guard
+// (session/tmux, via CachedPanePIDStillAlive), and
+// SessionService.findConfirmedLiveInstance all bottom out in — three
+// independent liveness bugs (#791, #799, and the backlog-layer one this
+// comment was added for) each shipped their own incomplete proxy before this
+// existed.
+//
+// Checks two signals because either alone has a false negative:
+// HasLiveSessionNoCache() (fresh backend round trip) misses a process that
+// outlived a killed/restarted tmux server; CachedPanePIDStillAlive() (OS PID +
+// creation-time, tmux backend only) catches that case but is only meaningful
+// once a pane PID has actually been cached.
 func (i *Instance) IsBackendProcessAlive() bool {
-	return i.pm().HasSession() && i.pm().HasLiveSessionNoCache()
+	if !i.pm().HasSession() {
+		return false
+	}
+	if i.pm().HasLiveSessionNoCache() {
+		return true
+	}
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		if mgr, ok := tb.TmuxManager().(*TmuxProcessManager); ok {
+			return mgr.CachedPanePIDStillAlive()
+		}
+	}
+	return false
+}
+
+// GetCurrentWorkingDirectory returns the actual runtime working directory of
+// the instance's live pane/process (via pane or process introspection) — as
+// opposed to GetPath()/GetEffectiveRootDir(), which report the persisted
+// repo-root/worktree path and can diverge from where the process is really
+// running. Used by worktree-deletion safety checks that must know whether
+// some OTHER session's real cwd sits inside a worktree about to be removed.
+func (i *Instance) GetCurrentWorkingDirectory() (string, error) {
+	return i.pm().GetCurrentWorkingDirectory()
 }
 
 // RestoreProcess is the backend-agnostic replacement for reaching into a

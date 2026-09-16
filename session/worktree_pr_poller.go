@@ -149,6 +149,21 @@ func (p *WorktreePRPoller) GetPRData(repoPath, branch string) *github.PRInfo {
 	return v.(*github.PRInfo)
 }
 
+// InvalidateCache clears the shared ETag cache entry for a PR so the next
+// scheduled tick (ticker or ScanDone()) performs a full fetch instead of a
+// 304. It does not dispatch an immediate refetch: WorktreePRPoller has no
+// persistent per-worktree index to target one, so up to one PollInterval of
+// staleness is an accepted trade-off for worktrees with no active session.
+func (p *WorktreePRPoller) InvalidateCache(owner, repo string, prNumber int) {
+	// Host unknown at this call site (webhook's repoFullName carries no host) —
+	// github.com is the safe default; see poller_invalidation_adapter.go.
+	ref, err := github.NewRepoRef(owner, repo)
+	if err != nil {
+		return
+	}
+	p.etagCache.Invalidate(ref, prNumber)
+}
+
 // pollLoop drives the poller: react to scanner completions and a fallback ticker.
 func (p *WorktreePRPoller) pollLoop() {
 	defer p.wg.Done()
@@ -225,15 +240,18 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem) {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			p.fetchAndStore(captured)
+			ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
+			defer cancel()
+			ctx = github.WithGitHubCallOrigin(ctx, github.OriginWorktreePRPoller)
+			p.fetchAndStore(ctx, captured)
 		}()
 	}
 	wg.Wait()
 }
 
 // fetchAndStore fetches PR info for one worktree and stores it in the cache.
-func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
-	repoRef, err := github.GetOwnerRepoFromRemote(item.RepoPath)
+func (p *WorktreePRPoller) fetchAndStore(ctx context.Context, item WorktreeScanItem) {
+	repoRef, err := github.GetOwnerRepoFromRemote(item.RepoPath, enterpriseHostsForRemoteParsing())
 	if err != nil {
 		log.Warn("worktree PR poller: could not read remote URL", "path", item.RepoPath, "err", err)
 		return
@@ -242,14 +260,11 @@ func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
 		return // not a GitHub remote
 	}
 
-	ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
-	defer cancel()
-
 	key := worktreeCacheKey(item.RepoPath, item.Branch)
 
 	// Use ETag conditional fetch when we already know the PR number.
 	if existing := p.GetPRData(item.RepoPath, item.Branch); existing != nil && existing.Number > 0 {
-		info, changed, fetchErr := github.GetPRInfoConditional(ctx, repoRef.Owner(), repoRef.Repo(), existing.Number, p.etagCache)
+		info, changed, fetchErr := github.GetPRInfoConditional(ctx, repoRef, existing.Number, p.etagCache)
 		if fetchErr != nil {
 			if !p.handleFetchError(fetchErr) {
 				log.Warn("worktree PR poller: failed to fetch PR status", "branch", item.Branch, "err", fetchErr)
@@ -269,7 +284,7 @@ func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
 		listEtag = v.(listCacheEntry).etag
 	}
 
-	info, newEtag, changed, fetchErr := github.GetPRForBranchConditional(ctx, repoRef.Owner(), repoRef.Repo(), item.Branch, listEtag)
+	info, newEtag, changed, fetchErr := github.GetPRForBranchConditional(ctx, repoRef, item.Branch, listEtag)
 	if changed && newEtag != "" {
 		p.listEtags.Store(key, listCacheEntry{etag: newEtag, noPR: errors.Is(fetchErr, github.ErrNoPR)})
 	}
@@ -311,7 +326,7 @@ func (p *WorktreePRPoller) isAuthOK() bool {
 			return r.ok
 		}
 	}
-	if err := github.CheckGHAuth(); err != nil {
+	if err := github.CheckGHAuth(p.ctx); err != nil {
 		log.Warn("worktree PR poller: github auth unavailable", "err", err)
 		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
 		return false
@@ -352,8 +367,8 @@ func (p *WorktreePRPoller) sessionBackedPaths() map[string]struct{} {
 
 	paths := make(map[string]struct{}, len(insts))
 	for _, inst := range insts {
-		if inst.Path != "" {
-			paths[inst.Path] = struct{}{}
+		if p := inst.GetPath(); p != "" {
+			paths[p] = struct{}{}
 		}
 	}
 	return paths

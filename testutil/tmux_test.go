@@ -3,6 +3,7 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -392,4 +393,19 @@ func TestSanitizeTestName(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+// TestCreateIsolatedTmuxServer_SocketNameEmbedsPID guards the naming
+// convention testutil/tmuxreap.ReapLeakedTestServers relies on to tell a
+// still-running test server apart from one left behind by a killed test
+// binary (see BUG-105): the socket name must contain the owning process's
+// PID as one of its "_"-delimited numeric fields.
+func TestCreateIsolatedTmuxServer_SocketNameEmbedsPID(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not available, skipping test")
+	}
+
+	server := CreateIsolatedTmuxServer(t)
+	want := fmt.Sprintf("_%d_", os.Getpid())
+	assert.Contains(t, server.GetSocketName(), want)
 }

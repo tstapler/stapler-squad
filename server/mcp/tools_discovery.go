@@ -41,32 +41,37 @@ func decodeCursor(s string) (*paginationCursor, error) {
 }
 
 func instanceToSummary(inst *session.Instance) SessionSummary {
-	tags := inst.Tags
+	snap := inst.Snapshot()
+	ws := inst.Workspace()
+	tags := snap.Tags
 	if tags == nil {
 		tags = []string{}
 	}
-	lastActivity := inst.UpdatedAt
-	if inst.CreatedAt.After(lastActivity) {
-		lastActivity = inst.CreatedAt
+	lastActivity := snap.UpdatedAt
+	if snap.CreatedAt.After(lastActivity) {
+		lastActivity = snap.CreatedAt
 	}
 	return SessionSummary{
-		ID:             inst.Title,
-		Title:          inst.Title,
-		Status:         inst.Status.String(),
+		ID:             snap.Title,
+		Title:          snap.Title,
+		Status:         snap.Status.String(),
 		Tags:           tags,
-		Branch:         inst.Branch,
-		Path:           inst.Path,
-		CreatedAt:      inst.CreatedAt,
+		Branch:         snap.Branch,
+		Path:           snap.Path,
+		ActiveDir:      ws.ActiveDir,
+		ExistingDir:    ws.ExistingDir,
+		CreatedAt:      snap.CreatedAt,
 		LastActivityAt: lastActivity,
 	}
 }
 
 func instanceToDetail(inst *session.Instance) SessionDetail {
+	snap := inst.Snapshot()
 	return SessionDetail{
 		SessionSummary: instanceToSummary(inst),
-		Program:        inst.Program,
-		SessionType:    string(inst.SessionType),
-		WorkingDir:     inst.WorkingDir,
+		Program:        snap.Program,
+		SessionType:    string(snap.SessionType),
+		WorkingDir:     snap.WorkingDir,
 	}
 }
 
@@ -238,10 +243,12 @@ func (d *discoveryHandlers) searchSessions(ctx context.Context, req mcpgo.CallTo
 }
 
 func matchesSearch(inst *session.Instance, queryLower string, tagFilter []string) bool {
+	snap := inst.Snapshot()
+
 	// Must match all required tags.
 	for _, required := range tagFilter {
 		found := false
-		for _, t := range inst.Tags {
+		for _, t := range snap.Tags {
 			if strings.EqualFold(t, required) {
 				found = true
 				break
@@ -256,6 +263,6 @@ func matchesSearch(inst *session.Instance, queryLower string, tagFilter []string
 	if queryLower == "" {
 		return true
 	}
-	searchable := strings.ToLower(inst.Title + " " + inst.Path + " " + inst.Branch + " " + strings.Join(inst.Tags, " "))
+	searchable := strings.ToLower(snap.Title + " " + snap.Path + " " + snap.Branch + " " + strings.Join(snap.Tags, " "))
 	return strings.Contains(searchable, queryLower)
 }

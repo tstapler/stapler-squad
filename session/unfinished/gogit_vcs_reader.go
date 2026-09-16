@@ -410,6 +410,7 @@ func (g *GoGitVCSReader) pruneRepoCache() {
 		if ts < cutoff {
 			g.repoCache.Delete(k)
 			atomic.AddInt64(&g.repoCacheSize, -1)
+			atomic.AddInt64(&g.repoCacheEvictions, 1)
 			releaseGogitstoreRef(entry)
 		} else {
 			live = append(live, liveEntry{k.(string), ts, entry})
@@ -427,6 +428,7 @@ func (g *GoGitVCSReader) pruneRepoCache() {
 		for _, e := range live[:int64(len(live))-maxEntries] {
 			g.repoCache.Delete(e.key)
 			atomic.AddInt64(&g.repoCacheSize, -1)
+			atomic.AddInt64(&g.repoCacheEvictions, 1)
 			releaseGogitstoreRef(e.entry)
 		}
 	}
@@ -471,6 +473,7 @@ func (g *GoGitVCSReader) ClearCache() {
 	g.repoCache.Range(func(k, v any) bool {
 		g.repoCache.Delete(k)
 		atomic.AddInt64(&g.repoCacheSize, -1)
+		atomic.AddInt64(&g.repoCacheEvictions, 1)
 		releaseGogitstoreRef(v.(*cachedRepo))
 		return true
 	})
@@ -491,6 +494,19 @@ type GoGitVCSReader struct {
 	// repoCacheSize tracks the approximate entry count atomically so eviction
 	// can be triggered without a full Range scan on every cache miss.
 	repoCacheSize int64
+
+	// repoCacheColdOpens/repoCacheEvictions back RepoCacheStats: instrumentation
+	// added to root-cause the blob-cache's near-zero hit rate observed in
+	// production (see /debug/blob-cache) before deciding whether to decouple
+	// blobCache from cachedRepo's lifetime the way matcherCache already is.
+	// blobCache lives inside *cachedRepo (gogit_vcs_reader.go's cachedRepo
+	// struct), so every eviction here also discards that repo's blob cache —
+	// if repoCacheEvictions tracks repoCacheColdOpens closely, evictions (not a
+	// genuinely low same-blob-revisit workload) are the reason blobCache never
+	// warms up, which would justify that decoupling; if evictions are rare
+	// relative to opens, the low hit rate reflects the workload instead.
+	repoCacheColdOpens int64
+	repoCacheEvictions int64
 
 	// diffStatCache caches DiffShortstat results keyed by absolute worktreePath.
 	// Values are diffStatEntry (stored by value; no mutation after Store).
@@ -659,6 +675,38 @@ func BlobCacheStatsSnapshot() BlobCacheStats {
 		return BlobCacheStats{}
 	}
 	return r.BlobCacheStats()
+}
+
+// RepoCacheStats reports repoCache churn: how many *cachedRepo entries were
+// ever opened cold (ColdOpens) versus evicted (Evictions, via pruneRepoCache's
+// TTL/LRU passes or ClearCache). Since blobCache lives inside *cachedRepo
+// (see that struct's doc comment), every eviction discards the evicted repo's
+// blob cache along with it. Evictions tracking ColdOpens closely means most
+// opens are actually re-opens of a previously-evicted path — the likely
+// explanation for a low BlobCacheStats hit rate; Evictions staying small
+// relative to ColdOpens means most opens are genuinely first-time, and the low
+// hit rate instead reflects the workload rarely revisiting the same blob.
+type RepoCacheStats struct {
+	CurrentSize int64
+	ColdOpens   int64
+	Evictions   int64
+}
+
+func (g *GoGitVCSReader) RepoCacheStats() RepoCacheStats {
+	return RepoCacheStats{
+		CurrentSize: atomic.LoadInt64(&g.repoCacheSize),
+		ColdOpens:   atomic.LoadInt64(&g.repoCacheColdOpens),
+		Evictions:   atomic.LoadInt64(&g.repoCacheEvictions),
+	}
+}
+
+// RepoCacheStatsSnapshot mirrors BlobCacheStatsSnapshot for RepoCacheStats.
+func RepoCacheStatsSnapshot() RepoCacheStats {
+	r := currentReader.Load()
+	if r == nil {
+		return RepoCacheStats{}
+	}
+	return r.RepoCacheStats()
 }
 
 // perRepoObjectCacheSize replaces go-git's PlainOpenWithOptions default of
@@ -1954,6 +2002,7 @@ func (g *GoGitVCSReader) openRepoEntry(path string) (*cachedRepo, error) {
 	actual, loaded := g.repoCache.LoadOrStore(path, entry)
 	if !loaded {
 		atomic.AddInt64(&g.repoCacheSize, 1)
+		atomic.AddInt64(&g.repoCacheColdOpens, 1)
 	} else {
 		// Another goroutine won the race to store the canonical entry for
 		// this path first. The repo we just opened here — and its

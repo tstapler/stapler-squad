@@ -68,13 +68,6 @@ export const columnDropOver = style({
   borderRadius: vars.radii.sm,
 });
 
-// Applied to columnCards while a dragged card is hovering over this column as a valid drop
-// target (dnd-kit's useDroppable isOver).
-export const columnCardsOver = style({
-  outline: `2px dashed ${vars.color.primary}`,
-  outlineOffset: "-2px",
-});
-
 // Visual language borrowed from SessionListEmptyState.css.ts (muted text, small centered
 // copy) rather than that component itself, which is sized for the whole-list empty state.
 export const emptyColumn = style({

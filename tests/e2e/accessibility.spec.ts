@@ -368,14 +368,12 @@ test.describe('Accessibility — backlog live updates (WCAG 4.1.3 AA)', () => {
     await assertTabWrapsWithinDialog(page, dialog);
   });
 
-  // BacklogFileBrowserModal, unlike ReviewChangesModal above: react-arborist's
-  // FileTree rewrites its own row tabindex the instant it receives focus,
-  // which makes useFocusTrap's getFocusable() query miss the just-focused
-  // row and can let native Tab fall through past the container entirely
-  // (filed as backlog item 4a1f73c4-5558-41f8-9860-8508fb874fcc). useFocusTrap
-  // now carries a `focusin` safety net for exactly this case — assert both
-  // activation focus and that a Tab-loop through the tree never truly
-  // escapes the dialog.
+  // BacklogFileBrowserModal, unlike ReviewChangesModal above, embeds a real
+  // react-arborist FileTree — see FileTree.tsx's TreeRow/handleTreeKeyDown
+  // "Tab" case for how it now keeps focus inside the dialog (backlog item
+  // 4a1f73c4-5558-41f8-9860-8508fb874fcc). useFocusTrap's `focusin` safety
+  // net remains as defense-in-depth. Assert both activation focus and a full
+  // Tab-loop wrap.
   test('useFocusTrap moves focus to BacklogFileBrowserModal\'s first focusable element on activation (modal-focus-trap AC5)', async ({ page, request }) => {
     const title = `e2e-focus-trap-files-${Date.now()}`;
     await seedWorkSessionWithWorktreeDirect(request, { title, status: 'review' });
@@ -411,10 +409,59 @@ test.describe('Accessibility — backlog live updates (WCAG 4.1.3 AA)', () => {
     const dialog = page.getByTestId('file-browser-modal');
     await expect(dialog).toBeVisible();
 
-    // Doesn't assert a clean wrap-to-first like assertTabWrapsWithinDialog —
-    // FileTree's roving tabindex means the tree's own internal tab order is
-    // still a bit erratic (tracked by the filed FileTree item above) — only
-    // that the focusin safety net stops it from ever truly leaving the dialog.
+    await assertTabWrapsWithinDialog(page, dialog);
+  });
+
+  // AC3 (modal-focus-trap follow-up, backlog item
+  // 4a1f73c4-5558-41f8-9860-8508fb874fcc): scroll the tree mid-loop so
+  // react-arborist recycles virtualized row DOM nodes, then keep tabbing —
+  // guards against the "stale row reference" escape hypothesis in that
+  // item's research notes.
+  test('Tab never escapes BacklogFileBrowserModal across a scroll that recycles virtualized rows (modal-focus-trap AC5)', async ({
+    page,
+    request,
+  }) => {
+    const title = `e2e-focus-trap-files-scroll-${Date.now()}`;
+    await seedWorkSessionWithWorktreeDirect(request, { title, status: 'review', fileCount: 60 });
+
+    const backlogPage = new BacklogPage(page);
+    await backlogPage.goto();
+    await backlogPage.waitForPageLoad();
+    await backlogPage.openItemDetail(title);
+
+    await page.getByRole('button', { name: 'Browse files in this worktree' }).click();
+
+    const dialog = page.getByTestId('file-browser-modal');
+    await expect(dialog).toBeVisible();
+
+    // FileTree.tsx's own outer role="tree" wrapper and react-arborist's
+    // internal DefaultContainer (also role="tree", nested inside it — the
+    // latter is the actual scrollable/virtualized element) both match
+    // getByRole('tree'), so click a row directly for a deterministic focus
+    // target instead of the ambiguous container.
+    const firstRow = dialog.getByRole('treeitem').first();
+    await firstRow.click();
+    await expect(firstRow).toBeFocused();
+
+    for (let i = 0; i < 10; i++) {
+      await page.keyboard.press('Tab');
+    }
+
+    // Scroll react-arborist's internal virtualized container (the innermost
+    // role="tree" element) so it mounts/unmounts rows while a row still
+    // (potentially) holds a stale focus reference.
+    await dialog.getByRole('tree').last().evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+
+    // Not assertTabWrapsWithinDialog here: that helper's "wraps back to the
+    // exact starting element" check assumes stable DOM node identity, which
+    // virtualization deliberately breaks — a row scrolled out of view can be
+    // unmounted and a different row's DOM node recycled into its place, so
+    // the specific node focus started on may never literally recur (verified
+    // by running this with the strict check: it timed out, not because focus
+    // escaped, but because that exact node was gone). Only the containment
+    // guarantee is a valid invariant across a scroll.
     for (let i = 0; i < 30; i++) {
       await page.keyboard.press('Tab');
       const stillInside = await dialog.evaluate(
@@ -423,6 +470,7 @@ test.describe('Accessibility — backlog live updates (WCAG 4.1.3 AA)', () => {
       expect(stillInside, `Tab press #${i + 1} moved focus outside the dialog`).toBe(true);
     }
   });
+
 });
 
 /**

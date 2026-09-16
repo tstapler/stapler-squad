@@ -364,7 +364,7 @@ func NewPRVerification(exists, matched bool, actualHeadBranch, state, author str
 //
 // Returns:
 //   - (NewPRVerification(false, false, "", "", ""), nil): no PR exists for
-//     prNumber in owner/repo at all (githubpkg.ErrNoPR). Callers must NOT
+//     prNumber in ref's repo at all (githubpkg.ErrNoPR). Callers must NOT
 //     persist on this result, with or without an override — re-asking
 //     GitHub the same question will not change the answer.
 //   - (NewPRVerification(true, ..., info.HeadRef, info.State, info.Author), nil):
@@ -372,8 +372,8 @@ func NewPRVerification(exists, matched bool, actualHeadBranch, state, author str
 //   - (PRVerification{}, err): the lookup itself failed (rate limit, network,
 //     auth) — transient. Callers should surface a retryable error rather
 //     than treating this as a confirmed mismatch or a confirmed non-existence.
-func VerifyPRMatchesBranch(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (PRVerification, error) {
-	info, err := githubpkg.GetPRByNumber(ctx, owner, repo, prNumber)
+func VerifyPRMatchesBranch(ctx context.Context, ref githubpkg.RepoRef, prNumber int, expectedBranch string) (PRVerification, error) {
+	info, err := githubpkg.GetPRByNumber(ctx, ref, prNumber)
 	if err != nil {
 		if errors.Is(err, githubpkg.ErrNoPR) {
 			return NewPRVerification(false, false, "", "", ""), nil
@@ -395,8 +395,9 @@ func detectRepoPath(store session.InstanceStore, owner, repo string) string {
 		if strings.Contains(strings.ToLower(inst.Path), strings.ToLower(repo)) {
 			return inst.Path
 		}
-		if strings.Contains(strings.ToLower(inst.GetWorkingDirectory()), target) {
-			dir := inst.GetWorkingDirectory()
+		activeDir := inst.ActiveDir()
+		if strings.Contains(strings.ToLower(activeDir), target) {
+			dir := activeDir
 			// Walk up to find the git root.
 			for dir != "/" && dir != "." {
 				if _, statErr := os.Stat(filepath.Join(dir, ".git")); statErr == nil {

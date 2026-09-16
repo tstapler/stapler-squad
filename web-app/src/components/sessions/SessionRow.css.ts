@@ -321,14 +321,6 @@ export const rowActive = style({
   },
 });
 
-/** Name + chip row inside nameCell — extracted from inline style in SessionRow.tsx */
-export const nameRow = style({
-  display: "flex",
-  alignItems: "center",
-  gap: "6px",
-  minWidth: 0,
-});
-
 /** Muted clock icon prefix for the elapsed column — makes the column self-labeling */
 export const elapsedIcon = style({
   marginInlineEnd: "3px",

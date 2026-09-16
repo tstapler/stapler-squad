@@ -26,6 +26,7 @@ export interface BacklogCategoryDefaults {
   skipPlanning: boolean;
   autoSpawnSession: boolean;
   autoCreatePR: boolean;
+  autoApprovePlan: boolean;
   /** Pipeline mode slug, or "" for the built-in default. */
   pipelineMode: string;
 }
@@ -75,27 +76,31 @@ export const BACKLOG_CATEGORIES: BacklogCategoryOption[] = [
 export const CATEGORY_DEFAULTS: Record<string, BacklogCategoryDefaults> = {
   bugfix: {
     // Fast path — bugs are usually well-scoped, skip formal planning and
-    // spawn immediately.
+    // spawn immediately. autoApprovePlan is moot here (skipPlanning already
+    // bypasses the plan-approval gate entirely) but set false for clarity.
     autoSpawnSession: true,
     skipPlanning: true,
     skipReviewGate: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     pipelineMode: "",
   },
   feature: {
-    // Full rigor — use the SDD pipeline mode.
+    // Full rigor — use the SDD pipeline mode, human reviews the plan.
     autoSpawnSession: false,
     skipPlanning: false,
     skipReviewGate: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     pipelineMode: SDD_PIPELINE_MODE_SLUG,
   },
   chore: {
-    // Low-risk, fully automated.
+    // Low-risk, fully automated — no manual gate, including plan approval.
     autoSpawnSession: true,
     skipPlanning: true,
     skipReviewGate: true,
     autoCreatePR: true,
+    autoApprovePlan: true,
     pipelineMode: "",
   },
   refactor: {
@@ -104,6 +109,7 @@ export const CATEGORY_DEFAULTS: Record<string, BacklogCategoryDefaults> = {
     skipPlanning: false,
     skipReviewGate: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     pipelineMode: "",
   },
 };

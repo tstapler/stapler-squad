@@ -386,9 +386,23 @@ func pathEscapesRoot(root, candidate string) bool {
 // still exists on disk — callers that do path-string correlation (e.g.
 // HistoryLinker matching against ~/.claude/projects/<hashed-path>) need the
 // nominal path regardless of whether the directory is currently present. For
-// callers that need to actually read from the filesystem, use Workspace(),
-// which falls back to the repo root when the worktree is gone.
+// callers that need to actually read from the filesystem, use
+// Workspace().ExistingDir, which falls back to the repo root when the worktree
+// is gone.
+//
+// Prefer ActiveDir(), which names what this returns.
 func (i *Instance) GetEffectiveRootDir() string {
+	return i.ActiveDir()
+}
+
+// ActiveDir returns Workspace().ActiveDir without computing the rest of the
+// Workspace: the worktree directory when this session has one, else the repo
+// root. Prefer it to Workspace().ActiveDir when the active directory is all you
+// need — Workspace() additionally stats the filesystem to resolve ExistingDir,
+// which callers on hot paths (cmd.Dir, session start, poll loops) should not pay
+// for, and which logs a warning for every paused session whose worktree
+// pause_session removed.
+func (i *Instance) ActiveDir() string {
 	if i.gitManager.HasWorktree() {
 		if p := i.gitManager.GetWorktreePath(); p != "" {
 			return p
@@ -405,27 +419,37 @@ func (i *Instance) GetPath() string {
 	return i.Snapshot().Path
 }
 
-// Workspace returns where this session is operating.
-// Use this as the single source of truth for path resolution instead of
-// accessing inst.Path directly, which is wrong for worktree sessions.
-//
-// Falls back to RepoRoot if the worktree path no longer exists on disk (e.g.
-// a paused session's worktree was removed while its branch/metadata
-// persisted) — otherwise filesystem-reading callers like ListFiles would try
-// to read a directory that's gone and surface a bare "directory not found: ."
-// with no indication why.
+// Workspace returns every path concept this session has, named. See the
+// Workspace type for which field answers which question — in particular
+// ActiveDir to compare sessions, ExistingDir to open files. Prefer it to
+// reading inst.Path directly, which is wrong for worktree sessions.
 func (i *Instance) Workspace() Workspace {
 	repoRoot := i.GetPath()
-	effectivePath := i.GetEffectiveRootDir()
-	if effectivePath != repoRoot {
-		if _, err := os.Stat(effectivePath); err != nil {
-			log.Warn("worktree path no longer exists on disk, falling back to repo path", "session", i.Title, "worktreePath", effectivePath)
-			effectivePath = repoRoot
+	worktreeDir := ""
+	if i.gitManager.HasWorktree() {
+		worktreeDir = i.gitManager.GetWorktreePath()
+	}
+	// Derived from worktreeDir rather than calling ActiveDir(), which would read
+	// the worktree a second time — the two fields must describe one instant.
+	activeDir := worktreeDir
+	if activeDir == "" {
+		activeDir = repoRoot
+	}
+
+	// Only stat when the two can actually differ, so directory sessions cost no
+	// syscall at all.
+	existingDir := activeDir
+	if existingDir != repoRoot {
+		if _, err := os.Stat(existingDir); err != nil {
+			log.Warn("worktree path no longer exists on disk, falling back to repo path", "session", i.GetTitle(), "worktreePath", existingDir)
+			existingDir = repoRoot
 		}
 	}
 	return Workspace{
-		EffectivePath: effectivePath,
-		RepoRoot:      repoRoot,
+		RepoRoot:    repoRoot,
+		WorktreeDir: worktreeDir,
+		ActiveDir:   activeDir,
+		ExistingDir: existingDir,
 	}
 }
 
@@ -468,6 +492,31 @@ func (i *Instance) GetBaseCommitSHA() string {
 func (i *Instance) SetGitWorktree(worktree *git.GitWorktree) {
 	i.gitManager.SetWorktree(worktree)
 	i.started.Store(worktree != nil)
+}
+
+// RecordVCSStatusRequest marks this instance's worktree as recently active
+// for WorktreeChangeDetector's idle-gating (Story 2.2.2) -- called by
+// WorkspaceService.GetVCSStatus on every call (hit or miss) so a workdir
+// being polled only via GetVCSStatus (never GetSessionDiff) still counts as
+// active for the periodic tick's activeFunc check. No-op if there's no
+// worktree.
+func (i *Instance) RecordVCSStatusRequest() {
+	i.gitManager.RecordRequest()
+}
+
+// RefreshDiffStatsIfStale recomputes diff stats only if the cached value is
+// older than diffStatsCacheTTL — a no-op otherwise. Use for callers that can
+// tolerate a few seconds of staleness (notably the GetSessionDiff RPC, which
+// profiled at ~13% of app-wide CPU since UpdateDiffStats redoes a full diff
+// plus an ahead/behind commit walk unconditionally on every call — mirrors
+// GetVCSStatus's proven TTL-cache pattern). Callers needing a
+// guaranteed-fresh read (daemon.go's AutoYes loop, exit/destroy lifecycle
+// snapshots) must keep calling UpdateDiffStats directly.
+func (i *Instance) RefreshDiffStatsIfStale() error {
+	if i.gitManager.DiffStatsFresh() {
+		return nil
+	}
+	return i.UpdateDiffStats()
 }
 
 // UpdateDiffStats updates the git diff statistics for this instance.
@@ -604,12 +653,13 @@ func computeDirDiffStats(repoPath, baseSHA string) *git.DiffStats {
 	return stats
 }
 
-// GetWorkingDirectory returns the working directory for this instance.
+// GetWorkingDirectory returns Workspace().ActiveDir. Despite the name it does
+// not read the Instance.WorkingDir field, which is the user's relative
+// subdirectory (see resolveStartPath).
+//
+// Deprecated: use ActiveDir(), or Workspace().ExistingDir to open a file.
 func (i *Instance) GetWorkingDirectory() string {
-	if i.gitManager.HasWorktree() {
-		return i.gitManager.GetWorktreePath()
-	}
-	return i.GetPath()
+	return i.ActiveDir()
 }
 
 // DetectAndPopulateWorktreeInfo detects if the instance path is a worktree

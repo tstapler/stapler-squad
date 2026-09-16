@@ -60,6 +60,7 @@ type InstanceData struct {
 	GitHubPRURL     string `json:"github_pr_url,omitempty"`
 	GitHubOwner     string `json:"github_owner,omitempty"`
 	GitHubRepo      string `json:"github_repo,omitempty"`
+	GitHubHost      string `json:"github_host,omitempty"`
 	GitHubSourceRef string `json:"github_source_ref,omitempty"`
 	ClonedRepoPath  string `json:"cloned_repo_path,omitempty"`
 	// Worktree detection fields
@@ -517,8 +518,17 @@ func (s *Storage) ListInstanceIDs() ([]string, error) {
 
 // ListSessionRecords returns a snapshot of all sessions as SessionRecords,
 // for use by the tokens.Associator to match JSONL files to stapler-squad sessions.
+//
+// Uses LoadMinimal.WithTags() rather than plain ListInstanceData() (LoadMinimal):
+// Tags is an eager-loaded ent edge (session/ent/schema/session.go), not a plain
+// column, so it comes back empty under LoadMinimal — see LoadOptions.LoadTags's
+// doc comment and TestStorage_UpdateInstance's identical note.
 func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
-	data, err := s.ListInstanceData()
+	// LoadWorktree so ActiveDir() below can resolve to the worktree path —
+	// Claude's JSONL ProjectPath is derived from the process cwd (the
+	// worktree), so matching against the identity Path orphans every
+	// worktree session's token records.
+	data, err := s.repo.ListWithOptions(context.Background(), LoadOptions{LoadTags: true, LoadWorktree: true})
 	if err != nil {
 		return nil
 	}
@@ -531,8 +541,9 @@ func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
 		records = append(records, tokens.SessionRecord{
 			SessionID:      sessionID,
 			ConversationID: d.ClaudeSession.ConversationUUID,
-			Path:           d.Path,
+			Path:           d.ActiveDir(),
 			CreatedAt:      d.CreatedAt,
+			Tags:           d.Tags,
 		})
 	}
 	return records
@@ -809,6 +820,16 @@ func (s *Storage) RecordTaggingRuleFire(ctx context.Context, ruleID string, fire
 // given instant.
 func (s *Storage) GetTaggingRuleFireCounts(ctx context.Context, since time.Time) (map[string]int, error) {
 	return s.repo.GetTaggingRuleFireCounts(ctx, since)
+}
+
+// DismissFinding persists a WasteFinding dismissal in the repository.
+func (s *Storage) DismissFinding(ctx context.Context, data DismissedFindingData) error {
+	return s.repo.DismissFinding(ctx, data)
+}
+
+// ListDismissedFindingIDs returns the set of currently-dismissed finding_id values.
+func (s *Storage) ListDismissedFindingIDs(ctx context.Context) (map[string]bool, error) {
+	return s.repo.ListDismissedFindingIDs(ctx)
 }
 
 // RecordAnalytics logs a classification decision to the repository.

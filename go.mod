@@ -25,7 +25,7 @@ require (
 	github.com/bufbuild/connect-go v1.10.0
 	github.com/creack/pty v1.1.24
 	github.com/edsrzf/mmap-go v1.2.0
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/go-webauthn/webauthn v0.16.1

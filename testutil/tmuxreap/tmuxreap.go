@@ -40,25 +40,29 @@ const reapOverallBudget = 20 * time.Second
 const reapMaxConcurrent = 32
 
 // testSocketPrefixes lists every socket-name prefix created by tests across
-// the whole module (session, session/mux, session/tmux). Exported via
-// ReapLeakedTestServers/StartTestServerWatchdog so every package's TestMain
-// shares one reaper instead of maintaining its own copy — a prior duplicate
-// in session/integration_test.go only knew about "test_coldrestore_" and
-// silently missed "test-isolated-" (the name testSocketOnce in session/tmux
-// actually generates), letting orphaned isolated servers from a SIGKILLed
-// test binary accumulate indefinitely instead of being reaped on the next
-// run.
+// the whole module. Exported via ReapLeakedTestServers/StartTestServerWatchdog
+// so every package's TestMain shares one reaper instead of maintaining its
+// own copy.
+//
+// This list used to enumerate each generator's exact prefix one at a time
+// (e.g. "test_coldrestore_", "test_recovery_") and kept missing new ones the
+// same way every time: a prior duplicate in session/integration_test.go only
+// knew about "test_coldrestore_" and silently missed "test-isolated-" (the
+// name testSocketOnce in session/tmux generates); later, both
+// testutil.CreateIsolatedTmuxServer's "test_<TestName>_<pid>_<n>" and
+// session/session_creation_test.go's local testTmuxSocket helper
+// ("test_<TestName>_<pid>") went unreaped for the same reason — an arbitrary
+// test name between "test_" and the PID means no fixed literal prefix can
+// name every case (see BUG-105: 882 leaked sockets accumulated over 8+ days,
+// exhausting the stapler-squad.service memory cgroup and causing deploy
+// health-check timeouts/rollbacks). Broadened to the bare "test_" prefix so
+// any future "test_..."-named generator is covered without another
+// whack-a-mole patch; extractTestSocketPID + isProcessAlive below still gate
+// every match on the owning PID actually being dead before anything is
+// killed, so this stays safe against a real session (which never uses a
+// "test_"-prefixed name — see the StillMatchesUnderscorePrefixes test).
 var testSocketPrefixes = []string{
-	"test_coldrestore_",
-	"test_ensure_noop_",
-	"test_ensure_start_",
-	"test_exit_empty_",
-	"test_keepalive_",
-	"test_recovery_",
-	"test_killcm_",
-	"test_restart_cm_",
-	"test_cmdlen_repro_",
-	"test_cmdlen_fixed_",
+	"test_",
 	"integration_",
 	"test-isolated-",
 }
@@ -70,6 +74,14 @@ var testSocketPrefixes = []string{
 // socket name.
 func ReapLeakedTestServers() {
 	myPID := os.Getpid()
+	reapLeakedSocketFiles(myPID)
+	reapOrphanedTestProcesses(myPID)
+}
+
+// reapLeakedSocketFiles is ReapLeakedTestServers' file-based sweep: it scans
+// the tmux socket directory and kills every leaked entry in parallel, bounded
+// by reapOverallBudget/reapMaxConcurrent.
+func reapLeakedSocketFiles(myPID int) {
 	socketDir := fmt.Sprintf("/tmp/tmux-%d", os.Getuid())
 	entries, err := os.ReadDir(socketDir)
 	if err != nil {
@@ -78,26 +90,14 @@ func ReapLeakedTestServers() {
 
 	overallCtx, cancel := context.WithTimeout(context.Background(), reapOverallBudget)
 	defer cancel()
-
 	sem := make(chan struct{}, reapMaxConcurrent)
 	var wg sync.WaitGroup
 	skipped := 0
-
 	for _, entry := range entries {
 		name := entry.Name()
-		if !isTestSocketName(name) {
+		if !isLeakedTestSocket(myPID, name) {
 			continue
 		}
-		ownerPID, ok := extractTestSocketPID(name)
-		if ok {
-			if ownerPID == myPID {
-				continue // our own run (shouldn't exist at TestMain start, be safe)
-			}
-			if isProcessAlive(ownerPID) {
-				continue // another live test runner — don't interfere
-			}
-		}
-
 		select {
 		case <-overallCtx.Done():
 			// Ran out of budget: leave the remaining sockets for the next
@@ -106,23 +106,11 @@ func ReapLeakedTestServers() {
 			continue
 		case sem <- struct{}{}:
 		}
-
 		wg.Add(1)
 		go func(name string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			ctx, cancel := context.WithTimeout(overallCtx, 5*time.Second)
-			defer cancel()
-			_ = safeexec.CommandContext(ctx, tmuxBinary(), "-L", name, "kill-server").Run()
-			// kill-server only unlinks the socket when it actually stops a
-			// live server. Most leaked sockets here have no server behind
-			// them at all (the owning tmux process already exited on its
-			// own) — kill-server reports "no server running" and leaves the
-			// file in place, which is why this directory accumulates
-			// indefinitely otherwise. Safe to remove unconditionally: we've
-			// already confirmed the owning test PID is dead, and any server
-			// kill-server did stop has already unlinked its own socket.
-			_ = os.Remove(filepath.Join(socketDir, name))
+			killLeakedSocketFile(overallCtx, name)
 		}(name)
 	}
 	wg.Wait()
@@ -130,6 +118,99 @@ func ReapLeakedTestServers() {
 	if skipped > 0 {
 		fmt.Fprintf(os.Stderr, "tmuxreap: hit %s budget with %d leaked socket(s) still unreaped; will retry on next run\n", reapOverallBudget, skipped)
 	}
+}
+
+// isLeakedTestSocket reports whether name is a test-prefixed socket safe to
+// reap: either it has no embedded PID to check liveness against, or the PID
+// it does embed (myPID excepted) belongs to a process that's confirmed dead.
+func isLeakedTestSocket(myPID int, name string) bool {
+	if !isTestSocketName(name) {
+		return false
+	}
+	ownerPID, ok := extractTestSocketPID(name)
+	if !ok {
+		return true
+	}
+	if ownerPID == myPID {
+		return false // our own run (shouldn't exist at TestMain start, be safe)
+	}
+	return !isProcessAlive(ownerPID) // another live test runner — don't interfere
+}
+
+// killLeakedSocketFile stops the tmux server behind a leaked socket, if one
+// is still running, and removes the socket file.
+func killLeakedSocketFile(parent context.Context, name string) {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	_ = safeexec.CommandContext(ctx, tmuxBinary(), "-L", name, "kill-server").Run()
+	// kill-server only unlinks the socket when it actually stops a live
+	// server. Most leaked sockets here have no server behind them at all (the
+	// owning tmux process already exited on its own) — kill-server reports
+	// "no server running" and leaves the file in place, which is why this
+	// directory accumulates indefinitely otherwise. Safe to remove
+	// unconditionally: we've already confirmed the owning test PID is dead,
+	// and any server kill-server did stop has already unlinked its own
+	// socket.
+	_ = os.Remove(filepath.Join(fmt.Sprintf("/tmp/tmux-%d", os.Getuid()), name))
+}
+
+// reapOrphanedTestProcesses kills tmux server *processes* matching a known
+// test socket prefix even when no socket file exists for them anymore. The
+// file-based sweep above is blind to this case: a server killed mid-shutdown
+// (e.g. by the machine's own OOM killer, see BUG-105) can unlink its own
+// socket and then hang before actually exiting, leaving nothing under
+// socketDir to find. Uses `ps` rather than /proc so this works on both Linux
+// and macOS. Same liveness rule as the file-based sweep: only kill a server
+// whose owning test PID (embedded in its -L socket name) is confirmed dead.
+func reapOrphanedTestProcesses(myPID int) {
+	out, err := safeexec.CommandContext(context.Background(), "ps", "-eo", "pid=,args=").Output()
+	if err != nil {
+		return
+	}
+
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		fields := strings.SplitN(line, " ", 2)
+		if len(fields) != 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || pid == myPID {
+			continue
+		}
+
+		socketName, ok := tmuxDashLSocketName(fields[1])
+		if !ok || !isTestSocketName(socketName) {
+			continue
+		}
+
+		if ownerPID, ok := extractTestSocketPID(socketName); ok {
+			if ownerPID == myPID || isProcessAlive(ownerPID) {
+				continue // owning test run is still alive — don't interfere
+			}
+		}
+
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Kill()
+		}
+	}
+}
+
+// tmuxDashLSocketName extracts the socket name from a tmux command line's
+// "-L <name>" argument, e.g. "tmux -L test_Foo_123 start-server" -> "test_Foo_123".
+func tmuxDashLSocketName(args string) (string, bool) {
+	if !strings.Contains(args, "tmux") {
+		return "", false
+	}
+	idx := strings.Index(args, "-L ")
+	if idx == -1 {
+		return "", false
+	}
+	rest := strings.Fields(args[idx+len("-L "):])
+	if len(rest) == 0 {
+		return "", false
+	}
+	return rest[0], true
 }
 
 // tmuxBinary mirrors session/tmux's Binary() env-var check (TMUX_BIN) without
