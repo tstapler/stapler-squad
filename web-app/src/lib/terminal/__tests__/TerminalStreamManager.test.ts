@@ -356,4 +356,86 @@ describe('TerminalStreamManager', () => {
       expect(terminal.wasCleared()).toBe(true);
     });
   });
+
+  // Story 1.4.0 (Task 1.4.0a) — client-local altScreenActive tracking.
+  describe('altScreenActive tracking (Task 1.4.0a)', () => {
+    it('fires onAltScreenChange(true) once on entry and not again for repeated entry output', () => {
+      const onAltScreenChange = jest.fn();
+      manager.setOnAltScreenChange(onAltScreenChange);
+
+      manager.write('\x1b[?1049hsome redrawn content');
+      manager.write('more redrawn content, still alt screen');
+
+      expect(onAltScreenChange).toHaveBeenCalledTimes(1);
+      expect(onAltScreenChange).toHaveBeenCalledWith(true);
+    });
+
+    it('fires onAltScreenChange(false) on exit', () => {
+      const onAltScreenChange = jest.fn();
+      manager.setOnAltScreenChange(onAltScreenChange);
+
+      manager.write('\x1b[?1049hentering alt screen');
+      manager.write('\x1b[?1049lback to normal screen');
+
+      expect(onAltScreenChange).toHaveBeenNthCalledWith(1, true);
+      expect(onAltScreenChange).toHaveBeenNthCalledWith(2, false);
+    });
+
+    it('does not fire onAltScreenChange for ordinary output containing no mode markers', () => {
+      const onAltScreenChange = jest.fn();
+      manager.setOnAltScreenChange(onAltScreenChange);
+
+      manager.write('plain incremental output');
+
+      expect(onAltScreenChange).not.toHaveBeenCalled();
+    });
+  });
+
+  // Story 1.4.1 (Task 1.4.1a) — AppScrollbackResponse dispatch, isolated from onFullSnapshot.
+  describe('handleAppScrollback dispatch (Task 1.4.1a)', () => {
+    it('calls onAppScrollback and not onFullSnapshot when an AppScrollbackResponse frame arrives', () => {
+      const onAppScrollback = jest.fn();
+      const onFullSnapshot = jest.fn();
+      manager.setOnAppScrollback(onAppScrollback);
+      manager.setOnFullSnapshot(onFullSnapshot);
+
+      const frame = {
+        content: '...transcript...',
+        outcome: 1 /* DELIVERED */,
+        program: 'claude',
+        forwardId: 'fwd-1',
+        blockedReason: 0,
+      } as any;
+      manager.handleAppScrollback(frame);
+
+      expect(onAppScrollback).toHaveBeenCalledTimes(1);
+      expect(onAppScrollback).toHaveBeenCalledWith(frame);
+      expect(onFullSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('calls onFullSnapshot (not onAppScrollback) for a normal ANSI_SNAPSHOT_PREFIX write immediately after', () => {
+      const onAppScrollback = jest.fn();
+      const onFullSnapshot = jest.fn();
+      manager.setOnAppScrollback(onAppScrollback);
+      manager.setOnFullSnapshot(onFullSnapshot);
+
+      manager.handleAppScrollback({
+        content: '...transcript...',
+        outcome: 1,
+        program: 'claude',
+        forwardId: 'fwd-1',
+        blockedReason: 0,
+      } as any);
+      manager.write(ANSI_SNAPSHOT_PREFIX + 'fresh pane content');
+
+      expect(onFullSnapshot).toHaveBeenCalledTimes(1);
+      expect(onAppScrollback).toHaveBeenCalledTimes(1); // unchanged from the prior call
+    });
+
+    it('does not throw when handleAppScrollback is called with no onAppScrollback callback registered', () => {
+      expect(() => manager.handleAppScrollback({
+        content: '', outcome: 4, program: 'claude', forwardId: 'fwd-2', blockedReason: 1,
+      } as any)).not.toThrow();
+    });
+  });
 });

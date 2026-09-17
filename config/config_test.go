@@ -1336,6 +1336,41 @@ func TestFeatureFlag_PiSupport_DefaultsFalseAndPersists(t *testing.T) {
 	})
 }
 
+// TestConfig_GetFeatureFlag_should_ReturnFalse_When_AppScrollForwardingClaudeFlagNotSet
+// and its "SetFeatureFlag persists" subtest cover REQ-13/Story 1.5.1's two
+// acceptance criteria for terminal:app-scrollback-forwarding:claude: it
+// defaults to false on a config with no explicit setting, and SetFeatureFlag
+// round-trips it through the on-disk config.json's feature_flags object --
+// mirrors TestFeatureFlag_PiSupport_DefaultsFalseAndPersists' structure.
+func TestConfig_GetFeatureFlag_should_ReturnFalse_When_AppScrollForwardingClaudeFlagNotSet(t *testing.T) {
+	t.Run("defaults false on a config with no explicit setting", func(t *testing.T) {
+		cfg := &Config{FeatureFlags: nil}
+		assert.False(t, cfg.GetFeatureFlag(FeatureAppScrollForwardingClaude))
+	})
+
+	t.Run("SetFeatureFlag persists and is re-readable, including on disk", func(t *testing.T) {
+		envtest.NewIsolatedStateDir(t)
+
+		cfg := LoadConfig()
+		require.NoError(t, cfg.SetFeatureFlag(FeatureAppScrollForwardingClaude, true))
+		assert.True(t, cfg.GetFeatureFlag(FeatureAppScrollForwardingClaude))
+
+		configDir, err := GetConfigDir()
+		require.NoError(t, err)
+		data, err := os.ReadFile(filepath.Join(configDir, ConfigFileName))
+		require.NoError(t, err)
+
+		var onDisk struct {
+			FeatureFlags map[string]bool `json:"feature_flags"`
+		}
+		require.NoError(t, json.Unmarshal(data, &onDisk))
+		assert.True(t, onDisk.FeatureFlags[FeatureAppScrollForwardingClaude], "feature_flags.%q must be persisted true on disk", FeatureAppScrollForwardingClaude)
+
+		reloaded := LoadConfig()
+		assert.True(t, reloaded.GetFeatureFlag(FeatureAppScrollForwardingClaude))
+	})
+}
+
 // ─── IsNamedInstance ────────────────────────────────────────────────────────
 
 // TestIsNamedInstance_should_ReturnFalse_When_InstanceEnvVarUnset covers the

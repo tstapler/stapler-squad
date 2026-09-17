@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/ansi"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -205,6 +206,19 @@ type Instance struct {
 	Status Status
 	// Program is the program to run in the instance.
 	Program string
+	// AltScreenActive reports whether the pane's PTY output stream is
+	// currently in the alternate screen buffer (DECSET 1049), per the last
+	// chunk observed by altScreenTracker. Written under mu by
+	// setAltScreenActiveLocked; read only via GetAltScreenActive's
+	// Snapshot() path -- see .claude/rules/instance-lock-free-reads.md.
+	AltScreenActive bool
+	// AltScreenBootstrapped distinguishes "confirmed not in alt screen" from
+	// "never checked" -- AltScreenActive's zero value is false either way, so
+	// without this a session that's genuinely not in alt screen would fail
+	// altScreenActiveForSnapshot's fast path forever and re-run
+	// IsAlternateScreenActiveBootstrap's real tmux query on every connect and
+	// resize. Set alongside AltScreenActive by setAltScreenActiveLocked.
+	AltScreenBootstrapped bool
 	// Height is the height of the instance.
 	Height int
 	// Width is the width of the instance.
@@ -571,6 +585,14 @@ type Instance struct {
 	// callers that read inst.Tags directly.
 	tagManager TagManager
 
+	// altScreenTracker is a stateful scanner over this instance's PTY output
+	// stream (see ObserveAltScreenTransition), not observable state itself --
+	// excluded from InstanceSnapshot like gitManager/vncManager/cdpManager
+	// above. Its own internal state is not mu-guarded; callers must serialize
+	// ObserveAltScreenTransition calls for a given instance (one logical PTY
+	// output stream has one writer at a time).
+	altScreenTracker ansi.AltScreenTracker
+
 	// taggingEngine drives reclassifyTagsLocked's sync fixpoint (session-classifier-pipeline
 	// Epic 3.3). nil is a valid value — mirrors tagFireRecorder's nil-tolerant convention —
 	// and means "automatic tagging disabled" (e.g. a bare struct-literal test Instance),
@@ -655,6 +677,12 @@ type Instance struct {
 	// See JoinHibernation.
 	hibernateWG sync.WaitGroup
 
+	// scrollLease serializes this instance's own concurrent
+	// Instance.ForwardScroll calls (Story 1.3.1) -- see scroll_lease.go's
+	// doc comment for why this is transient orchestration state, not a
+	// snapshot-tracked field.
+	scrollLease scrollLease
+
 	// destroyed is set by Destroy() so a SessionDriver goroutine that outlives
 	// its own teardown (session_driver.go's loop only self-terminates on a
 	// 25-minute wall-clock deadline or a detected terminal status, both of
@@ -738,6 +766,41 @@ type Instance struct {
 	// warns against.
 	remoteApprovalRelay   *sshremote.RemoteApprovalRelay
 	remoteApprovalRelayMu deadlock.Mutex
+}
+
+// ObserveAltScreenTransition feeds a chunk of raw PTY output through
+// altScreenTracker and, only when that changes the alt-screen state,
+// publishes it via setAltScreenActiveLocked. Callers must serialize calls
+// per instance (see altScreenTracker's doc comment) -- server/services'
+// per-connection/per-hub-pump output-forwarding goroutines each own a single
+// sequential stream for a given instance, so this is called from at most one
+// goroutine at a time per instance in practice.
+func (i *Instance) ObserveAltScreenTransition(data []byte) {
+	active, changed := i.altScreenTracker.Observe(string(data))
+	if !changed {
+		return
+	}
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setAltScreenActiveLocked(s, active)
+		return nil
+	})
+}
+
+// SetAltScreenActiveBootstrap directly sets both altScreenTracker's internal
+// state and the published AltScreenActive value from a source that already
+// knows it authoritatively (session/instance_tmux.go's
+// IsAlternateScreenActiveBootstrap, a live tmux `#{alternate_on}` query) --
+// unlike ObserveAltScreenTransition, this isn't derived from scanning a PTY
+// byte chunk. Updates the tracker too (not just the published value) so a
+// later live ObserveAltScreenTransition call computes `changed` relative to
+// the correct baseline, instead of the tracker's zero-value default
+// silently masking a real exit transition.
+func (i *Instance) SetAltScreenActiveBootstrap(active bool) {
+	i.altScreenTracker.SetActive(active)
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setAltScreenActiveLocked(s, active)
+		return nil
+	})
 }
 
 // executionTarget returns i.ExecutionTarget, defaulting to LocalTarget{} when nil.
@@ -1125,9 +1188,12 @@ func (i *Instance) Snapshot() *InstanceSnapshot {
 // finishInstanceConstruction publishes the initial snapshot so that Load() is
 // guaranteed non-nil by the time the *Instance is visible to any other goroutine.
 // This is the single choke-point called by every construction site — Epic 3
-// will extend this helper to also spawn the actor goroutine.
+// will extend this helper to also spawn the actor goroutine, and it's also
+// where scrollForwardVersionMismatchCheck kicks off (Story 1.5.3), so it runs
+// at construction time rather than being deferred until a user scrolls.
 func finishInstanceConstruction(i *Instance) {
 	i.snapshot.Store(buildSnapshot(i))
+	i.kickOffClaudeVersionMismatchCheck()
 }
 
 // SetShellRepository injects the shell persistence backend. Called by Storage after

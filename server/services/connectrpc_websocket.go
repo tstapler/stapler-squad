@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/tstapler/stapler-squad/config"
@@ -204,16 +205,38 @@ type cursorPositioner interface {
 // the resync always meeting the client's deadline.
 const withCursorSyncTimeout = 300 * time.Millisecond
 
+// altScreenActiveForSnapshot returns whether inst is currently showing its
+// alternate screen buffer, for stamping onto an initial/resize snapshot
+// (events.proto's TerminalOutput.alt_screen_active). Prefers the free,
+// live-tracked value; falls back to Instance.IsAlternateScreenActiveBootstrap's
+// direct tmux query only the first time -- GetAltScreenBootstrapped()
+// distinguishes a confirmed "not in alt screen" from "never checked", so a
+// genuinely-not-alt-screen session pays one real tmux query here, never
+// repeatedly on every later connect/resize.
+func altScreenActiveForSnapshot(inst *session.Instance) bool {
+	if inst.GetAltScreenActive() {
+		return true
+	}
+	if inst.GetAltScreenBootstrapped() {
+		return false
+	}
+	return inst.IsAlternateScreenActiveBootstrap()
+}
+
 // newTerminalOutputData wraps content in the TerminalData_Output frame sent for
-// sessionID. Shared by the initial-snapshot send paths (hub, control mode, and
-// tmux capture-pane), which all build this identical envelope around whatever
-// content each has just prepared.
-func newTerminalOutputData(sessionID string, content string) *sessionv1.TerminalData {
+// sessionID. Shared by the control-mode and tmux-capture-pane initial/resize
+// snapshot send paths, which all build this identical envelope around whatever
+// content each has just prepared. altScreenActive is stamped onto every one of
+// these snapshots (events.proto's TerminalOutput.alt_screen_active doc
+// comment) since a capture-pane-derived snapshot can never itself carry the
+// DECSET 1049h marker a client would otherwise scan for.
+func newTerminalOutputData(sessionID string, content string, altScreenActive bool) *sessionv1.TerminalData {
 	return &sessionv1.TerminalData{
 		SessionId: sessionID,
 		Data: &sessionv1.TerminalData_Output{
 			Output: &sessionv1.TerminalOutput{
-				Data: []byte(content),
+				Data:            []byte(content),
+				AltScreenActive: &altScreenActive,
 			},
 		},
 	}
@@ -502,6 +525,13 @@ const pumpControlModeResubscribeDelay = 500 * time.Millisecond
 // known gap not acceptable to ship once the streamhub default flipped on;
 // it shipped anyway — this closes it.
 func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub.SessionController, sessionName string) {
+	// GetOrCreate's caller always passes the *session.Instance itself as
+	// controller (server/services/connectrpc_websocket.go's streamViaHub);
+	// tests pass a fakeSessionController instead, so this assertion fails
+	// (instance stays nil) there rather than panicking -- alt-screen
+	// tracking is simply skipped for those.
+	instance, _ := controller.(*session.Instance)
+
 	// Unconditional on every exit path (including a future panic) — this is
 	// the other half of TryStartPump's CAS (session/streamhub/hub.go): a
 	// caller must be able to tell "the pump that used to feed this hub is
@@ -527,7 +557,7 @@ func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub
 		}
 
 		_, updates := controller.SubscribeControlModeUpdates()
-		drainControlModeUpdatesIntoHub(hub, updates)
+		drainControlModeUpdatesIntoHub(hub, updates, instance)
 
 		if hub.State() == streamhub.HubTornDown {
 			log.Info("streamhub raw-output pump exiting: hub torn down", "session", sessionName)
@@ -543,17 +573,18 @@ func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub
 // flushing — mirrors the legacy per-connection coalesce loop's `select
 // {...; default: break coalesce}` pattern so a burst doesn't always pay
 // BatchWindow's full MaxBatchWindow ceiling latency.
-func drainControlModeUpdatesIntoHub(hub *streamhub.StreamHub, updates <-chan []byte) {
+func drainControlModeUpdatesIntoHub(hub *streamhub.StreamHub, updates <-chan []byte, instance *session.Instance) {
 	for data := range updates {
 		hub.OnRawOutput(data)
-		drainAlreadyAvailable(hub, updates)
+		observeAltScreenIfInstance(instance, data)
+		drainAlreadyAvailable(hub, updates, instance)
 		hub.TryFlush()
 	}
 }
 
 // drainAlreadyAvailable consumes every frame immediately ready on updates
 // (non-blocking) into hub, without waiting for more to arrive.
-func drainAlreadyAvailable(hub *streamhub.StreamHub, updates <-chan []byte) {
+func drainAlreadyAvailable(hub *streamhub.StreamHub, updates <-chan []byte, instance *session.Instance) {
 	for {
 		select {
 		case more, ok := <-updates:
@@ -561,9 +592,21 @@ func drainAlreadyAvailable(hub *streamhub.StreamHub, updates <-chan []byte) {
 				return
 			}
 			hub.OnRawOutput(more)
+			observeAltScreenIfInstance(instance, more)
 		default:
 			return
 		}
+	}
+}
+
+// observeAltScreenIfInstance feeds data through instance's alt-screen
+// tracker, matching the tap streamViaControlMode's forwardOneControlModeFrame
+// applies via ObserveAltScreenTransition. instance is nil in tests that pass
+// a fakeSessionController instead of a real *session.Instance to
+// pumpControlModeOutputIntoHub.
+func observeAltScreenIfInstance(instance *session.Instance, data []byte) {
+	if instance != nil {
+		instance.ObserveAltScreenTransition(data)
 	}
 }
 
@@ -1144,7 +1187,7 @@ func (h *ConnectRPCWebSocketHandler) captureAndSendInitialSnapshot(stream *conne
 // longer exists — colors (SGR) are preserved, only positioning is removed.
 func sendInitialSnapshotContent(stream *connectWebSocketStream, instance *session.Instance, sessionID, initialContent string) error {
 	fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(streamhub.RawPaneContent(initialContent)), instance)
-	terminalData := newTerminalOutputData(sessionID, fullContent)
+	terminalData := newTerminalOutputData(sessionID, fullContent, altScreenActiveForSnapshot(instance))
 
 	dataBytes, err := proto.Marshal(terminalData)
 	if err != nil {
@@ -1359,12 +1402,23 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		onResize: func(cols, rows int) {
 			dispatchResizeRequest(resizeCh, resizeReq{cols, rows})
 		},
-		onScrollbackRequest: func(startLine, endLine string) (string, error) {
-			// Delegate the tmux capture (the only piece of this handling that depends
-			// on `instance`, which runInputReadLoop does not have access to) back to
-			// streamViaControlMode; response building, marshaling, and writing stay
-			// inside runInputReadLoop as part of the pure-moved loop body.
-			return instance.GetScrollbackHistory(startLine, endLine)
+		onScrollbackRequest: func(startLine, endLine string) (ScrollbackResult, error) {
+			// PathLegacyPerConnection: hub is nil and subscriberCount is the
+			// fixed -1 sentinel (never equal to 1), so AppScrollGate's check
+			// (4) always fails here -- see Risk Control's "Concrete
+			// resolution" section in plan.md and Task 1.3.3b. This is
+			// deliberate, not a bug: activeControlModeStreams measures
+			// stream *generations*, not concurrent viewers, so it can't
+			// substitute for a real subscriber count.
+			return scrollbackResultForRequest(scrollbackRequestParams{
+				instance:        instance,
+				subscriberCount: -1,
+				hub:             nil,
+				startLine:       startLine,
+				endLine:         endLine,
+				logPrefix:       "[streamViaControlMode]",
+				fallback:        instance.GetScrollbackHistory,
+			})
 		},
 		onCurrentPaneRequest: func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 			// Handle a mid-stream CurrentPaneRequest (e.g. a client-initiated resync) via the
@@ -1524,7 +1578,7 @@ func (h *ConnectRPCWebSocketHandler) sendPostResizeSnapshot(p controlModeResizeC
 	// CurrentPaneRequest does, proto events.proto) — a client-initiated
 	// resync is instead handled entirely by handleCurrentPaneRequest, which
 	// already echoes resync_id (Task 3.2.1.1).
-	snapMsg := newTerminalOutputData(p.sessionID, fullContent)
+	snapMsg := newTerminalOutputData(p.sessionID, fullContent, altScreenActiveForSnapshot(p.instance))
 	if snapBytes, merr := proto.Marshal(snapMsg); merr != nil {
 		log.Error("[streamViaControlMode] failed to marshal post-resize snapshot", "session", p.sessionID, "err", merr)
 	} else {
@@ -1601,6 +1655,7 @@ func (h *ConnectRPCWebSocketHandler) forwardOneControlModeFrame(p controlModeOut
 	cbp := coalesceBufPool.Get().(*[]byte)
 	buf := coalesceAvailableFrames(append((*cbp)[:0], data...), p.updateChan)
 	tapEscapeAnalytics(p.instance, escapeParser, buf)
+	p.instance.ObserveAltScreenTransition(buf)
 
 	sendErr := sendControlModeOutput(p.stream, p.sessionID, buf)
 	*cbp = buf[:0]
@@ -1923,10 +1978,11 @@ func (h *ConnectRPCWebSocketHandler) sendHubInitialSnapshot(stream *connectWebSo
 		content = ""
 	}
 	fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), instance)
+	altScreenActive := altScreenActiveForSnapshot(instance)
 	initMsg := &sessionv1.TerminalData{
 		SessionId: sessionID,
 		Data: &sessionv1.TerminalData_Output{
-			Output: &sessionv1.TerminalOutput{Data: []byte(fullContent)},
+			Output: &sessionv1.TerminalOutput{Data: []byte(fullContent), AltScreenActive: &altScreenActive},
 		},
 	}
 	b, merr := proto.Marshal(initMsg)
@@ -2069,8 +2125,16 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 			}
 			hub.RequestResize(connCtx, subscriberID, size)
 		},
-		onScrollbackRequest: func(startLine, endLine string) (string, error) {
-			return instance.GetScrollbackHistory(startLine, endLine)
+		onScrollbackRequest: func(startLine, endLine string) (ScrollbackResult, error) {
+			return scrollbackResultForRequest(scrollbackRequestParams{
+				instance:        instance,
+				subscriberCount: hub.SubscriberCount(),
+				hub:             hub,
+				startLine:       startLine,
+				endLine:         endLine,
+				logPrefix:       "[streamViaHub]",
+				fallback:        instance.GetScrollbackHistory,
+			})
 		},
 		onCurrentPaneRequest: func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 			return handleCurrentPaneRequest(ctx, sessionID, instance, req, currentResyncOptions())
@@ -2530,9 +2594,11 @@ type inputReadLoopParams struct {
 	onInput func(data []byte)
 	// onResize pushes a mid-stream resize request to the coalescing worker.
 	onResize func(cols, rows int)
-	// onScrollbackRequest performs the tmux capture for a ScrollbackRequest;
-	// request validation, response construction, and writing stay in handleScrollbackRequest.
-	onScrollbackRequest func(startLine, endLine string) (string, error)
+	// onScrollbackRequest performs the tmux capture (or, when AppScrollGate
+	// passes, the app-forwarded scroll) for a ScrollbackRequest; request
+	// validation, response construction, and writing stay in
+	// handleScrollbackRequest. See ScrollbackResult's doc comment.
+	onScrollbackRequest func(startLine, endLine string) (ScrollbackResult, error)
 	// onCurrentPaneRequest answers a mid-stream CurrentPaneRequest (as opposed to
 	// the initial handshake one, which the caller parses and answers before this
 	// loop starts) — see handleCurrentPaneRequestFrame.
@@ -2626,10 +2692,107 @@ func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.T
 	}
 }
 
+// ScrollbackResult is onScrollbackRequest's return type (Task 1.3.3b): the
+// unchanged tmux-native capture (Content, AppScroll nil) in the common case,
+// or an app-forwarded scroll result (AppScroll non-nil) when AppScrollGate
+// passes for the requesting session -- handleScrollbackRequest/
+// handleShellScrollbackRequest branch on AppScroll to decide which response
+// message to build, never both.
+type ScrollbackResult struct {
+	Content   string
+	AppScroll *AppScrollResult
+}
+
+// AppScrollResult carries one Instance.ForwardScroll call's result into the
+// AppScrollbackResponse response-building step, straight-copied onto the
+// proto's outcome/blocked_reason fields unchanged.
+type AppScrollResult struct {
+	Content       []byte
+	Outcome       sessionv1.ScrollForwardOutcome
+	BlockedReason sessionv1.ScrollBlockedReason
+	Program       string
+	ForwardID     string
+}
+
+// scrollbackRequestParams bundles scrollbackResultForRequest's parameters --
+// grouped per Fowler's "Introduce Parameter Object", mirroring
+// inputReadLoopParams's own precedent for this file.
+type scrollbackRequestParams struct {
+	instance        *session.Instance
+	subscriberCount int
+	hub             *streamhub.StreamHub // nil on PathLegacyPerConnection
+	startLine       string
+	endLine         string
+	// logPrefix matches each call site's existing log-line convention
+	// (e.g. "[streamViaControlMode]", "[streamViaHub]").
+	logPrefix string
+	// fallback performs the unchanged tmux-native capture when AppScrollGate
+	// fails or ForwardScroll errors. Callers pass instance.GetScrollbackHistory
+	// (main terminal) or, for a shell tab, p.shellSess.CapturePaneContentWithOptions
+	// -- the two call sites capture from different tmux sessions, so this
+	// can't be hardcoded to instance.GetScrollbackHistory inside this shared
+	// helper without silently breaking shell-tab scrollback.
+	fallback func(startLine, endLine string) (string, error)
+}
+
+// scrollbackResultForRequest is onScrollbackRequest's shared body for both
+// streamViaControlMode and streamViaHub (Task 1.3.3b): if AppScrollGate
+// passes for p.instance/p.subscriberCount, it delegates to
+// Instance.ForwardScroll and returns a populated AppScroll; otherwise --
+// including a mid-forward ForwardScroll error, which is logged and treated
+// the same as a gate miss per Task 1.3.1c's error-path contract -- it falls
+// through to the unchanged tmux-native GetScrollbackHistory/ScrollbackResponse
+// path.
+func scrollbackResultForRequest(p scrollbackRequestParams) (ScrollbackResult, error) {
+	// Task 1.5.1c: flag-off short-circuits to the unchanged tmux-native path
+	// with zero new behavior, exactly as if AppScrollGate itself had failed —
+	// covers both onScrollbackRequest closures (streamViaControlMode and
+	// streamViaHub), since both route through this shared helper.
+	//
+	// The pre-check below only guards against ScrollGateNoCapability (the
+	// plain-shell case, per Task 1.3.3b's acceptance criteria: a program with
+	// no registered ScrollAdapter falls straight through, unchanged, and
+	// never gets an AppScrollbackResponse at all -- ScrollForwardOutcome_
+	// NO_CAPABILITY is a forward-compatible enum value never actually sent,
+	// per design/ux.md Surface 5). Every *other* gate failure -- crucially
+	// ScrollGateUnsupportedPath, the PathLegacyPerConnection case this
+	// -1 subscriberCount sentinel exists for -- must still reach
+	// Instance.ForwardScroll so its own internal AppScrollGate call can
+	// produce a typed BLOCKED outcome+reason the client can render (Surface 3,
+	// UX-AC-4/UX-AC-8). Gating on the full AppScrollGate(...) bool here, as a
+	// prior version of this code did, silently swallowed every non-capability
+	// failure into the tmux-native fallback -- a solo PathLegacyPerConnection
+	// session would show a real (mis-scrolled) tmux capture instead of the
+	// "isn't available for this session yet" toast, never a BLOCKED response.
+	if config.LoadConfig().GetFeatureFlag(terminalAppScrollForwardingClaudeFlagName) {
+		if _, gateFailure, _ := session.AppScrollGate(p.instance, p.subscriberCount); gateFailure != session.ScrollGateNoCapability {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			outcome, blockedReason, content, ferr := p.instance.ForwardScroll(ctx, p.subscriberCount, p.hub)
+			cancel()
+			if ferr != nil {
+				log.Error(p.logPrefix+" ForwardScroll failed, falling back to tmux-native scrollback", "session", p.instance.GetTmuxSessionName(), "err", ferr)
+			} else {
+				return ScrollbackResult{AppScroll: &AppScrollResult{
+					Content:       content,
+					Outcome:       outcome,
+					BlockedReason: blockedReason,
+					Program:       p.instance.GetProgram(),
+					ForwardID:     uuid.NewString(),
+				}}, nil
+			}
+		}
+	}
+
+	content, err := p.fallback(p.startLine, p.endLine)
+	return ScrollbackResult{Content: content}, err
+}
+
 // handleScrollbackRequest answers a client's request for historical terminal
 // scrollback, extracted out of runInputReadLoop to keep that loop's cognitive
 // complexity under the lint gate (a pure move — behavior is unchanged from
-// what previously lived inline in the ScrollbackRequest branch).
+// what previously lived inline in the ScrollbackRequest branch). Widened by
+// Task 1.3.3b to also route an app-forwarded scroll result (AppScrollGate
+// pass) to AppScrollbackResponse instead of the tmux-native ScrollbackResponse.
 //
 // FromSequence is treated as a line offset from the end of tmux's history:
 //
@@ -2642,7 +2805,7 @@ func handleScrollbackRequest(
 	stream *connectWebSocketStream,
 	sessionID string,
 	scrollbackReq *sessionv1.ScrollbackRequest,
-	onScrollbackRequest func(startLine, endLine string) (string, error),
+	onScrollbackRequest func(startLine, endLine string) (ScrollbackResult, error),
 ) {
 	const maxScrollbackLimit = 1000
 	limit := int(scrollbackReq.Limit)
@@ -2653,16 +2816,47 @@ func handleScrollbackRequest(
 
 	startLine := fmt.Sprintf("-%d", offset+uint64(limit))
 	endLine := fmt.Sprintf("-%d", offset+1)
-	content, sbErr := onScrollbackRequest(startLine, endLine)
+	result, sbErr := onScrollbackRequest(startLine, endLine)
 	if sbErr != nil {
 		log.Warn("[streamViaControlMode] ScrollbackRequest tmux capture failed", "session", sessionID, "err", sbErr)
 		return
 	}
 
-	sbResp := buildScrollbackResponse(sessionID, "", content, offset, limit)
+	if result.AppScroll != nil {
+		writeAppScrollbackResponse(stream, sessionID, "", result.AppScroll)
+		return
+	}
+
+	sbResp := buildScrollbackResponse(sessionID, "", result.Content, offset, limit)
 	respBytes, merr := proto.Marshal(sbResp)
 	if merr != nil {
 		log.Error("[streamViaControlMode] failed to marshal scrollback response", "session", sessionID, "err", merr)
+		return
+	}
+	_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, respBytes))
+}
+
+// writeAppScrollbackResponse marshals and writes an AppScrollbackResponse
+// built from an Instance.ForwardScroll result (Task 1.3.3b/c), shared by the
+// main-terminal (shellID == "") and shell-tab scroll-forward paths --
+// mirrors buildScrollbackResponse's own main/shell sharing.
+func writeAppScrollbackResponse(stream *connectWebSocketStream, sessionID, shellID string, r *AppScrollResult) {
+	resp := &sessionv1.TerminalData{
+		SessionId: sessionID,
+		ShellId:   shellID,
+		Data: &sessionv1.TerminalData_AppScrollbackResponse{
+			AppScrollbackResponse: &sessionv1.AppScrollbackResponse{
+				Content:       r.Content,
+				Outcome:       r.Outcome,
+				Program:       r.Program,
+				ForwardId:     r.ForwardID,
+				BlockedReason: r.BlockedReason,
+			},
+		},
+	}
+	respBytes, merr := proto.Marshal(resp)
+	if merr != nil {
+		log.Error("[scroll_forward] failed to marshal AppScrollbackResponse", "session", sessionID, "shell", shellID, "err", merr)
 		return
 	}
 	_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, respBytes))
@@ -2946,7 +3140,8 @@ func sendCapturePaneInitialContent(stream *connectWebSocketStream, instance *ses
 	}
 
 	fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(streamhub.RawPaneContent(initialContent)), cpt.target)
-	terminalData := newTerminalOutputData(cpt.sessionID, fullContent)
+	altScreenActive := instance != nil && altScreenActiveForSnapshot(instance)
+	terminalData := newTerminalOutputData(cpt.sessionID, fullContent, altScreenActive)
 
 	dataBytes, err := proto.Marshal(terminalData)
 	if err != nil {

@@ -164,6 +164,15 @@ export interface XtermTerminalProps {
    * If true, theme/fontSize/scrollback props are ignored unless explicitly provided
    */
   useConfig?: boolean;
+
+  /**
+   * Story 1.4.0 (Task 1.4.0c) — threaded straight through to
+   * useTerminalGestures's identically-named option. See that hook's doc
+   * comment; TerminalOutput.tsx supplies both.
+   */
+  isAltScreenActive?: () => boolean;
+  /** Story 1.4.0 (Task 1.4.0c) — see useTerminalGestures's identically-named option. */
+  onAltScreenScrollUp?: (lines: number) => void;
 }
 
 export interface XtermTerminalHandle {
@@ -207,6 +216,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   fontSize: fontSizeProp,
   scrollback: scrollbackProp,
   useConfig = false,
+  isAltScreenActive,
+  onAltScreenScrollUp,
 }, ref) => {
   // Load configuration
   const config = useConfig ? loadTerminalConfig() : null;
@@ -263,6 +274,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     containerRef,
     terminalRef,
     onSendData: useCallback((data: string) => onDataRef.current?.(data), []),
+    isAltScreenActive,
+    onAltScreenScrollUp,
   });
 
   // Show the "Copied/Copy failed" toast via DOM mutation (no re-render).
