@@ -604,7 +604,6 @@ type Instance struct {
 	// convention elsewhere in this codebase — and means "recording disabled," not an error.
 	tagFireRecorder TagFireRecorder
 
-
 	// snapshot is a lock-free atomic copy of all mutable Instance fields, published
 	// by every mutator before it releases mu. Readers can call Snapshot()
 	// without acquiring any lock. Load() is guaranteed non-nil after construction.
