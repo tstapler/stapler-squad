@@ -371,9 +371,13 @@ type mockCreateCall struct {
 	// production code performs on the instance after CreateDirectorySession/
 	// CreateWorktreeSession returns it.
 	inst *session.Instance
+	// programOverride captures the trailing programOverride argument (Epic 2.4) so
+	// tests can assert a work-stage executor override reached instance creation via
+	// this same call, rather than a later SwitchProgram/Restart-style call.
+	programOverride string
 }
 
-func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, path, prompt string, tags []string, oneShot bool, _ bool) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, path, prompt string, tags []string, oneShot bool, _ bool, programOverride string) (*session.Instance, error) {
 	_, contextErr := os.Stat(filepath.Join(path, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(path, ".claude", "commands", "backlog", "status.md"))
 	m.mu.Lock()
@@ -387,6 +391,7 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 			oneShot:                     oneShot,
 			contextFileExistedAtSpawn:   contextErr == nil,
 			slashCommandsExistedAtSpawn: slashErr == nil,
+			programOverride:             programOverride,
 		})
 		return nil, m.err
 	}
@@ -396,7 +401,11 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 	// UUID must be unique per call — SpawnSessionFromItem's ItemSession row is
 	// keyed on inst.UUID, so archival-tracking tests need distinct values per
 	// spawn to tell rounds apart (see mockSessionStopper.archivedUUIDs).
-	inst := &session.Instance{Title: title, Path: path, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
+	program := programOverride
+	if program == "" {
+		program = "claude"
+	}
+	inst := &session.Instance{Title: title, Path: path, Program: program, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
 	m.calls = append(m.calls, mockCreateCall{
 		title:                       title,
 		path:                        path,
@@ -406,13 +415,14 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 		contextFileExistedAtSpawn:   contextErr == nil,
 		slashCommandsExistedAtSpawn: slashErr == nil,
 		inst:                        inst,
+		programOverride:             programOverride,
 	})
 	return inst, nil
 }
 
 // CreateWorktreeSession records the call to the same calls slice as CreateDirectorySession,
 // using worktreePath as the session path (that's where files are written before spawn).
-func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, worktreePath, prompt string, tags []string, oneShot bool, _ bool) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, worktreePath, prompt string, tags []string, oneShot bool, _ bool, programOverride string) (*session.Instance, error) {
 	_, contextErr := os.Stat(filepath.Join(worktreePath, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(worktreePath, ".claude", "commands", "backlog", "status.md"))
 	m.mu.Lock()
@@ -426,10 +436,15 @@ func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, 
 			oneShot:                     oneShot,
 			contextFileExistedAtSpawn:   contextErr == nil,
 			slashCommandsExistedAtSpawn: slashErr == nil,
+			programOverride:             programOverride,
 		})
 		return nil, m.err
 	}
-	inst := &session.Instance{Title: title, Path: worktreePath, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
+	program := programOverride
+	if program == "" {
+		program = "claude"
+	}
+	inst := &session.Instance{Title: title, Path: worktreePath, Program: program, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
 	m.calls = append(m.calls, mockCreateCall{
 		title:                       title,
 		path:                        worktreePath,
@@ -439,6 +454,7 @@ func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, 
 		contextFileExistedAtSpawn:   contextErr == nil,
 		slashCommandsExistedAtSpawn: slashErr == nil,
 		inst:                        inst,
+		programOverride:             programOverride,
 	})
 	return inst, nil
 }
@@ -3561,11 +3577,11 @@ func TestItemSessionToProto_HandlesInvalidTriageResultJSON(t *testing.T) {
 // errSessionCreator always returns an error from CreateDirectorySession and CreateWorktreeSession.
 type errSessionCreator struct{ err error }
 
-func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _, _, _ string, _ []string, _ bool, _ bool) (*session.Instance, error) {
+func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _, _, _ string, _ []string, _ bool, _ bool, _ string) (*session.Instance, error) {
 	return nil, e.err
 }
 
-func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _, _, _ string, _ []string, _ bool, _ bool) (*session.Instance, error) {
+func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _, _, _ string, _ []string, _ bool, _ bool, _ string) (*session.Instance, error) {
 	return nil, e.err
 }
 

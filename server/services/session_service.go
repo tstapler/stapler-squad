@@ -1617,7 +1617,7 @@ func (s *SessionService) TriggerReviewForSession(sessionUUID string) {
 // BacklogLifecycleListener can spawn one-shot review sessions automatically when
 // a work session exits. The session is tagged "backlog:review" and runs one-shot.
 func (s *SessionService) SpawnReviewSession(ctx context.Context, item *session.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error) {
-	inst, err := s.CreateDirectorySession(ctx, "review:"+item.ID[:8], item.RepoPath, prompt, []string{"backlog:review"}, true, true)
+	inst, err := s.CreateDirectorySession(ctx, "review:"+item.ID[:8], item.RepoPath, prompt, []string{"backlog:review"}, true, true, "")
 	if err != nil {
 		return nil, err
 	}
@@ -1629,13 +1629,17 @@ func (s *SessionService) SpawnReviewSession(ctx context.Context, item *session.B
 // BacklogService can spawn sessions without importing SessionService directly.
 // It creates a directory-type session with the given title, path, initial prompt,
 // tags, and oneShot flag, wires it into the live poller, and returns the Instance.
-func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error) {
+func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error) {
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, path, "")
+	program := resolved.Program
+	if programOverride != "" {
+		program = programOverride
+	}
 	opts := session.InstanceOptions{
 		Title:            title,
 		Path:             path,
-		Program:          resolved.Program,
+		Program:          program,
 		PermissionMode:   session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
 		SessionType:      session.SessionTypeDirectory,
 		Prompt:           prompt,
@@ -1692,13 +1696,17 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 // CreateWorktreeSession satisfies the services.SessionCreator interface.
 // It spawns a session that uses an already-created git worktree at worktreePath.
 // repoPath is the parent repo (for program resolution). worktreePath must exist on disk.
-func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error) {
+func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error) {
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, repoPath, "")
+	program := resolved.Program
+	if programOverride != "" {
+		program = programOverride
+	}
 	opts := session.InstanceOptions{
 		Title:            title,
 		Path:             repoPath,
-		Program:          resolved.Program,
+		Program:          program,
 		PermissionMode:   session.PermissionModeAuto,
 		SessionType:      session.SessionTypeExistingWorktree,
 		ExistingWorktree: worktreePath,

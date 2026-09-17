@@ -982,6 +982,33 @@ func (s *BacklogService) spawnSessionAfterGates(
 		return nil, wErr
 	}
 
+	// 10b. Resolve the work-stage executor BEFORE spawning (never after) so the session
+	// starts on the configured program on its first launch — no kill-and-relaunch via
+	// SwitchProgram/Restart, and no risk to the prompt CLI arg passed to the spawn call
+	// below. See Epic 2.4's design note. ComputeExecutorHash is deliberately computed
+	// from the RAW workExecModel (e.g. "family:sonnet"), never the ResolveExecutorProgram
+	// output below — see ComputeExecutorHash's doc comment for why hashing the resolved
+	// value would permanently false-flag drift against the mode-side hash.
+	var workExecProgram, workExecModel string
+	if s.pipelineEngine != nil {
+		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleWork)
+	}
+	workExecutorHash := session.ComputeExecutorHash(workExecProgram, workExecModel)
+	var programOverride, workResolvedModel string
+	if workExecProgram != "" || workExecModel != "" {
+		var resolveErr error
+		programOverride, resolveErr = session.ResolveExecutorProgram(workExecProgram, workExecModel, s.modelFamilies)
+		if resolveErr != nil {
+			log.Warn("[SpawnSessionFromItem] failed to resolve work-stage executor program, falling back to default", "item", item.ID, "program", workExecProgram, "model", workExecModel, "err", resolveErr)
+			programOverride = ""
+		} else {
+			// workResolvedModel persists the concrete post-family-alias model onto
+			// the ItemSession row (resolved_model's contract) — independent of
+			// programOverride, which is the full "claude --model <id>" string.
+			workResolvedModel, _ = session.ResolveModel(s.modelFamilies, workExecModel)
+		}
+	}
+
 	// 11. Spawn session first so we have the real UUID before creating the ItemSession record.
 	spawnTags := []string{session.TagBacklogWork}
 	if isReopen {
@@ -993,10 +1020,10 @@ func (s *BacklogService) spawnSessionAfterGates(
 	var inst *session.Instance
 	if useWorktree {
 		inst, err = s.sessionCreator.CreateWorktreeSession(ctx, title, item.RepoPath, worktreePath, prompt,
-			spawnTags, false, false)
+			spawnTags, false, false, programOverride)
 	} else {
 		inst, err = s.sessionCreator.CreateDirectorySession(ctx, title, worktreePath, prompt,
-			spawnTags, false, false)
+			spawnTags, false, false, programOverride)
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn session: %w", err))
@@ -1058,7 +1085,14 @@ func (s *BacklogService) spawnSessionAfterGates(
 		AcSnapshot:               acSnapshot,
 		PipelineModeSnapshot:     item.PipelineMode,
 		PipelineModeSnapshotHash: pipelineModeSnapshotHash,
-		ClaimantHostID:           s.claimantHostID(),
+		// ResolvedProgram/ResolvedModel/ExecutorSnapshotHash freeze the work-stage
+		// executor resolved above at spawn time (Epic 2.4). The work stage has no
+		// headless-caller-registry fallback concept, so ConfiguredProgram/
+		// ExecutorFallbackReason/CostPriced are left at their zero-value defaults.
+		ResolvedProgram:      workExecProgram,
+		ResolvedModel:        workResolvedModel,
+		ExecutorSnapshotHash: workExecutorHash,
+		ClaimantHostID:       s.claimantHostID(),
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create item session: %w", err))
@@ -3069,7 +3103,7 @@ Do not modify the code. Only write the review verdict.
 	}
 
 	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, title, item.RepoPath, reReviewPrompt,
-		[]string{"backlog:review"}, !useAutonomous /*oneShot*/, true /*hidden*/)
+		[]string{"backlog:review"}, !useAutonomous /*oneShot*/, true /*hidden*/, "" /*programOverride: review-stage threading is out of Epic 2.4's scope*/)
 	if spawnErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn re-review session: %w", spawnErr))
 	}

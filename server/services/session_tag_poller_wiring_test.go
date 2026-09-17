@@ -69,7 +69,7 @@ func TestSessionService_should_RegisterNewSessionWithTagPoller_When_SessionCreat
 	t.Cleanup(poller.Stop)
 
 	const title = "tag-poller-post-startup-session"
-	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false)
+	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false, "")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
