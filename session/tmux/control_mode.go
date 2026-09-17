@@ -562,22 +562,31 @@ func (t *TmuxSession) readControlModeOutput() {
 	// unconditionally would close the wrong (newer) generation's doneCh
 	// instead of unblocking this (older) generation's runCMSender.
 	//
+	//   - doneCh == nil: this generation's own controlModeDone was already
+	//     nil at capture time (StopControlMode raced StartControlMode's
+	//     goroutine spawn and closed-and-nilled it before this goroutine's
+	//     RLock capture ran) -- there is nothing to close; falling through
+	//     to the equality check below would compare nil == nil and
+	//     wrongly close(nil), panicking.
 	//   - t.controlModeDone == doneCh: nothing has replaced or closed it
 	//     yet. Close-and-nil under the lock, same as StopControlMode's own
 	//     guard -- whichever of the two gets here first wins; the other
 	//     sees nil and skips, so this shared-field case can't double-close.
-	//   - t.controlModeDone == nil: StopControlMode already closed and
-	//     nilled it (same generation) -- already handled, skip.
+	//   - t.controlModeDone == nil (and doneCh != nil): StopControlMode
+	//     already closed and nilled it (same generation) -- already
+	//     handled, skip.
 	//   - t.controlModeDone is some other non-nil channel: a newer
 	//     generation already replaced the field. Our doneCh is now
 	//     orphaned from it entirely -- this is the only goroutine that
 	//     ever holds this specific reference (monitorControlModeErrors
 	//     never closes doneCh), so it's safe to close directly.
-	if t.controlModeDone == doneCh {
-		close(doneCh)
-		t.controlModeDone = nil
-	} else if t.controlModeDone != nil {
-		close(doneCh)
+	if doneCh != nil {
+		if t.controlModeDone == doneCh {
+			close(doneCh)
+			t.controlModeDone = nil
+		} else if t.controlModeDone != nil {
+			close(doneCh)
+		}
 	}
 	// Reset so that the next StartControlMode() call sees a clean slate.
 	t.controlModeRefCount = 0
