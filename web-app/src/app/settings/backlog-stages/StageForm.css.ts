@@ -141,8 +141,8 @@ export const graphSection = style({
 
 export const warningBanner = style({
   color: vars.color.textPrimary,
-  background: "#fff8e1",
-  border: "1px solid #f0c040",
+  background: vars.color.warningBg,
+  border: `1px solid ${vars.color.warning}`,
   borderRadius: vars.radii.sm,
   padding: `${vars.space["2"]} ${vars.space["3"]}`,
   fontSize: vars.fontSize.sm,

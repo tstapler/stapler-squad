@@ -92,6 +92,38 @@ full-suite runs must not reproduce the `TempDir RemoveAll cleanup` failure for t
 
 ## Related
 
+- **2026-09-16 sighting (second, same day)**: 2 more `TempDir RemoveAll cleanup: unlinkat ...
+  directory not empty` failures in the same `make ci` cycle as the sighting below, this time in
+  `make test-integration`'s second (non-`session`/`session/tmux`) invocation — one on
+  `TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_Headless...` (name truncated by the
+  capturing pipe; `server/dependencies_test.go` family), the other not captured due to the same
+  truncation. Immediately re-ran `make test-integration` standalone with output captured to a file
+  instead of a truncating pipe: 7179 tests, 0 failures, 37.7s. Confirms both were transient
+  full-suite-load flakes in this same shared teardown-ordering gap, not a regression from the
+  logging fix being pushed; re-ran rather than investigating further, consistent with this bug's own
+  scope boundary.
+- **2026-09-16 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not
+  empty` symptom recurred again on the same test,
+  `TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService`
+  (`server/dependencies_test.go`), during `make ci`'s full `test-race` run (7075 tests, 330s) on
+  `main` while syncing a rebase-exposed lint fix — unrelated to that diff (which touched only
+  `server/services/backlog_service_triage.go` logging calls). Passed 10/10 in isolation with `-race`
+  immediately after (`go test ./server -race -run
+  TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
+  -count=10`). Confirms this remains the same shared teardown-ordering gap, not a new regression;
+  re-ran rather than investigating further, consistent with this bug's own scope boundary.
+- **2026-09-13 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not
+  empty` symptom recurred on a fourth test, in a different package this time --
+  `TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService`
+  (`server/dependencies_test.go`), during `make quick-check`'s full `test-race` run (6909 tests,
+  288s) on the `backlog/stapler-squad-fix-fork-pressure-flap-and-status-banner` branch (fork-pressure
+  hysteresis + status-banner work, unrelated to this test or its `BuildDependencies()`/
+  `wireDepsIntoServer` construction path). Passed 5/5 in isolation with `-race` immediately after (`go
+  test ./server/... -race -run TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
+  -count=5`). Confirms the failure family isn't confined to `server/services` -- `server`'s own
+  `BuildDependencies()` path (already flagged non-hermetic, starting ~30 real subsystems including
+  sweepers/notifiers/analytics writers) hits the same teardown-ordering gap. Not investigated further,
+  consistent with this bug's own scope boundary.
 - **2026-09-08: `TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo` instance
   root-caused and fixed** (unlike this bug's own still-unconfirmed ClaudeSettingsWatcher hypothesis).
   Hit during `make quick-check` on PR #735 (`fix-control-mode-input-silent-drop`, an unrelated

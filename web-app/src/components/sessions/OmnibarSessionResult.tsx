@@ -103,8 +103,8 @@ export function OmnibarSessionResult({
           )}
         </span>
 
-        {session.path && (
-          <span className={styles.path}>{shortPath(session.path)}</span>
+        {session.existingDir && (
+          <span className={styles.path}>{shortPath(session.existingDir)}</span>
         )}
       </span>
 

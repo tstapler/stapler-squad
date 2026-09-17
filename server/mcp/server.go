@@ -70,12 +70,18 @@ func NewCore(
 	if svc != nil {
 		registerWorkflowTools(s, &workflowHandlers{svc: svc})
 		registerRulesTools(s, &rulesHandlers{svc: svc})
+		registerTaggingRulesTools(s, &taggingRulesHandlers{svc: svc})
 		registerNotificationTools(s, &notificationHandlers{svc: svc})
 		registerHistoryTools(s, &historyHandlers{svc: svc})
 	}
 	if storage != nil && (backlogEnabled == nil || backlogEnabled()) {
-		registerBacklogTools(s, &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener, backlogSvc: backlogSvc, liveCheck: liveCheck})
+		h := &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener, backlogSvc: backlogSvc, liveCheck: liveCheck}
+		registerBacklogTools(s, h)
 		registerGoalTools(s, &goalHandlers{storage: storage, store: store, eventBus: eventBus, enabledCheck: backlogEnabled})
+		// registerGuidanceTools shares backlogHandlers (not a separate struct)
+		// so create_guidance_request can call h.resolveItemLink directly —
+		// see durable-guidance-request plan Epic 2.2.
+		registerGuidanceTools(s, h)
 	}
 	if prCache != nil {
 		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc})

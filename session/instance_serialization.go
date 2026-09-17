@@ -83,28 +83,31 @@ func (i *Instance) ToInstanceData() InstanceData {
 	})
 
 	data := InstanceData{
-		Title:            snap.Title,
-		UUID:             snap.UUID,
-		Path:             snap.Path,
-		WorkingDir:       snap.WorkingDir,
-		Branch:           snap.Branch,
-		Status:           snap.Status,
-		Height:           snap.Height,
-		Width:            snap.Width,
-		CreatedAt:        snap.CreatedAt,
-		UpdatedAt:        time.Now(),
-		Program:          snap.Program,
-		AutoYes:          snap.AutoYes,
-		AutoApprove:      snap.AutoApprove,
-		Prompt:           snap.Prompt,
-		InitialPrompt:    snap.InitialPrompt,
-		Category:         snap.Category,
-		Note:             snap.Note,
-		IsExpanded:       snap.IsExpanded,
-		Tags:             snap.Tags, // Include tags in serialization
-		SessionType:      snap.SessionType,
-		TmuxPrefix:       snap.TmuxPrefix,
-		TmuxServerSocket: snap.TmuxServerSocket,
+		Title:         snap.Title,
+		UUID:          snap.UUID,
+		Path:          snap.Path,
+		WorkingDir:    snap.WorkingDir,
+		Branch:        snap.Branch,
+		Status:        snap.Status,
+		Height:        snap.Height,
+		Width:         snap.Width,
+		CreatedAt:     snap.CreatedAt,
+		UpdatedAt:     time.Now(),
+		Program:       snap.Program,
+		AutoYes:       snap.AutoYes,
+		AutoApprove:   snap.AutoApprove,
+		Prompt:        snap.Prompt,
+		InitialPrompt: snap.InitialPrompt,
+		Category:      snap.Category,
+		Note:          snap.Note,
+		IsExpanded:    snap.IsExpanded,
+		Tags:          snap.Tags, // Include tags in serialization
+		// ADR-002 tag provenance — see Instance.RuleTagProvenance/SuppressedRuleTags.
+		RuleTagProvenance:  snap.RuleTagProvenance,
+		SuppressedRuleTags: snap.SuppressedRuleTags,
+		SessionType:        snap.SessionType,
+		TmuxPrefix:         snap.TmuxPrefix,
+		TmuxServerSocket:   snap.TmuxServerSocket,
 		// Backend is set once at construction and never mutated afterward — same
 		// as LaunchCommand below, it isn't in InstanceSnapshot, so read it
 		// directly off the Instance rather than adding it to the snapshot.
@@ -217,6 +220,17 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 	return fromInstanceData(data, false)
 }
 
+// FromInstanceDataDeferred reconstructs an *Instance without starting it (no
+// PTY spawn, no cold-restore, no goroutines) — LoadInstances' bulk-startup
+// path, exported for an on-demand, read-only "shadow" instance bound to the
+// same backend/session identity as the persisted record. Lets a caller ask a
+// truth question (IsBackendProcessAlive()) or act on the real session
+// (KillSession()) for a sessionUUID the live in-memory registry doesn't have
+// tracked — see SessionService.findConfirmedLiveInstance.
+func FromInstanceDataDeferred(data InstanceData) (*Instance, error) {
+	return fromInstanceData(data, true)
+}
+
 // fromInstanceData is the shared implementation. When deferStart is true, the
 // Active-branch (and Stopped-but-tmux-alive recovery) code paths still wire the
 // tmux session object (so HasSession()/TmuxAlive() report correctly) but skip
@@ -261,29 +275,32 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	}
 
 	instance := &Instance{
-		Title:            data.Title,
-		UUID:             data.UUID,
-		Path:             migratedPath, // Use migrated path
-		WorkingDir:       data.WorkingDir,
-		Branch:           data.Branch,
-		Status:           data.Status,
-		Height:           data.Height,
-		Width:            data.Width,
-		CreatedAt:        data.CreatedAt,
-		UpdatedAt:        data.UpdatedAt,
-		Program:          data.Program,
-		AutoYes:          data.AutoYes, // pre-existing bug: was never restored on load, losing auto_yes across every restart
-		AutoApprove:      data.AutoApprove,
-		Prompt:           data.Prompt,
-		InitialPrompt:    data.InitialPrompt,
-		Category:         data.Category,
-		Note:             data.Note,
-		IsExpanded:       data.IsExpanded,
-		Tags:             tags, // Use migrated tags (includes category if needed)
-		SessionType:      data.SessionType,
-		TmuxPrefix:       data.TmuxPrefix,
-		TmuxServerSocket: data.TmuxServerSocket,
-		Backend:          data.Backend,
+		Title:         data.Title,
+		UUID:          data.UUID,
+		Path:          migratedPath, // Use migrated path
+		WorkingDir:    data.WorkingDir,
+		Branch:        data.Branch,
+		Status:        data.Status,
+		Height:        data.Height,
+		Width:         data.Width,
+		CreatedAt:     data.CreatedAt,
+		UpdatedAt:     data.UpdatedAt,
+		Program:       data.Program,
+		AutoYes:       data.AutoYes, // pre-existing bug: was never restored on load, losing auto_yes across every restart
+		AutoApprove:   data.AutoApprove,
+		Prompt:        data.Prompt,
+		InitialPrompt: data.InitialPrompt,
+		Category:      data.Category,
+		Note:          data.Note,
+		IsExpanded:    data.IsExpanded,
+		Tags:          tags, // Use migrated tags (includes category if needed)
+		// ADR-002 tag provenance — see Instance.RuleTagProvenance/SuppressedRuleTags.
+		RuleTagProvenance:  data.RuleTagProvenance,
+		SuppressedRuleTags: data.SuppressedRuleTags,
+		SessionType:        data.SessionType,
+		TmuxPrefix:         data.TmuxPrefix,
+		TmuxServerSocket:   data.TmuxServerSocket,
+		Backend:            data.Backend,
 		ReviewState: ReviewState{
 			LastTerminalUpdate:   data.LastTerminalUpdate,
 			LastMeaningfulOutput: data.LastMeaningfulOutput,
@@ -582,7 +599,21 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(instance.Title, instance.Program, tmuxPrefix))
 			}
 		}
-		if deferStart {
+		// Raw ArchivedAt read, not IsArchived(): this runs before
+		// finishInstanceConstruction publishes the first snapshot, so
+		// Snapshot() is not populated yet. The instance is still
+		// goroutine-local here, so the raw read is race-free.
+		if instance.ArchivedAt != nil {
+			// Archived means deliberately retired: never auto-start (see
+			// ADR-001, superseded-rework-session-retirement). Normalize
+			// Active/Creating only — the other statuses in this bucket are
+			// written deliberately by archive writers that never touch status,
+			// and rewriting them would destroy the failure signal irreversibly.
+			if instance.Status == Active || instance.Status == Creating {
+				instance.loadStatus(Stopped)
+			}
+			instance.started.Store(true)
+		} else if deferStart {
 			// Leave started=false: the async Step 6 loop in BuildRuntimeDeps calls
 			// Start(false) later, off the startup critical path. That loop already
 			// hot-attaches to a live tmux session or cold-restores a dead one —

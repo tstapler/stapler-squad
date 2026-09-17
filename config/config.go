@@ -475,6 +475,24 @@ const StreamHubFeatureFlag = "stream_hub"
 // still required, same as the STAPLER_SQUAD_USE_TYMUX env var it replaces.
 const TymuxFeatureFlag = "tymux"
 
+// TriageGuidanceHaltFeatureFlag is the config.FeatureFlags key backing
+// EffectiveTriageGuidanceHaltEnabled — gates whether automated triage halts
+// and asks via a durable GuidanceRequest instead of guessing on a genuinely
+// ambiguous item (durable-guidance-request AC2). Defaults to off: no rollback
+// rehearsal has vouched for this as the global default yet, same posture as
+// TymuxFeatureFlag.
+const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
+
+// EffectiveTriageGuidanceHaltEnabled reports whether automated triage should
+// halt and create a GuidanceRequest on ambiguity rather than guess. Callers
+// must read this fresh at the exact halt-decision instant, not cache it at
+// pass start — triage is a long-running background call, not a
+// request/response RPC, so staleness at the decision point is the risk that
+// matters (mirrors EffectiveTymuxEnabled's live-read contract).
+func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, false)
+}
+
 // NativeWorktreeFeatureFlag is the config.FeatureFlags key backing
 // EffectiveNativeWorktreeEnabled — the global native (go-git) worktree
 // implementation default. Defaults to off (ADR-002): this is

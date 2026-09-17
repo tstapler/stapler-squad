@@ -94,6 +94,37 @@ type ApprovalRuleData struct {
 	MinSessionIdleMinutes int32
 }
 
+// TaggingRuleData is the domain model for a user-editable tagging rule.
+// Sibling of ApprovalRuleData — same shape convention, same unique-rule_id +
+// atomic-upsert concurrency guarantee.
+type TaggingRuleData struct {
+	RuleID         string
+	Name           string
+	NamePattern    string
+	BranchPattern  string
+	PathPattern    string
+	ProgramPattern string
+	RequiredTags   []string
+	OutputTag      string
+	Priority       int
+	Enabled        bool
+	Source         string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// DismissedFindingData is the domain model for a dismissed WasteFinding
+// record. FindingID is the stable content-addressed dismissal key (see
+// tokens.ComputeFindingID); SessionID/ConversationID/FindingType are kept
+// alongside it only for debuggability, not for lookups.
+type DismissedFindingData struct {
+	FindingID      string
+	SessionID      string
+	ConversationID string
+	FindingType    int32
+	DismissedAt    time.Time
+}
+
 // SubcommandDecisionCount holds a (subcommand, decision) aggregate count.
 // Returned by GetSubcommandBreakdown.
 type SubcommandDecisionCount struct {

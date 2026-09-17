@@ -147,3 +147,23 @@ func TestEnsureReleased_NoHolderIsANoop(t *testing.T) {
 		t.Fatalf("EnsureReleased took %v for an already-free port; want near-instant", elapsed)
 	}
 }
+
+func TestEnsureReleased_StopsWaitingWhenContextCanceled(t *testing.T) {
+	port := freePort(t)
+	startHelper(t, port, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	err := EnsureReleased(ctx, Options{
+		Ports:        []int{port},
+		Timeout:      10 * time.Second,
+		PollInterval: 20 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("EnsureReleased returned nil for a canceled context")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("EnsureReleased ignored cancellation for %v", elapsed)
+	}
+}

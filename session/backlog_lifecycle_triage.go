@@ -174,14 +174,14 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		Statuses: []string{string(BacklogStatusIdea), string(BacklogStatusQueued)},
 	})
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedTriageItems list error: %v", err)
+		log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems list error", "error", err)
 		return
 	}
 
 	for _, item := range items {
 		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 		if sessErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedTriageItems ListItemSessions item=%s: %v", item.ID, sessErr)
+			log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems ListItemSessions failed", "item", item.ID, "error", sessErr)
 			continue
 		}
 		// Find the most recent triage-role session regardless of whether it has
@@ -192,6 +192,18 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		latestTriage := latestTriageSession(sessions)
 		if latestTriage == nil {
 			continue // no triage session has ever run for this item
+		}
+
+		// durable-guidance-request AC2/Story 5.1.3: a triage session that ended
+		// (or is sitting open) with an open GuidanceRequest against this item is
+		// expected once triage_guidance_halt is on — it deliberately halted to
+		// ask instead of guessing — not an anomaly. Skip it entirely this tick
+		// rather than tombstoning/MarkStuck-ing it, which would retry-with-
+		// backoff-penalize a legitimately-halted item and defeat the halt.
+		if _, pendingCount, _, guidanceErr := l.storage.ListPendingGuidanceRequests(ctx, domain.RequestScopeBacklogItem, item.ID, 0); guidanceErr != nil {
+			log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems ListPendingGuidanceRequests failed", "item", item.ID, "error", guidanceErr)
+		} else if pendingCount > 0 {
+			continue
 		}
 
 		isIdea := item.Status == string(BacklogStatusIdea)
@@ -238,7 +250,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			// tombstoneOrphanTriageSessions in server/services). Past staleness with no
 			// live record IS the confirmed-dead signal for this detector.
 			if endErr := l.storage.UpdateItemSessionEnded(ctx, latestTriage.ID, time.Now()); endErr != nil { //nolint:silenttransition best-effort tombstone; MarkStuck+notify below runs unconditionally regardless of this write's outcome, so the item is surfaced either way
-				log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedTriageItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, latestTriage.ID, endErr)
+				log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems UpdateItemSessionEnded failed", "item", item.ID, "session", latestTriage.ID, "error", endErr)
 			}
 			reasonDetail = fmt.Sprintf("triage session %s still open after %s", latestTriage.SessionUUID, staleness)
 		} else {
@@ -256,10 +268,10 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 				// "may be stuck" notification for what is an expected, self-inflicted event.
 				respawner := l.getTriageRespawner()
 				if respawner != nil {
-					log.InfoLog().Printf("[BacklogLifecycle] item %s triage session %s orphaned by graceful shutdown, respawning immediately with no penalty", item.ID, latestTriage.SessionUUID)
+					log.Info("[BacklogLifecycle] item triage session orphaned by graceful shutdown, respawning immediately with no penalty", "item", item.ID, "session", latestTriage.SessionUUID)
 					go func(itemID string) {
 						if err := respawner.AutoRespawnTriage(l.shutdownCtx, itemID); err != nil {
-							log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedTriageItems shutdown-respawn item=%s: %v", itemID, err)
+							log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems shutdown-respawn failed", "item", itemID, "error", err)
 						}
 					}(item.ID)
 				}
@@ -294,7 +306,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatus(item.Status), reasonDetail)
 		if markErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuck item=%s: %v", item.ID, markErr)
+			log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuck failed", "item", item.ID, "error", markErr)
 			continue
 		}
 		if !applied {
@@ -302,7 +314,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		}
 		rows, findErr := er.FindOpenStuckStates(ctx)
 		if findErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedTriageItems FindOpenStuckStates item=%s: %v", item.ID, findErr)
+			log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems FindOpenStuckStates failed", "item", item.ID, "error", findErr)
 			continue
 		}
 		row, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonOrphanedTriage)
@@ -310,7 +322,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			continue
 		}
 
-		log.WarningLog().Printf("[BacklogLifecycle] item %s triage session %s orphaned (%s)", item.ID, latestTriage.SessionUUID, reasonDetail)
+		log.Warn("[BacklogLifecycle] item triage session orphaned", "item", item.ID, "session", latestTriage.SessionUUID, "reason", reasonDetail)
 		l.notify(item.ID,
 			"Triage may be stuck",
 			fmt.Sprintf("%s — its triage session ended without producing a usable plan and nothing is running. Re-trigger triage or investigate.", item.Title),
@@ -318,7 +330,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			false, false, // urgent, important — routine stuck-poll, matches "Work session may be stuck"
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonOrphanedTriage); notifyErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuckNotified item=%s: %v", item.ID, notifyErr)
+			log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuckNotified failed", "item", item.ID, "error", notifyErr)
 		}
 	}
 	// No resolve pass needed here: selfHealStuck (status-anchored) clears this
@@ -341,7 +353,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 func (l *BacklogLifecycleListener) reconcileOrphanedTriageRemediation(ctx context.Context, er *EntRepository) {
 	open, err := er.FindOpenStuckStates(ctx)
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedTriageRemediation FindOpenStuckStates error: %v", err)
+		log.Warn("[BacklogLifecycle] reconcileOrphanedTriageRemediation FindOpenStuckStates error", "error", err)
 		return
 	}
 	for _, row := range open {
@@ -377,7 +389,7 @@ func (l *BacklogLifecycleListener) retryOrphanedTriageWithBackoffGate(ctx contex
 
 	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonOrphanedTriage)
 	if gateErr != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
+		log.Warn("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate RemediationDue failed", "item", itemID, "error", gateErr)
 		due = true // fail open — see retryPushFailedWithBackoffGate's identical rationale
 	}
 	if justParked {
@@ -389,13 +401,13 @@ func (l *BacklogLifecycleListener) retryOrphanedTriageWithBackoffGate(ctx contex
 		)
 	}
 	if !due {
-		log.InfoLog().Printf("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate item=%s: orphaned_triage remediation backoff not yet due, skipping retry", itemID)
+		log.Info("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate: orphaned_triage remediation backoff not yet due, skipping retry", "item", itemID)
 		return
 	}
 
 	go func() {
 		if err := respawner.AutoRespawnTriage(l.shutdownCtx, itemID); err != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate AutoRespawnTriage item=%s: %v", itemID, err)
+			log.Warn("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate AutoRespawnTriage failed", "item", itemID, "error", err)
 		}
 	}()
 }

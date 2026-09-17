@@ -197,6 +197,7 @@ jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn().mockReturnValue({}),
 }));
 
+
 // The jest styleMock for `.css.ts` files wraps every export (including plain
 // `style()` string exports) in a callable proxy function, which triggers a
 // benign "Invalid value for prop className" React warning. Pre-existing

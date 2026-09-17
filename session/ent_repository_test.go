@@ -2,11 +2,14 @@ package session
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -794,6 +797,86 @@ func TestUpdateSessionMetadata_SessionNotFound(t *testing.T) {
 	err := repo.UpdateSessionMetadata(ctx, "does-not-exist", nil, nil, &note, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "session not found")
+}
+
+// TestTaggingRuleSchema_should_CreateTableWithAllFields_When_SchemaCreateRuns
+// verifies that a fresh ent client's Schema.Create() creates the
+// tagging_rules table with all fields from taggingrule.go, mirroring
+// backlog_stuck_migration_test.go's schema-creation pattern for
+// BacklogStuckState.
+func TestTaggingRuleSchema_should_CreateTableWithAllFields_When_SchemaCreateRuns(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := repo.client.TaggingRule.Create().
+		SetRuleID("schema-test-rule").
+		SetName("Schema test rule").
+		SetBranchPattern("^(bugfix|fix)/").
+		SetRequiredTags([]string{"Reviewed"}).
+		SetOutputTag("Bugfix").
+		SetPriority(50).
+		SetEnabled(true).
+		SetSource("seed").
+		Save(ctx)
+	require.NoError(t, err)
+
+	fetched, err := repo.client.TaggingRule.Get(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "schema-test-rule", fetched.RuleID)
+	assert.Equal(t, "Schema test rule", fetched.Name)
+	assert.Equal(t, "^(bugfix|fix)/", fetched.BranchPattern)
+	assert.Equal(t, []string{"Reviewed"}, fetched.RequiredTags)
+	assert.Equal(t, "Bugfix", fetched.OutputTag)
+	assert.Equal(t, 50, fetched.Priority)
+	assert.True(t, fetched.Enabled)
+	assert.Equal(t, "seed", fetched.Source)
+	assert.False(t, fetched.CreatedAt.IsZero())
+	assert.False(t, fetched.UpdatedAt.IsZero())
+}
+
+// TestTaggingRuleSchema_should_CreateIdempotently_When_SchemaCreateRunsTwice
+// mirrors backlog_stuck_migration_test.go's Test_migration_should_be_reversible:
+// a fresh client's Schema.Create() is idempotent when run twice, and the
+// tagging_rules table coexists cleanly with its sibling tables. This repo's
+// auto-migration approach (no versioned up/down files) makes this the
+// equivalent of a migration-reversibility test — see validation.md's
+// "Migration verification note" for Story 2.1.1.
+func TestTaggingRuleSchema_should_CreateIdempotently_When_SchemaCreateRunsTwice(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test-taggingrule-idempotent.db")
+
+	db, err := sql.Open("sqlite", dbPath+"?_fk=1")
+	require.NoError(t, err)
+	defer db.Close()
+
+	drv := entsql.OpenDB(dialect.SQLite, db)
+	client := ssent.NewClient(ssent.Driver(drv))
+	defer client.Close()
+
+	ctx := context.Background()
+
+	// Serialized via EntSchemaCreateMu — see its doc comment: Atlas has
+	// package-level state that races under t.Parallel() across independent
+	// clients.
+	EntSchemaCreateMu.Lock()
+	require.NoError(t, client.Schema.Create(ctx))
+
+	// Second Schema.Create call must be idempotent — no error, no duplicate index.
+	require.NoError(t, client.Schema.Create(ctx))
+	EntSchemaCreateMu.Unlock()
+
+	// Sibling table remains intact and queryable — the additive table did not
+	// disturb it.
+	itemCount, err := client.BacklogItem.Query().Count(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, itemCount)
+
+	ruleCount, err := client.TaggingRule.Query().Count(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, ruleCount)
 }
 
 // createTestEntRepository is a thin wrapper around NewTestEntRepository

@@ -1147,6 +1147,25 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 	}
 }
 
+// CleanupTerminalItem removes git worktrees and archives/kills the tmux panes
+// of every work/review session on itemID — the same synchronous cleanup
+// TransitionBacklogItemStatus runs inline on a terminal transition, exported
+// so it can also be invoked from the session/ package (see
+// session.WorktreeCleaner) by internal transition paths that call the
+// storage layer directly (bounce-to-done, PR-merge done) and would otherwise
+// depend solely on the 60s reconcileTerminalItemSessions safety-net sweep.
+// Best-effort: a listing failure is logged, never returned — mirrors
+// cleanupItemWorktrees's and archiveItemWorkSessions's own contract.
+func (s *BacklogService) CleanupTerminalItem(ctx context.Context, itemID string) {
+	sessions, err := s.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		log.WarningLog().Printf("[CleanupTerminalItem] ListItemSessions item=%s: %v", itemID, err)
+		return
+	}
+	s.cleanupItemWorktrees(ctx, sessions)
+	s.archiveItemWorkSessions(ctx, sessions)
+}
+
 // archiveItemWorkSessions soft-archives every work- or review-role session in
 // sessions so it stops accumulating in the default session list, and kills its live
 // tmux pane so the underlying claude process (and its MCP server subprocess fleet)

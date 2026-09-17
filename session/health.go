@@ -221,9 +221,18 @@ func paneDeadStatus(instance *Instance, batch map[string]tmux.PaneDeadStatus) (d
 // resume (see Instance.ResumeFromCrash / the ResumeCrashedSession RPC) and must
 // not be silently respawned either. PermanentlyFailed is likewise terminal
 // (ADR-001, session-retry-backoff) -- it requires an explicit Retry now, not
-// silent health-checker recovery.
+// silent health-checker recovery. Archived sessions are skipped regardless of
+// status: archival means the session was deliberately retired.
 func healthCheckSkipReason(instance *Instance) (string, bool) {
-	status := instance.Snapshot().Status
+	snap := instance.Snapshot()
+	// Checked before IsSuspended() because the statuses that reach
+	// recoverMissingSession's Start(false) -- Active, Creating, Restoring,
+	// Failed -- are precisely the ones IsSuspended() omits (see ADR-001,
+	// superseded-rework-session-retirement).
+	if snap.ArchivedAt != nil {
+		return "Skipped (session is archived)", true
+	}
+	status := snap.Status
 	if !status.IsSuspended() {
 		return "", false
 	}

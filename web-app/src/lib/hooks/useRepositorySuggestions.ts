@@ -45,7 +45,7 @@ export function useRepositorySuggestions(options: RepositorySuggestionsOptions =
 
       // Build the input shape rankPathsByFrecency expects
       const frecencyInput = sessions.map((session) => ({
-        path: session.path,
+        path: session.activeDir,
         timestampsMs: [
           session.updatedAt          ? Number(session.updatedAt.seconds) * 1000          : 0,
           session.lastMeaningfulOutput ? Number(session.lastMeaningfulOutput.seconds) * 1000 : 0,

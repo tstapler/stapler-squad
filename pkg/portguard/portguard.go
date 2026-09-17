@@ -113,8 +113,11 @@ func EnsureReleased(ctx context.Context, opts Options) error {
 		poll = DefaultPollInterval
 	}
 
-	if waitUntilFree(opts.Ports, timeout, poll) {
+	if waitUntilFree(ctx, opts.Ports, timeout, poll) {
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("portguard: waiting for ports %v: %w", opts.Ports, err)
 	}
 
 	victims, err := findPortHolders(ctx, opts.Ports, opts.ProcessNameContains, opts.ExcludePID)
@@ -126,16 +129,22 @@ func EnsureReleased(ctx context.Context, opts Options) error {
 		_ = v.SendSignalWithContext(ctx, syscall.SIGTERM)
 	}
 
-	if waitUntilFree(opts.Ports, timeout, poll) {
+	if waitUntilFree(ctx, opts.Ports, timeout, poll) {
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("portguard: waiting after SIGTERM for ports %v: %w", opts.Ports, err)
 	}
 
 	for _, v := range victims {
 		_ = v.KillWithContext(ctx)
 	}
 
-	if waitUntilFree(opts.Ports, killGracePeriod, poll) {
+	if waitUntilFree(ctx, opts.Ports, killGracePeriod, poll) {
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("portguard: waiting after SIGKILL for ports %v: %w", opts.Ports, err)
 	}
 
 	return fmt.Errorf("portguard: port(s) %v still bound after terminating %d matching process(es)", stillBound(opts.Ports), len(victims))
@@ -151,16 +160,23 @@ func stillBound(ports []int) []int {
 	return bound
 }
 
-func waitUntilFree(ports []int, timeout, poll time.Duration) bool {
-	deadline := time.Now().Add(timeout)
+func waitUntilFree(ctx context.Context, ports []int, timeout, poll time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+
 	for {
 		if allFree(ports) {
 			return true
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
 			return allFree(ports)
+		case <-ticker.C:
 		}
-		time.Sleep(poll)
 	}
 }
 

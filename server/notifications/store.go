@@ -264,9 +264,9 @@ func (s *NotificationHistoryStore) mergeOccurrence(existing, record *Notificatio
 // AppendAutoApproved writes a silent NOTIFICATION_TYPE_AUTO_APPROVED record directly to
 // history without publishing to the event bus. The record is immediately marked as read so
 // it never appears in the active notification feed — only in the auto-handled history view.
-func (s *NotificationHistoryStore) AppendAutoApproved(sessionID, sessionName, toolName, filePath, ruleID, ruleName, ruleSource, decision string) error {
+func (s *NotificationHistoryStore) AppendAutoApproved(sessionID, sessionName, toolName, detail, ruleID, ruleName, ruleSource, decision string) error {
 	title := "Auto-" + decision + "d: " + toolName
-	msg := filePath
+	msg := detail
 	if msg == "" {
 		msg = toolName
 	}

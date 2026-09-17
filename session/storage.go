@@ -47,6 +47,11 @@ type InstanceData struct {
 	IsExpanded bool     `json:"is_expanded,omitempty"`
 	Tags       []string `json:"tags,omitempty"` // Multi-valued tags for flexible organization
 
+	// RuleTagProvenance/SuppressedRuleTags back Instance's ADR-002 tag-provenance
+	// fields — see their doc comments on Instance for the full semantics.
+	RuleTagProvenance  map[string]string `json:"rule_tag_provenance,omitempty"`
+	SuppressedRuleTags map[string]bool   `json:"suppressed_rule_tags,omitempty"`
+
 	// Session type determines the workflow (directory, new_worktree, existing_worktree)
 	SessionType SessionType `json:"session_type,omitempty"`
 
@@ -513,8 +518,17 @@ func (s *Storage) ListInstanceIDs() ([]string, error) {
 
 // ListSessionRecords returns a snapshot of all sessions as SessionRecords,
 // for use by the tokens.Associator to match JSONL files to stapler-squad sessions.
+//
+// Uses LoadMinimal.WithTags() rather than plain ListInstanceData() (LoadMinimal):
+// Tags is an eager-loaded ent edge (session/ent/schema/session.go), not a plain
+// column, so it comes back empty under LoadMinimal — see LoadOptions.LoadTags's
+// doc comment and TestStorage_UpdateInstance's identical note.
 func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
-	data, err := s.ListInstanceData()
+	// LoadWorktree so ActiveDir() below can resolve to the worktree path —
+	// Claude's JSONL ProjectPath is derived from the process cwd (the
+	// worktree), so matching against the identity Path orphans every
+	// worktree session's token records.
+	data, err := s.repo.ListWithOptions(context.Background(), LoadOptions{LoadTags: true, LoadWorktree: true})
 	if err != nil {
 		return nil
 	}
@@ -527,8 +541,9 @@ func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
 		records = append(records, tokens.SessionRecord{
 			SessionID:      sessionID,
 			ConversationID: d.ClaudeSession.ConversationUUID,
-			Path:           d.Path,
+			Path:           d.ActiveDir(),
 			CreatedAt:      d.CreatedAt,
+			Tags:           d.Tags,
 		})
 	}
 	return records
@@ -779,6 +794,42 @@ func (s *Storage) UpsertRule(ctx context.Context, rule ApprovalRuleData) error {
 // DeleteRule removes an auto-approval rule from the repository.
 func (s *Storage) DeleteRule(ctx context.Context, id string) error {
 	return s.repo.DeleteRule(ctx, id)
+}
+
+// AllTaggingRules returns all tagging rules from the repository.
+func (s *Storage) AllTaggingRules(ctx context.Context) ([]TaggingRuleData, error) {
+	return s.repo.AllTaggingRules(ctx)
+}
+
+// UpsertTaggingRule creates or updates a tagging rule in the repository.
+func (s *Storage) UpsertTaggingRule(ctx context.Context, rule TaggingRuleData) error {
+	return s.repo.UpsertTaggingRule(ctx, rule)
+}
+
+// DeleteTaggingRule removes a tagging rule from the repository.
+func (s *Storage) DeleteTaggingRule(ctx context.Context, id string) error {
+	return s.repo.DeleteTaggingRule(ctx, id)
+}
+
+// RecordTaggingRuleFire records that a tagging rule matched at the given instant.
+func (s *Storage) RecordTaggingRuleFire(ctx context.Context, ruleID string, firedAt time.Time) error {
+	return s.repo.RecordTaggingRuleFire(ctx, ruleID, firedAt)
+}
+
+// GetTaggingRuleFireCounts returns the number of recorded fires per rule ID since the
+// given instant.
+func (s *Storage) GetTaggingRuleFireCounts(ctx context.Context, since time.Time) (map[string]int, error) {
+	return s.repo.GetTaggingRuleFireCounts(ctx, since)
+}
+
+// DismissFinding persists a WasteFinding dismissal in the repository.
+func (s *Storage) DismissFinding(ctx context.Context, data DismissedFindingData) error {
+	return s.repo.DismissFinding(ctx, data)
+}
+
+// ListDismissedFindingIDs returns the set of currently-dismissed finding_id values.
+func (s *Storage) ListDismissedFindingIDs(ctx context.Context) (map[string]bool, error) {
+	return s.repo.ListDismissedFindingIDs(ctx)
 }
 
 // RecordAnalytics logs a classification decision to the repository.

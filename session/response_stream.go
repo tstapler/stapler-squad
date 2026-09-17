@@ -160,6 +160,13 @@ func (rs *ResponseStream) SetStableSessionID(id string) {
 	}
 }
 
+// SetProjectPath adds stable project attribution to future escape events.
+func (rs *ResponseStream) SetProjectPath(path string) {
+	if rs.escapeParser != nil && path != "" {
+		rs.escapeParser.SetProjectPath(path)
+	}
+}
+
 // Start begins streaming responses from the PTY to all subscribers.
 // This is a non-blocking call that starts a background goroutine.
 // Use the provided context to stop the stream.

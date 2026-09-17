@@ -435,3 +435,51 @@ func TestComputeWasteScore_WhenCleanSession_ExpectLowScore(t *testing.T) {
 	require.NotNil(t, score)
 	assert.Less(t, float64(*score), 30.0)
 }
+
+// --- ComputeFindingID ---
+
+func TestComputeFindingID_WhenSameInputs_ExpectSameID(t *testing.T) {
+	t.Parallel()
+	id1 := ComputeFindingID("sess-1", "conv-1", FindingCacheHitFloorBreach, "Cache hit rate 9% is below the 40% floor.")
+	id2 := ComputeFindingID("sess-1", "conv-1", FindingCacheHitFloorBreach, "Cache hit rate 9% is below the 40% floor.")
+	assert.Equal(t, id1, id2)
+	assert.NotEmpty(t, id1)
+}
+
+// A finished session's transcript is immutable, so ComputeFindings always
+// recomputes byte-identical Findings for it — this is the case ID stability
+// must hold for, so a dismissal actually sticks.
+func TestComputeFindingID_WhenRecomputedFromIdenticalFinishedSessionData_ExpectStableID(t *testing.T) {
+	t.Parallel()
+	msg := "Session used 3,000,000 tokens, over the 2,000,000 ceiling — estimated cost $12.34."
+	first := ComputeFindingID("sess-42", "conv-42", FindingSessionTokenCeiling, msg)
+	second := ComputeFindingID("sess-42", "conv-42", FindingSessionTokenCeiling, msg)
+	assert.Equal(t, first, second, "a finished session's identical recomputation must reproduce the same finding_id, or a dismissal would never stick")
+}
+
+// The core recurrence-vs-new-occurrence contract: a still-active session
+// whose underlying condition changes materially (here, the message's
+// embedded numbers change as the transcript grows) must NOT collide with
+// the old finding_id, so it can never be silently suppressed by dismissing
+// the earlier occurrence.
+func TestComputeFindingID_WhenMessageContentDiffers_ExpectDifferentID(t *testing.T) {
+	t.Parallel()
+	before := ComputeFindingID("sess-1", "conv-1", FindingCacheHitFloorBreach, "Cache hit rate 80% is below the 95% floor over 6 turns.")
+	after := ComputeFindingID("sess-1", "conv-1", FindingCacheHitFloorBreach, "Cache hit rate 60% is below the 95% floor over 20 turns.")
+	assert.NotEqual(t, before, after)
+}
+
+func TestComputeFindingID_WhenFindingTypeDiffers_ExpectDifferentID(t *testing.T) {
+	t.Parallel()
+	msg := "same message text"
+	a := ComputeFindingID("sess-1", "conv-1", FindingCacheHitFloorBreach, msg)
+	b := ComputeFindingID("sess-1", "conv-1", FindingSessionTokenCeiling, msg)
+	assert.NotEqual(t, a, b)
+}
+
+func TestComputeFindingID_WhenSessionIDEmpty_ExpectFallsBackToConversationID(t *testing.T) {
+	t.Parallel()
+	viaSessionID := ComputeFindingID("orphan-conv-1", "", FindingOversizedStartContext, "msg")
+	viaConversationID := ComputeFindingID("", "orphan-conv-1", FindingOversizedStartContext, "msg")
+	assert.Equal(t, viaSessionID, viaConversationID, "an orphan session (empty sessionID) must key identically whether the caller passes its conversationID as sessionID or conversationID")
+}

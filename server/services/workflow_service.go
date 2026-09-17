@@ -637,6 +637,46 @@ func (s *WorkflowService) ListTriggerFireEvents(
 	}), nil
 }
 
+// archiveInstanceTimeout bounds each per-instance actor round-trip in
+// archiveMatchingInstances, mirroring the 2s budget review_queue_poller.go uses
+// for its own sendCtx calls.
+const archiveInstanceTimeout = 2 * time.Second
+
+// archiveMatchingInstances marks the in-memory instances of workflowID archived,
+// skipping the ones ArchiveWorkflowSessions' DB predicate also skips.
+//
+// The CAS in SetArchivedAtIfNilCtx makes the ArchivedAt write idempotent — it
+// does not make the whole check atomic: the status predicates below run on the
+// caller's goroutine, so an instance that turns Active mid-round-trip is still
+// archived while Active. That residual is by design, and is repaired by the
+// load-time self-heal in fromInstanceData (see ADR-001,
+// superseded-rework-session-retirement).
+func archiveMatchingInstances(ctx context.Context, instances []*session.Instance, workflowID string, now time.Time) {
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		snap := inst.Snapshot()
+		if snap.WorkflowID != workflowID || snap.ArchivedAt != nil {
+			continue
+		}
+		if inst.IsActive() || inst.IsCreating() || inst.IsPaused() {
+			continue
+		}
+		// Actor-routed, not a raw field write: IsArchived() reads the published
+		// snapshot, so a bare inst.ArchivedAt = &now stays invisible to every
+		// guard (ADR-001). Bounded per instance so one busy actor cannot stall
+		// this RPC.
+		archiveCtx, cancel := context.WithTimeout(ctx, archiveInstanceTimeout)
+		_, err := inst.SetArchivedAtIfNilCtx(archiveCtx, now)
+		cancel()
+		if err != nil {
+			log.Warn("[WorkflowService] in-memory archive timed out; DB row is already archived",
+				"session", snap.Title, "workflow_id", workflowID, "err", err)
+		}
+	}
+}
+
 // +api: session:archive-workflow-sessions
 // ArchiveWorkflowSessions archives all non-active sessions for a given workflow.
 // Active, Creating, and Paused sessions are silently skipped.
@@ -676,13 +716,7 @@ func (ws *WorkflowService) ArchiveWorkflowSessions(
 
 	// Update in-memory instances for any that are still in the poller.
 	if ws.poller != nil {
-		for _, inst := range ws.poller.GetInstances() {
-			if inst.WorkflowID == req.Msg.WorkflowId && inst.ArchivedAt == nil {
-				if !inst.IsActive() && !inst.IsCreating() && !inst.IsPaused() {
-					inst.ArchivedAt = &now
-				}
-			}
-		}
+		archiveMatchingInstances(ctx, ws.poller.GetInstances(), req.Msg.WorkflowId, now)
 	}
 
 	log.Info("[WorkflowService] ArchiveWorkflowSessions completed",

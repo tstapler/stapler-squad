@@ -328,6 +328,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | PTY multiplexing (ssq-mux) | `docs/how-to/monitor-external-terminal-sessions.md` |
 | State file isolation / multi-instance | `docs/reference/state-isolation.md` |
 | Tag-based session organization | `docs/reference/tag-organization.md` |
+| Backlog completion gate (AC-completeness check) + synchronous terminal-transition cleanup | `docs/reference/backlog-completion-gate-and-cleanup.md` |
 | Benchmark reference | `docs/reference/benchmarks.md` |
 | Nil safety & static analysis tools | `docs/how-to/run-nil-safety-analysis.md` |
 | Go concurrency patterns | `docs/explanation/concurrency-patterns.md` |

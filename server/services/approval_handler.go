@@ -59,7 +59,7 @@ type approvalNotificationStamper interface {
 // autoApprovalLogger is a narrow interface for writing silent auto-approval records
 // directly to notification history without triggering toasts or push notifications.
 type autoApprovalLogger interface {
-	AppendAutoApproved(sessionID, sessionName, toolName, filePath, ruleID, ruleName, ruleSource, decision string) error
+	AppendAutoApproved(sessionID, sessionName, toolName, detail, ruleID, ruleName, ruleSource, decision string) error
 }
 
 // headlessPoolApprover is the narrow interface ApprovalHandler needs from the headless pool.
@@ -234,6 +234,65 @@ func buildApprovalQuery(toolName string, toolInput map[string]interface{}, sessi
 	)
 }
 
+// piToolNameAliases maps pi's native tool names (@earendil-works/pi-coding-agent
+// dist/core/tools/index.js's allToolNames: read, bash, powershell, edit, write, grep,
+// find, ls) to the Claude tool name a classifier rule actually targets, wherever the
+// two differ. Most of pi's names already match a rule's ToolName/ToolPattern via
+// matchesRule's case-insensitive strings.EqualFold (pi's "bash" == "Bash", "read" ==
+// "Read", "write" == "Write", "edit" == "Edit", "grep" == "Grep" — all listed as-is in
+// classifier.go's ToolPattern regexes), so only the two genuine mismatches are aliased:
+//   - "find" -> "Glob": pi's glob-pattern file finder has no name overlap with Claude's
+//     "Glob" tool, which classifier.go:1328's read-only ToolPattern explicitly lists.
+//   - "powershell" -> "Bash": pi's Windows shell tool is a distinct name from Claude's
+//     single cross-platform "Bash" tool; aliasing it lets classifier.go:826's ToolName:
+//     "Bash" rule and line 472's deep AST security audit apply to PowerShell commands
+//     too, since powershell's arg is already keyed "command" (see piPathToFilePathTools
+//     below for the one field pi does NOT share with Claude's convention).
+var piToolNameAliases = map[string]string{
+	"find":       "Glob",
+	"powershell": "Bash",
+}
+
+// normalizePiPayload rewrites payload in place from pi's native tool vocabulary to
+// Claude's, so classifier.RuleBasedClassifier's rules — written entirely against
+// Claude's ToolName strings and ToolInput key names — actually match pi tool calls
+// instead of falling through to "no matching rule" on every single one.
+//
+// Root cause (2026-09-12 investigation): pi's approval extension
+// (cmd/ssq-hooks/main.go's ssqApprovalExtensionTemplate) forwards event.toolName/
+// event.input verbatim with no translation, unlike every other non-Claude agent
+// (Gemini/OpenCode/Antigravity), which go through cmd/ssq-hooks's own per-agent parsers
+// (see normalizeOpenCodeToolInput there for the equivalent fix, already shipped, for
+// OpenCode's "filePath" vs. Claude's "file_path"). pi never had an equivalent because
+// its extension POSTs directly to this HTTP endpoint (ADR-001) rather than going
+// through ssq-hooks's stdin-based parser chain at all.
+//
+// Confirmed against the real installed package
+// (~/.local/share/pi/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/*.js,
+// pi 0.84.4): pi's read/edit/write/grep/find/ls tools all key their target path as
+// "path" (Type.String({description:"Path to the file..."})) — never "file_path". Since
+// matchesRule (pkg/classifier/classifier.go) reads payload.ToolInput["file_path"]
+// verbatim for every FilePattern rule, every pi file-targeting tool call previously
+// matched filePath == "" and silently failed FilePattern rules exactly like the
+// OpenCode gap did — before falling through to Escalate (classifyInternal's
+// "No matching rule" path) and blocking for the full 4-minute manual-review timeout
+// (ApprovalHandler.approvalTimeout()) with no reviewer able to resolve it, which is the
+// "everything getting hung up and timing out" symptom this fixes.
+func normalizePiPayload(payload *classifier.PermissionRequestPayload) {
+	if alias, ok := piToolNameAliases[strings.ToLower(payload.ToolName)]; ok {
+		payload.ToolName = alias
+	}
+	if payload.ToolInput == nil {
+		return
+	}
+	if _, hasFilePath := payload.ToolInput["file_path"]; hasFilePath {
+		return
+	}
+	if p, ok := payload.ToolInput["path"]; ok {
+		payload.ToolInput["file_path"] = p
+	}
+}
+
 // HandlePermissionRequest handles POST /api/hooks/permission-request.
 // This endpoint is configured as an HTTP hook in Claude Code's settings.
 // It blocks until the user approves/denies or the context is canceled.
@@ -269,6 +328,13 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	source := payload.Source
 	if source == "" {
 		source = "claude"
+	}
+
+	// pi sends its own native tool vocabulary (payload.Source == "pi") — normalize it
+	// to Claude's conventions in place, unlike "claude"/"" which are passed through
+	// unmodified. See normalizePiPayload's doc comment for why this is needed at all.
+	if payload.Source == "pi" {
+		normalizePiPayload(&payload)
 	}
 
 	// Secret scan: auto-deny any command that appears to contain a plaintext secret.
@@ -406,10 +472,9 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 
 		switch result.Decision {
 		case classifier.AutoAllow:
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID)
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID, "detail", approvalDetail(payload.ToolInput))
 			if h.autoApprovalLog != nil {
-				filePath, _ := payload.ToolInput["file_path"].(string)
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "allow")
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "allow")
 			}
 			h.writeDecision(w, "allow", "")
 			return
@@ -418,10 +483,9 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			if result.Alternative != "" {
 				msg = fmt.Sprintf("%s %s", msg, result.Alternative)
 			}
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg)
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg, "detail", approvalDetail(payload.ToolInput))
 			if h.autoApprovalLog != nil {
-				filePath, _ := payload.ToolInput["file_path"].(string)
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "deny")
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "deny")
 			}
 			h.writeDecision(w, "deny", msg)
 			return
@@ -746,13 +810,25 @@ func sanitizeNotificationText(s string) string {
 	}, s)
 }
 
-// buildApprovalMessage builds the human-readable message for an approval notification.
-func buildApprovalMessage(approval *PendingApproval) string {
-	if cmd, ok := approval.ToolInput["command"].(string); ok && cmd != "" {
+// approvalDetail extracts the human-meaningful part of a tool call — the full command
+// (including every sub-command of a compound &&/;/pipe chain, since this is the raw
+// string before classifier.ExtractAllCommands splits it) for Bash/PowerShell, or the
+// target path for file-targeting tools. Returns "" if toolInput has neither, letting the
+// caller supply its own fallback.
+func approvalDetail(toolInput map[string]interface{}) string {
+	if cmd, ok := toolInput["command"].(string); ok && cmd != "" {
 		return truncateString(cmd, maxNotificationMessageLen)
 	}
-	if filePath, ok := approval.ToolInput["file_path"].(string); ok && filePath != "" {
+	if filePath, ok := toolInput["file_path"].(string); ok && filePath != "" {
 		return filePath
+	}
+	return ""
+}
+
+// buildApprovalMessage builds the human-readable message for an approval notification.
+func buildApprovalMessage(approval *PendingApproval) string {
+	if detail := approvalDetail(approval.ToolInput); detail != "" {
+		return detail
 	}
 	return fmt.Sprintf("Claude needs permission to use %s", approval.ToolName)
 }

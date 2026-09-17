@@ -3251,7 +3251,7 @@ func TestCreateSession_RestartFromSessionId_DerivesPathFromSource(t *testing.T) 
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the source session")
+	assert.Equal(t, sourcePath, resp.Msg.Session.RepoRoot, "path should be derived from the source session")
 	assert.Equal(t, "restart-source", resp.Msg.Session.RestartedFromSessionId)
 }
 
@@ -3282,7 +3282,7 @@ func TestCreateSession_RestartFromSessionId_ExplicitPathWins(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	assert.Equal(t, explicitPath, resp.Msg.Session.Path, "explicit path must win over the restart-derived path")
+	assert.Equal(t, explicitPath, resp.Msg.Session.RepoRoot, "explicit path must win over the restart-derived path")
 	assert.Equal(t, "restart-source-explicit", resp.Msg.Session.RestartedFromSessionId, "lineage must still be recorded even when path is explicit")
 }
 
@@ -3372,7 +3372,7 @@ func TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed(t *t
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the confirmed live source")
+	assert.Equal(t, sourcePath, resp.Msg.Session.RepoRoot, "path should be derived from the confirmed live source")
 	assert.Equal(t, "restart-source-live-confirmed", resp.Msg.Session.RestartedFromSessionId)
 }
 
@@ -4601,4 +4601,91 @@ func TestCreateSession_should_PersistCreationProgressUpdatedAt_When_PhaseTransit
 			"creation_progress_updated_at must be persisted to storage, not left zero, once a phase transition has occurred")
 	}
 	require.True(t, found, "created instance must be present in storage")
+}
+
+// --------------------------------------------------------------------------
+// ListTaggingRules / UpsertTaggingRule / DeleteTaggingRule (Story 5.2.1)
+// --------------------------------------------------------------------------
+
+// TestSessionService_ListTaggingRules_should_ReturnUpsertedRule_When_UpsertTaggingRuleRPCCalledFirst
+// covers Story 5.2.1's Given-When-Then: a rule upserted via the UpsertTaggingRule RPC with
+// output_tag "Hotfix" appears in a subsequent ListTaggingRules RPC call.
+func TestSessionService_ListTaggingRules_should_ReturnUpsertedRule_When_UpsertTaggingRuleRPCCalledFirst(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	upsertResp, err := svc.UpsertTaggingRule(context.Background(), connect.NewRequest(&sessionv1.UpsertTaggingRuleRequest{
+		Rule: &sessionv1.TaggingRuleProto{
+			Name:          "Hotfix branch",
+			BranchPattern: "^hotfix/",
+			OutputTag:     "Hotfix",
+			Priority:      50,
+			Enabled:       true,
+		},
+	}))
+	require.NoError(t, err)
+	require.NotEmpty(t, upsertResp.Msg.GetRule().GetId(), "an id should be generated when the caller omits one")
+
+	listResp, err := svc.ListTaggingRules(context.Background(), connect.NewRequest(&sessionv1.ListTaggingRulesRequest{}))
+	require.NoError(t, err)
+
+	var found bool
+	for _, r := range listResp.Msg.GetRules() {
+		if r.GetOutputTag() == "Hotfix" {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected a rule with output_tag=Hotfix in ListTaggingRules, got: %+v", listResp.Msg.GetRules())
+}
+
+// TestSessionService_UpsertTaggingRule_should_ReturnValidationError_When_OutputTagEmpty
+// covers Story 5.2.1's validation acceptance criterion: an empty output_tag is rejected
+// with a client-visible error, not silently accepted.
+func TestSessionService_UpsertTaggingRule_should_ReturnValidationError_When_OutputTagEmpty(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	_, err := svc.UpsertTaggingRule(context.Background(), connect.NewRequest(&sessionv1.UpsertTaggingRuleRequest{
+		Rule: &sessionv1.TaggingRuleProto{
+			Name: "Missing output tag",
+		},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestSessionService_DeleteTaggingRule_should_RemoveRule_When_RuleExists covers the delete
+// half of the CRUD surface Story 5.2.1 exposes.
+func TestSessionService_DeleteTaggingRule_should_RemoveRule_When_RuleExists(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	upsertResp, err := svc.UpsertTaggingRule(context.Background(), connect.NewRequest(&sessionv1.UpsertTaggingRuleRequest{
+		Rule: &sessionv1.TaggingRuleProto{
+			Name:      "To delete",
+			OutputTag: "ToDelete",
+		},
+	}))
+	require.NoError(t, err)
+
+	deleteResp, err := svc.DeleteTaggingRule(context.Background(), connect.NewRequest(&sessionv1.DeleteTaggingRuleRequest{
+		Id: upsertResp.Msg.GetRule().GetId(),
+	}))
+	require.NoError(t, err)
+	assert.True(t, deleteResp.Msg.GetSuccess())
+
+	listResp, err := svc.ListTaggingRules(context.Background(), connect.NewRequest(&sessionv1.ListTaggingRulesRequest{}))
+	require.NoError(t, err)
+	for _, r := range listResp.Msg.GetRules() {
+		assert.NotEqual(t, upsertResp.Msg.GetRule().GetId(), r.GetId(), "deleted rule must not reappear in ListTaggingRules")
+	}
 }

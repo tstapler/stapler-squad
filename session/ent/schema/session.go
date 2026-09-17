@@ -163,6 +163,14 @@ func (Session) Fields() []ent.Field {
 			Optional().
 			Default("").
 			Comment("Human-readable reason the async creation pipeline failed (session.Instance.failureReason, Epic 1.2). Meaningful only when status == Failed."),
+		field.JSON("rule_tag_provenance", map[string]string{}).
+			Optional().
+			Default(map[string]string{}).
+			Comment("session.Instance.RuleTagProvenance: tag value -> the TaggingRule.ID (or the \"llm\" sentinel) that most recently applied it (ADR-002)."),
+		field.JSON("suppressed_rule_tags", []string{}).
+			Optional().
+			Default([]string{}).
+			Comment("session.Instance.SuppressedRuleTags, persisted as a []string set (converted to/from map[string]bool in Go): tags a user explicitly removed while they had rule provenance (ADR-002)."),
 	}
 }
 
