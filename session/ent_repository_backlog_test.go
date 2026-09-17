@@ -1263,3 +1263,108 @@ func TestUpdateItemSessionCost_should_NotResetPricedToTrue_When_PricedCallFollow
 	assert.InDelta(t, 3.50, fetched.EstimatedCostUsd, 1e-9, "the later priced call's cost must still be added")
 	assert.False(t, fetched.CostPriced, "cost_priced must stay false once any contributing call was unpriced")
 }
+
+// TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExecutorFields
+// mirrors TestMigrationShouldBeReversible_WhenBacklogItemGainsOptionalShipSnapshotFields
+// above, applied to the stage-executor fields this project added to PipelineMode
+// (stage_executors_json) and ItemSession (resolved_program, resolved_model,
+// executor_snapshot_hash, configured_program, executor_fallback_reason,
+// cost_priced). Per validation.md's Migration Test spec: (1) Up — a
+// pre-existing-shaped row (created via the repository methods that predate
+// this project, setting none of the new fields, exactly like
+// newTestItemSessionForCost's pattern above) reads back safe defaults; (2)
+// behavior parity — PipelineEngine.ExecutorFor on that pre-existing mode
+// returns ("", "") for every StageRole, proving it is never treated as if it
+// had overrides it never configured; (3) rollback safety — the row round
+// trips through pre-project accessors that don't reference the new fields at
+// all, with no error and no data loss on the fields those accessors do use.
+func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExecutorFields(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// --- (1) Up: pre-existing PipelineMode and ItemSession rows read back safe defaults ---
+
+	pipelineModeRepo := NewEntPipelineModeRepository(repo.client)
+	preExistingMode, err := pipelineModeRepo.Create(ctx, PipelineModeCreateInput{
+		Slug:                  "pre-existing-mode",
+		Name:                  "Mode created before stage-executor fields existed",
+		Enabled:               true,
+		StatusCommandTemplate: "status template",
+		DoneCommandTemplate:   "done template",
+		FailCommandTemplate:   "fail template",
+		ReviewCommandTemplate: "review template",
+		ShipCommandTemplate:   "ship template",
+		HelpCommandTemplate:   "help template",
+		TriagePromptTemplate:  "triage template",
+		ReviewPromptTemplate:  "review prompt template",
+		InitialPromptTemplate: "initial prompt template",
+		// StageExecutors deliberately omitted: simulates a row created before
+		// this field existed.
+	})
+	require.NoError(t, err)
+
+	parsedExecutors, err := ParseStageExecutors(preExistingMode.StageExecutorsJSON)
+	require.NoError(t, err, "a pre-existing row's stage_executors_json must parse cleanly")
+	assert.Equal(t, "{}", preExistingMode.StageExecutorsJSON)
+	assert.Empty(t, parsedExecutors)
+
+	preExistingItem, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title:        "item for pre-existing item-session stage-executor fields",
+		PipelineMode: preExistingMode.Slug,
+	})
+	require.NoError(t, err)
+
+	preExistingSession, err := repo.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      preExistingItem.ID,
+		SessionUUID: "pre-existing-stage-executor-session",
+		SessionRole: SessionRoleWork,
+		// ResolvedProgram/ResolvedModel/ExecutorSnapshotHash/ConfiguredProgram/
+		// ExecutorFallbackReason/CostUnpriced deliberately omitted: simulates a
+		// row created before these fields existed.
+	})
+	require.NoError(t, err)
+
+	fetchedSession, err := repo.GetItemSession(ctx, preExistingSession.ID)
+	require.NoError(t, err)
+	assert.True(t, fetchedSession.CostPriced, "existing Claude-only cost data must be retroactively priced")
+	assert.Equal(t, "", fetchedSession.ResolvedProgram)
+	assert.Equal(t, "", fetchedSession.ResolvedModel)
+	assert.Equal(t, "", fetchedSession.ExecutorSnapshotHash)
+	assert.Equal(t, "", fetchedSession.ConfiguredProgram)
+	assert.Equal(t, "", fetchedSession.ExecutorFallbackReason)
+
+	// --- (2) Behavior parity: ExecutorFor must never invent overrides for a mode that never configured any ---
+
+	engine, err := NewPipelineEngine(pipelineModeRepo)
+	require.NoError(t, err)
+	itemOnPreExistingMode := &BacklogItemData{ID: preExistingItem.ID, PipelineMode: preExistingMode.Slug}
+
+	for _, role := range []StageRole{StageRoleTriage, StageRoleReview, StageRoleWork} {
+		program, model := engine.ExecutorFor(itemOnPreExistingMode, role)
+		assert.Equal(t, "", program, "role %s: pre-existing mode must never resolve a program override", role)
+		assert.Equal(t, "", model, "role %s: pre-existing mode must never resolve a model override", role)
+	}
+
+	// --- (3) Rollback safety: round trip through pre-project accessors that never reference the new fields ---
+
+	newName := "Renamed pre-existing mode"
+	updatedMode, err := pipelineModeRepo.Update(ctx, preExistingMode.ID, PipelineModeUpdateInput{
+		Name: &newName,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, newName, updatedMode.Name)
+	assert.Equal(t, preExistingMode.Slug, updatedMode.Slug, "existing Slug must be unchanged by an update that never references stage_executors_json")
+	assert.Equal(t, "{}", updatedMode.StageExecutorsJSON, "stage_executors_json must be undisturbed by an update that never references it")
+
+	startedAt := time.Now().UTC().Truncate(time.Second)
+	require.NoError(t, repo.UpdateItemSessionStarted(ctx, preExistingSession.ID, startedAt))
+
+	fetchedAfterUpdate, err := repo.GetItemSession(ctx, preExistingSession.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetchedAfterUpdate.StartedAt)
+	assert.True(t, startedAt.Equal(*fetchedAfterUpdate.StartedAt), "StartedAt must round-trip through an accessor that never references the new executor fields")
+	assert.True(t, fetchedAfterUpdate.CostPriced, "cost_priced must be undisturbed by an update that never references it")
+	assert.Equal(t, "", fetchedAfterUpdate.ResolvedProgram, "ResolvedProgram must be undisturbed by an update that never references it")
+}
