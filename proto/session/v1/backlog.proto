@@ -328,6 +328,18 @@ message PipelineMode {
   // per-stage program/model override — see session.PipelineStageExecutor.
   // Absent keys mean "inherit the default executor for that role."
   map<string, PipelineStageExecutor> stage_executors = 18;
+  // stage_executor_hashes is DERIVED, like content_hash: computed on read as
+  // session.ComputeExecutorHash(entry.Program, entry.Model) for EVERY
+  // StageRole ("triage", "review", "work"), including roles with no
+  // configured override (hashed as the zero-value PipelineStageExecutor{}).
+  // This map is intentionally dense, never sparse — an unconfigured role's
+  // entry equals ComputeExecutorHash("", ""), the same value an unconfigured
+  // session's own executor_snapshot_hash computes, so the "what ran" UI can
+  // compare a session's executor_snapshot_hash against this map for any
+  // role, configured or not, without every default-executor session
+  // misreading as drifted. See plan.md Story 5.2.4's Engineering-lens design
+  // note for the full rationale.
+  map<string, string> stage_executor_hashes = 19;
 }
 
 // PipelineStageExecutor is the proto shape of session.PipelineStageExecutor —

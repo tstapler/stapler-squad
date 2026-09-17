@@ -1,11 +1,12 @@
 // +feature: insights-dashboard
 "use client";
 
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import Fuse from "fuse.js";
 import type { SessionTokenSummary } from "@/gen/session/v1/insights_pb";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
+import { LiveRegion } from "@/components/ui/LiveRegion";
 import {
   tableCard,
   tableHeader,
@@ -29,6 +30,8 @@ import {
   clickableRow,
   sortableTh,
   sortOrderHint,
+  roleFilterChip,
+  roleFilterChipClear,
 } from "./SessionsTable.css";
 import { fmtCost, fmtTokens, fmtPct, shortId } from "./insightsFormatters";
 
@@ -36,6 +39,22 @@ interface Props {
   sessions: SessionTokenSummary[];
   onSessionClick?: (session: SessionTokenSummary) => void;
   backlogIndex?: Map<string, BacklogIndexEntry>;
+  /**
+   * Controlled search text (Task 5.2.2a) — when provided alongside
+   * onSearchTextChange, the table's search box reflects/drives this value
+   * instead of its own internal state. Omitting both preserves the table's
+   * original fully-uncontrolled behavior for every existing caller.
+   */
+  searchText?: string;
+  onSearchTextChange?: (text: string) => void;
+  /**
+   * Cross-filter set by a StageCostChart bar/legend click (Task 5.2.2c) —
+   * an additional array filter applied before Fuse's text search runs, not
+   * fuzzy-matched as free text. Renders a "Filtered to: <role> ×" chip
+   * (Task 5.2.2e) when set.
+   */
+  roleFilter?: string;
+  onClearRoleFilter?: () => void;
 }
 
 function pathBasename(p: string): string {
@@ -76,9 +95,22 @@ type SortColumn =
   | "cacheRoi"
   | "wasteScore";
 
-export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props) {
+export function SessionsTable({
+  sessions,
+  onSessionClick,
+  backlogIndex,
+  searchText: controlledSearchText,
+  onSearchTextChange,
+  roleFilter,
+  onClearRoleFilter,
+}: Props) {
   const [showOrphans, setShowOrphans] = useState(true);
-  const [searchText, setSearchText] = useState("");
+  const [internalSearchText, setInternalSearchText] = useState("");
+  // Controlled/uncontrolled hybrid (Task 5.2.2a): a caller supplying both
+  // props drives the search box; every other caller keeps the original
+  // fully-uncontrolled behavior unchanged.
+  const searchText = controlledSearchText ?? internalSearchText;
+  const setSearchText = onSearchTextChange ?? setInternalSearchText;
   const [modelFilter, setModelFilter] = useState("");
   const [sortCol, setSortCol] = useState<SortColumn | null>(null);
   const [sortAsc, setSortAsc] = useState(false);
@@ -124,6 +156,13 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
 
     if (modelFilter) {
       result = result.filter((s) => s.primaryModel === modelFilter);
+    }
+
+    // Role cross-filter (Task 5.2.2c) — applied as its own array filter, not
+    // fuzzy-matched through Fuse's free-text search, since a role name isn't
+    // meant to be searched, only exactly matched.
+    if (roleFilter) {
+      result = result.filter((s) => s.sessionRole === roleFilter);
     }
 
     if (!showOrphans) {
@@ -201,7 +240,7 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
       }
       return sortAsc ? cmp : -cmp;
     });
-  }, [sessions, searchText, modelFilter, showOrphans, fuse, sortCol, sortAsc]);
+  }, [sessions, searchText, modelFilter, roleFilter, showOrphans, fuse, sortCol, sortAsc]);
 
   const handleSortClick = useCallback((col: SortColumn) => {
     // Reads sortCol from closure rather than nesting setSortAsc inside
@@ -223,12 +262,31 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
     [sortCol, sortAsc]
   );
 
-  const hasActiveFilters = searchText !== "" || modelFilter !== "";
+  const hasActiveFilters = searchText !== "" || modelFilter !== "" || !!roleFilter;
 
   function clearFilters() {
     setSearchText("");
     setModelFilter("");
   }
+
+  // Announces the role cross-filter's state change (ux.md Surface B+C step
+  // 7 / AC21) — a screen-reader user learns the table narrowed or the
+  // filter cleared without needing to re-scan the table. Only fires on a
+  // roleFilter transition, not on every displayed.length change (e.g. a
+  // live session update while filtered would otherwise re-announce
+  // needlessly).
+  const prevRoleFilterRef = useRef<string | undefined>(roleFilter);
+  const [roleFilterAnnouncement, setRoleFilterAnnouncement] = useState("");
+  useEffect(() => {
+    if (prevRoleFilterRef.current === roleFilter) return;
+    if (roleFilter) {
+      setRoleFilterAnnouncement(`Filtered to ${roleFilter}, showing ${displayed.length} sessions`);
+    } else if (prevRoleFilterRef.current) {
+      setRoleFilterAnnouncement("Filter cleared, showing all sessions");
+    }
+    prevRoleFilterRef.current = roleFilter;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roleFilter]);
 
   const handleRowKeyDown = useCallback((e: React.KeyboardEvent<HTMLTableRowElement>, s: SessionTokenSummary) => {
     if ((e.key === "Enter" || e.key === " ") && onSessionClick) {
@@ -377,6 +435,20 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
           )}
         </div>
         <div className={filterBar}>
+          {roleFilter && (
+            <span className={roleFilterChip} data-testid="role-filter-chip">
+              Filtered to: {roleFilter}
+              <button
+                type="button"
+                className={roleFilterChipClear}
+                onClick={onClearRoleFilter}
+                aria-label={`Clear filter: ${roleFilter}`}
+              >
+                ×
+              </button>
+            </span>
+          )}
+          <LiveRegion message={roleFilterAnnouncement} />
           <input
             type="search"
             className={searchInput}

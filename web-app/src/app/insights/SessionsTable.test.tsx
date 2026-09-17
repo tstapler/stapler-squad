@@ -319,4 +319,65 @@ describe("SessionsTable", () => {
       expect(firstRow.querySelector("td")?.getAttribute("title")).toBe("session-2");
     });
   });
+
+  // ─── Story 5.2.2: role cross-filter ────────────────────────────────────
+  describe("SessionsTable_should_ApplyRoleFilter_When_RoleFilterPropSet", () => {
+    it("shows only sessions matching roleFilter and renders the active-filter chip", () => {
+      const workSession = makeSession({
+        sessionId: "sess-work",
+        conversationId: "sess-work",
+        sessionRole: "work",
+      });
+      const triageSession = makeSession({
+        sessionId: "sess-triage",
+        conversationId: "sess-triage",
+        sessionRole: "triage",
+      });
+      render(<SessionsTable sessions={[workSession, triageSession]} roleFilter="work" />);
+
+      expect(screen.getByTestId("role-filter-chip")).toHaveTextContent("Filtered to: work");
+      const rows = document.querySelectorAll("tbody tr");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].querySelector("td")?.getAttribute("title")).toBe("sess-work");
+    });
+
+    it("does not render the chip when roleFilter is unset", () => {
+      render(<SessionsTable sessions={[makeSession({ sessionRole: "work" })]} />);
+
+      expect(screen.queryByTestId("role-filter-chip")).not.toBeInTheDocument();
+    });
+
+    it("calls onClearRoleFilter when the chip's clear button is clicked", async () => {
+      const user = userEvent.setup();
+      const onClearRoleFilter = jest.fn();
+      render(
+        <SessionsTable
+          sessions={[makeSession({ sessionRole: "work" })]}
+          roleFilter="work"
+          onClearRoleFilter={onClearRoleFilter}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: /clear filter: work/i }));
+      expect(onClearRoleFilter).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("SessionsTable_should_UseControlledSearchText_When_SearchTextPropAndOnChangeBothProvided", () => {
+    it("reflects the controlled searchText value and calls onSearchTextChange on input", async () => {
+      const user = userEvent.setup();
+      const onSearchTextChange = jest.fn();
+      render(
+        <SessionsTable
+          sessions={[makeSession()]}
+          searchText=""
+          onSearchTextChange={onSearchTextChange}
+        />
+      );
+
+      const input = screen.getByLabelText("Search sessions by project path");
+      await user.type(input, "x");
+      expect(onSearchTextChange).toHaveBeenCalledWith("x");
+    });
+  });
 });

@@ -181,6 +181,43 @@ func TestCreatePipelineMode_should_PersistStageExecutorsAndReturnInResponse_When
 	assert.Equal(t, "claude-haiku-4-5", getResp.Msg.Item.StageExecutors["triage"].Model)
 }
 
+// TestCreatePipelineMode_should_ReturnDenseStageExecutorHashesForAllThreeRoles_When_OnlyTriageIsConfigured
+// is the Task 5.2.4a regression test for the sparse-vs-dense hash mismatch
+// bug named in plan.md's Engineering-lens design note: stage_executor_hashes
+// must carry an entry for every StageRole, including unconfigured ones,
+// computed identically to session.ComputeExecutorHash("", "") — otherwise a
+// session that ran an unconfigured role's ordinary default would be
+// impossible to distinguish, on the frontend, from a genuinely drifted one.
+func TestCreatePipelineMode_should_ReturnDenseStageExecutorHashesForAllThreeRoles_When_OnlyTriageIsConfigured(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newPipelineModeTestService(t)
+	ctx := t.Context()
+
+	createResp, err := svc.CreatePipelineMode(ctx, connect.NewRequest(&sessionv1.CreatePipelineModeRequest{
+		Slug: "cheap-triage-dense",
+		Name: "Cheap Triage Dense",
+		StageExecutors: map[string]*sessionv1.PipelineStageExecutor{
+			"triage": {Model: "claude-haiku-4-5"},
+		},
+	}))
+	require.NoError(t, err)
+
+	hashes := createResp.Msg.Item.StageExecutorHashes
+	require.Len(t, hashes, 3, "stage_executor_hashes must have an entry for all 3 roles, not just configured ones")
+	require.Contains(t, hashes, "triage")
+	require.Contains(t, hashes, "review")
+	require.Contains(t, hashes, "work")
+
+	assert.Equal(t, session.ComputeExecutorHash("", "claude-haiku-4-5"), hashes["triage"])
+	// review/work have no configured override — each must hash as the
+	// zero-value PipelineStageExecutor{}, identical to what an unconfigured
+	// session's own executor_snapshot_hash computes.
+	defaultHash := session.ComputeExecutorHash("", "")
+	assert.Equal(t, defaultHash, hashes["review"])
+	assert.Equal(t, defaultHash, hashes["work"])
+	assert.NotEqual(t, defaultHash, hashes["triage"], "a configured role must not collide with the default hash")
+}
+
 // TestUpdatePipelineMode_should_ReplaceStageExecutors_When_StageExecutorsUpdateProvided
 // proves UpdatePipelineMode's StageExecutorsUpdate wrapper replaces the
 // existing map entirely when present, distinguishing that from "untouched"
