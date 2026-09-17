@@ -318,6 +318,26 @@ func (s *BacklogService) TriggerTriage(
 	if s.pipelineEngine != nil {
 		triagePipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(session.PipelineMode(item.PipelineMode))
 	}
+
+	// Resolve this stage's configured (program, model) executor before creating
+	// the ItemSession row, so the row's snapshot fields reflect exactly what
+	// will run. ComputeExecutorHash is deliberately computed from the RAW
+	// triageExecModel (e.g. "family:opus"), never the ResolveModel-resolved
+	// concrete ID below — see ComputeExecutorHash's doc comment for why hashing
+	// the resolved value would permanently false-flag drift against the
+	// mode-side hash (Task 5.2.4a).
+	var triageExecProgram, triageExecModel string
+	if s.pipelineEngine != nil {
+		triageExecProgram, triageExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleTriage)
+	}
+	triageExecutorHash := session.ComputeExecutorHash(triageExecProgram, triageExecModel)
+	triageCaller, triageConfiguredProgram, triageFallbackReason := s.resolveHeadlessCaller(triageExecProgram, item.ID, "triage")
+	triageResolvedModel, modelErr := session.ResolveModel(s.modelFamilies, triageExecModel)
+	if modelErr != nil {
+		log.Warn("[PipelineEngine] failed to resolve triage model family alias, using empty model", "item", item.ID, "model", triageExecModel, "err", modelErr)
+		triageResolvedModel = ""
+	}
+
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:                   item.ID,
 		SessionUUID:              triageSessionUUID,
@@ -325,6 +345,11 @@ func (s *BacklogService) TriggerTriage(
 		AcSnapshot:               item.AcceptanceCriteria,
 		PipelineModeSnapshot:     item.PipelineMode,
 		PipelineModeSnapshotHash: triagePipelineModeSnapshotHash,
+		ResolvedProgram:          triageExecProgram,
+		ResolvedModel:            triageResolvedModel,
+		ExecutorSnapshotHash:     triageExecutorHash,
+		ConfiguredProgram:        triageConfiguredProgram,
+		ExecutorFallbackReason:   triageFallbackReason,
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create triage item session: %w", err))
@@ -455,7 +480,7 @@ func (s *BacklogService) TriggerTriage(
 		// cost incurred," matching cost_priced's own schema default, rather than as
 		// an untrustworthy $0 that would otherwise trip the persistence guard below.
 		triageCostPriced := true
-		raw, callErr := s.headlessPool.CallBlocking(triageCtx,
+		raw, callErr := triageCaller.CallBlocking(triageCtx,
 			headless.FeatureKeyTriage,
 			headless.HeadlessTriageSystemPrompt(),
 			triagePrompt,
@@ -472,7 +497,7 @@ func (s *BacklogService) TriggerTriage(
 			// earlier), not a permission-mode gap. Do not add bypassPermissions here
 			// without a fresh empirical repro, per ADR-001's own "don't trust
 			// unverified CLI-behavior assumptions" precedent.
-			headless.CallOptions{WorkDir: triageWorkDir},
+			headless.CallOptions{WorkDir: triageWorkDir, Model: triageResolvedModel},
 			func(usd float64, priced bool) { triageCostUSD = usd; triageCostPriced = priced },
 		)
 

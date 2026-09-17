@@ -117,11 +117,11 @@ type ServerDependencies struct {
 
 	// GeminiCaller is a headless.PoolClient adapter shelling out to the `gemini`
 	// CLI (backlog-stage-execution-costs Epic 3.1). Nil when the gemini binary is
-	// not found at startup. Not yet consulted by any call site: Epic 2.3's
-	// resolveHeadlessCaller/headlessCallers registry (which would dispatch a
-	// stage's headless call here when its PipelineMode configures program=
-	// "gemini") has not landed on this branch yet — this field is that epic's
-	// wiring point.
+	// not found at startup. Registered into BacklogService's headlessCallers
+	// registry under "gemini" via SetGeminiCaller (Epic 2.3), so a PipelineMode
+	// stage executor configured with program="gemini" dispatches here via
+	// resolveHeadlessCaller. Exposed on this struct mainly for tests/observability;
+	// production callers reach it through BacklogService, not this field directly.
 	GeminiCaller *headless.GeminiCaller
 
 	// WorkflowRepo persists workflow definitions.
@@ -1576,6 +1576,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// than loading pricing a second, independent way.
 		if _, lookErr := exec.LookPath("gemini"); lookErr == nil {
 			geminiCaller = headless.NewGeminiCaller("gemini", pricing, 5)
+			backlogSvc.SetGeminiCaller(geminiCaller)
 			log.Info("gemini headless caller initialized", "maxConcurrent", 5)
 		} else {
 			log.Warn("gemini headless caller disabled: gemini binary not found", "err", lookErr)
@@ -1665,6 +1666,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			overridePath := filepath.Join(configDir, "model_family_overrides.json")
 			if families, loadErr := workflows.LoadModelFamilyOverride(overridePath); loadErr == nil {
 				workflowScheduler.SetModelFamilies(families)
+				// Share the same override with BacklogService's stage-executor
+				// resolution (backlog-stage-execution-costs Epic 2.3) so a
+				// "family:opus"-style alias resolves identically for both fire
+				// paths. backlogSvc defaults to workflows.DefaultModelFamilies()
+				// (NewBacklogService) when workflowRepo is nil and this block
+				// never runs at all.
+				backlogSvc.SetModelFamilies(families)
 			} else if !os.IsNotExist(loadErr) {
 				log.Warn("failed to load model family override, using defaults", "path", overridePath, "err", loadErr)
 			}

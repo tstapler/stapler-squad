@@ -18,6 +18,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -217,6 +218,24 @@ type BacklogService struct {
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 	triageSem      chan struct{}
+
+	// headlessCallers maps a stage executor's configured program name (e.g.
+	// "gemini") to the headless.PoolClient that runs it, consulted by
+	// resolveHeadlessCaller. Always contains at least "claude" -> headlessPool
+	// once SetHeadlessPool has run (see NewBacklogService's degradation
+	// contract: a nil creator/headlessPool is expected in test environments).
+	// Populated incrementally as dependencies.go wires each caller in, since
+	// GeminiCaller (Epic 3.1) is constructed after backlogSvc itself.
+	headlessCallers map[string]headless.PoolClient
+
+	// modelFamilies resolves a stage executor's "family:<alias>" Model value
+	// (e.g. "family:opus") to a concrete model ID via session.ResolveModel,
+	// mirroring server/workflows.Scheduler's own modelFamilies field.
+	// Defaults to workflows.DefaultModelFamilies() in NewBacklogService;
+	// overridable via SetModelFamilies from the same
+	// model_family_overrides.json dependencies.go loads for the Scheduler, so
+	// both fire paths resolve a given alias identically.
+	modelFamilies map[string]string
 
 	// triageInFlight tracks, per item ID, whether a headless triage call this
 	// process itself started is still genuinely running. tombstoneOrphanTriageSessions
@@ -524,12 +543,78 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		triageCleanupTimeout: defaultTriageCleanupTimeout,
 		resolveGitHubInput:   session.ResolveGitHubInput,
 		capabilityCheck:      headless.DefaultCapabilitySelfCheck,
+		modelFamilies:        workflows.DefaultModelFamilies(),
 	}
 }
 
-// SetHeadlessPool wires the headless pool for autonomous triage calls.
+// SetModelFamilies replaces the family alias -> concrete model ID map used to
+// resolve a stage executor's "family:<alias>" Model value. See the
+// modelFamilies field's doc comment.
+func (s *BacklogService) SetModelFamilies(families map[string]string) {
+	s.modelFamilies = families
+}
+
+// SetHeadlessPool wires the headless pool for autonomous triage calls and
+// registers it in headlessCallers under "claude" — the fallback target every
+// resolveHeadlessCaller branch degrades to.
 func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 	s.headlessPool = pool
+	if s.headlessCallers == nil {
+		s.headlessCallers = make(map[string]headless.PoolClient)
+	}
+	s.headlessCallers["claude"] = pool
+}
+
+// SetGeminiCaller registers caller in headlessCallers under "gemini" so a
+// PipelineMode stage executor configured with program="gemini" resolves to it
+// (Epic 3.1/2.3). Takes the concrete *headless.GeminiCaller type rather than
+// the headless.PoolClient interface so a nil caller (gemini binary not found
+// at startup — see server/dependencies.go) is caught by this ordinary nil
+// check: wrapping a typed nil pointer in an interface first would make an
+// interface-level `== nil` check pass a non-nil caller through by mistake.
+func (s *BacklogService) SetGeminiCaller(caller *headless.GeminiCaller) {
+	if caller == nil {
+		return
+	}
+	if s.headlessCallers == nil {
+		s.headlessCallers = make(map[string]headless.PoolClient)
+	}
+	s.headlessCallers["gemini"] = caller
+}
+
+// availabilityChecker is satisfied by a headless.PoolClient that can re-probe
+// its own runtime availability at call time (e.g. GeminiCaller.Available(),
+// Task 3.1.1g) — not part of the headless.PoolClient interface itself since
+// Claude's Pool has no equivalent "goes missing mid-run" failure mode (see
+// GeminiCaller.Available's doc comment).
+type availabilityChecker interface {
+	Available() bool
+}
+
+// resolveHeadlessCaller picks the headless.PoolClient to run a stage's
+// configured program, failing closed to Claude — loudly, via a Warn log and a
+// returned fallbackReason for persistence onto the ItemSession row — rather
+// than silently no-op'ing, crashing, or trusting a startup-time-only
+// availability check that can go stale (Story 2.3.1).
+//
+// program is the raw value ExecutorFor returned (empty or "claude" is the
+// overwhelmingly common case and skips the map lookup and availability probe
+// entirely). itemID/stage are for the log line and are not otherwise
+// interpreted.
+func (s *BacklogService) resolveHeadlessCaller(program, itemID, stage string) (caller headless.PoolClient, configuredProgram, fallbackReason string) {
+	if program == "" || program == "claude" {
+		return s.headlessPool, "", ""
+	}
+	found, ok := s.headlessCallers[program]
+	if !ok {
+		log.Warn("[PipelineEngine] unsupported headless program", "program", program, "item", itemID, "stage", stage, "fallback", "claude")
+		return s.headlessPool, program, "unsupported_program"
+	}
+	if ac, ok := found.(availabilityChecker); ok && !ac.Available() {
+		log.Warn("[PipelineEngine] headless program unavailable", "program", program, "item", itemID, "stage", stage, "fallback", "claude")
+		return s.headlessPool, program, program + "_unavailable"
+	}
+	return found, "", ""
 }
 
 // claimantHostID returns the stable per-host/per-instance identifier for the

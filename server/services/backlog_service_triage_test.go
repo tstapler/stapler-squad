@@ -3817,6 +3817,92 @@ func TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefault
 		"sanity: the default BuildHeadlessTriagePrompt's boilerplate must not appear when a non-default mode is wired")
 }
 
+// TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTriageOverride
+// (Story 2.3.2) proves TriggerTriage resolves the item's configured triage
+// executor through PipelineEngine.ExecutorFor and threads the resolved model
+// into the headless.CallOptions passed to CallBlocking — the plan's own
+// "cheap-triage" acceptance example (validation.md's Happy Path Scenario).
+func TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTriageOverride(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(t.Context(), session.PipelineModeCreateInput{
+		Slug:    "cheap-triage",
+		Name:    "Cheap Triage",
+		Enabled: true,
+		StageExecutors: map[session.StageRole]session.PipelineStageExecutor{
+			session.StageRoleTriage: {Model: "claude-haiku-4-5"},
+		},
+	})
+	require.NoError(t, err)
+	engine, err := session.NewPipelineEngine(pmRepo)
+	require.NoError(t, err)
+	svc.pipelineEngine = engine
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "cheap-triage item",
+		Status:       string(session.BacklogStatusIdea),
+		Priority:     3,
+		RepoPath:     repoPath,
+		PipelineMode: "cheap-triage",
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	wait.RequireEventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
+
+	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, listErr)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "claude-haiku-4-5", sessions[0].ResolvedModel)
+	assert.Equal(t, session.ComputeExecutorHash("", "claude-haiku-4-5"), sessions[0].ExecutorSnapshotHash)
+	assert.Empty(t, sessions[0].ConfiguredProgram, "no fallback occurred for the claude program")
+	assert.Empty(t, sessions[0].ExecutorFallbackReason)
+}
+
+// TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefault
+// (Story 2.3.2) is the byte-identical-to-today counterpart: an item on
+// PipelineModeDefault (no stage executor override configured anywhere) must
+// resolve to an empty CallOptions.Model, unchanged from pre-Epic-2.3 behavior.
+func TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefault(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "default-mode item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	wait.RequireEventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
+
+	assert.Empty(t, pool.firstCall().model, "CallOptions.Model must stay empty when no stage executor override is configured")
+}
+
 // TestTriggerTriage_should_UseUnmodifiedRetriagePrompt_When_RetriagingRegardlessOfPipelineMode
 // (Story 1.5.3) proves the retriage (feedback-driven refine) branch stays on
 // BuildHeadlessRetriagePrompt directly, even when item.PipelineMode is non-default with a

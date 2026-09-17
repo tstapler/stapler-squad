@@ -2841,6 +2841,24 @@ Do not modify the code. Only write the review verdict.
 
 		headlessPrompt := s.reviewPromptFor(item, acSnapshot, workSessionDiff, false, verificationNotes, extras)
 		systemPrompt, callOpts, callTimeout, reviewPath := session.BuildReviewCallOptions(workSessionDiff, codebaseWorkDir)
+
+		// Resolve this stage's configured (program, model) executor (Epic 2.3,
+		// Story 2.3.3), mirroring TriggerTriage's identical resolution. As there:
+		// ComputeExecutorHash MUST hash the RAW reviewExecModel (e.g.
+		// "family:opus"), never the ResolveModel-resolved concrete ID that goes
+		// into callOpts.Model below — see ComputeExecutorHash's doc comment.
+		var reviewExecProgram, reviewExecModel string
+		if s.pipelineEngine != nil {
+			reviewExecProgram, reviewExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleReview)
+		}
+		reviewExecutorHash := session.ComputeExecutorHash(reviewExecProgram, reviewExecModel)
+		reviewCaller, reviewConfiguredProgram, reviewFallbackReason := s.resolveHeadlessCaller(reviewExecProgram, item.ID, "review")
+		reviewResolvedModel, reviewModelErr := session.ResolveModel(s.modelFamilies, reviewExecModel)
+		if reviewModelErr != nil {
+			log.Warn("[PipelineEngine] failed to resolve review model family alias, using empty model", "item", item.ID, "model", reviewExecModel, "err", reviewModelErr)
+			reviewResolvedModel = ""
+		}
+		callOpts.Model = reviewResolvedModel
 		// callStart is recorded immediately before the headless call sequence
 		// (capability self-check, then CallBlocking) so Epic 2.5's duration_ms=
 		// observability logging reflects the real cost of this re-review attempt,
@@ -2877,7 +2895,7 @@ Do not modify the code. Only write the review verdict.
 		// incurred" rather than as an untrustworthy $0 — see the identical
 		// rationale on TriggerTriage's triageCostPriced.
 		callCostPriced := true
-		reviewResult, callErr := s.headlessPool.CallBlocking(
+		reviewResult, callErr := reviewCaller.CallBlocking(
 			reviewCtx, headless.FeatureKeyReview, systemPrompt, headlessPrompt, callOpts,
 			func(usd float64, priced bool) { callCostUSD = usd; callCostPriced = priced },
 		)
@@ -2954,12 +2972,17 @@ Do not modify the code. Only write the review verdict.
 
 		reviewSessionUUID := headlessReReviewUUIDPrefix + uuid.New().String()
 		is, createErr := s.storage.CreateItemSessionWithVerdict(cleanupCtx, session.ItemSessionData{
-			ItemID:           item.ID,
-			SessionUUID:      reviewSessionUUID,
-			SessionRole:      session.SessionRoleReview,
-			AcSnapshot:       session.AcCriteriaJSON(acSnapshotJSON),
-			EstimatedCostUsd: callCostUSD,
-			CostUnpriced:     !callCostPriced,
+			ItemID:                 item.ID,
+			SessionUUID:            reviewSessionUUID,
+			SessionRole:            session.SessionRoleReview,
+			AcSnapshot:             session.AcCriteriaJSON(acSnapshotJSON),
+			EstimatedCostUsd:       callCostUSD,
+			CostUnpriced:           !callCostPriced,
+			ResolvedProgram:        reviewExecProgram,
+			ResolvedModel:          reviewResolvedModel,
+			ExecutorSnapshotHash:   reviewExecutorHash,
+			ConfiguredProgram:      reviewConfiguredProgram,
+			ExecutorFallbackReason: reviewFallbackReason,
 		}, session.ReviewVerdictData{
 			OverallOutcome: overall,
 			PerCriterion:   string(perCriterionJSON),

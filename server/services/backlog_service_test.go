@@ -88,6 +88,7 @@ type fakeHeadlessPool struct {
 type fakePoolCall struct {
 	key            headless.FeatureKey
 	workDir        string
+	model          string
 	userPrompt     string
 	systemPrompt   string
 	allowedTools   string
@@ -103,6 +104,7 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 	f.calls = append(f.calls, fakePoolCall{
 		key:            key,
 		workDir:        opts.WorkDir,
+		model:          opts.Model,
 		userPrompt:     userPrompt,
 		systemPrompt:   systemPrompt,
 		allowedTools:   opts.AllowedTools,
@@ -3166,6 +3168,76 @@ func TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession(t *testing.T) 
 		"TriggerReReview's success path must thread CallBlocking's cost into the persisted ItemSession")
 }
 
+// TestTriggerReReview_should_ResolveFamilyAliasToConcreteModelId_When_ReviewStageConfiguresFamilyOpus
+// (Story 2.3.3) proves TriggerReReview resolves the item's configured review
+// executor through PipelineEngine.ExecutorFor and, per the plan's own
+// canonical "family:opus" acceptance example, threads the resolved concrete
+// model ID into the headless.CallOptions passed to CallBlocking — while the
+// persisted ExecutorSnapshotHash is computed from the RAW "family:opus" alias,
+// not the resolved ID (ComputeExecutorHash's load-bearing invariant).
+func TestTriggerReReview_should_ResolveFamilyAliasToConcreteModelId_When_ReviewStageConfiguresFamilyOpus(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(t.Context(), session.PipelineModeCreateInput{
+		Slug:    "strong-review",
+		Name:    "Strong Review",
+		Enabled: true,
+		StageExecutors: map[session.StageRole]session.PipelineStageExecutor{
+			session.StageRoleReview: {Model: "family:opus"},
+		},
+	})
+	require.NoError(t, err)
+	engine, err := session.NewPipelineEngine(pmRepo)
+	require.NoError(t, err)
+	svc.pipelineEngine = engine
+
+	repoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "marker.txt"), []byte("x"), 0o644))
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:        "family-opus review item",
+		RepoPath:     repoDir,
+		PipelineMode: strPtr("strong-review"),
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	for _, target := range []session.BacklogStatus{session.BacklogStatusReady, session.BacklogStatusInProgress, session.BacklogStatusReview} {
+		_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+			ItemId:       itemID,
+			TargetStatus: string(target),
+		}))
+		require.NoError(t, err)
+	}
+
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"found it","tool_reads":["marker.txt"],"verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	require.Equal(t, 1, pool.callCount())
+	assert.Equal(t, "claude-opus-4-8", pool.firstCall().model,
+		"CallOptions.Model must be the family alias resolved to a concrete model ID")
+
+	sessions, listErr := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, listErr)
+	reviewSession := sessions[len(sessions)-1]
+	assert.Equal(t, "claude-opus-4-8", reviewSession.ResolvedModel)
+	assert.Equal(t, session.ComputeExecutorHash("", "family:opus"), reviewSession.ExecutorSnapshotHash,
+		"ExecutorSnapshotHash must hash the RAW unresolved alias, not the resolved concrete model ID")
+	assert.Empty(t, reviewSession.ConfiguredProgram, "no fallback occurred for the claude program")
+	assert.Empty(t, reviewSession.ExecutorFallbackReason)
+}
+
 // TestTriggerReReview_EmptyDiff_UsesShorterCodebaseReadTimeout verifies the empty-diff
 // re-review call runs under headless.CodebaseReadCallTimeout (600s), not the plain
 // headless.DefaultCallTimeout (900s).
@@ -4945,4 +5017,93 @@ func TestUpdateItemSource_ReturnsErrorForUnknownSourceId(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+}
+
+// ─── resolveHeadlessCaller (Story 2.3.1) ───────────────────────────────────
+
+// fakeAvailabilityCaller is a headless.PoolClient stub that also implements
+// availabilityChecker, for exercising resolveHeadlessCaller's call-time
+// re-probe branch independently of the real GeminiCaller.
+type fakeAvailabilityCaller struct {
+	available bool
+}
+
+func (f *fakeAvailabilityCaller) CallBlocking(_ context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions, _ headless.CostSink) (string, error) {
+	return "", nil
+}
+
+func (f *fakeAvailabilityCaller) Available() bool {
+	return f.available
+}
+
+func TestResolveHeadlessCaller_should_ReturnClaudePool_When_ProgramIsEmptyOrClaude(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	claudePool := &fakeHeadlessPool{}
+	svc.SetHeadlessPool(claudePool)
+
+	for _, program := range []string{"", "claude"} {
+		caller, configuredProgram, fallbackReason := svc.resolveHeadlessCaller(program, "item-1", "triage")
+		assert.Same(t, headless.PoolClient(claudePool), caller, "program %q must resolve to the claude pool directly, no map lookup", program)
+		assert.Empty(t, configuredProgram)
+		assert.Empty(t, fallbackReason)
+	}
+}
+
+func TestResolveHeadlessCaller_should_ReturnRegisteredCaller_When_ProgramIsKnownAndAvailable(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	claudePool := &fakeHeadlessPool{}
+	svc.SetHeadlessPool(claudePool)
+	gemini := &fakeAvailabilityCaller{available: true}
+	svc.headlessCallers["gemini"] = gemini
+
+	caller, configuredProgram, fallbackReason := svc.resolveHeadlessCaller("gemini", "item-1", "triage")
+	assert.Same(t, headless.PoolClient(gemini), caller)
+	assert.Empty(t, configuredProgram, "no fallback occurred, so configuredProgram must be empty")
+	assert.Empty(t, fallbackReason)
+}
+
+func TestResolveHeadlessCaller_should_FallBackToClaudeWithUnsupportedReason_When_ProgramIsUnknown(t *testing.T) {
+	// Deliberately not t.Parallel() — see captureLogs' doc comment: a parallel
+	// sibling logging during this window would write into this test's buffer.
+	buf := captureLogs(t)
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	claudePool := &fakeHeadlessPool{}
+	svc.SetHeadlessPool(claudePool)
+	// Gemini deliberately not wired — models the pre-Epic-3.1 state, or any
+	// other program name that was never registered.
+
+	caller, configuredProgram, fallbackReason := svc.resolveHeadlessCaller("gemini", "item-1", "triage")
+	assert.Same(t, headless.PoolClient(claudePool), caller)
+	assert.Equal(t, "gemini", configuredProgram)
+	assert.Equal(t, "unsupported_program", fallbackReason)
+	assert.Contains(t, buf.String(), "unsupported headless program")
+	assert.Contains(t, buf.String(), "program=gemini")
+}
+
+// TestResolveHeadlessCaller_should_FallBackToClaudeWithFallbackReason_When_ProgramAvailableAtWireTimeButGoneAtCallTime
+// models Story 2.3.1's Blocker-#3 fix: a program registered at server-startup
+// wiring time can still be gone (uninstalled) by the time a later call
+// actually resolves it, so availability must be re-checked at call time, not
+// only trusted from the map lookup succeeding.
+func TestResolveHeadlessCaller_should_FallBackToClaudeWithFallbackReason_When_ProgramAvailableAtWireTimeButGoneAtCallTime(t *testing.T) {
+	// Deliberately not t.Parallel() — see captureLogs' doc comment: a parallel
+	// sibling logging during this window would write into this test's buffer.
+	buf := captureLogs(t)
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	claudePool := &fakeHeadlessPool{}
+	svc.SetHeadlessPool(claudePool)
+	gemini := &fakeAvailabilityCaller{available: false}
+	svc.headlessCallers["gemini"] = gemini
+
+	caller, configuredProgram, fallbackReason := svc.resolveHeadlessCaller("gemini", "item-1", "triage")
+	assert.Same(t, headless.PoolClient(claudePool), caller)
+	assert.Equal(t, "gemini", configuredProgram)
+	assert.Equal(t, "gemini_unavailable", fallbackReason, "distinct from the unknown-program case's unsupported_program reason")
+	assert.Contains(t, buf.String(), "headless program unavailable")
 }
