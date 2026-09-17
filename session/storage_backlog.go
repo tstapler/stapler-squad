@@ -201,9 +201,18 @@ type ItemSessionData struct {
 	// first starts — see ItemSessionSummary.PipelineModeSnapshot(Hash).
 	PipelineModeSnapshot     string
 	PipelineModeSnapshotHash string
-	TriageResult             string
-	VerificationNotes        string  // Freeform verification evidence reported via request_review
-	EstimatedCostUsd         float64 // Only set for headless sessions where cost is known at creation time
+	// ResolvedProgram/ResolvedModel/ExecutorSnapshotHash/ConfiguredProgram/
+	// ExecutorFallbackReason freeze this stage's resolved executor at spawn
+	// time — see ItemSessionSummary's fields of the same name and the
+	// ItemSession ent schema's field comments.
+	ResolvedProgram        string
+	ResolvedModel          string
+	ExecutorSnapshotHash   string
+	ConfiguredProgram      string
+	ExecutorFallbackReason string
+	TriageResult           string
+	VerificationNotes      string  // Freeform verification evidence reported via request_review
+	EstimatedCostUsd       float64 // Only set for headless sessions where cost is known at creation time
 	// ClaimantHostID is the claiming/attaching process's own stable host identifier
 	// (Config.GetOrCreateClaimantHostID), never anything derived from the session being
 	// claimed/attached. See ItemSession.claimant_host_id's schema comment for the full
@@ -242,6 +251,11 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 		SetNillableAcSnapshot(nilIfEmpty(string(data.AcSnapshot))).
 		SetPipelineModeSnapshot(data.PipelineModeSnapshot).
 		SetPipelineModeSnapshotHash(data.PipelineModeSnapshotHash).
+		SetResolvedProgram(data.ResolvedProgram).
+		SetResolvedModel(data.ResolvedModel).
+		SetExecutorSnapshotHash(data.ExecutorSnapshotHash).
+		SetConfiguredProgram(data.ConfiguredProgram).
+		SetExecutorFallbackReason(data.ExecutorFallbackReason).
 		SetNillableTriageResult(nilIfEmpty(data.TriageResult)).
 		SetNillableVerificationNotes(nilIfEmpty(data.VerificationNotes)).
 		SetClaimantHostID(data.ClaimantHostID)
@@ -792,6 +806,11 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 		SetNillableAcSnapshot(nilIfEmptyJSON(isData.AcSnapshot)).
 		SetPipelineModeSnapshot(isData.PipelineModeSnapshot).
 		SetPipelineModeSnapshotHash(isData.PipelineModeSnapshotHash).
+		SetResolvedProgram(isData.ResolvedProgram).
+		SetResolvedModel(isData.ResolvedModel).
+		SetExecutorSnapshotHash(isData.ExecutorSnapshotHash).
+		SetConfiguredProgram(isData.ConfiguredProgram).
+		SetExecutorFallbackReason(isData.ExecutorFallbackReason).
 		SetNillableTriageResult(nilIfEmpty(isData.TriageResult))
 	if isData.EstimatedCostUsd > 0 {
 		isq = isq.SetEstimatedCostUsd(isData.EstimatedCostUsd)

@@ -47,6 +47,26 @@ func (ItemSession) Fields() []ent.Field {
 		field.String("pipeline_mode_snapshot_hash").
 			Default("").
 			Comment("SHA-256 (hex, truncated to 16 chars) of the resolved mode's 9 raw content-template field values, concatenated in fixed order, computed at the moment this session started. Empty for the default mode (code-backed, can't drift) or an already-unresolved slug. Compared against the live mode's current hash by the \"what ran\" UI (Story 3.4.1) to detect the referenced mode's content having been edited since — the slug alone cannot detect this."),
+		field.String("resolved_program").
+			Optional().
+			Default("").
+			Comment("The program actually used for this stage's execution, resolved via PipelineEngine.ExecutorFor at spawn time. Empty means the pool/session default program (typically Claude) was used. Independent of pipeline_mode_snapshot_hash, which covers only the 9 content-template fields, not execution config — see executor_snapshot_hash."),
+		field.String("resolved_model").
+			Optional().
+			Default("").
+			Comment("The model actually used for this stage's execution (post-ResolveModel family-alias resolution), resolved via PipelineEngine.ExecutorFor at spawn time. Empty means the program's default model was used."),
+		field.String("executor_snapshot_hash").
+			Optional().
+			Default("").
+			Comment("SHA-256 (hex, truncated to 16 chars) of ComputeExecutorHash(program, model) for the raw, pre-ResolveModel (program, model) pair this stage was configured with at spawn time — see ComputeExecutorHash's doc comment for why the pre-resolution pair is mandatory. Independent of pipeline_mode_snapshot_hash (content only). Lets a \"what ran\" UI detect a PipelineMode's executor config having changed since a given session started."),
+		field.String("configured_program").
+			Optional().
+			Default("").
+			Comment("The program this stage was actually configured for (e.g. \"gemini\"), before any call-time availability fallback. Empty unless resolveHeadlessCaller fell back to a different program than configured — see executor_fallback_reason."),
+		field.String("executor_fallback_reason").
+			Optional().
+			Default("").
+			Comment("Non-empty only when resolveHeadlessCaller fell back away from configured_program at call time, e.g. \"gemini_unavailable\" or \"unsupported_program\". Empty means the configured program (if any) ran as configured, with no substitution."),
 		field.String("triage_result").
 			Optional().
 			Comment("JSON triage suggestions"),

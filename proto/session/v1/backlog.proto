@@ -118,6 +118,26 @@ message ItemSession {
   // identifier, not populated for local/dev sessions). Empty for ItemSession rows
   // created before this field existed.
   string claimant_host_id = 20;
+  // resolved_program/resolved_model are the program/model actually used for
+  // this stage's execution, resolved via PipelineEngine.ExecutorFor at spawn
+  // time. Empty means the pool/session default was used. Independent of
+  // pipeline_mode_snapshot_hash, which covers only the 9 content-template
+  // fields, not execution config.
+  string resolved_program = 21;
+  string resolved_model = 22;
+  // executor_snapshot_hash is ComputeExecutorHash(program, model) for the
+  // raw, pre-ResolveModel (program, model) pair this stage was configured
+  // with at spawn time. Lets a "what ran" UI detect the PipelineMode's
+  // executor config having changed since this session started.
+  string executor_snapshot_hash = 23;
+  // configured_program is the program this stage was actually configured
+  // for, before any call-time availability fallback. Empty unless
+  // resolveHeadlessCaller fell back to a different program than configured.
+  string configured_program = 24;
+  // executor_fallback_reason is non-empty only when resolveHeadlessCaller
+  // fell back away from configured_program at call time, e.g.
+  // "gemini_unavailable" or "unsupported_program".
+  string executor_fallback_reason = 25;
 }
 
 // BacklogStatusEvent records a single status transition for a backlog item.

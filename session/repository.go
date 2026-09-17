@@ -198,6 +198,16 @@ type ItemSessionSummary struct {
 	AcSnapshot               AcCriteriaJSON
 	PipelineModeSnapshot     string
 	PipelineModeSnapshotHash string
+	// ResolvedProgram/ResolvedModel/ExecutorSnapshotHash/ConfiguredProgram/
+	// ExecutorFallbackReason mirror ItemSession's ent schema fields of the
+	// same name — see their schema comments for the full "what ran"
+	// provenance discipline. Independent of PipelineModeSnapshot(Hash), which
+	// covers only content templates, not execution config.
+	ResolvedProgram        string
+	ResolvedModel          string
+	ExecutorSnapshotHash   string
+	ConfiguredProgram      string
+	ExecutorFallbackReason string
 	// BaseCommitSha is the worktree's pre-work HEAD, captured once at spawn —
 	// the base of the review gate's base..HEAD diff, and by construction always
 	// already an ancestor of main. Never use it as evidence that this session's
