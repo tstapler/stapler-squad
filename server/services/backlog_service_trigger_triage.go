@@ -498,7 +498,11 @@ func (s *BacklogService) TriggerTriage(
 			// without a fresh empirical repro, per ADR-001's own "don't trust
 			// unverified CLI-behavior assumptions" precedent.
 			headless.CallOptions{WorkDir: triageWorkDir, Model: triageResolvedModel},
-			func(usd float64, priced bool) { triageCostUSD = usd; triageCostPriced = priced },
+			func(usd float64, priced bool) {
+				triageCostUSD = usd
+				triageCostPriced = priced
+				logBudgetWarningIfCrossed(itemID, "triage", item.CostBudgetThresholdUsd, existingSessions, usd)
+			},
 		)
 
 		// cleanupCtx outlives shutdownCtx so DB writes succeed even during graceful

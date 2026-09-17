@@ -289,6 +289,49 @@ func TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip(t *testing.
 	assert.Nil(t, fetchedAfterClear.PrFeedbackAddressedAt)
 }
 
+// TestEntRepositoryBacklog_CostBudgetThresholdUsd_should_RoundTrip verifies
+// Task 4.2.1's nil-pointer-presence convention for CostBudgetThresholdUsd:
+// unset by default, settable via UpdateBacklogItem, and 0.0 is a legitimate
+// configured threshold distinct from "unset" (mirrors ReworkCapOverride).
+func TestEntRepositoryBacklog_CostBudgetThresholdUsd_should_RoundTrip(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title: "item for cost-budget-threshold round-trip",
+	})
+	require.NoError(t, err)
+
+	fetchedPre, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Nil(t, fetchedPre.CostBudgetThresholdUsd)
+
+	threshold := 5.00
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		CostBudgetThresholdUsd: &threshold,
+	}, nil)
+	require.NoError(t, err)
+
+	fetchedAfterUpdate, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetchedAfterUpdate.CostBudgetThresholdUsd)
+	assert.InDelta(t, threshold, *fetchedAfterUpdate.CostBudgetThresholdUsd, 0.0001)
+
+	// 0.0 is a legitimate configured threshold, not "unset".
+	zero := 0.0
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		CostBudgetThresholdUsd: &zero,
+	}, nil)
+	require.NoError(t, err)
+
+	fetchedAfterZero, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetchedAfterZero.CostBudgetThresholdUsd)
+	assert.InDelta(t, 0.0, *fetchedAfterZero.CostBudgetThresholdUsd, 0.0001)
+}
+
 // TestGetBacklogItem_Labels_ReadsEmptyForPreExistingRow is the NULL-safety
 // test for the new labels field (Epic 0.1, Story 0.1.1): a row created
 // without setting Labels must read back as nil/empty, not panic, confirming

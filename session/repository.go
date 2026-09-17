@@ -347,6 +347,11 @@ type BacklogItemData struct {
 	// replacing (not adding to) the global value. See effectiveReworkCap in
 	// server/services/backlog_service_triage.go.
 	ReworkCapOverride *int
+	// CostBudgetThresholdUsd is a per-item, optional soft-budget-warning
+	// threshold in USD. Nil = no threshold configured, no warning ever fires
+	// for this item. Same single-pointer-presence convention as
+	// ReworkCapOverride. See session.EvaluateBudgetThreshold.
+	CostBudgetThresholdUsd *float64
 	// PipelineMode is the slug of the PipelineMode this item uses to drive
 	// triage/work/review content (see session/pipeline_engine.go). Empty
 	// string (PipelineModeDefault) means the built-in, hardcoded pipeline.
@@ -647,6 +652,13 @@ type BacklogItemUpdate struct {
 	// default" via this struct — a deliberate simplification; add a
 	// ClearReworkCapOverride bool alongside this if that's needed later.
 	ReworkCapOverride *int
+	// CostBudgetThresholdUsd follows the same single-pointer presence
+	// convention as ReworkCapOverride: nil means "leave untouched", a
+	// non-nil pointer sets the item's threshold (0.0 is a legitimate
+	// configured threshold, distinct from nil/"unset"). There is currently
+	// no way to explicitly clear a threshold back to "unset" via this
+	// struct — same deliberate simplification as ReworkCapOverride.
+	CostBudgetThresholdUsd *float64
 	// UserModifiedFields follows the same partial-update-presence convention:
 	// nil means "leave untouched", a non-nil pointer sets the stored
 	// JSON-encoded set of user-modified field names (e.g. `["title"]`). Build

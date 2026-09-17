@@ -2931,7 +2931,11 @@ Do not modify the code. Only write the review verdict.
 		callCostPriced := true
 		reviewResult, callErr := reviewCaller.CallBlocking(
 			reviewCtx, headless.FeatureKeyReview, systemPrompt, headlessPrompt, callOpts,
-			func(usd float64, priced bool) { callCostUSD = usd; callCostPriced = priced },
+			func(usd float64, priced bool) {
+				callCostUSD = usd
+				callCostPriced = priced
+				logBudgetWarningIfCrossed(item.ID, "review", item.CostBudgetThresholdUsd, sessions, usd)
+			},
 		)
 
 		// Explicit, immediate cleanup as soon as the transcript file is no longer

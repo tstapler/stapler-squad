@@ -258,6 +258,16 @@ type BacklogService struct {
 	// goroutine in the new process could possibly still be running an old triage call.
 	triageInFlight sync.Map
 
+	// budgetWarnedItems tracks, per item ID, whether the work-stage soft
+	// budget warning (Story 4.2.3, ADR-003) has already fired for that item's
+	// current over-threshold streak — deduped for the process lifetime so a
+	// recurring poll/push of WatchBacklogItems/GetBacklogItem doesn't re-log
+	// on every read while an item stays over threshold. Mirrors
+	// InsightsService.warnNewUnpricedFamilies' per-process-lifetime dedup
+	// convention. checkWorkStageBudget deletes an item's entry once its cost
+	// drops back under threshold, so a future re-crossing warns again.
+	budgetWarnedItems sync.Map
+
 	// capabilityCheck gates codebase-read calls with a cached smoke-test result
 	// (Story 2.2.6): a success is cached for the process lifetime, a failure only
 	// for a bounded window before it's re-attempted. Defaults to
@@ -1071,6 +1081,10 @@ func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEn
 		override := int32(*item.ReworkCapOverride)
 		p.ReworkCapOverride = &override
 	}
+	if item.CostBudgetThresholdUsd != nil {
+		threshold := *item.CostBudgetThresholdUsd
+		p.CostBudgetThresholdUsd = &threshold
+	}
 
 	// Parse acceptance criteria JSON into repeated AcCriterion.
 	if item.AcceptanceCriteria != "" {
@@ -1295,4 +1309,63 @@ func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions [
 			log.WarningLog().Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
 		}
 	}
+}
+
+// cumulativeItemSpendUSD sums EstimatedCostUsd across sessions and counts how
+// many of them are unpriced (cost_priced == false). Per Epic 2.5, an unpriced
+// session's EstimatedCostUsd is always 0 by construction (never incremented),
+// so summing every session's EstimatedCostUsd unconditionally already yields
+// the correct known-spend total — unpricedCount exists only so callers can
+// surface the gap in a log line rather than silently treating it as "under
+// threshold" (Task 4.2.2b).
+func cumulativeItemSpendUSD(sessions []session.ItemSessionSummary) (totalUSD float64, unpricedCount int) {
+	for _, is := range sessions {
+		totalUSD += is.EstimatedCostUsd
+		if !is.CostPriced {
+			unpricedCount++
+		}
+	}
+	return totalUSD, unpricedCount
+}
+
+// logBudgetWarningIfCrossed evaluates the per-item soft budget threshold
+// (ADR-003) inline at cost-recording time for a headless triage/review call:
+// priorSessions is that item's ItemSession set fetched before this call's own
+// row was created/persisted, so priorSessions' cost sum plus callCostUSD is
+// the item's new cumulative spend. Purely observational — never blocks,
+// retries, or errors the call that triggered it (see EvaluateBudgetThreshold's
+// own doc comment).
+func logBudgetWarningIfCrossed(itemID, stage string, thresholdUSD *float64, priorSessions []session.ItemSessionSummary, callCostUSD float64) {
+	priorTotal, unpricedCount := cumulativeItemSpendUSD(priorSessions)
+	cumulative := priorTotal + callCostUSD
+	if !session.EvaluateBudgetThreshold(itemID, stage, thresholdUSD, cumulative) {
+		return
+	}
+	suffix := ""
+	if unpricedCount > 0 {
+		suffix = fmt.Sprintf(" (excludes %d unpriced session(s))", unpricedCount)
+	}
+	log.WarningLog().Printf("[BudgetWarning] item=%s stage=%s threshold=%.2f spent=%.2f%s", itemID, stage, *thresholdUSD, cumulative, suffix)
+}
+
+// checkWorkStageBudget evaluates the per-item soft budget threshold (ADR-003)
+// for an active work-stage session at live-cost-recompute time (Story 4.2.3)
+// — called from WatchBacklogItems's snapshot/live paths and GetBacklogItem,
+// the smallest set of call sites that already recompute an item's live
+// TotalEstimatedCostUsd on a recurring/subscribed basis. Deduped via
+// budgetWarnedItems so a repeated poll while still over threshold doesn't
+// re-log; deleting the item's entry once its cost drops back under threshold
+// lets a future re-crossing warn again. No-ops when thresholdUSD is nil.
+func (s *BacklogService) checkWorkStageBudget(itemID string, thresholdUSD *float64, totalCostUSD float64) {
+	if thresholdUSD == nil {
+		return
+	}
+	if !session.EvaluateBudgetThreshold(itemID, "work", thresholdUSD, totalCostUSD) {
+		s.budgetWarnedItems.Delete(itemID)
+		return
+	}
+	if _, alreadyWarned := s.budgetWarnedItems.LoadOrStore(itemID, struct{}{}); alreadyWarned {
+		return
+	}
+	log.WarningLog().Printf("[BudgetWarning] item=%s stage=work threshold=%.2f spent=%.2f", itemID, *thresholdUSD, totalCostUSD)
 }

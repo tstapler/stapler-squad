@@ -348,6 +348,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		ShippedFileStats:             item.ShippedFileStats,
 		ShippedSnapshotCaptureFailed: item.ShippedSnapshotCaptureFailed,
 		ReworkCapOverride:            item.ReworkCapOverride,
+		CostBudgetThresholdUsd:       item.CostBudgetThresholdUsd,
 		NextWorkflowID:               item.NextWorkflowID,
 		ChainFired:                   item.ChainFired,
 		ChainedAt:                    item.ChainedAt,
@@ -468,6 +469,7 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetLabels(data.Labels).
 		SetNillableArchivedAt(data.ArchivedAt).
 		SetNillableReworkCapOverride(data.ReworkCapOverride).
+		SetNillableCostBudgetThresholdUsd(data.CostBudgetThresholdUsd).
 		SetNillableGithubSyncedIssueUpdatedAt(data.GitHubSyncedIssueUpdatedAt)
 
 	if data.SourceID != "" {
@@ -1120,6 +1122,9 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.ReworkCapOverride != nil {
 		u.SetReworkCapOverride(*update.ReworkCapOverride)
 	}
+	if update.CostBudgetThresholdUsd != nil {
+		u.SetCostBudgetThresholdUsd(*update.CostBudgetThresholdUsd)
+	}
 	if update.ExternalURL != nil {
 		u.SetExternalURL(*update.ExternalURL)
 	}
@@ -1266,6 +1271,9 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	}
 	if update.ReworkCapOverride != nil {
 		fields = append(fields, "reworkCapOverride")
+	}
+	if update.CostBudgetThresholdUsd != nil {
+		fields = append(fields, "costBudgetThresholdUsd")
 	}
 	if update.ExternalURL != nil {
 		fields = append(fields, "externalUrl")

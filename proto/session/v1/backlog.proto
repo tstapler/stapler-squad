@@ -276,6 +276,11 @@ message BacklogItem {
   // automatically (mirroring a manual ApprovePlan call) once its artifacts
   // exist on disk — no manual "Approve Plan" click required. Off by default.
   bool auto_approve_plan = 38;
+  // cost_budget_threshold_usd is a per-item, optional soft-budget-warning
+  // threshold in USD. Unset means no threshold is configured and no warning
+  // ever fires for this item — 0.0 is a legitimate configured threshold,
+  // distinct from unset. See session.EvaluateBudgetThreshold.
+  optional double cost_budget_threshold_usd = 39;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -451,6 +456,9 @@ message CreateBacklogItemRequest {
   // auto_approve_plan — see BacklogItem.auto_approve_plan. Unset/false means
   // the manual "Approve Plan" click is still required.
   bool auto_approve_plan = 15;
+  // cost_budget_threshold_usd — see BacklogItem.cost_budget_threshold_usd.
+  // Unset means no threshold is configured at creation time.
+  optional double cost_budget_threshold_usd = 16;
 }
 
 message CreateBacklogItemResponse {
@@ -645,6 +653,11 @@ message UpdateBacklogItemRequest {
   // set on every UpdateBacklogItem call, same as skip_review_gate/
   // skip_planning/auto_spawn_session above (not presence-gated).
   bool auto_approve_plan = 20;
+  // cost_budget_threshold_usd is presence-gated like rework_cap_override:
+  // unset leaves the item's stored threshold untouched, a non-nil pointer
+  // (including one pointing at 0.0) explicitly sets it. See
+  // BacklogItem.cost_budget_threshold_usd.
+  optional double cost_budget_threshold_usd = 21;
 }
 
 message UpdateBacklogItemResponse {

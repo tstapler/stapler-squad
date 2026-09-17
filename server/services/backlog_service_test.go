@@ -1057,6 +1057,84 @@ func TestBacklogItemToProto_should_PopulateAllowedTransitions_When_ItemIsOnCusto
 		"a custom-stage item must see its real configured transitions, not an empty slice from a hardcoded DefaultWorkflowEngine")
 }
 
+// ─── checkWorkStageBudget ───────────────────────────────────────────────────
+
+// TestCheckWorkStageBudget_should_LogOnceThenDedupUntilDropAndRecross_When_ThresholdRepeatedlyCrossed
+// (Story 4.2.3, Task 4.2.3d) drives the full dedup state machine across a
+// sequence of polls against one *BacklogService instance: first crossing logs
+// once, a repeated poll while still over threshold doesn't re-log, and
+// dropping back under threshold then re-crossing warns again.
+func TestCheckWorkStageBudget_should_LogOnceThenDedupUntilDropAndRecross_When_ThresholdRepeatedlyCrossed(t *testing.T) {
+	buf := swapWarningLog(t)
+	svc := NewBacklogService(nil, nil, nil, nil, nil, nil)
+	threshold := 5.00
+
+	// First crossing: 5.20 >= 5.00 — logs once.
+	svc.checkWorkStageBudget("bl_abc123", &threshold, 5.20)
+	require.Equal(t, 1, strings.Count(buf.String(), "[BudgetWarning]"), "expected exactly one warning on first crossing")
+	assert.Contains(t, buf.String(), "item=bl_abc123 stage=work threshold=5.00 spent=5.20")
+
+	// Repeated poll, still over threshold: must not re-log.
+	svc.checkWorkStageBudget("bl_abc123", &threshold, 5.25)
+	require.Equal(t, 1, strings.Count(buf.String(), "[BudgetWarning]"), "expected no additional warning while still over threshold")
+
+	// Drops back under threshold: no new log, but the dedup entry clears.
+	svc.checkWorkStageBudget("bl_abc123", &threshold, 3.00)
+	require.Equal(t, 1, strings.Count(buf.String(), "[BudgetWarning]"), "dropping under threshold must not itself log")
+
+	// Re-crosses: must warn again.
+	svc.checkWorkStageBudget("bl_abc123", &threshold, 6.00)
+	require.Equal(t, 2, strings.Count(buf.String(), "[BudgetWarning]"), "expected a second warning after re-crossing")
+}
+
+// TestGetBacklogItem_should_EmitBudgetWarningLogLine_When_LiveCostCrossesThreshold
+// (Story 4.2.3, Task 4.2.3c) confirms GetBacklogItem's wiring, not just the
+// checkWorkStageBudget helper in isolation: an item with a work-stage session
+// whose cost brings TotalEstimatedCostUsd over its configured threshold logs
+// exactly once on the first read and does not re-log on an immediate second read.
+func TestGetBacklogItem_should_EmitBudgetWarningLogLine_When_LiveCostCrossesThreshold(t *testing.T) {
+	buf := swapWarningLog(t)
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	threshold := 5.00
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:                  "item with an over-budget live work session",
+		Status:                 string(session.BacklogStatusInProgress),
+		Priority:               3,
+		CostBudgetThresholdUsd: &threshold,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:           item.ID,
+		SessionUUID:      "work-session-over-budget",
+		SessionRole:      string(session.SessionRoleWork),
+		EstimatedCostUsd: 5.20,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(buf.String(), "[BudgetWarning]"))
+	assert.Contains(t, buf.String(), "item="+item.ID+" stage=work threshold=5.00 spent=5.20")
+
+	// Second read with cost unchanged: no additional warning.
+	_, err = svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(buf.String(), "[BudgetWarning]"), "expected no additional warning on repeated read while still over threshold")
+}
+
+// TestCheckWorkStageBudget_should_NeverLog_When_ThresholdIsNil covers an item
+// with no configured budget threshold: it must never log regardless of live cost.
+func TestCheckWorkStageBudget_should_NeverLog_When_ThresholdIsNil(t *testing.T) {
+	buf := swapWarningLog(t)
+	svc := NewBacklogService(nil, nil, nil, nil, nil, nil)
+
+	svc.checkWorkStageBudget("bl_no_threshold", nil, 1_000_000.00)
+	assert.Empty(t, buf.String(), "an item with no configured threshold must never log a budget warning")
+}
+
 // ─── backlogItemSummaryToProto ─────────────────────────────────────────────────
 
 // TestBacklogItemSummaryToProto_should_SetAllowedTransitions_When_ItemHasAnyStatus

@@ -5190,6 +5190,59 @@ func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirect
 	assert.Equal(t, string(session.SessionRoleTriage), sessions[0].Role)
 }
 
+// TestTriggerTriage_should_EmitBudgetWarningLogLine_When_CostCrossesItemThreshold
+// (Story 4.2.2, validation.md REQ-7) verifies the inline soft-budget-warning
+// check fires from TriggerTriage's CostSink closure at the moment cost is
+// recorded: an item with cost_budget_threshold_usd=5.00 and $4.90 of prior
+// spend crosses to $5.05 once this $0.15 triage call completes, and the
+// crossing must not affect the triage call's own success.
+func TestTriggerTriage_should_EmitBudgetWarningLogLine_When_CostCrossesItemThreshold(t *testing.T) {
+	t.Parallel()
+	buf := swapWarningLog(t)
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON(), cost: 0.15}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	threshold := 5.00
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:                  "item crossing its cost budget threshold",
+		Status:                 string(session.BacklogStatusIdea),
+		Priority:               3,
+		RepoPath:               t.TempDir(),
+		CostBudgetThresholdUsd: &threshold,
+	})
+	require.NoError(t, err)
+
+	// Prior spend of $4.90 from an already-completed session for this item.
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:           item.ID,
+		SessionUUID:      "prior-triage-session",
+		SessionRole:      string(session.SessionRoleTriage),
+		EstimatedCostUsd: 4.90,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr, "crossing the budget threshold must not affect the triage call's own success")
+
+	wait.RequireEventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
+
+	wait.RequireEventually(t, func() bool {
+		return strings.Contains(buf.String(), "[BudgetWarning]")
+	}, 5*time.Second, 50*time.Millisecond, "expected a [BudgetWarning] log line once the threshold was crossed")
+
+	logged := buf.String()
+	assert.Contains(t, logged, "item="+item.ID)
+	assert.Contains(t, logged, "stage=triage")
+	assert.Contains(t, logged, "threshold=5.00")
+	assert.Contains(t, logged, "spent=5.05")
+}
+
 // TestTriggerTriage_should_AutoApprovePlan_When_AutoApprovePlanSet is a
 // regression/coverage test for the opt-in "auto-approve plan" automation
 // setting: an item with AutoApprovePlan=true must have PlanApproved set true
