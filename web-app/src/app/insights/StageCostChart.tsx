@@ -139,8 +139,16 @@ export function StageCostChart({ roles, activeRole, onRoleClick }: Props) {
             <button
               key={d.role}
               type="button"
+              role="button"
+              tabIndex={0}
               className={`${legendItem} ${legendButton} ${isActive ? legendButtonActive : ""}`}
               onClick={() => handleRoleActivate(d.role)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleRoleActivate(d.role);
+                }
+              }}
               aria-pressed={onRoleClick ? isActive : undefined}
               aria-label={label}
               data-testid={`stage-cost-legend-${d.role}`}

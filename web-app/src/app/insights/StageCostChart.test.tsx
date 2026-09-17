@@ -18,6 +18,18 @@ function makeRole(fields: {
   });
 }
 
+/** Renders a single-role chart wired to onRoleClick — shared by the click/keyboard-activation tests. */
+function renderSingleWorkRoleChart(onRoleClick: () => void, extraProps: { activeRole?: string } = {}) {
+  render(
+    <StageCostChart
+      roles={[makeRole({ sessionRole: "work", estimatedCostUsd: 2 })]}
+      onRoleClick={onRoleClick}
+      {...extraProps}
+    />
+  );
+  return screen.getByTestId("stage-cost-legend-work");
+}
+
 describe("StageCostChart", () => {
   it("StageCostChart_should_RenderBarsSortedDescendingByCost_When_ThreeRoleBreakdownEntriesProvided", () => {
     render(
@@ -88,26 +100,46 @@ describe("StageCostChart", () => {
 
   it("StageCostChart_should_CallOnRoleClick_When_LegendEntryClicked", () => {
     const onRoleClick = jest.fn();
-    render(
-      <StageCostChart
-        roles={[makeRole({ sessionRole: "work", estimatedCostUsd: 2 })]}
-        onRoleClick={onRoleClick}
-      />
-    );
+    const legendEntry = renderSingleWorkRoleChart(onRoleClick);
 
-    fireEvent.click(screen.getByTestId("stage-cost-legend-work"));
+    fireEvent.click(legendEntry);
     expect(onRoleClick).toHaveBeenCalledWith("work");
   });
 
   it("StageCostChart_should_MarkLegendEntryPressed_When_ActiveRoleMatches", () => {
-    render(
-      <StageCostChart
-        roles={[makeRole({ sessionRole: "work", estimatedCostUsd: 2 })]}
-        activeRole="work"
-        onRoleClick={jest.fn()}
-      />
-    );
+    const legendEntry = renderSingleWorkRoleChart(jest.fn(), { activeRole: "work" });
 
-    expect(screen.getByTestId("stage-cost-legend-work")).toHaveAttribute("aria-pressed", "true");
+    expect(legendEntry).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("StageCostChart_should_BeKeyboardFocusable_When_LegendEntryRendered", () => {
+    const legendEntry = renderSingleWorkRoleChart(jest.fn());
+
+    expect(legendEntry).toHaveAttribute("tabIndex", "0");
+    expect(legendEntry).toHaveAttribute("role", "button");
+  });
+
+  it("StageCostChart_should_CallOnRoleClick_When_LegendEntryActivatedWithEnterKey", () => {
+    const onRoleClick = jest.fn();
+    const legendEntry = renderSingleWorkRoleChart(onRoleClick);
+
+    fireEvent.keyDown(legendEntry, { key: "Enter" });
+    expect(onRoleClick).toHaveBeenCalledWith("work");
+  });
+
+  it("StageCostChart_should_CallOnRoleClick_When_LegendEntryActivatedWithSpaceKey", () => {
+    const onRoleClick = jest.fn();
+    const legendEntry = renderSingleWorkRoleChart(onRoleClick);
+
+    fireEvent.keyDown(legendEntry, { key: " " });
+    expect(onRoleClick).toHaveBeenCalledWith("work");
+  });
+
+  it("StageCostChart_should_NotCallOnRoleClick_When_LegendEntryActivatedWithOtherKey", () => {
+    const onRoleClick = jest.fn();
+    const legendEntry = renderSingleWorkRoleChart(onRoleClick);
+
+    fireEvent.keyDown(legendEntry, { key: "Tab" });
+    expect(onRoleClick).not.toHaveBeenCalled();
   });
 });
