@@ -203,6 +203,13 @@ type Instance struct {
 	// setAltScreenActiveLocked; read only via GetAltScreenActive's
 	// Snapshot() path -- see .claude/rules/instance-lock-free-reads.md.
 	AltScreenActive bool
+	// AltScreenBootstrapped distinguishes "confirmed not in alt screen" from
+	// "never checked" -- AltScreenActive's zero value is false either way, so
+	// without this a session that's genuinely not in alt screen would fail
+	// altScreenActiveForSnapshot's fast path forever and re-run
+	// IsAlternateScreenActiveBootstrap's real tmux query on every connect and
+	// resize. Set alongside AltScreenActive by setAltScreenActiveLocked.
+	AltScreenBootstrapped bool
 	// Height is the height of the instance.
 	Height int
 	// Width is the width of the instance.

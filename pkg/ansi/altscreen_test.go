@@ -16,28 +16,41 @@ func TestAltScreenTracker_Observe_should_ReturnActiveTrueChangedTrue_When_DECSET
 	}
 }
 
-func TestAltScreenTracker_Observe_should_ReturnChangedFalse_When_NoMarkersPresentOrMarkersSplitAcrossCalls(t *testing.T) {
-	t.Run("no markers present", func(t *testing.T) {
-		var tracker AltScreenTracker
-		active, changed := tracker.Observe("just some plain output\r\n")
-		if active || changed {
-			t.Fatalf("Observe(no markers) = (active=%v, changed=%v), want (false, false)", active, changed)
-		}
-	})
+func TestAltScreenTracker_Observe_should_ReturnChangedFalse_When_NoMarkersPresent(t *testing.T) {
+	var tracker AltScreenTracker
+	active, changed := tracker.Observe("just some plain output\r\n")
+	if active || changed {
+		t.Fatalf("Observe(no markers) = (active=%v, changed=%v), want (false, false)", active, changed)
+	}
+}
 
-	t.Run("markers split across two Observe calls", func(t *testing.T) {
+func TestAltScreenTracker_Observe_should_DetectMarker_When_SplitAcrossTwoCalls(t *testing.T) {
+	// A real PTY read can split an 8-byte marker across two chunks. The
+	// carry buffer exists so this is still detected on the call that
+	// completes it, rather than silently going missing (see pkg/ansi's
+	// AltScreenTracker.carry doc comment).
+	t.Run("enter split", func(t *testing.T) {
 		var tracker AltScreenTracker
-		// Split the enter sequence's bytes across two calls -- since each
-		// Observe call only sees a complete literal marker or none at all,
-		// a marker whose bytes straddle a chunk boundary is invisible to
-		// either call, and the tracker's state must simply persist.
 		active, changed := tracker.Observe("\x1b[?10")
 		if active || changed {
 			t.Fatalf("Observe(partial marker 1) = (active=%v, changed=%v), want (false, false)", active, changed)
 		}
 		active, changed = tracker.Observe("49h")
-		if active || changed {
-			t.Fatalf("Observe(partial marker 2) = (active=%v, changed=%v), want (false, false)", active, changed)
+		if !active || !changed {
+			t.Fatalf("Observe(partial marker 2) = (active=%v, changed=%v), want (true, true)", active, changed)
+		}
+	})
+
+	t.Run("exit split, one byte at a time", func(t *testing.T) {
+		var tracker AltScreenTracker
+		tracker.active = true
+
+		var active, changed bool
+		for _, b := range []byte(decset1049Exit) {
+			active, changed = tracker.Observe(string(b))
+		}
+		if active || !changed {
+			t.Fatalf("Observe(exit, byte-by-byte) final = (active=%v, changed=%v), want (false, true)", active, changed)
 		}
 	})
 }

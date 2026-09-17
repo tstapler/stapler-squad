@@ -49,7 +49,15 @@ func (s *GestureForwardStrategy) Capability() ScrollForwardCapability {
 	return s.capability
 }
 
+// KeySequences only implements ScrollUp -- Phase 1 is scroll-up-only (no
+// caller passes ScrollDown; see session/instance_scroll_forward.go). Panics
+// rather than silently returning the PageUp sequence for a direction it was
+// never verified against, since ScrollForwardCapability has no
+// KeySequencesDown field to return instead.
 func (s *GestureForwardStrategy) KeySequences(dir ScrollDirection) [][]byte {
+	if dir != ScrollUp {
+		panic("GestureForwardStrategy.KeySequences: ScrollDown not implemented")
+	}
 	return s.capability.KeySequencesUp
 }
 

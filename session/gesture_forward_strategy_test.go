@@ -25,7 +25,7 @@ func TestGestureForwardStrategy(t *testing.T) {
 			assert.False(t, tt.strategy.CanHandle("claude"), "CanHandle always returns false: strategies are selected by their owning adapter")
 
 			assert.Equal(t, [][]byte{pageUpBytes}, tt.strategy.KeySequences(ScrollUp))
-			assert.Equal(t, [][]byte{pageUpBytes}, tt.strategy.KeySequences(ScrollDown))
+			assert.Panics(t, func() { tt.strategy.KeySequences(ScrollDown) }, "ScrollDown is unimplemented and must fail loudly, not silently send PageUp")
 			assert.Equal(t, RedrawQuiescenceCapture, tt.strategy.CaptureVia())
 
 			cap := tt.strategy.Capability()

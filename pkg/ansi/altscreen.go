@@ -9,6 +9,10 @@ import "strings"
 const (
 	decset1049Enter = "\x1b[?1049h"
 	decset1049Exit  = "\x1b[?1049l"
+	// markerLen is shared by both markers (8 bytes each) -- carryLen below
+	// relies on that equality.
+	markerLen = len(decset1049Enter)
+	carryLen  = markerLen - 1
 )
 
 // AltScreenTracker is a small stateful scanner that tracks whether a PTY
@@ -21,6 +25,13 @@ const (
 // PTY output stream has one logical writer).
 type AltScreenTracker struct {
 	active bool
+	// carry holds up to carryLen trailing bytes from the previous Observe
+	// call, prepended to the next call's data before scanning -- a real PTY
+	// read can split an 8-byte marker across two chunks, and carry is always
+	// too short to itself contain a complete marker, so this can only add
+	// detections the single-chunk scan would otherwise miss, never
+	// double-count one already found.
+	carry string
 }
 
 // Observe scans data for alt-screen enter/exit markers and updates the
@@ -31,15 +42,23 @@ type AltScreenTracker struct {
 func (t *AltScreenTracker) Observe(data string) (active, changed bool) {
 	before := t.active
 
-	enterIdx := strings.LastIndex(data, decset1049Enter)
-	exitIdx := strings.LastIndex(data, decset1049Exit)
+	combined := t.carry + data
+	enterIdx := strings.LastIndex(combined, decset1049Enter)
+	exitIdx := strings.LastIndex(combined, decset1049Exit)
 	switch {
 	case enterIdx == -1 && exitIdx == -1:
-		// No markers in this chunk; state persists unchanged.
+		// No markers in this chunk (or split across the carry boundary);
+		// state persists unchanged.
 	case enterIdx > exitIdx:
 		t.active = true
 	default:
 		t.active = false
+	}
+
+	if len(combined) > carryLen {
+		t.carry = combined[len(combined)-carryLen:]
+	} else {
+		t.carry = combined
 	}
 
 	return t.active, t.active != before
@@ -49,7 +68,10 @@ func (t *AltScreenTracker) Observe(data string) (active, changed bool) {
 // for bootstrapping from a source that already knows the current state
 // authoritatively (e.g. a live tmux query), so a subsequent Observe call
 // computes `changed` relative to the correct baseline instead of the
-// tracker's zero-value default.
+// tracker's zero-value default. Also clears carry, so a partial marker
+// buffered before this authoritative resync can't combine with the next
+// chunk into a stale false match.
 func (t *AltScreenTracker) SetActive(active bool) {
 	t.active = active
+	t.carry = ""
 }

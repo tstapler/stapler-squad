@@ -38,27 +38,15 @@ func (execCommandRunner) Output(cmd *exec.Cmd) ([]byte, error) {
 var claudeVersionCheckedPaths sync.Map
 
 // scrollForwardVersionMismatchCheck compares binaryPath's actual
-// `--version` output against verifiedAgainstVersion
-// (ScrollForwardCapability.VerifiedAgainstVersion -- the version Story
-// 1.2.1's live spike confirmed the PageUp scroll-forward keybinding
-// against), logging log.Error the FIRST time a mismatch is found for
-// binaryPath. Skips entirely (via LoadOrStore) on every later call for the
-// same path -- at most once per distinct binary path, never once per
-// session or per scroll attempt.
-//
-// Deliberately NOT volume-gated like scrollForwardKeybindingCanary: a
-// version mismatch is a strong enough signal (a confirmed input to the
-// scroll-forwarding contract has changed) to warrant immediate visibility
-// regardless of how many sessions/scroll attempts have hit it yet --
-// closes pre-mortem P1 #1, that the canary's volume gate could otherwise
-// let a low-traffic session's regression go undetected indefinitely.
-//
-// A run failure (binary not found, non-zero exit) logs log.Warn instead of
-// log.Error and does not claim a mismatch -- mirrors
-// checkControlModeVersionMatchOnce's treatment of its own client-version
-// lookup failing (session/tmux/version_check.go): a lookup failure is a
-// different, lower-severity condition than a confirmed mismatch, not the
-// same thing reported the same way.
+// `--version` against verifiedAgainstVersion (the version scroll-forwarding's
+// PageUp keybinding was verified against), logging log.Error the first time a
+// mismatch is found for binaryPath and never again (LoadOrStore memoizes per
+// path). Deliberately not volume-gated like scrollForwardKeybindingCanary: a
+// version mismatch means a confirmed input to the scroll-forwarding contract
+// changed, which warrants immediate visibility even from a low-traffic
+// session. A run failure (binary not found, non-zero exit) logs log.Warn
+// instead and claims no mismatch -- a lookup failure is lower-severity than a
+// confirmed one, not the same thing.
 func scrollForwardVersionMismatchCheck(ctx context.Context, binaryPath, verifiedAgainstVersion string, runner CommandRunner) {
 	if binaryPath == "" {
 		return
@@ -93,14 +81,9 @@ func scrollForwardVersionMismatchCheck(ctx context.Context, binaryPath, verified
 var claudeVersionNumberRegex = regexp.MustCompile(`^\d+\.\d+\.\d+`)
 
 // normalizeClaudeVersion extracts the leading version number from `claude
-// --version`'s output, discarding everything after it. VERIFIED live in this
-// environment (research/stack.md line 150): the real output is
-// "2.1.270 (Claude Code)\n", not a bare version string -- an earlier
-// TrimSpace-only implementation compared that whole string against
-// verifiedAgainstVersion ("2.1.270") and reported a false mismatch on every
-// real Claude Code install, caught by this package's own ForwardScroll tests
-// actually shelling out to the real binary. Falls back to TrimSpace's result
-// if no leading semver-shaped token is found, so an unexpected future output
+// --version`'s output ("2.1.270 (Claude Code)\n", not a bare version string,
+// per research/stack.md), discarding the rest. Falls back to TrimSpace's
+// result if no leading semver-shaped token is found, so an unexpected future
 // format degrades to "probably still a mismatch" rather than silently always
 // matching.
 func normalizeClaudeVersion(raw string) string {
@@ -112,17 +95,14 @@ func normalizeClaudeVersion(raw string) string {
 }
 
 // kickOffClaudeVersionMismatchCheck triggers scrollForwardVersionMismatchCheck
-// for i's resolved claude binary, if any (Story 1.5.3, Task 1.5.3b) -- called
-// from finishInstanceConstruction (session/instance.go), the one choke-point
-// every Instance construction site funnels through, so the check runs the
-// moment a claude session is built, independent of whether its user ever
-// scrolls (pre-mortem P1 #1). Also called from ForwardScroll as a fallback
-// for instances built via bare struct literals in tests, which bypass
-// finishInstanceConstruction -- harmless either way, since the check is
-// memoized per binary path. Fires in a goroutine with a detached context (not
-// ctx, which is scoped to a single caller's request and may already be
-// canceled by the time the one-time `claude --version` shell-out completes)
-// so it never adds latency to whichever call site triggered it.
+// for i's resolved claude binary, if any. Called from
+// finishInstanceConstruction so the check runs independent of whether the
+// user ever scrolls, and again from ForwardScroll as a fallback for
+// test-only bare struct literals that bypass that constructor -- harmless
+// either way since the check is memoized per binary path. Runs in a
+// goroutine with a detached context (not ctx, which may already be canceled
+// by the time the one-time shell-out completes) so it never adds latency to
+// its caller.
 func (i *Instance) kickOffClaudeVersionMismatchCheck() {
 	binaryPath := claudeBinaryPathFromProgram(i.GetProgram())
 	if binaryPath == "" {

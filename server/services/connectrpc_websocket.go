@@ -209,12 +209,16 @@ const withCursorSyncTimeout = 300 * time.Millisecond
 // alternate screen buffer, for stamping onto an initial/resize snapshot
 // (events.proto's TerminalOutput.alt_screen_active). Prefers the free,
 // live-tracked value; falls back to Instance.IsAlternateScreenActiveBootstrap's
-// direct tmux query only when the tracker hasn't observed a transition yet
-// -- which is also its correct steady-state answer, so a genuinely-not-alt-
-// screen session pays one extra cheap query here, never repeatedly.
+// direct tmux query only the first time -- GetAltScreenBootstrapped()
+// distinguishes a confirmed "not in alt screen" from "never checked", so a
+// genuinely-not-alt-screen session pays one real tmux query here, never
+// repeatedly on every later connect/resize.
 func altScreenActiveForSnapshot(inst *session.Instance) bool {
 	if inst.GetAltScreenActive() {
 		return true
+	}
+	if inst.GetAltScreenBootstrapped() {
+		return false
 	}
 	return inst.IsAlternateScreenActiveBootstrap()
 }

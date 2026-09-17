@@ -39,28 +39,18 @@ const (
 // (3) DetectedStatus is exactly StatusIdle, and (4) exactly one subscriber is
 // connected.
 //
-// Check (3) is an allowlist of one, not a denylist of unsafe statuses:
-// StatusExecuting ("actively executing commands mid-turn") is unsafe, same
-// as StatusNeedsApproval/StatusInputRequired -- forwarding a scroll keystroke
-// while the agent is mid-turn is the highest-severity concurrency race
-// identified in research/pitfalls.md §1 and the opposite of what
-// research/ux.md §4c recommends (bias toward not forwarding while output is
-// actively streaming). Every other DetectedStatus value is unsafe by
-// construction too, since the check is `== StatusIdle`, not a maintained
-// exclusion list -- a new status added later is unsafe by default.
+// Check (3) allowlists StatusIdle rather than denylisting unsafe statuses,
+// so a new DetectedStatus value is unsafe by default -- forwarding mid-turn
+// (StatusExecuting/NeedsApproval/InputRequired) is the highest-severity
+// concurrency race in research/pitfalls.md §1.
 //
-// subscriberCount is passed in rather than queried internally, since the
-// caller (Epic 1.3) already has it from the hub/legacy path and this keeps
-// scroll_gate.go free of a streamhub import. PathLegacyPerConnection callers
-// pass a -1 sentinel to guarantee check (4) fails, which is reported as the
-// distinct ScrollGateUnsupportedPath failure rather than
-// ScrollGateTooManyViewers -- the caller (mapGateReason) needs the two
-// disambiguated, since a solo PathLegacyPerConnection user must never see
-// "another viewer connected" copy.
+// subscriberCount is passed in (not queried internally) to keep this file
+// free of a streamhub import; PathLegacyPerConnection callers pass a -1
+// sentinel to force check (4) to fail as the distinct
+// ScrollGateUnsupportedPath reason rather than ScrollGateTooManyViewers, so a
+// solo legacy-path user never sees "another viewer connected" copy.
 //
-// reason is a human-readable string for logs only; callers that need to
-// branch on the failure must switch on the returned ScrollGateFailure
-// instead.
+// reason is for logs only; branch on ScrollGateFailure instead.
 func AppScrollGate(inst *Instance, subscriberCount int) (ok bool, failure ScrollGateFailure, reason string) {
 	if resolveScrollAdapter(inst.GetProgram()) == nil {
 		return false, ScrollGateNoCapability, fmt.Sprintf("no scroll capability for program: %s", inst.GetProgram())

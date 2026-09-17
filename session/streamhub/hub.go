@@ -155,19 +155,14 @@ type StreamHub struct {
 	resizeGeneration uint64
 
 	// resizeApplyMu serializes RequestResize's full negotiate-then-apply
-	// sequence end to end, across every subscriber attached to this hub.
-	// It is a distinct lock from resizeMu (which only guards brief
-	// reads/writes of negotiatedSize/resizing for OnRawOutput/
-	// NegotiatedSize) because resizeApplyMu is held for the entire
-	// duration of applyNegotiatedSize's SetWindowSize ->
-	// quiescence-wait -> CapturePaneContent pipeline, which can run for
-	// hundreds of milliseconds. Without it, two subscribers voting for a
-	// resize near-simultaneously could each independently observe
-	// changed == true (under resizeMu, released before applyNegotiatedSize
-	// runs) and both call applyNegotiatedSize concurrently — violating its
-	// doc comment's "exactly once per call" contract and this package's
-	// single-owner concurrency guarantee, which is the entire point of the
-	// stream-hub redesign.
+	// sequence end to end. Distinct from resizeMu (which only guards brief
+	// negotiatedSize/resizing reads/writes) because it's held across
+	// applyNegotiatedSize's whole SetWindowSize -> quiescence-wait ->
+	// CapturePaneContent pipeline (can run for hundreds of ms) -- without
+	// it, two subscribers voting for a resize near-simultaneously could
+	// each observe changed == true under the brief resizeMu and both call
+	// applyNegotiatedSize concurrently, violating its "exactly once per
+	// call" contract.
 	resizeApplyMu sync.Mutex
 
 	// slowSubscriberDropsTotal counts slow-subscriber evictions (never
@@ -202,22 +197,17 @@ type StreamHub struct {
 	// See TryStartPump's doc comment for why this exists.
 	pumpActive bool
 
-	// scrollForwardMu is the ScrollForwardAttachBarrier (plan.md Story
-	// 1.3.1, Task 1.3.1b): held for the full duration of an in-flight
-	// Instance.ForwardScroll call via BeginScrollForward, and held by
-	// AttachSubscriber across its entire attach sequence -- registration
-	// through sendCatchUpSnapshot's live pane capture -- not just a
-	// point-in-time check before mu's own critical section. A
-	// lock-then-immediately-unlock check alone left a window where a
-	// forward could start after the check passed but before the catch-up
-	// snapshot's capture completed, letting a newly-attached subscriber's
-	// catch-up snapshot be the mid-scroll pane content; holding it for the
-	// duration closes that structurally (architecture-review BLOCKER, Fix
-	// 4). Kept separate from mu so it's held only across the rare,
-	// multi-hundred-ms forward/attach path, never across the hot broadcast
-	// path in the common case. Always acquired before mu when both are
-	// needed (AttachSubscriber -> registerSubscriberLocked), never the
-	// reverse, so the two locks have one consistent ordering.
+	// scrollForwardMu is the ScrollForwardAttachBarrier: held for the full
+	// duration of an in-flight Instance.ForwardScroll call via
+	// BeginScrollForward, and by AttachSubscriber across its entire attach
+	// sequence (registration through sendCatchUpSnapshot's live capture) --
+	// not just a point-in-time check, which would leave a window for a
+	// forward to start after the check passed but before the catch-up
+	// snapshot finished, letting a newly-attached subscriber's snapshot be
+	// the mid-scroll pane content. Kept separate from mu so it's held only
+	// across this rare, multi-hundred-ms path, never the hot broadcast
+	// path. Always acquired before mu when both are needed
+	// (AttachSubscriber -> registerSubscriberLocked), never the reverse.
 	scrollForwardMu sync.Mutex
 }
 
@@ -415,20 +405,13 @@ func (h *StreamHub) sendCatchUpSnapshot(sub *subscriber) {
 }
 
 // currentSnapshot returns the hub's best-known current pane content: the
-// cached result of the most recent successful post-quiescence
-// CapturePaneContent call (applyNegotiatedSize) if one exists, or a fresh
-// SessionController capture otherwise — never both, so an attach never pays
-// for a redundant capture-pane call when a recent one is already known-good
-// (this project's own root-cause concern about redundant captures,
-// research/pitfalls.md). A successful on-demand capture is itself cached, so
-// only the first subscriber of a hub that has never resized ever triggers a
-// real capture-pane call; every later attach before the next resize reuses
-// it.
+// cached result of the most recent post-quiescence CapturePaneContent call
+// if one exists, or a fresh on-demand capture otherwise (itself cached
+// afterward) -- an attach never pays for a redundant capture-pane call when
+// a recent one is already known-good.
 //
-// ok is false when no snapshot is available at all: h.controller is nil
-// (tests that never exercise the controller surface), CapturePaneContent
-// errors, or it succeeds with empty content (nothing has ever been rendered
-// to this pane yet).
+// ok is false when no snapshot is available: h.controller is nil, the
+// capture errors, or it succeeds with empty content.
 func (h *StreamHub) currentSnapshot() (content []byte, ok bool) {
 	h.snapshotMu.Lock()
 	cached := h.lastSnapshot

@@ -323,6 +323,7 @@ func (i *Instance) SetProgram(program string) {
 func setAltScreenActiveLocked(s *instanceState, active bool) {
 	s.inst.mu.Lock()
 	s.inst.AltScreenActive = active
+	s.inst.AltScreenBootstrapped = true
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)

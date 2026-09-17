@@ -227,3 +227,41 @@ func TestInstance_GetAltScreenActive_should_ReflectTrackerObservation_When_ReadC
 		t.Fatalf("GetAltScreenActive() = true after exit sequence, want false")
 	}
 }
+
+// TestInstance_GetAltScreenBootstrapped distinguishes "confirmed not in alt
+// screen" from "never checked" -- without this flag,
+// altScreenActiveForSnapshot (server/services/connectrpc_websocket.go) can't
+// tell the two apart and re-runs a real tmux subprocess query
+// (IsAlternateScreenActiveBootstrap) on every connect/resize for any session
+// that's genuinely not in alt screen, instead of caching the confirmed answer
+// after the first check.
+func TestInstance_GetAltScreenBootstrapped_should_ReturnFalse_When_NeverObservedOrBootstrapped(t *testing.T) {
+	inst := &Instance{Title: "altscreen-bootstrap-session"}
+
+	if inst.GetAltScreenBootstrapped() {
+		t.Fatalf("GetAltScreenBootstrapped() = true before any observation or bootstrap, want false")
+	}
+}
+
+func TestInstance_GetAltScreenBootstrapped_should_ReturnTrue_When_SetAltScreenActiveBootstrapCalled(t *testing.T) {
+	inst := &Instance{Title: "altscreen-bootstrap-session"}
+
+	inst.SetAltScreenActiveBootstrap(false)
+
+	if !inst.GetAltScreenBootstrapped() {
+		t.Fatalf("GetAltScreenBootstrapped() = false after SetAltScreenActiveBootstrap, want true")
+	}
+	if inst.GetAltScreenActive() {
+		t.Fatalf("GetAltScreenActive() = true after SetAltScreenActiveBootstrap(false), want false")
+	}
+}
+
+func TestInstance_GetAltScreenBootstrapped_should_ReturnTrue_When_ObserveAltScreenTransitionChangesState(t *testing.T) {
+	inst := &Instance{Title: "altscreen-bootstrap-session"}
+
+	inst.ObserveAltScreenTransition([]byte("\x1b[?1049h"))
+
+	if !inst.GetAltScreenBootstrapped() {
+		t.Fatalf("GetAltScreenBootstrapped() = false after a live-observed transition, want true")
+	}
+}

@@ -484,107 +484,39 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     appScrollbackActiveRef.current = appScrollbackState.active;
   }, [appScrollbackState.active]);
 
-  // Story 1.4.2 bug fix — ForwardScroll's own PageUp send (session/
-  // instance_scroll_forward.go) is a real tmux keystroke: the redraw it
-  // causes can arrive back at the client as an ordinary output frame through
-  // the *same* control-mode/hub stream handleOutput already consumes below,
-  // completely independent of the AppScrollbackResponse frame that reports
-  // the outcome. Without this, that self-caused echo was indistinguishable
-  // from a genuine live-resume (Ctrl+L) frame, so handleOutput's "any normal
-  // frame clears the banner" rule below fired on the *scroll's own* redraw
-  // and killed the ScrollSourceIndicator banner immediately after DELIVERED/
-  // AT_TOP -- violating design/ux.md Surface 2's "banner stays up alongside
-  // AT_TOP, does not flicker off between pages" (found via a real,
-  // reproducible failure: scroll-forward-outcome-signals-distinct.spec.ts's
-  // AT_TOP case).
-  //
-  // Neither a time window nor a "consume exactly N subsequent frames" count
-  // works: the echo's arrival relative to the outcome frame is a genuine
-  // race with no guaranteed ordering (confirmed empirically -- for a lone
-  // DELIVERED with no further scroll, as in scroll-forward-return-to-live.
-  // spec.ts, no separate echo frame arrives after the outcome at all, so a
-  // count-based "eat the next frame" swallowed that test's real Ctrl+L
-  // live-resume instead). What's actually invariant is *content*: the echo
-  // necessarily redraws the same pane content session/instance_scroll_
-  // forward.go's captureViaRedrawQuiescence just captured for this same
-  // outcome, so comparing the incoming frame's content signature against the
-  // outcome's own frame.content correctly identifies it regardless of
-  // arrival order or timing.
+  // ForwardScroll's PageUp send (session/instance_scroll_forward.go) causes
+  // a real redraw that echoes back through the same output stream as a
+  // normal frame, indistinguishable by itself from a genuine live-resume
+  // (Ctrl+L) -- without filtering it, handleOutput's "any normal frame
+  // clears the banner" rule below killed the ScrollSourceIndicator banner
+  // right after DELIVERED/AT_TOP. Content comparison, not a time window or
+  // frame count, is what's invariant: the echo's arrival timing relative to
+  // the outcome frame isn't guaranteed (some redraws never echo at all), but
+  // the echo always redraws the same pane content captureViaRedrawQuiescence
+  // just captured.
   const lastForwardedContentSignatureRef = useRef<string | null>(null);
   const contentSignature = useCallback((raw: string): string => {
-    // Strip ANSI CSI/OSC sequences and leading whitespace so two redraws of
-    // the same pane compare equal even if cursor-position framing differs
-    // slightly between the server's capture-pane snapshot and the live PTY
-    // stream's own representation of it. The CSI pattern follows the actual
-    // ECMA-48 grammar (parameter bytes 0x30-0x3F, intermediate bytes
-    // 0x20-0x2F, one final byte 0x40-0x7E) rather than a narrower
-    // digits/semicolon guess -- the narrower version silently failed to
-    // strip DECSTR's `\x1b[!p` (`!` is an intermediate byte, 0x21), which
-    // misaligned the two signatures by a few characters and made a real
-    // self-echo compare unequal (found via a real, reproducible failure in
-    // scroll-forward-outcome-signals-distinct.spec.ts's AT_TOP case).
-    // Whitespace is also stripped entirely, not just collapsed to a single
-    // space: capture-pane's snapshot (server-captured for
-    // AppScrollbackResponse.content) and the live PTY stream's own
-    // rendering of the identical redraw can wrap the same text at different
-    // column positions, inserting a line break where the other has a plain
-    // space -- found via a real, reproducible failure where the signature
-    // match still failed on otherwise-identical numeric content purely
-    // because of where the two representations happened to line-wrap.
-    // Collapsing to a single space is not enough on its own: it still
-    // fails when the wrap falls in the *middle* of a long run of repeated
-    // characters (e.g. a box-drawing horizontal rule): the two
-    // representations then differ only by one inserted space in an
-    // otherwise-identical run of dashes, which a same-length single-space
-    // collapse can't reconcile since the two sides carry a different total
-    // character count at that point. Stripping whitespace entirely instead
-    // of collapsing it reunites a mid-run wrap losslessly, since a wrap
-    // splits but never adds or drops characters (found via a real,
-    // reproducible failure in scroll-forward-outcome-signals-distinct.
-    // spec.ts's DELIVERED case: the server's capture-pane snapshot held one
-    // unbroken horizontal-rule line the live PTY stream wrapped into two).
-    //
-    // Deliberately NOT truncated (a prior version sliced to the first 80
-    // characters): the server's capture-pane call (session/instance_scroll_
-    // forward.go's captureViaRedrawQuiescence, via CapturePaneContentPriority)
-    // only ever sees the pane's CURRENT view, not the full redraw as
-    // originally written -- in alt-screen mode tmux keeps no scrollback, so a
-    // widened `-S`/`-N` capture can't recover lines that already scrolled off
-    // the top (verified empirically: a fixture redraw followed by a trailing
-    // prompt line legitimately scrolls the pane, discarding the top few
-    // lines from tmux's own grid, not just from the capture window). The
-    // live PTY echo, in contrast, carries the redraw's full original bytes,
-    // so the two sides can be offset by an arbitrary number of lines --
-    // comparing only a fixed-length prefix compares two substrings anchored
-    // at different offsets into the same content (found via a real,
-    // reproducible failure in scroll-forward-outcome-signals-distinct.
-    // spec.ts's AT_TOP case).
+    // Strip ANSI CSI/OSC sequences (full ECMA-48 grammar, not just
+    // digits/semicolons -- narrower patterns miss e.g. DECSTR's `\x1b[!p`)
+    // and whitespace entirely (not collapsed) so two redraws of the same
+    // pane compare equal despite differing line-wrap columns. Not truncated
+    // to a fixed prefix either: with no alt-screen scrollback, the server's
+    // capture can start at a different offset into the same content than
+    // the live PTY echo's full bytes.
     return raw
       .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
       .replace(/\x1b\][^\x07]*(\x07|\x1b\\)/g, "")
       .replace(/\s+/g, "");
   }, []);
-  // Accumulates output-frame signatures received since the last
+  // Accumulates output-frame signatures since the last
   // recordForwardedContentSignature call, plus how much of the recorded
-  // signature has been matched so far, so isSelfEchoOfLastForward can
-  // recognize a redraw echo that legally arrives split across more than one
-  // output frame -- e.g. one frame carries the redrawn body and a later,
-  // separate frame carries only the trailing prompt line the server's
-  // captured signature's tail also included. Neither frame alone is a
-  // substring match, but their concatenation is (found via a real,
-  // reproducible failure in scroll-forward-outcome-signals-distinct.
-  // spec.ts's AT_TOP case: the DELIVERED banner was set, then cleared within
-  // ~60ms by the very next output frame -- the body of its own triggering
-  // redraw -- because that one frame alone didn't yet include the trailing
-  // prompt bytes the server's captured signature ended with).
-  //
-  // Progress must strictly increase each frame to keep accumulating -- a
-  // frame that doesn't extend the match is judged on its own content
-  // instead of the stale buffer, and the buffer/progress are reset either
-  // way. Without this, a real echo's partial match (see above) would
-  // permanently "stick": every later frame -- including a genuine live
-  // resume -- would keep testing against that same stale, already-matched
-  // prefix and never be recognized as different.
+  // signature has matched so far -- a redraw echo can legally arrive split
+  // across more than one output frame, where no single frame alone is a
+  // substring match but their concatenation is. Progress must strictly
+  // increase each frame to keep accumulating; a frame that doesn't extend
+  // the match is judged on its own content and the buffer resets, so a
+  // stale partial match can't "stick" and misclassify a later genuine live
+  // resume.
   const recentEchoBufferRef = useRef<string>("");
   const matchedEchoPrefixLenRef = useRef<number>(0);
   const MAX_ECHO_BUFFER = 20000; // generous headroom over any real single-pane capture

@@ -55,6 +55,16 @@ func (i *Instance) GetAltScreenActive() bool {
 	return i.Snapshot().AltScreenActive
 }
 
+// GetAltScreenBootstrapped reports whether AltScreenActive reflects a
+// confirmed observation (live transition or a completed
+// IsAlternateScreenActiveBootstrap query) rather than its unset zero value --
+// see altScreenActiveForSnapshot (server/services/connectrpc_websocket.go),
+// the one caller that needs to tell "confirmed not in alt screen" apart from
+// "never checked" before deciding whether a fresh tmux query is warranted.
+func (i *Instance) GetAltScreenBootstrapped() bool {
+	return i.Snapshot().AltScreenBootstrapped
+}
+
 // MatchesID reports whether id refers to this instance.
 // Accepts the stable UUID, the legacy Title, or the full tmux session name
 // (e.g. "staplersquad_my-session") so that hook notifications sent from inside

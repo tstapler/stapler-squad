@@ -230,9 +230,11 @@ func TestNormalizeClaudeVersion_should_ExtractLeadingSemverToken(t *testing.T) {
 		{raw: "unexpected future format", want: "unexpected future format"},
 	}
 	for _, tt := range tests {
-		if got := normalizeClaudeVersion(tt.raw); got != tt.want {
-			t.Fatalf("normalizeClaudeVersion(%q) = %q, want %q", tt.raw, got, tt.want)
-		}
+		t.Run(tt.raw, func(t *testing.T) {
+			if got := normalizeClaudeVersion(tt.raw); got != tt.want {
+				t.Fatalf("normalizeClaudeVersion(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -250,8 +252,10 @@ func TestClaudeBinaryPathFromProgram_should_ExtractClaudeToken(t *testing.T) {
 		{program: "", want: ""},
 	}
 	for _, tt := range tests {
-		if got := claudeBinaryPathFromProgram(tt.program); got != tt.want {
-			t.Fatalf("claudeBinaryPathFromProgram(%q) = %q, want %q", tt.program, got, tt.want)
-		}
+		t.Run(tt.program, func(t *testing.T) {
+			if got := claudeBinaryPathFromProgram(tt.program); got != tt.want {
+				t.Fatalf("claudeBinaryPathFromProgram(%q) = %q, want %q", tt.program, got, tt.want)
+			}
+		})
 	}
 }

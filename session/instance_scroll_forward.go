@@ -14,17 +14,13 @@ import (
 )
 
 // errScrollForwardResizeRaced is returned by captureViaRedrawQuiescence when
-// a pane resize (StreamHub.RequestResize -> applyNegotiatedSize) was
-// detected running during its capture window (Fix 5). Neither RequestResize
-// nor applyNegotiatedSize acquires ScrollForwardAttachBarrier's
-// scrollForwardMu -- unlike AttachSubscriber (Fix 4), a resize can run fully
-// concurrently with an in-flight ForwardScroll -- so a resize mid-capture can
-// reflow the pane in a way captureViaRedrawQuiescence's before/after content
-// diff would otherwise silently misinterpret as a genuine DELIVERED/AT_TOP
-// result. Treating it as an ordinary ForwardScroll error reuses the existing
-// error-path contract: the lease/attach-barrier still release via defer, and
-// the caller (scrollbackResultForRequest, server/services/connectrpc_websocket.go)
-// already falls back to tmux-native scrollback on any non-nil err.
+// a pane resize was detected running during its capture window. Unlike
+// AttachSubscriber, a resize doesn't acquire ScrollForwardAttachBarrier's
+// scrollForwardMu and can run fully concurrently with ForwardScroll, so a
+// mid-capture resize could otherwise reflow the pane in a way the
+// before/after content diff misreads as a genuine DELIVERED/AT_TOP result.
+// Treated as an ordinary ForwardScroll error: lease/attach-barrier still
+// release via defer, and the caller falls back to tmux-native scrollback.
 var errScrollForwardResizeRaced = errors.New("scroll_forward: pane resize occurred during capture window, discarding outcome")
 
 const (
@@ -43,19 +39,15 @@ const (
 
 // ForwardScroll orchestrates one app-scrollback-forward request end to end:
 // gate check -> lease acquire -> attach-barrier acquire -> send -> capture ->
-// release (Story 1.3.1). subscriberCount and hub come from the caller's
-// streaming path (Task 1.3.3b/c) -- hub is nil on PathLegacyPerConnection,
-// which AppScrollGate already blocks unconditionally via the -1 sentinel
-// caller convention, so BeginScrollForward is never reached with a nil hub
-// in practice.
+// release. hub is nil on PathLegacyPerConnection, but AppScrollGate already
+// blocks that path unconditionally via the -1 sentinel caller convention, so
+// BeginScrollForward is never reached with a nil hub in practice.
 //
-// Error path: if any SendInputViaControlMode call or the subsequent capture
-// errors, ForwardScroll returns immediately with a non-nil err and every
-// other return value at its zero value. The lease and attach-barrier
-// releases still fire via defer regardless of which point failed --
-// TestForwardScroll_should_ReleaseLeaseAndAttachBarrier_When_* below is the
-// regression guard that this holds under an actual error, not just a
-// code-reading argument (pre-mortem P1 #3).
+// On any SendInputViaControlMode or capture error, ForwardScroll returns
+// immediately with a non-nil err and every other return value at its zero
+// value; the lease and attach-barrier releases still fire via defer
+// regardless of which point failed (see
+// TestForwardScroll_should_ReleaseLeaseAndAttachBarrier_When_* below).
 func (i *Instance) ForwardScroll(ctx context.Context, subscriberCount int, hub *streamhub.StreamHub) (
 	outcome sessionv1.ScrollForwardOutcome,
 	blockedReason sessionv1.ScrollBlockedReason,
@@ -133,16 +125,10 @@ func scrollForwardGateOutcome(i *Instance, subscriberCount int) (outcome session
 // ScrollBlockedReason -- a total switch, not a string comparison, so a
 // future edit to AppScrollGate's human-readable reason string can never
 // silently collapse ScrollGateUnsupportedPath and ScrollGateTooManyViewers
-// into the same client-visible Blocked reason (Fix 1, adversarial-review
-// BLOCKER -- see plan.md's Risk Control "Concrete resolution" section: a
-// solo PathLegacyPerConnection user must never see "another viewer
-// connected" copy).
-//
-// Every other gate failure (capability/alt-screen/status) maps to the
-// unspecified reason -- Epic 1.4's client only attempts a request when it
-// already believes forwarding is eligible, so those never surface as a
-// client-visible Blocked case in practice, but the mapping stays total
-// rather than panicking on an unmapped value.
+// into the same client-visible Blocked reason (a solo legacy-path user must
+// never see "another viewer connected" copy). Every other gate failure maps
+// to the unspecified reason, since the client only requests forwarding when
+// it already believes it's eligible.
 func mapGateReason(gateFailure ScrollGateFailure) sessionv1.ScrollBlockedReason {
 	switch gateFailure {
 	case ScrollGateUnsupportedPath:
@@ -233,23 +219,12 @@ func resizeActivitySnapshot(hub *streamhub.StreamHub) (generation uint64, resizi
 }
 
 // waitForRedrawQuiescence polls paneContent until two consecutive calls
-// return byte-identical content, or maxWait elapses -- whichever comes
-// first (Story 1.3.2). Modeled on waitForPaneSettle's poll-and-compare shape
-// (session/autonomous_driver.go:449) but independently stated with its own
-// state: a concurrent resize's quiescence (connectrpc_websocket.go's
-// resizeSettling) and a concurrent scroll-forward's must not corrupt each
-// other.
-//
-// If paneContent itself errors on any poll, waitForRedrawQuiescence returns
-// immediately with that error -- not retried, not treated as a
-// non-stabilizing poll result. If ctx is canceled while waiting, it returns
-// immediately with ctx.Err() for the same reason: an upstream disconnect is
-// a real cancellation, not an honest partial capture.
-//
-// deadlineExceeded is true only when maxWait elapsed without two consecutive
-// matching polls -- the caller (captureViaRedrawQuiescence) treats that as
-// an honest partial success, not an error, and still computes a real
-// ScrollForwardOutcome from the last-seen content.
+// return byte-identical content, or maxWait elapses, whichever comes first.
+// A paneContent error or ctx cancellation returns immediately, not retried --
+// an upstream disconnect is a real cancellation, not an honest partial
+// capture. deadlineExceeded is true only when maxWait elapsed without two
+// matching polls; the caller treats that as an honest partial success, not
+// an error, and still computes a real outcome from the last-seen content.
 func waitForRedrawQuiescence(ctx context.Context, paneContent func() (string, error), pollInterval, maxWait time.Duration) (last string, deadlineExceeded bool, err error) {
 	deadline := time.Now().Add(maxWait)
 	haveLast := false
