@@ -92,6 +92,14 @@ full-suite runs must not reproduce the `TempDir RemoveAll cleanup` failure for t
 
 ## Related
 
+- **2026-09-17 sighting (second, same day)**: recurred on yet another unrelated test,
+  `TestScanner_Start_should_persistPeriodically_When_MaintenanceTickFires` (`session/unfinished`),
+  same symptom (`testing.go:1464: TempDir RemoveAll cleanup: unlinkat ... directory not empty`), in
+  the "Test (affected packages only, fast signal)" CI job on the same PR #817 CI cycle as the sighting
+  below — `session/unfinished` is untouched by that PR's diff. Re-ran via `gh run rerun --failed`
+  rather than investigating further, consistent with this bug's own scope boundary. Two sightings on
+  two different, unrelated tests in the same CI cycle strengthens the case (already made by the
+  2026-09-02 sighting) that this is a broad shared-teardown-ordering gap, not a per-test issue.
 - **2026-09-17 sighting**: recurred on the exact test this bug is named for,
   `TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable`, same symptom
   (`testing.go:1464: TempDir RemoveAll cleanup: unlinkat ... directory not empty`), in the "MCP
