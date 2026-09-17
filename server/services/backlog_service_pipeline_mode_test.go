@@ -566,3 +566,39 @@ func TestCreatePipelineMode_should_Succeed_When_AllPlaceholdersAreRecognized(t *
 	require.NoError(t, listErr)
 	assert.Len(t, all, 1, "the row should be written when validation passes")
 }
+
+// ─── Epic 3.3: Aider save-time rejection (ADR-002) ─────────────────────────
+
+// TestCreatePipelineMode_should_ReturnCodeInvalidArgumentAndPersistNothing_When_TriageProgramIsAider
+// (plan.md Story 3.3.1) is the end-to-end RPC-level confirmation that
+// ADR-002's exclusion holds through the full BacklogService surface, not
+// just session.ValidatePipelineModeContent in isolation (already covered by
+// pipeline_mode_validation_test.go's
+// TestValidateStageExecutors_should_RejectNamingProgramAndStage_When_AiderConfiguredForTriage):
+// Given a live BacklogService test harness, When CreatePipelineMode is
+// called with stage_executors["triage"].program = "aider", Then the RPC
+// returns CodeInvalidArgument and no PipelineMode row is created, confirmed
+// via a subsequent ListPipelineModes call showing the mode absent.
+func TestCreatePipelineMode_should_ReturnCodeInvalidArgumentAndPersistNothing_When_TriageProgramIsAider(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newPipelineModeTestService(t)
+	ctx := t.Context()
+
+	_, err := svc.CreatePipelineMode(ctx, connect.NewRequest(&sessionv1.CreatePipelineModeRequest{
+		Slug: "aider-triage",
+		Name: "Aider Triage",
+		StageExecutors: map[string]*sessionv1.PipelineStageExecutor{
+			"triage": {Program: "aider"},
+		},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "aider")
+	assert.Contains(t, err.Error(), "triage")
+
+	listResp, listErr := svc.ListPipelineModes(ctx, connect.NewRequest(&sessionv1.ListPipelineModesRequest{}))
+	require.NoError(t, listErr)
+	for _, item := range listResp.Msg.Items {
+		assert.NotEqual(t, "aider-triage", item.Slug, "no PipelineMode row should be persisted when save-time validation rejects the aider triage executor")
+	}
+}
