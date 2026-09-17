@@ -30,7 +30,7 @@ func (f *fakeSessionTagPoolClient) CallBlocking(_ context.Context, _ headless.Fe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
-	sink(0)
+	sink(0, true)
 	return f.response, nil
 }
 

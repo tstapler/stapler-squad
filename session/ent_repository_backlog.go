@@ -245,6 +245,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		LastProgressAt:           is.LastProgressAt,
 		CreatedAt:                is.CreatedAt,
 		EstimatedCostUsd:         is.EstimatedCostUsd,
+		CostPriced:               is.CostPriced,
 		TriageResult:             is.TriageResult,
 		TriageResultSummary:      triageResultSummary,
 		VerificationNotes:        is.VerificationNotes,

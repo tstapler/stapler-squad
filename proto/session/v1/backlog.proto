@@ -138,6 +138,11 @@ message ItemSession {
   // fell back away from configured_program at call time, e.g.
   // "gemini_unavailable" or "unsupported_program".
   string executor_fallback_reason = 25;
+  // cost_priced is false when the most recent cost-contributing headless call
+  // could not produce a trustworthy dollar figure (e.g. an unpriced Gemini
+  // model family) — see headless.CostSink's priced signal. True for all
+  // pre-existing rows (Claude-only cost data was always priced).
+  bool cost_priced = 26;
 }
 
 // BacklogStatusEvent records a single status transition for a backlog item.

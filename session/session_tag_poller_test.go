@@ -35,7 +35,7 @@ func (f *fakeTagPoolClient) CallBlocking(_ context.Context, _ headless.FeatureKe
 	defer f.mu.Unlock()
 	f.calls++
 	f.lastUserPrompt = userPrompt
-	sink(0)
+	sink(0, true)
 	if f.err != nil {
 		return "", f.err
 	}

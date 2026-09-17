@@ -67,6 +67,9 @@ func (ItemSession) Fields() []ent.Field {
 			Optional().
 			Default("").
 			Comment("Non-empty only when resolveHeadlessCaller fell back away from configured_program at call time, e.g. \"gemini_unavailable\" or \"unsupported_program\". Empty means the configured program (if any) ran as configured, with no substitution."),
+		field.Bool("cost_priced").
+			Default(true).
+			Comment("False when the most recent cost-contributing headless call could not produce a trustworthy dollar figure (e.g. an unpriced Gemini model family) — see headless.CostSink's priced signal. Default true so pre-existing Claude-only rows read as priced, matching their actual (always-priced) history."),
 		field.String("triage_result").
 			Optional().
 			Comment("JSON triage suggestions"),

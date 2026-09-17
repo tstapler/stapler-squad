@@ -213,6 +213,11 @@ type ItemSessionData struct {
 	TriageResult           string
 	VerificationNotes      string  // Freeform verification evidence reported via request_review
 	EstimatedCostUsd       float64 // Only set for headless sessions where cost is known at creation time
+	// CostUnpriced marks EstimatedCostUsd as untrustworthy (see headless.CostSink's
+	// priced signal) rather than a genuine dollar figure — e.g. an unpriced Gemini
+	// model family. Zero-value false means priced, matching cost_priced's ent
+	// schema default, so existing callers that never set this field are unaffected.
+	CostUnpriced bool
 	// ClaimantHostID is the claiming/attaching process's own stable host identifier
 	// (Config.GetOrCreateClaimantHostID), never anything derived from the session being
 	// claimed/attached. See ItemSession.claimant_host_id's schema comment for the full
@@ -261,6 +266,9 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 		SetClaimantHostID(data.ClaimantHostID)
 	if data.EstimatedCostUsd > 0 {
 		q = q.SetEstimatedCostUsd(data.EstimatedCostUsd)
+	}
+	if data.CostUnpriced {
+		q = q.SetCostPriced(false)
 	}
 	is, err := q.Save(ctx)
 	if err != nil {
@@ -504,21 +512,31 @@ func (r *EntRepository) UpdateItemSessionFailureCapture(ctx context.Context, id 
 	return nil
 }
 
-// UpdateItemSessionCost adds usd to an ItemSession's estimated_cost_usd. Additive
-// (not a Set) so a session with multiple headless calls attributed to it — e.g.
-// the autonomous fix-loop's per-turn LLM calls — accumulates a real running total
-// instead of each call overwriting the last.
-func (r *EntRepository) UpdateItemSessionCost(ctx context.Context, id string, usd float64) error {
+// UpdateItemSessionCost adds usd to an ItemSession's estimated_cost_usd and
+// records whether that cost is trustworthy. Additive (not a Set) so a session
+// with multiple headless calls attributed to it — e.g. the autonomous fix-loop's
+// per-turn LLM calls — accumulates a real running total instead of each call
+// overwriting the last.
+//
+// When priced is false, usd is not added (it should already be 0 per
+// headless.CostSink's contract) and cost_priced is set to false on the row.
+// cost_priced is sticky: a priced call never resets it back to true once any
+// contributing call for this session has been unpriced, since the row's running
+// total is then permanently missing that call's real cost.
+func (r *EntRepository) UpdateItemSessionCost(ctx context.Context, id string, usd float64, priced bool) error {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
-	_, err = r.client.ItemSession.UpdateOneID(parsedID).
-		AddEstimatedCostUsd(usd).
-		Save(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to add estimated_cost_usd on item session %s: %w", id, err)
+	q := r.client.ItemSession.UpdateOneID(parsedID)
+	if priced {
+		q = q.AddEstimatedCostUsd(usd)
+	} else {
+		q = q.SetCostPriced(false)
+	}
+	if _, err := q.Save(ctx); err != nil {
+		return fmt.Errorf("failed to update cost on item session %s: %w", id, err)
 	}
 	return nil
 }
@@ -538,7 +556,10 @@ func (r *EntRepository) AddHeadlessCostBySessionUUID(ctx context.Context, sessio
 		}
 		return err
 	}
-	return r.UpdateItemSessionCost(ctx, is.ID, usd)
+	// CostSinkForSessionUUID (the sole caller of this method) already discards
+	// unpriced results before reaching here, so every call arriving at this
+	// point is Claude-authoritative.
+	return r.UpdateItemSessionCost(ctx, is.ID, usd, true)
 }
 
 // SetItemSessionBaseCommit records the worktree's pre-work HEAD SHA for the
@@ -814,6 +835,9 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 		SetNillableTriageResult(nilIfEmpty(isData.TriageResult))
 	if isData.EstimatedCostUsd > 0 {
 		isq = isq.SetEstimatedCostUsd(isData.EstimatedCostUsd)
+	}
+	if isData.CostUnpriced {
+		isq = isq.SetCostPriced(false)
 	}
 	is, err := isq.Save(ctx)
 	if err != nil {

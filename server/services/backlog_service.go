@@ -724,6 +724,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		ExecutorSnapshotHash:     is.ExecutorSnapshotHash,
 		ConfiguredProgram:        is.ConfiguredProgram,
 		ExecutorFallbackReason:   is.ExecutorFallbackReason,
+		CostPriced:               is.CostPriced,
 		EndReason:                is.EndReason,
 		FailureCapturePath:       is.FailureCapturePath,
 		ClaimantHostId:           is.ClaimantHostID,

@@ -720,22 +720,29 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 	return p.call(ctx, key, systemPrompt, userPrompt, opts.Model, p.runner)
 }
 
-// CostSink receives the USD cost of a completed CallBlocking call. Every call site
-// must supply one — see DiscardCost for the explicit, greppable opt-out for a call
-// with nowhere to persist cost. This replaced a `(string, float64, error)` return
-// shape that let several pipeline call sites silently drop real cost data via `_`.
-type CostSink func(usd float64)
+// CostSink receives the USD cost of a completed CallBlocking call, plus whether
+// that cost is trustworthy. priced is false when the adapter could not compute a
+// real dollar figure (e.g. an unpriced model family) — usd is 0 in that case, and
+// callers must not fold it into a running total as if it were a genuine free
+// call. Every call site must supply one — see DiscardCost for the explicit,
+// greppable opt-out for a call with nowhere to persist cost. This replaced a
+// `(string, float64, error)` return shape that let several pipeline call sites
+// silently drop real cost data via `_`.
+type CostSink func(usd float64, priced bool)
 
 // DiscardCost is the explicit opt-out for a CallBlocking call with nowhere to
 // persist cost (e.g. a capability self-check). Grep this name to find every call
 // site not wired into cost tracking.
-func DiscardCost(float64) {}
+func DiscardCost(float64, bool) {}
 
 // CallBlocking makes a single blocking headless call and returns the result text
 // and any error. opts is the single place to pass WorkDir/Model/AllowedTools/
 // PermissionMode; the zero value reproduces the simplest call shape. sink is
 // always invoked with the cost in USD reported by claude, parsed from the JSON
 // result at no extra cost — pass DiscardCost if the caller has nowhere to put it.
+// Claude's total_cost_usd is always authoritative when the CLI call completes, so
+// sink always fires with priced=true here; a false value only ever comes from a
+// non-Claude adapter (see GeminiCaller).
 func (p *Pool) CallBlocking(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string, opts CallOptions, sink CostSink) (string, error) {
 	ch, err := p.CallWithOptions(ctx, key, systemPrompt, userPrompt, opts)
 	if err != nil {
@@ -743,7 +750,7 @@ func (p *Pool) CallBlocking(ctx context.Context, key FeatureKey, systemPrompt, u
 	}
 	text, cost, err := drainChannelWithCost(ch)
 	if sink != nil {
-		sink(cost)
+		sink(cost, true)
 	}
 	return text, err
 }

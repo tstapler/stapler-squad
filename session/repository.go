@@ -229,11 +229,15 @@ type ItemSessionSummary struct {
 	LastProgressAt        *time.Time
 	CreatedAt             time.Time
 	EstimatedCostUsd      float64
-	TriageResult          string // raw JSON stored in triage_result column
-	TriageResultSummary   string // summary field parsed from TriageResult
-	VerificationNotes     string // freeform verification evidence reported via request_review
-	OverallOutcome        string // from linked review_verdict (empty if none)
-	ReviewVerdict         *ReviewVerdictSummary
+	// CostPriced mirrors ItemSession.cost_priced — false when the most recent
+	// cost-contributing headless call could not produce a trustworthy dollar
+	// figure. See the ent schema field's comment for the full rationale.
+	CostPriced          bool
+	TriageResult        string // raw JSON stored in triage_result column
+	TriageResultSummary string // summary field parsed from TriageResult
+	VerificationNotes   string // freeform verification evidence reported via request_review
+	OverallOutcome      string // from linked review_verdict (empty if none)
+	ReviewVerdict       *ReviewVerdictSummary
 	// ClaimantHostID identifies the physical stapler-squad process/host that claimed or
 	// attached this session. See ItemSession.claimant_host_id's schema comment for the
 	// full disambiguation against STAPLER_SQUAD_INSTANCE and CloudContext.InstanceID.

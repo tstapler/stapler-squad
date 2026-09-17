@@ -2872,9 +2872,14 @@ Do not modify the code. Only write the review verdict.
 		defer reviewCancel()
 
 		var callCostUSD float64
+		// callCostPriced defaults true, matching cost_priced's own schema default,
+		// so a call that fails before the sink ever fires reads as "no cost
+		// incurred" rather than as an untrustworthy $0 — see the identical
+		// rationale on TriggerTriage's triageCostPriced.
+		callCostPriced := true
 		reviewResult, callErr := s.headlessPool.CallBlocking(
 			reviewCtx, headless.FeatureKeyReview, systemPrompt, headlessPrompt, callOpts,
-			func(usd float64) { callCostUSD = usd },
+			func(usd float64, priced bool) { callCostUSD = usd; callCostPriced = priced },
 		)
 
 		// Explicit, immediate cleanup as soon as the transcript file is no longer
@@ -2954,6 +2959,7 @@ Do not modify the code. Only write the review verdict.
 			SessionRole:      session.SessionRoleReview,
 			AcSnapshot:       session.AcCriteriaJSON(acSnapshotJSON),
 			EstimatedCostUsd: callCostUSD,
+			CostUnpriced:     !callCostPriced,
 		}, session.ReviewVerdictData{
 			OverallOutcome: overall,
 			PerCriterion:   string(perCriterionJSON),

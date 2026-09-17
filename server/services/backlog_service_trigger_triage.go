@@ -450,6 +450,11 @@ func (s *BacklogService) TriggerTriage(
 
 		callStart := time.Now()
 		var triageCostUSD float64
+		// triageCostPriced defaults true (not Go's zero value) so a call that fails
+		// before the sink ever fires (e.g. subprocess launch failure) reads as "no
+		// cost incurred," matching cost_priced's own schema default, rather than as
+		// an untrustworthy $0 that would otherwise trip the persistence guard below.
+		triageCostPriced := true
 		raw, callErr := s.headlessPool.CallBlocking(triageCtx,
 			headless.FeatureKeyTriage,
 			headless.HeadlessTriageSystemPrompt(),
@@ -468,7 +473,7 @@ func (s *BacklogService) TriggerTriage(
 			// without a fresh empirical repro, per ADR-001's own "don't trust
 			// unverified CLI-behavior assumptions" precedent.
 			headless.CallOptions{WorkDir: triageWorkDir},
-			func(usd float64) { triageCostUSD = usd },
+			func(usd float64, priced bool) { triageCostUSD = usd; triageCostPriced = priced },
 		)
 
 		// cleanupCtx outlives shutdownCtx so DB writes succeed even during graceful
@@ -483,9 +488,12 @@ func (s *BacklogService) TriggerTriage(
 
 		// Persisted unconditionally, before the success/failure branches below: the
 		// LLM call already incurred this cost whether or not it errored or produced
-		// parseable output, so it must not be lost down either failure path.
-		if triageCostUSD > 0 {
-			if costErr := s.storage.UpdateItemSessionCost(cleanupCtx, isID, triageCostUSD); costErr != nil {
+		// parseable output, so it must not be lost down either failure path. Also
+		// fires when the call was unpriced (triageCostUSD == 0 in that case) so an
+		// untrustworthy $0 gets recorded as unpriced rather than silently read back
+		// as "genuinely free."
+		if triageCostUSD > 0 || !triageCostPriced {
+			if costErr := s.storage.UpdateItemSessionCost(cleanupCtx, isID, triageCostUSD, triageCostPriced); costErr != nil {
 				log.Warn("[TriggerTriage] failed to persist cost", "item", itemID, "error", costErr)
 			}
 		}

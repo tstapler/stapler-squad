@@ -133,7 +133,7 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 	if onCall != nil {
 		onCall(opts.WorkDir)
 	}
-	sink(f.cost)
+	sink(f.cost, true)
 	return resp, f.err
 }
 

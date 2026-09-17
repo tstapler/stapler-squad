@@ -304,7 +304,7 @@ func DraftPRDescription(ctx context.Context, pool *Pool, itemTitle, itemDescript
 	userPrompt := fmt.Sprintf("Backlog item: %s\n\nProblem statement:\n%s\n\nBranch: %s\n\nDiff:\n%s",
 		itemTitle, itemDescription, branchName, diff)
 	var cost float64
-	raw, err := pool.CallBlocking(ctx, FeatureKeyPRDescription, prDescriptionSystemPrompt, userPrompt, CallOptions{}, func(usd float64) { cost = usd })
+	raw, err := pool.CallBlocking(ctx, FeatureKeyPRDescription, prDescriptionSystemPrompt, userPrompt, CallOptions{}, func(usd float64, _ bool) { cost = usd })
 	if err != nil {
 		return "", cost, fmt.Errorf("DraftPRDescription: %w", err)
 	}
@@ -366,7 +366,7 @@ func GenerateSessionCompletionNarrative(ctx context.Context, pool PoolClient, se
 	fmt.Fprintf(&sb, "\nDecisions:\n%s\n\nDiff:\n%s", decisionsSummary, sanitized)
 
 	var cost float64
-	raw, err := pool.CallBlocking(ctx, FeatureKeySessionCompletionSummary, sessionCompletionSummarySystemPrompt, sb.String(), CallOptions{}, func(usd float64) { cost = usd })
+	raw, err := pool.CallBlocking(ctx, FeatureKeySessionCompletionSummary, sessionCompletionSummarySystemPrompt, sb.String(), CallOptions{}, func(usd float64, _ bool) { cost = usd })
 	if err != nil {
 		return "", cost, fmt.Errorf("GenerateSessionCompletionNarrative: %w", err)
 	}
@@ -501,7 +501,7 @@ func GenerateSessionTags(ctx context.Context, pool PoolClient, meta classifier.S
 
 	var cost float64
 	raw, err := pool.CallBlocking(ctx, FeatureKeySessionTagging, sessionTaggingSystemPrompt, sb.String(),
-		CallOptions{Model: "haiku"}, func(usd float64) { cost = usd })
+		CallOptions{Model: "haiku"}, func(usd float64, _ bool) { cost = usd })
 	if err != nil {
 		return []string{UnclassifiedTag}, cost, true
 	}

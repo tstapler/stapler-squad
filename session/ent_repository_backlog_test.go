@@ -1144,3 +1144,79 @@ func TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestF
 	assert.Equal(t, SessionRoleWork, matches[0].SessionRole, "newer row (session_role=work) must appear first")
 	assert.Equal(t, SessionRoleTriage, matches[1].SessionRole, "older row (session_role=triage) must appear second")
 }
+
+// newTestItemSessionForCost creates a backlog item and an ItemSession for it,
+// for Epic 2.5's UpdateItemSessionCost/cost_priced tests below.
+func newTestItemSessionForCost(t *testing.T, repo *EntRepository, ctx context.Context) ItemSessionSummary {
+	t.Helper()
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item for cost bookkeeping test"})
+	require.NoError(t, err)
+	is, err := repo.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "cost-test-" + item.ID,
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	return is
+}
+
+// TestUpdateItemSessionCost_should_IncrementCostAndKeepPricedTrue_When_CallIsPriced
+// covers Story 2.5.2's happy path: a priced call adds to estimated_cost_usd and
+// leaves cost_priced at its schema default of true.
+func TestUpdateItemSessionCost_should_IncrementCostAndKeepPricedTrue_When_CallIsPriced(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	is := newTestItemSessionForCost(t, repo, ctx)
+
+	require.NoError(t, repo.UpdateItemSessionCost(ctx, is.ID, 1.25, true))
+
+	fetched, err := repo.GetItemSession(ctx, is.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 1.25, fetched.EstimatedCostUsd, 1e-9)
+	assert.True(t, fetched.CostPriced, "a priced call must leave cost_priced true")
+}
+
+// TestUpdateItemSessionCost_should_LeaveCostUnchangedAndSetPricedFalse_When_CallIsUnpriced
+// covers Story 2.5.2's error/edge path: an unpriced call must not be folded into
+// the running cost total as if it were a genuine $0, and must flip cost_priced
+// to false so the row is visibly known-incomplete.
+func TestUpdateItemSessionCost_should_LeaveCostUnchangedAndSetPricedFalse_When_CallIsUnpriced(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	is := newTestItemSessionForCost(t, repo, ctx)
+	require.NoError(t, repo.UpdateItemSessionCost(ctx, is.ID, 2.00, true))
+
+	require.NoError(t, repo.UpdateItemSessionCost(ctx, is.ID, 0, false))
+
+	fetched, err := repo.GetItemSession(ctx, is.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 2.00, fetched.EstimatedCostUsd, 1e-9, "an unpriced call must not change the running cost total")
+	assert.False(t, fetched.CostPriced, "an unpriced call must set cost_priced false")
+}
+
+// TestUpdateItemSessionCost_should_NotResetPricedToTrue_When_PricedCallFollowsUnpricedCall
+// covers the sticky-once-false invariant: once any contributing call for a
+// session has been unpriced, a later priced call must not paper over that by
+// resetting cost_priced back to true — the row's total is permanently missing
+// the unpriced call's real cost.
+func TestUpdateItemSessionCost_should_NotResetPricedToTrue_When_PricedCallFollowsUnpricedCall(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	is := newTestItemSessionForCost(t, repo, ctx)
+	require.NoError(t, repo.UpdateItemSessionCost(ctx, is.ID, 0, false))
+	require.NoError(t, repo.UpdateItemSessionCost(ctx, is.ID, 3.50, true))
+
+	fetched, err := repo.GetItemSession(ctx, is.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 3.50, fetched.EstimatedCostUsd, 1e-9, "the later priced call's cost must still be added")
+	assert.False(t, fetched.CostPriced, "cost_priced must stay false once any contributing call was unpriced")
+}
