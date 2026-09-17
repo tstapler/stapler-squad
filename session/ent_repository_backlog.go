@@ -2804,11 +2804,14 @@ func (r *EntRepository) GetAllItemSessionsWithBacklogInfo(ctx context.Context) (
 			continue
 		}
 		results = append(results, ItemSessionBacklogEntry{
-			SessionUUID: is.SessionUUID,
-			SessionRole: is.SessionRole,
-			ItemID:      is.Edges.BacklogItem.ID.String(),
-			ItemTitle:   is.Edges.BacklogItem.Title,
-			ItemStatus:  is.Edges.BacklogItem.Status,
+			SessionUUID:      is.SessionUUID,
+			SessionRole:      is.SessionRole,
+			ItemID:           is.Edges.BacklogItem.ID.String(),
+			ItemTitle:        is.Edges.BacklogItem.Title,
+			ItemStatus:       is.Edges.BacklogItem.Status,
+			EstimatedCostUsd: is.EstimatedCostUsd,
+			CostPriced:       is.CostPriced,
+			CreatedAt:        is.CreatedAt,
 		})
 	}
 	return results, nil

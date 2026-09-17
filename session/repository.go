@@ -515,6 +515,11 @@ type ItemSessionBacklogEntry struct {
 	ItemID      string
 	ItemTitle   string
 	ItemStatus  string
+	// EstimatedCostUsd, CostPriced, and CreatedAt mirror the underlying
+	// ItemSession row's own fields (session/ent/schema/item_session.go).
+	EstimatedCostUsd float64
+	CostPriced       bool
+	CreatedAt        time.Time
 }
 
 // BacklogItemFilter controls which items ListBacklogItems returns.
