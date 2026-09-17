@@ -17,6 +17,7 @@ import {
   BacklogProgressNote as BacklogProgressNoteProto,
   BacklogActivityNote as BacklogActivityNoteProto,
   PipelineMode as PipelineModeProto,
+  PipelineStageExecutor as PipelineStageExecutorProto,
 } from "@/gen/session/v1/backlog_pb";
 
 // ---------------------------------------------------------------------------
@@ -250,6 +251,14 @@ export interface PipelineMode {
   initialPromptTemplate: string;
   /** SHA-256 (hex, truncated to 16 chars) over the 9 content-template fields, computed server-side. */
   contentHash: string;
+  /**
+   * Per-stage {program, model} override, keyed by StageRole ("triage",
+   * "review", "work"). A missing key or empty program/model means "inherit
+   * the default executor for that role" — see session.PipelineStageExecutor.
+   * Optional so pre-existing call sites that construct a PipelineMode
+   * without it (older tests, fixtures) keep compiling.
+   */
+  stageExecutors?: Record<string, { program: string; model: string }>;
 }
 
 /**
@@ -271,6 +280,15 @@ export interface PipelineModeInput {
   triagePromptTemplate?: string;
   reviewPromptTemplate?: string;
   initialPromptTemplate?: string;
+  /** Per-stage {program, model} override — see PipelineMode.stageExecutors. */
+  stageExecutors?: Record<string, { program: string; model: string }>;
+  /**
+   * Bypasses the save-time pricing-table cross-check for an unrecognized
+   * literal model ID (Story 1.3.1's CodeInvalidArgument rejection) — set
+   * when the operator confirms via PipelineModeForm's "use it anyway"
+   * override (Task 5.1.1h).
+   */
+  forceUnknownModel?: boolean;
 }
 
 /**
@@ -466,6 +484,18 @@ function mapActivityNote(n: BacklogActivityNoteProto): ActivityNote {
   };
 }
 
+/** Strips the protobuf Message<> wrapper down to the plain {program, model} shape PipelineModeForm consumes. */
+function mapStageExecutors(
+  raw: { [key: string]: PipelineStageExecutorProto } | undefined
+): Record<string, { program: string; model: string }> {
+  const result: Record<string, { program: string; model: string }> = {};
+  if (!raw) return result;
+  for (const [role, executor] of Object.entries(raw)) {
+    result[role] = { program: executor.program, model: executor.model };
+  }
+  return result;
+}
+
 function mapPipelineMode(p: PipelineModeProto): PipelineMode {
   return {
     id: p.id,
@@ -483,6 +513,7 @@ function mapPipelineMode(p: PipelineModeProto): PipelineMode {
     reviewPromptTemplate: p.reviewPromptTemplate,
     initialPromptTemplate: p.initialPromptTemplate,
     contentHash: p.contentHash,
+    stageExecutors: mapStageExecutors(p.stageExecutors),
   };
 }
 
@@ -1136,6 +1167,8 @@ export function useBacklogService(): UseBacklogServiceReturn {
         triagePromptTemplate: data.triagePromptTemplate ?? "",
         reviewPromptTemplate: data.reviewPromptTemplate ?? "",
         initialPromptTemplate: data.initialPromptTemplate ?? "",
+        stageExecutors: data.stageExecutors ?? {},
+        forceUnknownModel: data.forceUnknownModel ?? false,
       });
       if (!resp.item) throw new Error("createPipelineMode: server returned no item");
       return mapPipelineMode(resp.item);
@@ -1163,6 +1196,9 @@ export function useBacklogService(): UseBacklogServiceReturn {
           triagePromptTemplate: data.triagePromptTemplate,
           reviewPromptTemplate: data.reviewPromptTemplate,
           initialPromptTemplate: data.initialPromptTemplate,
+          // undefined = leave stage executors untouched; present (even {}) = replace.
+          stageExecutors: data.stageExecutors !== undefined ? { values: data.stageExecutors } : undefined,
+          forceUnknownModel: data.forceUnknownModel,
         });
         if (!resp.item) throw new Error("updatePipelineMode: server returned no item");
         return mapPipelineMode(resp.item);
