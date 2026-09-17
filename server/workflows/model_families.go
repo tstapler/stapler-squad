@@ -4,18 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
-	"strings"
 
 	"github.com/tstapler/stapler-squad/session"
 )
-
-// modelFamilyPrefix namespaces a family alias in a workflow's stored Model field
-// (e.g. "family:sonnet"). Only this namespaced form is treated as an alias —
-// a bare "sonnet" string is left as a literal model ID, so a workflow that
-// historically stored that exact string (before family aliases existed) is
-// never silently reinterpreted.
-const modelFamilyPrefix = "family:"
 
 // DefaultModelFamilies returns the hardcoded family alias → concrete model ID
 // map, e.g. "sonnet" → "claude-sonnet-4-6". Keep in sync with the frontend's
@@ -65,34 +56,15 @@ func LoadModelFamilyOverride(configPath string) (map[string]string, error) {
 }
 
 // ResolveModel resolves a workflow's stored Model value to a concrete model ID
-// using families. Values without the "family:" prefix (including "") pass
-// through unchanged. An unknown or retired family alias returns an error
-// rather than passing the broken "family:xxx" string through to the CLI.
+// using families.
 //
-// Decision record (client vs. server-side family resolution): resolution
-// happens here, server-side, at fire-time — not client-side at save-time —
-// so that updating a family's "latest" model only requires editing this
-// package's override file (LoadModelFamilyOverride), with no frontend
-// redeploy needed to pick it up. It also means every fire (manual RunWorkflow
-// and cron) always resolves against the current map, and a workflow that
-// already stores a concrete model ID (pre-dating this feature) is never
-// touched — ResolveModel is a no-op for any value without the "family:"
-// prefix.
+// Delegates to session.ResolveModel — the pure alias-resolution logic moved
+// there (Task 2.2.1a) so both FireNow and this project's new work-stage/
+// headless spawn paths (which live in session, not server/workflows) resolve
+// family aliases through one shared implementation instead of two
+// independently-drifting copies.
 func ResolveModel(families map[string]string, model string) (string, error) {
-	if !strings.HasPrefix(model, modelFamilyPrefix) {
-		return model, nil
-	}
-	alias := strings.TrimPrefix(model, modelFamilyPrefix)
-	resolved, ok := families[alias]
-	if !ok {
-		known := make([]string, 0, len(families))
-		for k := range families {
-			known = append(known, k)
-		}
-		sort.Strings(known)
-		return "", fmt.Errorf("unknown model family %q (known families: %s)", alias, strings.Join(known, ", "))
-	}
-	return resolved, nil
+	return session.ResolveModel(families, model)
 }
 
 // ValidateModel validates a workflow's Model field at save time (CreateWorkflow/
