@@ -126,6 +126,13 @@ const terminalResyncBatchingFlagName = "terminal:resync-batching"
 
 const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
 
+// terminalAppScrollForwardingClaudeFlagName mirrors
+// config.FeatureAppScrollForwardingClaude so knownFeatureFlags below doesn't
+// duplicate the literal -- see config/config.go for the flag's full
+// documentation and
+// project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
+const terminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForwardingClaude
+
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
 // BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
@@ -222,6 +229,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        worktreeChangeDetectionFlagName,
 		description: "Watch each session's .git dir via fsnotify and run a staggered 15s periodic cheap dirty/HEAD check to invalidate the diff-stats and VCS-status caches, letting both widen from a 15s to a 5-minute TTL. Applies to newly-created worktrees only; already-open sessions keep today's 15s pure-TTL behavior until restarted. Default: off.",
+	},
+	{
+		name:        terminalAppScrollForwardingClaudeFlagName,
+		description: "Forward Claude Code's own PageUp scroll keybinding into its fullscreen conversation view instead of tmux-native scrollback capture, for eligible sessions (AppScrollGate: adapter coverage, alt-screen active, idle status, exactly one connected viewer). Flag-off always falls through to the unchanged tmux-native scrollback path, regardless of AppScrollGate's verdict. Default: off.",
 	},
 	{
 		name:        piSupportFlagName,

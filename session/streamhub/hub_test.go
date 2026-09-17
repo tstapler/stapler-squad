@@ -3,6 +3,7 @@ package streamhub_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -287,5 +288,129 @@ func TestStreamHub_should_StayAliveAndRetryLater_When_CapturePaneContentErrorsWi
 
 	if !waitFor(t, time.Second, func() bool { return controller.resizeCallCount(120, 40) == 1 }) {
 		t.Fatalf("expected the hub to still service a later resize once the controller recovers")
+	}
+}
+
+// TestStreamHub_AttachSubscriber_should_BlockUntilForwardScrollReleases_When_ScrollForwardAttachBarrierHeld
+// is the architecture-review BLOCKER regression test for Story 1.3.1's
+// ScrollForwardAttachBarrier: a second client's AttachSubscriber call must
+// never observe a mid-scroll pane as its catch-up snapshot. Simulates an
+// in-flight Instance.ForwardScroll call by holding BeginScrollForward's
+// release directly (ForwardScroll itself lives in the session package, which
+// imports streamhub, so it can't be exercised from here without an import
+// cycle -- the barrier's own mechanism is what this test verifies, not
+// ForwardScroll's orchestration around it, which session's own
+// TestForwardScroll_should_ReleaseLeaseAndAttachBarrier_When_* tests cover).
+func TestStreamHub_AttachSubscriber_should_BlockUntilForwardScrollReleases_When_ScrollForwardAttachBarrierHeld(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	controller := newFakeSessionController()
+	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	defer hub.ForceTeardown()
+
+	release := hub.BeginScrollForward()
+
+	attachReturned := make(chan streamhub.SubscriberID, 1)
+	go func() {
+		id := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{CanResize: true})
+		attachReturned <- id
+	}()
+
+	// AttachSubscriber must not return while the barrier is held.
+	select {
+	case <-attachReturned:
+		t.Fatalf("AttachSubscriber returned while ScrollForwardAttachBarrier was still held")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	release()
+
+	select {
+	case <-attachReturned:
+	case <-time.After(time.Second):
+		t.Fatalf("AttachSubscriber did not return after ScrollForwardAttachBarrier was released")
+	}
+}
+
+// slowCaptureSessionController wraps fakeSessionController, making its
+// CapturePaneContentRawContext call block until release closes -- gives a
+// concurrent BeginScrollForward call a deterministic window to attempt to
+// acquire the barrier while an in-flight AttachSubscriber's catch-up
+// snapshot capture is still running, instead of relying on a sleep-based
+// race.
+type slowCaptureSessionController struct {
+	*fakeSessionController
+	captureStarted chan struct{}
+	release        chan struct{}
+	once           sync.Once
+}
+
+func (c *slowCaptureSessionController) CapturePaneContentRawContext(ctx context.Context) (streamhub.RawPaneContent, error) {
+	c.once.Do(func() { close(c.captureStarted) })
+	<-c.release
+	return c.fakeSessionController.CapturePaneContentRawContext(ctx)
+}
+
+// TestStreamHub_BeginScrollForward_should_BlockUntilAttachSubscriberCatchUpSnapshotCompletes_When_AttachStartedFirst
+// is the reverse-direction regression test for Fix 4 (architecture-review
+// BLOCKER): TestStreamHub_AttachSubscriber_should_BlockUntilForwardScrollReleases_When_ScrollForwardAttachBarrierHeld
+// above only covers a forward that starts before an attach. This covers the
+// other direction the bug actually lived in -- an attach that starts first
+// and is still mid catch-up-snapshot capture when a forward tries to begin
+// -- asserting BeginScrollForward blocks until the attach's catch-up
+// snapshot has actually completed, not just until an initial barrier check
+// passes.
+func TestStreamHub_BeginScrollForward_should_BlockUntilAttachSubscriberCatchUpSnapshotCompletes_When_AttachStartedFirst(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	base := newFakeSessionController()
+	base.captureContent = "pane content"
+	controller := &slowCaptureSessionController{
+		fakeSessionController: base,
+		captureStarted:        make(chan struct{}),
+		release:               make(chan struct{}),
+	}
+	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	defer hub.ForceTeardown()
+
+	attachReturned := make(chan streamhub.SubscriberID, 1)
+	go func() {
+		id := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{CanResize: true})
+		attachReturned <- id
+	}()
+
+	select {
+	case <-controller.captureStarted:
+	case <-time.After(time.Second):
+		t.Fatalf("AttachSubscriber never reached its catch-up snapshot capture")
+	}
+
+	forwardAcquired := make(chan struct{}, 1)
+	go func() {
+		release := hub.BeginScrollForward()
+		forwardAcquired <- struct{}{}
+		release()
+	}()
+
+	// BeginScrollForward must not acquire the barrier while the in-flight
+	// attach's catch-up snapshot capture is still running.
+	select {
+	case <-forwardAcquired:
+		t.Fatalf("BeginScrollForward acquired the barrier while AttachSubscriber's catch-up snapshot capture was still in flight")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(controller.release)
+
+	select {
+	case <-attachReturned:
+	case <-time.After(time.Second):
+		t.Fatalf("AttachSubscriber did not return after its catch-up snapshot capture completed")
+	}
+
+	select {
+	case <-forwardAcquired:
+	case <-time.After(time.Second):
+		t.Fatalf("BeginScrollForward did not acquire the barrier after AttachSubscriber released it")
 	}
 }

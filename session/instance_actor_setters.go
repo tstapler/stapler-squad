@@ -314,6 +314,20 @@ func (i *Instance) SetProgram(program string) {
 	})
 }
 
+// ---- AltScreenActive --------------------------------------------------------------
+
+// setAltScreenActiveLocked mirrors setGitHubResolutionLocked's shape: mutate
+// under s.inst.mu, republish the snapshot before releasing it. Called only
+// from Instance.ObserveAltScreenTransition, and only when altScreenTracker
+// reports a real state change, so this doesn't run on every PTY output chunk.
+func setAltScreenActiveLocked(s *instanceState, active bool) {
+	s.inst.mu.Lock()
+	s.inst.AltScreenActive = active
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
 // ---- LastAddedToQueue -----------------------------------------------------------
 
 func setLastAddedToQueueLocked(s *instanceState, t time.Time) {

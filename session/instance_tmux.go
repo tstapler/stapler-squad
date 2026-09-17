@@ -1017,6 +1017,38 @@ func (i *Instance) logFastLaneAssertionFailure(method string) {
 		"method", method, "instanceID", i.UUID, "title", i.Title)
 }
 
+// IsAlternateScreenActiveBootstrap directly queries tmux (`#{alternate_on}`)
+// for whether this instance's pane is currently showing its alternate
+// screen buffer -- unlike GetAltScreenActive(), which only reflects
+// transitions ObserveAltScreenTransition has actually observed live. Used
+// once to bootstrap the initial snapshot sent to a fresh connection/hub
+// (server/services/connectrpc_websocket.go's altScreenActiveForSnapshot):
+// a session that entered alt screen before any output tap started
+// observing it would otherwise report false forever, since byte-stream
+// tracking alone can never recover a transition it missed. A successful
+// query also persists its result via SetAltScreenActiveBootstrap, so
+// AppScrollGate's own GetAltScreenActive() read sees the corrected value
+// too, not just the one-off snapshot this call was made for. Returns false
+// (not an error) for a non-tmux backend or a failed query -- this is a
+// best-effort bootstrap, not a required capability.
+func (i *Instance) IsAlternateScreenActiveBootstrap() bool {
+	tb, ok := i.processManager.(*TmuxBackend)
+	if !ok {
+		return false
+	}
+	tpm, ok := tb.TmuxManager().(*TmuxProcessManager)
+	if !ok {
+		return false
+	}
+	active, err := tpm.IsAlternateScreenActive()
+	if err != nil {
+		log.ForSession(i.Title).Debug("IsAlternateScreenActiveBootstrap query failed", "err", err)
+		return false
+	}
+	i.SetAltScreenActiveBootstrap(active)
+	return active
+}
+
 // CapturePaneContentRaw captures pane content with ANSI codes preserved (no line joining).
 // Essential for hybrid streaming where cursor positioning codes must be preserved.
 func (i *Instance) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {

@@ -48,6 +48,13 @@ func (i *Instance) GetProgram() string {
 	return i.Snapshot().Program
 }
 
+// GetAltScreenActive reports whether this instance's pane was last observed
+// in the alternate screen buffer. Reads via Snapshot(), not the raw field --
+// see .claude/rules/instance-lock-free-reads.md.
+func (i *Instance) GetAltScreenActive() bool {
+	return i.Snapshot().AltScreenActive
+}
+
 // MatchesID reports whether id refers to this instance.
 // Accepts the stable UUID, the legacy Title, or the full tmux session name
 // (e.g. "staplersquad_my-session") so that hook notifications sent from inside

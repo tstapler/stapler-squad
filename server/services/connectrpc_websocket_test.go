@@ -2015,8 +2015,8 @@ func TestRunInputReadLoopExitsPromptlyOnConnectionClose(t *testing.T) {
 		recordedInput = append(recordedInput, cp)
 	}
 	onResize := func(cols, rows int) {}
-	onScrollbackRequest := func(startLine, endLine string) (string, error) {
-		return "", nil
+	onScrollbackRequest := func(startLine, endLine string) (ScrollbackResult, error) {
+		return ScrollbackResult{}, nil
 	}
 	onCurrentPaneRequest := func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 		return &sessionv1.TerminalOutput{}, nil
@@ -2443,7 +2443,7 @@ func TestRunInputReadLoop_should_InvokeOnCurrentPaneRequestOnce_When_CurrentPane
 	}
 	onInput := func(data []byte) {}
 	onResize := func(cols, rows int) {}
-	onScrollbackRequest := func(startLine, endLine string) (string, error) { return "", nil }
+	onScrollbackRequest := func(startLine, endLine string) (ScrollbackResult, error) { return ScrollbackResult{}, nil }
 
 	doneChan := make(chan struct{})
 	errChan := make(chan error, 2)
@@ -3502,4 +3502,141 @@ func TestStreamTerminal_should_PopulateConnectionCount_When_SessionIsPathHubOwne
 func TestStreamTerminal_should_OmitConnectionCount_When_SessionIsPathLegacyPerConnection(t *testing.T) {
 	msg := &sessionv1.TerminalOutput{Data: []byte("legacy output")}
 	require.Nil(t, msg.ConnectionCount, "legacy-path TerminalOutput must never carry a fabricated connection_count")
+}
+
+// TestHandleScrollbackRequest_should_RouteToCorrectResponseTypeOnMockStream_When_BothCallSitesExercised
+// is Task 1.3.3d's integration test: a table covering both branches
+// handleScrollbackRequest can take, asserting the correct TerminalData oneof
+// variant lands on the wire -- an AppScrollbackResponse when
+// onScrollbackRequest's ScrollbackResult carries a populated AppScroll, and
+// the existing, unchanged ScrollbackResponse otherwise. onScrollbackRequest
+// itself is faked here (scrollbackResultForRequest's own AppScrollGate/
+// ForwardScroll wiring is covered separately by
+// TestForwardScroll_should_* in the session package and this file's
+// AppScrollGate-driven closures), matching this file's existing convention
+// of faking the callback field rather than standing up a real Instance.
+func TestHandleScrollbackRequest_should_RouteToCorrectResponseTypeOnMockStream_When_BothCallSitesExercised(t *testing.T) {
+	tests := []struct {
+		name                string
+		onScrollbackRequest func(startLine, endLine string) (ScrollbackResult, error)
+		wantAppScroll       bool
+	}{
+		{
+			name: "app-forwarded path taken",
+			onScrollbackRequest: func(startLine, endLine string) (ScrollbackResult, error) {
+				return ScrollbackResult{AppScroll: &AppScrollResult{
+					Content:   []byte("claude's own scrolled transcript"),
+					Outcome:   sessionv1.ScrollForwardOutcome_DELIVERED,
+					Program:   "claude",
+					ForwardID: "fwd-1",
+				}}, nil
+			},
+			wantAppScroll: true,
+		},
+		{
+			name: "tmux-native path taken, unchanged",
+			onScrollbackRequest: func(startLine, endLine string) (ScrollbackResult, error) {
+				return ScrollbackResult{Content: "line1\nline2\n"}, nil
+			},
+			wantAppScroll: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assertScrollbackRequestRoutesTo(t, tt.onScrollbackRequest, tt.wantAppScroll)
+		})
+	}
+}
+
+// assertScrollbackRequestRoutesTo drives one handleScrollbackRequest call
+// against a real WebSocket pair and asserts which TerminalData oneof variant
+// arrived, split out of the table loop above to stay under this repo's
+// function-length gate.
+func assertScrollbackRequestRoutesTo(t *testing.T, onScrollbackRequest func(startLine, endLine string) (ScrollbackResult, error), wantAppScroll bool) {
+	t.Helper()
+	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	handleScrollbackRequest(serverStream, "test-session", &sessionv1.ScrollbackRequest{FromSequence: 0, Limit: 100}, onScrollbackRequest)
+
+	env := readEnvelopeFromClient(t, clientConn)
+	var td sessionv1.TerminalData
+	require.NoError(t, proto.Unmarshal(env.Data, &td))
+
+	appResp := td.GetAppScrollbackResponse()
+	nativeResp := td.GetScrollbackResponse()
+
+	if wantAppScroll {
+		require.NotNil(t, appResp, "expected an AppScrollbackResponse, got %T", td.Data)
+		require.Nil(t, nativeResp, "must not also send a ScrollbackResponse")
+		require.Equal(t, sessionv1.ScrollForwardOutcome_DELIVERED, appResp.Outcome)
+		require.Equal(t, "claude", appResp.Program)
+		return
+	}
+	require.NotNil(t, nativeResp, "expected a ScrollbackResponse, got %T", td.Data)
+	require.Nil(t, appResp, "must not also send an AppScrollbackResponse")
+}
+
+// TestScrollbackResultForRequest_should_SkipAppScrollGate_When_FlagIsOff is
+// Task 1.5.1d's flag-off case: scrollbackResultForRequest must never touch
+// p.instance at all when terminalAppScrollForwardingClaudeFlagName is off --
+// proven structurally, not just by reading the code, by passing a nil
+// *session.Instance. AppScrollGate(nil, ...) panics immediately (inst.
+// GetProgram() dereferences a nil receiver's field), so a passing test here
+// is decisive proof the gate call was skipped, not merely that it returned
+// false.
+func TestScrollbackResultForRequest_should_SkipAppScrollGate_When_FlagIsOff(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	// Flag intentionally left unset (defaults false).
+
+	fallbackCalled := false
+	result, err := scrollbackResultForRequest(scrollbackRequestParams{
+		instance:  nil,
+		startLine: "-100",
+		endLine:   "-1",
+		logPrefix: "[test]",
+		fallback: func(startLine, endLine string) (string, error) {
+			fallbackCalled = true
+			return "tmux-native content", nil
+		},
+	})
+
+	require.NoError(t, err)
+	require.True(t, fallbackCalled, "fallback must be called when the flag is off")
+	require.Nil(t, result.AppScroll)
+	require.Equal(t, "tmux-native content", result.Content)
+}
+
+// TestScrollbackResultForRequest_should_AttemptAppScrollGate_When_FlagIsOn is
+// the mirror image of the test above (Task 1.5.1d's flag-on case): with the
+// flag on, scrollbackResultForRequest DOES reach AppScrollGate(p.instance,
+// ...), which panics against the same nil *session.Instance. Recovering that
+// panic here is the decisive signal that the gate was actually reached, not
+// skipped -- without it, the flag-off test above would pass vacuously even
+// if the flag check were deleted entirely.
+func TestScrollbackResultForRequest_should_AttemptAppScrollGate_When_FlagIsOn(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalAppScrollForwardingClaudeFlagName, true))
+
+	reachedGate := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				reachedGate = true
+			}
+		}()
+		_, _ = scrollbackResultForRequest(scrollbackRequestParams{
+			instance:  nil,
+			startLine: "-100",
+			endLine:   "-1",
+			logPrefix: "[test]",
+			fallback: func(startLine, endLine string) (string, error) {
+				return "tmux-native content", nil
+			},
+		})
+	}()
+
+	require.True(t, reachedGate, "AppScrollGate must be reached (and attempt to dereference p.instance) when the flag is on")
 }

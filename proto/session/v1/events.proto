@@ -109,6 +109,16 @@ message TerminalData {
     // (default off) — see BatchedCurrentPaneRequest's doc comment for the
     // unresolved default-on decision this message deliberately does not make.
     BatchedCurrentPaneRequest batched_current_pane_request = 19;
+
+    // A captured redraw from Instance.ForwardScroll (Epic 1.3, server →
+    // client), sent instead of ScrollbackResponse when AppScrollGate passes
+    // for the requesting session. Deliberately a distinct message rather than
+    // a reuse of ScrollbackResponse or TerminalOutput's ANSI_SNAPSHOT_PREFIX
+    // framing -- see plan.md's Pattern Decisions ("Response framing for a
+    // captured redraw") for why conflating the two risks a client-side
+    // dispatch ambiguity between a routine resize resync and a forwarded-
+    // scroll page.
+    AppScrollbackResponse app_scrollback_response = 20;
   }
 
   // Fields 8, 12, 13, 14, 15 (delta, state, diff, input_echo, ssp_negotiation)
@@ -123,6 +133,42 @@ message TerminalData {
   // Optional shell identifier. When non-empty, this TerminalData message is
   // scoped to a custom shell (sibling tmux session) rather than the main session.
   string shell_id = 17;
+}
+
+// ScrollForwardOutcome is the result of one Instance.ForwardScroll call
+// (Epic 1.3). See ScrollBlockedReason for which reasons accompany BLOCKED.
+enum ScrollForwardOutcome {
+  SCROLL_FORWARD_OUTCOME_UNSPECIFIED = 0;
+  DELIVERED = 1;
+  AT_TOP = 2;
+  NO_CAPABILITY = 3;
+  BLOCKED = 4;
+}
+
+// ScrollBlockedReason distinguishes *why* ForwardScroll returned BLOCKED --
+// deliberately three distinct values, not one generic "blocked" catch-all
+// (adversarial-review BLOCKER: a single reason can't tell a real 2+
+// subscriber MULTIPLE_VIEWERS block apart from the unconditional
+// UNSUPPORTED_STREAMING_PATH block every PathLegacyPerConnection session
+// gets regardless of actual viewer count -- see plan.md's Risk Control
+// "Concrete resolution" section). Meaningful only when outcome == BLOCKED.
+enum ScrollBlockedReason {
+  SCROLL_BLOCKED_REASON_UNSPECIFIED = 0;
+  MULTIPLE_VIEWERS = 1;
+  LEASE_CONTENTION = 2;
+  UNSUPPORTED_STREAMING_PATH = 3;
+}
+
+// AppScrollbackResponse carries one ForwardScroll call's captured redraw
+// back to the client.
+message AppScrollbackResponse {
+  bytes content = 1;
+  ScrollForwardOutcome outcome = 2;
+  string program = 3;
+  string forward_id = 4;
+  // blocked_reason is meaningful only when outcome == BLOCKED;
+  // SCROLL_BLOCKED_REASON_UNSPECIFIED for every other outcome.
+  ScrollBlockedReason blocked_reason = 5;
 }
 
 // ShellStatusUpdate notifies the client that a custom shell's status has changed.
@@ -169,6 +215,15 @@ message TerminalOutput {
   // `data` (an otherwise-empty TerminalOutput) when the server has a count
   // update but no new terminal bytes to send.
   optional int32 connection_count = 4;
+
+  // inst.GetAltScreenActive() at capture time — set only on an
+  // initial-connect/post-resize snapshot (never a live-output frame, which
+  // the client's own byte-scanning already tracks correctly). A
+  // `tmux capture-pane` snapshot can't carry a mode-switch sequence like
+  // DECSET 1049h, so without this, a client connecting to (or resizing) an
+  // already-alt-screen session never learns it — the common case for a
+  // long-running session, not an edge case.
+  optional bool alt_screen_active = 5;
 }
 
 // TerminalInput contains user input for the terminal (client to server)

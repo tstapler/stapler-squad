@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -194,5 +195,35 @@ func TestInstance_PreviewContext_FallsBackToPreviewOnGenuineCaptureError(t *test
 	}
 	if content != "pty buffer fallback content" {
 		t.Fatalf("PreviewContext() should fall back to Preview() on a genuine capture error, got: %q", content)
+	}
+}
+
+// TestInstance_GetAltScreenActive_should_ReflectTrackerObservation_When_ReadConcurrentlyWithPTYWrite
+// is the regression guard named by .claude/rules/instance-lock-free-reads.md:
+// GetAltScreenActive's lock-free Snapshot() read must not race a concurrent
+// setAltScreenActiveLocked write reached via ObserveAltScreenTransition. Run
+// with -race; the value observed after the writer goroutine finishes must
+// reflect the last transition it applied ("\x1b[?1049l" -> false).
+func TestInstance_GetAltScreenActive_should_ReflectTrackerObservation_When_ReadConcurrentlyWithPTYWrite(t *testing.T) {
+	inst := &Instance{Title: "altscreen-race-session"}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		inst.ObserveAltScreenTransition([]byte("\x1b[?1049h"))
+		inst.ObserveAltScreenTransition([]byte("\x1b[?1049l"))
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			_ = inst.GetAltScreenActive()
+		}
+	}()
+	wg.Wait()
+
+	if inst.GetAltScreenActive() {
+		t.Fatalf("GetAltScreenActive() = true after exit sequence, want false")
 	}
 }

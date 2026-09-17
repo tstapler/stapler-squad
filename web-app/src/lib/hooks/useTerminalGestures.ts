@@ -34,6 +34,21 @@ interface UseTerminalGesturesOptions {
   onSendData: (data: string) => void;
   /** Milliseconds of hold before a touch becomes a long-press selection. Default: 400ms. */
   longPressMs?: number;
+  /**
+   * Story 1.4.0 (Task 1.4.0c) — returns true when the terminal's alt-screen
+   * buffer is currently active. Consulted only inside the SCROLLING state's
+   * per-frame throttled callback (never a new recognizer/listener — see this
+   * hook's header comment on why a second touchmove pair must not exist).
+   */
+  isAltScreenActive?: () => boolean;
+  /**
+   * Story 1.4.0 (Task 1.4.0c) — called with a positive line count instead of
+   * `terminal.scrollLines()` when the SCROLLING state's drag resolves to the
+   * scroll-up direction (`lines < 0`) while isAltScreenActive() is true. Plain
+   * downward drags and plain-shell sessions are unaffected — same branch,
+   * same throttled callback, one new outcome inside it.
+   */
+  onAltScreenScrollUp?: (lines: number) => void;
 }
 
 /**
@@ -46,10 +61,14 @@ export function useTerminalGestures({
   terminalRef,
   onSendData,
   longPressMs = 400,
+  isAltScreenActive,
+  onAltScreenScrollUp,
 }: UseTerminalGesturesOptions): void {
   // Keep stable refs so event handlers don't form stale closures
   const onSendDataRef = useRef(onSendData);
   const longPressMsRef = useRef(longPressMs);
+  const isAltScreenActiveRef = useRef(isAltScreenActive);
+  const onAltScreenScrollUpRef = useRef(onAltScreenScrollUp);
 
   useEffect(() => {
     onSendDataRef.current = onSendData;
@@ -58,6 +77,14 @@ export function useTerminalGestures({
   useEffect(() => {
     longPressMsRef.current = longPressMs;
   }, [longPressMs]);
+
+  useEffect(() => {
+    isAltScreenActiveRef.current = isAltScreenActive;
+  }, [isAltScreenActive]);
+
+  useEffect(() => {
+    onAltScreenScrollUpRef.current = onAltScreenScrollUp;
+  }, [onAltScreenScrollUp]);
 
   useEffect(() => {
     const containerEl = containerRef.current;
@@ -243,7 +270,17 @@ export function useTerminalGestures({
             const moveDy = clientY - lastY;
             lastY = clientY;
             const lines = Math.round(-moveDy / cachedCellH);
-            if (lines !== 0) terminal.scrollLines(lines);
+            if (lines === 0) return;
+            // Story 1.4.0 (Task 1.4.0c) — an alt-screen pane has no xterm-native
+            // scrollback to move (research/architecture.md §3), so a scroll-up
+            // drag (lines < 0) is routed to the alt-screen trigger instead of
+            // terminal.scrollLines(). Downward drags and plain-shell sessions
+            // fall through unchanged.
+            if (lines < 0 && isAltScreenActiveRef.current?.() && onAltScreenScrollUpRef.current) {
+              onAltScreenScrollUpRef.current(-lines);
+              return;
+            }
+            terminal.scrollLines(lines);
           });
         }
         // Stay in PENDING if movement is small

@@ -41,8 +41,29 @@ export function useKeyboard(
       // contenteditable div (e.g. a rich-text omnibar) has no matching tagName, so it needs
       // its own check too. Matches the precedent in shortcutRegistry.ts's isInputElement and
       // OmnibarContext.tsx's equivalent guard.
+      //
+      // Also ignore a focused native button/link/role="button" element -- these have their
+      // own default keyboard activation (Enter/Space) the browser dispatches on the focused
+      // element itself, which a single-letter global shortcut has no business intercepting.
+      // Without this, registering e.g. an unscoped `Enter` handler here (page.tsx does, for
+      // "open the focused session row") calls preventDefault() on every Enter keydown on the
+      // page -- even when its own handler body no-ops -- silently breaking Enter-activation
+      // for every other focused button on the page (found via a real, reproducibly-failing
+      // scroll-forward-blocked-toast-keyboard.spec.ts case: Enter never dismissed the toast's
+      // "Got it" button, Space did, because Space isn't a registered shortcut key here).
+      // event.target can be the bare Document node itself (real apps never
+      // do this, but a test dispatching keydown directly on `document` does)
+      // -- Document has no getAttribute, so that call is optional-chained
+      // rather than assumed to exist on every EventTarget.
       const target = event.target as HTMLElement;
-      if (ignoreElements.includes(target.tagName) || target.isContentEditable) {
+      const tag = target.tagName;
+      if (
+        ignoreElements.includes(tag) ||
+        target.isContentEditable ||
+        tag === "BUTTON" ||
+        tag === "A" ||
+        target.getAttribute?.("role") === "button"
+      ) {
         return;
       }
 

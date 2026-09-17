@@ -92,6 +92,7 @@ type InstanceSnapshot struct {
 	UpdatedAt        time.Time
 	Status           Status
 	Program          string
+	AltScreenActive  bool
 	Height           int
 	Width            int
 	AutoYes          bool
@@ -170,6 +171,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		Status:                    i.Status,
 		CreationProgressUpdatedAt: i.creationProgressUpdatedAt,
 		Program:                   i.Program,
+		AltScreenActive:           i.AltScreenActive,
 		Height:                    i.Height,
 		Width:                     i.Width,
 		AutoYes:                   i.AutoYes,

@@ -135,13 +135,24 @@ type StreamHub struct {
 	// coalesce/flush pass per burst instead of each paying their own.
 	batchWindow *BatchWindow
 
-	// resizeMu guards negotiatedSize/resizing — kept separate from mu (the
-	// subscriber-registry lock) so a slow SessionController call (a real
-	// tmux ioctl/capture-pane) never blocks AttachSubscriber/
-	// DetachSubscriber/Broadcast on unrelated subscribers.
+	// resizeMu guards negotiatedSize/resizing/resizeGeneration — kept
+	// separate from mu (the subscriber-registry lock) so a slow
+	// SessionController call (a real tmux ioctl/capture-pane) never blocks
+	// AttachSubscriber/DetachSubscriber/Broadcast on unrelated subscribers.
 	resizeMu       sync.Mutex
 	negotiatedSize TerminalSize
 	resizing       bool
+	// resizeGeneration increments once per completed applyNegotiatedSize
+	// call (success or failure), alongside resizing flipping back to
+	// false. ForwardScroll (session package, via ResizeActivity) samples
+	// this and resizing before/after its own independent pane-capture
+	// window to detect a resize racing that capture (Fix 5) -- neither
+	// StreamHub.RequestResize nor applyNegotiatedSize acquires
+	// scrollForwardMu, so a resize can run fully concurrently with an
+	// in-flight ForwardScroll; this counter is how that race is made
+	// observable rather than silently corrupting ForwardScroll's
+	// before/after content diff.
+	resizeGeneration uint64
 
 	// resizeApplyMu serializes RequestResize's full negotiate-then-apply
 	// sequence end to end, across every subscriber attached to this hub.
@@ -190,6 +201,32 @@ type StreamHub struct {
 	// any hot path this hub's other locks were split out to protect.
 	// See TryStartPump's doc comment for why this exists.
 	pumpActive bool
+
+	// scrollForwardMu is the ScrollForwardAttachBarrier (plan.md Story
+	// 1.3.1, Task 1.3.1b): held for the full duration of an in-flight
+	// Instance.ForwardScroll call via BeginScrollForward, and held by
+	// AttachSubscriber across its entire attach sequence -- registration
+	// through sendCatchUpSnapshot's live pane capture -- not just a
+	// point-in-time check before mu's own critical section. A
+	// lock-then-immediately-unlock check alone left a window where a
+	// forward could start after the check passed but before the catch-up
+	// snapshot's capture completed, letting a newly-attached subscriber's
+	// catch-up snapshot be the mid-scroll pane content; holding it for the
+	// duration closes that structurally (architecture-review BLOCKER, Fix
+	// 4). Kept separate from mu so it's held only across the rare,
+	// multi-hundred-ms forward/attach path, never across the hot broadcast
+	// path in the common case. Always acquired before mu when both are
+	// needed (AttachSubscriber -> registerSubscriberLocked), never the
+	// reverse, so the two locks have one consistent ordering.
+	scrollForwardMu sync.Mutex
+}
+
+// BeginScrollForward claims the ScrollForwardAttachBarrier for the duration
+// of one Instance.ForwardScroll call, returning a release func the caller
+// must defer. See scrollForwardMu's doc comment.
+func (h *StreamHub) BeginScrollForward() (release func()) {
+	h.scrollForwardMu.Lock()
+	return h.scrollForwardMu.Unlock
 }
 
 // NewStreamHub constructs a StreamHub for one tmux session, starting in
@@ -293,27 +330,22 @@ func (h *StreamHub) MarkPumpExited() {
 // streamhub itself has no opinion on whether that's a legitimate reattach —
 // that policy belongs to HubRegistry (Epic 3).
 func (h *StreamHub) AttachSubscriber(transport Transport, capability SubscriberCapability) SubscriberID {
+	// scrollForwardMu is held for the entire attach sequence, through
+	// sendCatchUpSnapshot -- not just an initial lock-then-unlock barrier
+	// check -- so a BeginScrollForward call that starts after this attach
+	// has already passed the check can't begin until this attach's
+	// catch-up snapshot has actually been captured and sent. A
+	// point-in-time check alone left a window where an in-flight
+	// ForwardScroll could still start after the check but before
+	// sendCatchUpSnapshot's live pane capture, letting the newly-attached
+	// subscriber's catch-up snapshot be the mid-scroll pane (Fix 4,
+	// architecture-review BLOCKER). See scrollForwardMu's doc comment.
+	h.scrollForwardMu.Lock()
+	defer h.scrollForwardMu.Unlock()
+
 	id := NewSubscriberID()
 	sub := newSubscriber(id, transport, capability, h.subscriberBufferSize)
-
-	h.mu.Lock()
-	h.subscribers[id] = sub
-	h.cancelPendingTeardownLocked()
-	if h.teardownInFlight {
-		// ForceTeardown is mid-StopControlMode-call for this exact attach —
-		// tell its final state write to skip claiming HubTornDown even if
-		// this subscriber detaches again before that call returns (see
-		// ForceTeardown's doc comment).
-		h.reactivatedDuringTeardown = true
-	}
-	switch h.state {
-	case HubStarting, HubActive, HubDraining, HubTornDown:
-		h.state = HubActive
-	default:
-		panic("unhandled HubLifecycleState")
-	}
-	count := len(h.subscribers)
-	h.mu.Unlock()
+	count := h.registerSubscriberLocked(id, sub)
 
 	// Story 1.2.1's AC: a newly-attached subscriber receives a CatchUpSnapshot
 	// within this same call, not just the browser WebSocket path via its own
@@ -333,6 +365,32 @@ func (h *StreamHub) AttachSubscriber(transport Transport, capability SubscriberC
 		"can_resize", capability.CanResize, "can_write", capability.CanWrite)
 	recordSubscribersPerHub(count)
 	return id
+}
+
+// registerSubscriberLocked adds sub to the subscriber registry under mu,
+// transitioning the hub's lifecycle state and canceling any pending
+// teardown -- the mu-guarded portion of AttachSubscriber, split out so
+// AttachSubscriber itself stays under this repo's function-length gate.
+func (h *StreamHub) registerSubscriberLocked(id SubscriberID, sub *subscriber) (count int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.subscribers[id] = sub
+	h.cancelPendingTeardownLocked()
+	if h.teardownInFlight {
+		// ForceTeardown is mid-StopControlMode-call for this exact attach —
+		// tell its final state write to skip claiming HubTornDown even if
+		// this subscriber detaches again before that call returns (see
+		// ForceTeardown's doc comment).
+		h.reactivatedDuringTeardown = true
+	}
+	switch h.state {
+	case HubStarting, HubActive, HubDraining, HubTornDown:
+		h.state = HubActive
+	default:
+		panic("unhandled HubLifecycleState")
+	}
+	return len(h.subscribers)
 }
 
 // sendCatchUpSnapshot delivers the hub's current pane content directly to a
@@ -678,6 +736,7 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	defer func() {
 		h.resizeMu.Lock()
 		h.resizing = false
+		h.resizeGeneration++
 		h.resizeMu.Unlock()
 	}()
 

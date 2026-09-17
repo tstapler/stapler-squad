@@ -3068,6 +3068,22 @@ func cmCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 3*time.Second)
 }
 
+// capturePaneFailureLogArgs records the spawn-failure counter and
+// exists-cache invalidation every capture-pane variant below performs on a
+// failed subprocess call, and returns the log args (with stderr appended when
+// available) for the caller's own log.Warn — each variant's message and
+// error-wrap verb (%v vs %w) still differ, so those stay at the call site.
+func (t *TmuxSession) capturePaneFailureLogArgs(err error) []any {
+	recordFailure(time.Now())
+	t.invalidateExistsCache()
+	logArgs := []any{"session", t.sanitizedName, "err", err}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+		logArgs = append(logArgs, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
+	}
+	return logArgs
+}
+
 // defaultCapturePaneTimeout bounds the zero-arg CapturePaneContent* wrappers'
 // subprocess execution. runGated/runGatedWith's context.WithTimeout only
 // bounds the exec-gate *wait*, not the tmux subprocess call itself (fn()) --
@@ -3124,17 +3140,11 @@ func (t *TmuxSession) CapturePaneContentContext(ctx context.Context) (string, er
 		return t.cmdExec.Output(cmd)
 	})
 	if err != nil {
-		recordFailure(time.Now())
-		// Invalidate cache so TmuxAlive() returns false on the next call without
-		// waiting for the 5-second TTL. This prevents repeated ERROR-level subprocess
-		// failures when a session has died and the registry hasn't caught up yet.
-		t.invalidateExistsCache()
-		logArgs := []any{"session", t.sanitizedName, "err", err}
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-			logArgs = append(logArgs, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
-		}
-		log.Warn("failed to capture pane content for session", logArgs...)
+		// capturePaneFailureLogArgs invalidates the exists-cache so TmuxAlive()
+		// returns false on the next call without waiting for the 5-second TTL,
+		// preventing repeated ERROR-level subprocess failures when a session has
+		// died and the registry hasn't caught up yet.
+		log.Warn("failed to capture pane content for session", t.capturePaneFailureLogArgs(err)...)
 		// %w (not %v): preserves the error chain so a caller-side
 		// errors.Is(err, context.Canceled/DeadlineExceeded) check (e.g.
 		// Instance.PreviewContext) can still see through this wrap when the
@@ -3171,14 +3181,7 @@ func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
 		return t.cmdExec.Output(cmd)
 	})
 	if err != nil {
-		recordFailure(time.Now())
-		t.invalidateExistsCache()
-		logArgs := []any{"session", t.sanitizedName, "err", err}
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-			logArgs = append(logArgs, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
-		}
-		log.Warn("failed to capture pane content for session (fast lane)", logArgs...)
+		log.Warn("failed to capture pane content for session (fast lane)", t.capturePaneFailureLogArgs(err)...)
 		return "", fmt.Errorf("error capturing pane content for session '%s': %v", t.sanitizedName, err)
 	}
 	return sanitizeUTF8String(output), nil
@@ -3207,14 +3210,7 @@ func (t *TmuxSession) CapturePaneContentRawPriority(ctx context.Context) (string
 		return t.cmdExec.Output(cmd)
 	})
 	if err != nil {
-		recordFailure(time.Now())
-		t.invalidateExistsCache()
-		logArgs := []any{"session", t.sanitizedName, "err", err}
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-			logArgs = append(logArgs, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
-		}
-		log.Warn("failed to capture raw pane content for session (fast lane)", logArgs...)
+		log.Warn("failed to capture raw pane content for session (fast lane)", t.capturePaneFailureLogArgs(err)...)
 		return "", fmt.Errorf("error capturing raw pane content for session '%s': %v", t.sanitizedName, err)
 	}
 	return sanitizeUTF8String(output), nil
@@ -3349,6 +3345,27 @@ func (t *TmuxSession) GetCursorPosition() (x, y int, err error) {
 	}
 
 	return cursorX, cursorY, nil
+}
+
+// IsAlternateScreenActive reports whether the pane is currently showing its
+// alternate screen buffer, via tmux's own `#{alternate_on}` format variable
+// -- tmux already tracks this internally, so this is a direct query rather
+// than inference from observed byte transitions. Used to bootstrap
+// Instance.AltScreenActive (session/instance.go's ObserveAltScreenTransition)
+// for a session whose alt-screen entry happened before any control-mode/hub
+// output tap started observing it, which byte-stream tracking alone can
+// never recover (found while building the app-scrollback-forwarding E2E
+// suite: this is the common case for a session opened moments after it was
+// created, not an edge case).
+func (t *TmuxSession) IsAlternateScreenActive() (bool, error) {
+	cmd := t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName, "#{alternate_on}")
+	output, err := runGated(context.Background(), t.serverSocket, func() ([]byte, error) {
+		return t.cmdExec.Output(cmd)
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to query alternate screen state for session '%s': %w", t.sanitizedName, err)
+	}
+	return strings.TrimSpace(string(output)) == "1", nil
 }
 
 // GetPaneDimensions returns the current dimensions of the tmux pane.
