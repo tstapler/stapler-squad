@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -114,6 +115,15 @@ type ServerDependencies struct {
 	// HeadlessPool manages headless LLM calls. Nil when the claude binary is not found.
 	HeadlessPool *headless.Pool
 
+	// GeminiCaller is a headless.PoolClient adapter shelling out to the `gemini`
+	// CLI (backlog-stage-execution-costs Epic 3.1). Nil when the gemini binary is
+	// not found at startup. Not yet consulted by any call site: Epic 2.3's
+	// resolveHeadlessCaller/headlessCallers registry (which would dispatch a
+	// stage's headless call here when its PipelineMode configures program=
+	// "gemini") has not landed on this branch yet — this field is that epic's
+	// wiring point.
+	GeminiCaller *headless.GeminiCaller
+
 	// WorkflowRepo persists workflow definitions.
 	WorkflowRepo session.WorkflowRepository
 
@@ -188,6 +198,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		VNCDeps:                        rt.VNCDeps,
 		CDPDeps:                        rt.CDPDeps,
 		HeadlessPool:                   rt.HeadlessPool,
+		GeminiCaller:                   rt.GeminiCaller,
 		WorkflowRepo:                   rt.WorkflowRepo,
 		WorkflowScheduler:              rt.WorkflowScheduler,
 		TriggerFireEventRepo:           rt.TriggerFireEventRepo,
@@ -505,6 +516,12 @@ type RuntimeDeps struct {
 
 	// HeadlessPool manages headless LLM calling. Nil when claude binary is not found.
 	HeadlessPool *headless.Pool
+
+	// GeminiCaller is a headless.PoolClient adapter shelling out to the `gemini`
+	// CLI (backlog-stage-execution-costs Epic 3.1). Nil when the gemini binary is
+	// not found at startup — see the identical field's doc comment on
+	// ServerDependencies above.
+	GeminiCaller *headless.GeminiCaller
 
 	// WorkflowRepo persists workflow definitions.
 	WorkflowRepo session.WorkflowRepository
@@ -1530,6 +1547,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// depends on them, plus backlogSvc/sessionSummaryGenerator, all of which
 	// need backlogSvc (constructed after that early wiring).
 	var insightsSvc *services.InsightsService
+	var geminiCaller *headless.GeminiCaller
 	if tokenStore != nil {
 		pricing := tokens.DefaultPricingTable()
 		if configDir, cfgErr := config.GetConfigDir(); cfgErr == nil {
@@ -1545,6 +1563,24 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		if pricing.IsStale() {
 			log.Warn("pricing table is stale (an entry's EffectiveDate is 30+ days old)", "loadedAt", pricing.LoadedAt)
 		}
+
+		// GeminiCaller (backlog-stage-execution-costs Epic 3.1): only construct it
+		// when a gemini binary is actually detected at startup — an absent binary
+		// just means this field stays nil, exactly like HeadlessPool above when
+		// claude is missing. Detected via a direct exec.LookPath rather than
+		// config.GetAvailablePrograms() (a heavier shell-based scan across every
+		// candidate CLI) since GeminiCaller.Available() already re-probes with the
+		// same exec.LookPath primitive at call time — one detection mechanism for
+		// this binary, not two. Nested under tokenStore != nil because it reuses
+		// the pricing table already loaded for InsightsService just above, rather
+		// than loading pricing a second, independent way.
+		if _, lookErr := exec.LookPath("gemini"); lookErr == nil {
+			geminiCaller = headless.NewGeminiCaller("gemini", pricing, 5)
+			log.Info("gemini headless caller initialized", "maxConcurrent", 5)
+		} else {
+			log.Warn("gemini headless caller disabled: gemini binary not found", "err", lookErr)
+		}
+
 		associator := tokens.NewAssociator(storage)
 		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator, storage)
 		insightsSvc.SetDismissedFindingsStore(storage)
@@ -1750,6 +1786,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	return &RuntimeDeps{
 		HeadlessPool:                   headlessPool,
+		GeminiCaller:                   geminiCaller,
 		ServiceDeps:                    svc,
 		Instances:                      instances,
 		ReactiveQueueMgr:               reactiveQueueMgr,

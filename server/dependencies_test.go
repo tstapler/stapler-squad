@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -77,6 +78,31 @@ func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueu
 		t.Errorf("SessionService's SlackNotifier is not the same instance as deps.SlackNotifier (split-brain regression, commit 13ad9c260): got %p, want %p",
 			deps.SessionService.SlackNotifierForTest(), deps.SlackNotifier)
 	}
+}
+
+// TestBuildDependencies_should_WireGeminiCaller_When_GeminiBinaryDetected is the
+// Task 3.1.2b integration test: confirms BuildDependencies actually constructs
+// a *headless.GeminiCaller when the gemini binary is present at startup,
+// mirroring HeadlessPool's own "non-fatal, just leave the field nil, if the
+// binary is missing" pattern (this branch does not yet register it into a
+// headlessCallers registry — Epic 2.3, not landed yet — see GeminiCaller's
+// doc comment on ServerDependencies). Skips (rather than asserting nil) when
+// gemini genuinely isn't installed on the machine running this test —
+// mirroring config.GetAvailablePrograms' own tests' convention of skipping
+// gracefully for an optional candidate CLI not guaranteed present in every
+// dev/CI environment.
+func TestBuildDependencies_should_WireGeminiCaller_When_GeminiBinaryDetected(t *testing.T) {
+	if _, lookErr := exec.LookPath("gemini"); lookErr != nil {
+		t.Skip("gemini binary not found on PATH; skipping (see config.GetAvailablePrograms' analogous convention)")
+	}
+
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+
+	require.NotNil(t, deps.GeminiCaller, "expected GeminiCaller to be wired when the gemini binary is detected at startup")
+	assert.True(t, deps.GeminiCaller.Available())
 }
 
 func TestBuildServiceDeps_RejectsNilCore(t *testing.T) {
