@@ -155,6 +155,93 @@ func TestCreatePipelineMode_should_PersistAndInvalidateCacheSynchronously_When_V
 		"expected the new mode's rendered prompt with no stale-cache window")
 }
 
+// TestCreatePipelineMode_should_PersistStageExecutorsAndReturnInResponse_When_ValidTriageOverrideProvided
+// (Story 1.2.2) proves stage_executors round-trips through the full Create
+// RPC -> repository -> response path.
+func TestCreatePipelineMode_should_PersistStageExecutorsAndReturnInResponse_When_ValidTriageOverrideProvided(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newPipelineModeTestService(t)
+	ctx := t.Context()
+
+	createResp, err := svc.CreatePipelineMode(ctx, connect.NewRequest(&sessionv1.CreatePipelineModeRequest{
+		Slug: "cheap-triage",
+		Name: "Cheap Triage",
+		StageExecutors: map[string]*sessionv1.PipelineStageExecutor{
+			"triage": {Model: "claude-haiku-4-5"},
+		},
+	}))
+	require.NoError(t, err)
+	require.Contains(t, createResp.Msg.Item.StageExecutors, "triage")
+	assert.Equal(t, "claude-haiku-4-5", createResp.Msg.Item.StageExecutors["triage"].Model)
+	assert.Empty(t, createResp.Msg.Item.StageExecutors["triage"].Program)
+
+	getResp, err := svc.GetPipelineMode(ctx, connect.NewRequest(&sessionv1.GetPipelineModeRequest{Slug: "cheap-triage"}))
+	require.NoError(t, err)
+	require.Contains(t, getResp.Msg.Item.StageExecutors, "triage")
+	assert.Equal(t, "claude-haiku-4-5", getResp.Msg.Item.StageExecutors["triage"].Model)
+}
+
+// TestUpdatePipelineMode_should_ReplaceStageExecutors_When_StageExecutorsUpdateProvided
+// proves UpdatePipelineMode's StageExecutorsUpdate wrapper replaces the
+// existing map entirely when present, distinguishing that from "untouched"
+// (nil, covered by the round trip already exercised elsewhere in this file).
+func TestUpdatePipelineMode_should_ReplaceStageExecutors_When_StageExecutorsUpdateProvided(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newPipelineModeTestService(t)
+	ctx := t.Context()
+
+	createResp, err := svc.CreatePipelineMode(ctx, connect.NewRequest(&sessionv1.CreatePipelineModeRequest{
+		Slug: "cheap-triage",
+		Name: "Cheap Triage",
+		StageExecutors: map[string]*sessionv1.PipelineStageExecutor{
+			"triage": {Model: "claude-haiku-4-5"},
+		},
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.Item.Id
+
+	updateResp, err := svc.UpdatePipelineMode(ctx, connect.NewRequest(&sessionv1.UpdatePipelineModeRequest{
+		Id: id,
+		StageExecutors: &sessionv1.StageExecutorsUpdate{
+			Values: map[string]*sessionv1.PipelineStageExecutor{
+				"review": {Model: "claude-opus-4-5"},
+			},
+		},
+	}))
+	require.NoError(t, err)
+	require.Contains(t, updateResp.Msg.Item.StageExecutors, "review")
+	assert.Equal(t, "claude-opus-4-5", updateResp.Msg.Item.StageExecutors["review"].Model)
+	assert.NotContains(t, updateResp.Msg.Item.StageExecutors, "triage",
+		"a present StageExecutorsUpdate must replace the map entirely, not merge")
+}
+
+// TestUpdatePipelineMode_should_LeaveStageExecutorsUntouched_When_StageExecutorsFieldOmitted
+// proves an omitted (nil) StageExecutors field on UpdatePipelineModeRequest
+// leaves existing overrides alone.
+func TestUpdatePipelineMode_should_LeaveStageExecutorsUntouched_When_StageExecutorsFieldOmitted(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newPipelineModeTestService(t)
+	ctx := t.Context()
+
+	createResp, err := svc.CreatePipelineMode(ctx, connect.NewRequest(&sessionv1.CreatePipelineModeRequest{
+		Slug: "cheap-triage",
+		Name: "Cheap Triage",
+		StageExecutors: map[string]*sessionv1.PipelineStageExecutor{
+			"triage": {Model: "claude-haiku-4-5"},
+		},
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.Item.Id
+
+	updateResp, err := svc.UpdatePipelineMode(ctx, connect.NewRequest(&sessionv1.UpdatePipelineModeRequest{
+		Id:   id,
+		Name: strPtr("Cheap Triage Renamed"),
+	}))
+	require.NoError(t, err)
+	require.Contains(t, updateResp.Msg.Item.StageExecutors, "triage")
+	assert.Equal(t, "claude-haiku-4-5", updateResp.Msg.Item.StageExecutors["triage"].Model)
+}
+
 // ─── TestUpdatePipelineMode ─────────────────────────────────────────────────
 
 // TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidationFailsAfterSuccessfulDBWrite

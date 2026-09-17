@@ -72,7 +72,50 @@ func pipelineModeToProto(pm *ent.PipelineMode) *sessionv1.PipelineMode {
 			pm.ReviewPromptTemplate,
 			pm.InitialPromptTemplate,
 		),
+		StageExecutors: stageExecutorsToProto(pm),
 	}
+}
+
+// stageExecutorsToProto parses pm's stage_executors_json and converts it to
+// the proto map shape. A parse error means a malformed column (should never
+// happen since session.SerializeStageExecutors is the only writer) — logged
+// and treated as no overrides configured rather than failing the whole
+// response for one bad row.
+func stageExecutorsToProto(pm *ent.PipelineMode) map[string]*sessionv1.PipelineStageExecutor {
+	stageExecutors, err := session.ParseStageExecutors(pm.StageExecutorsJSON)
+	if err != nil {
+		log.WarningLog().Printf("[PipelineMode] failed to parse stage_executors_json for pipeline mode %s: %v — treating as empty", pm.ID, err)
+		stageExecutors = map[session.StageRole]session.PipelineStageExecutor{}
+	}
+	protoStageExecutors := make(map[string]*sessionv1.PipelineStageExecutor, len(stageExecutors))
+	for role, executor := range stageExecutors {
+		protoStageExecutors[string(role)] = &sessionv1.PipelineStageExecutor{
+			Program: executor.Program,
+			Model:   executor.Model,
+		}
+	}
+	return protoStageExecutors
+}
+
+// stageExecutorsFromProto converts the wire map shape into the domain map
+// keyed by session.StageRole. Key validation against the 3 known roles is
+// Epic 1.3's responsibility (ValidatePipelineModeContent); this function
+// performs no validation of its own.
+func stageExecutorsFromProto(m map[string]*sessionv1.PipelineStageExecutor) map[session.StageRole]session.PipelineStageExecutor {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[session.StageRole]session.PipelineStageExecutor, len(m))
+	for role, executor := range m {
+		if executor == nil {
+			continue
+		}
+		out[session.StageRole(role)] = session.PipelineStageExecutor{
+			Program: executor.Program,
+			Model:   executor.Model,
+		}
+	}
+	return out
 }
 
 // pipelineCacheInvalidator is a narrow, consumer-defined interface (per
@@ -145,6 +188,7 @@ func (s *BacklogService) CreatePipelineMode(
 		TriagePromptTemplate:  req.Msg.TriagePromptTemplate,
 		ReviewPromptTemplate:  req.Msg.ReviewPromptTemplate,
 		InitialPromptTemplate: req.Msg.InitialPromptTemplate,
+		StageExecutors:        stageExecutorsFromProto(req.Msg.StageExecutors),
 	}
 
 	pm, err := s.pipelineModeRepo.Create(ctx, input)
@@ -229,6 +273,15 @@ func (s *BacklogService) UpdatePipelineMode(
 		TriagePromptTemplate:  req.Msg.TriagePromptTemplate,
 		ReviewPromptTemplate:  req.Msg.ReviewPromptTemplate,
 		InitialPromptTemplate: req.Msg.InitialPromptTemplate,
+	}
+	// nil StageExecutors on the wire means "leave untouched"; present (even
+	// empty) means "replace" — matching StageExecutorsUpdate's doc comment.
+	if req.Msg.StageExecutors != nil {
+		stageExecutors := stageExecutorsFromProto(req.Msg.StageExecutors.Values)
+		if stageExecutors == nil {
+			stageExecutors = map[session.StageRole]session.PipelineStageExecutor{}
+		}
+		update.StageExecutors = &stageExecutors
 	}
 
 	pm, err := s.pipelineModeRepo.Update(ctx, id, update)

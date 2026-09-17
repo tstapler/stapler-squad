@@ -294,6 +294,18 @@ message PipelineMode {
   // detect drift between a session's frozen snapshot hash and this mode's
   // current content.
   string content_hash = 17;
+  // stage_executors maps a StageRole ("triage", "review", "work") to the
+  // per-stage program/model override — see session.PipelineStageExecutor.
+  // Absent keys mean "inherit the default executor for that role."
+  map<string, PipelineStageExecutor> stage_executors = 18;
+}
+
+// PipelineStageExecutor is the proto shape of session.PipelineStageExecutor —
+// an optional program/model override for a single pipeline stage. Both
+// fields empty means "inherit the default executor for that role."
+message PipelineStageExecutor {
+  string program = 1;
+  string model = 2;
 }
 
 // LivenessDefinition is the proto representation of session.LivenessDefinition
@@ -871,6 +883,7 @@ message CreatePipelineModeRequest {
   string triage_prompt_template = 11;
   string review_prompt_template = 12;
   string initial_prompt_template = 13;
+  map<string, PipelineStageExecutor> stage_executors = 14;
 }
 
 message CreatePipelineModeResponse {
@@ -891,6 +904,18 @@ message UpdatePipelineModeRequest {
   optional string triage_prompt_template = 11;
   optional string review_prompt_template = 12;
   optional string initial_prompt_template = 13;
+  // stage_executors is nil-means-untouched (proto3 has no field presence for
+  // map/repeated fields directly, so it's wrapped): unset leaves existing
+  // stage executor overrides alone; present-but-empty clears all of them.
+  optional StageExecutorsUpdate stage_executors = 14;
+}
+
+// StageExecutorsUpdate wraps a stage-executors map so UpdatePipelineModeRequest
+// can distinguish "field not sent" (nil, leave untouched) from "field sent
+// empty" (clear all overrides) — proto3 maps have no presence tracking on
+// their own.
+message StageExecutorsUpdate {
+  map<string, PipelineStageExecutor> values = 1;
 }
 
 message UpdatePipelineModeResponse {
