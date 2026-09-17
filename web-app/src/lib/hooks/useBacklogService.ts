@@ -114,6 +114,37 @@ export interface LinkedSession {
    * parsed cleanly, or nothing was captured.
    */
   failureCapturePath?: string;
+  /**
+   * Concrete program/model this stage actually ran on (never the raw
+   * `family:sonnet`-style alias, never "" for a session that ran) — see
+   * ItemSession.resolved_program/resolved_model (Epic 2.1). Empty for
+   * sessions that predate this field.
+   */
+  resolvedProgram?: string;
+  resolvedModel?: string;
+  /**
+   * SHA-256 (hex, truncated 16 chars) of ComputeExecutorHash(program, model)
+   * for the RAW, pre-resolution (program, model) pair this stage was
+   * configured with at spawn time — "" for a session that predates this
+   * field. Compared against the mode's dense
+   * PipelineMode.stageExecutorHashes[role] to detect executor-config drift —
+   * see resolveExecutorProvenance (pipelineModeDisplay.ts).
+   */
+  executorSnapshotHash?: string;
+  /**
+   * The program this stage was actually configured to run on at spawn time
+   * (before any availability fallback) — "" when no headless-caller
+   * substitution could occur (e.g. a work-stage session). Paired with
+   * executorFallbackReason below.
+   */
+  configuredProgram?: string;
+  /**
+   * Non-empty only when resolveHeadlessCaller fell back away from
+   * configuredProgram at call time (e.g. "gemini_unavailable") — a
+   * persisted, UI-visible fallback marker (Story 2.3.1), never only a log
+   * line.
+   */
+  executorFallbackReason?: string;
 }
 
 export interface BacklogItem {
@@ -218,6 +249,13 @@ export interface BacklogItem {
    */
   reworkCapOverride?: number;
   /**
+   * Per-item, optional soft-budget-warning threshold in USD. Undefined means
+   * no threshold is configured and no warning ever fires for this item — 0
+   * is a legitimate configured threshold, distinct from unset. See
+   * ItemBudgetWarning.tsx and session.EvaluateBudgetThreshold.
+   */
+  costBudgetThresholdUsd?: number;
+  /**
    * Live-update generation counter (Epic 6.1, backlog-event-driven-updates).
    * Populated only by `useWatchBacklogItems` — incremented once per genuine
    * live (non-snapshot) `BacklogItemEvent` for this item, so
@@ -259,6 +297,17 @@ export interface PipelineMode {
    * without it (older tests, fixtures) keep compiling.
    */
   stageExecutors?: Record<string, { program: string; model: string }>;
+  /**
+   * DERIVED, server-computed: session.ComputeExecutorHash(program, model)
+   * for every StageRole ("triage"/"review"/"work"), including roles with no
+   * configured override — a DENSE map, never sparse. An unconfigured role's
+   * entry equals ComputeExecutorHash("", ""), the same value an
+   * unconfigured session's own executorSnapshotHash computes. See
+   * resolveExecutorProvenance (pipelineModeDisplay.ts) — comparing a
+   * session's executorSnapshotHash against a sparse map would falsely flag
+   * every ordinary default-executor session as drifted.
+   */
+  stageExecutorHashes?: Record<string, string>;
 }
 
 /**
@@ -347,6 +396,8 @@ export interface BacklogItemInput {
   category?: string;
   /** Per-item rework-cap override. 0 = unlimited for this item, >0 = this item's own cap. See BacklogItem.reworkCapOverride. */
   reworkCapOverride?: number;
+  /** Per-item soft-budget-warning threshold in USD. Undefined = not configured. See BacklogItem.costBudgetThresholdUsd. */
+  costBudgetThresholdUsd?: number;
   /**
    * Manually associate an existing PR with this item (the "escape hatch" for
    * a PR that shipped via an out-of-band worktree). Must be set together
@@ -409,6 +460,11 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     pipelineModeSnapshotHash: s.pipelineModeSnapshotHash ?? "",
     endReason: s.endReason || undefined,
     failureCapturePath: s.failureCapturePath || undefined,
+    resolvedProgram: s.resolvedProgram || undefined,
+    resolvedModel: s.resolvedModel || undefined,
+    executorSnapshotHash: s.executorSnapshotHash ?? "",
+    configuredProgram: s.configuredProgram || undefined,
+    executorFallbackReason: s.executorFallbackReason || undefined,
   };
 
   // Map review verdict if present
@@ -514,6 +570,7 @@ function mapPipelineMode(p: PipelineModeProto): PipelineMode {
     initialPromptTemplate: p.initialPromptTemplate,
     contentHash: p.contentHash,
     stageExecutors: mapStageExecutors(p.stageExecutors),
+    stageExecutorHashes: { ...p.stageExecutorHashes },
   };
 }
 
@@ -612,6 +669,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     pipelineMode: p.pipelineMode || undefined,
     category: p.category || undefined,
     reworkCapOverride: p.reworkCapOverride,
+    costBudgetThresholdUsd: p.costBudgetThresholdUsd,
     externalId: p.externalId || undefined,
     externalUrl: p.externalUrl || undefined,
     labels: p.labels ?? [],
@@ -908,6 +966,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           pipelineMode: data.pipelineMode,
           category: data.category,
           reworkCapOverride: data.reworkCapOverride,
+          costBudgetThresholdUsd: data.costBudgetThresholdUsd,
           prUrl: data.prUrl,
           prNumber: data.prNumber,
         });

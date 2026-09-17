@@ -65,6 +65,7 @@ import { ActivityLogSection } from "./detail/ActivityLogSection";
 import { NotesSection } from "./detail/NotesSection";
 import { ManualOverrideSection } from "./detail/ManualOverrideSection";
 import { GateBlockingSection } from "./GateBlockingSection";
+import { ItemBudgetWarning } from "@/app/insights/ItemBudgetWarning";
 import * as styles from "./BacklogItemDetail.css";
 
 interface BacklogItemDetailProps {
@@ -1508,6 +1509,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           stuckItem={stuckItem}
           otherStuckReasons={stuckSummary?.otherReasons}
           onTriggerRemediationNow={triggerRemediationNow}
+        />
+        {/* Epic 5.3 (D2): per-item soft-budget warning — renders null until
+            costBudgetThresholdUsd is configured and crossed. Pinned here
+            alongside LifecycleSummary so it stays visible while scrolling,
+            same rationale as the edit-mode bannerBar above. */}
+        <ItemBudgetWarning
+          thresholdUsd={item.costBudgetThresholdUsd}
+          totalCostUsd={item.totalEstimatedCostUsd}
         />
       </div>
 
