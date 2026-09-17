@@ -92,6 +92,12 @@ full-suite runs must not reproduce the `TempDir RemoveAll cleanup` failure for t
 
 ## Related
 
+- **2026-09-17 sighting**: recurred on the exact test this bug is named for,
+  `TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable`, same symptom
+  (`testing.go:1464: TempDir RemoveAll cleanup: unlinkat ... directory not empty`), in the "MCP
+  Integration Tests" CI job on PR #817 (`app-scrollback-forwarding`) — an unrelated diff. Re-ran the
+  job via `gh run rerun --failed` rather than investigating further, consistent with this bug's own
+  scope boundary.
 - **2026-09-16 sighting (second, same day)**: 2 more `TempDir RemoveAll cleanup: unlinkat ...
   directory not empty` failures in the same `make ci` cycle as the sighting below, this time in
   `make test-integration`'s second (non-`session`/`session/tmux`) invocation — one on
