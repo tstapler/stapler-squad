@@ -158,6 +158,8 @@ func (s *BacklogService) CreatePipelineMode(
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("pipeline mode storage not available"))
 	}
 
+	stageExecutors := stageExecutorsFromProto(req.Msg.StageExecutors)
+
 	if err := session.ValidatePipelineModeContent(session.PipelineModeContentFields{
 		Slug:                  req.Msg.Slug,
 		ValidateSlug:          true,
@@ -170,6 +172,8 @@ func (s *BacklogService) CreatePipelineMode(
 		TriagePromptTemplate:  req.Msg.TriagePromptTemplate,
 		ReviewPromptTemplate:  req.Msg.ReviewPromptTemplate,
 		InitialPromptTemplate: req.Msg.InitialPromptTemplate,
+		StageExecutors:        stageExecutors,
+		ForceUnknownModel:     req.Msg.ForceUnknownModel,
 	}); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -188,7 +192,7 @@ func (s *BacklogService) CreatePipelineMode(
 		TriagePromptTemplate:  req.Msg.TriagePromptTemplate,
 		ReviewPromptTemplate:  req.Msg.ReviewPromptTemplate,
 		InitialPromptTemplate: req.Msg.InitialPromptTemplate,
-		StageExecutors:        stageExecutorsFromProto(req.Msg.StageExecutors),
+		StageExecutors:        stageExecutors,
 	}
 
 	pm, err := s.pipelineModeRepo.Create(ctx, input)
@@ -256,6 +260,18 @@ func (s *BacklogService) UpdatePipelineMode(
 	if req.Msg.InitialPromptTemplate != nil {
 		contentFields.InitialPromptTemplate = *req.Msg.InitialPromptTemplate
 	}
+	// nil req.Msg.StageExecutors means "leave untouched" (see the field's own
+	// doc comment) — nothing new to validate in that case. When present,
+	// validate the same map that's about to be written below.
+	var stageExecutors map[session.StageRole]session.PipelineStageExecutor
+	if req.Msg.StageExecutors != nil {
+		stageExecutors = stageExecutorsFromProto(req.Msg.StageExecutors.Values)
+		if stageExecutors == nil {
+			stageExecutors = map[session.StageRole]session.PipelineStageExecutor{}
+		}
+		contentFields.StageExecutors = stageExecutors
+	}
+	contentFields.ForceUnknownModel = req.Msg.GetForceUnknownModel()
 	if err := session.ValidatePipelineModeContent(contentFields); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -276,11 +292,8 @@ func (s *BacklogService) UpdatePipelineMode(
 	}
 	// nil StageExecutors on the wire means "leave untouched"; present (even
 	// empty) means "replace" — matching StageExecutorsUpdate's doc comment.
+	// stageExecutors was already parsed and validated above.
 	if req.Msg.StageExecutors != nil {
-		stageExecutors := stageExecutorsFromProto(req.Msg.StageExecutors.Values)
-		if stageExecutors == nil {
-			stageExecutors = map[session.StageRole]session.PipelineStageExecutor{}
-		}
 		update.StageExecutors = &stageExecutors
 	}
 

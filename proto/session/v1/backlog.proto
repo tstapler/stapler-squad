@@ -884,6 +884,12 @@ message CreatePipelineModeRequest {
   string review_prompt_template = 12;
   string initial_prompt_template = 13;
   map<string, PipelineStageExecutor> stage_executors = 14;
+  // force_unknown_model bypasses the save-time pricing-table cross-check
+  // (session.ValidatePipelineModeContent) for a literal, non-"family:"
+  // model ID not found in session/tokens/pricing.go's table — for a real
+  // model that shipped before the pricing table was updated. It never
+  // bypasses the character-class/shell-metacharacter guard.
+  bool force_unknown_model = 15;
 }
 
 message CreatePipelineModeResponse {
@@ -908,6 +914,11 @@ message UpdatePipelineModeRequest {
   // map/repeated fields directly, so it's wrapped): unset leaves existing
   // stage executor overrides alone; present-but-empty clears all of them.
   optional StageExecutorsUpdate stage_executors = 14;
+  // force_unknown_model — see CreatePipelineModeRequest's field of the same
+  // name. Unset (nil) is treated as false, matching this message's own
+  // "no field presence needed" convention for a flag that isn't itself a
+  // persisted PipelineMode column.
+  optional bool force_unknown_model = 15;
 }
 
 // StageExecutorsUpdate wraps a stage-executors map so UpdatePipelineModeRequest

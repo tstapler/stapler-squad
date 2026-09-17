@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // modelFamilyPrefix namespaces a family alias in a workflow's stored Model field
@@ -94,23 +95,15 @@ func ResolveModel(families map[string]string, model string) (string, error) {
 	return resolved, nil
 }
 
-// modelRe matches a bare model identifier or "family:" alias: letters, digits,
-// hyphens, underscores, dots, and at most one ':' namespace separator. No
-// whitespace or shell metacharacters, since the resolved value is concatenated
-// directly into a `claude --model <value>` program string at fire time
-// (FireNow).
-var modelRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*(:[a-zA-Z0-9][a-zA-Z0-9_.-]*)?$`)
-
 // ValidateModel validates a workflow's Model field at save time (CreateWorkflow/
 // UpdateWorkflow), so a malformed value is rejected up front instead of
 // silently breaking workflow launch later at fire time. Empty is always valid
 // (means "use the program's default model").
+//
+// Delegates to session.ValidateModel — the pure character-class check moved
+// there so session/pipeline_mode_validation.go (which cannot import
+// server/workflows) can reuse the identical check for PipelineMode stage
+// executors without a second, independently-drifting copy.
 func ValidateModel(model string) error {
-	if model == "" {
-		return nil
-	}
-	if !modelRe.MatchString(model) {
-		return fmt.Errorf("model must contain only letters, digits, '-', '_', '.', and at most one ':' namespace separator (no whitespace or other characters)")
-	}
-	return nil
+	return session.ValidateModel(model)
 }

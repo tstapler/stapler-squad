@@ -1282,7 +1282,7 @@ func (c *Config) GetAvailablePrograms() []string {
 		shell = "/bin/bash"
 	}
 
-	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy"}
+	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy", "aider"}
 
 	for _, candidate := range candidates {
 		var shellCmd string
