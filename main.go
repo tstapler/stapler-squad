@@ -1296,9 +1296,10 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	if err != nil {
 		return fmt.Errorf("ensure TLS certs: %w", err)
 	}
+	certStore := server.NewNetworkCertStore(netCerts)
 
 	tlsCfg := &tls.Config{
-		GetCertificate: server.GetCertificateByLocalAddr(netCerts),
+		GetCertificate: server.GetCertificateByLocalAddr(certStore),
 		MinVersion:     tls.VersionTLS12,
 	}
 

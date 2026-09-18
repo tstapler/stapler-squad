@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -121,12 +122,38 @@ func EnsureNetworkTLSCerts(networks map[string][]string) (caFile string, certs m
 	return caFile, certs, nil
 }
 
+// NetworkCertStore publishes the current network->cert map for
+// GetCertificateByLocalAddr's per-handshake read, replacing a plain
+// captured map so a runtime-added network's cert doesn't race a live
+// TLS handshake reading the old map.
+type NetworkCertStore struct {
+	certs atomic.Pointer[map[string]*NetworkCert]
+}
+
+func NewNetworkCertStore(initial map[string]*NetworkCert) *NetworkCertStore {
+	s := &NetworkCertStore{}
+	s.Store(initial)
+	return s
+}
+
+func (s *NetworkCertStore) Store(certs map[string]*NetworkCert) { s.certs.Store(&certs) }
+
+func (s *NetworkCertStore) Load() map[string]*NetworkCert {
+	if p := s.certs.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
 // GetCertificateByLocalAddr returns a tls.Config.GetCertificate callback that
 // selects the leaf certificate matching the local IP a connection was
 // accepted on. The server binds one listener across all interfaces, but each
-// network still only ever presents the certificate scoped to it.
-func GetCertificateByLocalAddr(certs map[string]*NetworkCert) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+// network still only ever presents the certificate scoped to it. store is
+// re-read on every invocation so a runtime-published cert update takes effect
+// without restarting the listener.
+func GetCertificateByLocalAddr(store *NetworkCertStore) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		certs := store.Load()
 		if chi.Conn != nil {
 			if host, _, err := net.SplitHostPort(chi.Conn.LocalAddr().String()); err == nil {
 				if nc, ok := certs[host]; ok {
