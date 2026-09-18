@@ -266,6 +266,7 @@ func newTestWAHandler(t *testing.T, seedRPID string) *serverauth.Handler {
 		t.Fatalf("NewCredentialStore: %v", err)
 	}
 	sessions := serverauth.NewSessionManager(t.TempDir() + "/auth-sessions.json")
+	t.Cleanup(sessions.Close) // stop the cleanup goroutine so goleak checks elsewhere in this binary don't see it
 
 	h, err := serverauth.NewHandler([]string{seedRPID}, []string{"https://" + seedRPID}, store, sessions, nil)
 	if err != nil {

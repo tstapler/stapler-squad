@@ -485,9 +485,13 @@ var (
 					waHandler = remoteAccess.Handler
 					certStore = remoteAccess.CertStore
 				}
-				// Never written to yet -- Story 3.1.2 wires a real
-				// OS-network-change source into this channel.
-				netChangeEvents := make(chan struct{})
+				netChangeEvents, netChangeCleanup := setupNetworkChangeEvents(func() (NetworkChangeSource, error) {
+					return newTailscaleNetmonSource()
+				})
+				a.OnStop("hostname-detector-netchange", func(ctx context.Context) error {
+					netChangeCleanup()
+					return nil
+				})
 				detector := NewHostnameDetector(HostnameDetectorConfig{
 					Srv:             srv,
 					InitialNetworks: initialNetworks,
@@ -974,6 +978,44 @@ func superviseTymuxd(ctx context.Context, cfg tymux.DaemonConfig, strictStartup,
 		log.Info("tymuxd will remain running across this shutdown (--tymuxd-keep-server=true)")
 	}
 	return nil
+}
+
+// setupNetworkChangeEvents constructs the OS-level network-change source
+// (Epic 3.1) and wires it into a coalescing events channel suitable for
+// HostnameDetectorConfig.Events. newSource is injected (rather than calling
+// newTailscaleNetmonSource directly) so tests can substitute a fake or a
+// forced error without touching the real netmon/eventbus machinery.
+//
+// A construction error is logged and degraded to timer-only (Task 3.1.2b):
+// the returned events channel is still valid, just never written to, so
+// HostnameDetector.Run keeps working off its timer/manual triggers alone --
+// this must never fail process startup, since the periodic timer alone
+// already satisfies the feature's core requirement.
+func setupNetworkChangeEvents(newSource func() (NetworkChangeSource, error)) (events chan struct{}, cleanup func()) {
+	events = make(chan struct{}, 1)
+
+	src, err := newSource()
+	if err != nil {
+		log.Warn("hostname-detect: network-change monitor unavailable, falling back to timer-only redetection", "err", err)
+		return events, func() {}
+	}
+
+	unregister := src.RegisterChangeCallback(func() {
+		// Non-blocking send: coalesces further at the channel level in
+		// case netmon's own debounce window still bursts, and never
+		// blocks the monitor's own callback goroutine.
+		select {
+		case events <- struct{}{}:
+		default:
+		}
+	})
+
+	return events, func() {
+		unregister()
+		if closeErr := src.Close(); closeErr != nil {
+			log.Warn("hostname-detect: failed to close network-change monitor", "err", closeErr)
+		}
+	}
 }
 
 // extraOriginPattern matches an exact http(s)://localhost:<port> or
