@@ -165,6 +165,7 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 	for {
 		msg, recvErr := stream.Receive()
 		if recvErr != nil {
+			t.Logf("stream.Receive error: %v", recvErr)
 			break
 		}
 		switch data := msg.Data.(type) {
