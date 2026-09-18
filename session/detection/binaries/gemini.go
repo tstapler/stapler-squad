@@ -35,6 +35,24 @@ func (d *GeminiDetector) Patterns() dtypes.StatusPatterns {
 		},
 		NeedsApproval: []dtypes.StatusPattern{
 			{
+				Name:        "gemini_requesting_permission",
+				Pattern:     `(?i)Requesting permission for:`,
+				Description: "Gemini requesting permission header",
+				Priority:    18,
+			},
+			{
+				Name:        "gemini_run_this_command",
+				Pattern:     `(?i)Run this command\?`,
+				Description: "Gemini command approval prompt",
+				Priority:    18,
+			},
+			{
+				Name:        "gemini_run_command_option",
+				Pattern:     `(?i)Yes,\s*run\s*command`,
+				Description: "Gemini run command selection option",
+				Priority:    17,
+			},
+			{
 				Name:        "gemini_permission",
 				Pattern:     `(?i)Yes, allow once`,
 				Description: "Gemini permission prompt",

@@ -39,6 +39,24 @@ func (d *AgyDetector) Patterns() dtypes.StatusPatterns {
 		},
 		NeedsApproval: []dtypes.StatusPattern{
 			{
+				Name:        "agy_requesting_permission",
+				Pattern:     `(?i)Requesting permission for:`,
+				Description: "Agy requesting permission header",
+				Priority:    18,
+			},
+			{
+				Name:        "agy_run_this_command",
+				Pattern:     `(?i)Run this command\?`,
+				Description: "Agy command approval prompt",
+				Priority:    18,
+			},
+			{
+				Name:        "agy_run_command_option",
+				Pattern:     `(?i)Yes,\s*run\s*command`,
+				Description: "Agy run command selection option",
+				Priority:    17,
+			},
+			{
 				Name:        "agy_permission",
 				Pattern:     `(?i)Yes, allow once`,
 				Description: "Agy permission prompt",

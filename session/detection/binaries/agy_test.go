@@ -69,14 +69,49 @@ func TestAgyDetector_working_pattern(t *testing.T) {
 	mustNotMatch(t, p, "◇ Ready")
 }
 
+func TestAgyDetector_permissionPrompts_sample(t *testing.T) {
+	d := NewAgyDetector()
+	patterns := d.Patterns().NeedsApproval
+
+	sampleOutput := `Requesting permission for:
+   git add server/services/session_service_stream_terminal_test.go && git commit -m "test" && git push
+
+Run this command?
+> 1. Yes, run command
+  2. No, cancel`
+
+	matched := false
+	for _, p := range patterns {
+		re := regexp.MustCompile(p.Pattern)
+		if re.MatchString(sampleOutput) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		t.Errorf("expected NeedsApproval patterns to match sample output:\n%s", sampleOutput)
+	}
+}
+
+func getNeedsApprovalPatternByName(t *testing.T, name string) string {
+	t.Helper()
+	for _, p := range NewAgyDetector().Patterns().NeedsApproval {
+		if p.Name == name {
+			return p.Pattern
+		}
+	}
+	t.Fatalf("pattern with name %q not found", name)
+	return ""
+}
+
 func TestAgyDetector_permission_pattern(t *testing.T) {
-	p := NewAgyDetector().Patterns().NeedsApproval[0].Pattern
+	p := getNeedsApprovalPatternByName(t, "agy_permission")
 	mustMatch(t, p, "Yes, allow once")
 	mustNotMatch(t, p, "yes deny")
 }
 
 func TestAgyDetector_allowExecution_pattern(t *testing.T) {
-	p := NewAgyDetector().Patterns().NeedsApproval[1].Pattern
+	p := getNeedsApprovalPatternByName(t, "agy_allow_execution")
 	mustMatch(t, p, "Allow execution of:")
 	mustNotMatch(t, p, "allow execution other")
 }
