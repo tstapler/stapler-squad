@@ -5212,6 +5212,21 @@ func (s *SessionService) DeleteAlias(ctx context.Context, req *connect.Request[s
 	return s.defaultsSvc.DeleteAlias(ctx, req)
 }
 
+// ListProgramsConfig returns all program configurations (built-in and custom).
+func (s *SessionService) ListProgramsConfig(ctx context.Context, req *connect.Request[sessionv1.ListProgramsConfigRequest]) (*connect.Response[sessionv1.ListProgramsConfigResponse], error) {
+	return s.defaultsSvc.ListProgramsConfig(ctx, req)
+}
+
+// UpsertProgramConfig creates or updates a custom program configuration.
+func (s *SessionService) UpsertProgramConfig(ctx context.Context, req *connect.Request[sessionv1.UpsertProgramConfigRequest]) (*connect.Response[sessionv1.UpsertProgramConfigResponse], error) {
+	return s.defaultsSvc.UpsertProgramConfig(ctx, req)
+}
+
+// DeleteProgramConfig removes a custom program configuration by ID.
+func (s *SessionService) DeleteProgramConfig(ctx context.Context, req *connect.Request[sessionv1.DeleteProgramConfigRequest]) (*connect.Response[sessionv1.DeleteProgramConfigResponse], error) {
+	return s.defaultsSvc.DeleteProgramConfig(ctx, req)
+}
+
 // SearchFiles performs a recursive name-substring search in a session's worktree.
 func (s *SessionService) SearchFiles(
 	ctx context.Context,

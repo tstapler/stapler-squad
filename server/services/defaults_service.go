@@ -20,6 +20,9 @@ import (
 // aliasNameRE validates alias names: letters, digits, hyphens, underscores only.
 var aliasNameRE = regexp.MustCompile(`^[\w-]+$`)
 
+// programIDRE validates program IDs: letters, digits, hyphens, underscores only.
+var programIDRE = regexp.MustCompile(`^[\w-]+$`)
+
 // DefaultsService handles session defaults RPC methods.
 type DefaultsService struct {
 	// onGlobalDefaultsUpdated, if set, is called (in a goroutine) after every
@@ -619,4 +622,173 @@ func directoryRuleToProto(r config.DirectoryRule) *sessionv1.DirectoryRuleProto 
 		Overrides: profileDefaultsToProto(r.Overrides),
 	}
 	return proto
+}
+
+// BuiltInPrograms returns the set of built-in programs supported out of the box.
+func BuiltInPrograms() []config.ProgramConfig {
+	return []config.ProgramConfig{
+		{ID: "claude", Label: "Claude Code", Command: "claude", Description: "Anthropic's CLI assistant"},
+		{ID: "pi", Label: "pi", Command: "pi", Description: "@earendil-works/pi-coding-agent — TypeScript-extensible CLI"},
+		{ID: "aider", Label: "Aider", Command: "aider", Description: "AI pair programming with git"},
+		{ID: "opencode", Label: "OpenCode", Command: "opencode", Description: "OpenCode CLI assistant"},
+		{ID: "gemini", Label: "Gemini CLI", Command: "gemini", Description: "Google Gemini CLI"},
+		{ID: "agy", Label: "Antigravity", Command: "agy", Description: "Antigravity CLI (agy)"},
+		{ID: "bash", Label: "Terminal", Command: "bash", Description: "Interactive shell session"},
+	}
+}
+
+// IsBuiltInProgram checks if an ID belongs to a built-in program.
+func IsBuiltInProgram(id string) bool {
+	for _, p := range BuiltInPrograms() {
+		if strings.EqualFold(p.ID, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func programConfigToProto(p config.ProgramConfig, isBuiltin bool) *sessionv1.ProgramConfigProto {
+	env := p.Env
+	if env == nil {
+		env = make(map[string]string)
+	}
+	return &sessionv1.ProgramConfigProto{
+		Id:          p.ID,
+		Label:       p.Label,
+		Command:     p.Command,
+		CliFlags:    p.CLIFlags,
+		Description: p.Description,
+		Env:         env,
+		IsBuiltin:   isBuiltin,
+	}
+}
+
+// +api: program_config:list
+// ListProgramsConfig returns all configured programs (built-in and custom).
+func (d *DefaultsService) ListProgramsConfig(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListProgramsConfigRequest],
+) (*connect.Response[sessionv1.ListProgramsConfigResponse], error) {
+	cfg := config.LoadConfig()
+
+	builtIns := BuiltInPrograms()
+	result := make([]*sessionv1.ProgramConfigProto, 0, len(builtIns)+len(cfg.SessionDefaults.Programs))
+
+	for _, p := range builtIns {
+		result = append(result, programConfigToProto(p, true))
+	}
+
+	for _, p := range cfg.SessionDefaults.Programs {
+		result = append(result, programConfigToProto(p, false))
+	}
+
+	return connect.NewResponse(&sessionv1.ListProgramsConfigResponse{
+		Programs: result,
+	}), nil
+}
+
+// +api: program_config:upsert
+// UpsertProgramConfig creates or updates a custom program definition.
+func (d *DefaultsService) UpsertProgramConfig(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UpsertProgramConfigRequest],
+) (*connect.Response[sessionv1.UpsertProgramConfigResponse], error) {
+	if req.Msg.Program == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("program is required"))
+	}
+	id := strings.TrimSpace(req.Msg.Program.Id)
+	if id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("program id is required"))
+	}
+	if !programIDRE.MatchString(id) {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("program id %q must match ^[\\w-]+$ (letters, digits, hyphens, underscores only)", id))
+	}
+
+	label := strings.TrimSpace(req.Msg.Program.Label)
+	if label == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("program label is required"))
+	}
+
+	command := strings.TrimSpace(req.Msg.Program.Command)
+	if command == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("program command is required"))
+	}
+
+	if IsBuiltInProgram(id) {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cannot override built-in program %q", id))
+	}
+
+	cfg := config.LoadConfig()
+
+	prog := config.ProgramConfig{
+		ID:          id,
+		Label:       label,
+		Command:     command,
+		CLIFlags:    req.Msg.Program.CliFlags,
+		Description: req.Msg.Program.Description,
+		Env:         req.Msg.Program.Env,
+	}
+	if prog.Env == nil {
+		prog.Env = make(map[string]string)
+	}
+
+	found := false
+	for i, existing := range cfg.SessionDefaults.Programs {
+		if strings.EqualFold(existing.ID, prog.ID) {
+			cfg.SessionDefaults.Programs[i] = prog
+			found = true
+			break
+		}
+	}
+	if !found {
+		cfg.SessionDefaults.Programs = append(cfg.SessionDefaults.Programs, prog)
+	}
+
+	if err := config.SaveConfig(cfg); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
+	}
+
+	log.Info("upserted custom program", "id", prog.ID, "label", prog.Label)
+	return connect.NewResponse(&sessionv1.UpsertProgramConfigResponse{
+		Program: programConfigToProto(prog, false),
+	}), nil
+}
+
+// +api: program_config:delete
+// DeleteProgramConfig removes a custom program configuration by ID.
+func (d *DefaultsService) DeleteProgramConfig(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeleteProgramConfigRequest],
+) (*connect.Response[sessionv1.DeleteProgramConfigResponse], error) {
+	id := strings.TrimSpace(req.Msg.Id)
+	if id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("program id is required"))
+	}
+
+	if IsBuiltInProgram(id) {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cannot delete built-in program %q", id))
+	}
+
+	cfg := config.LoadConfig()
+
+	idx := -1
+	for i, existing := range cfg.SessionDefaults.Programs {
+		if strings.EqualFold(existing.ID, id) {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("program %q not found", id))
+	}
+
+	cfg.SessionDefaults.Programs = append(cfg.SessionDefaults.Programs[:idx], cfg.SessionDefaults.Programs[idx+1:]...)
+
+	if err := config.SaveConfig(cfg); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
+	}
+
+	log.Info("deleted custom program", "id", id)
+	return connect.NewResponse(&sessionv1.DeleteProgramConfigResponse{}), nil
 }

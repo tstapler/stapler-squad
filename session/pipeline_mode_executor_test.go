@@ -65,3 +65,28 @@ func TestParseStageExecutors_should_ReturnErrorNotPanic_When_JSONIsMalformed(t *
 		t.Fatal("ParseStageExecutors: expected error for malformed JSON, got nil")
 	}
 }
+
+// TestSerializeStageExecutors_should_ProduceEmptyObjectNotNull_When_MapIsNil guards the
+// "clear all stage-executor overrides" UI action, which passes a nil map — a bare `"null"`
+// would violate the stage_executors_json schema invariant (see
+// session/ent/schema/pipeline_mode.go's "no override configured" doc comment).
+func TestSerializeStageExecutors_should_ProduceEmptyObjectNotNull_When_MapIsNil(t *testing.T) {
+	raw, err := SerializeStageExecutors(nil)
+	if err != nil {
+		t.Fatalf("SerializeStageExecutors(nil): %v", err)
+	}
+	if raw != "{}" {
+		t.Fatalf("SerializeStageExecutors(nil) = %q, want %q", raw, "{}")
+	}
+
+	got, err := ParseStageExecutors(raw)
+	if err != nil {
+		t.Fatalf("ParseStageExecutors(%q): %v", raw, err)
+	}
+	if got == nil {
+		t.Fatal("ParseStageExecutors round trip of nil-map serialization: got nil map, want empty non-nil map")
+	}
+	if len(got) != 0 {
+		t.Fatalf("ParseStageExecutors round trip of nil-map serialization: got %d entries, want 0", len(got))
+	}
+}

@@ -23,6 +23,9 @@ type PipelineStageExecutor struct {
 // SerializeStageExecutors serializes a stage-role-to-executor override map
 // to its JSON storage representation, mirroring domain.SerializeAcCriteria.
 func SerializeStageExecutors(m map[StageRole]PipelineStageExecutor) (string, error) {
+	if m == nil {
+		m = map[StageRole]PipelineStageExecutor{}
+	}
 	b, err := json.Marshal(m)
 	if err != nil {
 		return "", err

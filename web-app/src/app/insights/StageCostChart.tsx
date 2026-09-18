@@ -118,8 +118,8 @@ export function StageCostChart({ roles, activeRole, onRoleClick }: Props) {
             <Bar
               dataKey="cost"
               radius={[4, 4, 0, 0]}
-              onClick={(entry: unknown) => {
-                const point = entry as DataPoint;
+              onClick={(entry: { payload?: DataPoint }) => {
+                const point = entry?.payload;
                 if (point?.role) handleRoleActivate(point.role);
               }}
               cursor={onRoleClick ? "pointer" : undefined}

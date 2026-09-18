@@ -1005,7 +1005,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 			// workResolvedModel persists the concrete post-family-alias model onto
 			// the ItemSession row (resolved_model's contract) — independent of
 			// programOverride, which is the full "claude --model <id>" string.
-			workResolvedModel, _ = session.ResolveModel(s.modelFamilies, workExecModel)
+			var modelErr error
+			workResolvedModel, modelErr = session.ResolveModel(s.modelFamilies, workExecModel)
+			if modelErr != nil {
+				log.Warn("[SpawnSessionFromItem] failed to resolve work model family alias, using empty model", "item", item.ID, "model", workExecModel, "err", modelErr)
+				workResolvedModel = ""
+			}
 		}
 	}
 
