@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
@@ -78,7 +80,7 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 	client := sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL)
 
 	resp, err := client.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
-		Title:   "stream-terminal-raw-output-regression",
+		Title:   fmt.Sprintf("stream-terminal-raw-output-%s", uuid.New().String()[:8]),
 		Path:    t.TempDir(),
 		Program: "bash",
 	}))
