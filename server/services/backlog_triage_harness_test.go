@@ -344,7 +344,7 @@ func TestTriageHarness_RealClaude(t *testing.T) {
 	// RedirectLogger's SyncBuffer (not a raw bytes.Buffer) is required here: this
 	// harness's background reconciliation loops keep calling ssqlog.ErrorLog().Printf
 	// after the poll below returns, racing with the errBuf.String() read further down.
-	errBuf := ssqlog.RedirectLogger(t, ssqlog.ErrorLog, ssqlog.SetErrorLogForTest, "ERROR: ")
+	errBuf := ssqlog.RedirectLogger(t, ssqlog.ErrorLog(), "ERROR: ")
 
 	repoPath := t.TempDir()
 

@@ -44,20 +44,39 @@ func (b *SyncBuffer) Len() int {
 	return b.buf.Len()
 }
 
-// RedirectLogger swaps the given atomicLogger-backed package logger (obtained
-// via get, e.g. ErrorLog) to a new *log.Logger writing into a SyncBuffer with
-// the given prefix, restoring the original logger via set (e.g.
-// SetErrorLogForTest) when t's cleanup runs.
-//
-// It replaces the logger wholesale via the atomic set/get pair rather than
-// mutating the existing *log.Logger's output/prefix in place — the same
-// swap-not-reassign approach SetErrorLogForTest already uses — so concurrent
-// readers that call get() mid-test never observe a partially-updated logger.
-func RedirectLogger(t *testing.T, get func() *stdlog.Logger, set func(*stdlog.Logger) *stdlog.Logger, prefix string) *SyncBuffer {
+// redirectMu serializes every RedirectLogger call across the whole process.
+// RedirectLogger mutates the given *log.Logger in place rather than swapping
+// in a new instance, so two callers redirecting the SAME logger concurrently
+// (e.g. two t.Parallel() tests) would otherwise race over whose SyncBuffer is
+// "current" — one test's Printf output could land in another test's buffer.
+// Holding this lock for the full redirect-to-restore window, mirrored from
+// session/sync_buffer_test.go's warningLogMu, prevents that.
+var redirectMu sync.Mutex //nolint:gochecknoglobals
+
+// RedirectLogger redirects logger's output to a fresh SyncBuffer for the
+// duration of the calling test, restoring the logger's original
+// output/prefix/flags via t.Cleanup. It mutates the existing *log.Logger in
+// place via its own thread-safe SetOutput/SetPrefix/SetFlags methods rather
+// than reassigning a package-level logger variable, so any caller that
+// already holds a reference to logger (obtained via an accessor like
+// ErrorLog() before this call) keeps writing to the right place. The
+// returned buffer is safe to read concurrently with writes still landing on
+// it.
+func RedirectLogger(t *testing.T, logger *stdlog.Logger, prefix string) *SyncBuffer {
 	t.Helper()
+	redirectMu.Lock()
 	buf := &SyncBuffer{}
-	newLogger := stdlog.New(buf, prefix, get().Flags())
-	orig := set(newLogger)
-	t.Cleanup(func() { set(orig) })
+	origOutput := logger.Writer()
+	origPrefix := logger.Prefix()
+	origFlags := logger.Flags()
+	logger.SetOutput(buf)
+	logger.SetPrefix(prefix)
+	logger.SetFlags(0)
+	t.Cleanup(func() {
+		logger.SetOutput(origOutput)
+		logger.SetPrefix(origPrefix)
+		logger.SetFlags(origFlags)
+		redirectMu.Unlock()
+	})
 	return buf
 }
