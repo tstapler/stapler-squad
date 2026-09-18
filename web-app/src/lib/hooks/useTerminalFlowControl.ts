@@ -4,7 +4,15 @@ import { useRef, useCallback, useEffect } from "react";
 import { TerminalData, TerminalDataSchema, TerminalInput, TerminalInputSchema, TerminalResize, TerminalResizeSchema, ScrollbackRequest, ScrollbackRequestSchema, CurrentPaneRequest, CurrentPaneRequestSchema, FlowControl, FlowControlSchema } from "@/gen/session/v1/events_pb";
 import { create } from "@bufbuild/protobuf";
 import { dimensionsEqual, type ResizeDimensions } from "@/lib/terminal/types";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+import { generateSecureId } from "@/lib/pane/paneUtils";
 import type { Terminal } from '@xterm/xterm';
+
+// Epic 3.1 (AC2) — client-generated correlation ID echoed back on the
+// resulting TerminalOutput.resync_id. Flag off preserves pre-project wire
+// behavior: CurrentPaneRequest.resync_id is left empty and
+// requestFullResync()'s return value is always undefined.
+export const RESYNC_CORRELATION_ID_FLAG = 'terminal:resync-correlation-id';
 
 export interface UseTerminalFlowControlOptions {
   sessionId: string;
@@ -13,6 +21,19 @@ export interface UseTerminalFlowControlOptions {
   pushMessageRef: React.MutableRefObject<((msg: TerminalData) => void) | null>;
   isConnectedRef: React.MutableRefObject<boolean>;
   onError?: (error: Error) => void;
+  /**
+   * Shared with useVisibilityResync.ts (Epic 3.1, Task 3.1.2.1) so the two
+   * independently-tracked resync flows (visibility-triggered vs
+   * resize-triggered) can reconcile a stall watchdog reset when *either*
+   * flow's outstanding resync_id is echoed back on a TerminalOutput message.
+   * Populated only when a resync_id was actually generated (i.e. the
+   * correlation-ID flag is on) — never gated on `isVisibilityTriggered`.
+   * Values are the `Date.now()` this ID was added (Epic 3.1, Task 3.1.2.4a)
+   * so useVisibilityResync's escalation logic can tell how long a specific
+   * ID has actually been outstanding, independent of the shared watchdog
+   * reset.
+   */
+  outstandingResyncIdsRef?: React.MutableRefObject<Map<string, number>>;
 }
 
 export interface UseTerminalFlowControlResult {
@@ -20,11 +41,19 @@ export interface UseTerminalFlowControlResult {
   resize: (cols: number, rows: number, force?: boolean) => void;
   requestScrollback: (fromSequence: number, limit: number) => void;
   sendFlowControl: (paused: boolean, watermark?: number) => void;
-  requestFullResync: (urgent?: boolean) => void;
+  /**
+   * @param isVisibilityTriggered - True when this resync was triggered by a
+   * visibility/focus event (useVisibilityResync.ts) rather than a resize.
+   * Drives the `stale_dimensions` flag — never set for resize-triggered
+   * resyncs, since those already carry fresh dimensions by construction.
+   * @returns the generated resync_id, or undefined when
+   * terminal:resync-correlation-id is off or the request could not be sent.
+   */
+  requestFullResync: (urgent?: boolean, isVisibilityTriggered?: boolean) => string | undefined;
   markResyncComplete: () => void;
   markPaneResponseReceived: () => void;
-  getIsResyncingRef: () => React.MutableRefObject<boolean>;
-  getWaitingForPaneResponseRef: () => React.MutableRefObject<boolean>;
+  getIsResyncingRef: () => React.MutableRefObject<string | null>;
+  getWaitingForPaneResponseRef: () => React.MutableRefObject<string | null>;
 }
 
 /**
@@ -37,16 +66,47 @@ export function useTerminalFlowControl({
   pushMessageRef,
   isConnectedRef,
   onError,
+  outstandingResyncIdsRef,
 }: UseTerminalFlowControlOptions): UseTerminalFlowControlResult {
-  // Resync state machine refs
-  const isResyncingRef = useRef(false);
-  const waitingForPaneResponseRef = useRef(false);
+  const correlationIdEnabled = useFeatureFlag(RESYNC_CORRELATION_ID_FLAG);
+
+  // Resync state machine refs. Hold the pending resync's generated tracking
+  // ID (null when no resync is pending) rather than a plain boolean — Epic
+  // 3.1, Task 3.1.1.2. Truthiness is preserved for existing consumers
+  // (useTerminalStream.ts's disconnect()): a non-empty string is truthy,
+  // null is falsy, so the existing `if (isResyncingRef.current)` checks keep
+  // working unchanged. An internal tracking ID is always generated
+  // (independent of the correlation-ID flag) so this pending-state machinery
+  // behaves identically whether or not the flag is on; only the wire
+  // encoding (CurrentPaneRequest.resync_id) and requestFullResync's return
+  // value are gated on the flag.
+  const isResyncingRef = useRef<string | null>(null);
+  const waitingForPaneResponseRef = useRef<string | null>(null);
   const lastResyncTimeRef = useRef<number>(0);
   const lastResizeTimeRef = useRef<number>(0);
   const lastSentDimsRef = useRef<ResizeDimensions | null>(null);
+  // Last BOUNCE_HISTORY_SIZE sizes sent (oldest first; current lastSentDimsRef excluded,
+  // handled by value-dedup above). Lets resize() catch a repeat of any recent size, not
+  // just two sends back, since a real oscillating viewport can cycle through 3+ values.
+  const sentHistoryRef = useRef<ResizeDimensions[]>([]);
+  const BOUNCE_HISTORY_SIZE = 4;
+  // Consecutive bounces held back-to-back with no genuinely-new size sent in
+  // between. Drives an escalating hold (doubling, capped) so a viewport
+  // stuck oscillating for an extended period backs off further apart instead
+  // of retrying every flat BOUNCE_HOLD_MS — resets to 0 the moment a resize
+  // actually sends (a real new size, or a held one whose hold elapsed).
+  const bounceStreakRef = useRef(0);
   const pendingResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const paneRequestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dimensionSyncRef = useRef<{ cols?: number; rows?: number }>({});
+  // Epic 3.1, Task 3.1.1.4a — last dimensions a resync response was actually
+  // applied for (set in markPaneResponseReceived). Compared against the
+  // terminal's CURRENT dimensions in requestFullResync to compute
+  // stale_dimensions: null until the first resync response lands, so the
+  // flag defaults to false on a cold start rather than an unconditional true
+  // (pre-mortem P1 risk — must not reintroduce the corruption bug an
+  // always-true stale_dimensions would cause).
+  const lastSyncedDimensionsRef = useRef<{ cols: number; rows: number } | null>(null);
 
   // Cancel any pending deferred resize/pane-request timers when the component
   // unmounts to prevent the timer callback from firing against a torn-down
@@ -75,18 +135,29 @@ export function useTerminalFlowControl({
     pushMessageRef.current?.(msg);
   }, [pushMessageRef]);
 
+  // Shared connection gate for every public dispatch function below — a copy-pasted
+  // per-callsite check is how sendInput's copy silently lacked a console.warn. Internal
+  // per-chunk/per-tick continuation checks stay inline (a background retry after the
+  // initial call already logged once shouldn't log again).
+  const ensureConnected = useCallback((action: string): boolean => {
+    if (!pushMessageRef.current || !isConnectedRef.current) {
+      console.warn(`[useTerminalFlowControl] Cannot ${action}: stream not connected`);
+      return false;
+    }
+    return true;
+  }, [pushMessageRef, isConnectedRef]);
+
   // ---- Resync ----
 
-  const requestFullResync = useCallback((urgent: boolean = false) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) {
-      console.warn("[useTerminalFlowControl] Cannot request resync: stream not connected");
-      return;
+  const requestFullResync = useCallback((urgent: boolean = false, isVisibilityTriggered: boolean = false): string | undefined => {
+    if (!ensureConnected("request resync")) {
+      return undefined;
     }
 
     const currentTerminal = getTerminal();
     if (!currentTerminal) {
       console.warn("[useTerminalFlowControl] Cannot request resync: terminal not available");
-      return;
+      return undefined;
     }
 
     const now = Date.now();
@@ -95,7 +166,7 @@ export function useTerminalFlowControl({
 
     if (!urgent && timeSinceLastResync < RESYNC_THROTTLE_MS && lastResyncTimeRef.current !== 0) {
       console.log(`[useTerminalFlowControl] Resync throttled (${timeSinceLastResync}ms since last, need ${RESYNC_THROTTLE_MS}ms)`);
-      return;
+      return undefined;
     }
 
     if (urgent) {
@@ -105,20 +176,41 @@ export function useTerminalFlowControl({
     try {
       console.log(`[useTerminalFlowControl] Requesting full resync with current dimensions: ${currentTerminal.cols}x${currentTerminal.rows}`);
       lastResyncTimeRef.current = now;
-      isResyncingRef.current = true;
-      waitingForPaneResponseRef.current = true;
+      const trackingId = generateSecureId();
+      isResyncingRef.current = trackingId;
+      waitingForPaneResponseRef.current = trackingId;
 
       dimensionSyncRef.current = {
         cols: currentTerminal.cols,
         rows: currentTerminal.rows,
       };
 
+      // Epic 3.1, Task 3.1.1.4b — only a visibility/focus-triggered resync
+      // can be "stale" in this sense (a resize-triggered one always carries
+      // just-measured dimensions). Defaults to false until a resync response
+      // has actually been applied at least once (lastSyncedDimensionsRef
+      // starts null), and correctly stays false when the terminal's own
+      // dimensions genuinely changed while backgrounded (currentTerminal.cols/
+      // rows would then differ from lastSyncedDimensionsRef).
+      const staleDimensions = isVisibilityTriggered
+        && lastSyncedDimensionsRef.current !== null
+        && currentTerminal.cols === lastSyncedDimensionsRef.current.cols
+        && currentTerminal.rows === lastSyncedDimensionsRef.current.rows;
+
+      const resyncId = correlationIdEnabled ? trackingId : "";
+
       const currentPaneReq = create(CurrentPaneRequestSchema, {
         lines: 50,
         includeEscapes: true,
         targetCols: currentTerminal.cols,
         targetRows: currentTerminal.rows,
+        resyncId,
+        staleDimensions,
       });
+
+      if (resyncId && outstandingResyncIdsRef) {
+        outstandingResyncIdsRef.current.set(resyncId, Date.now());
+      }
 
       pushMessage(
         create(TerminalDataSchema, {
@@ -129,10 +221,13 @@ export function useTerminalFlowControl({
           },
         })
       );
+
+      return resyncId || undefined;
     } catch (err) {
       handleError(err);
+      return undefined;
     }
-  }, [sessionId, getTerminal, pushMessage, pushMessageRef, isConnectedRef, handleError]);
+  }, [sessionId, getTerminal, pushMessage, ensureConnected, handleError, correlationIdEnabled, outstandingResyncIdsRef]);
 
   // ---- Message dispatch functions ----
 
@@ -140,7 +235,7 @@ export function useTerminalFlowControl({
   const CHUNK_DELAY_MS = 10;   // ms between chunks — yields event loop without stalling input
 
   const sendInput = useCallback((input: string) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) return;
+    if (!ensureConnected("send input")) return;
 
     const encoder = new TextEncoder();
     const inputBytes = encoder.encode(input);
@@ -192,13 +287,10 @@ export function useTerminalFlowControl({
       }
     };
     sendChunk();
-  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
+  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError, ensureConnected]);
 
   const resize = useCallback((cols: number, rows: number, force: boolean = false) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) {
-      console.warn("Cannot resize terminal: stream not connected");
-      return;
-    }
+    if (!ensureConnected("resize terminal")) return;
 
     // Cancel any previously deferred resize — we have newer dimensions now.
     // This MUST run before the value-dedup early-return below: otherwise a
@@ -244,7 +336,14 @@ export function useTerminalFlowControl({
         // Only record success (and refresh the throttle/dedup state) after the
         // send above completed without throwing.
         lastResizeTimeRef.current = Date.now();
+        if (lastSentDimsRef.current !== null) {
+          sentHistoryRef.current.push(lastSentDimsRef.current);
+          if (sentHistoryRef.current.length > BOUNCE_HISTORY_SIZE) {
+            sentHistoryRef.current.shift();
+          }
+        }
         lastSentDimsRef.current = { cols, rows };
+        bounceStreakRef.current = 0;
 
         // After resizing, request fresh terminal content
         paneRequestTimerRef.current = setTimeout(() => {
@@ -252,6 +351,14 @@ export function useTerminalFlowControl({
           if (!pushMessageRef.current || !isConnectedRef.current) return;
           try {
             console.log(`[useTerminalFlowControl] Requesting fresh pane content after resize`);
+            // Epic 3.1, Task 3.1.1.3 — a resize-triggered pane request always
+            // carries just-measured dimensions, so stale_dimensions is always
+            // explicitly false here (never the isVisibilityTriggered formula
+            // used in requestFullResync).
+            const resyncId = correlationIdEnabled ? generateSecureId() : "";
+            if (resyncId && outstandingResyncIdsRef) {
+              outstandingResyncIdsRef.current.set(resyncId, Date.now());
+            }
             pushMessage(
               create(TerminalDataSchema, {
                 sessionId,
@@ -262,6 +369,8 @@ export function useTerminalFlowControl({
                     includeEscapes: true,
                     targetCols: cols,
                     targetRows: rows,
+                    resyncId,
+                    staleDimensions: false,
                   }),
                 },
               })
@@ -274,6 +383,24 @@ export function useTerminalFlowControl({
         handleError(err);
       }
     };
+
+    // Bounce detection: matches ANY of the last BOUNCE_HISTORY_SIZE sizes sent, not just
+    // the one two sends ago, since a real oscillating viewport can wander through 3+
+    // values on a slower cadence than THROTTLE_MS catches. Held out past an escalating
+    // BOUNCE_HOLD_MS instead of sent immediately, coalescing the oscillation into one settled resize.
+    const isBounce = !force && sentHistoryRef.current.some((d) => dimensionsEqual(d, { cols, rows }));
+    if (isBounce) {
+      const BOUNCE_HOLD_BASE_MS = 3000;
+      const BOUNCE_HOLD_MAX_MS = 15000;
+      const holdMs = Math.min(BOUNCE_HOLD_BASE_MS * 2 ** bounceStreakRef.current, BOUNCE_HOLD_MAX_MS);
+      bounceStreakRef.current += 1;
+      console.log(`[useTerminalFlowControl] Resize bounce detected (${cols}x${rows} matches recent history), holding ${holdMs}ms (streak ${bounceStreakRef.current})`);
+      pendingResizeTimerRef.current = setTimeout(() => {
+        pendingResizeTimerRef.current = null;
+        doSend();
+      }, holdMs);
+      return;
+    }
 
     if (!force && timeSinceLastResize < THROTTLE_MS && lastResizeTimeRef.current !== 0) {
       // Defer instead of drop: schedule the trailing-edge send so the final
@@ -288,13 +415,10 @@ export function useTerminalFlowControl({
     }
 
     doSend();
-  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
+  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, ensureConnected, handleError, correlationIdEnabled, outstandingResyncIdsRef]);
 
   const requestScrollback = useCallback((fromSequence: number, limit: number) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) {
-      console.warn("Cannot request scrollback: stream not connected");
-      return;
-    }
+    if (!ensureConnected("request scrollback")) return;
 
     try {
       console.log(`[useTerminalFlowControl] Requesting scrollback: fromSeq=${fromSequence}, limit=${limit}`);
@@ -313,13 +437,10 @@ export function useTerminalFlowControl({
     } catch (err) {
       handleError(err);
     }
-  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
+  }, [sessionId, pushMessage, ensureConnected, handleError]);
 
   const sendFlowControl = useCallback((paused: boolean, watermark?: number) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) {
-      console.warn("Cannot send flow control: stream not connected");
-      return;
-    }
+    if (!ensureConnected("send flow control")) return;
 
     try {
       console.log(`[useTerminalFlowControl] Sending flow control: paused=${paused}, watermark=${watermark || 'N/A'}`);
@@ -338,14 +459,25 @@ export function useTerminalFlowControl({
     } catch (err) {
       handleError(err);
     }
-  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
+  }, [sessionId, pushMessage, ensureConnected, handleError]);
 
   const markResyncComplete = useCallback(() => {
-    isResyncingRef.current = false;
+    isResyncingRef.current = null;
   }, []);
 
   const markPaneResponseReceived = useCallback(() => {
-    waitingForPaneResponseRef.current = false;
+    waitingForPaneResponseRef.current = null;
+    // Epic 3.1, Task 3.1.1.4a — this is the single existing "resync response
+    // applied" signal (invoked, via useVisibilityResync.ts's
+    // notifyResyncOutputReceived, whenever a visibility/focus-triggered
+    // resync completes), so it's the correct integration point to record
+    // which dimensions the client believes are now in sync with the server.
+    if (dimensionSyncRef.current.cols !== undefined && dimensionSyncRef.current.rows !== undefined) {
+      lastSyncedDimensionsRef.current = {
+        cols: dimensionSyncRef.current.cols,
+        rows: dimensionSyncRef.current.rows,
+      };
+    }
   }, []);
 
   const getIsResyncingRef = useCallback(() => isResyncingRef, []);

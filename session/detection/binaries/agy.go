@@ -68,6 +68,24 @@ func (d *AgyDetector) Patterns() dtypes.StatusPatterns {
 				Description: "Agy tool execution permission prompt",
 				Priority:    19,
 			},
+			{
+				Name:        "agy_needs_approval_for",
+				Pattern:     `(?i)needs\s+approval\s+for`,
+				Description: "Agy subagent needs approval indicator",
+				Priority:    19,
+			},
+			{
+				Name:        "agy_ctrl_k_approve",
+				Pattern:     `(?i)ctrl\+k\s+approve`,
+				Description: "Agy ctrl+k approve shortcut prompt",
+				Priority:    18,
+			},
+			{
+				Name:        "agy_agent_blocked",
+				Pattern:     `(?i)Blocked\s*·`,
+				Description: "Agy agent blocked status indicator",
+				Priority:    18,
+			},
 		},
 		InputRequired: []dtypes.StatusPattern{},
 		Error:         []dtypes.StatusPattern{

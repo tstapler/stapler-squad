@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -74,6 +75,28 @@ type SessionStopper interface {
 	// currently tracked live (same "not live" cases as IsSessionLive); dur is
 	// meaningless when ok is false.
 	TimeSinceLastMeaningfulOutput(sessionUUID string) (dur time.Duration, ok bool)
+	// IsRetryPending returns true if sessionUUID's live Instance currently has
+	// an automated retry claimed or scheduled by the configurable retry policy
+	// (session-retry-backoff). RemediateStaleWorkSession defers rather than
+	// killing the pane and respawning when this is true, so the two
+	// mechanisms never race the same session's process-level state (AC8).
+	// Returns false if the session isn't tracked live.
+	IsRetryPending(sessionUUID string) bool
+}
+
+// SessionSteerer allows BacklogService to inject a message into an already-
+// active session (e.g. a PR-fix problem description) instead of skipping a
+// respawn outright. It is nil-safe: BacklogService degrades gracefully when
+// not wired, mirroring SessionStopper.
+type SessionSteerer interface {
+	SessionProgram(sessionUUID string) (program string, ok bool)
+	// IsReadyForSteer reports whether sessionUUID's pane is confirmed idle
+	// and safe for an unattended PTY write. False — including when
+	// readiness can't be determined — means the caller must not steer (see
+	// *SessionService.IsReadyForSteer's doc comment for why "unknown" must
+	// never default to true here).
+	IsReadyForSteer(sessionUUID string) bool
+	SteerActiveSession(ctx context.Context, sessionUUID, message string) error
 }
 
 // RepoWatchRemover lets BacklogService tell the background unfinished-changes
@@ -101,6 +124,7 @@ type BacklogService struct {
 	sourceBackend     itemSourceBackend
 	sessionCreator    SessionCreator
 	sessionStopper    SessionStopper
+	sessionSteerer    SessionSteerer
 	autonomousStarter AutonomousDriverStarter
 	// repoWatchRemover tells the unfinished-changes scanner to stop watching a
 	// worktree path once it's removed from disk (BUG-034). nil-safe — wired via
@@ -110,8 +134,15 @@ type BacklogService struct {
 	// self-service "Ship PR" action on the item detail page. nil (the default)
 	// makes TriggerShipPR return CodeUnimplemented; wired via SetOneShotRunner.
 	oneShotRunner PRRunner
-	cfg           *config.Config
-	engine        session.WorkflowEngine
+	// julesDispatcher drives DispatchToJules (backlog_service_jules.go). nil
+	// (the default — Jules disabled, or its dependencies unresolvable at
+	// startup) makes DispatchToJules return CodeFailedPrecondition pointing at
+	// Settings → Jules, mirroring checkEgressConsent's own message for the
+	// same underlying condition; wired via SetJulesDispatcher
+	// (server/dependencies.go, Task 2.4.4a).
+	julesDispatcher JulesDispatcher
+	cfg             *config.Config
+	engine          session.WorkflowEngine
 	// worktreeMu serializes context-file writes to the same worktree path so that
 	// concurrent SpawnSessionFromItem / AttachSessionToItem calls cannot produce
 	// a partially-written .claude/backlog-context.md.
@@ -163,6 +194,24 @@ type BacklogService struct {
 	// section.
 	spawnInFlight sync.Map
 
+	// steerDedup maps itemID -> lastSteerReason, the most recently delivered
+	// PR-fix steer reason signature, when, and which session received it —
+	// suppresses an exact-repeat steer within steerCooldown, but only for the
+	// same session (a changed active work session is always treated as never
+	// delivered — architecture review concern). In-memory only (see plan.md's
+	// Pattern Decisions: bounded blast radius, no DB durability needed).
+	steerDedup sync.Map
+	// steerConflictDebounce maps itemID -> conflictDebounceState — the
+	// two-consecutive-tick confirmation gate for a newly-appearing merge
+	// conflict signal (pitfalls research §6, cli/cli#9583), also keyed by
+	// session identity via conflictDebounceState's own pendingConflict.sessionUUID.
+	steerConflictDebounce sync.Map
+	// steerInFlight maps itemID -> struct{}, guarding steerActiveSessionForPRFix
+	// against two overlapping reconcile ticks racing to steer the same item
+	// before steerDedup is updated. Mirrors spawnInFlight's self-cleaning
+	// LoadOrStore/defer-Delete idiom.
+	steerInFlight sync.Map
+
 	// headless triage pool and concurrency controls.
 	headlessPool   headless.PoolClient
 	shutdownCtx    context.Context
@@ -185,11 +234,13 @@ type BacklogService struct {
 	// goroutine in the new process could possibly still be running an old triage call.
 	triageInFlight sync.Map
 
-	// capabilityCheck gates the first codebase-read call per process lifetime (Story
-	// 2.2.6). Defaults to headless.DefaultCapabilitySelfCheck (shared with
-	// ReviewGateRunner so a failure discovered via either call site short-circuits
-	// the other) but is a field — not a hardcoded package-var reference — so tests
-	// can inject a fresh instance instead of fighting the singleton's sync.Once.
+	// capabilityCheck gates codebase-read calls with a cached smoke-test result
+	// (Story 2.2.6): a success is cached for the process lifetime, a failure only
+	// for a bounded window before it's re-attempted. Defaults to
+	// headless.DefaultCapabilitySelfCheck (shared with ReviewGateRunner so a
+	// failure discovered via either call site short-circuits the other) but is a
+	// field — not a hardcoded package-var reference — so tests can inject a fresh
+	// instance instead of fighting the shared singleton's cached state.
 	capabilityCheck *headless.CodebaseReadCapabilitySelfCheck
 
 	// triageCleanupTimeout bounds the post-LLM-call DB writes in TriggerTriage's
@@ -262,6 +313,101 @@ type BacklogService struct {
 	// uses to construct pipelineEngine (Epic 1.5.1a). May be nil in tests
 	// that don't pass one; handlers nil-check and return CodeUnavailable.
 	pipelineModeRepo session.PipelineModeRepository
+
+	// livenessRepo backs the LivenessDefinition CRUD RPCs (Epic 1.3 of
+	// backlog-custom-workflow-stages): CreateLivenessDefinition/
+	// UpdateLivenessDefinition/DeleteLivenessDefinition/GetLivenessDefinition/
+	// ListLivenessDefinitions. Wired post-construction via
+	// SetLivenessRepository — not a NewBacklogService constructor parameter,
+	// unlike pipelineModeRepo above, to avoid touching every one of this
+	// struct's existing test call sites for a dependency Epic 1.3 introduces;
+	// Epic 1.4 may fold this into the constructor once its own
+	// livenessEngine-in-sweeps wiring needs to. May be nil; handlers nil-check
+	// and return CodeUnavailable.
+	livenessRepo session.LivenessRepository
+	// livenessEngine is the LivenessEngine (session.CachingLivenessEngine in
+	// production) whose in-process cache the CRUD RPC write handlers
+	// invalidate on Create/Update/Delete. Wired post-construction via
+	// SetLivenessEngine, same rationale as livenessRepo above. May be nil;
+	// cache invalidation is then a no-op (matching invalidatePipelineCache's
+	// duck-typed no-op-if-unwired shape for pipelineEngine).
+	livenessEngine session.LivenessEngine
+
+	// stageCRUDRepo backs the Stage/StageTransition/TransitionGate CRUD RPCs
+	// (Epic 2.7 of backlog-custom-workflow-stages):
+	// CreateStage/UpdateStage/DeleteStage/GetStage/ListStages and their
+	// transition/gate siblings. Wired post-construction via
+	// SetStageCRUDRepository, same rationale as livenessRepo above. May be
+	// nil; handlers nil-check and return CodeUnavailable.
+	stageCRUDRepo session.StageCRUDRepository
+	// stageConfigEngine is the ConfiguredWorkflowEngine whose stageConfigCache
+	// the stage/transition/gate CRUD write handlers invalidate on success.
+	// Wired post-construction via SetStageConfigEngine. May be nil; cache
+	// invalidation is then a no-op, mirroring livenessEngine above.
+	stageConfigEngine stageConfigCacheInvalidator
+	// gateSatisfactionRepo backs the RecordGateApproval RPC (Epic 2.4, Story
+	// 2.4.1). Wired post-construction via SetGateSatisfactionRepository, same
+	// rationale as stageCRUDRepo above. May be nil; the handler nil-checks and
+	// returns CodeUnavailable.
+	gateSatisfactionRepo session.GateSatisfactionRepository
+}
+
+// stageConfigCacheInvalidator is a narrow, consumer-defined interface (see
+// pipelineCacheInvalidator's identical rationale in
+// backlog_service_pipeline_mode.go) matched via duck typing against
+// s.stageConfigEngine. *session.ConfiguredWorkflowEngine satisfies it.
+type stageConfigCacheInvalidator interface {
+	InvalidateCache(ctx context.Context) error
+}
+
+// SetStageCRUDRepository wires the repository backing the Stage/
+// StageTransition/TransitionGate CRUD RPCs. nil (the default) makes those
+// RPCs return CodeUnavailable, mirroring pipelineModeRepo's nil-guard shape.
+func (s *BacklogService) SetStageCRUDRepository(repo session.StageCRUDRepository) {
+	s.stageCRUDRepo = repo
+}
+
+// SetStageConfigEngine wires the engine whose stageConfigCache the stage/
+// transition/gate CRUD write handlers invalidate on success. nil (the
+// default) makes cache invalidation a no-op.
+func (s *BacklogService) SetStageConfigEngine(engine stageConfigCacheInvalidator) {
+	s.stageConfigEngine = engine
+}
+
+// invalidateStageConfigCache re-fetches the enabled stage/transition graph
+// into s.stageConfigEngine's cache after a successful stage/transition/gate
+// write. id is used only for the Warn log line if invalidation fails.
+// No-op (silently) if stageConfigEngine is unwired. Deliberately returns
+// nothing — mirrors invalidatePipelineCache's rationale: a cache-invalidation
+// failure after a successful DB write must never fail the RPC.
+func (s *BacklogService) invalidateStageConfigCache(ctx context.Context, id string) {
+	if s.stageConfigEngine == nil {
+		return
+	}
+	if err := s.stageConfigEngine.InvalidateCache(ctx); err != nil {
+		log.WarningLog().Printf("[ConfiguredWorkflowEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
+	}
+}
+
+// SetGateSatisfactionRepository wires the repository backing the
+// RecordGateApproval RPC. nil (the default) makes that RPC return
+// CodeUnavailable, mirroring stageCRUDRepo's nil-guard shape.
+func (s *BacklogService) SetGateSatisfactionRepository(repo session.GateSatisfactionRepository) {
+	s.gateSatisfactionRepo = repo
+}
+
+// SetLivenessRepository wires the repository backing the LivenessDefinition
+// CRUD RPCs. nil (the default) makes those RPCs return CodeUnavailable,
+// mirroring pipelineModeRepo's nil-guard shape.
+func (s *BacklogService) SetLivenessRepository(repo session.LivenessRepository) {
+	s.livenessRepo = repo
+}
+
+// SetLivenessEngine wires the LivenessEngine whose cache the LivenessDefinition
+// CRUD RPC write handlers invalidate on success. nil (the default) makes
+// cache invalidation a no-op.
+func (s *BacklogService) SetLivenessEngine(engine session.LivenessEngine) {
+	s.livenessEngine = engine
 }
 
 // PipelineEngine returns the PipelineEngine injected at construction (nil if none was
@@ -278,6 +424,33 @@ func (s *BacklogService) PipelineEngine() session.PipelineEngine {
 // *config.Config pointer.
 func (s *BacklogService) ConfigMu() *sync.RWMutex {
 	return &s.cfgMu
+}
+
+// EnterpriseHosts returns the statically-configured GitHub Enterprise
+// hostnames (normalized, github.com excluded), for callers that need to
+// recognize GHE PR/issue URLs — e.g. server/mcp/tools_backlog.go's
+// reportPRCreated and importGitHubIssue, which otherwise fall back to
+// session.ParseGitHubURL's github.com-only matching and silently fail to
+// recognize any GHE host. Mirrors SessionService.enterpriseHosts, minus that
+// method's additional union with cached-account hosts (BacklogService has no
+// UserPRCache dependency) — extend this if/when that's needed here too.
+// Read under cfgMu's read lock for the same reason as
+// maxConcurrentBacklogWorkItems below.
+func (s *BacklogService) EnterpriseHosts() []string {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	configuredHosts := s.cfg.GetGitHubEnterpriseHosts()
+	hosts := make([]string, 0, len(configuredHosts))
+	seen := make(map[string]bool, len(configuredHosts))
+	for _, h := range configuredHosts {
+		host := githubpkg.NormalizeHost(h.Host)
+		if host == "" || githubpkg.IsGitHubCom(host) || seen[host] {
+			continue
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
+	return hosts
 }
 
 // maxConcurrentBacklogWorkItems reads cfg.MaxConcurrentBacklogWorkItemsOrDefault()
@@ -304,6 +477,20 @@ func (s *BacklogService) autoSpawnReadyItemsEnabled() bool {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
 	return s.cfg.AutoSpawnReadyItemsOrDefault()
+}
+
+// Admit reports whether a new trigger-fired session may be created right now, per the
+// same MaxConcurrentBacklogWorkItems WIP cap SpawnSessionFromItem's own gate enforces
+// (backlog_service_triage.go). Implements server/workflows.AdmissionGate — wired into
+// Scheduler at construction (server/dependencies.go) so Scheduler.FireNow/FireTrigger
+// can no longer bypass this cap (webhook-triggers Epic 1.3, closing the collateral
+// debt the 2026-07-12 OOM incident's WIP limit was meant to prevent everywhere).
+func (s *BacklogService) Admit(ctx context.Context) (bool, error) {
+	liveCount, err := s.countLiveBacklogWorkSessions(ctx)
+	if err != nil {
+		return false, fmt.Errorf("count live work sessions: %w", err)
+	}
+	return liveCount < s.maxConcurrentBacklogWorkItems(), nil
 }
 
 // SetEventBus wires in the event bus used to publish operator-facing notifications.
@@ -343,6 +530,24 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 // SetHeadlessPool wires the headless pool for autonomous triage calls.
 func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 	s.headlessPool = pool
+}
+
+// claimantHostID returns the stable per-host/per-instance identifier for the
+// process performing a backlog claim or attach, for cross-host provenance on
+// ItemSession rows. It is distinct from STAPLER_SQUAD_INSTANCE (a config
+// namespace, not an identity) and from session/contexts.go's cloud InstanceID
+// (cloud-only, not populated for local/dev). Returns "" on any failure so a
+// claim/attach never fails just because host-identity persistence did.
+func (s *BacklogService) claimantHostID() string {
+	if s.cfg == nil {
+		return ""
+	}
+	id, err := s.cfg.GetOrCreateClaimantHostID()
+	if err != nil {
+		log.WarningLog().Printf("[claimantHostID] failed to resolve claimant host id: %v", err)
+		return ""
+	}
+	return id
 }
 
 // SetScrollbackManager wires in the scrollback manager used to write a searchable
@@ -405,6 +610,31 @@ func (s *BacklogService) Shutdown() {
 // SetSessionStopper wires the optional session stopper used to kill orphaned sessions on re-triage.
 func (s *BacklogService) SetSessionStopper(stopper SessionStopper) {
 	s.sessionStopper = stopper
+}
+
+// SetSessionSteerer wires the optional session steerer used to inject a
+// PR-fix problem description into an already-active session instead of
+// skipping the respawn outright.
+func (s *BacklogService) SetSessionSteerer(steerer SessionSteerer) {
+	s.sessionSteerer = steerer
+}
+
+// GetSessionSteerer returns the wired SessionSteerer, or nil if
+// SetSessionSteerer was never called. Exists so server-package tests can
+// assert real bootstrap wiring (dependencies.go) without exposing the
+// field directly — mirrors SessionService.GetBacklogLifecycleListener's
+// wiring-test-support role (pre-mortem.md P2 #5: this is the first such
+// getter for this pattern on BacklogService).
+func (s *BacklogService) GetSessionSteerer() SessionSteerer {
+	return s.sessionSteerer
+}
+
+// GetSessionStopper returns the wired SessionStopper, or nil. Added
+// alongside GetSessionSteerer since SetSessionStopper had the identical
+// untested-wiring gap (pre-mortem.md P2 #5) — fixing both costs one extra
+// assertion in the same test, not a second test file.
+func (s *BacklogService) GetSessionStopper() SessionStopper {
+	return s.sessionStopper
 }
 
 // SetRepoWatchRemover wires the optional unfinished-changes scanner hook used
@@ -479,14 +709,19 @@ func (s *BacklogService) resolveRepoPathInput(input string) (string, error) {
 // costFor, if non-nil, is called with the tmux session UUID to populate EstimatedCostUsd.
 func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID string) float64) *sessionv1.ItemSession {
 	p := &sessionv1.ItemSession{
-		Id:                       is.ID,
-		SessionUuid:              is.SessionUUID,
-		SessionRole:              is.Role,
+		Id:          is.ID,
+		SessionUuid: is.SessionUUID,
+		SessionRole: is.Role,
+		// #nosec G115 -- git commit count for a single session's worktree, bounded
+		// by realistic repo activity during one session's lifetime.
 		CommitCountSinceSpawn:    int32(is.CommitCountSinceSpawn),
 		LastCommitMessage:        is.LastCommitMessage,
 		CreatedAt:                timestamppb.New(is.CreatedAt),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
+		EndReason:                is.EndReason,
+		FailureCapturePath:       is.FailureCapturePath,
+		ClaimantHostId:           is.ClaimantHostID,
 	}
 	if is.StartedAt != nil {
 		p.StartedAt = timestamppb.New(*is.StartedAt)
@@ -506,6 +741,8 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 			Id:             rv.ID,
 			OverallOutcome: rv.OverallOutcome,
 			Summary:        rv.Summary,
+			// #nosec G115 -- token count for one review's diff, bounded by realistic
+			// diff/LLM-context sizes, nowhere near int32 range.
 			DiffTokenCount: int32(rv.DiffTokenCount),
 			DiffTruncated:  rv.DiffTruncated,
 			OverrideBy:     rv.OverrideBy,
@@ -522,6 +759,8 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 				p.ReviewVerdict.PerCriterion = make([]*sessionv1.CriterionVerdict, len(cvs))
 				for i, cv := range cvs {
 					p.ReviewVerdict.PerCriterion[i] = &sessionv1.CriterionVerdict{
+						// #nosec G115 -- index into one backlog item's acceptance-criteria
+						// list, bounded by realistic AC list length (a handful of entries).
 						CriterionIndex: int32(cv.CriterionIndex),
 						Outcome:        string(cv.Outcome),
 						Evidence:       cv.Evidence,
@@ -534,7 +773,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 	if is.TriageResult != "" {
 		var tr triageResultJSON
 		if jsonErr := json.Unmarshal([]byte(is.TriageResult), &tr); jsonErr != nil {
-			log.WarningLog.Printf("[itemSessionToProto] invalid triage_result JSON for session %s: %v", is.ID, jsonErr)
+			log.WarningLog().Printf("[itemSessionToProto] invalid triage_result JSON for session %s: %v", is.ID, jsonErr)
 		} else {
 			suggs := make([]*sessionv1.TriageSuggestion, len(tr.Suggestions))
 			for i, sg := range tr.Suggestions {
@@ -558,8 +797,10 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 				Suggestions:         suggs,
 				ClarifyingQuestions: clarifying,
 				Tasks:               tasks,
-				Iteration:           int32(tr.Iteration),
-				Feedback:            tr.Feedback,
+				// #nosec G115 -- triage rework iteration counter, bounded by the small
+				// configurable rework cap (config.MaxAutoReworkIterationsOrDefault, default 3).
+				Iteration: int32(tr.Iteration),
+				Feedback:  tr.Feedback,
 			}
 		}
 	}
@@ -587,10 +828,17 @@ type triageResultJSON struct {
 
 // backlogItemSummaryToProto maps a BacklogItemSummary to the proto BacklogItem message.
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
-func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+// engine must be the caller's s.engine (see allowedTransitionStrings); no
+// per-item StageConfigSnapshot fallback is passed here — unlike
+// backlogItemToProto, BacklogItemSummary doesn't carry StatusEvents (that's
+// the whole point of the "summary" — avoid over-hydration), so
+// BuildStageConfigSnapshotFallback has nothing to reconstruct from.
+func backlogItemSummaryToProto(item *session.BacklogItemSummary, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:         item.ID,
-		Title:      item.Title,
+		Id:       item.ID,
+		PublicId: item.PublicIDRaw,
+		Title:    item.Title,
+		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))
 		Priority:   int32(item.Priority),
 		Status:     string(item.Status),
 		RepoPath:   item.RepoPath,
@@ -598,9 +846,26 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 		ExternalId: item.ExternalID,
 		Labels:     item.Labels,
 		PrUrl:      item.PrURL,
-		PrNumber:   int32(item.PrNumber),
-		CreatedAt:  timestamppb.New(item.CreatedAt),
-		UpdatedAt:  timestamppb.New(item.UpdatedAt),
+		// #nosec G115 -- pr_number is a GitHub PR number; production writers store it
+		// from a *int32 RPC field, structurally bounded well under int32 range.
+		PrNumber:           int32(item.PrNumber),
+		CreatedAt:          timestamppb.New(item.CreatedAt),
+		UpdatedAt:          timestamppb.New(item.UpdatedAt),
+		AllowedTransitions: allowedTransitionStrings(engine, item.Status, nil),
+		// Plan-gating fields: board/list-view cards derive their primary
+		// action (getAvailableActions in itemActions.ts) from
+		// SkipPlanning/PlanApproved/PlanArtifactsPath directly, so this
+		// "lightweight" summary must carry them too, not just GetBacklogItem's
+		// full backlogItemToProto — omitting them here silently zero-valued
+		// PlanArtifactsPath for any item whose data reached the client via
+		// ListBacklogItems (or a WatchBacklogItems reconnect resync, which
+		// shares this same conversion), flipping a ready item with an
+		// approved-pending plan to show "Trigger Triage" instead of "Approve
+		// Plan". Same class of gap as AllowedTransitions (#585).
+		SkipPlanning:        item.SkipPlanning,
+		PlanApproved:        item.PlanApproved,
+		PlanArtifactsPath:   item.PlanArtifactsPath,
+		PlanRejectionReason: item.PlanRejectionReason,
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
@@ -614,6 +879,8 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 			protoAC := make([]*sessionv1.AcCriterion, len(criteria))
 			for i, c := range criteria {
 				protoAC[i] = &sessionv1.AcCriterion{
+					// #nosec G115 -- index into one backlog item's acceptance-criteria
+					// list, bounded by realistic AC list length (a handful of entries).
 					Index:  int32(c.Index),
 					Text:   c.Text,
 					Status: string(c.Status),
@@ -636,18 +903,15 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 	return p
 }
 
-// protoWorkflowEngine is a stateless, read-only WorkflowEngine used only to
-// surface AllowedTransitions on the wire (backlogItemToProto below) — package
-// state is safe here since the underlying transitions map is never mutated
-// after construction. Not s.engine: backlogItemToProto is a free function
-// called from many BacklogService methods, and threading an engine parameter
-// through every call site would be a much larger change for the same result.
-var protoWorkflowEngine = session.NewDefaultWorkflowEngine()
-
 // allowedTransitionStrings returns the string form of
-// protoWorkflowEngine.AllowedTransitions(from), for BacklogItem.allowed_transitions.
-func allowedTransitionStrings(from session.BacklogStatus) []string {
-	targets := protoWorkflowEngine.AllowedTransitions(from)
+// engine.AllowedTransitions(from, fallback), for BacklogItem.allowed_transitions.
+// engine must be the caller's real, request-scoped s.engine (not a hardcoded
+// DefaultWorkflowEngine) so a CUSTOM-stage item gets its actual configured
+// transitions rather than an empty slice (#585) — see the docstrings on
+// backlogItemToProto/backlogItemSummaryToProto below for how fallback is
+// derived per caller.
+func allowedTransitionStrings(engine session.WorkflowEngine, from session.BacklogStatus, fallback *session.StageConfigSnapshot) []string {
+	targets := engine.AllowedTransitions(from, fallback)
 	out := make([]string, len(targets))
 	for i, t := range targets {
 		out[i] = string(t)
@@ -656,42 +920,58 @@ func allowedTransitionStrings(from session.BacklogStatus) []string {
 }
 
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
-func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+// engine must be the caller's s.engine — see allowedTransitionStrings.
+func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:                 item.ID,
-		Title:              item.Title,
-		Description:        item.Description,
-		Priority:           int32(item.Priority),
-		Status:             item.Status,
-		RepoPath:           item.RepoPath,
-		SkipReviewGate:     item.SkipReviewGate,
-		SkipPlanning:       item.SkipPlanning,
-		AutoSpawnSession:   item.AutoSpawnSession,
-		AutoCreatePr:       item.AutoCreatePR,
-		PipelineMode:       &item.PipelineMode,
-		Category:           &item.Category,
-		PlanApproved:       item.PlanApproved,
-		PlanArtifactsPath:  item.PlanArtifactsPath,
-		Notes:              item.Notes,
-		ExternalId:         item.ExternalID,
-		Labels:             item.Labels,
-		SourceId:           item.SourceID,
-		PrUrl:              item.PrURL,
+		Id:          item.ID,
+		Title:       item.Title,
+		Description: item.Description,
+		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))
+		Priority:            int32(item.Priority),
+		Status:              item.Status,
+		RepoPath:            item.RepoPath,
+		SkipReviewGate:      item.SkipReviewGate,
+		SkipPlanning:        item.SkipPlanning,
+		AutoSpawnSession:    item.AutoSpawnSession,
+		AutoCreatePr:        item.AutoCreatePR,
+		AutoApprovePlan:     item.AutoApprovePlan,
+		PipelineMode:        &item.PipelineMode,
+		Category:            &item.Category,
+		PlanApproved:        item.PlanApproved,
+		PlanArtifactsPath:   item.PlanArtifactsPath,
+		PlanRejectionReason: item.PlanRejectionReason,
+		Notes:               item.Notes,
+		ExternalId:          item.ExternalID,
+		Labels:              item.Labels,
+		SourceId:            item.SourceID,
+		PrUrl:               item.PrURL,
+		// #nosec G115 -- pr_number is a GitHub PR number; production writers store it
+		// from a *int32 RPC field, structurally bounded well under int32 range.
 		PrNumber:           int32(item.PrNumber),
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
-		AllowedTransitions: allowedTransitionStrings(session.BacklogStatus(item.Status)),
+		AllowedTransitions: allowedTransitionStrings(engine, session.BacklogStatus(item.Status), session.BuildStageConfigSnapshotFallback(item)),
+		PublicId:           item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
 	}
+	if item.BaseBranch != "" {
+		p.BaseBranch = &item.BaseBranch
+	}
 	if item.PlanApprovedAt != nil {
 		p.PlanApprovedAt = timestamppb.New(*item.PlanApprovedAt)
+	}
+	if item.PlanRejectedAt != nil {
+		p.PlanRejectedAt = timestamppb.New(*item.PlanRejectedAt)
 	}
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
 	}
 	if item.ReworkCapOverride != nil {
+		// #nosec G115 -- rework_cap_override is only ever set from a *int32 RPC field
+		// (backlog_service_lifecycle.go's int(*req.Msg.ReworkCapOverride)), so this
+		// int -> int32 round trip cannot lose information.
 		override := int32(*item.ReworkCapOverride)
 		p.ReworkCapOverride = &override
 	}
@@ -703,6 +983,8 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 			protoAC := make([]*sessionv1.AcCriterion, len(criteria))
 			for i, c := range criteria {
 				protoAC[i] = &sessionv1.AcCriterion{
+					// #nosec G115 -- index into one backlog item's acceptance-criteria
+					// list, bounded by realistic AC list length (a handful of entries).
 					Index:  int32(c.Index),
 					Text:   c.Text,
 					Status: string(c.Status),
@@ -730,12 +1012,14 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		protoEvents := make([]*sessionv1.BacklogStatusEvent, len(item.StatusEvents))
 		for i, ev := range item.StatusEvents {
 			protoEvents[i] = &sessionv1.BacklogStatusEvent{
-				Id:          ev.ID,
-				FromStatus:  ev.FromStatus,
-				ToStatus:    ev.ToStatus,
-				TriggeredBy: ev.TriggeredBy,
-				CreatedAt:   timestamppb.New(ev.CreatedAt),
-				Note:        ev.Note,
+				Id:                         ev.ID,
+				FromStatus:                 ev.FromStatus,
+				ToStatus:                   ev.ToStatus,
+				TriggeredBy:                ev.TriggeredBy,
+				CreatedAt:                  timestamppb.New(ev.CreatedAt),
+				Note:                       ev.Note,
+				StageNameSnapshot:          ev.StageNameSnapshot,
+				AllowedTransitionsSnapshot: ev.AllowedTransitionsSnapshot,
 			}
 		}
 		p.StatusEvents = protoEvents
@@ -747,7 +1031,9 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		protoNotes := make([]*sessionv1.BacklogProgressNote, len(item.ProgressNotes))
 		for i, n := range item.ProgressNotes {
 			protoNotes[i] = &sessionv1.BacklogProgressNote{
-				Id:             n.ID,
+				Id: n.ID,
+				// #nosec G115 -- index into one backlog item's acceptance-criteria
+				// list, bounded by realistic AC list length (a handful of entries).
 				CriterionIndex: int32(n.CriterionIndex),
 				Note:           n.Note,
 				Status:         n.Status,
@@ -755,6 +1041,16 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 			}
 		}
 		p.ProgressNotes = protoNotes
+	}
+
+	// Populate activity notes (the ungated post_backlog_update log) when they
+	// were eagerly loaded.
+	if len(item.ActivityNotes) > 0 {
+		protoActivityNotes := make([]*sessionv1.BacklogActivityNote, len(item.ActivityNotes))
+		for i := range item.ActivityNotes {
+			protoActivityNotes[i] = activityNoteDataToProto(&item.ActivityNotes[i])
+		}
+		p.ActivityNotes = protoActivityNotes
 	}
 
 	return p
@@ -795,10 +1091,10 @@ func (s *BacklogService) commitAndPushItemWorktrees(ctx context.Context, session
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		commitMsg := fmt.Sprintf("[claudesquad] save work before done (session %s)", is.SessionUUID)
 		if commitErr := g.CommitChanges(commitMsg); commitErr != nil {
-			log.WarningLog.Printf("[commitAndPushItemWorktrees] commit failed path=%s: %v", wt.WorktreePath, commitErr)
+			log.WarningLog().Printf("[commitAndPushItemWorktrees] commit failed path=%s: %v", wt.WorktreePath, commitErr)
 		}
 		if pushErr := g.PushBranch(); pushErr != nil {
-			log.WarningLog.Printf("[commitAndPushItemWorktrees] push failed path=%s: %v", wt.WorktreePath, pushErr)
+			log.WarningLog().Printf("[commitAndPushItemWorktrees] push failed path=%s: %v", wt.WorktreePath, pushErr)
 		}
 	}
 }
@@ -838,7 +1134,7 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 		}
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		if cleanErr := g.Cleanup(); cleanErr != nil {
-			log.WarningLog.Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
+			log.WarningLog().Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
 			continue
 		}
 		// The worktree directory is gone — stop the unfinished-changes scanner
@@ -849,6 +1145,25 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 			s.repoWatchRemover.RemoveRepo(wt.WorktreePath)
 		}
 	}
+}
+
+// CleanupTerminalItem removes git worktrees and archives/kills the tmux panes
+// of every work/review session on itemID — the same synchronous cleanup
+// TransitionBacklogItemStatus runs inline on a terminal transition, exported
+// so it can also be invoked from the session/ package (see
+// session.WorktreeCleaner) by internal transition paths that call the
+// storage layer directly (bounce-to-done, PR-merge done) and would otherwise
+// depend solely on the 60s reconcileTerminalItemSessions safety-net sweep.
+// Best-effort: a listing failure is logged, never returned — mirrors
+// cleanupItemWorktrees's and archiveItemWorkSessions's own contract.
+func (s *BacklogService) CleanupTerminalItem(ctx context.Context, itemID string) {
+	sessions, err := s.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		log.WarningLog().Printf("[CleanupTerminalItem] ListItemSessions item=%s: %v", itemID, err)
+		return
+	}
+	s.cleanupItemWorktrees(ctx, sessions)
+	s.archiveItemWorkSessions(ctx, sessions)
 }
 
 // archiveItemWorkSessions soft-archives every work- or review-role session in
@@ -878,10 +1193,10 @@ func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions [
 			continue
 		}
 		if err := s.sessionStopper.ArchiveSessionByUUID(ctx, is.SessionUUID); err != nil {
-			log.WarningLog.Printf("[archiveItemWorkSessions] failed to archive session=%s: %v", is.SessionUUID, err)
+			log.WarningLog().Printf("[archiveItemWorkSessions] failed to archive session=%s: %v", is.SessionUUID, err)
 		}
 		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
-			log.WarningLog.Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
+			log.WarningLog().Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
 		}
 	}
 }

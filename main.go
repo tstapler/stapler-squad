@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/daemon"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/buildinfo"
 	"github.com/tstapler/stapler-squad/pkg/warren"
 	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server"
@@ -24,37 +25,57 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/telemetry"
+	"io"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
+	"sort"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
+// version is normally overridden via -X main.version=... (see Makefile's
+// LDFLAGS / GoReleaser's .goreleaser.yaml). "dev" is a placeholder, not a
+// real fallback: resolveDevVersion() below replaces it at startup using
+// Go's own automatic VCS build-info stamping (populated by a plain
+// `go build`/`go install` run from inside this git checkout — no ldflags
+// needed), rather than a hardcoded version string that silently goes stale
+// forever. That staleness was a real, live bug: a binary this repo
+// documents building via a bare `go build`/`go install` (no Makefile, no
+// ldflags) reported "1.1.2" regardless of what commit it actually
+// contained, because that was the last value anyone happened to hardcode
+// here — verified in the field on a machine's actual ~/.local/bin install.
 var (
-	version            = "1.1.2"
-	daemonFlag         bool
-	mcpFlag            bool
-	testModeFlag       bool
-	testDirFlag        string
-	discoveryModeFlag  string
-	discoverExtFlag    bool
-	profileFlag        bool
-	profilePortFlag    int
-	traceFlag          bool
-	listenAddrFlag     string
-	remoteAccessFlag   bool
-	remotePortFlag     int
-	rpIDFlag           string
-	tmuxKeepServerFlag bool
-	rootCmd            = &cobra.Command{
+	version                 = "dev"
+	daemonFlag              bool
+	mcpFlag                 bool
+	testModeFlag            bool
+	testDirFlag             string
+	discoveryModeFlag       string
+	discoverExtFlag         bool
+	profileFlag             bool
+	profilePortFlag         int
+	traceFlag               bool
+	listenAddrFlag          string
+	remoteAccessFlag        bool
+	remotePortFlag          int
+	rpIDFlag                string
+	tmuxKeepServerFlag      bool
+	tymuxdKeepServerFlag    bool
+	openURLFlag             string
+	registerLinuxSchemeFlag string
+	listKnownHostsFlag      bool
+	rootCmd                 = &cobra.Command{
 		Use:   "stapler-squad",
 		Short: "Stapler Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp (Web Mode)",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -63,6 +84,44 @@ var (
 			// session state including Claude session IDs for --resume on next start).
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+
+			// --open-url mode: translate an ssq:// deep link to a local web UI URL
+			// and shell out to the OS's default opener, then exit. Never starts the
+			// HTTP server, config loading, or logging — it's a fire-and-forget CLI
+			// helper invoked by the OS as the ssq:// scheme handler (see
+			// project_plans/backlog-deep-linking/implementation/plan.md Epic 4).
+			if openURLFlag != "" {
+				if err := runOpenURL(ctx, openURLFlag); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				return nil
+			}
+
+			// --register-linux-scheme mode: idempotently register stapler-squad as
+			// the OS handler for the ssq:// URL scheme (Story 4.2). Invoked from
+			// scripts/install-service.sh's Linux install path, not by end users
+			// directly — hidden from --help below.
+			if registerLinuxSchemeFlag != "" {
+				desktopDir := filepath.Join(os.Getenv("HOME"), ".local", "share", "applications")
+				if err := registerLinuxScheme(ctx, desktopDir, registerLinuxSchemeFlag); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				return nil
+			}
+
+			// --list-known-hosts mode (Observability Plan,
+			// project_plans/backlog-deep-linking/implementation/plan.md): print the
+			// local Workspace Host Registry's contents to stdout, then exit. Lets a
+			// user diagnose "why didn't my link resolve" without reading logs.
+			if listKnownHostsFlag {
+				if err := runListKnownHosts(os.Stdout); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				return nil
+			}
 
 			// MCP mode: initialize logging to stderr, run MCP server.
 			// Mutually exclusive with HTTP server mode — returns when stdin closes.
@@ -96,12 +155,13 @@ var (
 				// load-time read of the flag (rather than a live BacklogController,
 				// which BuildCoreDeps doesn't construct) is sufficient.
 				backlogEnabled := func() bool { return cfg.GetFeatureFlag("backlog") }
-				// No BacklogService on this stdio fallback path (buildMCPDeps only
-				// builds Phase 1 CoreDeps) — submit_review_verdict's eager
-				// review->in_progress transition is skipped here, and
-				// create_backlog_item/import_github_issue skip auto-triage; see
-				// RunServer's doc comment.
-				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil)
+				// No BacklogService/liveness checker on this stdio fallback path
+				// (buildMCPDeps only builds Phase 1 CoreDeps) — submit_review_verdict's
+				// eager review->in_progress transition is skipped here,
+				// create_backlog_item/import_github_issue skip auto-triage, and
+				// link_session_to_item degrades to UNAVAILABLE; see RunServer's doc
+				// comment and ADR-001.
+				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil, nil)
 			}
 
 			// Enable test mode if flag is set
@@ -112,22 +172,22 @@ var (
 					testDir = fmt.Sprintf("/tmp/stapler-squad-test-%d", os.Getpid())
 				}
 				// Set environment variable for config package to use
-				os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+				if err := os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir); err != nil {
+					log.Warn("Failed to set STAPLER_SQUAD_TEST_DIR; test mode may use the wrong data directory", "err", err)
+				}
 				log.Info("Test mode enabled: using isolated data directory", "dir", testDir)
 			}
 
 			// Load config first so we can configure logging properly
 			cfg := config.LoadConfig()
 
-			// Register the process manager backend before any session is created.
-			// Empty string defaults to "tmux" for backwards-compatibility.
-			{
-				backend := session.ProcessManagerBackend(cfg.ProcessManagerBackend)
-				if backend == "" {
-					backend = session.BackendTmux
-				}
-				session.RegisterBackendProvider(backend)
-			}
+			// The process-wide default backend is resolved live per session
+			// (session.getSelectedBackend, via config.EffectiveTymuxEnabled) —
+			// no startup-time registration needed. resolvedBackend here is only
+			// for tymuxNeeded's startup-supervision decision below: whether
+			// tymuxd needs to be running *right now*, given the flag's value at
+			// this instant.
+			resolvedBackend := session.ResolveSessionBackend(cfg, "", "")
 
 			// Load discovery config
 			discoveryCfg := config.LoadDiscoveryConfig()
@@ -197,7 +257,7 @@ var (
 			// Acquire an exclusive, process-lifetime lock before touching any
 			// shared state (tmux server, ent DB) so a prior process that
 			// launchd/systemd has lost track of (see
-			// .claude/rules/service-restart-orphan-process.md) can't race
+			// docs/explanation/service-restart-orphan-process.md) can't race
 			// this one over the same instance directory.
 			configDir, err := config.GetConfigDir()
 			if err != nil {
@@ -317,6 +377,25 @@ var (
 					}
 					log.Warn("Failed to ensure tmux server running", "err", tmuxReadyErr)
 				}
+
+				// Start tymuxd supervision only when it's actually needed (Epic 2.2,
+				// project_plans/tymux-bundled-integration/implementation/plan.md). Mirrors
+				// tmux's own EnsureServerRunning posture immediately above: non-fatal by
+				// default (log.Warn and continue) so a tymuxd that fails to start never
+				// blocks stapler-squad from serving tmux-backed sessions, unless
+				// STAPLER_SQUAD_STRICT_STARTUP opts into hard failure.
+				//
+				// tymuxNeeded also checks cfg.TymuxSessionOverrides (Phase 4): a true
+				// entry there triggers startup supervision even when the global default
+				// is tmux, so a session pinned to tymux by a prior process finds a daemon
+				// running when it resumes.
+				if tymuxNeeded(cfg, resolvedBackend) {
+					if err := superviseTymuxd(ctx, tymux.ResolveDaemonConfig(), strictStartup, tymuxdKeepServerFlag,
+						tymux.EnsureDaemonRunning, a.OnStop); err != nil {
+						return err
+					}
+				}
+
 				// --tmux-keep-server intentionally keeps the tmux server (and anything
 				// attached to it) alive across this restart, but any control-mode client
 				// this process spawns will be brand new -- so any control-mode client
@@ -482,6 +561,13 @@ var (
 		Short: "Print the version number of stapler-squad",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("stapler-squad version %s\n", version)
+			if buildinfo.Branch != "" || buildinfo.Commit != "" {
+				worktreeNote := ""
+				if buildinfo.Worktree == "true" {
+					worktreeNote = " (worktree checkout)"
+				}
+				fmt.Printf("  branch: %s  commit: %s%s\n", orUnknown(buildinfo.Branch), orUnknown(buildinfo.Commit), worktreeNote)
+			}
 			fmt.Printf("https://github.com/TylerStaplerAtFanatics/stapler-squad/releases/tag/v%s\n", version)
 		},
 	}
@@ -705,6 +791,13 @@ var (
 	}
 )
 
+func orUnknown(s string) string {
+	if s == "" {
+		return "unknown"
+	}
+	return s
+}
+
 func init() {
 	rootCmd.Flags().BoolVar(&mcpFlag, "mcp", false,
 		"Run as an MCP server (stdio transport). Reads MCP JSON-RPC from stdin, writes to stdout. "+
@@ -739,10 +832,29 @@ func init() {
 	rootCmd.Flags().BoolVar(&tmuxKeepServerFlag, "tmux-keep-server", true,
 		"Keep tmux server running even when all user sessions close (sets exit-empty off). "+
 			"Use this if the tmux server frequently stops between sessions.")
+	rootCmd.Flags().BoolVar(&tymuxdKeepServerFlag, "tymuxd-keep-server", true,
+		"Keep the tymuxd daemon running across a stapler-squad restart, matching tmux's own "+
+			"--tmux-keep-server default. Pass --tymuxd-keep-server=false to stop it via the "+
+			"App.OnStop hook on shutdown instead.")
+	rootCmd.Flags().StringVar(&openURLFlag, "open-url", "",
+		"Translate an ssq:// deep link to a local web UI URL and open it via the OS's default "+
+			"opener (open on macOS, xdg-open on Linux), then exit. Used as the ssq:// scheme handler.")
+	rootCmd.Flags().StringVar(&registerLinuxSchemeFlag, "register-linux-scheme", "",
+		"(Linux only, internal) Idempotently register the given binary path as the OS handler "+
+			"for the ssq:// URL scheme via a .desktop file + xdg-mime, then exit. "+
+			"Invoked by scripts/install-service.sh.")
+	rootCmd.Flags().BoolVar(&listKnownHostsFlag, "list-known-hosts", false,
+		"Print the local Workspace Host Registry's known peer hosts (identity, advertised "+
+			"address(es), last-seen time) to stdout, then exit. Peers only appear here if "+
+			"they're reachable at the network layer (same LAN or VPN/Tailscale-style overlay) "+
+			"— this registry does not perform NAT traversal or cross-network discovery.")
 
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")
 	if err != nil {
+		panic(err)
+	}
+	if err := rootCmd.Flags().MarkHidden("register-linux-scheme"); err != nil {
 		panic(err)
 	}
 
@@ -756,6 +868,74 @@ func init() {
 	rootCmd.AddCommand(listSessionsCmd)
 	rootCmd.AddCommand(printQRCodesCmd)
 	rootCmd.AddCommand(commands.GetSessionCmd)
+	rootCmd.AddCommand(commands.EnsurePortsFreeCmd)
+}
+
+// tymuxNeeded reports whether tymuxd supervision should run for this process
+// (Epic 2.2, project_plans/tymux-bundled-integration/implementation/plan.md
+// Task 2.2.1a). True when resolvedBackend is the tymux global default, OR
+// when any entry in cfg.TymuxSessionOverrides (Phase 4, config/config.go) is
+// true — a per-session override set (e.g. via SetTymuxSessionOverride) before
+// this process started must also trigger startup supervision, otherwise a
+// session already pinned to tymux from a prior process would find no daemon
+// running when it starts.
+func tymuxNeeded(cfg *config.Config, resolvedBackend session.ProcessManagerBackend) bool {
+	if resolvedBackend == session.BackendTymux {
+		return true
+	}
+	if cfg == nil {
+		return false
+	}
+	for _, forceTymux := range cfg.TymuxSessionOverrides {
+		if forceTymux {
+			return true
+		}
+	}
+	return false
+}
+
+// superviseTymuxd is the daemon startup/shutdown decision logic for tymuxd
+// (Epic 2.2, project_plans/tymux-bundled-integration/implementation/plan.md),
+// extracted out of the cobra "runtime" phase's RunE closure so it's
+// independently testable. Mirrors tmux's own EnsureServerRunning posture:
+// non-fatal by default (log.Warn and continue) so a tymuxd that fails to
+// start never blocks stapler-squad from serving tmux-backed sessions, unless
+// strictStartup opts into hard failure.
+//
+// ensure and registerStop are injected (rather than calling
+// tymux.EnsureDaemonRunning / a.OnStop directly) so tests can substitute
+// fakes instead of spawning a real tymuxd subprocess or a real *warren.App.
+func superviseTymuxd(ctx context.Context, cfg tymux.DaemonConfig, strictStartup, keepServer bool,
+	ensure func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error),
+	registerStop func(name string, fn func(context.Context) error)) error {
+	tymuxdReady, tymuxErr := ensure(ctx, cfg)
+	if tymuxErr != nil {
+		if strictStartup {
+			return fmt.Errorf("tymuxd startup failed (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", tymuxErr)
+		}
+		log.Warn("Failed to ensure tymuxd running", "err", tymuxErr)
+		return nil
+	}
+
+	switch {
+	case !tymuxdReady.Spawned:
+		// This process only reused an already-healthy tymuxd -- per
+		// TymuxdReady.Spawned's doc comment (session/tymux/supervise.go),
+		// that daemon may belong to a DIFFERENT process sharing the same
+		// configDir (default/"shared" instance, or a named instance
+		// started twice). Never register a stop hook for a daemon this
+		// process didn't start -- StopTymuxd() has no ownership check of
+		// its own, only a PID file, so doing so could kill a daemon a
+		// still-running sibling process depends on (the same "isolated
+		// config dir, shared daemon" hazard config.IsNamedInstance's doc
+		// comment documents for tmux).
+		log.Info("tymuxd already running (reused, not started by this process) -- not registering a stop hook for it")
+	case !keepServer:
+		registerStop("tymuxd", func(ctx context.Context) error { return tymux.StopTymuxd() })
+	default:
+		log.Info("tymuxd will remain running across this shutdown (--tymuxd-keep-server=true)")
+	}
+	return nil
 }
 
 // extraOriginPattern matches an exact http(s)://localhost:<port> or
@@ -935,6 +1115,42 @@ func scutilNameservers() []string {
 	return servers
 }
 
+// forwardLookupViaKnownNameservers resolves hostname against every
+// nameserver scutil reports, the forward-lookup analog of
+// reverseDNSViaKnownNameservers below: a forward query is scoped by search
+// domain (e.g. "staplerhome.internal"), and an unscoped VPN resolver can take
+// priority over a LAN router's scoped resolver for that same domain, so
+// net.LookupHost's OS-chosen resolver order can return "no such host" from
+// the wrong resolver even though the LAN router would have answered.
+// Querying each known nameserver directly finds a LAN-only A record that
+// step would otherwise miss.
+func forwardLookupViaKnownNameservers(hostname string) []string {
+	seen := make(map[string]bool)
+	var ips []string
+	for _, server := range scutilNameservers() {
+		resolver := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 3 * time.Second}
+				return d.DialContext(ctx, network, net.JoinHostPort(server, "53"))
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		found, err := resolver.LookupHost(ctx, hostname)
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, ip := range found {
+			if !seen[ip] {
+				seen[ip] = true
+				ips = append(ips, ip)
+			}
+		}
+	}
+	return ips
+}
+
 // reverseDNSViaKnownNameservers performs a PTR lookup for lanIPStr against
 // every nameserver scutil reports, rather than relying on the OS's default
 // resolver selection. A PTR query carries no domain suffix, so per-domain
@@ -1086,6 +1302,49 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 		MinVersion:     tls.VersionTLS12,
 	}
 
+	// A hostname not in allRPIDs at startup may still be a legitimate LAN
+	// client -- discovery is one-shot at boot (see detectLANIPs/
+	// resolveLANHostnames above) and misses anything not yet resolvable at
+	// that instant (e.g. Wi-Fi/DHCP still coming up when launchd started
+	// this process). Accept it as a new rpID only if it forward-resolves to
+	// an IP this machine actually owns, so a request can't claim an
+	// arbitrary hostname as its RPID.
+	hostnameValidator := func(hostname string) bool {
+		resolvedIPs, _ := net.LookupHost(hostname)
+		// The OS's default resolver order can shadow a LAN-only search
+		// domain with an unscoped VPN resolver (see
+		// forwardLookupViaKnownNameservers) -- always also check every
+		// nameserver scutil knows about directly rather than only falling
+		// back to it when net.LookupHost errors.
+		resolvedIPs = append(resolvedIPs, forwardLookupViaKnownNameservers(hostname)...)
+		ownIPs := listNonLoopbackIPs()
+		for _, resolved := range resolvedIPs {
+			for _, own := range ownIPs {
+				if resolved == own {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	// resolveLANHostnames' boot-time candidates (reverse DNS/PTR, avahi/mDNS,
+	// hostname -f, search-domain guesses) are never re-checked after this
+	// point, unlike a hostname registered dynamically at request time via
+	// hostnameValidator above. Run them through the same forward-DNS-ownership
+	// check here so a stale or spoofable boot-time guess can't sit in the
+	// static rpID list unverified for the life of the process.
+	rawHostnames := hostnames
+	var verifiedHostnames []string
+	for _, hn := range hostnames {
+		if hostnameValidator(hn) {
+			verifiedHostnames = append(verifiedHostnames, hn)
+		} else {
+			log.Warn("webauthn: dropping unverified boot-time hostname candidate", "hostname", hn)
+		}
+	}
+	hostnames = verifiedHostnames
+
 	// Determine rpID: config/flag override > first detected hostname > detected LAN IP.
 	// WebAuthn spec requires a domain name; IP addresses are not accepted by browsers.
 	rpID := cfg.PasskeyRPID
@@ -1107,9 +1366,19 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	}
 	origins = append(origins, fmt.Sprintf("https://localhost:%d", remotePort))
 
+	// displayHost is shown to the user (QR code, setup URL, console banner) --
+	// it is not trusted as an rpID/origin here. If every boot-time candidate
+	// failed hostnameValidator above (e.g. DNS/Wi-Fi still coming up when this
+	// process started), prefer an unverified hostname over lanIPStr: WebAuthn
+	// requires a domain name, browsers reject IP RPIDs, and a real request to
+	// this hostname is re-validated for real by webauthnForHost's runtime path
+	// (server/auth/webauthn.go) before it's ever trusted as an rpID.
 	displayHost := rpID
-	if len(hostnames) > 0 {
+	switch {
+	case len(hostnames) > 0:
 		displayHost = hostnames[0]
+	case len(rawHostnames) > 0:
+		displayHost = rawHostnames[0]
 	}
 	origin := fmt.Sprintf("https://%s:%d", displayHost, remotePort)
 
@@ -1129,7 +1398,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
 	sessions := serverauth.NewSessionManager(sessionsPath)
 
-	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions)
+	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions, hostnameValidator)
 	if err != nil {
 		return fmt.Errorf("create webauthn handler: %w", err)
 	}
@@ -1148,6 +1417,30 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 
 	// Register auth routes on the shared mux (accessible via both servers).
 	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort)
+
+	// Register the gossip-style host advertisement endpoint (ADR-002) on the
+	// same shared mux/remote server -- see host_advertisement.go's doc
+	// comment for why this is the right integration point.
+	hostIdentity, err := session.LoadOrCreateHostIdentity(configDir)
+	if err != nil {
+		log.Warn("failed to load/create host identity, host advertisement disabled", "err", err)
+	} else {
+		hostRegistry, regErr := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
+		if regErr != nil {
+			log.Warn("failed to open host registry, host advertisement disabled", "err", regErr)
+		} else {
+			selfAddresses := make([]string, 0, len(hostnames)+len(lanIPs))
+			for _, hn := range hostnames {
+				selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", hn, remotePort))
+			}
+			for _, ip := range lanIPs {
+				selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", ip, remotePort))
+			}
+			advertiser := session.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, session.DefaultHostAdvertisementInterval)
+			serverauth.RegisterHostAdvertisementRoute(srv.Mux(), hostIdentity, hostRegistry, advertiser, selfAddresses)
+			go advertiser.Run(ctx)
+		}
+	}
 
 	// Start the remote HTTPS server with auth middleware applied.
 	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions)); err != nil {
@@ -1193,9 +1486,63 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 }
 
 func main() {
+	if version == "dev" {
+		resolveDevVersion()
+	}
+	// GoReleaser's release build only sets main.version (`-X
+	// main.version={{.Version}}`, kept as its own ldflag target deliberately
+	// — see Makefile's LDFLAGS comment), never buildinfo.Version. Fill it in
+	// here so the web UI's /api/server-info still reports a version on a
+	// released binary instead of an empty string.
+	if buildinfo.Version == "" {
+		buildinfo.Version = version
+	}
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
+		// Every invocation of this binary exited 0 regardless of success or
+		// failure before this line existed — verified: `./stapler-squad
+		// nonexistent-command; echo $?` printed the cobra error and still
+		// exited 0. That silently defeated install-service.sh's new
+		// ensure-ports-free capability probe and its primary safety check
+		// (macos_stop_service): both branch on this process's exit code to
+		// tell "subcommand missing" / "genuinely failed to free the port"
+		// apart from "succeeded", and all three looked identical to the
+		// caller without this.
+		os.Exit(1)
 	}
+}
+
+// resolveDevVersion replaces the "dev" placeholder with real VCS info from
+// Go's own automatic build-info stamping (present on any `go build`/
+// `go install` run from inside a git checkout, no ldflags required) — see
+// the version var's doc comment for why a hardcoded fallback string isn't
+// good enough. No-ops (leaves "dev") if build info or a revision genuinely
+// isn't available, e.g. building from a source tarball with no .git dir.
+func resolveDevVersion() {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	var revision string
+	var modified bool
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+		case "vcs.modified":
+			modified = s.Value == "true"
+		}
+	}
+	if revision == "" {
+		return
+	}
+	if len(revision) > 12 {
+		revision = revision[:12]
+	}
+	if modified {
+		revision += "-dirty"
+	}
+	version = revision
 }
 
 // buildLogConfig converts application config to a log.LogConfig. consoleEnabled
@@ -1212,7 +1559,15 @@ func buildLogConfig(daemon bool, cfg *config.Config, consoleEnabled bool) *log.L
 		UseSessionLogs: cfg.UseSessionLogs,
 		ConsoleEnabled: consoleEnabled,
 		FileEnabled:    true,
-		FileLevel:      log.DEBUG,
+		// INFO by default — DEBUG floods the log with per-poll-cycle noise
+		// (staleness checks, history-linker correlation, terminal snapshots)
+		// on every boot. Adjustable at runtime without a restart via
+		// POST /api/debug/log-level. Both must be set: initializeWithConfig
+		// seeds the runtime level from min(FileLevel, ConsoleLevel), and an
+		// unset ConsoleLevel zero-values to DEBUG (LogLevel's iota starts at
+		// DEBUG=0), silently overriding FileLevel.
+		FileLevel:    log.INFO,
+		ConsoleLevel: log.INFO,
 	}
 }
 
@@ -1252,4 +1607,46 @@ func buildMCPDeps() (session.InstanceStore, *services.SessionService, *scrollbac
 	sbMgr := scrollback.NewScrollbackManager(sbConfig)
 
 	return core.Storage, core.SessionService, sbMgr, core.Storage, nil
+}
+
+// runListKnownHosts implements --list-known-hosts: open this instance's
+// local Workspace Host Registry (using the same state-dir resolution as
+// startRemoteAccess's session.NewHostRegistry call) and print its current
+// contents to out. Registry-open failures (e.g. a corrupted
+// host_registry.json) are returned as a single-line error, mirroring
+// runOpenURL's error-handling convention, rather than exiting via panic.
+func runListKnownHosts(out io.Writer) error {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return fmt.Errorf("list-known-hosts: failed to resolve config directory: %w", err)
+	}
+	registry, err := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
+	if err != nil {
+		return fmt.Errorf("list-known-hosts: failed to open host registry: %w", err)
+	}
+	formatKnownHosts(out, registry.Snapshot())
+	return nil
+}
+
+// formatKnownHosts renders entries as a human-readable table (host id,
+// advertised address(es), last-seen time) to out, sorted by HostID for
+// deterministic output. Separated from runListKnownHosts so the formatting
+// logic is directly testable without touching disk.
+func formatKnownHosts(out io.Writer, entries []session.RegistryEntry) {
+	if len(entries) == 0 {
+		fmt.Fprintln(out, "No known hosts.")
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].HostID.String() < entries[j].HostID.String()
+	})
+	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "HOST ID\tADVERTISED ADDRESS(ES)\tLAST SEEN")
+	for _, entry := range entries {
+		fmt.Fprintf(w, "%s\t%s\t%s\n",
+			entry.HostID.String(),
+			strings.Join(entry.AdvertisedAddress, ", "),
+			entry.LastSeenAt.Local().Format(time.RFC3339))
+	}
+	_ = w.Flush()
 }

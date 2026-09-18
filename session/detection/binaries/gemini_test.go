@@ -5,6 +5,7 @@ import (
 )
 
 func TestGeminiDetector_Name(t *testing.T) {
+	t.Parallel()
 	d := NewGeminiDetector()
 	if d.Name() != "gemini" {
 		t.Errorf("Name() = %q, want %q", d.Name(), "gemini")
@@ -12,6 +13,7 @@ func TestGeminiDetector_Name(t *testing.T) {
 }
 
 func TestGeminiDetector_Patterns_should_haveReadyPattern(t *testing.T) {
+	t.Parallel()
 	d := NewGeminiDetector()
 	p := d.Patterns()
 	if len(p.Ready) == 0 {
@@ -23,6 +25,7 @@ func TestGeminiDetector_Patterns_should_haveReadyPattern(t *testing.T) {
 }
 
 func TestGeminiDetector_Patterns_should_havePermissionPatterns(t *testing.T) {
+	t.Parallel()
 	d := NewGeminiDetector()
 	p := d.Patterns()
 	if len(p.NeedsApproval) == 0 {
@@ -31,6 +34,7 @@ func TestGeminiDetector_Patterns_should_havePermissionPatterns(t *testing.T) {
 }
 
 func TestGeminiDetector_FilterContent_should_returnUnchanged(t *testing.T) {
+	t.Parallel()
 	d := NewGeminiDetector()
 	input := "gemini output"
 	if got := d.FilterContent(input); got != input {

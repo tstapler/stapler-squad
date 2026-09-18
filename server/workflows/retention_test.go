@@ -15,9 +15,7 @@ import (
 // ent client plus a workflow repository backed by the same database.
 func newTestInfra(t *testing.T) (repo *session.EntRepository, wfRepo session.WorkflowRepository) {
 	t.Helper()
-	entRepo, err := session.NewEntRepository(session.WithDatabasePath(t.TempDir() + "/retention_test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { entRepo.Close() })
+	entRepo := session.NewTestEntRepository(t)
 	return entRepo, session.NewEntWorkflowRepository(entRepo.GetEntClient())
 }
 
@@ -137,6 +135,44 @@ func TestRunRetentionSweep_Disabled_NothingArchived(t *testing.T) {
 	RunRetentionSweep(ctx, entRepo.GetEntClient(), wfRepo)
 
 	assert.Equal(t, 0, countArchivedSessions(t, entRepo, wf.ID.String()), "no sessions should be archived when retention is disabled")
+}
+
+// TestArchiveExcessSessions_should_NotArchiveActiveSession_When_RevivedBetweenQueryAndUpdate
+// covers round-2 concern C8 of the superseded-rework-session-retirement work:
+// keep_sessions enforcement applied its StatusNotIn/ArchivedAtIsNil filter to
+// the ID *query* only, so a session revived between that query and the adjacent
+// update was archived while Active — producing exactly the Active + archived
+// rows ADR-001's load-time self-heal then has to clean up.
+//
+// The revival is simulated the way it presents to the update: an Active session
+// id inside the excess set. Note this asserts the narrower invariant (an Active
+// id in the set is left alone) rather than driving a real mid-sweep revival,
+// which the existing fixtures cannot inject.
+func TestArchiveExcessSessions_should_NotArchiveActiveSession_When_RevivedBetweenQueryAndUpdate(t *testing.T) {
+	entRepo, wfRepo := newTestInfra(t)
+	ctx := context.Background()
+
+	createWorkflowWithRetention(t, wfRepo, "c8-wf", 1, 0)
+	wf, err := wfRepo.GetBySlug(ctx, "c8-wf")
+	require.NoError(t, err)
+
+	client := entRepo.GetEntClient()
+	stopped, err := client.Session.Create().
+		SetTitle("c8-stopped").SetPath("/tmp").SetStatus(int(session.Stopped)).
+		SetWorkflowID(wf.ID.String()).SetProgram("claude").Save(ctx)
+	require.NoError(t, err)
+	revived, err := client.Session.Create().
+		SetTitle("c8-revived").SetPath("/tmp").SetStatus(int(session.Active)).
+		SetWorkflowID(wf.ID.String()).SetProgram("claude").Save(ctx)
+	require.NoError(t, err)
+
+	n, err := archiveExcessSessions(ctx, client, []int{stopped.ID, revived.ID}, time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "only the still-terminal session may be archived")
+
+	reloaded, err := client.Session.Get(ctx, revived.ID)
+	require.NoError(t, err)
+	assert.Nil(t, reloaded.ArchivedAt, "a session revived between the ID query and the update must not be archived")
 }
 
 func TestRunRetentionSweep_NilGuard_DoesNotPanic(t *testing.T) {

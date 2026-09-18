@@ -4,9 +4,12 @@ package session
 // GitHub metadata delegation, permissions, and other display-oriented Instance methods.
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -43,6 +46,23 @@ func (i *Instance) GetStableID() string {
 // write; a direct field read or an i.mu-guarded read would not be.
 func (i *Instance) GetProgram() string {
 	return i.Snapshot().Program
+}
+
+// GetAltScreenActive reports whether this instance's pane was last observed
+// in the alternate screen buffer. Reads via Snapshot(), not the raw field --
+// see .claude/rules/instance-lock-free-reads.md.
+func (i *Instance) GetAltScreenActive() bool {
+	return i.Snapshot().AltScreenActive
+}
+
+// GetAltScreenBootstrapped reports whether AltScreenActive reflects a
+// confirmed observation (live transition or a completed
+// IsAlternateScreenActiveBootstrap query) rather than its unset zero value --
+// see altScreenActiveForSnapshot (server/services/connectrpc_websocket.go),
+// the one caller that needs to tell "confirmed not in alt screen" apart from
+// "never checked" before deciding whether a fresh tmux query is warranted.
+func (i *Instance) GetAltScreenBootstrapped() bool {
+	return i.Snapshot().AltScreenBootstrapped
 }
 
 // MatchesID reports whether id refers to this instance.
@@ -133,6 +153,13 @@ func (i *Instance) previewBlocked() bool {
 // Preview returns the current visible terminal content.
 // Prefers tmux's own capture-pane (authoritative rendered screen) for tmux-backed
 // instances; falls back to the in-memory PTY buffer from ClaudeController otherwise.
+//
+// Its underlying capture-pane subprocess runs with context.Background() and
+// cannot be cancelled. Driver-loop callers (session_driver.go) MUST use
+// PreviewContext(ctx) with the loop's own cancellable ctx instead — an
+// in-flight Preview() call here previously blocked the driver goroutine from
+// ever reaching its `defer cancel()` on stop, leaking the capture-pane
+// subprocess across StopSessionDriver/Destroy().
 func (i *Instance) Preview() (string, error) {
 	if i.previewBlocked() {
 		return "", nil
@@ -171,6 +198,44 @@ func (i *Instance) Preview() (string, error) {
 	}
 
 	return content, nil
+}
+
+// PreviewContext is Preview with an external context threaded onto the
+// underlying tmux subprocess call itself (not just the exec-gate wait), so a
+// caller that cancels ctx can kill an already-running capture-pane process
+// rather than only giving up on waiting for it. Used by the SessionDriver
+// polling loop (session_driver.go), whose stop channel needs to interrupt a
+// capture already in flight so StopSessionDriver's bounded join can't stall
+// on a stuck subprocess — see runGatedWith's doc comment in
+// session/tmux/exec_gate.go for why the gate's own timeout doesn't cover
+// this. Falls back to the plain, non-cancellable Preview() for backends that
+// don't expose a context-aware capture (native backend, no active tmux
+// session, or no controller).
+func (i *Instance) PreviewContext(ctx context.Context) (string, error) {
+	if i.previewBlocked() {
+		return "", nil
+	}
+
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		if tpm, ok := tb.mgr.(*TmuxProcessManager); ok {
+			content, err := tpm.CapturePaneContentContext(ctx)
+			if err == nil {
+				return content, nil
+			}
+			// A cancellation/deadline means the caller no longer wants this
+			// result — falling back to the non-cancellable Preview() here
+			// would silently ignore that and block on a fresh subprocess
+			// call anyway, defeating the whole point of threading ctx
+			// through in the first place (see doc comment above). Only
+			// fall back for genuine capture failures (e.g. subprocess
+			// error, no pane).
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return "", ctx.Err()
+			}
+		}
+	}
+
+	return i.Preview()
 }
 
 // PreviewFullHistory captures the entire tmux pane output including full scrollback history.
@@ -283,14 +348,19 @@ func (i *Instance) GetStatusIconForType() string {
 // instance_adapter.go and serialization (ToInstanceData/FromInstanceData).
 
 // GitHub returns a read-only view of the GitHub metadata for this instance.
+// Reads through Snapshot() rather than the raw fields: setGitHubResolutionLocked
+// writes these under i.mu from the actor goroutine, so an unguarded read here
+// races it exactly like the pre-fix GetEffectiveRootDir did (backlog 10fc3913).
 func (i *Instance) GitHub() GitHubMetadataView {
+	gh := i.Snapshot().GitHub
 	return GitHubMetadataView{
-		PRNumber:       i.GitHubPRNumber,
-		PRURL:          i.GitHubPRURL,
-		Owner:          i.GitHubOwner,
-		Repo:           i.GitHubRepo,
-		SourceRef:      i.GitHubSourceRef,
-		ClonedRepoPath: i.ClonedRepoPath,
+		PRNumber:       gh.GitHubPRNumber,
+		PRURL:          gh.GitHubPRURL,
+		Owner:          gh.GitHubOwner,
+		Repo:           gh.GitHubRepo,
+		Host:           gh.GitHubHost,
+		SourceRef:      gh.GitHubSourceRef,
+		ClonedRepoPath: gh.ClonedRepoPath,
 	}
 }
 
@@ -321,8 +391,8 @@ type prUpdateResult struct {
 // changes). For directory sessions, Branch is never stored, so it reads the branch live
 // from the working directory via git. Returns "" if the branch cannot be determined.
 func (i *Instance) CurrentBranch() string {
-	if i.Branch != "" {
-		return i.Branch
+	if branch := i.Snapshot().Branch; branch != "" {
+		return branch
 	}
 	workDir := i.GetWorkingDirectory()
 	if workDir == "" {
@@ -336,10 +406,27 @@ func (i *Instance) CurrentBranch() string {
 	return branch
 }
 
+// PRStatusUpdate bundles the fields PRStatusPoller writes to an Instance on each
+// successful fetch. Introduced when itemized checks/review feedback/mergeable were
+// added — the prior 7-positional-parameter signature was already at the limit this
+// repo's primitive-obsession checklist flags.
+type PRStatusUpdate struct {
+	State           string
+	Priority        string
+	CheckConclusion string
+	Mergeable       string
+	ApprovedCount   int
+	ChangesReqCount int
+	IsDraft         bool
+	Terminal        bool
+	Checks          []github.CheckItem
+	Reviews         []github.ReviewItem
+}
+
 // UpdatePRStatus atomically updates the PR status fields on this instance.
 // Called by PRStatusPoller on each successful fetch.
 // Returns prUpdateResult indicating whether the priority changed.
-func (i *Instance) UpdatePRStatus(state, priority, checkConclusion string, approvedCount, changesReqCount int, isDraft, terminal bool) prUpdateResult {
+func (i *Instance) UpdatePRStatus(update PRStatusUpdate) prUpdateResult {
 	var result prUpdateResult
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		inst := s.inst
@@ -347,15 +434,18 @@ func (i *Instance) UpdatePRStatus(state, priority, checkConclusion string, appro
 		// (MarkViewed & co.) mutate other fields directly under i.mu.Lock() from
 		// outside the actor — see runActor's doc comment in actor.go.
 		inst.mu.Lock()
-		result.PriorityChanged = priority != inst.GitHubPRPriority
-		result.CheckConclusionChanged = checkConclusion != inst.GitHubCheckConclusion
-		inst.GitHubPRState = state
-		inst.GitHubPRPriority = priority
-		inst.GitHubPRIsDraft = isDraft
-		inst.GitHubApprovedCount = approvedCount
-		inst.GitHubChangesReqCount = changesReqCount
-		inst.GitHubCheckConclusion = checkConclusion
-		inst.GitHubPRStatusTerminal = terminal
+		result.PriorityChanged = update.Priority != inst.GitHubPRPriority
+		result.CheckConclusionChanged = update.CheckConclusion != inst.GitHubCheckConclusion
+		inst.GitHubPRState = update.State
+		inst.GitHubPRPriority = update.Priority
+		inst.GitHubPRIsDraft = update.IsDraft
+		inst.GitHubApprovedCount = update.ApprovedCount
+		inst.GitHubChangesReqCount = update.ChangesReqCount
+		inst.GitHubCheckConclusion = update.CheckConclusion
+		inst.GitHubPRStatusTerminal = update.Terminal
+		inst.GitHubChecks = update.Checks
+		inst.GitHubReviewFeedback = update.Reviews
+		inst.GitHubMergeable = update.Mergeable
 		inst.LastPRStatusCheck = time.Now()
 		snap := buildSnapshot(inst)
 		inst.mu.Unlock()

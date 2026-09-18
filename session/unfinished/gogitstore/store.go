@@ -37,6 +37,13 @@ import (
 // methods this prototype deliberately does not implement (see package doc).
 var errNotImplemented = errors.New("gogitstore: not implemented in this read-only prototype")
 
+// packIndexEntry pairs a pack's hash with its parsed index, for
+// SharedObjectStore.indexSnapshot — see that field's doc comment.
+type packIndexEntry struct {
+	hash plumbing.Hash
+	li   *lockedIndex
+}
+
 // SharedObjectStore holds everything that is scoped to a repository's
 // commondir (the shared git object database root: $GIT_COMMON_DIR/objects)
 // rather than to any single worktree: the parsed packfile indexes and the
@@ -76,6 +83,19 @@ type SharedObjectStore struct {
 	mu         sync.Mutex
 	index      map[plumbing.Hash]*lockedIndex
 	indexBuilt bool
+
+	// indexSnapshot is a read-only []packIndexEntry mirror of index, rebuilt
+	// only inside ensureIndex/refreshIndexes (the only two places index is
+	// ever mutated) rather than on every object lookup. findObjectInPackfile
+	// used to clone the whole index map on every single call — allocating and
+	// hashing len(index) entries per lookup — purely to avoid holding mu
+	// while calling into a *lockedIndex (each of which re-locks the SAME mu,
+	// since lockedIndex.mu is always &s.mu; see index.go's package doc). A
+	// slice handed out under a short lock and never mutated in place (only
+	// ever replaced wholesale) is safe to iterate lock-free after that lock
+	// is released, so the hot path becomes one lock/read/unlock instead of a
+	// full map copy. PerfFix-6.
+	indexSnapshot []packIndexEntry
 
 	// IndexBuildCount and IndexEntryCount are prototype instrumentation
 	// (exported so the package's own test — and any caller who wants to
@@ -189,6 +209,7 @@ func (s *SharedObjectStore) ensureIndex() error {
 
 	s.index = built
 	s.indexBuilt = true
+	s.rebuildIndexSnapshotLocked()
 	atomic.AddInt32(&s.IndexBuildCount, 1)
 	atomic.AddInt64(&s.IndexEntryCount, totalEntries)
 
@@ -298,10 +319,25 @@ func (s *SharedObjectStore) refreshIndexes() error {
 		s.index[h] = li
 		addedEntries += n
 	}
+	s.rebuildIndexSnapshotLocked()
 	if addedEntries > 0 {
 		atomic.AddInt64(&s.IndexEntryCount, addedEntries)
 	}
 	return nil
+}
+
+// rebuildIndexSnapshotLocked refreshes indexSnapshot from the current
+// contents of s.index. Callers MUST hold s.mu — shared by ensureIndex and
+// refreshIndexes, the only two places s.index is mutated. The old slice
+// value is simply replaced, never mutated in place, so callers that grabbed
+// the previous slice under a prior lock/unlock keep seeing a consistent
+// (if now-stale) view rather than a torn one.
+func (s *SharedObjectStore) rebuildIndexSnapshotLocked() {
+	snapshot := make([]packIndexEntry, 0, len(s.index))
+	for h, li := range s.index {
+		snapshot = append(snapshot, packIndexEntry{hash: h, li: li})
+	}
+	s.indexSnapshot = snapshot
 }
 
 // dirObject and dirObjectPack are locked wrappers around s.dir.Object and
@@ -366,22 +402,23 @@ func (s *SharedObjectStore) dirObjectPack(pack plumbing.Hash) (billy.File, error
 }
 
 // findObjectInPackfile returns which pack (if any) contains h and its
-// offset within that pack. It snapshots the index map under mu, then
+// offset within that pack. It reads the cached indexSnapshot under mu, then
 // releases mu before calling FindOffset on each entry (each of those calls
 // re-acquires mu itself via lockedIndex) — never held twice at once, so
-// this cannot deadlock against lockedIndex's own locking.
+// this cannot deadlock against lockedIndex's own locking. indexSnapshot is
+// only ever replaced wholesale (never mutated in place) by
+// rebuildIndexSnapshotLocked, so handing out the current slice value under
+// a short lock and iterating it lock-free is safe — no per-call map copy
+// needed on this hot path. PerfFix-6.
 func (s *SharedObjectStore) findObjectInPackfile(h plumbing.Hash) (pack plumbing.Hash, offset int64, ok bool) {
 	s.mu.Lock()
-	packs := make(map[plumbing.Hash]*lockedIndex, len(s.index))
-	for k, v := range s.index {
-		packs[k] = v
-	}
+	packs := s.indexSnapshot
 	s.mu.Unlock()
 
-	for packHash, idx := range packs {
-		off, err := idx.FindOffset(h)
+	for _, entry := range packs {
+		off, err := entry.li.FindOffset(h)
 		if err == nil {
-			return packHash, off, true
+			return entry.hash, off, true
 		}
 	}
 	return plumbing.ZeroHash, 0, false
@@ -522,10 +559,22 @@ func (s *SharedObjectStore) getFromPackfile(h plumbing.Hash, handles *packHandle
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
+	if debugStallHeldPackHandleRead != nil {
+		debugStallHeldPackHandleRead()
+	}
+
 	p := packfile.NewPackfileWithCache(idx, s.fs, ch.f, s.objectCache, s.largeObjectThreshold)
 	// Deliberately NOT p.Close() — see doc comment above.
 	return p.GetByOffset(offset)
 }
+
+// debugStallHeldPackHandleRead is a test-only injection point (nil in
+// production) letting a test force a getFromPackfile read to hold ch.mu for
+// an arbitrary duration, to deterministically reproduce the
+// closeAll/getFromPackfile lock-contention hang this file's closeAll doc
+// comment describes, instead of relying on hitting it by pure timing luck
+// under soak load.
+var debugStallHeldPackHandleRead func()
 
 // HasEncodedObject implements storer.EncodedObjectStorer.
 func (s *SharedObjectStore) HasEncodedObject(h plumbing.Hash) error {
@@ -615,20 +664,83 @@ func (c *packHandleCache) get(pack plumbing.Hash, open func() (billy.File, error
 	return h, nil
 }
 
-// closeAll closes every handle this cache has opened and clears the map.
-// Must be called exactly once, when the owning WorktreeStorer is evicted
-// (see storer.go's WorktreeStorer.Close) — otherwise every cached handle
-// leaks a file descriptor for the life of the process.
+// packHandleCloseTimeout bounds how long closeAll waits for any single
+// handle's h.mu before giving up on that handle and moving on — see
+// closeAll's doc comment for why a concurrent reader can legitimately hold
+// h.mu for longer than this (a stuck/slow getFromPackfile read), confirmed
+// via a fresh goroutine dump captured from TestGogitstore_SoakUnderSustainedLoad
+// (a worker's Close() blocked in sync.Once.doSlow while the Once-executing
+// goroutine was itself blocked acquiring this same h.mu inside closeAll).
+const packHandleCloseTimeout = 5 * time.Second
+
+// closeAll closes every cached pack handle. It used to hold c.mu across a
+// per-handle h.mu.Lock() loop — but getFromPackfile can legitimately hold a
+// handle's h.mu for the duration of a raw packfile read, and closeAll runs
+// inside WorktreeStorer.Close()'s sync.Once.Do body, so a single stuck read
+// wedged closeAll forever, which wedged the Once, which wedged every other
+// concurrent Close() caller in sync.Once.doSlow. Confirmed via a real
+// pprof.Lookup("goroutine") dump (see closeall_hang_repro_test.go).
+//
+// Fix: snapshot-and-clear the map under a brief c.mu critical section (so
+// closeAll no longer serializes with packHandleCache.get), then close every
+// handle concurrently with a bounded per-handle wait on h.mu. A handle whose
+// read doesn't finish within packHandleCloseTimeout is hedged off to a
+// detached background goroutine that keeps waiting and closes it once free —
+// so closeAll's (and thus Close()'s) own wall-clock time is bounded to about
+// one timeout period regardless of how many handles are stuck, while no fd
+// is ever leaked.
 func (c *packHandleCache) closeAll() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, h := range c.handles {
-		h.mu.Lock()
-		_ = h.f.Close()
-		h.mu.Unlock()
-	}
+	handles := c.handles
 	c.handles = nil
+	c.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for pack, h := range handles {
+		wg.Add(1)
+		go func(pack plumbing.Hash, h *cachedPackHandle) {
+			defer wg.Done()
+			closeHandleBounded(pack, h)
+		}(pack, h)
+	}
+	wg.Wait()
 }
+
+// closeHandleBounded closes h, waiting up to packHandleCloseTimeout to
+// acquire h.mu before handing off to a detached background goroutine that
+// closes it once free — guaranteeing the fd is eventually closed without
+// making the caller (closeAll) wait indefinitely for a stuck reader.
+func closeHandleBounded(pack plumbing.Hash, h *cachedPackHandle) {
+	acquired := make(chan struct{})
+	go func() {
+		h.mu.Lock()
+		close(acquired)
+	}()
+
+	select {
+	case <-acquired:
+		defer h.mu.Unlock()
+		_ = h.f.Close()
+	case <-time.After(packHandleCloseTimeout):
+		log.Warn("gogitstore: pack handle close is taking longer than expected — a concurrent read is likely still in flight; will close it in the background once free to avoid an fd leak", "pack", pack.String(), "timeout", packHandleCloseTimeout)
+		go func() {
+			<-acquired
+			defer h.mu.Unlock()
+			_ = h.f.Close()
+			log.Warn("gogitstore: slow pack handle close completed", "pack", pack.String())
+			if debugHedgedPackHandleCloseDone != nil {
+				debugHedgedPackHandleCloseDone()
+			}
+		}()
+	}
+}
+
+// debugHedgedPackHandleCloseDone is a test-only injection point (nil in
+// production) letting a test observe when closeHandleBounded's hedged-off
+// background goroutine has finished closing a handle, so a test can wait
+// for that goroutine to complete instead of returning while it is still
+// running — see closeHandleBounded's timeout branch.
+var debugHedgedPackHandleCloseDone func()
 
 // cachedPackHandle wraps one long-lived billy.File open on a pack, plus a
 // mutex serializing reads through it — packfile.Packfile/Scanner hold a seek

@@ -1,0 +1,24 @@
+{
+  "id": "trigger-form-modal",
+  "type": "frontend",
+  "name": "Trigger create/edit form — type-conditional fields, webhook secret UX, inline backend-error mapping",
+  "component": "TriggerFormModal",
+  "path": "web-app/src/components/sessions/TriggerFormModal.tsx",
+  "filePath": "web-app/src/components/sessions/TriggerFormModal.tsx",
+  "markerLine": 3,
+  "tested": true,
+  "testIds": [
+    "TriggerFormModal_should_showGithubPushFields_When_defaultTypeSelected",
+    "TriggerFormModal_should_switchToCronFields_When_cronTypeSelected",
+    "TriggerFormModal_should_switchToWebhookFields_When_webhookTypeSelected",
+    "TriggerFormModal_should_showGenerateSecretAffordance_When_creatingWebhookTrigger",
+    "TriggerFormModal_should_showMaskedSecretPlaceholder_When_editingExistingWebhookTrigger",
+    "TriggerFormModal_should_disableTypeSwitch_When_editing",
+    "TriggerFormModal_should_prefillFieldsFromExistingTrigger_When_editing",
+    "TriggerFormModal_should_callOnSaveAndClose_When_validSubmission",
+    "TriggerFormModal_should_blockSubmit_When_requiredTypeSpecificFieldMissing",
+    "TriggerFormModal_should_showInlineFieldError_When_backendRejectsWithFieldSpecificMessage",
+    "TriggerFormModal_should_showFieldSpecificError_When_theRejectedFieldIsVisibleForCurrentType"
+  ],
+  "lastModified": "2026-08-06T00:00:00Z"
+}

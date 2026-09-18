@@ -1,22 +1,33 @@
 "use client";
 
-import { useState, KeyboardEvent, useRef } from "react";
+import { useState, KeyboardEvent, useRef, RefObject } from "react";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
+import {
+  UNCLASSIFIED_TAG, hasProvenance, removalConfirmationText,
+} from "@/lib/sessions/tagProvenance";
 import * as styles from "./TagEditor.css";
 
 interface TagEditorProps {
   tags: string[];
+  /** Maps a tag value to its provenance: a TaggingRule.ID, the "llm" sentinel, or absent (manual). */
+  tagProvenance?: Record<string, string>;
+  /** Maps a TaggingRule.ID to its display name, for the removal confirmation's rule-name wording. */
+  tagRuleNames?: Record<string, string>;
   onSave: (tags: string[]) => void;
   onCancel: () => void;
   sessionTitle: string;
+  triggerRef?: RefObject<HTMLElement | null>;
 }
 
-export function TagEditor({ tags, onSave, onCancel, sessionTitle }: TagEditorProps) {
+export function TagEditor({ tags, tagProvenance, tagRuleNames = {}, onSave, onCancel, sessionTitle, triggerRef }: TagEditorProps) {
   const [currentTags, setCurrentTags] = useState<string[]>([...tags]);
   const modalRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(modalRef, true);
+  useFocusTrap(modalRef, true, triggerRef);
   const [inputValue, setInputValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // ux.md Surface 3: at most one tag's removal confirmation is expanded at a time.
+  const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
+  const keepButtonRef = useRef<HTMLButtonElement>(null);
 
   const handleAddTag = () => {
     const trimmedTag = inputValue.trim();
@@ -36,10 +47,23 @@ export function TagEditor({ tags, onSave, onCancel, sessionTitle }: TagEditorPro
     setError(null);
   };
 
-  const handleRemoveTag = (tagToRemove: string) => {
-    setCurrentTags(currentTags.filter(tag => tag !== tagToRemove));
+  const removeImmediately = (tagToRemove: string) => {
+    setCurrentTags((prev) => prev.filter((tag) => tag !== tagToRemove));
     setError(null);
+    setPendingRemoval(null);
   };
+
+  const handleRemoveClick = (tagToRemove: string) => {
+    if (hasProvenance(tagToRemove, tagProvenance)) {
+      setPendingRemoval(tagToRemove);
+      // Focus the non-destructive default (WCAG 2.4.3, ux.md AC13).
+      setTimeout(() => keepButtonRef.current?.focus(), 0);
+      return;
+    }
+    removeImmediately(tagToRemove);
+  };
+
+  const handleKeepRemoval = () => setPendingRemoval(null);
 
   const handleKeyPress = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
@@ -94,19 +118,61 @@ export function TagEditor({ tags, onSave, onCancel, sessionTitle }: TagEditorPro
               <p className={styles.emptyMessage}>No tags yet. Add your first tag above.</p>
             ) : (
               <div className={styles.tagsList}>
-                {currentTags.map((tag) => (
-                  <div key={tag} className={styles.tagItem}>
-                    <span className={styles.tagText}>{tag}</span>
-                    <button
-                      onClick={() => handleRemoveTag(tag)}
-                      className={styles.removeButton}
-                      title={`Remove tag "${tag}"`}
-                      aria-label={`Remove tag ${tag}`}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
+                {currentTags.map((tag) => {
+                  const isUnclassified = tag === UNCLASSIFIED_TAG;
+                  const isPendingRemoval = pendingRemoval === tag;
+
+                  if (isPendingRemoval) {
+                    return (
+                      <div
+                        key={tag}
+                        className={`${styles.tagItem} ${styles.tagItemConfirming}`}
+                        data-testid={`tag-confirm-row-${tag}`}
+                        onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); handleKeepRemoval(); } }}
+                      >
+                        <span className={styles.tagText}>{tag}</span>
+                        <span className={styles.confirmCaption}>
+                          {removalConfirmationText(tag, tagProvenance, tagRuleNames)}
+                        </span>
+                        <button
+                          ref={keepButtonRef}
+                          type="button"
+                          onClick={handleKeepRemoval}
+                          className={styles.keepButton}
+                        >
+                          Keep
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeImmediately(tag)}
+                          className={styles.removeAnywayButton}
+                        >
+                          Remove anyway
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={tag} className={`${styles.tagItem} ${isUnclassified ? styles.tagItemUnclassified : ""}`}>
+                      <span className={styles.tagText}>{tag}</span>
+                      {isUnclassified ? (
+                        <span className={styles.unclassifiedCaption}>
+                          Removed automatically once classification succeeds
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => handleRemoveClick(tag)}
+                          className={styles.removeButton}
+                          title={`Remove tag "${tag}"`}
+                          aria-label={`Remove tag ${tag}`}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

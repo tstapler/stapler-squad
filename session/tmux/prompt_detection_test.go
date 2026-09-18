@@ -6,6 +6,7 @@ import (
 
 // TestPromptDetection tests the detection of prompts from various AI programs
 func TestPromptDetection(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		program  string
@@ -170,6 +171,7 @@ func TestPromptDetection(t *testing.T) {
 
 // TestRealClaudeCodeSamples tests with actual captured output from Claude Code sessions
 func TestRealClaudeCodeSamples(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		content  string
@@ -273,6 +275,7 @@ The codebase is well-structured and follows Python best practices. The main area
 
 // TestStatusUpdateLogic tests the complete status update flow
 func TestStatusUpdateLogic(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		program        string

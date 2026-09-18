@@ -7,7 +7,14 @@ import { ApprovalsProvider, useApprovalsContext } from "../ApprovalsContext";
 // ---------------------------------------------------------------------------
 
 const mockRefetch = jest.fn().mockResolvedValue(undefined);
-const mockResolveApproval = jest.fn().mockResolvedValue({ data: undefined });
+// Real RTK Query mutation triggers return a value that's both awaitable (resolves to
+// {data}/{error}, never rejects on its own) and carries an .unwrap() method that rejects on
+// {error} -- ApprovalsContext.approve/deny call .unwrap() to get real reject-on-failure
+// semantics, so the mock has to expose the same shape or it throws "unwrap is not a function".
+const mockResolveApproval = jest.fn().mockImplementation(() => {
+  const promise = Promise.resolve({ data: undefined });
+  return Object.assign(promise, { unwrap: () => promise.then((r) => r.data) });
+});
 
 // Mutable approvals array so individual tests can override it
 let mockApprovalData = [

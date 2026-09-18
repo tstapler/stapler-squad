@@ -1,0 +1,14 @@
+{
+  "id": "stream-hub-rollout:set-global-override",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "SetStreamHubGlobalOverride",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/stream_hub_rollout_service.go",
+  "tested": true,
+  "testIds": [
+    "TestSetStreamHubGlobalOverride_SetsAndClears"
+  ],
+  "lastModified": "2026-08-26T16:35:55.974259436-07:00"
+}

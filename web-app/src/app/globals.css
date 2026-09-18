@@ -43,6 +43,8 @@
   --terminal-hover-background: #3e3e42;
 
   /* Interactive elements */
+  /* Legacy, independently-defined value — not a consumer of theme.css.ts's vars.color.primary
+     (which was darkened to #5457ef for WCAG AA). Still on the old #6366f1, consumed via .btn-primary. */
   --primary: #6366f1;
   --primary-hover: #818cf8;
   --primary-active: #4f46e5;

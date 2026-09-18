@@ -19,6 +19,7 @@ func (f *funcLifecycleListener) OnLifecycleEvent(event LifecycleEvent, reason st
 // TestLifecycleCallbackConcurrency verifies that fireLifecycleEvent is data-race free
 // when called from multiple goroutines concurrently and delivers every event.
 func TestLifecycleCallbackConcurrency(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "concurrency-test"}
 
 	var counter int64
@@ -69,6 +70,7 @@ func TestLifecycleCallbackConcurrency(t *testing.T) {
 // an invalid state transition rather than panicking or silently succeeding.
 // This validates the fix replacing _ = i.transitionTo(Stopped) with error logging.
 func TestTransitionToErrorInCallback(t *testing.T) {
+	t.Parallel()
 	// Stopped is a terminal state — Stopped→Stopped must return an error.
 	inst := &Instance{Title: "transition-test", Status: Stopped}
 
@@ -91,6 +93,7 @@ func TestTransitionToErrorInCallback(t *testing.T) {
 // used elsewhere in this file exercises cheaply without a real tmux/process
 // manager, since !i.started.Load() short-circuits before any real teardown.
 func TestDestroy_FiresEventStopped_EvenWhenNeverStarted(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "destroy-event-test"}
 
 	var gotEvent LifecycleEvent

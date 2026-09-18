@@ -24,6 +24,7 @@ import {
   enableBacklogFeatureFlag,
   disableBacklogFeatureFlag,
 } from "./pages/StuckItemsPage";
+import { BacklogPage } from "./pages/BacklogPage";
 
 const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
 
@@ -49,6 +50,15 @@ test.describe("stuck items", () => {
     await disableBacklogFeatureFlag(request);
   });
 
+  test.beforeEach(async ({ page }) => {
+    // Skip the first-run onboarding modal (shows on any fresh browser context after
+    // 800ms — see web-app/src/components/onboarding/useOnboarding.ts), matching the
+    // convention in triggers-panel.spec.ts / rule-builder-ci-passing.spec.ts.
+    await page.addInitScript(() => {
+      localStorage.setItem("stapler-squad:onboarded", "true");
+    });
+  });
+
   test("shows nav badge with no click and full detail within two clicks", async ({ page, request }) => {
     await seedStuckItem(request, {
       itemId: "e2e-pr-ready-1",
@@ -64,8 +74,10 @@ test.describe("stuck items", () => {
     await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("stuck-nav-badge")).toBeVisible();
 
-    // Click 1: navigate to /unfinished via the nav link.
-    await page.getByRole("link", { name: /Unfinished/ }).first().click();
+    // Click 1: navigate to /unfinished via the nav link (nav-pages.ts labels this
+    // route "Up Next", not "Unfinished" — the page's own heading/route name differs
+    // from its nav entry's display label).
+    await page.getByRole("link", { name: /Up Next/ }).first().click();
     const stuckPage = new StuckItemsPage(page);
     await stuckPage.goto();
     await expect(stuckPage.section).toBeVisible();
@@ -211,5 +223,71 @@ test.describe("stuck items", () => {
     await picker.getByTestId("stuck-item-snooze-confirm").click();
 
     await expect(card).not.toBeVisible();
+  });
+
+  test("retries a stuck item from the BlockerChip on the backlog detail page", async ({ page, request }) => {
+    const itemId = await seedStuckItem(request, {
+      itemId: "e2e-blocker-chip-retry-1",
+      title: "fix: blocker chip retry test",
+      reason: "stale_work",
+      context: "no activity for 4 days",
+    });
+
+    const backlogPage = new BacklogPage(page);
+    await backlogPage.goto();
+    await backlogPage.waitForPageLoad();
+    await backlogPage.openItemDetail("fix: blocker chip retry test");
+
+    const lifecycleSummary = page.getByTestId("lifecycle-summary");
+    await expect(lifecycleSummary).toBeVisible();
+
+    const retryButton = lifecycleSummary.getByTestId("blocker-chip-retry");
+    await expect(retryButton).toBeEnabled();
+    await retryButton.click();
+
+    // Pending state fires synchronously on click.
+    await expect(retryButton).toBeDisabled();
+    await expect(lifecycleSummary.getByTestId("blocker-chip-duration")).toHaveTextContent("Retrying…");
+
+    // "stale_work" is a wired remediation reason (server/services/backlog_service_stuck.go),
+    // so it resolves to idle (no inline error) rather than CodeUnimplemented.
+    await expect(retryButton).toBeEnabled({ timeout: 10_000 });
+    await expect(lifecycleSummary.getByTestId("blocker-chip-error")).not.toBeVisible();
+
+    expect(itemId).toBeTruthy();
+  });
+
+  test("deep-links from /unfinished?item=<id> to an auto-expanded stuck item card", async ({ page, request }) => {
+    const itemId = await seedStuckItem(request, {
+      itemId: "e2e-deep-link-1",
+      title: "fix: deep link auto-expand test",
+      reason: "rework_cap",
+      context: "cap hit",
+    });
+
+    await page.goto(`${BASE_URL}/unfinished?item=${itemId}`, { waitUntil: "domcontentloaded" });
+    const stuckPage = new StuckItemsPage(page);
+    await expect(stuckPage.section).toBeVisible();
+
+    // The linked item auto-expands without a manual click.
+    await expect(page.getByTestId("stuck-item-detail")).toBeVisible();
+    await expect(stuckPage.cardByTitle("fix: deep link auto-expand test")).toBeVisible();
+  });
+
+  test("ignores an unknown ?item= id and renders the section normally", async ({ page, request }) => {
+    await seedStuckItem(request, {
+      itemId: "e2e-deep-link-negative-1",
+      title: "fix: deep link negative test",
+      reason: "rework_cap",
+      context: "cap hit",
+    });
+
+    await page.goto(`${BASE_URL}/unfinished?item=does-not-exist`, { waitUntil: "domcontentloaded" });
+    const stuckPage = new StuckItemsPage(page);
+    await expect(stuckPage.section).toBeVisible();
+
+    // No card should be auto-expanded for a non-matching id.
+    await expect(page.getByTestId("stuck-item-detail")).not.toBeVisible();
+    await expect(stuckPage.cardByTitle("fix: deep link negative test")).toBeVisible();
   });
 });

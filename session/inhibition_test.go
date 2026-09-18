@@ -6,9 +6,11 @@ import (
 )
 
 func TestInhibitionEngine(t *testing.T) {
+	t.Parallel()
 	ie := NewInhibitionEngine()
 
 	t.Run("SanitizeString redacts API keys and secrets", func(t *testing.T) {
+		t.Parallel()
 		input := "My key is sk-123456789012345678901234 and AWS is AKIAIOSFODNN7EXAMPLE"
 		expected := "My key is [REDACTED_CREDENTIAL] and AWS is [REDACTED_CREDENTIAL]"
 
@@ -19,6 +21,7 @@ func TestInhibitionEngine(t *testing.T) {
 	})
 
 	t.Run("SanitizeTurn redacts CanonicalBlocks", func(t *testing.T) {
+		t.Parallel()
 		rawArgs := json.RawMessage(`{"token": "Bearer secret_token_value", "public": "hello"}`)
 
 		turn := CanonicalTurn{

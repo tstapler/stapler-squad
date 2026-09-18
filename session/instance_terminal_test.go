@@ -1,11 +1,16 @@
 package session
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // TestInstance_Preview_DoesNotReturnStaleUnboundedHistory is the regression test for the
@@ -18,6 +23,7 @@ import (
 // dismissed. Preview() must only see a bounded recent tail, matching its own doc comment
 // ("current visible terminal content").
 func TestInstance_Preview_DoesNotReturnStaleUnboundedHistory(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "stale-preview-session", Status: Running}
 	inst.started.Store(true)
 
@@ -60,6 +66,7 @@ func TestInstance_Preview_DoesNotReturnStaleUnboundedHistory(t *testing.T) {
 // byte stream cannot by itself distinguish "answered dialog now overwritten" from
 // "current output" without re-implementing terminal emulation; tmux already does this.
 func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{capturePaneReturn: "tmux rendered screen"}
 	inst := &Instance{Title: "tmux-preview-session", Status: Running, processManager: NewTmuxBackend(mock)}
 	inst.started.Store(true)
@@ -87,6 +94,7 @@ func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 // capture-pane failure (e.g. the tmux session died mid-poll) falls back to the
 // in-memory PTY buffer rather than surfacing an error or returning stale/empty content.
 func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{capturePaneErr: fmt.Errorf("no such tmux session")}
 	inst := &Instance{Title: "tmux-preview-fallback", Status: Running, processManager: NewTmuxBackend(mock)}
 	inst.started.Store(true)
@@ -106,5 +114,154 @@ func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T
 	}
 	if content != "pty buffer fallback content" {
 		t.Fatalf("Preview() should fall back to the PTY buffer on capture-pane error, got: %q", content)
+	}
+}
+
+// newInstanceWithRealTmuxProcessManager builds an *Instance backed by a real
+// *TmuxProcessManager wrapping a real *tmux.TmuxSession whose subprocess calls are mocked
+// via tmux.MockCmdExec's OutputFunc. PreviewContext type-asserts the concrete
+// *TmuxProcessManager (not the TmuxManager interface), so mockTmuxManager (used by the
+// Preview() tests above) can't exercise it — this real-session construction is required
+// instead, mirroring the technique in tmux_process_manager_test.go.
+func newInstanceWithRealTmuxProcessManager(t *testing.T, outputFunc func(cmd *exec.Cmd) ([]byte, error)) *Instance {
+	t.Helper()
+	// sessionExists is filled in after ts is constructed below, so the
+	// CombinedOutputFunc closure (built first) reads it by reference rather
+	// than needing to duplicate tmux's own name-sanitization logic.
+	var sessionExists string
+	cmdExec := tmux.MockCmdExec{
+		OutputFunc: outputFunc,
+		RunFunc:    func(cmd *exec.Cmd) error { return nil },
+		// Reports the session as existing to tmux's list-sessions, so
+		// CapturePaneContentContext's DoesSessionExist() guard doesn't
+		// short-circuit before outputFunc's mocked capture-pane call runs.
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			return []byte(sessionExists), nil
+		},
+	}
+	ts := tmux.NewTmuxSessionWithDeps(t.Name(), "echo", tmux.MakePtyFactory(), cmdExec)
+	sessionExists = ts.GetSanitizedName()
+	tpm := &TmuxProcessManager{}
+	tpm.SetSession(ts)
+
+	inst := &Instance{Title: t.Name(), Status: Running, processManager: NewTmuxBackend(tpm)}
+	inst.started.Store(true)
+	return inst
+}
+
+// TestInstance_PreviewContext_ReturnsCtxErrDirectlyOnCancellation is the regression test
+// for item 5/7 of PR #548's review: PreviewContext must not fall back to the
+// non-cancellable Preview() when CapturePaneContentContext failed because the caller's ctx
+// was canceled — falling back there would silently ignore the caller no longer wanting a
+// result and block on a fresh subprocess call anyway.
+func TestInstance_PreviewContext_ReturnsCtxErrDirectlyOnCancellation(t *testing.T) {
+	inst := newInstanceWithRealTmuxProcessManager(t, func(cmd *exec.Cmd) ([]byte, error) {
+		t.Fatalf("subprocess should never run once ctx is already canceled")
+		return nil, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	content, err := inst.PreviewContext(ctx)
+	if content != "" {
+		t.Fatalf("expected empty content on cancellation, got: %q", content)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got: %v", err)
+	}
+}
+
+// TestInstance_PreviewContext_FallsBackToPreviewOnGenuineCaptureError asserts the other
+// side of the same branch: a real (non-cancellation) capture-pane failure must still fall
+// back to Preview(), matching the pre-existing Preview()-level fallback behavior.
+func TestInstance_PreviewContext_FallsBackToPreviewOnGenuineCaptureError(t *testing.T) {
+	inst := newInstanceWithRealTmuxProcessManager(t, func(cmd *exec.Cmd) ([]byte, error) {
+		return nil, fmt.Errorf("exit status 1: no such session")
+	})
+
+	buf := NewCircularBuffer(1024)
+	if _, err := buf.Write([]byte("pty buffer fallback content")); err != nil {
+		t.Fatalf("write buffer: %v", err)
+	}
+	pa := NewPTYAccess(inst.Title, nil, buf)
+	ctrl := &ClaudeController{sessionName: inst.Title, instance: inst}
+	ctrl.ptyAccess.Store(pa)
+	inst.controllerManager.SetController(ctrl)
+
+	content, err := inst.PreviewContext(context.Background())
+	if err != nil {
+		t.Fatalf("PreviewContext() error: %v", err)
+	}
+	if content != "pty buffer fallback content" {
+		t.Fatalf("PreviewContext() should fall back to Preview() on a genuine capture error, got: %q", content)
+	}
+}
+
+// TestInstance_GetAltScreenActive_should_ReflectTrackerObservation_When_ReadConcurrentlyWithPTYWrite
+// is the regression guard named by .claude/rules/instance-lock-free-reads.md:
+// GetAltScreenActive's lock-free Snapshot() read must not race a concurrent
+// setAltScreenActiveLocked write reached via ObserveAltScreenTransition. Run
+// with -race; the value observed after the writer goroutine finishes must
+// reflect the last transition it applied ("\x1b[?1049l" -> false).
+func TestInstance_GetAltScreenActive_should_ReflectTrackerObservation_When_ReadConcurrentlyWithPTYWrite(t *testing.T) {
+	inst := &Instance{Title: "altscreen-race-session"}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		inst.ObserveAltScreenTransition([]byte("\x1b[?1049h"))
+		inst.ObserveAltScreenTransition([]byte("\x1b[?1049l"))
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			_ = inst.GetAltScreenActive()
+		}
+	}()
+	wg.Wait()
+
+	if inst.GetAltScreenActive() {
+		t.Fatalf("GetAltScreenActive() = true after exit sequence, want false")
+	}
+}
+
+// TestInstance_GetAltScreenBootstrapped distinguishes "confirmed not in alt
+// screen" from "never checked" -- without this flag,
+// altScreenActiveForSnapshot (server/services/connectrpc_websocket.go) can't
+// tell the two apart and re-runs a real tmux subprocess query
+// (IsAlternateScreenActiveBootstrap) on every connect/resize for any session
+// that's genuinely not in alt screen, instead of caching the confirmed answer
+// after the first check.
+func TestInstance_GetAltScreenBootstrapped_should_ReturnFalse_When_NeverObservedOrBootstrapped(t *testing.T) {
+	inst := &Instance{Title: "altscreen-bootstrap-session"}
+
+	if inst.GetAltScreenBootstrapped() {
+		t.Fatalf("GetAltScreenBootstrapped() = true before any observation or bootstrap, want false")
+	}
+}
+
+func TestInstance_GetAltScreenBootstrapped_should_ReturnTrue_When_SetAltScreenActiveBootstrapCalled(t *testing.T) {
+	inst := &Instance{Title: "altscreen-bootstrap-session"}
+
+	inst.SetAltScreenActiveBootstrap(false)
+
+	if !inst.GetAltScreenBootstrapped() {
+		t.Fatalf("GetAltScreenBootstrapped() = false after SetAltScreenActiveBootstrap, want true")
+	}
+	if inst.GetAltScreenActive() {
+		t.Fatalf("GetAltScreenActive() = true after SetAltScreenActiveBootstrap(false), want false")
+	}
+}
+
+func TestInstance_GetAltScreenBootstrapped_should_ReturnTrue_When_ObserveAltScreenTransitionChangesState(t *testing.T) {
+	inst := &Instance{Title: "altscreen-bootstrap-session"}
+
+	inst.ObserveAltScreenTransition([]byte("\x1b[?1049h"))
+
+	if !inst.GetAltScreenBootstrapped() {
+		t.Fatalf("GetAltScreenBootstrapped() = false after a live-observed transition, want true")
 	}
 }

@@ -7,7 +7,7 @@ runs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.25.0'
+        go-version-file: 'go.mod'
 
     - name: Set up pnpm
       uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -25,10 +25,25 @@ runs:
       shell: bash
       run: cd web-app && pnpm install --frozen-lockfile
 
+    # Pre-populate buf-action's own tool-cache lookup path (runner.tool_cache
+    # == $RUNNER_TOOL_CACHE, what its tc.find()/tc.cacheFile() calls read and
+    # write) so most runs skip the network download entirely. Cache the whole
+    # "buf" directory rather than a specific .../<version>/<arch> subpath:
+    # tc's internal arch segment comes from Node's process.arch ("x64",
+    # lowercase), not the runner.arch context ("X64", uppercase) — pinning
+    # the path to runner.arch here would silently create/restore the wrong
+    # directory and always miss.
+    - name: Cache buf binary
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/buf
+        key: buf-1.41.0-${{ runner.os }}-${{ runner.arch }}
+
     - name: Set up buf
-      uses: bufbuild/buf-setup-action@v1
+      uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
       with:
         version: '1.41.0'
+        setup_only: 'true'
 
     - name: Generate protobuf code
       shell: bash

@@ -152,8 +152,11 @@ func (s *GitHubUserService) StartGitHubDeviceAuth(
 		DeviceCode:      da.DeviceCode,
 		UserCode:        da.UserCode,
 		VerificationUri: da.VerificationURI,
-		ExpiresIn:       int32(da.ExpiresIn),
-		Interval:        int32(da.Interval),
+		// #nosec G115 -- GitHub OAuth device-flow timing in seconds (typically
+		// ~900s), far below int32 range.
+		ExpiresIn: int32(da.ExpiresIn),
+		// #nosec G115 -- see ExpiresIn above; interval is typically ~5s.
+		Interval: int32(da.Interval),
 	}), nil
 }
 
@@ -238,12 +241,21 @@ func (s *GitHubUserService) ListGitHubAccounts(
 	accounts := s.buildAccountList()
 
 	// EnterpriseHosts drives the omnibar's GHE URL detector, so it must reflect
-	// every host the user can actually reach — not just hosts with a
-	// statically configured OAuth App (s.enterpriseHosts), which omits hosts
-	// added via AddGitHubAccountWithToken/AddGitHubAccountFromCLI (e.g. gh CLI
-	// import) since those never touch s.enterpriseHosts.
-	seen := make(map[string]bool, len(s.enterpriseHosts)+len(accounts))
-	hosts := make([]string, 0, len(s.enterpriseHosts)+len(accounts))
+	// every host the user has ever linked — not just hosts with a statically
+	// configured OAuth App (s.enterpriseHosts), which omits hosts added via
+	// AddGitHubAccountWithToken/AddGitHubAccountFromCLI (e.g. gh CLI import)
+	// since those never touch s.enterpriseHosts. It's sourced from the
+	// persisted keychain account index (ListKeychainAccounts), NOT from
+	// s.cache.GetCachedAccounts()/buildAccountList(): that cache is gated on a
+	// live, network-dependent revalidation of every token (see
+	// UserPRCache.resolveAllLogins) that silently drops an account on any
+	// transient failure to reach its host — very plausible for a
+	// VPN/corp-network-gated GHES host — which would otherwise make the
+	// omnibar detector flicker in and out for an account that is, from the
+	// user's perspective, still linked.
+	keychainAccounts := githubpkg.ListKeychainAccounts()
+	seen := make(map[string]bool, len(s.enterpriseHosts)+len(keychainAccounts))
+	hosts := make([]string, 0, len(s.enterpriseHosts)+len(keychainAccounts))
 	addHost := func(host string) {
 		host = githubpkg.NormalizeHost(host)
 		if host == "" || githubpkg.IsGitHubCom(host) || seen[host] {
@@ -255,7 +267,7 @@ func (s *GitHubUserService) ListGitHubAccounts(
 	for _, h := range s.enterpriseHosts {
 		addHost(h.Host)
 	}
-	for _, a := range accounts {
+	for _, a := range keychainAccounts {
 		addHost(a.Host)
 	}
 	return connect.NewResponse(&sessionv1.ListGitHubAccountsResponse{
@@ -406,17 +418,21 @@ func userPRsToProto(prs []githubpkg.UserPR) []*sessionv1.UserPR {
 	out := make([]*sessionv1.UserPR, len(prs))
 	for i, pr := range prs {
 		p := &sessionv1.UserPR{
-			Owner:             pr.Owner,
-			Repo:              pr.Repo,
-			Number:            int32(pr.Number),
-			Title:             pr.Title,
-			HtmlUrl:           pr.URL,
-			State:             pr.State,
-			HeadRef:           pr.HeadRef,
-			BaseRef:           pr.BaseRef,
-			IsDraft:           pr.IsDraft,
-			CheckConclusion:   pr.CheckConclusion,
-			ApprovedCount:     int32(pr.ApprovedCount),
+			Owner: pr.Owner,
+			Repo:  pr.Repo,
+			// #nosec G115 -- pr.Number is a GitHub PR number, far below int32 range.
+			Number:          int32(pr.Number),
+			Title:           pr.Title,
+			HtmlUrl:         pr.URL,
+			State:           pr.State,
+			HeadRef:         pr.HeadRef,
+			BaseRef:         pr.BaseRef,
+			IsDraft:         pr.IsDraft,
+			CheckConclusion: pr.CheckConclusion,
+			// #nosec G115 -- review counts for a single PR, bounded by realistic
+			// reviewer counts, far below int32 range.
+			ApprovedCount: int32(pr.ApprovedCount),
+			// #nosec G115 -- see ApprovedCount above.
 			ChangesReqCount:   int32(pr.ChangesReqCount),
 			SessionIds:        pr.SessionIDs,
 			LocalWorktreePath: pr.LocalWorktreePath,

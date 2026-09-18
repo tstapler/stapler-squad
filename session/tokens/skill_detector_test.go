@@ -9,6 +9,7 @@ import (
 )
 
 func TestSkillDetector_WhenSlashCommandInHumanTurn_ExpectIsCommandTrue(t *testing.T) {
+	t.Parallel()
 	jsonl := `{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"text","text":"/plan:feature implement auth"}]},"uuid":"human-1","timestamp":"2026-05-15T10:00:00.000Z","sessionId":"skill-test"}` + "\n"
 
 	p := NewParser()
@@ -27,6 +28,7 @@ func TestSkillDetector_WhenSlashCommandInHumanTurn_ExpectIsCommandTrue(t *testin
 }
 
 func TestSkillDetector_WhenSkillMdReadToolResult_ExpectIsCommandFalse(t *testing.T) {
+	t.Parallel()
 	jsonl := `{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"Contents of /Users/alice/.claude/skills/code-review.md loaded."}]}]},"uuid":"human-1","timestamp":"2026-05-15T10:00:00.000Z","sessionId":"skill-test"}` + "\n"
 
 	p := NewParser()
@@ -77,6 +79,7 @@ func BenchmarkDetectCommandsInText(b *testing.B) {
 }
 
 func TestSkillDetector_WhenRegularMessage_ExpectNoActivations(t *testing.T) {
+	t.Parallel()
 	jsonl := `{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"text","text":"what is the status of the build?"}]},"uuid":"human-1","timestamp":"2026-05-15T10:00:00.000Z","sessionId":"skill-test"}` + "\n"
 
 	p := NewParser()
@@ -87,6 +90,7 @@ func TestSkillDetector_WhenRegularMessage_ExpectNoActivations(t *testing.T) {
 }
 
 func TestSkillDetector_WhenMultipleCommandsInOneTurn_ExpectAllDetected(t *testing.T) {
+	t.Parallel()
 	jsonl := `{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"text","text":"run /plan:feature then /code:review"}]},"uuid":"human-1","timestamp":"2026-05-15T10:00:00.000Z","sessionId":"skill-test"}` + "\n"
 
 	p := NewParser()

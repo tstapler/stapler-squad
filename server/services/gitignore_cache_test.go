@@ -17,6 +17,7 @@ func makePatterns(lines ...string) []gitignore.Pattern {
 }
 
 func TestGitignoreCache_Hit(t *testing.T) {
+	t.Parallel()
 	c := NewGitignoreCache(10, 5*time.Second)
 	want := makePatterns("*.log", "node_modules/")
 
@@ -32,6 +33,7 @@ func TestGitignoreCache_Hit(t *testing.T) {
 }
 
 func TestGitignoreCache_MissOnTTLExpiry(t *testing.T) {
+	t.Parallel()
 	ttl := 10 * time.Millisecond
 	c := NewGitignoreCache(10, ttl)
 	c.Put("root:/some/dir", makePatterns("*.log"), time.Now())
@@ -46,6 +48,7 @@ func TestGitignoreCache_MissOnTTLExpiry(t *testing.T) {
 }
 
 func TestGitignoreCache_Eviction(t *testing.T) {
+	t.Parallel()
 	maxSize := 3
 	c := NewGitignoreCache(maxSize, 5*time.Second)
 

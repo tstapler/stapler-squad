@@ -1,0 +1,19 @@
+{
+  "id": "remote-connection-indicator",
+  "type": "frontend",
+  "name": "Live SSH connection-health badge on remote-backed session cards",
+  "component": "RemoteConnectionIndicator",
+  "path": "web-app/src/components/sessions/RemoteConnectionIndicator.tsx",
+  "filePath": "web-app/src/components/sessions/RemoteConnectionIndicator.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "RemoteConnectionIndicator_should_RenderNothing_When_NoHealthEventObservedYet",
+    "RemoteConnectionIndicator_should_IssueNoNetworkRequest_When_MountedWithNoHealthEvent",
+    "RemoteConnectionIndicator_should_ShowConnectedBadge_When_StateIsConnected",
+    "RemoteConnectionIndicator_should_ShowReconnectingBadge_When_StateIsReconnecting",
+    "RemoteConnectionIndicator_should_AnnouncePolitely_When_TransitioningFromConnectedToReconnecting",
+    "RemoteConnectionIndicator_should_AnnounceViaAssertiveAlert_When_TransitioningToDisconnected"
+  ],
+  "lastModified": "2026-08-17T00:00:00Z"
+}

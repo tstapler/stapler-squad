@@ -1,0 +1,16 @@
+{
+  "id": "launcher-presets-detector",
+  "type": "frontend",
+  "component": "PresetDetector",
+  "path": "web-app/src/lib/omnibar/detectors/PresetDetector.ts",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "PresetDetector_should_ResolveToPreset_When_KnownIdTyped",
+    "PresetDetector_should_ReturnNotFound_When_UnknownIdTyped",
+    "PresetDetector_should_ReturnNull_When_NoPresetPrefix",
+    "PresetDetector_should_ReturnNull_When_PrefixOnlyWithNoId",
+    "PresetDetector_should_BeCaseSensitive_When_IdCaseDiffers"
+  ],
+  "lastModified": "2026-08-12T18:00:11Z"
+}

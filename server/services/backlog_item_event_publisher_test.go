@@ -2,9 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -18,6 +15,7 @@ import (
 // events.BacklogItemEventPayload and delivers it through a real EventBus
 // (Story 1.3.2 AC).
 func TestBacklogItemEventPublisher_should_publishConvertedEventToBus_When_PublishItemChangedCalled(t *testing.T) {
+	t.Parallel()
 	bus := events.NewEventBus(10)
 	defer bus.Close()
 
@@ -70,6 +68,7 @@ const panickingChangeKind session.BacklogChangeKind = "not-a-real-kind"
 // BacklogChangeKind) is recovered inside PublishItemChanged and never
 // propagates to the caller (Story 1.3.2 AC / Task 1.3.2b).
 func TestBacklogItemEventPublisher_should_recoverAndLog_When_PublishItemChangedPanics(t *testing.T) {
+	t.Parallel()
 	bus := events.NewEventBus(10)
 	defer bus.Close()
 
@@ -100,10 +99,23 @@ func TestBacklogItemEventPublisher_should_recoverAndLog_When_PublishItemChangedP
 	}
 }
 
+// TestMapBacklogChangeKind_should_MapActivityNoteAdded_When_Called (Epic 8.4,
+// Task 8.4.1a) is a direct assertion that ChangeActivityNoteAdded is mapped
+// (no panic) rather than falling through to the default unmapped-kind panic
+// branch.
+func TestMapBacklogChangeKind_should_MapActivityNoteAdded_When_Called(t *testing.T) {
+	t.Parallel()
+	got := mapBacklogChangeKind(session.ChangeActivityNoteAdded)
+	if got != events.BacklogChangeActivityNoteAdded {
+		t.Fatalf("expected %s, got %s", events.BacklogChangeActivityNoteAdded, got)
+	}
+}
+
 // TestBacklogItemEventPublisher_should_noOp_When_BusIsNil verifies the nil-Bus
 // guard: a zero-value publisher (or one constructed without a Bus) must not
 // panic when PublishItemChanged is called.
 func TestBacklogItemEventPublisher_should_noOp_When_BusIsNil(t *testing.T) {
+	t.Parallel()
 	publisher := &BacklogItemEventPublisher{}
 	item := &session.BacklogItemData{ID: "item-789"}
 
@@ -119,6 +131,7 @@ func TestBacklogItemEventPublisher_should_noOp_When_BusIsNil(t *testing.T) {
 // OS processes; a publisher wired to busA only must never let its events
 // reach a subscriber on the structurally separate busB.
 func TestEventBus_should_neverCrossDeliverBacklogEvents_When_TwoIndependentBusInstancesExist(t *testing.T) {
+	t.Parallel()
 	busA := events.NewEventBus(10)
 	defer busA.Close()
 	busB := events.NewEventBus(10)
@@ -170,6 +183,7 @@ func TestEventBus_should_neverCrossDeliverBacklogEvents_When_TwoIndependentBusIn
 // must not block, error, or panic — the existing non-blocking fan-out in
 // *events.EventBus is unaffected by the new BacklogItemEventPayload type.
 func TestBacklogItemEventPublisher_should_notPanic_When_PublishingWithZeroSubscribers(t *testing.T) {
+	t.Parallel()
 	bus := events.NewEventBus(10)
 	defer bus.Close()
 
@@ -194,27 +208,15 @@ func TestBacklogItemEventPublisher_should_notPanic_When_PublishingWithZeroSubscr
 	}
 }
 
-// newTestEntRepositoryForIsolation creates a temporary ent-backed
-// *session.EntRepository, mirroring session_test's own
+// newTestEntRepositoryForIsolation creates a uniquely-named in-memory
+// ent-backed *session.EntRepository, mirroring session_test's own
 // newTestEntRepositoryForEvents helper (session/ent_repository_backlog_events_test.go).
 // A local copy is kept here (rather than exporting/reusing that one) because
 // this file lives in package services, not session_test, and the two files
 // serve different packages' tests.
-func newTestEntRepositoryForIsolation(t *testing.T) (*session.EntRepository, func()) {
+func newTestEntRepositoryForIsolation(t *testing.T) *session.EntRepository {
 	t.Helper()
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, fmt.Sprintf("test-%d.db", time.Now().UnixNano()))
-
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
-
-	cleanup := func() {
-		repo.Close()
-		os.Remove(dbPath)
-		os.Remove(dbPath + "-wal")
-		os.Remove(dbPath + "-shm")
-	}
-	return repo, cleanup
+	return session.NewTestEntRepository(t)
 }
 
 // TestWorkspaceIsolation_should_holdEndToEnd_When_SimulatingTwoWorkspaceProcesses
@@ -226,10 +228,9 @@ func newTestEntRepositoryForIsolation(t *testing.T) (*session.EntRepository, fun
 // workspace A's repository must never surface as an event on workspace B's
 // subscriber.
 func TestWorkspaceIsolation_should_holdEndToEnd_When_SimulatingTwoWorkspaceProcesses(t *testing.T) {
-	repoA, cleanupA := newTestEntRepositoryForIsolation(t)
-	defer cleanupA()
-	repoB, cleanupB := newTestEntRepositoryForIsolation(t)
-	defer cleanupB()
+	t.Parallel()
+	repoA := newTestEntRepositoryForIsolation(t)
+	repoB := newTestEntRepositoryForIsolation(t)
 
 	busA := events.NewEventBus(10)
 	defer busA.Close()

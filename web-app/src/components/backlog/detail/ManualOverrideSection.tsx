@@ -6,6 +6,7 @@ import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
 import * as styles from "../GateVerdictBox.css";
 import { InlineError } from "../InlineError";
+import { getErrorMessage } from "@/lib/utils/connectError";
 
 const MIN_OVERRIDE_REASON_LENGTH = 5;
 
@@ -67,7 +68,7 @@ export function ManualOverrideSection({
       setToStatus("");
       setReason("");
     } catch (err) {
-      setStatusError(err instanceof Error ? err.message : "Status override failed. Please try again.");
+      setStatusError(getErrorMessage(err, "Status override failed. Please try again."));
     } finally {
       setStatusPending(false);
     }
@@ -81,7 +82,7 @@ export function ManualOverrideSection({
       setPrUrl("");
       setPrNumber("");
     } catch (err) {
-      setPrError(err instanceof Error ? err.message : "PR association failed. Please try again.");
+      setPrError(getErrorMessage(err, "PR association failed. Please try again."));
     } finally {
       setPrPending(false);
     }

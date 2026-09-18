@@ -223,9 +223,9 @@ main() {
     # Install
     install_binary
 
-    # Check PATH
-    path_ok=0
-    check_path || path_ok=$?
+    # Check PATH (check_path prints its own actionable warning on failure;
+    # this is advisory only, so the overall install still exits 0 below)
+    check_path || true
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

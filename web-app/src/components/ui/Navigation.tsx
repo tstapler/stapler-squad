@@ -24,6 +24,7 @@ export function Navigation() {
     { href: routes.home, label: "Sessions" },
     { href: routes.reviewQueue, label: "Review Queue" },
     ...(backlogEnabled ? [{ href: routes.backlog, label: "Backlog" }] : []),
+    { href: routes.sessionsImport, label: "Import" },
   ];
 
   return (

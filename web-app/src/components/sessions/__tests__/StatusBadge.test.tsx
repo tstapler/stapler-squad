@@ -197,6 +197,7 @@ describe("getDetectedStatusInfo", () => {
     { status: DetectedStatus.IDLE, expectedLabel: "Idle" },
     { status: DetectedStatus.SUCCESS, expectedLabel: "Success" },
     { status: DetectedStatus.WAITING_FOR_AGENT, expectedLabel: "Waiting for Agent" },
+    { status: DetectedStatus.COMPACTING, expectedLabel: "Compacting" },
   ];
 
   badgeStatuses.forEach(({ status, expectedLabel }) => {

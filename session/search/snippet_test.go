@@ -7,6 +7,7 @@ import (
 )
 
 func TestNewSnippetGenerator(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGenerator()
 	if gen == nil {
 		t.Fatal("NewSnippetGenerator returned nil")
@@ -20,6 +21,7 @@ func TestNewSnippetGenerator(t *testing.T) {
 }
 
 func TestSnippetGenerator_Generate_SingleMatch(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGenerator()
 	timestamp := time.Now()
 
@@ -43,6 +45,7 @@ func TestSnippetGenerator_Generate_SingleMatch(t *testing.T) {
 }
 
 func TestSnippetGenerator_Generate_MultipleMatches(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGeneratorWithOptions(10, 3, 300)
 	timestamp := time.Now()
 
@@ -59,6 +62,7 @@ func TestSnippetGenerator_Generate_MultipleMatches(t *testing.T) {
 }
 
 func TestSnippetGenerator_Generate_MatchAtStart(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGenerator()
 	timestamp := time.Now()
 
@@ -77,6 +81,7 @@ func TestSnippetGenerator_Generate_MatchAtStart(t *testing.T) {
 }
 
 func TestSnippetGenerator_Generate_MatchAtEnd(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGeneratorWithOptions(5, 3, 300)
 	timestamp := time.Now()
 
@@ -95,6 +100,7 @@ func TestSnippetGenerator_Generate_MatchAtEnd(t *testing.T) {
 }
 
 func TestSnippetGenerator_Generate_EmptyMessage(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGenerator()
 	timestamp := time.Now()
 
@@ -105,6 +111,7 @@ func TestSnippetGenerator_Generate_EmptyMessage(t *testing.T) {
 }
 
 func TestSnippetGenerator_Generate_EmptyQuery(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGenerator()
 	timestamp := time.Now()
 
@@ -115,6 +122,7 @@ func TestSnippetGenerator_Generate_EmptyQuery(t *testing.T) {
 }
 
 func TestSnippetGenerator_Generate_NoMatch(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGenerator()
 	timestamp := time.Now()
 
@@ -127,6 +135,7 @@ func TestSnippetGenerator_Generate_NoMatch(t *testing.T) {
 }
 
 func TestSnippetGenerator_Generate_MultiWordQuery(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGenerator()
 	timestamp := time.Now()
 
@@ -145,6 +154,7 @@ func TestSnippetGenerator_Generate_MultiWordQuery(t *testing.T) {
 }
 
 func TestSnippetGenerator_Generate_CaseInsensitive(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGenerator()
 	timestamp := time.Now()
 
@@ -163,6 +173,7 @@ func TestSnippetGenerator_Generate_CaseInsensitive(t *testing.T) {
 }
 
 func TestSnippetGenerator_Generate_StemmedMatch(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGenerator()
 	timestamp := time.Now()
 
@@ -179,6 +190,7 @@ func TestSnippetGenerator_Generate_StemmedMatch(t *testing.T) {
 }
 
 func TestSnippetGenerator_Generate_LongMessage(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGeneratorWithOptions(10, 3, 200)
 	timestamp := time.Now()
 
@@ -207,6 +219,7 @@ func TestSnippetGenerator_Generate_LongMessage(t *testing.T) {
 }
 
 func TestSnippetGenerator_Generate_WordBoundaries(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGenerator()
 	timestamp := time.Now()
 
@@ -226,6 +239,7 @@ func TestSnippetGenerator_Generate_WordBoundaries(t *testing.T) {
 }
 
 func TestSnippetGenerator_HighlightRanges(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGeneratorWithOptions(5, 1, 300)
 	timestamp := time.Now()
 
@@ -249,6 +263,7 @@ func TestSnippetGenerator_HighlightRanges(t *testing.T) {
 }
 
 func TestSnippetGenerator_GenerateFromSearchResult(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGenerator()
 
 	doc := &Document{
@@ -274,6 +289,7 @@ func TestSnippetGenerator_GenerateFromSearchResult(t *testing.T) {
 }
 
 func TestSnippetGenerator_GenerateFromSearchResult_NilDoc(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGenerator()
 
 	snippets := gen.GenerateFromSearchResult(nil, []string{"docker"})
@@ -283,6 +299,7 @@ func TestSnippetGenerator_GenerateFromSearchResult_NilDoc(t *testing.T) {
 }
 
 func TestSnippetGenerator_Ellipsis(t *testing.T) {
+	t.Parallel()
 	gen := NewSnippetGeneratorWithOptions(3, 1, 300)
 	timestamp := time.Now()
 

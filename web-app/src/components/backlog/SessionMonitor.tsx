@@ -2,7 +2,9 @@
 // +feature: backlog:session-monitor
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { ConnectError, Code } from "@connectrpc/connect";
 import { useSessionService } from "@/lib/hooks/useSessionService";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import * as styles from "./SessionMonitor.css";
 
 interface SessionMonitorProps {
@@ -38,6 +40,18 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
 
   const outputRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // A NotFound response means the underlying session/history is gone for good —
+  // retrying every POLL_INTERVAL_MS forever just hammers the server with a lookup
+  // that can never succeed. Stop polling entirely once we see one.
+  const goneRef = useRef(false);
+
+  const stopPolling = useCallback(() => {
+    goneRef.current = true;
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
 
   const fetchTerminal = useCallback(async () => {
     try {
@@ -45,9 +59,10 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
       setTerminalError(null);
       if (output) setTerminalOutput(output);
     } catch (err) {
-      setTerminalError(err instanceof Error ? err.message : "Could not reach the server.");
+      setTerminalError(getErrorMessage(err, "Could not reach the server."));
+      if (err instanceof ConnectError && err.code === Code.NotFound) stopPolling();
     }
-  }, [sessionId, getTerminalSnapshot]);
+  }, [sessionId, getTerminalSnapshot, stopPolling]);
 
   const fetchConversation = useCallback(async () => {
     try {
@@ -55,9 +70,10 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
       setConversationError(null);
       setMessages(msgs);
     } catch (err) {
-      setConversationError(err instanceof Error ? err.message : "Could not reach the server.");
+      setConversationError(getErrorMessage(err, "Could not reach the server."));
+      if (err instanceof ConnectError && err.code === Code.NotFound) stopPolling();
     }
-  }, [sessionId, getConversationMessages]);
+  }, [sessionId, getConversationMessages, stopPolling]);
 
   const refresh = useCallback(() => {
     void fetchTerminal();
@@ -70,12 +86,13 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
     setMessages([]);
     setTerminalError(null);
     setConversationError(null);
+    goneRef.current = false;
   }, [sessionId]);
 
   // Initial load + polling while running
   useEffect(() => {
     void refresh();
-    if (isRunning) {
+    if (isRunning && !goneRef.current) {
       pollRef.current = setInterval(refresh, POLL_INTERVAL_MS);
     }
     return () => {

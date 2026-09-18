@@ -48,6 +48,12 @@ var snapshotTests = []snapshotTest{
 		program:     "claude",
 		description: "Claude at the idle prompt — '? for shortcuts' visible, waiting for user input",
 	},
+	{
+		fixture:     "claude_compacting.txt",
+		expected:    StatusCompacting,
+		program:     "claude",
+		description: "Claude actively compacting/summarizing conversation history (INFERRED fixture — see project_plans/context-compaction-detection/implementation/plan.md Story 1.1.1)",
+	},
 
 	// ── Gemini CLI ───────────────────────────────────────────────────────────
 	{
@@ -185,6 +191,7 @@ var snapshotTests = []snapshotTest{
 // Stub fixtures (empty files) fail with a descriptive message telling you
 // exactly what terminal output to capture and paste in.
 func TestSnapshotDetection(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	for _, tc := range snapshotTests {

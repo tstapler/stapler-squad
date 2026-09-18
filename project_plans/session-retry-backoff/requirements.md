@@ -8,6 +8,21 @@ multi-attempt, backoff-gated one; adds UI surfacing
 **Complexity**: 3 — touches session lifecycle, config, proto, and UI; must not
 regress the existing crash-recovery path
 
+## Success Metrics / Prioritization
+**(Added post-Product-Triad-Review, PM lens, 2026-08-29)** — no outcome-level metric was
+previously stated; all existing acceptance criteria are correctness/behavioral, not measures
+of the problem improving. Proposed measures (no telemetry currently emits these — instrumenting
+them is out of scope for this feature and tracked as a follow-up, not a blocker):
+- **Manual-intervention reduction**: count of sessions that reach `permanently_failed` vs. those
+  that self-recover via automated retry, before/after rollout, for Tyler's typical 5-10 parallel
+  `backlog:work`/interactive sessions.
+- **Why now**: this item was migrated from a competitive-context issue (Sortie, Gastown both ship
+  retry+backoff as core features); no formal RICE score was run against other open backlog items,
+  but the existing single-retry mechanism's known gap (manual restart required after 2nd failure)
+  is a recurring operational cost for the app's primary "5-10 parallel agents" use case named in
+  the original issue — treated as sufficient justification without a full scoring exercise given
+  the item was already prioritized `p3` at intake.
+
 ## Problem Statement
 
 The original request describes retry as if it doesn't exist: "a failed session stays
@@ -74,9 +89,15 @@ history view.
 2. **Exponential backoff delay** (`initial_delay * 2^attempt`, capped at
    `max_delay_seconds`) before each retry — replaces today's immediate restart. Must not
    block the driver goroutine in a way that prevents the session from being
-   manually retried or stopped during the wait.
+   manually retried or stopped during the wait. **(Added post-adversarial-review):** a
+   fixed jitter fraction (`±10%` default) is applied on top of the computed delay to
+   avoid a synchronized restart storm when a shared-cause failure hits multiple sessions
+   at once — see `plan.md` Task 2.3.1c and `pre-mortem.md` Failure #1 for the residual
+   zero-delay-at-attempt-0 risk this doesn't fully close.
 3. **`tmux_exited` detected as a distinct condition** from `crashed` (pane/session gone
-   vs. process exited), each independently gate-able via `retry_on`.
+   vs. process exited), each independently gate-able via `retry_on`. A brief
+   restart-grace window near process start (anchored to server boot time) exempts a
+   routine service restart from counting as a `tmux_exited` failure occurrence.
 4. **Same-worktree reuse and continuation-context prompt** on every automated retry
    (already exists — preserve, extend the existing continuation-prompt derivation to
    prepend an explicit "Previous attempt failed due to {reason}" line per the issue's
@@ -106,7 +127,12 @@ history view.
   `session/backlog_lifecycle.go` (`retryPushFailedWithBackoffGate`,
   `retryOrphanedTriageWithBackoffGate`, etc.) — those retry backlog *automation steps*
   (push, triage), a different concept from retrying a crashed *agent session process*.
-  Out of scope; no overlap to resolve beyond naming clarity.
+  **Correction (post-adversarial-review, cross-artifact consistency pass, 2026-08-29):**
+  the two mechanisms are conceptually distinct but were found to overlap in practice for
+  `backlog:work`-tagged sessions, which are eligible for both this feature's process-level
+  retry and `BacklogLifecycleListener`'s remediation. See AC8 and `plan.md` Epic 2.1's
+  `backlog:work` coordination task — this is a real interaction to resolve, not "naming
+  clarity" only.
 
 ## Acceptance Criteria (draft — refined further in plan.md)
 
@@ -124,3 +150,9 @@ history view.
 7. Existing single-retry crash-recovery behavior is not regressed for sessions with no
    explicit retry policy configured (i.e. a sane default policy preserves at least
    today's "retry once" behavior, not a silent downgrade to zero retries).
+8. **(Added post-adversarial-review, 2026-08-29)** `backlog:work`-tagged sessions retain
+   *some* automated recovery path when their underlying tmux/process dies — either this
+   feature's own `RetryState`/CAS-guarded machinery, or a verified equivalent in
+   `BacklogLifecycleListener`'s remediation gate — never silent exclusion with no
+   replacement coverage (regression risk identified in `implementation/pre-mortem.md`
+   Failure #2).

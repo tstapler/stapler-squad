@@ -22,6 +22,7 @@ func mustNotMatch(t *testing.T, pattern, input string) {
 }
 
 func TestAgyDetector_Name(t *testing.T) {
+	t.Parallel()
 	d := NewAgyDetector()
 	if d.Name() != "agy" {
 		t.Errorf("Name() = %q, want %q", d.Name(), "agy")
@@ -29,6 +30,7 @@ func TestAgyDetector_Name(t *testing.T) {
 }
 
 func TestAgyDetector_Patterns_should_haveReadyPattern(t *testing.T) {
+	t.Parallel()
 	d := NewAgyDetector()
 	p := d.Patterns()
 	if len(p.Ready) == 0 {
@@ -40,6 +42,7 @@ func TestAgyDetector_Patterns_should_haveReadyPattern(t *testing.T) {
 }
 
 func TestAgyDetector_Patterns_should_useAgyPrefixedNames(t *testing.T) {
+	t.Parallel()
 	d := NewAgyDetector()
 	p := d.Patterns()
 	for _, sp := range p.NeedsApproval {
@@ -50,6 +53,7 @@ func TestAgyDetector_Patterns_should_useAgyPrefixedNames(t *testing.T) {
 }
 
 func TestAgyDetector_FilterContent_should_returnUnchanged(t *testing.T) {
+	t.Parallel()
 	d := NewAgyDetector()
 	input := "agy output"
 	if got := d.FilterContent(input); got != input {
@@ -58,12 +62,14 @@ func TestAgyDetector_FilterContent_should_returnUnchanged(t *testing.T) {
 }
 
 func TestAgyDetector_ready_pattern(t *testing.T) {
+	t.Parallel()
 	p := NewAgyDetector().Patterns().Ready[0].Pattern
 	mustMatch(t, p, "◇ Ready")
 	mustNotMatch(t, p, "Working...")
 }
 
 func TestAgyDetector_working_pattern(t *testing.T) {
+	t.Parallel()
 	p := NewAgyDetector().Patterns().Processing[0].Pattern
 	mustMatch(t, p, "✦ Working")
 	mustNotMatch(t, p, "◇ Ready")
@@ -93,6 +99,30 @@ Run this command?
 	}
 }
 
+func TestAgyDetector_subagentPermissionPrompts_sample(t *testing.T) {
+	d := NewAgyDetector()
+	patterns := d.Patterns().NeedsApproval
+
+	sampleOutput := ` ┃ self needs approval for Bash
+ ┃ ─────────────────────────────────────────────────────────────────────────────────
+ ┃ ● Bash(cargo check)
+ ┃ ctrl+k approve · alt+j manage
+─────────────────────────────────────────────────────────────────────────────────────
+  ● Agent(self)  Blocked · Running command · 20m34s`
+
+	matched := false
+	for _, p := range patterns {
+		re := regexp.MustCompile(p.Pattern)
+		if re.MatchString(sampleOutput) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		t.Errorf("expected NeedsApproval patterns to match subagent approval sample output:\n%s", sampleOutput)
+	}
+}
+
 func getNeedsApprovalPatternByName(t *testing.T, name string) string {
 	t.Helper()
 	for _, p := range NewAgyDetector().Patterns().NeedsApproval {
@@ -105,18 +135,21 @@ func getNeedsApprovalPatternByName(t *testing.T, name string) string {
 }
 
 func TestAgyDetector_permission_pattern(t *testing.T) {
+	t.Parallel()
 	p := getNeedsApprovalPatternByName(t, "agy_permission")
 	mustMatch(t, p, "Yes, allow once")
 	mustNotMatch(t, p, "yes deny")
 }
 
 func TestAgyDetector_allowExecution_pattern(t *testing.T) {
+	t.Parallel()
 	p := getNeedsApprovalPatternByName(t, "agy_allow_execution")
 	mustMatch(t, p, "Allow execution of:")
 	mustNotMatch(t, p, "allow execution other")
 }
 
 func TestAgyDetector_idleReadline_pattern(t *testing.T) {
+	t.Parallel()
 	idle := NewAgyDetector().Patterns().Idle
 	if len(idle) == 0 {
 		t.Fatal("Idle patterns empty")
@@ -126,6 +159,7 @@ func TestAgyDetector_idleReadline_pattern(t *testing.T) {
 }
 
 func TestAgyDetector_idleInsert_pattern(t *testing.T) {
+	t.Parallel()
 	idle := NewAgyDetector().Patterns().Idle
 	if len(idle) < 2 {
 		t.Fatal("Idle patterns has fewer than 2 entries")
@@ -135,6 +169,7 @@ func TestAgyDetector_idleInsert_pattern(t *testing.T) {
 }
 
 func TestAgyDetector_activeRunning_pattern(t *testing.T) {
+	t.Parallel()
 	active := NewAgyDetector().Patterns().Active
 	if len(active) == 0 {
 		t.Fatal("Active patterns empty")
@@ -144,6 +179,7 @@ func TestAgyDetector_activeRunning_pattern(t *testing.T) {
 }
 
 func TestAgyDetector_activeThinking_pattern(t *testing.T) {
+	t.Parallel()
 	active := NewAgyDetector().Patterns().Active
 	if len(active) < 2 {
 		t.Fatal("Active patterns has fewer than 2 entries")

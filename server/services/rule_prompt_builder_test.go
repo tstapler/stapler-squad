@@ -9,6 +9,7 @@ import (
 
 // T-UNIT-GO-005
 func TestDefaultRulePromptBuilder_BuildSystemPrompt_ContainsSchemaAndSeeds(t *testing.T) {
+	t.Parallel()
 	builder := &DefaultRulePromptBuilder{}
 	ctx := RulePromptContext{
 		ExistingRules: []RuleSpec{},
@@ -26,6 +27,7 @@ func TestDefaultRulePromptBuilder_BuildSystemPrompt_ContainsSchemaAndSeeds(t *te
 
 // T-UNIT-GO-006
 func TestDefaultRulePromptBuilder_BuildUserPrompt_FormatsGap(t *testing.T) {
+	t.Parallel()
 	builder := &DefaultRulePromptBuilder{}
 	ctx := RulePromptContext{
 		AnalyticsGaps: []AnalyticsGap{
@@ -42,6 +44,7 @@ func TestDefaultRulePromptBuilder_BuildUserPrompt_FormatsGap(t *testing.T) {
 
 // T-UNIT-GO-009
 func TestBuildUserPrompt_RedactsSecretCommandPreviews(t *testing.T) {
+	t.Parallel()
 	builder := &DefaultRulePromptBuilder{}
 	ctx := RulePromptContext{
 		AnalyticsGaps: []AnalyticsGap{
@@ -62,6 +65,7 @@ func TestBuildUserPrompt_RedactsSecretCommandPreviews(t *testing.T) {
 }
 
 func TestDefaultRulePromptBuilder_BuildUserPrompt_CommandSample(t *testing.T) {
+	t.Parallel()
 	builder := &DefaultRulePromptBuilder{}
 	ctx := RulePromptContext{
 		CommandSample: "git push origin main",
@@ -75,6 +79,7 @@ func TestDefaultRulePromptBuilder_BuildUserPrompt_CommandSample(t *testing.T) {
 }
 
 func TestDefaultRulePromptBuilder_BuildUserPrompt_RedactsSecretCommandSample(t *testing.T) {
+	t.Parallel()
 	builder := &DefaultRulePromptBuilder{}
 	ctx := RulePromptContext{
 		CommandSample: "curl -H 'Authorization: Bearer ghp_AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHH1234'",
@@ -88,6 +93,7 @@ func TestDefaultRulePromptBuilder_BuildUserPrompt_RedactsSecretCommandSample(t *
 }
 
 func TestDefaultRulePromptBuilder_BuildUserPrompt_EmptyGaps(t *testing.T) {
+	t.Parallel()
 	builder := &DefaultRulePromptBuilder{}
 	ctx := RulePromptContext{
 		AnalyticsGaps: []AnalyticsGap{},

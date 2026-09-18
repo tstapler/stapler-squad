@@ -62,6 +62,9 @@ func registerWorkflowTools(s *mcpserver.MCPServer, h *workflowHandlers) {
 			mcpgo.WithBoolean("cron_enabled",
 				mcpgo.Description("Whether the cron schedule is active (default: false)"),
 			),
+			mcpgo.WithBoolean("enabled",
+				mcpgo.Description("Whether this trigger is active — gates webhook/github_push firing as well as cron (default: true)"),
+			),
 			mcpgo.WithNumber("keep_sessions",
 				mcpgo.Description("Keep only the N most recent sessions for this workflow (0/omitted = keep all)"),
 			),
@@ -92,6 +95,7 @@ func registerWorkflowTools(s *mcpserver.MCPServer, h *workflowHandlers) {
 			mcpgo.WithString("agent_type", mcpgo.Description("New agent type override")),
 			mcpgo.WithString("cron_expression", mcpgo.Description("New cron expression")),
 			mcpgo.WithBoolean("cron_enabled", mcpgo.Description("New cron enabled state")),
+			mcpgo.WithBoolean("enabled", mcpgo.Description("New trigger-enabled state")),
 			mcpgo.WithNumber("keep_sessions", mcpgo.Description("New keep_sessions value")),
 			mcpgo.WithNumber("archive_after_hours", mcpgo.Description("New archive_after_hours value")),
 		),
@@ -147,6 +151,7 @@ type WorkflowResult struct {
 	AgentType         string `json:"agent_type,omitempty"`
 	CronExpression    string `json:"cron_expression,omitempty"`
 	CronEnabled       bool   `json:"cron_enabled"`
+	Enabled           bool   `json:"enabled"`
 	KeepSessions      *int32 `json:"keep_sessions,omitempty"`
 	ArchiveAfterHours *int32 `json:"archive_after_hours,omitempty"`
 }
@@ -165,6 +170,7 @@ func workflowToResult(w *sessionv1.WorkflowProto) WorkflowResult {
 		AgentType:         w.GetAgentType(),
 		CronExpression:    w.GetCronExpression(),
 		CronEnabled:       w.GetCronEnabled(),
+		Enabled:           w.GetEnabled(),
 		KeepSessions:      w.KeepSessions,
 		ArchiveAfterHours: w.ArchiveAfterHours,
 	}
@@ -208,6 +214,7 @@ func (h *workflowHandlers) createWorkflow(ctx context.Context, req mcpgo.CallToo
 		AgentType:         stringArg(args, "agent_type"),
 		CronExpression:    stringArg(args, "cron_expression"),
 		CronEnabled:       boolArg(args, "cron_enabled"),
+		Enabled:           boolPtrArg(args, "enabled"),
 		KeepSessions:      int32PtrArg(args, "keep_sessions"),
 		ArchiveAfterHours: int32PtrArg(args, "archive_after_hours"),
 	}
@@ -250,6 +257,7 @@ func (h *workflowHandlers) updateWorkflow(ctx context.Context, req mcpgo.CallToo
 		AgentType:         stringPtrArg(args, "agent_type"),
 		CronExpression:    stringPtrArg(args, "cron_expression"),
 		CronEnabled:       boolPtrArg(args, "cron_enabled"),
+		Enabled:           boolPtrArg(args, "enabled"),
 		KeepSessions:      int32PtrArg(args, "keep_sessions"),
 		ArchiveAfterHours: int32PtrArg(args, "archive_after_hours"),
 	}

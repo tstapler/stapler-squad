@@ -1,7 +1,7 @@
 "use client";
 // +feature: ui:header-nav
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
 import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
@@ -27,6 +27,7 @@ export function Header() {
   const pathname = usePathname();
   const { authenticated, authEnabled } = useAuth();
   const [isDebugOpen, setIsDebugOpen] = useState(false);
+  const debugButtonTriggerRef = useRef<HTMLElement | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isApprovalDrawerOpen, setIsApprovalDrawerOpen] = useState(false);
   const { togglePanel, getUnreadCount } = useNotifications();
@@ -142,7 +143,10 @@ export function Header() {
             </button>
             <button
               className={styles.debugButton}
-              onClick={() => setIsDebugOpen(true)}
+              onClick={(event) => {
+                debugButtonTriggerRef.current = event.currentTarget;
+                setIsDebugOpen(true);
+              }}
               aria-label="Open debug menu"
               title="Debug menu"
             >
@@ -169,6 +173,7 @@ export function Header() {
       <DebugMenu
         isOpen={isDebugOpen}
         onClose={() => setIsDebugOpen(false)}
+        triggerRef={debugButtonTriggerRef}
       />
       <ApprovalDrawer
         isOpen={isApprovalDrawerOpen}

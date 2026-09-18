@@ -29,4 +29,4 @@ Verified locally via go test ./... — all tests pass.
 Evaluate every acceptance criterion against the diff above. Also verify the implementation follows the plan (if provided).
 Output ONLY a single JSON object with no surrounding text:
 {"overall":"PASS","summary":"concise assessment","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"direct quote from diff"}]}
-Valid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE.
+Valid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE. Mark a criterion UNVERIFIABLE rather than guessing if you cannot confirm it from what's in front of you — a missing or incomplete diff is a known limitation of this mode, not a signal the work is wrong.

@@ -28,6 +28,9 @@ echo "Stapler Squad Gemini Hook Installer"
 echo "===================================="
 echo ""
 
+# Single-quoted deliberately: $TOOL_INPUT is expanded later, by Gemini CLI's
+# own shell when it runs this hook command — not by this installer script.
+# shellcheck disable=SC2016
 HOOK_CMD='echo "$TOOL_INPUT" | ssq-hooks check --db ~/.config/stapler-squad/stapler-squad.db'
 
 info "To enable Stapler Squad permissions check in Gemini CLI, add the following"

@@ -48,11 +48,11 @@ func (ss *StartupScanner) Scan(instances []*Instance, queue ReviewQueueWriter) i
 			item := buildStartupItem(inst, result)
 			queue.Add(item)
 			added++
-			log.InfoLog.Printf("[StartupScan] Session '%s': detected %s (status=%s)",
+			log.InfoLog().Printf("[StartupScan] Session '%s': detected %s (status=%s)",
 				inst.Title, result.Reason, result.ClaudeStatus)
 		}
 	}
-	log.InfoLog.Printf("[StartupScan] Scanned %d sessions, added %d to review queue", scanned, added)
+	log.InfoLog().Printf("[StartupScan] Scanned %d sessions, added %d to review queue", scanned, added)
 	return added
 }
 
@@ -63,21 +63,22 @@ func buildStartupItem(inst *Instance, result DetectionResult) *ReviewItem {
 		lastActivity = inst.CreatedAt
 	}
 	return &ReviewItem{
-		SessionID:    inst.Title,
-		SessionName:  inst.Title,
-		Reason:       result.Reason,
-		Priority:     result.Priority,
-		DetectedAt:   time.Now(),
-		Context:      result.Context,
-		Program:      inst.Program,
-		Branch:       inst.Branch,
-		Path:         inst.Path,
-		WorkingDir:   inst.WorkingDir,
-		Status:       inst.Status.String(),
-		Tags:         inst.Tags,
-		Category:     inst.Category,
-		DiffStats:    inst.GetDiffStats(),
-		LastActivity: lastActivity,
-		ClaudeStatus: result.ClaudeStatus,
+		SessionID:       inst.Title,
+		SessionName:     inst.Title,
+		Reason:          result.Reason,
+		Priority:        result.Priority,
+		DetectedAt:      time.Now(),
+		Context:         result.Context,
+		Program:         inst.Program,
+		Branch:          inst.Branch,
+		Path:            inst.Path,
+		WorkingDir:      inst.WorkingDir,
+		Status:          inst.Status.String(),
+		Tags:            inst.Tags,
+		Category:        inst.Category,
+		DiffStats:       inst.GetDiffStats(),
+		LastActivity:    lastActivity,
+		HasCommitsAhead: inst.GetHasCommitsAhead(),
+		ClaudeStatus:    result.ClaudeStatus,
 	}
 }

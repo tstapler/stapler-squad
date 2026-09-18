@@ -128,7 +128,7 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 	}
 
 	if wtErr == nil && wt.BaseCommitSHA != "" {
-		shipped, commitsErr := git.ListShippedCommits(item.RepoPath, wt.BaseCommitSHA, lastCommitSha)
+		shipped, _, commitsErr := git.ListShippedCommits(ctx, item.RepoPath, wt.BaseCommitSHA, lastCommitSha)
 		if commitsErr != nil {
 			// Non-fatal: the badge/branch info above is still valid even if the
 			// commit list itself can't be resolved (e.g. the base SHA has since
@@ -165,7 +165,7 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 				// Degrade gracefully: a corrupt/truncated snapshot blob must not
 				// fail the whole RPC — every other populated field above is still
 				// valid and useful on its own.
-				log.WarningLog.Printf("[BacklogService] GetBacklogItemShipStatus item=%s: failed to decode ShippedFileStats: %v", item.ID, unmarshalErr)
+				log.WarningLog().Printf("[BacklogService] GetBacklogItemShipStatus item=%s: failed to decode ShippedFileStats: %v", item.ID, unmarshalErr)
 			} else {
 				for _, fs := range decoded {
 					status.FileStats = append(status.FileStats, &sessionv1.ShippedFileStat{

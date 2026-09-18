@@ -21,8 +21,16 @@ SCANNER="tools/scanner/backend/cmd/scanner"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-for p in session unfinished backlog insights github_user session_summary; do
-  "$SCANNER" "proto/session/v1/$p.proto" server/services/ "$TMP" >/dev/null
+# Avoid mapfile (bash 4+ only) — macOS ships bash 3.2 as /bin/bash and
+# #!/usr/bin/env bash resolves to whatever's first on PATH, not necessarily a
+# newer Homebrew bash.
+protos=()
+while IFS= read -r line; do
+  [ -n "$line" ] && protos+=("$line")
+done < <("$SCRIPT_DIR/list-backend-protos.sh")
+
+for proto in "${protos[@]}"; do
+  "$SCANNER" "$proto" server/services/ "$TMP" >/dev/null
 done
 
 python3 - "$TMP" "$COMMITTED" <<'PY'

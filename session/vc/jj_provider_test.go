@@ -19,6 +19,7 @@ func skipIfNoJJ(t *testing.T) {
 }
 
 func TestNewJujutsuProvider(t *testing.T) {
+	t.Parallel()
 	t.Run("valid jujutsu repository", func(t *testing.T) {
 		skipIfNoJJ(t)
 		tmpDir := t.TempDir()
@@ -89,6 +90,7 @@ func TestNewJujutsuProvider(t *testing.T) {
 }
 
 func TestJujutsuProviderType(t *testing.T) {
+	t.Parallel()
 	skipIfNoJJ(t)
 	tmpDir := t.TempDir()
 
@@ -106,6 +108,7 @@ func TestJujutsuProviderType(t *testing.T) {
 }
 
 func TestJujutsuProviderName(t *testing.T) {
+	t.Parallel()
 	skipIfNoJJ(t)
 	tmpDir := t.TempDir()
 
@@ -123,6 +126,7 @@ func TestJujutsuProviderName(t *testing.T) {
 }
 
 func TestJujutsuProviderWorkDir(t *testing.T) {
+	t.Parallel()
 	skipIfNoJJ(t)
 	tmpDir := t.TempDir()
 
@@ -140,6 +144,7 @@ func TestJujutsuProviderWorkDir(t *testing.T) {
 }
 
 func TestParseJJStatusChar(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		char     byte
 		expected FileStatus
@@ -165,6 +170,7 @@ func TestParseJJStatusChar(t *testing.T) {
 }
 
 func TestJujutsuProviderGetBranch(t *testing.T) {
+	t.Parallel()
 	t.Run("no bookmark (returns change ID or @)", func(t *testing.T) {
 		skipIfNoJJ(t)
 		tmpDir := t.TempDir()
@@ -219,6 +225,7 @@ func TestJujutsuProviderGetBranch(t *testing.T) {
 }
 
 func TestJujutsuProviderGetChangedFiles(t *testing.T) {
+	t.Parallel()
 	t.Run("no changes", func(t *testing.T) {
 		skipIfNoJJ(t)
 		tmpDir := t.TempDir()
@@ -331,6 +338,7 @@ func TestJujutsuProviderGetChangedFiles(t *testing.T) {
 }
 
 func TestJujutsuProviderGetStatus(t *testing.T) {
+	t.Parallel()
 	t.Run("clean repository", func(t *testing.T) {
 		skipIfNoJJ(t)
 		tmpDir := t.TempDir()
@@ -392,6 +400,7 @@ func TestJujutsuProviderGetStatus(t *testing.T) {
 }
 
 func TestJujutsuProviderCommit(t *testing.T) {
+	t.Parallel()
 	t.Run("commit with message (describe + new)", func(t *testing.T) {
 		skipIfNoJJ(t)
 		tmpDir := t.TempDir()
@@ -432,6 +441,7 @@ func TestJujutsuProviderCommit(t *testing.T) {
 }
 
 func TestJujutsuProviderGetDiff(t *testing.T) {
+	t.Parallel()
 	t.Run("diff of modified file", func(t *testing.T) {
 		skipIfNoJJ(t)
 		tmpDir := t.TempDir()
@@ -490,6 +500,7 @@ func TestJujutsuProviderGetDiff(t *testing.T) {
 }
 
 func TestJujutsuProviderGetInteractiveCommand(t *testing.T) {
+	t.Parallel()
 	skipIfNoJJ(t)
 	tmpDir := t.TempDir()
 
@@ -519,6 +530,7 @@ func TestJujutsuProviderGetInteractiveCommand(t *testing.T) {
 }
 
 func TestJujutsuProviderGetLogCommand(t *testing.T) {
+	t.Parallel()
 	skipIfNoJJ(t)
 	tmpDir := t.TempDir()
 
@@ -538,6 +550,7 @@ func TestJujutsuProviderGetLogCommand(t *testing.T) {
 }
 
 func TestJujutsuProviderDescribe(t *testing.T) {
+	t.Parallel()
 	skipIfNoJJ(t)
 	tmpDir := t.TempDir()
 	initJJRepo(t, tmpDir)
@@ -560,6 +573,7 @@ func TestJujutsuProviderDescribe(t *testing.T) {
 }
 
 func TestJujutsuProviderNew(t *testing.T) {
+	t.Parallel()
 	skipIfNoJJ(t)
 	tmpDir := t.TempDir()
 	initJJRepo(t, tmpDir)
@@ -586,6 +600,7 @@ func TestJujutsuProviderNew(t *testing.T) {
 }
 
 func TestJujutsuProviderSquash(t *testing.T) {
+	t.Parallel()
 	skipIfNoJJ(t)
 	tmpDir := t.TempDir()
 	initJJRepoWithFile(t, tmpDir)
@@ -618,6 +633,7 @@ func TestJujutsuProviderSquash(t *testing.T) {
 }
 
 func TestJujutsuProviderAbandon(t *testing.T) {
+	t.Parallel()
 	skipIfNoJJ(t)
 	tmpDir := t.TempDir()
 	initJJRepo(t, tmpDir)

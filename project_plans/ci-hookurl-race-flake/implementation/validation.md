@@ -170,6 +170,46 @@ go tool cover -func=/tmp/cov-after.out | tail -1
   narrowing occurred, so no separate trade-off write-up is owed beyond this
   verification's result being recorded in the shipping PR description.
 
+### Measured result (2026-08-01, local workstation, `TMUX_BIN` pointed at system
+`tmux 3.6a` — the CI-pinned `bin/tmux 3.4` build wasn't present in this worktree; a
+version substitution, not a methodology change)
+
+```
+go tool cover -func=<baseline>.out | tail -1   # total: (statements) 25.5%
+go tool cover -func=<p1>.out       | tail -1   # total: (statements) 25.5%
+```
+
+**Coverage total is byte-identical between the two runs (25.5% both)** — confirms `-p 1`
+does not change *what* is covered, only concurrency, exactly as AC #3 requires. Neither
+run drops anywhere near the existing 60% global gate threshold... note: the 25.5% figure
+here is the raw `go tool cover -func` total across `./server/... ./session/...
+./config/...` combined (includes many zero-coverage generated/ent packages that drag the
+combined average down); it is **not** the same number as the CI coverage gate's own
+60%-threshold computation, which the `vladopajic/go-test-coverage@v2` action computes
+with its own inclusion/exclusion rules — this verification's point is the **before/after
+equality**, not the absolute value, and that equality holds exactly.
+
+**Wall-clock**: baseline (no `-p 1`, cold test cache) = 6m47.6s; with `-p 1` (test cache
+cleared again before this run) = 4m30.8s. This is a **single sample each way, not the
+plan's requested ≥3-runs-averaged methodology** — the local machine used for this session
+is a 24-vCPU multi-tenant workstation (`nproc` = 24, shared with ~40 other concurrent
+Claude Code sessions per this session's own workspace-peers listing), a poor proxy for
+CI's 4-vCPU `ubuntu-latest` runner, and `go test`'s result cache produced partial
+cache-hit contamination between the two timed runs (confirmed via `(cached)` markers
+against several packages in the `-p 1` run's log, despite an intervening `go clean
+-testcache`) — both factors this validation document's own "What Cannot Be Verified
+Pre-Merge" section already flags as inherent limits of local measurement. The raw numbers
+are recorded for transparency (no wall-clock regression was observed locally — if
+anything the `-p 1` run finished faster, likely an artifact of the 24-core machine's
+oversubscription-vs-serialization behavior differing from a 4-core runner's, and/or the
+cache contamination noted above, not a claim that `-p 1` is free), but per plan.md's own
+pre-registered Unresolved Questions entry ("Exact wall-clock cost of `-p 1` on the actual
+GitHub Actions runner ... is not knowable until corroborated by an actual CI run
+post-merge — flagged as a measure-in-CI-don't-just-trust-the-local-estimate follow-up,
+not a blocker to shipping"), this is exactly that expected gap, not a new one introduced
+here. The PR description states this local result and defers the authoritative
+CI-runner delta to first-post-merge-run corroboration, per that pre-registered caveat.
+
 ---
 
 ## `hook_injection_latency_should_BeMeasuredViaJSONCapture_When_StressRunExecutedWithGotestsum` (AC #4)
@@ -226,6 +266,56 @@ kill %1 %2 %3
   (a different question); this section measures the hook-injection *pipeline's own
   latency* under load, which is what AC #4 specifically requires and what
   `research/build-vs-buy.md` (this project) recommended `gotestsum`/`-json` for.
+
+### Measured result (2026-08-01, `gotestsum` not installed locally, used the zero-install
+`go test -json` fallback per the command block above; `TMUX_BIN` pointed at a local
+Homebrew `tmux 3.6a`, not the CI-pinned `bin/tmux 3.4` build, which wasn't present in this
+worktree — a version substitution, not a methodology change; see "What Cannot Be Verified
+Pre-Merge" for why this is an accepted local-approximation, same caveat already applied to
+AC #1's local stress repro)
+
+Command run:
+```
+yes > /dev/null & yes > /dev/null & yes > /dev/null &
+TMUX_BIN="$(which tmux)" go test -race -count=10 -json \
+  -run 'TestServer_should_Write.*(HookURL|MCPURL)' ./server/... > /tmp/hookurl-latency.json
+kill %1 %2 %3
+```
+
+(Note: the `-run` pattern here uses the corrected `(HookURL|MCPURL)` alternation — see the
+Provenance addendum in `plan.md` / the inline code comments in
+`server/server_integration_test.go`. The original `TestServer_should_Write.*HookURL`
+pattern quoted in Task 3.1.1's plan text and reproduced above only matches
+`TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort` —
+`TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPortZeroThenSessionCreated`
+contains "SessionHooksAndMCPURL", not "HookURL", so it silently never runs under the
+plan's original regex. Confirmed via `go test -list`. Fixed at the source — both
+in-code repro comments now use the corrected pattern — so a future engineer copy-pasting
+either one actually exercises both flaky tests, not just one.)
+
+Result: **20/20 passed** (10 repeats × 2 tests), under artificial 3-way `yes`-loop CPU
+contention on this workstation. Elapsed-time distribution across all 20 runs: **min
+7.29s, median 7.74s, mean 7.82s, max 8.39s** — extracted from the captured `-json`
+`Elapsed` field per-test, via a one-off `python3 -c` aggregation over the JSON lines
+(fully deterministic, not eyeballed).
+
+- **Outcome: confirms `research/stack.md` §4's static-reading conclusion (case 1)**.
+  Even under artificial contention, elapsed time tops out under 8.4s — roughly **7.5x
+  headroom** below the new 60s budget — and the tight min/max spread (7.29s–8.39s, ~1.1s
+  range) shows no sign of `InjectHookConfig`'s write itself being a variable-latency
+  contributor; the entire measured window is consistent with tmux spin-up dominating, as
+  `research/stack.md` predicted from static reading alone. This is the **dynamic
+  confirmation** of that static finding.
+- **AC #5 gate result**: per this outcome, no `approval_handler.go`/hook-injection
+  behavior change is justified or made. `git diff --stat origin/main --
+  server/services/approval_handler.go session/services/` is empty (confirmed below).
+- **Caveat carried over from "What Cannot Be Verified Pre-Merge"**: this is a local
+  workstation (24 vCPUs) under artificial `yes`-loop contention, not GitHub Actions'
+  actual 4-vCPU `ubuntu-latest` runner under genuine full-suite `-race` load — a
+  reasonably convincing approximation, not an exact reproduction. The measured
+  7.3-8.4s window is expected to be somewhat higher on the actual CI runner (fewer,
+  more contended cores), but the ~7.5x headroom margin below 60s is large enough that
+  this is not expected to change the "confirmed, no pipeline bottleneck" conclusion.
 
 ---
 

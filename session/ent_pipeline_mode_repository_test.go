@@ -8,6 +8,7 @@ import (
 )
 
 func TestEntPipelineModeRepository_Create_should_PersistAndRoundTrip_When_ValidInput(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -34,6 +35,7 @@ func TestEntPipelineModeRepository_Create_should_PersistAndRoundTrip_When_ValidI
 }
 
 func TestEntPipelineModeRepository_Create_should_ReturnConstraintError_When_DuplicateSlug(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -54,6 +56,7 @@ func TestEntPipelineModeRepository_Create_should_ReturnConstraintError_When_Dupl
 }
 
 func TestEntPipelineModeRepository_Update_should_OnlyChangeSuppliedFields_When_PartialUpdateInput(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -97,6 +100,7 @@ func TestEntPipelineModeRepository_Update_should_OnlyChangeSuppliedFields_When_P
 }
 
 func TestEntPipelineModeRepository_ListEnabled_should_ExcludeDisabledRows_When_MixedEnabledState(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 

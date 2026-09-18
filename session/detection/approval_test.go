@@ -9,6 +9,7 @@ import (
 )
 
 func TestNewApprovalDetector(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	if detector == nil {
@@ -22,6 +23,7 @@ func TestNewApprovalDetector(t *testing.T) {
 }
 
 func TestApprovalDetector_AddPattern(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	pattern := &ApprovalPattern{
@@ -52,6 +54,7 @@ func TestApprovalDetector_AddPattern(t *testing.T) {
 }
 
 func TestApprovalDetector_AddPatternInvalidRegex(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	pattern := &ApprovalPattern{
@@ -67,6 +70,7 @@ func TestApprovalDetector_AddPatternInvalidRegex(t *testing.T) {
 }
 
 func TestApprovalDetector_RemovePattern(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	pattern := &ApprovalPattern{
@@ -87,6 +91,7 @@ func TestApprovalDetector_RemovePattern(t *testing.T) {
 }
 
 func TestApprovalDetector_DetectCommandApproval(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	output := `I will execute the command: "ls -la /tmp"
@@ -108,6 +113,7 @@ This will list all files in the directory.`
 }
 
 func TestApprovalDetector_DetectFileWriteApproval(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	output := `I will write the file to /path/to/file.txt
@@ -125,6 +131,7 @@ The content will be saved.`
 }
 
 func TestApprovalDetector_DetectFileReadApproval(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	output := `Let me read the file at /etc/config.json
@@ -142,6 +149,7 @@ I'll check the contents.`
 }
 
 func TestApprovalDetector_DetectConfirmation(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	output := `Do you want me to proceed with this operation?
@@ -159,6 +167,7 @@ It will make changes to the system.`
 }
 
 func TestApprovalDetector_DetectMultiple(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	output := `I will execute the command: "echo test"
@@ -173,6 +182,7 @@ Do you want to proceed?`
 }
 
 func TestApprovalDetector_NoDetection(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	output := `This is just regular output
@@ -187,6 +197,7 @@ Just normal text`
 }
 
 func TestApprovalDetector_DetectInChunk(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	request := detector.DetectInChunk([]byte(`Should I run the command: "test"?`), nil)
@@ -197,6 +208,7 @@ func TestApprovalDetector_DetectInChunk(t *testing.T) {
 }
 
 func TestApprovalDetector_DetectInChunkWithError(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	request := detector.DetectInChunk([]byte(`Should I run the command: "test"?`), fmt.Errorf("error occurred"))
@@ -207,6 +219,7 @@ func TestApprovalDetector_DetectInChunkWithError(t *testing.T) {
 }
 
 func TestApprovalDetector_GetHistory(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	// Trigger some detections
@@ -227,6 +240,7 @@ func TestApprovalDetector_GetHistory(t *testing.T) {
 }
 
 func TestApprovalDetector_GetHistoryAll(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	detector.Detect(`Execute command: "test1"`)
@@ -240,6 +254,7 @@ func TestApprovalDetector_GetHistoryAll(t *testing.T) {
 }
 
 func TestApprovalDetector_GetPendingRequests(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	detector.Detect(`Execute command: "test"`)
@@ -256,6 +271,7 @@ func TestApprovalDetector_GetPendingRequests(t *testing.T) {
 }
 
 func TestApprovalDetector_GetRequestByID(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	requests := detector.Detect(`Execute command: "test"`)
@@ -277,6 +293,7 @@ func TestApprovalDetector_GetRequestByID(t *testing.T) {
 }
 
 func TestApprovalDetector_GetRequestByIDNonexistent(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	found := detector.GetRequestByID("nonexistent")
@@ -287,6 +304,7 @@ func TestApprovalDetector_GetRequestByIDNonexistent(t *testing.T) {
 }
 
 func TestApprovalDetector_UpdateRequestStatus(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	requests := detector.Detect(`Execute command: "test"`)
@@ -318,6 +336,7 @@ func TestApprovalDetector_UpdateRequestStatus(t *testing.T) {
 }
 
 func TestApprovalDetector_UpdateRequestStatusNonexistent(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	err := detector.UpdateRequestStatus("nonexistent", ApprovalApproved, nil)
@@ -327,6 +346,7 @@ func TestApprovalDetector_UpdateRequestStatusNonexistent(t *testing.T) {
 }
 
 func TestApprovalDetector_Subscribe(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	ch := detector.Subscribe("test-subscriber")
@@ -354,6 +374,7 @@ func TestApprovalDetector_Subscribe(t *testing.T) {
 }
 
 func TestApprovalDetector_Unsubscribe(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	ch := detector.Subscribe("test-subscriber")
@@ -367,6 +388,7 @@ func TestApprovalDetector_Unsubscribe(t *testing.T) {
 }
 
 func TestApprovalDetector_ClearHistory(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	detector.Detect(`Execute command: "test1"`)
@@ -381,6 +403,7 @@ func TestApprovalDetector_ClearHistory(t *testing.T) {
 }
 
 func TestApprovalDetector_SetMaxHistory(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	// Generate 10 detections
@@ -401,6 +424,7 @@ func TestApprovalDetector_SetMaxHistory(t *testing.T) {
 }
 
 func TestApprovalDetector_GetStatistics(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	// Create some detections
@@ -432,6 +456,7 @@ func TestApprovalDetector_GetStatistics(t *testing.T) {
 }
 
 func TestApprovalRequest_Fields(t *testing.T) {
+	t.Parallel()
 	detector := NewApprovalDetector()
 
 	requests := detector.Detect(`Execute command: "ls -la"`)
@@ -467,6 +492,7 @@ func TestApprovalRequest_Fields(t *testing.T) {
 }
 
 func TestExtractContext(t *testing.T) {
+	t.Parallel()
 	lines := []string{
 		"line 0",
 		"line 1",
@@ -484,6 +510,7 @@ func TestExtractContext(t *testing.T) {
 }
 
 func TestExtractContextBoundaries(t *testing.T) {
+	t.Parallel()
 	lines := []string{
 		"line 0",
 		"line 1",
@@ -503,6 +530,7 @@ func TestExtractContextBoundaries(t *testing.T) {
 }
 
 func TestExtractCaptureGroups(t *testing.T) {
+	t.Parallel()
 	match := []string{"full match", "group1", "group2"}
 	keys := []string{"key1", "key2"}
 
@@ -518,6 +546,7 @@ func TestExtractCaptureGroups(t *testing.T) {
 }
 
 func TestExtractCaptureGroupsEmpty(t *testing.T) {
+	t.Parallel()
 	match := []string{"full match"}
 	keys := []string{"key1", "key2"}
 
@@ -529,6 +558,7 @@ func TestExtractCaptureGroupsEmpty(t *testing.T) {
 }
 
 func TestGenerateApprovalID(t *testing.T) {
+	t.Parallel()
 	id1 := generateApprovalID()
 	if id1 == "" {
 		t.Error("generateApprovalID() returned empty string")

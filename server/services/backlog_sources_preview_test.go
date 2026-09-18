@@ -25,6 +25,7 @@ import (
 // could have: an open issue, a non-eligible local status, and a closed issue
 // with no locally-imported counterpart at all.
 func TestPreviewBackwardSyncImpact_CountsOnlyEligibleItems(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	registry := session.NewPluginRegistry()
@@ -112,6 +113,7 @@ func (f *fakePaginatedSourcePlugin) MapToBacklogItem(item session.ExternalItem, 
 // response, so the UI can show the "may be incomplete" caveat rather than
 // implying an exhaustive count.
 func TestPreviewBackwardSyncImpact_UsesFetchAllAndSurfacesPossiblyIncomplete(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	registry := session.NewPluginRegistry()
@@ -157,6 +159,7 @@ func TestPreviewBackwardSyncImpact_UsesFetchAllAndSurfacesPossiblyIncomplete(t *
 // dropped or mismatched rows (e.g. a map keyed wrong) would show up as a
 // wrong count rather than passing by accident.
 func TestPreviewBackwardSyncImpact_BatchedLookupCountsCorrectlyAtScale(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	registry := session.NewPluginRegistry()
@@ -213,6 +216,7 @@ func TestPreviewBackwardSyncImpact_BatchedLookupCountsCorrectlyAtScale(t *testin
 // false "itemCount: 0" — a silent "nothing will change" would be worse than
 // an explicit failure here (plan.md Story 4.4.1 AC2).
 func TestPreviewBackwardSyncImpact_ReturnsErrorOnFetchFailure(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	registry := session.NewPluginRegistry()
@@ -237,6 +241,7 @@ func TestPreviewBackwardSyncImpact_ReturnsErrorOnFetchFailure(t *testing.T) {
 }
 
 func TestPreviewBackwardSyncImpact_ReturnsUnimplementedWithoutPluginRegistry(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	_, err := svc.PreviewBackwardSyncImpact(t.Context(), connect.NewRequest(&sessionv1.PreviewBackwardSyncImpactRequest{SourceId: "any"}))
 	require.Error(t, err)
@@ -246,6 +251,7 @@ func TestPreviewBackwardSyncImpact_ReturnsUnimplementedWithoutPluginRegistry(t *
 }
 
 func TestPreviewBackwardSyncImpact_ReturnsInvalidArgumentWhenSourceIDEmpty(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	svc.SetPluginRegistry(session.NewPluginRegistry())
 	_, err := svc.PreviewBackwardSyncImpact(t.Context(), connect.NewRequest(&sessionv1.PreviewBackwardSyncImpactRequest{SourceId: ""}))
@@ -256,6 +262,7 @@ func TestPreviewBackwardSyncImpact_ReturnsInvalidArgumentWhenSourceIDEmpty(t *te
 }
 
 func TestPreviewBackwardSyncImpact_ReturnsNotFoundForMissingSource(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	registry := session.NewPluginRegistry()
 	registry.Register(&fakeSourcePlugin{})

@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -15,12 +14,7 @@ import (
 // elsewhere in this package (server/review_queue_manager_test.go).
 func newTestStorageForReviewQueueLookup(t *testing.T) *session.Storage {
 	t.Helper()
-	dir := t.TempDir()
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(dir, "sessions.db")))
-	if err != nil {
-		t.Fatalf("NewEntRepository: %v", err)
-	}
-	t.Cleanup(func() { _ = repo.Close() })
+	repo := session.NewTestEntRepository(t)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {

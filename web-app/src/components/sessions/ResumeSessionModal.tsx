@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, KeyboardEvent } from "react";
+import { useState, useRef, useEffect, KeyboardEvent, RefObject } from "react";
 import { Session } from "@/gen/session/v1/types_pb";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { generateUniqueName } from "@/utils/sessionNameUtils";
@@ -11,6 +11,7 @@ interface ResumeSessionModalProps {
   sessions: Session[];
   onConfirm: (updates: { title: string; tags: string[] }) => Promise<void> | void;
   onCancel: () => void;
+  triggerRef?: RefObject<HTMLElement | null>;
 }
 
 export function ResumeSessionModal({
@@ -18,10 +19,11 @@ export function ResumeSessionModal({
   sessions,
   onConfirm,
   onCancel,
+  triggerRef,
 }: ResumeSessionModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
-  useFocusTrap(modalRef, true);
+  useFocusTrap(modalRef, true, triggerRef);
 
   // Compute conflict detection once at mount
   const [initialState] = useState(() => {
@@ -201,11 +203,11 @@ export function ResumeSessionModal({
                   </span>
                 </div>
               )}
-              {session.path && (
+              {session.existingDir && (
                 <div className={styles.contextRow}>
                   <span className={styles.contextLabel}>Path:</span>
-                  <span className={styles.contextValue} title={session.path}>
-                    {session.path}
+                  <span className={styles.contextValue} title={session.existingDir}>
+                    {session.existingDir}
                   </span>
                 </div>
               )}

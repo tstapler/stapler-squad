@@ -2,6 +2,7 @@ import { configureStore } from "@reduxjs/toolkit";
 import { useDispatch, useSelector } from "react-redux";
 import backlogItemsReducer from "./backlogItemsSlice";
 import bulkSelectionReducer from "./bulkSelectionSlice";
+import remotesReducer from "./remotesSlice";
 import reviewQueueReducer from "./reviewQueueSlice";
 import sessionsReducer from "./sessionsSlice";
 import { connectApi } from "@/lib/api/connectApi";
@@ -10,6 +11,7 @@ export const store = configureStore({
   reducer: {
     backlogItems: backlogItemsReducer,
     bulkSelection: bulkSelectionReducer,
+    remotes: remotesReducer,
     reviewQueue: reviewQueueReducer,
     sessions: sessionsReducer,
     [connectApi.reducerPath]: connectApi.reducer,

@@ -40,17 +40,38 @@ type backlogItemEventSender interface {
 	Send(*sessionv1.BacklogItemEvent) error
 }
 
-// testAfterSubscribeHook, when non-nil, is invoked immediately after
-// s.eventBus.Subscribe(ctx) below, before the after_seq branch's
-// EventsSince(afterSeq) read. Production code never sets this — it exists
-// solely so Epic 3.2's tests can deterministically land a Publish() call
-// inside the narrow race window between Subscribe() and EventsSince()
-// described in the forceIsSnapshot call site's comment (pre-mortem P2 #4):
-// without a seam here, reproducing that specific interleaving depends on
-// non-deterministic goroutine scheduling, which cannot be turned into a
-// reliable regression test. See backlog_service_events_test.go's
-// race-window test for the only caller.
-var testAfterSubscribeHook func()
+// testAfterSubscribeHookKey is the context key under which a test-only
+// after-Subscribe hook (see withTestAfterSubscribeHook) is stashed. Using
+// ctx instead of a package-global var/mutex means each watchBacklogItems
+// call only ever sees the hook its own caller attached — a global slot
+// (this package's earlier design, and the still-live pattern in
+// backlog_service_triage.go's testTriageCompleteHook) is read by every
+// t.Parallel() test's watchBacklogItems call, not just the one that set it,
+// so an unrelated concurrently-running test's Subscribe() can trigger
+// another test's hook and double-publish its race-marker event. Scoping the
+// hook to ctx makes that cross-test collision structurally impossible: a
+// context created by one test can never be visible to another's call.
+type testAfterSubscribeHookKey struct{}
+
+// withTestAfterSubscribeHook returns a copy of ctx carrying hook, to be
+// invoked immediately after s.eventBus.Subscribe(ctx) below, before the
+// after_seq branch's EventsSince(afterSeq) read. Production code never uses
+// this — it exists solely so Epic 3.2's tests can deterministically land a
+// Publish() call inside the narrow race window between Subscribe() and
+// EventsSince() described in the forceIsSnapshot call site's comment
+// (pre-mortem P2 #4): without a seam here, reproducing that specific
+// interleaving depends on non-deterministic goroutine scheduling, which
+// cannot be turned into a reliable regression test. See
+// backlog_service_events_test.go's race-window test for the only caller.
+func withTestAfterSubscribeHook(ctx context.Context, hook func()) context.Context {
+	return context.WithValue(ctx, testAfterSubscribeHookKey{}, hook)
+}
+
+func callTestAfterSubscribeHook(ctx context.Context) {
+	if hook, ok := ctx.Value(testAfterSubscribeHookKey{}).(func()); ok && hook != nil {
+		hook()
+	}
+}
 
 // WatchBacklogItems streams real-time backlog item events. Sends an initial
 // snapshot (or, on reconnect via after_seq, a replay of buffered events)
@@ -76,6 +97,9 @@ func (s *BacklogService) watchBacklogItems(
 		return connect.NewError(connect.CodeUnimplemented, fmt.Errorf("backlog event stream is not available"))
 	}
 
+	done := TrackOpenStream("WatchBacklogItems")
+	defer done()
+
 	// Subscribe before building the snapshot/replay batch so no events are
 	// lost between the two phases (snapshot races are resolved by
 	// client-side upsert semantics) — mirrors session_service.go's
@@ -83,9 +107,7 @@ func (s *BacklogService) watchBacklogItems(
 	eventCh, subID := s.eventBus.Subscribe(ctx)
 	defer s.eventBus.Unsubscribe(subID)
 
-	if testAfterSubscribeHook != nil {
-		testAfterSubscribeHook()
-	}
+	callTestAfterSubscribeHook(ctx)
 
 	costFor := s.buildCostLookup()
 
@@ -105,7 +127,7 @@ func (s *BacklogService) watchBacklogItems(
 			if !backlogItemMatchesFilters(evt.BacklogItemPayload.Item, msg) {
 				continue
 			}
-			converted := convertEventToBacklogItemEvent(evt, costFor)
+			converted := convertEventToBacklogItemEvent(ctx, s.storage, s.engine, evt, costFor)
 			// Force is_snapshot: true on every replayed event, unconditionally,
 			// regardless of the value the event was originally published
 			// with. A live event published in the race window between
@@ -135,7 +157,7 @@ func (s *BacklogService) watchBacklogItems(
 			if !backlogItemMatchesFilters(item, msg) {
 				continue
 			}
-			if err := sender.Send(snapshotEventForItem(item, costFor)); err != nil {
+			if err := sender.Send(snapshotEventForItem(ctx, s.storage, s.engine, item, costFor)); err != nil {
 				return fmt.Errorf("failed to send initial backlog snapshot: %w", err)
 			}
 			initialPhaseSent++
@@ -174,7 +196,7 @@ func (s *BacklogService) watchBacklogItems(
 			if !backlogItemMatchesFilters(evt.BacklogItemPayload.Item, msg) {
 				continue
 			}
-			if err := sender.Send(convertEventToBacklogItemEvent(evt, costFor)); err != nil {
+			if err := sender.Send(convertEventToBacklogItemEvent(ctx, s.storage, s.engine, evt, costFor)); err != nil {
 				return fmt.Errorf("failed to send backlog event: %w", err)
 			}
 		}
@@ -202,7 +224,14 @@ func backlogItemMatchesFilters(item *session.BacklogItemData, msg *sessionv1.Wat
 
 // snapshotEventForItem builds the initial-snapshot BacklogItemEvent for a
 // single currently-visible item (fresh-connection branch, after_seq == 0).
-func snapshotEventForItem(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItemEvent {
+// Calls enrichItemSessionsWorktreeData so this path matches GetBacklogItem's
+// per-session worktree_branch/worktree_path population — without it, every
+// fresh WatchBacklogItems connection (e.g. opening the backlog detail pane)
+// immediately overwrote an already-loaded item's enriched worktree data with
+// this un-enriched snapshot, hiding BacklogFileBrowserModal's trigger.
+func snapshotEventForItem(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItemEvent {
+	protoItem := backlogItemToProto(item, engine, costFor)
+	enrichItemSessionsWorktreeData(ctx, storage, protoItem)
 	return &sessionv1.BacklogItemEvent{
 		Timestamp: timestamppb.Now(),
 		// Seq intentionally left at its zero value: this synthetic per-item
@@ -213,7 +242,7 @@ func snapshotEventForItem(item *session.BacklogItemData, costFor func(tmuxUUID s
 		Event: &sessionv1.BacklogItemEvent_ItemUpdated{
 			ItemUpdated: &sessionv1.BacklogItemUpdatedEvent{
 				ItemId:     item.ID,
-				Item:       backlogItemToProto(item, costFor),
+				Item:       protoItem,
 				IsSnapshot: true,
 			},
 		},
@@ -225,7 +254,7 @@ func snapshotEventForItem(item *session.BacklogItemData, costFor func(tmuxUUID s
 // on Kind to build the matching oneof variant. Mirrors convertEventToProto's
 // switch-on-event.Type pattern already used for session events
 // (event_converter.go).
-func convertEventToBacklogItemEvent(evt *events.Event, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItemEvent {
+func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, evt *events.Event, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItemEvent {
 	out := &sessionv1.BacklogItemEvent{
 		Timestamp: timestamppb.New(evt.Timestamp),
 		// evt.Seq is assigned by EventBus.Publish (0 means unpublished, which
@@ -246,7 +275,8 @@ func convertEventToBacklogItemEvent(evt *events.Event, costFor func(tmuxUUID str
 	if payload.Item != nil {
 		itemID = payload.Item.ID
 	}
-	protoItem := backlogItemToProtoOrNil(payload.Item, costFor)
+	protoItem := backlogItemToProtoOrNil(payload.Item, engine, costFor)
+	enrichItemSessionsWorktreeData(ctx, storage, protoItem)
 
 	switch payload.Kind {
 	case events.BacklogChangeStatusTransition:
@@ -273,10 +303,11 @@ func convertEventToBacklogItemEvent(evt *events.Event, costFor func(tmuxUUID str
 	case events.BacklogChangeSessionAttached:
 		out.Event = &sessionv1.BacklogItemEvent_SessionAttached{
 			SessionAttached: &sessionv1.BacklogItemSessionAttachedEvent{
-				ItemId:     itemID,
-				SessionId:  payload.SessionID,
-				Item:       protoItem,
-				IsSnapshot: payload.IsSnapshot,
+				ItemId:         itemID,
+				SessionId:      payload.SessionID,
+				Item:           protoItem,
+				IsSnapshot:     payload.IsSnapshot,
+				ClaimantHostId: payload.ClaimantHostID,
 			},
 		}
 
@@ -291,6 +322,16 @@ func convertEventToBacklogItemEvent(evt *events.Event, costFor func(tmuxUUID str
 				UpdatedFields: payload.UpdatedFields,
 				Item:          protoItem,
 				IsSnapshot:    payload.IsSnapshot,
+			},
+		}
+
+	case events.BacklogChangeActivityNoteAdded:
+		// Deliberately never touches protoItem (ADR-002): this event's payload
+		// carries only the new note, never a full item snapshot.
+		out.Event = &sessionv1.BacklogItemEvent_ActivityNoteAdded{
+			ActivityNoteAdded: &sessionv1.BacklogItemActivityNoteAddedEvent{
+				ItemId: itemID,
+				Note:   activityNoteDataToProto(payload.ActivityNote),
 			},
 		}
 
@@ -323,11 +364,30 @@ func convertEventToBacklogItemEvent(evt *events.Event, costFor func(tmuxUUID str
 // BacklogItemEventPayload.Item may legitimately be nil (defensive only —
 // production publishers always populate it) so every call site here must
 // guard first.
-func backlogItemToProtoOrNil(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+func backlogItemToProtoOrNil(item *session.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	if item == nil {
 		return nil
 	}
-	return backlogItemToProto(item, costFor)
+	return backlogItemToProto(item, engine, costFor)
+}
+
+// activityNoteDataToProto converts a session.ActivityNoteData (the payload
+// carried by BacklogChangeActivityNoteAdded) to the wire
+// sessionv1.BacklogActivityNote. Nil-safe: BacklogItemChange.ActivityNote is
+// only guaranteed non-nil when Kind == ChangeActivityNoteAdded, but this is
+// called unconditionally from that switch case, so a defensive nil check
+// still guards against a caller bug rather than trusting the invariant.
+func activityNoteDataToProto(n *session.ActivityNoteData) *sessionv1.BacklogActivityNote {
+	if n == nil {
+		return nil
+	}
+	return &sessionv1.BacklogActivityNote{
+		Id:                 n.ID,
+		Message:            n.Message,
+		AuthorSessionUuid:  n.AuthorSessionUUID,
+		AuthorSessionTitle: n.AuthorSessionTitle,
+		CreatedAt:          timestamppb.New(n.CreatedAt),
+	}
 }
 
 // reviewVerdictDataToProto converts a session.ReviewVerdictData (the payload
@@ -343,6 +403,8 @@ func reviewVerdictDataToProto(v *session.ReviewVerdictData, occurredAt time.Time
 	p := &sessionv1.ReviewVerdict{
 		OverallOutcome: string(v.OverallOutcome),
 		Summary:        v.Summary,
+		// #nosec G115 -- a token count for one review's diff; bounded by realistic
+		// diff/LLM-context sizes, nowhere near int32 range.
 		DiffTokenCount: int32(v.DiffTokenCount),
 		DiffTruncated:  v.DiffTruncated,
 		OverrideBy:     v.OverrideBy,
@@ -358,6 +420,8 @@ func reviewVerdictDataToProto(v *session.ReviewVerdictData, occurredAt time.Time
 			p.PerCriterion = make([]*sessionv1.CriterionVerdict, len(cvs))
 			for i, cv := range cvs {
 				p.PerCriterion[i] = &sessionv1.CriterionVerdict{
+					// #nosec G115 -- index into one backlog item's acceptance-criteria
+					// list, bounded by realistic AC list length (a handful of entries).
 					CriterionIndex: int32(cv.CriterionIndex),
 					Outcome:        string(cv.Outcome),
 					Evidence:       cv.Evidence,

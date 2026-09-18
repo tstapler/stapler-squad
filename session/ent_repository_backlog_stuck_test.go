@@ -29,6 +29,7 @@ func createStuckTestItem(t *testing.T, repo *EntRepository, ctx context.Context,
 // a fresh MarkStuck call inserts exactly one row with first_detected_at/
 // last_checked_at/context set and notified_at/resolved_at left null.
 func TestMarkStuck_should_insertOpenRowWithNullNotified_When_NoExistingRow(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -55,6 +56,7 @@ func TestMarkStuck_should_insertOpenRowWithNullNotified_When_NoExistingRow(t *te
 // last_checked_at (and context), leaving first_detected_at unchanged — the
 // plain 2-column unique index guarantees no duplicate row is created.
 func TestMarkStuck_should_updateLastCheckedOnly_When_OpenRowExists(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -93,6 +95,7 @@ func TestMarkStuck_should_updateLastCheckedOnly_When_OpenRowExists(t *testing.T)
 // and notified_at are cleared and first_detected_at is reset to the new onset
 // time, never inserting a second row.
 func TestMarkStuck_should_reopenRowInPlace_When_ExistingRowResolved(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -139,6 +142,7 @@ func TestMarkStuck_should_reopenRowInPlace_When_ExistingRowResolved(t *testing.T
 // tick-shaped regression covering the same resolve-in-place invariant as
 // above: resolved, then recurs, must never produce a 2nd row.
 func TestMarkStuck_should_keepExactlyOneRow_When_ResolvedThenRecurs(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -164,6 +168,7 @@ func TestMarkStuck_should_keepExactlyOneRow_When_ResolvedThenRecurs(t *testing.T
 // verifies MarkStuck's best-effort status precondition: a mismatched
 // expectedStatus returns (false, nil) and writes nothing.
 func TestMarkStuck_should_returnAppliedFalse_When_StatusPreconditionMismatch(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -183,6 +188,7 @@ func TestMarkStuck_should_returnAppliedFalse_When_StatusPreconditionMismatch(t *
 // is a single atomic UPDATE ... WHERE resolved_at IS NULL, and the resolved
 // row drops out of FindOpenStuckStates.
 func TestResolveStuck_should_setResolvedAtOnce_When_RowOpen(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -208,6 +214,7 @@ func TestResolveStuck_should_setResolvedAtOnce_When_RowOpen(t *testing.T) {
 // a second ResolveStuck call is a no-op: affected-rows=0, no error, and the
 // original resolved_at timestamp is preserved unchanged.
 func TestResolveStuck_should_beNoOpAndNotOverwrite_When_AlreadyResolved(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -239,6 +246,7 @@ func TestResolveStuck_should_beNoOpAndNotOverwrite_When_AlreadyResolved(t *testi
 // and one resolved, only the 5 genuinely open+un-snoozed rows are returned,
 // each carrying item title/status/pr_number/pr_url.
 func TestFindOpenStuckStates_should_excludeResolvedAndSnoozed_When_Queried(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -310,6 +318,7 @@ func TestFindOpenStuckStates_should_excludeResolvedAndSnoozed_When_Queried(t *te
 // TestMarkStuckNotified_should_setNotifiedAt_When_Null verifies
 // MarkStuckNotified sets notified_at=now only where it was previously null.
 func TestMarkStuckNotified_should_setNotifiedAt_When_Null(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()

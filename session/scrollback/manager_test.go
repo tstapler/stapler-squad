@@ -2,6 +2,7 @@ package scrollback
 
 import (
 	"fmt"
+	"math"
 	"testing"
 )
 
@@ -31,6 +32,7 @@ func appendN(t *testing.T, m *ScrollbackManager, sessionID string, n int) {
 // ---- TestGetScrollbackBefore ----
 
 func TestGetScrollbackBefore_BeforeSeqZero_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	appendN(t, m, "sess1", 5)
 
@@ -44,6 +46,7 @@ func TestGetScrollbackBefore_BeforeSeqZero_ReturnsEmpty(t *testing.T) {
 }
 
 func TestGetScrollbackBefore_BeforeSeq1_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	// Only entry 1 exists; nothing is strictly before seq 1.
 	m := newTestManager(t)
 	appendN(t, m, "sess1", 1)
@@ -58,6 +61,7 @@ func TestGetScrollbackBefore_BeforeSeq1_ReturnsEmpty(t *testing.T) {
 }
 
 func TestGetScrollbackBefore_BeforeSeq5_Returns4Entries(t *testing.T) {
+	t.Parallel()
 	// 10 entries (seq 1–10); beforeSeq=5 → entries 1–4.
 	m := newTestManager(t)
 	appendN(t, m, "sess1", 10)
@@ -85,6 +89,7 @@ func TestGetScrollbackBefore_BeforeSeq5_Returns4Entries(t *testing.T) {
 }
 
 func TestGetScrollbackBefore_LimitIsRespected(t *testing.T) {
+	t.Parallel()
 	// 10 entries (seq 1–10); beforeSeq=10, limit=3 → last 3 before seq 10 = entries 7,8,9.
 	m := newTestManager(t)
 	appendN(t, m, "sess1", 10)
@@ -105,6 +110,7 @@ func TestGetScrollbackBefore_LimitIsRespected(t *testing.T) {
 }
 
 func TestGetScrollbackBefore_BeforeSeqExceedsAll_ReturnsAllUpToLimit(t *testing.T) {
+	t.Parallel()
 	// 5 entries; beforeSeq=100 (beyond all) with limit=10 → all 5 entries.
 	m := newTestManager(t)
 	appendN(t, m, "sess1", 5)
@@ -126,6 +132,7 @@ func TestGetScrollbackBefore_BeforeSeqExceedsAll_ReturnsAllUpToLimit(t *testing.
 }
 
 func TestGetScrollbackBefore_NoEntries_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	// Session has no scrollback at all.
 	m := newTestManager(t)
 
@@ -139,6 +146,7 @@ func TestGetScrollbackBefore_NoEntries_ReturnsEmpty(t *testing.T) {
 }
 
 func TestGetScrollbackBefore_LimitLargerThanAvailable(t *testing.T) {
+	t.Parallel()
 	// 3 entries; beforeSeq=10, limit=50 → all 3 entries.
 	m := newTestManager(t)
 	appendN(t, m, "sess1", 3)
@@ -149,5 +157,32 @@ func TestGetScrollbackBefore_LimitLargerThanAvailable(t *testing.T) {
 	}
 	if len(entries) != 3 {
 		t.Fatalf("expected 3 entries (all), got %d", len(entries))
+	}
+}
+
+// TestGetScrollbackBefore_BeforeSeqNearMaxUint64 is the regression test for
+// the gosec G115 fix: beforeSeq is a client-supplied pagination cursor
+// (uint64) used directly as GetScrollback's `limit` int argument, so a
+// value near math.MaxUint64 must be clamped to math.MaxInt before the
+// narrowing conversion instead of wrapping into a negative int limit (which
+// would either panic downstream or silently return zero entries instead of
+// the expected "everything before this cursor" result).
+func TestGetScrollbackBefore_BeforeSeqNearMaxUint64(t *testing.T) {
+	t.Parallel()
+	m := newTestManager(t)
+	appendN(t, m, "sess1", 5)
+
+	entries, err := m.GetScrollbackBefore("sess1", math.MaxUint64, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 5 {
+		t.Fatalf("expected all 5 entries for a beforeSeq near math.MaxUint64, got %d", len(entries))
+	}
+	for i, e := range entries {
+		expectedSeq := uint64(i + 1)
+		if e.Sequence != expectedSeq {
+			t.Errorf("entry[%d].Sequence: want %d, got %d", i, expectedSeq, e.Sequence)
+		}
 	}
 }

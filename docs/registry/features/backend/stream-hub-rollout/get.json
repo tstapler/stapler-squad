@@ -1,0 +1,15 @@
+{
+  "id": "stream-hub-rollout:get",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "GetStreamHubRolloutStatus",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/stream_hub_rollout_service.go",
+  "tested": true,
+  "testIds": [
+    "TestGetStreamHubRolloutStatus_DefaultsToNoRehearsalNoOverrides",
+    "TestGetStreamHubRolloutStatus_ReportsGlobalEnvVar"
+  ],
+  "lastModified": "2026-08-23T09:53:16.504851981-07:00"
+}

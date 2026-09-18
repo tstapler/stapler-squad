@@ -5,6 +5,7 @@ import (
 )
 
 func TestCheckDependencies_ReturnsDepsResult(t *testing.T) {
+	t.Parallel()
 	result := CheckDependencies()
 
 	// The function should always return a DepsResult (never panic).
@@ -30,6 +31,7 @@ func TestCheckDependencies_ReturnsDepsResult(t *testing.T) {
 }
 
 func TestCheckDependencies_IsIdempotent(t *testing.T) {
+	t.Parallel()
 	r1 := CheckDependencies()
 	r2 := CheckDependencies()
 
@@ -42,6 +44,7 @@ func TestCheckDependencies_IsIdempotent(t *testing.T) {
 }
 
 func TestCDPStatus_String(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		status CDPStatus
 		want   string
@@ -63,6 +66,7 @@ func TestCDPStatus_String(t *testing.T) {
 }
 
 func TestNew_ReturnsNoopWhenChromePathEmpty(t *testing.T) {
+	t.Parallel()
 	mgr := New(CDPConfig{SessionID: "test", ChromePath: ""})
 	if mgr == nil {
 		t.Fatal("New returned nil manager")

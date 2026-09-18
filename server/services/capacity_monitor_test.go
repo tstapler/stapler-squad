@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tokens"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 type mockInstancePoller struct {
@@ -64,6 +65,7 @@ func (m *mockLimitsClient) ModelContextWindow(model string) int {
 }
 
 func TestCapacityMonitor_PollAndEvaluate(t *testing.T) {
+	t.Parallel()
 	eventBus := events.NewEventBus(10)
 	poller := &mockInstancePoller{
 		instances: []*session.Instance{
@@ -157,6 +159,7 @@ func TestCapacityMonitor_PollAndEvaluate(t *testing.T) {
 }
 
 func TestCapacityMonitor_AutoTransition(t *testing.T) {
+	t.Parallel()
 	eventBus := events.NewEventBus(10)
 	poller := &mockInstancePoller{
 		instances: []*session.Instance{
@@ -216,12 +219,13 @@ func TestCapacityMonitor_AutoTransition(t *testing.T) {
 	monitor.poll(context.Background())
 
 	// Wait for background auto-transition goroutine to complete
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return switcher.GetTarget("test-session-auto") == "agy"
 	}, 2*time.Second, 10*time.Millisecond, "expected switcher to have target 'agy' for test-session-auto")
 }
 
 func TestCapacityMonitor_RateLimitWarning(t *testing.T) {
+	t.Parallel()
 	eventBus := events.NewEventBus(10)
 	poller := &mockInstancePoller{
 		instances: []*session.Instance{

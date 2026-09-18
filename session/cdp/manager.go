@@ -210,7 +210,7 @@ func (m *cdpStreamManager) doAllocate() error {
 		return fmt.Errorf("cdp: could not determine home dir: %w", err)
 	}
 	wrapperDir := filepath.Join(homeDir, ".stapler-squad", "cdp-bins", m.cfg.SessionID)
-	if err := os.MkdirAll(wrapperDir, 0o755); err != nil {
+	if err := os.MkdirAll(wrapperDir, 0o750); err != nil {
 		return fmt.Errorf("cdp: failed to create wrapper dir %s: %w", wrapperDir, err)
 	}
 
@@ -222,7 +222,7 @@ exec %s --remote-debugging-port="$CDP_PORT" "$@"
 
 	for _, binName := range chromeBinaries {
 		scriptPath := filepath.Join(wrapperDir, binName)
-		if err := os.WriteFile(scriptPath, []byte(wrapperContent), 0o755); err != nil {
+		if err := os.WriteFile(scriptPath, []byte(wrapperContent), 0o700); err != nil {
 			return fmt.Errorf("cdp: failed to write wrapper script %s: %w", scriptPath, err)
 		}
 	}

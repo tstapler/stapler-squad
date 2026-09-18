@@ -10,11 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestSessionRestartWithConversationContinuity verifies that sessions restart
 // with the --resume flag when Claude session data is available
 func TestSessionRestartWithConversationContinuity(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -326,6 +328,7 @@ func testLazyRecoveryRestart(t *testing.T) {
 // TestClaudeCommandBuilderIntegration verifies the integration of ClaudeCommandBuilder
 // with the instance lifecycle
 func TestClaudeCommandBuilderIntegration(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -573,6 +576,7 @@ func testSessionDataPersistence(t *testing.T) {
 
 // TestInstanceWithWorktreeAndClaudeSession verifies Claude sessions work with git worktrees
 func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -671,6 +675,7 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 // pane's foreground PID is unchanged — i.e. it hot-attached to the same
 // process rather than relaunching it.
 func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -681,7 +686,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 		Program:          "bash -c 'echo test session; exec bash'",
 		SessionType:      SessionTypeDirectory,
 		AutoYes:          true,
-		TmuxServerSocket: getTestTmuxSocket(t),
+		TmuxServerSocket: testTmuxSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -715,7 +720,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 	// never actually wait for the server) — this mirrors exactly what
 	// FromInstanceData's restore path does: construct a fresh object and
 	// immediately check aliveness on it.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		probe := tmux.NewTmuxSessionWithServerSocket(instance.Title, instance.Program, "staplersquad_", instance.TmuxServerSocket, tmux.WithRegistry(nil))
 		return probe.DoesSessionExist()
 	}, 2*time.Second, 10*time.Millisecond, "tmux server should stabilize so a freshly-constructed session object can see it")
@@ -757,6 +762,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 // program), comes back from LoadInstances() unstarted and near-instantly,
 // rather than blocking on a relaunch.
 func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -774,7 +780,7 @@ func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
 		Program:          "bash -c 'echo hi; exec bash'",
 		SessionType:      SessionTypeDirectory,
 		AutoYes:          true,
-		TmuxServerSocket: getTestTmuxSocket(t),
+		TmuxServerSocket: testTmuxSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {

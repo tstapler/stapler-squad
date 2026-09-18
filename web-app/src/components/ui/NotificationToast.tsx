@@ -162,6 +162,7 @@ export function NotificationToast({
     <div
       className={`${toast} ${notification.notificationType === "approval_needed" ? toastApproval : ""} ${isVisible ? visible : ""} ${isExiting ? exiting : ""} ${isMinimized ? minimized : ""}`}
       style={{ "--priority-color": getPriorityColor() } as React.CSSProperties}
+      data-testid="toast"
       role="alert"
       aria-live={notification.notificationType === "approval_needed" ? "assertive" : "polite"}
       onClick={isMinimized ? () => setIsMinimized(false) : undefined}

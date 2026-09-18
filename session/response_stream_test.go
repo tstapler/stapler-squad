@@ -7,11 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 func TestNewResponseStream(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -41,6 +43,7 @@ func TestNewResponseStream(t *testing.T) {
 }
 
 func TestNewResponseStreamWithBuffer(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -58,6 +61,7 @@ func TestNewResponseStreamWithBuffer(t *testing.T) {
 }
 
 func TestResponseStream_StartAndStop(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -98,6 +102,7 @@ func TestResponseStream_StartAndStop(t *testing.T) {
 }
 
 func TestResponseStream_DoubleStart(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -125,6 +130,7 @@ func TestResponseStream_DoubleStart(t *testing.T) {
 }
 
 func TestResponseStream_Subscribe(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -152,6 +158,7 @@ func TestResponseStream_Subscribe(t *testing.T) {
 }
 
 func TestResponseStream_DuplicateSubscribe(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -177,6 +184,7 @@ func TestResponseStream_DuplicateSubscribe(t *testing.T) {
 }
 
 func TestResponseStream_Unsubscribe(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -210,6 +218,7 @@ func TestResponseStream_Unsubscribe(t *testing.T) {
 }
 
 func TestResponseStream_UnsubscribeNonExistent(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -229,6 +238,7 @@ func TestResponseStream_UnsubscribeNonExistent(t *testing.T) {
 }
 
 func TestResponseStream_Streaming(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -306,7 +316,7 @@ func TestResponseStream_SetStableSessionID(t *testing.T) {
 	// Isolate config so the test doesn't depend on (or clobber) the developer's
 	// real ~/.stapler-squad config — and so capture_level is deterministically
 	// "summary" (DefaultConfig's default) regardless of ambient environment.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	spy := &escapeEventSpy{}
 	prev := analytics.GetGlobalEscapeWriter()
@@ -353,6 +363,7 @@ func TestResponseStream_SetStableSessionID(t *testing.T) {
 }
 
 func TestResponseStream_MultipleSubscribers(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -404,6 +415,7 @@ func TestResponseStream_MultipleSubscribers(t *testing.T) {
 }
 
 func TestResponseStream_GetSubscriberIDs(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -426,6 +438,7 @@ func TestResponseStream_GetSubscriberIDs(t *testing.T) {
 }
 
 func TestResponseStream_GetSubscriberInfo(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -458,6 +471,7 @@ func TestResponseStream_GetSubscriberInfo(t *testing.T) {
 }
 
 func TestResponseStream_SetBufferSize(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -477,6 +491,7 @@ func TestResponseStream_SetBufferSize(t *testing.T) {
 }
 
 func TestResponseStream_StopWithoutStart(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -496,6 +511,7 @@ func TestResponseStream_StopWithoutStart(t *testing.T) {
 }
 
 func TestResponseStream_ContextCancellation(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -541,6 +557,7 @@ func TestResponseStream_ContextCancellation(t *testing.T) {
 }
 
 func TestResponseStream_PTYClosed(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -583,6 +600,7 @@ func TestResponseStream_PTYClosed(t *testing.T) {
 }
 
 func TestResponseStream_NilPTYAccess(t *testing.T) {
+	t.Parallel()
 	rs := NewResponseStream("test-session", nil)
 
 	ctx := context.Background()
@@ -593,6 +611,7 @@ func TestResponseStream_NilPTYAccess(t *testing.T) {
 }
 
 func TestResponseStream_ClosedPTYAccess(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -629,6 +648,7 @@ func TestResponseStream_ClosedPTYAccess(t *testing.T) {
 }
 
 func TestResponseStream_StreamingWritesToBuffer(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -713,6 +733,7 @@ func drainChannel(ch <-chan ResponseChunk, timeout time.Duration) {
 }
 
 func TestResponseStream_HighThroughput(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -754,6 +775,7 @@ func TestResponseStream_HighThroughput(t *testing.T) {
 }
 
 func TestResponseStream_ReadTimeout(t *testing.T) {
+	t.Parallel()
 	// Create a PTY that will timeout on reads
 	reader, writer, err := mockPTY()
 	if err != nil {
@@ -791,6 +813,7 @@ func TestResponseStream_ReadTimeout(t *testing.T) {
 }
 
 func TestResponseStream_EmptyData(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -829,6 +852,7 @@ func TestResponseStream_EmptyData(t *testing.T) {
 }
 
 func TestResponseStream_ConcurrentSubscribeUnsubscribe(t *testing.T) {
+	t.Parallel()
 	reader, writer, err := mockPTY()
 	if err != nil {
 		t.Fatalf("Failed to create mock PTY: %v", err)
@@ -865,6 +889,7 @@ func TestResponseStream_ConcurrentSubscribeUnsubscribe(t *testing.T) {
 }
 
 func TestResponseStream_NilReaderInPTY(t *testing.T) {
+	t.Parallel()
 	buffer := NewCircularBuffer(1024)
 	ptyAccess := NewPTYAccess("test-session", nil, buffer) // nil PTY
 
@@ -888,6 +913,7 @@ func TestResponseStream_NilReaderInPTY(t *testing.T) {
 }
 
 func TestResponseStream_PTYReaderReturnsEOF(t *testing.T) {
+	t.Parallel()
 	// Use an already-closed pipe to simulate EOF
 	r, w, _ := os.Pipe()
 	r.Close()

@@ -1,0 +1,6 @@
+line1
+<<<<<<< HEAD
+ours
+=======
+theirs
+>>>>>>> origin/main

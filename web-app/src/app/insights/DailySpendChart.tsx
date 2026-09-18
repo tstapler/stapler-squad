@@ -13,6 +13,7 @@ import {
   CartesianGrid,
 } from "recharts";
 import { chartCard, chartTitle, chartWrap, emptyChart, unpricedFootnote } from "./DailySpendChart.css";
+import { fmtCost } from "./insightsFormatters";
 
 interface Props {
   daily: DailyTokenBucket[];
@@ -32,10 +33,6 @@ function toDataPoints(daily: DailyTokenBucket[]): DataPoint[] {
     const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
     return { date: label, cost: b.estimatedCostUsd, hasUnpriced: (b.unpricedModels?.length ?? 0) > 0 };
   });
-}
-
-function fmtDollar(v: number): string {
-  return `$${v.toFixed(3)}`;
 }
 
 export function DailySpendChart({ daily }: Props) {
@@ -71,14 +68,14 @@ export function DailySpendChart({ daily }: Props) {
               axisLine={false}
             />
             <YAxis
-              tickFormatter={fmtDollar}
+              tickFormatter={fmtCost}
               tick={{ fontSize: 11 }}
               tickLine={false}
               axisLine={false}
               width={56}
             />
             <Tooltip
-              formatter={(v: unknown) => [fmtDollar(Number(v)), "Cost"]}
+              formatter={(v: unknown) => [fmtCost(Number(v)), "Cost"]}
               contentStyle={{ fontSize: "12px" }}
             />
             <Line

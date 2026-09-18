@@ -97,6 +97,7 @@ func waitFor(t *testing.T, fn func() bool) {
 // --- Tests ---
 
 func TestRegistry_EventParsing_SessionCreated(t *testing.T) {
+	t.Parallel()
 	r, feed := newTestRegistry(t)
 
 	feed("%session-created $0 mysession")
@@ -105,6 +106,7 @@ func TestRegistry_EventParsing_SessionCreated(t *testing.T) {
 }
 
 func TestRegistry_EventParsing_SessionClosed(t *testing.T) {
+	t.Parallel()
 	r, feed := newTestRegistry(t)
 
 	// First create the session.
@@ -118,6 +120,7 @@ func TestRegistry_EventParsing_SessionClosed(t *testing.T) {
 }
 
 func TestRegistry_EventParsing_PaneExited_ClosesSubscriber(t *testing.T) {
+	t.Parallel()
 	r, feed := newTestRegistry(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -135,6 +138,7 @@ func TestRegistry_EventParsing_PaneExited_ClosesSubscriber(t *testing.T) {
 }
 
 func TestRegistry_EventParsing_UnknownEvents_NoPanel(t *testing.T) {
+	t.Parallel()
 	r, feed := newTestRegistry(t)
 	// These should be ignored without panic.
 	feed("%begin 1234 1")
@@ -147,6 +151,7 @@ func TestRegistry_EventParsing_UnknownEvents_NoPanel(t *testing.T) {
 }
 
 func TestRegistry_SubscribePaneExit_ContextCancel(t *testing.T) {
+	t.Parallel()
 	r, _ := newTestRegistry(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -164,6 +169,7 @@ func TestRegistry_SubscribePaneExit_ContextCancel(t *testing.T) {
 }
 
 func TestRegistry_Stop_ClosesAllSubscribers(t *testing.T) {
+	t.Parallel()
 	r := NewTmuxServerRegistry("")
 	r.healthMu.Lock()
 	r.healthy = true
@@ -186,6 +192,7 @@ func TestRegistry_Stop_ClosesAllSubscribers(t *testing.T) {
 }
 
 func TestRegistry_ConcurrentSubscriptions(t *testing.T) {
+	t.Parallel()
 	r, feed := newTestRegistry(t)
 
 	const numGoroutines = 10
@@ -221,6 +228,7 @@ func TestRegistry_ConcurrentSubscriptions(t *testing.T) {
 }
 
 func TestRegistry_SessionClosed_FiresPaneExit(t *testing.T) {
+	t.Parallel()
 	r, feed := newTestRegistry(t)
 
 	r.mu.Lock()

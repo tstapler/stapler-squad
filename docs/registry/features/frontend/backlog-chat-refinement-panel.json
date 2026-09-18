@@ -1,0 +1,17 @@
+{
+  "id": "backlog:chat-refinement-panel",
+  "type": "frontend",
+  "component": "ChatRefinementPanel",
+  "path": "web-app/src/components/backlog/ChatRefinementPanel.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "ChatRefinementPanel_should_CallOnSendWithTypedMessage_When_SendClicked",
+    "ChatRefinementPanel_should_AppendUserAndAssistantTurns_When_MessageSent",
+    "ChatRefinementPanel_should_DisableSend_When_InputIsEmpty",
+    "ChatRefinementPanel_should_ShowOnlyFirstClarifyingQuestion_When_MultipleQuestionsPending",
+    "ChatRefinementPanel_should_ShowNewQuestion_When_ParentReplacesClarifyingQuestionsPropAfterTriageCompletes",
+    "ChatRefinementPanel_should_ShowErrorMessage_When_OnSendRejects"
+  ],
+  "lastModified": "2026-08-13T00:00:00Z"
+}

@@ -16,6 +16,7 @@ import (
 // re-staged/re-committed by a later CommitChanges call, even though `git add .`
 // alone would happily restage anything already tracked.
 func TestCommitChanges_UntracksIgnoredPreTrackedFiles(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	// Simulate a stale branch that already committed the scaffolding file —
@@ -55,6 +56,7 @@ func TestCommitChanges_UntracksIgnoredPreTrackedFiles(t *testing.T) {
 // CommitChanges must skip the commit rather than erroring on git's "nothing to
 // commit".
 func TestCommitChanges_SkipsCommitGracefully_WhenOnlyScaffoldingStaged(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	headBefore := runGit(t, repoDir, "rev-parse", "HEAD")
 
@@ -74,6 +76,7 @@ func TestCommitChanges_SkipsCommitGracefully_WhenOnlyScaffoldingStaged(t *testin
 // staging guard stages a normal new file as usual, while a scaffolding file
 // added alongside it never ends up staged.
 func TestStageAllExceptScaffolding_LeavesUnrelatedTrackedFilesAlone(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "new-file.txt"), []byte("hello"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, ".backlog-context.md"), []byte("scaffolding"), 0o644))

@@ -37,12 +37,32 @@ type ClaudeRunner interface {
 var (
 	// ErrClaudeNotFound is returned when the claude binary is not in PATH.
 	ErrClaudeNotFound = errors.New("claude binary not found in PATH")
-	// ErrLLMError is returned when claude exits with code 1 (LLM-level error).
-	ErrLLMError = errors.New("claude LLM error (exit 1)")
-	// ErrUsageError is returned when claude exits with code 2 (bad usage / bad flags).
-	ErrUsageError = errors.New("claude usage error (exit 2)")
-	// ErrInterrupted is returned when claude exits with code 130 (SIGINT).
-	ErrInterrupted = errors.New("claude interrupted (exit 130)")
+	// ErrSubprocessStart is wrapped around the error returned when ClaudeRunner.Run
+	// itself fails to start the subprocess — os.Pipe() failing under fd exhaustion,
+	// or cmd.Start() failing under ENOMEM/ENOENT/EACCES — as opposed to the
+	// subprocess starting and later exiting non-zero. This happens before any
+	// StreamChunk is ever produced, so CallBlocking's raw return is always "" for
+	// this failure mode (there is nothing to capture). classifyHeadlessCallError
+	// (server/services/backlog_service_triage.go) matches this sentinel so the
+	// failure is bucketed as "subprocess_start_error" in logs instead of falling
+	// through to an undiagnosable "other".
+	ErrSubprocessStart = errors.New("headless subprocess failed to start")
+	// ErrPoolSaturated is returned when a call never got a shot at running the LLM
+	// subprocess: it waited for a concurrency-pool slot until maxQueueWait
+	// (caller.go) elapsed, without the caller's own ctx expiring first. Distinct
+	// from a genuine subprocess timeout so classifyHeadlessCallError
+	// (server/services/backlog_service_triage.go) can bucket "starved behind
+	// other concurrent calls" separately from "ran and hung" — see BUG-093.
+	ErrPoolSaturated = errors.New("headless pool: timed out waiting for a concurrency slot")
+	// ErrIdleTimeout is returned when a stream-json subprocess produced no new
+	// output line for idleTimeout (pool.go) — a real progress signal, distinct
+	// from the caller's own ctx deadline, so classifyHeadlessCallError can bucket
+	// "genuinely stalled" separately from "hit the ceiling while still active."
+	ErrIdleTimeout = errors.New("headless pool: no output for the idle timeout window")
+	// ErrOutputCapExceeded is returned when a first-call subprocess's cumulative
+	// stream-json output exceeds maxFirstCallOutputBytes (pool.go) — a memory
+	// safeguard independent of idleTimeout for a long-running, non-idle stream.
+	ErrOutputCapExceeded = errors.New("headless pool: cumulative output exceeded the byte cap")
 )
 
 // ProcessRunner implements ClaudeRunner using executor.StartProcess.
@@ -52,19 +72,29 @@ type ProcessRunner struct {
 	allowedTools    string // optional --allowedTools value; empty = not passed
 	permissionMode  string // optional --permission-mode value; empty = not passed
 	disallowedTools string // optional --disallowedTools value; empty = not passed
+	// interpreter, when non-empty, is exec'd instead of claudeBin, with claudeBin
+	// prepended to argv. Opt-in, test-only — see NewShellWrappedProcessRunnerForTesting
+	// in fake_runner.go. Zero value for every production ProcessRunner.
+	interpreter string
 }
 
 // WithWorkDir returns a copy of this ProcessRunner that sets the subprocess working
 // directory to workDir, preserving any existing allowedTools/permissionMode/
 // disallowedTools. Used by CallBlocking for per-call directory override.
 func (r *ProcessRunner) WithWorkDir(workDir string) *ProcessRunner {
-	return &ProcessRunner{claudeBin: r.claudeBin, workDir: workDir, allowedTools: r.allowedTools, permissionMode: r.permissionMode, disallowedTools: r.disallowedTools}
+	cp := *r
+	cp.workDir = workDir
+	return &cp
 }
 
 // WithToolAccess returns a copy of this ProcessRunner with allowedTools/permissionMode/
 // disallowedTools set, preserving any existing workDir.
 func (r *ProcessRunner) WithToolAccess(allowedTools, permissionMode, disallowedTools string) *ProcessRunner {
-	return &ProcessRunner{claudeBin: r.claudeBin, workDir: r.workDir, allowedTools: allowedTools, permissionMode: permissionMode, disallowedTools: disallowedTools}
+	cp := *r
+	cp.allowedTools = allowedTools
+	cp.permissionMode = permissionMode
+	cp.disallowedTools = disallowedTools
+	return &cp
 }
 
 // toolAccessArgs returns the --allowedTools/--permission-mode/--disallowedTools flag
@@ -126,7 +156,12 @@ func (r *ProcessRunner) Run(ctx context.Context, args []string, stdin io.Reader)
 	if stdin != nil {
 		opts = append(opts, executor.WithProcessStdin(stdin))
 	}
-	proc, err := executor.StartProcess(ctx, r.claudeBin, args, opts...)
+	name := r.claudeBin
+	if r.interpreter != "" {
+		name = r.interpreter
+		args = append([]string{r.claudeBin}, args...)
+	}
+	proc, err := executor.StartProcess(ctx, name, args, opts...)
 	if err != nil {
 		return nil, nil, err
 	}

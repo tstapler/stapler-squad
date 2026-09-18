@@ -2,8 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -18,14 +16,9 @@ import (
 func setupRQSFixture(t *testing.T) (rqs *ReviewQueueService, poller *session.ReviewQueuePoller, storage *session.Storage, cleanup func()) {
 	t.Helper()
 
-	tmpDir, err := os.MkdirTemp("", "rqs-test-*")
-	require.NoError(t, err)
+	repo := session.NewTestEntRepository(t)
 
-	dbPath := fmt.Sprintf("%s/sessions.db", tmpDir)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
-
-	storage, err = session.NewStorageWithRepository(repo)
+	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 
 	bus := events.NewEventBus(16)
@@ -38,8 +31,6 @@ func setupRQSFixture(t *testing.T) (rqs *ReviewQueueService, poller *session.Rev
 
 	cleanup = func() {
 		bus.Close()
-		repo.Close()
-		os.RemoveAll(tmpDir)
 	}
 	return
 }
@@ -49,6 +40,7 @@ func setupRQSFixture(t *testing.T) (rqs *ReviewQueueService, poller *session.Rev
 // copy from LoadInstances. Replacing poller instances discards live state (PTY handles,
 // controllers, etc.) on every instance, not just the one being acknowledged.
 func TestAcknowledgeSession_UpdatesLiveInstance(t *testing.T) {
+	t.Parallel()
 	rqs, poller, storage, cleanup := setupRQSFixture(t)
 	t.Cleanup(cleanup)
 
@@ -89,6 +81,7 @@ func TestAcknowledgeSession_UpdatesLiveInstance(t *testing.T) {
 // TestAcknowledgeSession_UnknownSession verifies that AcknowledgeSession succeeds
 // gracefully when the session ID is not in storage (external session / corrupt ID).
 func TestAcknowledgeSession_UnknownSession(t *testing.T) {
+	t.Parallel()
 	rqs, _, _, cleanup := setupRQSFixture(t)
 	t.Cleanup(cleanup)
 
@@ -101,6 +94,7 @@ func TestAcknowledgeSession_UnknownSession(t *testing.T) {
 
 // TestAcknowledgeSession_EmptyID verifies that a missing session ID returns InvalidArgument.
 func TestAcknowledgeSession_EmptyID(t *testing.T) {
+	t.Parallel()
 	rqs, _, _, cleanup := setupRQSFixture(t)
 	t.Cleanup(cleanup)
 

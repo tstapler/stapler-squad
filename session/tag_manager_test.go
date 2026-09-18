@@ -6,6 +6,7 @@ import (
 )
 
 func TestTagManager_Add(t *testing.T) {
+	t.Parallel()
 	tags := []string{}
 	tm := NewTagManager(&tags)
 
@@ -53,6 +54,7 @@ func TestTagManager_Add(t *testing.T) {
 }
 
 func TestTagManager_Remove(t *testing.T) {
+	t.Parallel()
 	tags := []string{"frontend", "backend", "urgent"}
 	tm := NewTagManager(&tags)
 
@@ -80,6 +82,7 @@ func TestTagManager_Remove(t *testing.T) {
 }
 
 func TestTagManager_Has(t *testing.T) {
+	t.Parallel()
 	tags := []string{"frontend", "backend"}
 	tm := NewTagManager(&tags)
 
@@ -95,6 +98,7 @@ func TestTagManager_Has(t *testing.T) {
 }
 
 func TestTagManager_All(t *testing.T) {
+	t.Parallel()
 	tags := []string{"frontend", "backend"}
 	tm := NewTagManager(&tags)
 
@@ -111,6 +115,7 @@ func TestTagManager_All(t *testing.T) {
 }
 
 func TestTagManager_Set(t *testing.T) {
+	t.Parallel()
 	tags := []string{"old-tag"}
 	tm := NewTagManager(&tags)
 
@@ -153,6 +158,7 @@ func TestTagManager_Set(t *testing.T) {
 }
 
 func TestTagManager_BackingSliceMutation(t *testing.T) {
+	t.Parallel()
 	// Verify that mutations through TagManager are visible via the backing slice
 	tags := []string{}
 	tm := NewTagManager(&tags)

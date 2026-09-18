@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -26,6 +27,7 @@ import (
 // pipeline_mode entirely (req.Msg.PipelineMode == nil) must never clobber the
 // item's existing stored mode back to "".
 func TestUpdateBacklogItem_should_PreserveExistingPipelineMode_When_FieldOmittedFromRequest(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	quick := "quick"
@@ -52,6 +54,7 @@ func TestUpdateBacklogItem_should_PreserveExistingPipelineMode_When_FieldOmitted
 // (req.Msg.PipelineMode != nil && *req.Msg.PipelineMode == "") is a real reset
 // request, distinct from "omitted", and must be honored.
 func TestUpdateBacklogItem_should_ResetPipelineModeToEmptyString_When_FieldExplicitlySetToEmptyString(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	quick := "quick"
@@ -75,6 +78,7 @@ func TestUpdateBacklogItem_should_ResetPipelineModeToEmptyString_When_FieldExpli
 // CreateBacklogItem persists a non-default pipeline_mode supplied on the request
 // (Story 1.4.4).
 func TestCreateBacklogItem_should_SetPipelineModeFromRequest_When_FieldPresent(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	quick := "quick"
@@ -93,7 +97,7 @@ func TestCreateBacklogItem_should_SetPipelineModeFromRequest_When_FieldPresent(t
 // is the positive case for the opt-in default: with the flag on and no explicit
 // pipeline_mode on the request, a brand-new item defaults to "sdd" instead of "".
 func TestCreateBacklogItem_should_DefaultPipelineModeToSDD_When_FlagEnabledAndFieldOmitted(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(sddDefaultPipelineFlagName, true))
 	svc := newBacklogService(t)
 
@@ -110,7 +114,7 @@ func TestCreateBacklogItem_should_DefaultPipelineModeToSDD_When_FlagEnabledAndFi
 // created with no explicit pipeline_mode still gets "" — zero behavior change
 // for every item until an operator deliberately opts in.
 func TestCreateBacklogItem_should_NotDefaultPipelineMode_When_FlagDisabled(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	svc := newBacklogService(t)
 
 	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -126,7 +130,7 @@ func TestCreateBacklogItem_should_NotDefaultPipelineMode_When_FlagDisabled(t *te
 // explicit empty string, which must still mean "flat default pipeline", not
 // "unset, please apply the sdd default".
 func TestCreateBacklogItem_should_RespectExplicitPipelineMode_When_FlagEnabledButFieldSet(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(sddDefaultPipelineFlagName, true))
 	svc := newBacklogService(t)
 
@@ -155,6 +159,7 @@ func TestCreateBacklogItem_should_RespectExplicitPipelineMode_When_FlagEnabledBu
 // default-behavior guard: an item created without an explicit category must
 // come back uncategorized ("").
 func TestCreateBacklogItem_should_DefaultCategoryToEmpty_When_FieldOmitted(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -168,6 +173,7 @@ func TestCreateBacklogItem_should_DefaultCategoryToEmpty_When_FieldOmitted(t *te
 // TestCreateBacklogItem_should_PersistCategory_When_FieldSet is the round-trip
 // case for an explicitly-set, valid category.
 func TestCreateBacklogItem_should_PersistCategory_When_FieldSet(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	bugfix := "bugfix"
@@ -185,6 +191,7 @@ func TestCreateBacklogItem_should_PersistCategory_When_FieldSet(t *testing.T) {
 // (plus empty) with CodeInvalidArgument, mirroring how other enum-shaped
 // fields are validated in this service.
 func TestCreateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	bogus := "not-a-real-category"
@@ -201,6 +208,7 @@ func TestCreateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvide
 // category entirely (req.Msg.Category == nil) must never clobber the item's
 // existing stored category back to "".
 func TestUpdateBacklogItem_should_LeaveCategoryUntouched_When_FieldOmitted(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	bugfix := "bugfix"
@@ -225,6 +233,7 @@ func TestUpdateBacklogItem_should_LeaveCategoryUntouched_When_FieldOmitted(t *te
 // TestUpdateBacklogItem_should_UpdateCategory_When_FieldSet proves the other
 // half of presence-gating: an explicitly-present category value is honored.
 func TestUpdateBacklogItem_should_UpdateCategory_When_FieldSet(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -245,6 +254,7 @@ func TestUpdateBacklogItem_should_UpdateCategory_When_FieldSet(t *testing.T) {
 // TestUpdateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided
 // mirrors the create-side validation guard for the update path.
 func TestUpdateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -267,6 +277,7 @@ func TestUpdateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvide
 // default-behavior guard for the opt-in AutoCreatePR policy — an item created
 // without the flag must not have it silently enabled.
 func TestCreateBacklogItem_should_DefaultAutoCreatePrToFalse_When_FieldOmitted(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -281,6 +292,7 @@ func TestCreateBacklogItem_should_DefaultAutoCreatePrToFalse_When_FieldOmitted(t
 // UpdateBacklogItem round-trips it (unconditional-bool-wrap pattern, same as
 // SkipReviewGate/SkipPlanning/AutoSpawnSession).
 func TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -428,6 +440,84 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 		"the item must stay in pr_pending — where ReconcilePRPending can still see and fix it — not silently reach done")
 }
 
+// TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_ReviewToReadyBlockedByPassVerdict
+// is the RPC-layer regression test for AC5: a review→ready (and pr_pending→ready)
+// transition blocked by TransitionGuard's PASS-verdict-without-override guard must
+// map to connect.CodeFailedPrecondition — a business-rule gate the caller can react
+// to (e.g. by supplying override_reason) — not connect.CodeInvalidArgument, which
+// would incorrectly signal a malformed request.
+func TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_ReviewToReadyBlockedByPassVerdict(t *testing.T) {
+	t.Parallel()
+	for _, from := range []session.BacklogStatus{session.BacklogStatusReview, session.BacklogStatusPRPending} {
+		t.Run(string(from), func(t *testing.T) {
+			t.Parallel()
+			svc := newBacklogService(t)
+			storage := svc.storage
+
+			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+				Title:  "item with a passing review verdict",
+				Status: string(from),
+			})
+			require.NoError(t, err)
+
+			_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+				ItemID:      item.ID,
+				SessionUUID: "review-session-pass-verdict",
+				SessionRole: session.SessionRoleReview,
+			}, session.ReviewVerdictData{
+				OverallOutcome: session.ReviewVerdictPass,
+			})
+			require.NoError(t, err)
+
+			_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+				ItemId:       item.ID,
+				TargetStatus: string(session.BacklogStatusReady),
+			}))
+			require.Error(t, err, "a PASS-verdict item must not reach ready without an override_reason")
+			assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err),
+				"a business-rule guard failure must map to FailedPrecondition, not InvalidArgument")
+
+			fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
+			require.NoError(t, err)
+			assert.Equal(t, string(from), fetched.Status, "the blocked transition must not change the item's status")
+		})
+	}
+}
+
+// TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_ReviewToReadyBlockedByPassVerdict.
+// AC2 (RPC-layer): the same transition succeeds once override_reason is supplied.
+func TestTransitionBacklogItemStatus_should_Allow_When_ReviewToReadyHasOverrideReason(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+	storage := svc.storage
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item with a passing review verdict and an override",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session-pass-verdict-override",
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewVerdictPass,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:         item.ID,
+		TargetStatus:   string(session.BacklogStatusReady),
+		OverrideReason: "manually reviewed, shipping without the automated gate",
+	}))
+	require.NoError(t, err, "override_reason must let a PASS-verdict item proceed to ready")
+
+	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReady), fetched.Status)
+}
+
 // TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleBaseSeed
 // is the direct regression test for the 2026-07-21 false-done bug found via the
 // archived-items audit: ItemSession.LastCommitSha is only ever seeded once at
@@ -513,6 +603,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleB
 // "done" must now archive every work-role session for the item via the injected
 // SessionStopper (mirrors cleanupItemWorktrees, which already runs at this call site).
 func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemReachesDone(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
@@ -545,6 +636,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemReaches
 // TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchived mirrors
 // the done case above for the "archived" terminal status.
 func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchived(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
@@ -577,6 +669,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchive
 // guards against over-eager archival: a non-terminal transition (e.g. ready->in_progress)
 // must not touch any work session.
 func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_TransitionIsNotTerminal(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
@@ -605,6 +698,191 @@ func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_Transiti
 	assert.Empty(t, stopper.archivedUUIDs, "a non-terminal transition must not archive any work session")
 }
 
+// ─── live-session teardown on backward-to-ready transition (Epic 1.2) ─────────
+//
+// pitfalls.md §1: nothing stopped a live work/review session when an item was
+// sent backward to ready, letting it keep running against a now-superseded
+// plan and later block the next spawn via hasActiveWorkSession.
+
+// TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToReady
+// is table-driven over all four live source statuses, so a regression that
+// narrows the teardown's `if` condition (e.g. to just review) is caught.
+func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToReady(t *testing.T) {
+	t.Parallel()
+	for _, from := range []session.BacklogStatus{
+		session.BacklogStatusInProgress, session.BacklogStatusReview, session.BacklogStatusPRPending, session.BacklogStatusDone,
+	} {
+		t.Run(string(from), func(t *testing.T) {
+			t.Parallel()
+			storage := createTestStorage(t)
+			svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+			stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+			svc.SetSessionStopper(stopper)
+
+			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+				Title:  "item sent back to ready",
+				Status: string(from),
+			})
+			require.NoError(t, err)
+
+			_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+				ItemID:      item.ID,
+				SessionUUID: "work-live-1",
+				SessionRole: session.SessionRoleWork,
+			})
+			require.NoError(t, err)
+
+			_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+				ItemId:         item.ID,
+				TargetStatus:   string(session.BacklogStatusReady),
+				OverrideReason: "missed the mobile layout, redo with touch targets",
+			}))
+			require.NoError(t, err)
+
+			assert.Contains(t, stopper.stoppedUUIDs, "work-live-1",
+				"a backward transition to ready must stop the item's live work session")
+
+			fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
+			require.NoError(t, err)
+			assert.Equal(t, string(session.BacklogStatusReady), fetched.Status)
+		})
+	}
+}
+
+// TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdictPresentAndOverrideReasonSet
+// proves the teardown fires correctly even when the real ErrVerdictClearRequiredForReady
+// guard is in play, not just in a case engineered to avoid it — the exact shape
+// handleSendBackWithFeedback produces in production (feedback text doubles as
+// override_reason). The complementary "fails without an override reason" half of
+// this guard is already covered by
+// TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_ReviewToReadyBlockedByPassVerdict.
+func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdictPresentAndOverrideReasonSet(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item with a passing review verdict and a live work session",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session-pass-verdict",
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewVerdictPass,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "work-live-1",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:         item.ID,
+		TargetStatus:   string(session.BacklogStatusReady),
+		OverrideReason: "missed the mobile layout, redo with touch targets",
+	}))
+	require.NoError(t, err, "override_reason must let a PASS-verdict item proceed to ready")
+
+	assert.Contains(t, stopper.stoppedUUIDs, "work-live-1",
+		"the guard-bypass path and the teardown path must compose correctly")
+}
+
+// TestTransitionBacklogItemStatus_should_NotStopLiveWorkSession_When_TransitionIsNotBackwardToReady
+// guards against over-eager teardown: a forward or unrelated transition must not
+// touch any live work session (mirrors
+// TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_TransitionIsNotTerminal
+// for the new teardown block).
+func TestTransitionBacklogItemStatus_should_NotStopLiveWorkSession_When_TransitionIsNotBackwardToReady(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "item moving forward from ready",
+		Status:       string(session.BacklogStatusReady),
+		SkipPlanning: true,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "work-forward-1",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       item.ID,
+		TargetStatus: "in_progress",
+	}))
+	require.NoError(t, err)
+
+	assert.NotContains(t, stopper.stoppedUUIDs, "work-forward-1",
+		"a forward or unrelated transition must not trigger the live-session teardown")
+}
+
+// TestTransitionBacklogItemStatus_should_StillTransition_When_LiveSessionTeardownFails
+// is the pre-mortem P1 #2 regression: a teardown failure
+// (sessionStopper.StopSessionByUUID erroring) must never block the transition, and
+// the session row must still be marked ended so it doesn't stay stuck "live" in the
+// DB — best-effort semantics, since blocking the send-back on a teardown failure
+// would be strictly worse for the operator than a best-effort continue.
+func TestTransitionBacklogItemStatus_should_StillTransition_When_LiveSessionTeardownFails(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}, stopperErr: errors.New("tmux teardown failed")}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item whose live session teardown fails",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "work-live-1",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:         item.ID,
+		TargetStatus:   string(session.BacklogStatusReady),
+		OverrideReason: "missed the mobile layout, redo with touch targets",
+	}))
+	require.NoError(t, err, "a teardown failure must not block the transition")
+
+	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReady), fetched.Status)
+
+	assert.Contains(t, stopper.stoppedUUIDs, "work-live-1", "the stop must still be attempted")
+
+	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, err)
+	var fetchedIS *session.ItemSessionSummary
+	for i := range sessions {
+		if sessions[i].ID == is.ID {
+			fetchedIS = &sessions[i]
+		}
+	}
+	require.NotNil(t, fetchedIS, "expected the created ItemSession to still exist")
+	assert.NotNil(t, fetchedIS.EndedAt, "the session row must still be marked ended even though the tmux teardown failed")
+}
+
 // ─── SubmitManualReview PASS→done guard (2026-07-18 finding) ──────────────────
 //
 // docs/tasks/backlog-feature-improvement.md's 2026-07-18 update: SubmitManualReview
@@ -622,6 +900,7 @@ func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_Transiti
 // still auto-transition straight to done on a PASS manual review, matching the
 // pre-existing behavior this guard must not regress.
 func TestSubmitManualReview_PassNoUnshippedCode_TransitionsToDone(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -712,6 +991,7 @@ func TestSubmitManualReview_PassWithUnshippedCode_StaysInReviewForShipPR(t *test
 // TestUpdateBacklogItem_should_RejectPrFields_When_OnlyOneOfPairSet is the
 // presence-gating guard: pr_url/pr_number must be set together or not at all.
 func TestUpdateBacklogItem_should_RejectPrFields_When_OnlyOneOfPairSet(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -739,6 +1019,7 @@ func TestUpdateBacklogItem_should_RejectPrFields_When_OnlyOneOfPairSet(t *testin
 // TestUpdateBacklogItem_should_RejectPrUrl_When_NotRecognizableGitHubPRURL covers
 // a malformed/non-PR URL — rejected before any storage write.
 func TestUpdateBacklogItem_should_RejectPrUrl_When_NotRecognizableGitHubPRURL(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -760,6 +1041,7 @@ func TestUpdateBacklogItem_should_RejectPrUrl_When_NotRecognizableGitHubPRURL(t 
 // TestUpdateBacklogItem_should_RejectPrNumber_When_MismatchedAgainstUrl covers a
 // typo'd pr_number that disagrees with the PR number embedded in pr_url.
 func TestUpdateBacklogItem_should_RejectPrNumber_When_MismatchedAgainstUrl(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -783,6 +1065,7 @@ func TestUpdateBacklogItem_should_RejectPrNumber_When_MismatchedAgainstUrl(t *te
 // stuck in review, with no live linked session — the item moves to
 // pr_pending and a success notification fires (criterion 8).
 func TestUpdateBacklogItem_should_AssociatePrAndTransitionToPrPending_When_ItemInReview(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	bus := events.NewEventBus(10)
@@ -823,6 +1106,7 @@ func TestUpdateBacklogItem_should_AssociatePrAndTransitionToPrPending_When_ItemI
 // item outside "review" must fail clearly, not with a generic CAS error, and
 // must not corrupt state.
 func TestUpdateBacklogItem_should_RejectPrAssociation_When_ItemNotInReview(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
@@ -855,6 +1139,7 @@ func TestUpdateBacklogItem_should_RejectPrAssociation_When_ItemNotInReview(t *te
 // verifies a manual override (override_reason set) leaves a visible audit
 // trail — a progress note and a notification — rather than a silent write.
 func TestTransitionBacklogItemStatus_should_AppendNoteAndNotify_When_OverrideReasonSet(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	bus := events.NewEventBus(10)
@@ -895,6 +1180,7 @@ func TestTransitionBacklogItemStatus_should_AppendNoteAndNotify_When_OverrideRea
 // negative case: a routine (non-override) automated transition must not gain
 // new notification noise — only manual overrides do.
 func TestTransitionBacklogItemStatus_should_NotNotify_When_NoOverrideReasonSet(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	bus := events.NewEventBus(10)
@@ -932,6 +1218,7 @@ func TestTransitionBacklogItemStatus_should_NotNotify_When_NoOverrideReasonSet(t
 // transition on the same item must not silently clobber it — the loser gets a
 // clean CAS failure.
 func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverrideRaces(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
@@ -1032,6 +1319,7 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 // built from the wrong field, or an off-by-one in from/to status, would fail
 // even a single straight-line call.
 func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
@@ -1061,4 +1349,226 @@ func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testin
 	require.Len(t, final.StatusEvents, 1)
 	assert.Equal(t, string(session.BacklogStatusReview), final.StatusEvents[0].FromStatus)
 	assert.Equal(t, string(session.BacklogStatusInProgress), final.StatusEvents[0].ToStatus)
+}
+
+// disabledEdgeWorkflowEngine wraps the default WorkflowEngine but forces
+// CanTransition to return false for exactly one from/to edge regardless of
+// what the static validTransitions map says, simulating a
+// ConfiguredWorkflowEngine (Epic 2.3) whose custom transition graph has had
+// that edge removed. Shared by Story 2.1.1/2.1.2 (Epic 2.1) regression tests
+// across this file and backlog_service_sync_test.go — both call sites must
+// consult the injected engine, not session.CanTransitionBacklog directly.
+type disabledEdgeWorkflowEngine struct {
+	session.WorkflowEngine
+	deniedFrom, deniedTo session.BacklogStatus
+}
+
+func (e disabledEdgeWorkflowEngine) CanTransition(from, to session.BacklogStatus, fallback *session.StageConfigSnapshot) bool {
+	if from == e.deniedFrom && to == e.deniedTo {
+		return false
+	}
+	return e.WorkflowEngine.CanTransition(from, to, fallback)
+}
+
+// alwaysAllowWorkflowEngine allows every transition, including ones the
+// static validTransitions map forbids. Used to prove a call site reads the
+// injected engine rather than session.CanTransitionBacklog (Story 2.1.1).
+type alwaysAllowWorkflowEngine struct{}
+
+func (alwaysAllowWorkflowEngine) CanTransition(_, _ session.BacklogStatus, _ *session.StageConfigSnapshot) bool {
+	return true
+}
+
+func (alwaysAllowWorkflowEngine) PendingGates(_ session.BacklogItemTransitionInput, _ session.BacklogStatus, _ *session.StageConfigSnapshot) ([]session.GateStatus, error) {
+	return nil, nil
+}
+
+func (alwaysAllowWorkflowEngine) ValidateGates(_ session.BacklogItemTransitionInput, _ session.BacklogStatus, _ *session.StageConfigSnapshot) error {
+	return nil
+}
+
+func (alwaysAllowWorkflowEngine) AllowedTransitions(_ session.BacklogStatus, _ *session.StageConfigSnapshot) []session.BacklogStatus {
+	return nil
+}
+
+// TestOverrideVerdict_should_RefuseTransition_When_ConfiguredWorkflowEngineHasDisabledTheEdge
+// is the Story 2.1.1 regression test: OverrideVerdict must refuse a
+// transition the injected engine refuses, even though the static
+// domain.CanTransitionBacklog map would allow review->done.
+func TestOverrideVerdict_should_RefuseTransition_When_ConfiguredWorkflowEngineHasDisabledTheEdge(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	engine := disabledEdgeWorkflowEngine{
+		WorkflowEngine: session.NewDefaultWorkflowEngine(),
+		deniedFrom:     session.BacklogStatusReview,
+		deniedTo:       session.BacklogStatusDone,
+	}
+	svc := NewBacklogService(storage, nil, nil, engine, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item with review->done disabled by the configured engine",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session-disabled-edge",
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.OverrideVerdict(t.Context(), connect.NewRequest(&sessionv1.OverrideVerdictRequest{
+		ItemSessionId:  is.ID,
+		ToStatus:       string(session.BacklogStatusDone),
+		OverrideReason: "should be refused by the configured engine",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+
+	final, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), final.Status, "item must stay at its original status when the engine refuses the transition")
+}
+
+// TestOverrideVerdict_should_AllowTransition_When_StaticMapWouldRefuseButEngineAllows
+// is the inverse of the above: it confirms the call site reads
+// s.engine.CanTransition and not session.CanTransitionBacklog directly, by
+// using a transition (review->queued) the static map forbids but the
+// injected engine allows.
+func TestOverrideVerdict_should_AllowTransition_When_StaticMapWouldRefuseButEngineAllows(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	require.False(t, session.CanTransitionBacklog(session.BacklogStatusReview, session.BacklogStatusQueued),
+		"precondition: the static map must forbid review->queued for this test to prove anything")
+	svc := NewBacklogService(storage, nil, nil, alwaysAllowWorkflowEngine{}, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item exercising an engine-only-allowed transition",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session-engine-allows",
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.OverrideVerdict(t.Context(), connect.NewRequest(&sessionv1.OverrideVerdictRequest{
+		ItemSessionId:  is.ID,
+		ToStatus:       string(session.BacklogStatusQueued),
+		OverrideReason: "allowed only because the injected engine permits it",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusQueued), resp.Msg.Item.Status)
+}
+
+// ─── AddBacklogItemDependency RPC handler ──────────────────────────────────────
+
+// TestAddBacklogItemDependency_should_PersistEdge_When_ItemsExistAndNoCycle is
+// the RPC-level success path: given two real items and no cycle, the handler
+// must persist the dependency and return the reloaded (blocked) item.
+func TestAddBacklogItemDependency_should_PersistEdge_When_ItemsExistAndNoCycle(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+
+	blocker, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "blocker item",
+	}))
+	require.NoError(t, err)
+	blocked, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "blocked item",
+	}))
+	require.NoError(t, err)
+
+	resp, err := svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
+		BlockerItemId: blocker.Msg.Item.Id,
+		BlockedItemId: blocked.Msg.Item.Id,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Item)
+	assert.Equal(t, blocked.Msg.Item.Id, resp.Msg.Item.Id)
+}
+
+// TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_SelfDependency
+// covers the handler's translation of session.ErrDependencyCycle (self-edges
+// included) into connect.CodeInvalidArgument.
+func TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_SelfDependency(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+
+	item, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "solo item",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
+		BlockerItemId: item.Msg.Item.Id,
+		BlockedItemId: item.Msg.Item.Id,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_EdgeWouldCloseCycle
+// covers the handler's translation of a would-close-a-cycle error (distinct
+// from the self-dependency case above) into connect.CodeInvalidArgument.
+func TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_EdgeWouldCloseCycle(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+
+	a, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{Title: "a"}))
+	require.NoError(t, err)
+	b, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{Title: "b"}))
+	require.NoError(t, err)
+
+	_, err = svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
+		BlockerItemId: a.Msg.Item.Id,
+		BlockedItemId: b.Msg.Item.Id,
+	}))
+	require.NoError(t, err)
+
+	// The reverse edge would close a two-node cycle.
+	_, err = svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
+		BlockerItemId: b.Msg.Item.Id,
+		BlockedItemId: a.Msg.Item.Id,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerItemMissing
+// covers the handler's translation of session.ErrNotFound into
+// connect.CodeNotFound for a blocker id that does not exist.
+func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerItemMissing(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+
+	blocked, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "blocked item",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
+		BlockerItemId: "00000000-0000-0000-0000-000000000000",
+		BlockedItemId: blocked.Msg.Item.Id,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+}
+
+// TestAddBacklogItemDependency_should_ReturnUnavailable_When_StorageNotWired
+// covers the handler's storage-nil guard.
+func TestAddBacklogItemDependency_should_ReturnUnavailable_When_StorageNotWired(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogServiceNilStorage()
+
+	_, err := svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
+		BlockerItemId: "some-blocker",
+		BlockedItemId: "some-blocked",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 }

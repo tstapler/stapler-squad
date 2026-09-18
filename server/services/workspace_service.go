@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/vc"
 	"github.com/tstapler/stapler-squad/session/vcs"
 
@@ -142,7 +143,7 @@ func (ws *WorkspaceService) GetVCSStatus(
 		return nil, err
 	}
 
-	workDir := instance.Workspace().EffectivePath
+	workDir := instance.Workspace().ExistingDir
 	if workDir == "" {
 		return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
 			Error: "session has no working directory",
@@ -153,8 +154,14 @@ func (ws *WorkspaceService) GetVCSStatus(
 	if cached, ok := ws.vcsStatusCache.Load(workDir); ok {
 		entry := cached.(vcsStatusCacheEntry)
 		if time.Since(entry.cachedAt) < vcsStatusCacheTTL {
+			// Shallow-copy before touching StatusAsOf — entry.status is a
+			// pointer shared with every other concurrent cache hit (and with
+			// the map itself); writing through it directly races with those
+			// readers instead of only reading from them.
+			respStatus := *entry.status
+			respStatus.StatusAsOf = entry.cachedAt
 			return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
-				VcsStatus: vcsStatusToProto(entry.status),
+				VcsStatus: vcsStatusToProto(&respStatus),
 			}), nil
 		}
 	}
@@ -180,7 +187,36 @@ func (ws *WorkspaceService) GetVCSStatus(
 		}), nil
 	}
 
-	ws.vcsStatusCache.Store(workDir, vcsStatusCacheEntry{status: status, cachedAt: time.Now()})
+	// Commits/AggregateDiffStat are computed here (not inside GitProvider.GetStatus)
+	// because they need the session's recorded base SHA, an Instance-level concept the
+	// vc.VCSProvider abstraction doesn't have access to. Jujutsu has no equivalent base
+	// SHA concept, so this only runs for git sessions.
+	if _, isGit := provider.(*vc.GitProvider); isGit {
+		if baseSHA := instance.GetBaseCommitSHA(); baseSHA != "" {
+			if headSHA, headErr := git.GetHeadCommitSHA(workDir); headErr != nil {
+				log.Debug("GetVCSStatus: failed to resolve HEAD commit SHA", "workDir", workDir, "err", headErr)
+				status.CommitsUnavailable = true
+			} else if headSHA != baseSHA {
+				commits, truncated, listErr := git.ListShippedCommits(ctx, workDir, baseSHA, headSHA)
+				if listErr == nil {
+					status.Commits = commits
+					status.CommitsTruncated = truncated
+				} else {
+					log.Debug("GetVCSStatus: failed to list shipped commits", "workDir", workDir, "err", listErr)
+					status.CommitsUnavailable = true
+				}
+				if diffStat, diffErr := git.DiffStatBetween(ctx, workDir, baseSHA, headSHA); diffErr == nil {
+					status.AggregateDiffStat = &diffStat
+				} else {
+					log.Debug("GetVCSStatus: failed to compute aggregate diff stat", "workDir", workDir, "err", diffErr)
+				}
+			}
+		}
+	}
+
+	now := time.Now()
+	status.StatusAsOf = now
+	ws.vcsStatusCache.Store(workDir, vcsStatusCacheEntry{status: status, cachedAt: now})
 
 	return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
 		VcsStatus: vcsStatusToProto(status),
@@ -216,7 +252,9 @@ func (ws *WorkspaceService) GetWorkspaceInfo(
 		CurrentBookmark:       vcsInfo.CurrentBookmark,
 		CurrentRevision:       vcsInfo.CurrentRevision,
 		HasUncommittedChanges: vcsInfo.HasUncommittedChanges,
-		ModifiedFileCount:     int32(vcsInfo.ModifiedFileCount),
+		// #nosec G115 -- ModifiedFileCount is a working-tree file count for one
+		// local repo, far below int32 range.
+		ModifiedFileCount: int32(vcsInfo.ModifiedFileCount),
 	}
 
 	switch vcsInfo.VCSType {
@@ -323,7 +361,10 @@ func (ws *WorkspaceService) SwitchWorkspace(
 		return nil, err
 	}
 
-	preWorkDir := instance.Workspace().EffectivePath
+	// ExistingDir despite the "never compare it" rule on Workspace: this keys the
+	// VCS status cache, and that status is genuinely a property of the directory
+	// git actually ran in, not of which session asked.
+	preWorkDir := instance.Workspace().ExistingDir
 
 	var switchType session.WorkspaceSwitchType
 	switch req.Msg.SwitchType {
@@ -417,11 +458,14 @@ func vcsStatusToProto(status *vc.VCSStatus) *sessionv1.VCSStatus {
 	}
 
 	protoStatus := &sessionv1.VCSStatus{
-		Type:         vcsTypeToProto(status.Type),
-		Branch:       status.Branch,
-		HeadCommit:   status.HeadCommit,
-		Description:  status.Description,
-		AheadBy:      int32(status.AheadBy),
+		Type:        vcsTypeToProto(status.Type),
+		Branch:      status.Branch,
+		HeadCommit:  status.HeadCommit,
+		Description: status.Description,
+		// #nosec G115 -- AheadBy/BehindBy are git/jj ahead-behind commit
+		// counts for one local branch, far below int32 range.
+		AheadBy: int32(status.AheadBy),
+		// #nosec G115 -- see AheadBy above.
 		BehindBy:     int32(status.BehindBy),
 		Upstream:     status.Upstream,
 		HasStaged:    status.HasStaged,
@@ -442,6 +486,29 @@ func vcsStatusToProto(status *vc.VCSStatus) *sessionv1.VCSStatus {
 	}
 	for _, f := range status.ConflictFiles {
 		protoStatus.ConflictFiles = append(protoStatus.ConflictFiles, fileChangeToProto(f))
+	}
+
+	for _, c := range status.Commits {
+		commit := &sessionv1.ShippedCommit{Sha: c.SHA, Summary: c.Summary, AuthorName: c.AuthorName}
+		if !c.AuthorAt.IsZero() {
+			commit.AuthoredAt = timestamppb.New(c.AuthorAt)
+		}
+		protoStatus.Commits = append(protoStatus.Commits, commit)
+	}
+	protoStatus.CommitsTruncated = status.CommitsTruncated
+	protoStatus.CommitsUnavailable = status.CommitsUnavailable
+	if status.AggregateDiffStat != nil {
+		protoStatus.AggregateDiffStat = &sessionv1.AggregateDiffStat{
+			// #nosec G115 -- diff stats for one local commit range, far below int32 range.
+			FilesChanged: int32(status.AggregateDiffStat.FilesChanged),
+			// #nosec G115 -- see FilesChanged above.
+			Additions: int32(status.AggregateDiffStat.Additions),
+			// #nosec G115 -- see FilesChanged above.
+			Deletions: int32(status.AggregateDiffStat.Deletions),
+		}
+	}
+	if !status.StatusAsOf.IsZero() {
+		protoStatus.StatusAsOf = timestamppb.New(status.StatusAsOf)
 	}
 
 	return protoStatus
@@ -483,11 +550,13 @@ func fileStatusToProto(s vc.FileStatus) sessionv1.FileStatus {
 
 func fileChangeToProto(f vc.FileChange) *sessionv1.FileChange {
 	return &sessionv1.FileChange{
-		Path:      f.Path,
-		Status:    fileStatusToProto(f.Status),
-		IsStaged:  f.IsStaged,
-		OldPath:   f.OldPath,
+		Path:     f.Path,
+		Status:   fileStatusToProto(f.Status),
+		IsStaged: f.IsStaged,
+		OldPath:  f.OldPath,
+		// #nosec G115 -- per-file diff line counts, far below int32 range.
 		Additions: int32(f.Additions),
+		// #nosec G115 -- see Additions above.
 		Deletions: int32(f.Deletions),
 	}
 }
@@ -533,7 +602,8 @@ func (ws *WorkspaceService) ListBranches(
 		if time.Since(cached.cachedAt) < branchCacheTTL {
 			branches := filterBranches(cached.branches, filter, maxResults)
 			return connect.NewResponse(&sessionv1.ListBranchesResponse{
-				Branches:   branches,
+				Branches: branches,
+				// #nosec G115 -- len(branches) is a git ref count for one local repo, far below int32 range.
 				TotalCount: int32(len(branches)),
 				Truncated:  false,
 			}), nil
@@ -588,7 +658,8 @@ func (ws *WorkspaceService) ListBranches(
 
 	branches := filterBranches(all, filter, maxResults)
 	return connect.NewResponse(&sessionv1.ListBranchesResponse{
-		Branches:   branches,
+		Branches: branches,
+		// #nosec G115 -- len(branches) is a git ref count for one local repo, far below int32 range.
 		TotalCount: int32(len(branches)),
 		Truncated:  truncated,
 	}), nil

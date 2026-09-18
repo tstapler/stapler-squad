@@ -29,6 +29,8 @@ func DetectedStatusToProto(s DetectedStatus) sessionv1.DetectedStatus {
 		return sessionv1.DetectedStatus_DETECTED_STATUS_READY
 	case StatusWaitingForAgent:
 		return sessionv1.DetectedStatus_DETECTED_STATUS_WAITING_FOR_AGENT
+	case StatusCompacting:
+		return sessionv1.DetectedStatus_DETECTED_STATUS_COMPACTING
 	default:
 		return sessionv1.DetectedStatus_DETECTED_STATUS_UNSPECIFIED
 	}
@@ -45,6 +47,8 @@ func DetectedStatusToSubStatus(s DetectedStatus) sessionv1.SubStatus {
 	switch s {
 	case StatusWaitingForAgent:
 		return sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT
+	case StatusCompacting:
+		return sessionv1.SubStatus_SUB_STATUS_COMPACTING
 	case StatusProcessing, StatusExecuting:
 		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
 	case StatusNeedsApproval:

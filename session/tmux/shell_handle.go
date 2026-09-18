@@ -134,8 +134,9 @@ func (h *ShellTmuxHandle) Resize(cols, rows int) error {
 	if err := h.cmdExec.Run(cmd); err != nil {
 		return fmt.Errorf("ShellTmuxHandle.Resize: %w", err)
 	}
-	h.lastKnownCols.Store(int32(cols))
-	h.lastKnownRows.Store(int32(rows))
+	// Widened from the already-clamped uint16 dimension, so this always fits int32.
+	h.lastKnownCols.Store(int32(ClampWinsizeDim(cols)))
+	h.lastKnownRows.Store(int32(ClampWinsizeDim(rows)))
 	return nil
 }
 

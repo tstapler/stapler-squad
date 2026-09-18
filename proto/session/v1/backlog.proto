@@ -60,6 +60,17 @@ message TriageResult {
   // feedback is the free-text feedback that produced this iteration, empty
   // for the initial (non-refined) triage run.
   string feedback = 6;
+  // chat_history is the running transcript for chat-originated creation/
+  // refinement (CreateBacklogItemFromChat). Empty for triage runs triggered
+  // via the structured form/refine-feedback path.
+  repeated ChatTriageTurn chat_history = 7;
+}
+
+// ChatTriageTurn is a single message in a chat-originated triage conversation.
+message ChatTriageTurn {
+  string role = 1; // "user" or "assistant"
+  string text = 2;
+  google.protobuf.Timestamp created_at = 3;
 }
 
 // ItemSession records a session that was spawned or attached to a backlog item.
@@ -81,6 +92,32 @@ message ItemSession {
   string worktree_path = 15;
   string pipeline_mode_snapshot = 16;
   string pipeline_mode_snapshot_hash = 17;
+  // end_reason is set alongside ended_at for a headless (triage/review) call:
+  // classifyHeadlessCallError's bucket ("shutdown", "timeout", "subprocess_start_error",
+  // "claude_not_found", "other"), or empty for a successful end. Already captured
+  // durably (session.ItemSessionSummary.EndReason) but previously never surfaced
+  // over the wire.
+  string end_reason = 18;
+  // failure_capture_path is the absolute path to a durable file holding the
+  // size-capped raw stdout of a headless triage/review call that errored or
+  // whose result failed to parse — see session.WriteHeadlessFailureCapture. Empty
+  // when the call succeeded and parsed cleanly, or capture itself failed.
+  string failure_capture_path = 19;
+  // claimant_host_id identifies the physical stapler-squad process/host that
+  // created this ItemSession — either by claiming the item (DequeueNextQueuedItems
+  // -> SpawnSessionFromItem) or by attaching an externally-created session
+  // (AttachSessionToItem, where it is the attaching process's own identity, not
+  // anything embedded in the attached session). A random UUID generated once and
+  // persisted in that process's own config (Config.GetOrCreateClaimantHostID),
+  // stable across restarts of the same process/config directory and distinct
+  // across different hosts or STAPLER_SQUAD_INSTANCE-namespaced config dirs on the
+  // same machine. Purely descriptive provenance — never read by
+  // TransitionBacklogItemStatus's CAS guard. Do not confuse with
+  // STAPLER_SQUAD_INSTANCE (namespaces on-disk state on a single machine) or
+  // session/contexts.go's CloudContext.InstanceID (a cloud provider's instance
+  // identifier, not populated for local/dev sessions). Empty for ItemSession rows
+  // created before this field existed.
+  string claimant_host_id = 20;
 }
 
 // BacklogStatusEvent records a single status transition for a backlog item.
@@ -95,6 +132,24 @@ message BacklogStatusEvent {
   // captured durably (session.BacklogStatusEventData.Note) but previously never
   // surfaced over the wire — the "why" behind reviewer/system decisions.
   optional string note = 6;
+  // stage_name_snapshot is the destination stage's human-readable name,
+  // frozen at the moment of this transition (Epic 2.5's StageConfigSnapshot
+  // discipline — session.BacklogStatusEventData.StageNameSnapshot) so
+  // item-detail history keeps rendering the original name after that
+  // BacklogStage row is later renamed or deleted.
+  optional string stage_name_snapshot = 7;
+  // allowed_transitions_snapshot is the destination stage's legal outgoing
+  // transition slugs, frozen at the moment of this transition (ADR-004's
+  // StageConfigSnapshot discipline, sibling to stage_name_snapshot —
+  // session.BacklogStatusEventData.AllowedTransitionsSnapshot) so
+  // CanTransition/AllowedTransitions/PendingGates can keep answering per this
+  // item's captured graph after that stage's transitions are later edited or
+  // the stage itself is deleted. Empty when no snapshot was captured (a row
+  // written before this field existed, or no matching BacklogStage row was
+  // found at write time) — distinct from a captured-but-empty snapshot, which
+  // this repeated field cannot represent, matching proto3's usual
+  // empty-vs-absent limitation for repeated fields.
+  repeated string allowed_transitions_snapshot = 8;
 }
 
 // BacklogProgressNote records a single report_progress call against one of a
@@ -106,6 +161,20 @@ message BacklogProgressNote {
   int32 criterion_index = 2;
   string note = 3;
   string status = 4; // "pending", "in_progress", "done", "fail"
+  google.protobuf.Timestamp created_at = 5;
+}
+
+// BacklogActivityNote records a single free-form, timestamped, attributed
+// note posted via post_backlog_update — the ungated sibling log to
+// BacklogProgressNote (see ADR-001: sibling table, not extending
+// BacklogProgressNote). Unlike BacklogProgressNote, it is never role/item-
+// gated and carries no criterion index or status: it's an informal comment,
+// not an official progress or review signal.
+message BacklogActivityNote {
+  string id = 1;
+  string message = 2;
+  string author_session_uuid = 3;
+  string author_session_title = 4;
   google.protobuf.Timestamp created_at = 5;
 }
 
@@ -159,6 +228,29 @@ message BacklogItem {
   // a manual status override may choose from. The frontend must render this
   // list verbatim rather than re-encoding the transition graph client-side.
   repeated string allowed_transitions = 32;
+  // plan_rejection_reason is the free-text reason from the most recent
+  // RejectPlan call. Cleared on ApprovePlan, on the next TriggerTriage
+  // completion, and on backward transition to idea/refining. Empty means
+  // "no outstanding rejection".
+  string plan_rejection_reason = 33;
+  google.protobuf.Timestamp plan_rejected_at = 34;
+  // activity_notes is the ungated post_backlog_update log — eagerly loaded
+  // alongside progress_notes (see GetBacklogItem).
+  repeated BacklogActivityNote activity_notes = 35;
+  // public_id is the externally-shareable identifier (a "bl_"-prefixed
+  // BacklogItemID), used by ssq:// deep links and the UI's Copy Link/Copy ID
+  // affordances instead of the internal UUID `id`. Empty for rows that
+  // predate the public_id backfill — callers must fall back to `id`.
+  string public_id = 36;
+  // base_branch is an explicit opt-in override for the branch new worktrees
+  // (triage's isolated worktree, and the eventual work session) fork from.
+  // Unset means the default: origin's default branch tip, not repo_path's
+  // own ambient HEAD (see git.ResolveWorktreeBaseCommit).
+  optional string base_branch = 37;
+  // auto_approve_plan, when true, approves a plan TriggerTriage produces
+  // automatically (mirroring a manual ApprovePlan call) once its artifacts
+  // exist on disk — no manual "Approve Plan" click required. Off by default.
+  bool auto_approve_plan = 38;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -204,6 +296,87 @@ message PipelineMode {
   string content_hash = 17;
 }
 
+// LivenessDefinition is the proto representation of session.LivenessDefinition
+// (Epic 1.1 of backlog-custom-workflow-stages) — a named,
+// (stage_slug, pipeline_mode)-addressed override for how long a given backlog
+// stage may go without progress before a reconcile* stuck-detection sweep
+// treats an item as stuck. Mirrors PipelineMode's CRUD shape. No UI consumes
+// this in Phase 1 — operator-callable only, via the 5 RPCs below.
+message LivenessDefinition {
+  string id = 1;
+  string stage_slug = 2;
+  // pipeline_mode is unset for a mode-less row (applies to all pipeline
+  // modes absent a more specific override) — see CachingLivenessEngine's
+  // (stage, mode) -> (stage, nil) fallback.
+  optional string pipeline_mode = 3;
+  // kind is one of "duration_budget", "heartbeat", "cycle_frequency" —
+  // mirrors session.LivenessKind's 3 string values exactly.
+  string kind = 4;
+  // Shape A ("duration_budget") fields, in milliseconds. Zero when kind is
+  // not "duration_budget".
+  int64 expected_duration_ms = 5;
+  int64 staleness_margin_ms = 6;
+  // Shape B ("heartbeat") field, in milliseconds. Zero when kind is not
+  // "heartbeat".
+  int64 max_no_progress_duration_ms = 7;
+  // Shape C ("cycle_frequency") fields. Zero when kind is not
+  // "cycle_frequency".
+  int32 cycle_threshold = 8;
+  int64 cycle_lookback_ms = 9;
+  bool enabled = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+// BacklogStage is the proto representation of session.StageDefinition / the
+// persisted BacklogStage row (Epic 2.2's schema) — one node in the workflow
+// graph, built-in or operator-defined. Epic 2.7's 5-RPC CRUD surface below is
+// the settings UI's (Epic 2.8) only way to create/edit these.
+message BacklogStage {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  string description = 4;
+  bool is_entry = 5;
+  bool is_terminal = 6;
+  bool enabled = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+// StageTransition is the proto representation of one (from_stage, to_stage)
+// edge in the workflow graph (Epic 2.2's schema), with its attached gates
+// eager-loaded.
+message StageTransition {
+  string id = 1;
+  string from_stage_slug = 2;
+  string to_stage_slug = 3;
+  bool enabled = 4;
+  repeated TransitionGate gates = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+// TransitionGate is the proto representation of one gate attached to a
+// StageTransition (Epic 2.2's schema). config carries kind-specific
+// key/value pairs — validated server-side by session.ParseGateConfig against
+// kind's allowlisted field set (and, for kind="custom", Story 2.4.4's
+// pre-registered skill allowlist) at save time (Task 2.7.2g), never
+// interpreted as an arbitrary command.
+message TransitionGate {
+  string id = 1;
+  string transition_id = 2;
+  // kind is one of session.GateKind's 4 values: "human_approval",
+  // "automated_review", "structural", "custom".
+  string kind = 3;
+  map<string, string> config = 4;
+  bool stateful = 5;
+  int32 order_index = 6;
+  bool enabled = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
 // SourceSyncEvent records the result of a single sync run for an ItemSource.
 message SourceSyncEvent {
   string id = 1;
@@ -234,11 +407,59 @@ message CreateBacklogItemRequest {
   // category is a coarse classification (bugfix/feature/chore/refactor).
   // Unset means uncategorized.
   optional string category = 13;
+  // base_branch is an explicit opt-in override for the branch new worktrees
+  // fork from — see BacklogItem.base_branch. Unset means the default
+  // (origin's default branch tip), not repo_path's own ambient HEAD.
+  optional string base_branch = 14;
+  // auto_approve_plan — see BacklogItem.auto_approve_plan. Unset/false means
+  // the manual "Approve Plan" click is still required.
+  bool auto_approve_plan = 15;
 }
 
 message CreateBacklogItemResponse {
   BacklogItem item = 1;
   bool triage_triggered = 2;
+}
+
+// CreateBacklogItemFromChatRequest carries a single free-text chat turn.
+// When existing_item_id is empty, this is the first turn of a new
+// chat-originated item (delegates to CreateBacklogItem internally). When
+// existing_item_id is set, this is a refinement turn on an existing item
+// (delegates to TriggerTriage with feedback = message).
+message CreateBacklogItemFromChatRequest {
+  string existing_item_id = 1;
+  string message = 2;
+}
+
+message CreateBacklogItemFromChatResponse {
+  BacklogItem item = 1;
+  bool triage_triggered = 2;
+}
+
+// ParseBacklogItemIntentRequest carries the omnibar's free-text message.
+message ParseBacklogItemIntentRequest {
+  string message = 1;
+  // repo_path optionally narrows title/AC phrasing to a known repo. Unset is
+  // fine — the LLM parses from the message text alone.
+  string repo_path = 2;
+}
+
+// ParsedBacklogItemDraft is the LLM's structured read of a free-text message,
+// meant to be reviewed/edited by the user, never created verbatim.
+message ParsedBacklogItemDraft {
+  string title = 1;
+  string description = 2;
+  repeated string acceptance_criteria = 3;
+  // confidence is 0..1; a low value is a hint for the review UI to flag the
+  // draft for closer scrutiny, not a threshold that blocks creation.
+  float confidence = 4;
+}
+
+message ParseBacklogItemIntentResponse {
+  ParsedBacklogItemDraft draft = 1;
+  // error is set (with draft empty) when parsing failed — the caller should
+  // fall back to CreateBacklogItemFromChat rather than surface a hard error.
+  string error = 2;
 }
 
 message GetBacklogItemRequest {
@@ -305,14 +526,6 @@ message BacklogItemShipStatus {
   // values. Populated only when a durable snapshot exists (nil/zero-value
   // otherwise).
   bool snapshot_capture_failed = 18;
-}
-
-// ShippedCommit is one commit in a BacklogItemShipStatus's shipped range.
-message ShippedCommit {
-  string sha = 1;
-  string summary = 2; // first line of the commit message
-  string author_name = 3;
-  google.protobuf.Timestamp authored_at = 4;
 }
 
 // ShippedFileStat is one file's durable per-file diff-stat snapshot,
@@ -387,6 +600,14 @@ message UpdateBacklogItemRequest {
   // (requires the item to currently be in "review" status).
   optional string pr_url = 17;
   optional int32 pr_number = 18;
+  // base_branch is presence-gated like category: unset leaves the item's
+  // stored override untouched, a non-nil pointer (including one pointing at
+  // "") explicitly sets/clears it. See BacklogItem.base_branch.
+  optional string base_branch = 19;
+  // auto_approve_plan — see BacklogItem.auto_approve_plan. Unconditionally
+  // set on every UpdateBacklogItem call, same as skip_review_gate/
+  // skip_planning/auto_spawn_session above (not presence-gated).
+  bool auto_approve_plan = 20;
 }
 
 message UpdateBacklogItemResponse {
@@ -401,11 +622,31 @@ message ArchiveBacklogItemResponse {
   BacklogItem item = 1;
 }
 
+message UnarchiveBacklogItemRequest {
+  string item_id = 1;
+}
+
+message UnarchiveBacklogItemResponse {
+  BacklogItem item = 1;
+}
+
 message DeleteBacklogItemRequest {
   string item_id = 1;
 }
 
 message DeleteBacklogItemResponse {}
+
+message AddBacklogItemDependencyRequest {
+  // Item that must reach a resolved status (done or archived) before
+  // blocked_item_id becomes eligible for dequeue/start.
+  string blocker_item_id = 1;
+  // Dependent item, gated until blocker_item_id resolves.
+  string blocked_item_id = 2;
+}
+
+message AddBacklogItemDependencyResponse {
+  BacklogItem item = 1;
+}
 
 message TransitionBacklogItemStatusRequest {
   string item_id = 1;
@@ -455,6 +696,12 @@ message TriggerTriageRequest {
   // completed triage result instead of a fresh triage run. Requires a prior
   // completed triage result to exist.
   string feedback = 2;
+  // chat_mode, when true alongside a non-empty feedback, tightens the
+  // refinement prompt to ask at most one clarifying question per turn
+  // instead of a batch of questions — set by CreateBacklogItemFromChat for
+  // chat-originated refinement turns. Ignored for a fresh triage run
+  // (feedback empty).
+  bool chat_mode = 3;
 }
 
 message TriggerTriageResponse {
@@ -466,6 +713,19 @@ message ApprovePlanRequest {
 }
 
 message ApprovePlanResponse {
+  BacklogItem item = 1;
+}
+
+message RejectPlanRequest {
+  string item_id = 1;
+  // reason is required free-text feedback explaining what should change,
+  // mirroring TriggerTriageRequest.feedback's refinement-input pattern.
+  // RejectPlan does not itself trigger regeneration — see
+  // project_plans/plan-approval-ux/decisions/ADR-002.
+  string reason = 2;
+}
+
+message RejectPlanResponse {
   BacklogItem item = 1;
 }
 
@@ -503,6 +763,23 @@ message TriggerShipPRResponse {
   // pr_url is the GitHub PR URL extracted from the one-shot run's output, or
   // empty if the run completed without producing a detectable PR URL.
   string pr_url = 1;
+}
+
+// DispatchToJulesRequest deliberately carries no egress_acknowledged field
+// (google-jules-integration pre-mortem P1 #3, mirrors
+// services.JulesDispatchRequest's doc comment): consent is a durable,
+// server-side fact only ConfirmEgressConsent can write, never a
+// caller-supplied boolean this RPC could trust.
+message DispatchToJulesRequest {
+  string item_id = 1;
+  // branch is required — MVP Jules dispatch only ever starts from a branch
+  // already pushed to GitHub, never an unpushed local one.
+  string branch = 2;
+  string prompt = 3;
+}
+
+message DispatchToJulesResponse {
+  ItemSession item_session = 1;
 }
 
 message TriggerSyncRequest {
@@ -640,6 +917,282 @@ message ListPipelineModesResponse {
   repeated PipelineMode items = 1;
 }
 
+message CreateLivenessDefinitionRequest {
+  string stage_slug = 1;
+  // pipeline_mode unset means a mode-less row (applies to all pipeline modes).
+  optional string pipeline_mode = 2;
+  string kind = 3;
+  int64 expected_duration_ms = 4;
+  int64 staleness_margin_ms = 5;
+  int64 max_no_progress_duration_ms = 6;
+  int32 cycle_threshold = 7;
+  int64 cycle_lookback_ms = 8;
+  bool enabled = 9;
+}
+
+message CreateLivenessDefinitionResponse {
+  LivenessDefinition item = 1;
+}
+
+message UpdateLivenessDefinitionRequest {
+  string id = 1;
+  optional int64 expected_duration_ms = 2;
+  optional int64 staleness_margin_ms = 3;
+  optional int64 max_no_progress_duration_ms = 4;
+  optional int32 cycle_threshold = 5;
+  optional int64 cycle_lookback_ms = 6;
+  optional bool enabled = 7;
+}
+
+message UpdateLivenessDefinitionResponse {
+  LivenessDefinition item = 1;
+}
+
+message DeleteLivenessDefinitionRequest {
+  string id = 1;
+}
+
+message DeleteLivenessDefinitionResponse {}
+
+message GetLivenessDefinitionRequest {
+  string stage_slug = 1;
+  optional string pipeline_mode = 2;
+}
+
+message GetLivenessDefinitionResponse {
+  LivenessDefinition item = 1;
+}
+
+message ListLivenessDefinitionsRequest {}
+
+message ListLivenessDefinitionsResponse {
+  repeated LivenessDefinition items = 1;
+}
+
+// ============================================================================
+// Stage / Transition / Gate CRUD (Epic 2.7 of backlog-custom-workflow-stages)
+// ============================================================================
+
+message CreateStageRequest {
+  string slug = 1;
+  string name = 2;
+  string description = 3;
+  bool is_entry = 4;
+  bool is_terminal = 5;
+  bool enabled = 6;
+}
+
+message CreateStageResponse {
+  BacklogStage item = 1;
+}
+
+message UpdateStageRequest {
+  string id = 1;
+  optional string name = 2;
+  optional string description = 3;
+  optional bool is_entry = 4;
+  optional bool is_terminal = 5;
+  optional bool enabled = 6;
+}
+
+message UpdateStageResponse {
+  BacklogStage item = 1;
+}
+
+message DeleteStageRequest {
+  string id = 1;
+  // force bypasses the live-item-count guard (Story 2.7.1's "disable, don't
+  // delete" acceptance criterion) — the settings UI never sets this; it
+  // exists for a deliberate operator override.
+  bool force = 2;
+}
+
+message DeleteStageResponse {}
+
+message GetStageRequest {
+  string slug = 1;
+}
+
+message GetStageResponse {
+  BacklogStage item = 1;
+}
+
+message ListStagesRequest {}
+
+message ListStagesResponse {
+  repeated BacklogStage items = 1;
+}
+
+message CreateStageTransitionRequest {
+  string from_stage_slug = 1;
+  string to_stage_slug = 2;
+  bool enabled = 3;
+}
+
+message CreateStageTransitionResponse {
+  StageTransition item = 1;
+  // warnings carries Epic 2.6's ValidateGraph non-blocking warning strings
+  // (e.g. a gate-free cycle) computed against the graph as it stands after
+  // this create — never a rejection, just an operator-facing heads-up.
+  repeated string warnings = 2;
+}
+
+message UpdateStageTransitionRequest {
+  string id = 1;
+  optional bool enabled = 2;
+}
+
+message UpdateStageTransitionResponse {
+  StageTransition item = 1;
+  // warnings — see CreateStageTransitionResponse.warnings.
+  repeated string warnings = 2;
+}
+
+message DeleteStageTransitionRequest {
+  string id = 1;
+}
+
+message DeleteStageTransitionResponse {}
+
+message GetStageTransitionRequest {
+  string id = 1;
+}
+
+message GetStageTransitionResponse {
+  StageTransition item = 1;
+}
+
+message ListStageTransitionsRequest {
+  // from_stage_slug, when set, restricts results to edges outgoing from this
+  // stage. Empty means all transitions.
+  optional string from_stage_slug = 1;
+}
+
+message ListStageTransitionsResponse {
+  repeated StageTransition items = 1;
+}
+
+message CreateTransitionGateRequest {
+  string transition_id = 1;
+  string kind = 2;
+  map<string, string> config = 3;
+  bool stateful = 4;
+  int32 order_index = 5;
+  bool enabled = 6;
+}
+
+message CreateTransitionGateResponse {
+  TransitionGate item = 1;
+}
+
+// UpdateTransitionGateRequest always resubmits kind+config together (rather
+// than each independently optional): session.ParseGateConfig validates a
+// config payload against its kind atomically, so a partial (kind XOR config)
+// update could silently leave a stale/invalid pairing on the row between the
+// two writes.
+message UpdateTransitionGateRequest {
+  string id = 1;
+  string kind = 2;
+  map<string, string> config = 3;
+  optional bool stateful = 4;
+  optional int32 order_index = 5;
+  optional bool enabled = 6;
+}
+
+message UpdateTransitionGateResponse {
+  TransitionGate item = 1;
+}
+
+message DeleteTransitionGateRequest {
+  string id = 1;
+}
+
+message DeleteTransitionGateResponse {}
+
+message GetTransitionGateRequest {
+  string id = 1;
+}
+
+message GetTransitionGateResponse {
+  TransitionGate item = 1;
+}
+
+message ListTransitionGatesRequest {
+  // transition_id, when set, restricts results to gates on that transition.
+  // Empty means all gates.
+  optional string transition_id = 1;
+}
+
+message ListTransitionGatesResponse {
+  repeated TransitionGate items = 1;
+}
+
+// GateSatisfactionRecord is the proto representation of a persisted one-shot
+// gate outcome (Epic 2.4, session.GateSatisfactionData), keyed by
+// (item_id, gate_id).
+message GateSatisfactionRecord {
+  string id = 1;
+  string item_id = 2;
+  string gate_id = 3;
+  bool satisfied = 4;
+  string satisfied_by = 5;
+  google.protobuf.Timestamp satisfied_at = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+// RecordGateApprovalRequest records one explicit human-approval action for a
+// human_approval-kind gate (Story 2.4.1). One-shot: a second call for the
+// same (item_id, gate_id) pair is rejected (connect.CodeAlreadyExists) by the
+// schema's UNIQUE(item_id, gate_id) index, not silently overwritten.
+message RecordGateApprovalRequest {
+  string item_id = 1;
+  string gate_id = 2;
+  // satisfied_by identifies the approving actor (e.g. a username) — optional,
+  // purely for audit display.
+  string satisfied_by = 3;
+  // approved is true to approve the gate, false to reject it. Approval is
+  // permanently one-shot (a second call once approved is always rejected); a
+  // rejection can be reversed by a later call with approved = true, or
+  // re-rejected idempotently (ADR-006).
+  bool approved = 4;
+}
+
+message RecordGateApprovalResponse {
+  GateSatisfactionRecord record = 1;
+}
+
+// GateStatus mirrors session.GateStatus — one gate's current satisfaction
+// state for a pending transition attempt, driving the item-detail "what's
+// blocking this" checklist (Epic 2.10). gate_id is a string, not always a
+// persisted TransitionGate id: DefaultWorkflowEngine's built-in gates have no
+// row to key on and use a stable human-readable identifier instead.
+message GateStatus {
+  string gate_id = 1;
+  // kind is one of "human_approval", "automated_review", "structural",
+  // "custom" (session.GateKind's sealed set).
+  string kind = 2;
+  bool satisfied = 3;
+  string description = 4;
+  string action_hint = 5;
+  // config_error is non-empty when this gate's configuration references
+  // something that no longer resolves (a removed custom-check skill, an
+  // unresolvable pipeline mode) — set instead of the normal satisfied/
+  // unsatisfied evaluation. Empty means no config error (ADR-006).
+  string config_error = 6;
+}
+
+// GetPendingGatesRequest asks which gates (if any) block item_id from
+// transitioning to to_status, without attempting the transition.
+message GetPendingGatesRequest {
+  string item_id = 1;
+  string to_status = 2;
+}
+
+message GetPendingGatesResponse {
+  // Empty means no gates block this transition.
+  repeated GateStatus gates = 1;
+}
+
 // ============================================================================
 // Backlog Item Events (for WatchBacklogItems streaming)
 // ============================================================================
@@ -674,6 +1227,9 @@ message BacklogItemEvent {
     // useWatchBacklogItems.ts's handling (falls through to a no-op case) and
     // backlog_service_events.go's watchBacklogItems doc comment.
     BacklogSnapshotCompleteEvent snapshot_complete = 9;
+    // Field 8 is seq (message-level, not part of this oneof); 9 is
+    // snapshot_complete above, so 10 is next.
+    BacklogItemActivityNoteAddedEvent activity_note_added = 10;
   }
 
   // Monotonically-increasing sequence number assigned by pkg/events.EventBus
@@ -715,6 +1271,10 @@ message BacklogItemSessionAttachedEvent {
   string session_id = 2;
   BacklogItem item = 3;
   bool is_snapshot = 4;
+  // claimant_host_id is the attaching process's own identity (Config.GetOrCreateClaimantHostID),
+  // never anything read from the attached session. See ItemSession.claimant_host_id for the full
+  // disambiguation against STAPLER_SQUAD_INSTANCE and session/contexts.go's CloudContext.InstanceID.
+  string claimant_host_id = 5;
 }
 
 // BacklogItemUpdatedEvent is emitted when one or more item fields change
@@ -724,6 +1284,16 @@ message BacklogItemUpdatedEvent {
   repeated string updated_fields = 2;
   BacklogItem item = 3;
   bool is_snapshot = 4;
+}
+
+// BacklogItemActivityNoteAddedEvent is emitted when post_backlog_update
+// appends a new BacklogActivityNote. Deliberately has no item/is_snapshot
+// field (see ADR-002): every post is a genuine live event — there is no
+// snapshot-replay concept for this kind, since the full log already rides
+// GetBacklogItem's activity_notes.
+message BacklogItemActivityNoteAddedEvent {
+  string item_id = 1;
+  BacklogActivityNote note = 2;
 }
 
 // BacklogItemArchivedEvent is emitted when an item is soft-deleted via
@@ -767,6 +1337,21 @@ service BacklogService {
   // CreateBacklogItem adds a new item to the backlog.
   rpc CreateBacklogItem(CreateBacklogItemRequest) returns (CreateBacklogItemResponse) {}
 
+  // CreateBacklogItemFromChat handles one turn of a natural-language chat
+  // conversation for creating or refining a backlog item. First turn (no
+  // existing_item_id) creates a minimal item via CreateBacklogItem; later
+  // turns delegate to TriggerTriage with feedback = message.
+  rpc CreateBacklogItemFromChat(CreateBacklogItemFromChatRequest) returns (CreateBacklogItemFromChatResponse) {}
+
+  // ParseBacklogItemIntent runs a free-text task description through an LLM
+  // to produce a structured draft (title, description, acceptance criteria)
+  // for the caller to review/edit before calling CreateBacklogItem. This does
+  // NOT create anything — pure parsing, mirroring TriggerTriage's separation
+  // between "generate a plan" and "the user acts on it." Best-effort: on
+  // parse failure, response.error is set and draft is empty so the caller can
+  // fall back to raw-text creation (CreateBacklogItemFromChat).
+  rpc ParseBacklogItemIntent(ParseBacklogItemIntentRequest) returns (ParseBacklogItemIntentResponse) {}
+
   // GetBacklogItem retrieves a single backlog item by ID.
   rpc GetBacklogItem(GetBacklogItemRequest) returns (GetBacklogItemResponse) {}
 
@@ -784,6 +1369,12 @@ service BacklogService {
 
   // ArchiveBacklogItem soft-deletes an item by setting its archived_at timestamp.
   rpc ArchiveBacklogItem(ArchiveBacklogItemRequest) returns (ArchiveBacklogItemResponse) {}
+
+  // UnarchiveBacklogItem restores a previously archived item to the "idea"
+  // status and clears archived_at. It does not restore any prior status
+  // history, nor recreate a deleted git worktree/session — the item simply
+  // re-enters the idea column needing a fresh session.
+  rpc UnarchiveBacklogItem(UnarchiveBacklogItemRequest) returns (UnarchiveBacklogItemResponse) {}
 
   // DeleteBacklogItem permanently removes an item and all its child records.
   rpc DeleteBacklogItem(DeleteBacklogItemRequest) returns (DeleteBacklogItemResponse) {}
@@ -806,6 +1397,11 @@ service BacklogService {
   // ApprovePlan marks the planning artifacts for an item as approved.
   rpc ApprovePlan(ApprovePlanRequest) returns (ApprovePlanResponse) {}
 
+  // RejectPlan records a rejection reason for an item's current plan
+  // artifacts and clears any existing approval. Does not itself trigger
+  // regeneration — see project_plans/plan-approval-ux/decisions/ADR-002.
+  rpc RejectPlan(RejectPlanRequest) returns (RejectPlanResponse) {}
+
   // SuggestNextItem recommends the highest-priority actionable backlog item.
   rpc SuggestNextItem(SuggestNextItemRequest) returns (SuggestNextItemResponse) {}
 
@@ -820,6 +1416,13 @@ service BacklogService {
   // yet) with no PR of its own — the self-service "Ship PR" action on the item
   // detail page.
   rpc TriggerShipPR(TriggerShipPRRequest) returns (TriggerShipPRResponse) {}
+
+  // DispatchToJules dispatches a ready backlog item to Google Jules — the one
+  // guarded entry point the web UI (and later an MCP tool) uses. Requires the
+  // item's repo to already be acknowledged for cloud egress via a prior
+  // ConfirmEgressConsent call; there is no field on this request that can
+  // grant that consent itself (google-jules-integration pre-mortem P1 #3).
+  rpc DispatchToJules(DispatchToJulesRequest) returns (DispatchToJulesResponse) {}
 
   // TriggerSync initiates a sync run for an external item source.
   rpc TriggerSync(TriggerSyncRequest) returns (TriggerSyncResponse) {}
@@ -860,6 +1463,92 @@ service BacklogService {
 
   // ListPipelineModes returns all pipeline modes, including disabled ones.
   rpc ListPipelineModes(ListPipelineModesRequest) returns (ListPipelineModesResponse) {}
+
+  // CreateLivenessDefinition registers a new stage/pipeline-mode liveness
+  // override. Rejects a request whose (stage_slug, pipeline_mode) pair
+  // already has an enabled row with CodeAlreadyExists.
+  rpc CreateLivenessDefinition(CreateLivenessDefinitionRequest) returns (CreateLivenessDefinitionResponse) {}
+
+  // UpdateLivenessDefinition modifies an existing liveness definition's
+  // fields via partial update, invalidating the in-process liveness cache
+  // synchronously on success.
+  rpc UpdateLivenessDefinition(UpdateLivenessDefinitionRequest) returns (UpdateLivenessDefinitionResponse) {}
+
+  // DeleteLivenessDefinition removes a liveness definition override.
+  rpc DeleteLivenessDefinition(DeleteLivenessDefinitionRequest) returns (DeleteLivenessDefinitionResponse) {}
+
+  // GetLivenessDefinition retrieves a single liveness definition by
+  // (stage_slug, pipeline_mode) exact match.
+  rpc GetLivenessDefinition(GetLivenessDefinitionRequest) returns (GetLivenessDefinitionResponse) {}
+
+  // ListLivenessDefinitions returns all liveness definitions, including
+  // disabled ones.
+  rpc ListLivenessDefinitions(ListLivenessDefinitionsRequest) returns (ListLivenessDefinitionsResponse) {}
+
+  // CreateStage registers a new workflow stage.
+  rpc CreateStage(CreateStageRequest) returns (CreateStageResponse) {}
+
+  // UpdateStage modifies an existing stage's fields via partial update.
+  rpc UpdateStage(UpdateStageRequest) returns (UpdateStageResponse) {}
+
+  // DeleteStage removes a stage definition. Rejected with
+  // CodeFailedPrecondition (naming the live item count) when the stage has
+  // >=1 live item, unless force=true.
+  rpc DeleteStage(DeleteStageRequest) returns (DeleteStageResponse) {}
+
+  // GetStage retrieves a single stage by slug.
+  rpc GetStage(GetStageRequest) returns (GetStageResponse) {}
+
+  // ListStages returns all stages, including disabled ones.
+  rpc ListStages(ListStagesRequest) returns (ListStagesResponse) {}
+
+  // CreateStageTransition adds a new (from_stage, to_stage) edge, invoking
+  // Epic 2.6's graph validator before committing.
+  rpc CreateStageTransition(CreateStageTransitionRequest) returns (CreateStageTransitionResponse) {}
+
+  // UpdateStageTransition modifies an existing transition's enabled flag.
+  // Disabling an edge additionally invokes the live-item-aware disable
+  // check (Task 2.6.1e) before committing.
+  rpc UpdateStageTransition(UpdateStageTransitionRequest) returns (UpdateStageTransitionResponse) {}
+
+  // DeleteStageTransition removes a transition edge.
+  rpc DeleteStageTransition(DeleteStageTransitionRequest) returns (DeleteStageTransitionResponse) {}
+
+  // GetStageTransition retrieves a single transition by id.
+  rpc GetStageTransition(GetStageTransitionRequest) returns (GetStageTransitionResponse) {}
+
+  // ListStageTransitions returns transitions, optionally filtered by
+  // from_stage_slug.
+  rpc ListStageTransitions(ListStageTransitionsRequest) returns (ListStageTransitionsResponse) {}
+
+  // CreateTransitionGate attaches a new gate to a transition. config is
+  // validated against kind (and, for a custom-check gate, Story 2.4.4's
+  // pre-registered skill allowlist) before persisting.
+  rpc CreateTransitionGate(CreateTransitionGateRequest) returns (CreateTransitionGateResponse) {}
+
+  // UpdateTransitionGate modifies an existing gate's kind/config (revalidated
+  // together) and/or its stateful/order_index/enabled fields.
+  rpc UpdateTransitionGate(UpdateTransitionGateRequest) returns (UpdateTransitionGateResponse) {}
+
+  // DeleteTransitionGate removes a gate from its transition.
+  rpc DeleteTransitionGate(DeleteTransitionGateRequest) returns (DeleteTransitionGateResponse) {}
+
+  // GetTransitionGate retrieves a single gate by id.
+  rpc GetTransitionGate(GetTransitionGateRequest) returns (GetTransitionGateResponse) {}
+
+  // ListTransitionGates returns gates, optionally filtered by transition_id.
+  rpc ListTransitionGates(ListTransitionGatesRequest) returns (ListTransitionGatesResponse) {}
+
+  // RecordGateApproval records one explicit human-approval action for a
+  // human_approval-kind gate (Epic 2.4, Story 2.4.1) — one-shot, not
+  // re-askable once recorded.
+  rpc RecordGateApproval(RecordGateApprovalRequest) returns (RecordGateApprovalResponse) {}
+
+  // GetPendingGates previews which gates (if any) currently block item_id
+  // from transitioning to to_status — read-only, does not attempt the
+  // transition. Backs the item-detail "what's blocking this" checklist
+  // (Epic 2.10).
+  rpc GetPendingGates(GetPendingGatesRequest) returns (GetPendingGatesResponse) {}
 
   // ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
   rpc ImportGitHubIssue(ImportGitHubIssueRequest) returns (ImportGitHubIssueResponse) {}
@@ -918,6 +1607,13 @@ service BacklogService {
   // already exhausted its attempt budget — use ResetStuckRemediation first.
   rpc TriggerRemediationNow(TriggerRemediationNowRequest) returns (TriggerRemediationNowResponse) {}
 
+  // AddBacklogItemDependency marks blocked_item_id as depending on
+  // (blocked by) blocker_item_id. The dependent item is excluded from
+  // DequeueNextQueuedItems until the blocker resolves (reaches done or
+  // archived status, or is deleted). Rejects self-dependency and any edge
+  // that would close a dependency cycle.
+  rpc AddBacklogItemDependency(AddBacklogItemDependencyRequest) returns (AddBacklogItemDependencyResponse) {}
+
   // WatchBacklogItems streams real-time backlog item events (status changes,
   // verdicts, session attachments, updates, archival, removal).
   // Server-streaming RPC for live backlog updates without polling.
@@ -940,6 +1636,9 @@ message ImportGitHubIssueRequest {
 message ImportGitHubIssueResponse {
   BacklogItem item = 1;
   bool triage_triggered = 2;
+  // True when issue_url was already imported — `item` is the existing backlog
+  // item, not a newly-created one, and no new triage was triggered.
+  bool already_existed = 3;
 }
 
 message CancelTriageRequest {
@@ -956,6 +1655,8 @@ message GitHubRepoEntry {
   bool is_local = 3;
   string local_path = 4;
   string description = 5;
+  // GitHub host this repo was found on ("" means github.com).
+  string host = 6;
 }
 
 message GitHubIssueEntry {
@@ -970,6 +1671,8 @@ message GitHubIssueEntry {
   bool is_pr = 9;
   // GitHub login of the issue's author.
   string author = 10;
+  // GitHub host this issue was found on ("" means github.com).
+  string host = 11;
 }
 
 message SearchGitHubReposRequest {
@@ -987,6 +1690,8 @@ message ListGitHubIssuesRequest {
   string state = 3;
   string search = 4;
   int32 limit = 5;
+  // GitHub host the repo lives on ("" means github.com).
+  string host = 6;
 }
 
 message ListGitHubIssuesResponse {
@@ -1083,6 +1788,28 @@ enum StuckReason {
   // (AutoRespawnAutonomousWork, AutoReopenForPRFix, or AutoRespawnReview) was
   // skipped because the item already has an active work or review session.
   STUCK_REASON_RESPAWN_BLOCKED_ACTIVE = 14;
+  // STUCK_REASON_LIKELY_FLAKY: see domain.StuckReasonLikelyFlaky
+  // (session/domain/backlog.go) — behavioral evidence (a review-verdict
+  // flip-flop on an unchanged diff, or a test-file-only rework cycle) that
+  // this item's review outcome may be non-deterministic rather than a real
+  // pass/fail signal. Purely informational — never gates the reopen/park
+  // decision; present as a hint to verify, not a confident verdict.
+  STUCK_REASON_LIKELY_FLAKY = 15;
+  // STUCK_REASON_MULTIPLE_REASONS: see domain.StuckReasonMultipleReasons — synthetic aggregate signal for multiple simultaneous stuck reasons.
+  STUCK_REASON_MULTIPLE_REASONS = 16;
+  // STUCK_REASON_BOUNCE_CAP_EXHAUSTED: see domain.StuckReasonBounceCapExhausted — synthetic aggregate signal for a bouncing item that exhausted its remediation cap.
+  STUCK_REASON_BOUNCE_CAP_EXHAUSTED = 17;
+  // STUCK_REASON_BLOCKED_BY_DEPENDENCY: see domain.StuckReasonBlockedByDependency
+  // (session/domain/backlog.go) — DequeueNextQueuedItems' dependency gate
+  // skipped this item because at least one of its blocker items has not yet
+  // reached a resolved status (done or archived).
+  STUCK_REASON_BLOCKED_BY_DEPENDENCY = 18;
+  // STUCK_REASON_STEER_FAILED: see domain.StuckReasonSteerFailed
+  // (session/domain/backlog.go) — AutoReopenForPRFix attempted to steer an
+  // already-active session with a PR-fix problem description and the
+  // delivery itself failed. Distinct from STUCK_REASON_RESPAWN_BLOCKED_ACTIVE,
+  // which covers the degrade paths where a steer was never attempted at all.
+  STUCK_REASON_STEER_FAILED = 19;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

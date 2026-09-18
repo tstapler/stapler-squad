@@ -45,6 +45,10 @@ func (s *stubStore) UpdateInstanceLastUserResponse(title string, t time.Time) er
 	return nil
 }
 
+func (s *stubStore) UpdateInstanceMetadata(currentTitle string, newTitle, category, note, workingDir *string) error {
+	return nil
+}
+
 func (s *stubStore) ListInstanceData() ([]session.InstanceData, error) {
 	if s.loadErr != nil {
 		return nil, s.loadErr
@@ -92,4 +96,29 @@ func parseResult(t *testing.T, res *mcpgo.CallToolResult) map[string]interface{}
 		t.Fatalf("parseResult: unmarshal JSON: %v\nJSON: %s", err, tc.Text)
 	}
 	return m
+}
+
+// requireToolTextResult asserts res is a plain-text success result (the shape
+// every mutating backlog handler returns via mcpgo.NewToolResultText on
+// success — errResult's JSON-shaped errors, parsed by parseResult, are the
+// only other content[0] shape these handlers produce) and returns its text.
+func requireToolTextResult(t *testing.T, res *mcpgo.CallToolResult) string {
+	t.Helper()
+	if res == nil {
+		t.Fatal("requireToolTextResult: result is nil")
+	}
+	if len(res.Content) == 0 {
+		t.Fatal("requireToolTextResult: result has no content")
+	}
+	tc, ok := res.Content[0].(mcpgo.TextContent)
+	if !ok {
+		t.Fatalf("requireToolTextResult: content[0] is not TextContent, got %T", res.Content[0])
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(tc.Text), &m); err == nil {
+		if success, ok := m["success"].(bool); ok && !success {
+			t.Fatalf("requireToolTextResult: expected success, got error result: %s", tc.Text)
+		}
+	}
+	return tc.Text
 }

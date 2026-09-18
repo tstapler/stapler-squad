@@ -48,6 +48,7 @@ jest.mock("@/lib/store", () => ({
   useAppSelector: () => mockLiveRawItem,
 }));
 jest.mock("@connectrpc/connect", () => ({
+  ...jest.requireActual("@connectrpc/connect"),
   createClient: () => ({
     watchBacklogItems: () => (async function* () {})(),
   }),
@@ -101,6 +102,7 @@ const baseItem: BacklogItem = {
   skipReviewGate: false,
   autoSpawnSession: false,
   autoCreatePR: false,
+  autoApprovePlan: false,
   planApproved: false,
   triageStatus: undefined,
   acCriteria: [],
@@ -110,6 +112,7 @@ const baseItem: BacklogItem = {
   updatedAt: "2026-07-01T00:00:00.000Z",
   statusEvents: [],
   progressNotes: [],
+  activityNotes: [],
   totalEstimatedCostUsd: 0,
 };
 

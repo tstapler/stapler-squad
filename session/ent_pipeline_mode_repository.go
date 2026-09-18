@@ -150,6 +150,7 @@ func (r *EntPipelineModeRepository) GetBySlug(ctx context.Context, slug string) 
 // ListAll returns all pipeline modes sorted ascending by created_at.
 // A safety cap of 1000 is applied to prevent runaway queries.
 func (r *EntPipelineModeRepository) ListAll(ctx context.Context) ([]*ent.PipelineMode, error) {
+	//nolint:entfullscan capped at Limit(1000) below; doc comment states this explicitly.
 	pms, err := r.client.PipelineMode.Query().
 		Order(ent.Asc(pipelinemode.FieldCreatedAt)).
 		Limit(1000).

@@ -6,11 +6,13 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session/sshremote"
 )
 
 // TestConvertEventToProto_SessionAcknowledged verifies that EventSessionAcknowledged
 // is converted to the SessionAcknowledged proto variant with correct fields (UT-GO-01).
 func TestConvertEventToProto_SessionAcknowledged(t *testing.T) {
+	t.Parallel()
 	ts := time.Now()
 	event := &events.Event{
 		Type:      events.EventSessionAcknowledged,
@@ -48,6 +50,7 @@ func TestConvertEventToProto_SessionAcknowledged(t *testing.T) {
 // TestConvertEventToProto_UserInteraction verifies that EventUserInteraction is
 // converted to the UserInteraction proto variant with correct fields (UT-GO-02).
 func TestConvertEventToProto_UserInteraction(t *testing.T) {
+	t.Parallel()
 	ts := time.Now()
 	event := &events.Event{
 		Type:            events.EventUserInteraction,
@@ -86,6 +89,7 @@ func TestConvertEventToProto_UserInteraction(t *testing.T) {
 // TestConvertEventToProto_UserInteraction_UnknownType verifies that an unknown
 // InteractionType string falls back to UNSPECIFIED rather than panicking.
 func TestConvertEventToProto_UserInteraction_UnknownType(t *testing.T) {
+	t.Parallel()
 	event := &events.Event{
 		Type:            events.EventUserInteraction,
 		Timestamp:       time.Now(),
@@ -105,5 +109,66 @@ func TestConvertEventToProto_UserInteraction_UnknownType(t *testing.T) {
 	}
 	if ui.UserInteraction.Type != sessionv1.UserInteractionEvent_INTERACTION_TYPE_UNSPECIFIED {
 		t.Errorf("unknown type should map to UNSPECIFIED, got %v", ui.UserInteraction.Type)
+	}
+}
+
+// TestConvertEventToProto_RemoteHealthChanged verifies that
+// EventRemoteHealthChanged (session/sshremote.RemoteHealthProber, Epic 6.4)
+// is converted to the RemoteHealthChanged proto variant with the Go
+// string-typed RemoteConnectionState correctly mapped to the wire enum
+// (ssh-remote-workspaces Epic 6.2, closing the gap where this event type had
+// no oneof case and was silently dropped on the wire).
+func TestConvertEventToProto_RemoteHealthChanged(t *testing.T) {
+	event := &events.Event{
+		Type:      events.EventRemoteHealthChanged,
+		Timestamp: time.Now(),
+		RemoteHealthPayload: &events.RemoteHealthEventPayload{
+			RemoteName:    "prod-box",
+			State:         sshremote.RemoteConnectionStateReconnecting,
+			PreviousState: sshremote.RemoteConnectionStateConnected,
+		},
+	}
+
+	protoEvent := convertEventToProto(event)
+	if protoEvent == nil {
+		t.Fatal("expected non-nil protoEvent")
+	}
+
+	rh, ok := protoEvent.Event.(*sessionv1.SessionEvent_RemoteHealthChanged)
+	if !ok {
+		t.Fatalf("expected *SessionEvent_RemoteHealthChanged, got %T", protoEvent.Event)
+	}
+
+	inner := rh.RemoteHealthChanged
+	if inner == nil {
+		t.Fatal("expected non-nil RemoteHealthChangedEvent")
+	}
+	if inner.RemoteName != "prod-box" {
+		t.Errorf("RemoteName = %q, want %q", inner.RemoteName, "prod-box")
+	}
+	if inner.State != sessionv1.RemoteConnectionState_REMOTE_CONNECTION_STATE_RECONNECTING {
+		t.Errorf("State = %v, want RECONNECTING", inner.State)
+	}
+	if inner.PreviousState != sessionv1.RemoteConnectionState_REMOTE_CONNECTION_STATE_CONNECTED {
+		t.Errorf("PreviousState = %v, want CONNECTED", inner.PreviousState)
+	}
+}
+
+// TestConvertEventToProto_RemoteHealthChanged_NilPayload verifies a nil
+// RemoteHealthPayload doesn't panic and leaves the oneof unset rather than
+// sending a RemoteHealthChangedEvent with zero-value fields indistinguishable
+// from a real UNSPECIFIED state.
+func TestConvertEventToProto_RemoteHealthChanged_NilPayload(t *testing.T) {
+	event := &events.Event{
+		Type:      events.EventRemoteHealthChanged,
+		Timestamp: time.Now(),
+	}
+
+	protoEvent := convertEventToProto(event)
+	if protoEvent == nil {
+		t.Fatal("expected non-nil protoEvent")
+	}
+	if protoEvent.Event != nil {
+		t.Errorf("expected nil oneof for nil RemoteHealthPayload, got %T", protoEvent.Event)
 	}
 }

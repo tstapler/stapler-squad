@@ -1,6 +1,6 @@
-# Stapler Squad [![CI](https://github.com/TylerStaplerAtFanatics/stapler-squad/actions/workflows/build.yml/badge.svg)](https://github.com/TylerStaplerAtFanatics/stapler-squad/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/TylerStaplerAtFanatics/stapler-squad)](https://github.com/TylerStaplerAtFanatics/stapler-squad/releases/latest)
+# Stapler Squad [![CI](https://github.com/tstapler/stapler-squad/actions/workflows/build.yml/badge.svg)](https://github.com/tstapler/stapler-squad/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/tstapler/stapler-squad)](https://github.com/tstapler/stapler-squad/releases/latest)
 
-[Stapler Squad](https://TylerStaplerAtFanatics.github.io/stapler-squad/) is a web-based mission control for running multiple AI coding agents ([Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli), [Aider](https://github.com/Aider-AI/aider)) simultaneously — with a real-time dashboard, automatic approval rules, and a structured review queue. Run it with `ssq`, then open `http://localhost:8543`.
+[Stapler Squad](https://tstapler.github.io/stapler-squad/) is a web-based mission control for running multiple AI coding agents ([Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli), [Aider](https://github.com/Aider-AI/aider)) simultaneously — with a real-time dashboard, automatic approval rules, and a structured review queue. Run it with `ssq`, then open `http://localhost:8543`.
 
 ![Stapler Squad Demo](assets/demo.gif)
 
@@ -47,7 +47,7 @@ Both Homebrew and manual installation will install Stapler Squad as `ssq` on you
 #### Homebrew
 
 ```bash
-brew tap TylerStaplerAtFanatics/stapler-squad https://github.com/TylerStaplerAtFanatics/stapler-squad && brew install TylerStaplerAtFanatics/stapler-squad/stapler-squad
+brew tap tstapler/stapler-squad https://github.com/tstapler/stapler-squad && brew install tstapler/stapler-squad/stapler-squad
 ```
 
 This installs both `stapler-squad` and the `ssq` alias.
@@ -57,7 +57,7 @@ This installs both `stapler-squad` and the `ssq` alias.
 Download and install the latest pre-built binary:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TylerStaplerAtFanatics/stapler-squad/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tstapler/stapler-squad/main/install.sh | bash
 ```
 
 This puts the `ssq` binary in `~/.local/bin`.
@@ -65,7 +65,7 @@ This puts the `ssq` binary in `~/.local/bin`.
 To use a custom name for the binary:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TylerStaplerAtFanatics/stapler-squad/main/install.sh | bash -s -- --name <your-binary-name>
+curl -fsSL https://raw.githubusercontent.com/tstapler/stapler-squad/main/install.sh | bash -s -- --name <your-binary-name>
 ```
 
 #### Build from Source
@@ -73,7 +73,7 @@ curl -fsSL https://raw.githubusercontent.com/TylerStaplerAtFanatics/stapler-squa
 Build and install directly from source. The script installs Go via Homebrew if it isn't already present, then compiles the full application (web UI + server) and puts `ssq` in `~/.local/bin`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TylerStaplerAtFanatics/stapler-squad/main/install.sh | bash -s -- --from-source
+curl -fsSL https://raw.githubusercontent.com/tstapler/stapler-squad/main/install.sh | bash -s -- --from-source
 ```
 
 Or step by step:
@@ -83,7 +83,7 @@ Or step by step:
 brew install go node buf
 
 # 2. Clone the repository
-git clone https://github.com/TylerStaplerAtFanatics/stapler-squad.git
+git clone https://github.com/tstapler/stapler-squad.git
 cd stapler-squad
 
 # 3. Build (compiles proto code, Next.js web UI, and Go binary)
@@ -206,40 +206,51 @@ For process isolation when running multiple stapler-squad instances, configure a
 
 ### Usage
 
-```
-Usage:
-  ssq [flags]
-  ssq [command]
-
-Available Commands:
-  completion  Generate the autocompletion script for the specified shell
-  debug       Print debug information like config paths
-  help        Help about any command
-  reset       Reset all stored instances
-  version     Print the version number of stapler-squad
-
-Flags:
-  -y, --autoyes          [experimental] If enabled, all instances will automatically accept prompts for claude code & aider
-  -h, --help             help for stapler-squad
-  -p, --program string   Program to run in new instances (e.g. 'aider --model ollama_chat/gemma3:1b')
-```
-
 Run the application with:
 
 ```bash
 ssq
 ```
-NOTE: The default program is `claude` and we recommend using the latest version.
+
+This starts the web server (default `http://localhost:8543`) and opens the web UI, where you create and manage sessions. Program selection (Claude Code, Aider, Codex, Gemini, Amp, etc.) happens in the UI's session-creation panel, not via a CLI flag — the server auto-detects which agent CLIs are installed and lists them there.
+
+```
+Usage:
+  stapler-squad [flags]
+  stapler-squad [command]
+
+Available Commands:
+  debug            Print debug information like config paths
+  help             Help about any command
+  list             List all sessions
+  print-qr-codes   Generate a 1-hour setup token and print QR codes for all detected domains
+  reset            Reset all stored instances
+  test-pty         Test PTY initialization and discovery
+  version          Print the version number of stapler-squad
+
+Flags:
+      --discover-external    Enable external session discovery (tmux/screen sessions outside stapler-squad)
+      --discovery-mode       Enable session discovery mode
+  -h, --help                 help for stapler-squad
+      --listen string        Address to listen on
+      --mcp                  Run as an MCP server over stdio instead of starting the web server
+      --profile              Enable pprof profiling endpoints
+      --profile-port int     Port for pprof profiling endpoints (default 6060)
+      --remote-access        Enable remote access (WebAuthn passkey + QR code setup)
+      --remote-port int      Port for remote access (default 8444)
+      --rp-id string         WebAuthn relying party ID for remote access
+      --test-dir string      Directory to use for test-mode state
+      --test-mode            Run in an isolated test-mode state directory
+      --tmux-keep-server     Keep the tmux server alive after stapler-squad exits (default true)
+      --trace               Enable execution tracing
+```
 
 <br />
 
 <b>Using Stapler Squad with other AI assistants:</b>
 - For [Codex](https://github.com/openai/codex): Set your API key with `export OPENAI_API_KEY=<your_key>`
-- Launch with specific assistants:
-   - Codex: `ssq -p "codex"`
-   - Aider: `ssq -p "aider ..."`
-   - Gemini: `ssq -p "gemini"`
-- Make this the default, by modifying the config file (locate with `ssq debug`)
+- Open the web UI, start a new session, and pick the assistant (Claude Code, Codex, Aider, Gemini, Amp, ...) from the program dropdown in the session-creation panel.
+- Set a default assistant for new sessions in the config file (locate with `ssq debug`) via the `default_program` key.
 
 ### Development
 
@@ -255,7 +266,7 @@ brew install tmux gh
 
 ```bash
 # Clone the repository
-git clone https://github.com/TylerStaplerAtFanatics/stapler-squad.git
+git clone https://github.com/tstapler/stapler-squad.git
 cd stapler-squad
 
 # Build (auto-installs go, buf, and node via Homebrew if missing)
@@ -489,4 +500,4 @@ The result is opinionated toward my own workflow: approval gates before agent ch
 
 ### Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=TylerStaplerAtFanatics/stapler-squad&type=Date)](https://www.star-history.com/#TylerStaplerAtFanatics/stapler-squad&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=tstapler/stapler-squad&type=Date)](https://www.star-history.com/#tstapler/stapler-squad&Date)

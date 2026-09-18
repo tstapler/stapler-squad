@@ -1,5 +1,11 @@
 package vc
 
+import (
+	"time"
+
+	"github.com/tstapler/stapler-squad/session/git"
+)
+
 // VCSType represents the type of version control system
 type VCSType int
 
@@ -97,6 +103,29 @@ type VCSStatus struct {
 	UnstagedFiles  []FileChange
 	UntrackedFiles []FileChange
 	ConflictFiles  []FileChange
+
+	// Commits lists the branch's commits not yet on its recorded base (newest first),
+	// Git only — nil for Jujutsu or when no base SHA is recorded. Populated by the
+	// caller (WorkspaceService), not by GitProvider.GetStatus itself, since GetStatus
+	// has no access to the session's recorded base SHA — that's an Instance-level
+	// concept the vc.VCSProvider abstraction doesn't know about.
+	Commits []git.ShippedCommit
+	// CommitsTruncated is true when Commits was cut off by ListShippedCommits's cap.
+	CommitsTruncated bool
+	// CommitsUnavailable is true when a base/head SHA was resolved and a commit-list
+	// fetch was attempted but failed or timed out — distinct from Commits simply being
+	// empty because the branch genuinely has zero unshipped commits.
+	CommitsUnavailable bool
+	// AggregateDiffStat is the branch's total change size vs. its recorded base — a
+	// DiffShortstat-equivalent, distinct from the working-tree
+	// staged/unstaged/untracked/conflict file lists above, and populated even when the
+	// working tree is fully clean. nil when no base SHA is resolved.
+	AggregateDiffStat *git.AggregateDiffStat
+
+	// StatusAsOf is when this status was computed (fresh-compute) or cached
+	// (cache-hit) — set at the WorkspaceService RPC-handler layer, not here.
+	// Mapped onto VcsStatus.StatusAsOf by vcsStatusToProto.
+	StatusAsOf time.Time
 }
 
 // AllChangedFiles returns all files with changes, in display order

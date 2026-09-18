@@ -1,0 +1,15 @@
+{
+  "id": "session-escape-breakdown-table",
+  "type": "frontend",
+  "name": "Per-session escape sequence breakdown table (All Sessions tab)",
+  "component": "SessionEscapeBreakdownTable",
+  "path": "web-app/src/components/analytics/SessionEscapeBreakdownTable.tsx",
+  "filePath": "web-app/src/components/analytics/SessionEscapeBreakdownTable.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "SessionEscapeBreakdownTable > SessionEscapeBreakdownTable_should_SortDescendingByMangleRate_When_DefaultRendered",
+    "SessionEscapeBreakdownTable > SessionEscapeBreakdownTable_should_ApplyNonColorOutlierCue_When_RowExceedsThreshold"
+  ],
+  "lastModified": "2026-08-11T00:00:00Z"
+}

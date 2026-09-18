@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -11,7 +12,52 @@ import (
 	"go.uber.org/goleak"
 )
 
+// TestRecordFromResult_ThreadsSourceOntoEntry verifies pi-support Story 4.3.1b:
+// the source value passed to RecordFromResult ends up on the resulting
+// AnalyticsEntry, so per-agent approval patterns are distinguishable in the
+// audit/analytics record — regardless of the value ApprovalHandler defaulted it
+// to ("claude" or "pi") before calling in.
+func TestRecordFromResult_ThreadsSourceOntoEntry(t *testing.T) {
+	t.Parallel()
+	store := NewAnalyticsStore(nil)
+
+	store.RecordFromResult(
+		classifier.PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "ls"}},
+		classifier.ClassificationResult{Decision: classifier.AutoAllow},
+		"sess-1", "", 0, "pi",
+	)
+
+	select {
+	case entry := <-store.ch:
+		assert.Equal(t, "pi", entry.Source)
+	default:
+		t.Fatal("expected RecordFromResult to enqueue an entry")
+	}
+}
+
+// TestRecordFromResult_DefaultsSourceEmpty_When_CallerPassesEmptyString mirrors
+// Claude's unmodified curl hook path (ApprovalHandler defaults empty to
+// "claude" at its own call site — RecordFromResult itself never re-defaults).
+func TestRecordFromResult_DefaultsSourceEmpty_When_CallerPassesEmptyString(t *testing.T) {
+	t.Parallel()
+	store := NewAnalyticsStore(nil)
+
+	store.RecordFromResult(
+		classifier.PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "ls"}},
+		classifier.ClassificationResult{Decision: classifier.AutoAllow},
+		"sess-1", "", 0, "",
+	)
+
+	select {
+	case entry := <-store.ch:
+		assert.Equal(t, "", entry.Source)
+	default:
+		t.Fatal("expected RecordFromResult to enqueue an entry")
+	}
+}
+
 func TestClassify_DailyBucketAutoApproveRate(t *testing.T) {
+	t.Parallel()
 	b := DailyBucket{
 		Date:      "2026-04-13",
 		AutoAllow: 8,
@@ -45,18 +91,15 @@ func mustCompileRe(t *testing.T, pattern string) *regexp.Regexp {
 // ── TestReclassifyGaps ───────────────────────────────────────────────────────
 
 func TestReclassifyGaps_should_reclassifyEntry_When_ruleNowCoversCommand(t *testing.T) {
+	t.Parallel()
 	// TC-G-12: Classifier has rule matching "git push". Entry is escalate with no RuleID.
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:             "rule-git-push",
-			Name:           "Allow git push",
 			ToolName:       "Bash",
 			CommandPattern: mustCompileRe(t, "^git push"),
 			Decision:       classifier.AutoAllow,
-			Enabled:        true,
-			Priority:       100,
-			Source:         "user",
+			RuleMeta:       classifier.RuleMeta{ID: "rule-git-push", Name: "Allow git push", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -78,6 +121,7 @@ func TestReclassifyGaps_should_reclassifyEntry_When_ruleNowCoversCommand(t *test
 }
 
 func TestReclassifyGaps_should_skipEntry_When_alreadyDecided(t *testing.T) {
+	t.Parallel()
 	// TC-G-13: Entry with Decision="auto_allow" is unchanged.
 	c := classifier.NewRuleBasedClassifier()
 
@@ -97,18 +141,15 @@ func TestReclassifyGaps_should_skipEntry_When_alreadyDecided(t *testing.T) {
 }
 
 func TestReclassifyGaps_should_skipEntry_When_hasRuleID(t *testing.T) {
+	t.Parallel()
 	// TC-G-14: Entry with Decision="escalate" and RuleID != "" is unchanged.
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:             "rule-git-push",
-			Name:           "Allow git push",
 			ToolName:       "Bash",
 			CommandPattern: mustCompileRe(t, "^git push"),
 			Decision:       classifier.AutoAllow,
-			Enabled:        true,
-			Priority:       100,
-			Source:         "user",
+			RuleMeta:       classifier.RuleMeta{ID: "rule-git-push", Name: "Allow git push", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -130,18 +171,15 @@ func TestReclassifyGaps_should_skipEntry_When_hasRuleID(t *testing.T) {
 }
 
 func TestReclassifyGaps_should_notMutateOriginalSlice(t *testing.T) {
+	t.Parallel()
 	// TC-G-15: Original slice entries must remain unchanged after reclassification.
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:             "rule-git-push",
-			Name:           "Allow git push",
 			ToolName:       "Bash",
 			CommandPattern: mustCompileRe(t, "^git push"),
 			Decision:       classifier.AutoAllow,
-			Enabled:        true,
-			Priority:       100,
-			Source:         "user",
+			RuleMeta:       classifier.RuleMeta{ID: "rule-git-push", Name: "Allow git push", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -168,20 +206,17 @@ func TestReclassifyGaps_should_notMutateOriginalSlice(t *testing.T) {
 }
 
 func TestReclassifyGaps_should_handleCommandUnder200Chars(t *testing.T) {
+	t.Parallel()
 	// TC-G-16 (R3.3): Short command (well under 200 chars); classifier rule uses
 	// CriteriaPrograms matching "git". Verifies truncation is irrelevant for typical commands.
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:   "rule-git-all",
-			Name: "Allow all git",
 			Criteria: &classifier.CommandCriteria{
 				Programs: []string{"git"},
 			},
 			Decision: classifier.AutoAllow,
-			Enabled:  true,
-			Priority: 100,
-			Source:   "user",
+			RuleMeta: classifier.RuleMeta{ID: "rule-git-all", Name: "Allow all git", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -207,6 +242,7 @@ func TestReclassifyGaps_should_handleCommandUnder200Chars(t *testing.T) {
 // ── TestComputeSummary ───────────────────────────────────────────────────────
 
 func TestComputeSummary_should_countCoverageGaps_When_escalateNoRuleID(t *testing.T) {
+	t.Parallel()
 	// TC-G-17: 3 entries: 2 escalate+no-ruleID, 1 auto_allow → CoverageGapCount=2
 	entries := []AnalyticsEntry{
 		{Decision: "escalate", RuleID: "", ToolName: "Bash"},
@@ -219,6 +255,7 @@ func TestComputeSummary_should_countCoverageGaps_When_escalateNoRuleID(t *testin
 }
 
 func TestComputeSummary_should_notCountGap_When_escalateWithRuleID(t *testing.T) {
+	t.Parallel()
 	// TC-G-18: 1 entry: escalate + RuleID="r1" → CoverageGapCount=0
 	entries := []AnalyticsEntry{
 		{Decision: "escalate", RuleID: "r1", ToolName: "Bash"},
@@ -229,6 +266,7 @@ func TestComputeSummary_should_notCountGap_When_escalateWithRuleID(t *testing.T)
 }
 
 func TestComputeSummary_should_computeCorrectRates(t *testing.T) {
+	t.Parallel()
 	// TC-G-19: 10 entries: 8 auto_allow, 1 auto_deny, 1 escalate.
 	entries := make([]AnalyticsEntry, 0, 10)
 	for i := 0; i < 8; i++ {
@@ -244,6 +282,7 @@ func TestComputeSummary_should_computeCorrectRates(t *testing.T) {
 }
 
 func TestComputeSummary_should_returnZeroSummary_When_empty(t *testing.T) {
+	t.Parallel()
 	// TC-G-20: Empty entry slice → all counts zero, rates zero.
 	s := ComputeSummary(nil)
 	assert.Equal(t, 0, s.TotalDecisions, "TC-G-20: TotalDecisions must be 0")
@@ -253,19 +292,16 @@ func TestComputeSummary_should_returnZeroSummary_When_empty(t *testing.T) {
 }
 
 func TestComputeSummary_should_showFewerGaps_After_ReclassifyGaps(t *testing.T) {
+	t.Parallel()
 	// TC-G-21: 3 escalate+no-ruleID entries; classifier covers 2 of them.
 	// After ReclassifyGaps, ComputeSummary should show CoverageGapCount=1.
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
 		{
-			ID:             "rule-git-push",
-			Name:           "Allow git push",
 			ToolName:       "Bash",
 			CommandPattern: mustCompileRe(t, "^git push"),
 			Decision:       classifier.AutoAllow,
-			Enabled:        true,
-			Priority:       100,
-			Source:         "user",
+			RuleMeta:       classifier.RuleMeta{ID: "rule-git-push", Name: "Allow git push", Enabled: true, Priority: 100, Source: "user"},
 		},
 	}
 	c.ReplaceRules(rules)
@@ -282,6 +318,7 @@ func TestComputeSummary_should_showFewerGaps_After_ReclassifyGaps(t *testing.T) 
 }
 
 func TestComputeSummary_EscalationReasonCounts(t *testing.T) {
+	t.Parallel()
 	// AC4: escalate/secret-scan-auto_deny entries bucket into the 5 escalation
 	// categories; non-escalation, non-secret-scan-deny entries contribute to none.
 	entries := []AnalyticsEntry{
@@ -309,6 +346,7 @@ func TestComputeSummary_EscalationReasonCounts(t *testing.T) {
 // only (same scope as EscalationReasonCounts), not the full auto_allow/auto_deny/escalate
 // traffic mix — see pre-mortem.md Failure #5 / adversarial-review.md's resolved blocker.
 func TestComputeSummary_should_PopulateRiskLevelCounts_When_EntriesSpanAllFourRiskLevels(t *testing.T) {
+	t.Parallel()
 	entries := []AnalyticsEntry{
 		{Decision: "escalate", RiskLevel: "critical"},
 		{Decision: "escalate", RiskLevel: "high"},
@@ -334,6 +372,7 @@ func TestComputeSummary_should_PopulateRiskLevelCounts_When_EntriesSpanAllFourRi
 // TestComputeSummary_should_ReturnEmptyRiskLevelCounts_When_NoEntriesInWindow covers the
 // zero-escalation edge case: an empty map, not a nil-panic or a spurious non-empty result.
 func TestComputeSummary_should_ReturnEmptyRiskLevelCounts_When_NoEntriesInWindow(t *testing.T) {
+	t.Parallel()
 	s := ComputeSummary(nil)
 	assert.Empty(t, s.RiskLevelCounts)
 }
@@ -343,6 +382,13 @@ func TestComputeSummary_should_ReturnEmptyRiskLevelCounts_When_NoEntriesInWindow
 // nothing new relative to the pre-Start baseline immediately after Stop() returns,
 // with no polling/sleep needed.
 func TestAnalyticsStore_Stop_JoinsFlushGoroutine(t *testing.T) {
+	// Not t.Parallel(): this test's goleak.IgnoreCurrent()/VerifyNone() baseline
+	// can be polluted by other parallel tests' own background goroutines (e.g.
+	// database/sql connection-pool cleaners from their own createTestStorage
+	// pools) starting mid-flight and getting misattributed as "leaked" by this
+	// test. See the identical rationale on
+	// TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil in
+	// session_service_test.go.
 	storage := createTestStorage(t)
 	store := NewAnalyticsStore(storage)
 
@@ -356,6 +402,7 @@ func TestAnalyticsStore_Stop_JoinsFlushGoroutine(t *testing.T) {
 // TestAnalyticsStore_Stop_Idempotent confirms Stop() can be called multiple times
 // (e.g. once via t.Cleanup and once explicitly) without panicking.
 func TestAnalyticsStore_Stop_Idempotent(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	store := NewAnalyticsStore(storage)
 	store.Start(context.Background())
@@ -367,6 +414,7 @@ func TestAnalyticsStore_Stop_Idempotent(t *testing.T) {
 // TestAnalyticsStore_Stop_BeforeStart_NoPanic confirms Stop() is safe to call on a
 // store that was never Start()ed (cancel is nil).
 func TestAnalyticsStore_Stop_BeforeStart_NoPanic(t *testing.T) {
+	t.Parallel()
 	store := NewAnalyticsStore(nil)
 	require.NotPanics(t, store.Stop)
 }
@@ -375,6 +423,7 @@ func TestAnalyticsStore_Stop_BeforeStart_NoPanic(t *testing.T) {
 // silent no-op (matching the existing buffer-full drop behavior) instead of panicking
 // on a send to a goroutine that is no longer draining the channel.
 func TestAnalyticsStore_Record_AfterStop_NoPanic(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	store := NewAnalyticsStore(storage)
 	store.Start(context.Background())
@@ -383,4 +432,40 @@ func TestAnalyticsStore_Record_AfterStop_NoPanic(t *testing.T) {
 	require.NotPanics(t, func() {
 		store.Record(AnalyticsEntry{SessionID: "sess-1", ToolName: "Bash"})
 	})
+}
+
+// ── Story 2.3.3: Tagging-rule fire-count analytics ──────────────────────────
+
+// TestAnalyticsStore_RecordTaggingRuleFire_should_PersistFire_When_Called covers the
+// fire-and-forget insert path: RecordTaggingRuleFire is async (spawns a goroutine, per its
+// doc comment), so the assertion polls via require.Eventually rather than sleeping.
+func TestAnalyticsStore_RecordTaggingRuleFire_should_PersistFire_When_Called(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	store := NewAnalyticsStore(storage)
+
+	store.RecordTaggingRuleFire("seed-bugfix")
+
+	require.Eventually(t, func() bool {
+		counts, err := store.GetTaggingRuleFireCounts(context.Background(), time.Now().Add(-time.Hour))
+		return err == nil && counts["seed-bugfix"] == 1
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+// TestAnalyticsStore_GetTaggingRuleFireCounts_should_ExcludeFiresOlderThanWindow_When_TwoRecentAndOneStale
+// covers Story 2.3.3's second acceptance criterion: two fires within the last 7 days and one
+// fire 10 days ago must yield a count of 2, not 3.
+func TestAnalyticsStore_GetTaggingRuleFireCounts_should_ExcludeFiresOlderThanWindow_When_TwoRecentAndOneStale(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+
+	now := time.Now()
+	require.NoError(t, storage.RecordTaggingRuleFire(context.Background(), "seed-bugfix", now.Add(-1*time.Hour)))
+	require.NoError(t, storage.RecordTaggingRuleFire(context.Background(), "seed-bugfix", now.Add(-2*time.Hour)))
+	require.NoError(t, storage.RecordTaggingRuleFire(context.Background(), "seed-bugfix", now.Add(-10*24*time.Hour)))
+
+	store := NewAnalyticsStore(storage)
+	counts, err := store.GetTaggingRuleFireCounts(context.Background(), now.Add(-7*24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 2, counts["seed-bugfix"])
 }

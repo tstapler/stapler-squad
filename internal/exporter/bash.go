@@ -34,10 +34,10 @@ func (e *BashExporter) Export(events []*history.Event) error {
 		// #1600000000
 		// command
 		ts := ev.Timestamp.Unix()
-		
+
 		// For multiline bash commands, typically just literal newlines
 		cmd := ev.Command
-		
+
 		fmt.Fprintf(&buf, "#%d\n%s\n", ts, cmd)
 	}
 

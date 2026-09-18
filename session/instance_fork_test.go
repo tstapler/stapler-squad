@@ -34,6 +34,7 @@ func writeConvLines(t *testing.T, path string, count int) {
 }
 
 func TestForkFromCheckpoint_ConvUUID_SetAsResumeId(t *testing.T) {
+	t.Parallel()
 	configDir := t.TempDir()
 
 	// Create source instance.
@@ -68,6 +69,7 @@ func TestForkFromCheckpoint_ConvUUID_SetAsResumeId(t *testing.T) {
 }
 
 func TestForkFromCheckpoint_NoGitSHA_Succeeds(t *testing.T) {
+	t.Parallel()
 	configDir := t.TempDir()
 	srcInst := &Instance{
 		Title: "src-session",
@@ -88,6 +90,7 @@ func TestForkFromCheckpoint_NoGitSHA_Succeeds(t *testing.T) {
 }
 
 func TestForkFromCheckpoint_NoConvUUID_EmptyResumeId(t *testing.T) {
+	t.Parallel()
 	configDir := t.TempDir()
 	srcInst := &Instance{
 		Title: "src-session",
@@ -106,6 +109,7 @@ func TestForkFromCheckpoint_NoConvUUID_EmptyResumeId(t *testing.T) {
 }
 
 func TestForkFromCheckpoint_ForkedFromIDSet(t *testing.T) {
+	t.Parallel()
 	configDir := t.TempDir()
 	srcInst := &Instance{
 		Title: "src-session",
@@ -123,6 +127,7 @@ func TestForkFromCheckpoint_ForkedFromIDSet(t *testing.T) {
 }
 
 func TestForkFromCheckpoint_UnknownCheckpointID_ReturnsError(t *testing.T) {
+	t.Parallel()
 	configDir := t.TempDir()
 	srcInst := &Instance{Title: "src-session", Path: t.TempDir()}
 	srcInst.started.Store(true)
@@ -134,6 +139,7 @@ func TestForkFromCheckpoint_UnknownCheckpointID_ReturnsError(t *testing.T) {
 }
 
 func TestForkFromCheckpoint_EmptyNewTitle_ReturnsError(t *testing.T) {
+	t.Parallel()
 	configDir := t.TempDir()
 	srcInst := &Instance{Title: "src-session", Path: t.TempDir()}
 	srcInst.started.Store(true)
@@ -151,6 +157,7 @@ func TestForkFromCheckpoint_EmptyNewTitle_ReturnsError(t *testing.T) {
 // time and that every line is valid JSON with a non-nil message field.
 // This is the critical end-to-end test that was previously missing.
 func TestForkFromCheckpoint_ForkedFileHasCorrectContent(t *testing.T) {
+	t.Parallel()
 	configDir := t.TempDir()
 	historyDir := t.TempDir()
 
@@ -162,7 +169,7 @@ func TestForkFromCheckpoint_ForkedFileHasCorrectContent(t *testing.T) {
 		Title:           "src-session",
 		Path:            t.TempDir(),
 		HistoryFilePath: historyFile,
-		claudeSession:   &ClaudeSessionData{ConversationUUID: "conv-real"},
+		claudeExtension: claudeExtension{claudeSession: &ClaudeSessionData{ConversationUUID: "conv-real"}},
 	}
 	srcInst.started.Store(true)
 
@@ -206,6 +213,7 @@ func TestForkFromCheckpoint_ForkedFileHasCorrectContent(t *testing.T) {
 // (the old bufio.Scanner limit). This regression test guards the fix in
 // instance_checkpoint.go that replaced Scanner with bufio.NewReader.
 func TestForkFromCheckpoint_ConvLineCount_AccurateForLargeLines(t *testing.T) {
+	t.Parallel()
 	historyDir := t.TempDir()
 	historyFile := filepath.Join(historyDir, "conv-large.jsonl")
 

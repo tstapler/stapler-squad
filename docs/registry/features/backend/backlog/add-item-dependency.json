@@ -1,0 +1,24 @@
+{
+  "id": "backlog:add-item-dependency",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "AddBacklogItemDependency",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "tested": true,
+  "testIds": [
+    "TestAddBacklogItemDependency_should_RejectSelfDependency_When_BlockerEqualsBlocked",
+    "TestAddBacklogItemDependency_should_RejectCycle_When_TwoNodeCycleWouldClose",
+    "TestAddBacklogItemDependency_should_RejectCycle_When_LongerCycleWouldClose",
+    "TestAddBacklogItemDependency_should_NoOp_When_SamePairAddedTwice",
+    "TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerDoesNotExist",
+    "TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockedDoesNotExist",
+    "TestAddBacklogItemDependency_should_PersistEdge_When_ItemsExistAndNoCycle",
+    "TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_SelfDependency",
+    "TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_EdgeWouldCloseCycle",
+    "TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerItemMissing",
+    "TestAddBacklogItemDependency_should_ReturnUnavailable_When_StorageNotWired"
+  ],
+  "lastModified": "2026-08-13T00:07:54.125730877-07:00"
+}

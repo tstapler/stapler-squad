@@ -1,0 +1,19 @@
+{
+  "id": "backlog:reject-plan",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "RejectPlan",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "tested": true,
+  "testIds": [
+    "TestRejectPlan_HappyPath_SetsReasonAndTimestamp",
+    "TestRejectPlan_EmptyReason_ReturnsInvalidArgument",
+    "TestRejectPlan_WhitespaceOnlyReason_ReturnsInvalidArgument",
+    "TestRejectPlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition",
+    "TestRejectPlan_ClearsExistingApproval",
+    "tests/e2e/plan-review.spec.ts"
+  ],
+  "lastModified": "2026-08-12T00:00:00Z"
+}

@@ -83,3 +83,35 @@ on. It also blows past `requirements.md`'s "Small (1-3 days), single-file utilit
   `sessionsSlice.ts` level (e.g. giving `setSessions` a filter-scoped merge instead of a blind
   `setAll`) remains explicitly out of scope for this item per `requirements.md`'s Out of Scope
   section.
+
+## Amendment (2026-08-24): resolving adversarial-review's two BLOCKERs
+
+`implementation/adversarial-review.md` returned **BLOCKED** on two gaps this ADR's original
+"Consequences" section did not cover. Both are resolved with code-level fixes, not documented
+risk, per `implementation/pre-mortem.md` P1 item #3's explicit requirement that a BLOCKER may
+not be closed the same way the (already-accepted) filter-heterogeneity Concern was:
+
+- **Blocker 1 (hung/slow fetch stalls the whole coordinator)**: every fetcher closure at all 4
+  call sites now passes ConnectRPC's native `{ timeoutMs: LIST_SESSIONS_TIMEOUT_MS }` (15s;
+  `useSessionService.ts`), the same mechanism already used for `createSession`'s
+  `CREATE_SESSION_TIMEOUT_MS`. A fetch that hangs past this bound rejects, which the
+  coordinator's existing settle/drain logic already unblocks queued callers from — proven at
+  `refreshCoordinator.test.ts`'s `request_should_unblockQueuedCallers_When_aHungFetcherEventuallyTimesOut`.
+  No coordinator-level `AbortSignal` plumbing was needed.
+- **Blocker 2 (a queued guarded stream-flush fetcher can be silently discarded)**: `request()`
+  gained a `{ guarded?: boolean }` option (`refreshCoordinator.ts`). Sites #2/#3/#3b (the
+  stream-reconnect flush, gated on `streamGenerationRef`) pass `guarded: true`; site #1 (the
+  public `listSessions()`) does not. A non-guarded caller arriving while a guarded fetcher sits
+  in the coordinator's `pending` slot no longer overwrites it — it rides the guarded fetch's
+  own outcome instead (still an instance of this ADR's existing accepted "loses its own
+  onResult" tradeoff, just with guarded fetchers given priority over unguarded ones). Proven at
+  the coordinator level
+  (`request_should_neverOverwriteAGuardedPendingFetcher_When_ALaterNonGuardedCallerCoalesces`)
+  and at the real call-site/Redux-store level
+  (`useSessionService.test.ts`'s
+  `listSessions_should_neverOverwriteAQueuedGuardedStreamSnapshot_When_ALaterUnguardedListSessionsCoalesces`).
+
+`implementation/pre-mortem.md` P1 item #1 (a thrown `onResult` wedging the coordinator at
+`inFlight` forever) is also closed with a code-level fix: `run()`'s drain step is in a
+`finally` block, so it always executes regardless of whether `fetcher()` rejects or `onResult`
+throws — proven at `request_should_returnToIdleState_When_onResultThrowsSynchronously`.

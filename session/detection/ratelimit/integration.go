@@ -90,6 +90,7 @@ type PTYConsumer struct {
 	running      bool
 	cancelFn     context.CancelFunc
 	notifyCh     chan struct{}
+	done         chan struct{}
 }
 
 func NewPTYConsumer(buffer BufferReader, manager *Manager) *PTYConsumer {
@@ -122,25 +123,34 @@ func (pc *PTYConsumer) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	pc.cancelFn = cancel
 	pc.running = true
-	go pc.pollLoop(ctx)
+	pc.done = make(chan struct{})
+	go pc.pollLoop(ctx, pc.done)
 }
 
 func (pc *PTYConsumer) Stop() {
 	pc.mu.Lock()
-	defer pc.mu.Unlock()
 
 	if !pc.running {
+		pc.mu.Unlock()
 		return
 	}
 
 	pc.running = false
-	if pc.cancelFn != nil {
-		pc.cancelFn()
-		pc.cancelFn = nil
+	cancelFn := pc.cancelFn
+	pc.cancelFn = nil
+	done := pc.done
+	pc.mu.Unlock()
+
+	if cancelFn != nil {
+		cancelFn()
+	}
+	if done != nil {
+		<-done
 	}
 }
 
-func (pc *PTYConsumer) pollLoop(ctx context.Context) {
+func (pc *PTYConsumer) pollLoop(ctx context.Context, done chan struct{}) {
+	defer close(done)
 	heartbeat := time.NewTicker(5 * time.Second)
 	defer heartbeat.Stop()
 

@@ -6,6 +6,7 @@ import (
 )
 
 func TestBannerFilter_IsBanner(t *testing.T) {
+	t.Parallel()
 	filter := NewBannerFilter()
 
 	tests := []struct {
@@ -76,6 +77,7 @@ func TestBannerFilter_IsBanner(t *testing.T) {
 }
 
 func TestBannerFilter_FilterBanners(t *testing.T) {
+	t.Parallel()
 	filter := NewBannerFilter()
 
 	input := []string{
@@ -118,6 +120,7 @@ func TestBannerFilter_FilterBanners(t *testing.T) {
 }
 
 func TestBannerFilter_FilterBannersFromText(t *testing.T) {
+	t.Parallel()
 	filter := NewBannerFilter()
 
 	input := `Hello, world!
@@ -147,6 +150,7 @@ Final line`
 }
 
 func TestBannerFilter_HasMeaningfulContent(t *testing.T) {
+	t.Parallel()
 	filter := NewBannerFilter()
 
 	tests := []struct {
@@ -197,6 +201,7 @@ func TestBannerFilter_HasMeaningfulContent(t *testing.T) {
 }
 
 func TestBannerFilter_RealWorldExamples(t *testing.T) {
+	t.Parallel()
 	filter := NewBannerFilter()
 
 	// Real-world tmux status line examples
@@ -235,6 +240,7 @@ func TestBannerFilter_RealWorldExamples(t *testing.T) {
 }
 
 func TestBannerFilter_ANSIDetection(t *testing.T) {
+	t.Parallel()
 	filter := NewBannerFilter()
 
 	// Test ANSI-based banner detection (most reliable)
@@ -291,6 +297,7 @@ func TestBannerFilter_ANSIDetection(t *testing.T) {
 }
 
 func TestStripANSICodes(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -346,6 +353,7 @@ func TestStripANSICodes(t *testing.T) {
 }
 
 func TestBannerFilter_EdgeCases(t *testing.T) {
+	t.Parallel()
 	filter := NewBannerFilter()
 
 	tests := []struct {
@@ -391,6 +399,7 @@ func TestBannerFilter_EdgeCases(t *testing.T) {
 }
 
 func TestBannerFilter_PerformanceWithLargeInput(t *testing.T) {
+	t.Parallel()
 	filter := NewBannerFilter()
 
 	// Generate large input with mixed banners and content

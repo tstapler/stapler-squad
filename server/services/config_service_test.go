@@ -13,23 +13,12 @@ import (
 )
 
 // claudeConfigTestDir creates a temporary directory that impersonates ~/.claude for
-// the duration of the test by overriding HOME.  It returns a cleanup function that
-// restores the original HOME value.
+// the duration of the test by overriding HOME (via withFakeHome, which serializes
+// against every other HOME-mutating test in this package).
 func claudeConfigTestDir(t *testing.T) string {
 	t.Helper()
 
-	tmpHome := t.TempDir()
-
-	// Point HOME at the temp directory so GetClaudeDir() resolves to tmpHome/.claude
-	origHome, hadHome := os.LookupEnv("HOME")
-	t.Setenv("HOME", tmpHome)
-	t.Cleanup(func() {
-		if hadHome {
-			os.Setenv("HOME", origHome) //nolint:errcheck
-		} else {
-			os.Unsetenv("HOME") //nolint:errcheck
-		}
-	})
+	tmpHome := withFakeHome(t)
 
 	claudeDir := filepath.Join(tmpHome, ".claude")
 	if err := os.MkdirAll(claudeDir, 0755); err != nil {

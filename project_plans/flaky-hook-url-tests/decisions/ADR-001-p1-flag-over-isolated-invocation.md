@@ -1,7 +1,7 @@
 # ADR-001: `-p 1` on the Existing Gating Invocation, Not a Second Isolated `-race` Job
 
 ## Status
-Proposed
+Accepted — implemented in `.github/workflows/build.yml` via the `ci-hookurl-race-flake` PR.
 
 ## Context
 

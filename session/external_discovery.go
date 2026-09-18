@@ -161,8 +161,16 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 		Permissions: GetMuxExternalPermissions(),
 	}
 
-	// Initialize the process manager for external instances.
-	instance.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
+	// Initialize the process manager for external instances. An unrecognized
+	// instance.Backend value here means genuinely corrupted/unexpected data —
+	// log it loudly and skip wrapping this discovered session rather than
+	// registering an Instance with no process manager.
+	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
+	if err != nil {
+		log.Error("failed to construct process manager for external session", "tmux_session", discovered.Metadata.TmuxSession, "title", title, "err", err)
+		return
+	}
+	instance.processManager = pm
 
 	// UNIFIED ARCHITECTURE: Attach to the existing tmux session so external sessions
 	// use the same streaming/resize infrastructure as regular sessions.

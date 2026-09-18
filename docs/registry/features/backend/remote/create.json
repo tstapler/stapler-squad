@@ -1,0 +1,17 @@
+{
+  "id": "remote:create",
+  "type": "backend",
+  "service": "RemoteService",
+  "method": "CreateRemote",
+  "protoFile": "proto/session/v1/remote.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/remote_service.go",
+  "tested": true,
+  "testIds": [
+    "TestDraftFlow_GenerateIdentity_TrustHostKey_Then_CreateRemote_RoundTripSucceeds",
+    "TestCreateRemote_DuplicateName_ReturnsAlreadyExists",
+    "TestCreateRemote_NonDefaultPort_FoldedIntoHostString",
+    "remote-workspaces \u003e add a remote, test connection, trust the host key, verify Connected status"
+  ],
+  "lastModified": "2026-08-17T00:00:00Z"
+}

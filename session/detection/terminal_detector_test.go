@@ -16,6 +16,7 @@ func (f *fakeTerminalDetector) RecentEvents(n int) []DetectionEvent           { 
 func (f *fakeTerminalDetector) SetSessionID(id string)                        {}
 
 func TestFakeTerminalDetector_should_satisfyInterface(t *testing.T) {
+	t.Parallel()
 	var _ TerminalDetector = (*fakeTerminalDetector)(nil)
 	// If this compiles, the interface is satisfied.
 }

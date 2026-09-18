@@ -21,6 +21,7 @@ func setupNotificationService() *NotificationService {
 // TestGetNotificationHistory_ReturnsEmpty verifies that a fresh NotificationService
 // with no store wired returns an empty list without error.
 func TestGetNotificationHistory_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	svc := setupNotificationService()
 
 	resp, err := svc.GetNotificationHistory(
@@ -37,6 +38,7 @@ func TestGetNotificationHistory_ReturnsEmpty(t *testing.T) {
 // TestMarkNotificationRead_EmptyIDs verifies that passing an empty
 // notification_ids slice returns success with marked_count == 0 (no-op).
 func TestMarkNotificationRead_EmptyIDs(t *testing.T) {
+	t.Parallel()
 	svc := setupNotificationService()
 
 	resp, err := svc.MarkNotificationRead(
@@ -55,6 +57,7 @@ func TestMarkNotificationRead_EmptyIDs(t *testing.T) {
 // TestClearNotificationHistory_Success verifies that ClearNotificationHistory
 // returns success when there is nothing to clear (nil store).
 func TestClearNotificationHistory_Success(t *testing.T) {
+	t.Parallel()
 	svc := setupNotificationService()
 
 	resp, err := svc.ClearNotificationHistory(

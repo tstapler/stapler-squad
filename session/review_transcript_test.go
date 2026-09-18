@@ -15,10 +15,13 @@ func newTestScrollbackManager(t *testing.T) *scrollback.ScrollbackManager {
 	t.Helper()
 	cfg := scrollback.DefaultScrollbackConfig()
 	cfg.StoragePath = t.TempDir()
-	return scrollback.NewScrollbackManager(cfg)
+	sm := scrollback.NewScrollbackManager(cfg)
+	t.Cleanup(func() { _ = sm.Close() })
+	return sm
 }
 
 func TestStripANSI(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   string
@@ -63,6 +66,7 @@ func TestStripANSI(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := stripANSI([]byte(tt.in))
 			if got != tt.want {
 				t.Errorf("stripANSI(%q) = %q, want %q", tt.in, got, tt.want)
@@ -72,6 +76,7 @@ func TestStripANSI(t *testing.T) {
 }
 
 func TestWriteReviewTranscriptFile_WritesStrippedContent(t *testing.T) {
+	t.Parallel()
 	sm := newTestScrollbackManager(t)
 	workDir := t.TempDir()
 	sessionUUID := "sess-abc-123"
@@ -119,6 +124,7 @@ func TestWriteReviewTranscriptFile_WritesStrippedContent(t *testing.T) {
 }
 
 func TestWriteReviewTranscriptFile_TruncatesToMaxBytesKeepingTail(t *testing.T) {
+	t.Parallel()
 	sm := newTestScrollbackManager(t)
 	workDir := t.TempDir()
 	sessionUUID := "sess-long-999"
@@ -164,6 +170,7 @@ func TestWriteReviewTranscriptFile_TruncatesToMaxBytesKeepingTail(t *testing.T) 
 }
 
 func TestWriteReviewTranscriptFile_NoScrollbackReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	sm := newTestScrollbackManager(t)
 	workDir := t.TempDir()
 
@@ -190,6 +197,7 @@ func TestWriteReviewTranscriptFile_NoScrollbackReturnsEmpty(t *testing.T) {
 }
 
 func TestWriteReviewTranscriptFile_NilManagerReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	workDir := t.TempDir()
 
 	relPath, cleanup, err := WriteReviewTranscriptFile(nil, "some-session", workDir, DefaultReviewTranscriptMaxBytes)
@@ -203,6 +211,7 @@ func TestWriteReviewTranscriptFile_NilManagerReturnsEmpty(t *testing.T) {
 }
 
 func TestWriteReviewTranscriptFile_EmptyArgsReturnEmpty(t *testing.T) {
+	t.Parallel()
 	sm := newTestScrollbackManager(t)
 	workDir := t.TempDir()
 
@@ -217,6 +226,7 @@ func TestWriteReviewTranscriptFile_EmptyArgsReturnEmpty(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			relPath, cleanup, err := WriteReviewTranscriptFile(sm, tt.sessionUUID, tt.workDir, DefaultReviewTranscriptMaxBytes)
 			if err != nil {
 				t.Fatalf("WriteReviewTranscriptFile() error = %v, want nil", err)

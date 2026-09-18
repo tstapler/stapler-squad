@@ -21,6 +21,7 @@ func buildMCPConfigFlag(mcpURL string) string {
 // TestMCPConfigFlagStructure verifies the generated --mcp-config JSON has the required
 // MCP spec structure: top-level "mcpServers" wrapper with correct server entry.
 func TestMCPConfigFlagStructure(t *testing.T) {
+	t.Parallel()
 	flag := buildMCPConfigFlag("http://localhost:8543/mcp")
 
 	// Strip the --mcp-config prefix and surrounding single-quotes to get the raw JSON.
@@ -70,6 +71,7 @@ func TestMCPConfigFlagStructure(t *testing.T) {
 // TestMCPConfigFlagRejectedByOldFormat confirms the previously-broken format
 // (missing mcpServers wrapper) is structurally wrong.
 func TestMCPConfigFlagRejectedByOldFormat(t *testing.T) {
+	t.Parallel()
 	oldJSON := `{"stapler-squad":{"type":"http","url":"http://localhost:8543/mcp"}}`
 
 	var top map[string]json.RawMessage
@@ -90,6 +92,7 @@ func TestMCPConfigFlagRejectedByOldFormat(t *testing.T) {
 // it falls back to schema-only validation (unreachable MCP URL, no API proxy).
 // Skipped when claude is not installed.
 func TestClaudeBinaryAcceptsMCPConfig(t *testing.T) {
+	t.Parallel()
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
 		t.Skip("claude not in PATH — skipping binary integration test")

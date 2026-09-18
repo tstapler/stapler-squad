@@ -5,6 +5,8 @@
  * the server's expectations for the ConnectRPC protocol.
  */
 
+import { gzipSync } from "zlib";
+
 // Extract the encodeEnvelope function for testing
 function encodeEnvelope(flags: number, data: Uint8Array): Uint8Array {
   const envelope = new Uint8Array(5 + data.length);
@@ -14,6 +16,44 @@ function encodeEnvelope(flags: number, data: Uint8Array): Uint8Array {
   view.setUint32(1, data.length, false); // false = big-endian
   envelope.set(data, 5);
   return envelope;
+}
+
+// Extract the decompressGzipPayload function for testing. Duplicated locally rather than
+// imported from ./websocket-transport (as encodeEnvelope is above) because that module
+// transitively imports "it-ws/client", whose installed package in this checkout ships only
+// src/ (no dist/ build output the package.json "exports" map points at) — a pre-existing,
+// unrelated packaging gap that makes the real module unresolvable under Jest regardless of
+// this change. See server/protocol/compression_test.go for the corresponding Go-side coverage.
+async function decompressGzipPayload(data: Uint8Array): Promise<Uint8Array> {
+  // Typed as Uint8Array<ArrayBuffer> (rather than the bare Uint8Array default of
+  // Uint8Array<ArrayBufferLike>) to match DecompressionStream.readable's declared type in
+  // lib.dom.d.ts exactly — otherwise pipeThrough's generic inference can't reconcile the two
+  // and tsc rejects the call. Kept in sync with websocket-transport.ts's real implementation.
+  const stream = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    start(controller) {
+      controller.enqueue(data as Uint8Array<ArrayBuffer>);
+      controller.close();
+    },
+  });
+  const decompressed = stream.pipeThrough(new DecompressionStream("gzip"));
+  const reader = decompressed.getReader();
+
+  const chunks: Uint8Array[] = [];
+  let totalLength = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    totalLength += value.length;
+  }
+
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
 }
 
 describe('WebSocket Transport - Envelope Encoding', () => {
@@ -133,6 +173,35 @@ describe('WebSocket Transport - Envelope Encoding', () => {
       expect(length).toBe(2);
       expect(envelope[5]).toBe(0xAA);
       expect(envelope[6]).toBe(0xBB);
+    });
+  });
+
+  // AC6a (terminal-resync-reliability Epic 5.1): parseResponseBody's compressed-frame handling.
+  // decompressGzipPayload is the extracted decompression step parseResponseBody calls when the
+  // envelope's CompressedFlag is set (server/protocol/envelope.go); these tests exercise it
+  // directly since parseResponseBody itself is a private closure inside stream().
+  describe('parseResponseBody compressed-frame handling', () => {
+    it('parseResponseBody_should_DecompressGzipPayload_When_CompressedFlagSet', async () => {
+      const original = new TextEncoder().encode(
+        'the quick brown fox jumps over the lazy dog '.repeat(50)
+      );
+      // Compressed with Node's zlib (a standard gzip encoder), simulating the payload the Go
+      // server produces via server/protocol's CompressEnvelopeIfLarge (also standard gzip).
+      const compressed = new Uint8Array(gzipSync(Buffer.from(original)));
+
+      const result = await decompressGzipPayload(compressed);
+
+      expect(result).toEqual(original);
+    });
+
+    it('parseResponseBody_should_SurfaceDecodeError_When_CompressedFlagSetButPayloadIsTruncated', async () => {
+      const original = new TextEncoder().encode(
+        'the quick brown fox jumps over the lazy dog '.repeat(50)
+      );
+      const compressed = new Uint8Array(gzipSync(Buffer.from(original)));
+      const truncated = compressed.slice(0, compressed.length - 10);
+
+      await expect(decompressGzipPayload(truncated)).rejects.toThrow();
     });
   });
 

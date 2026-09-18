@@ -89,7 +89,7 @@ func seedBacklogItems(t *testing.T, repo *session.EntRepository, ctx context.Con
 // countRows returns COUNT(*) for the given table in the sqlite file at dbPath.
 func countRows(t *testing.T, dbPath, table string) int {
 	t.Helper()
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -106,6 +106,7 @@ func countRows(t *testing.T, dbPath, table string) int {
 // destination's backlog_items count is unchanged post-merge, because
 // mergeSessions never touches that table.
 func TestMergeDatabase_should_notPublishLiveEvents_When_BulkCopyingBacklogItems(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	sourceRepo, sourcePath, sourceCleanup := newTempEntRepoForMergeTest(t)
@@ -156,6 +157,7 @@ func TestMergeDatabase_should_notPublishLiveEvents_When_BulkCopyingBacklogItems(
 // live backlog-item publisher being wired on the destination, and backlog
 // items present in both workspaces are left untouched by that copy.
 func TestMergeDatabase_should_stillPersistCopiedItems_When_EventPublishIsSuppressed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	sourceRepo, sourcePath, sourceCleanup := newTempEntRepoForMergeTest(t)

@@ -184,8 +184,7 @@ func (g *GitHubIssuesPlugin) fetchIssuesPage(ctx context.Context, cfg githubPlug
 	req.Header.Set("Authorization", "token "+cfg.Token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := github.HTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("github_issues: request failed: %w", err)
 	}
@@ -328,7 +327,7 @@ func (g *GitHubIssuesPlugin) CloseIssue(ctx context.Context, config PluginConfig
 	req.Header.Set("Authorization", "token "+cfg.Token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	resp, err := github.HTTPClient().Do(req)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("github_issues: close issue %s request failed: %w", externalID, err)
 	}
@@ -394,7 +393,7 @@ func (g *GitHubIssuesPlugin) PostIssueComment(ctx context.Context, config Plugin
 	req.Header.Set("Authorization", "token "+cfg.Token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	resp, err := github.HTTPClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("github_issues: post comment on issue %s request failed: %w", externalID, err)
 	}

@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,52 +12,22 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// ConversationID represents a validated Claude/Antigravity conversation UUID.
-type ConversationID string
-
-// ParseConversationID parses and validates a raw string as a ConversationID.
-func ParseConversationID(s string) (ConversationID, error) {
-	if !isValidUUID(s) {
-		return "", fmt.Errorf("invalid conversation ID format: %q", s)
-	}
-	return ConversationID(s), nil
-}
-
-// WorkspacePath represents a cleaned, resolved workspace root path.
-type WorkspacePath string
-
-// NewWorkspacePath resolves symlinks and cleans a path to guarantee a single canonical representation.
-func NewWorkspacePath(s string) (WorkspacePath, error) {
-	if s == "" {
-		return "", fmt.Errorf("workspace path cannot be empty")
-	}
-	resolved, err := filepath.EvalSymlinks(s)
-	if err != nil {
-		resolved = s
-	}
-	return WorkspacePath(filepath.Clean(resolved)), nil
-}
+// ErrNoHistoryAdapter indicates PortSessionHistory was asked to port history for a program
+// pair where no registered HistoryAdapter claims one (or both) sides — e.g. opencode, aider,
+// bash, or gemini (the real Gemini CLI, distinct from Antigravity's own storage format — see
+// AgyAdapter.CanHandle), none of which have a canonical history format to port. Callers should
+// treat this as an expected, low-severity no-op (log and continue), not a hard failure.
+var ErrNoHistoryAdapter = errors.New("no history adapter resolves for this program")
 
 // PortSessionHistory translates and syncs history between Claude Code and Antigravity CLI.
 func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *Instance) error {
-	var srcAdapter, dstAdapter HistoryAdapter
+	srcAdapter := resolveHistoryAdapter(oldProgram)
+	dstAdapter := resolveHistoryAdapter(newProgram)
 
-	claude := NewClaudeAdapter()
-	agy := NewAgyAdapter()
-
-	if claude.CanHandle(oldProgram) {
-		srcAdapter = claude
-	} else if agy.CanHandle(oldProgram) {
-		srcAdapter = agy
+	if srcAdapter == nil || dstAdapter == nil {
+		return ErrNoHistoryAdapter
 	}
-
-	if claude.CanHandle(newProgram) {
-		dstAdapter = claude
-	} else if agy.CanHandle(newProgram) {
-		dstAdapter = agy
-	}
-
-	if srcAdapter == nil || dstAdapter == nil || srcAdapter.Name() == dstAdapter.Name() {
+	if srcAdapter.Name() == dstAdapter.Name() {
 		return nil
 	}
 
@@ -99,18 +70,20 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 				log.Warn("PortSessionHistory: failed to marshal agy history entry", "error", marshalErr)
 				return marshalErr
 			}
-			if f, err := os.OpenFile(agyHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+			if f, err := os.OpenFile(agyHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil { // #nosec G304 -- agyHistoryPath is home dir + hardcoded constant components only
 				if _, werr := f.Write(historyData); werr != nil {
-					f.Close()
+					_ = f.Close()
 					log.Warn("PortSessionHistory: failed to write agy history data", "error", werr)
 					return werr
 				}
 				if _, werr := f.Write([]byte("\n")); werr != nil {
-					f.Close()
+					_ = f.Close()
 					log.Warn("PortSessionHistory: failed to write agy history newline", "error", werr)
 					return werr
 				}
-				f.Close()
+				if err := f.Close(); err != nil {
+					log.Warn("PortSessionHistory: failed to close agy history file", "error", err)
+				}
 			}
 		}
 	} else if dstAdapter.Name() == "claude" {
@@ -129,18 +102,20 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 				log.Warn("PortSessionHistory: failed to marshal claude history entry", "error", marshalErr)
 				return marshalErr
 			}
-			if hf, err := os.OpenFile(claudeHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+			if hf, err := os.OpenFile(claudeHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil { // #nosec G304 -- claudeHistoryPath is home dir + hardcoded constant components only
 				if _, werr := hf.Write(historyData); werr != nil {
-					hf.Close()
+					_ = hf.Close()
 					log.Warn("PortSessionHistory: failed to write claude history data", "error", werr)
 					return werr
 				}
 				if _, werr := hf.Write([]byte("\n")); werr != nil {
-					hf.Close()
+					_ = hf.Close()
 					log.Warn("PortSessionHistory: failed to write claude history newline", "error", werr)
 					return werr
 				}
-				hf.Close()
+				if err := hf.Close(); err != nil {
+					log.Warn("PortSessionHistory: failed to close claude history file", "error", err)
+				}
 			}
 		}
 

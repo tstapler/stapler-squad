@@ -15,6 +15,7 @@ import {
   Zap,
   FolderOpen,
   ToggleLeft,
+  Import,
 } from "lucide-react";
 import { routes } from "./routes";
 
@@ -59,6 +60,7 @@ export const NAV_PAGES: NavPage[] = [
   // Secondary — hamburger / More-sheet only
   { href: routes.insights, label: "Insights", icon: BarChart2, headerNav: false, group: "insights" },
   { href: routes.workflows, label: "Workflows", icon: Zap,             headerNav: false, group: "automation" },
+  { href: routes.triggers, label: "Triggers", icon: Zap,          headerNav: false, featureFlag: "webhook_triggers", group: "automation" },
   { href: routes.rules,   label: "Rules",   icon: BookOpen,          headerNav: false, group: "automation" },
   { href: routes.history, label: "History", icon: History,           headerNav: false, group: "insights" },
   { href: routes.logs,    label: "Logs",    icon: ScrollText,  headerNav: false, group: "settings" },
@@ -67,11 +69,10 @@ export const NAV_PAGES: NavPage[] = [
   { href: routes.escapeAnalytics, label: "Escape Analytics", icon: BarChart2, headerNav: false, group: "insights" },
   { href: routes.files,           label: "Files",            icon: FolderOpen,   headerNav: false, group: "settings" },
   { href: routes.settingsFeatures, label: "Feature Flags",   icon: ToggleLeft,   headerNav: false, group: "settings" },
+  { href: routes.sessionsImport,  label: "Import",           icon: Import,       headerNav: false, group: "work" },
 ];
 
 export const MOBILE_NAV_PAGES = NAV_PAGES.filter((p) => p.mobileNav !== false);
-/** Items shown in the always-visible header nav row on wide desktop (≥1100px). */
-export const HEADER_NAV_PAGES = NAV_PAGES.filter((p) => p.headerNav !== false);
 /** Items rendered in the BottomNav primary bar (excluding Notifications which is custom-rendered). */
 export const BOTTOM_NAV_PRIMARY = NAV_PAGES.filter(
   (p) => p.bottomNavPrimary && p.mobileNav !== false && p.href !== routes.notifications

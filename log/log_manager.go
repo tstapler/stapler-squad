@@ -98,18 +98,6 @@ func (m *LogManager) ForSession(id string) (*SessionLoggers, error) {
 	return loggers, nil
 }
 
-// CloseSession removes session-scoped loggers and closes their file handle.
-func (m *LogManager) CloseSession(id string) {
-	m.sessionsMu.Lock()
-	defer m.sessionsMu.Unlock()
-	if l, ok := m.sessions[id]; ok {
-		if l.LogFile != nil {
-			_ = l.LogFile.Close()
-		}
-		delete(m.sessions, id)
-	}
-}
-
 // Close drains async writers, flushes the slog handler, and closes all log files.
 // Drain order matters: async writers must be drained before the underlying file is
 // closed, otherwise buffered entries are lost.

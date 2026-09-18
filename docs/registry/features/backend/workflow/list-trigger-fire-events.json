@@ -1,0 +1,15 @@
+{
+  "id": "workflow:list-trigger-fire-events",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ListTriggerFireEvents",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/workflow_service.go",
+  "tested": true,
+  "testIds": [
+    "TestListTriggerFireEvents_ReturnsEventsForWorkflow",
+    "TestListTriggerFireEvents_NilRepo_ReturnsEmptyList"
+  ],
+  "lastModified": "2026-08-06T20:33:31.647419986-07:00"
+}

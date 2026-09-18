@@ -1,0 +1,15 @@
+{
+  "id": "escape-analytics-global-view",
+  "type": "frontend",
+  "name": "All Sessions tab toggle on the Escape Analytics page (global summary view)",
+  "component": "EscapeAnalyticsPage",
+  "path": "web-app/src/components/analytics/EscapeAnalyticsPage.tsx",
+  "filePath": "web-app/src/components/analytics/EscapeAnalyticsPage.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "EscapeAnalyticsPage > EscapeAnalyticsPage_should_SuspendPerSessionHooks_When_AllSessionsTabActive",
+    "EscapeAnalyticsPage > EscapeAnalyticsPage_should_KeepFocusOnTabButton_When_TabSwitched"
+  ],
+  "lastModified": "2026-08-11T00:00:00Z"
+}

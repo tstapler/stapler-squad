@@ -31,6 +31,7 @@ func (f *fakePauseResumeProcessManager) Start(dir string) error {
 // actually started (e.g. the async CreateSession goroutine hasn't finished
 // yet) performs a state-only transition instead of erroring.
 func TestPause_should_NoOpSucceed_When_ActiveInstanceNeverStarted(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:       "never-started",
 		Status:      Active,
@@ -49,6 +50,7 @@ func TestPause_should_NoOpSucceed_When_ActiveInstanceNeverStarted(t *testing.T) 
 // calls Instance.Pause() directly, so the guard must live here, not just in
 // UpdateSession).
 func TestPause_should_ReturnErrPauseNotPermitted_When_PermissionDenied(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:       "no-pause-perm",
 		Status:      Active,
@@ -64,6 +66,7 @@ func TestPause_should_ReturnErrPauseNotPermitted_When_PermissionDenied(t *testin
 // TestPause_should_ReturnAlreadyPausedError_When_AlreadyPaused verifies the
 // already-Paused no-op guard still runs before the not-started branch.
 func TestPause_should_ReturnAlreadyPausedError_When_AlreadyPaused(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:       "already-paused",
 		Status:      Paused,
@@ -80,8 +83,10 @@ func TestPause_should_ReturnAlreadyPausedError_When_AlreadyPaused(t *testing.T) 
 // verifies that the not-started no-op path still defers to the state machine:
 // Creating/Stopped/Hibernated -> Paused are not valid transitions.
 func TestPause_should_ReturnInvalidTransition_When_NeverStartedFromNonPauseableState(t *testing.T) {
+	t.Parallel()
 	for _, status := range []Status{Creating, Stopped, Hibernated} {
 		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
 			inst := &Instance{
 				Title:       "never-started-" + status.String(),
 				Status:      status,
@@ -103,6 +108,7 @@ func TestPause_should_ReturnInvalidTransition_When_NeverStartedFromNonPauseableS
 // just because `started` was never set (e.g. a Paused instance loaded from a
 // state where Start() was never actually called).
 func TestResume_should_PerformRealResumeAndMarkStarted_When_PausedInstanceNeverStarted(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:       "never-started-paused",
 		Status:      Paused,
@@ -123,6 +129,7 @@ func TestResume_should_PerformRealResumeAndMarkStarted_When_PausedInstanceNeverS
 // TestResume_should_ReturnErrResumeNotPermitted_When_PermissionDenied mirrors
 // the pause-side permission gate for the MCP-tool bypass.
 func TestResume_should_ReturnErrResumeNotPermitted_When_PermissionDenied(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:       "no-resume-perm",
 		Status:      Paused,
@@ -139,6 +146,7 @@ func TestResume_should_ReturnErrResumeNotPermitted_When_PermissionDenied(t *test
 // claudeSession reattachment attempt (handleClaudeSessionReattachment errors are
 // logged, not fatal).
 func TestResume_should_NotFailFatally_When_ClaudeSessionReattachmentFails(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:       "never-started-paused-claude",
 		Status:      Paused,
@@ -162,6 +170,7 @@ func TestResume_should_NotFailFatally_When_ClaudeSessionReattachmentFails(t *tes
 // TestPauseResume_should_UseSentinelErrors verifies errors.Is compatibility for
 // the classifyPauseResumeErr helper in server/services/session_service.go.
 func TestPauseResume_should_UseSentinelErrors(t *testing.T) {
+	t.Parallel()
 	assert.True(t, errors.Is(ErrPauseNotPermitted, ErrPauseNotPermitted))
 	assert.True(t, errors.Is(ErrResumeNotPermitted, ErrResumeNotPermitted))
 }

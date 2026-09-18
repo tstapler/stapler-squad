@@ -11,6 +11,7 @@ import (
 // ─── ParseHeadlessTriageResult ────────────────────────────────────────────────
 
 func TestParseHeadlessTriageResult_ValidJSON(t *testing.T) {
+	t.Parallel()
 	raw := `{"summary":"Nice summary","suggestions":[{"text":"do X","rationale":"why"}],"tasks":[{"text":"task 1","estimate":"2h","category":"backend"}]}`
 	result, err := ParseHeadlessTriageResult(raw)
 	require.NoError(t, err)
@@ -22,6 +23,7 @@ func TestParseHeadlessTriageResult_ValidJSON(t *testing.T) {
 }
 
 func TestParseHeadlessTriageResult_StripsMarkdownFences(t *testing.T) {
+	t.Parallel()
 	raw := "```json\n{\"summary\":\"fenced\",\"suggestions\":[]}\n```"
 	result, err := ParseHeadlessTriageResult(raw)
 	require.NoError(t, err)
@@ -29,12 +31,14 @@ func TestParseHeadlessTriageResult_StripsMarkdownFences(t *testing.T) {
 }
 
 func TestParseHeadlessTriageResult_InvalidJSON(t *testing.T) {
+	t.Parallel()
 	_, err := ParseHeadlessTriageResult("{not json}")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ParseHeadlessTriageResult")
 }
 
 func TestParseHeadlessTriageResult_CapsTasksAt12(t *testing.T) {
+	t.Parallel()
 	tasks := make([]string, 0, 15)
 	for i := range 15 {
 		tasks = append(tasks, `{"text":"t`+string(rune('0'+i))+`","estimate":"1h","category":"backend"}`)
@@ -46,6 +50,7 @@ func TestParseHeadlessTriageResult_CapsTasksAt12(t *testing.T) {
 }
 
 func TestParseHeadlessTriageResult_EmptySuggestionsOK(t *testing.T) {
+	t.Parallel()
 	raw := `{"summary":"minimal","suggestions":[]}`
 	result, err := ParseHeadlessTriageResult(raw)
 	require.NoError(t, err)
@@ -54,6 +59,7 @@ func TestParseHeadlessTriageResult_EmptySuggestionsOK(t *testing.T) {
 }
 
 func TestParseHeadlessTriageResult_PreambleBeforeJSON(t *testing.T) {
+	t.Parallel()
 	raw := "Here is my analysis of the backlog item.\nSome additional notes.\n" +
 		`{"summary":"preamble ok","suggestions":[{"text":"s","rationale":"r"}]}`
 	result, err := ParseHeadlessTriageResult(raw)
@@ -62,6 +68,7 @@ func TestParseHeadlessTriageResult_PreambleBeforeJSON(t *testing.T) {
 }
 
 func TestParseHeadlessTriageResult_PreambleBeforeFencedJSON(t *testing.T) {
+	t.Parallel()
 	// Most common real-world case: Claude outputs text, then a fenced block.
 	raw := "Triage complete. Here is the result:\n\n" +
 		"```json\n" +
@@ -73,6 +80,7 @@ func TestParseHeadlessTriageResult_PreambleBeforeFencedJSON(t *testing.T) {
 }
 
 func TestParseHeadlessTriageResult_NoJSON(t *testing.T) {
+	t.Parallel()
 	_, err := ParseHeadlessTriageResult("No JSON here at all.")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ParseHeadlessTriageResult")
@@ -93,6 +101,7 @@ func TestParseHeadlessTriageResult_NoJSON(t *testing.T) {
 // TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionEndedWithoutTransition
 // for the detector-side half of this regression).
 func TestParseHeadlessTriageResult_PrematureCompletionPlaceholder(t *testing.T) {
+	t.Parallel()
 	raw := "Planning subagent is running in the background to write `plan.md`. I'll wait for its completion before dispatching the architecture/adversarial/UX review subagents."
 	_, err := ParseHeadlessTriageResult(raw)
 	require.Error(t, err)
@@ -108,6 +117,7 @@ func TestParseHeadlessTriageResult_PrematureCompletionPlaceholder(t *testing.T) 
 // result looks like {"example":"schema"}" — this must not break parsing of the real
 // object that follows.
 func TestParseHeadlessTriageResult_StrayBraceInPreamble(t *testing.T) {
+	t.Parallel()
 	raw := `I've finished the triage. For reference, a sample response looks like {"example":"schema"}.
 
 ` + `{"summary":"the real summary","suggestions":[{"text":"s","rationale":"r"}],"tasks":[]}`
@@ -124,6 +134,7 @@ func TestParseHeadlessTriageResult_StrayBraceInPreamble(t *testing.T) {
 // (e.g. while explaining what it changed) before emitting the revised result, the
 // revised (last) object is the one returned — not the echoed prior one.
 func TestParseHeadlessTriageResult_PriorResultEchoedThenRevised(t *testing.T) {
+	t.Parallel()
 	raw := `Here was the prior result for reference:
 {"title":"old-title","summary":"old summary","suggestions":[],"tasks":[{"text":"old task","estimate":"1h","category":"backend"}]}
 
@@ -138,6 +149,7 @@ Incorporating the feedback, here is the revised result:
 }
 
 func TestParseHeadlessTriageResult_MultipleStrayBracesPickLast(t *testing.T) {
+	t.Parallel()
 	raw := `First I considered {"summary":"decoy one"} but discarded it.
 Then {"summary":"decoy two","suggestions":[]} also didn't fit.
 Final answer: {"summary":"real one","suggestions":[]}`
@@ -154,6 +166,7 @@ Final answer: {"summary":"real one","suggestions":[]}`
 // decoy's un-nested brace plus the real object's embedded `{ braces }` would throw
 // off depth tracking and either merge the two spans or truncate the real one early.
 func TestParseHeadlessTriageResult_BraceInsideStringLiteralIgnored(t *testing.T) {
+	t.Parallel()
 	raw := `Example: {"x":"y"}
 Real: {"summary":"config looks like { nested }","suggestions":[]}`
 	result, err := ParseHeadlessTriageResult(raw)
@@ -177,6 +190,7 @@ func TestParseHeadlessTriageResult_EscapedQuoteInStringLiteral(t *testing.T) {
 // misread as an escaped quote (`\"`) — the escape flag must reset after consuming
 // the backslash, not be evaluated against the following quote character.
 func TestParseHeadlessTriageResult_EscapedBackslashBeforeQuote(t *testing.T) {
+	t.Parallel()
 	raw := `{"summary":"path is C:\\","suggestions":[]}`
 	result, err := ParseHeadlessTriageResult(raw)
 	require.NoError(t, err)
@@ -187,6 +201,7 @@ func TestParseHeadlessTriageResult_EscapedBackslashBeforeQuote(t *testing.T) {
 // succeeds when the preamble contains a stray, unmatched closing brace (not a
 // complete decoy object) before the real JSON.
 func TestParseHeadlessTriageResult_StrayClosingBraceBeforeJSON(t *testing.T) {
+	t.Parallel()
 	raw := `Here's a stray closing brace: } — ignore that.
 {"summary":"still parses","suggestions":[]}`
 	result, err := ParseHeadlessTriageResult(raw)
@@ -212,18 +227,21 @@ func TestParseHeadlessTriageResult_StrayUnmatchedOpeningBrace(t *testing.T) {
 // ─── BuildHeadlessTriagePrompt ────────────────────────────────────────────────
 
 func TestBuildHeadlessTriagePrompt_ContainsTitle(t *testing.T) {
+	t.Parallel()
 	item := &BacklogItemData{Title: "My Feature", ID: "abc-123"}
 	prompt := BuildHeadlessTriagePrompt(item, "/tmp/artifacts")
 	assert.Contains(t, prompt, "My Feature")
 }
 
 func TestBuildHeadlessTriagePrompt_ContainsArtifactPath(t *testing.T) {
+	t.Parallel()
 	item := &BacklogItemData{Title: "Test", ID: "id-1"}
 	prompt := BuildHeadlessTriagePrompt(item, "/repo/docs/tasks/test")
 	assert.Contains(t, prompt, "/repo/docs/tasks/test")
 }
 
 func TestBuildHeadlessTriagePrompt_InstructsJSONOutput(t *testing.T) {
+	t.Parallel()
 	item := &BacklogItemData{Title: "Test", ID: "id-1"}
 	prompt := BuildHeadlessTriagePrompt(item, "/tmp/art")
 	// Headless mode must instruct JSON output, not call an MCP tool.
@@ -232,6 +250,7 @@ func TestBuildHeadlessTriagePrompt_InstructsJSONOutput(t *testing.T) {
 }
 
 func TestBuildHeadlessTriagePrompt_IncludesAcceptanceCriteria(t *testing.T) {
+	t.Parallel()
 	// ParseAcCriteria expects JSON-encoded criteria.
 	acJSON := AcCriteriaJSON(`[{"index":1,"text":"User can log in","status":"pending"},{"index":2,"text":"User can log out","status":"pending"}]`)
 	item := &BacklogItemData{
@@ -244,6 +263,7 @@ func TestBuildHeadlessTriagePrompt_IncludesAcceptanceCriteria(t *testing.T) {
 }
 
 func TestBuildHeadlessTriagePrompt_NoAcSection_WhenEmpty(t *testing.T) {
+	t.Parallel()
 	item := &BacklogItemData{Title: "No AC", ID: "id-3"}
 	prompt := BuildHeadlessTriagePrompt(item, "/tmp")
 	assert.NotContains(t, prompt, "Acceptance Criteria")
@@ -252,6 +272,7 @@ func TestBuildHeadlessTriagePrompt_NoAcSection_WhenEmpty(t *testing.T) {
 // ─── BuildHeadlessRetriagePrompt ──────────────────────────────────────────────
 
 func TestBuildHeadlessRetriagePrompt_ContainsPriorResultAndFeedback(t *testing.T) {
+	t.Parallel()
 	item := &BacklogItemData{Title: "My Feature", ID: "abc-123"}
 	prior := HeadlessTriageResult{
 		Iteration: 1,
@@ -267,6 +288,7 @@ func TestBuildHeadlessRetriagePrompt_ContainsPriorResultAndFeedback(t *testing.T
 }
 
 func TestBuildHeadlessRetriagePrompt_ReferencesExistingArtifacts(t *testing.T) {
+	t.Parallel()
 	item := &BacklogItemData{Title: "My Feature", ID: "abc-123"}
 	prompt := BuildHeadlessRetriagePrompt(item, "/tmp/artifacts", HeadlessTriageResult{}, "feedback text")
 	assert.Contains(t, prompt, "/tmp/artifacts/plan.md")

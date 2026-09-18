@@ -17,9 +17,11 @@ export interface BrowserLogEntry {
 
 export interface UseBrowserLogStreamOptions {
   /**
-   * Whether verbose debug-level console output also streams to the server.
-   * log/warn/error (and window.onerror/unhandledrejection) always stream
-   * regardless of this flag — it only gates the noisy `console.debug` level.
+   * Whether verbose console.debug output streams to the server. console.log,
+   * console.warn, console.error, window.onerror, and unhandledrejection
+   * always stream regardless of this flag (info-and-up, matching the
+   * server's own log-level convention) — this only gates the noisiest,
+   * per-frame debug tracing (e.g. per-WebSocket-message logs).
    */
   enabled: boolean;
   /** Optional session ID to tag entries. */
@@ -58,9 +60,10 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
   useEffect(() => {
     // SSR guard
     if (typeof window === "undefined") return;
-    // Always install interceptors — log/warn/error and uncaught errors stream to the
-    // server unconditionally (see enqueue()); only console.debug is gated behind
-    // options.enabled, since that's the noisy, opt-in-only level.
+    // Always install interceptors — console.error and uncaught errors stream to the
+    // server unconditionally (see enqueue()) as a crash-diagnostics safety net;
+    // log/warn/debug are gated behind options.enabled, since those are the noisy,
+    // opt-in-only levels.
 
     const apiBase = baseUrlRef.current ?? getApiBaseUrl();
     const client = createClient(SessionService, getConnectTransport());
@@ -94,7 +97,8 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
     }
 
     function enqueue(level: BrowserLogEntry["level"], args: unknown[]): void {
-      // console.debug is opt-in only (noisy); log/warn/error always stream.
+      // Only "debug" is opt-in (noisy, per-frame tracing); log/warn/error
+      // stream unconditionally, matching the server's info-and-up default.
       if (level === "debug" && !enabledRef.current) return;
       if (intercepting) return; // reentrancy guard
       intercepting = true;
@@ -125,7 +129,10 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
       }
       if (buffer.length === 0) return;
       const entries = buffer.splice(0);
-      // Use ConnectRPC client — fire-and-forget; never recurse into console
+      // Use ConnectRPC client — fire-and-forget; never recurse into console.
+      // Deliberately not cancelled: buffered log entries should still ship
+      // even if the effect that scheduled this flush re-runs first.
+      // abort-signal-exempt
       client
         .logClientEvents({
           entries: entries.map((e) => ({

@@ -9,6 +9,7 @@
  */
 
 import { EscapeSequenceParser } from './EscapeSequenceParser';
+import type { ScrollForwardOutcome, ScrollBlockedReason } from '@/gen/session/v1/events_pb';
 
 /** Minimal terminal interface (subset of xterm.js Terminal) */
 export interface ITerminal {
@@ -32,6 +33,34 @@ const HIGH_WATERMARK = 100000; // 100KB - pause when buffer exceeds this
 const LOW_WATERMARK = 10000;   // 10KB - resume when buffer drops below this
 const CHUNK_SIZE = 16384;      // 16KB chunks
 const CHUNK_DELAY_MS = 0;      // Yield to event loop between chunks
+
+/**
+ * Mirrors connectrpc_websocket.go's `ansiSnapshotPrefix` (DECSTR + erase-screen +
+ * cursor-home). The server prepends this exact byte sequence to every full-pane
+ * replacement snapshot it sends — the post-resize capture, visibility/focus resync,
+ * and reconnect snapshot all use it — so its presence at the start of a chunk is a
+ * reliable, trigger-independent signal that this chunk replaces the whole screen
+ * rather than appending to it.
+ *
+ * Checked once, here, inside write() — the single funnel every output path (live
+ * streaming, resize snapshots, resync snapshots, and the RESIZING-queue flush in
+ * TerminalOutput.tsx) already goes through — rather than at each call site, so a
+ * future call site can't reintroduce the stale-buffer-overlap bug by forgetting to
+ * check it.
+ */
+export const ANSI_SNAPSHOT_PREFIX = "\x1b[!p\x1b[2J\x1b[H";
+
+/**
+ * One AppScrollbackResponse frame (Story 1.4.1, Epic 1.3's `Instance.ForwardScroll`),
+ * decoded to a plain string for the client's rendering layer.
+ */
+export interface AppScrollbackFrame {
+  content: string;
+  outcome: ScrollForwardOutcome;
+  program: string;
+  forwardId: string;
+  blockedReason: ScrollBlockedReason;
+}
 
 /**
  * RedrawThrottler - Coalesces rapid full-screen redraws to max 30 FPS.
@@ -137,6 +166,28 @@ export class TerminalStreamManager {
   private firstOutputReceived: boolean = false;
   private onFirstOutput: (() => void) | null = null;
 
+  // Invoked whenever write() detects a full-pane replacement snapshot (see
+  // ANSI_SNAPSHOT_PREFIX), after this.terminal.clear() has already run — lets the
+  // caller reset state it owns that the manager doesn't (e.g. TerminalOutput.tsx's
+  // scrollback-paging refs).
+  private onFullSnapshot: (() => void) | null = null;
+
+  // Story 1.4.0 — client-local mirror of the server's AltScreenTracker (Task 1.1.1a),
+  // observed independently off the same escape sequences already flowing through
+  // write() rather than round-tripped over the wire. Purely a local scroll-up-trigger
+  // decision (see TerminalOutput.tsx's wheel listener / useTerminalGestures wiring);
+  // the server keeps its own copy for the safety-gate role, and the two are not meant
+  // to be reconciled — they observe the same bytes independently by design.
+  private altScreenActive: boolean = false;
+  private onAltScreenChange: ((active: boolean) => void) | null = null;
+
+  // Story 1.4.1 — registered handler for a captured AppScrollbackResponse frame.
+  // Deliberately dispatched through handleAppScrollback(), a distinct entry point
+  // from write()'s ANSI_SNAPSHOT_PREFIX sniff, so a concurrent resize resync's
+  // onFullSnapshot can never fire for this message type and vice versa
+  // (research/architecture.md §6).
+  private onAppScrollback: ((frame: AppScrollbackFrame) => void) | null = null;
+
   constructor(terminal: ITerminal, sendFlowControl: SendFlowControlFn) {
     this.terminal = terminal;
     this.sendFlowControl = sendFlowControl;
@@ -150,6 +201,49 @@ export class TerminalStreamManager {
   /** Set a callback invoked once on first output received. */
   setOnFirstOutput(cb: () => void): void {
     this.onFirstOutput = cb;
+  }
+
+  /** Set a callback invoked whenever a full-pane replacement snapshot is detected in write(). */
+  setOnFullSnapshot(cb: () => void): void {
+    this.onFullSnapshot = cb;
+  }
+
+  /**
+   * Set a callback invoked whenever altScreenActive changes value (Task 1.4.0a) —
+   * called only on an actual transition, mirroring the server-side
+   * `AltScreenTracker.Observe`'s `changed` return convention.
+   */
+  setOnAltScreenChange(cb: (active: boolean) => void): void {
+    this.onAltScreenChange = cb;
+  }
+
+  /**
+   * Directly sets altScreenActive from the server-authoritative
+   * TerminalOutput.alt_screen_active hint (only ever present on an
+   * initial-connect/post-resize snapshot — see useTerminalStream.ts's
+   * onAltScreenActiveHint doc comment) rather than inferring it from
+   * scanning content bytes, which a capture-pane-derived snapshot can never
+   * carry the DECSET 1049h marker for.
+   */
+  setAltScreenActiveHint(active: boolean): void {
+    if (active !== this.altScreenActive) {
+      this.altScreenActive = active;
+      this.onAltScreenChange?.(active);
+    }
+  }
+
+  /** Set a callback invoked when handleAppScrollback() dispatches a captured frame (Task 1.4.1a). */
+  setOnAppScrollback(cb: (frame: AppScrollbackFrame) => void): void {
+    this.onAppScrollback = cb;
+  }
+
+  /**
+   * Dispatch a captured AppScrollbackResponse frame to the registered
+   * onAppScrollback callback. Never routes through write()/onFullSnapshot —
+   * see this.onAppScrollback's doc comment.
+   */
+  handleAppScrollback(frame: AppScrollbackFrame): void {
+    this.onAppScrollback?.(frame);
   }
 
   /** Inject a SerializeAddon for prependScrollbackBatch (serialize-clear-rewrite pattern). */
@@ -233,6 +327,16 @@ export class TerminalStreamManager {
       return;
     }
 
+    // A full-pane replacement snapshot must replace the screen, not append to it —
+    // see ANSI_SNAPSHOT_PREFIX's doc comment. Without this, stale rows from before
+    // the snapshot (reflowed under the terminal's previous wrap state, or content
+    // the user had scrolled past) sit underneath the fresh content instead of being
+    // replaced by it.
+    if (output.startsWith(ANSI_SNAPSHOT_PREFIX)) {
+      this.terminal.clear();
+      this.onFullSnapshot?.();
+    }
+
     // Track first output
     if (!this.firstOutputReceived) {
       this.firstOutputReceived = true;
@@ -258,6 +362,13 @@ export class TerminalStreamManager {
     this.isWritingInitialContent = true;
     try {
       this.terminal.clear();
+      // Note: initial/history content here is a tmux capture-pane-derived
+      // snapshot, which can never itself carry a DECSET 1049h marker (it's a
+      // rendered text snapshot, not a replay of the raw byte stream) — so
+      // scanning it for alt-screen transitions would never find anything.
+      // setAltScreenActiveHint(), driven by the server-authoritative
+      // TerminalOutput.alt_screen_active field, is what actually establishes
+      // correct alt-screen state on connect; see its doc comment.
       await this.enqueueWrite(content);
       this.terminal.scrollToBottom();
 
@@ -322,11 +433,32 @@ export class TerminalStreamManager {
   }
 
   /**
+   * Task 1.4.0a — track altScreenActive off the same enter/exit markers the
+   * needsRefresh scan in handleProcessedOutput already watches for exit.
+   * lastIndexOf + compare (rather than two independent .includes() checks)
+   * resolves the rare case where a single throttled chunk contains both an
+   * exit and a re-entry by picking whichever marker occurs later in the chunk.
+   */
+  private updateAltScreenActive(safeOutput: string): void {
+    const altEnterIdx = Math.max(safeOutput.lastIndexOf('\x1b[?1049h'), safeOutput.lastIndexOf('\x1b[?47h'));
+    const altExitIdx = Math.max(safeOutput.lastIndexOf('\x1b[?1049l'), safeOutput.lastIndexOf('\x1b[?47l'));
+    if (altEnterIdx < 0 && altExitIdx < 0) return;
+
+    const active = altEnterIdx > altExitIdx;
+    if (active !== this.altScreenActive) {
+      this.altScreenActive = active;
+      this.onAltScreenChange?.(active);
+    }
+  }
+
+  /**
    * Handle processed output by routing through the appropriate write path
    * (raw direct/chunked or state batching).
    */
   private handleProcessedOutput(safeOutput: string): void {
     if (safeOutput.length === 0) return;
+
+    this.updateAltScreenActive(safeOutput);
 
     // Detect terminal mode transitions that may need a refresh
     const needsRefresh =

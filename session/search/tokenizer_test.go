@@ -6,6 +6,7 @@ import (
 )
 
 func TestNewTokenizer(t *testing.T) {
+	t.Parallel()
 	tokenizer := NewTokenizer()
 	if tokenizer == nil {
 		t.Fatal("NewTokenizer returned nil")
@@ -23,6 +24,7 @@ func TestNewTokenizer(t *testing.T) {
 }
 
 func TestTokenize_BasicTokenization(t *testing.T) {
+	t.Parallel()
 	tokenizer := NewTokenizer()
 
 	tests := []struct {
@@ -78,6 +80,7 @@ func TestTokenize_BasicTokenization(t *testing.T) {
 }
 
 func TestTokenize_StopWordRemoval(t *testing.T) {
+	t.Parallel()
 	tokenizer := NewTokenizer()
 
 	tests := []struct {
@@ -113,6 +116,7 @@ func TestTokenize_StopWordRemoval(t *testing.T) {
 }
 
 func TestTokenize_Stemming(t *testing.T) {
+	t.Parallel()
 	tokenizer := NewTokenizer()
 
 	tests := []struct {
@@ -158,6 +162,7 @@ func TestTokenize_Stemming(t *testing.T) {
 }
 
 func TestTokenize_Deduplication(t *testing.T) {
+	t.Parallel()
 	tokenizer := NewTokenizer()
 
 	tests := []struct {
@@ -193,6 +198,7 @@ func TestTokenize_Deduplication(t *testing.T) {
 }
 
 func TestTokenize_ShortWords(t *testing.T) {
+	t.Parallel()
 	tokenizer := NewTokenizer()
 
 	// Single character words should be filtered out
@@ -204,6 +210,7 @@ func TestTokenize_ShortWords(t *testing.T) {
 }
 
 func TestTokenizeWithPositions(t *testing.T) {
+	t.Parallel()
 	tokenizer := NewTokenizer()
 
 	tests := []struct {
@@ -260,6 +267,7 @@ func TestTokenizeWithPositions(t *testing.T) {
 }
 
 func TestIsStopWord(t *testing.T) {
+	t.Parallel()
 	tokenizer := NewTokenizer()
 
 	tests := []struct {
@@ -287,6 +295,7 @@ func TestIsStopWord(t *testing.T) {
 }
 
 func TestPorterStem(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -332,6 +341,7 @@ func TestPorterStem(t *testing.T) {
 }
 
 func TestMeasure(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		word     string
 		expected int
@@ -362,6 +372,7 @@ func TestMeasure(t *testing.T) {
 }
 
 func TestContainsVowel(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		word     string
 		expected bool
@@ -385,6 +396,7 @@ func TestContainsVowel(t *testing.T) {
 }
 
 func TestEndsWithDoubleConsonant(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		word     string
 		expected bool
@@ -409,6 +421,7 @@ func TestEndsWithDoubleConsonant(t *testing.T) {
 }
 
 func TestEndsCVC(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		word     string
 		expected bool
@@ -467,6 +480,7 @@ func BenchmarkPorterStem(b *testing.B) {
 
 // Test real-world content similar to Claude history messages
 func TestTokenize_RealWorldContent(t *testing.T) {
+	t.Parallel()
 	tokenizer := NewTokenizer()
 
 	tests := []struct {

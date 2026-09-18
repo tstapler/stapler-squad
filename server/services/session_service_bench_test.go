@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"runtime"
 	"testing"
 
@@ -41,24 +40,11 @@ type benchServiceFixture struct {
 func benchmarkServiceSetup(b *testing.B) *benchServiceFixture {
 	b.Helper()
 
-	// Temp directory for the SQLite database.
-	tmpDir, err := os.MkdirTemp("", "bench-session-svc-*")
-	if err != nil {
-		b.Fatalf("failed to create temp dir: %v", err)
-	}
-	dbPath := fmt.Sprintf("%s/sessions.db", tmpDir)
-
 	// Repository → Storage → EventBus → SessionService
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	if err != nil {
-		_ = os.RemoveAll(tmpDir)
-		b.Fatalf("failed to create repository: %v", err)
-	}
+	repo := session.NewTestEntRepository(b)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
-		_ = repo.Close()
-		_ = os.RemoveAll(tmpDir)
 		b.Fatalf("failed to create storage: %v", err)
 	}
 
@@ -81,8 +67,6 @@ func benchmarkServiceSetup(b *testing.B) *benchServiceFixture {
 		svc.Shutdown()
 		srv.Close()
 		bus.Close()
-		_ = repo.Close()
-		_ = os.RemoveAll(tmpDir)
 	}
 
 	return &benchServiceFixture{

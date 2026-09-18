@@ -11,6 +11,9 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
+
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -21,6 +24,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestResolveSessionType_ExplicitDirectory(t *testing.T) {
+	t.Parallel()
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
 	}
@@ -28,6 +32,7 @@ func TestResolveSessionType_ExplicitDirectory(t *testing.T) {
 }
 
 func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
+	t.Parallel()
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
 	}
@@ -35,6 +40,7 @@ func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
 }
 
 func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
+	t.Parallel()
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType:      sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE,
 		ExistingWorktree: "/some/worktree",
@@ -43,6 +49,7 @@ func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
 }
 
 func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
+	t.Parallel()
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
 	}
@@ -50,6 +57,7 @@ func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
 }
 
 func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
+	t.Parallel()
 	// Backward-compat: a resolved branch with no explicit session_type → new_worktree.
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
@@ -58,6 +66,7 @@ func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
 }
 
 func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t *testing.T) {
+	t.Parallel()
 	// Backward-compat: ExistingWorktree field present → existing_worktree (takes priority over branch).
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType:      sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
@@ -67,6 +76,7 @@ func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t 
 }
 
 func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
+	t.Parallel()
 	// SESSION_TYPE_ONE_OFF maps to SessionTypeOneOff (caller converts to directory after path gen).
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
@@ -75,6 +85,7 @@ func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
 }
 
 func TestResolveSessionType_UnknownExplicitTypeDefaultsToDirectory(t *testing.T) {
+	t.Parallel()
 	// A proto enum value we don't recognise yet should degrade gracefully.
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType(999),
@@ -87,6 +98,7 @@ func TestResolveSessionType_UnknownExplicitTypeDefaultsToDirectory(t *testing.T)
 // ---------------------------------------------------------------------------
 
 func TestCreateSession_EmptyTitle_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -101,6 +113,7 @@ func TestCreateSession_EmptyTitle_ReturnsInvalidArgument(t *testing.T) {
 }
 
 func TestCreateSession_EmptyPath_NonOneOff_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -114,6 +127,39 @@ func TestCreateSession_EmptyPath_NonOneOff_ReturnsInvalidArgument(t *testing.T) 
 	assert.Contains(t, err.Error(), "path is required")
 }
 
+func TestCreateSession_should_RejectAutoApprove_When_ProgramUnsupported(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "my-session",
+		Path:        t.TempDir(),
+		Program:     "codex",
+		AutoApprove: true,
+	}))
+
+	require.Error(t, err)
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+	assert.Contains(t, err.Error(), "auto_approve")
+}
+
+func TestCreateSession_should_SetAutoApprove_When_ProgramIsClaude(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "my-session",
+		Path:        t.TempDir(),
+		Program:     "claude",
+		AutoApprove: true,
+	}))
+
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Session.AutoApprove)
+}
+
 func TestCreateSession_EmptyPath_OneOff_PassesPathValidation(t *testing.T) {
 	// one_off=true must NOT fail with "path is required".
 	// If tmux is available the call succeeds (err == nil); if not, it fails with
@@ -121,8 +167,7 @@ func TestCreateSession_EmptyPath_OneOff_PassesPathValidation(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	withFakeHome(t)
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       "scratch-session",
@@ -139,31 +184,88 @@ func TestCreateSession_EmptyPath_OneOff_PassesPathValidation(t *testing.T) {
 	}
 }
 
-// TestCreateSession_EmptyPath_Autonomous_PassesPathValidation is a regression test for
-// a bug where autonomous sessions created via the omnibar (SessionType=DIRECTORY,
-// AutonomousMode=true, Path="") were rejected with "path is required": the guard
-// only exempted SESSION_TYPE_ONE_OFF, not AutonomousMode, even though the omnibar
-// always sends an empty path for autonomous sessions and relies on the server to
-// generate a scratch directory (mirroring one-off).
-func TestCreateSession_EmptyPath_Autonomous_PassesPathValidation(t *testing.T) {
-	storage := createTestStorage(t)
-	svc := newCreateTestService(t, storage)
-
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
-
-	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
-		Title:          "autonomous-session",
-		Path:           "",
-		SessionType:    sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
-		AutonomousMode: true,
-	}))
-
-	if err != nil {
-		assertNotConnectCode(t, err, connect.CodeInvalidArgument, "autonomous session must not fail path validation")
-	} else {
-		require.NotNil(t, resp.Msg.Session)
-		destroyCreatedSession(t, svc, resp.Msg.Session.Id)
+// TestRequiresExplicitPath covers requiresExplicitPath's exemption branches,
+// extracted from CreateSession's inline path-validation check. The "autonomous
+// mode is exempt" case below is a regression test for a bug where autonomous
+// sessions created via the omnibar (SessionType=DIRECTORY, AutonomousMode=true,
+// Path="") were rejected with "path is required": the guard only exempted
+// SESSION_TYPE_ONE_OFF, not AutonomousMode, even though the omnibar always sends
+// an empty path for autonomous sessions and relies on the server to generate a
+// scratch directory (mirroring one-off). This used to be verified via a full
+// CreateSession -> tmux -> SessionDriver round trip (destroyCreatedSession ->
+// JoinSessionDriver); see BUG-099 for why that made it reliably flaky.
+func TestRequiresExplicitPath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		msg  *sessionv1.CreateSessionRequest
+		want bool
+	}{
+		{
+			name: "directory session with empty path requires one",
+			msg: &sessionv1.CreateSessionRequest{
+				SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+				Path:        "",
+			},
+			want: true,
+		},
+		{
+			name: "directory session with a path does not require one",
+			msg: &sessionv1.CreateSessionRequest{
+				SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+				Path:        "/some/path",
+			},
+			want: false,
+		},
+		{
+			name: "one-off is exempt regardless of path",
+			msg: &sessionv1.CreateSessionRequest{
+				SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
+				Path:        "",
+			},
+			want: false,
+		},
+		{
+			name: "autonomous mode is exempt",
+			msg: &sessionv1.CreateSessionRequest{
+				SessionType:    sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+				AutonomousMode: true,
+				Path:           "",
+			},
+			want: false,
+		},
+		{
+			name: "alias name is exempt",
+			msg: &sessionv1.CreateSessionRequest{
+				SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+				AliasName:   "my-alias",
+				Path:        "",
+			},
+			want: false,
+		},
+		{
+			name: "new project is exempt",
+			msg: &sessionv1.CreateSessionRequest{
+				SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT,
+				Path:        "",
+			},
+			want: false,
+		},
+		{
+			name: "restart from session id is exempt",
+			msg: &sessionv1.CreateSessionRequest{
+				SessionType:          sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+				RestartFromSessionId: "abc123",
+				Path:                 "",
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, requiresExplicitPath(tt.msg))
+		})
 	}
 }
 
@@ -176,8 +278,7 @@ func TestCreateSession_Autonomous_ExplicitPath_DoesNotGenerateScratchDir(t *test
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	baseDir := withFakeHome(t)
 	explicitPath := t.TempDir()
 	oneOffDir := filepath.Join(baseDir, "oneoff")
 
@@ -196,6 +297,7 @@ func TestCreateSession_Autonomous_ExplicitPath_DoesNotGenerateScratchDir(t *test
 }
 
 func TestCreateSession_DuplicateTitle_ReturnsAlreadyExists(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -218,6 +320,7 @@ func TestCreateSession_DuplicateTitle_ReturnsAlreadyExists(t *testing.T) {
 }
 
 func TestCreateSession_EmptyTitleAndPath_TitleErrorFirst(t *testing.T) {
+	t.Parallel()
 	// Both title and path are missing; title validation must fire first.
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
@@ -237,8 +340,7 @@ func TestCreateSession_OneOff_CreatesDirectoryInBaseDir(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir) // ~/oneoff resolves under here
+	baseDir := withFakeHome(t) // ~/oneoff resolves under here
 
 	expectedBase := filepath.Join(baseDir, "oneoff")
 
@@ -268,8 +370,7 @@ func TestCreateSession_OneOff_TwoCallsCreateTwoDistinctDirectories(t *testing.T)
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	baseDir := withFakeHome(t)
 	expectedBase := filepath.Join(baseDir, "oneoff")
 
 	for i, title := range []string{"session-a", "session-b"} {
@@ -286,15 +387,21 @@ func TestCreateSession_OneOff_TwoCallsCreateTwoDistinctDirectories(t *testing.T)
 	}
 }
 
-// TestCreateSession_Autonomous_CreatesDirectoryInBaseDir verifies that, like one-off
-// sessions, an autonomous session with an empty path gets a generated scratch
-// directory rather than being rejected before directory-generation logic runs.
-func TestCreateSession_Autonomous_CreatesDirectoryInBaseDir(t *testing.T) {
+// TestCreateSession_Autonomous_EmptyPath_GeneratesDirectoryInBaseDir is a wiring
+// check that CreateSession actually calls needsGeneratedOneOffPath/
+// generateOneOffPath correctly for the AutonomousMode=true, Path="" combination —
+// TestNeedsGeneratedOneOffPath and TestGenerateOneOffPath below prove those
+// functions are individually correct, but only a real CreateSession call proves
+// they're wired up (right args, right point in the pipeline) for this specific
+// combination. This still goes through the flaky destroyCreatedSession ->
+// JoinSessionDriver teardown path documented in BUG-099 — same accepted risk as
+// its one-off counterpart, TestCreateSession_OneOff_CreatesDirectoryInBaseDir,
+// just below.
+func TestCreateSession_Autonomous_EmptyPath_GeneratesDirectoryInBaseDir(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	baseDir := withFakeHome(t)
 	expectedBase := filepath.Join(baseDir, "oneoff")
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -307,11 +414,93 @@ func TestCreateSession_Autonomous_CreatesDirectoryInBaseDir(t *testing.T) {
 		destroyCreatedSession(t, svc, resp.Msg.Session.Id)
 	}
 
-	// Whether or not tmux started, the generated directory must have been created.
 	entries, err := os.ReadDir(expectedBase)
 	require.NoError(t, err, "autonomous session should generate a scratch directory")
 	require.Len(t, entries, 1, "exactly one generated directory should exist")
 	assert.True(t, entries[0].IsDir(), "generated entry should be a directory")
+}
+
+// TestNeedsGeneratedOneOffPath covers needsGeneratedOneOffPath's branches,
+// extracted from CreateSession's inline directory-generation check, plus a
+// generateOneOffPath call proving the generated directory actually lands on
+// disk. The "autonomous with empty resolved path generates" case is a
+// regression test: like one-off sessions, an autonomous session with an empty
+// path must get a generated scratch directory rather than being rejected before
+// directory-generation logic runs. This used to be verified via a full
+// CreateSession -> tmux -> SessionDriver round trip (destroyCreatedSession ->
+// JoinSessionDriver); see BUG-099 for why that made it reliably flaky (the
+// driver goroutine never exited within any timeout tried).
+func TestNeedsGeneratedOneOffPath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		msg          *sessionv1.CreateSessionRequest
+		resolvedPath string
+		want         bool
+	}{
+		{
+			name:         "one-off always generates, even with a resolved path",
+			msg:          &sessionv1.CreateSessionRequest{SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF},
+			resolvedPath: "/already/resolved",
+			want:         true,
+		},
+		{
+			name:         "autonomous with empty resolved path generates",
+			msg:          &sessionv1.CreateSessionRequest{AutonomousMode: true},
+			resolvedPath: "",
+			want:         true,
+		},
+		{
+			name:         "autonomous with an explicit resolved path does not generate",
+			msg:          &sessionv1.CreateSessionRequest{AutonomousMode: true},
+			resolvedPath: "/explicit/path",
+			want:         false,
+		},
+		{
+			name:         "non-autonomous directory session with empty path does not generate",
+			msg:          &sessionv1.CreateSessionRequest{SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY},
+			resolvedPath: "",
+			want:         false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, needsGeneratedOneOffPath(tt.msg, tt.resolvedPath))
+		})
+	}
+}
+
+func TestGenerateOneOffPath(t *testing.T) {
+	t.Parallel()
+	baseDir := t.TempDir()
+	cfg := &config.Config{OneOffBaseDir: baseDir}
+
+	first, err := generateOneOffPath(cfg)
+	require.NoError(t, err)
+	second, err := generateOneOffPath(cfg)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, first, second, "successive calls should generate distinct directories")
+	for _, p := range []string{first, second} {
+		info, statErr := os.Stat(p)
+		require.NoError(t, statErr)
+		assert.True(t, info.IsDir())
+		assert.Equal(t, baseDir, filepath.Dir(p))
+	}
+}
+
+func TestGenerateOneOffPath_BadBaseDir_ReturnsError(t *testing.T) {
+	t.Parallel()
+	// Point OneOffBaseDir at a file (not a directory) so the directory cannot be created.
+	baseDirParent := t.TempDir()
+	baseDirAsFile := filepath.Join(baseDirParent, "oneoff")
+	require.NoError(t, os.WriteFile(baseDirAsFile, []byte("not a directory"), 0o644))
+
+	cfg := &config.Config{OneOffBaseDir: filepath.Join(baseDirAsFile, "nested")}
+
+	_, err := generateOneOffPath(cfg)
+	require.Error(t, err)
 }
 
 func TestCreateSession_OneOff_BadBaseDir_ReturnsInternalError(t *testing.T) {
@@ -319,21 +508,9 @@ func TestCreateSession_OneOff_BadBaseDir_ReturnsInternalError(t *testing.T) {
 	svc := newCreateTestService(t, storage)
 
 	// Point HOME at a file (not a directory) so ~/oneoff cannot be created.
-	tmpFile, err := os.CreateTemp("", "not-a-dir-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.Remove(tmpFile.Name()) })
-	tmpFile.Close()
+	withFakeHomeAsFile(t)
 
-	// Set HOME to the file's directory and give an explicit base that is the file itself.
-	// We do this by setting ONE_OFF_BASE_DIR via config — but since config is loaded
-	// from disk and we can't inject it here, we instead make the HOME trick: point HOME
-	// to a path whose parent does not allow mkdir.
-	//
-	// Simpler: make the base dir a regular file so os.MkdirAll fails.
-	bogusHome := tmpFile.Name() // HOME = a file; ~/oneoff = file + "/oneoff" which can't be created
-	t.Setenv("HOME", bogusHome)
-
-	_, err = svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       "cant-make-dir",
 		SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
 	}))
@@ -351,36 +528,45 @@ func TestCreateSession_OneOff_BadBaseDir_ReturnsInternalError(t *testing.T) {
 // constant silently regressing below the documented worst case (git clone up
 // to ~120s) — see the comment on createSessionTimeout.
 func TestCreateSessionTimeout_ComfortablyAboveGitCloneBound(t *testing.T) {
+	t.Parallel()
 	assert.Greater(t, createSessionTimeout, 120*time.Second)
 }
 
-// TestCreateSession_GitHubURLResolution_BoundedByContext verifies that
-// CreateSession's GitHub URL resolution step (the one known synchronous
-// sub-operation that can block for up to ~120s on a real clone) is bound to
-// the request context rather than able to hang the RPC forever. An
-// already-expired context is threaded all the way down to
-// safeexec.CommandContext for the underlying `git clone` subprocess, so the
-// subprocess itself should be killed at/near start rather than merely having
-// the RPC give up while a clone keeps running in the background. This makes
-// the test deterministic and fast: ctx.Done() is already closed before the
-// subprocess can do any meaningful network I/O.
-func TestCreateSession_GitHubURLResolution_BoundedByContext(t *testing.T) {
+// TestCreateSession_GitHubURLResolution_NotBoundByRequestContext supersedes
+// the pre-Epic-2.1 TestCreateSession_GitHubURLResolution_BoundedByContext:
+// GitHub URL resolution (the one known synchronous sub-operation that used to
+// block for up to ~120s on a real clone) is no longer part of CreateSession's
+// synchronous path at all (project_plans/async-session-creation/
+// implementation/plan.md Epic 2.1 Story 2.1.1) -- it runs in the
+// trackCleanup-dispatched background goroutine, against its own detached,
+// independently-timed-out context (backgroundGitHubResolutionTimeout), not
+// the RPC's ctx. So an already-expired RPC context must NOT cause
+// CreateSession to fail for a GitHub URL path: nothing on the synchronous
+// path threads ctx down to the clone anymore.
+func TestCreateSession_GitHubURLResolution_NotBoundByRequestContext(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
+
+	resolvedPath := t.TempDir()
+	svc.githubResolver = func(_ context.Context, _ string, _ []string) (string, *session.GitHubRef, error) {
+		return resolvedPath, &session.GitHubRef{Owner: "octocat", Repo: "Hello-World"}, nil
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already expired before CreateSession even starts
 
 	start := time.Now()
-	_, err := svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
+	resp, err := svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title: "github-timeout-test",
 		Path:  "https://github.com/octocat/Hello-World",
 	}))
 	elapsed := time.Since(start)
 
-	require.Error(t, err)
-	assertConnectCode(t, err, connect.CodeDeadlineExceeded)
-	assert.Less(t, elapsed, 2*time.Second, "CreateSession must fail fast on an expired context, not hang on GitHub resolution")
+	require.NoError(t, err, "an expired RPC context must not fail CreateSession for a GitHub URL -- resolution is deferred to the background")
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+	assert.Less(t, elapsed, 2*time.Second, "CreateSession must return fast, not wait on GitHub resolution")
+	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_CREATING, resp.Msg.Session.Status)
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +585,13 @@ func TestCreateSession_GitHubURLResolution_BoundedByContext(t *testing.T) {
 //
 // Requires tmux to be installed; skipped automatically otherwise.
 func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
+	// Not t.Parallel(): this test's goleak.IgnoreCurrent()/VerifyNone() baseline
+	// would be polluted by goroutines started/stopped in sibling parallel tests.
+	baseline := goleak.IgnoreCurrent()
+	// Registered first so it runs LAST (t.Cleanup is LIFO) — after
+	// destroyCreatedSession/svc.Shutdown/bus.Close have fully torn everything down.
+	t.Cleanup(func() { goleak.VerifyNone(t, baseline) })
+
 	storage := createTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
@@ -462,16 +655,42 @@ func newCreateTestService(t *testing.T, storage *session.Storage) *SessionServic
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
 	t.Cleanup(func() { svc.Shutdown() })
+
+	// Wire a ReviewQueuePoller so FindLiveInstance (used by destroyCreatedSession to
+	// join the driver goroutine) resolves the live instance instead of always nil.
+	statusMgr := session.NewInstanceStatusManager()
+	queue := session.NewReviewQueue()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+
 	return svc
 }
 
 // destroyCreatedSession cleans up a session that was successfully created during a test.
 // Errors are soft-logged so cleanup failures don't mask the actual test assertion.
-func destroyCreatedSession(t *testing.T, svc *SessionService, id string) {
+//
+// It waits for DeleteSession's background Destroy() cleanup (waitForPendingCleanup)
+// before returning: these tests set HOME to a t.TempDir(), and since t.Cleanup runs
+// LIFO, that TempDir's RemoveAll (registered after the service, later in the test
+// body) would otherwise race Destroy() for files under HOME (e.g. the tmux exec-gate
+// directory) — see waitForPendingCleanup's doc comment.
+//
+// It also joins the session's SessionDriver goroutine (session.JoinSessionDriver):
+// Destroy()'s call to StopSessionDriver only bounds its wait to driverStopTimeout and
+// proceeds anyway on timeout, so without this join the driver goroutine can still be
+// polling Preview() — which resolves the tmux exec-gate directory via the process-wide
+// HOME/config dir — after waitForPendingCleanup returns and the test's t.TempDir() is
+// removed, intermittently producing "directory not empty" from RemoveAll.
+func destroyCreatedSession(t testing.TB, svc *SessionService, id string) {
 	t.Helper()
+	inst := svc.FindLiveInstance(id)
 	_, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: id}))
 	if err != nil {
 		t.Logf("destroyCreatedSession: cleanup for %q failed (non-fatal): %v", id, err)
+	}
+	svc.waitForPendingCleanup()
+	if inst != nil {
+		session.JoinSessionDriver(inst)
 	}
 }
 

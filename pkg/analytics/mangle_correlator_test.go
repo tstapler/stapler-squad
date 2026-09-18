@@ -33,10 +33,22 @@ func TestMangleCorrelator_Mutated(t *testing.T) {
 	}
 }
 
+func TestMangleCorrelator_DoesNotReportStrippedWithoutActiveTransport(t *testing.T) {
+	spy := &spyWriter{}
+	c := NewMangleCorrelator(20*time.Millisecond, 100)
+	c.RecordStage1("no-consumer", "SGR", "abc123", 20)
+	time.Sleep(40 * time.Millisecond)
+	c.EvictExpired(context.Background(), spy)
+	if len(spy.events) != 0 {
+		t.Fatalf("inactive transport produced false stripped events: %+v", spy.events)
+	}
+}
+
 func TestMangleCorrelator_Stripped(t *testing.T) {
 	spy := &spyWriter{}
 	c := NewMangleCorrelator(100*time.Millisecond, 100)
 	c.RecordStage1("sess1", "SGR", "abc123", 20)
+	c.ObserveTransport("sess1")
 	// Wait for TTL to expire
 	time.Sleep(200 * time.Millisecond)
 	c.EvictExpired(context.Background(), spy)
@@ -94,6 +106,71 @@ func TestMangleCorrelator_OrdinalPerType(t *testing.T) {
 	}
 	if mangled, _ := c.CheckStage2("sess1", "SGR", "hash-green", 5); mangled {
 		t.Errorf("SGR#2 should match hash-green, got mangled=true")
+	}
+}
+
+// TestMangleCorrelator_EvictExpired_PrunesStaleOrdinalCounters is the PerfFix-2 regression
+// test: stage1Ordinals/stage2Ordinals previously had no TTL of their own, so a session's
+// ordinal counters for a (session, type) pair survived forever once EvictExpired had nothing
+// left in pending to reap for that pair — confirmed as the #1 live-heap consumer
+// (25.18% inuse_space) before ordinalLastSeen-driven pruning was added.
+func TestMangleCorrelator_EvictExpired_PrunesStaleOrdinalCounters(t *testing.T) {
+	spy := &spyWriter{}
+	c := NewMangleCorrelator(100*time.Millisecond, 100)
+
+	c.RecordStage1("sess1", "SGR", "hash-1", 5)
+	c.CheckStage2("sess1", "SGR", "hash-1", 5)
+
+	ok := ordinalKey{"sess1", "SGR"}
+	c.mu.Lock()
+	_, s1ok := c.stage1Ordinals[ok]
+	_, s2ok := c.stage2Ordinals[ok]
+	c.mu.Unlock()
+	if !s1ok || !s2ok {
+		t.Fatalf("expected ordinal counters to be present immediately after use, s1=%v s2=%v", s1ok, s2ok)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	c.EvictExpired(context.Background(), spy)
+	c.PruneStaleOrdinals()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.stage1Ordinals[ordinalKey{"sess1", "SGR"}]; ok {
+		t.Error("expected stage1Ordinals entry to be pruned once its (session, type) pair went quiet")
+	}
+	if _, ok := c.stage2Ordinals[ordinalKey{"sess1", "SGR"}]; ok {
+		t.Error("expected stage2Ordinals entry to be pruned once its (session, type) pair went quiet")
+	}
+	if _, ok := c.ordinalLastSeen[ordinalKey{"sess1", "SGR"}]; ok {
+		t.Error("expected ordinalLastSeen entry to be pruned once its (session, type) pair went quiet")
+	}
+}
+
+// TestMangleCorrelator_EvictExpired_DoesNotScanOrdinalMaps is the enforcement for the
+// mutex-contention fix: EvictExpired must NOT prune ordinal counters itself — that scan
+// moved to the separate, less-frequent PruneStaleOrdinals so the hot maxAge/2 eviction tick's
+// critical section stays limited to the pending map. A regression that merges the two back
+// together would make this fail (ordinals pruned by EvictExpired alone, before
+// PruneStaleOrdinals ever runs).
+func TestMangleCorrelator_EvictExpired_DoesNotScanOrdinalMaps(t *testing.T) {
+	spy := &spyWriter{}
+	c := NewMangleCorrelator(100*time.Millisecond, 100)
+
+	c.RecordStage1("sess1", "SGR", "hash-1", 5)
+	c.CheckStage2("sess1", "SGR", "hash-1", 5)
+
+	time.Sleep(200 * time.Millisecond)
+	c.EvictExpired(context.Background(), spy)
+
+	ok := ordinalKey{"sess1", "SGR"}
+	c.mu.Lock()
+	_, s1ok := c.stage1Ordinals[ok]
+	_, s2ok := c.stage2Ordinals[ok]
+	_, lastSeenOk := c.ordinalLastSeen[ok]
+	c.mu.Unlock()
+	if !s1ok || !s2ok || !lastSeenOk {
+		t.Errorf("expected EvictExpired alone to leave stale ordinal entries in place (pruning belongs to PruneStaleOrdinals), got s1=%v s2=%v lastSeen=%v", s1ok, s2ok, lastSeenOk)
 	}
 }
 

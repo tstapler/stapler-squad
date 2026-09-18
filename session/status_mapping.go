@@ -29,7 +29,7 @@ func AttentionReasonFromDetected(detected detection.DetectedStatus) AttentionRea
 	case detection.StatusIdle:
 		return ReasonIdle
 	// Active/processing states do not require attention.
-	case detection.StatusExecuting, detection.StatusProcessing, detection.StatusWaitingForAgent, detection.StatusReady, detection.StatusUnknown:
+	case detection.StatusExecuting, detection.StatusProcessing, detection.StatusWaitingForAgent, detection.StatusReady, detection.StatusUnknown, detection.StatusCompacting:
 		return ""
 	default:
 		return ""

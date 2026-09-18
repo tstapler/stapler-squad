@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -9,9 +10,13 @@ import (
 )
 
 // isClaudeAntigravityFamily reports whether program belongs to the Claude/Antigravity
-// family recognized by the history-porting and conversation-UUID heuristics below.
+// family recognized by the history-porting and conversation-UUID heuristics below. Derived
+// from resolveHistoryAdapter (rather than re-declaring its own claude/agy/antigravity string
+// match) so this can't independently drift from which programs actually have a HistoryAdapter
+// — the exact drift that caused "gemini" to be treated as portable by AgyAdapter.CanHandle
+// but not by this family check.
 func isClaudeAntigravityFamily(program string) bool {
-	return strings.Contains(program, "claude") || strings.Contains(program, "agy") || strings.Contains(program, "antigravity")
+	return resolveHistoryAdapter(program) != nil
 }
 
 // isClaudeAntigravityCrossSwitch reports whether oldProgram and newProgram sit on opposite
@@ -22,6 +27,17 @@ func isClaudeAntigravityCrossSwitch(oldProgram, newProgram string) bool {
 		((strings.Contains(oldProgram, "agy") || strings.Contains(oldProgram, "antigravity")) && strings.Contains(newProgram, "claude"))
 }
 
+// portHistoryFailureIsExpected reports whether portErr is the low-severity ErrNoHistoryAdapter
+// sentinel (isClaudeAntigravityCrossSwitch and each adapter's CanHandle having drifted out of
+// sync) rather than a genuine import/export failure, so SwitchProgram can pick Warn vs Error.
+// Currently unreachable via SwitchProgram itself — isClaudeAntigravityFamily now derives from
+// resolveHistoryAdapter, so the two stay in sync by construction — but kept as defense-in-depth
+// against isClaudeAntigravityCrossSwitch (which can't reduce the same way, since it also
+// encodes directionality) drifting independently in the future.
+func portHistoryFailureIsExpected(portErr error) bool {
+	return errors.Is(portErr, ErrNoHistoryAdapter)
+}
+
 // SwitchProgram atomically switches this instance's Program to rawProgram (resolving an
 // empty string to the configured default), porting Claude<->Antigravity conversation
 // history when crossing between those two and clearing stale conversation linkage
@@ -29,19 +45,20 @@ func isClaudeAntigravityCrossSwitch(oldProgram, newProgram string) bool {
 // non-nil it runs after the field mutation but before an Active-session restart, so
 // callers can make the new program durable even if the subsequent restart fails.
 //
-// The whole operation runs under a per-instance lock (programSwitchMu) so a manual
-// program-switch request and an automatic capacity-monitor fallback firing near-
-// simultaneously serialize instead of double-restarting or double-porting history. This
-// is the single implementation shared by the UpdateSession RPC handler and the
-// capacity-monitor auto-fallback path (SessionService.UpdateSessionProgram) so the two
-// entry points can't drift.
+// The whole operation runs under a per-instance lock (restartTriggerMu, shared with
+// SetAutoApprove) so a manual program-switch request, an automatic capacity-monitor
+// fallback, and a post-creation auto-approve toggle firing near-simultaneously serialize
+// instead of double-restarting or double-porting history. This is the single
+// implementation shared by the UpdateSession RPC handler and the capacity-monitor
+// auto-fallback path (SessionService.UpdateSessionProgram) so the two entry points can't
+// drift.
 //
 // changed reports whether the resolved program actually differed from the current one; a
 // no-op skips persist/restart entirely. err is only ever a Restart failure — persist
 // failures are logged, not returned, matching the pre-existing best-effort save semantics.
 func (i *Instance) SwitchProgram(ctx context.Context, rawProgram string, persist func() error) (changed bool, resolvedProgram string, err error) {
-	i.programSwitchMu.Lock()
-	defer i.programSwitchMu.Unlock()
+	i.restartTriggerMu.Lock()
+	defer i.restartTriggerMu.Unlock()
 
 	resolvedProgram = rawProgram
 	if resolvedProgram == "" {
@@ -58,7 +75,13 @@ func (i *Instance) SwitchProgram(ctx context.Context, rawProgram string, persist
 	switch {
 	case isClaudeAntigravityCrossSwitch(oldProgram, resolvedProgram):
 		if portErr := PortSessionHistory(ctx, oldProgram, resolvedProgram, i); portErr != nil {
-			log.Error("[SwitchProgram] failed to port session history during program switch", "session", i.Title, "old", oldProgram, "new", resolvedProgram, "err", portErr)
+			if portHistoryFailureIsExpected(portErr) {
+				// Low-severity: the family-gate above and each adapter's CanHandle
+				// have drifted out of sync. Best-effort porting still no-ops safely.
+				log.Warn("[SwitchProgram] no history adapter resolved for program pair; skipping history port", "session", i.Title, "old", oldProgram, "new", resolvedProgram)
+			} else {
+				log.Error("[SwitchProgram] failed to port session history during program switch", "session", i.Title, "old", oldProgram, "new", resolvedProgram, "err", portErr)
+			}
 		}
 	case isClaudeAntigravityFamily(oldProgram) && !isClaudeAntigravityFamily(resolvedProgram):
 		// Leaving the Claude/Antigravity family entirely: a stale --resume UUID

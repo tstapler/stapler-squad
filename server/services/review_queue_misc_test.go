@@ -17,6 +17,7 @@ import (
 // TestGetReviewQueue_ReturnsEmpty verifies that a freshly-created
 // ReviewQueueService returns an empty queue with no error.
 func TestGetReviewQueue_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	rqs, _, _, cleanup := setupRQSFixture(t)
 	t.Cleanup(cleanup)
 
@@ -30,6 +31,7 @@ func TestGetReviewQueue_ReturnsEmpty(t *testing.T) {
 // TestGetReviewQueue_WithItems verifies that items added to the review queue
 // are returned by GetReviewQueue.
 func TestGetReviewQueue_WithItems(t *testing.T) {
+	t.Parallel()
 	rqs, _, _, cleanup := setupRQSFixture(t)
 	t.Cleanup(cleanup)
 

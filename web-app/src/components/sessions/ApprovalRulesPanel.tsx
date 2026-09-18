@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useApprovalRules } from "@/lib/hooks/useApprovalRules";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useApprovalAnalytics } from "@/lib/hooks/useApprovalAnalytics";
 import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
 import { useExportRules } from "@/lib/hooks/useExportRules";
@@ -18,6 +19,7 @@ import { RuleBuilderForm } from "@/components/rules/RuleBuilderForm";
 import { TemplateLibrary } from "@/components/rules/TemplateLibrary";
 import { MatchDescription } from "@/components/rules/MatchDescription";
 import { SeverityBadge } from "./SeverityBadge";
+import { TaggingRulesPanel } from "./TaggingRulesPanel";
 import {
   panel, header, titleRow, title, subtitle, refreshButton,
   analyticsBar, analyticsTotal, analyticsRate, rateAllow, rateManual, analyticsTopTool,
@@ -81,7 +83,9 @@ interface ApprovalRulesPanelProps {
  * create, edit, toggle, and delete custom rules via the structured rule builder.
  */
 export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
-  const { rules, loading, error, upsertRule, deleteRule, refresh } = useApprovalRules();
+  const { rules, loading, error, upsertRule, deleteRule, refresh, reloadClaudeSettingsRules } = useApprovalRules();
+  const { showActionToast } = useNotifications();
+  const [reloadingClaudeSettings, setReloadingClaudeSettings] = useState(false);
   const { summary, loading: analyticsLoading } = useApprovalAnalytics({ windowDays: 7 });
   const { exportRules, loading: exporting, error: exportError } = useExportRules();
 
@@ -107,6 +111,10 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
   const [cmdSampleText, setCmdSampleText] = useState("");
 
   const [sourceFilter, setSourceFilter] = useState<string>("all");
+  // ux.md Surface 4: the "Tagging Rules" tab lives alongside the existing
+  // approval-rule source-filter tabs but renders a wholly separate panel
+  // (TaggingRulesPanel), rather than filtering the same table.
+  const [showTaggingRulesTab, setShowTaggingRulesTab] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("priority");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -271,6 +279,24 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
     }
   };
 
+  const handleReloadClaudeSettings = async () => {
+    if (reloadingClaudeSettings) return; // guards against a rapid double-click firing two RPCs
+    setReloadingClaudeSettings(true);
+    try {
+      const resp = await reloadClaudeSettingsRules();
+      showActionToast(
+        resp.message || (resp.success ? `Reloaded ${resp.ruleCount} claude-settings rule(s).` : "Failed to reload Claude settings rules — previous rules still active."),
+        resp.success ? "success" : "error",
+        "claude-settings-reload"
+      );
+    } catch (e) {
+      console.error("Failed to reload claude-settings rules:", e);
+      showActionToast("Could not reach the server to reload rules. Try again.", "error", "claude-settings-reload");
+    } finally {
+      setReloadingClaudeSettings(false);
+    }
+  };
+
   // ── Epic 3: handle suggestion cards ──────────────────────────────────────
 
   const [dismissedIndices, setDismissedIndices] = useState<Set<number>>(new Set());
@@ -300,6 +326,288 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
   const autoAllowRate = summary ? Math.round(summary.autoApproveRate * 100) : null;
   const manualRate    = summary ? Math.round(summary.manualReviewRate * 100) : null;
   const total         = summary ? summary.totalDecisions : null;
+
+  // ── Approval Rules tab content (everything below the tab bar that is specific to it) ──────
+  // Extracted so the tab-bar branch below is a single `showTaggingRulesTab ? <TaggingRulesPanel
+  // /> : renderApprovalRulesContent()` instead of repeating `!showTaggingRulesTab &&` on every
+  // block (config/claude-settings hints, error banner, rules table, row count, mobile FAB, rule
+  // builder). A plain function (not a nested component) so it isn't remounted on every render.
+  function renderApprovalRulesContent() {
+    return (
+      <>
+        {/* ── Config file path hint (shown when viewing config tab) ── */}
+        {sourceFilter === "config" && (
+          <div className={configFileHint}>
+            Stored in ~/.config/stapler-squad/shared_rules.yaml
+          </div>
+        )}
+        {/* ── Claude settings reload hint (shown when viewing claude-settings tab) ── */}
+        {sourceFilter === "claude-settings" && (
+          <div className={configFileHint}>
+            Loaded from ~/.claude/settings.json{" "}
+            <button
+              className={retryButton}
+              onClick={handleReloadClaudeSettings}
+              disabled={reloadingClaudeSettings}
+            >
+              {reloadingClaudeSettings ? "Reloading…" : "Reload rules"}
+            </button>
+          </div>
+        )}
+
+        {/* ── Error ── */}
+        {error && (
+          <div className={errorClass}>
+            Failed to load rules: {error.message}
+            <button onClick={refresh} className={retryButton}>Retry</button>
+          </div>
+        )}
+
+        {/* ── Rules table ── */}
+        <div className={tableWrapper}>
+          {loading && visibleRules.length === 0 ? (
+            <div className={loadingClass}>Loading rules…</div>
+          ) : visibleRules.length === 0 ? (
+            <div className={empty} data-testid="empty-state">
+              <p>
+                Approval rules let you automatically allow or deny tool calls from Claude without manual review.
+              </p>
+              {(sourceFilter === "all" || sourceFilter === "user") && (
+                <p>
+                  <button
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", textDecoration: "underline", padding: 0 }}
+                    onClick={() => { setTemplateSeed(null); setEditingRule(null); setShowBuilder(true); }}
+                  >
+                    Add Rule
+                  </button>
+                  {" "}using the builder below or{" "}
+                  <button
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", textDecoration: "underline", padding: 0 }}
+                    onClick={() => setImportModalOpen(true)}
+                  >
+                    Import YAML
+                  </button>
+                  {" "}to import from a file.
+                </p>
+              )}
+              {sourceFilter === "seed" && (
+                <p>No built-in rules are available in this workspace.</p>
+              )}
+              {sourceFilter === "claude-settings" && (
+                <p>No rules from your ~/.claude/settings.json file were found.</p>
+              )}
+              {sourceFilter === "config" && (
+                <p>No rules in your config file yet. Use the &quot;→ Config&quot; button on a custom rule to copy it to <code>~/.config/stapler-squad/shared_rules.yaml</code>, or create a new rule and select &quot;Save to Config File&quot;.</p>
+              )}
+            </div>
+          ) : (
+            <table className={table}>
+              <thead>
+                <tr>
+                  <th className={`${th} ${thSortable}`} onClick={() => handleSort("name")}>
+                    Name{sortIcon("name")}
+                  </th>
+                  <th className={th}>Match</th>
+                  <th className={`${th} ${thSortable}`} onClick={() => handleSort("decision")}>
+                    Decision{sortIcon("decision")}
+                  </th>
+                  <th className={th}>Risk</th>
+                  <th className={th}>Source</th>
+                  <th
+                    className={`${th} ${thSortable}`}
+                    title="Higher priority fires first. Custom rules default to 10; built-in rules default to 100–1000."
+                    onClick={() => handleSort("priority")}
+                  >
+                    Priority ⓘ{sortIcon("priority")}
+                  </th>
+                  <th
+                    className={`${th} ${thSortable}`}
+                    title="Number of times this rule fired in the last 7 days"
+                    onClick={() => handleSort("hits")}
+                  >
+                    Hits (7d){sortIcon("hits")}
+                  </th>
+                  <th className={th}>Enabled</th>
+                  <th className={th}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRules.map((rule) => (
+                  <tr key={rule.id} className={`${row} ${!rule.enabled ? rowDisabled : ""}`}>
+                    <td className={td}>
+                      <span className={ruleName}>{rule.name || rule.id}</span>
+                      {rule.reason && <span className={ruleReason}>{rule.reason}</span>}
+                      {rule.alternative && <span className={ruleAlt}>Alt: {rule.alternative}</span>}
+                    </td>
+                    <td className={td}>
+                      <MatchDescription rule={rule} matchChipClass={matchChip} />
+                    </td>
+                    <td className={td}>
+                      <span className={`${decisionBadge} ${decisionClass(rule.decision)}`}>
+                        {decisionLabel(rule.decision)}
+                      </span>
+                    </td>
+                    <td className={td}>
+                      <SeverityBadge riskLevel={rule.riskLevel} compact />
+                    </td>
+                    <td className={td}>
+                      <span
+                        className={rule.source === "config" ? configFileBadge : sourceBadge}
+                        title={
+                          rule.source === "seed"
+                            ? "These rules ship with stapler-squad and cannot be deleted"
+                            : rule.source === "claude-settings"
+                            ? "These rules come from your ~/.claude/settings.json file"
+                            : rule.source === "config"
+                            ? "This rule is stored in ~/.config/stapler-squad/shared_rules.yaml and can be shared"
+                            : undefined
+                        }
+                      >
+                        {sourceLabel(rule.source)}
+                      </span>
+                    </td>
+                    <td className={`${td} ${tdCenter}`}>{rule.priority}</td>
+                    <td className={`${td} ${tdCenter}`}>
+                      {(() => {
+                        const hits = hitCountByRuleId.get(rule.id) ?? 0;
+                        return hits > 0
+                          ? <span className={`${hitBadge} ${hitBadgeActive}`}>{hits.toLocaleString()}</span>
+                          : <span className={hitBadge}>—</span>;
+                      })()}
+                    </td>
+                    <td className={`${td} ${tdCenter}`}>
+                      {rule.source === "user" ? (
+                        <button
+                          className={`${toggle} ${rule.enabled ? toggleOn : toggleOff}`}
+                          onClick={() => handleToggle(rule)}
+                          aria-label={rule.enabled ? "Disable rule" : "Enable rule"}
+                        >
+                          {rule.enabled ? "ON" : "OFF"}
+                        </button>
+                      ) : (
+                        <span className={builtInBadge} title="Built-in rules cannot be disabled">
+                          Always on
+                        </span>
+                      )}
+                    </td>
+                    <td className={`${td} ${tdCenter}`} style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                      {rule.source === "user" && (
+                        <>
+                          <button
+                            style={{ fontSize: "0.75rem", padding: "2px 8px", cursor: "pointer", border: "1px solid var(--border-color)", borderRadius: "4px", background: "transparent", color: "inherit" }}
+                            onClick={() => handleEdit(rule)}
+                            aria-label={`Edit rule ${rule.name}`}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className={deleteButton}
+                            onClick={() => deleteRule(rule.id)}
+                            aria-label={`Delete rule ${rule.name}`}
+                            title="Delete rule"
+                          >
+                            ✕
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* ── Row count indicator ── */}
+        {visibleRules.length > 0 && (
+          <div className={rowCount}>
+            {visibleRules.length} rule{visibleRules.length !== 1 ? "s" : ""}
+            {(sourceFilter !== "all" || searchQuery.trim()) && ` (filtered from ${rules.length} total)`}
+          </div>
+        )}
+
+        {/* ── Mobile FAB ── */}
+        <button
+          className={mobileAddFab}
+          onClick={() => { setTemplateSeed(null); setEditingRule(null); setShowBuilder(true); }}
+          aria-label="Add rule"
+          data-testid="add-rule-fab"
+        >
+          +
+        </button>
+
+        {/* ── Rule Builder ── */}
+        <div className={formSection} id="rule-builder" {...(showBuilder ? { role: "dialog" } : {})}>
+          {!showBuilder ? (
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              <button data-testid="add-rule-button" className={addButton} onClick={() => { setTemplateSeed(null); setEditingRule(null); setShowBuilder(true); }}>
+                + Add Custom Rule
+              </button>
+              <button
+                className={addButton}
+                style={{ background: "transparent", border: "1px solid var(--border-color)", color: "inherit" }}
+                onClick={() => setShowTemplates(true)}
+              >
+                Start from Template
+              </button>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+                <button
+                  aria-label="Close dialog"
+                  onClick={handleCancel}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-secondary)", lineHeight: 1 }}
+                >
+                  ×
+                </button>
+              </div>
+              {/* ── Epic 6: Generate from command section ── */}
+              <details data-testid="generate-from-command-details" style={{ marginBottom: 12 }}>
+                <summary style={{ cursor: "pointer", fontSize: 13, color: "var(--text-secondary)" }}>Generate from command sample</summary>
+                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+                  <textarea
+                    data-testid="command-sample-textarea"
+                    value={cmdSampleText}
+                    onChange={(e) => setCmdSampleText(e.target.value)}
+                    placeholder="Paste a command you ran, e.g. git push origin main"
+                    rows={3}
+                    style={{ width: "100%", fontFamily: "monospace", fontSize: 12, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border-color)", background: "var(--input-background)", color: "var(--input-text)", resize: "vertical" }}
+                  />
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      data-testid="command-sample-generate-button"
+                      disabled={!cmdSampleText.trim() || cmdLoading}
+                      onClick={() => { void cmdGenerate({ source: SuggestionSource.COMMAND_SAMPLE, commandSample: cmdSampleText }); }}
+                      style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, border: "none", cursor: cmdSampleText.trim() ? "pointer" : "default", background: "var(--primary)", color: "var(--primary-text)" }}
+                    >
+                      {cmdLoading ? "Generating…" : "Generate"}
+                    </button>
+                    {cmdLoading && (
+                      <button
+                        onClick={cmdCancel}
+                        style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, border: "1px solid var(--border-color)", background: "none", cursor: "pointer" }}
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </details>
+              <RuleBuilderForm
+                editRule={editingRule}
+                prefill={showBuilder ? effectivePrefill : null}
+                templateSeed={templateSeed}
+                onSave={handleSave}
+                onCancel={handleCancel}
+                subcommandStats={summary?.commandSubcommandStats ?? []}
+              />
+            </>
+          )}
+        </div>
+      </>
+    );
+  }
 
   // ── render ────────────────────────────────────────────────────────────────
 
@@ -423,16 +731,18 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
       )}
 
       {/* ── Search ── */}
-      <input
-        className={searchBar}
-        type="search"
-        placeholder="Search by name, tool, program, pattern…"
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-        aria-label="Search rules"
-      />
+      {!showTaggingRulesTab && (
+        <input
+          className={searchBar}
+          type="search"
+          placeholder="Search by name, tool, program, pattern…"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          aria-label="Search rules"
+        />
+      )}
 
-      {/* ── Source filter tabs ── */}
+      {/* ── Source filter tabs (+ Tagging Rules, ux.md Surface 4) ── */}
       <div className={tabs}>
         {(["all", "user", "config", "seed", "claude-settings"] as const).map((src) => {
           const count = src === "all" ? rules.length : rules.filter((r) => r.source === src).length;
@@ -441,8 +751,8 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
           return (
             <button
               key={src}
-              className={`${tab} ${sourceFilter === src ? tabActive : ""}`}
-              onClick={() => setSourceFilter(src)}
+              className={`${tab} ${!showTaggingRulesTab && sourceFilter === src ? tabActive : ""}`}
+              onClick={() => { setShowTaggingRulesTab(false); setSourceFilter(src); }}
             >
               <span className={tabLabelFull}>{fullLabel}</span>
               <span className={tabLabelShort}>{shortLabel}</span>
@@ -450,265 +760,15 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
             </button>
           );
         })}
+        <button
+          className={`${tab} ${showTaggingRulesTab ? tabActive : ""}`}
+          onClick={() => setShowTaggingRulesTab(true)}
+          data-testid="tagging-rules-tab"
+        >
+          Tagging Rules
+        </button>
       </div>
-      {/* ── Config file path hint (shown when viewing config tab) ── */}
-      {sourceFilter === "config" && (
-        <div className={configFileHint}>
-          Stored in ~/.config/stapler-squad/shared_rules.yaml
-        </div>
-      )}
-
-      {/* ── Error ── */}
-      {error && (
-        <div className={errorClass}>
-          Failed to load rules: {error.message}
-          <button onClick={refresh} className={retryButton}>Retry</button>
-        </div>
-      )}
-
-      {/* ── Rules table ── */}
-      <div className={tableWrapper}>
-        {loading && visibleRules.length === 0 ? (
-          <div className={loadingClass}>Loading rules…</div>
-        ) : visibleRules.length === 0 ? (
-          <div className={empty} data-testid="empty-state">
-            <p>
-              Approval rules let you automatically allow or deny tool calls from Claude without manual review.
-            </p>
-            {(sourceFilter === "all" || sourceFilter === "user") && (
-              <p>
-                <button
-                  style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", textDecoration: "underline", padding: 0 }}
-                  onClick={() => { setTemplateSeed(null); setEditingRule(null); setShowBuilder(true); }}
-                >
-                  Add Rule
-                </button>
-                {" "}using the builder below or{" "}
-                <button
-                  style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", textDecoration: "underline", padding: 0 }}
-                  onClick={() => setImportModalOpen(true)}
-                >
-                  Import YAML
-                </button>
-                {" "}to import from a file.
-              </p>
-            )}
-            {sourceFilter === "seed" && (
-              <p>No built-in rules are available in this workspace.</p>
-            )}
-            {sourceFilter === "claude-settings" && (
-              <p>No rules from your ~/.claude/settings.json file were found.</p>
-            )}
-            {sourceFilter === "config" && (
-              <p>No rules in your config file yet. Use the &quot;→ Config&quot; button on a custom rule to copy it to <code>~/.config/stapler-squad/shared_rules.yaml</code>, or create a new rule and select &quot;Save to Config File&quot;.</p>
-            )}
-          </div>
-        ) : (
-          <table className={table}>
-            <thead>
-              <tr>
-                <th className={`${th} ${thSortable}`} onClick={() => handleSort("name")}>
-                  Name{sortIcon("name")}
-                </th>
-                <th className={th}>Match</th>
-                <th className={`${th} ${thSortable}`} onClick={() => handleSort("decision")}>
-                  Decision{sortIcon("decision")}
-                </th>
-                <th className={th}>Risk</th>
-                <th className={th}>Source</th>
-                <th
-                  className={`${th} ${thSortable}`}
-                  title="Higher priority fires first. Custom rules default to 10; built-in rules default to 100–1000."
-                  onClick={() => handleSort("priority")}
-                >
-                  Priority ⓘ{sortIcon("priority")}
-                </th>
-                <th
-                  className={`${th} ${thSortable}`}
-                  title="Number of times this rule fired in the last 7 days"
-                  onClick={() => handleSort("hits")}
-                >
-                  Hits (7d){sortIcon("hits")}
-                </th>
-                <th className={th}>Enabled</th>
-                <th className={th}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRules.map((rule) => (
-                <tr key={rule.id} className={`${row} ${!rule.enabled ? rowDisabled : ""}`}>
-                  <td className={td}>
-                    <span className={ruleName}>{rule.name || rule.id}</span>
-                    {rule.reason && <span className={ruleReason}>{rule.reason}</span>}
-                    {rule.alternative && <span className={ruleAlt}>Alt: {rule.alternative}</span>}
-                  </td>
-                  <td className={td}>
-                    <MatchDescription rule={rule} matchChipClass={matchChip} />
-                  </td>
-                  <td className={td}>
-                    <span className={`${decisionBadge} ${decisionClass(rule.decision)}`}>
-                      {decisionLabel(rule.decision)}
-                    </span>
-                  </td>
-                  <td className={td}>
-                    <SeverityBadge riskLevel={rule.riskLevel} compact />
-                  </td>
-                  <td className={td}>
-                    <span
-                      className={rule.source === "config" ? configFileBadge : sourceBadge}
-                      title={
-                        rule.source === "seed"
-                          ? "These rules ship with stapler-squad and cannot be deleted"
-                          : rule.source === "claude-settings"
-                          ? "These rules come from your ~/.claude/settings.json file"
-                          : rule.source === "config"
-                          ? "This rule is stored in ~/.config/stapler-squad/shared_rules.yaml and can be shared"
-                          : undefined
-                      }
-                    >
-                      {sourceLabel(rule.source)}
-                    </span>
-                  </td>
-                  <td className={`${td} ${tdCenter}`}>{rule.priority}</td>
-                  <td className={`${td} ${tdCenter}`}>
-                    {(() => {
-                      const hits = hitCountByRuleId.get(rule.id) ?? 0;
-                      return hits > 0
-                        ? <span className={`${hitBadge} ${hitBadgeActive}`}>{hits.toLocaleString()}</span>
-                        : <span className={hitBadge}>—</span>;
-                    })()}
-                  </td>
-                  <td className={`${td} ${tdCenter}`}>
-                    {rule.source === "user" ? (
-                      <button
-                        className={`${toggle} ${rule.enabled ? toggleOn : toggleOff}`}
-                        onClick={() => handleToggle(rule)}
-                        aria-label={rule.enabled ? "Disable rule" : "Enable rule"}
-                      >
-                        {rule.enabled ? "ON" : "OFF"}
-                      </button>
-                    ) : (
-                      <span className={builtInBadge} title="Built-in rules cannot be disabled">
-                        Always on
-                      </span>
-                    )}
-                  </td>
-                  <td className={`${td} ${tdCenter}`} style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                    {rule.source === "user" && (
-                      <>
-                        <button
-                          style={{ fontSize: "0.75rem", padding: "2px 8px", cursor: "pointer", border: "1px solid var(--border-color)", borderRadius: "4px", background: "transparent", color: "inherit" }}
-                          onClick={() => handleEdit(rule)}
-                          aria-label={`Edit rule ${rule.name}`}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className={deleteButton}
-                          onClick={() => deleteRule(rule.id)}
-                          aria-label={`Delete rule ${rule.name}`}
-                          title="Delete rule"
-                        >
-                          ✕
-                        </button>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-
-      {/* ── Row count indicator ── */}
-      {visibleRules.length > 0 && (
-        <div className={rowCount}>
-          {visibleRules.length} rule{visibleRules.length !== 1 ? "s" : ""}
-          {(sourceFilter !== "all" || searchQuery.trim()) && ` (filtered from ${rules.length} total)`}
-        </div>
-      )}
-
-      {/* ── Mobile FAB ── */}
-      <button
-        className={mobileAddFab}
-        onClick={() => { setTemplateSeed(null); setEditingRule(null); setShowBuilder(true); }}
-        aria-label="Add rule"
-        data-testid="add-rule-fab"
-      >
-        +
-      </button>
-
-      {/* ── Rule Builder ── */}
-      <div className={formSection} id="rule-builder" {...(showBuilder ? { role: "dialog" } : {})}>
-        {!showBuilder ? (
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            <button data-testid="add-rule-button" className={addButton} onClick={() => { setTemplateSeed(null); setEditingRule(null); setShowBuilder(true); }}>
-              + Add Custom Rule
-            </button>
-            <button
-              className={addButton}
-              style={{ background: "transparent", border: "1px solid var(--border-color)", color: "inherit" }}
-              onClick={() => setShowTemplates(true)}
-            >
-              Start from Template
-            </button>
-          </div>
-        ) : (
-          <>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
-              <button
-                aria-label="Close dialog"
-                onClick={handleCancel}
-                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-secondary)", lineHeight: 1 }}
-              >
-                ×
-              </button>
-            </div>
-            {/* ── Epic 6: Generate from command section ── */}
-            <details data-testid="generate-from-command-details" style={{ marginBottom: 12 }}>
-              <summary style={{ cursor: "pointer", fontSize: 13, color: "var(--text-secondary)" }}>Generate from command sample</summary>
-              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-                <textarea
-                  data-testid="command-sample-textarea"
-                  value={cmdSampleText}
-                  onChange={(e) => setCmdSampleText(e.target.value)}
-                  placeholder="Paste a command you ran, e.g. git push origin main"
-                  rows={3}
-                  style={{ width: "100%", fontFamily: "monospace", fontSize: 12, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border-color)", background: "var(--input-background)", color: "var(--input-text)", resize: "vertical" }}
-                />
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button
-                    data-testid="command-sample-generate-button"
-                    disabled={!cmdSampleText.trim() || cmdLoading}
-                    onClick={() => { void cmdGenerate({ source: SuggestionSource.COMMAND_SAMPLE, commandSample: cmdSampleText }); }}
-                    style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, border: "none", cursor: cmdSampleText.trim() ? "pointer" : "default", background: "var(--primary)", color: "var(--primary-text)" }}
-                  >
-                    {cmdLoading ? "Generating…" : "Generate"}
-                  </button>
-                  {cmdLoading && (
-                    <button
-                      onClick={cmdCancel}
-                      style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, border: "1px solid var(--border-color)", background: "none", cursor: "pointer" }}
-                    >
-                      Cancel
-                    </button>
-                  )}
-                </div>
-              </div>
-            </details>
-            <RuleBuilderForm
-              editRule={editingRule}
-              prefill={showBuilder ? effectivePrefill : null}
-              templateSeed={templateSeed}
-              onSave={handleSave}
-              onCancel={handleCancel}
-              subcommandStats={summary?.commandSubcommandStats ?? []}
-            />
-          </>
-        )}
-      </div>
+      {showTaggingRulesTab ? <TaggingRulesPanel /> : renderApprovalRulesContent()}
 
       <TemplateLibrary
         open={showTemplates}

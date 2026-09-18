@@ -12,6 +12,7 @@ import (
 // are NOT updated when terminal content is unchanged (signature matching).
 // This test addresses BUG-002: Timestamp refresh reset on startup.
 func TestUpdateTerminalTimestamps_SignatureBasedPreservation(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:   "test-signature",
 		Path:    "/tmp/test-signature",
@@ -82,6 +83,7 @@ func TestUpdateTerminalTimestamps_SignatureBasedPreservation(t *testing.T) {
 // historical timestamps when terminal content hasn't changed.
 // This is the core scenario described in BUG-002.
 func TestPreview_PreservesHistoricalTimestamps(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:   "test-preview-preserve",
 		Path:    "/tmp/test-preview-preserve",
@@ -130,6 +132,7 @@ func TestPreview_PreservesHistoricalTimestamps(t *testing.T) {
 // TestForceUpdate_AlwaysUpdatesTimestamp verifies that forceUpdate=true
 // bypasses signature checking but still uses signatures for change detection.
 func TestForceUpdate_SignatureChangeDetection(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:   "test-force-update",
 		Path:    "/tmp/test-force-update",
@@ -185,6 +188,7 @@ func TestForceUpdate_SignatureChangeDetection(t *testing.T) {
 // TestSignatureStability verifies that the same content always produces
 // the same signature (hash stability).
 func TestSignatureStability(t *testing.T) {
+	t.Parallel()
 	content := "Test terminal content\nLine 2\nLine 3"
 
 	signature1 := computeContentSignature(content)
@@ -212,6 +216,7 @@ func TestSignatureStability(t *testing.T) {
 // 3. Review queue poller calls Preview() to refresh timestamps
 // 4. Content hasn't changed, so timestamp should be preserved
 func TestReviewQueueRefreshScenario(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:   "test-review-refresh",
 		Path:    "/tmp/test-review-refresh",

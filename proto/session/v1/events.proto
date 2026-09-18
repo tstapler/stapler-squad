@@ -4,6 +4,7 @@ package session.v1;
 
 import "google/protobuf/timestamp.proto";
 import "session/v1/types.proto";
+import "session/v1/remote.proto";
 
 // SessionEvent represents a real-time event about session state changes.
 // Used for WatchSessions streaming RPC to push updates to clients.
@@ -21,6 +22,12 @@ message SessionEvent {
     SessionAcknowledgedEvent session_acknowledged = 7;
     ApprovalResponseEvent approval_response = 8;
     NotificationEvent notification = 9;
+    // remote_health_changed carries a configured remote's SSH connection
+    // health-state transition (session/sshremote.RemoteHealthProber, Epic
+    // 6.4) -- session is nil for this event type, so WatchSessions' per-event
+    // category_filter/status_filter checks (which only test event.Session)
+    // never drop it.
+    RemoteHealthChangedEvent remote_health_changed = 11;
   }
 
   reserved 5;
@@ -58,6 +65,21 @@ message SessionDeletedEvent {
   string reason = 2; // Optional deletion reason
 }
 
+// RemoteHealthChangedEvent is emitted when a configured remote's SSH
+// connection health transitions between connected/reconnecting/disconnected
+// (session/sshremote.RemoteHealthProber, Epic 6.4; wired onto SessionEvent's
+// oneof by Epic 6.2's RemoteConnectionIndicator, which is what actually
+// consumes this on the frontend -- WatchSessions is the only stream this
+// event type is published on, there is no separate remote-health stream).
+message RemoteHealthChangedEvent {
+  // remote_name is the config.RemoteConfig.Name this transition applies to.
+  string remote_name = 1;
+  // state is the remote's connection state as of this event.
+  RemoteConnectionState state = 2;
+  // previous_state is the state immediately before this transition.
+  RemoteConnectionState previous_state = 3;
+}
+
 // TerminalData represents terminal I/O for bidirectional streaming.
 // Used for StreamTerminal RPC to provide real-time terminal access.
 message TerminalData {
@@ -81,6 +103,22 @@ message TerminalData {
 
     // Shell status update event (server → client); shell_id identifies the shell.
     ShellStatusUpdate shell_status_update = 18;
+
+    // Coalesced CurrentPaneRequests bound for the same connection (client →
+    // server), Epic 5.2 / Story 5.2.1. Flag-gated behind terminal:resync-batching
+    // (default off) — see BatchedCurrentPaneRequest's doc comment for the
+    // unresolved default-on decision this message deliberately does not make.
+    BatchedCurrentPaneRequest batched_current_pane_request = 19;
+
+    // A captured redraw from Instance.ForwardScroll (Epic 1.3, server →
+    // client), sent instead of ScrollbackResponse when AppScrollGate passes
+    // for the requesting session. Deliberately a distinct message rather than
+    // a reuse of ScrollbackResponse or TerminalOutput's ANSI_SNAPSHOT_PREFIX
+    // framing -- see plan.md's Pattern Decisions ("Response framing for a
+    // captured redraw") for why conflating the two risks a client-side
+    // dispatch ambiguity between a routine resize resync and a forwarded-
+    // scroll page.
+    AppScrollbackResponse app_scrollback_response = 20;
   }
 
   // Fields 8, 12, 13, 14, 15 (delta, state, diff, input_echo, ssp_negotiation)
@@ -95,6 +133,42 @@ message TerminalData {
   // Optional shell identifier. When non-empty, this TerminalData message is
   // scoped to a custom shell (sibling tmux session) rather than the main session.
   string shell_id = 17;
+}
+
+// ScrollForwardOutcome is the result of one Instance.ForwardScroll call
+// (Epic 1.3). See ScrollBlockedReason for which reasons accompany BLOCKED.
+enum ScrollForwardOutcome {
+  SCROLL_FORWARD_OUTCOME_UNSPECIFIED = 0;
+  DELIVERED = 1;
+  AT_TOP = 2;
+  NO_CAPABILITY = 3;
+  BLOCKED = 4;
+}
+
+// ScrollBlockedReason distinguishes *why* ForwardScroll returned BLOCKED --
+// deliberately three distinct values, not one generic "blocked" catch-all
+// (adversarial-review BLOCKER: a single reason can't tell a real 2+
+// subscriber MULTIPLE_VIEWERS block apart from the unconditional
+// UNSUPPORTED_STREAMING_PATH block every PathLegacyPerConnection session
+// gets regardless of actual viewer count -- see plan.md's Risk Control
+// "Concrete resolution" section). Meaningful only when outcome == BLOCKED.
+enum ScrollBlockedReason {
+  SCROLL_BLOCKED_REASON_UNSPECIFIED = 0;
+  MULTIPLE_VIEWERS = 1;
+  LEASE_CONTENTION = 2;
+  UNSUPPORTED_STREAMING_PATH = 3;
+}
+
+// AppScrollbackResponse carries one ForwardScroll call's captured redraw
+// back to the client.
+message AppScrollbackResponse {
+  bytes content = 1;
+  ScrollForwardOutcome outcome = 2;
+  string program = 3;
+  string forward_id = 4;
+  // blocked_reason is meaningful only when outcome == BLOCKED;
+  // SCROLL_BLOCKED_REASON_UNSPECIFIED for every other outcome.
+  ScrollBlockedReason blocked_reason = 5;
 }
 
 // ShellStatusUpdate notifies the client that a custom shell's status has changed.
@@ -123,6 +197,33 @@ message ResizeQuiescence {
 // TerminalOutput contains data from the terminal (server to client)
 message TerminalOutput {
   bytes data = 1; // Raw terminal output bytes (ANSI escape codes, etc)
+
+  // Echoes the resync_id of the CurrentPaneRequest that triggered this output,
+  // when applicable. Lets the client correlate a resync reply to the specific
+  // request it made (e.g. to clear pending-resync state) rather than assuming
+  // the most recent request is always the one being answered. Empty when this
+  // output is not a resync reply.
+  string resync_id = 2;
+
+  // Number of transports currently attached to this session's StreamHub
+  // (Epic 4.2, Story 4.2.1). Only ever populated for PathHubOwned sessions —
+  // proto3 `optional` presence lets the frontend distinguish "not reported"
+  // (PathLegacyPerConnection, flag off) from a real count, since fabricating
+  // a number from PathLegacyPerConnection's activeControlModeStreams
+  // generation counter would show a misleading value (it isn't a live
+  // subscriber count). May arrive on a side-channel message carrying no
+  // `data` (an otherwise-empty TerminalOutput) when the server has a count
+  // update but no new terminal bytes to send.
+  optional int32 connection_count = 4;
+
+  // inst.GetAltScreenActive() at capture time — set only on an
+  // initial-connect/post-resize snapshot (never a live-output frame, which
+  // the client's own byte-scanning already tracks correctly). A
+  // `tmux capture-pane` snapshot can't carry a mode-switch sequence like
+  // DECSET 1049h, so without this, a client connecting to (or resizing) an
+  // already-alt-screen session never learns it — the common case for a
+  // long-running session, not an edge case.
+  optional bool alt_screen_active = 5;
 }
 
 // TerminalInput contains user input for the terminal (client to server)
@@ -211,6 +312,34 @@ message CurrentPaneRequest {
   // and has been removed. Reserved to prevent accidental reuse.
   reserved 5;
   reserved "streaming_mode";
+
+  // Client-generated correlation ID for this resync request. Echoed back on
+  // the resulting TerminalOutput.resync_id so the client can match a reply to
+  // the specific request that triggered it.
+  string resync_id = 6;
+
+  // True when the client believes its current terminal dimensions may be
+  // stale (e.g. after a tab was backgrounded and resized without a resize
+  // event reaching the server). Signals the server to skip fast-path
+  // optimizations that assume dimensions are already in sync.
+  bool stale_dimensions = 7;
+}
+
+// BatchedCurrentPaneRequest coalesces multiple CurrentPaneRequests bound for
+// the same connection into a single round trip (Epic 5.2 / Story 5.2.1,
+// terminal-resync-reliability). Each sub-request keeps its own resync_id and
+// gets its own individually-tagged TerminalOutput reply — batching the
+// transport does not change per-request correlation semantics.
+//
+// Flag-gated behind terminal:resync-batching (default off; see
+// feature_flag_service.go). Whether to flip that flag on by default is an
+// open go/no-go decision NOT resolved by this message or its handling code —
+// it is deferred pending Epic 5.1's compression benchmark numbers (see
+// requirements.md's Unresolved Question #1 in
+// project_plans/terminal-resync-reliability/). Do not treat the existence of
+// this type as an implicit decision to enable batching broadly.
+message BatchedCurrentPaneRequest {
+  repeated CurrentPaneRequest requests = 1;
 }
 
 // CurrentPaneResponse contains the current visible tmux pane content
@@ -349,6 +478,11 @@ message ReviewQueueItemRemovedEvent {
 
   // Why it was removed
   string reason = 2; // "resolved", "dismissed", "timeout", "acknowledged"
+
+  // Set only when reason == "auto_resolved_by_rule": the display name of
+  // the rule that resolved the underlying approval. Empty for every other
+  // removal reason.
+  optional string auto_resolved_by_rule = 3;
 }
 
 // ReviewQueueItemUpdatedEvent is emitted when item properties change

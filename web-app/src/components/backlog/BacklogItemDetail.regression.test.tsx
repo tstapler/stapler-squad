@@ -120,6 +120,7 @@ const baseItem: BacklogItem = {
   skipReviewGate: false,
   autoSpawnSession: false,
   autoCreatePR: false,
+  autoApprovePlan: false,
   planApproved: false,
   // triageStatus "running" is what enables the 5s background poll.
   triageStatus: "running",
@@ -130,6 +131,7 @@ const baseItem: BacklogItem = {
   updatedAt: "2026-07-01T00:00:00Z",
   statusEvents: [],
   progressNotes: [],
+  activityNotes: [],
   totalEstimatedCostUsd: 0,
 };
 

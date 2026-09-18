@@ -142,4 +142,27 @@ export class ShellTabsPage {
     // Wait until the session header is visible (tab bar rendered)
     await expect(this.addShellButton).toBeVisible({ timeout: 8000 });
   }
+
+  /**
+   * Click the session card/row matching `title` and open its detail view.
+   * Use this instead of openFirstSession() whenever a test needs a specific,
+   * known-live session (e.g. a freshly created bash fixture) rather than
+   * whatever happens to sort first — global-setup.ts always pre-seeds several
+   * demo sessions (some "Stopped", with no live terminal/WS) ahead of any
+   * spec-local fixture, so "first in the list" is not a reliable target.
+   */
+  async openSessionByTitle(title: string): Promise<void> {
+    const card = this.page.locator('[data-testid="session-card"]').filter({ hasText: title }).first();
+    const row = this.page.locator('[data-testid="session-row"]').filter({ hasText: title }).first();
+
+    const hasCard = await card.isVisible({ timeout: 3000 }).catch(() => false);
+    if (hasCard) {
+      await card.click();
+    } else {
+      await expect(row).toBeVisible({ timeout: 5000 });
+      await row.click();
+    }
+
+    await expect(this.addShellButton).toBeVisible({ timeout: 8000 });
+  }
 }

@@ -43,6 +43,24 @@ const bounceLookback = 24 * time.Hour
 // as an independent constant since this package cannot import server/services.
 const bounceMainBranch = "main"
 
+// multiReasonThreshold is the minimum count of simultaneously open
+// *non-escalation* stuck reasons on one item before it is escalated to
+// domain.StuckReasonMultipleReasons. Fixed per plan.md's Pattern Decisions
+// table (requirements.md's own live-data-informed default: "≥2 would have
+// caught both" of this project's motivating live cases) — not a tunable
+// scoring rubric.
+const multiReasonThreshold = 2
+
+// multiReasonNotifyDwell is how long domain.StuckReasonMultipleReasons' row
+// must have been open (FirstDetectedAt) before its notification fires, so a
+// single-tick threshold crossing doesn't notify immediately — the same
+// one-reconcile-tick-width debounce shape as prReadyThreshold/
+// abandonedReviewGrace, sized to the reconcile ticker's period. Independent
+// constant, NOT read from server/dependencies.go's ticker constant: the
+// session package cannot import server, matching bounceMainBranch's existing
+// precedent for duplicating a cross-package constant.
+const multiReasonNotifyDwell = 60 * time.Second
+
 // stuckPRReady reports whether a pr_ready_unmerged condition first observed
 // at firstDetected has held long enough (> prReadyThreshold) as of now to be
 // notification-worthy. Exact-threshold and under-threshold both return false
@@ -59,17 +77,39 @@ func abandonedReview(lastReviewAt, now time.Time) bool {
 }
 
 // staleWork reports whether an in_progress item's active work session has
-// gone quiet long enough (> maxWorkSessionStaleness, reused unchanged — no
-// new threshold introduced) to be flagged stale_work.
-func staleWork(lastProgress, now time.Time) bool {
-	return now.Sub(lastProgress) > maxWorkSessionStaleness
+// gone quiet longer than maxNoProgress to be flagged stale_work. maxNoProgress
+// is resolved by the caller (session/backlog_lifecycle_stale.go's
+// reconcileStaleWorkSessions) — from LivenessEngine when wired, falling back
+// to maxWorkSessionStaleness otherwise (Epic 1.4, Story 1.4.3).
+func staleWork(lastProgress, now time.Time, maxNoProgress time.Duration) bool {
+	return now.Sub(lastProgress) > maxNoProgress
 }
 
 // isBouncing reports whether cycleCount in_progress->review round trips
 // within the lookback window, with no recorded PASS verdict, constitute a
-// non-converging "bouncing" cycle (>= bounceThreshold and !hasPass).
-func isBouncing(cycleCount int, hasPass bool) bool {
-	return cycleCount >= bounceThreshold && !hasPass
+// non-converging "bouncing" cycle (>= cycleThreshold and !hasPass).
+// cycleThreshold is resolved by the caller (session/backlog_lifecycle.go's
+// reconcileBouncingItems) — from LivenessEngine when wired, falling back to
+// bounceThreshold otherwise (Epic 1.4, Story 1.4.3).
+func isBouncing(cycleCount, cycleThreshold int, hasPass bool) bool {
+	return cycleCount >= cycleThreshold && !hasPass
+}
+
+// isMultiReasonEscalated reports whether openNonEscalationCount — the number
+// of simultaneously open, non-escalation stuck reasons on one item — meets or
+// exceeds multiReasonThreshold, i.e. the item should carry an open
+// domain.StuckReasonMultipleReasons row.
+func isMultiReasonEscalated(openNonEscalationCount int) bool {
+	return openNonEscalationCount >= multiReasonThreshold
+}
+
+// multiReasonEscalationNotifyReady reports whether a
+// domain.StuckReasonMultipleReasons row first observed at firstDetected has
+// held long enough (>= multiReasonNotifyDwell) as of now to be
+// notification-worthy — mirrors stuckPRReady/abandonedReview's "don't notify
+// on the very tick that created the row" shape.
+func multiReasonEscalationNotifyReady(firstDetected, now time.Time) bool {
+	return now.Sub(firstDetected) >= multiReasonNotifyDwell
 }
 
 // IsRepeatedFailure reports whether the two most recent review verdicts (most
@@ -127,6 +167,193 @@ func IsRepeatedNoVerdictFailure(hadVerdict []bool) bool {
 		}
 	}
 	return true
+}
+
+// RepeatedFailureEscalationThreshold is the streak length (see
+// ReviewFailureStreakLen/NoVerdictStreakLen) at which AutoReopenAfterFailedReview
+// grants ONE escalated retry instead of an identical one — matches
+// IsRepeatedFailure's/IsRepeatedNoVerdictFailure's own "two in a row" trip
+// point (bounceThreshold's "flip twice" precedent, reused here).
+const RepeatedFailureEscalationThreshold = 2
+
+// RepeatedFailureParkThreshold is the streak length at which
+// AutoReopenAfterFailedReview gives up and parks the item for a human instead
+// of granting a further attempt — one past RepeatedFailureEscalationThreshold,
+// so the streak has to survive one escalated, deliberately-different attempt
+// before the breaker fully trips. See docs/tasks/backlog-feature-improvement.md's
+// "no escalation, no awareness that the last N attempts failed the same way"
+// finding: without this second threshold, IsRepeatedFailure/
+// IsRepeatedNoVerdictFailure tripping at streak==2 just parks immediately,
+// with no attempt at all to try something different first.
+//
+// Honesty check, matching TestOnlyReworkMinAttempts' own candor above: the
+// "escalated" retry is only a text nudge (session.BuildSessionInitialPrompt's
+// Escalation Notice) prepended to an otherwise-identical respawn — same
+// agent, same tools, same diff strategy. Nothing persists which work session
+// was "the escalated one," so there is no way to later query how often the
+// nudge actually changes the outcome versus the agent simply repeating
+// itself again. This is a deliberate v1 bet on prompt-following, not a
+// structural difference in remediation; calibrating it is future work.
+const RepeatedFailureParkThreshold = 3
+
+// ReviewFailureStreakLen reports how many of the leading entries in recent
+// (most-recent-first, as returned by Storage.GetRecentReviewVerdictSummaries)
+// share recent[0]'s outcome and summary — i.e. how many consecutive review
+// attempts in a row failed for the identical reason. Generalizes
+// IsRepeatedFailure's fixed exactly-2 check to an arbitrary streak length, so
+// a caller can distinguish "just reached 2" (grant one escalated retry) from
+// "still failing after that escalated retry too" (give up). Returns 0 if
+// recent is empty or its head is a PASS or empty-summary verdict — an empty
+// summary carries no comparable signal, matching IsRepeatedFailure's own
+// requirement that Summary != "".
+func ReviewFailureStreakLen(recent []ReviewVerdictSummary) int {
+	if len(recent) == 0 {
+		return 0
+	}
+	head := recent[0]
+	if head.OverallOutcome == string(ReviewOutcomePass) || head.Summary == "" {
+		return 0
+	}
+	n := 1
+	for _, v := range recent[1:] {
+		if v.OverallOutcome != head.OverallOutcome || v.Summary != head.Summary {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+// NoVerdictStreakLen reports how many of the leading entries in hadVerdict
+// (most-recent-first, one bool per review-role ItemSession — true if that
+// session ever wrote a ReviewVerdict — as built by
+// server/services/backlog_service_triage.go's recentReviewHadVerdict) are
+// false in a row, i.e. how many consecutive review sessions exited without
+// ever calling submit_review_verdict. Generalizes IsRepeatedNoVerdictFailure's
+// fixed threshold check the same way ReviewFailureStreakLen generalizes
+// IsRepeatedFailure.
+func NoVerdictStreakLen(hadVerdict []bool) int {
+	n := 0
+	for _, v := range hadVerdict {
+		if v {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+// IsFlakyVerdictFlipFlop reports whether the two most recent review verdicts
+// (most recent first, as returned by Storage.GetRecentReviewVerdictSummaries)
+// share the same non-empty DiffHash but landed on a different OverallOutcome
+// — i.e. the identical reviewed diff got two different answers, the
+// signature of a flaky/non-deterministic review rather than a real fix or
+// regression (the code under review never changed between attempts). An
+// empty DiffHash is "unknown, not computed" and is never treated as a match
+// — two unknowns are not evidence of anything. False on fewer than 2
+// verdicts, and false when the outcomes agree (that repeated-same-outcome
+// shape is IsRepeatedFailure's job, not this one).
+//
+// Known false-positive source (documented, not filtered — see
+// validation.md): a manual OverrideBy="user" verdict interleaved with an
+// automated one can look identical to a flip-flop but is actually a human
+// correction, not model variance. OverrideBy isn't part of
+// []ReviewVerdictSummary today, so it can't be excluded here.
+func IsFlakyVerdictFlipFlop(recent []ReviewVerdictSummary) bool {
+	if len(recent) < 2 {
+		return false
+	}
+	latest, prior := recent[0], recent[1]
+	if latest.DiffHash == "" || prior.DiffHash == "" {
+		return false
+	}
+	if latest.DiffHash != prior.DiffHash {
+		return false
+	}
+	return latest.OverallOutcome != prior.OverallOutcome
+}
+
+// TestOnlyReworkMinAttempts is how many consecutive rework attempts (most
+// recent first) must have touched test-only files before
+// IsTestOnlyReworkCycle trips. An unvalidated starting guess — no
+// calibration corpus exists yet beyond the n≈3 items (ccbfe7a6, e271db3d,
+// 92d679fd) that motivated this item; see validation.md. Exported: callers
+// that build the []string attempt list to pass in (e.g.
+// recentWorkSessionFileLists in server/services/backlog_service_triage.go)
+// must request at least this many attempts, and must reference this
+// constant rather than duplicating the literal — a hardcoded copy at the
+// call site would silently go stale if this threshold is ever retuned.
+const TestOnlyReworkMinAttempts = 2
+
+// testFileSuffixes are the file-path suffixes IsTestOnlyReworkCycle treats as
+// a test/spec file. Deliberately a fixed suffix list, not a regex/glob DSL —
+// see plan.md's explicit scope guard against introducing a rules DSL for
+// this predicate.
+var testFileSuffixes = []string{
+	"_test.go",
+	".test.ts",
+	".test.tsx",
+	".spec.ts",
+	".spec.tsx",
+}
+
+// isTestFile reports whether path ends in one of testFileSuffixes.
+func isTestFile(path string) bool {
+	for _, suffix := range testFileSuffixes {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsTestOnlyReworkCycle reports whether every file touched across the last
+// TestOnlyReworkMinAttempts rework attempts (most recent first — one
+// []string of changed file paths per attempt) is a test/spec file. A
+// legitimate fix touches production code somewhere; a run of test-only
+// diffs is suggestive of chasing a non-deterministic failure by editing the
+// test rather than the underlying code. False on fewer than
+// TestOnlyReworkMinAttempts attempts, on any attempt with no file data at
+// all (no signal, don't guess), or on any attempt touching a non-test file.
+//
+// Known false-positive source (documented, not filtered — purely
+// informational, never gates the reopen decision, so this rate is accepted
+// rather than suppressed here; see validation.md): a legitimate
+// test-coverage-improvement item also produces test-only rework cycles by
+// design.
+func IsTestOnlyReworkCycle(fileListsByAttempt [][]string) bool {
+	if len(fileListsByAttempt) < TestOnlyReworkMinAttempts {
+		return false
+	}
+	for _, files := range fileListsByAttempt[:TestOnlyReworkMinAttempts] {
+		if len(files) == 0 {
+			return false
+		}
+		for _, f := range files {
+			if !isTestFile(f) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// MostRecentCompletedWorkSession returns the most recent completed
+// (EndedAt != nil) work-role ItemSession from sessions, or nil if none
+// exists. sessions must be ordered oldest-first, as Storage.ListItemSessions
+// returns. Exported: called from server/services at review-verdict-save time
+// to resolve which work session's diff a given verdict is reviewing (feeds
+// the DiffHash computation IsFlakyVerdictFlipFlop consumes), and by the
+// stuck-item reconciler to build IsTestOnlyReworkCycle's per-attempt file
+// lists. Only considers completed sessions — reading a still-in-progress
+// session's commit range risks racing an in-flight write (see validation.md).
+func MostRecentCompletedWorkSession(sessions []ItemSessionSummary) *ItemSessionSummary {
+	for i := len(sessions) - 1; i >= 0; i-- {
+		if sessions[i].Role == SessionRoleWork && sessions[i].EndedAt != nil {
+			return &sessions[i]
+		}
+	}
+	return nil
 }
 
 // prReadyToMergeSolo is the solo-operator PR readiness predicate (ADR-001

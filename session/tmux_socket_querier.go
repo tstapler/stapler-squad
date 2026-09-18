@@ -20,6 +20,14 @@ type TmuxSocketQuerier interface {
 	IsServerDown(serverSocket string) bool
 }
 
+// NewRealTmuxSocketQuerier returns the production TmuxSocketQuerier backed by
+// the real tmux package, for callers outside this package (e.g.
+// server/services) that need to query live tmux state without depending on
+// the unexported realTmuxSocketQuerier type directly.
+func NewRealTmuxSocketQuerier() TmuxSocketQuerier {
+	return realTmuxSocketQuerier{}
+}
+
 // realTmuxSocketQuerier is the production TmuxSocketQuerier, backed by the real
 // tmux package (which shells out to the tmux binary).
 type realTmuxSocketQuerier struct{}

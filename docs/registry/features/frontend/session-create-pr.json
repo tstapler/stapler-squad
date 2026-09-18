@@ -1,0 +1,22 @@
+{
+  "id": "session-create-pr",
+  "type": "frontend",
+  "description": "CreatePullRequestModal — mechanical PR-creation/draft flow launched from a session card or the review queue",
+  "component": "CreatePullRequestModal",
+  "path": "web-app/src/components/sessions/CreatePullRequestModal.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "CreatePullRequestModal_should_PrefillFields_When_Opened",
+    "CreatePullRequestModal_should_AllowEditingBaseBranch_When_UserTypes",
+    "CreatePullRequestModal_should_ShowViewPrLink_When_PrAlreadyExists",
+    "CreatePullRequestModal_should_CallCreatePullRequest_When_Submitted",
+    "CreatePullRequestModal_should_ShowPersistWarning_When_PersistedFalse",
+    "CreatePullRequestModal_should_PreserveFieldValues_When_SubmitFails",
+    "CreatePullRequestModal_should_OfferRetryAndClose_When_DraftFetchFails",
+    "CreatePullRequestModal_should_DisableAllFieldsAndButtons_When_Submitting",
+    "CreatePullRequestModal_should_HaveAccessibleLabelsForAllInputs_When_Rendered",
+    "CreatePullRequestModal_should_PairIconAndTextWithSuccessAndWarningStates_When_Rendered"
+  ],
+  "lastModified": "2026-08-21T12:01:35Z"
+}

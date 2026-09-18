@@ -17,10 +17,18 @@
 //     other tests use, rather than waiting 30 real minutes) and asserts
 //     zero SharedObjectStores remain.
 //
-// Duration here is intentionally modest for a `go test` run (~20s of
+// Duration here is intentionally modest for a `go test -bench` run (~20s of
 // sustained concurrent load) so this stays practical to run repeatedly —
 // see this task's report for a longer (~2 minute), manually-run variant of
 // the same scenario and whether its results changed the conclusion.
+//
+// This is a Benchmark, not a Test: go test never runs Benchmarks unless
+// invoked with -bench, which keeps this out of `make test`/`make
+// test-race`/`make test-integration` (and CI) structurally — no flag
+// (-short or otherwise) needs to be remembered at every call site. Run it
+// explicitly via `make benchmark-soak` or
+// `go test -bench BenchmarkGogitstoreSoakUnderSustainedLoad -benchtime=1x
+// -run '^$' ./session/unfinished/gogitstore/`.
 package gogitstore
 
 import (
@@ -30,14 +38,48 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"go.uber.org/goleak"
 )
+
+// soakWaitTimeout bounds how long the soak test waits on any single
+// sync.WaitGroup before giving up and failing with a full goroutine dump,
+// instead of relying on Go's 600s per-package test timeout (which kills the
+// whole test binary with only a partial/interleaved stack trace, and no
+// signal about which of the three WaitGroups was actually stuck). Set well
+// above soakDuration (so normal teardown never trips it) but far below 600s,
+// so a real hang is caught with time to spare and with output attributable
+// to a specific stage.
+const soakWaitTimeout = 45 * time.Second
+
+// waitBounded waits for wg with a soakWaitTimeout bound. On timeout, it
+// dumps every goroutine's complete stack (via pprof.Lookup("goroutine"),
+// which — unlike runtime.Stack — is not silently truncated by a fixed
+// buffer size) to t's log and fails the test, naming which wait stage
+// timed out so the dump can be correlated with what the test was doing.
+func waitBounded(tb testing.TB, stage string, wg *sync.WaitGroup) {
+	tb.Helper()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(soakWaitTimeout):
+		var buf strings.Builder
+		_ = pprof.Lookup("goroutine").WriteTo(&buf, 2)
+		tb.Fatalf("soak test hung waiting on %s (exceeded %s) — full goroutine dump follows:\n%s", stage, soakWaitTimeout, buf.String())
+	}
+}
 
 // countOpenFDs returns this process's current open file descriptor count via
 // /proc/self/fd. Linux-specific (this project's documented deployment
@@ -53,12 +95,19 @@ func countOpenFDs() (n int, ok bool) {
 	return len(entries), true
 }
 
-func TestGogitstore_SoakUnderSustainedLoad(t *testing.T) {
-	if testing.Short() {
-		t.Skip("soak test skipped under -short")
-	}
+func BenchmarkGogitstoreSoakUnderSustainedLoad(b *testing.B) {
 	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
+		b.Skip("git binary not available")
+	}
+
+	// This does a fixed ~soakDuration of real work per call, not per b.N --
+	// it isn't a throughput microbenchmark the harness should recalibrate.
+	// Without this guard, running it without -benchtime=1x (e.g. a bare
+	// `go test -bench=BenchmarkGogitstoreSoakUnderSustainedLoad`) lets Go's
+	// benchmark harness call this function repeatedly to hit its default
+	// target duration, multiplying the real wall-clock cost unexpectedly.
+	if b.N > 1 {
+		b.Fatalf("run with -benchtime=1x (see make benchmark-soak); got b.N=%d", b.N)
 	}
 
 	const numRepos = 3
@@ -66,7 +115,7 @@ func TestGogitstore_SoakUnderSustainedLoad(t *testing.T) {
 	const soakDuration = 20 * time.Second
 	const numWorkers = 8
 
-	root := t.TempDir()
+	root := b.TempDir()
 	type repoInfo struct {
 		mainDir   string
 		worktrees []string
@@ -74,11 +123,11 @@ func TestGogitstore_SoakUnderSustainedLoad(t *testing.T) {
 	repos := make([]repoInfo, numRepos)
 	for i := range repos {
 		mainDir := filepath.Join(root, fmt.Sprintf("repo%d", i))
-		buildPackedFixture(t, mainDir, 25)
+		buildPackedFixture(b, mainDir, 25)
 		wts := []string{mainDir}
 		for w := 0; w < worktreesPerRepo; w++ {
 			wtDir := filepath.Join(root, fmt.Sprintf("repo%d-wt%d", i, w))
-			addWorktree(t, mainDir, wtDir, fmt.Sprintf("wt-%d-%d", i, w))
+			addWorktree(b, mainDir, wtDir, fmt.Sprintf("wt-%d-%d", i, w))
 			wts = append(wts, wtDir)
 		}
 		repos[i] = repoInfo{mainDir: mainDir, worktrees: wts}
@@ -92,10 +141,17 @@ func TestGogitstore_SoakUnderSustainedLoad(t *testing.T) {
 	// copy-based path.
 	reg := &Registry{UseMmapIndex: true, CacheMaxSize: 256 * 1024}
 
+	// goroutineBaseline snapshots the pre-benchmark goroutine set via
+	// goleak.IgnoreCurrent() rather than asserting a bare process-wide
+	// goleak.VerifyNone() — this benchmark runs inside the full `go test
+	// -bench` binary alongside every other package's own background
+	// goroutines (see session/actor_test.go's TestActorNoLeak for the same
+	// pattern).
+	goroutineBaseline := goleak.IgnoreCurrent()
+
 	runtime.GC()
 	var baselineMem runtime.MemStats
 	runtime.ReadMemStats(&baselineMem)
-	baselineGoroutines := runtime.NumGoroutine()
 	baselineFDs, fdSupported := countOpenFDs()
 
 	var opsDone atomic.Int64
@@ -139,8 +195,8 @@ func TestGogitstore_SoakUnderSustainedLoad(t *testing.T) {
 	// Worker goroutines: repeatedly open/read/close a worktree, cycling
 	// through every repo x worktree combination — the realistic "many
 	// worktrees across several repos, repeated opens/closes" shape this
-	// task's item 4 describes. Never call *testing.T reporting methods from
-	// here (only the goroutine running the test function may — see
+	// task's item 4 describes. Never call testing.TB reporting methods from
+	// here (only the goroutine running the benchmark function may — see
 	// mmap_stage2_test.go's TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack
 	// doc comment for the same constraint) — errors are recorded via
 	// atomics and reported from the main goroutine after joining.
@@ -224,26 +280,26 @@ func TestGogitstore_SoakUnderSustainedLoad(t *testing.T) {
 		}
 	}()
 
-	workerWG.Wait()
+	waitBounded(b, "workerWG (soak workers)", &workerWG)
 	close(stop)
-	repackWG.Wait()
-	prunerWG.Wait()
+	waitBounded(b, "repackWG (repacker goroutine)", &repackWG)
+	waitBounded(b, "prunerWG (pruner goroutine)", &prunerWG)
 
-	t.Logf("soak summary: opsDone=%d opErrorsStaleIndex(tolerated)=%d opErrorsUnexpected=%d repackCount=%d repackErrors=%d",
+	b.Logf("soak summary: opsDone=%d opErrorsStaleIndex(tolerated)=%d opErrorsUnexpected=%d repackCount=%d repackErrors=%d",
 		opsDone.Load(), opErrorsStaleIndex.Load(), opErrorsUnexpected.Load(), repackCount.Load(), repackErrors.Load())
 	errSamplesMu.Lock()
 	for msg, count := range errSamples {
-		t.Logf("UNEXPECTED error sample (x%d): %s", count, msg)
+		b.Logf("UNEXPECTED error sample (x%d): %s", count, msg)
 	}
 	errSamplesMu.Unlock()
 	if opsDone.Load() == 0 {
-		t.Fatal("soak loop completed zero operations — test isn't exercising anything")
+		b.Fatal("soak loop completed zero operations — benchmark isn't exercising anything")
 	}
 	if opErrorsUnexpected.Load() > 0 {
-		t.Errorf("%d worker operations failed with an UNEXPECTED error type during sustained load (see error samples above) — plumbing.ErrObjectNotFound alone is tolerated as an expected consequence of this test's intentionally adversarial concurrent-repack cadence; anything else is a real regression to investigate", opErrorsUnexpected.Load())
+		b.Errorf("%d worker operations failed with an UNEXPECTED error type during sustained load (see error samples above) — plumbing.ErrObjectNotFound alone is tolerated as an expected consequence of this benchmark's intentionally adversarial concurrent-repack cadence; anything else is a real regression to investigate", opErrorsUnexpected.Load())
 	}
 	if repackErrors.Load() > 0 {
-		t.Errorf("%d repack-goroutine operations failed during the soak", repackErrors.Load())
+		b.Errorf("%d repack-goroutine operations failed during the soak", repackErrors.Load())
 	}
 
 	// Force full eviction: manipulate every remaining zero-refcount store's
@@ -265,40 +321,39 @@ func TestGogitstore_SoakUnderSustainedLoad(t *testing.T) {
 	remaining := len(reg.stores)
 	reg.mu.Unlock()
 	if remaining != 0 {
-		t.Errorf("expected zero SharedObjectStores remaining after forced full TTL eviction, got %d — eviction is not actually reclaiming stores", remaining)
+		b.Errorf("expected zero SharedObjectStores remaining after forced full TTL eviction, got %d — eviction is not actually reclaiming stores", remaining)
 	}
 
-	// Give any just-stopped watcher goroutines a moment to actually exit —
-	// stopPackWatch closes their stop channel, but goroutine scheduling
-	// isn't instantaneous — before measuring.
+	// Poll goleak.Find (rather than a bare single call, or goleak.VerifyNone
+	// — which would b.Fatal and skip the FD/mem checks below) to give
+	// just-stopped watcher goroutines (stopPackWatch closes their stop
+	// channel, but goroutine scheduling isn't instantaneous) time to actually
+	// exit before this fails.
 	grDeadline := time.Now().Add(5 * time.Second)
-	var afterGoroutines int
+	var leakErr error
 	for {
-		runtime.GC()
-		afterGoroutines = runtime.NumGoroutine()
-		if afterGoroutines <= baselineGoroutines+2 || time.Now().After(grDeadline) {
+		if leakErr = goleak.Find(goroutineBaseline); leakErr == nil || time.Now().After(grDeadline) {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Logf("goroutines: baseline=%d after-soak-and-full-eviction=%d", baselineGoroutines, afterGoroutines)
-	if afterGoroutines > baselineGoroutines+2 {
-		t.Errorf("goroutine count did not return to baseline after full eviction: baseline=%d after=%d (possible leak of ~%d goroutines)", baselineGoroutines, afterGoroutines, afterGoroutines-baselineGoroutines)
+	if leakErr != nil {
+		b.Errorf("goroutine leak after full eviction: %v", leakErr)
 	}
 
 	if fdSupported {
 		afterFDs, _ := countOpenFDs()
-		t.Logf("open FDs: baseline=%d after-soak-and-full-eviction=%d", baselineFDs, afterFDs)
+		b.Logf("open FDs: baseline=%d after-soak-and-full-eviction=%d", baselineFDs, afterFDs)
 		if afterFDs > baselineFDs+5 { // small slack for test-harness-owned fds unrelated to this package
-			t.Errorf("file descriptor count did not return to baseline after full eviction: baseline=%d after=%d (possible fd leak of ~%d)", baselineFDs, afterFDs, afterFDs-baselineFDs)
+			b.Errorf("file descriptor count did not return to baseline after full eviction: baseline=%d after=%d (possible fd leak of ~%d)", baselineFDs, afterFDs, afterFDs-baselineFDs)
 		}
 	} else {
-		t.Log("skipping FD-count assertion: /proc/self/fd unavailable on this platform")
+		b.Log("skipping FD-count assertion: /proc/self/fd unavailable on this platform")
 	}
 
 	runtime.GC()
 	var afterMem runtime.MemStats
 	runtime.ReadMemStats(&afterMem)
-	t.Logf("heap: baseline HeapAlloc=%d bytes, after-soak-and-full-eviction HeapAlloc=%d bytes (delta=%d)",
+	b.Logf("heap: baseline HeapAlloc=%d bytes, after-soak-and-full-eviction HeapAlloc=%d bytes (delta=%d)",
 		baselineMem.HeapAlloc, afterMem.HeapAlloc, int64(afterMem.HeapAlloc)-int64(baselineMem.HeapAlloc))
 }

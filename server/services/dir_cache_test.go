@@ -32,6 +32,7 @@ func entryNames(entries []*sessionv1.PathEntry) []string {
 // TestDirCache_Hit verifies that a Put followed by an immediate Get returns
 // the same entries without performing a second disk read.
 func TestDirCache_Hit(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	makeFile(t, filepath.Join(dir, "a.txt"))
 	makeFile(t, filepath.Join(dir, "b.txt"))
@@ -53,6 +54,7 @@ func TestDirCache_Hit(t *testing.T) {
 // TestDirCache_MissOnMtimeChange verifies that after a directory is modified
 // (which advances its mtime), Get returns a miss and removes the stale entry.
 func TestDirCache_MissOnMtimeChange(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	info, err := os.Stat(dir)
@@ -85,6 +87,7 @@ func TestDirCache_MissOnMtimeChange(t *testing.T) {
 // TestDirCache_MissOnTTLExpiry verifies that an entry is not returned after the TTL
 // has elapsed, even if the directory has not changed.
 func TestDirCache_MissOnTTLExpiry(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	info, err := os.Stat(dir)
@@ -111,6 +114,7 @@ func TestDirCache_MissOnTTLExpiry(t *testing.T) {
 // TestDirCache_NoEvictionBelowMax verifies that no eviction occurs when the cache
 // has fewer entries than maxSize.
 func TestDirCache_NoEvictionBelowMax(t *testing.T) {
+	t.Parallel()
 	const maxSize = 4
 	cache := NewDirCache(maxSize, 60*time.Second)
 
@@ -134,6 +138,7 @@ func TestDirCache_NoEvictionBelowMax(t *testing.T) {
 // TestDirCache_EvictsOldestAtMax verifies that adding an entry when the cache is at
 // capacity evicts the entry with the oldest cachedAt, keeping len(entries) == maxSize.
 func TestDirCache_EvictsOldestAtMax(t *testing.T) {
+	t.Parallel()
 	const maxSize = 3
 	cache := NewDirCache(maxSize, 60*time.Second)
 
@@ -183,6 +188,7 @@ func TestDirCache_EvictsOldestAtMax(t *testing.T) {
 // TestDirCache_ConcurrentReads verifies that many simultaneous Get calls after a Put
 // do not cause data races. Run with: go test -race ./server/services/...
 func TestDirCache_ConcurrentReads(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	makeFile(t, filepath.Join(dir, "file.txt"))
 
@@ -216,6 +222,7 @@ func TestDirCache_ConcurrentReads(t *testing.T) {
 // TestDirCache_NonexistentDir verifies that Get for a path that does not exist returns
 // a miss and does not store anything in the cache.
 func TestDirCache_NonexistentDir(t *testing.T) {
+	t.Parallel()
 	cache := NewDirCache(16, 60*time.Second)
 
 	got, ok := cache.Get("/does/not/exist/anywhere")
@@ -232,6 +239,7 @@ func TestDirCache_NonexistentDir(t *testing.T) {
 // for the same directory returns identical entries and exercises the cache hit path
 // (indirectly: the second call completes without error and returns consistent results).
 func TestListPathCompletions_CacheHit(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	makeDir(t, filepath.Join(dir, "alpha"))
 	makeFile(t, filepath.Join(dir, "beta.txt"))
@@ -273,6 +281,7 @@ func TestListPathCompletions_CacheHit(t *testing.T) {
 // changes between two ListPathCompletions calls, the second call returns the updated
 // contents (cache miss due to mtime change).
 func TestListPathCompletions_CacheMissAfterMtimeChange(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	makeDir(t, filepath.Join(dir, "alpha"))
 

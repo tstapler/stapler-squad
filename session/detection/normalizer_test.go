@@ -5,6 +5,7 @@ import (
 )
 
 func TestPTYNormalizer_Normalize_should_stripANSI_When_escapeSequencesPresent(t *testing.T) {
+	t.Parallel()
 	n := PTYNormalizer{}
 	got := n.Normalize("\x1b[31mHello\x1b[0m")
 	if got != "Hello" {
@@ -13,6 +14,7 @@ func TestPTYNormalizer_Normalize_should_stripANSI_When_escapeSequencesPresent(t 
 }
 
 func TestPTYNormalizer_Normalize_should_collapseCarriageReturns_When_crPresent(t *testing.T) {
+	t.Parallel()
 	n := PTYNormalizer{}
 	got := n.Normalize("foo\rbar")
 	if got != "bar" {
@@ -21,6 +23,7 @@ func TestPTYNormalizer_Normalize_should_collapseCarriageReturns_When_crPresent(t
 }
 
 func TestPTYNormalizer_Normalize_should_handleWindowsCRLF_Without_collapse(t *testing.T) {
+	t.Parallel()
 	n := PTYNormalizer{}
 	// \r\n is a Windows newline; the \r should NOT cause a line overwrite
 	got := n.Normalize("line1\r\nline2")
@@ -31,6 +34,7 @@ func TestPTYNormalizer_Normalize_should_handleWindowsCRLF_Without_collapse(t *te
 }
 
 func TestPTYNormalizer_SplitLines_should_returnNonBlankLines(t *testing.T) {
+	t.Parallel()
 	n := PTYNormalizer{}
 	got := n.SplitLines("a\n\nb\n")
 	want := []string{"a", "b"}
@@ -46,6 +50,7 @@ func TestPTYNormalizer_SplitLines_should_returnNonBlankLines(t *testing.T) {
 }
 
 func TestPTYNormalizer_SplitLines_should_returnEmpty_When_inputIsEmpty(t *testing.T) {
+	t.Parallel()
 	n := PTYNormalizer{}
 	got := n.SplitLines("")
 	if len(got) != 0 {
@@ -58,6 +63,7 @@ func TestPTYNormalizer_SplitLines_should_returnEmpty_When_inputIsEmpty(t *testin
 // spaces between words in status-bar output. Without this fix, "esc to interrupt" would
 // become "esctointterrupt" after stripping, causing the esc_to_interrupt pattern to miss.
 func TestStripANSI_should_preserveWordSpaces_When_cursorForwardUsedBetweenWords(t *testing.T) {
+	t.Parallel()
 	// Reproduce the exact encoding Claude Code uses for "esc to interrupt":
 	// each word is separated by \x1b[39m (reset fg) \x1b[1X (erase char) \x1b[38;5;246m (set color) \x1b[C (cursor right)
 	escToInterrupt := "esc\x1b[39m\x1b[1X\x1b[38;5;246m\x1b[Cto\x1b[39m\x1b[1X\x1b[38;5;246m\x1b[Cinterrupt"
@@ -71,6 +77,7 @@ func TestStripANSI_should_preserveWordSpaces_When_cursorForwardUsedBetweenWords(
 // TestStripANSI_should_preserveSpaceAfterSpinner_When_cursorForwardUsedAfterSpinnerChar guards
 // against the regression where "✽ Transmuting…" becomes "✽Transmuting…" after stripping.
 func TestStripANSI_should_preserveSpaceAfterSpinner_When_cursorForwardUsedAfterSpinnerChar(t *testing.T) {
+	t.Parallel()
 	spinnerLine := "✽\x1b[1X\x1b[38;5;180m\x1b[CTransmuting…"
 	got := stripANSI(spinnerLine)
 	want := "✽ Transmuting…"

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/internal/history"
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
@@ -18,7 +19,12 @@ type SQLiteStore struct {
 // NewSQLiteStore initializes a new SQLite connection and schema.
 func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 	// Configure SQLite connection with WAL mode, busy_timeout, and _txlock=immediate
-	db, err := sql.Open("sqlite", dsn+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_txlock=immediate")
+	fullDSN := sqlitedsn.New(dsn).
+		WithPragma("journal_mode", "WAL").
+		WithPragma("busy_timeout", "5000").
+		WithTxLockImmediate().
+		Build()
+	db, err := sql.Open("sqlite", fullDSN)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -59,7 +65,7 @@ func (s *SQLiteStore) InsertEvent(ctx context.Context, e *history.Event) error {
 	VALUES (?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO NOTHING;
 	`
-	
+
 	return s.executeWithRetry(ctx, func() error {
 		_, err := s.db.ExecContext(ctx, query, e.ID, e.Command, e.Timestamp, e.Directory, e.ExitCode, e.ProgramSource, e.IsRedacted)
 		return err

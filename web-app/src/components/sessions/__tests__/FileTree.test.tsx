@@ -16,6 +16,7 @@ import React from "react";
 import { render, fireEvent, act, waitFor } from "@testing-library/react";
 import {
   FileTree,
+  TreeRow,
   buildTreeData,
   sortTreeData,
   filterChangedTreeData,
@@ -498,6 +499,81 @@ describe("FileTree – NodeRenderer click behavior", () => {
 });
 
 // ---------------------------------------------------------------------------
+// TreeRow – roving tabindex (modal-focus-trap AC5 follow-up, backlog item
+// 4a1f73c4-5558-41f8-9860-8508fb874fcc)
+// ---------------------------------------------------------------------------
+
+describe("TreeRow – roving tabindex", () => {
+  function renderRow(isFocused: boolean) {
+    const node = { isFocused, handleClick: jest.fn() } as unknown as Parameters<
+      typeof TreeRow
+    >[0]["node"];
+    const { container } = render(
+      <TreeRow node={node} innerRef={() => {}} attrs={{}}>
+        <span>row content</span>
+      </TreeRow>
+    );
+    return { container, node };
+  }
+
+  it("a focused row reports tabindex 0", () => {
+    const { container } = renderRow(true);
+    expect(container.querySelector("[tabindex]")?.getAttribute("tabindex")).toBe("0");
+  });
+
+  it("an unfocused row reports tabindex -1", () => {
+    const { container } = renderRow(false);
+    expect(container.querySelector("[tabindex]")?.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("re-rendering after the focused node changes (e.g. a directory expand/collapse) recomputes tabindex from node.isFocused rather than caching the old value", () => {
+    const focusedNode = { isFocused: true, handleClick: jest.fn() } as unknown as Parameters<
+      typeof TreeRow
+    >[0]["node"];
+    const { container, rerender } = render(
+      <TreeRow node={focusedNode} innerRef={() => {}} attrs={{}}>
+        <span>row content</span>
+      </TreeRow>
+    );
+    expect(container.querySelector("[tabindex]")?.getAttribute("tabindex")).toBe("0");
+
+    const unfocusedNode = { isFocused: false, handleClick: jest.fn() } as unknown as Parameters<
+      typeof TreeRow
+    >[0]["node"];
+    rerender(
+      <TreeRow node={unfocusedNode} innerRef={() => {}} attrs={{}}>
+        <span>row content</span>
+      </TreeRow>
+    );
+    expect(container.querySelector("[tabindex]")?.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("clicking the row delegates to node.handleClick", () => {
+    const { container, node } = renderRow(true);
+    fireEvent.click(container.querySelector("[tabindex]")!);
+    expect(node.handleClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a focus event from bubbling to an ancestor listener", () => {
+    const parentOnFocus = jest.fn();
+    const node = { isFocused: true, handleClick: jest.fn() } as unknown as Parameters<
+      typeof TreeRow
+    >[0]["node"];
+    const { container } = render(
+      <div onFocus={parentOnFocus}>
+        <TreeRow node={node} innerRef={() => {}} attrs={{}}>
+          <span>row content</span>
+        </TreeRow>
+      </div>
+    );
+
+    fireEvent.focus(container.querySelector("[tabindex]")!);
+
+    expect(parentOnFocus).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // FileTree – keyboard navigation
 // ---------------------------------------------------------------------------
 
@@ -526,7 +602,7 @@ describe("FileTree – keyboard navigation", () => {
       fireEvent.keyDown(div, { key, ...modifiers });
     }
 
-    return { fireKey };
+    return { fireKey, div };
   }
 
   beforeEach(() => {
@@ -563,6 +639,75 @@ describe("FileTree – keyboard navigation", () => {
     fireKey("k");
 
     expect(api.focus).toHaveBeenCalledWith(nodeA.id);
+  });
+
+  it("Tab key moves focus to the next visible node when not on the last row", async () => {
+    const nodeA = makeMockNode(makeFileNode("a.go", false));
+    const nodeB = makeMockNode(makeFileNode("b.go", false));
+    const api = makeMockTreeApi({
+      visibleNodes: [nodeA, nodeB],
+      focusedNode: nodeA,
+    });
+
+    const { fireKey } = await setupKeyboard(api);
+    fireKey("Tab");
+
+    expect(api.focus).toHaveBeenCalledWith(nodeB.id);
+  });
+
+  it("Shift+Tab key moves focus to the previous visible node when not on the first row", async () => {
+    const nodeA = makeMockNode(makeFileNode("a.go", false));
+    const nodeB = makeMockNode(makeFileNode("b.go", false));
+    const api = makeMockTreeApi({
+      visibleNodes: [nodeA, nodeB],
+      focusedNode: nodeB,
+    });
+
+    const { fireKey } = await setupKeyboard(api);
+    fireKey("Tab", { shiftKey: true });
+
+    expect(api.focus).toHaveBeenCalledWith(nodeA.id);
+  });
+
+  // Boundary case (modal-focus-trap AC5 follow-up, backlog item
+  // 4a1f73c4-5558-41f8-9860-8508fb874fcc): on the last/first row, Tab hands
+  // real DOM focus to the tree's own outer container (not tree.focus(), and
+  // not react-arborist's own document-wide walk) rather than getting stuck.
+  // Moving focus to that container — an ANCESTOR of react-arborist's
+  // internal row container — makes react-arborist's own onBlur see a
+  // relatedTarget it doesn't contain and clear its internal focusedNode, so
+  // the very next Tab/Shift+Tab is a plain, unintercepted browser tab move
+  // (handleTreeKeyDown no-ops with no focusedNode) — letting focus leave the
+  // widget on the following press whether or not a surrounding modal's
+  // focus trap is present (verified live via accessibility.spec.ts's
+  // BacklogFileBrowserModal Tab-loop tests; FilesTab has no trap at all, so
+  // this fallback is what lets Tab leave it normally).
+  it("Tab key on the last visible row moves DOM focus to the tree's own container instead of getting stuck", async () => {
+    const soleNode = makeMockNode(makeFileNode("a.go", false));
+    const api = makeMockTreeApi({
+      visibleNodes: [soleNode],
+      focusedNode: soleNode,
+    });
+
+    const { fireKey, div } = await setupKeyboard(api);
+    fireKey("Tab");
+
+    expect(api.focus).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(div);
+  });
+
+  it("Shift+Tab key on the first visible row moves DOM focus to the tree's own container instead of getting stuck", async () => {
+    const soleNode = makeMockNode(makeFileNode("a.go", false));
+    const api = makeMockTreeApi({
+      visibleNodes: [soleNode],
+      focusedNode: soleNode,
+    });
+
+    const { fireKey, div } = await setupKeyboard(api);
+    fireKey("Tab", { shiftKey: true });
+
+    expect(api.focus).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(div);
   });
 
   it("l key on directory opens it", async () => {

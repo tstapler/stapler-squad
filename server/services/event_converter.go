@@ -6,8 +6,27 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/sshremote"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// remoteConnectionStateToProto maps session/sshremote.RemoteConnectionState
+// (the Go string-typed state RemoteHealthProber owns) to the wire enum
+// (Epic 6.2). Falls back to UNSPECIFIED for any value not in the three the
+// prober's state machine actually produces, rather than panicking on an
+// unrecognized string.
+func remoteConnectionStateToProto(s sshremote.RemoteConnectionState) sessionv1.RemoteConnectionState {
+	switch s {
+	case sshremote.RemoteConnectionStateConnected:
+		return sessionv1.RemoteConnectionState_REMOTE_CONNECTION_STATE_CONNECTED
+	case sshremote.RemoteConnectionStateReconnecting:
+		return sessionv1.RemoteConnectionState_REMOTE_CONNECTION_STATE_RECONNECTING
+	case sshremote.RemoteConnectionStateDisconnected:
+		return sessionv1.RemoteConnectionState_REMOTE_CONNECTION_STATE_DISCONNECTED
+	default:
+		return sessionv1.RemoteConnectionState_REMOTE_CONNECTION_STATE_UNSPECIFIED
+	}
+}
 
 // convertEventToProto converts an internal event to a protobuf SessionEvent.
 // This handles the mapping between the Go event bus and the gRPC streaming protocol.
@@ -93,6 +112,17 @@ func convertEventToProto(event *events.Event) *sessionv1.SessionEvent {
 				Context:     event.Context, // carries approval ID for client-side correlation
 				RespondedAt: timestamppb.New(event.Timestamp),
 			},
+		}
+
+	case events.EventRemoteHealthChanged:
+		if event.RemoteHealthPayload != nil {
+			protoEvent.Event = &sessionv1.SessionEvent_RemoteHealthChanged{
+				RemoteHealthChanged: &sessionv1.RemoteHealthChangedEvent{
+					RemoteName:    event.RemoteHealthPayload.RemoteName,
+					State:         remoteConnectionStateToProto(event.RemoteHealthPayload.State),
+					PreviousState: remoteConnectionStateToProto(event.RemoteHealthPayload.PreviousState),
+				},
+			}
 		}
 	}
 

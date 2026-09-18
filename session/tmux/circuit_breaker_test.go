@@ -13,6 +13,7 @@ import (
 // IsFailure function does NOT trip the breaker on a "no sessions" exit-1 from
 // tmux list-sessions, while it DOES trip on real server-down output.
 func TestTmuxCircuitBreakerConfig_NoSessionsNotFailure(t *testing.T) {
+	t.Parallel()
 	cfg := tmuxCircuitBreakerConfig()
 
 	if cfg.IsFailure == nil {

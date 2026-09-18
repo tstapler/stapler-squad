@@ -9,7 +9,8 @@ import { AutocompleteInput } from "@/components/ui/AutocompleteInput";
 import { useSlashCommands } from "@/lib/hooks/useSlashCommands";
 import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestions";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
-import { CLAUDE_MODELS } from "@/lib/constants/programs";
+import { MODEL_AUTOCOMPLETE_OPTIONS } from "@/lib/constants/programs";
+import { fuzzyMatchModels, getModelLabel } from "@/lib/constants/modelFuzzyMatch";
 import { CronScheduleInput } from "@/components/workflows/CronScheduleInput";
 import { validateCron } from "@/lib/cron/validateCron";
 import * as styles from "./WorkflowForm.css";
@@ -68,7 +69,7 @@ export function WorkflowForm({ existing, onSubmit, onCancel }: WorkflowFormProps
   const [slashSuggestIndex, setSlashSuggestIndex] = useState(-1);
   const { commands: slashCommands } = useSlashCommands(formData.targetDirectory);
   const availablePrograms = useAvailablePrograms();
-  const modelSuggestions = CLAUDE_MODELS.map((m) => m.value);
+  const modelSuggestions = MODEL_AUTOCOMPLETE_OPTIONS.map((m) => m.value);
   const agentTypeSuggestions = availablePrograms
     .map((p) => p.value)
     .filter(Boolean);
@@ -267,6 +268,8 @@ export function WorkflowForm({ existing, onSubmit, onCancel }: WorkflowFormProps
             onChange={(v) => setField("model", v)}
             placeholder="claude-sonnet-4-6"
             suggestions={modelSuggestions}
+            filterFn={fuzzyMatchModels}
+            getLabel={getModelLabel}
             className={styles.input}
           />
         </div>

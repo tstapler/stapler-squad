@@ -30,8 +30,22 @@ function findSpecFiles(dir: string): string[] {
 
 function extractFeatureIds(testFile: string): string[] {
   const content = fs.readFileSync(testFile, 'utf-8');
-  const matches = content.match(/@feature\s+([\w:,-]+)/g) || [];
-  return matches.flatMap(m => m.replace('@feature', '').trim().split(/[,\s]+/).filter(Boolean));
+  const ids: string[] = [];
+  // Per-line extraction (not a whole-file regex) so the match can safely
+  // include spaces up to end-of-line without also swallowing unrelated
+  // comment lines that follow. Every spec in tests/e2e/ uses the
+  // "id, id, id" (comma + space) convention, e.g.:
+  //   // @feature session:create, alias:invoke
+  // A character-class-only regex like [\w:,-]+ excludes the space, so it
+  // silently stopped at the first ID and dropped every ID after the first
+  // comma-space — confirmed live: it reported 16/205 (8%) feature coverage
+  // when most specs list 2+ IDs.
+  for (const line of content.split('\n')) {
+    const match = line.match(/@feature\s+(.+)/);
+    if (!match) continue;
+    ids.push(...match[1].split(/[,\s]+/).map(s => s.trim()).filter(Boolean));
+  }
+  return ids;
 }
 
 function generateCoverageReport(registryPath: string, testDir: string): void {

@@ -5,12 +5,18 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import {
-  EscapeEventProto,
-  EscapeSequenceCount,
   GetEscapeAnalyticsSummaryRequestSchema,
+  GetEscapeAnalyticsGlobalSummaryRequestSchema,
   QueryEscapeAnalyticsRequestSchema,
 } from "@/gen/session/v1/session_pb";
+import type {
+  EscapeEventProto,
+  EscapeSequenceCount,
+  SessionEscapeSummary,
+  ProjectEscapeSummary,
+} from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
+import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { getConnectTransport } from "@/lib/api/transport";
 
 // ── Summary hook ────────────────────────────────────────────────────────────
@@ -20,18 +26,25 @@ interface UseEscapeAnalyticsSummaryReturn {
   totalSequences: bigint;
   totalMangled: bigint;
   mangleRate: number;
+  correlationOutcomes: bigint;
+  correlationCoverage: number;
+  captureHealthy: boolean;
   loading: boolean;
   error: Error | null;
   refresh: () => Promise<void>;
 }
 
 export function useEscapeAnalyticsSummary(
-  sessionId: string
+  sessionId: string,
+  enabled: boolean = true
 ): UseEscapeAnalyticsSummaryReturn {
   const [histogram, setHistogram] = useState<EscapeSequenceCount[]>([]);
   const [totalSequences, setTotalSequences] = useState<bigint>(0n);
   const [totalMangled, setTotalMangled] = useState<bigint>(0n);
   const [mangleRate, setMangleRate] = useState<number>(0);
+  const [correlationOutcomes, setCorrelationOutcomes] = useState<bigint>(0n);
+  const [correlationCoverage, setCorrelationCoverage] = useState(0);
+  const [captureHealthy, setCaptureHealthy] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
@@ -42,7 +55,7 @@ export function useEscapeAnalyticsSummary(
   }, []);
 
   const fetchSummary = useCallback(async () => {
-    if (!clientRef.current || !sessionId) return;
+    if (!clientRef.current || !sessionId || !enabled) return;
     setLoading(true);
     setError(null);
     try {
@@ -52,6 +65,9 @@ export function useEscapeAnalyticsSummary(
       setTotalSequences(resp.totalSequences ?? 0n);
       setTotalMangled(resp.totalMangled ?? 0n);
       setMangleRate(resp.mangleRate ?? 0);
+      setCorrelationOutcomes(resp.correlationOutcomes ?? 0n);
+      setCorrelationCoverage(resp.correlationCoverage ?? 0);
+      setCaptureHealthy(resp.captureHealthy ?? false);
     } catch (err) {
       const e = err instanceof Error ? err : new Error("Failed to fetch escape analytics summary");
       setError(e);
@@ -59,13 +75,178 @@ export function useEscapeAnalyticsSummary(
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, enabled]);
 
   useEffect(() => {
-    fetchSummary();
-  }, [fetchSummary]);
+    if (!clientRef.current || !sessionId || !enabled) return;
 
-  return { histogram, totalSequences, totalMangled, mangleRate, loading, error, refresh: fetchSummary };
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    const fetchData = async () => {
+      try {
+        const req = create(GetEscapeAnalyticsSummaryRequestSchema, { sessionId });
+        const resp = await clientRef.current!.getEscapeAnalyticsSummary(req);
+        if (cancelled) return;
+        setHistogram(resp.histogram ?? []);
+        setTotalSequences(resp.totalSequences ?? 0n);
+        setTotalMangled(resp.totalMangled ?? 0n);
+        setMangleRate(resp.mangleRate ?? 0);
+        setCorrelationOutcomes(resp.correlationOutcomes ?? 0n);
+        setCorrelationCoverage(resp.correlationCoverage ?? 0);
+        setCaptureHealthy(resp.captureHealthy ?? false);
+      } catch (err) {
+        if (cancelled) return;
+        const e = err instanceof Error ? err : new Error("Failed to fetch escape analytics summary");
+        setError(e);
+        console.error("Failed to fetch escape analytics summary:", e);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    fetchData();
+    return () => { cancelled = true; };
+  }, [sessionId, enabled]);
+
+  return { histogram, totalSequences, totalMangled, mangleRate, correlationOutcomes, correlationCoverage, captureHealthy, loading, error, refresh: fetchSummary };
+}
+
+// ── Global summary hook ───────────────────────────────────────────────────────
+
+interface EscapeAnalyticsGlobalFilters {
+  startTime?: Date;
+  endTime?: Date;
+}
+
+interface UseEscapeAnalyticsGlobalSummaryReturn {
+  histogram: EscapeSequenceCount[];
+  totalSequences: bigint;
+  totalMangled: bigint;
+  mangleRate: number;
+  correlationOutcomes: bigint;
+  correlationCoverage: number;
+  captureHealthy: boolean;
+  droppedEvents: bigint;
+  perSession: SessionEscapeSummary[];
+  perProject: ProjectEscapeSummary[];
+  loading: boolean;
+  error: Error | null;
+  refresh: () => Promise<void>;
+}
+
+export function useEscapeAnalyticsGlobalSummary(
+  enabled: boolean = true,
+  filters: EscapeAnalyticsGlobalFilters = {}
+): UseEscapeAnalyticsGlobalSummaryReturn {
+  const { startTime, endTime } = filters;
+
+  const [histogram, setHistogram] = useState<EscapeSequenceCount[]>([]);
+  const [totalSequences, setTotalSequences] = useState<bigint>(0n);
+  const [totalMangled, setTotalMangled] = useState<bigint>(0n);
+  const [mangleRate, setMangleRate] = useState<number>(0);
+  const [perSession, setPerSession] = useState<SessionEscapeSummary[]>([]);
+  const [perProject, setPerProject] = useState<ProjectEscapeSummary[]>([]);
+  const [correlationOutcomes, setCorrelationOutcomes] = useState<bigint>(0n);
+  const [correlationCoverage, setCorrelationCoverage] = useState(0);
+  const [captureHealthy, setCaptureHealthy] = useState(true);
+  const [droppedEvents, setDroppedEvents] = useState<bigint>(0n);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
+
+  useEffect(() => {
+    clientRef.current = createClient(SessionService, getConnectTransport());
+  }, []);
+
+  const buildRequest = useCallback(
+    () =>
+      create(GetEscapeAnalyticsGlobalSummaryRequestSchema, {
+        startTime: startTime ? timestampFromDate(startTime) : undefined,
+        endTime: endTime ? timestampFromDate(endTime) : undefined,
+      }),
+    [startTime, endTime]
+  );
+
+  const fetchGlobalSummary = useCallback(async () => {
+    if (!clientRef.current || !enabled) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const req = buildRequest();
+      const resp = await clientRef.current.getEscapeAnalyticsGlobalSummary(req);
+      setHistogram(resp.histogram ?? []);
+      setTotalSequences(resp.totalSequences ?? 0n);
+      setTotalMangled(resp.totalMangled ?? 0n);
+      setMangleRate(resp.mangleRate ?? 0);
+      setPerSession(resp.perSession ?? []);
+      setPerProject(resp.perProject ?? []);
+      setCorrelationOutcomes(resp.correlationOutcomes ?? 0n);
+      setCorrelationCoverage(resp.correlationCoverage ?? 0);
+      setCaptureHealthy(resp.captureHealthy ?? false);
+      setDroppedEvents(resp.droppedEvents ?? 0n);
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error("Failed to fetch escape analytics global summary");
+      setError(e);
+      console.error("Failed to fetch escape analytics global summary:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, [enabled, buildRequest]);
+
+  useEffect(() => {
+    if (!clientRef.current || !enabled) return;
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    const fetchData = async () => {
+      try {
+        const req = buildRequest();
+        const resp = await clientRef.current!.getEscapeAnalyticsGlobalSummary(req);
+        if (cancelled) return;
+        setHistogram(resp.histogram ?? []);
+        setTotalSequences(resp.totalSequences ?? 0n);
+        setTotalMangled(resp.totalMangled ?? 0n);
+        setMangleRate(resp.mangleRate ?? 0);
+        setPerSession(resp.perSession ?? []);
+        setPerProject(resp.perProject ?? []);
+        setCorrelationOutcomes(resp.correlationOutcomes ?? 0n);
+        setCorrelationCoverage(resp.correlationCoverage ?? 0);
+        setCaptureHealthy(resp.captureHealthy ?? false);
+        setDroppedEvents(resp.droppedEvents ?? 0n);
+      } catch (err) {
+        if (cancelled) return;
+        const e = err instanceof Error ? err : new Error("Failed to fetch escape analytics global summary");
+        setError(e);
+        console.error("Failed to fetch escape analytics global summary:", e);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    fetchData();
+    return () => { cancelled = true; };
+  }, [enabled, buildRequest]);
+
+  return {
+    histogram,
+    totalSequences,
+    totalMangled,
+    mangleRate,
+    correlationOutcomes,
+    correlationCoverage,
+    captureHealthy,
+    droppedEvents,
+    perSession,
+    perProject,
+    loading,
+    error,
+    refresh: fetchGlobalSummary,
+  };
 }
 
 // ── Events hook ──────────────────────────────────────────────────────────────

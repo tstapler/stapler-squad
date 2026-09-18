@@ -6,9 +6,11 @@ import { srOnly } from "./LiveRegion.css";
 interface LiveRegionProps {
   message: string;
   politeness?: "polite" | "assertive";
+  /** ARIA role for the live region. Defaults to "status" (existing behavior). Pass "alert" for assertive, interrupt-worthy announcements (Task 2.3.1). */
+  role?: "status" | "alert";
 }
 
-export function LiveRegion({ message, politeness = "polite" }: LiveRegionProps) {
+export function LiveRegion({ message, politeness = "polite", role = "status" }: LiveRegionProps) {
   const [currentMessage, setCurrentMessage] = useState(message);
 
   useEffect(() => {
@@ -19,7 +21,7 @@ export function LiveRegion({ message, politeness = "polite" }: LiveRegionProps) 
 
   return (
     <div
-      role="status"
+      role={role}
       aria-live={politeness}
       aria-atomic="true"
       className={srOnly}

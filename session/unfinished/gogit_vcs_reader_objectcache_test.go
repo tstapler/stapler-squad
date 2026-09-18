@@ -20,6 +20,7 @@ import (
 // should pay per repo. This test fails if a future edit silently reverts to
 // (or exceeds) go-git's default.
 func TestPerRepoObjectCacheSize_IsSmallerThanGoGitDefault(t *testing.T) {
+	t.Parallel()
 	if perRepoObjectCacheSize >= cache.DefaultMaxSize {
 		t.Errorf("perRepoObjectCacheSize = %d, want strictly less than go-git's own default %d",
 			perRepoObjectCacheSize, cache.DefaultMaxSize)
@@ -31,6 +32,7 @@ func TestPerRepoObjectCacheSize_IsSmallerThanGoGitDefault(t *testing.T) {
 // defeat cross-worktree sharing entirely (see gogitstore.Registry's own
 // doc comment).
 func TestGogitstoreRegistry_SameInstanceAcrossCalls(t *testing.T) {
+	t.Parallel()
 	g := &GoGitVCSReader{}
 
 	first := g.gogitstoreRegistry()
@@ -51,6 +53,7 @@ func TestGogitstoreRegistry_SameInstanceAcrossCalls(t *testing.T) {
 // reporting exactly one commondir entry) — the actual production wiring
 // this change exists for, not just that gogitstore compiles.
 func TestOpenRepoEntry_TwoWorktreesOfSameRepo_ShareOneIndexParse(t *testing.T) {
+	t.Parallel()
 	mainRepo := initRepoInternal(t)
 	linkedPath := filepath.Join(filepath.Dir(mainRepo), "linked-worktree-gogitstore")
 	gitRunInternal(t, mainRepo, "worktree", "add", linkedPath, "-b", "gogitstore-feature")

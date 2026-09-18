@@ -100,13 +100,13 @@ func EnsureNetworkTLSCerts(networks map[string][]string) (caFile string, certs m
 		if genErr != nil {
 			return "", nil, fmt.Errorf("generate cert for network %s: %w", key, genErr)
 		}
-		if err := os.WriteFile(certFile, certPEM, 0644); err != nil {
+		if err := os.WriteFile(certFile, certPEM, 0600); err != nil {
 			return "", nil, fmt.Errorf("write cert for network %s: %w", key, err)
 		}
 		if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
 			return "", nil, fmt.Errorf("write key for network %s: %w", key, err)
 		}
-		if err := os.WriteFile(hashFile, []byte(want), 0644); err != nil {
+		if err := os.WriteFile(hashFile, []byte(want), 0600); err != nil {
 			return "", nil, fmt.Errorf("write cert hash for network %s: %w", key, err)
 		}
 
@@ -169,7 +169,7 @@ func ensureCA(caFile string) (caKey *ecdsa.PrivateKey, caCert *x509.Certificate,
 	if err != nil {
 		return nil, nil, false, err
 	}
-	if err := os.WriteFile(caFile, caCertPEM, 0644); err != nil {
+	if err := os.WriteFile(caFile, caCertPEM, 0600); err != nil {
 		return nil, nil, false, fmt.Errorf("write CA cert: %w", err)
 	}
 
@@ -187,6 +187,8 @@ func ensureCA(caFile string) (caKey *ecdsa.PrivateKey, caCert *x509.Certificate,
 
 // loadCA reads the CA cert and key from disk. Returns (nil, nil, false) on any error.
 func loadCA(caFile, caKeyFile string) (*ecdsa.PrivateKey, *x509.Certificate, bool) {
+	// #nosec G304 -- caFile is configDir+caFileName, built from config.GetConfigDir() and a
+	// package constant; never derived from network/RPC input.
 	certData, err := os.ReadFile(caFile)
 	if err != nil {
 		return nil, nil, false
@@ -200,6 +202,8 @@ func loadCA(caFile, caKeyFile string) (*ecdsa.PrivateKey, *x509.Certificate, boo
 		return nil, nil, false
 	}
 
+	// #nosec G304 -- caKeyFile is configDir+caKeyFileName, same trusted-internal-path
+	// construction as caFile above.
 	keyData, err := os.ReadFile(caKeyFile)
 	if err != nil {
 		return nil, nil, false
@@ -230,12 +234,17 @@ func sanHash(hostnames []string) string {
 // the stored SAN hash matches want.
 func certCurrent(certFile, hashFile, want string) bool {
 	// Check stored hash first — cheapest test.
+	// #nosec G304 -- hashFile is configDir+networkHashFileName(key); key is a
+	// locally-detected LAN IP from detectLANIPs() in main.go, never network/RPC input,
+	// and is filename-sanitized by sanitizeKey before use.
 	stored, err := os.ReadFile(hashFile)
 	if err != nil || strings.TrimSpace(string(stored)) != want {
 		return false
 	}
 
 	// Check cert expiry.
+	// #nosec G304 -- certFile is configDir+networkCertFileName(key), same trusted,
+	// sanitized-key construction as hashFile above.
 	data, err := os.ReadFile(certFile)
 	if err != nil {
 		return false

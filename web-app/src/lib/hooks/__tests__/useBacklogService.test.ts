@@ -11,8 +11,8 @@
  * return statement and the plain object literal is restored.
  */
 
-import { renderHook } from "@testing-library/react";
-import { createClient } from "@connectrpc/connect";
+import { renderHook, act } from "@testing-library/react";
+import { createClient, ConnectError, Code } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 
@@ -21,6 +21,7 @@ import { useBacklogService } from "@/lib/hooks/useBacklogService";
 // ---------------------------------------------------------------------------
 
 jest.mock("@connectrpc/connect", () => ({
+  ...jest.requireActual("@connectrpc/connect"),
   createClient: jest.fn(() => ({})),
 }));
 
@@ -73,5 +74,24 @@ describe("useBacklogService", () => {
     expect(result.current.getBacklogItem).toBe(methodsBefore.getBacklogItem);
     expect(result.current.createBacklogItem).toBe(methodsBefore.createBacklogItem);
     expect(result.current.transitionStatus).toBe(methodsBefore.transitionStatus);
+  });
+
+  it("sets lastError to the raw ConnectError message, not the [code]-prefixed one, when transitionStatus rejects", async () => {
+    (createClient as jest.Mock).mockReturnValue({
+      transitionBacklogItemStatus: jest
+        .fn()
+        .mockRejectedValue(new ConnectError("item not found", Code.NotFound)),
+    });
+
+    const { result } = renderHook(() => useBacklogService());
+
+    await act(async () => {
+      await expect(
+        result.current.transitionStatus("item-1", "STATUS_IN_PROGRESS" as never)
+      ).rejects.toThrow();
+    });
+
+    expect(result.current.lastError?.message).toBe("item not found");
+    expect(result.current.lastError?.message).not.toMatch(/\[not_found\]/i);
   });
 });

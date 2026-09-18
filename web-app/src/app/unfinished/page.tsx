@@ -1,5 +1,6 @@
 // analytics-exempt
 import type { Metadata } from "next";
+import { Suspense } from "react";
 // +feature: unfinished-work
 import { UnfinishedTab } from "./UnfinishedTab";
 import { PageViewTracker } from "@/components/analytics/PageViewTracker";
@@ -13,7 +14,9 @@ export default function UnfinishedPage() {
   return (
     <>
       <PageViewTracker />
-      <UnfinishedTab />
+      <Suspense>
+        <UnfinishedTab />
+      </Suspense>
     </>
   );
 }

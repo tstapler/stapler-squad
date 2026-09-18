@@ -2,6 +2,12 @@ import { style } from "@vanilla-extract/css";
 import { recipe } from "@vanilla-extract/recipes";
 import { vars, breakpoints } from "@/styles/theme.css";
 
+// PaneSplitRenderer hides ResizeHandle below breakpoints.inner (900px, its isNarrow
+// check) — the horizontal-split override below must trigger at the same width or a
+// split created at a non-0.5 ratio (paneReducer.ts/paneUtils.ts default new splits to
+// 0.35/0.28) renders lopsided on mobile with no drag handle left to fix it.
+const narrowMediaQuery = `(max-width: ${parseInt(breakpoints.inner, 10) - 1}px)`;
+
 /**
  * Split container: CSS grid with a ratio-driven first column/row and a 6px handle column/row.
  * --split-ratio is set as an inline style at runtime (CSS custom property bridge).
@@ -31,6 +37,13 @@ export const splitContainer = recipe({
         // top | handle | bottom
         gridTemplateColumns: "100%",
         gridTemplateRows: "calc(var(--split-ratio, 0.5) * 100%) 6px 1fr",
+        "@media": {
+          [narrowMediaQuery]: {
+            // ResizeHandle is hidden below this width, so force 50/50 instead of
+            // trusting whatever ratio the split happened to be created with.
+            gridTemplateRows: "1fr 6px 1fr",
+          },
+        },
       },
     },
   },
@@ -116,6 +129,42 @@ export const resetLayoutButton = style({
   borderRadius: vars.radii.sm,
   cursor: "pointer",
   color: vars.color.textMuted,
+});
+
+export const viewModeToggleBar = style({
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["1"]} 0`,
+  flexShrink: 0,
+});
+
+export const viewModeToggleButton = recipe({
+  base: {
+    fontSize: vars.fontSize.xs,
+    padding: `2px ${vars.space["2"]}`,
+    background: "transparent",
+    border: `1px solid ${vars.color.borderColor}`,
+    borderRadius: vars.radii.sm,
+    cursor: "pointer",
+    color: vars.color.textMuted,
+    minHeight: "28px",
+  },
+  variants: {
+    active: {
+      // primary/primaryText (not accentBg/accentText) -- every theme verifies this specific
+      // pairing for WCAG AA contrast (see the "#fff on #6366f1 = 4.46:1 fails" comments next
+      // to each theme's `primary` value in theme.css.ts); accentText is documented there as
+      // "unchanged from pre-fix behavior... not in scope" for the exact contrast class this
+      // button hit in CI (axe: 3.84:1 against composited accentBg, needs 4.5:1).
+      true: {
+        background: vars.color.primary,
+        color: vars.color.primaryText,
+        borderColor: vars.color.primary,
+      },
+      false: {},
+    },
+  },
 });
 
 export const rendererRoot = style({

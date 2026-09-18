@@ -164,8 +164,10 @@ func assertMatchesGolden(t *testing.T, name, got string) {
 // fixtures — the zero-regression guard on Story 1.3.4's extraction of
 // buildDefaultSlashCommandSet itself, independent of PipelineEngine.
 func TestBuildDefaultSlashCommandSet_should_MatchPreRefactorGoldenOutput_When_GivenRepresentativeFixtures(t *testing.T) {
+	t.Parallel()
 	for _, fx := range characterizationFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
+			t.Parallel()
 			files, err := buildDefaultSlashCommandSet(fx.item)
 			if err != nil {
 				t.Fatalf("buildDefaultSlashCommandSet: %v", err)
@@ -195,10 +197,12 @@ func TestBuildDefaultSlashCommandSet_should_MatchPreRefactorGoldenOutput_When_Gi
 // TestCachingPipelineEngine_SlashCommandSet_should_ShortCircuitCacheAndDB_When_ModeIsDefault
 // already does for SlashCommandSet alone.
 func TestCachingPipelineEngine_should_ProduceByteIdenticalOutputToGoldenFixtures_When_ModeIsDefault(t *testing.T) {
+	t.Parallel()
 	engine := &CachingPipelineEngine{}
 
 	for _, fx := range characterizationFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
+			t.Parallel()
 			files, err := engine.SlashCommandSet(fx.item)
 			if err != nil {
 				t.Fatalf("SlashCommandSet: %v", err)

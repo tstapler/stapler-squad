@@ -74,7 +74,11 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 
 	cutoff := time.Now().AddDate(0, 0, -s.cfg.SessionRetention.RetentionDaysOrDefault())
 
-	dataSlice, err := s.storage.ListInstanceData()
+	// Worktree must be eager-loaded here: baseSafeToDelete's dirty-worktree check and
+	// sessionSafeToDelete's shared-worktree check both gate on d.Worktree.WorktreePath,
+	// which ListInstanceData (LoadMinimal) never populates -- that silently bypassed both
+	// safety checks (see git history for the regression this fixes).
+	dataSlice, err := s.storage.ListInstanceDataWithWorktree()
 	if err != nil {
 		log.Error("session retention sweeper: failed to list instances", "err", err)
 		return

@@ -1,0 +1,21 @@
+{
+  "id": "remote:test-connection",
+  "type": "backend",
+  "service": "RemoteService",
+  "method": "TestRemoteConnection",
+  "protoFile": "proto/session/v1/remote.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/remote_service.go",
+  "tested": true,
+  "testIds": [
+    "TestTestRemoteConnection_ReturnsHostKeyUnknown_When_NeverSeen",
+    "TestTestRemoteConnection_ReportsMismatch_NotHostKeyUnknown_When_TrustedKeyChanged",
+    "TestTestRemoteConnection_MissingRemoteName_ReturnsInvalidArgument",
+    "TestTestRemoteConnection_UnknownRemote_ReturnsNotFound",
+    "TestTestRemoteConnection_Draft_ReturnsHostKeyUnknown_When_NeverSeen",
+    "TestTestRemoteConnection_RemoteNameAndDraftBothSet_ReturnsInvalidArgument",
+    "TestTrustRemoteHostKey_Then_TestRemoteConnection_RoundTripSucceeds",
+    "remote-workspaces \u003e add a remote, test connection, trust the host key, verify Connected status"
+  ],
+  "lastModified": "2026-08-17T00:00:00Z"
+}

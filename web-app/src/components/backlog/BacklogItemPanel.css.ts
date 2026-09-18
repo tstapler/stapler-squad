@@ -124,7 +124,7 @@ export const statusChip = style({
 // ... BacklogItemPanel reflects the new status and verdict") and ux.md UX
 // AC #14 both require the verdict to appear here, mirroring
 // BacklogItemCard.css.ts's verdict badge variants (same token usage, no
-// hardcoded colors per .claude/rules/css-architecture.md).
+// hardcoded colors per docs/reference/css-architecture.md).
 const verdictBadgeBase = style({
   display: "inline-flex",
   alignItems: "center",

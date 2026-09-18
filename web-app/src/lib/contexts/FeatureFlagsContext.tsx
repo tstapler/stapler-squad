@@ -3,14 +3,14 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
 
 export interface FeatureFlagMeta {
   name: string;
   enabled: boolean;
   description: string;
+  statusDetail: string;
 }
 
 interface FeatureFlagsContextValue {
@@ -36,7 +36,7 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   const client = useMemo(
-    () => createClient(SessionService, createConnectTransport({ baseUrl: getApiBaseUrl() })),
+    () => createClient(SessionService, getConnectTransport()),
     []
   );
 
@@ -47,7 +47,7 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
       const list: FeatureFlagMeta[] = [];
       for (const f of res.flags) {
         map[f.name] = f.enabled;
-        list.push({ name: f.name, enabled: f.enabled, description: f.description });
+        list.push({ name: f.name, enabled: f.enabled, description: f.description, statusDetail: f.statusDetail });
       }
       setFlags(map);
       setFlagList(list);

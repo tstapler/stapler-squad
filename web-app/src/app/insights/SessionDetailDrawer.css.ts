@@ -190,6 +190,12 @@ export const srOnly = style({
   border: 0,
 });
 
+export const openFullPageLink = style({
+  fontSize: vars.fontSize.xs,
+  whiteSpace: "nowrap",
+  textDecoration: "none",
+});
+
 export const backlogLink = style({
   color: vars.color.primary,
   textDecoration: "none",

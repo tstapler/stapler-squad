@@ -2,6 +2,17 @@
 
 Source: GitHub issue [TylerStaplerAtFanatics/stapler-squad#170](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/170), migrated as backlog item `49a11c44-4f03-4703-af80-b466115b1eca`.
 
+> **Note (2026-08-10)**: Requirements, research, plan, pre-mortem, and validation for
+> this project were already produced in a prior session (2026-08-06 through
+> 2026-08-09) — see `implementation/plan.md`, `implementation/pre-mortem.md`,
+> `implementation/validation.md`, `research/*.md`. This session re-verified those
+> artifacts' cited line numbers against current `HEAD` (they match exactly — zero
+> drift) and re-ran the Phase 4 readiness gate inline rather than redispatching
+> subagents to redo already-complete, already-adversarially-reviewed work. The
+> backlog item's AC list has since been renumbered/expanded to 10 items (was 8,
+> AC0-AC7); AC9/AC10 below are new top-level entries but their substance was
+> already addressed in `plan.md`'s Risk Control section (pre-mortem Failures #2, #4).
+
 ## Motivation
 
 `herdr-web`'s terminal reconnect policy (`web/src/terminalReconnectPolicy.ts`) distinguishes
@@ -10,7 +21,7 @@ Source: GitHub issue [TylerStaplerAtFanatics/stapler-squad#170](https://github.c
 For the first N foreground attempts it uses a shorter connect timeout so a focused, disconnected
 terminal reconnects snappier than a backgrounded one.
 
-## Current state (verified against this codebase, 2026-08-06)
+## Current state (verified against this codebase, 2026-08-06; re-verified 2026-08-10)
 
 - `web-app/src/lib/hooks/useTerminalStream.ts` uses one `BackoffState(1000, 30_000)`
   (`terminalBackoffRef`, [useTerminalStream.ts:108](../../web-app/src/lib/hooks/useTerminalStream.ts#L108))
@@ -44,33 +55,41 @@ terminal reconnects snappier than a backgrounded one.
 3. Wire `foreground={isSelected}` from the session-detail view (`SessionDetailView.tsx`)
    down through `XtermTerminal`/`TerminalOutput` to the hook.
 
-## Acceptance Criteria
+## Acceptance Criteria (backlog item's current 10-item numbering)
 
-0. `useTerminalStream` accepts a `foreground?: boolean` option without changing behavior
-   for existing callers that omit it (default `false`/current behavior).
-1. A **connect-timeout** mechanism exists: if a reconnect attempt's WebSocket does not reach
-   an established/first-message state within the active timeout, the attempt is abandoned and
-   the normal backoff/retry path takes over — this mechanism does not exist in `backoff.ts`
-   today and must be added, not repurposed from the existing delay-between-attempts logic.
-2. When `foreground` is `true`, the first 2 reconnect attempts use a short connect timeout
-   (~1200-1500ms, matching herdr-web's `TERMINAL_FOREGROUND_CONNECT_TIMEOUT_MS`); subsequent
-   attempts (or all attempts when `foreground` is `false`) use the existing/longer timeout
-   (~3500ms, matching `TERMINAL_CONNECT_TIMEOUT_MS`).
-3. When `foreground` transitions from `false` to `true` (session just selected), the backoff
-   attempt counter resets so the fast-timeout window is available immediately rather than
-   being exhausted by prior background attempts.
-4. `SessionDetailView`/`XtermTerminal` passes `foreground={isSelected}` (or equivalent "this
-   terminal is the one currently visible to the user") into `useTerminalStream`.
-5. Behavior is scoped correctly relative to the existing `NEXT_PUBLIC_RECONNECT_V2` flag and
-   the pre-flag `TerminalOutput.tsx` reconnect path — the plan must state explicitly which
-   path(s) this feature applies to, rather than silently only covering the V2 path while the
-   flag is off by default.
-6. Unit test coverage for: fast timeout used on first 2 foreground attempts, normal timeout
-   used after 2 attempts or when not foreground, backoff/attempt-counter reset on
-   `false → true` foreground transition, and that connect-timeout abandonment triggers the
-   existing retry path rather than leaving the hook stuck in `CONNECTING`.
-7. No regression to existing `useTerminalStream`/`useTerminalStream.resync.integration` test
-   suites (`web-app/src/lib/hooks/__tests__/`).
+1. `useTerminalStream` accepts a `foreground?: boolean` option without changing behavior
+   for existing callers that omit it (default `false`).
+2. A connect-timeout mechanism (cap on one connection attempt's duration, distinct from
+   backoff delay-between-attempts) is added to `backoff.ts` as a standalone
+   `connectTimeoutMs()` function.
+3. When `foreground` is `true`, the first 2 reconnect attempts use ~1200ms connect-timeout;
+   all other attempts (fast window exhausted, or `foreground` is `false`) use ~3500ms.
+4. When `foreground` transitions `false→true`, both the backoff attempt counter and the
+   fast-attempt counter reset, AND any already-pending stale backoff-delay timer
+   (`reconnectTimerRef`) is cleared with an immediate reconnect attempt — not just the
+   counters (pre-mortem Failure #1, P1: resetting only counters still leaves a stale
+   up-to-30s delay in flight).
+5. `TerminalOutput.tsx` passes `foreground: isVisible` into `useTerminalStream`, reusing
+   the existing `isVisible` prop already computed correctly at all 3 `SessionDetailView.tsx`
+   call sites — no changes needed there or in `XtermTerminal.tsx`.
+6. Feature is scoped exclusively to the `NEXT_PUBLIC_RECONNECT_V2`-gated hook path; the
+   pre-flag legacy `TerminalOutput.tsx` reconnect path is explicitly out of scope
+   (documented, not silently skipped) since it has no automatic retry loop to attach a
+   timeout to.
+7. Test coverage for: fast vs. normal timeout selection; counter reset on foreground
+   transition (incl. stale-timer clearing); connect-timeout abandonment triggering retry
+   without getting stuck in `CONNECTING`; a message landing before the timer fires not
+   being retroactively aborted (pre-mortem Failure #3, P2); no timer leak on
+   `disconnect()`/unmount.
+8. No regression to existing `useTerminalStream`, `useTerminalStream.resync.integration`,
+   and `TerminalOutput.reconnect` test suites.
+9. `FOREGROUND_CONNECT_TIMEOUT_MS=1200` is documented as an unvalidated starting guess
+   (herdr-web's real value isn't inspectable — different, unvendored repo) with a required
+   pre-broad-rollout validation step against real connect-to-first-message latency on
+   VPN/high-RTT links (pre-mortem Failure #2, P1).
+10. An activation owner is named for flipping `NEXT_PUBLIC_RECONNECT_V2` on (or filing a
+    tracked follow-up) so the feature doesn't ship code-complete but permanently dark
+    (pre-mortem Failure #4, P2).
 
 ## Target user and success metric (added per triad Product-lens review)
 

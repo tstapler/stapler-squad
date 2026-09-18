@@ -67,6 +67,12 @@ type WorktreeStorer struct {
 // unconditionally — pack handle close errors are logged, not propagated,
 // since a failed close on an already-evicted worktree has no actionable
 // recovery for the caller.
+//
+// Note: a handle whose pack is being read concurrently may not be closed by
+// the time Close() returns — see store.go's packHandleCloseTimeout and
+// closeHandleBounded, which hedge a stuck handle off to a detached
+// background goroutine rather than block Close() on it. The fd is still
+// guaranteed to be closed eventually, just not necessarily synchronously.
 func (w *WorktreeStorer) Close() error {
 	w.closeOnce.Do(func() {
 		w.packHandles.closeAll()

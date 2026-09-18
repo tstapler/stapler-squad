@@ -5,6 +5,7 @@ import (
 )
 
 func TestVCSTypeString(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		vcsType  VCSType
 		expected string
@@ -26,6 +27,7 @@ func TestVCSTypeString(t *testing.T) {
 }
 
 func TestFileStatusString(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		status   FileStatus
 		expected string
@@ -53,6 +55,7 @@ func TestFileStatusString(t *testing.T) {
 }
 
 func TestVCSStatusAllChangedFiles(t *testing.T) {
+	t.Parallel()
 	status := &VCSStatus{
 		Type:   VCSGit,
 		Branch: "main",
@@ -88,6 +91,7 @@ func TestVCSStatusAllChangedFiles(t *testing.T) {
 }
 
 func TestVCSStatusAllChangedFilesEmpty(t *testing.T) {
+	t.Parallel()
 	status := &VCSStatus{
 		Type:   VCSGit,
 		Branch: "main",
@@ -101,6 +105,7 @@ func TestVCSStatusAllChangedFilesEmpty(t *testing.T) {
 }
 
 func TestVCSStatusTotalChanges(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		status   *VCSStatus
@@ -140,6 +145,7 @@ func TestVCSStatusTotalChanges(t *testing.T) {
 }
 
 func TestVCSStatusAheadBehindString(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		status   *VCSStatus
@@ -190,6 +196,7 @@ func TestVCSStatusAheadBehindString(t *testing.T) {
 }
 
 func TestFileChangeStruct(t *testing.T) {
+	t.Parallel()
 	change := FileChange{
 		Path:     "src/main.go",
 		OldPath:  "src/old_main.go",

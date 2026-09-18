@@ -25,6 +25,10 @@ var secretPatterns = []secretPattern{
 	{Name: "Anthropic API key", Pattern: regexp.MustCompile(`\bsk-ant-[A-Za-z0-9\-]{20,}\b`)},
 	// Slack tokens
 	{Name: "Slack token", Pattern: regexp.MustCompile(`\bxox[boas]-[0-9A-Za-z\-]+\b`)},
+	// Slack Incoming Webhook URL — a bare bearer credential (see
+	// project_plans/slack-review-notifications/decisions/ADR-001-slack-secret-storage-encryption.md):
+	// possessing the URL is sufficient to post to the configured channel indefinitely.
+	{Name: "Slack Incoming Webhook URL", Pattern: regexp.MustCompile(`\bhttps://hooks\.slack\.com/services/[A-Za-z0-9]+/[A-Za-z0-9]+/[A-Za-z0-9]+\b`)},
 	// JWT tokens (three base64url-separated segments, starts with eyJ which is base64 for `{"`)
 	{Name: "JWT token", Pattern: regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}`)},
 	// PEM private key headers

@@ -31,6 +31,7 @@ func newTestPoller(t *testing.T, fastInterval, slowInterval time.Duration) (*Rev
 // no sessions and no activity channel; after the first tick (which finds the queue empty),
 // the loop should switch to slowInterval and NOT fire again within 2×fastInterval.
 func TestAdaptivePoller_BackoffToIdleInterval(t *testing.T) {
+	t.Parallel()
 	fastInterval := 20 * time.Millisecond
 	slowInterval := 300 * time.Millisecond
 
@@ -79,6 +80,7 @@ func TestAdaptivePoller_BackoffToIdleInterval(t *testing.T) {
 // that the loop fires again within fastInterval + margin (rather than waiting the full
 // slow interval).
 func TestAdaptivePoller_SnapOnApprovalResponse(t *testing.T) {
+	t.Parallel()
 	fastInterval := 20 * time.Millisecond
 	slowInterval := 500 * time.Millisecond
 

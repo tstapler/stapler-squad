@@ -9,6 +9,9 @@ type EventBus = pkgevents.EventBus
 type Subscriber = pkgevents.Subscriber
 type BacklogChangeKind = pkgevents.BacklogChangeKind
 type BacklogItemEventPayload = pkgevents.BacklogItemEventPayload
+type RemoteHealthEventPayload = pkgevents.RemoteHealthEventPayload
+type WorkflowChangeKind = pkgevents.WorkflowChangeKind
+type WorkflowEventPayload = pkgevents.WorkflowEventPayload
 
 // Constants
 const (
@@ -20,6 +23,8 @@ const (
 	EventApprovalResponse    = pkgevents.EventApprovalResponse
 	EventNotification        = pkgevents.EventNotification
 	EventBacklogItemChanged  = pkgevents.EventBacklogItemChanged
+	EventRemoteHealthChanged = pkgevents.EventRemoteHealthChanged
+	EventWorkflowChanged     = pkgevents.EventWorkflowChanged
 
 	// Metadata keys for session-scoped notifications (see SessionScopedMetadata).
 	MetadataKeySessionScoped = pkgevents.MetadataKeySessionScoped
@@ -35,6 +40,15 @@ const (
 	BacklogChangeItemArchived          = pkgevents.BacklogChangeItemArchived
 	BacklogChangeItemRemoved           = pkgevents.BacklogChangeItemRemoved
 	BacklogChangeTriageProgressUpdated = pkgevents.BacklogChangeTriageProgressUpdated
+	BacklogChangeActivityNoteAdded     = pkgevents.BacklogChangeActivityNoteAdded
+)
+
+// WorkflowChangeKind constants (mirrors pkg/events/types.go).
+const (
+	WorkflowChangeCreated = pkgevents.WorkflowChangeCreated
+	WorkflowChangeUpdated = pkgevents.WorkflowChangeUpdated
+	WorkflowChangeDeleted = pkgevents.WorkflowChangeDeleted
+	WorkflowChangeRun     = pkgevents.WorkflowChangeRun
 )
 
 // Constructor functions (var allows assignment but is callable with identical syntax)
@@ -50,5 +64,7 @@ var (
 	NewApprovalResponseEvent            = pkgevents.NewApprovalResponseEvent
 	NewNotificationEvent                = pkgevents.NewNotificationEvent
 	NewBacklogItemChangedEvent          = pkgevents.NewBacklogItemChangedEvent
+	NewRemoteHealthChangedEvent         = pkgevents.NewRemoteHealthChangedEvent
+	NewWorkflowChangedEvent             = pkgevents.NewWorkflowChangedEvent
 	SessionScopedMetadata               = pkgevents.SessionScopedMetadata
 )

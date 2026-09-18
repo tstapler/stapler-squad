@@ -2,8 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -20,17 +18,11 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
-// newTestSessionSummaryEntClient constructs a fresh in-memory-on-disk sqlite-backed
-// *ent.Client for tests, mirroring session package's own createTestEntRepository
-// (session/ent_repository_test.go) — that helper is unexported and lives in a
-// different package, so this is a thin, test-local re-implementation using the
-// exported session.NewEntRepository/session.WithDatabasePath constructors.
+// newTestSessionSummaryEntClient constructs a fresh in-memory sqlite-backed
+// *ent.Client for tests via session.NewTestEntRepository.
 func newTestSessionSummaryEntClient(t *testing.T) *ent.Client {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), fmt.Sprintf("session-summary-test-%d.db", time.Now().UnixNano()))
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = repo.Close() })
+	repo := session.NewTestEntRepository(t)
 	return repo.GetEntClient()
 }
 
@@ -50,7 +42,7 @@ type fakePoolClient struct {
 	started chan struct{}
 }
 
-func (f *fakePoolClient) CallBlocking(ctx context.Context, _ headless.FeatureKey, _, userPrompt string, _ headless.CallOptions) (string, float64, error) {
+func (f *fakePoolClient) CallBlocking(ctx context.Context, _ headless.FeatureKey, _, userPrompt string, _ headless.CallOptions, sink headless.CostSink) (string, error) {
 	f.mu.Lock()
 	f.calls++
 	f.lastUser = userPrompt
@@ -64,12 +56,13 @@ func (f *fakePoolClient) CallBlocking(ctx context.Context, _ headless.FeatureKey
 	}
 	if f.block {
 		<-ctx.Done()
-		return "", 0, ctx.Err()
+		return "", ctx.Err()
 	}
+	sink(0)
 	if f.err != nil {
-		return "", 0, f.err
+		return "", f.err
 	}
-	return f.response, 0, nil
+	return f.response, nil
 }
 
 func (f *fakePoolClient) callCount() int {
@@ -156,6 +149,7 @@ func waitForNewGeneratedRow(t *testing.T, client *ent.Client, sessionID string, 
 // ---- GetSessionSummary ----
 
 func TestGetSessionSummary_should_ReturnNilSummary_When_NoRowExists(t *testing.T) {
+	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
 	gen := session.NewSessionSummaryGenerator(entClient, &fakePoolClient{}, nil, nil, nil)
 	svc := NewSessionSummaryService(gen, nil)
@@ -166,6 +160,7 @@ func TestGetSessionSummary_should_ReturnNilSummary_When_NoRowExists(t *testing.T
 }
 
 func TestGetSessionSummary_should_ReturnRow_When_Found(t *testing.T) {
+	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
 	pool := &fakePoolClient{response: "A narrative."}
 	gen := session.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
@@ -186,6 +181,7 @@ func TestGetSessionSummary_should_ReturnRow_When_Found(t *testing.T) {
 }
 
 func TestGetSessionSummary_should_ReconcileStaleGeneratingRowToError_When_GuardNotHeld(t *testing.T) {
+	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
 	gen := session.NewSessionSummaryGenerator(entClient, &fakePoolClient{}, nil, nil, nil)
 	svc := NewSessionSummaryService(gen, nil)
@@ -213,6 +209,7 @@ func TestGetSessionSummary_should_ReconcileStaleGeneratingRowToError_When_GuardN
 }
 
 func TestGetSessionSummary_should_LeaveStaleGeneratingRowUnchanged_When_GuardHeld(t *testing.T) {
+	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -257,6 +254,7 @@ func TestGetSessionSummary_should_LeaveStaleGeneratingRowUnchanged_When_GuardHel
 // ---- RegenerateSessionSummary ----
 
 func TestRegenerateSessionSummary_should_ReturnNotFound_When_NoRowAndNoLiveInstance(t *testing.T) {
+	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
 	gen := session.NewSessionSummaryGenerator(entClient, &fakePoolClient{}, nil, nil, nil)
 	svc := NewSessionSummaryService(gen, &fakeLiveInstanceFinder{})
@@ -267,6 +265,7 @@ func TestRegenerateSessionSummary_should_ReturnNotFound_When_NoRowAndNoLiveInsta
 }
 
 func TestRegenerateSessionSummary_should_NotTriggerSecondPipeline_When_AlreadyGenerating(t *testing.T) {
+	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -305,6 +304,7 @@ func TestRegenerateSessionSummary_should_NotTriggerSecondPipeline_When_AlreadyGe
 }
 
 func TestRegenerateSessionSummary_should_RefreshDiffAndGoalFromLiveInstance_When_LiveInstancePresent(t *testing.T) {
+	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
 	pool := &fakePoolClient{response: "A narrative."}
 	gen := session.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
@@ -337,6 +337,7 @@ func TestRegenerateSessionSummary_should_RefreshDiffAndGoalFromLiveInstance_When
 }
 
 func TestRegenerateSessionSummary_should_FallBackToPersistedFieldsWithNilGoal_When_NoLiveInstance(t *testing.T) {
+	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
 	pool := &fakePoolClient{response: "A narrative."}
 	gen := session.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
@@ -371,6 +372,7 @@ func TestRegenerateSessionSummary_should_FallBackToPersistedFieldsWithNilGoal_Wh
 }
 
 func TestRegenerateSessionSummary_should_DispatchWithBackgroundContext_When_RequestContextIsCancelledImmediately(t *testing.T) {
+	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
 	pool := &fakePoolClient{response: "A narrative."}
 	gen := session.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)

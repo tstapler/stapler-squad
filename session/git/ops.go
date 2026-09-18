@@ -2,9 +2,11 @@ package git
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +15,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -22,7 +26,13 @@ import (
 func FetchBranch(repoPath, branchName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "origin", branchName)
+	// "--" forces every remaining argument to be treated as positional, not an
+	// option — without it, a branchName starting with "-" (e.g.
+	// "--upload-pack=...") is parsed by git itself as a flag rather than a ref
+	// name, a documented git argument-injection vector (same class as
+	// CVE-2017-1000117) when branchName originates from caller input, as it
+	// does via BacklogItem.BaseBranch (session.ResolveExplicitBranchSHA).
+	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "origin", "--", branchName)
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("failed to fetch branch: %s", string(exitErr.Stderr))
@@ -30,6 +40,151 @@ func FetchBranch(repoPath, branchName string) error {
 		return fmt.Errorf("failed to fetch branch: %w", err)
 	}
 	return nil
+}
+
+// CandidateDefaultBranches are tried, in order, by ResolveDefaultBranchSHA when the
+// caller doesn't know the repo's actual default branch name. Mirrors the candidate list
+// session/unfinished's GoGitVCSReader.ResolveDefaultBranch already uses. "main" stays
+// first so the common case costs exactly one fetch. Exported so other packages needing
+// the same candidate list (session.RecoverBaseCommitSHA, GitWorktree.initBaseCommitSHA)
+// share one definition instead of re-declaring the literal.
+var CandidateDefaultBranches = []string{"main", "master", "develop", "trunk"} //nolint:gochecknoglobals
+
+// ResolveDefaultBranchSHA finds repoPath's real default branch and returns its freshly-
+// fetched origin tip SHA, trying CandidateDefaultBranches in order via ResolveOriginBranchSHA
+// until one exists on origin. Exists because a repo's default branch can be named anything
+// (this repo's own sibling dotfiles project uses "master", not "main") — a caller that
+// hardcodes "main" gets a fetch failure on every single call against such a repo, which used
+// to silently fall through to branching from the caller's ambient HEAD instead. Querying each
+// candidate by fetch (rather than inspecting locally-cached remote-tracking refs) works even
+// when the repo has never been fetched before, since a nonexistent branch fails fast at the
+// fetch step itself.
+func ResolveDefaultBranchSHA(repoPath string) (branch, sha string, err error) {
+	var errs []error
+	for _, candidate := range CandidateDefaultBranches {
+		if candidateSHA, fetchErr := ResolveOriginBranchSHA(repoPath, candidate); fetchErr == nil {
+			return candidate, candidateSHA, nil
+		} else {
+			errs = append(errs, fetchErr)
+		}
+	}
+	return "", "", fmt.Errorf("no candidate default branch (%v) exists on origin: %w", CandidateDefaultBranches, errors.Join(errs...))
+}
+
+// ResolveOriginBranchSHA fetches mainBranch from origin into repoPath and returns the
+// resulting origin/mainBranch tip commit SHA. Unlike a bare `rev-parse HEAD` against
+// repoPath's own checkout, this always fetches first, so the returned SHA reflects
+// origin's true current tip rather than whatever repoPath happened to have checked
+// out last — the gap that let a new backlog work session's worktree branch from a
+// days-stale local checkout instead of the real main tip (see legacySetupNewWorktree's
+// "branch from current HEAD" comment, and CreateBacklogWorktree's use of this func).
+func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
+	if err := FetchBranch(repoPath, mainBranch); err != nil {
+		return "", fmt.Errorf("failed to fetch %s: %w", mainBranch, err)
+	}
+	repo, err := OpenRepo(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+	ref, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", mainBranch), true)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve origin/%s: %w", mainBranch, err)
+	}
+	return ref.Hash().String(), nil
+}
+
+// ResolveLocalBranchSHA returns the tip commit SHA of the local branch (refs/heads/<branchName>)
+// in repoPath, without fetching. Used as a same-branch-only fallback when ResolveOriginBranchSHA's
+// fetch fails (offline, no origin remote) — still guarantees the caller branches from branchName
+// itself, just not guaranteed fresh, unlike falling back to repoPath's ambient HEAD which could be
+// checked out to any branch a concurrent process last left it on.
+func ResolveLocalBranchSHA(repoPath, branchName string) (string, error) {
+	repo, err := OpenRepo(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+	ref, err := repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve local branch %s: %w", branchName, err)
+	}
+	return ref.Hash().String(), nil
+}
+
+// ResolveDefaultLocalBranchSHA is ResolveDefaultBranchSHA's fully-offline counterpart:
+// tries CandidateDefaultBranches against repoPath's own local refs (no fetch), for use
+// when every origin candidate fetch has already failed.
+func ResolveDefaultLocalBranchSHA(repoPath string) (branch, sha string, err error) {
+	var errs []error
+	for _, candidate := range CandidateDefaultBranches {
+		if candidateSHA, localErr := ResolveLocalBranchSHA(repoPath, candidate); localErr == nil {
+			return candidate, candidateSHA, nil
+		} else {
+			errs = append(errs, localErr)
+		}
+	}
+	return "", "", fmt.Errorf("no candidate default branch (%v) exists locally: %w", CandidateDefaultBranches, errors.Join(errs...))
+}
+
+// ResolveWorktreeBaseCommit resolves the commit new backlog-item worktrees
+// should fork from: origin's default branch tip, falling back to a local
+// default branch when the origin fetch fails (offline, no origin remote).
+// baseSHA == "" (with err == nil) means repoPath has no commits yet
+// (IsUnbornRepo) — the only case it's safe for a caller to fall back to
+// branching from ambient HEAD, since no other branch can exist to
+// accidentally fork from instead. Any other resolution failure is returned
+// as an error rather than silently falling back to ambient HEAD, which is
+// what let new work fork from whatever branch repoPath's checkout happened
+// to be sitting on (e.g. an agent's own in-progress feature branch) instead
+// of main. Shared by session.CreateBacklogWorktree and TriggerTriage's
+// isolated triage worktree (server/services/backlog_service_triage.go).
+func ResolveWorktreeBaseCommit(repoPath string) (defaultBranch, baseSHA string, err error) {
+	defaultBranch, baseSHA, fetchErr := ResolveDefaultBranchSHA(repoPath)
+	if fetchErr == nil {
+		return defaultBranch, baseSHA, nil
+	}
+	defaultBranch, baseSHA, localErr := ResolveDefaultLocalBranchSHA(repoPath)
+	if localErr == nil {
+		return defaultBranch, baseSHA, nil
+	}
+	if IsUnbornRepo(repoPath) {
+		return "", "", nil
+	}
+	return "", "", fmt.Errorf("resolve default branch (origin fetch failed: %w, local lookup failed: %v)", fetchErr, localErr)
+}
+
+// ResolveExplicitBranchSHA resolves branchName's tip commit SHA for a caller
+// that deliberately opted out of the default-branch behavior (BacklogItem.
+// BaseBranch) — origin's copy first (fresh fetch), falling back to a local
+// branch of the same name when the origin fetch fails (offline, no origin
+// remote). Unlike ResolveWorktreeBaseCommit, there is no unborn-repo/ambient-
+// HEAD fallback here: an explicitly requested branch that doesn't exist
+// anywhere is always a hard error, never silently substituted.
+func ResolveExplicitBranchSHA(repoPath, branchName string) (string, error) {
+	if err := ValidateBranchName(branchName); err != nil {
+		return "", fmt.Errorf("resolve branch: %w", err)
+	}
+	if sha, err := ResolveOriginBranchSHA(repoPath, branchName); err == nil {
+		return sha, nil
+	} else if sha, localErr := ResolveLocalBranchSHA(repoPath, branchName); localErr == nil {
+		return sha, nil
+	} else {
+		return "", fmt.Errorf("resolve branch %q (origin fetch failed: %w, local lookup failed: %v)", branchName, err, localErr)
+	}
+}
+
+// IsUnbornRepo reports whether repoPath is a git repository with zero commits (HEAD
+// points at a branch ref that doesn't exist yet, e.g. right after `git init`). Distinct
+// from "no candidate default branch found": that can also mean a repo with real commit
+// history whose default branch just isn't named main/master/develop/trunk, which is not
+// safe to fall back to ambient HEAD for (see CreateBacklogWorktree). An unborn repo has
+// no commit history at all, so there is nothing to misattribute either way.
+func IsUnbornRepo(repoPath string) bool {
+	repo, err := OpenRepo(repoPath)
+	if err != nil {
+		return false
+	}
+	_, err = repo.Head()
+	return errors.Is(err, plumbing.ErrReferenceNotFound)
 }
 
 // IsCommitOnMain reports whether sha has actually landed on mainBranch — either the
@@ -41,11 +196,11 @@ func FetchBranch(repoPath, branchName string) error {
 // opened), or simply wrong for a manually-merged branch.
 //
 // Uses go-git rather than shelling out (repo convention — see
-// .claude/rules/prefer-go-git-over-subshells.md). The origin fetch is best-effort: a
+// the `prefer-go-git-over-subshells` skill). The origin fetch is best-effort: a
 // failure (offline, no such remote, nothing new) does not fail the whole check, since
 // the local-main check alone still answers the "merged directly to main locally" case.
 func IsCommitOnMain(repoPath, mainBranch, sha string) (bool, error) {
-	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	repo, err := OpenRepo(repoPath)
 	if err != nil {
 		return false, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
 	}
@@ -101,7 +256,7 @@ type BranchStatus struct {
 // locally reports BranchExists=false rather than an error, since that's the
 // expected state for a shipped, cleaned-up item, not a failure.
 func BranchAheadBehind(repoPath, branchName, mainBranch string) (BranchStatus, error) {
-	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	repo, err := OpenRepo(repoPath)
 	if err != nil {
 		return BranchStatus{}, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
 	}
@@ -151,7 +306,7 @@ func BehindOriginMain(worktreePath, mainBranch string) (int, error) {
 		return 0, fmt.Errorf("failed to fetch %s: %w", mainBranch, err)
 	}
 
-	repo, err := git.PlainOpenWithOptions(worktreePath, &git.PlainOpenOptions{DetectDotGit: true})
+	repo, err := OpenRepo(worktreePath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to open git repo at %s: %w", worktreePath, err)
 	}
@@ -236,9 +391,9 @@ type ShippedCommit struct {
 
 // CommitInfo returns the summary line, author and author timestamp for a single
 // resolved commit hash in the repo at repoPath, read via go-git — no subshell
-// (.claude/rules/prefer-go-git-over-subshells.md).
+// (the `prefer-go-git-over-subshells` skill).
 func CommitInfo(repoPath, sha string) (ShippedCommit, error) {
-	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	repo, err := OpenRepo(repoPath)
 	if err != nil {
 		return ShippedCommit{}, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
 	}
@@ -266,32 +421,56 @@ const listShippedCommitsCap = 100
 // hashes (not branch names): the caller typically has these directly from
 // GitWorktreeData.BaseCommitSHA and the work session's LastCommitSha, which
 // remain valid even after the branch itself has been deleted post-merge.
-func ListShippedCommits(repoPath, baseSHA, headSHA string) ([]ShippedCommit, error) {
-	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+// truncated reports whether the walk hit listShippedCommitsCap before
+// exhausting the range — the caller may want to surface that a longer list
+// exists than what's returned.
+func ListShippedCommits(ctx context.Context, repoPath, baseSHA, headSHA string) (commits []ShippedCommit, truncated bool, err error) {
+	return listShippedCommitsWithCap(ctx, repoPath, baseSHA, headSHA, listShippedCommitsCap)
+}
+
+// listShippedCommitsWithCap is ListShippedCommits' implementation with the
+// cap taken as a parameter rather than read from the package-level
+// listShippedCommitsCap constant, so a test can exercise the truncated==true
+// path against a small fixture (e.g. cap=3) instead of needing a 100+-commit
+// repo.
+func listShippedCommitsWithCap(ctx context.Context, repoPath, baseSHA, headSHA string, maxCommits int) ([]ShippedCommit, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	repo, err := OpenRepo(repoPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+		return nil, false, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
 	}
 
 	head, err := repo.CommitObject(plumbing.NewHash(headSHA))
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve commit %s: %w", headSHA, err)
+		return nil, false, fmt.Errorf("failed to resolve commit %s: %w", headSHA, err)
 	}
 	base, err := repo.CommitObject(plumbing.NewHash(baseSHA))
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve commit %s: %w", baseSHA, err)
+		return nil, false, fmt.Errorf("failed to resolve commit %s: %w", baseSHA, err)
+	}
+
+	// baseAncestors is base's reachable-commit set, computed once up front.
+	// The naive alternative — calling c.IsAncestor(base) inside the walk below
+	// for every node c — makes IsAncestor's own O(history-depth) BFS run once
+	// per visited node, i.e. O(N×M) overall; this single bounded walk plus an
+	// O(1) map lookup per node is O(M) total.
+	baseAncestors, err := reachableAncestors(repo, base.Hash)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to compute ancestor set for %s: %w", baseSHA, err)
 	}
 
 	var commits []ShippedCommit
 	seen := map[plumbing.Hash]bool{head.Hash: true}
 	queue := []*object.Commit{head}
-	for len(queue) > 0 && len(commits) < listShippedCommitsCap {
+	for len(queue) > 0 && len(commits) < maxCommits {
+		if err := ctx.Err(); err != nil {
+			return commits, len(commits) >= maxCommits, err
+		}
 		c := queue[0]
 		queue = queue[1:]
-		isAncestor, err := c.IsAncestor(base)
-		if err != nil {
-			return commits, err
-		}
-		if isAncestor {
+		if baseAncestors[c.Hash] {
 			continue
 		}
 		summary, _, _ := strings.Cut(c.Message, "\n")
@@ -308,16 +487,127 @@ func ListShippedCommits(repoPath, baseSHA, headSHA string) ([]ShippedCommit, err
 			}
 			return nil
 		}); err != nil {
-			return commits, err
+			return commits, len(commits) >= maxCommits, err
 		}
 	}
-	return commits, nil
+	return commits, len(commits) >= maxCommits, nil
+}
+
+// maxReachableAncestorsCommits caps reachableAncestors' walk, mirroring
+// session/unfinished's maxReachableSetCommits — a bound on an otherwise
+// unbounded history walk. Declared as a var so a test can lower it without
+// needing thousands of fixture commits.
+var maxReachableAncestorsCommits = 50_000
+
+// reachableAncestors returns the set of commits reachable from start by
+// walking parent links (i.e. start's ancestors, including start itself), up
+// to maxReachableAncestorsCommits commits.
+func reachableAncestors(repo *git.Repository, start plumbing.Hash) (map[plumbing.Hash]bool, error) {
+	seen := make(map[plumbing.Hash]bool, 64)
+	iter, err := repo.Log(&git.LogOptions{From: start})
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk history from %s: %w", start, err)
+	}
+	defer iter.Close()
+	if err := iter.ForEach(func(c *object.Commit) error {
+		if len(seen) >= maxReachableAncestorsCommits {
+			return storer.ErrStop
+		}
+		seen[c.Hash] = true
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("failed to walk history from %s: %w", start, err)
+	}
+	return seen, nil
+}
+
+// AggregateDiffStat is the files-changed/additions/deletions summary
+// returned by DiffStatBetween — a DiffShortstat-equivalent for a branch's
+// range vs. its base. Distinct from DiffStats (session/git/diff.go), which
+// holds working-tree diff content, not a committed-range summary.
+type AggregateDiffStat struct {
+	FilesChanged int
+	Additions    int
+	Deletions    int
+}
+
+// DiffStatBetween returns the aggregate files-changed/additions/deletions
+// between baseSHA and headSHA, summing FileStatsBetween's per-file counts.
+// ctx only guards against starting once the caller's deadline has passed —
+// FileStatsBetween's go-git patch computation takes no ctx, so this can't
+// bound a hang mid-computation.
+func DiffStatBetween(ctx context.Context, repoPath, baseSHA, headSHA string) (AggregateDiffStat, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return AggregateDiffStat{}, err
+	}
+	stats, err := FileStatsBetween(repoPath, baseSHA, headSHA)
+	if err != nil {
+		return AggregateDiffStat{}, err
+	}
+	var additions, deletions int
+	for _, s := range stats {
+		additions += s.Additions
+		deletions += s.Deletions
+	}
+	return AggregateDiffStat{FilesChanged: len(stats), Additions: additions, Deletions: deletions}, nil
+}
+
+// DiffContentBetween returns the unified-diff text and added/removed line
+// counts between baseSHA and headSHA (both resolved as commits, not the
+// working tree — equivalent to `git diff baseSHA..headSHA`), using go-git's
+// typed diff API instead of a safeexec shell-out (the
+// `prefer-go-git-over-subshells` skill). Distinct from GitWorktree.Diff
+// (session/git/diff.go), which diffs the working tree (uncommitted changes and
+// untracked files) against a single base commit — GitWorktree.Diff now has a
+// go-git implementation too, built from lower-level tree/gitignore/line-diff
+// primitives rather than a single library call; see its doc comment.
+func DiffContentBetween(repoPath, baseSHA, headSHA string) (*DiffStats, error) {
+	if baseSHA == headSHA {
+		return &DiffStats{}, nil
+	}
+	patch, err := diffPatchBetween(repoPath, baseSHA, headSHA)
+	if err != nil {
+		return nil, err
+	}
+	stats := &DiffStats{Content: patch.String()}
+	// Counts via chunk.Type()/chunk.Content() on the typed patch, not by
+	// string-prefix-scanning patch.String() — a "-"/"+" prefix check would
+	// misclassify a content line that itself starts with "--"/"++" (e.g. a
+	// removed `-- comment` or an added `++i`) as a diff header line.
+	// FileStatsBetween below uses the same approach per-file.
+	for _, fp := range patch.FilePatches() {
+		for _, chunk := range fp.Chunks() {
+			lines := countChunkLines(chunk.Content())
+			switch chunk.Type() {
+			case fdiff.Add:
+				stats.Added += lines
+			case fdiff.Delete:
+				stats.Removed += lines
+			}
+		}
+	}
+	return stats, nil
+}
+
+// countChunkLines counts the lines in a diff chunk's content, crediting a
+// final non-newline-terminated line (no-newline-at-EOF) as one more line.
+func countChunkLines(content string) int {
+	if content == "" {
+		return 0
+	}
+	lines := strings.Count(content, "\n")
+	if content[len(content)-1] != '\n' {
+		lines++
+	}
+	return lines
 }
 
 // FileStatsBetween returns the per-file diff-stat summary (path, status,
 // additions, deletions) for every file that changed between baseSHA and
 // headSHA in the repo at repoPath, using go-git's typed diff API — no
-// safeexec shell-out (.claude/rules/prefer-go-git-over-subshells.md).
+// safeexec shell-out (the `prefer-go-git-over-subshells` skill).
 //
 // Renames are reported as a single entry keyed by the file's new path, not a
 // delete+add pair: go-git's FilePatch.Files() already exposes the from/to
@@ -336,23 +626,9 @@ func FileStatsBetween(repoPath, baseSHA, headSHA string) ([]FileStat, error) {
 		return nil, nil
 	}
 
-	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	patch, err := diffPatchBetween(repoPath, baseSHA, headSHA)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
-	}
-
-	baseCommit, err := repo.CommitObject(plumbing.NewHash(baseSHA))
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", baseSHA, repoPath, err)
-	}
-	headCommit, err := repo.CommitObject(plumbing.NewHash(headSHA))
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", headSHA, repoPath, err)
-	}
-
-	patch, err := baseCommit.Patch(headCommit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
+		return nil, err
 	}
 
 	var stats []FileStat
@@ -382,14 +658,7 @@ func FileStatsBetween(repoPath, baseSHA, headSHA string) ([]FileStat, error) {
 		}
 
 		for _, chunk := range chunks {
-			content := chunk.Content()
-			if content == "" {
-				continue
-			}
-			lines := strings.Count(content, "\n")
-			if content[len(content)-1] != '\n' {
-				lines++
-			}
+			lines := countChunkLines(chunk.Content())
 			switch chunk.Type() {
 			case fdiff.Add:
 				stat.Additions += lines
@@ -404,33 +673,161 @@ func FileStatsBetween(repoPath, baseSHA, headSHA string) ([]FileStat, error) {
 	return stats, nil
 }
 
-// CheckoutBranch checks out a branch in an existing repository.
-func CheckoutBranch(repoPath, branchName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "checkout", branchName)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to checkout branch: %s", string(exitErr.Stderr))
+// diffPatchBetween opens repoPath, resolves baseSHA/headSHA, and returns the
+// object.Patch between them — the shared resolve+diff step behind both
+// FileStatsBetween and DiffHashBetween.
+func diffPatchBetween(repoPath, baseSHA, headSHA string) (*object.Patch, error) {
+	repo, err := OpenRepo(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+
+	baseCommit, err := repo.CommitObject(plumbing.NewHash(baseSHA))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", baseSHA, repoPath, err)
+	}
+	headCommit, err := repo.CommitObject(plumbing.NewHash(headSHA))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", headSHA, repoPath, err)
+	}
+
+	patch, err := baseCommit.Patch(headCommit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
+	}
+	return patch, nil
+}
+
+// DiffHashBetween returns a stable content hash of the diff between baseSHA
+// and headSHA in the repo at repoPath — the actual added/removed line
+// content per file, not just per-file counts (a per-file
+// path+status+addition-count+deletion-count tuple can collide across two
+// genuinely different edits, e.g. two different single-line replacements on
+// the same file both show as one addition and one deletion; hashing the
+// actual line text avoids that false-collision shape). Feeds
+// session.IsFlakyVerdictFlipFlop's DiffHash comparison: the same code
+// reviewed twice must hash identically; any real change to the diff must
+// not. Unlike a hash of the (possibly token-capped) prompt text sent to a
+// reviewer, this is computed from the full, untruncated diff, so two
+// different diffs that happen to share a truncated prefix can never
+// collide here.
+func DiffHashBetween(repoPath, baseSHA, headSHA string) (string, error) {
+	if baseSHA == headSHA {
+		return fmt.Sprintf("%x", sha256.Sum256(nil)), nil
+	}
+
+	patch, err := diffPatchBetween(repoPath, baseSHA, headSHA)
+	if err != nil {
+		return "", err
+	}
+
+	return diffHashFromFilePatches(patch.FilePatches()), nil
+}
+
+// diffHashFromFilePatches is DiffHashBetween's core, split out so a test can
+// drive it with fake fdiff.FilePatch values instead of coaxing a real git
+// repository into producing a specific go-git edge case.
+func diffHashFromFilePatches(filePatches []fdiff.FilePatch) string {
+	type fileDigest struct {
+		path    string
+		content string
+	}
+	digests := make([]fileDigest, 0, len(filePatches))
+	for _, fp := range filePatches {
+		chunks := fp.Chunks()
+		if len(chunks) == 0 {
+			// Binary file (or submodule ref update) — no line-level diff to
+			// report; see FileStatsBetween's doc comment. Also covers symlink
+			// changes: go-git's Files() returns (nil, nil) for non-regular-file
+			// tree entries regardless of add/modify/delete, which would
+			// otherwise panic below on the assumption that at most one side is
+			// nil.
+			continue
 		}
+
+		from, to := fp.Files()
+		path := ""
+		status := ""
+		switch {
+		case from == nil && to == nil:
+			// go-git can return (nil, nil) from Files() even when Chunks() is
+			// non-empty -- observed in production on symlink/gitlink type-change
+			// entries whose textual content still produces chunks. Skip rather
+			// than falling into the single-sided cases below, which assume at
+			// most one side is nil and would dereference the other.
+			continue
+		case from == nil:
+			status, path = "added", to.Path()
+		case to == nil:
+			status, path = "deleted", from.Path()
+		case from.Path() != to.Path():
+			status, path = "renamed:"+from.Path(), to.Path()
+		default:
+			status, path = "modified", to.Path()
+		}
+
+		var b strings.Builder
+		b.WriteString(status)
+		b.WriteByte('\n')
+		for _, chunk := range chunks {
+			fmt.Fprintf(&b, "%d:%s\n", chunk.Type(), chunk.Content())
+		}
+		digests = append(digests, fileDigest{path: path, content: b.String()})
+	}
+	sort.Slice(digests, func(i, j int) bool { return digests[i].path < digests[j].path })
+
+	h := sha256.New()
+	for _, d := range digests {
+		h.Write([]byte(d.path))
+		h.Write([]byte{'\n'})
+		h.Write([]byte(d.content))
+		h.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// CheckoutBranch checks out a branch in an existing repository. Uses go-git
+// (no subprocess — the `prefer-go-git-over-subshells` skill); ValidateBranchName
+// is still the defense against a flag-like branchName (unlike FetchBranch's "--"
+// guard, go-git's Checkout takes a typed plumbing.ReferenceName, not a raw CLI
+// argument, so there's no equivalent injection surface here to guard beyond that).
+func CheckoutBranch(repoPath, branchName string) error {
+	if err := ValidateBranchName(branchName); err != nil {
+		return fmt.Errorf("failed to checkout branch: %w", err)
+	}
+	repo, err := OpenRepo(repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to checkout branch: %w", err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to checkout branch: %w", err)
+	}
+	if err := worktree.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(branchName)}); err != nil {
 		return fmt.Errorf("failed to checkout branch: %w", err)
 	}
 	return nil
 }
 
-// RemoteURL returns the URL of the named remote (usually "origin") for a local repo.
+// RemoteURL returns the URL of the named remote (usually "origin") for a local
+// repo, matching `git remote get-url <remote>`'s single-URL output — uses
+// go-git (no subprocess — the `prefer-go-git-over-subshells` skill). Fetch
+// always uses the first configured URL (see config.RemoteConfig.URLs' doc
+// comment), so this returns urls[0] the same way the CLI does.
 func RemoteURL(repoPath, remote string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "remote", "get-url", remote)
-	out, err := cmd.Output()
+	repo, err := OpenRepo(repoPath)
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("failed to get remote URL: %s", string(exitErr.Stderr))
-		}
 		return "", fmt.Errorf("failed to get remote URL: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	r, err := repo.Remote(remote)
+	if err != nil {
+		return "", fmt.Errorf("failed to get remote URL: %w", err)
+	}
+	urls := r.Config().URLs
+	if len(urls) == 0 {
+		return "", fmt.Errorf("failed to get remote URL: remote %q has no configured URL", remote)
+	}
+	return urls[0], nil
 }
 
 // MergeMainResult describes the outcome of MergeMainIntoWorktree.
@@ -452,11 +849,57 @@ type MergeMainResult struct {
 
 // MergeMainIntoWorktree fetches mainBranch from origin and merges it into whatever
 // branch is currently checked out in worktreePath. It never leaves the worktree in a
-// conflicted state: on conflict it aborts the merge immediately (via `git merge
-// --abort`) and reports the conflicting paths, so the caller can hand that context to
-// whoever resolves it rather than leaving a half-merged working tree behind for the
-// next thing that touches it.
+// conflicted state: on conflict it aborts the merge immediately and reports the
+// conflicting paths, so the caller can hand that context to whoever resolves it rather
+// than leaving a half-merged working tree behind for the next thing that touches it.
+//
+// Dispatches to nativeMergeMainIntoWorktree (Epic 3.4) or legacyMergeMainIntoWorktree
+// (the original subprocess-based implementation below) based on useNativeMerge, keyed by
+// worktreePath per ADR-002 — every real call site (drift.go's EnsureBranchSyncedWithMain,
+// backlog_service_triage.go's syncPRBranchWithMain, session/backlog_lifecycle.go's
+// branchReconciler, which is assigned this exact function value) gets flag coverage with
+// no changes of its own.
 func MergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
+	var result *MergeMainResult
+	ctx := withOperationAttrs(context.Background(), attribute.String("worktree_path", worktreePath))
+	err := withOperationSpan(ctx, "git.merge.main", func() (string, string, error) {
+		native := useNativeMerge(worktreePath)
+		var mergeErr error
+		if native {
+			result, mergeErr = nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch)
+		} else {
+			result, mergeErr = legacyMergeMainIntoWorktree(worktreePath, mainBranch)
+		}
+		return implementationLabel(native), mergeOutcomeLabel(result, mergeErr), mergeErr
+	})
+	return result, err
+}
+
+// mergeOutcomeLabel is MergeMainIntoWorktree's outer-span outcome value: a coarser
+// up_to_date/merged/conflicted breakdown than git_merge_outcome_total's native-only
+// four-way UpToDate/FastForward/CleanMerge/Conflicted split (native_merge.go), since
+// MergeMainResult itself (shared by both the native and legacy implementations) doesn't
+// distinguish a fast-forward from a three-way clean merge — both just set Merged: true.
+func mergeOutcomeLabel(result *MergeMainResult, err error) string {
+	if err != nil || result == nil {
+		return outcomeError
+	}
+	switch {
+	case result.Conflicted:
+		return "conflicted"
+	case result.UpToDate:
+		return "up_to_date"
+	case result.Merged:
+		return "merged"
+	default:
+		return outcomeSuccess
+	}
+}
+
+// legacyMergeMainIntoWorktree is MergeMainIntoWorktree's original subprocess-based
+// implementation (`git fetch` + `git merge` + `git merge --abort` on conflict), unchanged
+// by Epic 3.4's dispatch seam.
+func legacyMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
 	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer fetchCancel()
 	fetchCmd := safeexec.CommandContext(fetchCtx, "git", "-C", worktreePath, "fetch", "origin", mainBranch)

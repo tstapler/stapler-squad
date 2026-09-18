@@ -7,6 +7,7 @@ import (
 )
 
 func TestDetectVCS(t *testing.T) {
+	t.Parallel()
 	// Test with non-existent path
 	t.Run("non-existent path", func(t *testing.T) {
 		result := DetectVCS("/non/existent/path/that/should/not/exist")
@@ -71,6 +72,7 @@ func TestDetectVCS(t *testing.T) {
 }
 
 func TestIsGitRepo(t *testing.T) {
+	t.Parallel()
 	t.Run("not a git repo", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		if isGitRepo(tmpDir) {
@@ -105,6 +107,7 @@ func TestIsGitRepo(t *testing.T) {
 }
 
 func TestIsJujutsuRepo(t *testing.T) {
+	t.Parallel()
 	t.Run("not a jujutsu repo", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		if isJujutsuRepo(tmpDir) {
@@ -126,6 +129,7 @@ func TestIsJujutsuRepo(t *testing.T) {
 }
 
 func TestFindVCSRoot(t *testing.T) {
+	t.Parallel()
 	t.Run("find git root from subdirectory", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		gitDir := filepath.Join(tmpDir, ".git")
@@ -188,6 +192,7 @@ func TestFindVCSRoot(t *testing.T) {
 }
 
 func TestNewProvider(t *testing.T) {
+	t.Parallel()
 	t.Run("no vcs detected", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		_, err := NewProvider(tmpDir)
@@ -201,6 +206,7 @@ func TestNewProvider(t *testing.T) {
 }
 
 func TestIsToolAvailable(t *testing.T) {
+	t.Parallel()
 	// Test with a command that should exist on most systems
 	t.Run("existing tool", func(t *testing.T) {
 		// 'ls' or 'echo' should exist on any Unix-like system

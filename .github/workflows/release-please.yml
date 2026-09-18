@@ -54,41 +54,23 @@ jobs:
           ref: ${{ needs.release-please.outputs.tag_name }}
           fetch-depth: 0
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 10.27.0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: web-app/pnpm-lock.yaml
-
-      - name: Install web dependencies
-        run: cd web-app && pnpm install --frozen-lockfile
-
-      - name: Set up buf
-        uses: bufbuild/buf-setup-action@v1
-        with:
-          version: '1.41.0'
-
-      - name: Generate protobuf code
-        run: buf generate
-
-      - name: Build web UI
-        working-directory: web-app
-        run: pnpm run build
-
-      - name: Copy web UI to dist
-        run: cp -r web-app/out server/web/dist
-
-      - name: Set up Go 1.23.0
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25.0'
-          cache: true
+      # Was five hand-duplicated steps here (pnpm/node/buf/web-build) that
+      # had drifted from .github/actions/prepare's own copy of the same
+      # sequence by missing one step entirely — ent ORM code generation.
+      # session/ent/*.go is gitignored and only exists after that step (see
+      # .gitignore's ent comment, Makefile's ent-gen target); every
+      # `make build`/test/lint target depends on ent-gen and so never
+      # exercises this path, which is exactly why the gap went unnoticed
+      # here. Confirmed this is the actual cause of v1.52.0 shipping a tag
+      # with zero attached binaries (run 34077654769: "no required module
+      # provides package .../session/ent/backlogstuckstate"). Using the
+      # shared action outright, instead of re-adding the missing step
+      # in-line a second time, so this exact drift can't recur the next
+      # time that sequence changes.
+      # Also sets up Go (go-version-file: go.mod) as its first step — no
+      # separate setup-go step needed here.
+      - name: Generate protos, ent ORM code, and build web UI
+        uses: ./.github/actions/prepare
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6

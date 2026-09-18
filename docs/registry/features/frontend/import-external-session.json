@@ -1,0 +1,12 @@
+{
+  "id": "import-external-session",
+  "type": "frontend",
+  "component": "ImportSessionsPage",
+  "path": "web-app/src/app/sessions/import/page.tsx",
+  "markerLine": 3,
+  "tested": true,
+  "testIds": [
+    "tests/e2e/import-external-session.spec.ts"
+  ],
+  "lastModified": "2026-07-27T00:00:00Z"
+}

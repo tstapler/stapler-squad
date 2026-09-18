@@ -25,6 +25,11 @@ export const tableTitle = style({
   color: vars.color.textPrimary,
 });
 
+export const sortOrderHint = style({
+  fontWeight: vars.fontWeight.normal,
+  color: vars.color.textMuted,
+});
+
 export const orphanToggle = style({
   display: "flex",
   alignItems: "center",

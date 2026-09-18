@@ -20,10 +20,15 @@ export const routes = {
   insights: "/insights",
   settingsFeatures: "/settings/features",
   settingsBacklogSources: "/settings/backlog-sources",
+  settingsBacklogStages: "/settings/backlog-stages",
   settingsPipelineModes: "/settings/pipeline-modes",
+  settingsRemotes: "/settings/remotes",
+  settingsJules: "/settings/jules",
   backlog: "/backlog",
   backlogBoard: "/backlog/board",
+  sessionsImport: "/sessions/import",
   workflows: "/workflows",
+  triggers: "/triggers",
   login: "/login",
   account: "/account",
   escapeAnalytics: "/analytics/escape",
@@ -34,6 +39,7 @@ export const routes = {
     if (title) params.set("title", title);
     return `/?${params.toString()}`;
   },
+  unfinishedItem: (itemId: string) => `/unfinished?item=${encodeURIComponent(itemId)}`,
 } as const;
 
 export type Route = typeof routes;
