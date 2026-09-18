@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -186,16 +187,34 @@ func TestHostnameDetector_Redetect_AddOnlyMergesNetworks(t *testing.T) {
 
 	ctx := context.Background()
 
-	d.redetect(ctx, TriggerStartup)
+	cycle0 := d.redetect(ctx, TriggerStartup)
 	if !reflect.DeepEqual(d.networks["10.0.0.5"], []string{"host.example.local"}) {
 		t.Fatalf("cycle 0: networks[10.0.0.5] = %v", d.networks["10.0.0.5"])
 	}
 	if hn := srv.GetHostnames(); !containsString(hn, "host.example.local") {
 		t.Fatalf("cycle 0: SetHostnames should include host.example.local, got %v", hn)
 	}
+	if cycle0.PrevCount != 0 {
+		t.Fatalf("cycle 0: PrevCount = %d, want 0 (nothing known before startup)", cycle0.PrevCount)
+	}
+	if cycle0.NewCount != 1 {
+		t.Fatalf("cycle 0: NewCount = %d, want 1", cycle0.NewCount)
+	}
+	if !reflect.DeepEqual(cycle0.Added, []string{"host.example.local"}) {
+		t.Fatalf("cycle 0: Added = %v, want [host.example.local]", cycle0.Added)
+	}
 
 	cycle = 1
-	d.redetect(ctx, TriggerTimer)
+	cycle1 := d.redetect(ctx, TriggerTimer)
+	if cycle1.PrevCount != 1 {
+		t.Fatalf("cycle 1: PrevCount = %d, want 1", cycle1.PrevCount)
+	}
+	if cycle1.NewCount != 2 {
+		t.Fatalf("cycle 1: NewCount = %d, want 2 (host2.example.local newly added)", cycle1.NewCount)
+	}
+	if !reflect.DeepEqual(cycle1.Added, []string{"host2.example.local"}) {
+		t.Fatalf("cycle 1: Added = %v, want [host2.example.local]", cycle1.Added)
+	}
 	got := append([]string(nil), d.networks["10.0.0.5"]...)
 	sort.Strings(got)
 	want := []string{"host.example.local", "host2.example.local"}
@@ -210,7 +229,10 @@ func TestHostnameDetector_Redetect_AddOnlyMergesNetworks(t *testing.T) {
 	}
 
 	cycle = 2
-	d.redetect(ctx, TriggerTimer)
+	cycle2 := d.redetect(ctx, TriggerTimer)
+	if !reflect.DeepEqual(cycle2.Added, []string{"other.example.local"}) {
+		t.Fatalf("cycle 2: Added = %v, want [other.example.local] (transient failure should not permanently exclude the IP)", cycle2.Added)
+	}
 	if !reflect.DeepEqual(d.networks["10.0.0.9"], []string{"other.example.local"}) {
 		t.Fatalf("cycle 2: networks[10.0.0.9] = %v, want [other.example.local] (transient failure should not permanently exclude the IP)", d.networks["10.0.0.9"])
 	}
@@ -352,8 +374,11 @@ func TestHostnameDetector_Redetect_UnverifiedHostnameNeverReachesRPIDOrTLS(t *te
 		validateFn:    func(string) bool { return false },
 	})
 
-	d.redetect(context.Background(), TriggerStartup)
+	cycleResult := d.redetect(context.Background(), TriggerStartup)
 
+	if containsString(cycleResult.Added, spoofed) {
+		t.Fatalf("unverified hostname %q must not appear in redetectCycle.Added, got %v", spoofed, cycleResult.Added)
+	}
 	if containsString(d.networks["10.0.0.5"], spoofed) {
 		t.Fatalf("unverified hostname %q must not be merged into d.networks, got %v", spoofed, d.networks["10.0.0.5"])
 	}
@@ -389,8 +414,11 @@ func TestHostnameDetector_Redetect_VerifiedHostnameReachesRPIDAndTLS(t *testing.
 		validateFn:    func(string) bool { return true },
 	})
 
-	d.redetect(context.Background(), TriggerStartup)
+	cycleResult := d.redetect(context.Background(), TriggerStartup)
 
+	if !containsString(cycleResult.Added, verified) {
+		t.Fatalf("verified hostname %q should appear in redetectCycle.Added, got %v", verified, cycleResult.Added)
+	}
 	if !containsString(d.networks["10.0.0.9"], verified) {
 		t.Fatalf("verified hostname %q should be merged into d.networks, got %v", verified, d.networks["10.0.0.9"])
 	}
@@ -417,8 +445,11 @@ func TestHostnameDetector_Redetect_NilHandlerAndCertStoreDoNotPanic(t *testing.T
 		validateFn: func(string) bool { return true },
 	})
 
-	d.redetect(context.Background(), TriggerStartup) // must not panic
+	cycleResult := d.redetect(context.Background(), TriggerStartup) // must not panic
 
+	if !containsString(cycleResult.Added, verified) {
+		t.Fatalf("expected %q in redetectCycle.Added even with nil Handler/CertStore, got %v", verified, cycleResult.Added)
+	}
 	if !containsString(d.networks["10.0.0.9"], verified) {
 		t.Fatalf("expected %q merged into d.networks even with nil Handler/CertStore, got %v", verified, d.networks["10.0.0.9"])
 	}
@@ -454,8 +485,11 @@ func TestHostnameDetector_Redetect_CertIssuanceFailureDoesNotRollbackRPID(t *tes
 		validateFn:    func(string) bool { return true },
 	})
 
-	d.redetect(context.Background(), TriggerStartup)
+	cycleResult := d.redetect(context.Background(), TriggerStartup)
 
+	if !containsString(cycleResult.Added, verified) {
+		t.Fatalf("expected %q in redetectCycle.Added even though cert issuance failed afterward, got %v", verified, cycleResult.Added)
+	}
 	if !hostnameHasRPID(h, verified) {
 		t.Fatalf("RegisterHostname for %q must not be rolled back when cert issuance fails afterward", verified)
 	}
@@ -519,5 +553,48 @@ func TestHostnameDetector_Redetect_RepeatedNoOpCyclesAreStable(t *testing.T) {
 	}
 	if calls := atomic.LoadInt32(&publisherCalls); calls != 1 {
 		t.Fatalf("expected certPublisher NOT re-invoked on no-op second cycle, call count = %d", calls)
+	}
+}
+
+// TestHostnameRedetectInterval_DefaultWhenUnset covers plan.md Task 4.2.1a:
+// an unset env var is normal, not a parse failure, so it silently falls back
+// to defaultHostnameRedetectInterval with no warning.
+func TestHostnameRedetectInterval_DefaultWhenUnset(t *testing.T) {
+	buf := captureLogWarn(t)
+
+	got := hostnameRedetectInterval()
+
+	if got != defaultHostnameRedetectInterval {
+		t.Fatalf("hostnameRedetectInterval() = %v, want default %v", got, defaultHostnameRedetectInterval)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected no log.Warn for an unset env var, got: %s", buf.String())
+	}
+}
+
+// TestHostnameRedetectInterval_ParsesOverride covers the env var successfully
+// overriding the default.
+func TestHostnameRedetectInterval_ParsesOverride(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_HOSTNAME_REDETECT_INTERVAL", "2m")
+
+	if got, want := hostnameRedetectInterval(), 2*time.Minute; got != want {
+		t.Fatalf("hostnameRedetectInterval() = %v, want %v", got, want)
+	}
+}
+
+// TestHostnameRedetectInterval_FallsBackOnParseError covers an unparseable
+// value: it must fall back to the default (never fail startup) and log a
+// warning naming the offending value.
+func TestHostnameRedetectInterval_FallsBackOnParseError(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_HOSTNAME_REDETECT_INTERVAL", "banana")
+	buf := captureLogWarn(t)
+
+	got := hostnameRedetectInterval()
+
+	if got != defaultHostnameRedetectInterval {
+		t.Fatalf("hostnameRedetectInterval() = %v, want default %v on parse failure", got, defaultHostnameRedetectInterval)
+	}
+	if !strings.Contains(buf.String(), "banana") {
+		t.Fatalf("expected log.Warn to name the offending value %q, got: %s", "banana", buf.String())
 	}
 }

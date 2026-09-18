@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"sort"
 	"time"
 
@@ -9,6 +10,29 @@ import (
 	"github.com/tstapler/stapler-squad/server"
 	serverauth "github.com/tstapler/stapler-squad/server/auth"
 )
+
+// defaultHostnameRedetectInterval is used when
+// STAPLER_SQUAD_HOSTNAME_REDETECT_INTERVAL is unset or unparseable.
+const defaultHostnameRedetectInterval = 5 * time.Minute
+
+// hostnameRedetectInterval reads STAPLER_SQUAD_HOSTNAME_REDETECT_INTERVAL and
+// parses it via time.ParseDuration, falling back to
+// defaultHostnameRedetectInterval if the env var is unset or fails to parse.
+// An unparseable value logs a warning (this is a diagnostic knob, not
+// required config, so it never fails startup); an unset value is normal and
+// silent. See plan.md Task 4.2.1a.
+func hostnameRedetectInterval() time.Duration {
+	raw := os.Getenv("STAPLER_SQUAD_HOSTNAME_REDETECT_INTERVAL")
+	if raw == "" {
+		return defaultHostnameRedetectInterval
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		log.Warn("hostname-detect: invalid STAPLER_SQUAD_HOSTNAME_REDETECT_INTERVAL, using default", "value", raw, "default", defaultHostnameRedetectInterval, "err", err)
+		return defaultHostnameRedetectInterval
+	}
+	return d
+}
 
 // TriggerSource identifies what caused a HostnameDetector cycle to run.
 type TriggerSource string
@@ -222,13 +246,26 @@ func (d *HostnameDetector) redetect(ctx context.Context, trigger TriggerSource) 
 	}
 	sort.Strings(addedList)
 
-	return redetectCycle{
+	cycle := redetectCycle{
 		Trigger:   trigger,
 		Duration:  time.Since(start),
 		PrevCount: prevCount,
 		NewCount:  len(flattened),
 		Added:     addedList,
 	}
+
+	// Emitted every cycle, including a no-op one -- see plan.md Story
+	// 4.1.1's acceptance criteria: a grep for "hostname-detect" must show
+	// the mechanism is running without needing to restart the process.
+	log.Info("hostname-detect: cycle complete",
+		"trigger", cycle.Trigger,
+		"duration", cycle.Duration,
+		"prev_count", cycle.PrevCount,
+		"new_count", cycle.NewCount,
+		"added", cycle.Added,
+	)
+
+	return cycle
 }
 
 // resolveAndValidate re-resolves every currently-known IP in d.networks and
