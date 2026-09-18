@@ -473,12 +473,17 @@ var (
 				// Server.hostnames is this feature's primary success metric
 				// and must not depend on remote access being enabled
 				// (project_plans/network-hostname-redetect Task 2.1.2c).
-				// WAHandler/CertStore/ValidateFn are left nil here: Epic 2.2
-				// wires those in once the validation gate exists, so this
-				// epic's detector only keeps Server.hostnames current.
+				// WAHandler/CertStore are nil when remote access is
+				// disabled; redetect's nil-checks (Epic 2.2) mean this still
+				// keeps Server.hostnames current, just without RPID/TLS
+				// publication.
 				initialNetworks := map[string][]string{}
+				var waHandler *serverauth.Handler
+				var certStore *server.NetworkCertStore
 				if remoteAccess != nil {
 					initialNetworks = remoteAccess.Networks
+					waHandler = remoteAccess.Handler
+					certStore = remoteAccess.CertStore
 				}
 				// Never written to yet -- Story 3.1.2 wires a real
 				// OS-network-change source into this channel.
@@ -488,8 +493,11 @@ var (
 					InitialNetworks: initialNetworks,
 					// Task 4.2.1b will replace this literal with
 					// hostnameRedetectInterval() (env-var override).
-					Tick:   time.NewTicker(5 * time.Minute).C,
-					Events: netChangeEvents,
+					Tick:       time.NewTicker(5 * time.Minute).C,
+					Events:     netChangeEvents,
+					WAHandler:  waHandler,
+					CertStore:  certStore,
+					ValidateFn: verifyHostnameOwnership,
 				})
 				a.Go("hostname-detector", func(ctx context.Context) {
 					detector.Run(ctx)
