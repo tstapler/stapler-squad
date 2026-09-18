@@ -22,6 +22,44 @@ func TestRedirectLogger_CapturesOutputWithPrefix(t *testing.T) {
 	}
 }
 
+// TestRedirectLogger_CapturesWritesFromPreExistingReference verifies that a
+// caller already holding a reference to logger (e.g. from an accessor like
+// ErrorLog(), obtained before RedirectLogger is called) still has its
+// writes land in the buffer. A swap-based implementation that reassigned a
+// package-level logger *variable* instead of mutating this exact instance
+// would fail this — the pre-existing reference would keep writing to the
+// old destination, unaffected by the swap.
+func TestRedirectLogger_CapturesWritesFromPreExistingReference(t *testing.T) {
+	logger := stdlog.New(stdlog.Writer(), "orig: ", stdlog.LstdFlags)
+	preRedirectRef := logger // captured before RedirectLogger is called
+
+	buf := RedirectLogger(t, logger, "TEST: ")
+	preRedirectRef.Println("written through the pre-existing reference")
+
+	got := buf.String()
+	if !strings.Contains(got, "written through the pre-existing reference") {
+		t.Errorf("write through pre-redirect reference did not land in buffer: %q", got)
+	}
+}
+
+// TestSyncBuffer_LenMatchesWrittenByteCount verifies Len() reports the
+// actual number of bytes written, not just that it doesn't race (which
+// TestRedirectLogger_NoRaceUnderConcurrentWritersAndReader already covers).
+func TestSyncBuffer_LenMatchesWrittenByteCount(t *testing.T) {
+	buf := &SyncBuffer{}
+	const msg = "hello, sync buffer"
+	n, err := buf.Write([]byte(msg))
+	if err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	if n != len(msg) {
+		t.Errorf("Write returned n=%d, want %d", n, len(msg))
+	}
+	if got := buf.Len(); got != len(msg) {
+		t.Errorf("Len() = %d, want %d", got, len(msg))
+	}
+}
+
 // TestRedirectLogger_RestoresOriginalLoggerOnCleanup proves the logger's
 // pre-test output/prefix/flags are back in place once the redirecting
 // test's cleanup has run — exercised via a sub-test so its t.Cleanup fires

@@ -44,14 +44,33 @@ func (b *SyncBuffer) Len() int {
 	return b.buf.Len()
 }
 
-// redirectMu serializes every RedirectLogger call across the whole process.
-// RedirectLogger mutates the given *log.Logger in place rather than swapping
-// in a new instance, so two callers redirecting the SAME logger concurrently
-// (e.g. two t.Parallel() tests) would otherwise race over whose SyncBuffer is
-// "current" — one test's Printf output could land in another test's buffer.
-// Holding this lock for the full redirect-to-restore window, mirrored from
-// session/sync_buffer_test.go's warningLogMu, prevents that.
-var redirectMu sync.Mutex //nolint:gochecknoglobals
+// redirectLocks holds one *sync.Mutex per *log.Logger ever passed to
+// RedirectLogger, guarded by redirectLocksMu. Locking is scoped per-logger
+// rather than process-wide: two callers redirecting the SAME logger
+// concurrently (e.g. two t.Parallel() tests) would otherwise race over whose
+// SyncBuffer is "current" — one test's Printf output could land in another
+// test's buffer — so that case still serializes, mirrored from
+// session/sync_buffer_test.go's warningLogMu. But a single process-wide lock
+// would also serialize two callers redirecting two DIFFERENT loggers for no
+// reason, and would deadlock a test that redirects two different loggers in
+// the same t.Run (the first redirect's unlock only happens in t.Cleanup,
+// which fires after the test function returns — the second redirect's Lock
+// call would block forever). Per-logger scoping avoids both.
+var (
+	redirectLocksMu sync.Mutex                         //nolint:gochecknoglobals
+	redirectLocks   = map[*stdlog.Logger]*sync.Mutex{} //nolint:gochecknoglobals
+)
+
+func redirectLockFor(logger *stdlog.Logger) *sync.Mutex {
+	redirectLocksMu.Lock()
+	defer redirectLocksMu.Unlock()
+	mu, ok := redirectLocks[logger]
+	if !ok {
+		mu = &sync.Mutex{}
+		redirectLocks[logger] = mu
+	}
+	return mu
+}
 
 // RedirectLogger redirects logger's output to a fresh SyncBuffer for the
 // duration of the calling test, restoring the logger's original
@@ -64,7 +83,8 @@ var redirectMu sync.Mutex //nolint:gochecknoglobals
 // it.
 func RedirectLogger(t *testing.T, logger *stdlog.Logger, prefix string) *SyncBuffer {
 	t.Helper()
-	redirectMu.Lock()
+	mu := redirectLockFor(logger)
+	mu.Lock()
 	buf := &SyncBuffer{}
 	origOutput := logger.Writer()
 	origPrefix := logger.Prefix()
@@ -76,7 +96,7 @@ func RedirectLogger(t *testing.T, logger *stdlog.Logger, prefix string) *SyncBuf
 		logger.SetOutput(origOutput)
 		logger.SetPrefix(origPrefix)
 		logger.SetFlags(origFlags)
-		redirectMu.Unlock()
+		mu.Unlock()
 	})
 	return buf
 }
