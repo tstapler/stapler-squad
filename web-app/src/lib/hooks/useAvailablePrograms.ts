@@ -15,6 +15,7 @@ export function useAvailablePrograms(): ProgramOption[] {
 
     try {
       const client = createClient(SessionService, getConnectTransport());
+      // abort-signal-exempt
       client.listProgramsConfig({})
         .then((res) => {
           if (!mounted) return;

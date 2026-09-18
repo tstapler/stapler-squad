@@ -1,5 +1,6 @@
 "use client";
 
+// analytics-exempt
 // +feature: settings-programs
 import { useState, useEffect, useCallback } from "react";
 import { SessionService, type ProgramConfigProto } from "@/gen/session/v1/session_pb";
