@@ -44,6 +44,14 @@ func (b *SyncBuffer) Len() int {
 	return b.buf.Len()
 }
 
+// Reset clears the buffer's contents, synchronized against concurrent
+// writers.
+func (b *SyncBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
 // redirectLocks holds one *sync.Mutex per *log.Logger ever passed to
 // RedirectLogger, guarded by redirectLocksMu. Locking is scoped per-logger
 // rather than process-wide: two callers redirecting the SAME logger

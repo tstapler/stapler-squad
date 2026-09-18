@@ -7,7 +7,6 @@ package session
 
 import (
 	"bytes"
-	stdlog "log"
 	"testing"
 	"time"
 
@@ -57,9 +56,7 @@ func TestCachingLivenessEngine_should_FallBackToModeLessRowWithoutWarnLog_When_S
 		embeddedDefault: NewDefaultLivenessEngine(),
 	}
 
-	var buf bytes.Buffer
-	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
-	t.Cleanup(func() { tslog.SetWarningLogForTest(orig) })
+	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
 	got, err := engine.LivenessFor(BacklogStatusIdea, PipelineMode("sdd"))
 
@@ -85,9 +82,7 @@ func TestCachingLivenessEngine_should_FallBackToDefaultEngineWithWarnLog_When_Ne
 	engine, err := NewCachingLivenessEngine(livenessRepo)
 	require.NoError(t, err)
 
-	var buf bytes.Buffer
-	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
-	t.Cleanup(func() { tslog.SetWarningLogForTest(orig) })
+	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
 	got, err := engine.LivenessFor(BacklogStatusIdea, PipelineMode("sdd"))
 
