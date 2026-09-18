@@ -288,6 +288,7 @@ func TestAllowedTransitions_should_ReturnSnapshottedTransitionsWithWarnLog_When_
 	require.Empty(t, engine.AllowedTransitions(customSlug, nil))
 	require.False(t, engine.CanTransition(customSlug, BacklogStatusReady, nil))
 
+	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
 	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
 	// With the item's own captured StageConfigSnapshot: the transitions legal

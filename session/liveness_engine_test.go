@@ -133,6 +133,7 @@ func TestLivenessFor_should_EmitExactlyOneWarnLine_When_FallingBackToDefaultEngi
 		embeddedDefault: NewDefaultLivenessEngine(),
 	}
 
+	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
 	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
 	got, err := engine.LivenessFor(BacklogStatusIdea, PipelineMode("sdd"))
@@ -160,6 +161,7 @@ func TestLivenessFor_should_NotEmitDuplicateWarnLines_When_CalledRepeatedlyForSa
 		embeddedDefault: NewDefaultLivenessEngine(),
 	}
 
+	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
 	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
 	const calls = 3

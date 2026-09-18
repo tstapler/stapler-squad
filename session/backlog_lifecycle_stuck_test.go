@@ -774,6 +774,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRe
 
 	const detectionMsg = "exited without ever writing a verdict"
 
+	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
 	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
 	// Sweep tick 1: no "bouncing" row exists yet, so RemediationBlocked reports
