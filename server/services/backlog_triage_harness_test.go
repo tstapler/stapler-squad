@@ -20,10 +20,8 @@ package services
 //	go test -v -tags=harness -run TestTriageHarness_RealClaude      ./server/services/ -timeout 5m
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	stdlog "log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -343,9 +341,10 @@ func TestTriageHarness_RealClaude(t *testing.T) {
 	client, _ := setupTriageHarness(t, &fastTriagePool{pool: realPool})
 
 	// Redirect ssqlog.ErrorLog to a buffer so we can surface service errors in t.Log.
-	var errBuf bytes.Buffer
-	origErrorLog := ssqlog.SetErrorLogForTest(stdlog.New(&errBuf, "ERROR: ", 0))
-	t.Cleanup(func() { ssqlog.SetErrorLogForTest(origErrorLog) })
+	// RedirectLogger's SyncBuffer (not a raw bytes.Buffer) is required here: this
+	// harness's background reconciliation loops keep calling ssqlog.ErrorLog().Printf
+	// after the poll below returns, racing with the errBuf.String() read further down.
+	errBuf := ssqlog.RedirectLogger(t, ssqlog.ErrorLog, ssqlog.SetErrorLogForTest, "ERROR: ")
 
 	repoPath := t.TempDir()
 
