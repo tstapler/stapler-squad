@@ -338,3 +338,16 @@ func Test_superviseTymuxd_should_DecideRegisterStopAndError_When_GivenEachCombin
 		})
 	}
 }
+
+// TestVerifyHostnameOwnership_RejectsNonMatchingIP asserts the single
+// extracted implementation (shared by startRemoteAccess's hostnameValidator
+// and HostnameDetector's default validateFn) rejects a hostname that does
+// not resolve to one of this host's own IPs. "invalid.invalid" is reserved
+// by RFC 2606 to never resolve on any network, so this is deterministic
+// without needing to fake net.LookupHost/forwardLookupViaKnownNameservers --
+// no real DNS answer for it can ever coincide with listNonLoopbackIPs().
+func TestVerifyHostnameOwnership_RejectsNonMatchingIP(t *testing.T) {
+	if got := verifyHostnameOwnership("invalid.invalid"); got {
+		t.Errorf("verifyHostnameOwnership(%q) = true, want false (reserved non-resolving hostname)", "invalid.invalid")
+	}
+}
