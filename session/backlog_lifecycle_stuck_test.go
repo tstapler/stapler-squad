@@ -1,10 +1,8 @@
 package session
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	stdlog "log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -776,9 +774,8 @@ func TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRe
 
 	const detectionMsg = "exited without ever writing a verdict"
 
-	var buf bytes.Buffer
-	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
-	t.Cleanup(func() { tslog.SetWarningLogForTest(orig) })
+	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
+	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
 	// Sweep tick 1: no "bouncing" row exists yet, so RemediationBlocked reports
 	// false (ungated default) — a genuinely fresh detection, must log and reach
