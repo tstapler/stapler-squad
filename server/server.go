@@ -57,7 +57,7 @@ type Server struct {
 	tlsConfig                  *tls.Config                     // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler // nil when auth is disabled
 	httpsURL                   string                          // set when remote access is enabled
-	hostnames                  []string                        // detected LAN hostnames
+	hostnames                  atomic.Pointer[[]string]        // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
 	origins                    []string                        // allowed CORS origins
 	shutdownHooks              []func()                        // called before HTTP server stops
 	connCtxCancel              context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
@@ -1513,14 +1513,45 @@ func (s *Server) SetHTTPSURL(url string) {
 	s.httpsURL = url
 }
 
-// SetHostnames records the detected LAN hostnames for this server.
+// SetHostnames merges hostnames into the previously published set and
+// atomically publishes the result. It never shrinks the set — a hostname
+// that drops out of a later detection cycle (e.g. a network interface goes
+// away) stays visible, since a stale-but-reachable hostname is safer than a
+// TLS SAN mismatch for a client that cached the old one. Order is
+// deterministic: previously published entries first, then new entries in
+// the order given.
 func (s *Server) SetHostnames(hostnames []string) {
-	s.hostnames = hostnames
+	var previous []string
+	if p := s.hostnames.Load(); p != nil {
+		previous = *p
+	}
+
+	seen := make(map[string]bool, len(previous)+len(hostnames))
+	merged := make([]string, 0, len(previous)+len(hostnames))
+	for _, h := range previous {
+		if !seen[h] {
+			seen[h] = true
+			merged = append(merged, h)
+		}
+	}
+	for _, h := range hostnames {
+		if !seen[h] {
+			seen[h] = true
+			merged = append(merged, h)
+		}
+	}
+
+	s.hostnames.Store(&merged)
 }
 
-// GetHostnames returns the detected LAN hostnames.
+// GetHostnames returns the currently published set of detected LAN
+// hostnames, or nil if SetHostnames has never been called.
 func (s *Server) GetHostnames() []string {
-	return s.hostnames
+	p := s.hostnames.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // SetOrigins records the allowed CORS origins.
@@ -1588,7 +1619,7 @@ func (s *Server) registerServerInfoHandler() {
 			CAPEMPath:  caPath,
 			HTTPSURL:   s.httpsURL,
 			TLSEnabled: tlsEnabled,
-			Hostnames:  s.hostnames,
+			Hostnames:  s.GetHostnames(),
 			Programs:   s.availablePrograms,
 			Version:    buildinfo.Version,
 			Branch:     buildinfo.Branch,
