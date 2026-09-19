@@ -31,6 +31,13 @@ jest.mock("@/lib/config", () => ({
   createAuthInterceptor: () => jest.fn(),
 }));
 
+// jest.setup.js globally stubs this module's useInsightsSummary (Story
+// 5.2.3, so BacklogItemDetail and every other consumer don't open a real
+// WatchInsights transport by default) — this file specifically tests the
+// real implementation against the mocked transport above, so it must opt
+// back out of that stub (same pattern as useHandoffSummary.test.ts).
+jest.unmock("@/lib/hooks/useInsightsService");
+
 import { useInsightsSummary, useSessionDetail } from "@/lib/hooks/useInsightsService";
 
 /** Async-iterable test double with a manually-controlled event queue,

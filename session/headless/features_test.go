@@ -168,7 +168,7 @@ func (f *fakePoolClientRecorder) CallBlocking(_ context.Context, key FeatureKey,
 	f.key = key
 	f.sys = systemPrompt
 	f.user = userPrompt
-	sink(0)
+	sink(0, true)
 	if f.err != nil {
 		return "", f.err
 	}

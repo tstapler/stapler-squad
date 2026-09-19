@@ -172,6 +172,37 @@ message ActivityCostBreakdown {
   int32        session_count      = 3;
 }
 
+// ItemRoleCost is one backlog item's cost within a single RoleCostBreakdown
+// bucket (Epic 4.1's item-drilldown data).
+message ItemRoleCost {
+  string item_id                 = 1;
+  string item_title              = 2;
+  double estimated_cost_usd      = 3;
+  int32  session_count           = 4;
+  int32  unpriced_session_count  = 5;
+}
+
+// RoleCostBreakdown aggregates estimated cost by SessionRole ("triage",
+// "review", "work", or "" for a session with no backlog-item attribution),
+// with a per-item drilldown. sum(role_breakdown[].estimated_cost_usd) across
+// a GetInsightsSummaryResponse always equals its total_cost_usd — both
+// exclude the same unpriced-session subset, see unpriced_session_count.
+message RoleCostBreakdown {
+  // session_role is a plain string (mirroring ItemSession.session_role's own
+  // proto representation), not ActivityType's enum — SessionRole is
+  // currently string-typed end-to-end.
+  string session_role            = 1;
+  double estimated_cost_usd      = 2;
+  int32  session_count           = 3;
+  repeated ItemRoleCost items    = 4;
+  // unpriced_session_count is the count of sessions in this bucket whose cost
+  // could not be trustworthily priced (mirrors ModelBreakdown.pricing_unavailable's
+  // "abstain rather than guess" convention). Those sessions are excluded from
+  // estimated_cost_usd (and from the response's total_cost_usd) rather than
+  // silently folded in as $0.
+  int32  unpriced_session_count  = 5;
+}
+
 // TopEntry is a generic name/value pair for top-N tables.
 message TopEntry {
   reserved 4;
@@ -217,6 +248,12 @@ message GetInsightsSummaryResponse {
   // activity_breakdown is total cost and session count sliced by ActivityType
   // across all in-range sessions, sorted by estimated_cost_usd descending.
   repeated ActivityCostBreakdown activity_breakdown = 15;
+  // role_breakdown is total cost sliced by SessionRole across all in-range
+  // sessions (Epic 4.1), sorted by estimated_cost_usd descending. Includes
+  // ItemSession-sourced costs with no matching Claude transcript (Story
+  // 4.1.4, e.g. a Gemini-priced triage call), which are folded into
+  // total_cost_usd above but not into daily/models/activity_breakdown.
+  repeated RoleCostBreakdown role_breakdown = 16;
 }
 
 // ListSessionTokensRequest supports paginated session listing.

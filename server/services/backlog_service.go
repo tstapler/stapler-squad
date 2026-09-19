@@ -18,6 +18,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -28,11 +29,16 @@ import (
 
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
 type SessionCreator interface {
-	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error)
+	// programOverride, when non-empty, replaces config.ResolveDefaults' resolved.Program
+	// as the spawned Instance's InstanceOptions.Program — set before session.NewInstance/
+	// instance.Start(true), never via a post-hoc SwitchProgram/Restart (see Epic 2.4's
+	// design note). Pass "" for callers unaffected by per-stage program overrides.
+	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
 	// CreateWorktreeSession spawns a session inside an already-created git worktree at
 	// worktreePath. repoPath is the parent repo used for program resolution; worktreePath
-	// must already exist on disk before this is called.
-	CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error)
+	// must already exist on disk before this is called. See programOverride's doc comment
+	// on CreateDirectorySession above.
+	CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
 }
 
 // AutonomousDriverStarter allows BacklogService to start an AutonomousDriver on an existing instance.
@@ -218,6 +224,24 @@ type BacklogService struct {
 	shutdownCancel context.CancelFunc
 	triageSem      chan struct{}
 
+	// headlessCallers maps a stage executor's configured program name (e.g.
+	// "gemini") to the headless.PoolClient that runs it, consulted by
+	// resolveHeadlessCaller. Always contains at least "claude" -> headlessPool
+	// once SetHeadlessPool has run (see NewBacklogService's degradation
+	// contract: a nil creator/headlessPool is expected in test environments).
+	// Populated incrementally as dependencies.go wires each caller in, since
+	// GeminiCaller (Epic 3.1) is constructed after backlogSvc itself.
+	headlessCallers map[string]headless.PoolClient
+
+	// modelFamilies resolves a stage executor's "family:<alias>" Model value
+	// (e.g. "family:opus") to a concrete model ID via session.ResolveModel,
+	// mirroring server/workflows.Scheduler's own modelFamilies field.
+	// Defaults to workflows.DefaultModelFamilies() in NewBacklogService;
+	// overridable via SetModelFamilies from the same
+	// model_family_overrides.json dependencies.go loads for the Scheduler, so
+	// both fire paths resolve a given alias identically.
+	modelFamilies map[string]string
+
 	// triageInFlight tracks, per item ID, whether a headless triage call this
 	// process itself started is still genuinely running. tombstoneOrphanTriageSessions
 	// has no other way to tell a still-running headless call apart from a dead one —
@@ -233,6 +257,16 @@ type BacklogService struct {
 	// start after a restart, every item's entry is (correctly) absent, since no
 	// goroutine in the new process could possibly still be running an old triage call.
 	triageInFlight sync.Map
+
+	// budgetWarnedItems tracks, per item ID, whether the work-stage soft
+	// budget warning (Story 4.2.3, ADR-003) has already fired for that item's
+	// current over-threshold streak — deduped for the process lifetime so a
+	// recurring poll/push of WatchBacklogItems/GetBacklogItem doesn't re-log
+	// on every read while an item stays over threshold. Mirrors
+	// InsightsService.warnNewUnpricedFamilies' per-process-lifetime dedup
+	// convention. checkWorkStageBudget deletes an item's entry once its cost
+	// drops back under threshold, so a future re-crossing warns again.
+	budgetWarnedItems sync.Map
 
 	// capabilityCheck gates codebase-read calls with a cached smoke-test result
 	// (Story 2.2.6): a success is cached for the process lifetime, a failure only
@@ -524,12 +558,78 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		triageCleanupTimeout: defaultTriageCleanupTimeout,
 		resolveGitHubInput:   session.ResolveGitHubInput,
 		capabilityCheck:      headless.DefaultCapabilitySelfCheck,
+		modelFamilies:        workflows.DefaultModelFamilies(),
 	}
 }
 
-// SetHeadlessPool wires the headless pool for autonomous triage calls.
+// SetModelFamilies replaces the family alias -> concrete model ID map used to
+// resolve a stage executor's "family:<alias>" Model value. See the
+// modelFamilies field's doc comment.
+func (s *BacklogService) SetModelFamilies(families map[string]string) {
+	s.modelFamilies = families
+}
+
+// SetHeadlessPool wires the headless pool for autonomous triage calls and
+// registers it in headlessCallers under "claude" — the fallback target every
+// resolveHeadlessCaller branch degrades to.
 func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 	s.headlessPool = pool
+	if s.headlessCallers == nil {
+		s.headlessCallers = make(map[string]headless.PoolClient)
+	}
+	s.headlessCallers["claude"] = pool
+}
+
+// SetGeminiCaller registers caller in headlessCallers under "gemini" so a
+// PipelineMode stage executor configured with program="gemini" resolves to it
+// (Epic 3.1/2.3). Takes the concrete *headless.GeminiCaller type rather than
+// the headless.PoolClient interface so a nil caller (gemini binary not found
+// at startup — see server/dependencies.go) is caught by this ordinary nil
+// check: wrapping a typed nil pointer in an interface first would make an
+// interface-level `== nil` check pass a non-nil caller through by mistake.
+func (s *BacklogService) SetGeminiCaller(caller *headless.GeminiCaller) {
+	if caller == nil {
+		return
+	}
+	if s.headlessCallers == nil {
+		s.headlessCallers = make(map[string]headless.PoolClient)
+	}
+	s.headlessCallers["gemini"] = caller
+}
+
+// availabilityChecker is satisfied by a headless.PoolClient that can re-probe
+// its own runtime availability at call time (e.g. GeminiCaller.Available(),
+// Task 3.1.1g) — not part of the headless.PoolClient interface itself since
+// Claude's Pool has no equivalent "goes missing mid-run" failure mode (see
+// GeminiCaller.Available's doc comment).
+type availabilityChecker interface {
+	Available() bool
+}
+
+// resolveHeadlessCaller picks the headless.PoolClient to run a stage's
+// configured program, failing closed to Claude — loudly, via a Warn log and a
+// returned fallbackReason for persistence onto the ItemSession row — rather
+// than silently no-op'ing, crashing, or trusting a startup-time-only
+// availability check that can go stale (Story 2.3.1).
+//
+// program is the raw value ExecutorFor returned (empty or "claude" is the
+// overwhelmingly common case and skips the map lookup and availability probe
+// entirely). itemID/stage are for the log line and are not otherwise
+// interpreted.
+func (s *BacklogService) resolveHeadlessCaller(program, itemID, stage string) (caller headless.PoolClient, configuredProgram, fallbackReason string) {
+	if program == "" || program == "claude" {
+		return s.headlessPool, "", ""
+	}
+	found, ok := s.headlessCallers[program]
+	if !ok {
+		log.Warn("[PipelineEngine] unsupported headless program", "program", program, "item", itemID, "stage", stage, "fallback", "claude")
+		return s.headlessPool, program, "unsupported_program"
+	}
+	if ac, ok := found.(availabilityChecker); ok && !ac.Available() {
+		log.Warn("[PipelineEngine] headless program unavailable", "program", program, "item", itemID, "stage", stage, "fallback", "claude")
+		return s.headlessPool, program, program + "_unavailable"
+	}
+	return found, "", ""
 }
 
 // claimantHostID returns the stable per-host/per-instance identifier for the
@@ -719,6 +819,12 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		CreatedAt:                timestamppb.New(is.CreatedAt),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
+		ResolvedProgram:          is.ResolvedProgram,
+		ResolvedModel:            is.ResolvedModel,
+		ExecutorSnapshotHash:     is.ExecutorSnapshotHash,
+		ConfiguredProgram:        is.ConfiguredProgram,
+		ExecutorFallbackReason:   is.ExecutorFallbackReason,
+		CostPriced:               is.CostPriced,
 		EndReason:                is.EndReason,
 		FailureCapturePath:       is.FailureCapturePath,
 		ClaimantHostId:           is.ClaimantHostID,
@@ -975,6 +1081,10 @@ func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEn
 		override := int32(*item.ReworkCapOverride)
 		p.ReworkCapOverride = &override
 	}
+	if item.CostBudgetThresholdUsd != nil {
+		threshold := *item.CostBudgetThresholdUsd
+		p.CostBudgetThresholdUsd = &threshold
+	}
 
 	// Parse acceptance criteria JSON into repeated AcCriterion.
 	if item.AcceptanceCriteria != "" {
@@ -1199,4 +1309,63 @@ func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions [
 			log.WarningLog().Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
 		}
 	}
+}
+
+// cumulativeItemSpendUSD sums EstimatedCostUsd across sessions and counts how
+// many of them are unpriced (cost_priced == false). Per Epic 2.5, an unpriced
+// session's EstimatedCostUsd is always 0 by construction (never incremented),
+// so summing every session's EstimatedCostUsd unconditionally already yields
+// the correct known-spend total — unpricedCount exists only so callers can
+// surface the gap in a log line rather than silently treating it as "under
+// threshold" (Task 4.2.2b).
+func cumulativeItemSpendUSD(sessions []session.ItemSessionSummary) (totalUSD float64, unpricedCount int) {
+	for _, is := range sessions {
+		totalUSD += is.EstimatedCostUsd
+		if !is.CostPriced {
+			unpricedCount++
+		}
+	}
+	return totalUSD, unpricedCount
+}
+
+// logBudgetWarningIfCrossed evaluates the per-item soft budget threshold
+// (ADR-003) inline at cost-recording time for a headless triage/review call:
+// priorSessions is that item's ItemSession set fetched before this call's own
+// row was created/persisted, so priorSessions' cost sum plus callCostUSD is
+// the item's new cumulative spend. Purely observational — never blocks,
+// retries, or errors the call that triggered it (see EvaluateBudgetThreshold's
+// own doc comment).
+func logBudgetWarningIfCrossed(itemID, stage string, thresholdUSD *float64, priorSessions []session.ItemSessionSummary, callCostUSD float64) {
+	priorTotal, unpricedCount := cumulativeItemSpendUSD(priorSessions)
+	cumulative := priorTotal + callCostUSD
+	if !session.EvaluateBudgetThreshold(itemID, stage, thresholdUSD, cumulative) {
+		return
+	}
+	suffix := ""
+	if unpricedCount > 0 {
+		suffix = fmt.Sprintf(" (excludes %d unpriced session(s))", unpricedCount)
+	}
+	log.WarningLog().Printf("[BudgetWarning] item=%s stage=%s threshold=%.2f spent=%.2f%s", itemID, stage, *thresholdUSD, cumulative, suffix)
+}
+
+// checkWorkStageBudget evaluates the per-item soft budget threshold (ADR-003)
+// for an active work-stage session at live-cost-recompute time (Story 4.2.3)
+// — called from WatchBacklogItems's snapshot/live paths and GetBacklogItem,
+// the smallest set of call sites that already recompute an item's live
+// TotalEstimatedCostUsd on a recurring/subscribed basis. Deduped via
+// budgetWarnedItems so a repeated poll while still over threshold doesn't
+// re-log; deleting the item's entry once its cost drops back under threshold
+// lets a future re-crossing warn again. No-ops when thresholdUSD is nil.
+func (s *BacklogService) checkWorkStageBudget(itemID string, thresholdUSD *float64, totalCostUSD float64) {
+	if thresholdUSD == nil {
+		return
+	}
+	if !session.EvaluateBudgetThreshold(itemID, "work", thresholdUSD, totalCostUSD) {
+		s.budgetWarnedItems.Delete(itemID)
+		return
+	}
+	if _, alreadyWarned := s.budgetWarnedItems.LoadOrStore(itemID, struct{}{}); alreadyWarned {
+		return
+	}
+	log.WarningLog().Printf("[BudgetWarning] item=%s stage=work threshold=%.2f spent=%.2f", itemID, *thresholdUSD, totalCostUSD)
 }

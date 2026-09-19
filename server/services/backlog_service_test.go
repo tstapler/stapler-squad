@@ -88,6 +88,7 @@ type fakeHeadlessPool struct {
 type fakePoolCall struct {
 	key            headless.FeatureKey
 	workDir        string
+	model          string
 	userPrompt     string
 	systemPrompt   string
 	allowedTools   string
@@ -103,6 +104,7 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 	f.calls = append(f.calls, fakePoolCall{
 		key:            key,
 		workDir:        opts.WorkDir,
+		model:          opts.Model,
 		userPrompt:     userPrompt,
 		systemPrompt:   systemPrompt,
 		allowedTools:   opts.AllowedTools,
@@ -133,7 +135,7 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 	if onCall != nil {
 		onCall(opts.WorkDir)
 	}
-	sink(f.cost)
+	sink(f.cost, true)
 	return resp, f.err
 }
 
@@ -369,9 +371,13 @@ type mockCreateCall struct {
 	// production code performs on the instance after CreateDirectorySession/
 	// CreateWorktreeSession returns it.
 	inst *session.Instance
+	// programOverride captures the trailing programOverride argument (Epic 2.4) so
+	// tests can assert a work-stage executor override reached instance creation via
+	// this same call, rather than a later SwitchProgram/Restart-style call.
+	programOverride string
 }
 
-func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, path, prompt string, tags []string, oneShot bool, _ bool) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, path, prompt string, tags []string, oneShot bool, _ bool, programOverride string) (*session.Instance, error) {
 	_, contextErr := os.Stat(filepath.Join(path, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(path, ".claude", "commands", "backlog", "status.md"))
 	m.mu.Lock()
@@ -385,6 +391,7 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 			oneShot:                     oneShot,
 			contextFileExistedAtSpawn:   contextErr == nil,
 			slashCommandsExistedAtSpawn: slashErr == nil,
+			programOverride:             programOverride,
 		})
 		return nil, m.err
 	}
@@ -394,7 +401,11 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 	// UUID must be unique per call — SpawnSessionFromItem's ItemSession row is
 	// keyed on inst.UUID, so archival-tracking tests need distinct values per
 	// spawn to tell rounds apart (see mockSessionStopper.archivedUUIDs).
-	inst := &session.Instance{Title: title, Path: path, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
+	program := programOverride
+	if program == "" {
+		program = "claude"
+	}
+	inst := &session.Instance{Title: title, Path: path, Program: program, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
 	m.calls = append(m.calls, mockCreateCall{
 		title:                       title,
 		path:                        path,
@@ -404,13 +415,14 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 		contextFileExistedAtSpawn:   contextErr == nil,
 		slashCommandsExistedAtSpawn: slashErr == nil,
 		inst:                        inst,
+		programOverride:             programOverride,
 	})
 	return inst, nil
 }
 
 // CreateWorktreeSession records the call to the same calls slice as CreateDirectorySession,
 // using worktreePath as the session path (that's where files are written before spawn).
-func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, worktreePath, prompt string, tags []string, oneShot bool, _ bool) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, worktreePath, prompt string, tags []string, oneShot bool, _ bool, programOverride string) (*session.Instance, error) {
 	_, contextErr := os.Stat(filepath.Join(worktreePath, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(worktreePath, ".claude", "commands", "backlog", "status.md"))
 	m.mu.Lock()
@@ -424,10 +436,15 @@ func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, 
 			oneShot:                     oneShot,
 			contextFileExistedAtSpawn:   contextErr == nil,
 			slashCommandsExistedAtSpawn: slashErr == nil,
+			programOverride:             programOverride,
 		})
 		return nil, m.err
 	}
-	inst := &session.Instance{Title: title, Path: worktreePath, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
+	program := programOverride
+	if program == "" {
+		program = "claude"
+	}
+	inst := &session.Instance{Title: title, Path: worktreePath, Program: program, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
 	m.calls = append(m.calls, mockCreateCall{
 		title:                       title,
 		path:                        worktreePath,
@@ -437,6 +454,7 @@ func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, 
 		contextFileExistedAtSpawn:   contextErr == nil,
 		slashCommandsExistedAtSpawn: slashErr == nil,
 		inst:                        inst,
+		programOverride:             programOverride,
 	})
 	return inst, nil
 }
@@ -1037,6 +1055,84 @@ func TestBacklogItemToProto_should_PopulateAllowedTransitions_When_ItemIsOnCusto
 	require.NoError(t, err)
 	assert.Equal(t, []string{"design-approved"}, resp.Msg.Item.AllowedTransitions,
 		"a custom-stage item must see its real configured transitions, not an empty slice from a hardcoded DefaultWorkflowEngine")
+}
+
+// ─── checkWorkStageBudget ───────────────────────────────────────────────────
+
+// TestCheckWorkStageBudget_should_LogOnceThenDedupUntilDropAndRecross_When_ThresholdRepeatedlyCrossed
+// (Story 4.2.3, Task 4.2.3d) drives the full dedup state machine across a
+// sequence of polls against one *BacklogService instance: first crossing logs
+// once, a repeated poll while still over threshold doesn't re-log, and
+// dropping back under threshold then re-crossing warns again.
+func TestCheckWorkStageBudget_should_LogOnceThenDedupUntilDropAndRecross_When_ThresholdRepeatedlyCrossed(t *testing.T) {
+	buf := swapWarningLog(t)
+	svc := NewBacklogService(nil, nil, nil, nil, nil, nil)
+	threshold := 5.00
+
+	// First crossing: 5.20 >= 5.00 — logs once.
+	svc.checkWorkStageBudget("bl_abc123", &threshold, 5.20)
+	require.Equal(t, 1, strings.Count(buf.String(), "[BudgetWarning]"), "expected exactly one warning on first crossing")
+	assert.Contains(t, buf.String(), "item=bl_abc123 stage=work threshold=5.00 spent=5.20")
+
+	// Repeated poll, still over threshold: must not re-log.
+	svc.checkWorkStageBudget("bl_abc123", &threshold, 5.25)
+	require.Equal(t, 1, strings.Count(buf.String(), "[BudgetWarning]"), "expected no additional warning while still over threshold")
+
+	// Drops back under threshold: no new log, but the dedup entry clears.
+	svc.checkWorkStageBudget("bl_abc123", &threshold, 3.00)
+	require.Equal(t, 1, strings.Count(buf.String(), "[BudgetWarning]"), "dropping under threshold must not itself log")
+
+	// Re-crosses: must warn again.
+	svc.checkWorkStageBudget("bl_abc123", &threshold, 6.00)
+	require.Equal(t, 2, strings.Count(buf.String(), "[BudgetWarning]"), "expected a second warning after re-crossing")
+}
+
+// TestGetBacklogItem_should_EmitBudgetWarningLogLine_When_LiveCostCrossesThreshold
+// (Story 4.2.3, Task 4.2.3c) confirms GetBacklogItem's wiring, not just the
+// checkWorkStageBudget helper in isolation: an item with a work-stage session
+// whose cost brings TotalEstimatedCostUsd over its configured threshold logs
+// exactly once on the first read and does not re-log on an immediate second read.
+func TestGetBacklogItem_should_EmitBudgetWarningLogLine_When_LiveCostCrossesThreshold(t *testing.T) {
+	buf := swapWarningLog(t)
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	threshold := 5.00
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:                  "item with an over-budget live work session",
+		Status:                 string(session.BacklogStatusInProgress),
+		Priority:               3,
+		CostBudgetThresholdUsd: &threshold,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:           item.ID,
+		SessionUUID:      "work-session-over-budget",
+		SessionRole:      string(session.SessionRoleWork),
+		EstimatedCostUsd: 5.20,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(buf.String(), "[BudgetWarning]"))
+	assert.Contains(t, buf.String(), "item="+item.ID+" stage=work threshold=5.00 spent=5.20")
+
+	// Second read with cost unchanged: no additional warning.
+	_, err = svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(buf.String(), "[BudgetWarning]"), "expected no additional warning on repeated read while still over threshold")
+}
+
+// TestCheckWorkStageBudget_should_NeverLog_When_ThresholdIsNil covers an item
+// with no configured budget threshold: it must never log regardless of live cost.
+func TestCheckWorkStageBudget_should_NeverLog_When_ThresholdIsNil(t *testing.T) {
+	buf := swapWarningLog(t)
+	svc := NewBacklogService(nil, nil, nil, nil, nil, nil)
+
+	svc.checkWorkStageBudget("bl_no_threshold", nil, 1_000_000.00)
+	assert.Empty(t, buf.String(), "an item with no configured threshold must never log a budget warning")
 }
 
 // ─── backlogItemSummaryToProto ─────────────────────────────────────────────────
@@ -3166,6 +3262,76 @@ func TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession(t *testing.T) 
 		"TriggerReReview's success path must thread CallBlocking's cost into the persisted ItemSession")
 }
 
+// TestTriggerReReview_should_ResolveFamilyAliasToConcreteModelId_When_ReviewStageConfiguresFamilyOpus
+// (Story 2.3.3) proves TriggerReReview resolves the item's configured review
+// executor through PipelineEngine.ExecutorFor and, per the plan's own
+// canonical "family:opus" acceptance example, threads the resolved concrete
+// model ID into the headless.CallOptions passed to CallBlocking — while the
+// persisted ExecutorSnapshotHash is computed from the RAW "family:opus" alias,
+// not the resolved ID (ComputeExecutorHash's load-bearing invariant).
+func TestTriggerReReview_should_ResolveFamilyAliasToConcreteModelId_When_ReviewStageConfiguresFamilyOpus(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(t.Context(), session.PipelineModeCreateInput{
+		Slug:    "strong-review",
+		Name:    "Strong Review",
+		Enabled: true,
+		StageExecutors: map[session.StageRole]session.PipelineStageExecutor{
+			session.StageRoleReview: {Model: "family:opus"},
+		},
+	})
+	require.NoError(t, err)
+	engine, err := session.NewPipelineEngine(pmRepo)
+	require.NoError(t, err)
+	svc.pipelineEngine = engine
+
+	repoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "marker.txt"), []byte("x"), 0o644))
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:        "family-opus review item",
+		RepoPath:     repoDir,
+		PipelineMode: strPtr("strong-review"),
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	for _, target := range []session.BacklogStatus{session.BacklogStatusReady, session.BacklogStatusInProgress, session.BacklogStatusReview} {
+		_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+			ItemId:       itemID,
+			TargetStatus: string(target),
+		}))
+		require.NoError(t, err)
+	}
+
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"found it","tool_reads":["marker.txt"],"verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	require.Equal(t, 1, pool.callCount())
+	assert.Equal(t, "claude-opus-4-8", pool.firstCall().model,
+		"CallOptions.Model must be the family alias resolved to a concrete model ID")
+
+	sessions, listErr := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, listErr)
+	reviewSession := sessions[len(sessions)-1]
+	assert.Equal(t, "claude-opus-4-8", reviewSession.ResolvedModel)
+	assert.Equal(t, session.ComputeExecutorHash("", "family:opus"), reviewSession.ExecutorSnapshotHash,
+		"ExecutorSnapshotHash must hash the RAW unresolved alias, not the resolved concrete model ID")
+	assert.Empty(t, reviewSession.ConfiguredProgram, "no fallback occurred for the claude program")
+	assert.Empty(t, reviewSession.ExecutorFallbackReason)
+}
+
 // TestTriggerReReview_EmptyDiff_UsesShorterCodebaseReadTimeout verifies the empty-diff
 // re-review call runs under headless.CodebaseReadCallTimeout (600s), not the plain
 // headless.DefaultCallTimeout (900s).
@@ -3489,11 +3655,11 @@ func TestItemSessionToProto_HandlesInvalidTriageResultJSON(t *testing.T) {
 // errSessionCreator always returns an error from CreateDirectorySession and CreateWorktreeSession.
 type errSessionCreator struct{ err error }
 
-func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _, _, _ string, _ []string, _ bool, _ bool) (*session.Instance, error) {
+func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _, _, _ string, _ []string, _ bool, _ bool, _ string) (*session.Instance, error) {
 	return nil, e.err
 }
 
-func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _, _, _ string, _ []string, _ bool, _ bool) (*session.Instance, error) {
+func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _, _, _ string, _ []string, _ bool, _ bool, _ string) (*session.Instance, error) {
 	return nil, e.err
 }
 
@@ -4945,4 +5111,93 @@ func TestUpdateItemSource_ReturnsErrorForUnknownSourceId(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+}
+
+// ─── resolveHeadlessCaller (Story 2.3.1) ───────────────────────────────────
+
+// fakeAvailabilityCaller is a headless.PoolClient stub that also implements
+// availabilityChecker, for exercising resolveHeadlessCaller's call-time
+// re-probe branch independently of the real GeminiCaller.
+type fakeAvailabilityCaller struct {
+	available bool
+}
+
+func (f *fakeAvailabilityCaller) CallBlocking(_ context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions, _ headless.CostSink) (string, error) {
+	return "", nil
+}
+
+func (f *fakeAvailabilityCaller) Available() bool {
+	return f.available
+}
+
+func TestResolveHeadlessCaller_should_ReturnClaudePool_When_ProgramIsEmptyOrClaude(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	claudePool := &fakeHeadlessPool{}
+	svc.SetHeadlessPool(claudePool)
+
+	for _, program := range []string{"", "claude"} {
+		caller, configuredProgram, fallbackReason := svc.resolveHeadlessCaller(program, "item-1", "triage")
+		assert.Same(t, headless.PoolClient(claudePool), caller, "program %q must resolve to the claude pool directly, no map lookup", program)
+		assert.Empty(t, configuredProgram)
+		assert.Empty(t, fallbackReason)
+	}
+}
+
+func TestResolveHeadlessCaller_should_ReturnRegisteredCaller_When_ProgramIsKnownAndAvailable(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	claudePool := &fakeHeadlessPool{}
+	svc.SetHeadlessPool(claudePool)
+	gemini := &fakeAvailabilityCaller{available: true}
+	svc.headlessCallers["gemini"] = gemini
+
+	caller, configuredProgram, fallbackReason := svc.resolveHeadlessCaller("gemini", "item-1", "triage")
+	assert.Same(t, headless.PoolClient(gemini), caller)
+	assert.Empty(t, configuredProgram, "no fallback occurred, so configuredProgram must be empty")
+	assert.Empty(t, fallbackReason)
+}
+
+func TestResolveHeadlessCaller_should_FallBackToClaudeWithUnsupportedReason_When_ProgramIsUnknown(t *testing.T) {
+	// Deliberately not t.Parallel() — see captureLogs' doc comment: a parallel
+	// sibling logging during this window would write into this test's buffer.
+	buf := captureLogs(t)
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	claudePool := &fakeHeadlessPool{}
+	svc.SetHeadlessPool(claudePool)
+	// Gemini deliberately not wired — models the pre-Epic-3.1 state, or any
+	// other program name that was never registered.
+
+	caller, configuredProgram, fallbackReason := svc.resolveHeadlessCaller("gemini", "item-1", "triage")
+	assert.Same(t, headless.PoolClient(claudePool), caller)
+	assert.Equal(t, "gemini", configuredProgram)
+	assert.Equal(t, "unsupported_program", fallbackReason)
+	assert.Contains(t, buf.String(), "unsupported headless program")
+	assert.Contains(t, buf.String(), "program=gemini")
+}
+
+// TestResolveHeadlessCaller_should_FallBackToClaudeWithFallbackReason_When_ProgramAvailableAtWireTimeButGoneAtCallTime
+// models Story 2.3.1's Blocker-#3 fix: a program registered at server-startup
+// wiring time can still be gone (uninstalled) by the time a later call
+// actually resolves it, so availability must be re-checked at call time, not
+// only trusted from the map lookup succeeding.
+func TestResolveHeadlessCaller_should_FallBackToClaudeWithFallbackReason_When_ProgramAvailableAtWireTimeButGoneAtCallTime(t *testing.T) {
+	// Deliberately not t.Parallel() — see captureLogs' doc comment: a parallel
+	// sibling logging during this window would write into this test's buffer.
+	buf := captureLogs(t)
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	claudePool := &fakeHeadlessPool{}
+	svc.SetHeadlessPool(claudePool)
+	gemini := &fakeAvailabilityCaller{available: false}
+	svc.headlessCallers["gemini"] = gemini
+
+	caller, configuredProgram, fallbackReason := svc.resolveHeadlessCaller("gemini", "item-1", "triage")
+	assert.Same(t, headless.PoolClient(claudePool), caller)
+	assert.Equal(t, "gemini", configuredProgram)
+	assert.Equal(t, "gemini_unavailable", fallbackReason, "distinct from the unknown-program case's unsupported_program reason")
+	assert.Contains(t, buf.String(), "headless program unavailable")
 }

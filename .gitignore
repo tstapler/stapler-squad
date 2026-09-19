@@ -1,6 +1,8 @@
 .idea
 .aider*
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/*.lock
 stapler-squad
 stapler-squad.prev
 stapler-squad-otel

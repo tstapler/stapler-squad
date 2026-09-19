@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { CollapsibleSection, CollapsibleGroup } from "@/components/ui/Collapsible";
 import { classifySessionKind, isSteerable, type SessionKind } from "@/lib/backlog/sessionKind";
-import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
+import { resolvePipelineModeDisplay, resolveExecutorProvenance } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
 import { useShowMore } from "@/lib/hooks/useShowMore";
 import { getErrorMessage } from "@/lib/utils/connectError";
@@ -262,6 +262,13 @@ export function SessionsSection({
               // it ended.
               const isOrphan = !s.endedAt && s.role !== statusToRole[item.status];
               const pipelineDisplay = resolvePipelineModeDisplay(s, pipelineModes);
+              // Story 5.2.4: the currently-fetched mode this session's frozen
+              // snapshot resolves to (or undefined for the default mode / an
+              // unrecognized slug) — resolveExecutorProvenance only computes
+              // drift when a live mode match exists, mirroring
+              // resolvePipelineModeDisplay's own precedent.
+              const matchedMode = pipelineModes.find((m) => m.slug === (s.pipelineModeSnapshot ?? ""));
+              const provenance = resolveExecutorProvenance(s, matchedMode);
               const kind = classifySessionKind(s);
               const isSynthetic = kind !== "work" && kind !== "review";
               // A Jules cloud session has no PTY/tmux Instance behind it --
@@ -458,6 +465,28 @@ export function SessionsSection({
                           </>
                         )}
                       </>
+                    )}
+                    {/* Story 5.2.4: fallback and drift are independent facts,
+                        computed independently by resolveExecutorProvenance,
+                        and rendered independently here — both can appear at
+                        once, neither suppresses the other. */}
+                    {provenance.fallback && (
+                      <span
+                        className={styles.executorFallbackBadge}
+                        aria-label={`Fell back to Claude: ${provenance.fallback.reason}`}
+                      >
+                        {" "}
+                        <span aria-hidden="true">↩</span> Ran on different program
+                      </span>
+                    )}
+                    {provenance.drifted && (
+                      <span
+                        className={styles.executorDriftBadge}
+                        aria-label="Executor config changed since this session ran"
+                      >
+                        {" "}
+                        <span aria-hidden="true">⚙</span> (executor config since changed)
+                      </span>
                     )}
                   </div>
                   {!isSynthetic && (s.commitCountSinceSpawn ?? 0) > 0 && (

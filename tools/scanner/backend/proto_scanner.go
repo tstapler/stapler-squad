@@ -201,6 +201,10 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ImportGitHubIssue": "ImportGitHubIssue",
 	// Launcher presets RPCs
 	"GetLauncherPresets": "launcher_presets:get",
+	// Program config RPCs
+	"ListProgramsConfig":  "program_config:list",
+	"UpsertProgramConfig": "program_config:upsert",
+	"DeleteProgramConfig": "program_config:delete",
 	// Session lifecycle RPCs
 	"ArchiveSession":          "session:archive",
 	"UnarchiveSession":        "session:unarchive",

@@ -54,6 +54,10 @@ const ModelOverTimeChart = dynamic(
   () => import("./ModelOverTimeChart").then((m) => m.ModelOverTimeChart),
   { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
 );
+const StageCostChart = dynamic(
+  () => import("./StageCostChart").then((m) => m.StageCostChart),
+  { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
+);
 
 function friendlyError(err: string): string {
   if (err.toLowerCase().includes("unauthenticated") || err.includes("code: 16")) {
@@ -107,6 +111,16 @@ function InsightsDashboardInner() {
     threshold > 0 &&
     projection !== null &&
     projection.projectedMonthly > threshold;
+
+  // Bar-click cross-filter (Task 5.2.2b) — lifted here so both StageCostChart
+  // and SessionsTable share it. Clicking the already-active role's bar again
+  // clears the filter (ux.md's "clicking the same bar again... returns to
+  // unfiltered view").
+  const [roleFilter, setRoleFilter] = useState<string | undefined>(undefined);
+  const handleRoleClick = useCallback((role: string) => {
+    setRoleFilter((prev) => (prev === role ? undefined : role));
+  }, []);
+  const clearRoleFilter = useCallback(() => setRoleFilter(undefined), []);
 
   const [selectedSession, setSelectedSession] = useState<SessionTokenSummary | null>(null);
   // Stable identity — SessionDetailDrawer's keydown-handling effect has this
@@ -208,6 +222,11 @@ function InsightsDashboardInner() {
             <div className={grid2}>
               <DailySpendChart daily={summary.daily} />
               <ModelBreakdownChart models={summary.models} />
+              <StageCostChart
+                roles={summary.roleBreakdown}
+                activeRole={roleFilter}
+                onRoleClick={handleRoleClick}
+              />
             </div>
           </section>
 
@@ -265,6 +284,8 @@ function InsightsDashboardInner() {
               sessions={summary.sessions}
               onSessionClick={(s) => setSelectedSession(s)}
               backlogIndex={backlogIndex}
+              roleFilter={roleFilter}
+              onClearRoleFilter={clearRoleFilter}
             />
           </section>
         </>

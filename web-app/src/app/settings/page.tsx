@@ -8,6 +8,7 @@ import { GlobalDefaultsForm } from "@/components/settings/GlobalDefaultsForm";
 import { ProfilesManager } from "@/components/settings/ProfilesManager";
 import { DirectoryRulesManager } from "@/components/settings/DirectoryRulesManager";
 import { AliasesManager } from "@/components/settings/AliasesManager";
+import { ProgramsManager } from "@/components/settings/ProgramsManager";
 import { PushNotificationSettings } from "@/components/settings/PushNotificationSettings";
 import { SlackNotificationSettings } from "@/components/settings/SlackNotificationSettings";
 import { ThemePicker } from "@/components/settings/ThemePicker";
@@ -78,6 +79,9 @@ function SettingsPageInner() {
             </section>
             <section className={styles.section}>
               <AliasesManager />
+            </section>
+            <section className={styles.section}>
+              <ProgramsManager />
             </section>
             {flags["backlog"] && (
               <section className={styles.section}>

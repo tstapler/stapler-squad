@@ -65,6 +65,11 @@ import { ActivityLogSection } from "./detail/ActivityLogSection";
 import { NotesSection } from "./detail/NotesSection";
 import { ManualOverrideSection } from "./detail/ManualOverrideSection";
 import { GateBlockingSection } from "./GateBlockingSection";
+import { ItemBudgetWarning } from "@/app/insights/ItemBudgetWarning";
+import { ItemStageCostTable, type ItemStageCostRow } from "@/app/insights/ItemStageCostTable";
+import { errorState as itemStageCostErrorState } from "@/app/insights/ItemStageCostTable.css";
+import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
+import { Skeleton } from "@/components/ui/Skeleton";
 import * as styles from "./BacklogItemDetail.css";
 
 interface BacklogItemDetailProps {
@@ -277,6 +282,28 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const configuredPipelineModeName = item?.pipelineMode
     ? (pipelineModes.find((m) => m.slug === item.pipelineMode)?.name ?? item.pipelineMode)
     : undefined;
+
+  // Story 5.2.3: this item's cost broken down by stage, sourced from
+  // GetInsightsSummaryResponse.role_breakdown[].items filtered to item.id —
+  // no new RPC (per plan.md), reusing the same Insights fetch the
+  // dashboard's own StageCostChart consumes. This is BacklogItemDetail.tsx's
+  // first Insights-summary fetch (ux.md Surface I), so its own
+  // loading/error states are handled explicitly below rather than assumed
+  // to piggyback on an existing fetch.
+  const { summary: insightsSummary, loading: insightsLoading, error: insightsError } = useInsightsSummary();
+  const itemStageCostRows: ItemStageCostRow[] = (insightsSummary?.roleBreakdown ?? [])
+    .map((bucket) => {
+      const entry = bucket.items.find((i) => i.itemId === item?.id);
+      return entry
+        ? {
+            role: bucket.sessionRole,
+            costUsd: entry.estimatedCostUsd,
+            sessionCount: entry.sessionCount,
+            unpricedSessionCount: entry.unpricedSessionCount,
+          }
+        : null;
+    })
+    .filter((row): row is ItemStageCostRow => row !== null);
 
   // Epic 5.3 (Story 5.3.1, backlog-event-driven-updates): live updates
   // replace the old 5s poll entirely. Subscribed unfiltered (no status/
@@ -1509,6 +1536,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           otherStuckReasons={stuckSummary?.otherReasons}
           onTriggerRemediationNow={triggerRemediationNow}
         />
+        {/* Epic 5.3 (D2): per-item soft-budget warning — renders null until
+            costBudgetThresholdUsd is configured and crossed. Pinned here
+            alongside LifecycleSummary so it stays visible while scrolling,
+            same rationale as the edit-mode bannerBar above. */}
+        <ItemBudgetWarning
+          thresholdUsd={item.costBudgetThresholdUsd}
+          totalCostUsd={item.totalEstimatedCostUsd}
+        />
       </div>
 
       <div className={styles.scrollArea}>
@@ -1797,6 +1832,23 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           />
 
           <AutonomousHealthStrip item={item} />
+
+          {/* Story 5.2.3: per-item cost-by-stage table. Placed alongside
+              ItemBudgetWarning above (both are per-item cost surfaces on this
+              view) — three states per ux.md Surface I: loading (Skeleton,
+              sized to the table's row height), error (distinct from "no
+              data" so a failed fetch never reads as "this item has no
+              sessions yet"), and the legitimate empty case (table omitted
+              entirely, handled inside ItemStageCostTable itself). */}
+          {insightsLoading && !insightsSummary ? (
+            <Skeleton variant="rectangular" width="100%" height={96} />
+          ) : insightsError ? (
+            <div className={itemStageCostErrorState} data-testid="item-stage-cost-error">
+              Couldn&apos;t load cost data.
+            </div>
+          ) : (
+            <ItemStageCostTable rows={itemStageCostRows} />
+          )}
 
           <SessionsSection
             item={item}

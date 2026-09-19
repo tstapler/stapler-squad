@@ -470,6 +470,16 @@ func (c *BrowserPassthroughConfig) IsEnabled() bool {
 	return *c.Enabled
 }
 
+// ProgramConfig defines a user-configured executable program.
+type ProgramConfig struct {
+	ID          string            `json:"id"`
+	Label       string            `json:"label"`
+	Command     string            `json:"command"`
+	CLIFlags    string            `json:"cli_flags,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+}
+
 // SessionDefaults is the top-level container for all session default configuration.
 type SessionDefaults struct {
 	// Program is the default AI program (e.g., "claude", "aider").
@@ -488,6 +498,8 @@ type SessionDefaults struct {
 	DirectoryRules []DirectoryRule `json:"directory_rules,omitempty"`
 	// Aliases are named session presets invoked via @name in the omnibar.
 	Aliases []AliasConfig `json:"aliases,omitempty"`
+	// Programs holds custom program definitions.
+	Programs []ProgramConfig `json:"programs,omitempty"`
 }
 
 // ProfileDefaults holds the configurable fields for a named profile.
