@@ -1340,6 +1340,68 @@ type remoteAccessResult struct {
 	Networks  map[string][]string
 }
 
+// remoteAuthSetup carries the auth-subsystem collaborators initRemoteAuth
+// builds that startRemoteAccess still needs afterward: configDir (for the
+// host-advertisement identity load that follows), store/setupMgr (for the
+// bootstrap QR-code check), and sessions/waHandler (for the auth middleware
+// and remoteAccessResult respectively).
+type remoteAuthSetup struct {
+	ConfigDir string
+	Store     *serverauth.CredentialStore
+	Sessions  *serverauth.SessionManager
+	WAHandler *serverauth.Handler
+	SetupMgr  *serverauth.SetupManager
+}
+
+// initRemoteAuth brings up the WebAuthn credential store, session manager,
+// setup-token watcher, and route registration for the remote HTTPS server.
+// Extracted out of startRemoteAccess to keep that function under the funlen
+// gate -- this block is a self-contained "auth subsystem bring-up" unit with
+// no branching into the surrounding TLS/hostname-detection logic, so it can
+// be named and tested independently.
+func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins []string, hostnameValidator func(string) bool, caFile, displayHost string, remotePort int) (*remoteAuthSetup, error) {
+	store, err := serverauth.NewCredentialStore()
+	if err != nil {
+		return nil, fmt.Errorf("create credential store: %w", err)
+	}
+
+	// Persist auth sessions so the phone stays logged in across server restarts.
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("get config dir: %w", err)
+	}
+	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
+	sessions := serverauth.NewSessionManager(sessionsPath)
+
+	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions, hostnameValidator)
+	if err != nil {
+		return nil, fmt.Errorf("create webauthn handler: %w", err)
+	}
+
+	setupMgr := serverauth.NewSetupManager()
+	inviteMgr := serverauth.NewInviteManager()
+
+	// Ensure the auth subdirectory exists so WatchFile can watch a quiet directory
+	// instead of the busy root state dir (eliminates spurious fsnotify wakeups).
+	authDir := filepath.Join(configDir, serverauth.SetupTokenDir)
+	if err := os.MkdirAll(authDir, 0700); err != nil {
+		log.Warn("failed to create auth dir", "path", authDir, "err", err)
+	}
+	setupTokenPath := filepath.Join(authDir, serverauth.SetupTokenFile)
+	go setupMgr.WatchFile(ctx, setupTokenPath)
+
+	// Register auth routes on the shared mux (accessible via both servers).
+	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort)
+
+	return &remoteAuthSetup{
+		ConfigDir: configDir,
+		Store:     store,
+		Sessions:  sessions,
+		WAHandler: waHandler,
+		SetupMgr:  setupMgr,
+	}, nil
+}
+
 // startRemoteAccess starts a second HTTPS server on all interfaces with passkey
 // authentication, while the local server on localhost stays unchanged.
 func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int) (*remoteAccessResult, error) {
@@ -1442,39 +1504,11 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 
 	srv.SetOrigins(append(srv.GetOrigins(), origins...))
 
-	// Initialise auth subsystem.
-	store, err := serverauth.NewCredentialStore()
+	auth, err := initRemoteAuth(ctx, srv, allRPIDs, origins, hostnameValidator, caFile, displayHost, remotePort)
 	if err != nil {
-		return nil, fmt.Errorf("create credential store: %w", err)
+		return nil, err
 	}
-
-	// Persist auth sessions so the phone stays logged in across server restarts.
-	configDir, err := config.GetConfigDir()
-	if err != nil {
-		return nil, fmt.Errorf("get config dir: %w", err)
-	}
-	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
-	sessions := serverauth.NewSessionManager(sessionsPath)
-
-	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions, hostnameValidator)
-	if err != nil {
-		return nil, fmt.Errorf("create webauthn handler: %w", err)
-	}
-
-	setupMgr := serverauth.NewSetupManager()
-	inviteMgr := serverauth.NewInviteManager()
-
-	// Ensure the auth subdirectory exists so WatchFile can watch a quiet directory
-	// instead of the busy root state dir (eliminates spurious fsnotify wakeups).
-	authDir := filepath.Join(configDir, serverauth.SetupTokenDir)
-	if err := os.MkdirAll(authDir, 0700); err != nil {
-		log.Warn("failed to create auth dir", "path", authDir, "err", err)
-	}
-	setupTokenPath := filepath.Join(authDir, serverauth.SetupTokenFile)
-	go setupMgr.WatchFile(ctx, setupTokenPath)
-
-	// Register auth routes on the shared mux (accessible via both servers).
-	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort)
+	configDir, store, sessions, waHandler, setupMgr := auth.ConfigDir, auth.Store, auth.Sessions, auth.WAHandler, auth.SetupMgr
 
 	// Register the gossip-style host advertisement endpoint (ADR-002) on the
 	// same shared mux/remote server -- see host_advertisement.go's doc
