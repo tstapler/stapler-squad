@@ -347,7 +347,7 @@ func Test_superviseTymuxd_should_DecideRegisterStopAndError_When_GivenEachCombin
 // without needing to fake net.LookupHost/forwardLookupViaKnownNameservers --
 // no real DNS answer for it can ever coincide with listNonLoopbackIPs().
 func TestVerifyHostnameOwnership_RejectsNonMatchingIP(t *testing.T) {
-	if got := verifyHostnameOwnership("invalid.invalid"); got {
+	if got := verifyHostnameOwnership(context.Background(), "invalid.invalid"); got {
 		t.Errorf("verifyHostnameOwnership(%q) = true, want false (reserved non-resolving hostname)", "invalid.invalid")
 	}
 }

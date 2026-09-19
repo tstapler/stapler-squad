@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -61,7 +62,7 @@ func newTestDetector(detectFn func(context.Context) []string, resolveFn func(con
 		events:       events,
 		manual:       make(chan chan redetectCycle),
 		done:         make(chan struct{}),
-		validateFn:   func(string) bool { return true },
+		validateFn:   func(context.Context, string) bool { return true },
 	}
 }
 
@@ -191,7 +192,7 @@ func TestHostnameDetector_Redetect_AddOnlyMergesNetworks(t *testing.T) {
 	if !reflect.DeepEqual(d.networks["10.0.0.5"], []string{"host.example.local"}) {
 		t.Fatalf("cycle 0: networks[10.0.0.5] = %v", d.networks["10.0.0.5"])
 	}
-	if hn := srv.GetHostnames(); !containsString(hn, "host.example.local") {
+	if hn := srv.GetHostnames(); !slices.Contains(hn, "host.example.local") {
 		t.Fatalf("cycle 0: SetHostnames should include host.example.local, got %v", hn)
 	}
 	if cycle0.PrevCount != 0 {
@@ -236,7 +237,7 @@ func TestHostnameDetector_Redetect_AddOnlyMergesNetworks(t *testing.T) {
 	if !reflect.DeepEqual(d.networks["10.0.0.9"], []string{"other.example.local"}) {
 		t.Fatalf("cycle 2: networks[10.0.0.9] = %v, want [other.example.local] (transient failure should not permanently exclude the IP)", d.networks["10.0.0.9"])
 	}
-	if hn := srv.GetHostnames(); !containsString(hn, "other.example.local") {
+	if hn := srv.GetHostnames(); !slices.Contains(hn, "other.example.local") {
 		t.Fatalf("cycle 2: SetHostnames should include other.example.local, got %v", hn)
 	}
 }
@@ -313,7 +314,7 @@ func hostnameHasRPID(h *serverauth.Handler, hostname string) bool {
 // hostname in any network's SANs.
 func certStoreHasSAN(certStore *server.NetworkCertStore, hostname string) bool {
 	for _, cert := range certStore.Load() {
-		if containsString(cert.SANs, hostname) {
+		if slices.Contains(cert.SANs, hostname) {
 			return true
 		}
 	}
@@ -331,7 +332,7 @@ type gateTestDetectorConfig struct {
 	waHandler     *serverauth.Handler
 	certStore     *server.NetworkCertStore
 	certPublisher func(map[string][]string) (string, map[string]*server.NetworkCert, error)
-	validateFn    func(string) bool
+	validateFn    func(context.Context, string) bool
 }
 
 func newGateTestDetector(cfg gateTestDetectorConfig) *HostnameDetector {
@@ -371,18 +372,18 @@ func TestHostnameDetector_Redetect_UnverifiedHostnameNeverReachesRPIDOrTLS(t *te
 		waHandler:     h,
 		certStore:     certStore,
 		certPublisher: server.EnsureNetworkTLSCerts,
-		validateFn:    func(string) bool { return false },
+		validateFn:    func(context.Context, string) bool { return false },
 	})
 
 	cycleResult := d.redetect(context.Background(), TriggerStartup)
 
-	if containsString(cycleResult.Added, spoofed) {
+	if slices.Contains(cycleResult.Added, spoofed) {
 		t.Fatalf("unverified hostname %q must not appear in redetectCycle.Added, got %v", spoofed, cycleResult.Added)
 	}
-	if containsString(d.networks["10.0.0.5"], spoofed) {
+	if slices.Contains(d.networks["10.0.0.5"], spoofed) {
 		t.Fatalf("unverified hostname %q must not be merged into d.networks, got %v", spoofed, d.networks["10.0.0.5"])
 	}
-	if hn := srv.GetHostnames(); !containsString(hn, spoofed) {
+	if hn := srv.GetHostnames(); !slices.Contains(hn, spoofed) {
 		t.Fatalf("unverified hostname %q should still reach Server.hostnames as bookkeeping, got %v", spoofed, hn)
 	}
 	if hostnameHasRPID(h, spoofed) {
@@ -411,15 +412,15 @@ func TestHostnameDetector_Redetect_VerifiedHostnameReachesRPIDAndTLS(t *testing.
 		waHandler:     h,
 		certStore:     certStore,
 		certPublisher: server.EnsureNetworkTLSCerts,
-		validateFn:    func(string) bool { return true },
+		validateFn:    func(context.Context, string) bool { return true },
 	})
 
 	cycleResult := d.redetect(context.Background(), TriggerStartup)
 
-	if !containsString(cycleResult.Added, verified) {
+	if !slices.Contains(cycleResult.Added, verified) {
 		t.Fatalf("verified hostname %q should appear in redetectCycle.Added, got %v", verified, cycleResult.Added)
 	}
-	if !containsString(d.networks["10.0.0.9"], verified) {
+	if !slices.Contains(d.networks["10.0.0.9"], verified) {
 		t.Fatalf("verified hostname %q should be merged into d.networks, got %v", verified, d.networks["10.0.0.9"])
 	}
 	if !hostnameHasRPID(h, verified) {
@@ -442,18 +443,18 @@ func TestHostnameDetector_Redetect_NilHandlerAndCertStoreDoNotPanic(t *testing.T
 		srv:        srv,
 		detectFn:   func(context.Context) []string { return []string{"10.0.0.9"} },
 		resolveFn:  func(context.Context, string) []string { return []string{verified} },
-		validateFn: func(string) bool { return true },
+		validateFn: func(context.Context, string) bool { return true },
 	})
 
 	cycleResult := d.redetect(context.Background(), TriggerStartup) // must not panic
 
-	if !containsString(cycleResult.Added, verified) {
+	if !slices.Contains(cycleResult.Added, verified) {
 		t.Fatalf("expected %q in redetectCycle.Added even with nil Handler/CertStore, got %v", verified, cycleResult.Added)
 	}
-	if !containsString(d.networks["10.0.0.9"], verified) {
+	if !slices.Contains(d.networks["10.0.0.9"], verified) {
 		t.Fatalf("expected %q merged into d.networks even with nil Handler/CertStore, got %v", verified, d.networks["10.0.0.9"])
 	}
-	if hn := srv.GetHostnames(); !containsString(hn, verified) {
+	if hn := srv.GetHostnames(); !slices.Contains(hn, verified) {
 		t.Fatalf("expected Server.hostnames to include %q, got %v", verified, hn)
 	}
 }
@@ -482,12 +483,12 @@ func TestHostnameDetector_Redetect_CertIssuanceFailureDoesNotRollbackRPID(t *tes
 		waHandler:     h,
 		certStore:     certStore,
 		certPublisher: failingPublisher,
-		validateFn:    func(string) bool { return true },
+		validateFn:    func(context.Context, string) bool { return true },
 	})
 
 	cycleResult := d.redetect(context.Background(), TriggerStartup)
 
-	if !containsString(cycleResult.Added, verified) {
+	if !slices.Contains(cycleResult.Added, verified) {
 		t.Fatalf("expected %q in redetectCycle.Added even though cert issuance failed afterward, got %v", verified, cycleResult.Added)
 	}
 	if !hostnameHasRPID(h, verified) {
@@ -525,7 +526,7 @@ func TestHostnameDetector_Redetect_RepeatedNoOpCyclesAreStable(t *testing.T) {
 		waHandler:     h,
 		certStore:     certStore,
 		certPublisher: countingPublisher,
-		validateFn:    func(string) bool { return true },
+		validateFn:    func(context.Context, string) bool { return true },
 	})
 
 	first := d.redetect(context.Background(), TriggerStartup)

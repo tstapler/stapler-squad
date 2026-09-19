@@ -40,6 +40,7 @@ type SessionManager struct {
 	authSessions map[string]*authSession // token → auth session
 	sessionsPath string                  // file path for persistence; empty = in-memory only
 	stopCleanup  chan struct{}           // closed by Close to stop the cleanup goroutine
+	closeOnce    sync.Once
 }
 
 type ceremony struct {
@@ -254,13 +255,15 @@ func (sm *SessionManager) removeExpired() {
 	sm.saveToDisk()
 }
 
-// Close stops the background cleanup goroutine. Safe to call at most once;
-// production callers hold a SessionManager for the process lifetime and
-// never call this, but tests that construct many short-lived SessionManagers
-// in the same binary need it to avoid leaking one ticker-driven goroutine per
-// instance (caught by goleak in a sibling package's tests).
+// Close stops the background cleanup goroutine. Safe to call more than once
+// or concurrently -- guarded by closeOnce so a second call is a no-op instead
+// of a double-close panic. Production callers hold a SessionManager for the
+// process lifetime and never call this, but tests that construct many
+// short-lived SessionManagers in the same binary need it to avoid leaking one
+// ticker-driven goroutine per instance (caught by goleak in a sibling
+// package's tests).
 func (sm *SessionManager) Close() {
-	close(sm.stopCleanup)
+	sm.closeOnce.Do(func() { close(sm.stopCleanup) })
 }
 
 func randomHex(n int) (string, error) {

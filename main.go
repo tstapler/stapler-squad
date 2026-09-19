@@ -29,7 +29,6 @@ import (
 	"github.com/tstapler/stapler-squad/telemetry"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -500,7 +499,8 @@ var (
 					Events:          netChangeEvents,
 					WAHandler:       waHandler,
 					CertStore:       certStore,
-					ValidateFn:      verifyHostnameOwnership,
+					// ValidateFn left nil: NewHostnameDetector defaults it to
+					// verifyHostnameOwnership unconditionally.
 				})
 
 				// STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE is a Risk Control
@@ -518,7 +518,7 @@ var (
 					})
 				}
 
-				registerRedetectHostnamesEndpoint(srv.Mux(), detector, redetectDisabled)
+				registerRedetectHostnamesEndpoint(srv.Mux(), detector, redetectDisabled, defaultRedetectHostnamesManualTimeout)
 
 				return nil
 			})
@@ -993,98 +993,6 @@ func superviseTymuxd(ctx context.Context, cfg tymux.DaemonConfig, strictStartup,
 	return nil
 }
 
-// setupNetworkChangeEvents constructs the OS-level network-change source
-// (Epic 3.1) and wires it into a coalescing events channel suitable for
-// HostnameDetectorConfig.Events. newSource is injected (rather than calling
-// newTailscaleNetmonSource directly) so tests can substitute a fake or a
-// forced error without touching the real netmon/eventbus machinery.
-//
-// A construction error is logged and degraded to timer-only (Task 3.1.2b):
-// the returned events channel is still valid, just never written to, so
-// HostnameDetector.Run keeps working off its timer/manual triggers alone --
-// this must never fail process startup, since the periodic timer alone
-// already satisfies the feature's core requirement.
-func setupNetworkChangeEvents(newSource func() (NetworkChangeSource, error)) (events chan struct{}, cleanup func()) {
-	events = make(chan struct{}, 1)
-
-	src, err := newSource()
-	if err != nil {
-		log.Warn("hostname-detect: network-change monitor unavailable, falling back to timer-only redetection", "err", err)
-		return events, func() {}
-	}
-
-	unregister := src.RegisterChangeCallback(func() {
-		// Non-blocking send: coalesces further at the channel level in
-		// case netmon's own debounce window still bursts, and never
-		// blocks the monitor's own callback goroutine.
-		select {
-		case events <- struct{}{}:
-		default:
-		}
-	})
-
-	return events, func() {
-		unregister()
-		if closeErr := src.Close(); closeErr != nil {
-			log.Warn("hostname-detect: failed to close network-change monitor", "err", closeErr)
-		}
-	}
-}
-
-// redetectHostnamesManualTimeout bounds both the send and the receive halves
-// of a manual-trigger round trip (plan.md Task 4.2.2a / pre-mortem.md #3):
-// guarding only the send and not the subsequent receive would still leave the
-// handler able to hang indefinitely if Run were mid-cycle or stuck. A var
-// (not a const) so tests can shrink it instead of waiting out the real 10s.
-var redetectHostnamesManualTimeout = 10 * time.Second
-
-// registerRedetectHostnamesEndpoint registers a loopback-only
-// POST /api/debug/redetect-hostnames handler that forces one HostnameDetector
-// cycle and returns its redetectCycle summary as JSON (plan.md Story 4.2.2).
-// It never calls detector.redetect directly from the handler goroutine --
-// that would race Run's own goroutine over the unsynchronized
-// HostnameDetector.networks map -- and instead round-trips through
-// detector.manual, the same channel Run's select loop already drains.
-// disabled mirrors the STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE check that
-// decided whether Run's goroutine was started at all: when true, nothing is
-// listening on detector.manual, so the handler must fail fast (503) instead
-// of blocking on a send nobody will ever receive.
-func registerRedetectHostnamesEndpoint(mux *http.ServeMux, detector *HostnameDetector, disabled bool) {
-	mux.HandleFunc("POST /api/debug/redetect-hostnames", func(w http.ResponseWriter, r *http.Request) {
-		if !serverauth.IsLocalhostRequest(r) {
-			http.Error(w, "forbidden: loopback only", http.StatusForbidden)
-			return
-		}
-		if disabled {
-			http.Error(w, "hostname redetection is disabled via STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE", http.StatusServiceUnavailable)
-			return
-		}
-
-		respCh := make(chan redetectCycle, 1)
-		select {
-		case detector.manual <- respCh:
-		case <-r.Context().Done():
-			http.Error(w, "request cancelled", http.StatusGatewayTimeout)
-			return
-		case <-time.After(redetectHostnamesManualTimeout):
-			http.Error(w, "timed out sending manual redetect request", http.StatusGatewayTimeout)
-			return
-		}
-
-		select {
-		case cycle := <-respCh:
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(cycle); err != nil {
-				log.Warn("hostname-detect: failed to encode manual redetect response", "err", err)
-			}
-		case <-r.Context().Done():
-			http.Error(w, "request cancelled", http.StatusGatewayTimeout)
-		case <-time.After(redetectHostnamesManualTimeout):
-			http.Error(w, "timed out waiting for redetect cycle result", http.StatusGatewayTimeout)
-		}
-	})
-}
-
 // extraOriginPattern matches an exact http(s)://localhost:<port> or
 // http(s)://127.0.0.1:<port> origin — no path, query, wildcard, or other host.
 var extraOriginPattern = regexp.MustCompile(`^https?://(localhost|127\.0\.0\.1):\d+$`)
@@ -1433,13 +1341,18 @@ func detectLANIPs(_ context.Context) []string {
 // coming up when launchd started this process). Accept it as a new rpID only
 // if it forward-resolves to an IP this machine actually owns, so a request
 // can't claim an arbitrary hostname as its RPID.
-func verifyHostnameOwnership(hostname string) bool {
-	resolvedIPs, _ := net.LookupHost(hostname)
+// ctx bounds the underlying DNS lookups -- HostnameDetector passes its
+// per-cycle cycleCtx so a hung resolver can't stall redetect past
+// cycleTimeout (see hostname_detector.go's redetect/cycleCtx doc comments);
+// startRemoteAccess's one-shot boot-time call uses context.Background() via
+// a thin adapter below since it isn't part of a bounded cycle loop.
+func verifyHostnameOwnership(ctx context.Context, hostname string) bool {
+	resolvedIPs, _ := net.DefaultResolver.LookupHost(ctx, hostname)
 	// The OS's default resolver order can shadow a LAN-only search domain
 	// with an unscoped VPN resolver (see forwardLookupViaKnownNameservers)
 	// -- always also check every nameserver scutil knows about directly
 	// rather than only falling back to it when net.LookupHost errors.
-	resolvedIPs = append(resolvedIPs, forwardLookupViaKnownNameservers(context.Background(), hostname)...)
+	resolvedIPs = append(resolvedIPs, forwardLookupViaKnownNameservers(ctx, hostname)...)
 	ownIPs := listNonLoopbackIPs()
 	for _, resolved := range resolvedIPs {
 		for _, own := range ownIPs {
@@ -1500,8 +1413,13 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	}
 
 	// startRemoteAccess's own hostnameValidator is just verifyHostnameOwnership
-	// -- no second implementation (see that function's doc comment).
-	hostnameValidator := verifyHostnameOwnership
+	// -- no second implementation (see that function's doc comment). This is
+	// a one-shot boot-time check, not part of a bounded per-cycle loop, so
+	// context.Background() is fine here (unlike HostnameDetector's ValidateFn,
+	// which must thread the cycle's own bounded context).
+	hostnameValidator := func(hostname string) bool {
+		return verifyHostnameOwnership(context.Background(), hostname)
+	}
 
 	// resolveLANHostnames' boot-time candidates (reverse DNS/PTR, avahi/mDNS,
 	// hostname -f, search-domain guesses) are never re-checked after this

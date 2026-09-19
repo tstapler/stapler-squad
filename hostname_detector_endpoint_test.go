@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,7 +59,7 @@ func TestRedetectHostnamesEndpoint_LoopbackRequestTriggersCycle(t *testing.T) {
 	waitForCalls(t, &calls, 1)
 
 	mux := http.NewServeMux()
-	registerRedetectHostnamesEndpoint(mux, d, false)
+	registerRedetectHostnamesEndpoint(mux, d, false, defaultRedetectHostnamesManualTimeout)
 
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, newLoopbackRequest())
@@ -73,7 +74,7 @@ func TestRedetectHostnamesEndpoint_LoopbackRequestTriggersCycle(t *testing.T) {
 	if cycle.Trigger != TriggerManual {
 		t.Fatalf("Trigger = %q, want %q", cycle.Trigger, TriggerManual)
 	}
-	if !containsString(cycle.Added, "manual.local") {
+	if !slices.Contains(cycle.Added, "manual.local") {
 		t.Fatalf("expected Added to include manual.local, got %v", cycle.Added)
 	}
 }
@@ -105,7 +106,7 @@ func TestRedetectHostnamesEndpoint_NonLoopbackRequestRejected(t *testing.T) {
 	)
 
 	mux := http.NewServeMux()
-	registerRedetectHostnamesEndpoint(mux, d, false)
+	registerRedetectHostnamesEndpoint(mux, d, false, defaultRedetectHostnamesManualTimeout)
 
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, newNonLoopbackRequest())
@@ -128,7 +129,7 @@ func TestRedetectHostnamesEndpoint_DisabledReturns503AndDoesNotSendOnManualChann
 	)
 
 	mux := http.NewServeMux()
-	registerRedetectHostnamesEndpoint(mux, d, true)
+	registerRedetectHostnamesEndpoint(mux, d, true, defaultRedetectHostnamesManualTimeout)
 
 	done := make(chan struct{})
 	w := httptest.NewRecorder()
@@ -151,12 +152,11 @@ func TestRedetectHostnamesEndpoint_DisabledReturns503AndDoesNotSendOnManualChann
 // TestRedetectHostnamesEndpoint_RespChReceiveTimesOutIfRunStalled covers the
 // pre-mortem.md #3 case: something drains detector.manual (so the send half
 // succeeds) but never responds on the respCh it received (simulating a
-// stalled/mid-cycle Run). The handler must still return within
-// redetectHostnamesManualTimeout rather than hang indefinitely.
+// stalled/mid-cycle Run). The handler must still return within its timeout
+// rather than hang indefinitely -- passed directly as a short value here
+// instead of mutating shared package state.
 func TestRedetectHostnamesEndpoint_RespChReceiveTimesOutIfRunStalled(t *testing.T) {
-	old := redetectHostnamesManualTimeout
-	redetectHostnamesManualTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { redetectHostnamesManualTimeout = old })
+	const shortTimeout = 50 * time.Millisecond
 
 	d := newTestDetector(
 		func(context.Context) []string { return nil },
@@ -172,7 +172,7 @@ func TestRedetectHostnamesEndpoint_RespChReceiveTimesOutIfRunStalled(t *testing.
 	}()
 
 	mux := http.NewServeMux()
-	registerRedetectHostnamesEndpoint(mux, d, false)
+	registerRedetectHostnamesEndpoint(mux, d, false, shortTimeout)
 
 	done := make(chan struct{})
 	w := httptest.NewRecorder()
@@ -184,7 +184,7 @@ func TestRedetectHostnamesEndpoint_RespChReceiveTimesOutIfRunStalled(t *testing.
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatalf("handler hung past redetectHostnamesManualTimeout waiting on a stalled respCh receive")
+		t.Fatalf("handler hung past its timeout waiting on a stalled respCh receive")
 	}
 
 	if w.Code != http.StatusGatewayTimeout {

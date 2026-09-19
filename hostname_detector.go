@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"slices"
 	"sort"
 	"time"
 
@@ -73,8 +74,10 @@ type HostnameDetectorConfig struct {
 	CertStore *server.NetworkCertStore
 	// ValidateFn defaults to verifyHostnameOwnership (set by
 	// NewHostnameDetector) when left nil -- the security gate must never be
-	// silently disabled just because a caller forgot to wire it.
-	ValidateFn func(string) bool
+	// silently disabled just because a caller forgot to wire it. It takes a
+	// context so it can be bounded by the per-cycle cycleTimeout, not just
+	// invoked context-less (see redetect's cycleCtx thread-through).
+	ValidateFn func(context.Context, string) bool
 }
 
 // HostnameDetector periodically (re)detects this host's LAN IPs and their
@@ -123,7 +126,7 @@ type HostnameDetector struct {
 	// validateFn first.
 	waHandler  *serverauth.Handler
 	certStore  *server.NetworkCertStore
-	validateFn func(string) bool
+	validateFn func(context.Context, string) bool
 
 	// certPublisher wraps server.EnsureNetworkTLSCerts by default; tests
 	// inject a fake to simulate issuance failure or to count invocations
@@ -236,22 +239,12 @@ func (d *HostnameDetector) redetect(ctx context.Context, trigger TriggerSource) 
 		d.publishVerified(verifiedNew)
 	}
 
-	addedSet := make(map[string]struct{}, len(verifiedNew))
-	for _, hostname := range verifiedNew {
-		addedSet[hostname] = struct{}{}
-	}
-	addedList := make([]string, 0, len(addedSet))
-	for hostname := range addedSet {
-		addedList = append(addedList, hostname)
-	}
-	sort.Strings(addedList)
-
 	cycle := redetectCycle{
 		Trigger:   trigger,
 		Duration:  time.Since(start),
 		PrevCount: prevCount,
 		NewCount:  len(flattened),
-		Added:     addedList,
+		Added:     sortedUnique(verifiedNew),
 	}
 
 	// Emitted every cycle, including a no-op one -- see plan.md Story
@@ -276,10 +269,10 @@ func (d *HostnameDetector) redetect(ctx context.Context, trigger TriggerSource) 
 func (d *HostnameDetector) resolveAndValidate(cycleCtx context.Context) (verifiedNew, unverified []string) {
 	for ip := range d.networks {
 		for _, hostname := range d.resolveFn(cycleCtx, ip) {
-			if containsString(d.networks[ip], hostname) {
+			if slices.Contains(d.networks[ip], hostname) {
 				continue
 			}
-			if !d.validateFn(hostname) {
+			if !d.validateFn(cycleCtx, hostname) {
 				log.Warn("hostname-detect: dropped unverified candidate", "hostname", hostname)
 				unverified = append(unverified, hostname)
 				continue
@@ -325,29 +318,30 @@ func (d *HostnameDetector) publishVerified(verifiedNew []string) {
 // flattenHostnames returns the deduplicated union of every hostname across
 // every IP in d.networks, sorted for deterministic SetHostnames input.
 func (d *HostnameDetector) flattenHostnames() []string {
-	seen := make(map[string]struct{})
-	var flattened []string
+	var all []string
 	for _, hostnames := range d.networks {
-		for _, hostname := range hostnames {
-			if _, ok := seen[hostname]; !ok {
-				seen[hostname] = struct{}{}
-				flattened = append(flattened, hostname)
-			}
-		}
+		all = append(all, hostnames...)
 	}
-	sort.Strings(flattened)
-	return flattened
+	return sortedUnique(all)
 }
 
 func (d *HostnameDetector) flattenedHostnameCount() int {
 	return len(d.flattenHostnames())
 }
 
-func containsString(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
+// sortedUnique returns the deduplicated, sorted contents of items. Shared by
+// flattenHostnames (dedup across every IP's hostnames) and redetect (dedup of
+// a single cycle's verifiedNew) rather than each hand-rolling its own
+// seen-map + sort.
+func sortedUnique(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	unique := make([]string, 0, len(items))
+	for _, item := range items {
+		if _, ok := seen[item]; !ok {
+			seen[item] = struct{}{}
+			unique = append(unique, item)
 		}
 	}
-	return false
+	sort.Strings(unique)
+	return unique
 }

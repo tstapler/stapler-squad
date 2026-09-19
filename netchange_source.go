@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/tstapler/stapler-squad/log"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
@@ -66,4 +67,42 @@ func (s *tailscaleNetmonSource) Close() error {
 	err := s.mon.Close()
 	s.bus.Close()
 	return err
+}
+
+// setupNetworkChangeEvents constructs the OS-level network-change source
+// (Epic 3.1) and wires it into a coalescing events channel suitable for
+// HostnameDetectorConfig.Events. newSource is injected (rather than calling
+// newTailscaleNetmonSource directly) so tests can substitute a fake or a
+// forced error without touching the real netmon/eventbus machinery.
+//
+// A construction error is logged and degraded to timer-only (Task 3.1.2b):
+// the returned events channel is still valid, just never written to, so
+// HostnameDetector.Run keeps working off its timer/manual triggers alone --
+// this must never fail process startup, since the periodic timer alone
+// already satisfies the feature's core requirement.
+func setupNetworkChangeEvents(newSource func() (NetworkChangeSource, error)) (events chan struct{}, cleanup func()) {
+	events = make(chan struct{}, 1)
+
+	src, err := newSource()
+	if err != nil {
+		log.Warn("hostname-detect: network-change monitor unavailable, falling back to timer-only redetection", "err", err)
+		return events, func() {}
+	}
+
+	unregister := src.RegisterChangeCallback(func() {
+		// Non-blocking send: coalesces further at the channel level in
+		// case netmon's own debounce window still bursts, and never
+		// blocks the monitor's own callback goroutine.
+		select {
+		case events <- struct{}{}:
+		default:
+		}
+	})
+
+	return events, func() {
+		unregister()
+		if closeErr := src.Close(); closeErr != nil {
+			log.Warn("hostname-detect: failed to close network-change monitor", "err", closeErr)
+		}
+	}
 }
