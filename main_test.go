@@ -5,12 +5,15 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -336,6 +339,82 @@ func Test_superviseTymuxd_should_DecideRegisterStopAndError_When_GivenEachCombin
 				t.Errorf("registerStop called = %v, want %v (called %d times)", gotRegisterStop, tc.wantRegisterStop, registerStopCalls)
 			}
 		})
+	}
+}
+
+// Test_startHostnameDetector_should_SkipRunAndNetworkChangeSource_When_DisableEnvSet
+// covers the CRITICAL gap: main.go's cobra "runtime" phase built the
+// HostnameDetector, decided whether to start its Run goroutine, and wired the
+// manual-trigger endpoint entirely inline, with zero test coverage on the
+// STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE branch. startHostnameDetector
+// extracts that decision (mirroring the superviseTymuxd extraction above) so
+// it's testable via injected goFn/onStop/newSource instead of a real
+// *warren.App or OS network monitor.
+func Test_startHostnameDetector_should_SkipRunAndNetworkChangeSource_When_DisableEnvSet(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE", "true")
+
+	var newSourceCalls, goCalls, onStopCalls int
+	fakeNewSource := func() (NetworkChangeSource, error) {
+		newSourceCalls++
+		return nil, errors.New("should never be called when disabled")
+	}
+	fakeGo := func(name string, fn func(context.Context)) { goCalls++ }
+	fakeOnStop := func(name string, fn func(context.Context) error) { onStopCalls++ }
+
+	mux := http.NewServeMux()
+	detector := startHostnameDetector(mux, &server.Server{}, nil, fakeNewSource, fakeGo, fakeOnStop)
+
+	if newSourceCalls != 0 {
+		t.Errorf("newSource called %d times, want 0 (disabled must skip the real OS network monitor entirely)", newSourceCalls)
+	}
+	if goCalls != 0 {
+		t.Errorf("goFn (Run goroutine start) called %d times, want 0", goCalls)
+	}
+	if onStopCalls != 0 {
+		t.Errorf("onStop called %d times, want 0 (no netchange cleanup hook to register when disabled)", onStopCalls)
+	}
+	if detector == nil {
+		t.Fatal("expected a non-nil detector even when disabled (endpoint registration still needs one to check the disabled flag before touching it)")
+	}
+
+	// The manual-trigger endpoint must still be registered, reporting 503
+	// rather than a 404 (registerRedetectHostnamesEndpoint's own disabled
+	// short-circuit) or hanging.
+	req := httptest.NewRequest(http.MethodPost, "/api/debug/redetect-hostnames", nil)
+	req.RemoteAddr = "127.0.0.1:54321"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("endpoint status = %d, want 503 (disabled)", w.Code)
+	}
+}
+
+// Test_startHostnameDetector_should_StartRunAndNetworkChangeSource_When_NotDisabled
+// covers the enabled branch: newSource, the Run goroutine, and the netchange
+// cleanup hook must all be wired up.
+func Test_startHostnameDetector_should_StartRunAndNetworkChangeSource_When_NotDisabled(t *testing.T) {
+	var newSourceCalls, goCalls, onStopCalls int
+	fakeNewSource := func() (NetworkChangeSource, error) {
+		newSourceCalls++
+		return nil, errors.New("no real OS network monitor in this test")
+	}
+	fakeGo := func(name string, fn func(context.Context)) { goCalls++ }
+	fakeOnStop := func(name string, fn func(context.Context) error) { onStopCalls++ }
+
+	mux := http.NewServeMux()
+	detector := startHostnameDetector(mux, &server.Server{}, nil, fakeNewSource, fakeGo, fakeOnStop)
+
+	if newSourceCalls != 1 {
+		t.Errorf("newSource called %d times, want 1", newSourceCalls)
+	}
+	if goCalls != 1 {
+		t.Errorf("goFn (Run goroutine start) called %d times, want 1", goCalls)
+	}
+	if onStopCalls != 1 {
+		t.Errorf("onStop called %d times, want 1 (netchange cleanup hook)", onStopCalls)
+	}
+	if detector == nil {
+		t.Fatal("expected a non-nil detector")
 	}
 }
 

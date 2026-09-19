@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/telemetry"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -476,49 +477,13 @@ var (
 				// WAHandler/CertStore are nil when remote access is
 				// disabled; redetect's nil-checks (Epic 2.2) mean this still
 				// keeps Server.hostnames current, just without RPID/TLS
-				// publication.
-				initialNetworks := map[string][]string{}
-				var waHandler *serverauth.Handler
-				var certStore *server.NetworkCertStore
-				if remoteAccess != nil {
-					initialNetworks = remoteAccess.Networks
-					waHandler = remoteAccess.Handler
-					certStore = remoteAccess.CertStore
-				}
-				netChangeEvents, netChangeCleanup := setupNetworkChangeEvents(func() (NetworkChangeSource, error) {
-					return newTailscaleNetmonSource()
-				})
-				a.OnStop("hostname-detector-netchange", func(ctx context.Context) error {
-					netChangeCleanup()
-					return nil
-				})
-				detector := NewHostnameDetector(HostnameDetectorConfig{
-					Srv:             srv,
-					InitialNetworks: initialNetworks,
-					Tick:            time.NewTicker(hostnameRedetectInterval()).C,
-					Events:          netChangeEvents,
-					WAHandler:       waHandler,
-					CertStore:       certStore,
-					// ValidateFn left nil: NewHostnameDetector defaults it to
-					// verifyHostnameOwnership unconditionally.
-				})
-
-				// STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE is a Risk Control
-				// (plan.md Story 4.2.1): an operator can turn off the
-				// redetection loop without a code change. When disabled, no
-				// goroutine ever drains detector.manual, so the manual-
-				// trigger endpoint below must independently check the same
-				// env var rather than assume Run is listening.
-				redetectDisabled := os.Getenv("STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE") == "true"
-				if redetectDisabled {
-					log.Info("hostname-detect: disabled via STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE")
-				} else {
-					a.Go("hostname-detector", func(ctx context.Context) {
-						detector.Run(ctx)
-					})
-				}
-
-				registerRedetectHostnamesEndpoint(srv.Mux(), detector, redetectDisabled, defaultRedetectHostnamesManualTimeout)
+				// publication. Extracted into startHostnameDetector (mirrors
+				// the superviseTymuxd extraction below) so the disable-flag
+				// branch and wiring are independently testable without a
+				// real *warren.App or OS network monitor.
+				startHostnameDetector(srv.Mux(), srv, remoteAccess,
+					func() (NetworkChangeSource, error) { return newTailscaleNetmonSource() },
+					a.Go, a.OnStop)
 
 				return nil
 			})
@@ -1576,6 +1541,72 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	log.Info("auth: remote access enabled", "port", remotePort, "rpID", rpID, "host", displayHost, "lan_ip", lanIPStr)
 	log.Info("auth: TLS CA cert", "path", caFile)
 	return &remoteAccessResult{Handler: waHandler, CertStore: certStore, Networks: networks}, nil
+}
+
+// startHostnameDetector wires up LAN hostname redetection: builds the
+// HostnameDetector from remoteAccess's collaborators (nil-safe -- see
+// HostnameDetectorConfig's doc comment), starts the OS-network-change source
+// and its cleanup hook, starts the Run goroutine, and registers the
+// manual-trigger HTTP endpoint. Extracted out of the cobra "runtime" phase's
+// RunE closure, mirroring the superviseTymuxd extraction below, so the
+// STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE branch and the wiring itself are
+// independently testable via injected goFn/onStop/newSource instead of a
+// real *warren.App or OS network monitor.
+//
+// The disable-flag check runs before newSource is invoked (not after), so a
+// disabled detector never starts the real netmon/eventbus goroutine at all.
+func startHostnameDetector(mux *http.ServeMux, srv *server.Server, remoteAccess *remoteAccessResult,
+	newSource func() (NetworkChangeSource, error),
+	goFn func(name string, fn func(context.Context)),
+	onStop func(name string, fn func(context.Context) error)) *HostnameDetector {
+	initialNetworks := map[string][]string{}
+	var waHandler *serverauth.Handler
+	var certStore *server.NetworkCertStore
+	if remoteAccess != nil {
+		initialNetworks = remoteAccess.Networks
+		waHandler = remoteAccess.Handler
+		certStore = remoteAccess.CertStore
+	}
+
+	// STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE is a Risk Control (plan.md
+	// Story 4.2.1): an operator can turn off the redetection loop without a
+	// code change. When disabled, no goroutine ever drains detector.manual,
+	// so the manual-trigger endpoint below must independently check the same
+	// env var rather than assume Run is listening.
+	redetectDisabled := os.Getenv("STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE") == "true"
+
+	var netChangeEvents chan struct{}
+	if redetectDisabled {
+		log.Info("hostname-detect: disabled via STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE")
+	} else {
+		var netChangeCleanup func()
+		netChangeEvents, netChangeCleanup = setupNetworkChangeEvents(newSource)
+		onStop("hostname-detector-netchange", func(ctx context.Context) error {
+			netChangeCleanup()
+			return nil
+		})
+	}
+
+	detector := NewHostnameDetector(HostnameDetectorConfig{
+		Srv:             srv,
+		InitialNetworks: initialNetworks,
+		Tick:            time.NewTicker(hostnameRedetectInterval()).C,
+		Events:          netChangeEvents,
+		WAHandler:       waHandler,
+		CertStore:       certStore,
+		// ValidateFn left nil: NewHostnameDetector defaults it to
+		// verifyHostnameOwnership unconditionally.
+	})
+
+	if !redetectDisabled {
+		goFn("hostname-detector", func(ctx context.Context) {
+			detector.Run(ctx)
+		})
+	}
+
+	registerRedetectHostnamesEndpoint(mux, detector, redetectDisabled, defaultRedetectHostnamesManualTimeout)
+
+	return detector
 }
 
 func main() {

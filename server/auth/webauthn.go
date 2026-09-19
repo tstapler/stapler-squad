@@ -170,7 +170,7 @@ func (h *Handler) RegisterHostname(hostname string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, rpID := range h.rpIDs {
-		if rpID == hostname {
+		if hostnameMatchesRPID(hostname, rpID) {
 			return nil // already registered
 		}
 	}

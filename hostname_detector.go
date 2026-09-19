@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"slices"
 	"sort"
@@ -53,6 +54,11 @@ type redetectCycle struct {
 	PrevCount int
 	NewCount  int
 	Added     []string
+
+	// UnverifiedCount is the number of hostnames discovered this cycle that
+	// failed validateFn (bookkeeping only, kept out of NewCount -- see
+	// redetect's doc comment on why the two counts must not be conflated).
+	UnverifiedCount int
 }
 
 // HostnameDetectorConfig is HostnameDetector's constructor input. It exists
@@ -222,29 +228,37 @@ func (d *HostnameDetector) redetect(ctx context.Context, trigger TriggerSource) 
 
 	verifiedNew, unverifiedThisCycle := d.resolveAndValidate(cycleCtx)
 
+	// flattened is the verified set (d.networks' union) -- the basis for both
+	// PrevCount and NewCount, so a hostname that fails validateFn every
+	// cycle (never merged into d.networks) can never inflate NewCount over
+	// PrevCount. It is reported separately via UnverifiedCount instead.
+	flattened := d.flattenHostnames()
+	newCount := len(flattened)
+
 	// Server.hostnames is bookkeeping only -- publish every hostname
 	// discovered this cycle, verified or not, on top of the verified set
 	// already folded into d.networks. SetHostnames' own add-only union
 	// merge means an unverified hostname published here once stays in
 	// Server.GetHostnames() forever, same as a verified one; it just never
 	// reaches d.networks, waHandler, or certPublisher.
-	flattened := d.flattenHostnames()
+	toPublish := flattened
 	if len(unverifiedThisCycle) > 0 {
-		flattened = append(append([]string(nil), flattened...), unverifiedThisCycle...)
-		sort.Strings(flattened)
+		toPublish = append(append([]string(nil), flattened...), unverifiedThisCycle...)
+		sort.Strings(toPublish)
 	}
-	d.srv.SetHostnames(flattened)
+	d.srv.SetHostnames(toPublish)
 
 	if len(verifiedNew) > 0 {
 		d.publishVerified(verifiedNew)
 	}
 
 	cycle := redetectCycle{
-		Trigger:   trigger,
-		Duration:  time.Since(start),
-		PrevCount: prevCount,
-		NewCount:  len(flattened),
-		Added:     sortedUnique(verifiedNew),
+		Trigger:         trigger,
+		Duration:        time.Since(start),
+		PrevCount:       prevCount,
+		NewCount:        newCount,
+		Added:           sortedUnique(verifiedNew),
+		UnverifiedCount: len(unverifiedThisCycle),
 	}
 
 	// Emitted every cycle, including a no-op one -- see plan.md Story
@@ -255,6 +269,7 @@ func (d *HostnameDetector) redetect(ctx context.Context, trigger TriggerSource) 
 		"duration", cycle.Duration,
 		"prev_count", cycle.PrevCount,
 		"new_count", cycle.NewCount,
+		"unverified_count", cycle.UnverifiedCount,
 		"added", cycle.Added,
 	)
 
@@ -306,13 +321,64 @@ func (d *HostnameDetector) publishVerified(verifiedNew []string) {
 	}
 
 	if d.certStore != nil {
-		_, newCerts, err := d.certPublisher(d.networks)
+		newCerts, err := d.publishCertsWithTimeout()
 		if err != nil {
 			log.Error("hostname-detect: TLS cert issuance failed", "err", err)
 			return
 		}
 		d.certStore.Store(newCerts)
 	}
+}
+
+// publishCertsWithTimeout runs d.certPublisher (server.EnsureNetworkTLSCerts
+// by default) with its own bounded timeout. certPublisher takes no context of
+// its own and does synchronous, blocking disk I/O (MkdirAll, LoadX509KeyPair,
+// WriteFile) plus cert generation -- calling it directly from redetect, as
+// this used to do, meant a hung filesystem call could stall Run's entire
+// select loop indefinitely despite redetect's doc comment claiming the whole
+// cycle was bounded by cycleTimeout. It wasn't: this was the uncovered path
+// pre-mortem.md Failure #1 was written to prevent.
+//
+// The call runs in a goroutine so it can be raced against a timer; a copy of
+// d.networks is passed in (not d.networks itself) because Run's own goroutine
+// may start mutating that map on the very next cycle while an abandoned,
+// still-running goroutine from a timed-out call is reading it -- see
+// d.networks' own doc comment ("only Run's own goroutine ever reads or
+// mutates this"). On timeout the goroutine is simply abandoned (certPublisher
+// has no way to be cancelled); the next cycle retries.
+func (d *HostnameDetector) publishCertsWithTimeout() (map[string]*server.NetworkCert, error) {
+	networksSnapshot := cloneNetworks(d.networks)
+
+	type result struct {
+		certs map[string]*server.NetworkCert
+		err   error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		_, certs, err := d.certPublisher(networksSnapshot)
+		resCh <- result{certs: certs, err: err}
+	}()
+
+	timer := time.NewTimer(d.cycleTimeout)
+	defer timer.Stop()
+
+	select {
+	case res := <-resCh:
+		return res.certs, res.err
+	case <-timer.C:
+		return nil, fmt.Errorf("cert publish timed out after %s", d.cycleTimeout)
+	}
+}
+
+// cloneNetworks returns a deep copy of networks (both the map and each IP's
+// hostname slice) so a caller can hand it to a goroutine without racing a
+// concurrent mutation of the original.
+func cloneNetworks(networks map[string][]string) map[string][]string {
+	clone := make(map[string][]string, len(networks))
+	for ip, hostnames := range networks {
+		clone[ip] = append([]string(nil), hostnames...)
+	}
+	return clone
 }
 
 // flattenHostnames returns the deduplicated union of every hostname across

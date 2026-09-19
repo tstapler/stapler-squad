@@ -77,6 +77,9 @@ func TestRedetectHostnamesEndpoint_LoopbackRequestTriggersCycle(t *testing.T) {
 	if !slices.Contains(cycle.Added, "manual.local") {
 		t.Fatalf("expected Added to include manual.local, got %v", cycle.Added)
 	}
+
+	cancel()
+	waitFor(t, (<-chan struct{})(d.done), time.Second, "Run to return")
 }
 
 // waitForCalls blocks until calls reaches at least want, or fails the test
