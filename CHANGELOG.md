@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.55.0](https://github.com/tstapler/stapler-squad/compare/v1.54.0...v1.55.0) (2026-09-19)
+
+
+### Features
+
+* **config:** custom program management in UI and backend ([#821](https://github.com/tstapler/stapler-squad/issues/821)) ([c461dbc](https://github.com/tstapler/stapler-squad/commit/c461dbcb83efd59a7932c098721d78819cb25933))
+* **hostname-detect:** periodic + network-change LAN hostname re-detection ([#823](https://github.com/tstapler/stapler-squad/issues/823)) ([57e85c6](https://github.com/tstapler/stapler-squad/commit/57e85c6357f5e6c122e1dc37475ef7cc862bf478))
+
+
+### Bug Fixes
+
+* **auth:** stop SessionManager's cleanup goroutine on Close() ([57e85c6](https://github.com/tstapler/stapler-squad/commit/57e85c6357f5e6c122e1dc37475ef7cc862bf478))
+* **log:** eliminate ssqlog.ErrorLog capture race in backlog_triage_harness_test.go ([#822](https://github.com/tstapler/stapler-squad/issues/822)) ([3796b08](https://github.com/tstapler/stapler-squad/commit/3796b08d7ae145a5329964c3198c7376b96c0385))
+
 ## [1.54.0](https://github.com/tstapler/stapler-squad/compare/v1.53.1...v1.54.0) (2026-09-17)
 
 
