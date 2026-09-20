@@ -203,6 +203,12 @@ export const zIndex = {
   base: 0,
   tableHeader: 1,   // sticky <th> within a scroll container — only competes with sibling tds
   raised: 10,
+  // In-viewport absolute overlays inside the terminal (Story 1.4.4/1.4.5) —
+  // distinct stacking context from the page-level `floatingTerminalUI`/`toast`
+  // layer above, so the low values are fine; ordering matters only between
+  // these two (the "no more history" line stays under the loading pill).
+  terminalOverlay: 15,
+  terminalOverlayPill: 20,
   header: 100,
   dropdown: 500,
   slideOver: 700,

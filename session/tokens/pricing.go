@@ -19,6 +19,12 @@ var variantSuffixPattern = regexp.MustCompile(`^(claude-(?:opus|sonnet|haiku)-\d
 // legacyModelPattern matches old-style claude-3-opus-20240229 format.
 var legacyModelPattern = regexp.MustCompile(`^claude-(\d+)-(\w+)(?:-\d{8})?$`)
 
+// geminiVariantSuffixPattern matches a trailing numeric snapshot suffix on a
+// bare Gemini pro/flash model ID, e.g. "gemini-2.5-pro-002" → "gemini-2.5-pro".
+// Anchored to exactly "pro"/"flash" (not "flash-lite" or other variants) so it
+// never merges a distinctly-priced sibling model into these two families.
+var geminiVariantSuffixPattern = regexp.MustCompile(`^(gemini-\d+\.\d+-(?:pro|flash))-\d+$`)
+
 // DefaultPricingTable returns a PricingTable with hardcoded defaults as of 2026-07-27.
 // Prices are in USD per million tokens.
 func DefaultPricingTable() *PricingTable {
@@ -119,6 +125,34 @@ func DefaultPricingTable() *PricingTable {
 				CacheWritePerMTok:  0.30,
 				CacheReadPerMTok:   0.03,
 			},
+			// Gemini entries: rates are per the <=200k-token-prompt tier (Gemini
+			// tiers up for prompts >200k, which this table doesn't model — see
+			// Anthropic entries above for the same simplification). CacheWritePerMTok
+			// is deliberately 0: Gemini bills context-cache writes as a per-hour
+			// storage fee ($4.50/1M tokens/hour for Pro, $1.00/1M/hour for Flash),
+			// not a per-token write cost, so there is no per-token figure to put
+			// here without misrepresenting the billing model; CacheReadPerMTok holds
+			// Gemini's "context caching price" (the discounted rate for tokens served
+			// from cache), which is the one Gemini cache dimension that maps cleanly
+			// onto this struct's per-token semantics.
+			// Verified 2026-09-17 against https://ai.google.dev/gemini-api/docs/pricing:
+			// $1.25/1M input, $10.00/1M output (<=200k token prompts).
+			"gemini-2.5-pro": {
+				ModelFamily:        "gemini-2.5-pro",
+				InputPricePerMTok:  1.25,
+				OutputPricePerMTok: 10.00,
+				CacheReadPerMTok:   0.125,
+				EffectiveDate:      "2026-09-17",
+			},
+			// Verified 2026-09-17 against https://ai.google.dev/gemini-api/docs/pricing:
+			// $0.30/1M input (text/image/video), $2.50/1M output.
+			"gemini-2.5-flash": {
+				ModelFamily:        "gemini-2.5-flash",
+				InputPricePerMTok:  0.30,
+				OutputPricePerMTok: 2.50,
+				CacheReadPerMTok:   0.03,
+				EffectiveDate:      "2026-09-17",
+			},
 		},
 	}
 }
@@ -161,13 +195,16 @@ func LoadPricingOverride(configPath string) (*PricingTable, error) {
 //	"claude-opus-4-7"            → "claude-opus-4"
 //	"claude-3-opus-20240229"     → "claude-opus-3"
 //	"claude-haiku-4"             → "claude-haiku-4"
+//	"gemini-2.5-pro-20250619"    → "gemini-2.5-pro"
+//	"gemini-2.5-flash-002"       → "gemini-2.5-flash"
 //	"unknown-model-xyz"          → "unknown-model-xyz"
 func NormalizeModelFamily(modelID string) string {
 	if modelID == "" {
 		return modelID
 	}
 
-	// Strip date suffix first (-20250514).
+	// Strip date suffix first (-20250514). Applies to any provider's model ID,
+	// not just Claude's.
 	normalized := dateSuffixPattern.ReplaceAllString(modelID, "")
 
 	// Handle legacy format: claude-3-opus → claude-opus-3
@@ -179,6 +216,11 @@ func NormalizeModelFamily(modelID string) string {
 
 	// Handle variant suffix: claude-sonnet-4-6 → claude-sonnet-4
 	if m := variantSuffixPattern.FindStringSubmatch(normalized); len(m) == 2 {
+		return m[1]
+	}
+
+	// Handle Gemini snapshot suffix: gemini-2.5-pro-002 → gemini-2.5-pro
+	if m := geminiVariantSuffixPattern.FindStringSubmatch(normalized); len(m) == 2 {
 		return m[1]
 	}
 

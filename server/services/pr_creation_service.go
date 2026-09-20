@@ -192,7 +192,9 @@ func (s *PRCreationService) DraftPullRequest(
 			draftedBody, draftCostUSD, draftErr := headless.DraftPRDescription(draftCtx, s.headlessPool, inst.Title, sessionGoalText(inst), diff, wt.GetBranchName())
 			draftCancel()
 			if concreteStorage, ok := s.storage.(*session.Storage); ok {
-				session.CostSinkForSessionUUID(concreteStorage, inst.UUID)(draftCostUSD)
+				// DraftPRDescription is Claude-only today (session/headless/features.go),
+				// so its cost is always authoritative.
+				session.CostSinkForSessionUUID(concreteStorage, inst.UUID)(draftCostUSD, true)
 			}
 			if draftErr != nil {
 				log.Warn("DraftPullRequest: DraftPRDescription failed, using fallback body", "session", req.Msg.SessionId, "err", draftErr)

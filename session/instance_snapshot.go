@@ -82,29 +82,36 @@ type AutonomousModeState struct {
 // through dedicated accessors or mailbox round-trips (Epic 3).
 type InstanceSnapshot struct {
 	// Identity / config
-	ID               string
-	UUID             string
-	Title            string
-	Path             string
-	WorkingDir       string
-	Branch           string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	Status           Status
-	Program          string
-	Height           int
-	Width            int
-	AutoYes          bool
-	AutoApprove      bool
-	IsExpanded       bool
-	Prompt           string
-	InitialPrompt    string
-	Category         string
-	Note             string
-	SessionType      SessionType
-	TmuxPrefix       string
-	TmuxServerSocket string
-	Tags             []string // defensive deep copy — see buildSnapshot
+	ID                    string
+	UUID                  string
+	Title                 string
+	Path                  string
+	WorkingDir            string
+	Branch                string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	Status                Status
+	Program               string
+	AltScreenActive       bool
+	AltScreenBootstrapped bool
+	Height                int
+	Width                 int
+	AutoYes               bool
+	AutoApprove           bool
+	IsExpanded            bool
+	Prompt                string
+	InitialPrompt         string
+	Category              string
+	Note                  string
+	SessionType           SessionType
+	TmuxPrefix            string
+	TmuxServerSocket      string
+	Tags                  []string // defensive deep copy — see buildSnapshot
+
+	// RuleTagProvenance/SuppressedRuleTags mirror Instance's ADR-002 tag-provenance
+	// fields — both defensive deep copies, see buildSnapshot.
+	RuleTagProvenance  map[string]string
+	SuppressedRuleTags map[string]bool
 
 	// Autonomous mode (grouped — access as snap.Autonomous.AutonomousMode)
 	Autonomous AutonomousModeState
@@ -170,6 +177,8 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		Status:                    i.Status,
 		CreationProgressUpdatedAt: i.creationProgressUpdatedAt,
 		Program:                   i.Program,
+		AltScreenActive:           i.AltScreenActive,
+		AltScreenBootstrapped:     i.AltScreenBootstrapped,
 		Height:                    i.Height,
 		Width:                     i.Width,
 		AutoYes:                   i.AutoYes,
@@ -269,6 +278,23 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 	if i.ExternalMetadata != nil {
 		meta := *i.ExternalMetadata
 		s.ExternalMetadata = &meta
+	}
+
+	// Deep copy RuleTagProvenance map[string]string (ADR-002) — never alias the
+	// live Instance map, mirroring Tags' copy above (instance-lock-free-reads.md).
+	if i.RuleTagProvenance != nil {
+		s.RuleTagProvenance = make(map[string]string, len(i.RuleTagProvenance))
+		for k, v := range i.RuleTagProvenance {
+			s.RuleTagProvenance[k] = v
+		}
+	}
+
+	// Deep copy SuppressedRuleTags map[string]bool (ADR-002).
+	if i.SuppressedRuleTags != nil {
+		s.SuppressedRuleTags = make(map[string]bool, len(i.SuppressedRuleTags))
+		for k, v := range i.SuppressedRuleTags {
+			s.SuppressedRuleTags[k] = v
+		}
 	}
 
 	return s

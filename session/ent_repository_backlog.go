@@ -227,6 +227,11 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		AcSnapshot:               AcCriteriaJSON(is.AcSnapshot),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
+		ResolvedProgram:          is.ResolvedProgram,
+		ResolvedModel:            is.ResolvedModel,
+		ExecutorSnapshotHash:     is.ExecutorSnapshotHash,
+		ConfiguredProgram:        is.ConfiguredProgram,
+		ExecutorFallbackReason:   is.ExecutorFallbackReason,
 		BaseCommitSha:            is.BaseCommitSha,
 		LastCommitSha:            is.LastCommitSha,
 		LastCommitMessage:        is.LastCommitMessage,
@@ -240,6 +245,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		LastProgressAt:           is.LastProgressAt,
 		CreatedAt:                is.CreatedAt,
 		EstimatedCostUsd:         is.EstimatedCostUsd,
+		CostPriced:               is.CostPriced,
 		TriageResult:             is.TriageResult,
 		TriageResultSummary:      triageResultSummary,
 		VerificationNotes:        is.VerificationNotes,
@@ -342,6 +348,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		ShippedFileStats:             item.ShippedFileStats,
 		ShippedSnapshotCaptureFailed: item.ShippedSnapshotCaptureFailed,
 		ReworkCapOverride:            item.ReworkCapOverride,
+		CostBudgetThresholdUsd:       item.CostBudgetThresholdUsd,
 		NextWorkflowID:               item.NextWorkflowID,
 		ChainFired:                   item.ChainFired,
 		ChainedAt:                    item.ChainedAt,
@@ -462,6 +469,7 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetLabels(data.Labels).
 		SetNillableArchivedAt(data.ArchivedAt).
 		SetNillableReworkCapOverride(data.ReworkCapOverride).
+		SetNillableCostBudgetThresholdUsd(data.CostBudgetThresholdUsd).
 		SetNillableGithubSyncedIssueUpdatedAt(data.GitHubSyncedIssueUpdatedAt)
 
 	if data.SourceID != "" {
@@ -1114,6 +1122,9 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.ReworkCapOverride != nil {
 		u.SetReworkCapOverride(*update.ReworkCapOverride)
 	}
+	if update.CostBudgetThresholdUsd != nil {
+		u.SetCostBudgetThresholdUsd(*update.CostBudgetThresholdUsd)
+	}
 	if update.ExternalURL != nil {
 		u.SetExternalURL(*update.ExternalURL)
 	}
@@ -1260,6 +1271,9 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	}
 	if update.ReworkCapOverride != nil {
 		fields = append(fields, "reworkCapOverride")
+	}
+	if update.CostBudgetThresholdUsd != nil {
+		fields = append(fields, "costBudgetThresholdUsd")
 	}
 	if update.ExternalURL != nil {
 		fields = append(fields, "externalUrl")
@@ -2815,11 +2829,14 @@ func (r *EntRepository) GetAllItemSessionsWithBacklogInfo(ctx context.Context) (
 			continue
 		}
 		results = append(results, ItemSessionBacklogEntry{
-			SessionUUID: is.SessionUUID,
-			SessionRole: is.SessionRole,
-			ItemID:      is.Edges.BacklogItem.ID.String(),
-			ItemTitle:   is.Edges.BacklogItem.Title,
-			ItemStatus:  is.Edges.BacklogItem.Status,
+			SessionUUID:      is.SessionUUID,
+			SessionRole:      is.SessionRole,
+			ItemID:           is.Edges.BacklogItem.ID.String(),
+			ItemTitle:        is.Edges.BacklogItem.Title,
+			ItemStatus:       is.Edges.BacklogItem.Status,
+			EstimatedCostUsd: is.EstimatedCostUsd,
+			CostPriced:       is.CostPriced,
+			CreatedAt:        is.CreatedAt,
 		})
 	}
 	return results, nil

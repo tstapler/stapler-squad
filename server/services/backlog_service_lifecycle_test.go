@@ -271,6 +271,98 @@ func TestUpdateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvide
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
 
+// ─── cost_budget_threshold_usd (Epic 4.2/5.3, backlog-stage-execution-costs) ──
+
+// TestCreateBacklogItem_should_LeaveCostBudgetThresholdUnset_When_FieldOmitted
+// is the default-behavior guard: an item created without an explicit
+// threshold must come back with no threshold configured (nil, distinct from
+// 0.0 — see BacklogItem.cost_budget_threshold_usd's doc comment).
+func TestCreateBacklogItem_should_LeaveCostBudgetThresholdUnset_When_FieldOmitted(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+
+	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item without a budget threshold",
+	}))
+	require.NoError(t, err)
+	assert.Nil(t, resp.Msg.Item.CostBudgetThresholdUsd)
+}
+
+// TestCreateBacklogItem_should_PersistCostBudgetThreshold_When_FieldSet is the
+// round-trip case for an explicitly-set threshold at creation time.
+func TestCreateBacklogItem_should_PersistCostBudgetThreshold_When_FieldSet(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+
+	threshold := 5.00
+	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:                  "item with a budget threshold",
+		CostBudgetThresholdUsd: &threshold,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Item.CostBudgetThresholdUsd)
+	assert.Equal(t, 5.00, *resp.Msg.Item.CostBudgetThresholdUsd)
+}
+
+// TestUpdateBacklogItem_should_LeaveCostBudgetThresholdUntouched_When_FieldOmitted
+// is the presence-gating regression guard: an UpdateBacklogItem request that
+// omits cost_budget_threshold_usd entirely must never clobber the item's
+// existing stored threshold back to unset.
+func TestUpdateBacklogItem_should_LeaveCostBudgetThresholdUntouched_When_FieldOmitted(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+
+	threshold := 5.00
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:                  "item with a budget threshold",
+		CostBudgetThresholdUsd: &threshold,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, created.Msg.Item.CostBudgetThresholdUsd)
+	require.Equal(t, 5.00, *created.Msg.Item.CostBudgetThresholdUsd)
+
+	// cost_budget_threshold_usd is deliberately left unset (nil) on this request.
+	updated, err := svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId: created.Msg.Item.Id,
+		Title:  "renamed item",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, updated.Msg.Item.CostBudgetThresholdUsd)
+	assert.Equal(t, 5.00, *updated.Msg.Item.CostBudgetThresholdUsd, "omitted cost_budget_threshold_usd must not clobber the item's existing threshold")
+}
+
+// TestUpdateBacklogItem_should_SetAndRoundTripCostBudgetThreshold_When_FieldSet
+// is Story 4.2.1's own AC, closed at the RPC layer by this epic: an
+// UpdateBacklogItem(cost_budget_threshold_usd: 5.00) call actually persists
+// and round-trips through a subsequent GetBacklogItem — not just through the
+// mutating call's own response.
+func TestUpdateBacklogItem_should_SetAndRoundTripCostBudgetThreshold_When_FieldSet(t *testing.T) {
+	t.Parallel()
+	svc := newBacklogService(t)
+
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with no threshold yet",
+	}))
+	require.NoError(t, err)
+	require.Nil(t, created.Msg.Item.CostBudgetThresholdUsd)
+
+	threshold := 5.00
+	updated, err := svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId:                 created.Msg.Item.Id,
+		CostBudgetThresholdUsd: &threshold,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, updated.Msg.Item.CostBudgetThresholdUsd)
+	assert.Equal(t, 5.00, *updated.Msg.Item.CostBudgetThresholdUsd)
+
+	got, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{
+		ItemId: created.Msg.Item.Id,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, got.Msg.Item.CostBudgetThresholdUsd, "threshold must round-trip through a fresh GetBacklogItem, not just the UpdateBacklogItem response")
+	assert.Equal(t, 5.00, *got.Msg.Item.CostBudgetThresholdUsd)
+}
+
 // ─── auto_create_pr policy flag (opt-in "auto-create PR on Complete") ─────────
 
 // TestCreateBacklogItem_should_DefaultAutoCreatePrToFalse_When_FieldOmitted is the

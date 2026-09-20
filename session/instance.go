@@ -18,6 +18,8 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/ansi"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -159,6 +161,14 @@ type LifecycleListener interface {
 	OnLifecycleEvent(event LifecycleEvent, reason string)
 }
 
+// TagFireRecorder records that a tagging rule matched, independent of whether the
+// resulting tag survives suppression filtering. Declared here (not imported from
+// server/services) because session cannot import that package; *services.AnalyticsStore
+// satisfies this interface structurally, with no import needed in that direction.
+type TagFireRecorder interface {
+	RecordTaggingRuleFire(ruleID string)
+}
+
 // ==== Instance -- Core Fields and Construction ====
 
 // MaxNoteLength is the maximum length, in bytes, of Instance.Note. Cross-referenced with the
@@ -196,6 +206,19 @@ type Instance struct {
 	Status Status
 	// Program is the program to run in the instance.
 	Program string
+	// AltScreenActive reports whether the pane's PTY output stream is
+	// currently in the alternate screen buffer (DECSET 1049), per the last
+	// chunk observed by altScreenTracker. Written under mu by
+	// setAltScreenActiveLocked; read only via GetAltScreenActive's
+	// Snapshot() path -- see .claude/rules/instance-lock-free-reads.md.
+	AltScreenActive bool
+	// AltScreenBootstrapped distinguishes "confirmed not in alt screen" from
+	// "never checked" -- AltScreenActive's zero value is false either way, so
+	// without this a session that's genuinely not in alt screen would fail
+	// altScreenActiveForSnapshot's fast path forever and re-run
+	// IsAlternateScreenActiveBootstrap's real tmux query on every connect and
+	// resize. Set alongside AltScreenActive by setAltScreenActiveLocked.
+	AltScreenBootstrapped bool
 	// Height is the height of the instance.
 	Height int
 	// Width is the width of the instance.
@@ -252,6 +275,17 @@ type Instance struct {
 	// Sessions can have multiple tags and appear in multiple groups simultaneously
 	// Examples: ["frontend", "urgent", "client-work"]
 	Tags []string
+	// RuleTagProvenance maps a tag value to the TaggingRule.ID (or the "llm"
+	// sentinel, llmSentinelRuleID) that most recently applied it (ADR-002).
+	// Absence of a tag here means it is user-owned and is never auto-retracted
+	// by reclassifyTagsLocked. Guarded by i.mu, same as Tags.
+	RuleTagProvenance map[string]string
+	// SuppressedRuleTags records tags the user explicitly removed while they
+	// carried rule provenance (ADR-002). The fixpoint/LLM apply paths
+	// (filterSuppressedTags) never re-add a tag present here until the user
+	// re-adds it explicitly via AddTag/SetTags, which clears its entry.
+	// Guarded by i.mu, same as Tags.
+	SuppressedRuleTags map[string]bool
 	// AutonomousMode enables autonomous Earpiece mode (crew autonomy).
 	// When true, the Fixer will inject correction prompts without user confirmation.
 	// When false (default), the session runs in supervised mode.
@@ -551,6 +585,25 @@ type Instance struct {
 	// callers that read inst.Tags directly.
 	tagManager TagManager
 
+	// altScreenTracker is a stateful scanner over this instance's PTY output
+	// stream (see ObserveAltScreenTransition), not observable state itself --
+	// excluded from InstanceSnapshot like gitManager/vncManager/cdpManager
+	// above. Its own internal state is not mu-guarded; callers must serialize
+	// ObserveAltScreenTransition calls for a given instance (one logical PTY
+	// output stream has one writer at a time).
+	altScreenTracker ansi.AltScreenTracker
+
+	// taggingEngine drives reclassifyTagsLocked's sync fixpoint (session-classifier-pipeline
+	// Epic 3.3). nil is a valid value — mirrors tagFireRecorder's nil-tolerant convention —
+	// and means "automatic tagging disabled" (e.g. a bare struct-literal test Instance),
+	// not an error. Injected via SetTaggingEngine.
+	taggingEngine *classifier.TaggingEngine
+
+	// tagFireRecorder records tagging-rule fires for analytics (see TagFireRecorder's doc
+	// comment). nil is a valid value — mirrors analyticsStore's existing nil-tolerant
+	// convention elsewhere in this codebase — and means "recording disabled," not an error.
+	tagFireRecorder TagFireRecorder
+
 	// snapshot is a lock-free atomic copy of all mutable Instance fields, published
 	// by every mutator before it releases mu. Readers can call Snapshot()
 	// without acquiring any lock. Load() is guaranteed non-nil after construction.
@@ -623,6 +676,12 @@ type Instance struct {
 	// goroutines so tests can join them before t.TempDir() cleanup runs.
 	// See JoinHibernation.
 	hibernateWG sync.WaitGroup
+
+	// scrollLease serializes this instance's own concurrent
+	// Instance.ForwardScroll calls (Story 1.3.1) -- see scroll_lease.go's
+	// doc comment for why this is transient orchestration state, not a
+	// snapshot-tracked field.
+	scrollLease scrollLease
 
 	// destroyed is set by Destroy() so a SessionDriver goroutine that outlives
 	// its own teardown (session_driver.go's loop only self-terminates on a
@@ -711,6 +770,41 @@ type Instance struct {
 	// warns against.
 	remoteApprovalRelay   *sshremote.RemoteApprovalRelay
 	remoteApprovalRelayMu deadlock.Mutex
+}
+
+// ObserveAltScreenTransition feeds a chunk of raw PTY output through
+// altScreenTracker and, only when that changes the alt-screen state,
+// publishes it via setAltScreenActiveLocked. Callers must serialize calls
+// per instance (see altScreenTracker's doc comment) -- server/services'
+// per-connection/per-hub-pump output-forwarding goroutines each own a single
+// sequential stream for a given instance, so this is called from at most one
+// goroutine at a time per instance in practice.
+func (i *Instance) ObserveAltScreenTransition(data []byte) {
+	active, changed := i.altScreenTracker.Observe(string(data))
+	if !changed {
+		return
+	}
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setAltScreenActiveLocked(s, active)
+		return nil
+	})
+}
+
+// SetAltScreenActiveBootstrap directly sets both altScreenTracker's internal
+// state and the published AltScreenActive value from a source that already
+// knows it authoritatively (session/instance_tmux.go's
+// IsAlternateScreenActiveBootstrap, a live tmux `#{alternate_on}` query) --
+// unlike ObserveAltScreenTransition, this isn't derived from scanning a PTY
+// byte chunk. Updates the tracker too (not just the published value) so a
+// later live ObserveAltScreenTransition call computes `changed` relative to
+// the correct baseline, instead of the tracker's zero-value default
+// silently masking a real exit transition.
+func (i *Instance) SetAltScreenActiveBootstrap(active bool) {
+	i.altScreenTracker.SetActive(active)
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setAltScreenActiveLocked(s, active)
+		return nil
+	})
 }
 
 // executionTarget returns i.ExecutionTarget, defaulting to LocalTarget{} when nil.
@@ -1098,15 +1192,72 @@ func (i *Instance) Snapshot() *InstanceSnapshot {
 // finishInstanceConstruction publishes the initial snapshot so that Load() is
 // guaranteed non-nil by the time the *Instance is visible to any other goroutine.
 // This is the single choke-point called by every construction site — Epic 3
-// will extend this helper to also spawn the actor goroutine.
+// will extend this helper to also spawn the actor goroutine, and it's also
+// where scrollForwardVersionMismatchCheck kicks off (Story 1.5.3), so it runs
+// at construction time rather than being deferred until a user scrolls.
 func finishInstanceConstruction(i *Instance) {
 	i.snapshot.Store(buildSnapshot(i))
+	i.kickOffClaudeVersionMismatchCheck()
 }
 
 // SetShellRepository injects the shell persistence backend. Called by Storage after
 // loading or creating an instance. Pass nil to disable persistence (e.g., in tests).
 func (i *Instance) SetShellRepository(repo ShellRepository) {
 	i.shellRepo = repo
+}
+
+// SetTagFireRecorder injects the tagging-rule fire-count recorder. Pass nil to disable
+// recording (the default) — see TagFireRecorder's doc comment.
+func (i *Instance) SetTagFireRecorder(recorder TagFireRecorder) {
+	i.tagFireRecorder = recorder
+}
+
+// SetTaggingEngine injects the sync tagging engine that reclassifyTagsLocked evaluates on
+// every tag-relevant mutation (session-classifier-pipeline Epic 3.3). Pass nil to disable
+// automatic tagging for this Instance (the default) — see the taggingEngine field's doc
+// comment. Not actor-routed: like SetTagFireRecorder/SetShellRepository, this is
+// construction-time wiring, not a runtime mutation that needs mailbox serialization.
+func (i *Instance) SetTaggingEngine(engine *classifier.TaggingEngine) {
+	i.taggingEngine = engine
+}
+
+// ReclassifyTagsAfterCreate runs the tagging fixpoint (and the Unclassified coexistence
+// rule) for a brand-new session immediately after its worktree has been created, so a
+// matching seeded rule's tag is present by the time Start() returns — the plan's headline
+// Success Metric for new-session creation, not just for a later rename (session-classifier-
+// pipeline Story 3.3.2).
+//
+// Acquires its own, fresh i.mu.Lock() — it must NEVER be called from anywhere that already
+// holds i.mu (that would deadlock), which is exactly why this is a distinct, non-"*Locked"
+// wrapper rather than reusing reclassifyTagsLocked's convention of assuming the lock is
+// already held by the caller. Callers rely on setupFirstTimeWorktree() having already fully
+// released Instance.startMu on the same call stack before this runs — see the call site in
+// Start() for the lock-order invariant this depends on (pre-mortem.md Failure #5, P3).
+func (i *Instance) ReclassifyTagsAfterCreate() {
+	i.mu.Lock()
+	s := &instanceState{inst: i}
+	reclassifyTagsLocked(s, i.taggingEngine)
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
+}
+
+// finishFirstTimeSetup creates the first-time worktree and reclassifies tags against the
+// now-known Path/Branch, shared by both of Start()'s firstTimeSetup branches (cold-start and
+// hot-restore-into-first-time-setup) so this pairing — and the lock-ordering invariant it
+// depends on — lives in exactly one place.
+//
+// setupFirstTimeWorktree() runs under Instance.startMu, never i.mu (see its own doc comment /
+// git_worktree_manager.go:22-26) — by the time it returns here, startMu is fully released on
+// this call stack, so ReclassifyTagsAfterCreate's own i.mu.Lock() below never nests under
+// startMu. No lock-ordering cycle is possible between the two on this or any other path
+// (pre-mortem.md Failure #5, P3).
+func (i *Instance) finishFirstTimeSetup() error {
+	if err := i.setupFirstTimeWorktree(); err != nil {
+		return err
+	}
+	i.ReclassifyTagsAfterCreate()
+	return nil
 }
 
 // GetSessionGoal returns a thread-safe shallow copy of the current SessionGoalData (nil if not set).
@@ -1318,7 +1469,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
 
 	if firstTimeSetup {
-		if err := i.setupFirstTimeWorktree(); err != nil {
+		if err := i.finishFirstTimeSetup(); err != nil {
 			return err
 		}
 	} else {
@@ -1575,7 +1726,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
 
 	if firstTimeSetup {
-		if err := i.setupFirstTimeWorktree(); err != nil {
+		if err := i.finishFirstTimeSetup(); err != nil {
 			return err
 		}
 	} else {

@@ -283,17 +283,23 @@ func TestKeyringTokenSource_APIKey_should_ServeFromCacheWithoutReResolving_When_
 
 func TestKeyringTokenSource_APIKey_should_ReturnErrJulesKeychainPausedAndLogOnce_When_CircuitOpen(t *testing.T) {
 	handler := installWarnHandler(t, "jules keychain paused")
+	probeRelease := make(chan struct{})
+	probeStarted := make(chan struct{}, 2)
 
 	swapKeyringSeams(t,
-		func(string, string) (string, error) { return "", errors.New("still down") },
+		func(string, string) (string, error) {
+			<-probeRelease
+			return "", errors.New("still down")
+		},
 		nil, nil,
 	)
 
 	now := time.Now()
-	s := NewKeyringTokenSource(withClock(func() time.Time { return now }))
-	s.stateMu.Lock()
-	s.circuitOpenUntil = now.Add(time.Hour)
-	s.stateMu.Unlock()
+	s := NewKeyringTokenSource(
+		withClock(func() time.Time { return now }),
+		withProbeStartHook(func() { probeStarted <- struct{}{} }),
+	)
+	s.openCircuit()
 
 	for i := 0; i < 5; i++ {
 		_, err := s.APIKey(context.Background())
@@ -305,11 +311,36 @@ func TestKeyringTokenSource_APIKey_should_ReturnErrJulesKeychainPausedAndLogOnce
 		}
 	}
 
-	// The single background probe (launched by the first of the 5 calls)
-	// fails against the stub above and logs once -- wait for it to land.
+	select {
+	case <-probeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("background keychain probe did not start")
+	}
+	close(probeRelease)
+
+	// The one background probe fails and extends the cooldown. Calls during
+	// that new cooldown must not immediately launch another probe.
 	waitForCount(t, time.Second, handler.Count, 1)
+	for {
+		s.stateMu.Lock()
+		inFlight := s.probeInFlight
+		s.stateMu.Unlock()
+		if !inFlight {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	_, err := s.APIKey(context.Background())
+	if !errors.Is(err, ErrJulesKeychainPaused) {
+		t.Fatalf("call after failed probe error = %v, want ErrJulesKeychainPaused", err)
+	}
+	select {
+	case <-probeStarted:
+		t.Fatal("failed probe was retried before its extended cooldown elapsed")
+	case <-time.After(50 * time.Millisecond):
+	}
 	if got := handler.Count(); got != 1 {
-		t.Fatalf("\"jules keychain paused\" Warn records = %d across 5 calls, want exactly 1", got)
+		t.Fatalf("\"jules keychain paused\" Warn records = %d, want exactly 1", got)
 	}
 }
 

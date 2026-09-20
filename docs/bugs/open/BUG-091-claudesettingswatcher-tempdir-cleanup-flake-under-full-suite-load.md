@@ -92,6 +92,40 @@ full-suite runs must not reproduce the `TempDir RemoveAll cleanup` failure for t
 
 ## Related
 
+- **2026-09-17 sighting (second, same day)**: recurred on yet another unrelated test,
+  `TestScanner_Start_should_persistPeriodically_When_MaintenanceTickFires` (`session/unfinished`),
+  same symptom (`testing.go:1464: TempDir RemoveAll cleanup: unlinkat ... directory not empty`), in
+  the "Test (affected packages only, fast signal)" CI job on the same PR #817 CI cycle as the sighting
+  below — `session/unfinished` is untouched by that PR's diff. Re-ran via `gh run rerun --failed`
+  rather than investigating further, consistent with this bug's own scope boundary. Two sightings on
+  two different, unrelated tests in the same CI cycle strengthens the case (already made by the
+  2026-09-02 sighting) that this is a broad shared-teardown-ordering gap, not a per-test issue.
+- **2026-09-17 sighting**: recurred on the exact test this bug is named for,
+  `TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable`, same symptom
+  (`testing.go:1464: TempDir RemoveAll cleanup: unlinkat ... directory not empty`), in the "MCP
+  Integration Tests" CI job on PR #817 (`app-scrollback-forwarding`) — an unrelated diff. Re-ran the
+  job via `gh run rerun --failed` rather than investigating further, consistent with this bug's own
+  scope boundary.
+- **2026-09-16 sighting (second, same day)**: 2 more `TempDir RemoveAll cleanup: unlinkat ...
+  directory not empty` failures in the same `make ci` cycle as the sighting below, this time in
+  `make test-integration`'s second (non-`session`/`session/tmux`) invocation — one on
+  `TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_Headless...` (name truncated by the
+  capturing pipe; `server/dependencies_test.go` family), the other not captured due to the same
+  truncation. Immediately re-ran `make test-integration` standalone with output captured to a file
+  instead of a truncating pipe: 7179 tests, 0 failures, 37.7s. Confirms both were transient
+  full-suite-load flakes in this same shared teardown-ordering gap, not a regression from the
+  logging fix being pushed; re-ran rather than investigating further, consistent with this bug's own
+  scope boundary.
+- **2026-09-16 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not
+  empty` symptom recurred again on the same test,
+  `TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService`
+  (`server/dependencies_test.go`), during `make ci`'s full `test-race` run (7075 tests, 330s) on
+  `main` while syncing a rebase-exposed lint fix — unrelated to that diff (which touched only
+  `server/services/backlog_service_triage.go` logging calls). Passed 10/10 in isolation with `-race`
+  immediately after (`go test ./server -race -run
+  TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
+  -count=10`). Confirms this remains the same shared teardown-ordering gap, not a new regression;
+  re-ran rather than investigating further, consistent with this bug's own scope boundary.
 - **2026-09-13 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not
   empty` symptom recurred on a fourth test, in a different package this time --
   `TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService`

@@ -317,7 +317,14 @@ func dispatchShellResize(p shellStreamParams, cols, rows int) {
 // handleShellScrollbackRequest is handleScrollbackRequest's shell-tab analog
 // (see runShellInputReadLoop's doc comment for why the surrounding read loop
 // isn't unified with runInputReadLoop) — response building itself is shared
-// via buildScrollbackResponse.
+// via buildScrollbackResponse. Also routes an app-forwarded scroll result to
+// AppScrollbackResponse: shell tabs have no *streamhub.StreamHub of their own
+// (streamShellViaControlMode is always control-mode-direct), so this always
+// passes hub: nil and the same -1 subscriberCount sentinel
+// streamViaControlMode's closure uses -- AppScrollGate's subscriber-count
+// check always fails here, so this call site never actually forwards a
+// scroll, but the widening exists so a future adapter/path change doesn't
+// have to rediscover this plumbing.
 func handleShellScrollbackRequest(p shellStreamParams, req *sessionv1.ScrollbackRequest) {
 	const maxScrollbackLimit = 1000
 	limit := int(req.Limit)
@@ -328,13 +335,26 @@ func handleShellScrollbackRequest(p shellStreamParams, req *sessionv1.Scrollback
 
 	startLine := fmt.Sprintf("-%d", offset+uint64(limit))
 	endLine := fmt.Sprintf("-%d", offset+1)
-	content, sbErr := p.shellSess.CapturePaneContentWithOptions(startLine, endLine)
+	result, sbErr := scrollbackResultForRequest(scrollbackRequestParams{
+		instance:        p.instance,
+		subscriberCount: -1,
+		hub:             nil,
+		startLine:       startLine,
+		endLine:         endLine,
+		logPrefix:       "[streamShellViaControlMode]",
+		fallback:        p.shellSess.CapturePaneContentWithOptions,
+	})
 	if sbErr != nil {
 		log.Warn("[streamShellViaControlMode] ScrollbackRequest tmux capture failed", "session", p.sessionID, "shell", p.shellID, "err", sbErr)
 		return
 	}
 
-	sbResp := buildScrollbackResponse(p.sessionID, p.shellID, content, offset, limit)
+	if result.AppScroll != nil {
+		writeAppScrollbackResponse(p.stream, p.sessionID, p.shellID, result.AppScroll)
+		return
+	}
+
+	sbResp := buildScrollbackResponse(p.sessionID, p.shellID, result.Content, offset, limit)
 	if respBytes, merr := proto.Marshal(sbResp); merr != nil {
 		log.Error("[streamShellViaControlMode] failed to marshal scrollback response", "session", p.sessionID, "shell", p.shellID, "err", merr)
 	} else {

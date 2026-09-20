@@ -47,6 +47,11 @@ type InstanceData struct {
 	IsExpanded bool     `json:"is_expanded,omitempty"`
 	Tags       []string `json:"tags,omitempty"` // Multi-valued tags for flexible organization
 
+	// RuleTagProvenance/SuppressedRuleTags back Instance's ADR-002 tag-provenance
+	// fields — see their doc comments on Instance for the full semantics.
+	RuleTagProvenance  map[string]string `json:"rule_tag_provenance,omitempty"`
+	SuppressedRuleTags map[string]bool   `json:"suppressed_rule_tags,omitempty"`
+
 	// Session type determines the workflow (directory, new_worktree, existing_worktree)
 	SessionType SessionType `json:"session_type,omitempty"`
 
@@ -791,6 +796,32 @@ func (s *Storage) DeleteRule(ctx context.Context, id string) error {
 	return s.repo.DeleteRule(ctx, id)
 }
 
+// AllTaggingRules returns all tagging rules from the repository.
+func (s *Storage) AllTaggingRules(ctx context.Context) ([]TaggingRuleData, error) {
+	return s.repo.AllTaggingRules(ctx)
+}
+
+// UpsertTaggingRule creates or updates a tagging rule in the repository.
+func (s *Storage) UpsertTaggingRule(ctx context.Context, rule TaggingRuleData) error {
+	return s.repo.UpsertTaggingRule(ctx, rule)
+}
+
+// DeleteTaggingRule removes a tagging rule from the repository.
+func (s *Storage) DeleteTaggingRule(ctx context.Context, id string) error {
+	return s.repo.DeleteTaggingRule(ctx, id)
+}
+
+// RecordTaggingRuleFire records that a tagging rule matched at the given instant.
+func (s *Storage) RecordTaggingRuleFire(ctx context.Context, ruleID string, firedAt time.Time) error {
+	return s.repo.RecordTaggingRuleFire(ctx, ruleID, firedAt)
+}
+
+// GetTaggingRuleFireCounts returns the number of recorded fires per rule ID since the
+// given instant.
+func (s *Storage) GetTaggingRuleFireCounts(ctx context.Context, since time.Time) (map[string]int, error) {
+	return s.repo.GetTaggingRuleFireCounts(ctx, since)
+}
+
 // DismissFinding persists a WasteFinding dismissal in the repository.
 func (s *Storage) DismissFinding(ctx context.Context, data DismissedFindingData) error {
 	return s.repo.DismissFinding(ctx, data)
@@ -1289,10 +1320,10 @@ func (s *Storage) UpdateItemSessionFailureCapture(ctx context.Context, id string
 	return s.repo.UpdateItemSessionFailureCapture(ctx, id, path)
 }
 
-// UpdateItemSessionCost adds usd to an ItemSession's estimated_cost_usd. See
-// EntRepository.UpdateItemSessionCost.
-func (s *Storage) UpdateItemSessionCost(ctx context.Context, id string, usd float64) error {
-	return s.repo.UpdateItemSessionCost(ctx, id, usd)
+// UpdateItemSessionCost adds usd to an ItemSession's estimated_cost_usd and
+// records whether that cost is trustworthy. See EntRepository.UpdateItemSessionCost.
+func (s *Storage) UpdateItemSessionCost(ctx context.Context, id string, usd float64, priced bool) error {
+	return s.repo.UpdateItemSessionCost(ctx, id, usd, priced)
 }
 
 // AddHeadlessCostBySessionUUID adds usd to the estimated_cost_usd of the ItemSession

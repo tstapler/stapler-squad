@@ -147,6 +147,22 @@ describe('useTerminalGestures', () => {
     return { terminalRef };
   }
 
+  // Story 1.4.0 (Task 1.4.0c) — mount with the new alt-screen options.
+  function mountAltScreen(isAltScreenActive: () => boolean, onAltScreenScrollUp: jest.Mock, longPressMs = 400) {
+    const terminalRef = makeTerminalRef('none');
+    renderHook(() =>
+      useTerminalGestures({
+        containerRef,
+        terminalRef: terminalRef as any,
+        onSendData,
+        longPressMs,
+        isAltScreenActive,
+        onAltScreenScrollUp,
+      }),
+    );
+    return { terminalRef };
+  }
+
   function fireTouchStart(x = 100, y = 100) {
     fakeContainer.fire('touchstart', makeTouchEvent('touchstart', x, y));
   }
@@ -243,6 +259,78 @@ describe('useTerminalGestures', () => {
       jest.advanceTimersByTime(16);
 
       expect((terminalRef.current as any).scrollLines).toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Story 1.4.0 (Task 1.4.0c/1.4.0d) — alt-screen scroll-up via SCROLLING state
+  // -------------------------------------------------------------------------
+  describe('SCROLLING state + isAltScreenActive (Story 1.4.0)', () => {
+    it('calls onAltScreenScrollUp instead of scrollLines when scrolling up and alt-screen is active', () => {
+      const onAltScreenScrollUp = jest.fn();
+      const { terminalRef } = mountAltScreen(() => true, onAltScreenScrollUp);
+
+      fireTouchStart(100, 100);
+      // First move > 15px to enter SCROLLING (lastY becomes 80)
+      fireTouchMove(80, 100);
+      // Second move: clientY increases (80 -> 120) => moveDy positive => lines < 0 (scroll-up direction)
+      fireTouchMove(120, 100);
+      jest.advanceTimersByTime(16);
+
+      expect(onAltScreenScrollUp).toHaveBeenCalled();
+      expect(onAltScreenScrollUp.mock.calls[0][0]).toBeGreaterThan(0);
+      expect((terminalRef.current as any).scrollLines).not.toHaveBeenCalled();
+    });
+
+    it('falls through to scrollLines when isAltScreenActive is false', () => {
+      const onAltScreenScrollUp = jest.fn();
+      const { terminalRef } = mountAltScreen(() => false, onAltScreenScrollUp);
+
+      fireTouchStart(100, 100);
+      fireTouchMove(80, 100);
+      fireTouchMove(120, 100);
+      jest.advanceTimersByTime(16);
+
+      expect(onAltScreenScrollUp).not.toHaveBeenCalled();
+      expect((terminalRef.current as any).scrollLines).toHaveBeenCalled();
+    });
+
+    it('falls through to scrollLines for a downward drag (lines >= 0) even when alt-screen is active', () => {
+      const onAltScreenScrollUp = jest.fn();
+      const { terminalRef } = mountAltScreen(() => true, onAltScreenScrollUp);
+
+      fireTouchStart(100, 100);
+      // Move up (finger travels up the screen) to enter SCROLLING and produce a
+      // downward (lines >= 0) scroll direction on the next frame.
+      fireTouchMove(50, 100);
+      fireTouchMove(20, 100);
+      jest.advanceTimersByTime(16);
+
+      expect(onAltScreenScrollUp).not.toHaveBeenCalled();
+      expect((terminalRef.current as any).scrollLines).toHaveBeenCalled();
+    });
+
+    it('never calls onAltScreenScrollUp when the gesture resolves to SELECTING (long press)', () => {
+      const onAltScreenScrollUp = jest.fn();
+      mountAltScreen(() => true, onAltScreenScrollUp);
+
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(450); // past longPressMs -> SELECTING
+      fireTouchMove(150, 100);
+      jest.advanceTimersByTime(16);
+
+      expect(onAltScreenScrollUp).not.toHaveBeenCalled();
+    });
+
+    it('never calls onAltScreenScrollUp when the gesture resolves to TAPPING', () => {
+      const onAltScreenScrollUp = jest.fn();
+      mountAltScreen(() => true, onAltScreenScrollUp);
+
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(100); // well under longPressMs, no movement
+      fireTouchEnd(100, 100);
+
+      expect(onAltScreenScrollUp).not.toHaveBeenCalled();
     });
   });
 

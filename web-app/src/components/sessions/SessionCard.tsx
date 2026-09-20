@@ -23,6 +23,8 @@ import { isAutoApproveSupported, isApprovalExtensionSupported } from "@/lib/sess
 import { getLastActivityTimestamp, isSessionStale } from "@/lib/session-staleness";
 import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
 import { PI_SUPPORT_FLAG_NAME } from "@/lib/constants/programs";
+import { useTaggingRuleNames } from "@/lib/hooks/useTaggingRuleNames";
+import { UNCLASSIFIED_TAG, tagProvenanceTitle, tagProvenanceAriaLabel } from "@/lib/sessions/tagProvenance";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -151,6 +153,7 @@ import {
   tagsContainer,
   tags,
   tag,
+  tagUnclassified,
   editTagsButton,
   body,
   info,
@@ -267,6 +270,7 @@ function SessionCardInner({
   staleThresholdMinutes = 30,
 }: SessionCardProps) {
   const sessionActions = useSessionActions(session.id);
+  const tagRuleNames = useTaggingRuleNames();
   const [isTagEditorOpen, setIsTagEditorOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isInlineEditing, setIsInlineEditing] = useState(false);
@@ -575,6 +579,8 @@ function SessionCardInner({
       {isTagEditorOpen && onUpdateTags && (
         <TagEditor
           tags={session.tags || []}
+          tagProvenance={session.ruleTagProvenance}
+          tagRuleNames={tagRuleNames}
           onSave={(newTags) => { onUpdateTags(session.id, newTags); setIsTagEditorOpen(false); }}
           onCancel={() => setIsTagEditorOpen(false)}
           triggerRef={tagEditorTriggerRef}
@@ -954,11 +960,22 @@ function SessionCardInner({
         <div className={tagsContainer}>
           {session.tags && session.tags.length > 0 && (
             <div className={tags} role="list" aria-label="Session tags">
-              {session.tags.map((sessionTag) => (
-                <span key={sessionTag} className={tag} role="listitem">
-                  {sessionTag}
-                </span>
-              ))}
+              {session.tags.map((sessionTag) => {
+                const isUnclassified = sessionTag === UNCLASSIFIED_TAG;
+                return (
+                  <span
+                    key={sessionTag}
+                    className={`${tag} ${isUnclassified ? tagUnclassified : ""}`}
+                    role="listitem"
+                    tabIndex={0}
+                    title={tagProvenanceTitle(sessionTag, session.ruleTagProvenance, tagRuleNames)}
+                    aria-label={tagProvenanceAriaLabel(sessionTag, session.ruleTagProvenance)}
+                  >
+                    {isUnclassified && <span aria-hidden="true">? </span>}
+                    {sessionTag}
+                  </span>
+                );
+              })}
             </div>
           )}
           <button

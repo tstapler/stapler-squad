@@ -1336,6 +1336,41 @@ func TestFeatureFlag_PiSupport_DefaultsFalseAndPersists(t *testing.T) {
 	})
 }
 
+// TestConfig_GetFeatureFlag_should_ReturnFalse_When_AppScrollForwardingClaudeFlagNotSet
+// and its "SetFeatureFlag persists" subtest cover REQ-13/Story 1.5.1's two
+// acceptance criteria for terminal:app-scrollback-forwarding:claude: it
+// defaults to false on a config with no explicit setting, and SetFeatureFlag
+// round-trips it through the on-disk config.json's feature_flags object --
+// mirrors TestFeatureFlag_PiSupport_DefaultsFalseAndPersists' structure.
+func TestConfig_GetFeatureFlag_should_ReturnFalse_When_AppScrollForwardingClaudeFlagNotSet(t *testing.T) {
+	t.Run("defaults false on a config with no explicit setting", func(t *testing.T) {
+		cfg := &Config{FeatureFlags: nil}
+		assert.False(t, cfg.GetFeatureFlag(FeatureAppScrollForwardingClaude))
+	})
+
+	t.Run("SetFeatureFlag persists and is re-readable, including on disk", func(t *testing.T) {
+		envtest.NewIsolatedStateDir(t)
+
+		cfg := LoadConfig()
+		require.NoError(t, cfg.SetFeatureFlag(FeatureAppScrollForwardingClaude, true))
+		assert.True(t, cfg.GetFeatureFlag(FeatureAppScrollForwardingClaude))
+
+		configDir, err := GetConfigDir()
+		require.NoError(t, err)
+		data, err := os.ReadFile(filepath.Join(configDir, ConfigFileName))
+		require.NoError(t, err)
+
+		var onDisk struct {
+			FeatureFlags map[string]bool `json:"feature_flags"`
+		}
+		require.NoError(t, json.Unmarshal(data, &onDisk))
+		assert.True(t, onDisk.FeatureFlags[FeatureAppScrollForwardingClaude], "feature_flags.%q must be persisted true on disk", FeatureAppScrollForwardingClaude)
+
+		reloaded := LoadConfig()
+		assert.True(t, reloaded.GetFeatureFlag(FeatureAppScrollForwardingClaude))
+	})
+}
+
 // ─── IsNamedInstance ────────────────────────────────────────────────────────
 
 // TestIsNamedInstance_should_ReturnFalse_When_InstanceEnvVarUnset covers the
@@ -1888,4 +1923,55 @@ func TestGetNativeMergeGlobalOverride_should_ReportUnset_Then_Set(t *testing.T) 
 	if _, ok := cfg.GetNativeMergeGlobalOverride(); ok {
 		t.Fatal("expected clearing the override to remove it")
 	}
+}
+
+// TestGetAvailablePrograms_should_IncludeAider_When_AiderIsOnPath (plan Task
+// 1.3.2b): GetAvailablePrograms' candidate list includes "aider" so the
+// settings UI's program dropdown can detect it if installed — mirrors this
+// repo's existing pattern for other candidates (skip gracefully if not
+// found, verified here via a mocked executor rather than the real PATH).
+func TestGetAvailablePrograms_should_IncludeAider_When_AiderIsOnPath(t *testing.T) {
+	originalShell := os.Getenv("SHELL")
+	defer os.Setenv("SHELL", originalShell)
+	os.Setenv("SHELL", "/bin/bash")
+
+	aiderPath := "/usr/local/bin/aider"
+	mockExecutor := &mockCommandExecutor{
+		CommandFunc: func(name string, args ...string) *exec.Cmd {
+			return exec.Command(name, args...)
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			shellCmd := cmd.Args[len(cmd.Args)-1]
+			if strings.Contains(shellCmd, "aider") {
+				return []byte(aiderPath), nil
+			}
+			return []byte(""), nil
+		},
+	}
+
+	programs := NewConfigWithExecutor(mockExecutor).GetAvailablePrograms()
+
+	assert.Contains(t, programs, aiderPath)
+}
+
+// TestGetAvailablePrograms_should_OmitAider_When_AiderNotOnPath is the
+// zero-regression companion: an undetected "aider" candidate is silently
+// skipped, same as any other undetected candidate, never an error.
+func TestGetAvailablePrograms_should_OmitAider_When_AiderNotOnPath(t *testing.T) {
+	originalShell := os.Getenv("SHELL")
+	defer os.Setenv("SHELL", originalShell)
+	os.Setenv("SHELL", "/bin/bash")
+
+	mockExecutor := &mockCommandExecutor{
+		CommandFunc: func(name string, args ...string) *exec.Cmd {
+			return exec.Command(name, args...)
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			return []byte(""), nil
+		},
+	}
+
+	programs := NewConfigWithExecutor(mockExecutor).GetAvailablePrograms()
+
+	assert.Empty(t, programs)
 }

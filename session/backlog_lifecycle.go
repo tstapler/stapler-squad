@@ -451,7 +451,7 @@ func (l *BacklogLifecycleListener) triggerDequeue(ctx context.Context) {
 		return
 	}
 	if err := d.DequeueNextQueuedItems(ctx); err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] DequeueNextQueuedItems error: %v", err)
+		log.Warn("[BacklogLifecycle] DequeueNextQueuedItems error", "error", err)
 	}
 }
 
@@ -808,11 +808,11 @@ func (l *BacklogLifecycleListener) onSessionStarted(sessionUUID string) {
 		if errors.Is(err, ErrNotFound) {
 			return
 		}
-		log.ErrorLog().Printf("[BacklogLifecycle] GetItemSessionBySessionUUID(%s) error: %v", sessionUUID, err)
+		log.Error("[BacklogLifecycle] GetItemSessionBySessionUUID error", "session", sessionUUID, "error", err)
 		return
 	}
 	if err := l.storage.UpdateItemSessionStarted(ctx, is.ID, time.Now()); err != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] UpdateItemSessionStarted(%s) error: %v", is.ID, err)
+		log.Error("[BacklogLifecycle] UpdateItemSessionStarted error", "item_session", is.ID, "error", err)
 	}
 }
 
@@ -825,7 +825,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		if errors.Is(err, ErrNotFound) {
 			return
 		}
-		log.ErrorLog().Printf("[BacklogLifecycle] GetItemSessionBySessionUUID(%s) error: %v", sessionUUID, err)
+		log.Error("[BacklogLifecycle] GetItemSessionBySessionUUID error", "session", sessionUUID, "error", err)
 		return
 	}
 
@@ -856,7 +856,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	// Record end time for all session roles (triage, review, work).
 	now := time.Now()
 	if err := l.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil { //nolint:silenttransition bookkeeping timestamp; the zombie-session detector (reconcileStuckReviewItems) falls back to SessionLivenessChecker rather than relying solely on EndedAt, so a failed write here doesn't fully hide a dead session
-		log.ErrorLog().Printf("[BacklogLifecycle] UpdateItemSessionEnded(%s) error: %v", is.ID, err)
+		log.Error("[BacklogLifecycle] UpdateItemSessionEnded error", "item_session", is.ID, "error", err)
 	}
 
 	// Review sessions are handled by a dedicated post-verdict path: they don't
@@ -882,19 +882,19 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		// to spawn a fresh work session) — driving our own status transition
 		// here would race it and, per BUG-064, reliably win, silently
 		// discarding that follow-up. Nothing further to do.
-		log.DebugLog().Printf("[BacklogLifecycle] onSessionExited item=%s session=%s: already ended by another code path before this exit event; skipping status transition", is.BacklogItemID, sessionUUID)
+		log.Debug("[BacklogLifecycle] onSessionExited already ended by another code path before this exit event; skipping status transition", "item", is.BacklogItemID, "session", sessionUUID)
 		return
 	}
 
 	// Look up the BacklogItem via storage (no longer an eager-loaded edge).
 	item, err := l.storage.GetBacklogItem(ctx, is.BacklogItemID)
 	if err != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] GetBacklogItem for session %s (item %s): %v", sessionUUID, is.BacklogItemID, err)
+		log.Error("[BacklogLifecycle] GetBacklogItem failed", "session", sessionUUID, "item", is.BacklogItemID, "error", err)
 		return
 	}
 
 	if BacklogStatus(item.Status) != BacklogStatusInProgress {
-		log.DebugLog().Printf("[BacklogLifecycle] item %s is %s (not in_progress); skipping", item.ID, item.Status)
+		log.Debug("[BacklogLifecycle] item is not in_progress; skipping", "item", item.ID, "status", item.Status)
 		return
 	}
 
@@ -909,7 +909,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		ExpectedUpdatedAt: &updatedAt,
 	}
 	if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, TriggeredBySystem); err != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] TransitionBacklogItemStatus item=%s to=%s: %v", item.ID, toStatus, err)
+		log.Error("[BacklogLifecycle] TransitionBacklogItemStatus failed", "item", item.ID, "to", toStatus, "error", err)
 		return
 	}
 
@@ -918,7 +918,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	// self-heal sweep's next tick (Task 2.1.5a).
 	l.resolveStuckLogged(ctx, l.storage.repo, item.ID, domain.StuckReasonStaleWork, "onSessionExited")
 
-	log.InfoLog().Printf("[BacklogLifecycle] item %s transitioned to %s (session %s exited)", item.ID, toStatus, sessionUUID)
+	log.Info("[BacklogLifecycle] item transitioned (session exited)", "item", item.ID, "to_status", toStatus, "session", sessionUUID)
 
 	// The item just left in_progress, freeing a WIP slot — dequeue immediately
 	// rather than waiting for the next ReconcileStuck tick (safety-net only).
@@ -1063,7 +1063,7 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 	// nothing active in flight.
 	reviewItems, err := er.FindStuckReviewItems(ctx)
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] BackfillStuckStates FindStuckReviewItems error: %v", err)
+		log.Warn("[BacklogLifecycle] BackfillStuckStates FindStuckReviewItems error", "error", err)
 	} else {
 		for _, item := range reviewItems {
 			if l.backfillMarkAndNotify(ctx, er, item.ID.String(), domain.StuckReasonAbandonedReview, BacklogStatusReview,
@@ -1079,12 +1079,12 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 		Statuses: []string{string(BacklogStatusInProgress)},
 	})
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] BackfillStuckStates ListBacklogItems error: %v", err)
+		log.Warn("[BacklogLifecycle] BackfillStuckStates ListBacklogItems error", "error", err)
 	} else {
 		for _, item := range inProgressItems {
 			sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 			if sessErr != nil {
-				log.WarningLog().Printf("[BacklogLifecycle] BackfillStuckStates ListItemSessions item=%s: %v", item.ID, sessErr)
+				log.Warn("[BacklogLifecycle] BackfillStuckStates ListItemSessions failed", "item", item.ID, "error", sessErr)
 				continue
 			}
 			var active *ItemSessionSummary
@@ -1111,7 +1111,7 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 		}
 	}
 
-	log.InfoLog().Printf("[BacklogLifecycle] BackfillStuckStates: seeded %d stuck row(s) at startup", seeded)
+	log.Info("[BacklogLifecycle] BackfillStuckStates: seeded stuck row(s) at startup", "seeded", seeded)
 }
 
 // backfillMarkAndNotify marks a stuck row and immediately pre-sets
@@ -1122,14 +1122,14 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 func (l *BacklogLifecycleListener) backfillMarkAndNotify(ctx context.Context, er *EntRepository, itemID string, reason domain.StuckReason, expectedStatus BacklogStatus, stuckContext string) bool {
 	applied, err := er.MarkStuck(ctx, itemID, reason, expectedStatus, stuckContext)
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] BackfillStuckStates MarkStuck item=%s reason=%s: %v", itemID, reason, err)
+		log.Warn("[BacklogLifecycle] BackfillStuckStates MarkStuck failed", "item", itemID, "reason", reason, "error", err)
 		return false
 	}
 	if !applied {
 		return false
 	}
 	if _, notifyErr := er.MarkStuckNotified(ctx, itemID, reason); notifyErr != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] BackfillStuckStates MarkStuckNotified item=%s reason=%s: %v", itemID, reason, notifyErr)
+		log.Warn("[BacklogLifecycle] BackfillStuckStates MarkStuckNotified failed", "item", itemID, "reason", reason, "error", notifyErr)
 	}
 	return true
 }
@@ -1143,7 +1143,7 @@ func (l *BacklogLifecycleListener) backfillMarkAndNotify(ctx context.Context, er
 func (l *BacklogLifecycleListener) runStuckDetector(name string, okNames, panickedNames *[]string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] stuck detector %q panicked (recovered): %v", name, r)
+			log.Warn("[BacklogLifecycle] stuck detector panicked (recovered)", "detector", name, "recovered", r)
 			*panickedNames = append(*panickedNames, name)
 			return
 		}
@@ -1162,13 +1162,13 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	er := l.storage.repo
 	n, err := er.ReconcileStuckItems(ctx)
 	if err != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] ReconcileStuckItems error: %v", err)
+		log.Error("[BacklogLifecycle] ReconcileStuckItems error", "error", err)
 		return
 	}
 	if n > 0 {
-		log.InfoLog().Printf("[BacklogLifecycle] ReconcileStuckItems: transitioned %d stuck items to review", n)
+		log.Info("[BacklogLifecycle] ReconcileStuckItems: transitioned stuck items to review", "count", n)
 	} else {
-		log.DebugLog().Printf("[BacklogLifecycle] ReconcileStuckItems: no stuck items found")
+		log.Debug("[BacklogLifecycle] ReconcileStuckItems: no stuck items found")
 	}
 
 	// Re-spawn review gates for items stuck in "review" with no review session.
@@ -1178,7 +1178,7 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	if l.getSessionCreator() != nil {
 		items, gateErr := er.FindReviewItemsWithoutGate(ctx)
 		if gateErr != nil {
-			log.ErrorLog().Printf("[BacklogLifecycle] FindReviewItemsWithoutGate error: %v", gateErr)
+			log.Error("[BacklogLifecycle] FindReviewItemsWithoutGate error", "error", gateErr)
 		} else {
 			for _, item := range items {
 				var workSession *ItemSessionSummary
@@ -1187,10 +1187,10 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 					workSession = &s
 				}
 				if workSession == nil {
-					log.DebugLog().Printf("[BacklogLifecycle] ReconcileStuckReviewGates: item %s has no work session, skipping", item.ID)
+					log.Debug("[BacklogLifecycle] ReconcileStuckReviewGates: item has no work session, skipping", "item", item.ID)
 					continue
 				}
-				log.InfoLog().Printf("[BacklogLifecycle] ReconcileStuckReviewGates: re-spawning review gate for item %s", item.ID)
+				log.Info("[BacklogLifecycle] ReconcileStuckReviewGates: re-spawning review gate", "item", item.ID)
 				itemData := backlogItemToData(item)
 				isCopy := *workSession
 				go func(itemCopy *BacklogItemData, isCopy ItemSessionSummary) {
@@ -1220,9 +1220,9 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// pr_url — otherwise permanently invisible to FindPRPendingItems' PrNumberGT(0)
 	// filter below, so they'd never get polled. See BackfillMissingPRNumbers doc.
 	if n, backfillErr := er.BackfillMissingPRNumbers(ctx); backfillErr != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] BackfillMissingPRNumbers error: %v", backfillErr)
+		log.Error("[BacklogLifecycle] BackfillMissingPRNumbers error", "error", backfillErr)
 	} else if n > 0 {
-		log.InfoLog().Printf("[BacklogLifecycle] BackfillMissingPRNumbers: backfilled pr_number for %d item(s)", n)
+		log.Info("[BacklogLifecycle] BackfillMissingPRNumbers: backfilled pr_number", "count", n)
 	}
 
 	// Durable stuck-reason detectors, each panic-isolated (Story 2.1.5e) so one
@@ -1436,7 +1436,7 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	if countErr == nil {
 		openCount = len(openRows)
 	}
-	log.InfoLog().Printf("[BacklogLifecycle] stuck sweep tick: detectors ok=%v panicked=%v openRows=%d", okNames, panickedNames, openCount)
+	log.Info("[BacklogLifecycle] stuck sweep tick", "ok", okNames, "panicked", panickedNames, "open_rows", openCount)
 }
 
 // resolveStuckLogged resolves an open BacklogStuckState row for (itemID, reason),
@@ -1448,7 +1448,7 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 // sites for the same reason within one function, e.g. "ReconcilePRPending/closed").
 func (l *BacklogLifecycleListener) resolveStuckLogged(ctx context.Context, er *EntRepository, itemID string, reason domain.StuckReason, caller string) {
 	if _, err := er.ResolveStuck(ctx, itemID, reason); err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] %s ResolveStuck(%s) item=%s: %v", caller, reason, itemID, err)
+		log.Warn("[BacklogLifecycle] ResolveStuck failed", "caller", caller, "reason", reason, "item", itemID, "error", err)
 	}
 }
 
@@ -1527,7 +1527,7 @@ func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Con
 		},
 	})
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] refreshWorkSessionGitActivity list error: %v", err)
+		log.Warn("[BacklogLifecycle] refreshWorkSessionGitActivity list error", "error", err)
 		return
 	}
 
@@ -1537,7 +1537,7 @@ func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Con
 		}
 		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 		if sessErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] refreshWorkSessionGitActivity ListItemSessions item=%s: %v", item.ID, sessErr)
+			log.Warn("[BacklogLifecycle] refreshWorkSessionGitActivity ListItemSessions failed", "item", item.ID, "error", sessErr)
 			continue
 		}
 		var lastWork *ItemSessionSummary
@@ -1564,7 +1564,7 @@ func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Con
 
 		info, infoErr := git.CommitInfo(item.RepoPath, head)
 		if infoErr != nil {
-			log.DebugLog().Printf("[BacklogLifecycle] refreshWorkSessionGitActivity CommitInfo item=%s sha=%s: %v", item.ID, head, infoErr)
+			log.Debug("[BacklogLifecycle] refreshWorkSessionGitActivity CommitInfo failed", "item", item.ID, "sha", head, "error", infoErr)
 			continue
 		}
 
@@ -1573,16 +1573,16 @@ func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Con
 			if shipped, _, listErr := git.ListShippedCommits(ctx, item.RepoPath, lastWork.BaseCommitSha, head); listErr == nil {
 				commitCount = len(shipped)
 			} else {
-				log.DebugLog().Printf("[BacklogLifecycle] refreshWorkSessionGitActivity ListShippedCommits item=%s: %v", item.ID, listErr)
+				log.Debug("[BacklogLifecycle] refreshWorkSessionGitActivity ListShippedCommits failed", "item", item.ID, "error", listErr)
 			}
 		}
 
 		if updErr := l.storage.UpdateItemSessionGitActivity(ctx, lastWork.ID, head, info.Summary, info.AuthorAt, commitCount); updErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] refreshWorkSessionGitActivity update item=%s session=%s: %v", item.ID, lastWork.SessionUUID, updErr)
+			log.Warn("[BacklogLifecycle] refreshWorkSessionGitActivity update failed", "item", item.ID, "session", lastWork.SessionUUID, "error", updErr)
 			continue
 		}
-		log.DebugLog().Printf("[BacklogLifecycle] refreshWorkSessionGitActivity item=%s session=%s: last commit %s → %s (%d since base)",
-			item.ID, lastWork.SessionUUID, lastWork.LastCommitSha, head, commitCount)
+		log.Debug("[BacklogLifecycle] refreshWorkSessionGitActivity: last commit updated",
+			"item", item.ID, "session", lastWork.SessionUUID, "from_sha", lastWork.LastCommitSha, "to_sha", head, "commit_count", commitCount)
 	}
 }
 
@@ -1613,7 +1613,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 		Statuses: []string{string(BacklogStatusQueued)},
 	})
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems list error: %v", err)
+		log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems list error", "error", err)
 		return
 	}
 
@@ -1633,7 +1633,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 		// same item under two differently-worded stuck reasons at once.
 		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 		if sessErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems ListItemSessions item=%s: %v", item.ID, sessErr)
+			log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems ListItemSessions failed", "item", item.ID, "error", sessErr)
 			// Fail open (still flag as plan-not-approved below) — losing session
 			// visibility for one tick shouldn't suppress the pre-existing signal.
 		} else if latest := latestTriageSession(sessions); latest != nil && latest.EndedAt != nil && latest.TriageResult == "" {
@@ -1643,7 +1643,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, BacklogStatusQueued,
 			"queued item blocked by DequeueNextQueuedItems' planning gate (plan not approved, skip_planning not set)")
 		if markErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems MarkStuck item=%s: %v", item.ID, markErr)
+			log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems MarkStuck failed", "item", item.ID, "error", markErr)
 			continue
 		}
 		if !applied {
@@ -1651,7 +1651,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 		}
 		rows, findErr := er.FindOpenStuckStates(ctx)
 		if findErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems FindOpenStuckStates item=%s: %v", item.ID, findErr)
+			log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems FindOpenStuckStates failed", "item", item.ID, "error", findErr)
 			continue
 		}
 		row, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonPlanNotApproved)
@@ -1659,7 +1659,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 			continue
 		}
 
-		log.WarningLog().Printf("[BacklogLifecycle] item %s queued but blocked by unapproved plan", item.ID)
+		log.Warn("[BacklogLifecycle] item queued but blocked by unapproved plan", "item", item.ID)
 		l.notify(item.ID,
 			"Queued item blocked by unapproved plan",
 			fmt.Sprintf("%s — this item cannot be dequeued until its plan is approved (or skip_planning is set). Approve the plan or update the item to unblock it.", item.Title),
@@ -1667,7 +1667,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 			false, true, // urgent, important — blocks progress but is a standing state, not time-critical
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonPlanNotApproved); notifyErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems MarkStuckNotified item=%s: %v", item.ID, notifyErr)
+			log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems MarkStuckNotified failed", "item", item.ID, "error", notifyErr)
 		}
 	}
 	// No resolve pass needed here: selfHealStuck (status-anchored) clears this
@@ -1707,7 +1707,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, sessionUUID, repoPath string) string {
 	wt, err := l.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] resolveLatestWorkCommit: no worktree data for session %s: %v", sessionUUID, err)
+		log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: no worktree data for session", "session", sessionUUID, "error", err)
 		return ""
 	}
 	if wt.WorktreePath != "" {
@@ -1719,7 +1719,7 @@ func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, 
 					return sha
 				}
 			} else if branchErr == nil {
-				log.WarningLog().Printf("[BacklogLifecycle] resolveLatestWorkCommit: worktree path %s now holds branch %q, not session's %q (path recycled?) — falling back to repo-wide branch lookup", wt.WorktreePath, branch, wt.BranchName)
+				log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: worktree path now holds a different branch than the session's (path recycled?) — falling back to repo-wide branch lookup", "worktree_path", wt.WorktreePath, "branch", branch, "expected_branch", wt.BranchName)
 			}
 		}
 	}
@@ -1730,7 +1730,7 @@ func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, 
 	cmd.Dir = repoPath
 	out, revErr := cmd.Output()
 	if revErr != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] resolveLatestWorkCommit: rev-parse %s in %s: %v", wt.BranchName, repoPath, revErr)
+		log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: rev-parse failed", "branch", wt.BranchName, "repo_path", repoPath, "error", revErr)
 		return ""
 	}
 	return strings.TrimSpace(string(out))
@@ -1792,7 +1792,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		Statuses: []string{string(BacklogStatusInProgress), string(BacklogStatusReview)},
 	})
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems list error: %v", err)
+		log.Warn("[BacklogLifecycle] reconcileBouncingItems list error", "error", err)
 		return
 	}
 
@@ -1828,7 +1828,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			checker := l.getPRPendingCheckerFactory()(item.RepoPath)
 			merged, mergedErr := checker.IsPRMerged(ctx, item.PrNumber)
 			if mergedErr != nil {
-				log.DebugLog().Printf("[BacklogLifecycle] reconcileBouncingItems IsPRMerged item=%s pr=%d: %v", item.ID, item.PrNumber, mergedErr)
+				log.Debug("[BacklogLifecycle] reconcileBouncingItems IsPRMerged failed", "item", item.ID, "pr", item.PrNumber, "error", mergedErr)
 			} else if merged {
 				// Story 6 guard (adversarial-review.md's Blocker): re-verify,
 				// via a live GitHub lookup, that PR #item.PrNumber's head
@@ -1837,18 +1837,18 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 				// alone. Fails closed identically to
 				// verifyPRAssociationForFixSpawn's own contract.
 				if !l.verifyPRAssociationForFixSpawn(ctx, item.ID, item.RepoPath, item.PrNumber) {
-					log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
+					log.Warn("[BacklogLifecycle] reconcileBouncingItems: PR head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", "item", item.ID, "pr", item.PrNumber)
 					continue
 				}
 				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: PR #%d for this item is confirmed merged on GitHub, so the item's rework cycle is treated as converged rather than bouncing.", item.PrNumber)
 				if transErr := l.transitionBouncingItemToDone(ctx, item, summary); transErr != nil {
-					log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems done transition item=%s: %v", item.ID, transErr)
+					log.Warn("[BacklogLifecycle] reconcileBouncingItems done transition failed", "item", item.ID, "error", transErr)
 					// The PR is already confirmed merged — the item is left
 					// bouncing between in_progress/review with nothing else
 					// surfacing this until the next tick retries it.
 					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("PR #%d was confirmed merged but the item's transition to done failed", item.PrNumber), transErr)
 				} else {
-					log.InfoLog().Printf("[BacklogLifecycle] reconcileBouncingItems item=%s → done (PR #%d already merged)", item.ID, item.PrNumber)
+					log.Info("[BacklogLifecycle] reconcileBouncingItems: item → done (PR already merged)", "item", item.ID, "pr", item.PrNumber)
 					// Best-effort: clear any bouncing (+ bounce_cap_exhausted,
 					// Signal 2) row from a prior tick immediately, rather than
 					// waiting for the next selfHealStuck sweep to notice the
@@ -1867,12 +1867,12 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			if sha, shipped := l.mostRecentWorkCommitShippedToMain(ctx, item.ID, item.RepoPath); shipped {
 				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: this item's most recent work-session commit (%s) is confirmed shipped to %s without ever going through a PR, so the item's rework cycle is treated as converged rather than bouncing.", sha, bounceMainBranch)
 				if transErr := l.transitionBouncingItemToDone(ctx, item, summary); transErr != nil {
-					log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems done transition (shipped without PR) item=%s: %v", item.ID, transErr)
+					log.Warn("[BacklogLifecycle] reconcileBouncingItems done transition (shipped without PR) failed", "item", item.ID, "error", transErr)
 					// The commit is already confirmed shipped to main — same
 					// silent-stranding risk as the merged-PR branch above.
 					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("commit %s was confirmed shipped to %s but the item's transition to done failed", sha, bounceMainBranch), transErr)
 				} else {
-					log.InfoLog().Printf("[BacklogLifecycle] reconcileBouncingItems item=%s → done (commit %s shipped to %s without a PR)", item.ID, sha, bounceMainBranch)
+					log.Info("[BacklogLifecycle] reconcileBouncingItems: item → done (commit shipped without a PR)", "item", item.ID, "commit", sha, "branch", bounceMainBranch)
 					// Best-effort: clear any bouncing (+ bounce_cap_exhausted,
 					// Signal 2) row from a prior tick — see the identical
 					// comment at the merged-PR branch above.
@@ -1884,7 +1884,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 
 		count, countErr := er.CountReviewCyclesSince(ctx, item.ID, since)
 		if countErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems CountReviewCyclesSince item=%s: %v", item.ID, countErr)
+			log.Warn("[BacklogLifecycle] reconcileBouncingItems CountReviewCyclesSince failed", "item", item.ID, "error", countErr)
 			continue
 		}
 		// Fetch the full most-recent verdict (outcome + reviewer summary), not
@@ -1900,7 +1900,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		// verdict either would.
 		recentVerdicts, verdictErr := er.GetRecentReviewVerdictSummaries(ctx, item.ID, 1)
 		if verdictErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems GetRecentReviewVerdictSummaries item=%s: %v", item.ID, verdictErr)
+			log.Warn("[BacklogLifecycle] reconcileBouncingItems GetRecentReviewVerdictSummaries failed", "item", item.ID, "error", verdictErr)
 		}
 		var latestOutcome, latestSummary string
 		if len(recentVerdicts) > 0 {
@@ -1923,7 +1923,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatus(item.Status), reasonDetail)
 		if markErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems MarkStuck item=%s: %v", item.ID, markErr)
+			log.Warn("[BacklogLifecycle] reconcileBouncingItems MarkStuck failed", "item", item.ID, "error", markErr)
 			continue
 		}
 		if !applied {
@@ -1931,14 +1931,14 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		}
 		rows, findErr := er.FindOpenStuckStates(ctx)
 		if findErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems FindOpenStuckStates item=%s: %v", item.ID, findErr)
+			log.Warn("[BacklogLifecycle] reconcileBouncingItems FindOpenStuckStates failed", "item", item.ID, "error", findErr)
 			continue
 		}
 		row, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonBouncing)
 		if !ok || row.NotifiedAt != nil {
 			continue
 		}
-		log.WarningLog().Printf("[BacklogLifecycle] item %s bouncing (%d cycles in %s, no PASS)", item.ID, count, cycleLookback)
+		log.Warn("[BacklogLifecycle] item bouncing, no PASS", "item", item.ID, "cycles", count, "lookback", cycleLookback)
 		notifyBody := fmt.Sprintf("%s — bounced between in_progress and review %d times in the last %s with no PASS verdict. It may be stuck in a non-converging rework loop.", item.Title, count, cycleLookback)
 		if latestOutcome != "" {
 			notifyBody = fmt.Sprintf("%s Most recent verdict: %s — %s", notifyBody, latestOutcome, sanitizeField(latestSummary, 500))
@@ -1950,7 +1950,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			false, true, // urgent, important — non-converging loop matters, but not a drop-everything alert
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonBouncing); notifyErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems MarkStuckNotified item=%s: %v", item.ID, notifyErr)
+			log.Warn("[BacklogLifecycle] reconcileBouncingItems MarkStuckNotified failed", "item", item.ID, "error", notifyErr)
 		}
 	}
 }
@@ -2028,7 +2028,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRepository) {
 	open, err := er.FindOpenStuckStates(ctx)
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] selfHealStuck FindOpenStuckStates error: %v", err)
+		log.Warn("[BacklogLifecycle] selfHealStuck FindOpenStuckStates error", "error", err)
 		return
 	}
 	for _, row := range open {
@@ -2124,7 +2124,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 func (l *BacklogLifecycleListener) reconcileMultiReasonEscalation(ctx context.Context, er *EntRepository) {
 	open, err := er.FindOpenStuckStates(ctx)
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] reconcileMultiReasonEscalation FindOpenStuckStates error: %v", err)
+		log.Warn("[BacklogLifecycle] reconcileMultiReasonEscalation FindOpenStuckStates error", "error", err)
 		return
 	}
 
@@ -2210,9 +2210,9 @@ func (l *BacklogLifecycleListener) deescalateMultiReasonIfNeeded(ctx context.Con
 	}
 	if hasExistingRow {
 		if _, resolveErr := er.ResolveStuck(ctx, itemID, domain.StuckReasonMultipleReasons); resolveErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileMultiReasonEscalation ResolveStuck item=%s: %v", itemID, resolveErr)
+			log.Warn("[BacklogLifecycle] reconcileMultiReasonEscalation ResolveStuck failed", "item", itemID, "error", resolveErr)
 		} else {
-			log.InfoLog().Printf("[BacklogLifecycle] de-escalated item=%s open_reasons=%d", itemID, openReasonsCount)
+			log.Info("[BacklogLifecycle] de-escalated", "item", itemID, "open_reasons", openReasonsCount)
 		}
 	}
 	return true
@@ -2242,7 +2242,7 @@ func (l *BacklogLifecycleListener) notifyMultiReasonEscalationIfReady(ctx contex
 		true, true, // urgent, important
 	)
 	if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonMultipleReasons); notifyErr != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuckNotified item=%s: %v", itemID, notifyErr)
+		log.Warn("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuckNotified failed", "item", itemID, "error", notifyErr)
 	}
 }
 
@@ -2270,13 +2270,13 @@ func (l *BacklogLifecycleListener) reconcileMultiReasonEscalationForItem(ctx con
 
 	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonMultipleReasons, rows[0].ItemStatus, contextString)
 	if markErr != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuck item=%s: %v", itemID, markErr)
+		log.Warn("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuck failed", "item", itemID, "error", markErr)
 		return
 	}
 	if !applied {
 		return
 	}
-	log.InfoLog().Printf("[BacklogLifecycle] escalated item=%s open_reasons=%d", itemID, len(nonEscalation))
+	log.Info("[BacklogLifecycle] escalated", "item", itemID, "open_reasons", len(nonEscalation))
 
 	l.notifyMultiReasonEscalationIfReady(ctx, er, itemID, rows[0].ItemTitle, contextString, len(nonEscalation), existingRow, hasExistingRow)
 }

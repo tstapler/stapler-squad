@@ -892,6 +892,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.SessionDefaults.Tags = []string{}
 	cfg.SessionDefaults.DirectoryRules = []DirectoryRule{}
 	cfg.SessionDefaults.Aliases = []AliasConfig{}
+	cfg.SessionDefaults.Programs = []ProgramConfig{}
 	// Escape analytics defaults. LoadConfigFromPath applies the same defaults
 	// after JSON decode (for fields absent from an existing config.json);
 	// DefaultConfig must mirror them so the two code paths are equivalent.
@@ -1282,7 +1283,7 @@ func (c *Config) GetAvailablePrograms() []string {
 		shell = "/bin/bash"
 	}
 
-	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy"}
+	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy", "aider"}
 
 	for _, candidate := range candidates {
 		var shellCmd string
@@ -1496,6 +1497,9 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	if cfg.SessionDefaults.Aliases == nil {
 		cfg.SessionDefaults.Aliases = []AliasConfig{}
 	}
+	if cfg.SessionDefaults.Programs == nil {
+		cfg.SessionDefaults.Programs = []ProgramConfig{}
+	}
 	if cfg.ConfigVersion == 0 {
 		cfg.ConfigVersion = 1
 	}
@@ -1693,6 +1697,17 @@ func (c *Config) SlackSigningSecretOverride() string {
 // See project_plans/pi-support/implementation/plan.md, Epic 2.1.
 const FeaturePiSupport = "pi-support"
 
+// FeatureAppScrollForwardingClaude gates forwarding Claude Code's own PageUp
+// scroll keybinding into its fullscreen conversation view (instead of relying
+// solely on tmux-native scrollback capture) for eligible Claude Code sessions
+// -- eligibility itself is AppScrollGate's job, this flag is the independent
+// kill switch on top of it. Off by default, live-settable, never an env var
+// (Risk Control's "Feature flags" bullet). See
+// project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
+// Scoped per-adapter deliberately: the future pi/agy equivalents
+// (":pi"/":agy") are separate flag keys, not covered by this one.
+const FeatureAppScrollForwardingClaude = "terminal:app-scrollback-forwarding:claude"
+
 // GetFeatureFlag returns the persisted enabled state of the named feature flag.
 // Absent key returns false — all feature flags default to disabled.
 // Currently recognized flags:
@@ -1705,6 +1720,8 @@ const FeaturePiSupport = "pi-support"
 //	  "webhook_triggers", but has no effect unless "webhook_triggers" is also enabled (that
 //	  flag gates whether the route is registered at all).
 //	"pi-support" (FeaturePiSupport) — pi-coding-agent support, off by default.
+//	"terminal:app-scrollback-forwarding:claude" (FeatureAppScrollForwardingClaude) —
+//	  app-scrollback forwarding for Claude Code sessions, off by default.
 func (c *Config) GetFeatureFlag(name string) bool {
 	if c == nil || c.FeatureFlags == nil {
 		return false

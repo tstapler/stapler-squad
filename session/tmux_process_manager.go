@@ -308,6 +308,19 @@ func (tm *TmuxProcessManager) CapturePaneContentRawPriority(ctx context.Context)
 	return s.CapturePaneContentRawPriority(ctx)
 }
 
+// IsAlternateScreenActive delegates to TmuxSession.IsAlternateScreenActive.
+// Not part of the TmuxManager interface (see Instance.IsAlternateScreenActiveBootstrap's
+// doc comment) -- called via a direct type assertion to *TmuxProcessManager
+// so this one-off addition doesn't ripple through TmuxManager's several test
+// mocks.
+func (tm *TmuxProcessManager) IsAlternateScreenActive() (bool, error) {
+	s := tm.session.Load()
+	if s == nil {
+		return false, fmt.Errorf("tmux session not initialized")
+	}
+	return s.IsAlternateScreenActive()
+}
+
 // CapturePaneContentWithOptions captures pane content between startLine and endLine.
 func (tm *TmuxProcessManager) CapturePaneContentWithOptions(startLine, endLine string) (string, error) {
 	s := tm.session.Load()

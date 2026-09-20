@@ -80,10 +80,19 @@ func NewInsightsService(
 	}
 }
 
-// sessionRolesForSessions builds a sessionUUID→role map from one unfiltered
+// SessionMeta is the per-session backlog attribution sessionMetaForSessions
+// looks up by tmux session ID: its SessionRole plus the backlog item it
+// belongs to (Epic 4.1's item-drilldown data).
+type SessionMeta struct {
+	Role      string
+	ItemID    string
+	ItemTitle string
+}
+
+// sessionMetaForSessions builds a sessionUUID→SessionMeta map from one unfiltered
 // GetAllItemSessionsWithBacklogInfo scan, keeping the first (most-recently-created,
-// per that query's explicit Order(Desc(CreatedAt))) role seen per UUID (ADR-029).
-func (s *InsightsService) sessionRolesForSessions(ctx context.Context) map[string]string {
+// per that query's explicit Order(Desc(CreatedAt))) entry seen per UUID (ADR-029).
+func (s *InsightsService) sessionMetaForSessions(ctx context.Context) map[string]SessionMeta {
 	if s.backlogReader == nil {
 		return nil
 	}
@@ -92,13 +101,13 @@ func (s *InsightsService) sessionRolesForSessions(ctx context.Context) map[strin
 		log.Warn("failed to fetch session roles for insights", "err", err)
 		return nil
 	}
-	roles := make(map[string]string, len(entries))
+	meta := make(map[string]SessionMeta, len(entries))
 	for _, e := range entries {
-		if _, exists := roles[e.SessionUUID]; !exists {
-			roles[e.SessionUUID] = e.SessionRole
+		if _, exists := meta[e.SessionUUID]; !exists {
+			meta[e.SessionUUID] = SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle}
 		}
 	}
-	return roles
+	return meta
 }
 
 // SetDismissedFindingsStore wires dismissal persistence (nil disables it —
@@ -136,7 +145,7 @@ func buildSessionSummary(
 	pt *tokens.PricingTable,
 	associator *tokens.Associator,
 	snapshot []tokens.SessionRecord,
-	roleMap map[string]string,
+	sessionMeta map[string]SessionMeta,
 ) *sessionv1.SessionTokenSummary {
 	firstTs, lastTs := sessionTimestamps(r)
 
@@ -177,7 +186,7 @@ func buildSessionSummary(
 		UnpricedModels:   unpriced,
 		ActivityType:     activityType,
 		Tags:             tags,
-		SessionRole:      roleMap[sessionID],
+		SessionRole:      sessionMeta[sessionID].Role,
 	}
 	if !firstTs.IsZero() {
 		summary.FirstMessageAt = timestamppb.New(firstTs)
@@ -228,6 +237,13 @@ func (s *InsightsService) GetInsightsSummary(
 
 		allUnpricedFamilies = make(map[string]bool)            // union of unpriced families across all sessions
 		dailyUnpriced       = make(map[string]map[string]bool) // day → set of unpriced families rolled into that day
+
+		roleAccums = make(map[string]*roleCostAccumulator) // key = SessionRole ("" = unattributed)
+		// transcriptCoveredSessionIDs is every tmux session ID resolved from a
+		// transcript in this loop — Story 4.1.4's fold-in pass skips any
+		// ItemSession row already counted here, so it never double-counts a
+		// Claude-backed session that has both a transcript and an ItemSession row.
+		transcriptCoveredSessionIDs = make(map[string]bool)
 	)
 
 	sessions := make([]*sessionv1.SessionTokenSummary, 0, len(results))
@@ -237,7 +253,7 @@ func (s *InsightsService) GetInsightsSummary(
 	if s.associator != nil {
 		sessionSnapshot = s.associator.Snapshot()
 	}
-	roleMap := s.sessionRolesForSessions(ctx)
+	sessionMeta := s.sessionMetaForSessions(ctx)
 
 	// Fetched once per request (not per-finding) — see AllRules's identical
 	// small-table-full-scan rationale.
@@ -278,6 +294,12 @@ func (s *InsightsService) GetInsightsSummary(
 		if s.associator != nil {
 			sessionID, isOrphan = s.associator.AssociateWithSnapshot(r, sessionSnapshot)
 		}
+		if sessionID != "" {
+			// Recorded before the orphan/session-id filters below so Story
+			// 4.1.4's fold-in pass still recognizes this session as
+			// transcript-covered even if this particular response excludes it.
+			transcriptCoveredSessionIDs[sessionID] = true
+		}
 
 		// Apply orphan filter.
 		if isOrphan && !msg.IncludeOrphans {
@@ -300,8 +322,9 @@ func (s *InsightsService) GetInsightsSummary(
 			}
 		}
 
-		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot, roleMap)
+		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot, sessionMeta)
 		costUSD, unpriced := summary.EstimatedCostUsd, summary.UnpricedModels
+		sessionUnpriced := len(unpriced) > 0
 		for _, f := range unpriced {
 			allUnpricedFamilies[f] = true
 		}
@@ -343,8 +366,14 @@ func (s *InsightsService) GetInsightsSummary(
 
 		sessions = append(sessions, summary)
 
-		// Aggregate global totals.
-		totalCostUSD += costUSD
+		// Aggregate global totals. An unpriced session's costUSD is excluded
+		// here (not just $0-added) so total_cost_usd stays exactly in sync
+		// with role_breakdown's identical exclusion rule below — see
+		// accumulateRoleCost's doc comment and Story 4.1.3's sum-consistency AC.
+		if !sessionUnpriced {
+			totalCostUSD += costUSD
+		}
+		accumulateRoleCost(roleAccums, sessionMeta[sessionID], costUSD, sessionUnpriced)
 		totalInputTokens += r.TotalInput
 		totalOutputTokens += r.TotalOutput
 		totalCacheReadTokens += r.CacheRead
@@ -447,6 +476,40 @@ func (s *InsightsService) GetInsightsSummary(
 	// of the process, not once per request.
 	s.warnNewUnpricedFamilies(allUnpricedFamilies)
 
+	// Story 4.1.4: fold in ItemSession rows with no matching Claude transcript
+	// (e.g. a Gemini-priced triage/review call, which writes no JSONL file for
+	// s.store.GetAll() to ever see) into total_cost_usd/role_breakdown, so a
+	// transcript-less session's cost isn't silently invisible. Deliberately
+	// scoped to those two surfaces only — daily/model/activity breakdowns stay
+	// transcript-only in v1 (see plan.md's Story 4.1.4 design note).
+	if s.backlogReader != nil {
+		entries, err := s.backlogReader.GetAllItemSessionsWithBacklogInfo(ctx)
+		if err != nil {
+			log.Warn("insights: failed to fetch item sessions for transcript-less cost fold-in", "err", err)
+		} else {
+			for _, e := range entries {
+				if e.SessionUUID == "" || transcriptCoveredSessionIDs[e.SessionUUID] {
+					continue // no real session, or already counted via its transcript above
+				}
+				if !fromTime.IsZero() && !e.CreatedAt.IsZero() && e.CreatedAt.Before(fromTime) {
+					continue
+				}
+				if !toTime.IsZero() && !e.CreatedAt.IsZero() && e.CreatedAt.After(toTime) {
+					continue
+				}
+				entryUnpriced := !e.CostPriced
+				if !entryUnpriced {
+					totalCostUSD += e.EstimatedCostUsd
+				}
+				accumulateRoleCost(roleAccums, SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle}, e.EstimatedCostUsd, entryUnpriced)
+			}
+		}
+	}
+
+	// Build sorted role-breakdown slice (Epic 4.1), sorted by cost desc — same
+	// pattern as models/activityBreakdown.
+	roleBreakdown := buildRoleBreakdown(roleAccums)
+
 	// Build sorted daily slice.
 	dailyKeys := make([]string, 0, len(dailyMap))
 	for k := range dailyMap {
@@ -514,6 +577,7 @@ func (s *InsightsService) GetInsightsSummary(
 		UnpricedModels:       sortedKeys(allUnpricedFamilies),
 		Findings:             allFindings,
 		ActivityBreakdown:    activityBreakdown,
+		RoleBreakdown:        roleBreakdown,
 	}
 
 	return connect.NewResponse(resp), nil
@@ -542,7 +606,7 @@ func (s *InsightsService) ListSessionTokens(
 	if s.associator != nil {
 		sessionSnapshot = s.associator.Snapshot()
 	}
-	roleMap := s.sessionRolesForSessions(ctx)
+	sessionMeta := s.sessionMetaForSessions(ctx)
 	for _, r := range results {
 		if r == nil {
 			continue
@@ -555,7 +619,7 @@ func (s *InsightsService) ListSessionTokens(
 			continue
 		}
 
-		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot, roleMap)
+		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot, sessionMeta)
 		for _, f := range summary.UnpricedModels {
 			allUnpricedFamilies[f] = true
 		}
@@ -694,10 +758,10 @@ func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEven
 				if s.associator != nil {
 					snapshot = s.associator.Snapshot()
 				}
-				roleMap := s.sessionRolesForSessions(ctx)
+				sessionMeta := s.sessionMetaForSessions(ctx)
 				evt = &sessionv1.InsightsEvent{
 					EventType: "update",
-					Session:   buildSessionSummary(result, s.pricing, s.associator, snapshot, roleMap),
+					Session:   buildSessionSummary(result, s.pricing, s.associator, snapshot, sessionMeta),
 					AllParsed: !s.store.IsLoading(),
 				}
 			} else {
@@ -854,6 +918,78 @@ func sessionTopTools(r *tokens.ParseResult, pt *tokens.PricingTable) []*sessionv
 		})
 	}
 	return result
+}
+
+// roleCostAccumulator collects one SessionRole's RoleCostBreakdown plus its
+// per-item ItemRoleCost buckets while GetInsightsSummary's main loop runs;
+// buildRoleBreakdown flattens it into the response's sorted role_breakdown slice.
+type roleCostAccumulator struct {
+	breakdown *sessionv1.RoleCostBreakdown
+	items     map[string]*sessionv1.ItemRoleCost // keyed by ItemID
+}
+
+// accumulateRoleCost folds one session's cost into roleAccums, bucketed by
+// meta.Role (empty string for a session with no backlog-item attribution —
+// kept, never dropped) and, within that bucket, by meta.ItemID. An unpriced
+// session increments UnpricedSessionCount and is excluded from
+// EstimatedCostUsd in both the role bucket and its item entry — the same
+// exclusion rule GetInsightsSummary applies to total_cost_usd, so
+// sum(role_breakdown[].estimated_cost_usd) always equals total_cost_usd.
+func accumulateRoleCost(roleAccums map[string]*roleCostAccumulator, meta SessionMeta, costUSD float64, unpriced bool) {
+	ra := roleAccums[meta.Role]
+	if ra == nil {
+		ra = &roleCostAccumulator{
+			breakdown: &sessionv1.RoleCostBreakdown{SessionRole: meta.Role},
+			items:     make(map[string]*sessionv1.ItemRoleCost),
+		}
+		roleAccums[meta.Role] = ra
+	}
+	ra.breakdown.SessionCount++
+	if unpriced {
+		ra.breakdown.UnpricedSessionCount++
+	} else {
+		ra.breakdown.EstimatedCostUsd += costUSD
+	}
+
+	item := ra.items[meta.ItemID]
+	if item == nil {
+		item = &sessionv1.ItemRoleCost{ItemId: meta.ItemID, ItemTitle: meta.ItemTitle}
+		ra.items[meta.ItemID] = item
+	}
+	item.SessionCount++
+	if unpriced {
+		item.UnpricedSessionCount++
+	} else {
+		item.EstimatedCostUsd += costUSD
+	}
+}
+
+// buildRoleBreakdown flattens roleAccums into a slice sorted by cost
+// descending (matching activityBreakdown's existing sort), with each
+// bucket's items sorted the same way.
+func buildRoleBreakdown(roleAccums map[string]*roleCostAccumulator) []*sessionv1.RoleCostBreakdown {
+	roles := make([]*sessionv1.RoleCostBreakdown, 0, len(roleAccums))
+	for _, ra := range roleAccums {
+		items := make([]*sessionv1.ItemRoleCost, 0, len(ra.items))
+		for _, it := range ra.items {
+			items = append(items, it)
+		}
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].EstimatedCostUsd != items[j].EstimatedCostUsd {
+				return items[i].EstimatedCostUsd > items[j].EstimatedCostUsd
+			}
+			return items[i].ItemId < items[j].ItemId
+		})
+		ra.breakdown.Items = items
+		roles = append(roles, ra.breakdown)
+	}
+	sort.Slice(roles, func(i, j int) bool {
+		if roles[i].EstimatedCostUsd != roles[j].EstimatedCostUsd {
+			return roles[i].EstimatedCostUsd > roles[j].EstimatedCostUsd
+		}
+		return roles[i].SessionRole < roles[j].SessionRole
+	})
+	return roles
 }
 
 // sortedKeys returns the true keys of a map[string]bool as a sorted slice.

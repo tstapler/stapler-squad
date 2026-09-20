@@ -36,7 +36,7 @@ func (p *instantDonePool) CallBlocking(
 	_ headless.CallOptions,
 	sink headless.CostSink,
 ) (string, error) {
-	sink(0)
+	sink(0, true)
 	return "DONE: test complete", nil
 }
 

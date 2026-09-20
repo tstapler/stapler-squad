@@ -159,6 +159,37 @@ func TestStreamOwnershipLock_should_ForcePathHubOwned_When_SessionOverrideIsSet(
 	}
 }
 
+// TestStreamOwnershipLock_should_ForcePathLegacyPerConnection_When_SessionOverrideIsFalse
+// covers the other direction of SetStreamHubSessionOverrideRequest's
+// documented contract ("false pins it onto the legacy path — either way,
+// regardless of the global default", proto/session/v1/session.proto): a
+// forceHub=false override must win over a *true* global flag, not just be
+// ignored. Regression guard for the bug where resolveLocked only checked
+// `ok && forceHub`, so a false override silently fell through to flagValue.
+func TestStreamOwnershipLock_should_ForcePathLegacyPerConnection_When_SessionOverrideIsFalse(t *testing.T) {
+	pinnedSession := "pinned-legacy-" + t.Name()
+	normalSession := "normal-2-" + t.Name()
+
+	streamhub.SetSessionOverrideLookup(func(sessionName string) (bool, bool) {
+		if sessionName == pinnedSession {
+			return false, true
+		}
+		return false, false
+	})
+	t.Cleanup(func() { streamhub.SetSessionOverrideLookup(nil) })
+
+	// Global flag is true for both; only pinnedSession has a false override.
+	pinnedPath := streamhub.AcquireOwnershipLock(pinnedSession).Resolve(true)
+	if pinnedPath != streamhub.PathLegacyPerConnection {
+		t.Fatalf("expected forceHub=false override to pin PathLegacyPerConnection, got %v", pinnedPath)
+	}
+
+	normalPath := streamhub.AcquireOwnershipLock(normalSession).Resolve(true)
+	if normalPath != streamhub.PathHubOwned {
+		t.Fatalf("expected non-overridden session to resolve PathHubOwned from the true global flag, got %v", normalPath)
+	}
+}
+
 // TestStreamOwnershipLock_should_IgnoreOverride_When_NoLookupIsInstalled
 // verifies the zero-value/backwards-compatible behavior: with no
 // SetSessionOverrideLookup call in effect (nil, the package default),

@@ -367,25 +367,19 @@ func (s *Scheduler) fireTrigger(ctx context.Context, wf *ent.Workflow, renderedP
 
 	sessionType := sessionTypeToProto(session.SessionType(wf.SessionType))
 
-	// Resolve a family alias (e.g. "family:sonnet") to a concrete model ID.
-	// Fails closed: an unknown/retired alias aborts the fire rather than
-	// passing the broken "family:xxx" string through to the CLI.
+	// Resolve a family alias (e.g. "family:sonnet") to a concrete model ID and
+	// append it to the program via the shared helper (session.ResolveExecutorProgram),
+	// so this and the work-stage/headless spawn paths can't independently drift on
+	// alias resolution or shell-escaping. Fails closed: an unknown/retired alias
+	// aborts the fire rather than passing the broken "family:xxx" string through
+	// to the CLI.
 	s.mu.Lock()
 	families := s.modelFamilies
 	s.mu.Unlock()
-	resolvedModel, modelErr := ResolveModel(families, wf.Model)
+	program, modelErr := session.ResolveExecutorProgram(wf.AgentType, wf.Model, families)
 	if modelErr != nil {
 		log.Error("[WorkflowScheduler] FireNow: model resolution failed", "slug", wf.Slug, "model", wf.Model, "err", modelErr)
 		return "", fmt.Errorf("resolve model for workflow %q: %w", wf.Slug, modelErr)
-	}
-
-	// Append --model flag when a model is specified and the program is claude (or defaulting to claude).
-	program := wf.AgentType
-	if resolvedModel != "" {
-		isClaudeProgram := program == "" || program == "claude"
-		if isClaudeProgram {
-			program = "claude --model " + resolvedModel
-		}
 	}
 
 	// Deliberately mirrors a manually-created CreateSessionRequest field-for-field

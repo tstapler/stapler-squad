@@ -96,6 +96,12 @@ type SessionService struct {
 	statusManager     *session.InstanceStatusManager
 	reviewQueuePoller *session.ReviewQueuePoller
 
+	// sessionTagPoller drives the Phase 4 LLM fallback tag classification
+	// (session-classifier-pipeline Epic 4.4). nil when HeadlessPool is nil (no
+	// claude binary found) — every AddInstance/RemoveInstance call site below
+	// guards for nil the same way reviewQueuePoller does.
+	sessionTagPoller *session.SessionTagClassificationPoller
+
 	// concStorage is the concrete backing store, used for operations (like
 	// ListWorkspacePeers) not part of the InstanceStore interface. nil when storage is a
 	// fake InstanceStore (tests) — callers must nil-check.
@@ -111,6 +117,16 @@ type SessionService struct {
 	approvalSvc     *ApprovalService
 	utilitySvc      *UtilityService
 	rulesSvc        *RulesService
+	// taggingRulesSvc is exposed over ListTaggingRules/UpsertTaggingRule/DeleteTaggingRule
+	// (Phase 5 of the session-classifier-pipeline project). nil-safe: those RPC handlers
+	// guard with `if s.taggingRulesSvc == nil` and return CodeUnimplemented, mirroring the
+	// pattern documented for rulesSvc's own nil-safe accessors below.
+	taggingRulesSvc *TaggingRulesService
+	// taggingEngine is the same live engine taggingRulesSvc mutates on CRUD — injected into
+	// every Instance (wireCallbacks) so session/instance_actor_setters.go's reclassifyTagsLocked
+	// fixpoint hook has a real rule set to evaluate (session-classifier-pipeline Epic 3.3/Task
+	// 2.3.3d). nil-safe like taggingRulesSvc; SetTaggingEngine(nil) just disables auto-tagging.
+	taggingEngine *classifier.TaggingEngine
 
 	// External session discovery (for mux-enabled sessions from external terminals)
 	externalDiscovery *session.ExternalSessionDiscovery
@@ -703,6 +719,21 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		classifierObj.AddRules(userRules)
 	}
 
+	// Build tagging rules store/service. The live TaggingEngine itself is wired into
+	// Instance construction by a later phase of this project (session-classifier-pipeline
+	// Phase 3) — constructing it here just gives TaggingRulesService's CRUD/rebuild
+	// plumbing a real engine to target ahead of that wiring.
+	taggingRulesStore, taggingRulesErr := NewTaggingRulesStore(concStorage)
+	if taggingRulesErr != nil {
+		log.Warn("failed to load tagging rules store, using empty store", "err", taggingRulesErr)
+		taggingRulesStore = &TaggingRulesStore{storage: concStorage}
+	}
+	taggingEngine := classifier.NewTaggingEngine()
+	if userTaggingRules := taggingRulesStore.ToRules(); len(userTaggingRules) > 0 {
+		taggingEngine.AddRules(userTaggingRules)
+	}
+	taggingRulesSvc := NewTaggingRulesService(taggingRulesStore, taggingEngine, analyticsStore)
+
 	// Determine the server process's own working directory for claude-settings
 	// project-level scope. Empty cwd makes LoadClaudeSettingsRulesDetailed skip
 	// project-level paths gracefully. Global-only for v1 — this is always the
@@ -800,6 +831,8 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		approvalSvc:                 approvalSvc,
 		utilitySvc:                  utilitySvc,
 		rulesSvc:                    rulesSvc,
+		taggingRulesSvc:             taggingRulesSvc,
+		taggingEngine:               taggingEngine,
 		approvalStore:               approvalStore,
 		databaseSvc:                 NewDatabaseService(),
 		fileSvc:                     NewFileService(workspaceSvc),
@@ -1351,6 +1384,14 @@ func (s *SessionService) GetClassifier() *classifier.RuleBasedClassifier {
 	return s.rulesSvc.classifier
 }
 
+// GetTaggingEngine returns the live TaggingEngine (the same instance taggingRulesSvc
+// mutates on CRUD) for wiring up SessionTagClassificationPoller (session-classifier-pipeline
+// Epic 4.4) — nil-safe like GetClassifier, though taggingEngine is currently always
+// constructed alongside the SessionService, unlike rulesSvc which can be nil in some paths.
+func (s *SessionService) GetTaggingEngine() *classifier.TaggingEngine {
+	return s.taggingEngine
+}
+
 // GetAnalyticsStore returns the analytics store for wiring up the ApprovalHandler.
 func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
 	if s.rulesSvc == nil {
@@ -1576,7 +1617,7 @@ func (s *SessionService) TriggerReviewForSession(sessionUUID string) {
 // BacklogLifecycleListener can spawn one-shot review sessions automatically when
 // a work session exits. The session is tagged "backlog:review" and runs one-shot.
 func (s *SessionService) SpawnReviewSession(ctx context.Context, item *session.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error) {
-	inst, err := s.CreateDirectorySession(ctx, "review:"+item.ID[:8], item.RepoPath, prompt, []string{"backlog:review"}, true, true)
+	inst, err := s.CreateDirectorySession(ctx, "review:"+item.ID[:8], item.RepoPath, prompt, []string{"backlog:review"}, true, true, "")
 	if err != nil {
 		return nil, err
 	}
@@ -1588,13 +1629,17 @@ func (s *SessionService) SpawnReviewSession(ctx context.Context, item *session.B
 // BacklogService can spawn sessions without importing SessionService directly.
 // It creates a directory-type session with the given title, path, initial prompt,
 // tags, and oneShot flag, wires it into the live poller, and returns the Instance.
-func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error) {
+func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error) {
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, path, "")
+	program := resolved.Program
+	if programOverride != "" {
+		program = programOverride
+	}
 	opts := session.InstanceOptions{
 		Title:            title,
 		Path:             path,
-		Program:          resolved.Program,
+		Program:          program,
 		PermissionMode:   session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
 		SessionType:      session.SessionTypeDirectory,
 		Prompt:           prompt,
@@ -1613,6 +1658,11 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	if err != nil {
 		return nil, fmt.Errorf("CreateDirectorySession: %w", err)
 	}
+	// Wire callbacks (including the tagging engine/fire recorder, session-classifier-pipeline
+	// Task 2.3.3d) before Start() so a first-time-setup session's ReclassifyTagsAfterCreate
+	// call has a real engine to evaluate, matching the primary CreateSession pipeline's
+	// wire-before-start ordering (session_creation_pipeline.go).
+	s.wireCallbacks(instance)
 	if err := instance.Start(true); err != nil {
 		return nil, fmt.Errorf("CreateDirectorySession start: %w", err)
 	}
@@ -1623,13 +1673,15 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 		}
 	}
 	session.StartSessionDriver(instance, path)
-	s.wireCallbacks(instance)
 	if err := s.storage.AddInstance(instance); err != nil {
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateDirectorySession save: %w", err)
 	}
 	if s.reviewQueuePoller != nil {
 		s.reviewQueuePoller.AddInstance(instance)
+	}
+	if s.sessionTagPoller != nil {
+		s.sessionTagPoller.AddInstance(instance)
 	}
 	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
 	if s.backlogLifecycleListener != nil {
@@ -1644,13 +1696,17 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 // CreateWorktreeSession satisfies the services.SessionCreator interface.
 // It spawns a session that uses an already-created git worktree at worktreePath.
 // repoPath is the parent repo (for program resolution). worktreePath must exist on disk.
-func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error) {
+func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error) {
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, repoPath, "")
+	program := resolved.Program
+	if programOverride != "" {
+		program = programOverride
+	}
 	opts := session.InstanceOptions{
 		Title:            title,
 		Path:             repoPath,
-		Program:          resolved.Program,
+		Program:          program,
 		PermissionMode:   session.PermissionModeAuto,
 		SessionType:      session.SessionTypeExistingWorktree,
 		ExistingWorktree: worktreePath,
@@ -1670,6 +1726,9 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 	if err != nil {
 		return nil, fmt.Errorf("CreateWorktreeSession: %w", err)
 	}
+	// See CreateDirectorySession's matching comment: wire callbacks (tagging engine/fire
+	// recorder included) before Start() so ReclassifyTagsAfterCreate has a real engine.
+	s.wireCallbacks(instance)
 	if err := instance.Start(true); err != nil {
 		return nil, fmt.Errorf("CreateWorktreeSession start: %w", err)
 	}
@@ -1680,13 +1739,15 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 		}
 	}
 	session.StartSessionDriver(instance, repoPath)
-	s.wireCallbacks(instance)
 	if err := s.storage.AddInstance(instance); err != nil {
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateWorktreeSession save: %w", err)
 	}
 	if s.reviewQueuePoller != nil {
 		s.reviewQueuePoller.AddInstance(instance)
+	}
+	if s.sessionTagPoller != nil {
+		s.sessionTagPoller.AddInstance(instance)
 	}
 	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
 	if s.backlogLifecycleListener != nil {
@@ -1702,6 +1763,14 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 // from it and cannot be re-persisted by the shutdown hook.
 func (s *SessionService) SetHistoryLinker(hl *session.HistoryLinker) {
 	s.historyLinker = hl
+}
+
+// SetSessionTagPoller wires the SessionTagClassificationPoller so sessions created
+// after server startup are added to it (previously only the boot-time instance list
+// ever reached it via a one-shot SetInstances call — see server/dependencies.go).
+// Must be called during server startup before any session-creation RPCs are used.
+func (s *SessionService) SetSessionTagPoller(poller *session.SessionTagClassificationPoller) {
+	s.sessionTagPoller = poller
 }
 
 // SetHeadlessPool wires the headless LLM pool for use by RunOneShot and other AI features.
@@ -1723,6 +1792,19 @@ func (s *SessionService) SetLifecycleContext(ctx context.Context) {
 // wireCallbacks wires all per-instance lifecycle callbacks on inst.
 // Consolidates the five wire* helpers that are always called together.
 func (s *SessionService) wireCallbacks(inst *session.Instance) {
+	// Tagging engine + fire-count recorder (session-classifier-pipeline Epic 3.3/Task
+	// 2.3.3d) — wired here, the single per-instance callback chokepoint every construction
+	// path (fresh CreateSession, CreateDirectorySession/CreateWorktreeSession, and every
+	// instance loaded at startup via loadInstancesWithWiring) already calls, so
+	// reclassifyTagsLocked has a real engine/recorder on every session, not just some paths.
+	inst.SetTaggingEngine(s.taggingEngine)
+	if analyticsStore := s.GetAnalyticsStore(); analyticsStore != nil {
+		// Guard against the typed-nil-interface gotcha: passing a nil *AnalyticsStore
+		// straight into the session.TagFireRecorder interface parameter would make
+		// inst.tagFireRecorder != nil true even though the underlying pointer is nil,
+		// and RecordTaggingRuleFire is not nil-receiver-safe.
+		inst.SetTagFireRecorder(analyticsStore)
+	}
 	s.wireRateLimitCallbacks(inst)
 	s.wireStatusChangeCallback(inst)
 	s.wireClaudeSessionIDCallback(inst)
@@ -2773,6 +2855,9 @@ func (s *SessionService) CreateSession(
 	if s.reviewQueuePoller != nil {
 		s.reviewQueuePoller.AddInstance(instance)
 		log.Info("[ReviewQueue] added new session to poller", "session", instance.Title)
+	}
+	if s.sessionTagPoller != nil {
+		s.sessionTagPoller.AddInstance(instance)
 	}
 
 	// Record initial_prompt (typed into the session terminal once the session reaches Ready state)
@@ -4005,6 +4090,9 @@ func (s *SessionService) removeFromAllPollers(id string) {
 	if s.reviewQueuePoller != nil {
 		s.reviewQueuePoller.RemoveInstance(id)
 	}
+	if s.sessionTagPoller != nil {
+		s.sessionTagPoller.RemoveInstance(id)
+	}
 	// Remove from HistoryLinker so the shutdown hook cannot re-persist a
 	// deleted session via historyLinker.Instances() → SaveInstances().
 	if s.historyLinker != nil {
@@ -4672,6 +4760,40 @@ func (s *SessionService) ReloadClaudeSettingsRules(
 	return s.rulesSvc.ReloadClaudeSettingsRules(ctx, req)
 }
 
+// ListTaggingRules returns all session-tagging rules (user and seed), each with its 7-day
+// fire count.
+func (s *SessionService) ListTaggingRules(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListTaggingRulesRequest],
+) (*connect.Response[sessionv1.ListTaggingRulesResponse], error) {
+	if s.taggingRulesSvc == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("tagging rules are not available on this server"))
+	}
+	return s.taggingRulesSvc.ListTaggingRulesRPC(ctx, req)
+}
+
+// UpsertTaggingRule creates or updates a user-defined session-tagging rule.
+func (s *SessionService) UpsertTaggingRule(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UpsertTaggingRuleRequest],
+) (*connect.Response[sessionv1.UpsertTaggingRuleResponse], error) {
+	if s.taggingRulesSvc == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("tagging rules are not available on this server"))
+	}
+	return s.taggingRulesSvc.UpsertTaggingRuleRPC(ctx, req)
+}
+
+// DeleteTaggingRule removes a user-defined session-tagging rule by ID.
+func (s *SessionService) DeleteTaggingRule(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeleteTaggingRuleRequest],
+) (*connect.Response[sessionv1.DeleteTaggingRuleResponse], error) {
+	if s.taggingRulesSvc == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("tagging rules are not available on this server"))
+	}
+	return s.taggingRulesSvc.DeleteTaggingRuleRPC(ctx, req)
+}
+
 // GetApprovalAnalytics returns aggregated analytics for classification decisions.
 func (s *SessionService) GetApprovalAnalytics(
 	ctx context.Context,
@@ -4819,6 +4941,9 @@ func (s *SessionService) ForkSession(
 		updatedInstances := append(s.reviewQueuePoller.GetInstances(), newInst)
 		s.reviewQueuePoller.SetInstances(updatedInstances)
 		log.Info("[ReviewQueue] updated poller instance references after ForkSession", "session", newInst.Title)
+	}
+	if s.sessionTagPoller != nil {
+		s.sessionTagPoller.AddInstance(newInst)
 	}
 
 	respProto := adapters.InstanceToProto(newInst, s.workflowNames())
@@ -5085,6 +5210,21 @@ func (s *SessionService) UpsertAlias(ctx context.Context, req *connect.Request[s
 // DeleteAlias removes an alias preset by name.
 func (s *SessionService) DeleteAlias(ctx context.Context, req *connect.Request[sessionv1.DeleteAliasRequest]) (*connect.Response[sessionv1.DeleteAliasResponse], error) {
 	return s.defaultsSvc.DeleteAlias(ctx, req)
+}
+
+// ListProgramsConfig returns all program configurations (built-in and custom).
+func (s *SessionService) ListProgramsConfig(ctx context.Context, req *connect.Request[sessionv1.ListProgramsConfigRequest]) (*connect.Response[sessionv1.ListProgramsConfigResponse], error) {
+	return s.defaultsSvc.ListProgramsConfig(ctx, req)
+}
+
+// UpsertProgramConfig creates or updates a custom program configuration.
+func (s *SessionService) UpsertProgramConfig(ctx context.Context, req *connect.Request[sessionv1.UpsertProgramConfigRequest]) (*connect.Response[sessionv1.UpsertProgramConfigResponse], error) {
+	return s.defaultsSvc.UpsertProgramConfig(ctx, req)
+}
+
+// DeleteProgramConfig removes a custom program configuration by ID.
+func (s *SessionService) DeleteProgramConfig(ctx context.Context, req *connect.Request[sessionv1.DeleteProgramConfigRequest]) (*connect.Response[sessionv1.DeleteProgramConfigResponse], error) {
+	return s.defaultsSvc.DeleteProgramConfig(ctx, req)
 }
 
 // SearchFiles performs a recursive name-substring search in a session's worktree.

@@ -78,6 +78,10 @@ jest.mock("@/lib/terminal/TerminalDimensionCache", () => ({
 jest.mock("@/lib/terminal/TerminalStreamManager", () => ({
   TerminalStreamManager: jest.fn().mockImplementation(() => ({
     setOnFirstOutput: jest.fn(),
+    setOnFullSnapshot: jest.fn(),
+    setOnAltScreenChange: jest.fn(),
+    setOnAppScrollback: jest.fn(),
+    handleAppScrollback: jest.fn(),
     installDebugMonitor: jest.fn(),
     writeInitialContent: jest.fn().mockResolvedValue(undefined),
     write: jest.fn(),
