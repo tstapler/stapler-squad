@@ -104,6 +104,7 @@ func detectGeminiStatus() bool {
 	}
 	return false
 }
+
 // hookStatus builds a GetHookStatusResponse from the global settings file and the
 // availability of the underlying binaries.
 func hookStatus() (*sessionv1.GetHookStatusResponse, error) {
