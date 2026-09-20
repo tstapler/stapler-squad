@@ -38,19 +38,36 @@ import (
 // returns.
 var warningLogMu sync.Mutex
 
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (n int, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // swapWarningLog redirects tslog.WarningLog to a buffer for the duration of
 // the calling test, restoring the original on cleanup via the atomic
 // SetWarningLogForTest setter.
-func swapWarningLog(t *testing.T) *bytes.Buffer {
+func swapWarningLog(t *testing.T) *safeBuffer {
 	t.Helper()
 	warningLogMu.Lock()
-	var buf bytes.Buffer
-	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
+	buf := &safeBuffer{}
+	orig := tslog.SetWarningLogForTest(stdlog.New(buf, "WARNING: ", 0))
 	t.Cleanup(func() {
 		tslog.SetWarningLogForTest(orig)
 		warningLogMu.Unlock()
 	})
-	return &buf
+	return buf
 }
 
 // failAfterNListEnabledRepo wraps a real session.PipelineModeRepository,
