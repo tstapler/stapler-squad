@@ -5241,7 +5241,6 @@ func TestTriggerTriage_should_EmitBudgetWarningLogLine_When_CostCrossesItemThres
 	assert.Contains(t, logged, "threshold=5.00")
 	assert.Contains(t, logged, "spent=5.05")
 }
-
 // TestTriggerTriage_should_AutoApprovePlan_When_AutoApprovePlanSet is a
 // regression/coverage test for the opt-in "auto-approve plan" automation
 // setting: an item with AutoApprovePlan=true must have PlanApproved set true

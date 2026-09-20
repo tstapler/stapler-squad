@@ -7,10 +7,8 @@ package services
 // "Story 2.2.x" rows.
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	stdlog "log"
 	"sync"
 	"testing"
 	"time"
@@ -26,48 +24,11 @@ import (
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
-// warningLogMu serializes swapWarningLog calls across this package's
-// t.Parallel() tests. SetWarningLogForTest reassigns the shared package-level
-// logger wholesale, so two parallel tests calling it concurrently would each
-// redirect the same global and race over whose buffer is "current" — this
-// mutex, held for the full swap-to-restore window, ensures only one test
-// owns the redirection at a time. Mirrors session/sync_buffer_test.go's
-// swapWarningLog, which mutates the logger in place instead; this package
-// uses SetWarningLogForTest directly since production code here never spawns
-// background goroutines that read log.WarningLog() after the owning test
-// returns.
-var warningLogMu sync.Mutex
-
-type safeBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *safeBuffer) Write(p []byte) (n int, err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *safeBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
 // swapWarningLog redirects tslog.WarningLog to a buffer for the duration of
-// the calling test, restoring the original on cleanup via the atomic
-// SetWarningLogForTest setter.
-func swapWarningLog(t *testing.T) *safeBuffer {
+// the calling test, restoring the original on cleanup.
+func swapWarningLog(t *testing.T) *tslog.SyncBuffer {
 	t.Helper()
-	warningLogMu.Lock()
-	buf := &safeBuffer{}
-	orig := tslog.SetWarningLogForTest(stdlog.New(buf, "WARNING: ", 0))
-	t.Cleanup(func() {
-		tslog.SetWarningLogForTest(orig)
-		warningLogMu.Unlock()
-	})
-	return buf
+	return tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 }
 
 // failAfterNListEnabledRepo wraps a real session.PipelineModeRepository,
