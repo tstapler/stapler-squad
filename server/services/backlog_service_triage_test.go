@@ -3329,6 +3329,126 @@ func TestSpawnSessionFromItem_should_SnapshotEmptyHash_When_PipelineModeIsDefaul
 	}
 }
 
+// --- Epic 2.4: work-stage program threading ---
+
+// TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_WorkStageOverrideConfigured
+// (Story 2.4.1, validation.md's REQ-2 integration test) proves SpawnSessionFromItem
+// resolves the work-stage executor via PipelineEngine.ExecutorFor +
+// session.ResolveExecutorProgram BEFORE spawning, threading the result into
+// SessionCreator's programOverride argument in the SAME call that carries the
+// item's kickoff prompt — never via a later SwitchProgram/Restart call, which
+// would risk racing/dropping that prompt delivery (see Epic 2.4's design note).
+// The single-call assertion (creator.callCount() == 1) is the regression guard for
+// the rejected "resolve after spawn, then SwitchProgram" design: that design would
+// require this same mock to record a second, distinct call.
+func TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_WorkStageOverrideConfigured(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+		Slug:                  "sonnet-work",
+		Name:                  "Sonnet Work",
+		Enabled:               true,
+		InitialPromptTemplate: "kickoff: {{item_title}}",
+		StageExecutors: map[session.StageRole]session.PipelineStageExecutor{
+			session.StageRoleWork: {Model: "family:sonnet"},
+		},
+	})
+	require.NoError(t, err)
+	engine, err := session.NewPipelineEngine(pmRepo)
+	require.NoError(t, err)
+	svc.pipelineEngine = engine
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:        "work-stage override item",
+		RepoPath:     repoPath,
+		PipelineMode: strPtr("sonnet-work"),
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipTriage:   true,
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+
+	require.Equal(t, 1, creator.callCount(),
+		"the override must reach instance creation via this single spawn call, never a follow-up SwitchProgram/Restart call")
+	call := creator.calls[0]
+	assert.Equal(t, "claude --model claude-sonnet-4-6", call.programOverride,
+		"family:sonnet must resolve to the concrete model ID via ResolveExecutorProgram, threaded as the programOverride argument")
+	assert.Equal(t, "claude --model claude-sonnet-4-6", call.inst.Program,
+		"the spawned Instance must actually run on the resolved program, proving InstanceOptions.Program (not a post-hoc call) carried it")
+	assert.Contains(t, call.prompt, "kickoff: work-stage override item",
+		"the item's kickoff prompt must still be delivered in the same call that carries the program override — not dropped or raced")
+
+	sessions, listErr := storage.ListItemSessions(ctx, itemID)
+	require.NoError(t, listErr)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "claude-sonnet-4-6", sessions[0].ResolvedModel)
+	assert.Empty(t, sessions[0].ResolvedProgram, "no program was explicitly configured on the stage executor, only a model")
+	assert.Equal(t, session.ComputeExecutorHash("", "family:sonnet"), sessions[0].ExecutorSnapshotHash,
+		"must hash the RAW pre-ResolveModel model value, never the resolved concrete model ID")
+}
+
+// TestSpawnSessionFromItem_should_LeaveInstanceProgramUnchanged_When_NoWorkStageOverrideConfigured
+// (Story 2.4.1's byte-identical-to-today AC) proves an item with no work-stage
+// executor override spawns exactly as it did before this project: an empty
+// programOverride, and mockSessionCreator's own default program unaffected.
+func TestSpawnSessionFromItem_should_LeaveInstanceProgramUnchanged_When_NoWorkStageOverrideConfigured(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "default mode item",
+		RepoPath: repoPath,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipTriage:   true,
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+
+	require.Len(t, creator.calls, 1)
+	assert.Empty(t, creator.calls[0].programOverride,
+		"no pipelineEngine wired and no stage executor configured means no override — byte-identical to pre-Epic-2.4 behavior")
+	assert.Equal(t, "claude", creator.calls[0].inst.Program,
+		"unchanged fallback: mockSessionCreator's own default program when programOverride is empty")
+}
+
 // --- Epic 1.5: PipelineEngine wired into the 4 call sites ---
 
 // readCommandFiles reads every file under worktreePath/.claude/commands/backlog/ into
@@ -3815,6 +3935,92 @@ func TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefault
 		"expected the mode-specific rendered triage prompt, got: %s", gotPrompt)
 	assert.NotContains(t, gotPrompt, "Perform pre-implementation triage",
 		"sanity: the default BuildHeadlessTriagePrompt's boilerplate must not appear when a non-default mode is wired")
+}
+
+// TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTriageOverride
+// (Story 2.3.2) proves TriggerTriage resolves the item's configured triage
+// executor through PipelineEngine.ExecutorFor and threads the resolved model
+// into the headless.CallOptions passed to CallBlocking — the plan's own
+// "cheap-triage" acceptance example (validation.md's Happy Path Scenario).
+func TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTriageOverride(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(t.Context(), session.PipelineModeCreateInput{
+		Slug:    "cheap-triage",
+		Name:    "Cheap Triage",
+		Enabled: true,
+		StageExecutors: map[session.StageRole]session.PipelineStageExecutor{
+			session.StageRoleTriage: {Model: "claude-haiku-4-5"},
+		},
+	})
+	require.NoError(t, err)
+	engine, err := session.NewPipelineEngine(pmRepo)
+	require.NoError(t, err)
+	svc.pipelineEngine = engine
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "cheap-triage item",
+		Status:       string(session.BacklogStatusIdea),
+		Priority:     3,
+		RepoPath:     repoPath,
+		PipelineMode: "cheap-triage",
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	wait.RequireEventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
+
+	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, listErr)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "claude-haiku-4-5", sessions[0].ResolvedModel)
+	assert.Equal(t, session.ComputeExecutorHash("", "claude-haiku-4-5"), sessions[0].ExecutorSnapshotHash)
+	assert.Empty(t, sessions[0].ConfiguredProgram, "no fallback occurred for the claude program")
+	assert.Empty(t, sessions[0].ExecutorFallbackReason)
+}
+
+// TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefault
+// (Story 2.3.2) is the byte-identical-to-today counterpart: an item on
+// PipelineModeDefault (no stage executor override configured anywhere) must
+// resolve to an empty CallOptions.Model, unchanged from pre-Epic-2.3 behavior.
+func TestTriggerTriage_should_LeaveCallOptionsModelEmpty_When_PipelineModeIsDefault(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "default-mode item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	wait.RequireEventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
+
+	assert.Empty(t, pool.firstCall().model, "CallOptions.Model must stay empty when no stage executor override is configured")
 }
 
 // TestTriggerTriage_should_UseUnmodifiedRetriagePrompt_When_RetriagingRegardlessOfPipelineMode
@@ -4982,6 +5188,59 @@ func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirect
 	require.NoError(t, listErr)
 	require.Len(t, sessions, 1, "a valid repo_path must still create the triage ItemSession")
 	assert.Equal(t, string(session.SessionRoleTriage), sessions[0].Role)
+}
+
+// TestTriggerTriage_should_EmitBudgetWarningLogLine_When_CostCrossesItemThreshold
+// (Story 4.2.2, validation.md REQ-7) verifies the inline soft-budget-warning
+// check fires from TriggerTriage's CostSink closure at the moment cost is
+// recorded: an item with cost_budget_threshold_usd=5.00 and $4.90 of prior
+// spend crosses to $5.05 once this $0.15 triage call completes, and the
+// crossing must not affect the triage call's own success.
+func TestTriggerTriage_should_EmitBudgetWarningLogLine_When_CostCrossesItemThreshold(t *testing.T) {
+	t.Parallel()
+	buf := swapWarningLog(t)
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON(), cost: 0.15}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	threshold := 5.00
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:                  "item crossing its cost budget threshold",
+		Status:                 string(session.BacklogStatusIdea),
+		Priority:               3,
+		RepoPath:               t.TempDir(),
+		CostBudgetThresholdUsd: &threshold,
+	})
+	require.NoError(t, err)
+
+	// Prior spend of $4.90 from an already-completed session for this item.
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:           item.ID,
+		SessionUUID:      "prior-triage-session",
+		SessionRole:      string(session.SessionRoleTriage),
+		EstimatedCostUsd: 4.90,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr, "crossing the budget threshold must not affect the triage call's own success")
+
+	wait.RequireEventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
+
+	wait.RequireEventually(t, func() bool {
+		return strings.Contains(buf.String(), "[BudgetWarning]")
+	}, 5*time.Second, 50*time.Millisecond, "expected a [BudgetWarning] log line once the threshold was crossed")
+
+	logged := buf.String()
+	assert.Contains(t, logged, "item="+item.ID)
+	assert.Contains(t, logged, "stage=triage")
+	assert.Contains(t, logged, "threshold=5.00")
+	assert.Contains(t, logged, "spent=5.05")
 }
 
 // TestTriggerTriage_should_AutoApprovePlan_When_AutoApprovePlanSet is a

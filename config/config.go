@@ -892,6 +892,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.SessionDefaults.Tags = []string{}
 	cfg.SessionDefaults.DirectoryRules = []DirectoryRule{}
 	cfg.SessionDefaults.Aliases = []AliasConfig{}
+	cfg.SessionDefaults.Programs = []ProgramConfig{}
 	// Escape analytics defaults. LoadConfigFromPath applies the same defaults
 	// after JSON decode (for fields absent from an existing config.json);
 	// DefaultConfig must mirror them so the two code paths are equivalent.
@@ -1282,7 +1283,7 @@ func (c *Config) GetAvailablePrograms() []string {
 		shell = "/bin/bash"
 	}
 
-	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy"}
+	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy", "aider"}
 
 	for _, candidate := range candidates {
 		var shellCmd string
@@ -1495,6 +1496,9 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	}
 	if cfg.SessionDefaults.Aliases == nil {
 		cfg.SessionDefaults.Aliases = []AliasConfig{}
+	}
+	if cfg.SessionDefaults.Programs == nil {
+		cfg.SessionDefaults.Programs = []ProgramConfig{}
 	}
 	if cfg.ConfigVersion == 0 {
 		cfg.ConfigVersion = 1

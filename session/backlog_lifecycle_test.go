@@ -1333,46 +1333,11 @@ func overridePRPendingChecker(t *testing.T, listener *BacklogLifecycleListener, 
 	listener.SetPRPendingCheckerFactory(func(repoPath string) prPendingChecker { return checker })
 }
 
-// testInfoLogMu serializes access to the package-global log.InfoLog var
-// across every test in this file that redirects it. log.InfoLog is a single
-// shared variable, so two t.Parallel() tests (including sibling subtests of
-// the same parent, which run concurrently with each other) that both swap it
-// out and restore it race on the same memory: one test's restore can stomp
-// another's redirect mid-run. Locking for the duration of each test (release
-// happens in the same t.Cleanup that restores the original logger) serializes
-// only the tests that touch log.InfoLog, without affecting the parallelism of
-// any other test in the package.
-var testInfoLogMu sync.Mutex
-
 // redirectInfoLog redirects log.InfoLog's output to a returned buffer for
-// the duration of the test and restores the original on cleanup. It mutates
-// the existing *log.Logger in place (SetOutput/SetPrefix/SetFlags) rather
-// than reassigning the log.InfoLog variable itself: reassignment is a data
-// race against any concurrently running goroutine that reads log.InfoLog
-// directly (e.g. production code calling log.InfoLog().Printf), even though
-// testInfoLogMu serializes the writers here — a mutex around only the write
-// side cannot protect an unsynchronized reader elsewhere in the program.
-// The returned buffer is a *syncBuffer (not *bytes.Buffer) so a leaked
-// goroutine from an already-finished sibling test still writing to the
-// shared logger can't race a later buf.String() read.
-func redirectInfoLog(t *testing.T) *syncBuffer {
+// the duration of the test and restores the original on cleanup.
+func redirectInfoLog(t *testing.T) *log.SyncBuffer {
 	t.Helper()
-	testInfoLogMu.Lock()
-	buf := &syncBuffer{}
-	logger := log.InfoLog()
-	origOutput := logger.Writer()
-	origPrefix := logger.Prefix()
-	origFlags := logger.Flags()
-	logger.SetOutput(buf)
-	logger.SetPrefix("INFO: ")
-	logger.SetFlags(0)
-	t.Cleanup(func() {
-		logger.SetOutput(origOutput)
-		logger.SetPrefix(origPrefix)
-		logger.SetFlags(origFlags)
-		testInfoLogMu.Unlock()
-	})
-	return buf
+	return log.RedirectLogger(t, log.InfoLog(), "INFO: ")
 }
 
 // TestReconcilePRPending_SpawnsFixSession_WhenHasConflictsTrue_Alone verifies

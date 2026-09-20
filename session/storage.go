@@ -1320,10 +1320,10 @@ func (s *Storage) UpdateItemSessionFailureCapture(ctx context.Context, id string
 	return s.repo.UpdateItemSessionFailureCapture(ctx, id, path)
 }
 
-// UpdateItemSessionCost adds usd to an ItemSession's estimated_cost_usd. See
-// EntRepository.UpdateItemSessionCost.
-func (s *Storage) UpdateItemSessionCost(ctx context.Context, id string, usd float64) error {
-	return s.repo.UpdateItemSessionCost(ctx, id, usd)
+// UpdateItemSessionCost adds usd to an ItemSession's estimated_cost_usd and
+// records whether that cost is trustworthy. See EntRepository.UpdateItemSessionCost.
+func (s *Storage) UpdateItemSessionCost(ctx context.Context, id string, usd float64, priced bool) error {
+	return s.repo.UpdateItemSessionCost(ctx, id, usd, priced)
 }
 
 // AddHeadlessCostBySessionUUID adds usd to the estimated_cost_usd of the ItemSession

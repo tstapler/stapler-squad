@@ -3150,7 +3150,7 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
 		[]byte(`{"default_program": "claude", "feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
-	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false)
+	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false, "")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3174,12 +3174,77 @@ func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	worktreePath := t.TempDir()
 	initGitRepoWithCommit(t, worktreePath)
 
-	inst, err := svc.CreateWorktreeSession(context.Background(), title, t.TempDir(), worktreePath, "", nil, true, false)
+	inst, err := svc.CreateWorktreeSession(context.Background(), title, t.TempDir(), worktreePath, "", nil, true, false, "")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
 	assert.Equal(t, session.BackendTmux, inst.Backend,
 		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
+}
+
+// --------------------------------------------------------------------------
+// CreateDirectorySession / CreateWorktreeSession — programOverride (Epic 2.4,
+// Story 2.4.1): the narrowest seam for confirming the kickoff prompt (Prompt,
+// a CLI arg baked in at process-spawn time via buildClaudeCommand) survives a
+// spawn that carries a work-stage program override, since both are set on the
+// same InstanceOptions value before NewInstance/Start(true) — never via a
+// later SwitchProgram/Restart call. See Epic 2.4's design note.
+// --------------------------------------------------------------------------
+
+// TestCreateDirectorySession_should_SetProgramFromOverride_When_ProgramOverrideNonEmpty
+// proves a non-empty programOverride replaces resolved.Program on
+// InstanceOptions, and that Prompt (the kickoff prompt argument) is passed
+// through unaffected by the override.
+func TestCreateDirectorySession_should_SetProgramFromOverride_When_ProgramOverrideNonEmpty(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	inst, err := svc.CreateDirectorySession(context.Background(), "program-override-directory-session", t.TempDir(), "do the thing", nil, true, false, "claude --model claude-sonnet-4-6")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, "claude --model claude-sonnet-4-6", inst.Program,
+		"a non-empty programOverride must replace resolved.Program on InstanceOptions before NewInstance/Start")
+	assert.Equal(t, "do the thing", inst.Prompt,
+		"the kickoff prompt must survive unaffected by the program override — both are set on the same InstanceOptions value before spawn")
+}
+
+// TestCreateDirectorySession_should_UseResolvedProgram_When_ProgramOverrideEmpty
+// is the byte-identical-to-today counterpart: an empty programOverride leaves
+// resolved.Program (config.ResolveDefaults' default) untouched.
+func TestCreateDirectorySession_should_UseResolvedProgram_When_ProgramOverrideEmpty(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"default_program": "claude"}`), 0o644))
+
+	inst, err := svc.CreateDirectorySession(context.Background(), "no-override-directory-session", t.TempDir(), "do the thing", nil, true, false, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, "claude", inst.Program,
+		"an empty programOverride must leave resolved.Program byte-identical to pre-Epic-2.4 behavior")
+}
+
+// TestCreateWorktreeSession_should_SetProgramFromOverride_When_ProgramOverrideNonEmpty
+// is the CreateWorktreeSession analogue of the CreateDirectorySession test above.
+func TestCreateWorktreeSession_should_SetProgramFromOverride_When_ProgramOverrideNonEmpty(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	worktreePath := t.TempDir()
+	initGitRepoWithCommit(t, worktreePath)
+
+	inst, err := svc.CreateWorktreeSession(context.Background(), "program-override-worktree-session", t.TempDir(), worktreePath, "do the thing", nil, true, false, "claude --model claude-sonnet-4-6")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, "claude --model claude-sonnet-4-6", inst.Program,
+		"a non-empty programOverride must replace resolved.Program on InstanceOptions before NewInstance/Start")
+	assert.Equal(t, "do the thing", inst.Prompt,
+		"the kickoff prompt must survive unaffected by the program override — both are set on the same InstanceOptions value before spawn")
 }
 
 // TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_HandlerInvoked

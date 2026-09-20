@@ -81,6 +81,13 @@ jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
   useStuckBacklogItems: (...args: unknown[]) => useStuckBacklogItemsMock(...args),
 }));
 
+// Story 5.2.3: BacklogItemDetail's own Insights fetch for ItemStageCostTable
+// — stub so this suite never opens a real WatchInsights transport.
+const useInsightsSummaryMock = jest.fn();
+jest.mock("@/lib/hooks/useInsightsService", () => ({
+  useInsightsSummary: (...args: unknown[]) => useInsightsSummaryMock(...args),
+}));
+
 // The edit-mode branch renders BacklogItemForm -> RepoPathInput, which uses
 // useSessionRepoPaths (Redux) and usePathCompletions (RPC). Stub both so this
 // test doesn't need a Redux store or ConnectRPC transport. Not exercised by
@@ -218,6 +225,13 @@ beforeEach(() => {
   mockTerminalStreamEvents = [];
   updateBacklogItem.mockClear().mockResolvedValue(null);
   useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
+  useInsightsSummaryMock.mockReturnValue({
+    summary: { roleBreakdown: [] },
+    loading: false,
+    isLiveUpdating: false,
+    error: null,
+    refetch: jest.fn(),
+  });
   overrideVerdict.mockReset();
   triggerTriage.mockClear().mockResolvedValue(undefined);
   rejectPlan.mockReset().mockResolvedValue(null);
@@ -1751,5 +1765,68 @@ describe("BacklogItemDetail — Copy ID/Copy Link (backlog-deep-linking Story 2.
       expect(copyLinkButton).toHaveAttribute("aria-label", "Copied link to clipboard");
     });
     expect(screen.getByTestId("copy-status-announcement")).toHaveTextContent("Link copied to clipboard");
+  });
+});
+
+describe("BacklogItemDetail — Story 5.2.3: per-item cost-by-stage table", () => {
+  it("BacklogItemDetail_should_RenderItemStageCostTable_When_RoleBreakdownHasMatchingItemEntries", async () => {
+    useInsightsSummaryMock.mockReturnValue({
+      summary: {
+        roleBreakdown: [
+          {
+            sessionRole: "triage",
+            items: [{ itemId: "item-1", itemTitle: "Refactor auth middleware", estimatedCostUsd: 0.02, sessionCount: 3, unpricedSessionCount: 0 }],
+          },
+          {
+            sessionRole: "review",
+            items: [{ itemId: "item-1", itemTitle: "Refactor auth middleware", estimatedCostUsd: 0.15, sessionCount: 1, unpricedSessionCount: 0 }],
+          },
+          {
+            sessionRole: "work",
+            items: [{ itemId: "item-2", itemTitle: "Some other item", estimatedCostUsd: 9.0, sessionCount: 1, unpricedSessionCount: 0 }],
+          },
+        ],
+      },
+      loading: false,
+      isLiveUpdating: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    await renderWithSession(makeSession(), []);
+
+    const costTable = screen.getByTestId("item-stage-cost-table");
+    expect(within(costTable).getByText("Triage")).toBeInTheDocument();
+    expect(within(costTable).getByText("Review")).toBeInTheDocument();
+    expect(within(costTable).queryByText("Work")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_OmitItemStageCostTable_When_NoMatchingRoleBreakdownEntries", async () => {
+    useInsightsSummaryMock.mockReturnValue({
+      summary: { roleBreakdown: [] },
+      loading: false,
+      isLiveUpdating: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    await renderWithSession(makeSession(), []);
+
+    expect(screen.queryByTestId("item-stage-cost-table")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_ShowErrorState_When_InsightsFetchFails", async () => {
+    useInsightsSummaryMock.mockReturnValue({
+      summary: null,
+      loading: false,
+      isLiveUpdating: false,
+      error: "network error",
+      refetch: jest.fn(),
+    });
+
+    await renderWithSession(makeSession(), []);
+
+    expect(screen.getByTestId("item-stage-cost-error")).toHaveTextContent("Couldn't load cost data.");
+    expect(screen.queryByTestId("item-stage-cost-table")).not.toBeInTheDocument();
   });
 });

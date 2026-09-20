@@ -127,7 +127,7 @@ func (s *BacklogService) watchBacklogItems(
 			if !backlogItemMatchesFilters(evt.BacklogItemPayload.Item, msg) {
 				continue
 			}
-			converted := convertEventToBacklogItemEvent(ctx, s.storage, s.engine, evt, costFor)
+			converted := convertEventToBacklogItemEvent(ctx, s.storage, s.engine, evt, costFor, s.checkWorkStageBudget)
 			// Force is_snapshot: true on every replayed event, unconditionally,
 			// regardless of the value the event was originally published
 			// with. A live event published in the race window between
@@ -157,7 +157,7 @@ func (s *BacklogService) watchBacklogItems(
 			if !backlogItemMatchesFilters(item, msg) {
 				continue
 			}
-			if err := sender.Send(snapshotEventForItem(ctx, s.storage, s.engine, item, costFor)); err != nil {
+			if err := sender.Send(snapshotEventForItem(ctx, s.storage, s.engine, item, costFor, s.checkWorkStageBudget)); err != nil {
 				return fmt.Errorf("failed to send initial backlog snapshot: %w", err)
 			}
 			initialPhaseSent++
@@ -196,7 +196,7 @@ func (s *BacklogService) watchBacklogItems(
 			if !backlogItemMatchesFilters(evt.BacklogItemPayload.Item, msg) {
 				continue
 			}
-			if err := sender.Send(convertEventToBacklogItemEvent(ctx, s.storage, s.engine, evt, costFor)); err != nil {
+			if err := sender.Send(convertEventToBacklogItemEvent(ctx, s.storage, s.engine, evt, costFor, s.checkWorkStageBudget)); err != nil {
 				return fmt.Errorf("failed to send backlog event: %w", err)
 			}
 		}
@@ -229,9 +229,12 @@ func backlogItemMatchesFilters(item *session.BacklogItemData, msg *sessionv1.Wat
 // fresh WatchBacklogItems connection (e.g. opening the backlog detail pane)
 // immediately overwrote an already-loaded item's enriched worktree data with
 // this un-enriched snapshot, hiding BacklogFileBrowserModal's trigger.
-func snapshotEventForItem(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItemEvent {
+func snapshotEventForItem(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, item *session.BacklogItemData, costFor func(tmuxUUID string) float64, checkBudget func(itemID string, thresholdUSD *float64, totalCostUSD float64)) *sessionv1.BacklogItemEvent {
 	protoItem := backlogItemToProto(item, engine, costFor)
 	enrichItemSessionsWorktreeData(ctx, storage, protoItem)
+	if checkBudget != nil {
+		checkBudget(item.ID, item.CostBudgetThresholdUsd, protoItem.TotalEstimatedCostUsd)
+	}
 	return &sessionv1.BacklogItemEvent{
 		Timestamp: timestamppb.Now(),
 		// Seq intentionally left at its zero value: this synthetic per-item
@@ -254,7 +257,7 @@ func snapshotEventForItem(ctx context.Context, storage *session.Storage, engine 
 // on Kind to build the matching oneof variant. Mirrors convertEventToProto's
 // switch-on-event.Type pattern already used for session events
 // (event_converter.go).
-func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, evt *events.Event, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItemEvent {
+func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, evt *events.Event, costFor func(tmuxUUID string) float64, checkBudget func(itemID string, thresholdUSD *float64, totalCostUSD float64)) *sessionv1.BacklogItemEvent {
 	out := &sessionv1.BacklogItemEvent{
 		Timestamp: timestamppb.New(evt.Timestamp),
 		// evt.Seq is assigned by EventBus.Publish (0 means unpublished, which
@@ -277,6 +280,9 @@ func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storag
 	}
 	protoItem := backlogItemToProtoOrNil(payload.Item, engine, costFor)
 	enrichItemSessionsWorktreeData(ctx, storage, protoItem)
+	if checkBudget != nil && payload.Item != nil {
+		checkBudget(itemID, payload.Item.CostBudgetThresholdUsd, protoItem.TotalEstimatedCostUsd)
+	}
 
 	switch payload.Kind {
 	case events.BacklogChangeStatusTransition:
