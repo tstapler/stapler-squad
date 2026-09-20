@@ -1938,7 +1938,7 @@ func TestGetAvailablePrograms_should_IncludeAider_When_AiderIsOnPath(t *testing.
 	aiderPath := "/usr/local/bin/aider"
 	mockExecutor := &mockCommandExecutor{
 		CommandFunc: func(name string, args ...string) *exec.Cmd {
-			return exec.Command(name, args...)
+			return exec.Command(name, args...) //nolint:norawexec // test mock helper
 		},
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
 			shellCmd := cmd.Args[len(cmd.Args)-1]
@@ -1964,7 +1964,7 @@ func TestGetAvailablePrograms_should_OmitAider_When_AiderNotOnPath(t *testing.T)
 
 	mockExecutor := &mockCommandExecutor{
 		CommandFunc: func(name string, args ...string) *exec.Cmd {
-			return exec.Command(name, args...)
+			return exec.Command(name, args...) //nolint:norawexec // test mock helper
 		},
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
 			return []byte(""), nil

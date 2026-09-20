@@ -252,10 +252,11 @@ func TestLookupBinaryDetector_should_resolveAntigravityAlias(t *testing.T) {
 	if !ok {
 		t.Fatal(`lookupBinaryDetector("antigravity") = _, false; want true via agy alias`)
 	}
-	if status := aliasSD.Detect([]byte("Accept this file edit?")); status != StatusNeedsApproval {
-		t.Errorf(`Detect("Accept this file edit?") via "antigravity" = %v, want %v`, status, StatusNeedsApproval)
+	for name, sd := range map[string]*StatusDetector{"agy": agySD, "antigravity": aliasSD} {
+		if status := sd.Detect([]byte("Accept this file edit?")); status != StatusNeedsApproval {
+			t.Errorf(`Detect("Accept this file edit?") via %q = %v, want %v`, name, status, StatusNeedsApproval)
+		}
 	}
-	_ = agySD
 }
 
 // TestDetectorForProgram_should_returnDetector_When_programRegistered is a

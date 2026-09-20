@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
@@ -23,10 +24,9 @@ import (
 const geminiAvailabilityTTL = 30 * time.Second
 
 // geminiRunner abstracts how the gemini binary is invoked, mirroring
-// ClaudeRunner's real/fake split (see fake_runner.go) so tests can stub the
-// subprocess without touching PATH or writing a real script to disk.
+// claudeRunner in caller.go.
 type geminiRunner interface {
-	Run(ctx context.Context, binPath string, args []string, workDir string) (stdout []byte, err error)
+	Run(ctx context.Context, binPath string, args []string, workDir string) ([]byte, error)
 }
 
 // realGeminiRunner shells out to the real gemini binary. args are built
@@ -36,7 +36,7 @@ type geminiRunner interface {
 type realGeminiRunner struct{}
 
 func (realGeminiRunner) Run(ctx context.Context, binPath string, args []string, workDir string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, binPath, args...) //nolint:gosec // binPath/args are internally constructed, not shell-interpreted
+	cmd := safeexec.CommandContext(ctx, binPath, args...) //nolint:gosec // binPath/args are internally constructed, not shell-interpreted
 	cmd.Dir = workDir
 	return cmd.Output()
 }
