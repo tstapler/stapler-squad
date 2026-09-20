@@ -252,10 +252,23 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 	// SetProgram under i.mu.Lock(), so reading the field twice here could
 	// observe two different values if a mutation lands in between.
 	program := i.Program
+	cliFlags := i.CLIFlags
+
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+		if res.CLIFlags != "" {
+			if cliFlags != "" {
+				cliFlags = res.CLIFlags + " " + cliFlags
+			} else {
+				cliFlags = res.CLIFlags
+			}
+		}
+	}
 
 	matched := matchLaunchBuilder(program)
 	cmd := i.buildBaseLaunchCommand(program, claudeSessionID, matched)
-	cmd = appendLaunchExtras(cmd, i.CLIFlags, i.ExtraArgs)
+	cmd = appendLaunchExtras(cmd, cliFlags, i.ExtraArgs)
 	if matched != nil {
 		cmd = cmd + matched.StderrRedirect(i)
 	}
@@ -575,8 +588,23 @@ func (i *Instance) initTmuxSession() {
 	} else {
 		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix, opts...)
 	}
+	var extraEnv []string
 	if i.UUID != "" {
-		session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
+		extraEnv = append(extraEnv, "STAPLER_SESSION_UUID="+i.UUID)
+	}
+	// Add custom program env vars if applicable
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, i.Program); res.IsCustom {
+		for k, v := range res.EnvVars {
+			extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", k, v))
+		}
+	}
+	// Instance-level EnvVars take precedence over program-level defaults
+	for k, v := range i.EnvVars {
+		extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", k, v))
+	}
+	if len(extraEnv) > 0 {
+		session.SetExtraEnv(extraEnv)
 	}
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
 		tb.TmuxManager().SetSession(session)

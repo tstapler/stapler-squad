@@ -237,6 +237,27 @@ func TestLookupBinaryDetector_should_findBuiltins_When_noPluginsLoaded(t *testin
 	}
 }
 
+// TestLookupBinaryDetector_should_resolveAntigravityAlias verifies the
+// "antigravity" long-form program name resolves to the same detector as
+// "agy" (AgyAdapter.CanHandle accepts both, so detection must too —
+// otherwise an "antigravity" session silently falls back to the generic
+// detector and misses every agy_* prompt pattern).
+func TestLookupBinaryDetector_should_resolveAntigravityAlias(t *testing.T) {
+	t.Parallel()
+	agySD, ok := lookupBinaryDetector("agy")
+	if !ok {
+		t.Fatal(`lookupBinaryDetector("agy") = _, false; want true`)
+	}
+	aliasSD, ok := lookupBinaryDetector("antigravity")
+	if !ok {
+		t.Fatal(`lookupBinaryDetector("antigravity") = _, false; want true via agy alias`)
+	}
+	if status := aliasSD.Detect([]byte("Accept this file edit?")); status != StatusNeedsApproval {
+		t.Errorf(`Detect("Accept this file edit?") via "antigravity" = %v, want %v`, status, StatusNeedsApproval)
+	}
+	_ = agySD
+}
+
 // TestDetectorForProgram_should_returnDetector_When_programRegistered is a
 // direct unit test of the exported wrapper session.ClaudeController.Start
 // uses in place of the old unconditional NewStatusDetector() call.
