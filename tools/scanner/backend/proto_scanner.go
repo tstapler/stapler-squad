@@ -326,6 +326,9 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetTaggingClassifierConfig":    "tagging-classifier:get-config",
 	"UpdateTaggingClassifierConfig": "tagging-classifier:update-config",
 	"ReclassifySessionTags":         "tagging-classifier:reclassify-session",
+	"ListTaggingRules":              "tagging-rule:list",
+	"UpsertTaggingRule":             "tagging-rule:upsert",
+	"DeleteTaggingRule":             "tagging-rule:delete",
 	"GetHandoffSummary":             "handoff-summary:get",
 	"TriggerHandoffSummary":         "handoff-summary:trigger",
 	// LivenessDefinition CRUD RPCs (Epic 1.3 of backlog-custom-workflow-stages)
