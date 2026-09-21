@@ -13,7 +13,7 @@
 
 import React from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import { SessionActionsOverflow } from "../SessionActionsOverflow";
+import { SessionActionsOverflow, fitMenuTop } from "../SessionActionsOverflow";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { SessionStatus, InstanceType } from "@/gen/session/v1/types_pb";
 
@@ -559,5 +559,19 @@ describe("SessionActionsOverflow", () => {
         await pending;
       });
     });
+  });
+});
+
+describe("fitMenuTop", () => {
+  it("keeps the requested top when the menu fits below", () => {
+    expect(fitMenuTop(100, 96, 300, 800)).toBe(100);
+  });
+
+  it("flips above the anchor when it would overflow the bottom", () => {
+    expect(fitMenuTop(700, 696, 400, 800)).toBe(296);
+  });
+
+  it("clamps to the top margin when it fits in neither direction", () => {
+    expect(fitMenuTop(300, 296, 900, 800)).toBe(8);
   });
 });

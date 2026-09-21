@@ -524,6 +524,8 @@ export const overflowMenu = style({
   padding: "4px",
   display: "flex",
   flexDirection: "column",
+  maxHeight: "calc(100vh - 16px)",
+  overflowY: "auto",
 });
 
 export const overflowMenuItem = style({

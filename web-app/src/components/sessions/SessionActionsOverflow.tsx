@@ -1,7 +1,7 @@
 "use client";
 // +feature: session-change-program
 
-import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
 import { MoreHorizontal } from "lucide-react";
 import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
@@ -72,6 +72,14 @@ export interface SessionActionsOverflowProps {
   onChangeProgram?: (sessionId: string, program: string) => Promise<void> | void;
 }
 
+const VIEWPORT_MARGIN = 8;
+
+/** Top for a fixed menu: below the anchor if it fits, else flipped above it, clamped on-screen. */
+export function fitMenuTop(top: number, anchorTop: number, height: number, viewportHeight: number): number {
+  if (top + height <= viewportHeight - VIEWPORT_MARGIN) return top;
+  return Math.max(VIEWPORT_MARGIN, anchorTop - height);
+}
+
 const menuSeparator = (
   <div role="separator" style={{ height: 1, background: "var(--border-color)", margin: "4px 0" }} />
 );
@@ -116,7 +124,8 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const isMidBackoffWait = !isPermanentlyFailed && !!session.nextRetryAt;
 
   const [showOverflow, setShowOverflow] = useState(false);
-  const [menuPos, setMenuPos] = useState({ top: 0, right: 0 });
+  const [menuPos, setMenuPos] = useState({ top: 0, right: 0, anchorTop: 0 });
+  const [fitTop, setFitTop] = useState<number | null>(null);
   const [isRestartConfirmOpen, setIsRestartConfirmOpen] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
   const [restartError, setRestartError] = useState("");
@@ -197,6 +206,12 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   useFocusTrap(programPickerDialogRef, isProgramPickerOpen, overflowButtonRef);
   useFocusTrap(programConfirmDialogRef, isProgramRestartConfirmOpen, overflowButtonRef);
 
+  useLayoutEffect(() => {
+    if (!showOverflow || !overflowMenuRef.current) return;
+    const { height } = overflowMenuRef.current.getBoundingClientRect();
+    setFitTop(fitMenuTop(menuPos.top, menuPos.anchorTop, height, window.innerHeight));
+  }, [showOverflow, menuPos]);
+
   useEffect(() => {
     if (showOverflow && overflowMenuRef.current) {
       const first = overflowMenuRef.current.querySelector<HTMLElement>('[role="menuitem"],[role="menuitemcheckbox"]');
@@ -220,7 +235,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
 
   useImperativeHandle(ref, () => ({
     openAt(x: number, y: number) {
-      setMenuPos({ top: y, right: window.innerWidth - x });
+      setMenuPos({ top: y, right: window.innerWidth - x, anchorTop: y });
       setShowOverflow(true);
     },
   }), []);
@@ -232,6 +247,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     setMenuPos({
       top: rect.bottom + 4,
       right: window.innerWidth - rect.right,
+      anchorTop: rect.top - 4,
     });
     setShowOverflow((o) => !o);
   }, []);
@@ -764,7 +780,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               ref={overflowMenuRef}
               id={`overflow-menu-${session.id}`}
               className={overflowMenu}
-              style={{ top: menuPos.top, right: menuPos.right }}
+              style={{ top: fitTop ?? menuPos.top, right: menuPos.right }}
               role="menu"
               aria-labelledby={`overflow-btn-${session.id}`}
               onClick={(e) => e.stopPropagation()}
