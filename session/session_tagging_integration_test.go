@@ -75,11 +75,9 @@ func TestSessionTaggingPipeline_should_ProduceFinalLLMTagWithNoUnclassified_When
 	assert.Equal(t, 1, fake.callCount(), "the LLM must be called exactly once")
 }
 
-// TestSessionTaggingPipeline_should_ShowUnclassifiedThenRealTag_When_FirstPollFailsAndSecondSucceeds
-// extends the happy path with Story 4.3.2's coexistence rule: a first poll tick that fails
-// applies Unclassified; once the session's content changes and a later tick succeeds with a
-// real tag, Unclassified is dropped in the same operation.
-func TestSessionTaggingPipeline_should_ShowUnclassifiedThenRealTag_When_FirstPollFailsAndSecondSucceeds(t *testing.T) {
+// TestSessionTaggingPipeline_should_LeaveTagsEmptyThenApplyRealTag_When_FirstPollFailsAndSecondSucceeds
+// covers a failed first tick (no tags applied) followed by a successful retry.
+func TestSessionTaggingPipeline_should_LeaveTagsEmptyThenApplyRealTag_When_FirstPollFailsAndSecondSucceeds(t *testing.T) {
 	t.Parallel()
 
 	inst := minimalInstance(t)
@@ -97,12 +95,10 @@ func TestSessionTaggingPipeline_should_ShowUnclassifiedThenRealTag_When_FirstPol
 	poller.config.MinReclassifyInterval = 0
 	poller.SetInstances([]*Instance{inst})
 
-	// First tick: the LLM call fails, so Unclassified is applied and the cache updates so an
-	// immediate re-tick with no content change doesn't retry.
+	// First tick: the LLM call fails, so no tags are applied.
 	poller.pollOnce()
 	tags := inst.GetTags()
-	require.Equal(t, []string{UnclassifiedTag}, tags)
-	require.Equal(t, "llm", inst.RuleTagProvenance[UnclassifiedTag])
+	require.Empty(t, tags)
 	require.Equal(t, 1, fake.callCount())
 
 	// Change the session's classification-relevant content (branch rename) so the content
@@ -116,7 +112,7 @@ func TestSessionTaggingPipeline_should_ShowUnclassifiedThenRealTag_When_FirstPol
 	poller.pollOnce()
 
 	tags = inst.GetTags()
-	assert.Equal(t, []string{"Feature"}, tags, "Unclassified must be dropped the moment a later poll succeeds with a real tag")
+	assert.Equal(t, []string{"Feature"}, tags, "a later successful poll must apply the real tag")
 	assert.Equal(t, "llm", inst.RuleTagProvenance["Feature"])
 	assert.Equal(t, 2, fake.callCount())
 }

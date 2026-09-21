@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -10,8 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/headless"
 )
 
 // isolatedClassifierService builds a SessionService with config I/O redirected to a temp dir,
@@ -146,4 +149,46 @@ func TestTaggingClassifierService_should_ReportEnvOverride_When_Updated(t *testi
 	require.NoError(t, err)
 	assert.Equal(t, "env-model", update.Msg.GetConfig().GetModel())
 	assert.Equal(t, []string{"env-fb"}, update.Msg.GetConfig().GetFallbackModels())
+}
+
+// errTagPoolClient is a headless.PoolClient whose calls fail when err is set, else return response.
+type errTagPoolClient struct {
+	response string
+	err      error
+}
+
+func (f *errTagPoolClient) CallBlocking(_ context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions, sink headless.CostSink) (string, error) {
+	sink(0, true)
+	return f.response, f.err
+}
+
+// reclassifyFixture registers one real session with a poller backed by client.
+func reclassifyFixture(t *testing.T, client headless.PoolClient, title string) (*SessionService, *session.Instance) {
+	t.Helper()
+	svc := newCreateTestService(t, createTestStorage(t))
+	poller := session.NewSessionTagClassificationPoller(client, classifier.NewTaggingEngine())
+	svc.SetSessionTagPoller(poller)
+	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+	return svc, inst
+}
+
+func TestTaggingClassifierService_should_ReturnTags_When_ReclassifySucceeds(t *testing.T) {
+	const title = "reclassify-ok-session"
+	svc, _ := reclassifyFixture(t, &errTagPoolClient{response: `{"results":[{"name":"` + title + `","tags":["Unclassified"]}]}`}, title)
+
+	resp, err := svc.ReclassifySessionTags(context.Background(), connect.NewRequest(&sessionv1.ReclassifySessionTagsRequest{SessionId: title}))
+
+	require.NoError(t, err)
+	assert.Contains(t, resp.Msg.GetTags(), session.UnclassifiedTag)
+}
+
+func TestTaggingClassifierService_should_ReturnUnavailable_When_ReclassifyDegrades(t *testing.T) {
+	const title = "reclassify-degraded-session"
+	svc, _ := reclassifyFixture(t, &errTagPoolClient{err: errors.New("pool down")}, title)
+
+	_, err := svc.ReclassifySessionTags(context.Background(), connect.NewRequest(&sessionv1.ReclassifySessionTagsRequest{SessionId: title}))
+
+	assertConnectCode(t, err, connect.CodeUnavailable)
 }
