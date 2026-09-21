@@ -5197,7 +5197,6 @@ func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirect
 // spend crosses to $5.05 once this $0.15 triage call completes, and the
 // crossing must not affect the triage call's own success.
 func TestTriggerTriage_should_EmitBudgetWarningLogLine_When_CostCrossesItemThreshold(t *testing.T) {
-	t.Parallel()
 	buf := swapWarningLog(t)
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON(), cost: 0.15}

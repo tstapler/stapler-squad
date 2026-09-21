@@ -53,11 +53,10 @@ func TestSessionService_should_RegisterNewSessionWithTagPoller_When_SessionCreat
 	svc := newCreateTestService(t, storage)
 
 	engine := classifier.NewTaggingEngine()
-	fake := &fakeSessionTagPoolClient{response: `{"tags":["Unclassified"]}`}
+	fake := &fakeSessionTagPoolClient{response: `{"results":[{"name":"tag-poller-post-startup-session","tags":["Unclassified"]}]}`}
 	poller := session.NewSessionTagClassificationPollerWithConfig(fake, engine, session.SessionTagPollerConfig{
-		PollInterval:    20 * time.Millisecond,
-		ConcurrentCalls: 1,
-		CallTimeout:     5 * time.Second,
+		PollInterval: 20 * time.Millisecond,
+		CallTimeout:  5 * time.Second,
 	})
 	svc.SetSessionTagPoller(poller)
 

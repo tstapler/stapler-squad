@@ -2475,6 +2475,20 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
+	// If program refers to a custom program ID, resolve its underlying command, CLI flags, and env vars.
+	if program != "" {
+		resolvedProg := config.ResolveProgramConfig(cfg, program)
+		if resolvedProg.IsCustom {
+			for k, v := range resolvedProg.EnvVars {
+				if _, exists := instanceEnvVars[k]; !exists {
+					instanceEnvVars[k] = v
+				}
+			}
+			// Program CLIFlags are NOT prepended here: buildLaunchCommand resolves them
+			// from the stored custom program ID at launch, so doing it here doubles them.
+		}
+	}
+
 	// Determine session type - use explicit session_type if provided, otherwise infer from fields.
 	// If the session was created via alias and the alias specifies a session type,
 	// use it as the fallback when the request itself didn't set one.
