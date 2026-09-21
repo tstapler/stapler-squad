@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -19,11 +20,6 @@ import (
 type SessionTagPollerConfig struct {
 	// PollInterval controls how often all sessions are checked.
 	PollInterval time.Duration
-	// ConcurrentCalls is retained for API compatibility (server/dependencies.go and tests
-	// construct this struct with field names). Batching issues at most one LLM call per
-	// tick, so it no longer gates anything — MaxBatchSessions and MinReclassifyInterval
-	// are the effective volume controls.
-	ConcurrentCalls int
 	// CallTimeout is the maximum time for a single batch classification call.
 	CallTimeout time.Duration
 	// MaxBatchSessions caps how many changed sessions a single tick classifies in its one
@@ -53,7 +49,6 @@ type SessionTagPollerConfig struct {
 func DefaultSessionTagPollerConfig() SessionTagPollerConfig {
 	return SessionTagPollerConfig{
 		PollInterval:          2 * time.Minute,
-		ConcurrentCalls:       3,
 		CallTimeout:           60 * time.Second,
 		MaxBatchSessions:      10,
 		MinReclassifyInterval: 30 * time.Minute,
@@ -64,11 +59,14 @@ func DefaultSessionTagPollerConfig() SessionTagPollerConfig {
 // modelHierarchy returns the ordered model list for batch calls: primary first, fallbacks
 // after, defaulting a blank primary to haiku so zero-value configs behave like before.
 func (p *SessionTagClassificationPoller) modelHierarchy() []string {
+	p.mu.RLock()
 	model := p.config.Model
+	fallbacks := p.config.FallbackModels
+	p.mu.RUnlock()
 	if model == "" {
 		model = "haiku"
 	}
-	return append([]string{model}, p.config.FallbackModels...)
+	return append([]string{model}, fallbacks...)
 }
 
 // SetModelConfig hot-swaps the model hierarchy without a poller restart — the Update RPC
@@ -77,15 +75,12 @@ func (p *SessionTagClassificationPoller) SetModelConfig(model string, fallbackMo
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.config.Model = model
-	p.config.FallbackModels = fallbackModels
+	p.config.FallbackModels = slices.Clone(fallbackModels)
 }
 
-// cachedTagResult is the poller's per-session cache entry. applied distinguishes a
-// genuinely classified session (never retried automatically — classify-once) from a degraded
-// one (retried after MinReclassifyInterval). tags is informational only — reclassification
-// only ever happens via ClassifyNow, which re-derives the vocabulary and re-applies to the
-// live Instance, never replaying tags straight from the cache. classifiedAt backs the
-// degraded-retry backoff.
+// cachedTagResult is the per-session cache entry. applied entries are never retried
+// automatically (classify-once); degraded ones retry after MinReclassifyInterval.
+// tags is informational: reclassification always goes through ClassifyNow.
 type cachedTagResult struct {
 	tags         []string
 	classifiedAt time.Time
@@ -184,7 +179,7 @@ func (p *SessionTagClassificationPoller) Start(ctx context.Context) {
 	// loopCtx is passed directly rather than having pollLoop re-read p.ctx itself: a re-read
 	// would still race a fast Stop() that nils p.ctx out before this goroutine gets scheduled.
 	go p.pollLoop(loopCtx)
-	log.Info("session tag classification poller started", "interval", p.config.PollInterval, "concurrency", p.config.ConcurrentCalls)
+	log.Info("session tag classification poller started", "interval", p.config.PollInterval)
 }
 
 // Running reports whether the poll loop is currently active — true between a Start() call and
@@ -248,23 +243,6 @@ func currentVocabulary(engine *classifier.TaggingEngine) []string {
 		vocabulary = append(vocabulary, UnclassifiedTag)
 	}
 	return vocabulary
-}
-
-// nonLLMOwnedTags returns tags with every entry whose RuleTagProvenance is llmSentinelRuleID
-// removed, preserving order. See classificationNeeded's hash-gating comment for why: the content
-// hash must be invariant to this poller's own prior output, or every successful classification
-// would immediately invalidate its own cache entry.
-//
-//nolint:unused
-func nonLLMOwnedTags(tags []string, provenance map[string]string) []string {
-	out := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		if provenance[tag] == llmSentinelRuleID {
-			continue
-		}
-		out = append(out, tag)
-	}
-	return out
 }
 
 // pendingClassification is one session that cleared the classify-once gate and awaits the
@@ -340,13 +318,9 @@ func metaForSession(snap *InstanceSnapshot) classifier.SessionTaggingContext {
 	}
 }
 
-// classificationNeeded enforces classify-once: a session with an applied cache entry is never
-// reclassified automatically, no matter how its branch, title, or tags change — re-running one
-// is an explicit user action (ClassifyNow / ReclassifySessionTags RPC). It returns the pending
-// classification (skip == "") or the skip reason: "suspended" for
-// paused/hibernated/stopped/crashed/permanently-failed instances, "already_classified" for
-// sessions with an applied entry, "cooldown" for degraded entries still inside the
-// MinReclassifyInterval retry backoff.
+// classificationNeeded enforces classify-once: an applied cache entry is never reclassified
+// automatically. It returns the pending classification (skip == "") or the skip reason:
+// "suspended", "already_classified", or "cooldown" (degraded entry inside the retry backoff).
 func (p *SessionTagClassificationPoller) classificationNeeded(inst *Instance, now time.Time) (*pendingClassification, string) {
 	snap := inst.Snapshot()
 	if snap.Status.IsSuspended() {
@@ -365,16 +339,19 @@ func (p *SessionTagClassificationPoller) classificationNeeded(inst *Instance, no
 
 // ClassifyNow synchronously (re)classifies one monitored session, bypassing the classify-once
 // gate — the programmatic back end of the user's manual "re-run classification" action. It
-// runs a single-session batch call bounded by CallTimeout (explicit user action, so blocking
-// is acceptable) and returns an error only when no monitored session matches title.
-func (p *SessionTagClassificationPoller) ClassifyNow(title string) error {
+// runs a single-session batch call bounded by CallTimeout and cancelled with ctx or the
+// poller. It returns an error only when no monitored session matches title.
+func (p *SessionTagClassificationPoller) ClassifyNow(ctx context.Context, title string) error {
 	p.mu.RLock()
 	instances := make([]*Instance, len(p.instances))
 	copy(instances, p.instances)
-	ctx := p.ctx
+	pollerCtx := p.ctx
 	p.mu.RUnlock()
-	if ctx == nil {
-		ctx = context.Background()
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if pollerCtx != nil {
+		defer context.AfterFunc(pollerCtx, cancel)()
 	}
 
 	for _, inst := range instances {
@@ -388,12 +365,9 @@ func (p *SessionTagClassificationPoller) ClassifyNow(title string) error {
 	return fmt.Errorf("tag poller: no monitored session matches %q", title)
 }
 
-// classifyBatch classifies the batch in one GenerateSessionTagsBatch call over the poller's
-// configured model hierarchy, applies each result via Instance.ApplyLLMTagResult, and records
-// every cache entry: applied ones are never retried automatically, degraded ones become
-// retryable after MinReclassifyInterval. degraded distinguishes a genuine classification
-// (outcome "applied", even when the model legitimately chose Unclassified) from a result
-// forced by an internal failure (outcome "failed_unclassified").
+// classifyBatch classifies the batch in one call over the model hierarchy, applies each
+// result, and caches it: applied entries are final, degraded ones retry after
+// MinReclassifyInterval. A model legitimately choosing Unclassified is still "applied".
 func (p *SessionTagClassificationPoller) classifyBatch(ctx context.Context, batch []pendingClassification, vocabulary []string, now time.Time) {
 	callCtx, cancel := context.WithTimeout(ctx, p.config.CallTimeout)
 	defer cancel()
@@ -407,6 +381,8 @@ func (p *SessionTagClassificationPoller) classifyBatch(ctx context.Context, batc
 	results, cost := headless.GenerateSessionTagsBatch(callCtx, p.pool, metas, vocabulary, p.modelHierarchy())
 	latency := time.Since(start)
 
+	log.Info("session tag poller: batch classified", "sessions", len(batch), "batch_cost_usd", cost, "latency_ms", latency.Milliseconds())
+
 	for _, b := range batch {
 		res := results[b.meta.Name]
 		outcome := "applied"
@@ -414,7 +390,7 @@ func (p *SessionTagClassificationPoller) classifyBatch(ctx context.Context, batc
 			log.Warn("session tag classification poller: batch classification degraded to Unclassified", "session", b.meta.Name)
 			outcome = "failed_unclassified"
 		}
-		log.Info("session tag poller: LLM classification", "session", b.meta.Name, "outcome", outcome, "tags", res.Tags, "cost_usd", cost, "latency_ms", latency.Milliseconds())
+		log.Info("session tag poller: LLM classification", "session", b.meta.Name, "outcome", outcome, "tags", res.Tags)
 
 		b.inst.ApplyLLMTagResult(res.Tags, llmSentinelRuleID)
 		p.cache.Store(b.meta.Name, cachedTagResult{tags: res.Tags, classifiedAt: now, applied: !res.Degraded})

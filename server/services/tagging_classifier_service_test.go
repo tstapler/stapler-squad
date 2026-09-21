@@ -134,3 +134,16 @@ func TestTaggingClassifierService_should_RejectReclassify_When_BadRequest(t *tes
 	_, err = svc.ReclassifySessionTags(context.Background(), connect.NewRequest(&sessionv1.ReclassifySessionTagsRequest{SessionId: "no-such-session"}))
 	assertConnectCode(t, err, connect.CodeNotFound)
 }
+
+func TestTaggingClassifierService_should_ReportEnvOverride_When_Updated(t *testing.T) {
+	svc := isolatedClassifierService(t)
+	t.Setenv("STAPLER_SQUAD_TAGGING_MODEL", "env-model")
+	t.Setenv("STAPLER_SQUAD_TAGGING_FALLBACK_MODELS", "env-fb")
+
+	update, err := svc.UpdateTaggingClassifierConfig(context.Background(), connect.NewRequest(&sessionv1.UpdateTaggingClassifierConfigRequest{
+		Config: &sessionv1.TaggingClassifierConfigProto{Model: "sonnet", FallbackModels: []string{"proxy-free"}},
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "env-model", update.Msg.GetConfig().GetModel())
+	assert.Equal(t, []string{"env-fb"}, update.Msg.GetConfig().GetFallbackModels())
+}

@@ -72,6 +72,7 @@ func splitEnvList(s string) []string {
 
 // GetTaggingClassifierConfig returns the effective LLM model hierarchy for session-tag
 // classification.
+// +api: tagging-classifier:get-config
 func (s *SessionService) GetTaggingClassifierConfig(
 	_ context.Context,
 	_ *connect.Request[sessionv1.GetTaggingClassifierConfigRequest],
@@ -86,6 +87,7 @@ func (s *SessionService) GetTaggingClassifierConfig(
 // UpdateTaggingClassifierConfig validates, persists, and hot-applies a new model hierarchy.
 // An empty model resets to the server default ("haiku"). Rejects blank-after-trim entries,
 // overlong names, and hierarchies longer than maxTaggingClassifierFallbacks.
+// +api: tagging-classifier:update-config
 func (s *SessionService) UpdateTaggingClassifierConfig(
 	_ context.Context,
 	req *connect.Request[sessionv1.UpdateTaggingClassifierConfigRequest],
@@ -125,12 +127,15 @@ func (s *SessionService) UpdateTaggingClassifierConfig(
 	if err := config.SaveConfig(cfg); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("save tagging classifier config: %w", err))
 	}
+	// Env overrides win over the saved config, so the poller and response report the
+	// effective hierarchy, not what was just saved.
+	effModel, effFallbacks := TaggingClassifierModelHierarchy(cfg)
 	if s.sessionTagPoller != nil {
-		s.sessionTagPoller.SetModelConfig(primary, fallbacks)
+		s.sessionTagPoller.SetModelConfig(effModel, effFallbacks)
 	}
-	log.Info("tagging classifier config updated", "model", primary, "fallbacks", fallbacks)
+	log.Info("tagging classifier config updated", "model", effModel, "fallbacks", effFallbacks)
 	return connect.NewResponse(&sessionv1.UpdateTaggingClassifierConfigResponse{
-		Config: taggingClassifierConfigToProto(primary, fallbacks),
+		Config: taggingClassifierConfigToProto(effModel, effFallbacks),
 	}), nil
 }
 
@@ -139,6 +144,7 @@ func (s *SessionService) UpdateTaggingClassifierConfig(
 // automatically — this RPC is the explicit user action that does. Fails NotFound when no
 // monitored session matches, Unimplemented when the headless pool (and therefore the
 // poller) is unavailable.
+// +api: tagging-classifier:reclassify-session
 func (s *SessionService) ReclassifySessionTags(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ReclassifySessionTagsRequest],
@@ -150,8 +156,7 @@ func (s *SessionService) ReclassifySessionTags(
 	if s.sessionTagPoller == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("tag classification is not available on this server (no headless pool)"))
 	}
-	_ = ctx
-	if err := s.sessionTagPoller.ClassifyNow(id); err != nil {
+	if err := s.sessionTagPoller.ClassifyNow(ctx, id); err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}
 	var tags []string

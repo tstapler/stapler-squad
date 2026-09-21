@@ -17,6 +17,30 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
+// lockedBuffer is a slog sink safe for the poller's goroutines writing while the test reads.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *lockedBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
 // fakeTagPoolClient is a minimal headless.PoolClient test double for
 // SessionTagClassificationPoller tests — records every call so tests can assert whether
 // GenerateSessionTags was invoked, and what vocabulary it observed, without a real subprocess
@@ -192,7 +216,7 @@ func TestSessionTagPoller_should_ApplyUnclassifiedAndUpdateCache_When_LLMCallFai
 // derived from a real internal failure (here: a hard CallBlocking error) rather than a
 // never-populated error.
 func TestSessionTagPoller_should_LogFailedUnclassifiedOutcome_When_GenerateSessionTagsDegrades(t *testing.T) {
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
 
@@ -213,7 +237,7 @@ func TestSessionTagPoller_should_LogFailedUnclassifiedOutcome_When_GenerateSessi
 // genuine, in-vocabulary classification (not a CallBlocking/JSON/filtering failure) — this must
 // still log "applied", not "failed_unclassified".
 func TestSessionTagPoller_should_LogAppliedOutcome_When_ModelLegitimatelyReturnsUnclassified(t *testing.T) {
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
 
@@ -429,6 +453,32 @@ func TestSessionTagPoller_should_HotSwapModels_When_SetModelConfigCalled(t *test
 	}
 }
 
+// TestSessionTagPoller_should_NotRace_When_SetModelConfigRunsConcurrentlyWithModelHierarchy
+// guards the p.mu protection of the hot-swapped config (run with -race).
+func TestSessionTagPoller_should_NotRace_When_SetModelConfigRunsConcurrentlyWithModelHierarchy(t *testing.T) {
+	t.Parallel()
+	fx := newTagPollerFixture(&fakeTagPoolClient{response: `{"results":[]}`}, "Feature")
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 500; i++ {
+			fx.poller.SetModelConfig("sonnet", []string{"a", "b"})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 500; i++ {
+			if got := fx.poller.modelHierarchy(); len(got) == 0 {
+				t.Error("empty hierarchy")
+				return
+			}
+		}
+	}()
+	wg.Wait()
+}
+
 // TestSessionTagPoller_should_ClassifySynchronously_When_ClassifyNowCalled verifies the manual
 // path: ClassifyNow bypasses the classify-once gate and applies fresh tags immediately,
 // returning an error only for unknown titles.
@@ -446,14 +496,14 @@ func TestSessionTagPoller_should_ClassifySynchronously_When_ClassifyNowCalled(t 
 		t.Fatalf("automatic re-tick must not reclassify (classify-once): calls=%d, want 1", got)
 	}
 
-	if err := fx.poller.ClassifyNow("sess-1"); err != nil {
+	if err := fx.poller.ClassifyNow(context.Background(), "sess-1"); err != nil {
 		t.Fatalf("ClassifyNow(sess-1) returned error: %v", err)
 	}
 	if got := fake.callCount(); got != 2 {
 		t.Fatalf("ClassifyNow: CallBlocking called %d times total, want 2", got)
 	}
 
-	if err := fx.poller.ClassifyNow("no-such-session"); err == nil {
+	if err := fx.poller.ClassifyNow(context.Background(), "no-such-session"); err == nil {
 		t.Fatal("ClassifyNow(unknown) must return an error")
 	}
 }
@@ -463,7 +513,7 @@ func TestSessionTagPoller_should_ClassifySynchronously_When_ClassifyNowCalled(t 
 // "LLM classification" INFO lines (the wall that prompted this change) — only classified
 // sessions log that message.
 func TestSessionTagPoller_should_NotLogClassificationLines_When_NothingChanged(t *testing.T) {
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
 
