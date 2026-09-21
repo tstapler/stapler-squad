@@ -6,6 +6,8 @@ import { useState, useEffect, useCallback } from "react";
 import { SessionService, type ProgramConfigProto } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
+import { useProbeProgram } from "@/lib/hooks/useProbeProgram";
+import { ProbeStatusBadge } from "@/components/ui/ProbeStatusBadge";
 import {
   container,
   heading,
@@ -34,6 +36,8 @@ import {
   deleteBtn,
   confirmDeleteBtn,
   fieldError,
+  commandRow,
+  checkButton,
 } from "./ProgramsManager.css";
 
 const PROGRAM_ID_RE = /^[\w-]+$/;
@@ -72,6 +76,8 @@ export function ProgramsManager() {
   const [formData, setFormData] = useState<ProgramFormData>(emptyForm);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const probe = useProbeProgram(formData.command, "program-config");
 
   const getClient = useCallback(() => {
     return createClient(SessionService, getConnectTransport());
@@ -311,14 +317,44 @@ export function ProgramsManager() {
 
             <div className={field}>
               <label className={labelClass} htmlFor="prog-command">Executable Command / Path</label>
-              <input
-                id="prog-command"
-                type="text"
-                className={input}
-                value={formData.command}
-                onChange={(e) => setFormData({ ...formData, command: e.target.value })}
-                placeholder="e.g. /usr/local/bin/my-agent or python -m myagent"
-                data-testid="prog-command-input"
+              <div className={commandRow}>
+                <input
+                  id="prog-command"
+                  type="text"
+                  className={input}
+                  value={formData.command}
+                  onChange={(e) => setFormData({ ...formData, command: e.target.value })}
+                  onBlur={() => probe.check()}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    probe.check({ immediate: true });
+                  }}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  aria-describedby="prog-command-status-text"
+                  placeholder="e.g. /usr/local/bin/my-agent or python -m myagent"
+                  data-testid="prog-command-input"
+                />
+                <button
+                  type="button"
+                  className={checkButton}
+                  onClick={() => probe.check({ explicit: true })}
+                  disabled={probe.state.kind === "checking"}
+                  aria-busy={probe.state.kind === "checking"}
+                  data-testid="prog-command-check"
+                >
+                  Check
+                </button>
+              </div>
+              <ProbeStatusBadge
+                state={probe.state}
+                checkedToken={probe.checkedToken}
+                onRetry={() => probe.check({ immediate: true })}
+                onConfirm={() => probe.check({ explicit: true })}
+                testId="prog-command-status"
+                id="prog-command-status-text"
               />
             </div>
 
@@ -327,6 +363,9 @@ export function ProgramsManager() {
               <input
                 id="prog-flags"
                 type="text"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 className={input}
                 value={formData.cliFlags}
                 onChange={(e) => setFormData({ ...formData, cliFlags: e.target.value })}

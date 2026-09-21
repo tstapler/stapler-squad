@@ -28,3 +28,23 @@ export const envVarInput = style({ flex: 1, backgroundColor: vars.color.inputBac
 export const deleteBtn = style({ backgroundColor: vars.color.errorBg, border: `1px solid ${vars.color.error}`, borderRadius: vars.radii.sm, color: vars.color.errorText, cursor: "pointer", padding: `${vars.space["1"]} ${vars.space["2"]}`, fontSize: vars.fontSize.xs, fontWeight: vars.fontWeight.medium });
 export const confirmDeleteBtn = style({ backgroundColor: vars.color.errorDark, border: `2px solid ${vars.color.errorDark}`, borderRadius: vars.radii.sm, color: vars.color.textInverse, cursor: "pointer", fontWeight: vars.fontWeight.bold, padding: `${vars.space["1"]} ${vars.space["2"]}`, fontSize: vars.fontSize.xs });
 export const fieldError = style({ color: vars.color.error, fontSize: vars.fontSize.xs, marginTop: vars.space["1"] });
+
+export const commandRow = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["2"],
+  "@media": { "(min-width: 640px)": { flexDirection: "row", alignItems: "flex-start" } },
+});
+// 44px target: full-width row below 640px, inline secondary button above.
+export const checkButton = style({
+  minHeight: "44px",
+  minWidth: "44px",
+  padding: `0 ${vars.space["4"]}`,
+  backgroundColor: "transparent",
+  border: `1px solid ${vars.color.inputBorder}`,
+  borderRadius: "4px",
+  color: vars.color.textPrimary,
+  font: "inherit",
+  cursor: "pointer",
+  selectors: { "&:disabled": { cursor: "progress", opacity: 0.7 } },
+});
