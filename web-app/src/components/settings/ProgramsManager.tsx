@@ -2,13 +2,16 @@
 
 // analytics-exempt
 // +feature: settings-programs
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { SessionService, type ProgramConfigProto } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
 import { useProbeProgram, type ProbeUiState } from "@/lib/hooks/useProbeProgram";
 import { ProbeStatusBadge } from "@/components/ui/ProbeStatusBadge";
 import { FlagCombobox } from "@/components/ui/FlagCombobox";
+import { UnknownFlagsWarning } from "@/components/ui/UnknownFlagsWarning";
+import { AvailableFlags } from "@/components/ui/AvailableFlags";
+import { validateFlags } from "@/lib/flags/validateFlags";
 import {
   container,
   heading,
@@ -87,6 +90,15 @@ export function ProgramsManager() {
 
   const probe = useProbeProgram(formData.command, "program-config");
   const flagsHint = FLAGS_HINTS[probe.state.kind];
+  const [flagsFocused, setFlagsFocused] = useState(false);
+  const probedFlags = useMemo(() => (probe.state.kind === "found" ? probe.state.flags : []), [probe.state]);
+  // The token still being typed is not judged until the field blurs or a space follows it.
+  const settledFlags =
+    flagsFocused && !/\s$/.test(formData.cliFlags) ? formData.cliFlags.replace(/\S+$/, "") : formData.cliFlags;
+  const unknownFlags = useMemo(() => validateFlags(settledFlags, probedFlags), [settledFlags, probedFlags]);
+  const flagsDescribedBy =
+    [flagsHint && "prog-flags-hint", unknownFlags.length > 0 && "prog-flags-warning"].filter(Boolean).join(" ") ||
+    undefined;
 
   const getClient = useCallback(() => {
     return createClient(SessionService, getConnectTransport());
@@ -369,21 +381,30 @@ export function ProgramsManager() {
 
             <div className={field}>
               <label className={labelClass} htmlFor="prog-flags">Default CLI Flags (optional)</label>
-              <FlagCombobox
-                id="prog-flags"
-                className={input}
-                value={formData.cliFlags}
-                onChange={(cliFlags) => setFormData({ ...formData, cliFlags })}
-                flags={probe.state.kind === "found" ? probe.state.flags : []}
-                placeholder="e.g. --verbose --auto"
-                testId="prog-flags-input"
-                describedBy={flagsHint ? "prog-flags-hint" : undefined}
-              />
+              <div onFocus={() => setFlagsFocused(true)} onBlur={() => setFlagsFocused(false)}>
+                <FlagCombobox
+                  id="prog-flags"
+                  className={input}
+                  value={formData.cliFlags}
+                  onChange={(cliFlags) => setFormData({ ...formData, cliFlags })}
+                  flags={probedFlags}
+                  placeholder="e.g. --verbose --auto"
+                  testId="prog-flags-input"
+                  describedBy={flagsDescribedBy}
+                />
+              </div>
               {flagsHint && (
                 <span id="prog-flags-hint" className={hintText} data-testid="prog-flags-hint">
                   {flagsHint}
                 </span>
               )}
+              <UnknownFlagsWarning
+                id="prog-flags-warning"
+                testId="prog-flags-warning"
+                program={probe.checkedToken}
+                unknown={unknownFlags}
+              />
+              <AvailableFlags flags={probedFlags} testId="prog-available-flags" />
             </div>
 
             <div className={field}>

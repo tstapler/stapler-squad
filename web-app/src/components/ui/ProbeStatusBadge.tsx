@@ -14,7 +14,7 @@ const TRANSPORT_HINT =
   "The server may refuse checks when it listens on a non-loopback address without authentication.";
 
 type Tone = "success" | "neutral" | "warning";
-type IconName = "check" | "info" | "warning";
+export type IconName = "check" | "info" | "warning";
 
 interface Row {
   tone: Tone;
@@ -88,7 +88,7 @@ const ICON_PATHS: Record<IconName, string> = {
   warning: "M8 2.5L14 13H2L8 2.5zM8 7v3M8 11.6v.1",
 };
 
-function Icon({ name }: { name: IconName }) {
+export function Icon({ name }: { name: IconName }) {
   return (
     <svg
       className={`${css.icon}`}

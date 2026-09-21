@@ -1,10 +1,12 @@
 // +feature: session-create settings-programs
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { ProgramOption } from "@/lib/constants/programs";
 import { useProbeProgram } from "@/lib/hooks/useProbeProgram";
 import { ProbeStatusBadge } from "@/components/ui/ProbeStatusBadge";
+import { UnknownFlagsWarning } from "@/components/ui/UnknownFlagsWarning";
+import { validateFlags } from "@/lib/flags/validateFlags";
 
 export const PROGRAM_PROBE_STATUS_ID = "omnibar-program-probe-status";
 // Kept so the not-found variant stays addressable by its pre-probe testid.
@@ -23,14 +25,28 @@ export function ProgramProbeSection({ option }: ProgramProbeSectionProps) {
     check();
   }, [check]);
 
+  // Only the saved cli_flags are validated; alias extraFlags never reach the panel (Flagged Choice 2).
+  const unknown = useMemo(
+    () => (state.kind === "found" ? validateFlags(option?.cliFlags ?? "", state.flags) : []),
+    [state, option?.cliFlags],
+  );
+
   return (
-    <ProbeStatusBadge
-      state={state}
-      checkedToken={checkedToken}
-      onRetry={() => check({ immediate: true })}
-      onConfirm={() => check({ explicit: true })}
-      testId={state.kind === "notFound" ? NOT_FOUND_TEST_ID : "program-probe-badge"}
-      id={PROGRAM_PROBE_STATUS_ID}
-    />
+    <>
+      <ProbeStatusBadge
+        state={state}
+        checkedToken={checkedToken}
+        onRetry={() => check({ immediate: true })}
+        onConfirm={() => check({ explicit: true })}
+        testId={state.kind === "notFound" ? NOT_FOUND_TEST_ID : "program-probe-badge"}
+        id={PROGRAM_PROBE_STATUS_ID}
+      />
+      <UnknownFlagsWarning
+        id="omnibar-flags-warning-text"
+        testId="omnibar-flags-warning"
+        program={checkedToken}
+        unknown={unknown}
+      />
+    </>
   );
 }

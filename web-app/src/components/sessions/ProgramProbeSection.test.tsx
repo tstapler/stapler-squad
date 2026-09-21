@@ -74,5 +74,37 @@ describe("ProgramProbeSection", () => {
     render(<ProgramProbeSection option={undefined} />);
     expect(screen.queryByRole("status")).toBeNull();
   });
+  describe("saved cli_flags warning", () => {
+    const foundWith = (names: string[]) =>
+      ({
+        ...probeStates.found,
+        flags: names.map((name) => ({ name, short: "", takesValue: false, description: "", aliases: [] })),
+      }) as never;
+    const AIDER = { value: "aider", label: "Aider", command: "aider", cliFlags: "--yes-always --bogus" };
+
+    it("ProgramProbeSection_should_ListOnlyBogus_When_SavedFlagsYesAlwaysAndBogus", () => {
+      setProbeHookState(foundWith(["--yes-always"]), "aider");
+      render(<ProgramProbeSection option={AIDER} />);
+      const warning = screen.getByTestId("omnibar-flags-warning");
+      expect(warning).toHaveTextContent("--bogus is not listed in aider --help.");
+      expect(warning).not.toHaveTextContent("--yes-always");
+      expect(warning).not.toHaveAttribute("role");
+    });
+
+    it.each(["notFound", "wrapper", "needsConfirm", "transportError", "noFlags", "checking"])(
+      "ProgramProbeSection_should_ShowNoFlagWarning_When_%s",
+      (kind) => {
+        setProbeHookState(probeStates[kind], "aider");
+        render(<ProgramProbeSection option={AIDER} />);
+        expect(screen.queryByTestId("omnibar-flags-warning")).toBeNull();
+      },
+    );
+
+    it("ProgramProbeSection_should_NotWarn_When_NoSavedFlags", () => {
+      setProbeHookState(foundWith(["--yes-always"]), "aider");
+      render(<ProgramProbeSection option={{ ...AIDER, cliFlags: undefined }} />);
+      expect(screen.queryByTestId("omnibar-flags-warning")).toBeNull();
+    });
+  });
 });
 

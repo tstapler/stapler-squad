@@ -289,4 +289,81 @@ describe("ProgramsManager probe badge", () => {
     expect(hint).toHaveTextContent(text);
     expect(screen.getByTestId("prog-flags-input")).toHaveAttribute("aria-describedby", hint.id);
   });
+  describe("unknown-flag warnings", () => {
+    const FOUND_WITH_MODEL = {
+      ...(probeStates.found as Extract<ProbeUiState, { kind: "found" }>),
+      flags: [{ name: "--model", short: "", takesValue: true, description: "Model to use", aliases: [] }] as never,
+    } as ProbeUiState;
+    const flagsInput = () => screen.getByTestId("prog-flags-input");
+    const type = (value: string) => {
+      fireEvent.focus(flagsInput());
+      fireEvent.change(flagsInput(), { target: { value } });
+      fireEvent.blur(flagsInput());
+    };
+
+    it("ProgramsManager_should_ShowWarningDescribedByAndNotInvalid_When_VerbosTyped", async () => {
+      await openForm(FOUND_WITH_MODEL);
+      type("--verbos");
+      const warning = screen.getByTestId("prog-flags-warning");
+      expect(warning).toHaveTextContent(
+        "--verbos is not listed in claude --help. It may still work (hidden or subcommand flags).",
+      );
+      expect(flagsInput().getAttribute("aria-describedby")).toContain(warning.id);
+      expect(flagsInput()).not.toHaveAttribute("aria-invalid");
+      expect(warning).not.toHaveAttribute("role");
+      expect(warning.querySelector("[role='alert']")).toBeNull();
+      expect(warning.querySelector("button")).toBeNull();
+      expect(warning.textContent).not.toMatch(/invalid|error/i);
+    });
+
+    it("ProgramsManager_should_HoldWarningUntilTokenSettles_When_StillTyping", async () => {
+      await openForm(FOUND_WITH_MODEL);
+      fireEvent.focus(flagsInput());
+      fireEvent.change(flagsInput(), { target: { value: "--mod" } });
+      expect(screen.queryByTestId("prog-flags-warning")).toBeNull();
+      fireEvent.change(flagsInput(), { target: { value: "--mod " } });
+      expect(screen.getByTestId("prog-flags-warning")).toBeInTheDocument();
+    });
+
+    it("ProgramsManager_should_ShowNoSuggestionsOrWarning_When_NotFoundZeroFlagsOrWrapper", async () => {
+      for (const name of ["notFound", "noFlags", "wrapper", "found", "needsConfirm", "checking", "transportError"]) {
+        const { unmount } = await openForm(probeStates[name]);
+        type("--verbos");
+        expect(screen.queryByTestId("prog-flags-warning")).toBeNull();
+        expect(screen.queryByTestId("prog-available-flags")).toBeNull();
+        unmount();
+      }
+    });
+
+    it("ProgramsManager_should_ShowOnlySoftWarningAndKeepSaveEnabled_When_KnownValidFlagNotInParsedSet", async () => {
+      await openForm(FOUND_WITH_MODEL);
+      type("--hidden-but-valid");
+      expect(screen.getByTestId("prog-flags-warning")).toBeInTheDocument();
+      expect(screen.getByTestId("save-program-btn")).toBeEnabled();
+      expect(flagsInput()).not.toHaveAttribute("aria-invalid");
+    });
+
+    it("ProgramsManager_should_DropWarningIdFromDescribedBy_When_FlagFixed", async () => {
+      await openForm(FOUND_WITH_MODEL);
+      type("--verbos");
+      type("--model x");
+      expect(screen.queryByTestId("prog-flags-warning")).toBeNull();
+      expect(flagsInput().getAttribute("aria-describedby") ?? "").not.toContain("prog-flags-warning");
+    });
+
+    it("ProgramsManager_should_ShowInfoButtonsInAvailableFlagsDisclosureOutsideOptions_When_Found", async () => {
+      await openForm(FOUND_WITH_MODEL);
+      expect(screen.queryByTestId("prog-flag-info-button")).toBeNull();
+      fireEvent.click(screen.getByTestId("prog-available-flags-toggle"));
+      expect(screen.getByTestId("prog-available-flags-toggle")).toHaveTextContent("Available flags (1)");
+      fireEvent.change(flagsInput(), { target: { value: "--mo", selectionStart: 4, selectionEnd: 4 } });
+      const listbox = screen.getByRole("listbox");
+      expect(listbox.querySelector("button")).toBeNull();
+      const info = screen.getByTestId("prog-flag-info-button");
+      expect(listbox.contains(info)).toBe(false);
+      fireEvent.click(info);
+      expect(screen.getByText("Model to use", { selector: "[data-testid='prog-flag-info-description']" })).toBeInTheDocument();
+      expect((flagsInput() as HTMLInputElement).value).toBe("--mo");
+    });
+  });
 });
