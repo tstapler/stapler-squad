@@ -2602,6 +2602,11 @@ func (s *SessionService) CreateSession(
 	// Directory, which NewProject would otherwise reintroduce.
 	var executionTarget session.ExecutionTarget = session.LocalTarget{}
 	existingWorktreeOverride := req.Msg.ExistingWorktree
+	// remoteCreationWarning mirrors Instance.CreationWarning (see
+	// InstanceOptions.CreationWarning's doc comment) for a remote
+	// SessionTypeNewWorktree, whose base-branch resolution runs synchronously
+	// in this block, before the Instance exists to set the field itself.
+	var remoteCreationWarning string
 	if remoteRequested {
 		switch sessionType {
 		case session.SessionTypeNewWorktree, session.SessionTypeExistingWorktree, session.SessionTypeDirectory, session.SessionTypeNewProject:
@@ -2663,16 +2668,44 @@ func (s *SessionService) CreateSession(
 			worktreeOps = git.NewRemoteWorktreeOps(runner)
 			remoteWT = git.RemoteWorktree{RepoPath: resolvedPath, WorktreePath: remoteWorkingPath, Branch: branch}
 
+			// Resolve the base commit the same way the local path does
+			// (git.ResolveWorktreeBaseCommit) instead of branching off
+			// resolvedPath's ambient checked-out HEAD -- see
+			// Instance.newWorktreeFromResolvedBase's doc comment for the
+			// misattribution bug this avoids. baseSHA == "" (err == nil) means
+			// an unborn repo, the one case ambient HEAD is safe to use.
+			defaultBranch, baseSHA, resolveErr := git.ResolveRemoteWorktreeBaseCommit(ctx, runner, resolvedPath)
+			if resolveErr != nil {
+				return nil, connect.NewError(connect.CodeInternal,
+					fmt.Errorf("failed to resolve default branch on remote %q: %w", resolvedRemote.Name, resolveErr))
+			}
+			branchArgs := []string{"branch", branch}
+			if baseSHA != "" {
+				branchArgs = append(branchArgs, baseSHA)
+				if diverged, ambientBranch := git.RemoteAmbientHEADDivergesFromBase(ctx, runner, resolvedPath, baseSHA); diverged {
+					if ambientBranch != "" {
+						remoteCreationWarning = fmt.Sprintf(
+							"branched from %s's default branch %q instead of %q, which %s was checked out to and has diverged from it",
+							resolvedPath, defaultBranch, ambientBranch, resolvedPath)
+					} else {
+						remoteCreationWarning = fmt.Sprintf(
+							"branched from %s's default branch %q instead of its ambient checked-out HEAD, which has diverged from it",
+							resolvedPath, defaultBranch)
+					}
+				}
+			}
+
 			// RemoteWorktreeOps.CreateWorktree (Phase 2, session/git/remote_worktree.go)
 			// mirrors the local "attach to an already-existing branch" `git worktree add
 			// <path> <branch>` shape deliberately, with no -b -- so a session that wants
 			// a fresh branch on the remote (the common case, mirroring local
-			// SessionTypeNewWorktree's own branch auto-creation) needs it created first.
-			// Best-effort: "git branch <name>" failing because the branch already exists
-			// is expected and ignored; any other failure (unreachable repo, invalid
-			// resolvedPath) is surfaced immediately rather than deferred to a more
-			// confusing failure from CreateWorktree itself.
-			if out, branchErr := runner.Run(ctx, resolvedPath, "git", "branch", branch); branchErr != nil &&
+			// SessionTypeNewWorktree's own branch auto-creation) needs it created first,
+			// from baseSHA rather than ambient HEAD (see above).
+			// Best-effort: "git branch <name> [sha]" failing because the branch already
+			// exists is expected and ignored; any other failure (unreachable repo,
+			// invalid resolvedPath) is surfaced immediately rather than deferred to a
+			// more confusing failure from CreateWorktree itself.
+			if out, branchErr := runner.Run(ctx, resolvedPath, "git", branchArgs...); branchErr != nil &&
 				!strings.Contains(string(out), "already exists") {
 				return nil, connect.NewError(connect.CodeInternal,
 					fmt.Errorf("failed to create branch %q on remote %q: %s (%w)",
@@ -2776,6 +2809,7 @@ func (s *SessionService) CreateSession(
 		Prompt:           req.Msg.Prompt,
 		InitialPrompt:    initialPrompt,
 		ExistingWorktree: existingWorktreeOverride,
+		CreationWarning:  remoteCreationWarning,
 		Category:         req.Msg.Category,
 		SessionType:      sessionType,
 		TmuxPrefix:       "", // Use default from config
