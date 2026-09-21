@@ -573,11 +573,13 @@ func (i *Instance) wireTmuxSession(program string) *tmux.TmuxSession {
 	opts := []tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand)}
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
 		if mgr, ok := tb.TmuxManager().(*TmuxProcessManager); ok {
+			// Kills a leftover pane process before a restart so it can't race the new one.
 			opts = append(opts, tmux.WithOrphanProcessGuard(mgr.CachedPanePIDStillAlive, mgr.TerminateCachedPanePID))
 		}
 	}
 	var session *tmux.TmuxSession
 	if snap.TmuxServerSocket != "" {
+		// nil registry: a reconnect loop on isolated sockets causes intermittent "exit status 1".
 		session = tmux.NewTmuxSessionWithServerSocket(snap.Title, program, tmuxPrefix, snap.TmuxServerSocket,
 			append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
 	} else {
@@ -608,6 +610,7 @@ func (i *Instance) initTmuxSession() {
 	i.LaunchCommand = enrichedProgram
 	log.Info("creating session", "session", i.Title, "program", enrichedProgram, "backend", string(processManagerBackendLabel(i.processManager)))
 
+	// Single choke point: every Start path funnels through here.
 	i.markWorkingDirTrusted()
 
 	i.wireTmuxSession(enrichedProgram)
