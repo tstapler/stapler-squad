@@ -19,8 +19,15 @@ The RPC accepts a command string but reduces it to a fixed, low-privilege execut
 
 **Execution shape**
 - Args are exactly `--help`. Env allowlist: `PATH`, `HOME`, `TERM=dumb`, `NO_COLOR=1`, `CI=1`, `COLUMNS`, `LANG`/`LC_ALL`, `PAGER=cat`, `MANPAGER=cat`. No tokens or API keys inherited.
-- cwd is an empty temp dir; stdin is /dev/null; own session and process group; group SIGKILL on the 3s timeout, on cap overflow, and after normal exit (ADR-002).
+- cwd is an empty temp dir; stdin is /dev/null; own session and process group; group SIGKILL on the timeout (default 3s, configurable through `Limits`; see plan Flagged Choice 11), on cap overflow, and after normal exit (ADR-002).
 - Global 2-slot semaphore acquired by the singleflight leader only (rejection -> `BUSY`, never cached); singleflight per cache key on a non-cancellable context (ADR-002); `NOT_FOUND`, `ERROR`, `BUSY` never cached.
+
+**Confirm before executing scripts (added in SDD phase 4, pre-mortem failure #2)**
+- Many user commands are wrapper scripts that ignore `--help` and run their body. `Prober.Probe` reads the first bytes of the resolved file: a native binary (ELF `\x7fELF`, Mach-O magic) may be run implicitly; a `#!` shebang script or any unrecognized file type returns `NEEDS_CONFIRM` **without executing**. It runs only when the request carries `confirm_execute=true`, which the UI sends only for an explicit user action (the `Check` button, or Enter in the command field, which is defined as Check). Blur never confirms.
+- The session-creation picker never executes on selection: it sends `resolve_only=true`, which resolves and stat-checks the file (found or not found) and returns a cached result if one exists, else `NEEDS_CONFIRM`. Execution there needs an explicit `Check`.
+- Once a (real path, mtime, size) target has been confirmed, the server remembers it for the process lifetime (bounded set), so later blur probes of that same file run without another click; a changed mtime requires a new confirmation.
+- Interpretation of AC8 recorded in `requirements.md` ("Interpretation notes"). This mitigation and the AC8 reading are **not yet approved**; sign-off stays PENDING.
+- Known cost: Node and Python CLIs such as claude, gemini and aider are usually shebang scripts, so the first check of each needs one click.
 
 **Request guard (`ProbeGuard`, `server/middleware/probeguard.go`, scoped to the full path `/api/session.v1.SessionService/ProbeProgram`)**
 - **Placement (iteration 2 fix).** One mux serves both listeners: `Start()` (`:8543`, `authMiddleware == nil` in `main.go`) and `StartRemote()` (`:8444`, TLS + `middleware.Auth`, `server/server.go:1374-1377` vs `:1643-1646`). The guard is installed only in `Start()`'s chain, around `inner`, when `authMiddleware == nil`; never at route registration (`:414`, shared mux, config not yet set, path already stripped) and never in `StartRemote()` (a Host check there would 403 the mobile app's LAN/Tailscale hostname; auth is that listener's boundary).
@@ -35,6 +42,6 @@ The RPC accepts a command string but reduces it to a fixed, low-privilege execut
 - **Option B: `program_id` for saved plus `unsaved=true`**: more code for a boundary the guard and target rules already narrow. Escalation to B remains additive (add a field, keep the runner and guard).
 
 ## Consequences
-- AC8 is met by shaping and guarding, not by identity: an authenticated-equivalent local caller can still cause `<any-safe-regular-file> --help` to run with an empty env in an empty dir. Residual risk: a binary that misbehaves on `--help`. Accepted because the same caller can already create sessions running arbitrary programs, and the guard closes the browser/rebinding vector that argument does not cover.
+- AC8 is met by shaping and guarding, not by identity: an authenticated-equivalent local caller can still cause `<any-safe-regular-file> --help` to run with an empty env in an empty dir. Residual risk: a native binary that misbehaves on `--help` (scripts now need explicit confirmation). Accepted because the same caller can already create sessions running arbitrary programs, and the guard closes the browser/rebinding vector that argument does not cover.
 - The plan restates AC8 honestly as "server hardening" (plan AC8 GWT).
 - Owner sign-off is **PENDING**; this ADR must not be read as approved by Tyler.

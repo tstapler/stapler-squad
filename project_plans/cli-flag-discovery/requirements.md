@@ -21,3 +21,14 @@ Program Config (`web-app/src/components/settings/ProgramsManager.tsx`) and sessi
 
 ## Out of scope
 Subcommand flag discovery, man page parsing, flag value completion.
+
+## Interpretation notes (added in SDD phase 4; the AC text above is unchanged and mirrors the backlog item)
+
+These record how the plan (`implementation/plan.md`) reads the ACs where the literal text and the design differ. They are readings, not approvals: ADR-001 owner sign-off is **PENDING human review**.
+
+- **AC8 ("only the command being configured")**: read as one command per request, taken from the form being edited or selected (Program Config field, or the session-creation picker's selected program), first token only, `--help` only, hardened env and cwd, and a request guard limiting callers to the local UI. The server does not keep a saved-program allow-list, so it will probe any single command the UI sends (ADR-001, Flagged Choice 1). Scripts (shebang or unrecognized file type) are not executed until the user explicitly clicks Check, and the session-creation picker never executes a program on selection (ADR-001, "Confirm before executing scripts").
+- **AC2 (`exec.LookPath`)**: the plan uses a custom `lookInDirs` over the login-shell PATH plus the server PATH, and rejects relative and world-writable targets. This is intentional hardening and PATH-fidelity work on top of `LookPath` semantics, not a deviation from "does the binary exist".
+- **AC3 ("no shell")**: applies to the `--help` execution. A constant script (no user text) derives the login-shell PATH so lookup matches how tmux sessions find programs. The 3s timeout stays the default unless the cold-start measurement in plan Task 1.1.3a contradicts it (then the plan makes the limit configurable).
+- **AC6 ("tooltip")**: delivered as a tap-to-reveal inline description plus a disclosure button, with no hover dependency (also satisfies AC9). No Radix tooltip is used.
+- **AC7 (session creation)**: scoped to the selected program's saved `cli_flags`. Alias `extraFlags` are not validated (they never reach the creation panel). This scope-down needs reviewer acceptance.
+- **AC10 (fixtures)**: `git` is a negative fixture (no options table); `tmux` is a second negative; `gh`, `rg`, `uv`, `aider`, `claude`, `gemini` and `agy` are positive fixtures.
