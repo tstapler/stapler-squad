@@ -466,6 +466,11 @@ func (s *JulesDispatchService) checkSpendGuards(ctx context.Context, openSession
 // defaultOrphanedPRFinder/defaultPRByNumberFinder already use for this exact
 // purpose (session/backlog_lifecycle_pr.go).
 func resolveJulesOwnerRepo(repoPath string) (githubpkg.RepoRef, error) {
+	// A GitHub URL (e.g. the settings panel's test-connection field) has no
+	// local git remote to read; parse it directly.
+	if parsed, perr := session.ParseGitHubURL(repoPath); perr == nil {
+		return githubpkg.NewRepoRef(parsed.Owner, parsed.Repo)
+	}
 	ref, err := githubpkg.GetOwnerRepoFromRemote(repoPath)
 	if err != nil {
 		return githubpkg.RepoRef{}, fmt.Errorf("resolving GitHub owner/repo for %s: %w", repoPath, err)

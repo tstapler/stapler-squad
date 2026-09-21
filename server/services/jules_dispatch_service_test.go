@@ -779,3 +779,10 @@ func TestBacklogService_DispatchToJules_should_ReturnFailedPreconditionDirecting
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "dispatch dialog")
 }
+
+func TestResolveJulesOwnerRepo_GitHubURL(t *testing.T) {
+	ref, err := resolveJulesOwnerRepo("https://github.com/tstapler/stapler-squad")
+	require.NoError(t, err)
+	assert.Equal(t, "tstapler", ref.Owner())
+	assert.Equal(t, "stapler-squad", ref.Repo())
+}
