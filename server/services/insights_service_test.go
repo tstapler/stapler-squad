@@ -1458,6 +1458,32 @@ func TestGetInsightsSummary_WhenSessionHasItemSessionRole_ExpectSessionRolePopul
 	assert.Equal(t, session.SessionRoleWork, resp.Msg.Sessions[0].SessionRole)
 }
 
+func TestGetInsightsSummary_WhenBacklogItemArchived_ExpectSessionRoleAndTagsPopulated(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-archived", "claude-sonnet-4", "/home/user/proj", 1000, 500, 0, now),
+	}
+	sessionRecords := []tokens.SessionRecord{
+		{SessionID: "sess-archived", ConversationID: "uuid-archived", Path: "/home/user/proj", Tags: []string{"triage-tag"}},
+	}
+	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
+	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		{SessionUUID: "sess-archived", SessionRole: session.SessionRoleTriage, ItemStatus: string(session.BacklogStatusArchived)},
+	}}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+
+	resp, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Equal(t, session.SessionRoleTriage, resp.Msg.Sessions[0].SessionRole)
+	assert.Equal(t, []string{"triage-tag"}, resp.Msg.Sessions[0].Tags)
+}
+
 func TestGetInsightsSummary_WhenNoItemSessionRow_ExpectSessionRoleEmpty(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()

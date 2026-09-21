@@ -112,6 +112,7 @@ export function SessionsTable({
   const searchText = controlledSearchText ?? internalSearchText;
   const setSearchText = onSearchTextChange ?? setInternalSearchText;
   const [modelFilter, setModelFilter] = useState("");
+  const [tagFilter, setTagFilter] = useState("");
   const [sortCol, setSortCol] = useState<SortColumn | null>(null);
   const [sortAsc, setSortAsc] = useState(false);
 
@@ -131,7 +132,7 @@ export function SessionsTable({
   const fuse = useMemo(
     () =>
       new Fuse(fuseDocs, {
-        keys: ["session.projectPath", "backlogTitle"],
+        keys: ["session.projectPath", "backlogTitle", "session.tags"],
         threshold: 0.4,
       }),
     [fuseDocs]
@@ -145,6 +146,11 @@ export function SessionsTable({
     return Array.from(seen).sort();
   }, [sessions]);
 
+  const uniqueTags = useMemo(
+    () => Array.from(new Set(sessions.flatMap((s) => s.tags ?? []))).sort(),
+    [sessions]
+  );
+
   const displayed = useMemo(() => {
     let result: SessionTokenSummary[];
 
@@ -156,6 +162,10 @@ export function SessionsTable({
 
     if (modelFilter) {
       result = result.filter((s) => s.primaryModel === modelFilter);
+    }
+
+    if (tagFilter) {
+      result = result.filter((s) => s.tags?.includes(tagFilter));
     }
 
     // Role cross-filter (Task 5.2.2c) — applied as its own array filter, not
@@ -240,7 +250,7 @@ export function SessionsTable({
       }
       return sortAsc ? cmp : -cmp;
     });
-  }, [sessions, searchText, modelFilter, roleFilter, showOrphans, fuse, sortCol, sortAsc]);
+  }, [sessions, searchText, modelFilter, tagFilter, roleFilter, showOrphans, fuse, sortCol, sortAsc]);
 
   const handleSortClick = useCallback((col: SortColumn) => {
     // Reads sortCol from closure rather than nesting setSortAsc inside
@@ -262,11 +272,12 @@ export function SessionsTable({
     [sortCol, sortAsc]
   );
 
-  const hasActiveFilters = searchText !== "" || modelFilter !== "" || !!roleFilter;
+  const hasActiveFilters = searchText !== "" || modelFilter !== "" || tagFilter !== "" || !!roleFilter;
 
   function clearFilters() {
     setSearchText("");
     setModelFilter("");
+    setTagFilter("");
   }
 
   // Announces the role cross-filter's state change (ux.md Surface B+C step
@@ -295,9 +306,10 @@ export function SessionsTable({
     }
   }, [onSessionClick]);
 
-  const sortableHeaderCell = (col: SortColumn, label: string) => (
+  const sortableHeaderCell = (col: SortColumn, label: string, title?: string) => (
     <th
       className={thRight}
+      title={title}
       scope="col"
       aria-sort={sortCol === col ? (sortAsc ? "ascending" : "descending") : "none"}
     >
@@ -331,7 +343,11 @@ export function SessionsTable({
       {sortableHeaderCell("duration", "Duration")}
       {sortableHeaderCell("costPerMessage", "Cost/Msg")}
       {sortableHeaderCell("cacheRoi", "Cache ROI")}
-      {sortableHeaderCell("wasteScore", "Waste Score")}
+      {sortableHeaderCell(
+        "wasteScore",
+        "Waste Score",
+        "Weighted 0-100 badness blend, not dollars. Higher is worse. Empty (\"Not evaluated\") means too few turns to evaluate."
+      )}
     </tr>
   );
 
@@ -348,15 +364,18 @@ export function SessionsTable({
           ) : (
             shortId(s.sessionId || s.conversationId)
           )}
+          {!backlogEntry && s.sessionRole && (
+            <span className={backlogBadge} data-testid="role-badge">{s.sessionRole}</span>
+          )}
           {backlogEntry && (
             <a
               href={`/backlog?item=${backlogEntry.itemId}`}
               className={backlogBadge}
               data-testid="backlog-badge"
-              title={`${backlogEntry.sessionRole}: ${backlogEntry.itemTitle}`}
+              title={`${backlogEntry.sessionRole || s.sessionRole}: ${backlogEntry.itemTitle}`}
               onClick={(e) => e.stopPropagation()}
             >
-              {backlogEntry.sessionRole}: {backlogEntry.itemTitle}
+              {backlogEntry.sessionRole || s.sessionRole}: {backlogEntry.itemTitle}
             </a>
           )}
         </td>
@@ -452,7 +471,7 @@ export function SessionsTable({
           <input
             type="search"
             className={searchInput}
-            placeholder="Search by path…"
+            placeholder="Search by path or tag…"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             aria-label="Search sessions by project path"
@@ -468,6 +487,19 @@ export function SessionsTable({
               <option key={m} value={m}>{m}</option>
             ))}
           </select>
+          {uniqueTags.length > 0 && (
+            <select
+              className={modelSelect}
+              value={tagFilter}
+              onChange={(e) => setTagFilter(e.target.value)}
+              aria-label="Filter by tag"
+            >
+              <option value="">All tags</option>
+              {uniqueTags.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          )}
           {hasActiveFilters && (
             <button
               type="button"
