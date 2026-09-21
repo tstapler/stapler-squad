@@ -993,3 +993,34 @@ func TestInstance_SetWindowSize_should_Delegate_When_Started(t *testing.T) {
 		t.Error("SetWindowSize should delegate to the process manager once started")
 	}
 }
+
+func TestInstance_BuildExtraEnv_IncludesCustomProgramAndInstanceEnvVars(t *testing.T) {
+	t.Parallel()
+	instance := &Instance{
+		UUID:    "test-uuid-456",
+		Program: "claude-250k-proxy",
+		EnvVars: map[string]string{
+			"CUSTOM_VAR": "custom_val",
+		},
+	}
+	extraEnv := instance.buildExtraEnv()
+	expectedUUID := "STAPLER_SESSION_UUID=test-uuid-456"
+	expectedCustom := "CUSTOM_VAR=custom_val"
+
+	hasUUID := false
+	hasCustom := false
+	for _, kv := range extraEnv {
+		if kv == expectedUUID {
+			hasUUID = true
+		}
+		if kv == expectedCustom {
+			hasCustom = true
+		}
+	}
+	if !hasUUID {
+		t.Errorf("expected buildExtraEnv to contain %q, got %v", expectedUUID, extraEnv)
+	}
+	if !hasCustom {
+		t.Errorf("expected buildExtraEnv to contain %q, got %v", expectedCustom, extraEnv)
+	}
+}

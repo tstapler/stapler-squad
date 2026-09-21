@@ -2211,19 +2211,8 @@ func (i *Instance) Resume() error {
 		}
 		program := i.buildLaunchCommand(claudeSessionID)
 		i.LaunchCommand = program
-		tmuxPrefix := i.TmuxPrefix
-		if tmuxPrefix == "" {
-			tmuxPrefix = "staplersquad_"
-		}
-		if tb, ok := i.processManager.(*TmuxBackend); ok {
-			if i.TmuxServerSocket != "" {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil)))
-			} else {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(i.Title, program, tmuxPrefix))
-			}
-			if i.UUID != "" {
-				tb.TmuxManager().Session().SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
-			}
+		if _, ok := i.processManager.(*TmuxBackend); ok {
+			i.wireTmuxSession(program)
 			if claudeSessionID != "" {
 				log.Info("resume: reinitializing tmux session with --resume", "session", i.Title, "uuid", claudeSessionID)
 			}
@@ -2422,24 +2411,8 @@ func (i *Instance) Restart(preserveOutput bool) error {
 	i.piSession = restorePiSession
 	i.piSessionMu.Unlock()
 
-	// Create a new tmux session
-	// Use configurable prefix or default
-	tmuxPrefix := i.TmuxPrefix
-	if tmuxPrefix == "" {
-		tmuxPrefix = "staplersquad_" // Default fallback
-	}
-
-	// Record the full launch command for diagnostics (MCP injection verification, etc.)
-	i.LaunchCommand = program
-
-	// Use server socket isolation if specified, otherwise use prefix-only isolation
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		if i.TmuxServerSocket != "" {
-			tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil)))
-		} else {
-			tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(i.Title, program, tmuxPrefix))
-		}
-	}
+	// Create and wire a new tmux session with full environment configuration
+	i.wireTmuxSession(program)
 
 	// Start the new session
 	if err := i.pm().Start(worktreePath); err != nil {

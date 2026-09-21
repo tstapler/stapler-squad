@@ -144,8 +144,12 @@ func piStderrLogPath(i *Instance) (string, error) {
 // isClaude reports whether the program command invokes the claude binary.
 // It checks each whitespace-delimited token's basename to avoid false positives
 // from env wrappers (e.g. "env -u VAR claude") and to reject similar names
-// like "claude-squad" or "myclaudeapp".
+// like "claude-squad" or "myclaudeapp". Custom program IDs are resolved first.
 func isClaude(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
 	for _, token := range strings.Fields(program) {
 		if filepath.Base(token) == "claude" {
 			return true
@@ -158,8 +162,12 @@ func isClaude(program string) bool {
 // isClaude: it checks each whitespace-delimited token's basename, so it
 // matches bare ("pi") and path-qualified ("/usr/local/bin/pi") invocations
 // while rejecting lookalikes like "pipenv" or "mypi" whose basename isn't
-// exactly "pi".
+// exactly "pi". Custom program IDs are resolved first.
 func isPi(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
 	for _, token := range strings.Fields(program) {
 		if filepath.Base(token) == "pi" {
 			return true
@@ -180,8 +188,12 @@ var yoloFlagByAgent = map[string]string{
 
 // yoloFlagFor returns the yolo/auto-approve flag for the agent detected in
 // program's whitespace-delimited tokens (basename match, mirroring isClaude),
-// or "" if the agent has no known flag.
+// or "" if the agent has no known flag. Custom program IDs are resolved first.
 func yoloFlagFor(program string) string {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
 	for _, token := range strings.Fields(program) {
 		if flag, ok := yoloFlagByAgent[filepath.Base(token)]; ok {
 			return flag
@@ -535,59 +547,10 @@ func (i *Instance) claudeMCPConfigArgs() (string, string) {
 // check is tried first to avoid a subprocess round trip on the hot path; the
 // canonical check only runs when it says no, so a merely-stale cache entry
 // doesn't force an unnecessary rebuild.
-func (i *Instance) initTmuxSession() {
-	if i.pm().HasSession() && (i.pm().IsAlive() || i.IsBackendProcessAlive()) {
-		log.Info("reusing existing tmux session", "session", i.Title)
-		return
-	}
-	var claudeSessionID string
-	if i.claudeSession != nil {
-		claudeSessionID = i.claudeSession.ConversationUUID
-	}
-	enrichedProgram := i.buildLaunchCommand(claudeSessionID)
-	i.LaunchCommand = enrichedProgram
-	// This func runs for every backend despite its name (BUG-109) -- log the
-	// real one instead of hardcoding "tmux".
-	log.Info("creating session", "session", i.Title, "program", enrichedProgram, "backend", string(processManagerBackendLabel(i.processManager)))
-
-	// Pre-trust the working directory so claude never blocks this
-	// (possibly-unattended) session on its interactive "trust this folder?"
-	// dialog. Every Start() path calls initTmuxSession() before starting the
-	// tmux session, so this is the single choke point that covers all of
-	// them (first-time setup, cold/hot restore, worktree creation). See
-	// markWorkingDirTrusted's doc comment.
-	i.markWorkingDirTrusted()
-
-	tmuxPrefix := i.TmuxPrefix
-	if tmuxPrefix == "" {
-		tmuxPrefix = "staplersquad_"
-	}
-
-	// runner threads i.ExecutionTarget through TmuxSession construction (ssh-remote-workspaces
-	// Phase 4, Task 4.2.1d) -- tmux.LocalRunner{} for LocalTarget (the default, identical to
-	// every construction site's pre-Phase-4 behavior) or the dialed *tmux.SSHRunner for a
-	// remote target, so this session's tmux subprocess calls run on the same host the
-	// CreateSession mode-specific block (server/services/session_service.go) already created
-	// the remote tmux session on.
-	runner := i.executionTarget().Runner()
-	opts := []tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand)}
-	// Wires RestoreWithWorkDir's orphan guard (BUG matching #791, a different
-	// call site -- see that method's doc comment) to this instance's cached
-	// pane PID, so a later restore that finds tmux has no record of the
-	// session can tell a genuinely dead pane from one whose OS process
-	// outlived a killed/restarted tmux server.
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		if mgr, ok := tb.TmuxManager().(*TmuxProcessManager); ok {
-			opts = append(opts, tmux.WithOrphanProcessGuard(mgr.CachedPanePIDStillAlive, mgr.TerminateCachedPanePID))
-		}
-	}
-	var session *tmux.TmuxSession
-	if i.TmuxServerSocket != "" {
-		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket,
-			append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
-	} else {
-		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix, opts...)
-	}
+// buildExtraEnv returns the KEY=VALUE environment variable pairs to inject via
+// tmux new-session -e flags. Combines STAPLER_SESSION_UUID, custom program env vars,
+// and instance-level EnvVars.
+func (i *Instance) buildExtraEnv() []string {
 	var extraEnv []string
 	if i.UUID != "" {
 		extraEnv = append(extraEnv, "STAPLER_SESSION_UUID="+i.UUID)
@@ -603,12 +566,56 @@ func (i *Instance) initTmuxSession() {
 	for k, v := range i.EnvVars {
 		extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", k, v))
 	}
-	if len(extraEnv) > 0 {
+	return extraEnv
+}
+
+// wireTmuxSession constructs the tmux.TmuxSession object with full environment configuration
+// and sets it on the instance's process manager.
+func (i *Instance) wireTmuxSession(program string) *tmux.TmuxSession {
+	tmuxPrefix := i.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+
+	runner := i.executionTarget().Runner()
+	opts := []tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand)}
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		if mgr, ok := tb.TmuxManager().(*TmuxProcessManager); ok {
+			opts = append(opts, tmux.WithOrphanProcessGuard(mgr.CachedPanePIDStillAlive, mgr.TerminateCachedPanePID))
+		}
+	}
+	var session *tmux.TmuxSession
+	if i.TmuxServerSocket != "" {
+		session = tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket,
+			append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
+	} else {
+		session = tmux.NewTmuxSessionWithPrefix(i.Title, program, tmuxPrefix, opts...)
+	}
+	if extraEnv := i.buildExtraEnv(); len(extraEnv) > 0 {
 		session.SetExtraEnv(extraEnv)
 	}
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
 		tb.TmuxManager().SetSession(session)
 	}
+	return session
+}
+
+func (i *Instance) initTmuxSession() {
+	if i.pm().HasSession() && (i.pm().IsAlive() || i.IsBackendProcessAlive()) {
+		log.Info("reusing existing tmux session", "session", i.Title)
+		return
+	}
+	var claudeSessionID string
+	if i.claudeSession != nil {
+		claudeSessionID = i.claudeSession.ConversationUUID
+	}
+	enrichedProgram := i.buildLaunchCommand(claudeSessionID)
+	i.LaunchCommand = enrichedProgram
+	log.Info("creating session", "session", i.Title, "program", enrichedProgram, "backend", string(processManagerBackendLabel(i.processManager)))
+
+	i.markWorkingDirTrusted()
+
+	i.wireTmuxSession(enrichedProgram)
 }
 
 // KillSession terminates the tmux session only (leaves worktree intact).

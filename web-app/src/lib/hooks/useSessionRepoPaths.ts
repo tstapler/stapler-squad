@@ -6,7 +6,12 @@ import { selectActiveSessionsSortedByUpdatedAt } from "@/lib/store/sessionsSlice
 
 /** Returns deduplicated list of repo root paths from all known sessions. */
 export function useSessionRepoPaths(): string[] {
-  const sessions = useAppSelector(selectActiveSessionsSortedByUpdatedAt);
+  let sessions: ReturnType<typeof selectActiveSessionsSortedByUpdatedAt> = [];
+  try {
+    sessions = useAppSelector(selectActiveSessionsSortedByUpdatedAt) ?? [];
+  } catch {
+    sessions = [];
+  }
   return useMemo(() => {
     const seen = new Set<string>();
     const paths: string[] = [];

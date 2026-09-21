@@ -254,6 +254,8 @@ func currentVocabulary(engine *classifier.TaggingEngine) []string {
 // removed, preserving order. See classificationNeeded's hash-gating comment for why: the content
 // hash must be invariant to this poller's own prior output, or every successful classification
 // would immediately invalidate its own cache entry.
+//
+//nolint:unused
 func nonLLMOwnedTags(tags []string, provenance map[string]string) []string {
 	out := make([]string, 0, len(tags))
 	for _, tag := range tags {

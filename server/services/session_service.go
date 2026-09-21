@@ -2479,7 +2479,6 @@ func (s *SessionService) CreateSession(
 	if program != "" {
 		resolvedProg := config.ResolveProgramConfig(cfg, program)
 		if resolvedProg.IsCustom {
-			program = resolvedProg.Command
 			for k, v := range resolvedProg.EnvVars {
 				if _, exists := instanceEnvVars[k]; !exists {
 					instanceEnvVars[k] = v
