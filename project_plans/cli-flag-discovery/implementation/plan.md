@@ -63,13 +63,19 @@ M1 (Phase 1 M1 part + Phase 2) is about 68.5h before Gate G1 (Task 2.1.2c's 1h c
 
 | Target | Cold (s) | Warm (s) | Under 1.5s cold? | Notes |
 |---|---|---|---|---|
-| claude | UNMEASURED | UNMEASURED | - | - |
-| aider | UNMEASURED | UNMEASURED | - | - |
-| gemini | UNMEASURED | UNMEASURED | - | - |
-| agy | UNMEASURED | UNMEASURED | - | - |
-| gh | UNMEASURED | UNMEASURED | - | - |
+| claude | 0.10 | 0.10 | yes | MEASURED 2026-09-21 on host onyx (Manjaro). ELF binary (2.1.278), no shebang: may run on an implicit probe. rc 0, 21 KB. |
+| aider | 0.62 | 0.41 | yes | MEASURED 2026-09-21 on onyx. Shebang script (0.78.0): needs `NEEDS_CONFIRM`. rc 0, 27 KB. |
+| gemini | 1.03 | 1.00 | yes (closest to the line) | MEASURED 2026-09-21 on onyx. Shebang script (0.43.0): needs `NEEDS_CONFIRM`. With the real `$HOME` it prints an "Invalid configuration in ~/.gemini/settings.json" preamble before the help; captured with a sandbox `HOME`. |
+| agy | 0.16 | 0.08 | yes | MEASURED 2026-09-21 on onyx. ELF (1.2.7), Go `flag` style. |
+| gh | 0.03 | 0.03 | yes | MEASURED 2026-09-21 on onyx. ELF (2.86.0). |
 
-Decision (fill in): _default 3s kept_ / _`slowTools` override added: ..._ / _`PENDING` status added_.
+Method: `NO_COLOR=1 PAGER=cat MANPAGER=cat timeout 10 <tool> --help </dev/null 2>&1`, 6 runs per tool. "Cold" is the first run, "warm" is the median of runs 2-6. This is not a true cold start: `drop_caches` needs root and was not used, and the binaries had been run earlier in the day, so first-ever-run cost (page cache, Python `.pyc`, npm resolution) is UNVERIFIED. Also measured, for reference: pi 0.34 cold / 0.35 warm (shebang), opencode 0.48 / 0.38 (ELF). No run timed out or returned non-zero.
+
+Side effects (MEASURED 2026-09-21, onyx), run with `HOME` set to an empty temp dir: claude, aider, agy, gh wrote nothing. gemini created `~/.gemini/projects.json.<uuid>.tmp`. pi (not a target) wrote `~/.pi/agent/{models-store,auth}.json`; opencode (not a target) created `~/.cache`, `~/.config`, `~/.local/{share,state}` and `~/.cache/opencode/bin`. A before/after `find ~ -newer` on the real `$HOME` was too noisy to be conclusive (concurrent sessions write `~/.cache`, `~/.claude.json` and others), so the sandbox-`HOME` result is the evidence. Consequence: point the child `HOME` at a per-probe temp dir in `probeEnv` (Unresolved Questions #6 answered: yes for gemini, no for the rest).
+
+`git --help` (MEASURED 2026-09-21, git 2.53.0 via `strace -f -e trace=execve`, stdout and stderr to a file, `PAGER=cat MANPAGER=cat`): no `man`, `less` or pager is exec'd; it prints the 2246-byte usage text in about 50 ms. The `git` negative fixture is therefore `git --help`, no `git -h` fallback needed. (`~/.local/bin/git` is a wrapper that resolves to linuxbrew git; the trace shows only `sh` PATH probes, `readlink` and `git`.)
+
+Decision: **default 3s kept.** No target exceeded 1.5s cold (worst: gemini 1.03s), so no `slowTools` override is added and Task 1.1.2b's `limitsFor` stays an empty map. No `PENDING` status: `ProbeStatus` in Task 1.2.1a is unchanged and `make proto-gen` may proceed with the current enum. The `TestProbe_should_ApplySlowToolLimits...` row in validation.md does not apply. Gate G1's second condition (no target forces `PENDING`) is satisfied. Caveat: gemini at about 1.0s leaves 3x headroom, not more, on a slower or busier machine; the 60s `TIMEOUT` TTL and explicit Check bypass cover that.
 
 ---
 
