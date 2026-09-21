@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -469,6 +470,97 @@ func TestHealthCheckerRecovery_PreExistingSessionAtRestart_StillRespawnsWithinGr
 	}
 }
 
+// TestHealthCheckerRecovery_PermanentlyFailedInstance_SkippedNotAutoRestarted
+// pins ADR-001: PermanentlyFailed is a terminal state reached only via an
+// explicit user-initiated Retry now, not something the health checker may
+// silently resurrect. Before this fix, checkSingleSession's terminal-state
+// skip switch handled Stopped and Crashed but not PermanentlyFailed, so a
+// PermanentlyFailed instance fell through to the same "!TmuxAlive()" branch
+// as any other started-but-dead session and got auto-restarted via
+// instance.Start(false) once the debounce threshold was reached.
+func TestHealthCheckerRecovery_PermanentlyFailedInstance_SkippedNotAutoRestarted(t *testing.T) {
+	t.Parallel()
+	checker := NewSessionHealthChecker(nil)
+
+	mock := &mockTmuxManager{hasSessionReturn: false} // TmuxAlive() would be false
+	inst := &Instance{Title: "permanently-failed-test", Status: PermanentlyFailed}
+	inst.started.Store(true)
+	inst.processManager = NewTmuxBackend(mock)
+
+	// Call past the debounce threshold -- if the skip didn't fire, the second
+	// call would reach the recovery path and invoke Start().
+	for i := 0; i < 2; i++ {
+		result := checker.checkSingleSession(inst, nil)
+		if !result.IsHealthy {
+			t.Errorf("call %d: expected IsHealthy=true (session skipped, not failing)", i+1)
+		}
+		if result.RecoveryAttempted {
+			t.Errorf("call %d: expected RecoveryAttempted=false for a PermanentlyFailed instance", i+1)
+		}
+		found := false
+		for _, a := range result.Actions {
+			if strings.Contains(a, "permanently failed") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("call %d: expected an Actions entry noting the skip, got %v", i+1, result.Actions)
+		}
+	}
+
+	if mock.startCalls != 0 {
+		t.Errorf("expected instance.Start to never be called for a PermanentlyFailed instance, got %d Start() calls", mock.startCalls)
+	}
+
+	checker.failureCountsMu.Lock()
+	count := checker.failureCounts[inst.Title]
+	checker.failureCountsMu.Unlock()
+	if count != 0 {
+		t.Errorf("expected failure count to stay 0 (skip returns before the debounce path is reached), got %d", count)
+	}
+
+	if inst.Snapshot().Status != PermanentlyFailed {
+		t.Errorf("expected Status to remain PermanentlyFailed, got %s", inst.Snapshot().Status)
+	}
+}
+
+// TestHealthCheckerRecovery_TymuxBackend_SkipsPollBasedLivenessCheck pins the
+// fix for a real incident (tymux-validation-test, 2026-09-07): a tymux-backed
+// instance's throwaway LoadInstances() copy always reports HasSession()==false
+// (fromInstanceData never wires tymux session/pane IDs the way it wires a
+// TmuxSession by name for the tmux backend — that would need a real
+// ListSessions RPC, which deferStart's "don't block LoadInstances()" contract
+// rules out). Without the Backend != BackendTymux guard, checkTmuxHealth
+// treated every tymux session as missing, forever, and eventually called
+// Start(false) on a disconnected copy — silently spawning an orphaned
+// duplicate session on tymuxd instead of ever reporting the real instance as
+// healthy.
+func TestHealthCheckerRecovery_TymuxBackend_SkipsPollBasedLivenessCheck(t *testing.T) {
+	t.Parallel()
+	checker := NewSessionHealthChecker(nil)
+
+	mock := &mockTmuxManager{hasSessionReturn: false} // would fail TmuxAlive() if ever consulted
+	inst := &Instance{Title: "tymux-backend-test", Status: Active, Backend: BackendTymux}
+	inst.started.Store(true)
+	inst.processManager = NewTmuxBackend(mock)
+
+	// Call past the debounce threshold -- if the skip didn't fire, the second
+	// call would reach recoverMissingSession and invoke Start().
+	for i := 0; i < 2; i++ {
+		result := checker.checkSingleSession(inst, nil)
+		if !result.IsHealthy {
+			t.Errorf("call %d: expected IsHealthy=true (tymux backend skips the poll-based check), got issues=%v", i+1, result.Issues)
+		}
+		if result.RecoveryAttempted {
+			t.Errorf("call %d: expected RecoveryAttempted=false for a tymux-backed instance", i+1)
+		}
+	}
+
+	if mock.startCalls != 0 {
+		t.Errorf("expected instance.Start to never be called for a tymux-backed instance's throwaway health-check copy, got %d Start() calls", mock.startCalls)
+	}
+}
+
 // --- checkInstances multi-socket regression tests ---
 //
 // CheckAllSessions previously derived a single socket from the first instance that
@@ -529,5 +621,80 @@ func TestSessionHealthChecker_CheckInstances_HealthySocketInstancesAllChecked(t 
 
 	if len(results) != 2 {
 		t.Fatalf("expected both instances to be checked, got %d results: %+v", len(results), results)
+	}
+}
+
+// If this fails, the 15s health checker respawns archived sessions as real tmux
+// sessions and real `claude` processes (ADR-001,
+// superseded-rework-session-retirement). The table covers exactly the four
+// statuses IsSuspended() omits; the control row proves live sessions are still
+// recovered.
+func TestHealthCheckerRecovery_ArchivedInstance_SkippedNotAutoRestarted(t *testing.T) {
+	t.Parallel()
+	archivedAt := time.Now()
+
+	tests := []struct {
+		name     string
+		status   Status
+		archived bool
+		// wantRecovery is the expected RecoveryAttempted on the second
+		// checkSingleSession call (past the failure debounce).
+		wantRecovery bool
+	}{
+		{name: "active_archived", status: Active, archived: true},
+		{name: "creating_archived", status: Creating, archived: true},
+		{name: "restoring_archived", status: Restoring, archived: true},
+		{name: "failed_archived", status: Failed, archived: true},
+		{name: "active_not_archived_control", status: Active, archived: false, wantRecovery: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			checker := NewSessionHealthChecker(nil)
+
+			mock := &mockTmuxManager{hasSessionReturn: false} // TmuxAlive() is false
+			inst := &Instance{Title: "archived-health-" + tt.name, Status: tt.status}
+			if tt.archived {
+				// Set before anything calls Snapshot(): it caches its first build.
+				inst.ArchivedAt = &archivedAt
+			}
+			inst.started.Store(true)
+			inst.processManager = NewTmuxBackend(mock)
+
+			// Two calls: the first is below the failure debounce threshold, the
+			// second reaches recoverMissingSession's Start(false).
+			var last HealthCheckResult
+			for i := 0; i < 2; i++ {
+				last = checker.checkSingleSession(inst, nil)
+			}
+
+			if last.RecoveryAttempted != tt.wantRecovery {
+				t.Errorf("RecoveryAttempted = %v, want %v (actions: %v)", last.RecoveryAttempted, tt.wantRecovery, last.Actions)
+			}
+
+			if !tt.archived {
+				if mock.startCalls == 0 {
+					t.Error("control: expected a live session's missing tmux session to still be recreated")
+				}
+				return
+			}
+
+			if mock.startCalls != 0 {
+				t.Errorf("expected Start() never to be called for an archived instance, got %d calls", mock.startCalls)
+			}
+			found := false
+			for _, a := range last.Actions {
+				if strings.Contains(a, "archived") {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected an Actions entry naming the archived skip, got %v", last.Actions)
+			}
+			if got := inst.Snapshot().Status; got != tt.status {
+				t.Errorf("Status = %v, want %v (the guard must not rewrite status)", got, tt.status)
+			}
+		})
 	}
 }

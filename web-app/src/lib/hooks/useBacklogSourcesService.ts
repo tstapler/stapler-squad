@@ -2,8 +2,7 @@
 
 import { useCallback, useRef, useEffect, useMemo, useState } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { BacklogService, ItemSource as ItemSourceProto, SourceSyncEvent as SourceSyncEventProto } from "@/gen/session/v1/backlog_pb";
 
 export interface ItemSource {
@@ -109,11 +108,7 @@ export function useBacklogSourcesService(): UseBacklogSourcesServiceReturn {
   const clearError = useCallback(() => setLastError(null), []);
 
   useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
-    clientRef.current = createClient(BacklogService, transport);
+    clientRef.current = createClient(BacklogService, getConnectTransport());
   }, []);
 
   const listItemSources = useCallback(async (): Promise<ItemSource[]> => {

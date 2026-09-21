@@ -1,8 +1,10 @@
 package adapters
 
 import (
+	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -10,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -293,15 +296,50 @@ func TestStatusToProto_AllStates(t *testing.T) {
 		{"Stopped", session.Stopped, sessionv1.SessionStatus_SESSION_STATUS_STOPPED},
 		{"Hibernated", session.Hibernated, sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED},
 		{"Restoring", session.Restoring, sessionv1.SessionStatus_SESSION_STATUS_RESTORING},
+		{"Crashed", session.Crashed, sessionv1.SessionStatus_SESSION_STATUS_CRASHED},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := StatusToProto(tc.input)
+			got, err := StatusToProto(tc.input)
+			if err != nil {
+				t.Errorf("StatusToProto(%v) returned unexpected error: %v", tc.input, err)
+			}
 			if got != tc.expected {
 				t.Errorf("StatusToProto(%v) = %v, want %v", tc.input, got, tc.expected)
 			}
 		})
+	}
+}
+
+// TestStatusToProto_should_ReturnFailed_When_StatusIsFailed verifies Epic 1.1
+// Story 1.1.3's Failed arm: session.Failed maps to SESSION_STATUS_FAILED, not
+// UNSPECIFIED.
+func TestStatusToProto_should_ReturnFailed_When_StatusIsFailed(t *testing.T) {
+	got, err := StatusToProto(session.Failed)
+	if err != nil {
+		t.Fatalf("StatusToProto(Failed) returned unexpected error: %v", err)
+	}
+	if got != sessionv1.SessionStatus_SESSION_STATUS_FAILED {
+		t.Errorf("StatusToProto(Failed) = %v, want SESSION_STATUS_FAILED", got)
+	}
+}
+
+// TestStatusToProto_should_ReturnExplicitError_When_StatusIsUnrecognized is the
+// Task 1.1.3c exhaustiveness guard: an unmapped session.Status value must fail
+// loudly (a returned error) instead of silently falling back to UNSPECIFIED, so
+// the next new status value added to the FSM but not to this switch is caught
+// instead of repeating the exact gap this story closes.
+func TestStatusToProto_should_ReturnExplicitError_When_StatusIsUnrecognized(t *testing.T) {
+	unrecognized := session.Status(99)
+
+	got, err := StatusToProto(unrecognized)
+
+	if err == nil {
+		t.Fatalf("StatusToProto(%v) = %v, <nil>, want a non-nil error for an unrecognized status", unrecognized, got)
+	}
+	if got != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
+		t.Errorf("StatusToProto(%v) status = %v, want SESSION_STATUS_UNSPECIFIED alongside the error", unrecognized, got)
 	}
 }
 
@@ -418,4 +456,88 @@ func TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackN
 	if proto.GithubMergeable != "" {
 		t.Errorf("expected empty GithubMergeable, got %q", proto.GithubMergeable)
 	}
+}
+
+// TestInstanceToProto_should_PopulateRuleTagProvenance_When_TagsHaveRuleProvenance closes
+// the session-classifier-pipeline Phase 6 gap: RuleTagProvenance was added to the wire proto
+// (types.proto field 90) but InstanceToProto never copied Instance.RuleTagProvenance into it,
+// so the frontend provenance tooltip had no data to read. See ADR-002 tag-provenance data
+// model.
+func TestInstanceToProto_should_PopulateRuleTagProvenance_When_TagsHaveRuleProvenance(t *testing.T) {
+	inst := &session.Instance{
+		Tags:              []string{"Bugfix", "Feature"},
+		RuleTagProvenance: map[string]string{"Bugfix": "seed-bugfix", "Feature": "llm"},
+	}
+
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+
+	want := map[string]string{"Bugfix": "seed-bugfix", "Feature": "llm"}
+	if len(proto.RuleTagProvenance) != len(want) {
+		t.Fatalf("RuleTagProvenance = %+v, want %+v", proto.RuleTagProvenance, want)
+	}
+	for tag, ruleID := range want {
+		if got := proto.RuleTagProvenance[tag]; got != ruleID {
+			t.Errorf("RuleTagProvenance[%q] = %q, want %q", tag, got, ruleID)
+		}
+	}
+}
+
+// newWorktreeInstance builds an Instance whose worktree points at worktreePath.
+// A path never created on disk models a session whose worktree pause_session
+// removed while keeping the branch.
+func newWorktreeInstance(repoPath, worktreePath string) *session.Instance {
+	const title = "worktree-session"
+	inst := &session.Instance{Title: title, Path: repoPath, Status: session.Active}
+	inst.SetGitWorktree(git.NewGitWorktreeFromStorage(repoPath, worktreePath, title, "test-branch", "abc123"))
+	return inst
+}
+
+// TestInstanceToProto_PopulatesPathVocabulary covers the four path fields at the
+// adapter boundary, which had no path-field assertions at all before this.
+func TestInstanceToProto_PopulatesPathVocabulary(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(t.TempDir(), "gone-worktree")
+
+	got := InstanceToProto(newWorktreeInstance(repoPath, worktreePath), nil)
+
+	require.Equal(t, repoPath, got.RepoRoot)
+	require.Equal(t, worktreePath, got.WorktreeDir)
+	require.Equal(t, worktreePath, got.ActiveDir)
+	require.Equal(t, repoPath, got.ExistingDir, "worktree is absent from disk, so ExistingDir falls back")
+}
+
+// TestInstanceToProto_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing checks
+// the divergence survives the adapter, not just the domain layer — wiring the
+// wrong one of the two into a field is exactly the mistake that shipped.
+func TestInstanceToProto_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing(t *testing.T) {
+	repoPath := t.TempDir()
+	gone := t.TempDir()
+
+	first := InstanceToProto(newWorktreeInstance(repoPath, filepath.Join(gone, "alpha")), nil)
+	second := InstanceToProto(newWorktreeInstance(repoPath, filepath.Join(gone, "beta")), nil)
+
+	require.Equal(t, first.ExistingDir, second.ExistingDir)
+	require.NotEqual(t, first.ActiveDir, second.ActiveDir,
+		"two isolated worktree sessions must stay distinguishable on the wire")
+}
+
+// TestInstanceToProto_LegacyPathFields_Unchanged is the additive guarantee: the
+// deprecated fields keep the values they carried before the new ones existed, so
+// no current consumer sees a change.
+func TestInstanceToProto_LegacyPathFields_Unchanged(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(t.TempDir(), "gone-worktree")
+
+	got := InstanceToProto(newWorktreeInstance(repoPath, worktreePath), nil)
+
+	// Concrete values, not a re-derivation from Workspace() — asserting against
+	// the implementation under test would still pass if its semantics changed,
+	// which is the one thing this test exists to catch.
+	//nolint:staticcheck // asserting the deprecated fields is the point: they must not change.
+	require.Equal(t, repoPath, got.Path, "path carried the disk-checked value, which falls back here")
+	//nolint:staticcheck // ditto.
+	require.Equal(t, worktreePath, got.WorkingDir, "working_dir carried the disk-agnostic value")
 }

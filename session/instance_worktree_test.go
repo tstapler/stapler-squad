@@ -1,8 +1,10 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -85,6 +87,93 @@ func TestEnsureDirectorySessionPath_NoopWhenPathIsAnExistingFile(t *testing.T) {
 	require.False(t, info.IsDir(), "the existing file must be left untouched, not replaced with a directory")
 }
 
+// TestSetupFirstTimeWorktree_NewWorktree_AlwaysFailsOnMissingPath documents
+// SessionTypeNewWorktree's deliberately strict, unconditional contract: it
+// requires an existing repo and never bootstraps one, regardless of
+// CreateIfMissing (there is no bootstrap-supporting branch in this case at
+// all) — the exact bug 9037ed5e0 fixed for CreateBacklogWorktree. A genuinely
+// new project that also wants an isolated worktree must go through
+// SessionTypeNewProject with a branch set instead (see
+// TestSetupFirstTimeWorktree_NewProject_CreatesWorktree_When_BranchSet).
+func TestSetupFirstTimeWorktree_NewWorktree_AlwaysFailsOnMissingPath(t *testing.T) {
+	t.Parallel()
+
+	for _, createIfMissing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("CreateIfMissing=%v", createIfMissing), func(t *testing.T) {
+			t.Parallel()
+			base := t.TempDir()
+			target := filepath.Join(base, "gone-repo")
+
+			inst, err := NewInstance(InstanceOptions{
+				Title:           "missing-repo",
+				Path:            target,
+				Program:         "claude",
+				SessionType:     SessionTypeNewWorktree,
+				CreateIfMissing: createIfMissing,
+			})
+			require.NoError(t, err)
+
+			err = inst.setupFirstTimeWorktree()
+			require.Error(t, err)
+			require.False(t, inst.gitManager.HasWorktree())
+		})
+	}
+}
+
+// TestSetupFirstTimeWorktree_NewProject_CreatesWorktree_When_BranchSet covers
+// the "steam-controls" regression (found 2026-09-05): the web-app's "New
+// Project, opened as New Worktree" flow targets a path that never exists yet
+// by construction, and now routes through SessionTypeNewProject (which always
+// bootstraps) with an explicit branch, rather than SessionTypeNewWorktree
+// (which never bootstraps — see the test above). Before this fix, that flow
+// incorrectly submitted SessionTypeNewWorktree against the nonexistent path
+// and always failed with "repository path does not exist".
+func TestSetupFirstTimeWorktree_NewProject_CreatesWorktree_When_BranchSet(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	target := filepath.Join(base, "brand-new-project")
+
+	inst, err := NewInstance(InstanceOptions{
+		Title:       "steam-controls",
+		Path:        target,
+		Program:     "claude",
+		SessionType: SessionTypeNewProject,
+		Branch:      "steam-controls",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, inst.setupFirstTimeWorktree())
+
+	_, gitErr := os.Stat(filepath.Join(target, ".git"))
+	require.NoError(t, gitErr, "expected the missing project path to be git-initialized")
+	require.True(t, inst.gitManager.HasWorktree(), "expected a worktree to be created off the bootstrapped repo")
+	require.NotEqual(t, target, inst.gitManager.GetWorktreePath(), "worktree must live in a separate directory from the main repo, matching an existing repo's NewWorktree behavior")
+}
+
+// TestSetupFirstTimeWorktree_NewProject_NoWorktree_When_BranchEmpty documents
+// the unchanged "open as directory" behavior: SessionTypeNewProject with no
+// branch set still just bootstraps the repo with no worktree, exactly as
+// before this case gained worktree-creation support.
+func TestSetupFirstTimeWorktree_NewProject_NoWorktree_When_BranchEmpty(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	target := filepath.Join(base, "brand-new-directory-project")
+
+	inst, err := NewInstance(InstanceOptions{
+		Title:       "new-directory-project",
+		Path:        target,
+		Program:     "claude",
+		SessionType: SessionTypeNewProject,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, inst.setupFirstTimeWorktree())
+
+	_, gitErr := os.Stat(filepath.Join(target, ".git"))
+	require.NoError(t, gitErr, "expected the missing project path to be git-initialized")
+	require.False(t, inst.gitManager.HasWorktree(), "expected no worktree when no branch was requested")
+}
+
 // TestGetEffectiveRootDir_ReturnsWorktreePath_EvenWhenMissingFromDisk documents
 // that GetEffectiveRootDir must stay disk-existence-agnostic: HistoryLinker
 // correlates sessions by the nominal worktree path string (see
@@ -119,7 +208,7 @@ func TestWorkspace_FallsBackToRepoRoot_WhenWorktreePathMissingFromDisk(t *testin
 	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
 
 	ws := inst.Workspace()
-	require.Equal(t, repoPath, ws.EffectivePath, "must fall back to RepoRoot when the worktree path is gone")
+	require.Equal(t, repoPath, ws.ExistingDir, "must fall back to RepoRoot when the worktree path is gone")
 	require.Equal(t, repoPath, ws.RepoRoot)
 }
 
@@ -147,6 +236,178 @@ func TestWorkspace_UsesWorktreePath_WhenPresentOnDisk(t *testing.T) {
 	require.NoError(t, err)
 
 	ws := inst.Workspace()
-	require.Equal(t, resolvedWorktreePath, ws.EffectivePath)
+	require.Equal(t, resolvedWorktreePath, ws.ExistingDir)
 	require.Equal(t, repoPath, ws.RepoRoot)
+}
+
+// TestWorkspace_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing is the
+// regression test for the WorkspacePeersPanel false-collision bug: two sessions
+// in separate worktrees of one repo, both worktrees since cleaned up, must stay
+// distinguishable. ExistingDir collapses them onto the shared repo root (it has
+// to — that is the only directory left to read from), so ActiveDir is what
+// callers comparing two sessions have to use.
+func TestWorkspace_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing(t *testing.T) {
+	t.Parallel()
+	repoPath := t.TempDir()
+	goneWorktrees := t.TempDir()
+
+	newSession := func(name string) Workspace {
+		inst := &Instance{Title: name, Path: repoPath, Status: Running}
+		inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, filepath.Join(goneWorktrees, name)))
+		return inst.Workspace()
+	}
+	first, second := newSession("alpha"), newSession("beta")
+
+	require.Equal(t, first.ExistingDir, second.ExistingDir,
+		"ExistingDir is lossy here by design — both fall back to the shared repo root")
+	require.NotEqual(t, first.ActiveDir, second.ActiveDir,
+		"ActiveDir must keep the sessions distinguishable, which is why comparisons use it")
+}
+
+// TestWorkspace_ActiveDir_KeepsWorktreeDir_WhenMissingFromDisk pins ActiveDir as
+// disk-agnostic. HistoryLinker correlates on this string and must get the
+// nominal worktree path whether or not the directory is still there.
+func TestWorkspace_ActiveDir_KeepsWorktreeDir_WhenMissingFromDisk(t *testing.T) {
+	t.Parallel()
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
+
+	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: Running}
+	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
+
+	ws := inst.Workspace()
+	require.Equal(t, worktreePath, ws.ActiveDir)
+	require.Equal(t, worktreePath, ws.WorktreeDir)
+	require.Equal(t, repoPath, ws.ExistingDir, "ExistingDir alone falls back")
+}
+
+// TestWorkspace_NoWorktree_CollapsesToRepoRoot covers the directory-session
+// shape: no worktree, so three of the four fields are the repo root and
+// WorktreeDir is empty rather than a duplicate of it.
+func TestWorkspace_NoWorktree_CollapsesToRepoRoot(t *testing.T) {
+	t.Parallel()
+	repoPath := t.TempDir()
+
+	ws := (&Instance{Title: "directory-session", Path: repoPath, Status: Running}).Workspace()
+
+	require.Equal(t, repoPath, ws.RepoRoot)
+	require.Equal(t, repoPath, ws.ActiveDir)
+	require.Equal(t, repoPath, ws.ExistingDir)
+	require.Empty(t, ws.WorktreeDir)
+}
+
+// TestGetWorkingDirectory_MatchesGetEffectiveRootDir_WhenWorktreePathEmpty pins
+// the one behaviour this refactor deliberately changed. A worktree set with an
+// empty path made GetWorkingDirectory return "" while GetEffectiveRootDir
+// returned the repo root; both now answer with the repo root, since every
+// caller (cmd.Dir, session start) wants a usable directory.
+func TestGetWorkingDirectory_MatchesGetEffectiveRootDir_WhenWorktreePathEmpty(t *testing.T) {
+	t.Parallel()
+	repoPath := t.TempDir()
+
+	inst := &Instance{Title: "empty-worktree-path", Path: repoPath, Status: Running}
+	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, ""))
+
+	require.Equal(t, repoPath, inst.GetWorkingDirectory())
+	require.Equal(t, inst.GetEffectiveRootDir(), inst.GetWorkingDirectory())
+}
+
+// TestGetEffectiveRootDir_ConcurrentWithSetGitHubResolution_NoRace is a
+// deterministic regression test (synchronization-hook based, not
+// time.Sleep) for the data race backlog item 10fc3913 reported: the
+// background resolution pipeline's SetGitHubResolution write (routed
+// through the actor, under i.mu) raced DeleteSession's cleanup-path reads
+// of GetEffectiveRootDir/Workspace/GetWorkingDirectory, which read the raw
+// i.Path field with no synchronization at all.
+//
+// This exercises the same shape without the full CreateSession/DeleteSession
+// RPC machinery: a live actor goroutine (NewLiveInstance) races
+// SetGitHubResolution against tight reader loops on the caller's own
+// goroutine, gated by a start channel so both sides begin at the same
+// instant instead of relying on OS scheduling luck across a single call --
+// go test -race -count=100 against this test's own single run already
+// found the pre-fix code failed unreliably (see PR description for the
+// before/after `go test -race` evidence), so this loops each side many
+// times to make detection deterministic rather than probabilistic.
+func TestGetEffectiveRootDir_ConcurrentWithSetGitHubResolution_NoRace(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "race-regression", Path: "/tmp/initial-path", Status: Creating}
+	li := NewLiveInstance(inst)
+	defer li.Stop()
+
+	const iterations = 500
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for n := 0; n < iterations; n++ {
+			inst.SetGitHubResolution(GitHubResolution{
+				Path:   fmt.Sprintf("/tmp/resolved-%d", n),
+				Branch: "resolved-branch",
+				Owner:  "octocat",
+				Repo:   "Hello-World",
+			})
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for n := 0; n < iterations; n++ {
+			_ = inst.GetEffectiveRootDir()
+			_ = inst.Workspace()
+			_ = inst.GetWorkingDirectory()
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+}
+
+// TestApplyWorktreeDetectionLocked_ConcurrentWithSetGitHubResolution_NoRace
+// regression-tests applyWorktreeDetectionLocked's write/write race fix
+// against setGitHubResolutionLocked. Drives the Locked helper directly via
+// sendSyncErr, not the full DetectAndPopulateWorktreeInfo, to exclude that
+// method's separate, still-unfixed i.Path read (see its doc comment).
+func TestApplyWorktreeDetectionLocked_ConcurrentWithSetGitHubResolution_NoRace(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "worktree-detect-write-race", Status: Creating}
+	li := NewLiveInstance(inst)
+	defer li.Stop()
+
+	info := &WorktreeInfo{IsWorktree: true, MainRepoRoot: "/tmp/main-repo", GitHubOwner: "detected-owner", GitHubRepo: "detected-repo"}
+
+	const iterations = 200
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for n := 0; n < iterations; n++ {
+			inst.SetGitHubResolution(GitHubResolution{
+				Branch: "resolved-branch",
+				Owner:  "octocat",
+				Repo:   "Hello-World",
+			})
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for n := 0; n < iterations; n++ {
+			_ = inst.sendSyncErr(func(s *instanceState) error {
+				applyWorktreeDetectionLocked(s, info)
+				return nil
+			})
+		}
+	}()
+
+	close(start)
+	wg.Wait()
 }

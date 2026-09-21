@@ -182,12 +182,6 @@ jest.mock("@xterm/addon-serialize", () => ({
   },
 }));
 
-jest.mock("@/lib/hooks/useMobileTerminalGestures", () => ({
-  useMobileTerminalGestures: () => {},
-}));
-jest.mock("@/lib/hooks/useTouchScroll", () => ({
-  useTouchScroll: () => {},
-}));
 jest.mock("@/lib/config/terminalConfig", () => ({
   loadTerminalConfig: () => null,
   darkTerminalTheme: {},

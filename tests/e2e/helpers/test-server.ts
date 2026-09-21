@@ -2,6 +2,7 @@ import { exec, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as net from 'net';
+import * as os from 'os';
 import * as path from 'path';
 import { SessionClient } from './session-client';
 
@@ -30,6 +31,9 @@ export interface TestServerConfig {
 export class TestServer {
   private process: ChildProcess | null = null;
   private config: TestServerConfig;
+  // PID-scoped copy of the shared repo-root binary (see ensureBinary) — set
+  // when we made one, so stop() knows to clean it up.
+  private binDir: string | null = null;
 
   constructor(config: Partial<TestServerConfig> = {}) {
     const pid = process.pid;
@@ -114,6 +118,7 @@ export class TestServer {
     }
 
     await this.cleanupTestDir();
+    await this.cleanupBinDir();
   }
 
   getBaseUrl(): string {
@@ -146,18 +151,35 @@ export class TestServer {
   }
 
   private async ensureBinary(): Promise<void> {
-    const stats = await fs.promises.stat(this.config.buildPath).catch(() => null);
-    if (stats && stats.isFile()) {
-      const age = Date.now() - stats.mtimeMs;
-      if (age < 3600000) {
-        return;
-      }
+    // TEST_SERVER_BINARY (woven-binary parity leg) points at a binary built
+    // by a separate pipeline — never rebuild or copy it here.
+    if (process.env.TEST_SERVER_BINARY) {
+      return;
     }
 
-    console.log('Building Go binary...');
+    // `make stapler-squad` — not a raw `go build` — so its own dependency
+    // chain (server/web/dist <- web-app/out <- web-app/src/**) decides
+    // whether the frontend needs rebuilding. A wall-clock age check here
+    // previously let a binary up to 1h old skip rebuilding even when
+    // web-app/src had just changed, silently serving a stale embedded UI to
+    // Playwright (see 2026-09-04 insights-cost-intelligence e2e debugging).
+    console.log('Ensuring Go binary is up to date (make stapler-squad)...');
     const projectRoot = path.join(__dirname, '../../..');
-    await execPromise('go build -o stapler-squad .', { cwd: projectRoot });
-    console.log('✅ Binary built');
+    await execPromise('make stapler-squad', { cwd: projectRoot });
+    console.log('✅ Binary up to date');
+
+    // The Makefile target always writes to the single repo-root path, which
+    // every concurrent e2e run / manual instance in this (shared, non-worktree
+    // -isolated) checkout would otherwise spawn from directly. testDir is
+    // already PID-scoped (see the constructor) — mirror that here with a
+    // PID-scoped copy, so concurrent runs against this same checkout can't
+    // race a rebuild out from under one another's already-spawned process.
+    this.binDir = path.join(os.tmpdir(), 'stapler-squad-e2e-bin', String(process.pid));
+    await fs.promises.mkdir(this.binDir, { recursive: true });
+    const isolatedPath = path.join(this.binDir, 'stapler-squad');
+    await fs.promises.copyFile(path.join(projectRoot, 'stapler-squad'), isolatedPath);
+    await fs.promises.chmod(isolatedPath, 0o755);
+    this.config.buildPath = isolatedPath;
   }
 
   /**
@@ -223,6 +245,17 @@ export class TestServer {
       }
     } catch (error) {
       console.warn(`Warning: Failed to cleanup test directory: ${error}`);
+    }
+  }
+
+  private async cleanupBinDir(): Promise<void> {
+    if (!this.binDir) return;
+    try {
+      await fs.promises.rm(this.binDir, { recursive: true, force: true });
+    } catch (error) {
+      console.warn(`Warning: Failed to cleanup binary directory: ${error}`);
+    } finally {
+      this.binDir = null;
     }
   }
 }

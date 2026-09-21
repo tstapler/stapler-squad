@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -100,4 +101,58 @@ func TestBuildContinuationPrompt_NoAssistantMessage(t *testing.T) {
 	if !strings.Contains(strings.ToLower(got), "continue") {
 		t.Errorf("expected fallback to mention 'continue', got: %q", got)
 	}
+}
+
+// TestBuildContinuationPrompt_ConcurrentWithSetHistoryInfo guards against a
+// data race: buildContinuationPrompt used to read inst.HistoryFilePath
+// directly with no lock, while SetHistoryInfo (the HistoryLinker's setter)
+// writes it under claudeSessionMu/i.mu. Unlike FindInstanceByHistoryPath
+// (session/artifact_lookup.go), which is documented as safe because it only
+// ever runs on the same goroutine that sets the field, buildContinuationPrompt
+// has no such guarantee — it can run concurrently with a live HistoryLinker
+// scan. Run with -race: this must fail on a raw-field read and pass once the
+// read goes through Snapshot().
+func TestBuildContinuationPrompt_ConcurrentWithSetHistoryInfo(t *testing.T) {
+	t.Parallel()
+	inst := makeTestInstance("continuation-prompt-race")
+
+	var writerWG, readerWG, ready sync.WaitGroup
+	stop := make(chan struct{})
+
+	const numWriters = 4
+	const numReaders = 4
+	ready.Add(numWriters + numReaders)
+
+	for w := 0; w < numWriters; w++ {
+		writerWG.Add(1)
+		go func(w int) {
+			defer writerWG.Done()
+			ready.Done()
+			ready.Wait() // start all goroutines at once to maximize overlap
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+					inst.SetHistoryInfo(fmt.Sprintf("uuid-%d-%d", w, i), fmt.Sprintf("/path/%d/%d.jsonl", w, i))
+				}
+			}
+		}(w)
+	}
+
+	for r := 0; r < numReaders; r++ {
+		readerWG.Add(1)
+		go func() {
+			defer readerWG.Done()
+			ready.Done()
+			ready.Wait()
+			for i := 0; i < 5000; i++ {
+				_ = buildContinuationPrompt(inst)
+			}
+		}()
+	}
+
+	readerWG.Wait() // readers finish their fixed workload first
+	close(stop)     // then signal writers to stop looping
+	writerWG.Wait()
 }

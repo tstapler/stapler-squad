@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"os"
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
@@ -11,22 +10,15 @@ import (
 )
 
 // TymuxRolloutService handles the GetTymuxRolloutStatus/
-// CompleteTymuxRollbackRehearsal/SetTymuxSessionOverride RPCs — the
-// operator-facing controls for the tymux-bundled-integration staged rollout
-// (Epic 3.3), mirroring StreamHubRolloutService's shape exactly: a
-// config-backed handler with no second implementation, so a concrete type
-// per the `interface-pollution-checklist` skill.
+// CompleteTymuxRollbackRehearsal/SetTymuxSessionOverride/
+// SetTymuxGlobalOverride RPCs — the operator-facing controls for the
+// tymux-bundled-integration rollout, mirroring StreamHubRolloutService's
+// shape exactly: a config-backed handler with no second implementation, so
+// a concrete type per the `interface-pollution-checklist` skill.
 //
-// The global STAPLER_SQUAD_USE_TYMUX default is deliberately NOT settable
-// here — it's env-var-gated and requires a process restart by design (see
-// resolveStartupBackend's callers in main.go), keeping the final
-// backend-switch a conscious operator action rather than a UI toggle that
-// could silently change live session-creation behavior for every new
-// session. What this service exposes is everything that IS safe to change
-// live: the rollback-rehearsal completion gate (config.json-backed, wired
-// today via config.RecordTymuxRollbackRehearsalCompleted from Epic 3.1) and
-// per-session canary overrides (config.SetTymuxSessionOverride/
-// TymuxSessionOverrides, Phase 4 Epic 4.1).
+// The global default is the "tymux" feature flag (config.TymuxFeatureFlag,
+// off by default) — SetTymuxGlobalOverride sets or clears that flag live
+// from the browser, no restart required.
 type TymuxRolloutService struct{}
 
 // NewTymuxRolloutService creates a TymuxRolloutService.
@@ -34,9 +26,8 @@ func NewTymuxRolloutService() *TymuxRolloutService {
 	return &TymuxRolloutService{}
 }
 
-// status builds the current TymuxRolloutStatus from live config plus the
-// process environment — shared by all three RPCs since each returns the
-// post-mutation status.
+// status builds the current TymuxRolloutStatus from live config — shared by
+// all four RPCs since each returns the post-mutation status.
 func (s *TymuxRolloutService) status() *sessionv1.TymuxRolloutStatus {
 	cfg := config.LoadConfig()
 
@@ -53,10 +44,18 @@ func (s *TymuxRolloutService) status() *sessionv1.TymuxRolloutStatus {
 		})
 	}
 
+	var globalOverride *bool
+	if v, ok := cfg.GetTymuxGlobalOverride(); ok {
+		globalOverride = &v
+	}
+
 	return &sessionv1.TymuxRolloutStatus{
-		GlobalEnvVarSet:              os.Getenv("STAPLER_SQUAD_USE_TYMUX") == "true",
+		// The STAPLER_SQUAD_USE_TYMUX env var was removed in favor of the
+		// "tymux" feature flag (GlobalOverride below) — always false now.
+		GlobalEnvVarSet:              false,
 		RollbackRehearsalCompletedAt: rehearsalCompletedAt,
 		SessionOverrides:             overrides,
+		GlobalOverride:               globalOverride,
 	}
 }
 
@@ -70,9 +69,8 @@ func (s *TymuxRolloutService) GetTymuxRolloutStatus(
 }
 
 // CompleteTymuxRollbackRehearsal records that the tymux backend's rollback
-// rehearsal has been performed, unblocking the global
-// STAPLER_SQUAD_USE_TYMUX default from resolving to true
-// (config.ResolveGlobalTymuxDefault).
+// rehearsal has been performed. Historical record only — the global default
+// no longer gates on it (see config.EffectiveTymuxEnabled).
 // +api: tymux-rollout:complete-rehearsal
 func (s *TymuxRolloutService) CompleteTymuxRollbackRehearsal(
 	ctx context.Context,
@@ -98,6 +96,21 @@ func (s *TymuxRolloutService) SetTymuxSessionOverride(
 ) (*connect.Response[sessionv1.TymuxRolloutStatus], error) {
 	cfg := config.LoadConfig()
 	if err := cfg.SetTymuxSessionOverride(req.Msg.GetSessionName(), req.Msg.ForceTymux); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(s.status()), nil
+}
+
+// SetTymuxGlobalOverride sets or clears the "tymux" feature flag. Takes
+// effect immediately for sessions created after this call — no process
+// restart required.
+// +api: tymux-rollout:set-global-override
+func (s *TymuxRolloutService) SetTymuxGlobalOverride(
+	ctx context.Context,
+	req *connect.Request[sessionv1.SetTymuxGlobalOverrideRequest],
+) (*connect.Response[sessionv1.TymuxRolloutStatus], error) {
+	cfg := config.LoadConfig()
+	if err := cfg.SetTymuxGlobalOverride(req.Msg.ForceTymux); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(s.status()), nil

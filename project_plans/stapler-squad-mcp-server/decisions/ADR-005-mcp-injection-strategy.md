@@ -1,5 +1,20 @@
 # ADR-005: MCP Server Injection into Managed Sessions
 
+**Status**: Superseded — 2026-09-09. Every managed session already receives the stapler-squad
+MCP server via a per-session `--mcp-config` command-line flag
+(`session/instance_tmux.go`'s `claudeMCPConfigArgs`, HTTP transport, session UUID in a header),
+built before this ADR's file-injection mechanism ever shipped and confirmed to already be the
+"primary" path in `InjectMCPConfig`'s own doc comment. The `.mcp.json`-writing fallback this ADR
+describes (drifted from `.claude/settings.local.json` to the project-root `.mcp.json` — a
+git-tracked file — at some point after this ADR was written) was removed outright: it added a
+second, redundant code path with no capability the CLI flag lacked, and caused a real bug
+(`project_plans/phantom-keystroke-replay/implementation/plan.md`, `phantom-repro-verify-0729b`:
+an unexpected Claude Code trust-dialog prompt triggered by the injected `.mcp.json`). Removed:
+`InjectMCPConfig`/`RemoveMCPConfig` (`server/services/mcp_injector.go`), `create_session`'s
+`inject_mcp` param, `update_session`'s `inject_mcp`/`remove_mcp` params. `--mcp-config` remains
+the only MCP wiring mechanism; the "Global install" idea in this ADR was never implemented and is
+not being pursued.
+
 **Status**: Accepted
 **Date**: 2026-04-18
 

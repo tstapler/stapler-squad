@@ -56,6 +56,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"FocusWindow":               "window:focus",
 	"RenameSession":             "session:rename",
 	"RestartSession":            "session:restart",
+	"RetrySession":              "session:retry",
 	"GetWorkspaceInfo":          "workspace:get-info",
 	"ListWorkspaceTargets":      "workspace:list-targets",
 	"SwitchWorkspace":           "workspace:switch",
@@ -136,6 +137,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// Backlog RPCs (BacklogService in backlog.proto)
 	"CreateBacklogItem":           "backlog:create-item",
 	"CreateBacklogItemFromChat":   "backlog:create-item-from-chat",
+	"ParseBacklogItemIntent":      "backlog:parse-item-intent",
 	"GetBacklogItem":              "backlog:get-item",
 	"ListBacklogItems":            "backlog:list-items",
 	"UpdateBacklogItem":           "backlog:update-item",
@@ -175,6 +177,13 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetPipelineMode":             "backlog:get-pipeline-mode",
 	"ListPipelineModes":           "backlog:list-pipeline-modes",
 	"AddBacklogItemDependency":    "backlog:add-item-dependency",
+	"DispatchToJules":             "backlog:dispatch-to-jules",
+	// Jules config RPCs (google-jules-integration Epic 2.4)
+	"GetJulesConfig":       "jules:get-config",
+	"UpdateJulesConfig":    "jules:update-config",
+	"TestJulesConnection":  "jules:test-connection",
+	"ConfirmEgressConsent": "jules:confirm-egress-consent",
+	"RevokeEgressConsent":  "jules:revoke-egress-consent",
 	// GitHub issue import RPCs (BacklogService) - mapped to the method name
 	// itself, not a kebab-case backlog:* id: origin/main already has
 	// committed registry files under docs/registry/features/backend/{method
@@ -192,6 +201,10 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ImportGitHubIssue": "ImportGitHubIssue",
 	// Launcher presets RPCs
 	"GetLauncherPresets": "launcher_presets:get",
+	// Program config RPCs
+	"ListProgramsConfig":  "program_config:list",
+	"UpsertProgramConfig": "program_config:upsert",
+	"DeleteProgramConfig": "program_config:delete",
 	// Session lifecycle RPCs
 	"ArchiveSession":          "session:archive",
 	"UnarchiveSession":        "session:unarchive",
@@ -199,6 +212,13 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ResumeHibernatedSession": "session:resume-hibernated",
 	"ResumeCrashedSession":    "session:resume-crashed",
 	"WriteToSession":          "session:write",
+	// Async session creation cancel/retry RPCs (async-session-creation Epic 6.3,
+	// Story 6.3.1) -- match the existing "// +api: session:cancel-creation" /
+	// "// +api: session:retry-creation" markers in session_service.go verbatim,
+	// or ScanProto's method-name fallback produces a second, non-marker-matching
+	// id/file (see the SearchGitHubRepos comment above for the failure mode).
+	"CancelSessionCreation": "session:cancel-creation",
+	"RetrySessionCreation":  "session:retry-creation",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",
 	"DeleteShell":  "shell:delete",
@@ -213,6 +233,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ListWorkflows":  "workflow:list",
 	"UpdateWorkflow": "workflow:update",
 	"RunWorkflow":    "workflow:run",
+	"WatchWorkflows": "workflow:watch",
 	// Trigger fire audit trail RPC (webhook-triggers Epic 1.2, Task 1.2.1d)
 	"ListTriggerFireEvents": "workflow:list-trigger-fire-events",
 	// Outbound callback config RPCs (webhook-triggers Phase 5, FR7)
@@ -227,6 +248,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetTymuxRolloutStatus":          "tymux-rollout:get",
 	"CompleteTymuxRollbackRehearsal": "tymux-rollout:complete-rehearsal",
 	"SetTymuxSessionOverride":        "tymux-rollout:set-session-override",
+	"SetTymuxGlobalOverride":         "tymux-rollout:set-global-override",
 	// Approval rules RPCs
 	"BulkUpsertRules":       "approval:bulk-upsert-rules",
 	"ExportRules":           "approval:export-rules",
@@ -302,6 +324,72 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// not left as a followup like headless.proto, since it was cheap here.
 	"GetHandoffSummary":     "handoff-summary:get",
 	"TriggerHandoffSummary": "handoff-summary:trigger",
+	// LivenessDefinition CRUD RPCs (Epic 1.3 of backlog-custom-workflow-stages)
+	// -- pre-existing collateral debt found by TestMethodToIDCompleteness
+	// while wiring Epic 2.7's own methodToID entries below: these markers
+	// (server/services/backlog_service_liveness.go) existed since Epic 1.3
+	// but were never added here, so ScanProto's method-name fallback had
+	// been producing flat, non-marker-matching files (CreateLivenessDefinition.json
+	// etc.) instead of docs/registry/features/backend/backlog/*.json --
+	// same bug class as the SearchGitHubRepos comment above documents.
+	"CreateLivenessDefinition": "backlog:create-liveness-definition",
+	"UpdateLivenessDefinition": "backlog:update-liveness-definition",
+	"DeleteLivenessDefinition": "backlog:delete-liveness-definition",
+	"GetLivenessDefinition":    "backlog:get-liveness-definition",
+	"ListLivenessDefinitions":  "backlog:list-liveness-definitions",
+	// Stage/StageTransition/TransitionGate CRUD RPCs (Epic 2.7 of
+	// backlog-custom-workflow-stages) -- must match the "// +api:
+	// backlog:*" markers in server/services/backlog_service_stages.go and
+	// backlog_service_transitions.go verbatim, or ScanProto's method-name
+	// fallback produces a second, non-marker-matching id and file (see the
+	// SearchGitHubRepos comment above for the failure mode).
+	"CreateStage":           "backlog:create-stage",
+	"UpdateStage":           "backlog:update-stage",
+	"DeleteStage":           "backlog:delete-stage",
+	"GetStage":              "backlog:get-stage",
+	"ListStages":            "backlog:list-stages",
+	"CreateStageTransition": "backlog:create-stage-transition",
+	"UpdateStageTransition": "backlog:update-stage-transition",
+	"DeleteStageTransition": "backlog:delete-stage-transition",
+	"GetStageTransition":    "backlog:get-stage-transition",
+	"ListStageTransitions":  "backlog:list-stage-transitions",
+	"CreateTransitionGate":  "backlog:create-transition-gate",
+	"UpdateTransitionGate":  "backlog:update-transition-gate",
+	"DeleteTransitionGate":  "backlog:delete-transition-gate",
+	"GetTransitionGate":     "backlog:get-transition-gate",
+	"ListTransitionGates":   "backlog:list-transition-gates",
+	"RecordGateApproval":    "backlog:record-gate-approval",
+	"GetPendingGates":       "backlog:get-pending-gates",
+	// Native git rollout RPCs (NativeGitRolloutService in native_git_rollout.proto)
+	// -- pre-existing collateral debt found by TestMethodToIDCompleteness: must
+	// match the "// +api: native-git-rollout:*" markers in
+	// server/services/native_git_rollout_service.go verbatim, same failure mode
+	// as the SearchGitHubRepos comment above.
+	"GetNativeGitRolloutStatus":        "native-git-rollout:get",
+	"SetNativeWorktreeGlobalOverride":  "native-git-rollout:set-worktree-global-override",
+	"SetNativeWorktreeSessionOverride": "native-git-rollout:set-worktree-session-override",
+	"SetNativeMergeGlobalOverride":     "native-git-rollout:set-merge-global-override",
+	"SetNativeMergeWorktreeOverride":   "native-git-rollout:set-merge-worktree-override",
+	// Tmux client/server version mismatch RPCs (session.proto) -- pre-existing
+	// collateral debt found by TestMethodToIDCompleteness: must match the
+	// "// +api: tmux:*" markers in server/services/tmux_version_status_service.go
+	// verbatim, same failure mode as the SearchGitHubRepos comment above.
+	"GetTmuxVersionStatus": "tmux:version-status",
+	"RestartTmuxServer":    "tmux:restart-server",
+	// Durable guidance-request RPCs (GuidanceRequestService in
+	// guidance_request.proto, #809) -- must match the "// +api:
+	// guidance-request:*" markers in server/services/guidance_request_service.go
+	// verbatim, same failure mode as the SearchGitHubRepos comment above.
+	"CreateGuidanceRequest":          "guidance-request:create",
+	"AnswerGuidanceRequest":          "guidance-request:answer",
+	"GetGuidanceRequest":             "guidance-request:get",
+	"ListGuidanceRequests":           "guidance-request:list",
+	"ListAllPendingGuidanceRequests": "guidance-request:list-all-pending",
+	// DismissFinding (InsightsService in insights.proto) -- its
+	// "// +api: DismissFinding" marker in server/services/insights_service.go
+	// already uses the method-name-as-id convention (see the SearchGitHubRepos
+	// comment above), so match it verbatim rather than a kebab-case id.
+	"DismissFinding": "DismissFinding",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

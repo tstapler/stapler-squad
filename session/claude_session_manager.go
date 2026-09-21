@@ -99,7 +99,7 @@ func (csm *ClaudeSessionManager) loadSessionMetadata(sessionID, sessionPath stri
 
 	for _, filename := range metadataFiles {
 		metadataPath := filepath.Join(sessionPath, filename)
-		if data, err := os.ReadFile(metadataPath); err == nil {
+		if data, err := os.ReadFile(metadataPath); err == nil { // #nosec G304 -- sessionPath is enumerated via os.ReadDir(csm.sessionDir) above and filename is one of 3 hardcoded constants, no external input
 			var metadata map[string]interface{}
 			if err := json.Unmarshal(data, &metadata); err == nil {
 				// Extract relevant information

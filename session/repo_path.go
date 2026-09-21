@@ -5,17 +5,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 )
 
 const detectWorktreeCacheTTL = 5 * time.Minute
@@ -269,7 +269,7 @@ func sanitizeCloneOutput(output []byte, cloneURL string) string {
 // take over).
 // Uses go-git per the `prefer-go-git-over-subshells` skill.
 func isCorruptedClone(repoPath string) bool {
-	repo, err := git.PlainOpen(repoPath)
+	repo, err := gitutil.OpenRepo(repoPath)
 	if err != nil {
 		return true
 	}
@@ -330,7 +330,7 @@ func RepairCorruptedGitRepo(repoPath string) error {
 // HEAD may be unresolvable — repo.Remote reads only .git/config, so this works
 // even when isCorruptedClone(repoPath) is true.
 func readOriginRemoteURL(repoPath string) (string, error) {
-	repo, err := git.PlainOpen(repoPath)
+	repo, err := gitutil.OpenRepo(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open repo: %w", err)
 	}
@@ -373,6 +373,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 			fetchCtx, fetchCancel := context.WithTimeout(ctx, 60*time.Second)
 			defer fetchCancel()
 			cmd := safeexec.CommandContext(fetchCtx, "git", "-C", repoPath, "fetch", "--all", "--prune")
+			cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 			if output, err := cmd.CombinedOutput(); err != nil {
 				// Only propagate when the caller's own ctx (not the local 60s
 				// fetchCtx timeout) is what killed the fetch — that means the
@@ -393,7 +394,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 
 	// Create parent directory
 	parentDir := filepath.Dir(repoPath)
-	if err := os.MkdirAll(parentDir, 0755); err != nil {
+	if err := os.MkdirAll(parentDir, 0750); err != nil {
 		return "", fmt.Errorf("failed to create directory %s: %w", parentDir, err)
 	}
 
@@ -401,11 +402,21 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 	// (see GetCloneURL) — never log it verbatim, and reset the remote's URL
 	// back to a credential-free form after cloning so the token isn't left
 	// sitting in the resulting .git/config indefinitely.
+	//
+	// GIT_TERMINAL_PROMPT=0 is required, not cosmetic: without it, a clone
+	// that can't auto-authenticate (e.g. a nonexistent or private repo, or
+	// an ambient credential.helper/http.extraheader left over from another
+	// checkout in the same environment interfering with an unrelated clone)
+	// blocks on a credential prompt with no TTY to answer it, silently
+	// consuming the full cloneCtx timeout below instead of failing fast with
+	// git's normal "repository not found" — observed in CI as a single
+	// nonexistent-repo clone attempt eating the entire 120s budget.
 	host := repoHost(ref)
 	log.Info("cloning repository", "host", host, "owner", ref.Owner, "repo", ref.Repo, "path", repoPath)
 	cloneCtx, cloneCancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cloneCancel()
 	cmd := safeexec.CommandContext(cloneCtx, "git", "clone", cloneURL, repoPath)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		// A killed/timed-out clone leaves a partially-initialized .git
 		// directory behind (see isCorruptedClone) — remove it so the next
@@ -446,23 +457,6 @@ func (m *RepoPathManager) ResolveGitHubInput(input string) (localPath string, re
 	return localPath, ref, nil
 }
 
-// ResolveGitHubInputCtx takes a GitHub URL/shorthand and returns a resolved path,
-// threading ctx down to EnsureRepoCloned so the underlying git clone/fetch
-// subprocess is actually cancelled if ctx is cancelled or times out.
-func (m *RepoPathManager) ResolveGitHubInputCtx(ctx context.Context, input string) (localPath string, ref *GitHubRef, err error) {
-	ref, err = ParseGitHubURL(input)
-	if err != nil {
-		return "", nil, err
-	}
-
-	localPath, err = m.EnsureRepoCloned(ctx, ref)
-	if err != nil {
-		return "", nil, err
-	}
-
-	return localPath, ref, nil
-}
-
 // ResolveGitHubInputCtxWithHosts takes a GitHub URL/shorthand and returns a
 // resolved path, recognizing URLs against the given GitHub Enterprise
 // hostnames in addition to github.com, and threading ctx down to
@@ -490,12 +484,6 @@ func ResolveGitHubInput(input string) (localPath string, ref *GitHubRef, err err
 	return DefaultRepoPathManager.ResolveGitHubInput(input)
 }
 
-// ResolveGitHubInputCtx is a convenience function using the default manager,
-// threading ctx down to the underlying git clone/fetch subprocess.
-func ResolveGitHubInputCtx(ctx context.Context, input string) (localPath string, ref *GitHubRef, err error) {
-	return DefaultRepoPathManager.ResolveGitHubInputCtx(ctx, input)
-}
-
 // ResolveGitHubInputCtxWithHosts is a convenience function using the default
 // manager, recognizing URLs against the given GitHub Enterprise hostnames in
 // addition to github.com.
@@ -518,6 +506,9 @@ type WorktreeInfo struct {
 	GitHubOwner string
 	// GitHubRepo is the repo name extracted from a GitHub remote URL
 	GitHubRepo string
+	// GitHubHost is the GitHub Enterprise host owning GitHubOwner/GitHubRepo,
+	// or "" for github.com.
+	GitHubHost string
 }
 
 // DetectWorktree checks if the given path is a git worktree and extracts relevant info.
@@ -559,7 +550,7 @@ func detectWorktreeUncached(path string) (*WorktreeInfo, error) {
 		info.IsWorktree = true
 
 		// Read the .git file to get the gitdir path
-		content, err := os.ReadFile(gitPath)
+		content, err := os.ReadFile(gitPath) // #nosec G304 -- gitPath is <path>/.git where path is the caller-chosen working directory itself (session's own repo/worktree path), the deliberate target of the operation, not an untrusted component joined onto a base the caller shouldn't control
 		if err != nil {
 			return info, fmt.Errorf("failed to read .git file: %w", err)
 		}
@@ -583,35 +574,38 @@ func detectWorktreeUncached(path string) (*WorktreeInfo, error) {
 	output, err := cmd.Output()
 	if err == nil {
 		info.RemoteURL = strings.TrimSpace(string(output))
-		// Try to parse GitHub owner/repo from the URL
-		info.GitHubOwner, info.GitHubRepo = parseGitHubRemoteURL(info.RemoteURL)
+		// Try to parse GitHub owner/repo/host from the URL
+		info.GitHubOwner, info.GitHubRepo, info.GitHubHost = parseGitHubRemoteURL(info.RemoteURL)
 	}
 
 	return info, nil
 }
 
-// parseGitHubRemoteURL extracts owner and repo from various GitHub URL formats.
-// Supports:
+// enterpriseHostsForRemoteParsing returns the statically-configured GitHub
+// Enterprise hostnames so parseGitHubRemoteURL can recognize a GHE remote
+// (e.g. git@github.netflix.net:owner/repo.git), not just github.com.
+func enterpriseHostsForRemoteParsing() []string {
+	configured := config.LoadConfig().GetGitHubEnterpriseHosts()
+	hosts := make([]string, 0, len(configured))
+	for _, h := range configured {
+		hosts = append(hosts, h.Host)
+	}
+	return hosts
+}
+
+// parseGitHubRemoteURL extracts owner, repo, and host from a GitHub remote
+// URL, recognizing both github.com and any configured GitHub Enterprise host.
+// Supports HTTPS and SSH formats, e.g.:
 //   - https://github.com/owner/repo.git
-//   - https://github.com/owner/repo
 //   - git@github.com:owner/repo.git
-//   - git@github.com:owner/repo
-func parseGitHubRemoteURL(url string) (owner, repo string) {
-	url = strings.TrimSpace(url)
-
-	// HTTPS format: https://github.com/owner/repo.git
-	httpsPattern := regexp.MustCompile(`^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?$`)
-	if match := httpsPattern.FindStringSubmatch(url); match != nil {
-		return match[1], match[2]
+//   - https://github.netflix.net/owner/repo
+//   - git@github.netflix.net:owner/repo.git
+func parseGitHubRemoteURL(remoteURL string) (owner, repo, host string) {
+	ref, err := github.ParseGitHubRefWithHosts(remoteURL, enterpriseHostsForRemoteParsing())
+	if err != nil {
+		return "", "", ""
 	}
-
-	// SSH format: git@github.com:owner/repo.git
-	sshPattern := regexp.MustCompile(`^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$`)
-	if match := sshPattern.FindStringSubmatch(url); match != nil {
-		return match[1], match[2]
-	}
-
-	return "", ""
+	return ref.Owner, ref.Repo, ref.Host
 }
 
 // GetMainRepoPath uses git rev-parse --git-common-dir to get the main repo path.
@@ -650,6 +644,30 @@ func GetMainRepoPath(path string) (string, error) {
 	return absPath, nil
 }
 
+// ResolveMainRepoRoot resolves repoPath to an absolute path and, if it is
+// itself a linked git worktree (e.g. an agent's own in-progress feature
+// worktree, or another backlog item's ephemeral triage worktree), redirects
+// to the main checkout it was created from. Nothing upstream guarantees a
+// stored BacklogItem.RepoPath is the main checkout rather than a worktree —
+// an agent filing an item routinely passes its own CWD — so callers that
+// create a new worktree/branch anchor everything (locking, `git worktree
+// add`, default-branch resolution) to the real repo root via this function
+// first, rather than to whatever ephemeral worktree path got stored.
+// Best-effort: if GetMainRepoPath fails (e.g. repoPath isn't a git repo yet),
+// the resolved-but-unredirected path is returned unchanged, not an error —
+// callers that need repoPath to already be a git repo will fail at their own
+// next step instead.
+func ResolveMainRepoRoot(repoPath string) (string, error) {
+	resolved, err := ResolveSessionPath(repoPath)
+	if err != nil {
+		return "", err
+	}
+	if mainRepo, mainErr := GetMainRepoPath(resolved); mainErr == nil && mainRepo != "" {
+		return mainRepo, nil
+	}
+	return resolved, nil
+}
+
 // WorkspaceKey returns a canonical identity for the repo/workspace a session belongs to,
 // used to group sibling worktrees/branches of the same repo as peers. Prefers the GitHub
 // owner/repo (stable across worktree paths); falls back to MainRepoPath, then Path.
@@ -677,4 +695,17 @@ func (i *Instance) WorkspaceKey() string {
 // WorkspaceKey function for the derivation rules.
 func (d InstanceData) WorkspaceKey() string {
 	return WorkspaceKey(d.GitHubOwner, d.GitHubRepo, d.MainRepoPath, d.Path)
+}
+
+// ActiveDir returns this instance data's resolved working directory: the git
+// worktree path if one was recorded (requires LoadOptions.LoadWorktree), else
+// Path. Mirrors Instance.Workspace().ActiveDir for callers that only have the
+// serialized InstanceData (see .claude/rules/instance-lock-free-reads.md) —
+// use this, not the raw identity Path, wherever a lookup needs to match the
+// directory a worktree session actually runs in.
+func (d InstanceData) ActiveDir() string {
+	if d.Worktree.WorktreePath != "" {
+		return d.Worktree.WorktreePath
+	}
+	return d.Path
 }

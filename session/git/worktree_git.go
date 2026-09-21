@@ -4,13 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing/object"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 // prNumberFromURLRe extracts the trailing PR number from a GitHub PR URL,
@@ -19,6 +30,115 @@ import (
 // duplicated here rather than imported since session/git cannot import the
 // parent session package without a cycle.
 var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
+
+// ghCommandCallsTotal / ghCommandDurationMs mirror github/gh_exec.go's
+// runGHCLICommand instrumentation (same metric names, same attribute keys),
+// registered separately here because session/git cannot import package
+// github to reuse its instruments directly: github/clone.go already imports
+// session/git, so the reverse import would be a compile-time cycle — the
+// same constraint already documented on isTraversalPathSegment above.
+// Registering the same instrument name from two packages against the one
+// global meter is expected and merges into a single series — both
+// registrations use the identical description text (see the constants
+// below) so the merged series never carries two conflicting descriptions.
+//
+// Registration failures are logged, not fatal, mirroring
+// github/telemetry_transport.go's registerGitHubTelemetry: these vars are
+// left nil on failure and every call site below nil-guards before using
+// them, so a meter that rejects registration (e.g. a duplicate-instrument
+// conflict) degrades to "telemetry silently skipped" rather than crashing
+// the whole binary at package-init time.
+var (
+	registerGHCommandTelemetryOnce sync.Once
+
+	ghCommandCallsTotal metric.Int64Counter
+	ghCommandDurationMs metric.Int64Histogram
+)
+
+func init() {
+	registerGHCommandTelemetry()
+}
+
+// githubCallsTotalDescription / githubCallDurationMsDescription must stay
+// byte-identical to the descriptions github/telemetry_transport.go's
+// registerGitHubTelemetry registers under the same two instrument names
+// (github.calls_total / github.call.duration_ms) — two different
+// descriptions for the same instrument name is a duplicate-instrument
+// conflict most OTel SDKs warn or error on.
+const (
+	githubCallsTotalDescription     = "Count of GitHub API calls (native HTTP and gh CLI subprocess), tagged by call origin, call site, and resource where applicable"
+	githubCallDurationMsDescription = "GitHub API call latency in milliseconds (native HTTP and gh CLI subprocess)"
+)
+
+// registerGHCommandTelemetry registers this package's gh-CLI call
+// instruments against telemetry.GetMeter(). Safe to call before
+// telemetry.Initialize (returns a no-op meter) and idempotent via
+// sync.Once, matching github/telemetry_transport.go's
+// registerGitHubTelemetry pattern.
+func registerGHCommandTelemetry() {
+	registerGHCommandTelemetryOnce.Do(func() {
+		registerGHCommandTelemetryWithMeter(telemetry.GetMeter())
+	})
+}
+
+// registerGHCommandTelemetryWithMeter does the actual instrument
+// registration against meter. Split out from registerGHCommandTelemetry so
+// tests can exercise the non-fatal-on-error path with a meter constructed to
+// fail, since a real OTel SDK meter's registration call doesn't itself
+// return an error for the specific duplicate-name/description conflict this
+// fix targets (that surfaces later, asynchronously, via the SDK's error
+// handler) — only for other rejections such as an invalid instrument name.
+func registerGHCommandTelemetryWithMeter(meter metric.Meter) {
+	var err error
+	if ghCommandCallsTotal, err = meter.Int64Counter("github.calls_total",
+		metric.WithDescription(githubCallsTotalDescription)); err != nil {
+		log.Error("session/git: failed to register github.calls_total", "err", err)
+	}
+
+	if ghCommandDurationMs, err = meter.Int64Histogram("github.call.duration_ms",
+		metric.WithDescription(githubCallDurationMsDescription),
+		metric.WithUnit("ms")); err != nil {
+		log.Error("session/git: failed to register github.call.duration_ms", "err", err)
+	}
+}
+
+// runGHCommand wraps a `gh` CLI invocation routed through g.commandRunner()
+// with span/metric telemetry, matching github/gh_exec.go's runGHCLICommand
+// shape for the sites that adapter can't reach (see ghCommandCallsTotal's
+// doc comment for why this can't just call runGHCLICommand directly). It
+// does not attempt to set a github.call.origin attribute: none of
+// GitWorktree's gh-CLI methods thread a caller-supplied context today (each
+// builds its own context.WithTimeout(context.Background(), ...) internally,
+// unchanged by Epic 1.1's scope), so there is never a tagged origin to read
+// here even where the import cycle wasn't in the way.
+func (g *GitWorktree) runGHCommand(ctx context.Context, callSite string, args ...string) ([]byte, error) {
+	ctx, span := telemetry.StartSpan(ctx, "gh."+callSite, trace.WithSpanKind(trace.SpanKindClient))
+	defer span.End()
+
+	attrs := []attribute.KeyValue{
+		attribute.String("process.command", "gh"),
+		attribute.String("github.call_site", callSite),
+	}
+	span.SetAttributes(attrs...)
+
+	start := time.Now()
+	output, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", args...)
+	duration := time.Since(start)
+
+	if ghCommandCallsTotal != nil {
+		ghCommandCallsTotal.Add(ctx, 1, metric.WithAttributes(attrs...))
+	}
+	if ghCommandDurationMs != nil {
+		ghCommandDurationMs.Record(ctx, duration.Milliseconds(), metric.WithAttributes(attrs...))
+	}
+
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+
+	return output, err
+}
 
 // runGitCommand executes a git command scoped to path and returns any error.
 // Routes through g.commandRunner() unconditionally, exactly like every other
@@ -29,11 +149,10 @@ var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
 // executor.Executor test-injection seam, never circuit-breaker-wrapped
 // anywhere in this package, unlike session/tmux's genuinely orthogonal
 // cmdExec), which made it dead code for all ~25 production callers of this
-// method (IsDirtyWithHint, RenameBranch, stageAndCommit,
-// StageAllExceptScaffolding, HasStagedChanges, plus every worktree_ops.go
-// worktree add/remove/prune/list call). IsDirtyWithHint's race/error-
-// injection tests now inject a tmux.CommandRunner spy via WithCommandRunner
-// instead of an executor.Executor mock.
+// method. IsDirtyWithHint, stageAndCommit, StageAllExceptScaffolding, and
+// HasStagedChanges have since moved onto go-git directly (no subprocess —
+// the `prefer-go-git-over-subshells` skill); RenameBranch and every
+// worktree_ops.go worktree add/remove/prune/list call remain on this seam.
 func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -68,7 +187,7 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	// First push the branch to remote to ensure it exists
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pushCancel()
-	if _, err := g.commandRunner().Run(pushCtx, g.worktreePath, "gh", "repo", "sync", "--source", "-b", g.branchName); err != nil {
+	if _, err := g.runGHCommand(pushCtx, "repo.sync_source", "repo", "sync", "--source", "-b", g.branchName); err != nil {
 		// If sync fails, try creating the branch on remote first
 		gitPushCtx, gitPushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer gitPushCancel()
@@ -81,7 +200,7 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	// Now sync with remote
 	syncCtx, syncCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer syncCancel()
-	if output, err := g.commandRunner().Run(syncCtx, g.worktreePath, "gh", "repo", "sync", "-b", g.branchName); err != nil {
+	if output, err := g.runGHCommand(syncCtx, "repo.sync", "repo", "sync", "-b", g.branchName); err != nil {
 		log.Error("failed to sync changes", "err", err)
 		return fmt.Errorf("failed to sync changes: %s (%w)", output, err)
 	}
@@ -149,11 +268,60 @@ func (g *GitWorktree) stageAndCommit(commitMessage string) error {
 		return nil
 	}
 
-	if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
+	repo, err := OpenRepo(g.worktreePath)
+	if err != nil {
+		return fmt.Errorf("failed to open git repo at %s: %w", g.worktreePath, err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree at %s: %w", g.worktreePath, err)
+	}
+	author, err := resolveCommitAuthorIdentity(repo)
+	if err != nil {
+		log.Error("failed to resolve commit author identity", "err", err)
+		return fmt.Errorf("failed to resolve commit author identity: %w", err)
+	}
+	// go-git never runs hooks, so there's no equivalent needed for the
+	// subprocess call's --no-verify.
+	if _, err := worktree.Commit(commitMessage, &git.CommitOptions{Author: author}); err != nil {
 		log.Error("failed to commit changes", "err", err)
 		return fmt.Errorf("failed to commit changes: %w", err)
 	}
 	return nil
+}
+
+// resolveCommitAuthorIdentity resolves the author identity for a commit made
+// via go-git's Worktree.Commit, mirroring real `git commit`'s own resolution
+// order: GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL env vars first (checked
+// independently per field, matching git's own ident resolution — one can be
+// set without the other), then the repo's config (local `user.name`/
+// `user.email` in .git/config, falling back per-field to global
+// ~/.gitconfig via ConfigScoped). Deliberately does not hardcode a
+// placeholder identity — unlike util.go's createInitialCommit, which is a
+// special-case bootstrap commit for a brand-new empty repo, this commit
+// represents real session work and must be attributed to whoever actually
+// configured this environment.
+func resolveCommitAuthorIdentity(repo *git.Repository) (*object.Signature, error) {
+	name := os.Getenv("GIT_AUTHOR_NAME")
+	email := os.Getenv("GIT_AUTHOR_EMAIL")
+	if name != "" && email != "" {
+		return &object.Signature{Name: name, Email: email, When: time.Now()}, nil
+	}
+
+	cfg, err := repo.ConfigScoped(config.GlobalScope)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read git config: %w", err)
+	}
+	if name == "" {
+		name = cfg.User.Name
+	}
+	if email == "" {
+		email = cfg.User.Email
+	}
+	if name == "" || email == "" {
+		return nil, fmt.Errorf("no git author identity configured (set GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL or git config user.name/user.email)")
+	}
+	return &object.Signature{Name: name, Email: email, When: time.Now()}, nil
 }
 
 // StageAllExceptScaffolding stages all worktree changes (`git add .`) and then
@@ -167,7 +335,18 @@ func (g *GitWorktree) stageAndCommit(commitMessage string) error {
 // (.github/workflows/backlog-scaffolding-guard.yml) is the second, independent
 // layer for the rare case where the untrack step itself errors.
 func (g *GitWorktree) StageAllExceptScaffolding() error {
-	if _, err := g.runGitCommand(g.worktreePath, "add", "."); err != nil {
+	repo, err := OpenRepo(g.worktreePath)
+	if err != nil {
+		return fmt.Errorf("failed to stage changes: %w", err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to stage changes: %w", err)
+	}
+	// AddOptions{All: true} is the `git add -A` equivalent — it stages
+	// deletions as well as new/modified files (verified against
+	// TestStageAllExceptScaffolding_StagesDeletedFiles).
+	if err := worktree.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		return fmt.Errorf("failed to stage changes: %w", err)
 	}
 
@@ -185,12 +364,26 @@ func (g *GitWorktree) StageAllExceptScaffolding() error {
 // StageAllExceptScaffolding so a commit whose only staged change was a
 // just-untracked scaffolding file is skipped gracefully instead of failing on
 // "nothing to commit".
+//
+// Uses worktreeStagedDirty (see worktree_dirty_fast.go) instead of go-git's
+// Worktree.Status() — untracked files are never in the index by definition, so
+// they're naturally excluded from this comparison exactly like go-git's own
+// git.Untracked exclusion was (see TestCommitChanges_SkipsCommitGracefully_WhenOnlyScaffoldingStaged,
+// the "brand-new scaffolding file added, then untracked again" case).
 func (g *GitWorktree) HasStagedChanges() (bool, error) {
-	out, err := g.runGitCommand(g.worktreePath, "diff", "--cached", "--name-only")
+	repo, err := OpenRepo(g.worktreePath)
 	if err != nil {
 		return false, fmt.Errorf("failed to check staged changes: %w", err)
 	}
-	return strings.TrimSpace(out) != "", nil
+	idx, err := repo.Storer.Index()
+	if err != nil {
+		return false, fmt.Errorf("failed to check staged changes: %w", err)
+	}
+	headHashes, err := cachedHeadTreeHashes(repo, &g.headTreeCache)
+	if err != nil {
+		return false, fmt.Errorf("failed to check staged changes: %w", err)
+	}
+	return worktreeStagedDirty(idx, headHashes), nil
 }
 
 // PrimeDirtyCacheAt sets the dirty-cache timestamp to t without running git status.
@@ -205,6 +398,8 @@ func (g *GitWorktree) PrimeDirtyCacheAt(t time.Time) {
 // manual commit, after running git operations, or in tests after writing files directly).
 func (g *GitWorktree) InvalidateDirtyCache() {
 	g.isDirtyCache.Store(dirtyCacheState{}) // zero time signals "cache invalid"
+	g.gitignoreFS.reset()
+	g.headTreeCache.v.Store(headTreeCacheEntry{}) //nolint:exhaustruct // zero entry, defensive reset — see headTreeCache's doc comment
 }
 
 // IsDirty checks if the worktree has uncommitted changes.
@@ -248,16 +443,17 @@ func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
 		return false, nil
 	}
 
-	// Slow path: run git status --porcelain via subprocess, wrapped in singleflight
-	// so concurrent callers coalesce onto a single status check rather than each
-	// spawning their own git process.
+	// Slow path: check via go-git's Worktree.Status() (no subprocess — the
+	// `prefer-go-git-over-subshells` skill), wrapped in singleflight so
+	// concurrent callers coalesce onto a single status check rather than each
+	// paying their own status-computation cost.
 	type dirtyResult struct {
 		dirty bool
 		err   error
 	}
 	v, _, _ := g.isDirtySF.Do(g.worktreePath, func() (interface{}, error) {
-		out, subErr := g.runGitCommand(g.worktreePath, "status", "--porcelain")
-		return dirtyResult{len(out) > 0, subErr}, nil
+		dirty, subErr := g.dirtyCheckerFunc()(g.worktreePath)
+		return dirtyResult{dirty, subErr}, nil
 	})
 	res := v.(dirtyResult)
 	if res.err != nil {
@@ -279,6 +475,39 @@ func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
 	return dirty, nil
 }
 
+// worktreeIsDirty reports whether the worktree at path has any staged or
+// unstaged change, via go-git's Worktree.Status() — no subprocess (the
+// `prefer-go-git-over-subshells` skill). status.IsClean() is true iff there
+// are zero entries at all, staged or unstaged, matching `git status
+// --porcelain` producing empty output. Uncached — kept for direct callers/tests
+// that want a guaranteed-fresh read; dirtyCheckerFunc's default instead calls
+// worktreeIsDirtyWithFS with the owning GitWorktree's gitignoreFS.
+func worktreeIsDirty(path string) (bool, error) {
+	return worktreeIsDirtyWithFS(path, nil)
+}
+
+// worktreeIsDirtyWithFS is worktreeIsDirty with the worktree's gitignore-pattern
+// filesystem reads served from cache (see gitignoreFSCache) when cache is non-nil.
+// go-git recomputes the full gitignore pattern set from scratch on every
+// Worktree.Status() call — profiling showed this dominating CPU/allocations under
+// load — so this is the fast path IsDirtyWithHint's cache-miss branch actually takes.
+func worktreeIsDirtyWithFS(path string, cache *gitignoreFSCache) (bool, error) {
+	repo, err := OpenRepo(path)
+	if err != nil {
+		return false, fmt.Errorf("failed to open git repo at %s: %w", path, err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("failed to get worktree at %s: %w", path, err)
+	}
+	worktree.Filesystem = newCachedFilesystem(worktree.Filesystem, cache)
+	status, err := worktree.Status()
+	if err != nil {
+		return false, fmt.Errorf("failed to get worktree status at %s: %w", path, err)
+	}
+	return !status.IsClean(), nil
+}
+
 // IsBranchCheckedOut checks if the instance branch is currently checked out.
 // Uses go-git to read HEAD directly (no subprocess).
 func (g *GitWorktree) IsBranchCheckedOut() (bool, error) {
@@ -298,7 +527,7 @@ func (g *GitWorktree) OpenBranchURL() error {
 
 	browseCtx, browseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer browseCancel()
-	if _, err := g.commandRunner().Run(browseCtx, g.worktreePath, "gh", "browse", "--branch", g.branchName); err != nil {
+	if _, err := g.runGHCommand(browseCtx, "browse", "browse", "--branch", g.branchName); err != nil {
 		return fmt.Errorf("failed to open branch URL: %w", err)
 	}
 	return nil
@@ -353,7 +582,7 @@ func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int
 	if baseBranch != "" {
 		args = append(args, "--base", baseBranch)
 	}
-	out, runErr := g.commandRunner().Run(ctx, g.worktreePath, "gh", args...)
+	out, runErr := g.runGHCommand(ctx, "pr.create", args...)
 	if runErr != nil {
 		// A race: PR was created between our check and now. Re-check once.
 		if u, n, err2 := g.findExistingPR(); err2 == nil && n > 0 {
@@ -387,7 +616,7 @@ func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int
 		// original gh-view-based lookup as a last resort.
 		numCtx, numCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer numCancel()
-		numOut, numErr := g.commandRunner().Run(numCtx, g.worktreePath, "gh", "pr", "view", "--json", "number", "--jq", ".number", "--head", g.branchName)
+		numOut, numErr := g.runGHCommand(numCtx, "pr.view.number", "pr", "view", "--json", "number", "--jq", ".number", "--head", g.branchName)
 		if numErr == nil {
 			prNumber, _ = strconv.Atoi(strings.TrimSpace(string(numOut)))
 		}
@@ -401,7 +630,7 @@ func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int
 func (g *GitWorktree) findExistingPR() (string, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "list", "--head", g.branchName,
+	out, err := g.runGHCommand(ctx, "pr.list", "pr", "list", "--head", g.branchName,
 		"--json", "number,url", "--jq", ".[0] | .number, .url")
 	if err != nil || strings.TrimSpace(string(out)) == "" {
 		return "", 0, fmt.Errorf("no existing PR")
@@ -663,15 +892,16 @@ func (s *PRStatus) FeedbackAuthors() []string {
 }
 
 // GetPRStatus fetches the combined CI check status, reviewer decisions,
-// mergeability, and PR comments for the given pull request number.
-func (g *GitWorktree) GetPRStatus(prNumber int) (*PRStatus, error) {
+// mergeability, and PR comments for the given pull request number. ctx is the
+// caller's context, per EnablePRAutoMerge's doc comment above.
+func (g *GitWorktree) GetPRStatus(ctx context.Context, prNumber int) (*PRStatus, error) {
 	if err := g.checkGHCLI(); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	raw, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "view", strconv.Itoa(prNumber),
+	raw, err := g.runGHCommand(ctx, "pr.view.status", "pr", "view", strconv.Itoa(prNumber),
 		"--json", "statusCheckRollup,reviews,comments,mergeable,mergeStateStatus,state,isDraft")
 	if err != nil {
 		return nil, fmt.Errorf("gh pr view failed: %s (%w)", raw, err)
@@ -825,13 +1055,15 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 // EnablePRAutoMerge enables GitHub auto-merge on the given PR so it merges
 // automatically once required CI checks pass. Best-effort: fails silently
 // when the repo does not have auto-merge enabled in its branch protection rules.
-func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
+// ctx is the caller's context (timeout/cancellation and any github.CallOrigin
+// tag thread through to runGHCommand) rather than a fresh context.Background().
+func (g *GitWorktree) EnablePRAutoMerge(ctx context.Context, prNumber int) error {
 	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "merge", strconv.Itoa(prNumber), "--auto", "--squash")
+	out, err := g.runGHCommand(ctx, "pr.merge.auto", "pr", "merge", strconv.Itoa(prNumber), "--auto", "--squash")
 	if err != nil {
 		return fmt.Errorf("gh pr merge --auto failed: %s (%w)", out, err)
 	}
@@ -844,14 +1076,15 @@ func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
 // Uses the legacy bot-login form (copilot-pull-request-reviewer[bot]) via
 // --add-reviewer rather than the newer @copilot alias, since the literal
 // login is accepted by every gh version this repo targets while the alias is
-// version-gated (see plan.md's Pattern Decisions table).
-func (g *GitWorktree) RequestCopilotReview(prNumber int) error {
+// version-gated (see plan.md's Pattern Decisions table). ctx is the caller's
+// context, per EnablePRAutoMerge's doc comment above.
+func (g *GitWorktree) RequestCopilotReview(ctx context.Context, prNumber int) error {
 	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "edit", strconv.Itoa(prNumber), "--add-reviewer", copilotReviewerLogin)
+	out, err := g.runGHCommand(ctx, "pr.edit.add_reviewer", "pr", "edit", strconv.Itoa(prNumber), "--add-reviewer", copilotReviewerLogin)
 	if err != nil {
 		return fmt.Errorf("gh pr edit --add-reviewer copilot failed: %s (%w)", out, err)
 	}
@@ -861,28 +1094,30 @@ func (g *GitWorktree) RequestCopilotReview(prNumber int) error {
 // ClosePR closes prNumber without merging, posting comment as an explanatory
 // PR comment first. Used when a PR is discovered to be superseded (its
 // branch's work already landed on main through a different path) rather than
-// genuinely broken — see BUG-032.
-func (g *GitWorktree) ClosePR(prNumber int, comment string) error {
+// genuinely broken — see BUG-032. ctx is the caller's context, per
+// EnablePRAutoMerge's doc comment above.
+func (g *GitWorktree) ClosePR(ctx context.Context, prNumber int, comment string) error {
 	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "close", strconv.Itoa(prNumber), "--comment", comment)
+	out, err := g.runGHCommand(ctx, "pr.close", "pr", "close", strconv.Itoa(prNumber), "--comment", comment)
 	if err != nil {
 		return fmt.Errorf("gh pr close failed: %s (%w)", out, err)
 	}
 	return nil
 }
 
-// IsPRMerged reports whether the given PR number has been merged.
-func (g *GitWorktree) IsPRMerged(prNumber int) (bool, error) {
+// IsPRMerged reports whether the given PR number has been merged. ctx is the
+// caller's context, per EnablePRAutoMerge's doc comment above.
+func (g *GitWorktree) IsPRMerged(ctx context.Context, prNumber int) (bool, error) {
 	if err := g.checkGHCLI(); err != nil {
 		return false, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "view", strconv.Itoa(prNumber), "--json", "state", "--jq", ".state")
+	out, err := g.runGHCommand(ctx, "pr.view.state", "pr", "view", strconv.Itoa(prNumber), "--json", "state", "--jq", ".state")
 	if err != nil {
 		return false, fmt.Errorf("gh pr view failed: %s (%w)", out, err)
 	}

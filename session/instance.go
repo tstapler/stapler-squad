@@ -18,6 +18,8 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/ansi"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -58,6 +60,21 @@ const (
 	// Unlike Stopped, a Crashed session is not auto-recovered by the health checker —
 	// it surfaces to the user/automation for an explicit resume (see ExitReason).
 	Crashed Status = 6
+	// PermanentlyFailed is a terminal state reached when the configurable retry
+	// policy's automated crash/stall recovery (session/retry_state.go) exhausts
+	// MaxAttempts, or a failure reason isn't in RetryOn at all. Unlike Stopped, it
+	// is not auto-revived by reconcileSessions even if tmux is alive — it's a
+	// deliberate terminal state pending human action via "Retry now"
+	// (Instance.RetryNow), not an incidental stop. See ADR-001.
+	PermanentlyFailed Status = 7
+	// Failed is a non-terminal state: the async creation pipeline (Background
+	// Resolution Pipeline, Epic 2.2) failed before the session ever reached
+	// Active. Distinct from Crashed (a previously-Active session whose process
+	// later exited abnormally): Failed→Creating is a legal transition, used by
+	// the retry path (Epic 1.2's TryStartRetry), while Crashed only recovers to
+	// Active. See ADR-001 and SESSION_STATUS_FAILED in
+	// proto/session/v1/types.proto.
+	Failed Status = 8
 
 	// Deprecated: use Active.
 	Running = Active
@@ -84,8 +101,29 @@ func (s Status) String() string {
 		return "Restoring"
 	case Crashed:
 		return "Crashed"
+	case PermanentlyFailed:
+		return "PermanentlyFailed"
+	case Failed:
+		return "Failed"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
+	}
+}
+
+// IsSuspended reports whether a session in this status is not actively running
+// and so must not be treated as a live target for background work that assumes
+// a running process or tmux session (health checks, PR/CI status polling, etc.):
+// Paused and Hibernated sessions have no tmux session at all; Stopped, Crashed,
+// and PermanentlyFailed are terminal states awaiting an explicit resume/retry,
+// not incidental gaps that background pollers should paper over. See
+// healthCheckSkipReason (session/health.go) for the health-checker's per-status
+// skip messages, and pr_status_poller.go's checkAllSessions for another consumer.
+func (s Status) IsSuspended() bool {
+	switch s {
+	case Paused, Hibernated, Stopped, Crashed, PermanentlyFailed:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -121,6 +159,14 @@ const ReasonColdRestoreLostHistory = "cold-restore-fresh-lost-history"
 // or channel if the handler needs to do significant work.
 type LifecycleListener interface {
 	OnLifecycleEvent(event LifecycleEvent, reason string)
+}
+
+// TagFireRecorder records that a tagging rule matched, independent of whether the
+// resulting tag survives suppression filtering. Declared here (not imported from
+// server/services) because session cannot import that package; *services.AnalyticsStore
+// satisfies this interface structurally, with no import needed in that direction.
+type TagFireRecorder interface {
+	RecordTaggingRuleFire(ruleID string)
 }
 
 // ==== Instance -- Core Fields and Construction ====
@@ -160,6 +206,19 @@ type Instance struct {
 	Status Status
 	// Program is the program to run in the instance.
 	Program string
+	// AltScreenActive reports whether the pane's PTY output stream is
+	// currently in the alternate screen buffer (DECSET 1049), per the last
+	// chunk observed by altScreenTracker. Written under mu by
+	// setAltScreenActiveLocked; read only via GetAltScreenActive's
+	// Snapshot() path -- see .claude/rules/instance-lock-free-reads.md.
+	AltScreenActive bool
+	// AltScreenBootstrapped distinguishes "confirmed not in alt screen" from
+	// "never checked" -- AltScreenActive's zero value is false either way, so
+	// without this a session that's genuinely not in alt screen would fail
+	// altScreenActiveForSnapshot's fast path forever and re-run
+	// IsAlternateScreenActiveBootstrap's real tmux query on every connect and
+	// resize. Set alongside AltScreenActive by setAltScreenActiveLocked.
+	AltScreenBootstrapped bool
 	// Height is the height of the instance.
 	Height int
 	// Width is the width of the instance.
@@ -216,6 +275,17 @@ type Instance struct {
 	// Sessions can have multiple tags and appear in multiple groups simultaneously
 	// Examples: ["frontend", "urgent", "client-work"]
 	Tags []string
+	// RuleTagProvenance maps a tag value to the TaggingRule.ID (or the "llm"
+	// sentinel, llmSentinelRuleID) that most recently applied it (ADR-002).
+	// Absence of a tag here means it is user-owned and is never auto-retracted
+	// by reclassifyTagsLocked. Guarded by i.mu, same as Tags.
+	RuleTagProvenance map[string]string
+	// SuppressedRuleTags records tags the user explicitly removed while they
+	// carried rule provenance (ADR-002). The fixpoint/LLM apply paths
+	// (filterSuppressedTags) never re-add a tag present here until the user
+	// re-adds it explicitly via AddTag/SetTags, which clears its entry.
+	// Guarded by i.mu, same as Tags.
+	SuppressedRuleTags map[string]bool
 	// AutonomousMode enables autonomous Earpiece mode (crew autonomy).
 	// When true, the Fixer will inject correction prompts without user confirmation.
 	// When false (default), the session runs in supervised mode.
@@ -236,6 +306,10 @@ type Instance struct {
 	GitHubOwner string `json:"github_owner,omitempty"`
 	// GitHubRepo is the repository name
 	GitHubRepo string `json:"github_repo,omitempty"`
+	// GitHubHost is the GitHub Enterprise host that owns GitHubOwner/GitHubRepo,
+	// or "" for github.com. Needed to poll/link the right PR for GHE sessions —
+	// see session/repo_path.go's parseGitHubRemoteURL and github.RepoRef.Host().
+	GitHubHost string `json:"github_host,omitempty"`
 	// GitHubSourceRef is the original URL or reference used to create this session
 	GitHubSourceRef string `json:"github_source_ref,omitempty"`
 	// ClonedRepoPath is the path where we cloned the repo (if cloned)
@@ -332,6 +406,44 @@ type Instance struct {
 	// Not persisted to the database — only meaningful in-memory during startup.
 	CreationProgress string `json:"-"`
 
+	// creationProgressUpdatedAt records when CreationProgress was last set, so the
+	// Stale-Creation Sweeper (Epic 4.1) can judge how far a killed process actually
+	// got instead of only how long ago it entered Creating. Bumped by
+	// setCreationProgressLocked on every SetCreationProgress call, in the same
+	// actor command as the progress-text write. Unlike CreationProgress itself,
+	// this IS persisted (see session/ent/schema's creation_progress_updated_at)
+	// so it survives a process restart.
+	creationProgressUpdatedAt time.Time
+
+	// failureReason holds the human-readable reason the async creation pipeline
+	// failed. Meaningful only when Status == Failed; empty otherwise. Terminal-write
+	// metadata, not independently-settable progress text (contrast
+	// SetCreationProgress, which ADR-002 deliberately leaves ungated) — there is no
+	// public setter. Only setFailureReasonLocked may write it, called exclusively
+	// from within TryForceStatusIfEpoch's own command closure (Epic 1.2).
+	failureReason string
+
+	// creationEpoch is a fencing counter bumped exactly once per cancel/retry of
+	// the async creation pipeline (ADR-002). A background writer captures the
+	// epoch before starting work and must present it back to
+	// TryForceStatusIfEpoch/UpdateInstanceIfEpoch to win the terminal write —
+	// if the epoch has since moved (a cancel or retry raced ahead of it), the
+	// write is silently dropped instead of overwriting a newer outcome.
+	// Written only by bumpCreationEpoch, called only from cancel/retry code
+	// paths (Phase 3) and from within TryStartRetry's own command closure.
+	creationEpoch uint64
+
+	// creationCancelFunc is the context.CancelFunc for this instance's
+	// Background Resolution Context (Epic 2.2, Story 2.2.1), stored at
+	// pipeline-spawn time so the Cancel RPC (Epic 3.2) can stop an
+	// in-progress creation. Process-local by nature -- a context.CancelFunc
+	// cannot be persisted or reconstructed -- so an instance loaded from
+	// storage without a live pipeline goroutine spawned in the current
+	// process has this nil (Task 3.2.1b's documented nil-guard case, not an
+	// edge case to special-case away). Not part of InstanceSnapshot; guarded
+	// by i.mu like creationEpoch (see instance_actor_setters.go).
+	creationCancelFunc context.CancelFunc
+
 	// LaunchCommand is the full command passed to tmux on session start, including
 	// any injected flags (--resume, --mcp-config, -y, initial prompt). Set once on
 	// first start and updated on restart. Empty for external (mux-discovered) sessions.
@@ -383,20 +495,21 @@ type Instance struct {
 	// ArchivedAt is set when the session is archived. Nil means not archived.
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 
-	// Claude Code session information for persistence and re-attachment
-	claudeSession *ClaudeSessionData
+	// claudeExtension holds Claude Code conversation-resume session state
+	// (claudeSession/claudeSessionMu/conversationClearedAt), embedded
+	// anonymously so those fields stay accessible as i.claudeSession etc.
+	// See claudeExtension's doc comment (instance_claude.go) for why this is
+	// always populated regardless of Program, unlike piExtension below.
+	claudeExtension
 
-	// conversationClearedAt records when ClearConversationState() last ran, so
-	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
-	// predating an explicit "start fresh" request. In-memory only — does not
-	// survive a process restart (see ADR-001, Consequences). Guarded by
-	// claudeSessionMu, not i.mu.
-	conversationClearedAt time.Time
-
-	// claudeSessionMu protects claudeSession, conversationClearedAt, and
-	// claudeSessionIDSavedCallback.
-	// Separate from mu to avoid holding the instance write lock during persistence I/O.
-	claudeSessionMu sync.RWMutex
+	// piExtension holds pi-coding-agent controller and session state
+	// (piSession/piSessionMu/piStatusSrc/piStatusStartMu), embedded
+	// anonymously so those fields stay accessible as i.piSession etc. See
+	// piExtension's doc comment (instance_pi_status.go) -- it implements
+	// programExtension so StartController/StopController
+	// (instance_controller.go) dispatch to it instead of growing another
+	// if-branch.
+	piExtension
 
 	// Review queue integration for tracking sessions needing attention
 	reviewQueue *ReviewQueue
@@ -405,6 +518,24 @@ type Instance struct {
 	// Fields are embedded (promoted) so external code can still access inst.LastViewed etc.
 	// Protected by mu (via sendSyncErr / Snapshot).
 	ReviewState
+
+	// RetryState holds the automated crash/stall retry lifecycle (attempt
+	// count, resolved max, last failure reason, pending-retry timestamp,
+	// history) for the configurable retry policy (session-retry-backoff).
+	// Fields are embedded (promoted) so callers can access inst.RetryAttempt
+	// etc. directly, mirroring ReviewState. Protected by mu.
+	RetryState
+
+	// RetryPolicyOverride is a per-session override for the global
+	// RetryPolicyConfig default, resolved once (global (+) override) at
+	// StartSessionDriver via resolveRetryPolicy. Mirrors ReworkCapOverride's
+	// nil-means-inherit convention. Nil means "use the global default".
+	RetryPolicyOverride *config.RetryPolicyConfig `json:"retry_policy_override,omitempty"`
+
+	// notifier delivers proactive notifications (e.g. a session giving up after
+	// exhausting its retry budget) independent of the passive ReviewQueue.
+	// Set via SetNotifier, mirroring reviewQueue/SetReviewQueue.
+	notifier Notifier
 
 	// controllerManager owns the ClaudeController and InstanceStatusManager references.
 	controllerManager ControllerManager
@@ -432,6 +563,12 @@ type Instance struct {
 	// Initialized to a TmuxBackend by default; future backends implement the ProcessManager interface.
 	pmMu           sync.Mutex
 	processManager ProcessManager
+	// claudeTrustStoreImpl backs trustStore()'s lazy default (real disk-backed
+	// store in production, in-memory in tests) -- see that method's doc
+	// comment. A test may set this directly (e.g. to a *memoryClaudeTrustStore
+	// it wants to assert against) before the first markWorkingDirTrusted call.
+	trustStoreMu         sync.Mutex
+	claudeTrustStoreImpl claudeTrustStore
 	// gitManager owns the git worktree and diff stats.
 	gitManager GitWorktreeManager
 	// vncManager owns the Xvfb + x11vnc lifecycle for this session.
@@ -447,6 +584,25 @@ type Instance struct {
 	// Backed by a pointer to Instance.Tags for zero-sync compatibility with
 	// callers that read inst.Tags directly.
 	tagManager TagManager
+
+	// altScreenTracker is a stateful scanner over this instance's PTY output
+	// stream (see ObserveAltScreenTransition), not observable state itself --
+	// excluded from InstanceSnapshot like gitManager/vncManager/cdpManager
+	// above. Its own internal state is not mu-guarded; callers must serialize
+	// ObserveAltScreenTransition calls for a given instance (one logical PTY
+	// output stream has one writer at a time).
+	altScreenTracker ansi.AltScreenTracker
+
+	// taggingEngine drives reclassifyTagsLocked's sync fixpoint (session-classifier-pipeline
+	// Epic 3.3). nil is a valid value — mirrors tagFireRecorder's nil-tolerant convention —
+	// and means "automatic tagging disabled" (e.g. a bare struct-literal test Instance),
+	// not an error. Injected via SetTaggingEngine.
+	taggingEngine *classifier.TaggingEngine
+
+	// tagFireRecorder records tagging-rule fires for analytics (see TagFireRecorder's doc
+	// comment). nil is a valid value — mirrors analyticsStore's existing nil-tolerant
+	// convention elsewhere in this codebase — and means "recording disabled," not an error.
+	tagFireRecorder TagFireRecorder
 
 	// snapshot is a lock-free atomic copy of all mutable Instance fields, published
 	// by every mutator before it releases mu. Readers can call Snapshot()
@@ -481,6 +637,13 @@ type Instance struct {
 	// driverRunning tracks whether a SessionDriver goroutine is active for this instance.
 	// Guarded by CompareAndSwap — see StartSessionDriver.
 	driverRunning atomic.Bool
+	// retryInFlight guards every restart path (automated backoff-expiry,
+	// restart-grace, manual RetryNow) against running concurrently for the
+	// same instance. Claimed exclusively inside restartForRetry via CAS — no
+	// other function CASes it directly, so every restart path is guarded by
+	// construction rather than by each caller remembering to. See
+	// session/retry_state.go's restartForRetry.
+	retryInFlight atomic.Bool
 	// driverStopper carries the stop/done signaling pair for the current
 	// SessionDriver run, if one has ever been started. Set by StartSessionDriver,
 	// read by StopSessionDriver (called from Destroy) to signal and join the
@@ -513,6 +676,12 @@ type Instance struct {
 	// goroutines so tests can join them before t.TempDir() cleanup runs.
 	// See JoinHibernation.
 	hibernateWG sync.WaitGroup
+
+	// scrollLease serializes this instance's own concurrent
+	// Instance.ForwardScroll calls (Story 1.3.1) -- see scroll_lease.go's
+	// doc comment for why this is transient orchestration state, not a
+	// snapshot-tracked field.
+	scrollLease scrollLease
 
 	// destroyed is set by Destroy() so a SessionDriver goroutine that outlives
 	// its own teardown (session_driver.go's loop only self-terminates on a
@@ -597,6 +766,41 @@ type Instance struct {
 	// warns against.
 	remoteApprovalRelay   *sshremote.RemoteApprovalRelay
 	remoteApprovalRelayMu deadlock.Mutex
+}
+
+// ObserveAltScreenTransition feeds a chunk of raw PTY output through
+// altScreenTracker and, only when that changes the alt-screen state,
+// publishes it via setAltScreenActiveLocked. Callers must serialize calls
+// per instance (see altScreenTracker's doc comment) -- server/services'
+// per-connection/per-hub-pump output-forwarding goroutines each own a single
+// sequential stream for a given instance, so this is called from at most one
+// goroutine at a time per instance in practice.
+func (i *Instance) ObserveAltScreenTransition(data []byte) {
+	active, changed := i.altScreenTracker.Observe(string(data))
+	if !changed {
+		return
+	}
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setAltScreenActiveLocked(s, active)
+		return nil
+	})
+}
+
+// SetAltScreenActiveBootstrap directly sets both altScreenTracker's internal
+// state and the published AltScreenActive value from a source that already
+// knows it authoritatively (session/instance_tmux.go's
+// IsAlternateScreenActiveBootstrap, a live tmux `#{alternate_on}` query) --
+// unlike ObserveAltScreenTransition, this isn't derived from scanning a PTY
+// byte chunk. Updates the tracker too (not just the published value) so a
+// later live ObserveAltScreenTransition call computes `changed` relative to
+// the correct baseline, instead of the tracker's zero-value default
+// silently masking a real exit transition.
+func (i *Instance) SetAltScreenActiveBootstrap(active bool) {
+	i.altScreenTracker.SetActive(active)
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setAltScreenActiveLocked(s, active)
+		return nil
+	})
 }
 
 // executionTarget returns i.ExecutionTarget, defaulting to LocalTarget{} when nil.
@@ -731,6 +935,7 @@ type InstanceOptions struct {
 	GitHubPRURL     string // Full URL to the PR
 	GitHubOwner     string // Repository owner
 	GitHubRepo      string // Repository name
+	GitHubHost      string // GitHub Enterprise host owning owner/repo, or "" for github.com
 	GitHubSourceRef string // Original URL/reference used to create session
 	ClonedRepoPath  string // Path where repo was cloned (if cloned)
 
@@ -885,6 +1090,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		GitHubPRURL:     opts.GitHubPRURL,
 		GitHubOwner:     opts.GitHubOwner,
 		GitHubRepo:      opts.GitHubRepo,
+		GitHubHost:      opts.GitHubHost,
 		GitHubSourceRef: opts.GitHubSourceRef,
 		ClonedRepoPath:  opts.ClonedRepoPath,
 		// One-shot mode, hidden flag, project, and workflow linkage
@@ -982,15 +1188,72 @@ func (i *Instance) Snapshot() *InstanceSnapshot {
 // finishInstanceConstruction publishes the initial snapshot so that Load() is
 // guaranteed non-nil by the time the *Instance is visible to any other goroutine.
 // This is the single choke-point called by every construction site — Epic 3
-// will extend this helper to also spawn the actor goroutine.
+// will extend this helper to also spawn the actor goroutine, and it's also
+// where scrollForwardVersionMismatchCheck kicks off (Story 1.5.3), so it runs
+// at construction time rather than being deferred until a user scrolls.
 func finishInstanceConstruction(i *Instance) {
 	i.snapshot.Store(buildSnapshot(i))
+	i.kickOffClaudeVersionMismatchCheck()
 }
 
 // SetShellRepository injects the shell persistence backend. Called by Storage after
 // loading or creating an instance. Pass nil to disable persistence (e.g., in tests).
 func (i *Instance) SetShellRepository(repo ShellRepository) {
 	i.shellRepo = repo
+}
+
+// SetTagFireRecorder injects the tagging-rule fire-count recorder. Pass nil to disable
+// recording (the default) — see TagFireRecorder's doc comment.
+func (i *Instance) SetTagFireRecorder(recorder TagFireRecorder) {
+	i.tagFireRecorder = recorder
+}
+
+// SetTaggingEngine injects the sync tagging engine that reclassifyTagsLocked evaluates on
+// every tag-relevant mutation (session-classifier-pipeline Epic 3.3). Pass nil to disable
+// automatic tagging for this Instance (the default) — see the taggingEngine field's doc
+// comment. Not actor-routed: like SetTagFireRecorder/SetShellRepository, this is
+// construction-time wiring, not a runtime mutation that needs mailbox serialization.
+func (i *Instance) SetTaggingEngine(engine *classifier.TaggingEngine) {
+	i.taggingEngine = engine
+}
+
+// ReclassifyTagsAfterCreate runs the tagging fixpoint (and the Unclassified coexistence
+// rule) for a brand-new session immediately after its worktree has been created, so a
+// matching seeded rule's tag is present by the time Start() returns — the plan's headline
+// Success Metric for new-session creation, not just for a later rename (session-classifier-
+// pipeline Story 3.3.2).
+//
+// Acquires its own, fresh i.mu.Lock() — it must NEVER be called from anywhere that already
+// holds i.mu (that would deadlock), which is exactly why this is a distinct, non-"*Locked"
+// wrapper rather than reusing reclassifyTagsLocked's convention of assuming the lock is
+// already held by the caller. Callers rely on setupFirstTimeWorktree() having already fully
+// released Instance.startMu on the same call stack before this runs — see the call site in
+// Start() for the lock-order invariant this depends on (pre-mortem.md Failure #5, P3).
+func (i *Instance) ReclassifyTagsAfterCreate() {
+	i.mu.Lock()
+	s := &instanceState{inst: i}
+	reclassifyTagsLocked(s, i.taggingEngine)
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
+}
+
+// finishFirstTimeSetup creates the first-time worktree and reclassifies tags against the
+// now-known Path/Branch, shared by both of Start()'s firstTimeSetup branches (cold-start and
+// hot-restore-into-first-time-setup) so this pairing — and the lock-ordering invariant it
+// depends on — lives in exactly one place.
+//
+// setupFirstTimeWorktree() runs under Instance.startMu, never i.mu (see its own doc comment /
+// git_worktree_manager.go:22-26) — by the time it returns here, startMu is fully released on
+// this call stack, so ReclassifyTagsAfterCreate's own i.mu.Lock() below never nests under
+// startMu. No lock-ordering cycle is possible between the two on this or any other path
+// (pre-mortem.md Failure #5, P3).
+func (i *Instance) finishFirstTimeSetup() error {
+	if err := i.setupFirstTimeWorktree(); err != nil {
+		return err
+	}
+	i.ReclassifyTagsAfterCreate()
+	return nil
 }
 
 // GetSessionGoal returns a thread-safe shallow copy of the current SessionGoalData (nil if not set).
@@ -1014,7 +1277,7 @@ func (i *Instance) HasGitHubPR() bool {
 
 // SetArtifacts atomically updates the in-memory Artifacts cache.
 func (i *Instance) SetArtifacts(blob *artifacts.SessionArtifactsBlob) {
-	i.sendSyncErr(func(s *instanceState) error { //nolint:errcheck
+	_ = i.sendSyncErr(func(s *instanceState) error {
 		s.inst.Artifacts = blob
 		return nil
 	})
@@ -1119,12 +1382,11 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 // (pre-mortem failure mode #4). Falls through to tryExtractConversationUUID's
 // DetectByPath fallback, guarded by conversationClearedAt.
 //
-// Only changes the actual launch command for a genuinely fresh Instance:
-// initTmuxSession() early-returns via HasSession() whenever a TmuxSession object
-// already exists in-process (e.g. after KillSession()), so this recovery is a
-// no-op for in-process restart-churn — confirmed by
-// TestKillSessionThenStart_DoesNotRebuildLaunchCommand; see plan.md Risk Control
-// item 8.
+// No-op whenever the underlying tmux session is still alive (i.pm().IsAlive()):
+// initTmuxSession() reuses it as-is in that case, so there's nothing to embed
+// --resume into yet. Once it's dead -- including in-process restart-churn via
+// KillSession() -- initTmuxSession() rebuilds the launch command, so recovering
+// the UUID here actually matters. See TestKillSessionThenStart_RebuildsLaunchCommand.
 func (i *Instance) recoverConversationBeforeLaunch(firstTimeSetup bool) {
 	if firstTimeSetup || i.pm().IsAlive() || i.HasClaudeSession() {
 		return
@@ -1200,7 +1462,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
 
 	if firstTimeSetup {
-		if err := i.setupFirstTimeWorktree(); err != nil {
+		if err := i.finishFirstTimeSetup(); err != nil {
 			return err
 		}
 	} else {
@@ -1454,7 +1716,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
 
 	if firstTimeSetup {
-		if err := i.setupFirstTimeWorktree(); err != nil {
+		if err := i.finishFirstTimeSetup(); err != nil {
 			return err
 		}
 	} else {
@@ -1708,6 +1970,17 @@ func (i *Instance) Destroy() error {
 	// (session_driver.go) polls this every driverPollInterval and exits on
 	// seeing it, rather than continuing until its own 25-minute deadline.
 	i.destroyed.Store(true)
+
+	// Evict this session's entry from PiExtensionHealthTracker (pi-support
+	// Epic 4.2 MAJOR 1 fix) so the tracker's map doesn't grow unboundedly for
+	// the life of the process. Gated on isPi to avoid a no-op resolver call on
+	// every single non-pi session's destroy; nil-checked since not every
+	// deployment wires SetPiExtensionHealthForgetter (e.g. tests).
+	if isPi(i.Program) {
+		if forgetter := getPiExtensionHealthForgetter(); forgetter != nil {
+			forgetter(i.GetStableID())
+		}
+	}
 
 	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
 	defer i.cleanupPromptFile()
@@ -2125,7 +2398,29 @@ func (i *Instance) Restart(preserveOutput bool) error {
 		return fmt.Errorf("cannot restart session '%s': no working directory configured", i.Title)
 	}
 
+	// Suppress pi's --session resume injection (buildLaunchCommand reads
+	// i.piSession directly for piProgram, unlike claude's explicit
+	// claudeSessionID param) unless both isPi(i.Program) and the pi-support
+	// feature flag are true — mirroring the claudeSessionID capture above's
+	// gating intent. The field itself is restored afterward rather than
+	// cleared outright, so a stale piSession isn't lost if the flag is later
+	// re-enabled.
+	//
+	// Guarded by piSessionMu (not i.mu), mirroring claudeSessionMu's usage:
+	// this used to rely on Stop() always having joined SetPiSessionID's only
+	// writer goroutine before Restart reached this code, an argument Bug 2
+	// broke (a disabled flag could skip stopPiStatusSource entirely, leaving
+	// that goroutine alive). The lock makes this safe structurally instead.
+	i.piSessionMu.Lock()
+	restorePiSession := i.piSession
+	if !isPi(i.Program) || !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) {
+		i.piSession = nil
+	}
+	i.piSessionMu.Unlock()
 	program := i.buildLaunchCommand(claudeSessionID)
+	i.piSessionMu.Lock()
+	i.piSession = restorePiSession
+	i.piSessionMu.Unlock()
 
 	// Create a new tmux session
 	// Use configurable prefix or default

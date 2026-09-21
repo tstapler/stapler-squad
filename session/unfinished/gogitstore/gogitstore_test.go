@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1114,54 +1113,6 @@ func exerciseRepo(t testing.TB, repo *git.Repository) {
 	if _, err := commit.Tree(); err != nil {
 		t.Fatalf("commit.Tree(): %v", err)
 	}
-}
-
-// heapAllocNow reports live HeapAlloc (bytes of reachable heap objects)
-// after forcing GC, deliberately NOT runtime.MemStats.TotalAlloc.
-// TotalAlloc is a process-wide monotonic counter that only ever grows —
-// any concurrent allocation elsewhere in the same test binary between two
-// readings (background GC workers, other goroutines the operation under
-// test starts, scheduler jitter under a loaded CI runner) permanently
-// inflates a TotalAlloc-based delta and can flip a close before/after
-// comparison. HeapAlloc instead reflects what's actually still reachable
-// after GC, so transient background garbage from elsewhere in the process
-// gets collected away rather than accumulating in the reading. It is still
-// process-wide (not scoped to a single goroutine), so callers comparing two
-// HeapAlloc-based deltas should still prefer a tolerance margin over a
-// strict inequality, and ideally median-of-N sampling too — see
-// TestMmapIndex_HeapAllocation_LowerThanCopyBased for both applied
-// together, and TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst
-// for the tolerance-margin half alone (it averages one sample per worktree
-// rather than taking a median of repeated samples).
-func heapAllocNow() uint64 {
-	runtime.GC()
-	runtime.GC() // two passes: the first can promote finalizer-pending garbage that only the second reclaims
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	return m.HeapAlloc
-}
-
-func deltaOrZero(before, after uint64) uint64 {
-	if after <= before {
-		return 0
-	}
-	return after - before
-}
-
-// median returns the median of vals, sorting a copy so the caller's slice
-// order is left untouched. Used to make heap-delta measurements in this
-// package robust to a single noisy sample — see heapAllocNow's doc comment.
-func median(vals []uint64) uint64 {
-	if len(vals) == 0 {
-		return 0
-	}
-	sorted := append([]uint64(nil), vals...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-	mid := len(sorted) / 2
-	if len(sorted)%2 == 1 {
-		return sorted[mid]
-	}
-	return (sorted[mid-1] + sorted[mid]) / 2
 }
 
 // --- structural sanity tests ----------------------------------------------

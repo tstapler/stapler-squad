@@ -19,10 +19,11 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 )
 
-// configDirContainsBytes walks the application's config directory (isolated
-// per-test-process by config.GetConfigDir()'s test-mode auto-detection, see
-// config/config.go's GetConfigDirForDir) and reports whether any file under
-// it contains needle. If the directory doesn't exist yet, nothing was
+// configDirContainsBytes walks config.GetConfigDir()'s directory and reports
+// whether any file under it contains needle. Not necessarily test-exclusive:
+// GetConfigDirForDir honors an ambient STAPLER_SQUAD_TEST_DIR override, which
+// can point at a directory another process is also using -- see the WalkDir
+// callback's ENOENT handling below. A missing directory means nothing was
 // written there, so the answer is trivially false.
 func configDirContainsBytes(t *testing.T, needle []byte) bool {
 	t.Helper()
@@ -37,6 +38,13 @@ func configDirContainsBytes(t *testing.T, needle []byte) bool {
 	found := false
 	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			// STAPLER_SQUAD_TEST_DIR can point at a live, shared state dir
+			// (config.GetConfigDirForDir honors it), so a file can vanish
+			// between WalkDir listing it and stat-ing it here. Benign race
+			// for this best-effort scan -- skip it, don't abort the walk.
+			if os.IsNotExist(err) {
+				return nil
+			}
 			return err
 		}
 		if d.IsDir() {

@@ -1,0 +1,14 @@
+{
+  "id": "native-git-rollout:get",
+  "type": "backend",
+  "service": "NativeGitRolloutService",
+  "method": "GetNativeGitRolloutStatus",
+  "protoFile": "proto/session/v1/native_git_rollout.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/native_git_rollout_service.go",
+  "tested": true,
+  "testIds": [
+    "TestNativeGitRolloutService_SetThenGet_ReflectsLiveState"
+  ],
+  "lastModified": "2026-09-11T22:59:12.781345429-07:00"
+}

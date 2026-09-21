@@ -25,6 +25,7 @@ jest.mock("@connectrpc/connect-web", () => ({
 
 jest.mock("@/lib/config", () => ({
   getApiBaseUrl: jest.fn(() => "http://localhost:8543"),
+  createAuthInterceptor: jest.fn(() => jest.fn()),
 }));
 
 // Live-tail polling itself (interval scheduling) is not what this suite is

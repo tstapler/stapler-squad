@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestRealTmuxSessionCreation validates session creation with real tmux
@@ -117,7 +119,7 @@ func TestRealTmuxSessionLifecycle(t *testing.T) {
 		// Verify session is gone — poll instead of a fixed sleep, since how
 		// long tmux takes to reflect the kill varies under load.
 		killedName := sessions[0]
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			var listErr error
 			sessions, listErr = server.ListSessions()
 			if listErr != nil {

@@ -120,111 +120,53 @@ func TestRegistry_UseMmapIndex_True_EngagesMmapLoader(t *testing.T) {
 	}
 }
 
-// TestMmapIndex_HeapAllocation_LowerThanCopyBased mirrors gogitstore_test.go's
-// TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst heap-delta
-// measurement technique: ensureIndex() under the mmap loader should
-// allocate substantially less live heap than the copy-based loader for the
-// SAME fixture, since it avoids the O(object count) make+copy decoder.go
-// performs for Names/CRC32/Offset32.
+// BenchmarkMmapIndex_HeapAllocation_CopyVsMmap measures ensureIndex()'s
+// live-heap cost under the mmap loader against the copy-based loader for the
+// SAME fixture — the mmap path should allocate substantially less, since it
+// avoids the O(object count) make+copy decoder.go performs for
+// Names/CRC32/Offset32. This used to be a Test asserting a hard ratio
+// threshold (git blame for the previous version); moved to a Benchmark
+// because "is A meaningfully cheaper than B" is a comparison question for
+// -bench/benchstat, not a pass/fail correctness question — see
+// BenchmarkMmapIndex_LoadVsCopyBased just above for the timing-only sibling
+// this mirrors. b.ReportAllocs() gives allocs/op and B/op averaged over
+// b.N runs, which needs no manual median-of-N sampling or noise-tolerance
+// margin the way a single-shot Test measurement did.
 //
-// Measurement methodology: this reuses gogitstore_test.go's heapAllocNow()/
-// deltaOrZero() helpers (live HeapAlloc after a double-GC pass) instead of
-// runtime.MemStats.TotalAlloc, which this test used previously.
-// TotalAlloc is a process-wide MONOTONIC counter, not scoped to the
-// goroutine or operation under test: any concurrent allocation in the same
-// test binary between the before/after snapshots — a GC background worker,
-// the mmapwatch.go pack-watch goroutine ensureIndex itself starts when
-// useMmap=true, or plain scheduler jitter under a loaded/shared CI runner —
-// permanently inflates the delta and can flip a close comparison. This was
-// observed flaking in CI (job 29549848133 and similar) with zero code
-// changes across reruns — a measurement-methodology bug, not a regression.
-// heapAllocNow()'s double-GC + HeapAlloc pattern instead reflects live
-// retained heap, which self-corrects for transient background garbage.
-//
-// Two more layers of noise tolerance on top of that: each arm takes the
-// MEDIAN of several samples rather than a single reading (a single bad
-// sample can no longer flip the result), and the pass/fail comparison uses
-// a tolerance margin instead of a strict `<`, since the real effect size
-// here (mmap loader avoiding an O(object count) copy for a 600-object
-// fixture) leaves large headroom over any plausible noise — see the
-// maxMmapToCopyRatio comment below for actual observed numbers.
-func TestMmapIndex_HeapAllocation_LowerThanCopyBased(t *testing.T) {
-	if os.Getenv("CI") != "" {
-		// ponytail: skipped in CI — git gc --aggressive under this repo's current CI load reliably corrupts the fixture repo (see PR #162); needs either a lighter non-aggressive gc or serialized/non-parallel test execution to fix properly, not attempted here
-		t.Skip("skipped in CI — see PR #162")
-	}
-	if testing.Short() {
-		t.Skip("skipped under -short: too slow for make test/quick-check")
-	}
+// Run explicitly with `go test -run '^$' -bench BenchmarkMmapIndex_HeapAllocation
+// -benchmem ./session/unfinished/gogitstore/...` — not part of any -short or
+// default `go test` run, and not gated on CI's `git gc --aggressive` fixture
+// corruption issue (see PR #162) since it never runs in the default `go test`
+// CI lane either.
+func BenchmarkMmapIndex_HeapAllocation_CopyVsMmap(b *testing.B) {
 	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
+		b.Skip("git binary not available")
 	}
-	dir := t.TempDir()
-	buildPackedFixture(t, dir, 600) // large enough for the copy's O(n) cost to be clearly visible
+	dir := b.TempDir()
+	buildPackedFixture(b, dir, 600) // large enough for the copy's O(n) cost to be clearly visible
 
 	_, commonFs, _, commonDirAbs, err := resolveGitFilesystems(dir)
 	if err != nil {
-		t.Fatalf("resolveGitFilesystems: %v", err)
+		b.Fatalf("resolveGitFilesystems: %v", err)
 	}
 
-	// samplesPerArm=5 balances noise-immunity (a single bad sample can no
-	// longer flip the median) against wall-clock cost — each sample forces
-	// a double-GC pass plus a fresh ensureIndex() over the 600-object
-	// fixture built above.
-	const samplesPerArm = 5
-
-	sample := func(useMmap bool) uint64 {
-		store := newSharedObjectStore(commonDirAbs, commonFs, cache.NewObjectLRU(cache.FileSize(1<<20)), 0, useMmap)
-		// Stop the pack-watch goroutine (started by ensureIndex below when
-		// useMmap is true — see TestRegistry_UseMmapIndex_True_EngagesMmapLoader's
-		// cleanup comment) immediately after this sample instead of deferring
-		// to t.Cleanup, so samplesPerArm iterations don't accumulate
-		// samplesPerArm live watcher goroutines for the duration of the test.
-		defer store.stopPackWatch()
-		before := heapAllocNow()
-		if err := store.ensureIndex(); err != nil {
-			t.Fatalf("ensureIndex(useMmap=%v): %v", useMmap, err)
+	run := func(b *testing.B, useMmap bool) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			store := newSharedObjectStore(commonDirAbs, commonFs, cache.NewObjectLRU(cache.FileSize(1<<20)), 0, useMmap)
+			if err := store.ensureIndex(); err != nil {
+				b.Fatalf("ensureIndex(useMmap=%v): %v", useMmap, err)
+			}
+			// See TestRegistry_UseMmapIndex_True_EngagesMmapLoader's cleanup
+			// comment: ensureIndex starts a pack-watch goroutine per store
+			// when useMmap is true, which must be stopped every iteration
+			// rather than only once at the end.
+			store.stopPackWatch()
 		}
-		after := heapAllocNow()
-		runtime.KeepAlive(store)
-		return deltaOrZero(before, after)
 	}
 
-	measure := func(useMmap bool) uint64 {
-		deltas := make([]uint64, samplesPerArm)
-		for i := range deltas {
-			deltas[i] = sample(useMmap)
-		}
-		return median(deltas)
-	}
-
-	copyDelta := measure(false)
-	mmapDelta := measure(true)
-
-	t.Logf("copy-based ensureIndex median HeapAlloc delta (n=%d): %d bytes", samplesPerArm, copyDelta)
-	t.Logf("mmap-based ensureIndex median HeapAlloc delta (n=%d):  %d bytes", samplesPerArm, mmapDelta)
-
-	if copyDelta == 0 {
-		t.Fatal("copy-based loader allocated 0 bytes — measurement is broken")
-	}
-	// Locally observed WITHOUT -race: mmap ~30KB vs copy ~117KB (~26% of
-	// copy's allocation). Under `go test -race` — how this package's tests
-	// actually run in CI — the ratio is structurally different, not just
-	// noisier: consistently ~95.8KB vs ~117.4KB (~82%). That's not
-	// measurement noise (repeated race-mode runs land on the exact same
-	// mmap byte count); it's the race detector's shadow-memory/goroutine
-	// bookkeeping adding a comparatively larger fixed cost to the mmap
-	// path's locking and pack-watch goroutine than to the copy path's
-	// allocation-heavy but synchronization-light work. The ceiling below
-	// has to clear the race-mode ratio with margin while still catching a
-	// real regression, which would push mmap's share close to or above
-	// 100% (the optimization providing no savings at all) rather than
-	// nudging a few points within the 26-82% range both good regimes land
-	// in.
-	const maxMmapToCopyRatio = 0.9
-	if maxAllowed := uint64(float64(copyDelta) * maxMmapToCopyRatio); mmapDelta >= maxAllowed {
-		t.Errorf("mmap loader allocated %d bytes, want meaningfully less than copy-based loader's %d bytes (must be under %.0f%% = %d bytes)", mmapDelta, copyDelta, maxMmapToCopyRatio*100, maxAllowed)
-	}
+	b.Run("copy", func(b *testing.B) { run(b, false) })
+	b.Run("mmap", func(b *testing.B) { run(b, true) })
 }
 
 // --- staleness detection ---------------------------------------------------

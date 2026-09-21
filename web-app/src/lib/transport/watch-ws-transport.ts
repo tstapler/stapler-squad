@@ -208,7 +208,10 @@ export function createWatchTransport(opt: ConnectTransportOptions): Transport {
 }
 
 /**
- * Selects the transport used by the three session/review-queue watch hooks.
+ * Selects the transport for any server-streaming Watch* RPC (SessionService,
+ * ReviewQueueService, BacklogService, InsightsService,
+ * UnfinishedWorkService, ...) whose path is registered with server.go's
+ * StreamingWSBridge.
  *
  * Native ConnectRPC streaming only helps over a real HTTP/2 connection —
  * that's the TLS remote-access listener (:8444) only. No shipping browser

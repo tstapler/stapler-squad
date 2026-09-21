@@ -12,6 +12,11 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
+// piSupportFlagName mirrors config.FeaturePiSupport so knownFeatureFlags below
+// doesn't duplicate the literal — see config/config.go for the flag's full
+// documentation and project_plans/pi-support/implementation/plan.md, Epic 2.1.
+const piSupportFlagName = config.FeaturePiSupport
+
 // sddDefaultPipelineFlagName is shared between knownFeatureFlags below and
 // CreateBacklogItem's default-resolution branch (backlog_service_lifecycle.go)
 // so the flag name can't drift between where it's declared and where it's
@@ -27,6 +32,25 @@ const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 // workspacePeersBlockFor below so the flag name can't drift between where it's declared and
 // where it's read.
 const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
+
+// githubPriorityAdmissionFlagName gates github.rateLimitTransport.RoundTrip's
+// AdmitOrigin rejection branch (github/http_client.go). github cannot import
+// this package (server/services already imports github, so the reverse would
+// be a cycle), so github/http_client.go duplicates this same string literal
+// under its own constant of the same name rather than importing it — mirrors
+// session/instance_tmux.go's terminalResyncExecGateFastLaneFlagName
+// precedent. Keep both constants' values in sync if this flag is ever
+// renamed.
+const githubPriorityAdmissionFlagName = "github:priority-admission-control"
+
+// githubGraphQLMigrationFlagName gates GetPRInfoCtx's dispatch to
+// GetPRInfoGraphQL instead of the gh-CLI shell-out (github/client.go). github
+// cannot import this package (server/services already imports github, so the
+// reverse would be a cycle), so github/client.go duplicates this same string
+// literal under its own constant of the same name rather than importing it —
+// mirrors githubPriorityAdmissionFlagName's precedent above. Keep both
+// constants' values in sync if this flag is ever renamed.
+const githubGraphQLMigrationFlagName = "github:graphql-pr-info"
 
 // handoffSummaryFlagName is the generic-registry name for the
 // restart-with-handoff-summary feature, so the frontend can discover
@@ -99,6 +123,15 @@ const terminalResyncCompressionFlagName = "terminal:resync-compression"
 const terminalResyncVisibilityScopeFlagName = "terminal:resync-visibility-scope"
 const terminalResyncStaggerFlagName = "terminal:resync-stagger"
 const terminalResyncBatchingFlagName = "terminal:resync-batching"
+
+const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
+
+// terminalAppScrollForwardingClaudeFlagName mirrors
+// config.FeatureAppScrollForwardingClaude so knownFeatureFlags below doesn't
+// duplicate the literal -- see config/config.go for the flag's full
+// documentation and
+// project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
+const terminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForwardingClaude
 
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
@@ -184,6 +217,30 @@ var knownFeatureFlags = []struct {
 	{
 		name:        terminalResyncBatchingFlagName,
 		description: "Batch multiple terminals' resync requests into a single round trip instead of issuing one request per terminal. Default: off.",
+	},
+	{
+		name:        githubPriorityAdmissionFlagName,
+		description: "Priority-aware admission control for outbound GitHub API calls: background pollers/sync back off once a resource's (core/search/graphql) remaining quota drops below a reserved headroom, so interactive GitHub actions (merge, comment, refresh) keep succeeding. Protects this stapler-squad instance's own interactive GitHub calls only — does not coordinate with other machines sharing the same GitHub token. Default: off.",
+	},
+	{
+		name:        githubGraphQLMigrationFlagName,
+		description: "Route GetPRInfoCtx's PR-metadata fetch through a single native GraphQL request instead of the `gh pr view` CLI shell-out, cutting the REST-equivalent call count for PR status refreshes. Default: off.",
+	},
+	{
+		name:        worktreeChangeDetectionFlagName,
+		description: "Watch each session's .git dir via fsnotify and run a staggered 15s periodic cheap dirty/HEAD check to invalidate the diff-stats and VCS-status caches, letting both widen from a 15s to a 5-minute TTL. Applies to newly-created worktrees only; already-open sessions keep today's 15s pure-TTL behavior until restarted. Default: off.",
+	},
+	{
+		name:        terminalAppScrollForwardingClaudeFlagName,
+		description: "Forward Claude Code's own PageUp scroll keybinding into its fullscreen conversation view instead of tmux-native scrollback capture, for eligible sessions (AppScrollGate: adapter coverage, alt-screen active, idle status, exactly one connected viewer). Flag-off always falls through to the unchanged tmux-native scrollback path, regardless of AppScrollGate's verdict. Default: off.",
+	},
+	{
+		name:        piSupportFlagName,
+		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
+	},
+	{
+		name:        config.TriageGuidanceHaltFeatureFlag,
+		description: "Automated triage halts and asks a durable guidance request instead of guessing when a backlog item is genuinely ambiguous. Default: off — baseline guess-and-proceed triage behavior is unchanged until enabled.",
 	},
 }
 

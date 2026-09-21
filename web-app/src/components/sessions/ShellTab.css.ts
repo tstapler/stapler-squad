@@ -15,7 +15,9 @@ export const errorIndicator = style({
   flexShrink: 0,
 });
 
-export const statusDotBase = style({
+// Used only as a base composed into statusDot's variants below
+// (no longer imported directly elsewhere).
+const statusDotBase = style({
   width: "8px",
   height: "8px",
   borderRadius: vars.radii.full,

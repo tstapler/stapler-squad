@@ -62,11 +62,11 @@ var updateDesktopDatabaseFunc = func(ctx context.Context, desktopDir string) err
 // once registration is already in place, so re-running never duplicates
 // registry entries.
 func registerLinuxScheme(ctx context.Context, desktopDir, execCommand string) error {
-	if err := os.MkdirAll(desktopDir, 0o755); err != nil {
+	if err := os.MkdirAll(desktopDir, 0o750); err != nil {
 		return fmt.Errorf("register-linux-scheme: create %s: %w", desktopDir, err)
 	}
 	desktopFilePath := filepath.Join(desktopDir, linuxDesktopFileName)
-	if err := os.WriteFile(desktopFilePath, []byte(desktopFileContent(execCommand)), 0o644); err != nil {
+	if err := os.WriteFile(desktopFilePath, []byte(desktopFileContent(execCommand)), 0o600); err != nil {
 		return fmt.Errorf("register-linux-scheme: write %s: %w", desktopFilePath, err)
 	}
 

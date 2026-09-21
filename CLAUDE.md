@@ -39,6 +39,12 @@ Single-binary deployment with embedded tmux: `docs/how-to/bundle-tmux.md`
 
 ### Testing
 
+`make test`/`test-race`/`test-coverage`/`test-integration`/`test-affected` run via
+[`gotestsum`](https://github.com/gotestyourself/gotestsum) (auto-installed on first
+use) instead of raw `go test`, for readable pass/fail-per-test output — see
+Makefile's `GOTESTSUM_BIN`. One-off single-package/single-test runs below still use
+plain `go test`.
+
 ```bash
 make build && make test     # Build (generates protos) then test
 make quick-check            # Build + test + lint (fast validation)
@@ -85,17 +91,20 @@ both fail the build, not just report:
   Level 0 consolidation gate), not a suppression.
 - **web-app — `jscpd`** (`web-app/.jscpd.json`; `make ready-duplication-gate-web`
   or `pnpm run lint:duplicates` in `web-app/`): jscpd has no git-diff scoping
-  like `--new-from-rev`, so this gates on an absolute `threshold` (0.1%) instead
-  of new-code-only — a ratchet against today's cleaned-up baseline (~0.09%,
-  ~215 duplicated lines), not zero-tolerance. `minLines`/`minTokens` are tuned
-  to 20/200: verified empirically (2026-08-24 repo-wide sweep + fix) that at
-  that size every finding was real, actionable duplication — component forks,
+  like `--new-from-rev`, so this gates on an absolute `threshold` (0.12%,
+  raised from 0.1% on 2026-09-12 after PR #785's new Omnibar test file added
+  one more irreducible `jest.mock(...)` block and tripped the old ratchet —
+  see below) instead of new-code-only — a ratchet against a cleaned-up
+  baseline, not zero-tolerance. `minLines`/`minTokens` are tuned to 20/200:
+  verified empirically (2026-08-24 repo-wide sweep + fix) that at that size
+  every finding was real, actionable duplication — component forks,
   copy-pasted hooks/effects, shared style/test-fixture blocks — not
   boilerplate noise, which dominates at jscpd's noisy 5-line/50-token
-  defaults. The ~0.09% baseline that remains is `jest.mock(...)` registration
-  lines that can't be extracted into a shared function (babel-jest hoists them
-  per test file), so it's irreducible, not unfixed debt. Long-term, true
-  diff-aware cross-file duplicate detection belongs in `kibitzer`
+  defaults. Most of the baseline is `jest.mock(...)` registration lines that
+  can't be extracted into a shared function (babel-jest hoists them per test
+  file), so it grows by a small, predictable amount every time a new
+  heavily-mocked test file is added — irreducible, not unfixed debt. Long-term,
+  true diff-aware cross-file duplicate detection belongs in `kibitzer`
   (github.com/tstapler/kibitzer) — see `tstapler/kibitzer#28`.
 
 For "which files are actually risky to touch" (complexity × git-churn, not
@@ -120,13 +129,20 @@ Subtle patterns (double-checked locking, etc.): `docs/explanation/concurrency-pa
 ## Application Data
 
 State and logs live in `~/.stapler-squad/`:
-- `logs/staplersquad.log` — main log (JSON-lines, one `slog` record per line); check here for session creation issues. `logs/service.log` is a different file — raw systemd stdout/stderr (startup banners, panics before logging init) — see `docs/how-to/debug-with-logs.md` for the full file breakdown, log-level controls, and volume-reduction guidance. With `STAPLER_SQUAD_INSTANCE=<name>` set, an instance logs to `instances/<name>/logs/staplersquad.log` instead (unset or `shared` uses the path above, unchanged)
+- `logs/staplersquad.log` — main log (JSON-lines, one `slog` record per line); check here for session creation issues. `logs/service.log` is a different file — raw systemd stdout/stderr (startup banners, panics before logging init) — see `docs/how-to/debug-with-logs.md` for the full file breakdown, log-level controls, and volume-reduction guidance.
+  Logs always land next to config/session state — `log.GetConfigDir()` mirrors
+  `config.GetConfigDir()`'s full priority list, so `STAPLER_SQUAD_INSTANCE=<name>`
+  logs to `instances/<name>/logs/staplersquad.log`, an opted-in
+  `STAPLER_SQUAD_WORKSPACE_MODE=true` or a `SwitchDatabase`-set workspace
+  preference logs to `workspaces/<hash-or-name>/logs/staplersquad.log`, and
+  unset/`shared` uses the path above, unchanged. See
+  `docs/reference/state-isolation.md` for the full priority list.
 - `worktrees/` — git worktrees for isolated sessions
 - `config.json`, `sessions.json`
 
 **Key log patterns:** `Starting tmux session`, `timed out waiting for tmux session`, `DoesSessionExist()` polling
 
-State isolation (workspace-based by default): `docs/reference/state-isolation.md`
+State isolation (workspace mode is opt-in, not default): `docs/reference/state-isolation.md`
 External session monitoring (ssq-mux for IDE terminals): `docs/how-to/monitor-external-terminal-sessions.md`
 
 ## Architecture Overview
@@ -283,17 +299,22 @@ General project documentation goes under `docs/` in a Diataxis-style hierarchy
 for the full layout), never under `.claude/docs/`. That directory no longer
 exists — it was migrated wholesale in 2026-08.
 
-AI-authorship code-review checklists and guardrails (the kind of thing that
-used to live in `.claude/rules/*.md`) become project skills under
-`.claude/skills/<slug>/SKILL.md` instead, never a new `.claude/rules/` file —
-that directory no longer exists either. The reason is context cost, not
-organization: a `.claude/rules/*.md` file's entire content loads into context
-every time something references it (including this file's own references),
-while a skill's full body only loads when actually invoked via the Skill
-tool — the skill list itself shows just a one-line description the rest of
-the time. See the `interface-pollution-checklist`, `primitive-obsession-checklist`,
+AI-authorship code-review checklists and guardrails that apply broadly (the
+kind of thing that used to live in `.claude/rules/*.md`) become project
+skills under `.claude/skills/<slug>/SKILL.md` instead. The reason is context
+cost, not organization: an always-loaded `.claude/rules/*.md` file's entire
+content loads into every session regardless of relevance, while a skill's
+full body only loads when actually invoked via the Skill tool — the skill
+list itself shows just a one-line description the rest of the time. See the
+`interface-pollution-checklist`, `primitive-obsession-checklist`,
 `e2e-test-conventions`, `prefer-go-git-over-subshells`, and
 `fix-flaky-tests-dont-defer` skills for the converted examples.
+
+`.claude/rules/*.md` **does** exist again for the narrower case a skill can't
+cover: a guardrail scoped to specific file paths via glob frontmatter
+(`globs: ["session/instance*.go"]`), auto-loaded only when Claude touches a
+matching path rather than every session — the context-cost objection above
+doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 
 ## Reference Documents Index
 
@@ -302,10 +323,12 @@ the time. See the `interface-pollution-checklist`, `primitive-obsession-checklis
 | Profiling / lock-up debugging | `docs/how-to/profile-lockups.md` |
 | OpenTelemetry / Datadog setup | `docs/how-to/enable-opentelemetry.md` |
 | Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `docs/how-to/enable-otel-auto-instrumentation.md` |
+| Enabling pi coding-agent support (flag, extension install, health badge) | `docs/how-to/enable-pi-support.md` |
 | macOS code signing / TCC | `docs/how-to/macos-codesigning.md` |
 | PTY multiplexing (ssq-mux) | `docs/how-to/monitor-external-terminal-sessions.md` |
 | State file isolation / multi-instance | `docs/reference/state-isolation.md` |
 | Tag-based session organization | `docs/reference/tag-organization.md` |
+| Backlog completion gate (AC-completeness check) + synchronous terminal-transition cleanup | `docs/reference/backlog-completion-gate-and-cleanup.md` |
 | Benchmark reference | `docs/reference/benchmarks.md` |
 | Nil safety & static analysis tools | `docs/how-to/run-nil-safety-analysis.md` |
 | Go concurrency patterns | `docs/explanation/concurrency-patterns.md` |
@@ -325,8 +348,12 @@ the time. See the `interface-pollution-checklist`, `primitive-obsession-checklis
 | Package manager: always pnpm in web-app/, never npm/yarn | `docs/how-to/use-pnpm-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `fix-flaky-tests-dont-defer` skill |
+| Prefer deterministic, fast tests over real sleeps/timeouts/t.Setenv fixtures | `deterministic-fast-tests` skill |
+| Test I/O/storage isolation strategy: in-memory DB, config-dir-resolved state directories, `envtest` env helpers | `docs/explanation/test-io-storage-isolation.md` |
+| Read *Instance fields via Snapshot(), not the raw field (avoids actor-write races) | `.claude/rules/instance-lock-free-reads.md` (glob-scoped to `session/instance*.go`) |
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `docs/how-to/expose-slack-interactive-endpoint.md` |
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `docs/how-to/expose-github-webhook-endpoint.md` |
 | Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `docs/how-to/debug-with-logs.md` |
 | `gh pr merge` needs `--repo owner/repo` | `docs/how-to/merge-prs-with-gh-cli.md` |
 | Playwright Chromium install hangs during extraction | `docs/how-to/fix-playwright-chromium-install-stall.md` |
+| Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |

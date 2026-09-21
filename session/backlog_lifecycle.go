@@ -23,11 +23,21 @@ import (
 // Notifier publishes an operator-facing notification. Implemented outside this
 // package (typically a thin adapter over the event bus) since this package cannot
 // import pkg/events directly — pkg/events imports session, so the reverse import
-// would be a cycle. notificationType and priority are int32 values matching
-// sessionv1.NotificationType / sessionv1.NotificationPriority; this package stays
-// free of the proto dependency and just passes the raw values through.
+// would be a cycle. notificationType is an int32 value matching
+// sessionv1.NotificationType; this package stays free of the proto dependency
+// and just passes the raw value through.
+//
+// urgent and important are the Eisenhower-style axes every call site classifies
+// itself on: urgent means time-sensitive right now, important means it matters
+// to a real outcome rather than being routine/transient telemetry. The
+// implementation (EventBusNotifier) derives the stored NotificationPriority
+// from the pair; push delivery (server/push/subscriber.go's shouldNotify)
+// fires only when both are true. Replaced a single ad hoc priority argument
+// (2026-09) because the numeric priority picked at each call site didn't
+// reliably track what actually deserved a push — see the notification
+// push-gate redesign PR for the classification behind each site.
 type Notifier interface {
-	Notify(itemID, title, message string, notificationType, priority int32)
+	Notify(itemID, title, message string, notificationType int32, urgent, important bool)
 }
 
 // QueueDequeuer claims and spawns as many queued (and, by default, "ready" —
@@ -87,6 +97,14 @@ type BacklogLifecycleListener struct {
 	// dequeuerMu guards dequeuer for concurrent Set/get access.
 	dequeuerMu sync.RWMutex
 	dequeuer   QueueDequeuer
+
+	// dashboardBaseURLFnMu guards dashboardBaseURLFn for concurrent Set/get
+	// access. Resolves the base URL used to build a clickable deep link back
+	// to a backlog item from a PR body (see backlogItemLink in
+	// backlog_lifecycle_pr.go); defaults to localhost:8543 and is overridden
+	// at startup via SetDashboardBaseURLFn with the real bound address.
+	dashboardBaseURLFnMu sync.RWMutex
+	dashboardBaseURLFn   func() string
 
 	// oneShotShipRunnerMu guards oneShotShipRunner for concurrent Set/get access.
 	oneShotShipRunnerMu sync.RWMutex
@@ -148,6 +166,10 @@ type BacklogLifecycleListener struct {
 	sessionArchiverMu sync.RWMutex
 	sessionArchiver   SessionArchiver
 
+	// worktreeCleanerMu guards worktreeCleaner for concurrent Set/get access.
+	worktreeCleanerMu sync.RWMutex
+	worktreeCleaner   WorktreeCleaner
+
 	// sessionLivenessCheckerMu guards sessionLivenessChecker for concurrent
 	// Set/get access.
 	sessionLivenessCheckerMu sync.RWMutex
@@ -162,6 +184,13 @@ type BacklogLifecycleListener struct {
 	// reviewSem limits concurrent review gate goroutines.
 	reviewSem chan struct{}
 
+	// customCheckSem limits concurrent custom-gate-check goroutines
+	// (runCustomGateCheck, session/backlog_lifecycle_gates.go), same pattern
+	// as reviewSem above but independent — a transition may spawn both an
+	// automated-review gate and a custom-check gate concurrently, and one
+	// kind saturating its bound must not starve the other.
+	customCheckSem chan struct{}
+
 	// shutdownCtx is cancelled by Shutdown(); used by long-running review gate calls.
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
@@ -175,6 +204,15 @@ type BacklogLifecycleListener struct {
 	// construction and forwarded unchanged into runner — never mutated afterward.
 	pipelineEngine PipelineEngine
 
+	// livenessEngine resolves per-stage/per-pipeline-mode stuck-detection thresholds (Epic 1.4 of
+	// backlog-custom-workflow-stages), replacing the flat maxHeadlessTriageSessionStaleness/
+	// maxWorkSessionStaleness/bounceThreshold/bounceLookback constants at their reconcile* call
+	// sites. Optional — nil (the default for every constructor except
+	// NewBacklogLifecycleListenerWithPool, production's only caller) falls back to each call
+	// site's literal constant, unchanged from pre-Epic-1.4 behavior. Set once at construction,
+	// same pattern as pipelineEngine above — never mutated afterward.
+	livenessEngine LivenessEngine
+
 	// chainReconcilerMu guards chainReconciler for concurrent Set/get access.
 	chainReconcilerMu sync.RWMutex
 	// chainReconciler completes pipeline chain-fires interrupted by a crash
@@ -184,7 +222,71 @@ type BacklogLifecycleListener struct {
 	// via SetChainReconciler.
 	chainReconciler *TriggerChainReconciler
 
+	// gateSatisfactionRepoMu guards gateSatisfactionRepo for concurrent Set/get access.
+	gateSatisfactionRepoMu sync.RWMutex
+	// gateSatisfactionRepo backs reconcileCustomGateChecks' scan for in-flight
+	// custom-check invocations (Epic 2.4, Task 2.4.4c). nil (the default)
+	// makes that sweep a no-op — matches every other optional-dependency
+	// detector's nil-safe convention in this file. Wired via
+	// SetGateSatisfactionRepository.
+	gateSatisfactionRepo GateSatisfactionRepository
+
+	// workflowEngineMu guards workflowEngine for concurrent Set/get access.
+	workflowEngineMu sync.RWMutex
+	// workflowEngine is consulted by transitionHasAutomatedReviewGate (Epic
+	// 2.4, Story 2.4.3) to detect a custom transition's attached
+	// GateKindAutomatedReview gate, generalizing the review-gate spawn
+	// condition beyond the built-in review status literal. nil (the default —
+	// server/dependencies.go does not wire a ConfiguredWorkflowEngine in here
+	// yet) makes transitionHasAutomatedReviewGate degrade to that literal
+	// comparison only, unchanged from pre-Epic-2.4 behavior. Wired via
+	// SetWorkflowEngine.
+	workflowEngine WorkflowEngine
+
 	enabled atomic.Bool
+}
+
+// SetWorkflowEngine wires the WorkflowEngine transitionHasAutomatedReviewGate
+// consults for a custom transition's automated-review gate. nil (the
+// default) is safe — see the field's doc comment.
+func (l *BacklogLifecycleListener) SetWorkflowEngine(engine WorkflowEngine) {
+	l.workflowEngineMu.Lock()
+	defer l.workflowEngineMu.Unlock()
+	l.workflowEngine = engine
+}
+
+// getWorkflowEngine returns the currently-wired WorkflowEngine (nil if none).
+func (l *BacklogLifecycleListener) getWorkflowEngine() WorkflowEngine {
+	l.workflowEngineMu.RLock()
+	defer l.workflowEngineMu.RUnlock()
+	return l.workflowEngine
+}
+
+// SetGateSatisfactionRepository wires the repository reconcileCustomGateChecks
+// (session/backlog_lifecycle_gates.go) scans for in-flight custom-check
+// invocations. nil (the default) is safe — see the field's doc comment.
+func (l *BacklogLifecycleListener) SetGateSatisfactionRepository(repo GateSatisfactionRepository) {
+	l.gateSatisfactionRepoMu.Lock()
+	defer l.gateSatisfactionRepoMu.Unlock()
+	l.gateSatisfactionRepo = repo
+}
+
+// getGateSatisfactionRepo returns the currently-wired GateSatisfactionRepository
+// (nil if none).
+func (l *BacklogLifecycleListener) getGateSatisfactionRepo() GateSatisfactionRepository {
+	l.gateSatisfactionRepoMu.RLock()
+	defer l.gateSatisfactionRepoMu.RUnlock()
+	return l.gateSatisfactionRepo
+}
+
+// SetReviewGateSatisfactionRepository wires the GateSatisfactionRepository the
+// underlying ReviewGateRunner uses to record a configured automated_review
+// gate's terminal outcome (Epic 2.4 follow-up — session/review_gate.go's
+// recordGateSatisfaction). Distinct from SetGateSatisfactionRepository above
+// (which wires reconcileCustomGateChecks' unrelated sweep): the runner holds
+// its own copy of the repository, not a shared reference to this listener's.
+func (l *BacklogLifecycleListener) SetReviewGateSatisfactionRepository(repo GateSatisfactionRepository) {
+	l.runner.SetGateSatisfactionRepository(repo)
 }
 
 // PipelineEngine returns the PipelineEngine injected at construction (nil if none was
@@ -205,6 +307,14 @@ func (l *BacklogLifecycleListener) SetHeadlessPool(p *headless.Pool) {
 	l.poolMu.Lock()
 	defer l.poolMu.Unlock()
 	l.headlessPool = p
+}
+
+// SetDashboardBaseURLFn overrides the base URL used by backlogItemLink to
+// build a deep link back to a backlog item in agent-created PR bodies.
+func (l *BacklogLifecycleListener) SetDashboardBaseURLFn(fn func() string) {
+	l.dashboardBaseURLFnMu.Lock()
+	defer l.dashboardBaseURLFnMu.Unlock()
+	l.dashboardBaseURLFn = fn
 }
 
 // SetAutoReopener wires in the spawner used to automatically reopen items for
@@ -341,7 +451,7 @@ func (l *BacklogLifecycleListener) triggerDequeue(ctx context.Context) {
 		return
 	}
 	if err := d.DequeueNextQueuedItems(ctx); err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] DequeueNextQueuedItems error: %v", err)
+		log.Warn("[BacklogLifecycle] DequeueNextQueuedItems error", "error", err)
 	}
 }
 
@@ -495,9 +605,9 @@ func (l *BacklogLifecycleListener) getNotifier() Notifier {
 }
 
 // notify publishes a best-effort operator notification. No-op if no notifier is wired.
-func (l *BacklogLifecycleListener) notify(itemID, title, message string, notificationType, priority int32) {
+func (l *BacklogLifecycleListener) notify(itemID, title, message string, notificationType int32, urgent, important bool) {
 	if n := l.getNotifier(); n != nil {
-		n.Notify(itemID, title, message, notificationType, priority)
+		n.Notify(itemID, title, message, notificationType, urgent, important)
 	}
 }
 
@@ -516,8 +626,8 @@ func (l *BacklogLifecycleListener) notifyTransitionFailed(itemID, itemTitle, fai
 	l.notify(itemID,
 		"Status update failed after work completed",
 		fmt.Sprintf("%s — %s: %v. The item's status may not reflect reality; check manually.", itemTitle, failureContext, writeErr),
-		7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-		3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+		true, true, // urgent, important — a silent status/reality mismatch is a genuine correctness bug
 	)
 }
 
@@ -536,6 +646,37 @@ func (l *BacklogLifecycleListener) getSessionArchiver() SessionArchiver {
 	l.sessionArchiverMu.RLock()
 	defer l.sessionArchiverMu.RUnlock()
 	return l.sessionArchiver
+}
+
+// SetWorktreeCleaner wires in the cleaner used to synchronously remove git
+// worktrees and archive work/review sessions when an internal transition
+// path (not the manual RPC) drives an item straight to a terminal status.
+// Optional — nil means those paths fall back to the 60s
+// reconcileTerminalItemSessions safety-net sweep, same as before this was
+// wired.
+func (l *BacklogLifecycleListener) SetWorktreeCleaner(c WorktreeCleaner) {
+	l.worktreeCleanerMu.Lock()
+	defer l.worktreeCleanerMu.Unlock()
+	l.worktreeCleaner = c
+}
+
+// getWorktreeCleaner returns the current worktree cleaner under a read lock.
+func (l *BacklogLifecycleListener) getWorktreeCleaner() WorktreeCleaner {
+	l.worktreeCleanerMu.RLock()
+	defer l.worktreeCleanerMu.RUnlock()
+	return l.worktreeCleaner
+}
+
+// cleanupTerminalItemSync invokes the injected WorktreeCleaner, if wired, for
+// itemID — the shared synchronous-cleanup call internal transition paths
+// (transitionBouncingItemToDone, the PR-merge-detected done path) make right
+// after a successful terminal transition so cleanup does not depend solely
+// on the 60s sweep. No-op when unwired (matches WorktreeCleaner's nil-safety
+// contract).
+func (l *BacklogLifecycleListener) cleanupTerminalItemSync(ctx context.Context, itemID string) {
+	if c := l.getWorktreeCleaner(); c != nil {
+		c.CleanupTerminalItem(ctx, itemID)
+	}
 }
 
 // SetSessionLivenessChecker wires the function used by the zombie-session
@@ -563,6 +704,12 @@ func (l *BacklogLifecycleListener) getHeadlessPool() *headless.Pool {
 	return l.headlessPool
 }
 
+func (l *BacklogLifecycleListener) getDashboardBaseURL() string {
+	l.dashboardBaseURLFnMu.RLock()
+	defer l.dashboardBaseURLFnMu.RUnlock()
+	return l.dashboardBaseURLFn()
+}
+
 // Shutdown cancels in-flight review gate calls. Safe to call concurrently.
 func (l *BacklogLifecycleListener) Shutdown() {
 	if l.shutdownCancel != nil {
@@ -571,13 +718,16 @@ func (l *BacklogLifecycleListener) Shutdown() {
 }
 
 // newListenerBase initialises fields common to all BacklogLifecycleListener constructors.
-// pipelineEngine may be nil — see the field's doc comment for the fallback behavior.
-func newListenerBase(storage *Storage, pipelineEngine PipelineEngine) *BacklogLifecycleListener {
+// pipelineEngine and livenessEngine may both be nil — see their field doc comments for the
+// fallback behavior.
+func newListenerBase(storage *Storage, pipelineEngine PipelineEngine, livenessEngine LivenessEngine) *BacklogLifecycleListener {
 	ctx, cancel := context.WithCancel(context.Background())
 	l := &BacklogLifecycleListener{
 		storage:                 storage,
 		pipelineEngine:          pipelineEngine,
+		livenessEngine:          livenessEngine,
 		reviewSem:               make(chan struct{}, maxConcurrentReviewGates),
+		customCheckSem:          make(chan struct{}, maxConcurrentCustomGateChecks),
 		shutdownCtx:             ctx,
 		shutdownCancel:          cancel,
 		prPendingCheckerFactory: defaultPRPendingCheckerFactory,
@@ -585,6 +735,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine) *BacklogLi
 		branchReconciler:        git.MergeMainIntoWorktree,
 		orphanedPRFinder:        defaultOrphanedPRFinder,
 		prByNumberFinder:        defaultPRByNumberFinder,
+		dashboardBaseURLFn:      func() string { return "http://localhost:8543" },
 	}
 	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
 	return l
@@ -594,13 +745,13 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine) *BacklogLi
 // The review gate is disabled (sessionCreator=nil, headlessPool=nil). No PipelineEngine
 // is wired (nil) — callers needing one should use NewBacklogLifecycleListenerWithPool.
 func NewBacklogLifecycleListener(storage *Storage) *BacklogLifecycleListener {
-	return newListenerBase(storage, nil)
+	return newListenerBase(storage, nil, nil)
 }
 
 // NewBacklogLifecycleListenerWithSpawner creates a listener that will spawn a
 // review gate session when a work session exits and SkipReviewGate is false.
 func NewBacklogLifecycleListenerWithSpawner(storage *Storage, spawner ReviewGateSpawner) *BacklogLifecycleListener {
-	l := newListenerBase(storage, nil)
+	l := newListenerBase(storage, nil, nil)
 	l.SetSessionCreator(spawner)
 	return l
 }
@@ -608,9 +759,11 @@ func NewBacklogLifecycleListenerWithSpawner(storage *Storage, spawner ReviewGate
 // NewBacklogLifecycleListenerWithPool creates a listener that uses a headless.Pool
 // for review gate calls instead of spawning a tmux session. pipelineEngine is the
 // shared PipelineEngine instance (Epic 1.5, Story 1.5.1) — pass nil to fall back to
-// the built-in default pipeline for every item.
-func NewBacklogLifecycleListenerWithPool(storage *Storage, pool *headless.Pool, pipelineEngine PipelineEngine) *BacklogLifecycleListener {
-	l := newListenerBase(storage, pipelineEngine)
+// the built-in default pipeline for every item. livenessEngine is the shared
+// LivenessEngine instance (Epic 1.4) — pass nil to fall back to each stuck-detection
+// sweep's literal constant for every item.
+func NewBacklogLifecycleListenerWithPool(storage *Storage, pool *headless.Pool, pipelineEngine PipelineEngine, livenessEngine LivenessEngine) *BacklogLifecycleListener {
+	l := newListenerBase(storage, pipelineEngine, livenessEngine)
 	l.headlessPool = pool
 	return l
 }
@@ -655,11 +808,11 @@ func (l *BacklogLifecycleListener) onSessionStarted(sessionUUID string) {
 		if errors.Is(err, ErrNotFound) {
 			return
 		}
-		log.ErrorLog().Printf("[BacklogLifecycle] GetItemSessionBySessionUUID(%s) error: %v", sessionUUID, err)
+		log.Error("[BacklogLifecycle] GetItemSessionBySessionUUID error", "session", sessionUUID, "error", err)
 		return
 	}
 	if err := l.storage.UpdateItemSessionStarted(ctx, is.ID, time.Now()); err != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] UpdateItemSessionStarted(%s) error: %v", is.ID, err)
+		log.Error("[BacklogLifecycle] UpdateItemSessionStarted error", "item_session", is.ID, "error", err)
 	}
 }
 
@@ -672,7 +825,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		if errors.Is(err, ErrNotFound) {
 			return
 		}
-		log.ErrorLog().Printf("[BacklogLifecycle] GetItemSessionBySessionUUID(%s) error: %v", sessionUUID, err)
+		log.Error("[BacklogLifecycle] GetItemSessionBySessionUUID error", "session", sessionUUID, "error", err)
 		return
 	}
 
@@ -703,7 +856,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	// Record end time for all session roles (triage, review, work).
 	now := time.Now()
 	if err := l.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil { //nolint:silenttransition bookkeeping timestamp; the zombie-session detector (reconcileStuckReviewItems) falls back to SessionLivenessChecker rather than relying solely on EndedAt, so a failed write here doesn't fully hide a dead session
-		log.ErrorLog().Printf("[BacklogLifecycle] UpdateItemSessionEnded(%s) error: %v", is.ID, err)
+		log.Error("[BacklogLifecycle] UpdateItemSessionEnded error", "item_session", is.ID, "error", err)
 	}
 
 	// Review sessions are handled by a dedicated post-verdict path: they don't
@@ -729,19 +882,19 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		// to spawn a fresh work session) — driving our own status transition
 		// here would race it and, per BUG-064, reliably win, silently
 		// discarding that follow-up. Nothing further to do.
-		log.DebugLog().Printf("[BacklogLifecycle] onSessionExited item=%s session=%s: already ended by another code path before this exit event; skipping status transition", is.BacklogItemID, sessionUUID)
+		log.Debug("[BacklogLifecycle] onSessionExited already ended by another code path before this exit event; skipping status transition", "item", is.BacklogItemID, "session", sessionUUID)
 		return
 	}
 
 	// Look up the BacklogItem via storage (no longer an eager-loaded edge).
 	item, err := l.storage.GetBacklogItem(ctx, is.BacklogItemID)
 	if err != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] GetBacklogItem for session %s (item %s): %v", sessionUUID, is.BacklogItemID, err)
+		log.Error("[BacklogLifecycle] GetBacklogItem failed", "session", sessionUUID, "item", is.BacklogItemID, "error", err)
 		return
 	}
 
 	if BacklogStatus(item.Status) != BacklogStatusInProgress {
-		log.DebugLog().Printf("[BacklogLifecycle] item %s is %s (not in_progress); skipping", item.ID, item.Status)
+		log.Debug("[BacklogLifecycle] item is not in_progress; skipping", "item", item.ID, "status", item.Status)
 		return
 	}
 
@@ -756,7 +909,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		ExpectedUpdatedAt: &updatedAt,
 	}
 	if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, TriggeredBySystem); err != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] TransitionBacklogItemStatus item=%s to=%s: %v", item.ID, toStatus, err)
+		log.Error("[BacklogLifecycle] TransitionBacklogItemStatus failed", "item", item.ID, "to", toStatus, "error", err)
 		return
 	}
 
@@ -765,14 +918,14 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	// self-heal sweep's next tick (Task 2.1.5a).
 	l.resolveStuckLogged(ctx, l.storage.repo, item.ID, domain.StuckReasonStaleWork, "onSessionExited")
 
-	log.InfoLog().Printf("[BacklogLifecycle] item %s transitioned to %s (session %s exited)", item.ID, toStatus, sessionUUID)
+	log.Info("[BacklogLifecycle] item transitioned (session exited)", "item", item.ID, "to_status", toStatus, "session", sessionUUID)
 
 	// The item just left in_progress, freeing a WIP slot — dequeue immediately
 	// rather than waiting for the next ReconcileStuck tick (safety-net only).
 	go l.triggerDequeue(context.Background())
 
 	// Spawn review gate if the item moved to review and a review mechanism is configured.
-	if toStatus == BacklogStatusReview && !item.SkipReviewGate && l.getSessionCreator() != nil {
+	if gateContext, ok := l.resolveReviewGateContext(BacklogStatusInProgress, toStatus); ok && !item.SkipReviewGate && l.getSessionCreator() != nil {
 		go func() {
 			// Acquire the bounded semaphore to prevent unbounded goroutine fan-out
 			// when many sessions exit simultaneously.
@@ -782,9 +935,96 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 				return
 			}
 			defer func() { <-l.reviewSem }()
-			l.spawnReviewGate(item, is)
+			l.spawnReviewGate(gateContext, item, is)
 		}()
 	}
+
+	// Spawn a custom/pluggable check gate (Story 2.4.4's follow-up: this was
+	// previously unreachable in production — see gate_custom_check.go's
+	// InvokeCustomGateCheck doc comment) if this transition has one configured.
+	// Independent of the automated-review gate above; a transition may have
+	// either, both, or neither.
+	if gateID, cfg, ok := l.resolveCustomCheckGateContext(BacklogStatusInProgress, toStatus); ok {
+		targetStage := toStatus
+		go func() {
+			select {
+			case l.customCheckSem <- struct{}{}:
+			case <-l.shutdownCtx.Done():
+				return
+			}
+			defer func() { <-l.customCheckSem }()
+			l.runCustomGateCheck(l.shutdownCtx, gateID, cfg, targetStage, item)
+		}()
+	}
+}
+
+// builtInReviewGateContext is the GateContext (session/review_gate.go) passed
+// to every review-gate spawn for the built-in review->pr_pending transition:
+// no persisted TransitionGate backs it (GateID ""), and it always reviews a
+// code diff (RequiresDiff: true) — the same behavior review_gate.go's Run had
+// unconditionally before Story 2.4.3 generalized it to accept a GateContext.
+var builtInReviewGateContext = GateContext{
+	GateID:           "",
+	TargetTransition: BacklogStatusReview,
+	RequiresDiff:     true,
+}
+
+// resolveReviewGateContext resolves the GateContext spawnReviewGate should use
+// for a from->to transition (Epic 2.4, Story 2.4.3's generalization of this
+// call site's old hardcoded `toStatus == BacklogStatusReview` literal; formerly
+// transitionHasAutomatedReviewGate, which only reported a bool and always
+// spawned with builtInReviewGateContext regardless of which gate matched).
+//
+// The built-in review status always resolves to builtInReviewGateContext,
+// unconditionally — never a configured gate's own fields, even when a
+// configured automated_review gate additionally matches this edge: the
+// built-in workflow-stage seed migration (Epic 2.2) does not itself seed an
+// automated_review gate for this edge, and requiring one here would silently
+// stop the review gate from firing for every install that hasn't separately
+// configured a custom graph. This is the zero-regression guarantee Task
+// 2.4.3d's test covers.
+//
+// Only a genuinely custom transition (to != BacklogStatusReview) backed by a
+// wired *ConfiguredWorkflowEngine with a matching GateKindAutomatedReview gate
+// resolves to that gate's own GateID/RequiresDiff/PipelineMode. ok is false
+// when no automated-review gate applies at all — the caller must not spawn a
+// review gate in that case. l.workflowEngine is nil in production until
+// SetWorkflowEngine is called (server/dependencies.go), so today this
+// degrades to the `to == BacklogStatusReview` case only, same as before this
+// generalization.
+func (l *BacklogLifecycleListener) resolveReviewGateContext(from, to BacklogStatus) (GateContext, bool) {
+	if to == BacklogStatusReview {
+		return builtInReviewGateContext, true
+	}
+	cwe, ok := l.getWorkflowEngine().(*ConfiguredWorkflowEngine)
+	if !ok {
+		return GateContext{}, false
+	}
+	gateID, cfg, found := cwe.ResolveAutomatedReviewGateContext(from, to)
+	if !found {
+		return GateContext{}, false
+	}
+	return GateContext{
+		GateID:           gateID,
+		TargetTransition: to,
+		RequiresDiff:     cfg.RequiresDiff,
+		PipelineMode:     cfg.PipelineMode,
+	}, true
+}
+
+// resolveCustomCheckGateContext resolves the GateID+CustomCheckConfig for a
+// GateKindCustom gate configured on the from->to edge (Epic 2.4, Story
+// 2.4.4's follow-up — see gate_custom_check.go's InvokeCustomGateCheck doc
+// comment for why this previously had no production call site). Mirrors
+// resolveReviewGateContext's shape for the sibling stateful gate kind. ok is
+// false when no WorkflowEngine is wired, it isn't a *ConfiguredWorkflowEngine,
+// or the edge carries no custom-check gate.
+func (l *BacklogLifecycleListener) resolveCustomCheckGateContext(from, to BacklogStatus) (uuid.UUID, CustomCheckConfig, bool) {
+	cwe, ok := l.getWorkflowEngine().(*ConfiguredWorkflowEngine)
+	if !ok {
+		return uuid.Nil, CustomCheckConfig{}, false
+	}
+	return cwe.ResolveCustomCheckGateContext(from, to)
 }
 
 // BackfillStuckStates seeds durable BacklogStuckState rows for items that are
@@ -823,7 +1063,7 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 	// nothing active in flight.
 	reviewItems, err := er.FindStuckReviewItems(ctx)
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] BackfillStuckStates FindStuckReviewItems error: %v", err)
+		log.Warn("[BacklogLifecycle] BackfillStuckStates FindStuckReviewItems error", "error", err)
 	} else {
 		for _, item := range reviewItems {
 			if l.backfillMarkAndNotify(ctx, er, item.ID.String(), domain.StuckReasonAbandonedReview, BacklogStatusReview,
@@ -839,12 +1079,12 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 		Statuses: []string{string(BacklogStatusInProgress)},
 	})
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] BackfillStuckStates ListBacklogItems error: %v", err)
+		log.Warn("[BacklogLifecycle] BackfillStuckStates ListBacklogItems error", "error", err)
 	} else {
 		for _, item := range inProgressItems {
 			sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 			if sessErr != nil {
-				log.WarningLog().Printf("[BacklogLifecycle] BackfillStuckStates ListItemSessions item=%s: %v", item.ID, sessErr)
+				log.Warn("[BacklogLifecycle] BackfillStuckStates ListItemSessions failed", "item", item.ID, "error", sessErr)
 				continue
 			}
 			var active *ItemSessionSummary
@@ -871,7 +1111,7 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 		}
 	}
 
-	log.InfoLog().Printf("[BacklogLifecycle] BackfillStuckStates: seeded %d stuck row(s) at startup", seeded)
+	log.Info("[BacklogLifecycle] BackfillStuckStates: seeded stuck row(s) at startup", "seeded", seeded)
 }
 
 // backfillMarkAndNotify marks a stuck row and immediately pre-sets
@@ -882,14 +1122,14 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 func (l *BacklogLifecycleListener) backfillMarkAndNotify(ctx context.Context, er *EntRepository, itemID string, reason domain.StuckReason, expectedStatus BacklogStatus, stuckContext string) bool {
 	applied, err := er.MarkStuck(ctx, itemID, reason, expectedStatus, stuckContext)
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] BackfillStuckStates MarkStuck item=%s reason=%s: %v", itemID, reason, err)
+		log.Warn("[BacklogLifecycle] BackfillStuckStates MarkStuck failed", "item", itemID, "reason", reason, "error", err)
 		return false
 	}
 	if !applied {
 		return false
 	}
 	if _, notifyErr := er.MarkStuckNotified(ctx, itemID, reason); notifyErr != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] BackfillStuckStates MarkStuckNotified item=%s reason=%s: %v", itemID, reason, notifyErr)
+		log.Warn("[BacklogLifecycle] BackfillStuckStates MarkStuckNotified failed", "item", itemID, "reason", reason, "error", notifyErr)
 	}
 	return true
 }
@@ -903,7 +1143,7 @@ func (l *BacklogLifecycleListener) backfillMarkAndNotify(ctx context.Context, er
 func (l *BacklogLifecycleListener) runStuckDetector(name string, okNames, panickedNames *[]string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] stuck detector %q panicked (recovered): %v", name, r)
+			log.Warn("[BacklogLifecycle] stuck detector panicked (recovered)", "detector", name, "recovered", r)
 			*panickedNames = append(*panickedNames, name)
 			return
 		}
@@ -922,13 +1162,13 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	er := l.storage.repo
 	n, err := er.ReconcileStuckItems(ctx)
 	if err != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] ReconcileStuckItems error: %v", err)
+		log.Error("[BacklogLifecycle] ReconcileStuckItems error", "error", err)
 		return
 	}
 	if n > 0 {
-		log.InfoLog().Printf("[BacklogLifecycle] ReconcileStuckItems: transitioned %d stuck items to review", n)
+		log.Info("[BacklogLifecycle] ReconcileStuckItems: transitioned stuck items to review", "count", n)
 	} else {
-		log.DebugLog().Printf("[BacklogLifecycle] ReconcileStuckItems: no stuck items found")
+		log.Debug("[BacklogLifecycle] ReconcileStuckItems: no stuck items found")
 	}
 
 	// Re-spawn review gates for items stuck in "review" with no review session.
@@ -938,7 +1178,7 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	if l.getSessionCreator() != nil {
 		items, gateErr := er.FindReviewItemsWithoutGate(ctx)
 		if gateErr != nil {
-			log.ErrorLog().Printf("[BacklogLifecycle] FindReviewItemsWithoutGate error: %v", gateErr)
+			log.Error("[BacklogLifecycle] FindReviewItemsWithoutGate error", "error", gateErr)
 		} else {
 			for _, item := range items {
 				var workSession *ItemSessionSummary
@@ -947,10 +1187,10 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 					workSession = &s
 				}
 				if workSession == nil {
-					log.DebugLog().Printf("[BacklogLifecycle] ReconcileStuckReviewGates: item %s has no work session, skipping", item.ID)
+					log.Debug("[BacklogLifecycle] ReconcileStuckReviewGates: item has no work session, skipping", "item", item.ID)
 					continue
 				}
-				log.InfoLog().Printf("[BacklogLifecycle] ReconcileStuckReviewGates: re-spawning review gate for item %s", item.ID)
+				log.Info("[BacklogLifecycle] ReconcileStuckReviewGates: re-spawning review gate", "item", item.ID)
 				itemData := backlogItemToData(item)
 				isCopy := *workSession
 				go func(itemCopy *BacklogItemData, isCopy ItemSessionSummary) {
@@ -960,7 +1200,17 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 						return
 					}
 					defer func() { <-l.reviewSem }()
-					l.spawnReviewGate(itemCopy, isCopy)
+					// itemCopy.Status is already "review" here (FindReviewItemsWithoutGate's
+					// query scope), so resolveReviewGateContext's to==BacklogStatusReview
+					// branch always applies — this always resolves to
+					// builtInReviewGateContext, routed through the same resolver as
+					// onSessionExited for a single source of truth rather than a second
+					// hardcoded reference to that variable.
+					gateContext, ok := l.resolveReviewGateContext(BacklogStatus(itemCopy.Status), BacklogStatusReview)
+					if !ok {
+						gateContext = builtInReviewGateContext
+					}
+					l.spawnReviewGate(gateContext, itemCopy, isCopy)
 				}(&itemData, isCopy)
 			}
 		}
@@ -970,9 +1220,9 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// pr_url — otherwise permanently invisible to FindPRPendingItems' PrNumberGT(0)
 	// filter below, so they'd never get polled. See BackfillMissingPRNumbers doc.
 	if n, backfillErr := er.BackfillMissingPRNumbers(ctx); backfillErr != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] BackfillMissingPRNumbers error: %v", backfillErr)
+		log.Error("[BacklogLifecycle] BackfillMissingPRNumbers error", "error", backfillErr)
 	} else if n > 0 {
-		log.InfoLog().Printf("[BacklogLifecycle] BackfillMissingPRNumbers: backfilled pr_number for %d item(s)", n)
+		log.Info("[BacklogLifecycle] BackfillMissingPRNumbers: backfilled pr_number", "count", n)
 	}
 
 	// Durable stuck-reason detectors, each panic-isolated (Story 2.1.5e) so one
@@ -1079,6 +1329,15 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.reconcileOrphanedTriageRemediation(ctx, er)
 	})
 
+	// Flag a custom-transition gate check (Epic 2.4, Task 2.4.4c) whose
+	// invocation has been open longer than its bound LivenessDefinition's
+	// StalenessThreshold — the same LivenessEngine-consulting sweep pattern as
+	// reconcileOrphanedTriageItems above, applied to InvokeCustomGateCheck's
+	// in-flight GateSatisfactionRecord rows instead of ItemSession rows.
+	l.runStuckDetector("gate_timeout", &okNames, &panickedNames, func() {
+		l.reconcileCustomGateChecks(ctx, er)
+	})
+
 	// Flag queued items DequeueNextQueuedItems' planning gate refuses to ever
 	// claim (plan not approved, skip_planning not set) — otherwise silent
 	// forever except for a per-tick WARNING log. See reconcilePlanNotApprovedItems'
@@ -1177,7 +1436,7 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	if countErr == nil {
 		openCount = len(openRows)
 	}
-	log.InfoLog().Printf("[BacklogLifecycle] stuck sweep tick: detectors ok=%v panicked=%v openRows=%d", okNames, panickedNames, openCount)
+	log.Info("[BacklogLifecycle] stuck sweep tick", "ok", okNames, "panicked", panickedNames, "open_rows", openCount)
 }
 
 // resolveStuckLogged resolves an open BacklogStuckState row for (itemID, reason),
@@ -1189,7 +1448,7 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 // sites for the same reason within one function, e.g. "ReconcilePRPending/closed").
 func (l *BacklogLifecycleListener) resolveStuckLogged(ctx context.Context, er *EntRepository, itemID string, reason domain.StuckReason, caller string) {
 	if _, err := er.ResolveStuck(ctx, itemID, reason); err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] %s ResolveStuck(%s) item=%s: %v", caller, reason, itemID, err)
+		log.Warn("[BacklogLifecycle] ResolveStuck failed", "caller", caller, "reason", reason, "item", itemID, "error", err)
 	}
 }
 
@@ -1268,7 +1527,7 @@ func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Con
 		},
 	})
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] refreshWorkSessionGitActivity list error: %v", err)
+		log.Warn("[BacklogLifecycle] refreshWorkSessionGitActivity list error", "error", err)
 		return
 	}
 
@@ -1278,7 +1537,7 @@ func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Con
 		}
 		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 		if sessErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] refreshWorkSessionGitActivity ListItemSessions item=%s: %v", item.ID, sessErr)
+			log.Warn("[BacklogLifecycle] refreshWorkSessionGitActivity ListItemSessions failed", "item", item.ID, "error", sessErr)
 			continue
 		}
 		var lastWork *ItemSessionSummary
@@ -1305,7 +1564,7 @@ func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Con
 
 		info, infoErr := git.CommitInfo(item.RepoPath, head)
 		if infoErr != nil {
-			log.DebugLog().Printf("[BacklogLifecycle] refreshWorkSessionGitActivity CommitInfo item=%s sha=%s: %v", item.ID, head, infoErr)
+			log.Debug("[BacklogLifecycle] refreshWorkSessionGitActivity CommitInfo failed", "item", item.ID, "sha", head, "error", infoErr)
 			continue
 		}
 
@@ -1314,16 +1573,16 @@ func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Con
 			if shipped, _, listErr := git.ListShippedCommits(ctx, item.RepoPath, lastWork.BaseCommitSha, head); listErr == nil {
 				commitCount = len(shipped)
 			} else {
-				log.DebugLog().Printf("[BacklogLifecycle] refreshWorkSessionGitActivity ListShippedCommits item=%s: %v", item.ID, listErr)
+				log.Debug("[BacklogLifecycle] refreshWorkSessionGitActivity ListShippedCommits failed", "item", item.ID, "error", listErr)
 			}
 		}
 
 		if updErr := l.storage.UpdateItemSessionGitActivity(ctx, lastWork.ID, head, info.Summary, info.AuthorAt, commitCount); updErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] refreshWorkSessionGitActivity update item=%s session=%s: %v", item.ID, lastWork.SessionUUID, updErr)
+			log.Warn("[BacklogLifecycle] refreshWorkSessionGitActivity update failed", "item", item.ID, "session", lastWork.SessionUUID, "error", updErr)
 			continue
 		}
-		log.DebugLog().Printf("[BacklogLifecycle] refreshWorkSessionGitActivity item=%s session=%s: last commit %s → %s (%d since base)",
-			item.ID, lastWork.SessionUUID, lastWork.LastCommitSha, head, commitCount)
+		log.Debug("[BacklogLifecycle] refreshWorkSessionGitActivity: last commit updated",
+			"item", item.ID, "session", lastWork.SessionUUID, "from_sha", lastWork.LastCommitSha, "to_sha", head, "commit_count", commitCount)
 	}
 }
 
@@ -1354,7 +1613,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 		Statuses: []string{string(BacklogStatusQueued)},
 	})
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems list error: %v", err)
+		log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems list error", "error", err)
 		return
 	}
 
@@ -1374,7 +1633,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 		// same item under two differently-worded stuck reasons at once.
 		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 		if sessErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems ListItemSessions item=%s: %v", item.ID, sessErr)
+			log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems ListItemSessions failed", "item", item.ID, "error", sessErr)
 			// Fail open (still flag as plan-not-approved below) — losing session
 			// visibility for one tick shouldn't suppress the pre-existing signal.
 		} else if latest := latestTriageSession(sessions); latest != nil && latest.EndedAt != nil && latest.TriageResult == "" {
@@ -1384,7 +1643,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, BacklogStatusQueued,
 			"queued item blocked by DequeueNextQueuedItems' planning gate (plan not approved, skip_planning not set)")
 		if markErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems MarkStuck item=%s: %v", item.ID, markErr)
+			log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems MarkStuck failed", "item", item.ID, "error", markErr)
 			continue
 		}
 		if !applied {
@@ -1392,7 +1651,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 		}
 		rows, findErr := er.FindOpenStuckStates(ctx)
 		if findErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems FindOpenStuckStates item=%s: %v", item.ID, findErr)
+			log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems FindOpenStuckStates failed", "item", item.ID, "error", findErr)
 			continue
 		}
 		row, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonPlanNotApproved)
@@ -1400,15 +1659,15 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 			continue
 		}
 
-		log.WarningLog().Printf("[BacklogLifecycle] item %s queued but blocked by unapproved plan", item.ID)
+		log.Warn("[BacklogLifecycle] item queued but blocked by unapproved plan", "item", item.ID)
 		l.notify(item.ID,
 			"Queued item blocked by unapproved plan",
 			fmt.Sprintf("%s — this item cannot be dequeued until its plan is approved (or skip_planning is set). Approve the plan or update the item to unblock it.", item.Title),
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+			8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			false, true, // urgent, important — blocks progress but is a standing state, not time-critical
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonPlanNotApproved); notifyErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems MarkStuckNotified item=%s: %v", item.ID, notifyErr)
+			log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems MarkStuckNotified failed", "item", item.ID, "error", notifyErr)
 		}
 	}
 	// No resolve pass needed here: selfHealStuck (status-anchored) clears this
@@ -1448,7 +1707,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, sessionUUID, repoPath string) string {
 	wt, err := l.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] resolveLatestWorkCommit: no worktree data for session %s: %v", sessionUUID, err)
+		log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: no worktree data for session", "session", sessionUUID, "error", err)
 		return ""
 	}
 	if wt.WorktreePath != "" {
@@ -1460,7 +1719,7 @@ func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, 
 					return sha
 				}
 			} else if branchErr == nil {
-				log.WarningLog().Printf("[BacklogLifecycle] resolveLatestWorkCommit: worktree path %s now holds branch %q, not session's %q (path recycled?) — falling back to repo-wide branch lookup", wt.WorktreePath, branch, wt.BranchName)
+				log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: worktree path now holds a different branch than the session's (path recycled?) — falling back to repo-wide branch lookup", "worktree_path", wt.WorktreePath, "branch", branch, "expected_branch", wt.BranchName)
 			}
 		}
 	}
@@ -1471,7 +1730,7 @@ func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, 
 	cmd.Dir = repoPath
 	out, revErr := cmd.Output()
 	if revErr != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] resolveLatestWorkCommit: rev-parse %s in %s: %v", wt.BranchName, repoPath, revErr)
+		log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: rev-parse failed", "branch", wt.BranchName, "repo_path", repoPath, "error", revErr)
 		return ""
 	}
 	return strings.TrimSpace(string(out))
@@ -1509,6 +1768,7 @@ func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Cont
 	if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); err != nil {
 		return fmt.Errorf("review->done: %w", err)
 	}
+	l.cleanupTerminalItemSync(ctx, item.ID)
 	return nil
 }
 
@@ -1532,12 +1792,29 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		Statuses: []string{string(BacklogStatusInProgress), string(BacklogStatusReview)},
 	})
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems list error: %v", err)
+		log.Warn("[BacklogLifecycle] reconcileBouncingItems list error", "error", err)
 		return
 	}
 
-	since := time.Now().Add(-bounceLookback)
 	for _, item := range items {
+		// Resolve this item's Shape-C liveness definition (CycleThreshold/CycleLookback)
+		// per item, inside the loop — a per-mode override means these can legitimately
+		// differ between items in the same tick (Epic 1.4, Story 1.4.3). Keyed to
+		// BacklogStatusReview, NOT BacklogStatusInProgress: DefaultLivenessEngine's table
+		// (Epic 1.2) already occupies BacklogStatusInProgress with the Shape-B stale-work
+		// definition, and a LivenessDefinition is a tagged union with exactly one Kind per
+		// stage — see this file's Epic 1.4 plan-correction note in
+		// project_plans/backlog-custom-workflow-stages/implementation/plan.md's Story 1.4.3.
+		cycleThreshold := bounceThreshold
+		cycleLookback := bounceLookback
+		if l.livenessEngine != nil {
+			if def, defErr := l.livenessEngine.LivenessFor(BacklogStatusReview, PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+				cycleThreshold = def.CycleThreshold
+				cycleLookback = def.CycleLookback
+			}
+		}
+		since := time.Now().Add(-cycleLookback)
+
 		// Before treating this item as failing, check whether its linked PR
 		// already merged — including a PR merged manually, outside the app's
 		// own ship flow (allow_auto_merge is disabled at the repo-settings
@@ -1549,9 +1826,9 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		// rather than inventing a new one.
 		if item.PrNumber > 0 && item.RepoPath != "" {
 			checker := l.getPRPendingCheckerFactory()(item.RepoPath)
-			merged, mergedErr := checker.IsPRMerged(item.PrNumber)
+			merged, mergedErr := checker.IsPRMerged(ctx, item.PrNumber)
 			if mergedErr != nil {
-				log.DebugLog().Printf("[BacklogLifecycle] reconcileBouncingItems IsPRMerged item=%s pr=%d: %v", item.ID, item.PrNumber, mergedErr)
+				log.Debug("[BacklogLifecycle] reconcileBouncingItems IsPRMerged failed", "item", item.ID, "pr", item.PrNumber, "error", mergedErr)
 			} else if merged {
 				// Story 6 guard (adversarial-review.md's Blocker): re-verify,
 				// via a live GitHub lookup, that PR #item.PrNumber's head
@@ -1560,18 +1837,18 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 				// alone. Fails closed identically to
 				// verifyPRAssociationForFixSpawn's own contract.
 				if !l.verifyPRAssociationForFixSpawn(ctx, item.ID, item.RepoPath, item.PrNumber) {
-					log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems item=%s: PR #%d head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber)
+					log.Warn("[BacklogLifecycle] reconcileBouncingItems: PR head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", "item", item.ID, "pr", item.PrNumber)
 					continue
 				}
 				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: PR #%d for this item is confirmed merged on GitHub, so the item's rework cycle is treated as converged rather than bouncing.", item.PrNumber)
 				if transErr := l.transitionBouncingItemToDone(ctx, item, summary); transErr != nil {
-					log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems done transition item=%s: %v", item.ID, transErr)
+					log.Warn("[BacklogLifecycle] reconcileBouncingItems done transition failed", "item", item.ID, "error", transErr)
 					// The PR is already confirmed merged — the item is left
 					// bouncing between in_progress/review with nothing else
 					// surfacing this until the next tick retries it.
 					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("PR #%d was confirmed merged but the item's transition to done failed", item.PrNumber), transErr)
 				} else {
-					log.InfoLog().Printf("[BacklogLifecycle] reconcileBouncingItems item=%s → done (PR #%d already merged)", item.ID, item.PrNumber)
+					log.Info("[BacklogLifecycle] reconcileBouncingItems: item → done (PR already merged)", "item", item.ID, "pr", item.PrNumber)
 					// Best-effort: clear any bouncing (+ bounce_cap_exhausted,
 					// Signal 2) row from a prior tick immediately, rather than
 					// waiting for the next selfHealStuck sweep to notice the
@@ -1590,12 +1867,12 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			if sha, shipped := l.mostRecentWorkCommitShippedToMain(ctx, item.ID, item.RepoPath); shipped {
 				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: this item's most recent work-session commit (%s) is confirmed shipped to %s without ever going through a PR, so the item's rework cycle is treated as converged rather than bouncing.", sha, bounceMainBranch)
 				if transErr := l.transitionBouncingItemToDone(ctx, item, summary); transErr != nil {
-					log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems done transition (shipped without PR) item=%s: %v", item.ID, transErr)
+					log.Warn("[BacklogLifecycle] reconcileBouncingItems done transition (shipped without PR) failed", "item", item.ID, "error", transErr)
 					// The commit is already confirmed shipped to main — same
 					// silent-stranding risk as the merged-PR branch above.
 					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("commit %s was confirmed shipped to %s but the item's transition to done failed", sha, bounceMainBranch), transErr)
 				} else {
-					log.InfoLog().Printf("[BacklogLifecycle] reconcileBouncingItems item=%s → done (commit %s shipped to %s without a PR)", item.ID, sha, bounceMainBranch)
+					log.Info("[BacklogLifecycle] reconcileBouncingItems: item → done (commit shipped without a PR)", "item", item.ID, "commit", sha, "branch", bounceMainBranch)
 					// Best-effort: clear any bouncing (+ bounce_cap_exhausted,
 					// Signal 2) row from a prior tick — see the identical
 					// comment at the merged-PR branch above.
@@ -1607,7 +1884,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 
 		count, countErr := er.CountReviewCyclesSince(ctx, item.ID, since)
 		if countErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems CountReviewCyclesSince item=%s: %v", item.ID, countErr)
+			log.Warn("[BacklogLifecycle] reconcileBouncingItems CountReviewCyclesSince failed", "item", item.ID, "error", countErr)
 			continue
 		}
 		// Fetch the full most-recent verdict (outcome + reviewer summary), not
@@ -1623,7 +1900,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		// verdict either would.
 		recentVerdicts, verdictErr := er.GetRecentReviewVerdictSummaries(ctx, item.ID, 1)
 		if verdictErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems GetRecentReviewVerdictSummaries item=%s: %v", item.ID, verdictErr)
+			log.Warn("[BacklogLifecycle] reconcileBouncingItems GetRecentReviewVerdictSummaries failed", "item", item.ID, "error", verdictErr)
 		}
 		var latestOutcome, latestSummary string
 		if len(recentVerdicts) > 0 {
@@ -1632,11 +1909,11 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		}
 		hasPass := latestOutcome == string(ReviewOutcomePass)
 
-		if !isBouncing(count, hasPass) {
+		if !isBouncing(count, cycleThreshold, hasPass) {
 			continue
 		}
 
-		reasonDetail := fmt.Sprintf("bounced in_progress<->review %d times in the last %s with no PASS verdict", count, bounceLookback)
+		reasonDetail := fmt.Sprintf("bounced in_progress<->review %d times in the last %s with no PASS verdict", count, cycleLookback)
 		if latestOutcome != "" {
 			// sanitizeField at 500 matches the existing convention for
 			// rendering a ReviewVerdict.Summary into operator/agent-facing
@@ -1646,7 +1923,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatus(item.Status), reasonDetail)
 		if markErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems MarkStuck item=%s: %v", item.ID, markErr)
+			log.Warn("[BacklogLifecycle] reconcileBouncingItems MarkStuck failed", "item", item.ID, "error", markErr)
 			continue
 		}
 		if !applied {
@@ -1654,26 +1931,26 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		}
 		rows, findErr := er.FindOpenStuckStates(ctx)
 		if findErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems FindOpenStuckStates item=%s: %v", item.ID, findErr)
+			log.Warn("[BacklogLifecycle] reconcileBouncingItems FindOpenStuckStates failed", "item", item.ID, "error", findErr)
 			continue
 		}
 		row, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonBouncing)
 		if !ok || row.NotifiedAt != nil {
 			continue
 		}
-		log.WarningLog().Printf("[BacklogLifecycle] item %s bouncing (%d cycles in %s, no PASS)", item.ID, count, bounceLookback)
-		notifyBody := fmt.Sprintf("%s — bounced between in_progress and review %d times in the last %s with no PASS verdict. It may be stuck in a non-converging rework loop.", item.Title, count, bounceLookback)
+		log.Warn("[BacklogLifecycle] item bouncing, no PASS", "item", item.ID, "cycles", count, "lookback", cycleLookback)
+		notifyBody := fmt.Sprintf("%s — bounced between in_progress and review %d times in the last %s with no PASS verdict. It may be stuck in a non-converging rework loop.", item.Title, count, cycleLookback)
 		if latestOutcome != "" {
 			notifyBody = fmt.Sprintf("%s Most recent verdict: %s — %s", notifyBody, latestOutcome, sanitizeField(latestSummary, 500))
 		}
 		l.notify(item.ID,
 			"Item is thrashing between work and review",
 			notifyBody,
-			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+			8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			false, true, // urgent, important — non-converging loop matters, but not a drop-everything alert
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonBouncing); notifyErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileBouncingItems MarkStuckNotified item=%s: %v", item.ID, notifyErr)
+			log.Warn("[BacklogLifecycle] reconcileBouncingItems MarkStuckNotified failed", "item", item.ID, "error", notifyErr)
 		}
 	}
 }
@@ -1751,11 +2028,11 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRepository) {
 	open, err := er.FindOpenStuckStates(ctx)
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] selfHealStuck FindOpenStuckStates error: %v", err)
+		log.Warn("[BacklogLifecycle] selfHealStuck FindOpenStuckStates error", "error", err)
 		return
 	}
 	for _, row := range open {
-		if row.ItemStatus == BacklogStatusDone || row.ItemStatus == BacklogStatusArchived {
+		if IsTerminalStatus(row.ItemStatus) {
 			// Blanket terminal rule — see doc comment above. An item that has
 			// truly finished has nothing left needing operator attention,
 			// regardless of which reason its stuck row is for.
@@ -1847,7 +2124,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 func (l *BacklogLifecycleListener) reconcileMultiReasonEscalation(ctx context.Context, er *EntRepository) {
 	open, err := er.FindOpenStuckStates(ctx)
 	if err != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] reconcileMultiReasonEscalation FindOpenStuckStates error: %v", err)
+		log.Warn("[BacklogLifecycle] reconcileMultiReasonEscalation FindOpenStuckStates error", "error", err)
 		return
 	}
 
@@ -1933,9 +2210,9 @@ func (l *BacklogLifecycleListener) deescalateMultiReasonIfNeeded(ctx context.Con
 	}
 	if hasExistingRow {
 		if _, resolveErr := er.ResolveStuck(ctx, itemID, domain.StuckReasonMultipleReasons); resolveErr != nil {
-			log.WarningLog().Printf("[BacklogLifecycle] reconcileMultiReasonEscalation ResolveStuck item=%s: %v", itemID, resolveErr)
+			log.Warn("[BacklogLifecycle] reconcileMultiReasonEscalation ResolveStuck failed", "item", itemID, "error", resolveErr)
 		} else {
-			log.InfoLog().Printf("[BacklogLifecycle] de-escalated item=%s open_reasons=%d", itemID, openReasonsCount)
+			log.Info("[BacklogLifecycle] de-escalated", "item", itemID, "open_reasons", openReasonsCount)
 		}
 	}
 	return true
@@ -1961,11 +2238,11 @@ func (l *BacklogLifecycleListener) notifyMultiReasonEscalationIfReady(ctx contex
 	l.notify(itemID,
 		"Multiple stuck reasons open",
 		fmt.Sprintf("%s — %d stuck reasons currently open simultaneously (%s). This combination is a stronger signal than any single reason alone.", itemTitle, nonEscalationCount, contextString),
-		7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-		4, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT
+		7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+		true, true, // urgent, important
 	)
 	if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonMultipleReasons); notifyErr != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuckNotified item=%s: %v", itemID, notifyErr)
+		log.Warn("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuckNotified failed", "item", itemID, "error", notifyErr)
 	}
 }
 
@@ -1993,19 +2270,19 @@ func (l *BacklogLifecycleListener) reconcileMultiReasonEscalationForItem(ctx con
 
 	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonMultipleReasons, rows[0].ItemStatus, contextString)
 	if markErr != nil {
-		log.WarningLog().Printf("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuck item=%s: %v", itemID, markErr)
+		log.Warn("[BacklogLifecycle] reconcileMultiReasonEscalation MarkStuck failed", "item", itemID, "error", markErr)
 		return
 	}
 	if !applied {
 		return
 	}
-	log.InfoLog().Printf("[BacklogLifecycle] escalated item=%s open_reasons=%d", itemID, len(nonEscalation))
+	log.Info("[BacklogLifecycle] escalated", "item", itemID, "open_reasons", len(nonEscalation))
 
 	l.notifyMultiReasonEscalationIfReady(ctx, er, itemID, rows[0].ItemTitle, contextString, len(nonEscalation), existingRow, hasExistingRow)
 }
 
 // hasActiveSession reports whether any of the provided ItemSessions is an
-// open (not yet ended) work- or review-role session. Package-local
+// open (not yet ended) work-, review-, or Jules-role session. Package-local
 // equivalent of server/services' hasActiveWorkSession/hasActiveReviewSession
 // (not reusable directly — that package imports session, not the other way
 // around) used by recoverDriftedPRItem/reconcileDriftedPRItems to avoid
@@ -2017,5 +2294,5 @@ func hasActiveSession(sessions []ItemSessionSummary) bool {
 			return true
 		}
 	}
-	return false
+	return HasActiveJulesSession(sessions)
 }

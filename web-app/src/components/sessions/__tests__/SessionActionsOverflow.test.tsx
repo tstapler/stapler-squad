@@ -199,6 +199,63 @@ describe("SessionActionsOverflow", () => {
     });
   });
 
+  describe("retry now flow (AC6)", () => {
+    it("omits Retry now menu item for a running session with no pending retry", () => {
+      renderOverflow({ onRetryNow: jest.fn() });
+      openMenu();
+      expect(screen.queryByRole("menuitem", { name: /retry.*now/i })).not.toBeInTheDocument();
+    });
+
+    it("shows Retry now menu item when session is PERMANENTLY_FAILED", () => {
+      const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
+      renderOverflow({ session, onRetryNow: jest.fn() });
+      openMenu();
+      expect(screen.getByRole("menuitem", { name: /retry.*now/i })).toBeInTheDocument();
+    });
+
+    it("shows Retry now menu item mid-backoff-wait (nextRetryAt set, not yet permanently failed)", () => {
+      const session = makeSession({ nextRetryAt: { seconds: BigInt(Math.floor(Date.now() / 1000) + 60), nanos: 0 } });
+      renderOverflow({ session, onRetryNow: jest.fn() });
+      openMenu();
+      expect(screen.getByRole("menuitem", { name: /retry.*now/i })).toBeInTheDocument();
+    });
+
+    it("shows primary Retry now button when showPrimaryAction=true and session is PERMANENTLY_FAILED", () => {
+      const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
+      renderOverflow({ session, showPrimaryAction: true, onRetryNow: jest.fn() });
+      expect(screen.getByRole("button", { name: /retry permanently-failed session/i })).toBeInTheDocument();
+    });
+
+    it("shows retry confirmation dialog when Retry now clicked", () => {
+      const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
+      renderOverflow({ session, onRetryNow: jest.fn() });
+      openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: /retry.*now/i }));
+      expect(screen.getByRole("dialog", { name: /retry session/i })).toBeInTheDocument();
+    });
+
+    it("calls onRetryNow with session id when confirmed, including from PERMANENTLY_FAILED", async () => {
+      const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
+      const onRetryNow = jest.fn().mockResolvedValue(true);
+      renderOverflow({ session, onRetryNow });
+      openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: /retry.*now/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^retry now$/i }));
+      await waitFor(() => expect(onRetryNow).toHaveBeenCalledWith("session-1"));
+    });
+
+    it("surfaces an error and keeps the dialog open when onRetryNow resolves false", async () => {
+      const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
+      const onRetryNow = jest.fn().mockResolvedValue(false);
+      renderOverflow({ session, onRetryNow });
+      openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: /retry.*now/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^retry now$/i }));
+      await waitFor(() => expect(screen.getByText(/failed to retry session/i)).toBeInTheDocument());
+      expect(screen.getByRole("dialog", { name: /retry session/i })).toBeInTheDocument();
+    });
+  });
+
   describe("clear conversation", () => {
     it("calls onClearConversationState with session id when clicked", () => {
       const onClear = jest.fn().mockResolvedValue(true);

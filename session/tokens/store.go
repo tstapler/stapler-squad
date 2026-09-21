@@ -46,7 +46,7 @@ type TokenStore struct {
 
 	// subscribers receive notifications when the store is updated.
 	subsMu sync.RWMutex
-	subs   []chan struct{}
+	subs   []chan *ParseResult
 
 	cancelFunc context.CancelFunc
 }
@@ -126,10 +126,12 @@ func (ts *TokenStore) IsLoading() bool {
 	return ts.isLoadingVal > 0
 }
 
-// Subscribe returns a channel that receives a struct{} whenever the store is updated.
+// Subscribe returns a channel that receives the changed file's *ParseResult
+// whenever the store is updated by a single-file reparse, or nil when the
+// initial directory walk completes.
 // The caller should drain the channel promptly to avoid blocking notifications.
-func (ts *TokenStore) Subscribe() <-chan struct{} {
-	ch := make(chan struct{}, subChanSize)
+func (ts *TokenStore) Subscribe() <-chan *ParseResult {
+	ch := make(chan *ParseResult, subChanSize)
 	ts.subsMu.Lock()
 	ts.subs = append(ts.subs, ch)
 	ts.subsMu.Unlock()
@@ -137,7 +139,7 @@ func (ts *TokenStore) Subscribe() <-chan struct{} {
 }
 
 // Unsubscribe removes a subscriber channel.
-func (ts *TokenStore) Unsubscribe(ch <-chan struct{}) {
+func (ts *TokenStore) Unsubscribe(ch <-chan *ParseResult) {
 	ts.subsMu.Lock()
 	defer ts.subsMu.Unlock()
 	newSubs := ts.subs[:0]
@@ -149,13 +151,15 @@ func (ts *TokenStore) Unsubscribe(ch <-chan struct{}) {
 	ts.subs = newSubs
 }
 
-// notify sends a non-blocking notification to all subscribers.
-func (ts *TokenStore) notify() {
+// notify sends a non-blocking notification of result to all subscribers.
+// result is the freshly parsed file for a single-file reparse, or nil when
+// the initial directory walk has completed.
+func (ts *TokenStore) notify(result *ParseResult) {
 	ts.subsMu.RLock()
 	defer ts.subsMu.RUnlock()
 	for _, ch := range ts.subs {
 		select {
-		case ch <- struct{}{}:
+		case ch <- result:
 		default:
 		}
 	}
@@ -223,7 +227,7 @@ func (ts *TokenStore) parseAndCache(filePath string) {
 	}
 	ts.mu.Unlock()
 
-	ts.notify()
+	ts.notify(result)
 }
 
 // walkAndEnqueue walks historyDir recursively and enqueues all .jsonl files.
@@ -236,7 +240,7 @@ func (ts *TokenStore) walkAndEnqueue(ctx context.Context) {
 		ts.mu.Lock()
 		ts.isLoadingVal = 0
 		ts.mu.Unlock()
-		ts.notify()
+		ts.notify(nil)
 	}()
 
 	if ts.historyDir == "" {

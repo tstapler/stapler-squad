@@ -2,8 +2,10 @@
 
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
+import { GitHubBadge } from "@/components/shared/GitHubBadge";
 import * as styles from "../BacklogItemDetail.css";
 import { ActionButtonLabel } from "./ActionButtonLabel";
+import { classifySessionKind } from "@/lib/backlog/sessionKind";
 
 export interface PullRequestSectionProps {
   item: BacklogItem;
@@ -27,6 +29,17 @@ export interface PullRequestSectionProps {
  * `showPrLink={false}` when this section is also rendering.
  */
 export function PullRequestSection({ item, actionLoading, onMarkDone, readOnly = false }: PullRequestSectionProps) {
+  // Story 3.3.2, Task 3.3.2b: linkedSessions is in creation order (same
+  // convention BacklogItemDetail.tsx's Jules dispatch-gate branch prefill
+  // relies on). The newest linked session isn't necessarily the one that
+  // opened this PR -- a review-gate session links *after* the work session
+  // it reviews (see julesDispatchGate.ts's skipReviewGate flow), so `.at(-1)`
+  // can return a "review" session and misattribute (or drop) the badge.
+  // Only sessionKind "work" (classifySessionKind) actually produces a PR --
+  // filter to those before taking the last one.
+  const producingSession = item.linkedSessions.filter((s) => classifySessionKind(s) === "work").at(-1);
+  const producedByJules = producingSession?.role === "jules_work";
+
   return (
     <CollapsibleSection sectionKey="pull-request" title="Pull Request" defaultExpanded={true}>
       <div className={styles.section}>
@@ -37,15 +50,14 @@ export function PullRequestSection({ item, actionLoading, onMarkDone, readOnly =
                 <span className={styles.reviewContextLabel}>
                   PR #{item.prNumber} — waiting for merge
                 </span>
-                <a
-                  className={styles.reviewContextSessionId}
-                  href={item.prUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  title="Open pull request on GitHub"
-                >
-                  {item.prUrl}
-                </a>
+                <div className={styles.sessionRowMain}>
+                  <GitHubBadge prNumber={item.prNumber} prUrl={item.prUrl} />
+                  {producedByJules && (
+                    <span className={styles.julesProvenanceMarker} aria-label="Opened by Jules">
+                      <span aria-hidden="true">☁</span> Jules
+                    </span>
+                  )}
+                </div>
               </>
             ) : (
               <span className={styles.reviewContextLabel}>

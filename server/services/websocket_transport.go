@@ -3,8 +3,9 @@ package services
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
-	"github.com/gorilla/websocket"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
@@ -15,7 +16,8 @@ import (
 // (server/services/connectrpc_websocket.go's writeMutex) rather than
 // duplicating that concurrency-safety fix.
 type WebSocketTransport struct {
-	stream *connectWebSocketStream
+	stream    *connectWebSocketStream
+	sessionID string
 
 	mu           sync.Mutex
 	hub          *streamhub.StreamHub
@@ -34,21 +36,20 @@ type WebSocketTransport struct {
 	// CatchUpSnapshot (session/streamhub/hub.go) against this handler's own,
 	// separate initial-snapshot send in streamViaHub
 	// (server/services/connectrpc_websocket.go): the browser path needs its
-	// snapshot ANSI-sanitized (prepareSnapshotContent), cursor-synced
-	// (withCursorSync), and proto-enveloped (protocol.CreateEnvelope) —
-	// transformations StreamHub has no notion of and cannot replicate with
-	// its raw []byte(content) send. See SuppressNextSend's doc comment for
-	// why suppressing exactly one Send call is safe.
+	// snapshot ANSI-sanitized (prepareSnapshotContent) and cursor-synced
+	// (withCursorSync) — transformations StreamHub has no notion of and
+	// cannot replicate. See SuppressNextSend's doc comment for why
+	// suppressing exactly one Send call is safe.
 	suppressNextSend atomic.Bool
 }
 
-// NewWebSocketTransport wraps stream as a streamhub.Transport. The caller
-// must call BindSubscriber once it has attached this transport to a hub and
-// knows the resulting SubscriberID — StreamHub.AttachSubscriber generates the
-// ID internally and only returns it after the transport is already
-// registered, so binding necessarily happens after construction.
-func NewWebSocketTransport(stream *connectWebSocketStream) *WebSocketTransport {
-	return &WebSocketTransport{stream: stream}
+// NewWebSocketTransport wraps stream as a streamhub.Transport for sessionID.
+// The caller must call BindSubscriber once it has attached this transport to
+// a hub and knows the resulting SubscriberID — StreamHub.AttachSubscriber
+// generates the ID internally and only returns it after the transport is
+// already registered, so binding necessarily happens after construction.
+func NewWebSocketTransport(stream *connectWebSocketStream, sessionID string) *WebSocketTransport {
+	return &WebSocketTransport{stream: stream, sessionID: sessionID}
 }
 
 // BindSubscriber records which hub/SubscriberID this transport was attached
@@ -75,26 +76,47 @@ func (t *WebSocketTransport) SuppressNextSend() {
 	t.suppressNextSend.Store(true)
 }
 
-// Send implements streamhub.Transport by writing data as a binary WebSocket
-// message via the stream's existing write-mutex-guarded WriteMessage. The
-// first call after SuppressNextSend is a no-op; see its doc comment.
+// Send implements streamhub.Transport. The first call after
+// SuppressNextSend is a no-op; see its doc comment. Every other call wraps
+// data (raw tmux bytes) in the same envelope-and-TerminalData_Output framing
+// streamViaControlMode's sendData applies (server/services/connectrpc_websocket.go),
+// via marshalProtoEnvelope over the stream's existing write-mutex-guarded
+// WriteMessage.
+//
+// Before this, Send forwarded data to the WebSocket completely unwrapped —
+// correct for a transport whose consumer expects raw bytes (MuxTransport's
+// ssq-mux clients), but the browser client's message loop
+// (useTerminalStream.ts) always protobuf-decodes an envelope expecting a
+// TerminalData message. Every hub-broadcast frame past the one
+// SuppressNextSend-guarded CatchUpSnapshot was silently undecodable:
+// StreamHub could never render a single byte of live output to a browser
+// tab once attached, including the user's own input echoing back — the
+// terminal simply never updated after its one-shot initial snapshot
+// (2026-09-01, first real end-to-end exercise of this path).
 func (t *WebSocketTransport) Send(data []byte) error {
 	if t.suppressNextSend.CompareAndSwap(true, false) {
 		return nil
 	}
-	return t.stream.WriteMessage(websocket.BinaryMessage, data)
+	msg := &sessionv1.TerminalData{
+		SessionId: t.sessionID,
+		Data: &sessionv1.TerminalData_Output{
+			Output: &sessionv1.TerminalOutput{Data: data},
+		},
+	}
+	return marshalProtoEnvelope(t.stream, 0, msg)
 }
 
-// Close implements streamhub.Transport. The first call triggers exactly one
-// DetachSubscriber call on the bound hub (Task 2.2.1b); every subsequent
-// call — including the reentrant one streamhub's subscriber.close makes back
-// into this method — is a no-op. Close never blocks on the WebSocket
-// connection itself; the connection's own read-loop teardown owns closing
-// the underlying network conn.
+// Close implements streamhub.Transport. The first call interrupts the
+// WebSocket read loop and detaches the subscriber exactly once; later calls,
+// including subscriber.close's reentrant call, are no-ops. The immediate read
+// deadline leaves writes available for the handler's final EndStream frame.
 func (t *WebSocketTransport) Close() error {
 	if !t.closed.CompareAndSwap(false, true) {
 		return nil
 	}
+	// Best effort: Close historically returned nil, and a closed connection is
+	// already in the desired state if setting its read deadline fails.
+	_ = t.stream.conn.SetReadDeadline(time.Now())
 	t.mu.Lock()
 	hub, id, bound := t.hub, t.subscriberID, t.bound
 	t.mu.Unlock()

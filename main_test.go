@@ -5,12 +5,15 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -339,96 +342,91 @@ func Test_superviseTymuxd_should_DecideRegisterStopAndError_When_GivenEachCombin
 	}
 }
 
-// TestResolveStartupBackend_EmptyConfigDefaultsToTmux covers Epic 3.2 Task
-// 3.2.1a/b (project_plans/tymux-bundled-integration/implementation/plan.md):
-// with no ProcessManagerBackend set and no env var, the function must default
-// to BackendTmux with no error — the pre-existing backwards-compatible
-// behavior of the inline block it replaces.
-func TestResolveStartupBackend_EmptyConfigDefaultsToTmux(t *testing.T) {
-	backend, err := resolveStartupBackend(&config.Config{}, false)
-	if err != nil {
-		t.Fatalf("resolveStartupBackend() error = %v, want nil", err)
-	}
-	if backend != session.BackendTmux {
-		t.Errorf("resolveStartupBackend() backend = %q, want %q", backend, session.BackendTmux)
-	}
-}
+// Test_startHostnameDetector_should_SkipRunAndNetworkChangeSource_When_DisableEnvSet
+// covers the CRITICAL gap: main.go's cobra "runtime" phase built the
+// HostnameDetector, decided whether to start its Run goroutine, and wired the
+// manual-trigger endpoint entirely inline, with zero test coverage on the
+// STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE branch. startHostnameDetector
+// extracts that decision (mirroring the superviseTymuxd extraction above) so
+// it's testable via injected goFn/onStop/newSource instead of a real
+// *warren.App or OS network monitor.
+func Test_startHostnameDetector_should_SkipRunAndNetworkChangeSource_When_DisableEnvSet(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE", "true")
 
-// TestResolveStartupBackend_TymuxConfigValueWithoutRehearsalFallsBackToTmux is
-// the bypass-guard regression test named in the plan: hand-editing
-// process_manager_backend: "tymux" directly into config.json, with no env var
-// set and no rollback rehearsal recorded, must NOT bypass the rehearsal gate
-// (research/pitfalls.md §3). It must resolve to BackendTmux and surface
-// config.ErrTymuxRollbackRehearsalNotCompleted for the caller to log.
-func TestResolveStartupBackend_TymuxConfigValueWithoutRehearsalFallsBackToTmux(t *testing.T) {
-	cfg := &config.Config{ProcessManagerBackend: "tymux"} // hand-edited config.json, no rehearsal, no env var
-
-	backend, err := resolveStartupBackend(cfg, false)
-
-	if backend != session.BackendTmux {
-		t.Errorf("resolveStartupBackend() backend = %q, want %q (bypass guard failed)", backend, session.BackendTmux)
+	var newSourceCalls, goCalls, onStopCalls int
+	fakeNewSource := func() (NetworkChangeSource, error) {
+		newSourceCalls++
+		return nil, errors.New("should never be called when disabled")
 	}
-	if !errors.Is(err, config.ErrTymuxRollbackRehearsalNotCompleted) {
-		t.Errorf("resolveStartupBackend() error = %v, want %v", err, config.ErrTymuxRollbackRehearsalNotCompleted)
-	}
-}
+	fakeGo := func(name string, fn func(context.Context)) { goCalls++ }
+	fakeOnStop := func(name string, fn func(context.Context) error) { onStopCalls++ }
 
-// TestResolveStartupBackend_TymuxConfigValueWithRehearsalCompletes verifies
-// the config-value path DOES resolve to tymux once the rehearsal has been
-// recorded — the gate blocks the unrehearsed case above, not the tymux value
-// unconditionally.
-func TestResolveStartupBackend_TymuxConfigValueWithRehearsalCompletes(t *testing.T) {
-	completedAt := time.Now()
-	cfg := &config.Config{
-		ProcessManagerBackend:             "tymux",
-		TymuxRollbackRehearsalCompletedAt: &completedAt,
+	mux := http.NewServeMux()
+	detector := startHostnameDetector(mux, &server.Server{}, nil, fakeNewSource, fakeGo, fakeOnStop)
+
+	if newSourceCalls != 0 {
+		t.Errorf("newSource called %d times, want 0 (disabled must skip the real OS network monitor entirely)", newSourceCalls)
+	}
+	if goCalls != 0 {
+		t.Errorf("goFn (Run goroutine start) called %d times, want 0", goCalls)
+	}
+	if onStopCalls != 0 {
+		t.Errorf("onStop called %d times, want 0 (no netchange cleanup hook to register when disabled)", onStopCalls)
+	}
+	if detector == nil {
+		t.Fatal("expected a non-nil detector even when disabled (endpoint registration still needs one to check the disabled flag before touching it)")
 	}
 
-	backend, err := resolveStartupBackend(cfg, false)
-
-	if err != nil {
-		t.Fatalf("resolveStartupBackend() error = %v, want nil", err)
-	}
-	if backend != session.BackendTymux {
-		t.Errorf("resolveStartupBackend() backend = %q, want %q", backend, session.BackendTymux)
+	// The manual-trigger endpoint must still be registered, reporting 503
+	// rather than a 404 (registerRedetectHostnamesEndpoint's own disabled
+	// short-circuit) or hanging.
+	req := httptest.NewRequest(http.MethodPost, "/api/debug/redetect-hostnames", nil)
+	req.RemoteAddr = "127.0.0.1:54321"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("endpoint status = %d, want 503 (disabled)", w.Code)
 	}
 }
 
-// TestResolveStartupBackend_EnvVarWithRehearsalCompletes verifies
-// STAPLER_SQUAD_USE_TYMUX=true (tymuxEnvRequested=true) also resolves to
-// tymux once the rehearsal is recorded, even when the config value itself is
-// something other than "tymux" — the env var and the config value both feed
-// the same tymuxRequested gate.
-func TestResolveStartupBackend_EnvVarWithRehearsalCompletes(t *testing.T) {
-	completedAt := time.Now()
-	cfg := &config.Config{
-		ProcessManagerBackend:             "tmux",
-		TymuxRollbackRehearsalCompletedAt: &completedAt,
+// Test_startHostnameDetector_should_StartRunAndNetworkChangeSource_When_NotDisabled
+// covers the enabled branch: newSource, the Run goroutine, and the netchange
+// cleanup hook must all be wired up.
+func Test_startHostnameDetector_should_StartRunAndNetworkChangeSource_When_NotDisabled(t *testing.T) {
+	var newSourceCalls, goCalls, onStopCalls int
+	fakeNewSource := func() (NetworkChangeSource, error) {
+		newSourceCalls++
+		return nil, errors.New("no real OS network monitor in this test")
 	}
+	fakeGo := func(name string, fn func(context.Context)) { goCalls++ }
+	fakeOnStop := func(name string, fn func(context.Context) error) { onStopCalls++ }
 
-	backend, err := resolveStartupBackend(cfg, true)
+	mux := http.NewServeMux()
+	detector := startHostnameDetector(mux, &server.Server{}, nil, fakeNewSource, fakeGo, fakeOnStop)
 
-	if err != nil {
-		t.Fatalf("resolveStartupBackend() error = %v, want nil", err)
+	if newSourceCalls != 1 {
+		t.Errorf("newSource called %d times, want 1", newSourceCalls)
 	}
-	if backend != session.BackendTymux {
-		t.Errorf("resolveStartupBackend() backend = %q, want %q", backend, session.BackendTymux)
+	if goCalls != 1 {
+		t.Errorf("goFn (Run goroutine start) called %d times, want 1", goCalls)
+	}
+	if onStopCalls != 1 {
+		t.Errorf("onStop called %d times, want 1 (netchange cleanup hook)", onStopCalls)
+	}
+	if detector == nil {
+		t.Fatal("expected a non-nil detector")
 	}
 }
 
-// TestResolveStartupBackend_NativeBackendPassesThroughUnaffected verifies the
-// gate only ever intercepts the tymux case — a "native" backend value passes
-// through completely unaffected, with no error, matching the plan's
-// acceptance criteria.
-func TestResolveStartupBackend_NativeBackendPassesThroughUnaffected(t *testing.T) {
-	cfg := &config.Config{ProcessManagerBackend: "native"}
-
-	backend, err := resolveStartupBackend(cfg, false)
-
-	if err != nil {
-		t.Fatalf("resolveStartupBackend() error = %v, want nil", err)
-	}
-	if backend != session.BackendNative {
-		t.Errorf("resolveStartupBackend() backend = %q, want %q", backend, session.BackendNative)
+// TestVerifyHostnameOwnership_RejectsNonMatchingIP asserts the single
+// extracted implementation (shared by startRemoteAccess's hostnameValidator
+// and HostnameDetector's default validateFn) rejects a hostname that does
+// not resolve to one of this host's own IPs. "invalid.invalid" is reserved
+// by RFC 2606 to never resolve on any network, so this is deterministic
+// without needing to fake net.LookupHost/forwardLookupViaKnownNameservers --
+// no real DNS answer for it can ever coincide with listNonLoopbackIPs().
+func TestVerifyHostnameOwnership_RejectsNonMatchingIP(t *testing.T) {
+	if got := verifyHostnameOwnership(context.Background(), "invalid.invalid"); got {
+		t.Errorf("verifyHostnameOwnership(%q) = true, want false (reserved non-resolving hostname)", "invalid.invalid")
 	}
 }

@@ -159,6 +159,38 @@ describe("PathCompletionDropdown", () => {
     expect(screen.getByRole("listbox", { name: "Path completions" })).toBeInTheDocument();
   });
 
+  it("worktree entry shows a 'worktree of <root>' label", () => {
+    const entry: CompletionEntry = {
+      name: "~/worktrees/wt-a",
+      path: "/repo/worktrees/wt-a",
+      isDirectory: true,
+      isHistory: true,
+      isWorktree: true,
+      rootLabel: "~/repo",
+    };
+    render(
+      <PathCompletionDropdown
+        entries={[entry]}
+        selectedIndex={-1}
+        onSelect={jest.fn()}
+        isLoading={false}
+      />
+    );
+    expect(screen.getByText("worktree of ~/repo")).toBeInTheDocument();
+  });
+
+  it("non-worktree entry shows no worktree label", () => {
+    render(
+      <PathCompletionDropdown
+        entries={[dir("projects")]}
+        selectedIndex={-1}
+        onSelect={jest.fn()}
+        isLoading={false}
+      />
+    );
+    expect(screen.queryByText(/worktree of/)).not.toBeInTheDocument();
+  });
+
   it("default id applied to listbox ul and each option li", () => {
     render(
       <PathCompletionDropdown

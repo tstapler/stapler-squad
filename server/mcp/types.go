@@ -18,12 +18,29 @@ type MCPResult struct {
 
 // SessionSummary is returned by list_sessions and search_sessions.
 type SessionSummary struct {
-	ID             string    `json:"id"`
-	Title          string    `json:"title"`
-	Status         string    `json:"status"`
-	Tags           []string  `json:"tags"`
-	Branch         string    `json:"branch,omitempty"`
-	Path           string    `json:"path"`
+	ID     string   `json:"id"`
+	Title  string   `json:"title"`
+	Status string   `json:"status"`
+	Tags   []string `json:"tags"`
+	Branch string   `json:"branch,omitempty"`
+	// Path is the session's original/logical repo path, set once at creation
+	// and never updated to reflect an actual worktree location — it identifies
+	// the repo, not where the session's process is running. Kept unchanged for
+	// backward compatibility with external MCP consumers.
+	// Deprecated: use ActiveDir (where the session runs) or ExistingDir (where
+	// to read/write files); see [[docs/reference/state-isolation.md]]'s path
+	// vocabulary, mirrored from ConnectRPC's Session.active_dir/existing_dir.
+	Path string `json:"path"`
+	// ActiveDir is where this session's process is actually running: its git
+	// worktree directory if it has one, else Path. Use this to compare whether
+	// two sessions occupy the same location.
+	ActiveDir string `json:"active_dir"`
+	// ExistingDir is ActiveDir when that directory still exists on disk, else
+	// Path. Use this only to open/read files — pause_session deletes a
+	// worktree's directory while keeping the session's branch, so two
+	// paused sessions in independently cleaned-up worktrees can share an
+	// ExistingDir without being in the same place; never compare it.
+	ExistingDir    string    `json:"existing_dir"`
 	CreatedAt      time.Time `json:"created_at"`
 	LastActivityAt time.Time `json:"last_activity_at"`
 }
@@ -33,7 +50,17 @@ type SessionDetail struct {
 	SessionSummary
 	Program     string `json:"program"`
 	SessionType string `json:"session_type"`
-	WorkingDir  string `json:"working_dir,omitempty"`
+	// WorkingDir here is the user-configured subdirectory to start in,
+	// relative to Path (Instance.WorkingDir in session/instance.go) — NOT the
+	// resolved, worktree-aware absolute path that ConnectRPC's identically
+	// named Session.working_dir field carries (that one is populated from
+	// Workspace().ActiveDir; see instance_adapter.go). Same field name,
+	// different source field, different meaning. Kept unchanged for backward
+	// compatibility with external MCP consumers.
+	// Deprecated: use SessionSummary.ActiveDir/ExistingDir for the resolved
+	// path; this field's relative-subdirectory meaning has no ActiveDir-style
+	// replacement here yet.
+	WorkingDir string `json:"working_dir,omitempty"`
 }
 
 // ListSessionsResult is returned by list_sessions.
@@ -92,6 +119,24 @@ const (
 	ErrSessionStartupTimeout = "SESSION_STARTUP_TIMEOUT"
 	ErrInvalidPath           = "INVALID_PATH"
 	ErrPTYWriteTimeout       = "PTY_WRITE_TIMEOUT"
+
+	// Async-session-creation Epic 2.3, Story 2.3.4: distinct outcomes for
+	// create_session/create_session_for_pr's wait on the Background
+	// Resolution Pipeline (server/services/session_creation_await.go).
+	// ErrSessionCreationFailed: the pipeline reached a terminal Failed status
+	// before the session ever became Active — distinct from ErrInternalError
+	// so the caller can tell "resolution failed" from "the tool itself
+	// errored."
+	ErrSessionCreationFailed = "SESSION_CREATION_FAILED"
+	// ErrSessionCreationCancelled: the instance vanished mid-wait (a
+	// concurrent CancelSessionCreation removed it) — distinct from
+	// ErrSessionNotFound, which means "never existed."
+	ErrSessionCreationCancelled = "SESSION_CREATION_CANCELLED"
+	// ErrSessionCreationAwaitCanceled: the MCP caller's own request context
+	// ended before AwaitCreationTerminal observed a terminal status, a
+	// timeout, or a vanish — distinct from both of the above and from the
+	// timeout's still_creating success result.
+	ErrSessionCreationAwaitCanceled = "SESSION_CREATION_AWAIT_CANCELED"
 )
 
 // BacklogItemSummaryResult is a trimmed backlog item shown in list_backlog_items results.

@@ -28,6 +28,6 @@ const connectBaseQuery: BaseQueryFn<
 export const connectApi = createApi({
   reducerPath: "connectApi",
   baseQuery: connectBaseQuery,
-  tagTypes: ["Approvals"],
+  tagTypes: ["Approvals", "GuidanceRequests"],
   endpoints: () => ({}),
 });

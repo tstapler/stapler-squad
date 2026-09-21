@@ -120,8 +120,9 @@ export function groupSessions(
         break;
 
       case GroupingStrategy.Path:
-        // Single-membership: One path per session
-        groupKeys = [session.path || "No Path"];
+        // Single-membership: One path per session. activeDir, not path, so
+        // worktree sessions group by where they actually run.
+        groupKeys = [session.activeDir || "No Path"];
         break;
 
       case GroupingStrategy.Program:
@@ -229,6 +230,7 @@ function getStatusDisplayName(status: number): string {
     case SessionStatus.STOPPED:        return "Stopped";  // 7
     case SessionStatus.HIBERNATED:     return "Hibernated"; // 8
     case SessionStatus.CRASHED:        return "Crashed";  // 10
+    case SessionStatus.PERMANENTLY_FAILED: return "Failed"; // 11
     default:                           return "Unknown";
   }
 }

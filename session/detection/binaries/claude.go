@@ -112,6 +112,24 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				Priority:    18,
 			},
 			{
+				Name:        "gemini_requesting_permission",
+				Pattern:     `(?i)Requesting permission for:`,
+				Description: "Gemini requesting permission header",
+				Priority:    18,
+			},
+			{
+				Name:        "gemini_run_this_command",
+				Pattern:     `(?i)Run this command\?`,
+				Description: "Gemini command approval prompt",
+				Priority:    18,
+			},
+			{
+				Name:        "gemini_run_command_option",
+				Pattern:     `(?i)Yes,\s*run\s*command`,
+				Description: "Gemini run command selection option",
+				Priority:    17,
+			},
+			{
 				Name:        "gemini_permission",
 				Pattern:     `(?i)Yes, allow once`,
 				Description: "Gemini permission prompt",
@@ -122,6 +140,24 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				Pattern:     `(?i)Allow execution of:`,
 				Description: "Gemini tool execution permission prompt",
 				Priority:    19,
+			},
+			{
+				Name:        "gemini_needs_approval_for",
+				Pattern:     `(?i)needs\s+approval\s+for`,
+				Description: "Gemini subagent needs approval indicator",
+				Priority:    19,
+			},
+			{
+				Name:        "gemini_ctrl_k_approve",
+				Pattern:     `(?i)ctrl\+k\s+approve`,
+				Description: "Gemini ctrl+k approve shortcut prompt",
+				Priority:    18,
+			},
+			{
+				Name:        "gemini_agent_blocked",
+				Pattern:     `(?i)Blocked\s*·`,
+				Description: "Gemini agent blocked status indicator",
+				Priority:    18,
 			},
 			{
 				Name:        "opencode_permission",
@@ -339,6 +375,13 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				Priority:    26,
 			},
 		},
+		// waiting_for_background_agent below remains unverified against a live modern
+		// Claude Code capture (kept for older CLI versions/documentation purposes; do not
+		// treat as reachable against a live modern session). shells_still_running and
+		// monitors_still_running, however, ARE reachable against the current CLI — the
+		// turn-completion long form ("✻ Cogitated for 1m 6s · done 3:06 PM · 1 shell, 1
+		// monitor still running") emits this exact phrasing, confirmed via a real captured
+		// session (see project_plans/monitor-waiting-indicator/implementation/plan.md).
 		WaitingForAgent: []dtypes.StatusPattern{
 			{
 				Name: "waiting_for_background_agent",
@@ -357,9 +400,11 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				// active. The "N shell(s) still running" suffix overrides the turn-completion
 				// verb-duration marker — the session is not done yet.
 				// Also matches bare "N shell(s) running" / "N shells still running" variants
-				// found in the Claude Code bottom status bar.
-				Pattern:     `(\d+)\s+shells?\s+(?:still\s+)?running`,
-				Description: "Background shell processes still running — session not yet idle",
+				// found in the Claude Code bottom status bar, and the turn-completion long
+				// form's comma-joined "N shell, M monitor still running" suffix — group 2
+				// optionally captures the trailing monitor count so both are summed.
+				Pattern:     `(\d+)\s+shells?(?:,\s*(\d+)\s+monitors?)?\s+(?:still\s+)?running`,
+				Description: "Background shell processes (optionally with monitors) still running — session not yet idle",
 				Priority:    27,
 			},
 			{

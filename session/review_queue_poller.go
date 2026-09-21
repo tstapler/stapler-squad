@@ -142,6 +142,11 @@ type ReviewQueuePoller struct {
 	// EventUserInteraction. A nil channel is never selected (safe in select statements).
 	activityCh <-chan struct{}
 
+	// archivedLivePaneWarned throttles warnArchivedLivePaneOnce to one record
+	// per session title per process; RemoveInstance drops the entry so the map
+	// tracks live instances, not every title seen. See that method's doc comment.
+	archivedLivePaneWarned sync.Map
+
 	// Backoff state: tracks consecutive poll errors to apply exponential delay.
 	consecutiveErrors int
 	// tickCount counts poll loop iterations; atomic because pollLoop writes and tests read concurrently.
@@ -239,6 +244,7 @@ func (rqp *ReviewQueuePoller) RemoveInstance(instanceTitle string) {
 		evictKey = removedTitle
 	}
 	rqp.contentProvider.EvictInstance(evictKey)
+	rqp.archivedLivePaneWarned.Delete(evictKey)
 }
 
 // SetApprovalProvider sets the approval metadata provider for enriching review queue items.
@@ -449,8 +455,16 @@ func (rqp *ReviewQueuePoller) ForceReconcile() {
 // - Stopped instances whose tmux session is found alive are revived to Active.
 func (rqp *ReviewQueuePoller) reconcileSessions() {
 	rqp.mu.RLock()
-	instances := make([]*Instance, len(rqp.instances))
-	copy(instances, rqp.instances)
+	instances := make([]*Instance, 0, len(rqp.instances))
+	for _, inst := range rqp.instances {
+		// Filtered before grouping/querying so a socket populated only by
+		// push-liveness instances triggers no ListSessions call at all --
+		// see ProcessManagerBackend.SkipsPollBasedLiveness's doc comment.
+		if inst.Backend.SkipsPollBasedLiveness() {
+			continue
+		}
+		instances = append(instances, inst)
+	}
 	rqp.mu.RUnlock()
 
 	if len(instances) == 0 {
@@ -490,6 +504,13 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 			// zero-lock way to read status from outside an in-flight actor command --
 			// it's only unsafe to call *inside* one (see the s.inst.mu.RLock() reads
 			// below). Tracked flake: https://github.com/tstapler/stapler-squad/issues/271
+
+			// Never revive an archived session to Active (see ADR-001,
+			// superseded-rework-session-retirement). The Active case below is
+			// deliberately NOT guarded — an archived row must still converge to
+			// Stopped.
+			archived := inst.IsArchived()
+
 			switch Status(inst.GetStatus()) {
 			case Active:
 				// Active but tmux session gone — mark Stopped.
@@ -521,8 +542,26 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					inst.fireLifecycleEvent(EventExited, "reconcile-session-missing")
 				}
 			case Stopped:
-				// Stopped but tmux session is alive — revive to Active.
+				// Stopped but tmux session is alive — revive to Active only if
+				// the wrapped program is genuinely still running. liveSessions
+				// only proves the tmux pane object exists; remain-on-exit keeps
+				// that true even after the wrapped program has exited (a dead
+				// "Pane is dead (signal N, ...)" placeholder, see
+				// PaneProcessDead's doc comment) — blindly reviving on pane
+				// existence alone previously left such sessions stuck showing
+				// Active with no live process behind them (frozen terminal, no
+				// response to input, confirmed 2026-09-06 via a restart that
+				// raced a controller's PTY-EOF transition to Stopped against
+				// this poller's next tick).
 				if liveSessions[sessionName] {
+					if archived {
+						rqp.warnArchivedLivePaneOnce(inst, sessionName, serverSocket)
+						continue
+					}
+					if dead, _, _ := inst.paneExitInfoIgnoringStatus(); dead {
+						log.Info("reconcileSessions: stopped session's pane exists but wrapped program has exited, leaving Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
+						continue
+					}
 					log.Info("reconcileSessions: stopped session found alive, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
@@ -550,6 +589,10 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 				// unmanaged underneath it (Preview() short-circuits for Hibernated,
 				// so such a session would otherwise look permanently dead).
 				if liveSessions[sessionName] {
+					if archived {
+						rqp.warnArchivedLivePaneOnce(inst, sessionName, serverSocket)
+						continue
+					}
 					log.Warn("reconcileSessions: hibernated session found alive in tmux, resuming to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
@@ -573,6 +616,10 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 				// than leaving it stuck showing the Crashed banner over a live pane,
 				// mirroring the Hibernated case just above.
 				if liveSessions[sessionName] {
+					if archived {
+						rqp.warnArchivedLivePaneOnce(inst, sessionName, serverSocket)
+						continue
+					}
 					log.Warn("reconcileSessions: crashed session found alive in tmux, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
@@ -585,9 +632,38 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					cancel()
 					inst.fireLifecycleEvent(EventStarted, "reconcile-session-crashed-but-alive")
 				}
+			case PermanentlyFailed:
+				// Deliberately not auto-revived even if tmux is alive, unlike
+				// Stopped/Hibernated/Crashed above — PermanentlyFailed means the
+				// configurable retry policy already exhausted its attempt budget
+				// for this failure episode; only an explicit RetryNow() call
+				// (the "Retry now" UI action / RetrySession RPC) should bring it
+				// back to Active. See ADR-001.
 			}
 		}
 	}
+}
+
+// warnArchivedLivePaneOnce logs, at most once per session title per process,
+// that an archived session still has a tmux pane object. Such a row is skipped
+// by every reconciler and hidden from ListSessions, so an orphaned claude
+// process behind it would otherwise surface nowhere (see ADR-001,
+// superseded-rework-session-retirement); this is the detector for it, not the
+// reaper. Keyed on Title, the codebase's conventional instance key, so
+// RemoveInstance can drop the entry alongside the content-cache eviction; a
+// rename re-arms the warning once.
+func (rqp *ReviewQueuePoller) warnArchivedLivePaneOnce(inst *Instance, sessionName, serverSocket string) {
+	snap := inst.Snapshot()
+	if _, dup := rqp.archivedLivePaneWarned.LoadOrStore(snap.Title, struct{}{}); dup {
+		return
+	}
+	// Probed after the de-dup: paneExitInfoIgnoringStatus runs several tmux
+	// subprocesses, so it must not fire on every tick.
+	dead, _, _ := inst.paneExitInfoIgnoringStatus()
+	log.Warn("reconcileSessions: archived session still has a live tmux pane object; not reviving",
+		"session", snap.Title, "tmux", sessionName, "socket", serverSocket,
+		"status", snap.Status, "pane_process_dead", dead,
+		"hint", "if pane_process_dead=false this is an orphaned process — `tmux kill-session -t <tmux>`")
 }
 
 // checkSessionsConcurrency caps the number of sessions checked simultaneously,
@@ -733,13 +809,13 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 func (rqp *ReviewQueuePoller) shouldSkipSession(inst *Instance) bool {
 	// Lock-free snapshot read for Hidden, Status, and ArchivedAt; Started() reads
 	// inst.started (set once during construction, not in the snapshot).
-	// Crashed is skipped alongside Stopped/Paused: SessionHealthChecker already
-	// killed its tmux session before setting this status (see MarkCrashed,
-	// session/instance_crash.go), so there is no live pane content to check, and
-	// the session already surfaces to the user via its own distinct status/banner
+	// Status.IsSuspended() covers Paused/Hibernated/Stopped/Crashed/PermanentlyFailed:
+	// none of these have a live tmux pane to check (SessionHealthChecker already
+	// tore it down, or it was never created), so there is no pane content to
+	// evaluate, and each surfaces to the user via its own distinct status/banner
 	// rather than a review-queue attention reason.
 	snap := inst.Snapshot()
-	return snap.Hidden || snap.Status == Stopped || snap.Status == Paused || snap.Status == Crashed || snap.ArchivedAt != nil || !inst.Started()
+	return snap.Hidden || snap.Status.IsSuspended() || snap.ArchivedAt != nil || !inst.Started()
 }
 
 // checkSession checks a single session and adds/removes from queue as needed.

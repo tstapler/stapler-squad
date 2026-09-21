@@ -14,7 +14,11 @@ import (
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
-// UT-2.x — shouldNotify table [R4, R5]
+// UT-2.x — shouldNotify table [R4, R5]. Tightened from the old ">= HIGH" threshold to
+// "== URGENT only" (2026-09, notification push-gate redesign): HIGH now means
+// "important but not urgent" and must not interrupt the user. Also age-gates URGENT
+// against urgentTTL — see shouldNotify's doc comment for why (urgency decays, importance
+// doesn't).
 func TestShouldNotifyTable(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -22,26 +26,30 @@ func TestShouldNotifyTable(t *testing.T) {
 		priority         int32
 		notificationType int32
 		newStatus        session.Status
+		age              time.Duration
 		wantNotify       bool
 	}{
 		// EventNotification cases
-		{"low priority generic → no push", events.EventNotification, priorityLow, typeUnspecified, 0, false},
-		{"medium priority generic → no push", events.EventNotification, priorityMedium, typeUnspecified, 0, false},
-		{"high priority generic → push", events.EventNotification, priorityHigh, typeUnspecified, 0, true},     // UT-2.1a
-		{"urgent priority generic → push", events.EventNotification, priorityUrgent, typeUnspecified, 0, true}, // UT-2.1b [BUG-2 fix]
-		{"low priority APPROVAL → push", events.EventNotification, priorityLow, typeApproval, 0, true},         // UT-2.2 [R5]
-		{"high priority APPROVAL → push", events.EventNotification, priorityHigh, typeApproval, 0, true},       // UT-2.3
+		{"low priority generic → no push", events.EventNotification, priorityLow, typeUnspecified, 0, 0, false},
+		{"medium priority generic → no push", events.EventNotification, priorityMedium, typeUnspecified, 0, 0, false},
+		{"high priority generic → no push", events.EventNotification, priorityHigh, typeUnspecified, 0, 0, false},                                          // UT-2.1a: HIGH = important-only, must not push
+		{"urgent priority generic, fresh → push", events.EventNotification, priorityUrgent, typeUnspecified, 0, 5 * time.Minute, true},                     // UT-2.1b [BUG-2 fix]
+		{"urgent priority generic, aged past TTL → no push", events.EventNotification, priorityUrgent, typeUnspecified, 0, urgentTTL + time.Minute, false}, // urgency decay
+		{"urgent priority generic, exactly at TTL → no push", events.EventNotification, priorityUrgent, typeUnspecified, 0, urgentTTL, false},              // boundary is exclusive
+		{"low priority APPROVAL → push", events.EventNotification, priorityLow, typeApproval, 0, 0, true},                                                  // UT-2.2 [R5]
+		{"high priority APPROVAL → push", events.EventNotification, priorityHigh, typeApproval, 0, 0, true},                                                // UT-2.3
+		{"urgent priority APPROVAL, aged past TTL → still push", events.EventNotification, priorityUrgent, typeApproval, 0, urgentTTL + time.Minute, true}, // approval override ignores age
 		// EventSessionUpdated cases
-		{"session stopped → push", events.EventSessionUpdated, 0, 0, session.Stopped, true},
+		{"session stopped → push", events.EventSessionUpdated, 0, 0, session.Stopped, 0, true},
 		// NeedsApproval is no longer a lifecycle status (it is a sub-status in Epic 3).
 		// Approval notifications are delivered via EventNotification, not EventSessionUpdated.
-		{"session active → no push", events.EventSessionUpdated, 0, 0, session.Active, false},
+		{"session active → no push", events.EventSessionUpdated, 0, 0, session.Active, 0, false},
 		// Other event types
-		{"unrelated event → no push", events.EventSessionCreated, 0, 0, 0, false},
+		{"unrelated event → no push", events.EventSessionCreated, 0, 0, 0, 0, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := shouldNotify(tt.eventType, tt.priority, tt.notificationType, tt.newStatus)
+			got := shouldNotify(tt.eventType, tt.priority, tt.notificationType, tt.newStatus, tt.age)
 			assert.Equal(t, tt.wantNotify, got, "shouldNotify mismatch for: %s", tt.name)
 		})
 	}
@@ -135,7 +143,8 @@ func TestDeduplicationWindow(t *testing.T) {
 
 	event := &events.Event{
 		Type:                 events.EventNotification,
-		NotificationPriority: priorityHigh,
+		Timestamp:            time.Now(),
+		NotificationPriority: priorityUrgent,
 		NotificationTitle:    "Test",
 		NotificationMessage:  "Body",
 		NotificationID:       "same-id",
@@ -161,7 +170,8 @@ func TestStartDeliverySubscriberCallsAllNotifiers(t *testing.T) {
 
 	bus.Publish(&events.Event{
 		Type:                 events.EventNotification,
-		NotificationPriority: priorityHigh,
+		Timestamp:            time.Now(),
+		NotificationPriority: priorityUrgent,
 		NotificationTitle:    "Test",
 		NotificationMessage:  "Body",
 	})
@@ -186,7 +196,8 @@ func TestDeliverySubscriberContinuesOnNotifierError(t *testing.T) {
 
 	bus.Publish(&events.Event{
 		Type:                 events.EventNotification,
-		NotificationPriority: priorityHigh,
+		Timestamp:            time.Now(),
+		NotificationPriority: priorityUrgent,
 		NotificationTitle:    "Test",
 		NotificationMessage:  "Body",
 	})
@@ -252,6 +263,7 @@ func TestUrgentPriorityTriggersPush(t *testing.T) {
 
 	bus.Publish(&events.Event{
 		Type:                 events.EventNotification,
+		Timestamp:            time.Now(),
 		NotificationPriority: priorityUrgent,
 		NotificationType:     typeUnspecified,
 		NotificationTitle:    "Urgent!",

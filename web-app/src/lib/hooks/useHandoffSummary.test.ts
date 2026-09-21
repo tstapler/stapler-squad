@@ -69,7 +69,7 @@ describe("useHandoffSummary", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     expect(mockGetHandoffSummary).toHaveBeenCalledTimes(1);
-    expect(mockGetHandoffSummary).toHaveBeenCalledWith({ sessionId: "sess-123" });
+    expect(mockGetHandoffSummary).toHaveBeenCalledWith({ sessionId: "sess-123" }, { signal: expect.any(AbortSignal) });
     expect(result.current.data?.status).toBe(HandoffSummaryStatus.READY);
   });
 
@@ -134,7 +134,7 @@ describe("useHandoffSummary", () => {
       await result.current.trigger();
     });
 
-    expect(mockTriggerHandoffSummary).toHaveBeenCalledWith({ sessionId: "sess-123" });
+    expect(mockTriggerHandoffSummary).toHaveBeenCalledWith({ sessionId: "sess-123" }, { signal: expect.any(AbortSignal) });
     // trigger() immediately reflects the returned row synchronously after
     // the call resolves.
     expect(result.current.data?.status).toBe(HandoffSummaryStatus.GENERATING);

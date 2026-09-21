@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config/workspacepath"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -53,6 +54,7 @@ func toSlogLevel(level LogLevel) slog.Level {
 // SetRuntimeLevel changes the minimum log level for all output streams immediately.
 // Safe to call from any goroutine. Takes effect on the next log call.
 func SetRuntimeLevel(level LogLevel) {
+	// #nosec G115 -- LogLevel is a small internal enum (DEBUG..FATAL, iota-based), nowhere near int32's range
 	runtimeLevel.Store(int32(level))
 	slogLevel.Set(toSlogLevel(level))
 }
@@ -222,7 +224,7 @@ func InfoLog() *log.Logger { return infoLog.Load() }
 func ErrorLog() *log.Logger { return errorLog.Load() }
 
 // DebugLog returns the current debug-level logger. Safe to call concurrently
-// with SetDebugLogForTest or initializeWithConfig replacing it.
+// with initializeWithConfig replacing it.
 func DebugLog() *log.Logger { return debugLog.Load() }
 
 // SetWarningLogForTest atomically replaces the warning logger and returns the
@@ -245,10 +247,6 @@ func SetInfoLogForTest(l *log.Logger) *log.Logger { return infoLog.Swap(l) }
 // SetErrorLogForTest atomically replaces the error logger and returns the
 // previous value, so callers can restore it via t.Cleanup.
 func SetErrorLogForTest(l *log.Logger) *log.Logger { return errorLog.Swap(l) }
-
-// SetDebugLogForTest atomically replaces the debug logger and returns the
-// previous value, so callers can restore it via t.Cleanup.
-func SetDebugLogForTest(l *log.Logger) *log.Logger { return debugLog.Swap(l) }
 
 // LogConfig holds logging configuration
 type LogConfig struct {
@@ -376,20 +374,6 @@ func (sl *StructuredLogger) Log(level LogLevel, message string, fields map[strin
 	_, _ = sl.writer.Write([]byte("\n"))
 }
 
-// LogWithFields logs a message with additional fields
-func (sl *StructuredLogger) LogWithFields(level LogLevel, message string, fields map[string]interface{}) {
-	sl.Log(level, message, fields)
-}
-
-// Debug logs a debug message
-func (sl *StructuredLogger) Debug(message string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	sl.Log(DEBUG, message, f)
-}
-
 // Info logs an info message
 func (sl *StructuredLogger) Info(message string, fields ...map[string]interface{}) {
 	var f map[string]interface{}
@@ -399,43 +383,23 @@ func (sl *StructuredLogger) Info(message string, fields ...map[string]interface{
 	sl.Log(INFO, message, f)
 }
 
-// Warning logs a warning message
-func (sl *StructuredLogger) Warning(message string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	sl.Log(WARNING, message, f)
-}
-
-// Error logs an error message
-func (sl *StructuredLogger) Error(message string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	sl.Log(ERROR, message, f)
-}
-
-// Fatal logs a fatal message
-func (sl *StructuredLogger) Fatal(message string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	sl.Log(FATAL, message, f)
-}
-
 // GetConfigDir returns the path to the application's configuration directory,
-// honoring the same STAPLER_SQUAD_TEST_DIR / STAPLER_SQUAD_INSTANCE precedence as
-// config.GetConfigDirForDir (Priorities 1-2 only; see that function's doc comment
-// for the full 6-priority list — Priorities 3-6 are DB/session-state concerns with
-// no log-directory analogue). Duplicated here rather than imported because config
-// already imports log, and importing back would create a cycle.
+// mirroring config.GetConfigDirForDir("")'s full 6-priority precedence so log
+// paths never drift from where DB/session state lands (via the shared
+// config/workspacepath leaf package — config already imports log, so log
+// can't import config back without a cycle).
 func GetConfigDir() (string, error) {
+	return GetConfigDirForDir("")
+}
+
+// GetConfigDirForDir mirrors config.GetConfigDirForDir(dir), see that
+// function's doc comment for the full 6-priority list. Kept here so any
+// future caller with an explicit dir (e.g. a hooks binary) needs no extra
+// plumbing.
+func GetConfigDirForDir(dir string) (string, error) {
 	// Priority 1: Test directory override (from --test-mode flag) wins outright.
 	if testDir := os.Getenv(envTestDir); testDir != "" {
-		if err := os.MkdirAll(testDir, 0755); err != nil {
+		if err := os.MkdirAll(testDir, 0750); err != nil {
 			return "", fmt.Errorf("failed to create test directory: %w", err)
 		}
 		return testDir, nil
@@ -447,9 +411,16 @@ func GetConfigDir() (string, error) {
 	}
 	baseDir := filepath.Join(homeDir, ".stapler-squad")
 
-	// Priority 2: Explicit instance ID. "shared" (or unset) keeps the shared,
-	// pre-fix path so the live default instance needs no migration.
-	if instanceID := os.Getenv(envInstanceID); instanceID != "" && instanceID != sharedInstanceID {
+	// Priority 2: Explicit instance ID (tests, named instances, backward
+	// compat). "shared" short-circuits straight to baseDir — same as
+	// config.GetConfigDirForDir — rather than falling through to Priority 3-6;
+	// it must NOT be treated as "unset", since that would silently land
+	// test/workspace-mode/preferred-workspace logic on a directory the caller
+	// explicitly opted out of.
+	if instanceID := os.Getenv(envInstanceID); instanceID != "" {
+		if instanceID == sharedInstanceID {
+			return baseDir, nil
+		}
 		// Reject path separators/".." so a stray or malicious instance ID can't
 		// escape baseDir via filepath.Join's lexical Clean() — same gap as
 		// config.GetConfigDirForDir, closed here first since this is the one
@@ -460,7 +431,31 @@ func GetConfigDir() (string, error) {
 		return filepath.Join(baseDir, "instances", instanceID), nil
 	}
 
-	return baseDir, nil
+	// Priority 3: Test mode auto-detection — must be checked before the
+	// preferred workspace file, same reasoning as config.GetConfigDirForDir.
+	if workspacepath.IsTestMode() {
+		pid := os.Getpid()
+		return filepath.Join(baseDir, "test", fmt.Sprintf("test-%d", pid)), nil
+	}
+
+	return resolveDefaultConfigDir(dir, baseDir)
+}
+
+// resolveDefaultConfigDir implements Priority 4-6 of GetConfigDirForDir,
+// mirroring config.resolveDefaultConfigDir exactly (see its doc comment).
+// Split out so it can be tested directly — Priority 3 (test mode
+// auto-detection) is always true inside a `go test` binary, which would
+// otherwise make this logic unreachable in tests.
+func resolveDefaultConfigDir(dir, baseDir string) (string, error) {
+	result := workspacepath.ResolveDefaultDir(dir, baseDir)
+	if result.WithinStateDir {
+		Warn("cwd is inside stapler-squad state directory; this process will use a different workspace than usual and may appear to have no sessions",
+			"cwd", result.WorkDir, "state_dir", baseDir)
+	}
+	if result.GetwdErr != nil {
+		Warn("failed to get working directory for workspace isolation", "err", result.GetwdErr)
+	}
+	return result.Dir, nil
 }
 
 // GetLogDir returns the directory where logs should be stored
@@ -483,7 +478,7 @@ func GetLogDir(cfg *LogConfig) (string, error) {
 
 	logDir := filepath.Join(configDir, "logs")
 	// Create the log directory if it doesn't exist
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		return os.TempDir(), fmt.Errorf("failed to create log directory: %w", err)
 	}
 
@@ -500,7 +495,7 @@ func GetTestLogDir() (string, error) {
 
 	testLogDir := filepath.Join(configDir, "logs", "test")
 	// Create the test log directory if it doesn't exist
-	if err := os.MkdirAll(testLogDir, 0755); err != nil {
+	if err := os.MkdirAll(testLogDir, 0750); err != nil {
 		return os.TempDir(), fmt.Errorf("failed to create test log directory: %w", err)
 	}
 
@@ -656,46 +651,11 @@ type SessionLoggers struct {
 	LogFile    io.Closer
 }
 
-// SessionLogger is a session-scoped logger that automatically injects the session ID
-// into every log call, eliminating the need to pass the session ID manually.
-//
-// Usage:
-//
-//	logger := log.ForSession(i.Title)
-//	logger.Error("Failed to setup git worktree: %v", err)
-type SessionLogger struct {
-	sessionID string
-}
-
 // ForSession returns a *slog.Logger pre-populated with "session" = sessionID.
 // All calls route through the async slog handler — no stdlib mutex serialization.
 // Session-specific log files still receive the entry via LogForSession when needed.
 func ForSession(sessionID string) *slog.Logger {
 	return slogDefault.Load().With("session", sessionID)
-}
-
-// ForSessionLegacy returns the old SessionLogger for callers that write to
-// per-session log files. New code should use ForSession instead.
-//
-// Deprecated: use ForSession.
-func ForSessionLegacy(sessionID string) *SessionLogger {
-	return &SessionLogger{sessionID: sessionID}
-}
-
-func (sl *SessionLogger) Debug(format string, v ...interface{}) {
-	LogForSession(sl.sessionID, "debug", format, v...)
-}
-
-func (sl *SessionLogger) Info(format string, v ...interface{}) {
-	LogForSession(sl.sessionID, "info", format, v...)
-}
-
-func (sl *SessionLogger) Warning(format string, v ...interface{}) {
-	LogForSession(sl.sessionID, "warning", format, v...)
-}
-
-func (sl *SessionLogger) Error(format string, v ...interface{}) {
-	LogForSession(sl.sessionID, "error", format, v...)
 }
 
 // logAt builds and emits a slog.Record with the PC of Info/Warn/Error/Debug's
@@ -733,38 +693,10 @@ func Debug(msg string, args ...any) { logAt(slog.LevelDebug, msg, args...) }
 
 // Global convenience functions for structured logging (legacy — prefer Info/Warn/Error/Debug)
 
-// DebugS logs a structured debug message
-func DebugS(message string, fields ...map[string]interface{}) {
-	if structuredLogger != nil {
-		structuredLogger.Debug(message, fields...)
-	}
-}
-
 // InfoS logs a structured info message
 func InfoS(message string, fields ...map[string]interface{}) {
 	if structuredLogger != nil {
 		structuredLogger.Info(message, fields...)
-	}
-}
-
-// WarningS logs a structured warning message
-func WarningS(message string, fields ...map[string]interface{}) {
-	if structuredLogger != nil {
-		structuredLogger.Warning(message, fields...)
-	}
-}
-
-// ErrorS logs a structured error message
-func ErrorS(message string, fields ...map[string]interface{}) {
-	if structuredLogger != nil {
-		structuredLogger.Error(message, fields...)
-	}
-}
-
-// FatalS logs a structured fatal message
-func FatalS(message string, fields ...map[string]interface{}) {
-	if structuredLogger != nil {
-		structuredLogger.Fatal(message, fields...)
 	}
 }
 
@@ -888,12 +820,15 @@ func createRotatingWriter(logFilePath string, cfg *LogConfig) io.Writer {
 	if cfg == nil || cfg.LogMaxSize <= 0 {
 		// Create log directory if it doesn't exist
 		logDir := filepath.Dir(logFilePath)
-		if err := os.MkdirAll(logDir, 0755); err != nil {
+		if err := os.MkdirAll(logDir, 0750); err != nil {
 			panic(fmt.Sprintf("could not create log directory: %s", err))
 		}
 
 		// No rotation, use standard file
-		f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		// #nosec G304 -- logFilePath comes from GetLogFilePath/GetLogDir, which resolve
+		// to config.GetConfigDir() (or an isolated test dir) plus fixed filenames, not
+		// caller/user-controlled input.
+		f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			panic(fmt.Sprintf("could not open log file: %s", err))
 		}
@@ -931,6 +866,7 @@ func initializeWithConfig(daemon bool, cfg *LogConfig) {
 	if cfg.ConsoleLevel < configLevel {
 		configLevel = cfg.ConsoleLevel
 	}
+	// #nosec G115 -- configLevel is a LogLevel enum (DEBUG..FATAL, iota-based), nowhere near int32's range
 	runtimeLevel.Store(int32(configLevel))
 
 	// Set log format to include timestamp and file/line number

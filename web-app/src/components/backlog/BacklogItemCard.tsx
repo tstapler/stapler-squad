@@ -8,7 +8,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 // it doesn't in the installed version).
 import { CircleDot } from "lucide-react";
 import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
-import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import type { StuckBacklogItem, StuckReason } from "@/gen/session/v1/backlog_pb";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { getPrimaryCardAction } from "@/lib/backlog/itemActions";
 import { BlockerChip } from "./BlockerChip";
@@ -39,6 +39,13 @@ interface BacklogItemCardProps {
    * page level (not per-card) and passed down — see board/page.tsx.
    */
   stuckItem?: StuckBacklogItem;
+  /**
+   * Every OTHER currently-open StuckReason for this item beyond `stuckItem`
+   * itself, from BacklogBoard's `summarizeStuckItemGroup` call (a backlog
+   * item can have several simultaneous open StuckBacklogItem rows —
+   * BUG-105). Threaded straight through to BlockerChip's "+N more" indicator.
+   */
+  otherStuckReasons?: StuckReason[];
 }
 
 function AcSummary({ item }: { item: BacklogItem }) {
@@ -93,6 +100,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
   pendingAction = null,
   forceJustChanged = false,
   stuckItem,
+  otherStuckReasons,
 }: BacklogItemCardProps) {
   const actionSpec = getPrimaryCardAction(item);
   const isTriageRunning = item.triageStatus === "running";
@@ -229,7 +237,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
             actionSpec.label
           )}
         </button>
-        {stuckItem && <BlockerChip variant="compact" item={stuckItem} />}
+        {stuckItem && <BlockerChip variant="compact" item={stuckItem} otherReasons={otherStuckReasons} />}
       </div>
       {disabledReason && (
         <span id={disabledReasonId} className={styles.disabledReason} data-testid="backlog-action-disabled-reason">

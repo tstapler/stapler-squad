@@ -260,16 +260,16 @@ func (s *RulesStore) exportRulesLocked() {
 	}
 
 	exportDir := filepath.Dir(exportPath)
-	if err := os.MkdirAll(exportDir, 0755); err != nil {
+	if err := os.MkdirAll(exportDir, 0750); err != nil {
 		return
 	}
 
 	tmp := exportPath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return
 	}
 	if err := os.Rename(tmp, exportPath); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 	}
 }
 
@@ -279,16 +279,18 @@ func specsToRules(specs []RuleSpec) []classifier.Rule {
 	rules := make([]classifier.Rule, 0, len(specs))
 	for _, spec := range specs {
 		r := classifier.Rule{
-			ID:                    spec.ID,
-			Name:                  spec.Name,
+			RuleMeta: classifier.RuleMeta{
+				ID:       spec.ID,
+				Name:     spec.Name,
+				Priority: spec.Priority,
+				Enabled:  spec.Enabled,
+				Source:   spec.Source,
+			},
 			ToolName:              spec.ToolName,
 			Decision:              parseDecision(spec.Decision),
 			RiskLevel:             parseRiskLevel(spec.RiskLevel),
 			Reason:                spec.Reason,
 			Alternative:           spec.Alternative,
-			Priority:              spec.Priority,
-			Enabled:               spec.Enabled,
-			Source:                spec.Source,
 			RequireCIPassing:      spec.RequireCIPassing,
 			MinSessionIdleMinutes: spec.MinSessionIdleMinutes,
 		}

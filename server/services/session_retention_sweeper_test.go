@@ -123,6 +123,29 @@ func TestSessionRetentionSweeper_SkipsOpenPR(t *testing.T) {
 		"expected session with an open/unmerged PR to be retained despite passing the retention window")
 }
 
+// TestSessionRetentionSweeper_DeletesTerminalPRAfterRestart is the regression test for
+// the session-retention-cleanup fix: GitHubPRStatusTerminal must round-trip through
+// storage (session/ent_repository.go's sessionToInstanceData / create+update paths),
+// not just live in memory, or every archived PR-linked session would be permanently
+// stuck behind SkipsOpenPR's check on every restart regardless of how old or merged the
+// PR actually is.
+func TestSessionRetentionSweeper_DeletesTerminalPRAfterRestart(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+
+	addArchivedInstance(t, fix, "terminal-pr-archived", time.Now().AddDate(0, 0, -20), func(inst *session.Instance) {
+		inst.GitHubPRNumber = 42
+		inst.GitHubPRStatusTerminal = true
+	})
+
+	sweeper := NewSessionRetentionSweeper(fix.storage, config.DefaultConfig(), fix.svc)
+	sweeper.sweep(context.Background())
+
+	assert.False(t, hasStoredTitle(t, fix, "terminal-pr-archived"),
+		"expected session with a merged/closed PR (loaded fresh from storage) to be deleted once past the retention window")
+}
+
 func TestSessionRetentionSweeper_SkipsDirtyWorktree(t *testing.T) {
 	t.Parallel()
 	fix := setupForkTestFixture(t)
@@ -311,15 +334,37 @@ func TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible(t *testi
 	// is gone moments later, so it converges on the very next tick). Re-invoking sweep()
 	// here models exactly that next tick, rather than asserting a stronger "always
 	// single-pass" guarantee this fix doesn't need to make.
+	// Inlined rather than calling hasStoredTitle(t, ...): that helper's
+	// require.NoError is safe at every OTHER call site in this file (all
+	// synchronous, single-shot assertions) but not here -- assert.Eventually
+	// runs this func on its own ticker goroutine, and does not wait for an
+	// in-flight tick to return before giving up at the deadline. If a tick's
+	// sweep(ctx) (real worktree/git + DB work) is still running when the 5s
+	// ceiling passes, Eventually returns and the test finishes, t.Cleanup
+	// closes fix.storage's DB, and the still-running stale tick then hits
+	// "sql: database is closed" -- require.NoError on a *testing.T that has
+	// already completed panics with "Fail in goroutine after test has
+	// completed" instead of just being one more false-y tick (confirmed:
+	// this exact panic, this exact test, session_service_fork_test.go's
+	// forkTestFixture doc comment already names it as a known recurrence).
+	// A query error here just means "not converged yet" -- return false and
+	// let the next tick (or the timeout) decide, never fail the test from
+	// this goroutine.
 	assert.Eventually(t, func() bool {
 		sweeper.sweep(ctx)
-		for _, title := range roundTitles {
-			if hasStoredTitle(t, fix, title) {
-				return false
+		data, err := fix.storage.ListInstanceData()
+		if err != nil {
+			return false
+		}
+		for _, d := range data {
+			for _, title := range roundTitles {
+				if d.Title == title {
+					return false
+				}
 			}
 		}
 		_, statErr := os.Stat(worktreeDir)
 		return os.IsNotExist(statErr)
-	}, 5*time.Second, 100*time.Millisecond,
+	}, 15*time.Second, 100*time.Millisecond,
 		"expected every sibling round's DB row and the shared worktree directory to eventually be reclaimed once the whole group became independently eligible")
 }

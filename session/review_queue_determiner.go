@@ -9,6 +9,15 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 )
 
+// waitingForAgentStuckThreshold bounds how long the no-controller path trusts
+// StatusWaitingForAgent as unconditional evidence of real background activity, before
+// treating it as a possibly-stuck/orphaned background shell and falling through to the
+// normal time-based idle re-add check instead. It's deliberately much larger than
+// basicIdleThreshold (below): the auto-mode footer count alone can't distinguish a
+// healthy long-running background task from one that's stalled, so this is a coarse
+// proxy — "background work has plausibly stalled" — not a precise stuck-detector.
+const waitingForAgentStuckThreshold = 30 * time.Minute
+
 // DetectionAction represents what the poller should do after status determination.
 type DetectionAction int
 
@@ -62,6 +71,14 @@ func effectiveCtx(provided, fallback string) string {
 		return provided
 	}
 	return fallback
+}
+
+// suppressedByAck reports whether inst was acknowledged (e.g. via the review queue's
+// "skip" action) more recently than its last meaningful output — meaning nothing new has
+// happened since the user dismissed it. Both Idle detection sites and the Stale check
+// share this single helper so the suppression rule lives in exactly one place.
+func (d *DefaultStatusDeterminer) suppressedByAck(inst *Instance) bool {
+	return inst.IsAcknowledgedAfterOutput()
 }
 
 // applyWorktreeCheck inspects the git worktree of inst and potentially overrides the
@@ -152,6 +169,15 @@ func (d *DefaultStatusDeterminer) Determine(
 			shouldAdd = true
 			ctx = effectiveCtx(statusInfo.StatusContext, "Task completed successfully")
 			log.Debug("task complete", "session", inst.Title, "ctx", ctx)
+		case statusInfo.ClaudeStatus == detection.StatusWaitingForAgent:
+			// Mirrors the no-controller branch's grace-period logic (below): trust
+			// StatusWaitingForAgent as evidence of real background activity only while
+			// recently updated, so a stuck/orphaned background task doesn't exclude an
+			// actually-idle session from the review queue indefinitely.
+			if time.Since(inst.Snapshot().UpdatedAt) < waitingForAgentStuckThreshold {
+				return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
+			}
+			// Stale background task — fall through to idle-state handling below.
 		}
 
 		// Now handle idle state - but only if no status-based condition was detected above.
@@ -167,11 +193,14 @@ func (d *DefaultStatusDeterminer) Determine(
 				shouldAdd = false
 
 			case detection.IdleStateTimeout:
-				// Definite timeout - been idle too long
-				reason = ReasonIdle
-				priority = PriorityLow
-				shouldAdd = true
-				ctx = "Session idle - ready for next task"
+				// Definite timeout - been idle too long, unless the user already
+				// acknowledged this session and nothing new has happened since.
+				if !d.suppressedByAck(inst) {
+					reason = ReasonIdle
+					priority = PriorityLow
+					shouldAdd = true
+					ctx = "Session idle - ready for next task"
+				}
 			}
 		}
 
@@ -227,16 +256,30 @@ func (d *DefaultStatusDeterminer) Determine(
 				shouldAdd = true
 				ctx = effectiveCtx(statusContext, "Task completed successfully")
 				log.Debug("task complete (no controller)", "session", inst.Title)
-			case detection.StatusExecuting, detection.StatusProcessing, detection.StatusWaitingForAgent, detection.StatusCompacting:
+			case detection.StatusExecuting, detection.StatusProcessing, detection.StatusCompacting:
 				return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
+			case detection.StatusWaitingForAgent:
+				// Unlike Executing/Processing/Compacting, WaitingForAgent is now reachable
+				// via the always-present auto-mode footer override (detection/detector.go's
+				// applyFooterIdleOverride) rather than only a genuinely-active spinner line —
+				// so it can no longer be trusted as unconditional evidence of real activity.
+				// A stuck/orphaned background shell that never decrements would otherwise
+				// exclude an actually-idle session from the review queue indefinitely. Only
+				// suppress it while recently updated; once stale, fall through to the normal
+				// time-based re-add check below.
+				if time.Since(inst.UpdatedAt) < waitingForAgentStuckThreshold {
+					return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
+				}
 			}
 		}
 
 		// If no status-based condition was detected, fall back to time-based checks
 		if !shouldAdd {
-			// Check if session has been idle for a long time based on UpdatedAt
+			// Check if session has been idle for a long time based on UpdatedAt,
+			// unless the user already acknowledged this session and nothing new
+			// has happened since.
 			const basicIdleThreshold = 5 * time.Second
-			if time.Since(inst.UpdatedAt) > basicIdleThreshold {
+			if time.Since(inst.UpdatedAt) > basicIdleThreshold && !d.suppressedByAck(inst) {
 				reason = ReasonIdle
 				priority = PriorityLow
 				shouldAdd = true
@@ -257,7 +300,7 @@ func (d *DefaultStatusDeterminer) Determine(
 	// Check for terminal staleness (no meaningful output for configured threshold)
 	// IMPORTANT: Respect acknowledgment - don't flag as stale if user already acknowledged
 	timeSinceOutput := inst.GetTimeSinceLastMeaningfulOutput()
-	alreadyAcknowledged := inst.IsAcknowledgedAfterOutput()
+	alreadyAcknowledged := d.suppressedByAck(inst)
 
 	if timeSinceOutput > d.config.StalenessThreshold {
 		if alreadyAcknowledged {

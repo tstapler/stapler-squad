@@ -62,5 +62,3 @@ export function FilterPills({ children, onClearAll, className }: FilterPillsProp
     </div>
   );
 }
-
-export default FilterPill;

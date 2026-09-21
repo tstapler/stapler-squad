@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -52,12 +53,13 @@ type ReviewQueueChecker interface {
 type approvalNotificationStamper interface {
 	SetMetadata(id, key, value string) error
 	MarkRead(ids []string) (int, error)
+	GetByID(id string) (*notifications.NotificationRecord, bool)
 }
 
 // autoApprovalLogger is a narrow interface for writing silent auto-approval records
 // directly to notification history without triggering toasts or push notifications.
 type autoApprovalLogger interface {
-	AppendAutoApproved(sessionID, sessionName, toolName, filePath, ruleID, ruleName, ruleSource, decision string) error
+	AppendAutoApproved(sessionID, sessionName, toolName, detail, ruleID, ruleName, ruleSource, decision string) error
 }
 
 // headlessPoolApprover is the narrow interface ApprovalHandler needs from the headless pool.
@@ -85,6 +87,7 @@ type ApprovalHandler struct {
 	liveFinder          LiveInstanceFinder          // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
 	slackNotifier       *SlackNotifier              // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
 	dashboardBaseURLFn  func() string               // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
+	piHealthTracker     *PiExtensionHealthTracker   // optional: records pi approval-extension health pings (pi-support Epic 4.2)
 }
 
 // NewApprovalHandler creates a new ApprovalHandler.
@@ -149,6 +152,12 @@ func (h *ApprovalHandler) SetClassifier(c classifier.Classifier) {
 // SetAnalyticsStore injects an AnalyticsStore for recording classification decisions.
 func (h *ApprovalHandler) SetAnalyticsStore(a *AnalyticsStore) {
 	h.analyticsStore = a
+}
+
+// SetPiExtensionHealthTracker injects a PiExtensionHealthTracker so
+// HandlePiExtensionLoaded has somewhere to record pings (pi-support Epic 4.2).
+func (h *ApprovalHandler) SetPiExtensionHealthTracker(t *PiExtensionHealthTracker) {
+	h.piHealthTracker = t
 }
 
 // SetDomainChecker injects a DomainAgeChecker for escalating requests to newly-registered domains.
@@ -225,6 +234,65 @@ func buildApprovalQuery(toolName string, toolInput map[string]interface{}, sessi
 	)
 }
 
+// piToolNameAliases maps pi's native tool names (@earendil-works/pi-coding-agent
+// dist/core/tools/index.js's allToolNames: read, bash, powershell, edit, write, grep,
+// find, ls) to the Claude tool name a classifier rule actually targets, wherever the
+// two differ. Most of pi's names already match a rule's ToolName/ToolPattern via
+// matchesRule's case-insensitive strings.EqualFold (pi's "bash" == "Bash", "read" ==
+// "Read", "write" == "Write", "edit" == "Edit", "grep" == "Grep" — all listed as-is in
+// classifier.go's ToolPattern regexes), so only the two genuine mismatches are aliased:
+//   - "find" -> "Glob": pi's glob-pattern file finder has no name overlap with Claude's
+//     "Glob" tool, which classifier.go:1328's read-only ToolPattern explicitly lists.
+//   - "powershell" -> "Bash": pi's Windows shell tool is a distinct name from Claude's
+//     single cross-platform "Bash" tool; aliasing it lets classifier.go:826's ToolName:
+//     "Bash" rule and line 472's deep AST security audit apply to PowerShell commands
+//     too, since powershell's arg is already keyed "command" (see piPathToFilePathTools
+//     below for the one field pi does NOT share with Claude's convention).
+var piToolNameAliases = map[string]string{
+	"find":       "Glob",
+	"powershell": "Bash",
+}
+
+// normalizePiPayload rewrites payload in place from pi's native tool vocabulary to
+// Claude's, so classifier.RuleBasedClassifier's rules — written entirely against
+// Claude's ToolName strings and ToolInput key names — actually match pi tool calls
+// instead of falling through to "no matching rule" on every single one.
+//
+// Root cause (2026-09-12 investigation): pi's approval extension
+// (cmd/ssq-hooks/main.go's ssqApprovalExtensionTemplate) forwards event.toolName/
+// event.input verbatim with no translation, unlike every other non-Claude agent
+// (Gemini/OpenCode/Antigravity), which go through cmd/ssq-hooks's own per-agent parsers
+// (see normalizeOpenCodeToolInput there for the equivalent fix, already shipped, for
+// OpenCode's "filePath" vs. Claude's "file_path"). pi never had an equivalent because
+// its extension POSTs directly to this HTTP endpoint (ADR-001) rather than going
+// through ssq-hooks's stdin-based parser chain at all.
+//
+// Confirmed against the real installed package
+// (~/.local/share/pi/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/*.js,
+// pi 0.84.4): pi's read/edit/write/grep/find/ls tools all key their target path as
+// "path" (Type.String({description:"Path to the file..."})) — never "file_path". Since
+// matchesRule (pkg/classifier/classifier.go) reads payload.ToolInput["file_path"]
+// verbatim for every FilePattern rule, every pi file-targeting tool call previously
+// matched filePath == "" and silently failed FilePattern rules exactly like the
+// OpenCode gap did — before falling through to Escalate (classifyInternal's
+// "No matching rule" path) and blocking for the full 4-minute manual-review timeout
+// (ApprovalHandler.approvalTimeout()) with no reviewer able to resolve it, which is the
+// "everything getting hung up and timing out" symptom this fixes.
+func normalizePiPayload(payload *classifier.PermissionRequestPayload) {
+	if alias, ok := piToolNameAliases[strings.ToLower(payload.ToolName)]; ok {
+		payload.ToolName = alias
+	}
+	if payload.ToolInput == nil {
+		return
+	}
+	if _, hasFilePath := payload.ToolInput["file_path"]; hasFilePath {
+		return
+	}
+	if p, ok := payload.ToolInput["path"]; ok {
+		payload.ToolInput["file_path"] = p
+	}
+}
+
 // HandlePermissionRequest handles POST /api/hooks/permission-request.
 // This endpoint is configured as an HTTP hook in Claude Code's settings.
 // It blocks until the user approves/denies or the context is canceled.
@@ -252,6 +320,23 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		sessionID = "unknown"
 	}
 
+	// source identifies which agent's hook produced this request, for audit/analytics
+	// distinguishability (pi-support Epic 4.3). Defaulted to "claude" here, at the
+	// recording boundary only — payload itself is never mutated, since Claude's
+	// existing curl hook omits the field entirely and that omission is the expected,
+	// backward-compatible shape of its wire payload.
+	source := payload.Source
+	if source == "" {
+		source = "claude"
+	}
+
+	// pi sends its own native tool vocabulary (payload.Source == "pi") — normalize it
+	// to Claude's conventions in place, unlike "claude"/"" which are passed through
+	// unmodified. See normalizePiPayload's doc comment for why this is needed at all.
+	if payload.Source == "pi" {
+		normalizePiPayload(&payload)
+	}
+
 	// Secret scan: auto-deny any command that appears to contain a plaintext secret.
 	// Runs on the full command text (before any truncation) so it catches long secrets.
 	if cmd, ok := payload.ToolInput["command"].(string); ok && cmd != "" {
@@ -275,7 +360,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 					RuleID:    classifier.RuleIDSecretScan,
 					RuleName:  "Plaintext Secret Detection",
 					Reason:    msg,
-				}, sessionID, "", 0)
+				}, sessionID, "", 0, source)
 			}
 			h.writeDecision(w, "deny", msg)
 			return
@@ -321,7 +406,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 						Reason:    reason,
 					}
 					if h.analyticsStore != nil {
-						h.analyticsStore.RecordFromResult(payload, domainEscalation, sessionID, "", 0)
+						h.analyticsStore.RecordFromResult(payload, domainEscalation, sessionID, "", 0, source)
 					}
 					// Fall through to manual review queue (do NOT return here).
 					escalation = domainEscalation
@@ -382,15 +467,14 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			if result.Decision != classifier.AutoAllow && result.Decision != classifier.AutoDeny && result.Decision != classifier.Escalate {
 				recordResult.RuleID = classifier.RuleIDUnexpectedDecision
 			}
-			h.analyticsStore.RecordFromResult(payload, recordResult, sessionID, "", durationMs)
+			h.analyticsStore.RecordFromResult(payload, recordResult, sessionID, "", durationMs, source)
 		}
 
 		switch result.Decision {
 		case classifier.AutoAllow:
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID)
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID, "detail", approvalDetail(payload.ToolInput))
 			if h.autoApprovalLog != nil {
-				filePath, _ := payload.ToolInput["file_path"].(string)
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "allow")
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "allow")
 			}
 			h.writeDecision(w, "allow", "")
 			return
@@ -399,10 +483,9 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			if result.Alternative != "" {
 				msg = fmt.Sprintf("%s %s", msg, result.Alternative)
 			}
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg)
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg, "detail", approvalDetail(payload.ToolInput))
 			if h.autoApprovalLog != nil {
-				filePath, _ := payload.ToolInput["file_path"].(string)
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "deny")
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "deny")
 			}
 			h.writeDecision(w, "deny", msg)
 			return
@@ -521,25 +604,88 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 		log.ForSession(sessionID).Info("[ApprovalHandler] approval resolved", "approval_id", approvalID, "behavior", decision.Behavior)
 	case <-time.After(h.approvalTimeout()):
 		// Server-side timeout (before the hook's 5-minute timeout).
-		// Return an empty HTTP response so the hook script gets no hookSpecificOutput
-		// and Claude Code falls back to its native terminal permission dialog.
-		// This lets the user still approve/deny in the terminal rather than being
-		// silently allowed or denied.
 		h.store.Remove(approvalID)
 		h.stampResolved(approvalID, sessionID, "timeout")
-		log.ForSession(sessionID).Info("[ApprovalHandler] approval timed out — returning empty response (native dialog fallback)", "approval_id", approvalID)
+		log.ForSession(sessionID).Info("[ApprovalHandler] approval timed out", "approval_id", approvalID, "source", source)
+		if source == "pi" {
+			// Fail closed, deliberately (pi-support MAJOR 3): unlike Claude's
+			// curl hook, pi's ssq-approval.ts extension has no native terminal
+			// permission dialog to fall back to, so an empty 200 here would
+			// leave the tool call in limbo at the mercy of the extension's own
+			// fetch()-throws-on-empty-body behavior — an accident of the
+			// client, not a contract. Deny explicitly instead.
+			h.writeDecision(w, "deny", "stapler-squad approval timed out")
+			return
+		}
+		// Claude: return an empty HTTP response so the hook script gets no
+		// hookSpecificOutput and Claude Code falls back to its native terminal
+		// permission dialog. This lets the user still approve/deny in the
+		// terminal rather than being silently allowed or denied.
 		w.WriteHeader(http.StatusOK)
 		return
 	case <-r.Context().Done():
-		// Claude Code disconnected (e.g., stapler-squad restarted, network issue)
+		// Claude Code disconnected (e.g., stapler-squad restarted, network issue).
+		// The client is already gone, so there is no response to write for
+		// either source — decision is intentionally left unset/unused here.
 		h.store.Remove(approvalID)
-		decision = ApprovalDecision{Behavior: "allow", Message: ""}
 		h.stampResolved(approvalID, sessionID, "canceled")
 		log.ForSession(sessionID).Info("[ApprovalHandler] approval context canceled", "approval_id", approvalID)
 		return // Don't write to disconnected client
 	}
 
 	h.writeDecision(w, decision.Behavior, decision.Message)
+}
+
+// piExtensionHealthPingPayload is the JSON body ssqApprovalExtensionTemplate
+// (cmd/ssq-hooks/main.go) POSTs to /api/hooks/pi-extension-loaded, both at
+// extension-load time and on every periodic re-ping (Story 4.2.3). Cwd is the
+// only field: the ping fires before any tool_call handler runs, so there is no
+// event/ctx object carrying a session ID the way HandlePermissionRequest's
+// payload does — cwd-prefix matching (the same fallback resolveSessionID
+// already uses for a missing/unmatched X-CS-Session-ID header) is the only
+// session-identifying signal available at that point.
+type piExtensionHealthPingPayload struct {
+	Cwd string `json:"cwd"`
+}
+
+// HandlePiExtensionLoaded records one pi approval-extension health ping
+// (pi-support Epic 4.2). The ping is best-effort and fire-and-forget from the
+// extension's side (see ssqApprovalExtensionTemplate's doc comment) — this
+// handler always responds 200 regardless of whether the session could be
+// resolved or the tracker recorded anything, so a malformed/unresolvable ping
+// never surfaces as an error to the extension.
+//
+// Feature-flag gate as the handler's first line (same idiom as
+// GitHubWebhookHandler.Handle / GenericWebhookHandler.Handle): with
+// pi-support off, this never touches piHealthTracker's in-memory map — that
+// mirrors every other pi surface (resume injection, UI preset, status
+// source, extension injection/enforcement), which all check the flag before
+// acting (see project_plans/pi-support/implementation/plan.md's Risk
+// Control section).
+//
+// +http: POST /api/hooks/pi-extension-loaded hooks:pi-extension-loaded
+func (h *ApprovalHandler) HandlePiExtensionLoaded(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) {
+		http.NotFound(w, r)
+		return
+	}
+
+	var payload piExtensionHealthPingPayload
+	_ = json.NewDecoder(r.Body).Decode(&payload) // best-effort; a malformed body still gets a 200
+
+	if h.piHealthTracker != nil {
+		sessionID := h.resolveSessionID(r.Header.Get("X-CS-Session-ID"), payload.Cwd)
+		if sessionID != "" {
+			h.piHealthTracker.RecordPing(sessionID)
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 // resolveSessionName returns the human-readable title for sessionID using the
@@ -582,7 +728,7 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 		h.resolveSessionName(sessionID),
 		approval.ID, // Use approval ID as notification ID for correlation
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT),
+		derivePriority(true, true), // urgent, important — a pending permission request blocks the session right now
 		title,
 		message,
 		metadata,
@@ -621,7 +767,7 @@ func (h *ApprovalHandler) broadcastQuestionNotification(sessionID string, payloa
 		h.resolveSessionName(sessionID),
 		uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+		derivePriority(true, true), // urgent, important — Claude is blocked waiting on the user right now
 		"Claude has a question",
 		message,
 		nil,
@@ -664,13 +810,25 @@ func sanitizeNotificationText(s string) string {
 	}, s)
 }
 
-// buildApprovalMessage builds the human-readable message for an approval notification.
-func buildApprovalMessage(approval *PendingApproval) string {
-	if cmd, ok := approval.ToolInput["command"].(string); ok && cmd != "" {
+// approvalDetail extracts the human-meaningful part of a tool call — the full command
+// (including every sub-command of a compound &&/;/pipe chain, since this is the raw
+// string before classifier.ExtractAllCommands splits it) for Bash/PowerShell, or the
+// target path for file-targeting tools. Returns "" if toolInput has neither, letting the
+// caller supply its own fallback.
+func approvalDetail(toolInput map[string]interface{}) string {
+	if cmd, ok := toolInput["command"].(string); ok && cmd != "" {
 		return truncateString(cmd, maxNotificationMessageLen)
 	}
-	if filePath, ok := approval.ToolInput["file_path"].(string); ok && filePath != "" {
+	if filePath, ok := toolInput["file_path"].(string); ok && filePath != "" {
 		return filePath
+	}
+	return ""
+}
+
+// buildApprovalMessage builds the human-readable message for an approval notification.
+func buildApprovalMessage(approval *PendingApproval) string {
+	if detail := approvalDetail(approval.ToolInput); detail != "" {
+		return detail
 	}
 	return fmt.Sprintf("Claude needs permission to use %s", approval.ToolName)
 }
@@ -846,6 +1004,9 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 	entry := hookEntry{Type: "command", Command: curlCmd, Timeout: hookTimeout}
 
 	// Read existing settings (if any).
+	// #nosec G304 -- settingsPath is rootDir/.claude/settings.local.json, where rootDir is
+	// the session's own worktree/directory (Instance.GetEffectiveRootDir()), established by
+	// this server's own session/worktree creation, never raw network/RPC input.
 	data, err := os.ReadFile(settingsPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read %s: %w", settingsPath, err)

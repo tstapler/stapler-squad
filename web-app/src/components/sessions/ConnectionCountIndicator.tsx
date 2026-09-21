@@ -21,6 +21,13 @@ export interface ConnectionCountIndicatorProps {
    * (Story 4.2.2 AC3 / UX-AC-10: only shown when a mismatch is real).
    */
   sizeMismatch?: boolean;
+  /**
+   * Task 1.4.3c — true for ~600ms right when a MULTIPLE_VIEWERS blocked toast
+   * mounts (design/ux.md Surface 3). Purely visual (aria-hidden); never set
+   * for the other two ScrollBlockedReason values, which have no
+   * connected-viewer state to point to.
+   */
+  pulse?: boolean;
 }
 
 // design/ux.md's "Rapid count oscillation" edge case (UX-AC-11): debounce the
@@ -62,7 +69,7 @@ function formatCount(count: number): string {
  * departure updates this region's text first, holds it for
  * `DEPARTURE_HOLD_MS`, then unmounts.
  */
-export function ConnectionCountIndicator({ count, sizeMismatch }: ConnectionCountIndicatorProps) {
+export function ConnectionCountIndicator({ count, sizeMismatch, pulse }: ConnectionCountIndicatorProps) {
   const [expanded, setExpanded] = useState(false);
   const [settledCount, setSettledCount] = useState(count);
   const [departureLabel, setDepartureLabel] = useState<string | null>(null);
@@ -146,11 +153,12 @@ export function ConnectionCountIndicator({ count, sizeMismatch }: ConnectionCoun
 
   return (
     <span
-      className={styles.badge}
+      className={pulse ? `${styles.badge} ${styles.pulse}` : styles.badge}
       role="status"
       aria-live="polite"
       aria-label={label}
       data-testid="connection-count-indicator"
+      data-pulse={pulse ? "true" : undefined}
       tabIndex={0}
       onMouseEnter={() => setExpanded(true)}
       onMouseLeave={() => setExpanded(false)}

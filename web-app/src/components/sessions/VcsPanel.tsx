@@ -5,6 +5,7 @@ import type { Session } from "@/gen/session/v1/types_pb";
 import { useSessionVcsContext } from "@/lib/contexts/SessionVcsContext";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { fromSessionVcs } from "@/lib/vcs/adapters";
+import { getGitHubRateLimitMessage } from "@/lib/vcs/githubRateLimit";
 import { VcsWidget } from "@/components/shared/VcsWidget";
 import * as styles from "./VcsPanel.css";
 
@@ -43,9 +44,9 @@ export function VcsPanel({ onNavigateToFile, session, onBrowseFiles }: VcsPanelP
   if (error) {
     return (
       <div className={styles.container}>
-        <div className={styles.error}>
+        <div className={styles.error} role="status" aria-live="polite">
           <span className={styles.errorIcon}>⚠️</span>
-          <span>{error.message}</span>
+          <span>{getGitHubRateLimitMessage(error, error.message)}</span>
           <button className={styles.retryButton} onClick={handleRetry}>
             Retry
           </button>

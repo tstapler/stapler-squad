@@ -1,0 +1,14 @@
+{
+  "id": "tmux:restart-server",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "RestartTmuxServer",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/tmux_version_status_service.go",
+  "tested": true,
+  "testIds": [
+    "TestRestartTmuxServer_ReturnsErrServerDownAsSuccess_When_NoServerRunning"
+  ],
+  "lastModified": "2026-09-11T22:59:12.781345429-07:00"
+}

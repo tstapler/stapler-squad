@@ -61,8 +61,13 @@ export function terminalStreamManagerMockModule() {
   return {
     TerminalStreamManager: jest.fn().mockImplementation(() => ({
       setOnFirstOutput: jest.fn(),
+      setOnFullSnapshot: jest.fn(),
+      setOnAltScreenChange: jest.fn(),
+      setOnAppScrollback: jest.fn(),
+      handleAppScrollback: jest.fn(),
       installDebugMonitor: jest.fn(),
       writeInitialContent: jest.fn().mockResolvedValue(undefined),
+      prependScrollbackBatch: jest.fn().mockResolvedValue(undefined),
       write: jest.fn(),
       cleanup: jest.fn(),
       updateSendFlowControl: jest.fn(),
@@ -84,18 +89,38 @@ export function terminalDimensionCacheWithValidationMockModule() {
   };
 }
 
+// Story 1.4.0/1.4.1 — the mock TerminalStreamManager instance captures the
+// callbacks TerminalOutput.tsx registers (setOnAltScreenChange,
+// setOnAppScrollback) onto itself, and this module exposes the latest
+// constructed instance via __mockManagerState so a test can drive them
+// directly (mirrors __mockXtermState's pattern in TerminalOutput.test.tsx).
 export function terminalStreamManagerWithSerializeAddonMockModule() {
-  return {
-    TerminalStreamManager: jest.fn().mockImplementation(() => ({
+  const state: { instance: any } = { instance: null };
+  const TerminalStreamManager = jest.fn().mockImplementation(() => {
+    const instance: any = {
       setOnFirstOutput: jest.fn(),
+      setOnFullSnapshot: jest.fn(),
+      setOnAltScreenChange: jest.fn((cb: (active: boolean) => void) => {
+        instance.__onAltScreenChange = cb;
+      }),
+      setOnAppScrollback: jest.fn((cb: (frame: unknown) => void) => {
+        instance.__onAppScrollback = cb;
+      }),
+      handleAppScrollback: jest.fn((frame: unknown) => {
+        instance.__onAppScrollback?.(frame);
+      }),
       setSerializeAddon: jest.fn(),
       installDebugMonitor: jest.fn(),
       writeInitialContent: jest.fn().mockResolvedValue(undefined),
+      prependScrollbackBatch: jest.fn().mockResolvedValue(undefined),
       write: jest.fn(),
       cleanup: jest.fn(),
       updateSendFlowControl: jest.fn(),
-    })),
-  };
+    };
+    state.instance = instance;
+    return instance;
+  });
+  return { TerminalStreamManager, __mockManagerState: state };
 }
 
 export function analyticsContextPlainMockModule() {

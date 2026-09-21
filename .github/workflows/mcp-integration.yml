@@ -94,17 +94,25 @@ jobs:
       # The integration test (TestMCPHandshakeSubprocess) spawns a real
       # --mcp subprocess and exercises the full MCP stdio handshake.
       # It calls `go build` internally, so the Go toolchain must be present.
+      # It's the only file in this job's scope actually gated behind
+      # -tags=integration (server/mcp/server_integration_test.go); server/services
+      # carries no integration-tagged tests of its own.
       #
-      # -timeout=1200s: the pure-Go sqlite migration (modernc.org/sqlite,
-      # see backlog/stapler-squad-fix-cgo-release-sqlite-driver) made
-      # session.NewEntRepository()'s ent schema migration + backfills
-      # measurably more expensive under -race than the old cgo driver
-      # (~2.9s/call under -race vs. ~0.77s without, measured locally via
-      # a standalone repro against this branch). server/services has 308
-      # call sites of the createTestStorage(t) helper that each pay this
-      # cost once, so its test binary alone needs on the order of 15
-      # minutes of headroom under -race; the previous 150s budget was
-      # sized for the old cgo driver and never adjusted for the new one.
+      # server/services runs WITHOUT -race here (unlike server/mcp above):
+      # the pure-Go sqlite driver (modernc.org/sqlite, see
+      # backlog/stapler-squad-fix-cgo-release-sqlite-driver) made
+      # session.NewEntRepository()'s ent schema migration measurably more
+      # expensive under -race than the old cgo driver (~2.9s/call under
+      # -race vs. ~0.77s without, measured locally against this branch),
+      # and server/services has 308 call sites of the createTestStorage(t)
+      # helper that each pay this cost once — under -race that alone
+      # repeatedly blew this job's budget (BUG-083/BUG-099). test-rest
+      # (build.yml) already runs server/services under -race unconditionally
+      # on every PR (no path filter), so this job doesn't need a second
+      # race-instrumented pass — running it here without -race keeps this
+      # job's own coverage of server/services (per #616, so a bug here still
+      # fails this required check even if only server/services changed)
+      # without paying the race tax twice.
       #
       # Soft-timeout wrapper: 25m soft budget below this job's 30m hard
       # timeout-minutes: ceiling, so a budget breach fails this step with
@@ -112,6 +120,8 @@ jobs:
       # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
       - name: Run MCP integration tests
         run: |
-          timeout 25m go test -tags=integration -timeout=1200s -v -race \
-            ./server/mcp/... \
-            ./server/services/... || { echo "::error::CI-BUDGET-EXCEEDED: 'mcp-integration' exceeded its 25m budget"; echo "CI-BUDGET-EXCEEDED: 'mcp-integration' exceeded its 25m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          timeout 25m bash -c '
+            set -e
+            go test -tags=integration -timeout=1200s -v -race ./server/mcp/...
+            go test -tags=integration -timeout=1200s -v ./server/services/...
+          ' || { echo "::error::CI-BUDGET-EXCEEDED: 'mcp-integration' exceeded its 25m budget"; echo "CI-BUDGET-EXCEEDED: 'mcp-integration' exceeded its 25m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }

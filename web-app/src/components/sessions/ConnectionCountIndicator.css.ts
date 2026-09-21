@@ -1,4 +1,4 @@
-import { style } from "@vanilla-extract/css";
+import { style, keyframes } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
 // Neutral chrome — this is informational, never an error/warning state
@@ -21,6 +21,30 @@ export const badge = style({
 
 export const icon = style({
   fontSize: vars.fontSize.sm,
+});
+
+// Task 1.4.3c — brief outline-flash pairing the MULTIPLE_VIEWERS blocked
+// toast with this badge (design/ux.md Surface 3's ambient/reactive signal
+// pairing). aria-hidden in the component -- purely visual reinforcement,
+// the toast text already carries the full explanation.
+const pulseOutline = keyframes({
+  "0%, 100%": { boxShadow: "0 0 0 0 rgba(0,0,0,0)" },
+  "50%": { boxShadow: `0 0 0 3px ${vars.color.warning}` },
+});
+
+export const pulse = style({
+  "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      animation: `${pulseOutline} 600ms ease-in-out`,
+    },
+    // ux.md §5 "prefers-reduced-motion" requirement: the pulsing/spinning
+    // ring must have a static fallback that still communicates state via
+    // color/shape alone, not via omitting the information (matches
+    // backlog/ConnectionIndicator.css.ts's spinnerBase pattern).
+    "(prefers-reduced-motion: reduce)": {
+      boxShadow: `0 0 0 3px ${vars.color.warning}`,
+    },
+  },
 });
 
 // Revealed on hover/focus (Story 4.2.2 Task 4.2.2b) — never a second
