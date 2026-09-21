@@ -68,15 +68,18 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		// bootstraps and then optionally worktrees off the fresh repo -- so
 		// this case's contract never needs a second, parallel bootstrap path.
 		log.Info("creating git worktree for instance", "session", i.Title, "path", i.Path)
-		gitWorktree, branchName, err := git.NewGitWorktreeWithBranch(i.Path, i.Title, i.Branch, git.WithCommandRunner(i.executionTarget().Runner()))
+		gitWorktree, branchName, err := i.newWorktreeFromResolvedBase()
 		if err != nil {
 			return fmt.Errorf("failed to create git worktree: %w", err)
 		}
 		i.gitManager.SetWorktree(gitWorktree)
-		if i.Branch == "" {
-			i.Branch = branchName
-		}
+		i.Branch = branchName
 		log.Info("git worktree created", "session", i.Title, "branch", i.Branch)
+		// Republish the snapshot so GetCreationWarning() (Snapshot()-backed, per
+		// instance-lock-free-reads.md) observes the CreationWarning set above by
+		// newWorktreeFromResolvedBase -- the initial snapshot published at
+		// construction predates this and is never otherwise refreshed.
+		i.snapshot.Store(buildSnapshot(i))
 	case SessionTypeExistingWorktree:
 		if i.ExistingWorktree == "" {
 			return fmt.Errorf("existing worktree path required for SessionTypeExistingWorktree")
@@ -198,6 +201,54 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		i.Branch = ""
 	}
 	return nil
+}
+
+// newWorktreeFromResolvedBase constructs the *git.GitWorktree for a
+// SessionTypeNewWorktree session, branching from the repo's real default
+// branch (origin's freshly-fetched tip, falling back to a local candidate —
+// see git.ResolveWorktreeBaseCommit) instead of i.Path's ambient checked-out
+// HEAD. Mirrors CreateBacklogWorktree's identical resolve-then-construct
+// pattern (see its doc comment for the misattribution bug this avoids); unlike
+// that queue-driven spawn, there is no baseBranch override here since
+// create_session accepts no such parameter yet.
+//
+// Only ever falls back to ambient HEAD for a genuinely unborn repo (baseSHA
+// == "", err == nil) — the one case with no other branch to accidentally
+// fork from. Any other resolution failure is a hard error, never a silent
+// ambient-HEAD fallback. When ambient HEAD is a real, different commit from
+// the resolved base, records i.CreationWarning so the MCP caller sees a
+// divergence signal instead of silent success (see instanceToDetail).
+func (i *Instance) newWorktreeFromResolvedBase() (*git.GitWorktree, string, error) {
+	branchName := git.ResolveBranchName(i.Branch, i.Title)
+	runner := i.executionTarget().Runner()
+
+	resolvedRepo, err := ResolveMainRepoRoot(i.Path)
+	if err != nil {
+		resolvedRepo = i.Path
+	}
+
+	defaultBranch, baseSHA, resolveErr := git.ResolveWorktreeBaseCommit(resolvedRepo)
+	if resolveErr != nil {
+		return nil, "", fmt.Errorf("resolve default branch: %w", resolveErr)
+	}
+	if baseSHA == "" {
+		// Unborn repo (IsUnbornRepo) -- no commits anywhere, so ambient HEAD
+		// carries no risk of branching from an unrelated branch's work.
+		return git.NewGitWorktreeWithBranch(i.Path, i.Title, branchName, git.WithCommandRunner(runner))
+	}
+	if diverged, ambientBranch := git.AmbientHEADDivergesFromBase(resolvedRepo, baseSHA); diverged {
+		if ambientBranch != "" {
+			i.CreationWarning = fmt.Sprintf(
+				"branched from %s's default branch %q instead of %q, which %s was checked out to and has diverged from it",
+				resolvedRepo, defaultBranch, ambientBranch, resolvedRepo)
+		} else {
+			i.CreationWarning = fmt.Sprintf(
+				"branched from %s's default branch %q instead of its ambient checked-out HEAD, which has diverged from it",
+				resolvedRepo, defaultBranch)
+		}
+		log.Warn("new_worktree: ambient HEAD diverges from resolved default branch", "repoPath", resolvedRepo, "defaultBranch", defaultBranch, "ambientBranch", ambientBranch)
+	}
+	return git.NewGitWorktreeFromCommitSHA(i.Path, i.Title, branchName, baseSHA, git.WithCommandRunner(runner))
 }
 
 // EnsureDirectorySessionPath creates and git-inits path if it does not already exist —
@@ -417,6 +468,13 @@ func (i *Instance) ActiveDir() string {
 // accessor (the published atomic Snapshot) rather than the bare i.Path field.
 func (i *Instance) GetPath() string {
 	return i.Snapshot().Path
+}
+
+// GetCreationWarning returns the one-time base-branch-divergence warning set
+// by newWorktreeFromResolvedBase, if any, via the lock-free published
+// Snapshot() rather than the bare i.CreationWarning field.
+func (i *Instance) GetCreationWarning() string {
+	return i.Snapshot().CreationWarning
 }
 
 // Workspace returns every path concept this session has, named. See the

@@ -246,6 +246,19 @@ func NewGitWorktreeWithBranch(repoPath string, sessionName string, customBranch 
 	return NewGitWorktreeWithBranchAndExecutor(repoPath, sessionName, customBranch, opts...)
 }
 
+// ResolveBranchName returns customBranch if set, else a branch name generated
+// from sessionName (config.BranchPrefix + sanitizeBranchName(sessionName)) —
+// the naming NewGitWorktreeWithBranch has always applied, extracted so
+// NewGitWorktreeFromCommitSHA callers that also need branch-name generation
+// (e.g. setupFirstTimeWorktree's SessionTypeNewWorktree case) don't duplicate it.
+func ResolveBranchName(customBranch, sessionName string) string {
+	if customBranch != "" {
+		return customBranch
+	}
+	cfg := config.LoadConfig()
+	return fmt.Sprintf("%s%s", cfg.BranchPrefix, sanitizeBranchName(sessionName))
+}
+
 // NewGitWorktreeWithBranchAndExecutor creates a new GitWorktree with an optional branch name.
 // The "WithExecutor" name predates CommandRunner (ADR-002) — see
 // NewGitWorktreeFromStorageWithExecutor's doc comment; use WithCommandRunner to
@@ -256,17 +269,7 @@ func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, cu
 		return nil, "", fmt.Errorf("repoPath must not be empty")
 	}
 
-	cfg := config.LoadConfig()
-
-	var branchName string
-	if customBranch != "" {
-		// Use the custom branch name directly
-		branchName = customBranch
-	} else {
-		// Generate branch name from session name
-		sanitizedName := sanitizeBranchName(sessionName)
-		branchName = fmt.Sprintf("%s%s", cfg.BranchPrefix, sanitizedName)
-	}
+	branchName := ResolveBranchName(customBranch, sessionName)
 
 	// Convert repoPath to absolute path
 	absPath, err := filepath.Abs(repoPath)

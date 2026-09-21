@@ -88,6 +88,7 @@ type InstanceSnapshot struct {
 	Path                  string
 	WorkingDir            string
 	Branch                string
+	CreationWarning       string
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 	Status                Status
@@ -172,6 +173,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		Path:                      i.Path,
 		WorkingDir:                i.WorkingDir,
 		Branch:                    i.Branch,
+		CreationWarning:           i.CreationWarning,
 		CreatedAt:                 i.CreatedAt,
 		UpdatedAt:                 i.UpdatedAt,
 		Status:                    i.Status,
