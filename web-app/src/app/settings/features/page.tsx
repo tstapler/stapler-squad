@@ -29,6 +29,7 @@ import {
 
 const FEATURE_META: Record<string, { label: string }> = {
   backlog: { label: "Backlog" },
+  "programs:cli-flag-probe": { label: "Program flag discovery (check binary and read --help)" },
   "pi-support": { label: "pi coding agent" },
   "backlog:sdd-default-pipeline": { label: "Backlog: default new items to SDD pipeline" },
   "review:block-approval-on-ci-failure": { label: "Block Approve when CI is failing" },

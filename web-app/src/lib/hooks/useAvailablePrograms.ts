@@ -24,6 +24,8 @@ export function useAvailablePrograms(): ProgramOption[] {
               value: p.id,
               label: p.label,
               description: p.description || p.command,
+              command: p.command,
+              cliFlags: p.cliFlags,
             }));
             setPrograms(list);
           }
