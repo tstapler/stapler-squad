@@ -2411,6 +2411,7 @@ func (i *Instance) Restart(preserveOutput bool) error {
 	i.piSession = restorePiSession
 	i.piSessionMu.Unlock()
 
+	i.LaunchCommand = program
 	// Create and wire a new tmux session with full environment configuration
 	i.wireTmuxSession(program)
 

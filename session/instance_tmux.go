@@ -259,12 +259,11 @@ func (i *Instance) currentLaunchCommand() string {
 // type's doc comment); a program none of them recognizes is shell-quoted and
 // run as-is, with AutoApprove's yolo-flag lookup as the only adjustment.
 func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
-	// Single read, reused below for both Matches and Build -- see
-	// .claude/rules/instance-lock-free-reads.md: i.Program is mutated by
-	// SetProgram under i.mu.Lock(), so reading the field twice here could
-	// observe two different values if a mutation lands in between.
-	program := i.Program
-	cliFlags := i.CLIFlags
+	// One Snapshot() read: SetProgram mutates Program under i.mu, so two raw reads
+	// could observe different values (.claude/rules/instance-lock-free-reads.md).
+	snap := i.Snapshot()
+	program := snap.Program
+	cliFlags := snap.CLIFlags
 
 	cfg := config.LoadConfig()
 	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
@@ -537,33 +536,25 @@ func (i *Instance) claudeMCPConfigArgs() (string, string) {
 	return "--mcp-config", shellQuote(cfg)
 }
 
-// initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
-//
-// Reuse requires HasSession() AND (the cheap cached IsAlive() OR the
-// canonical IsBackendProcessAlive() truth check): the pointer alone stays
-// non-nil forever once set, even after the tmux server backing it is killed,
-// which let recovery skip buildLaunchCommand() and relaunch without --resume
-// after a tmux-kill-server crash (2026-09-12 incident, #791). The cached
-// check is tried first to avoid a subprocess round trip on the hot path; the
-// canonical check only runs when it says no, so a merely-stale cache entry
-// doesn't force an unnecessary rebuild.
 // buildExtraEnv returns the KEY=VALUE environment variable pairs to inject via
 // tmux new-session -e flags. Combines STAPLER_SESSION_UUID, custom program env vars,
 // and instance-level EnvVars.
 func (i *Instance) buildExtraEnv() []string {
+	// Snapshot() also serves pre-publication callers (fromInstanceData): it lazily builds one.
+	snap := i.Snapshot()
 	var extraEnv []string
-	if i.UUID != "" {
-		extraEnv = append(extraEnv, "STAPLER_SESSION_UUID="+i.UUID)
+	if snap.UUID != "" {
+		extraEnv = append(extraEnv, "STAPLER_SESSION_UUID="+snap.UUID)
 	}
 	// Add custom program env vars if applicable
 	cfg := config.LoadConfig()
-	if res := config.ResolveProgramConfig(cfg, i.Program); res.IsCustom {
+	if res := config.ResolveProgramConfig(cfg, snap.Program); res.IsCustom {
 		for k, v := range res.EnvVars {
 			extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", k, v))
 		}
 	}
 	// Instance-level EnvVars take precedence over program-level defaults
-	for k, v := range i.EnvVars {
+	for k, v := range snap.EnvVars {
 		extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", k, v))
 	}
 	return extraEnv
@@ -572,7 +563,8 @@ func (i *Instance) buildExtraEnv() []string {
 // wireTmuxSession constructs the tmux.TmuxSession object with full environment configuration
 // and sets it on the instance's process manager.
 func (i *Instance) wireTmuxSession(program string) *tmux.TmuxSession {
-	tmuxPrefix := i.TmuxPrefix
+	snap := i.Snapshot()
+	tmuxPrefix := snap.TmuxPrefix
 	if tmuxPrefix == "" {
 		tmuxPrefix = "staplersquad_"
 	}
@@ -585,11 +577,11 @@ func (i *Instance) wireTmuxSession(program string) *tmux.TmuxSession {
 		}
 	}
 	var session *tmux.TmuxSession
-	if i.TmuxServerSocket != "" {
-		session = tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket,
+	if snap.TmuxServerSocket != "" {
+		session = tmux.NewTmuxSessionWithServerSocket(snap.Title, program, tmuxPrefix, snap.TmuxServerSocket,
 			append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
 	} else {
-		session = tmux.NewTmuxSessionWithPrefix(i.Title, program, tmuxPrefix, opts...)
+		session = tmux.NewTmuxSessionWithPrefix(snap.Title, program, tmuxPrefix, opts...)
 	}
 	if extraEnv := i.buildExtraEnv(); len(extraEnv) > 0 {
 		session.SetExtraEnv(extraEnv)
@@ -600,6 +592,9 @@ func (i *Instance) wireTmuxSession(program string) *tmux.TmuxSession {
 	return session
 }
 
+// initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
+// Reuse needs HasSession() AND (cached IsAlive() OR IsBackendProcessAlive()): the pointer
+// stays non-nil after the tmux server dies, which once skipped the --resume rebuild (#791).
 func (i *Instance) initTmuxSession() {
 	if i.pm().HasSession() && (i.pm().IsAlive() || i.IsBackendProcessAlive()) {
 		log.Info("reusing existing tmux session", "session", i.Title)
