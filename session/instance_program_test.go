@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 )
 
 // TestSwitchProgram_SameValue_NoOp verifies that requesting the program the instance
@@ -41,7 +42,7 @@ func TestSwitchProgram_EmptyString_ResolvesToConfigDefault(t *testing.T) {
 	// so a shared-helper fix isn't available here). If that file exists with an empty
 	// default_program, the test fails independent of any other change — confirmed by
 	// reproducing on a clean origin/main checkout. Isolate via a per-test dir instead.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	inst := minimalInstance(t)
 	inst.Program = "aider"
 

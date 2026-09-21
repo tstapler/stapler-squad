@@ -423,15 +423,3 @@ func truncateID(id string, length int) string {
 	}
 	return id[:length]
 }
-
-// GetJJVersion returns the installed JJ version
-func GetJJVersion() (string, error) {
-	vCtx, vCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer vCancel()
-	cmd := safeexec.CommandContext(vCtx, "jj", "--version")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(output)), nil
-}

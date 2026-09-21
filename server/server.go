@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/pkg/buildinfo"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -56,7 +57,7 @@ type Server struct {
 	tlsConfig                  *tls.Config                     // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler // nil when auth is disabled
 	httpsURL                   string                          // set when remote access is enabled
-	hostnames                  []string                        // detected LAN hostnames
+	hostnames                  atomic.Pointer[[]string]        // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
 	origins                    []string                        // allowed CORS origins
 	shutdownHooks              []func()                        // called before HTTP server stops
 	connCtxCancel              context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
@@ -130,7 +131,9 @@ func newServerBase(addr string) (*Server, context.Context) {
 	return srv, connCtx
 }
 
-// NewServer creates a new HTTP server instance with SessionService registered.
+// NewServerWithDeps creates a Server using pre-built dependencies.
+// Use this when deps are constructed externally (e.g. via Warren lifecycle phases)
+// so the build phases can be observed and timed independently.
 //
 // Initialization Order (dependencies flow downward):
 //
@@ -150,26 +153,6 @@ func newServerBase(addr string) (*Server, context.Context) {
 // Violating this order causes nil pointer panics or silent failures.
 // Dependency construction is encapsulated in BuildDependencies (server/dependencies.go).
 // See docs/tasks/architecture-refactor.md for the ongoing simplification plan.
-func NewServer(addr string) *Server {
-	srv, connCtx := newServerBase(addr)
-
-	log.Info("Building server dependencies...")
-	startTime := time.Now()
-	deps, err := BuildDependencies()
-	if err != nil {
-		log.Error("Failed to build server dependencies", "err", err)
-		// Continue without services — all RPC calls will return errors
-	} else {
-		log.Info("Server dependencies built", "elapsed", time.Since(startTime))
-		wireDepsIntoServer(srv, deps, connCtx)
-	}
-	registerStaticRoutes(srv)
-	return srv
-}
-
-// NewServerWithDeps creates a Server using pre-built dependencies.
-// Use this when deps are constructed externally (e.g. via Warren lifecycle phases)
-// so the build phases can be observed and timed independently.
 func NewServerWithDeps(addr string, deps *ServerDependencies) *Server {
 	srv, connCtx := newServerBase(addr)
 	wireDepsIntoServer(srv, deps, connCtx)
@@ -193,6 +176,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	deps.PRStatusPoller.Start(serverCtx)
 	log.Info("PRStatusPoller started")
+
+	if deps.SessionTagClassificationPoller != nil {
+		deps.SessionTagClassificationPoller.Start(serverCtx)
+		log.Info("SessionTagClassificationPoller started")
+	}
 
 	// Start SessionHealthChecker: polls for dead tmux panes (remain-on-exit
 	// placeholders left after the wrapped program exits) and stale
@@ -233,6 +221,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.UnfinishedScanner != nil {
 		deps.UnfinishedScanner.Start(serverCtx)
 		log.Info("UnfinishedWork scanner started")
+	}
+
+	// Start UnfinishedWatchDirWatcher: discovers repos under user-configured
+	// watch directories (Settings → Unfinished Work Sources) and registers
+	// them with UnfinishedScanner. Must start after UnfinishedScanner above
+	// since it calls UnfinishedScanner.AddRepo during its initial walk.
+	if deps.UnfinishedWatchDirWatcher != nil {
+		deps.UnfinishedWatchDirWatcher.Start(serverCtx)
+		log.Info("UnfinishedWork watch-dir watcher started")
 	}
 
 	// Start WorktreePRPoller: enriches worktrees-without-sessions with GitHub PR data.
@@ -298,6 +295,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			notifications.StartSubscriber(serverCtx, deps.EventBus, notifStore)
 			log.Info("NotificationHistoryStore initialized", "path", notifStorePath)
 
+			// Periodically demote URGENT notifications whose urgency has aged out
+			// (UrgentTTL) so a stale alert stops showing as urgent in the /notifications
+			// page — see StartUrgencyDecaySweeper's doc comment. 5 minutes is frequent
+			// enough that nothing sits visibly stale for long past the 1-hour TTL without
+			// adding meaningful overhead.
+			notifications.StartUrgencyDecaySweeper(serverCtx, notifStore, 5*time.Minute, &srv.backgroundTasksWG)
+
 			// Wire the batch-fetch session-existence lookup used by the store's
 			// orphan-pruning sweep (enforceRetention → pruneOrphanedRecords).
 			// See buildSessionExistenceLookup for the uptime-gate rationale.
@@ -327,30 +331,18 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Fires when capture-pane subprocess failures or zombie counts exceed thresholds,
 	// indicating that dead sessions are flooding the poller with fork() calls.
 	tmux.RegisterForkPressureAlert(func(level tmux.ForkPressureLevel, stats tmux.ForkPressureStats) {
-		body := fmt.Sprintf(
-			"Subprocess failures: %d/%ds | Spawns: %d/%ds | Zombies: %d | Level: %s",
-			stats.FailuresInWindow, int(stats.WindowDuration.Seconds()),
-			stats.SpawnsInWindow, int(stats.WindowDuration.Seconds()),
-			stats.ZombiesInWindow, level,
-		)
-		notifType := int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING)
-		if level == tmux.ForkPressureCritical {
-			notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR)
-		}
-		event := events.NewNotificationEvent(
-			"fork-pressure",
-			"System",
-			uuid.New().String(),
-			notifType,
-			int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
-			fmt.Sprintf("Fork Pressure: %s", level),
-			body,
-			nil,
-		)
+		event, body := buildForkPressureNotification(level, stats)
 		deps.EventBus.Publish(event)
+
+		if level == tmux.ForkPressureOK {
+			log.Info("[ForkPressure] cleared", "body", body)
+			return
+		}
 		log.Warn("[ForkPressure] alert dispatched", "level", level, "body", body)
 
 		// Immediately reconcile to mark dead sessions Stopped, cutting spawn rate.
+		// Nothing to reconcile on a clear (handled above), so this only runs for
+		// a genuinely elevated level.
 		if deps.ReviewQueuePoller != nil {
 			deps.ReviewQueuePoller.ForceReconcile()
 		}
@@ -383,17 +375,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Wire tmux server recovery → web UI toast notification.
 	tmux.SetServerRecoveryCallback(func() {
-		event := events.NewNotificationEvent(
-			"tmux-server",
-			"System",
-			uuid.New().String(),
-			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-			int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
-			"Tmux Server Recovered",
-			"Connection to the tmux server has been restored. Sessions will resume automatically.",
-			nil,
-		)
-		deps.EventBus.Publish(event)
+		deps.EventBus.Publish(buildTmuxServerRecoveredNotification())
 		log.Info("[tmux] recovery notification sent to connected clients")
 	})
 
@@ -526,6 +508,27 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		nativeGitRolloutAPIPath := "/api" + nativeGitRolloutPath
 		srv.RegisterConnectHandler(nativeGitRolloutAPIPath, http.StripPrefix("/api", nativeGitRolloutHandler))
 		log.Info("Registered NativeGitRolloutService handler", "path", nativeGitRolloutAPIPath)
+	}
+
+	// Register GuidanceRequestService handler (durable-guidance-request Phase
+	// 2: create/answer/read a durable question/answer, mirroring
+	// TymuxRolloutService's registration). Storage-backed, so it's threaded
+	// through deps.Storage rather than constructed with zero args like the
+	// config-only rollout services above.
+	if deps.Storage != nil {
+		// deps.BacklogService is passed only when non-nil: a nil *BacklogService
+		// boxed into the TriageRespawner interface would be a non-nil interface
+		// wrapping a nil pointer, defeating GuidanceRequestService's own
+		// triageRespawner == nil guard and panicking on first use.
+		var triageRespawner services.TriageRespawner
+		if deps.BacklogService != nil {
+			triageRespawner = deps.BacklogService
+		}
+		guidanceRequestSvc := services.NewGuidanceRequestService(deps.Storage, deps.EventBus, triageRespawner)
+		guidanceRequestPath, guidanceRequestHandler := sessionv1connect.NewGuidanceRequestServiceHandler(guidanceRequestSvc, ConnectOptions(deps.ErrorRegistry)...)
+		guidanceRequestAPIPath := "/api" + guidanceRequestPath
+		srv.RegisterConnectHandler(guidanceRequestAPIPath, http.StripPrefix("/api", guidanceRequestHandler))
+		log.Info("Registered GuidanceRequestService handler", "path", guidanceRequestAPIPath)
 	}
 
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
@@ -888,7 +891,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			if deps.BacklogLifecycleListener != nil {
 				prFixRouter = deps.BacklogLifecycleListener
 			}
-			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg, prFixRouter)
+			// pollerInvalidationAdapter wraps deps.PRStatusPoller/deps.WorktreePRPoller
+			// (session/poller_invalidation_adapter.go) so a verified PR-fix webhook
+			// event also invalidates the shared GitHub poller cache (Epic 5.3),
+			// alongside the existing prFixRouter dispatch. deps.WorktreePRPoller may
+			// be nil (not constructed when no GitHub token is available at startup);
+			// the adapter itself nil-guards it.
+			pollerInvalidator := session.NewPollerInvalidationAdapter(deps.PRStatusPoller, deps.WorktreePRPoller)
+			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg, prFixRouter, pollerInvalidator)
 			githubWebhookHandler.RegisterRoutes(srv.mux)
 			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
 			genericWebhookHandler.RegisterRoutes(srv.mux)
@@ -1028,7 +1038,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	cfg := config.LoadConfig()
 	if deps.AnalyticsEntClient != nil {
 		analytics.StartRetentionEnforcer(serverCtx, deps.AnalyticsEntClient,
-			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault(), cfg.EscapeAnalyticsRetentionDays)
+			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault(),
+			cfg.EscapeAnalyticsRetentionDays, cfg.EscapeAnalyticsMaxRowsPerSession)
 		log.Info("Analytics retention enforcer started", "maxRows", cfg.AnalyticsMaxRowsOrDefault(), "maxAgeDays", cfg.AnalyticsMaxAgeDaysOrDefault())
 	}
 
@@ -1194,6 +1205,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		go staleCreationSweeper.Start(serverCtx)
 		log.Info("Stale creation sweeper started",
 			"threshold_minutes", cfg.CreationStale.ThresholdMinutesOrDefault())
+	}
+
+	// Start superseded-rework-round sweeper (archives a work/review session
+	// once a newer round for the same backlog item exists -- see
+	// SupersededSessionSweeper doc comment).
+	if deps.Storage != nil && deps.SessionService != nil {
+		supersededSessionSweeper := services.NewSupersededSessionSweeper(deps.Storage, deps.SessionService)
+		go supersededSessionSweeper.Start(serverCtx)
+		log.Info("Superseded session sweeper started")
 	}
 
 	// Start memory pressure notifier (fires an operator-facing notification the first time
@@ -1493,14 +1513,45 @@ func (s *Server) SetHTTPSURL(url string) {
 	s.httpsURL = url
 }
 
-// SetHostnames records the detected LAN hostnames for this server.
+// SetHostnames merges hostnames into the previously published set and
+// atomically publishes the result. It never shrinks the set — a hostname
+// that drops out of a later detection cycle (e.g. a network interface goes
+// away) stays visible, since a stale-but-reachable hostname is safer than a
+// TLS SAN mismatch for a client that cached the old one. Order is
+// deterministic: previously published entries first, then new entries in
+// the order given.
 func (s *Server) SetHostnames(hostnames []string) {
-	s.hostnames = hostnames
+	var previous []string
+	if p := s.hostnames.Load(); p != nil {
+		previous = *p
+	}
+
+	seen := make(map[string]bool, len(previous)+len(hostnames))
+	merged := make([]string, 0, len(previous)+len(hostnames))
+	for _, h := range previous {
+		if !seen[h] {
+			seen[h] = true
+			merged = append(merged, h)
+		}
+	}
+	for _, h := range hostnames {
+		if !seen[h] {
+			seen[h] = true
+			merged = append(merged, h)
+		}
+	}
+
+	s.hostnames.Store(&merged)
 }
 
-// GetHostnames returns the detected LAN hostnames.
+// GetHostnames returns the currently published set of detected LAN
+// hostnames, or nil if SetHostnames has never been called.
 func (s *Server) GetHostnames() []string {
-	return s.hostnames
+	p := s.hostnames.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // SetOrigins records the allowed CORS origins.
@@ -1516,6 +1567,19 @@ func (s *Server) GetOrigins() []string {
 // registerServerInfoHandler registers the /api/server-info endpoint which exposes
 // the CA PEM file path and HTTPS URL for display in the settings UI.
 func (s *Server) registerServerInfoHandler() {
+	// Resolved once at registration time, not per-request: the running
+	// executable's path never changes for the life of the process, so
+	// there's no reason to repeat the os.Executable()/EvalSymlinks syscalls
+	// on every /api/server-info hit.
+	binaryPath, err := os.Executable()
+	if err == nil {
+		if resolved, evalErr := filepath.EvalSymlinks(binaryPath); evalErr == nil {
+			binaryPath = resolved
+		}
+	} else {
+		binaryPath = ""
+	}
+
 	s.mux.HandleFunc("/api/server-info", func(w http.ResponseWriter, r *http.Request) {
 		type serverInfoResponse struct {
 			CAPEMPath  string   `json:"ca_pem_path"`
@@ -1523,6 +1587,22 @@ func (s *Server) registerServerInfoHandler() {
 			TLSEnabled bool     `json:"tls_enabled"`
 			Hostnames  []string `json:"hostnames"`
 			Programs   []string `json:"programs"`
+			// Version/Branch/Commit/Worktree let the settings UI show which
+			// build is actually running — see pkg/buildinfo's doc comment for
+			// why Branch/Commit/Worktree are only ever non-empty on a locally
+			// built binary, not a GoReleaser release.
+			Version  string `json:"version"`
+			Branch   string `json:"branch,omitempty"`
+			Commit   string `json:"commit,omitempty"`
+			Worktree bool   `json:"worktree,omitempty"`
+			// BinaryPath is the resolved, symlink-following path of the
+			// running executable — lets a human confirm, from the UI, which
+			// on-disk build this instance actually is (e.g. the repo's dev
+			// build vs. a Homebrew install vs. a manual-builds/ scratch
+			// binary — see docs/reference/state-isolation.md's multi-
+			// instance layout for why more than one of these can be running
+			// on the same machine at once).
+			BinaryPath string `json:"binary_path,omitempty"`
 		}
 
 		configDir, err := config.GetConfigDir()
@@ -1539,8 +1619,13 @@ func (s *Server) registerServerInfoHandler() {
 			CAPEMPath:  caPath,
 			HTTPSURL:   s.httpsURL,
 			TLSEnabled: tlsEnabled,
-			Hostnames:  s.hostnames,
+			Hostnames:  s.GetHostnames(),
 			Programs:   s.availablePrograms,
+			Version:    buildinfo.Version,
+			Branch:     buildinfo.Branch,
+			Commit:     buildinfo.Commit,
+			Worktree:   buildinfo.Worktree == "true",
+			BinaryPath: binaryPath,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -1577,7 +1662,7 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 	// Bind eagerly so the caller gets a port-in-use error immediately.
 	ln, err := net.Listen("tcp", remoteAddr)
 	if err != nil {
-		return fmt.Errorf("bind remote server on %s: %w", remoteAddr, err)
+		return newRemoteBindError(remoteAddr, err)
 	}
 	log.Info("Remote HTTPS server listening", "addr", remoteAddr)
 
@@ -1661,6 +1746,73 @@ const pruneOrphanedMinUptime = 5 * time.Minute
 // cause the pruning sweep to delete every session-scoped notification record on a
 // fresh start or after a transient ListInstanceData error — hence the explicit nil
 // returns below rather than returning an empty map in those cases.
+// forkPressureNotificationID is the stable notification-record ID used across a
+// whole fork-pressure episode (fire, escalate, and clear), so repeated calls
+// update one record in place instead of each becoming a new, separately-tracked
+// notification. See server/notifications/store.go's Append, whose exact-ID-match
+// branch now merges changed content into the existing record instead of
+// silently no-op'ing (backlog item cfda07b7-73fb-42e1-a21b-7fdf8a052a14).
+const forkPressureNotificationID = "fork-pressure-status"
+
+// buildForkPressureNotification builds the event and body text for a fork-pressure
+// alert, including the clear signal (level == tmux.ForkPressureOK) that
+// checkPressure now emits once an episode ends. Extracted from
+// RegisterForkPressureAlert's closure so it's unit-testable without spinning up
+// the whole server. Always urgent-but-not-important: fork pressure (dead
+// sessions flooding the poller with fork() calls) is transient self-monitoring
+// telemetry that resolves on its own once ForceReconcile marks the dead
+// sessions Stopped, cutting spawn rate — not a real, lasting outcome problem
+// (see the classification table in the notification push-gate redesign PR), so
+// it must never push regardless of warning/critical/cleared level.
+//
+// NotificationType is intentionally held constant (WARNING) across every level,
+// including the clear -- not swapped to ERROR at Critical as before -- so the
+// store's (SessionID, NotificationType) dedup key keeps matching the same
+// record through an escalation instead of a level change spawning a second
+// one. Severity is instead conveyed via the title and the "fork_pressure_level"
+// metadata key, which the frontend status banner reads.
+func buildForkPressureNotification(level tmux.ForkPressureLevel, stats tmux.ForkPressureStats) (*events.Event, string) {
+	title := fmt.Sprintf("Fork Pressure: %s", level)
+	body := fmt.Sprintf(
+		"Subprocess failures: %d/%ds | Spawns: %d/%ds | Zombies: %d | Level: %s",
+		stats.FailuresInWindow, int(stats.WindowDuration.Seconds()),
+		stats.SpawnsInWindow, int(stats.WindowDuration.Seconds()),
+		stats.ZombiesInWindow, level,
+	)
+	if level == tmux.ForkPressureOK {
+		title = "Fork Pressure: cleared"
+		body = "Fork pressure has returned to normal."
+	}
+	event := events.NewNotificationEvent(
+		"fork-pressure",
+		"System",
+		forkPressureNotificationID,
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM), // urgent, important = true, false
+		title,
+		body,
+		map[string]string{"fork_pressure_level": level.String()},
+	)
+	return event, body
+}
+
+// buildTmuxServerRecoveredNotification builds the event for a tmux-server-recovered
+// toast. Extracted from SetServerRecoveryCallback's closure so it's unit-testable
+// without spinning up the whole server. Neither urgent nor important — the recovery
+// already happened and sessions resume automatically with no operator action needed.
+func buildTmuxServerRecoveredNotification() *events.Event {
+	return events.NewNotificationEvent(
+		"tmux-server",
+		"System",
+		uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW), // urgent, important = false, false
+		"Tmux Server Recovered",
+		"Connection to the tmux server has been restored. Sessions will resume automatically.",
+		nil,
+	)
+}
+
 func buildSessionExistenceLookup(storage instanceDataLister, startedAt time.Time) func() map[string]struct{} {
 	return func() map[string]struct{} {
 		if time.Since(startedAt) < pruneOrphanedMinUptime {

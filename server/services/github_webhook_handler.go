@@ -22,38 +22,60 @@ type PRFixEventRouter interface {
 	TriggerPRFixForEvent(ctx context.Context, repoFullName string, prNumber int) (matched bool, err error)
 }
 
+// GitHubPollerInvalidator invalidates the shared GitHub PR poller cache (and,
+// where possible, dispatches an immediate out-of-band refetch) in response to
+// a verified webhook event for repoFullName/prNumber — so poller-observed PR
+// state doesn't wait for the next tick's conditional-request cycle to notice a
+// webhook-signaled change. Satisfied by *session.pollerInvalidationAdapter
+// (wrapping both PRStatusPoller and WorktreePRPoller) — defined here, the
+// consumer, per the `interface-pollution-checklist` skill.
+type GitHubPollerInvalidator interface {
+	InvalidateForEvent(ctx context.Context, repoFullName string, prNumber int)
+}
+
 // GitHubWebhookHandler handles POST /webhooks/github: GitHub push-event deliveries
 // matched against enabled github_push-type Workflow rows, plus (Story 2.1.1)
 // check_run/workflow_run/pull_request_review/issue_comment deliveries routed to
 // handlePRFixEvent. Concrete type, not an interface — one implementation, per
 // the `interface-pollution-checklist` skill.
 type GitHubWebhookHandler struct {
-	repo        session.WorkflowRepository
-	scheduler   *workflows.Scheduler
-	fireEvents  session.TriggerFireEventRepository
-	cfg         *config.Config
-	prFixRouter PRFixEventRouter
-	selfLogin   *selfLoginCache
+	repo                session.WorkflowRepository
+	scheduler           *workflows.Scheduler
+	fireEvents          session.TriggerFireEventRepository
+	cfg                 *config.Config
+	prFixRouter         PRFixEventRouter
+	prPollerInvalidator GitHubPollerInvalidator
+	selfLogin           *selfLoginCache
 
 	// firstPRFixDelivery logs once per event type on the first verified delivery of
 	// that type (see github-webhook-public-reachability.md). Read-only after
 	// construction, so safe for concurrent map reads.
 	firstPRFixDelivery map[string]*sync.Once
+
+	// prEventWebhooksOffWarning gates the "delivery accepted but silently dropped
+	// because pr_event_webhooks is off" log (pre-mortem P2 #4, see
+	// github_webhook_pr_fix.go's handlePRFixEvent) to first-occurrence-only,
+	// mirroring firstPRFixDelivery's once-per-boot pattern above, so a live but
+	// misconfigured webhook tunnel doesn't spam one line per delivery.
+	prEventWebhooksOffWarning sync.Once
 }
 
 // NewGitHubWebhookHandler constructs a GitHubWebhookHandler. prFixRouter may be nil
 // (e.g. in tests that only exercise the push path, or if PR-fix wiring is
 // unavailable) — handlePRFixEvent treats a nil router as a wiring gap and persists
-// "fired_failed" rather than panicking.
-func NewGitHubWebhookHandler(repo session.WorkflowRepository, scheduler *workflows.Scheduler, fireEvents session.TriggerFireEventRepository, cfg *config.Config, prFixRouter PRFixEventRouter) *GitHubWebhookHandler {
+// "fired_failed" rather than panicking. prPollerInvalidator may also be nil (e.g.
+// in tests that don't exercise poller invalidation) — handlePRFixEvent skips the
+// call entirely rather than panicking.
+func NewGitHubWebhookHandler(repo session.WorkflowRepository, scheduler *workflows.Scheduler, fireEvents session.TriggerFireEventRepository, cfg *config.Config, prFixRouter PRFixEventRouter, prPollerInvalidator GitHubPollerInvalidator) *GitHubWebhookHandler {
 	firstPRFixDelivery := make(map[string]*sync.Once, len(prFixEventTypes))
 	for _, eventType := range prFixEventTypes {
 		firstPRFixDelivery[eventType] = &sync.Once{}
 	}
 	return &GitHubWebhookHandler{
 		repo: repo, scheduler: scheduler, fireEvents: fireEvents, cfg: cfg, prFixRouter: prFixRouter,
-		selfLogin:          newSelfLoginCache(),
-		firstPRFixDelivery: firstPRFixDelivery,
+		prPollerInvalidator: prPollerInvalidator,
+		selfLogin:           newSelfLoginCache(),
+		firstPRFixDelivery:  firstPRFixDelivery,
 	}
 }
 

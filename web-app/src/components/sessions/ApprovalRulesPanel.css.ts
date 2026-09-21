@@ -248,12 +248,6 @@ export const ruleAlt = style({
   marginTop: 2,
 });
 
-export const matchInfo = style({
-  display: "flex",
-  flexWrap: "wrap",
-  gap: 4,
-});
-
 export const matchChip = style({
   background: vars.color.terminalBackground,
   border: `1px solid ${vars.color.borderColor}`,
@@ -571,15 +565,8 @@ export const suggestionsContainer = style({
 
 // ── Command-sample generate section ───────────────────────────────────────────
 
-export const commandSampleDetails = style({
-  border: `1px solid ${vars.color.borderColor}`,
-  borderRadius: 8,
-  padding: "10px 14px",
-  background: vars.color.panelBgSecondary,
-  fontSize: 13,
-});
-
-export const commandSampleSummary = style({
+// Used only by the globalStyle selector below (no longer imported directly elsewhere).
+const commandSampleSummary = style({
   cursor: "pointer",
   fontWeight: 500,
   color: vars.color.textSecondary,
@@ -610,50 +597,6 @@ export const commandSampleSummary = style({
 // Rotate the ▶ caret when the details element is open.
 globalStyle(`details[open] > summary${commandSampleSummary}::before`, {
   transform: "rotate(90deg)",
-});
-
-export const commandSampleBody = style({
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  marginTop: 10,
-});
-
-export const commandSampleTextarea = style({
-  background: vars.color.inputBackground,
-  border: `1px solid ${vars.color.inputBorder}`,
-  borderRadius: 6,
-  padding: "8px 10px",
-  fontSize: 13,
-  color: vars.color.textPrimary,
-  fontFamily: vars.font.mono,
-  resize: "vertical",
-  minHeight: 60,
-  width: "100%",
-  boxSizing: "border-box",
-  selectors: {
-    "&:focus": {
-      outline: "none",
-      borderColor: vars.color.primary,
-    },
-  },
-});
-
-export const commandSampleActions = style({
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-});
-
-export const aiGeneratedBadge = style({
-  display: "inline-block",
-  padding: "2px 10px",
-  borderRadius: 4,
-  fontSize: 11,
-  fontWeight: 600,
-  background: vars.color.warningBg,
-  color: vars.color.warning,
-  border: `1px solid ${vars.color.warning}`,
 });
 
 // ── Add Rule Modal ────────────────────────────────────────────────────────────
@@ -745,13 +688,6 @@ export const formSectionHeader = style({
 });
 
 // ── Priority hint text ────────────────────────────────────────────────────────
-
-export const priorityHint = style({
-  fontSize: 11,
-  color: vars.color.textMuted,
-  marginTop: 2,
-  lineHeight: 1.4,
-});
 
 // ── Built-in enabled badge (static, non-interactive) ─────────────────────────
 
@@ -898,29 +834,6 @@ export const configFileBadge = style({
 });
 
 // ── Export-to-config-file inline action button ────────────────────────────────
-
-export const exportConfigButton = style({
-  background: "none",
-  border: `1px solid ${vars.color.borderColor}`,
-  borderRadius: 4,
-  padding: "2px 7px",
-  fontSize: 11,
-  color: vars.color.textSecondary,
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-  transition: "all 0.15s ease",
-  selectors: {
-    "&:hover:not(:disabled)": {
-      background: "rgba(59, 130, 246, 0.12)",
-      color: vars.color.primary,
-      borderColor: "rgba(59, 130, 246, 0.3)",
-    },
-    "&:disabled": {
-      opacity: 0.5,
-      cursor: "not-allowed",
-    },
-  },
-});
 
 // ── Config file path hint ─────────────────────────────────────────────────────
 

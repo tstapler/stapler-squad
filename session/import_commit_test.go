@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -89,7 +90,7 @@ func TestCommitImportExternalSession_ReturnsErrPathNotExist_When_CandidatePathMi
 }
 
 func TestCommitImportExternalSession_PersistsAndLinksAndSuspends_When_StartAndSuspendSucceed(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	suspended, err := NewSuspendedProcessStore()
 	require.NoError(t, err)
@@ -202,7 +203,7 @@ func TestCommitImportExternalSession_HonorsSessionNameOverrideMap(t *testing.T) 
 }
 
 func TestCommitImportExternalSession_CompensatingDeletesInstance_When_SuspendOriginalProcessFails(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	suspended, err := NewSuspendedProcessStore()
 	require.NoError(t, err)
@@ -270,7 +271,7 @@ func TestCommitImportExternalSession_CompensatingDeletesInstance_When_SuspendOri
 // longer identify the same process, CommitImportExternalSession must error
 // out and must never reach SuspendOriginalProcess/Suspended.Add.
 func TestCommitImportExternalSession_ReturnsError_When_AliveCheckerRejectsOriginalPID(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	suspended, err := NewSuspendedProcessStore()
 	require.NoError(t, err)

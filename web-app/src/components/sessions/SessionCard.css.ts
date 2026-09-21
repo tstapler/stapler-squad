@@ -355,6 +355,17 @@ export const tag = style({
   },
 });
 
+/**
+ * Unclassified pill (ux.md Surface 2): dashed border + muted color as one of
+ * two signals, per WCAG 1.4.1 (use of color) — the `?` glyph rendered inline
+ * in SessionCard.tsx is the required second, non-color signal.
+ */
+export const tagUnclassified = style({
+  border: `1px dashed ${vars.color.borderMuted}`,
+  background: "transparent",
+  color: vars.color.textMuted,
+});
+
 export const editTagsButton = style({
   padding: `${vars.space["1"]} 12px`,
   fontSize: "0.6875rem",
@@ -542,7 +553,6 @@ export const overflowMenuItemDanger = style({
   },
 });
 
-
 export const actionButton = style({
   padding: `6px ${vars.space["4"]}`,
   border: `1px solid ${vars.color.borderColor}`,
@@ -606,15 +616,6 @@ export const deleteButton = style({
   },
 });
 
-export const restartButton = style({
-  background: vars.color.warningBg,
-  color: vars.color.warningText,
-  borderColor: vars.color.warning,
-  selectors: {
-    "&:hover": { background: vars.color.warning, borderColor: vars.color.warning, color: vars.color.textPrimary },
-  },
-});
-
 export const renameDialog = style({
   position: "fixed",
   top: 0,
@@ -672,14 +673,6 @@ export const renameInput = style({
       boxShadow: `0 0 0 3px rgba(0, 112, 243, 0.1)`,
     },
   },
-});
-
-// renameLabel used for fork dialog
-export const renameLabel = style({
-  display: "block",
-  fontSize: "0.875rem",
-  color: vars.color.textSecondary,
-  marginBottom: vars.space["1"],
 });
 
 export const errorMessage = style({
@@ -747,47 +740,6 @@ export const dangerButton = style({
     "&:hover:not(:disabled)": { background: vars.color.errorDark, borderColor: vars.color.errorDark },
     "&:disabled": { opacity: 0.5, cursor: "not-allowed" },
   },
-});
-
-// Fork dialog specific
-export const forkEmptyMessage = style({
-  color: vars.color.textMuted,
-  fontSize: "0.875rem",
-  fontStyle: "italic",
-  margin: `${vars.space["2"]} 0`,
-});
-
-export const forkCheckpointList = style({
-  listStyle: "none",
-  padding: 0,
-  margin: `${vars.space["2"]} 0`,
-  display: "flex",
-  flexDirection: "column",
-  gap: vars.space["1"],
-});
-
-export const forkCheckpointItem = style({
-  display: "flex",
-  alignItems: "center",
-  gap: vars.space["2"],
-});
-
-export const forkCheckpointLabel = style({
-  display: "flex",
-  alignItems: "center",
-  gap: vars.space["2"],
-  cursor: "pointer",
-  fontSize: "0.875rem",
-  color: vars.color.textPrimary,
-});
-
-export const forkGitSha = style({
-  fontFamily: "monospace",
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
-  background: vars.color.surfaceSubtle,
-  padding: `1px ${vars.space["1"]}`,
-  borderRadius: vars.radii.sm,
 });
 
 // ── Terminal snapshot preview (from upstream) ────────────────────────────────

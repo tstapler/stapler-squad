@@ -73,6 +73,14 @@ func effectiveCtx(provided, fallback string) string {
 	return fallback
 }
 
+// suppressedByAck reports whether inst was acknowledged (e.g. via the review queue's
+// "skip" action) more recently than its last meaningful output — meaning nothing new has
+// happened since the user dismissed it. Both Idle detection sites and the Stale check
+// share this single helper so the suppression rule lives in exactly one place.
+func (d *DefaultStatusDeterminer) suppressedByAck(inst *Instance) bool {
+	return inst.IsAcknowledgedAfterOutput()
+}
+
 // applyWorktreeCheck inspects the git worktree of inst and potentially overrides the
 // current add/priority state with an UncommittedChanges reason, or sets CleanWorktree.
 // Only called when the session has a git worktree attached.
@@ -161,6 +169,15 @@ func (d *DefaultStatusDeterminer) Determine(
 			shouldAdd = true
 			ctx = effectiveCtx(statusInfo.StatusContext, "Task completed successfully")
 			log.Debug("task complete", "session", inst.Title, "ctx", ctx)
+		case statusInfo.ClaudeStatus == detection.StatusWaitingForAgent:
+			// Mirrors the no-controller branch's grace-period logic (below): trust
+			// StatusWaitingForAgent as evidence of real background activity only while
+			// recently updated, so a stuck/orphaned background task doesn't exclude an
+			// actually-idle session from the review queue indefinitely.
+			if time.Since(inst.Snapshot().UpdatedAt) < waitingForAgentStuckThreshold {
+				return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
+			}
+			// Stale background task — fall through to idle-state handling below.
 		}
 
 		// Now handle idle state - but only if no status-based condition was detected above.
@@ -176,11 +193,14 @@ func (d *DefaultStatusDeterminer) Determine(
 				shouldAdd = false
 
 			case detection.IdleStateTimeout:
-				// Definite timeout - been idle too long
-				reason = ReasonIdle
-				priority = PriorityLow
-				shouldAdd = true
-				ctx = "Session idle - ready for next task"
+				// Definite timeout - been idle too long, unless the user already
+				// acknowledged this session and nothing new has happened since.
+				if !d.suppressedByAck(inst) {
+					reason = ReasonIdle
+					priority = PriorityLow
+					shouldAdd = true
+					ctx = "Session idle - ready for next task"
+				}
 			}
 		}
 
@@ -255,9 +275,11 @@ func (d *DefaultStatusDeterminer) Determine(
 
 		// If no status-based condition was detected, fall back to time-based checks
 		if !shouldAdd {
-			// Check if session has been idle for a long time based on UpdatedAt
+			// Check if session has been idle for a long time based on UpdatedAt,
+			// unless the user already acknowledged this session and nothing new
+			// has happened since.
 			const basicIdleThreshold = 5 * time.Second
-			if time.Since(inst.UpdatedAt) > basicIdleThreshold {
+			if time.Since(inst.UpdatedAt) > basicIdleThreshold && !d.suppressedByAck(inst) {
 				reason = ReasonIdle
 				priority = PriorityLow
 				shouldAdd = true
@@ -278,7 +300,7 @@ func (d *DefaultStatusDeterminer) Determine(
 	// Check for terminal staleness (no meaningful output for configured threshold)
 	// IMPORTANT: Respect acknowledgment - don't flag as stale if user already acknowledged
 	timeSinceOutput := inst.GetTimeSinceLastMeaningfulOutput()
-	alreadyAcknowledged := inst.IsAcknowledgedAfterOutput()
+	alreadyAcknowledged := d.suppressedByAck(inst)
 
 	if timeSinceOutput > d.config.StalenessThreshold {
 		if alreadyAcknowledged {

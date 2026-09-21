@@ -298,7 +298,7 @@ function SessionRowInner({
       onContextMenu={handleContextMenu}
       onKeyDown={handleKeyDown}
       tabIndex={0}
-      aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}, program: ${session.program}${session.path ? `, path: ${abbreviatePath(session.path)}` : ""}${hasLostContext(session) ? ", context: lost" : ""}`}
+      aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}, program: ${session.program}${session.existingDir ? `, path: ${abbreviatePath(session.existingDir)}` : ""}${hasLostContext(session) ? ", context: lost" : ""}`}
     >
       {/* Checkbox cell — always in DOM to keep the reserved grid column occupied */}
       <div
@@ -335,21 +335,20 @@ function SessionRowInner({
           {displayName}
         </span>
         <span className={pathLineStyle}>
-          {session.path && (
-            <Tooltip label={session.path} side="bottom">
+          {session.existingDir && (
+            <Tooltip label={session.existingDir} side="bottom">
               <span
                 className={pathStyle}
                 role="img"
-                aria-label={`Path: ${session.path}`}
+                aria-label={`Path: ${session.existingDir}`}
               >
-                {abbreviatePath(session.path)}
+                {abbreviatePath(session.existingDir)}
               </span>
             </Tooltip>
           )}
           {session.status === SessionStatus.ACTIVE &&
             session.subStatus !== SubStatus.UNSPECIFIED &&
             session.subStatus !== SubStatus.READY &&
-            session.subStatus !== SubStatus.IDLE &&
             !(
               suppressApprovalSubStatus &&
               (session.subStatus === SubStatus.NEEDS_APPROVAL ||
@@ -403,6 +402,7 @@ function SessionRowInner({
             owner={session.githubOwner}
             repo={session.githubRepo}
             sourceRef={session.githubSourceRef}
+            host={session.githubHost}
             prPriority={session.githubPrPriority}
             prState={session.githubPrState}
             isDraft={session.githubPrIsDraft}

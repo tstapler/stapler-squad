@@ -73,6 +73,18 @@ const backlogItemsSlice = createSlice({
         // allowedTransitions specifically: a pure function of status, so it's
         // never legitimately empty for a real item — an empty value is always a
         // sparse-DTO/resync artifact (e.g. a stale ListBacklogItems shape).
+        //
+        // planArtifactsPath specifically: unlike the three fields above, it CAN
+        // legitimately go from set back to empty (TransitionBacklogItemStatus
+        // resets it when an item moves back to idea/refining, e.g. re-triage) —
+        // so this is gated on the item's status being unchanged. Every real
+        // reset path changes status in the same write (server-side
+        // backlog_service_lifecycle.go), so "same status, plan vanished" is
+        // never a legitimate transition and is always a sparse-DTO artifact
+        // (ListBacklogItems' backlogItemSummaryToProto omitted this field
+        // entirely until the fix alongside this guard — getPrimaryCardAction/
+        // itemActions.ts derives a ready item's card action directly from it,
+        // so a sparse resync could flip "Approve Plan" to "Trigger Triage").
         let nextItem = incoming;
         if (existing) {
           const patch: Partial<BacklogItem> = {};
@@ -84,6 +96,9 @@ const backlogItemsSlice = createSlice({
           }
           if ((existing.allowedTransitions?.length ?? 0) > 0 && (incoming.allowedTransitions?.length ?? 0) === 0) {
             patch.allowedTransitions = existing.allowedTransitions;
+          }
+          if (existing.status === incoming.status && existing.planArtifactsPath && !incoming.planArtifactsPath) {
+            patch.planArtifactsPath = existing.planArtifactsPath;
           }
           if (Object.keys(patch).length > 0) {
             nextItem = { ...incoming, ...patch };

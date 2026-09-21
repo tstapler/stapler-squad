@@ -12,9 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 func Test_parsePluginFile(t *testing.T) {
@@ -885,7 +884,7 @@ func Test_InitPlugins(t *testing.T) {
 		// file after InitPlugins returned and confirming it hot-reloads
 		// without a restart.
 		writePluginFile(t, dir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			_, ok := DetectorProvenance()["my-agent"]
 			return ok
 		}, eventuallyTimeout, eventuallyPoll, "watcher started by InitPlugins() did not pick up a new plugin file")
@@ -985,7 +984,7 @@ func Test_InitPlugins(t *testing.T) {
 		// dropped there is still picked up live.
 		firstDetectorsDir := filepath.Join(firstDir, "detectors")
 		writePluginFile(t, firstDetectorsDir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			_, ok := DetectorProvenance()["my-agent"]
 			return ok
 		}, eventuallyTimeout, eventuallyPoll, "the original watcher from the first InitPlugins() call is no longer running after a second InitPlugins() call")

@@ -361,10 +361,21 @@ func (cc *CommandCriteria) Matches(pc ParsedCommand) bool {
 	return true
 }
 
+// RuleMeta holds the identity/priority/lifecycle fields shared by every rule type in this
+// package (Rule and the sibling TaggingRule): a stable ID, a display Name, evaluation
+// Priority, an Enabled flag, and the Source it was loaded from.
+type RuleMeta struct {
+	ID       string
+	Name     string
+	Priority int
+	Enabled  bool
+	// Source tracks how the rule was loaded: SourceSeed, SourceUser, or SourceClaudeSettings.
+	Source string
+}
+
 // Rule is a single classification rule evaluated against a tool use request.
 type Rule struct {
-	ID   string
-	Name string
+	RuleMeta
 	// ToolName is an exact match on the tool name (case-insensitive). If non-empty, ToolPattern is ignored.
 	ToolName string
 	// ToolPattern matches against the tool name when ToolName is empty.
@@ -391,11 +402,6 @@ type Rule struct {
 	RiskLevel             RiskLevel
 	Reason                string
 	Alternative           string
-	// Priority determines rule evaluation order. Higher values are evaluated first.
-	Priority int
-	Enabled  bool
-	// Source tracks how the rule was loaded: SourceSeed, SourceUser, or SourceClaudeSettings.
-	Source string
 }
 
 // RuleSource identifies where a Rule was loaded from. A defined type (not an alias) so a
@@ -408,6 +414,9 @@ const (
 	SourceSeed           RuleSource = "seed"
 	SourceUser           RuleSource = "user"
 	SourceClaudeSettings RuleSource = "claude-settings"
+	// SourceGenerated marks a rule as LLM-authored (future rule-suggestion feature); not used
+	// by this project's initial seed set.
+	SourceGenerated RuleSource = "generated"
 )
 
 // RuleBasedClassifier evaluates a priority-ordered list of Rules.
@@ -795,34 +804,24 @@ func SeedRules() []Rule {
 		// ══════════════════════════════════════════════════════════════════════════
 
 		{
-			ID:          "seed-deny-env-write",
-			Name:        "Block writes to .env files",
 			ToolPattern: regexp.MustCompile(`(?i)^(Write|Edit|MultiEdit|Update)$`),
 			FilePattern: regexp.MustCompile(`(^|/)\.env(\.|$)`),
 			Decision:    AutoDeny,
 			RiskLevel:   RiskCritical,
 			Reason:      "Writing to .env files risks leaking or corrupting secrets.",
 			Alternative: "Use environment variable management tools or a secrets manager instead.",
-			Priority:    1000,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-deny-env-write", Name: "Block writes to .env files", Priority: 1000, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:          "seed-deny-git-internals-write",
-			Name:        "Block writes to .git internals",
 			ToolPattern: regexp.MustCompile(`(?i)^(Write|Edit|MultiEdit|Update)$`),
 			FilePattern: regexp.MustCompile(`(^|/)\.git/`),
 			Decision:    AutoDeny,
 			RiskLevel:   RiskCritical,
 			Reason:      "Directly modifying .git internals can corrupt the repository.",
 			Alternative: "Use git commands (git commit, git branch, etc.) instead.",
-			Priority:    1000,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-deny-git-internals-write", Name: "Block writes to .git internals", Priority: 1000, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-deny-rm-rf-root",
-			Name:     "Block rm -rf on root or home paths",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match combined -rf flag variants; regex inspects argument path prefix
 			CommandPattern: regexp.MustCompile(`rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\s+(/|~|\$HOME)/?(\s|$)`),
@@ -830,13 +829,9 @@ func SeedRules() []Rule {
 			RiskLevel:      RiskCritical,
 			Reason:         "Deleting the root or home directory would cause irreversible data loss.",
 			Alternative:    "Specify a precise subdirectory path instead.",
-			Priority:       1000,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-deny-rm-rf-root", Name: "Block rm -rf on root or home paths", Priority: 1000, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-deny-find-exec",
-			Name:     "Block find with -exec/-delete/-ok",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match multi-flag combinations in find arguments; regex required for -exec/-delete alternation
 			CommandPattern: regexp.MustCompile(`find\s+.*(-(exec|delete|ok)\b|--delete\b)`),
@@ -844,9 +839,7 @@ func SeedRules() []Rule {
 			RiskLevel:      RiskHigh,
 			Reason:         "find with -exec/-delete/-ok can execute arbitrary commands or delete files.",
 			Alternative:    "Use the Glob tool for file pattern matching, or review the find command before running.",
-			Priority:       1000,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-deny-find-exec", Name: "Block find with -exec/-delete/-ok", Priority: 1000, Enabled: true, Source: "seed"},
 		},
 		{
 			// Catches shell redirections that write to .env files, e.g.:
@@ -854,8 +847,6 @@ func SeedRules() []Rule {
 			//   cat config > .env.local
 			//   printf "KEY=val" > /path/.env
 			// The Write/Edit deny rule covers tool-based writes; this covers Bash redirects.
-			ID:       "seed-deny-bash-redirect-env",
-			Name:     "Block shell redirects to .env files",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot detect shell redirection operators (>> >) or match filename suffixes; regex required
 			CommandPattern: regexp.MustCompile(`>>?\s*\S*\.env(\s|$|[.'":])`),
@@ -863,15 +854,11 @@ func SeedRules() []Rule {
 			RiskLevel:      RiskCritical,
 			Reason:         "Redirecting output to .env files risks corrupting or leaking secrets.",
 			Alternative:    "Use environment variable management tools or a secrets manager instead.",
-			Priority:       1000,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-deny-bash-redirect-env", Name: "Block shell redirects to .env files", Priority: 1000, Enabled: true, Source: "seed"},
 		},
 		{
 			// Deny git reset --hard: destructive and hard to undo.
 			// git reset HEAD~1 (without --hard) remains allowed by seed-allow-git-write.
-			ID:       "seed-deny-git-reset-hard",
-			Name:     "Block git reset --hard",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:      []string{"git"},
@@ -882,15 +869,11 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskHigh,
 			Reason:      "git reset --hard discards uncommitted changes and cannot be undone.",
 			Alternative: "Use git stash to save changes, or git reset HEAD~1 to keep changes staged.",
-			Priority:    1000,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-deny-git-reset-hard", Name: "Block git reset --hard", Priority: 1000, Enabled: true, Source: "seed"},
 		},
 		{
 			// Deny git push --force / -f: can overwrite remote history and destroy others' work.
 			// --force-with-lease is NOT blocked here (safer); it escalates via seed-escalate-git-push.
-			ID:       "seed-deny-git-push-force",
-			Name:     "Block git push --force / -f",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:      []string{"git"},
@@ -901,15 +884,11 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskCritical,
 			Reason:      "Force-pushing can overwrite remote history and destroy collaborators' work.",
 			Alternative: "Use --force-with-lease for a safer force push, or coordinate with your team first.",
-			Priority:    1000,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-deny-git-push-force", Name: "Block git push --force / -f", Priority: 1000, Enabled: true, Source: "seed"},
 		},
 		{
 			// git branch -D force-deletes regardless of merge status, losing commits that
 			// aren't reachable from another ref. Recoverable via reflog but risky.
-			ID:       "seed-deny-git-branch-force-delete",
-			Name:     "Block git branch -D (force delete)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:      []string{"git"},
@@ -920,9 +899,7 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskHigh,
 			Reason:      "git branch -D force-deletes a branch even if it has unmerged commits.",
 			Alternative: "Use git branch -d to safely delete only merged branches.",
-			Priority:    1000,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-deny-git-branch-force-delete", Name: "Block git branch -D (force delete)", Priority: 1000, Enabled: true, Source: "seed"},
 		},
 
 		// ══════════════════════════════════════════════════════════════════════════
@@ -941,17 +918,13 @@ func SeedRules() []Rule {
 			// The 520 allow rule below permits -f body= replies (POST), but DELETE/PUT/
 			// PATCH on /replies would remove or alter existing comments. This rule fires
 			// first (525 > 520) to block those cases.
-			ID:       "seed-escalate-gh-api-pr-review-replies-write",
-			Name:     "Escalate gh api replies endpoint with destructive HTTP method",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match URL path patterns or flag value content (DELETE/PUT/PATCH); regex required for REST path + method combination
 			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*\brepos/[^/\s]+/[^/\s]+/pulls/[^/\s]+/comments/[^/\s]+/replies\b.*(\s-X\s+(DELETE|PUT|PATCH)\b|\s--method\s+(DELETE|PUT|PATCH)\b|\s--input\b)`),
 			Decision:       Escalate,
 			RiskLevel:      RiskMedium,
 			Reason:         "Using a destructive HTTP method on the PR review replies endpoint can modify or delete existing comments.",
-			Priority:       525,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-escalate-gh-api-pr-review-replies-write", Name: "Escalate gh api replies endpoint with destructive HTTP method", Priority: 525, Enabled: true, Source: "seed"},
 		},
 		{
 			// Posting a reply to a PR review comment is a low-risk write: the only
@@ -960,33 +933,25 @@ func SeedRules() []Rule {
 			// Must be at 520 (above the 515 guard) because it uses -f body=.
 			// Matches both literal paths (repos/owner/repo/pulls/123/comments/456/replies)
 			// and shell-variable forms (repos/$OWNER/$REPO/pulls/$PR_NUMBER/...).
-			ID:       "seed-allow-gh-api-pr-review-replies",
-			Name:     "Allow gh api to post PR review comment replies",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match URL path segments; regex required to identify the /pulls/.../comments/.../replies endpoint
 			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*\brepos/[^/\s]+/[^/\s]+/pulls/[^/\s]+/comments/[^/\s]+/replies\b`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
 			Reason:         "Posting replies to PR review comments is a standard PR review workflow operation.",
-			Priority:       520,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-allow-gh-api-pr-review-replies", Name: "Allow gh api to post PR review comment replies", Priority: 520, Enabled: true, Source: "seed"},
 		},
 		{
 			// Resolving a PR review thread marks it as done so it no longer blocks the
 			// merge. The resolveReviewThread GraphQL mutation uses -f query=... which
 			// would be caught by the 515 guard, so this must be at 520.
-			ID:       "seed-allow-gh-api-graphql-resolve-thread",
-			Name:     "Allow gh api graphql resolveReviewThread mutation",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match GraphQL mutation names inside argument values; regex required to identify resolveReviewThread
 			CommandPattern: regexp.MustCompile(`\bgh\s+api\s+graphql\b.*\bresolveReviewThread\b`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
 			Reason:         "Resolving a PR review thread is a standard PR review workflow operation.",
-			Priority:       520,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-allow-gh-api-graphql-resolve-thread", Name: "Allow gh api graphql resolveReviewThread mutation", Priority: 520, Enabled: true, Source: "seed"},
 		},
 		{
 			// Safety guard: escalate any gh api call that sends request body fields via
@@ -996,17 +961,13 @@ func SeedRules() []Rule {
 			// where --jq is a response filter but -f is still a write indicator.
 			// The 510 --jq / --paginate rules are safe to assume GET semantics because
 			// any -f/-F/--field flag is caught here first.
-			ID:       "seed-escalate-gh-api-explicit-write",
-			Name:     "Escalate gh api calls with field flags, write method, or --input",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match flag value content (POST/PUT/DELETE/PATCH) or alternation across -f/-F/--field; regex required
 			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*(\s-X\s+(POST|PUT|DELETE|PATCH)\b|\s--method\s+(POST|PUT|DELETE|PATCH)\b|\s(-f|-F)\s|\s--field\s|\s--input\b)`),
 			Decision:       Escalate,
 			RiskLevel:      RiskMedium,
 			Reason:         "gh api calls with field flags or explicit write methods can modify GitHub resources and should be reviewed.",
-			Priority:       515,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-escalate-gh-api-explicit-write", Name: "Escalate gh api calls with field flags, write method, or --input", Priority: 515, Enabled: true, Source: "seed"},
 		},
 		{
 			// gh api REST calls that include --jq are always GET + jq filter: --jq is a
@@ -1014,33 +975,25 @@ func SeedRules() []Rule {
 			// auto-allow here because the 515 guard above has already blocked any command
 			// that also contains -f/-F/--field flags (which would indicate a write).
 			// Covers the most common analytics pattern: gh api repos/.../X --jq '...'
-			ID:       "seed-allow-gh-api-rest-jq",
-			Name:     "Allow read-only gh api calls with --jq",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match presence of a specific long flag (--jq) anywhere in the command; regex required for flag detection in gh api
 			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*\s--jq\b`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
 			Reason:         "gh api with --jq filters a GET response; without field flags or an explicit write method this is a read-only GitHub API operation.",
-			Priority:       510,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-allow-gh-api-rest-jq", Name: "Allow read-only gh api calls with --jq", Priority: 510, Enabled: true, Source: "seed"},
 		},
 		{
 			// gh api REST calls with --paginate read all pages of a resource; --paginate
 			// has no HTTP method implication and is used exclusively for large reads.
 			// Safe here because the 515 guard has blocked any -f/-F/--field combos.
-			ID:       "seed-allow-gh-api-rest-paginate",
-			Name:     "Allow read-only gh api calls with --paginate",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match presence of a specific long flag (--paginate) anywhere in the command; regex required for flag detection in gh api
 			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*\s--paginate\b`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
 			Reason:         "gh api --paginate reads all pages of a resource and is a read-only GitHub API operation.",
-			Priority:       510,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-allow-gh-api-rest-paginate", Name: "Allow read-only gh api calls with --paginate", Priority: 510, Enabled: true, Source: "seed"},
 		},
 
 		// ══════════════════════════════════════════════════════════════════════════
@@ -1051,8 +1004,6 @@ func SeedRules() []Rule {
 			// git branch -d / --delete only removes merged branches (safer than -D), but
 			// branch deletion is still a write operation that should be reviewed.
 			// The allow rule at 100 handles read-only branch operations (git branch, git branch -a).
-			ID:       "seed-escalate-git-branch-safe-delete",
-			Name:     "Escalate git branch -d (safe delete)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:      []string{"git"},
@@ -1063,17 +1014,13 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "Branch deletion modifies repository structure and should be reviewed.",
 			Alternative: "Confirm the branch is fully merged before deleting: git branch --merged",
-			Priority:    500,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-git-branch-safe-delete", Name: "Escalate git branch -d (safe delete)", Priority: 500, Enabled: true, Source: "seed"},
 		},
 		{
 			// sed -i edits files in place; sed without -i is read-only (stdout only).
 			// RequiredFlagPrefixes matches both `-i` (GNU) and `-i.bak` / `-i ''` (macOS/BSD)
 			// since all in-place variants begin with the `-i` prefix.
 			// The allow rule at 100 handles read-only sed invocations.
-			ID:       "seed-escalate-sed-inplace",
-			Name:     "Escalate sed -i (in-place editing)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:             []string{"sed"},
@@ -1083,15 +1030,11 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "sed -i modifies files in place; mistakes can corrupt source files.",
 			Alternative: "Use the Edit tool for safe, reversible file modifications.",
-			Priority:    500,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-sed-inplace", Name: "Escalate sed -i (in-place editing)", Priority: 500, Enabled: true, Source: "seed"},
 		},
 		{
 			// npm operations that publish to the registry or manage credentials.
 			// Plain npm install/test/run remain AutoAllow via seed-allow-bash-npm at 100.
-			ID:       "seed-escalate-npm-publish",
-			Name:     "Escalate npm publish and credential operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"npm"},
@@ -1101,15 +1044,11 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskHigh,
 			Reason:      "npm publish/credential operations affect the public registry and should be reviewed.",
 			Alternative: "Confirm the package version, changelog, and access settings before publishing.",
-			Priority:    500,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-npm-publish", Name: "Escalate npm publish and credential operations", Priority: 500, Enabled: true, Source: "seed"},
 		},
 		{
 			// cargo publish pushes crates to crates.io. cargo login stores credentials.
 			// Standard cargo build/test/run remain AutoAllow via seed-allow-bash-cargo at 100.
-			ID:       "seed-escalate-cargo-publish",
-			Name:     "Escalate cargo publish and credential operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"cargo"},
@@ -1119,17 +1058,13 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskHigh,
 			Reason:      "cargo publish/credential operations affect crates.io and should be reviewed.",
 			Alternative: "Confirm the crate version and access settings before publishing.",
-			Priority:    500,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-cargo-publish", Name: "Escalate cargo publish and credential operations", Priority: 500, Enabled: true, Source: "seed"},
 		},
 		{
 			// gh api covers both REST (gh api repos/...) and GraphQL (gh api graphql).
 			// Read operations like gh pr view are auto-allowed at 100 via seed-allow-bash-gh-read.
 			// Write GH CLI operations (pr create, issue create, etc.) are caught by seed-escalate-gh-write below.
 			// This rule catches the lower-level API calls that can do arbitrary reads or writes.
-			ID:       "seed-escalate-gh-api",
-			Name:     "Escalate gh api calls",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"gh"},
@@ -1139,15 +1074,11 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "gh api calls can modify GitHub resources and should be reviewed.",
 			Alternative: "Use Python subprocess([\"gh\", \"api\", ...]) for unattended gh api calls; it bypasses the Bash tool approval handler.",
-			Priority:    500,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-gh-api", Name: "Escalate gh api calls", Priority: 500, Enabled: true, Source: "seed"},
 		},
 		{
 			// Covers high-level gh CLI write commands. Read operations (pr view, pr list, etc.)
 			// are auto-allowed by seed-allow-bash-gh-read at priority 100.
-			ID:       "seed-escalate-gh-write",
-			Name:     "Escalate gh write operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"gh"},
@@ -1169,16 +1100,12 @@ func SeedRules() []Rule {
 			Decision:  Escalate,
 			RiskLevel: RiskMedium,
 			Reason:    "gh write operations modify GitHub resources and should be reviewed.",
-			Priority:  500,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-escalate-gh-write", Name: "Escalate gh write operations", Priority: 500, Enabled: true, Source: "seed"},
 		},
 		{
 			// git config write flags modify repository or global settings. The allow rule at 100
 			// includes "config" as a subcommand for read operations (--get, --list, bare reads).
 			// This escalate fires first for any invocation that uses a write flag.
-			ID:       "seed-escalate-git-config-write",
-			Name:     "Escalate git config write operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:      []string{"git"},
@@ -1189,15 +1116,11 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "git config with write flags modifies repository or global settings and should be reviewed.",
 			Alternative: "Use git config --get or git config --list to inspect the current value first.",
-			Priority:    500,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-git-config-write", Name: "Escalate git config write operations", Priority: 500, Enabled: true, Source: "seed"},
 		},
 		{
 			// git filter-repo and filter-branch rewrite history, potentially discarding commits
 			// and making backups mandatory. These must fire at 500 to override the git allow rules.
-			ID:       "seed-escalate-git-filter-history",
-			Name:     "Escalate git history-rewrite operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"git"},
@@ -1207,15 +1130,11 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskHigh,
 			Reason:      "git filter-repo/filter-branch rewrites history and cannot be undone without a backup.",
 			Alternative: "Ensure a complete backup exists (e.g. git clone --mirror) before proceeding.",
-			Priority:    500,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-git-filter-history", Name: "Escalate git history-rewrite operations", Priority: 500, Enabled: true, Source: "seed"},
 		},
 		{
 			// curl with file output flags (-o/-O/--output) writes response bodies to disk.
 			// Must fire at 500 to override seed-allow-curl-read at 100.
-			ID:       "seed-escalate-curl-output",
-			Name:     "Escalate curl with file output flags",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match combined short flags (-oLs, etc.) or flag value content; regex required for -o/-O/--output detection
 			CommandPattern: regexp.MustCompile(`\bcurl\b.*\s(-[a-zA-Z]*[oO]|--(output|remote-name))\b`),
@@ -1223,32 +1142,24 @@ func SeedRules() []Rule {
 			RiskLevel:      RiskMedium,
 			Reason:         "curl -o/-O downloads a file to disk and should be reviewed.",
 			Alternative:    "Review the URL and destination path before downloading.",
-			Priority:       500,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-escalate-curl-output", Name: "Escalate curl with file output flags", Priority: 500, Enabled: true, Source: "seed"},
 		},
 		{
 			// curl with write HTTP methods can modify remote state.
 			// Must fire at 500 to override seed-allow-curl-read at 100.
 			// Note: -X alone (e.g. -X GET) is harmless but rare; we conservatively escalate any -X.
-			ID:       "seed-escalate-curl-write-method",
-			Name:     "Escalate curl write HTTP methods (POST/PUT/DELETE/PATCH)",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match alternation across -X/-d/--data/--upload-file/-T/-F flags; regex required for write-method detection
 			CommandPattern: regexp.MustCompile(`\bcurl\b.*(\s-X\s|\s--request\s|\s--data\b|\s-d\s|\s--data-raw\b|\s--data-binary\b|\s--upload-file\b|\s-T\s|\s-F\s|\s--form\s)`),
 			Decision:       Escalate,
 			RiskLevel:      RiskHigh,
 			Reason:         "curl with write methods or request bodies can modify remote state and should be reviewed.",
-			Priority:       500,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-escalate-curl-write-method", Name: "Escalate curl write HTTP methods (POST/PUT/DELETE/PATCH)", Priority: 500, Enabled: true, Source: "seed"},
 		},
 		{
 			// bazel run executes an arbitrary compiled binary — unlike build/test which only
 			// compile, run hands control to the output binary.
 			// bazel shutdown kills the build daemon, dropping all build caches.
-			ID:       "seed-escalate-bazel-run",
-			Name:     "Escalate bazel run and shutdown",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"bazel"},
@@ -1258,9 +1169,7 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "bazel run executes an arbitrary compiled binary; bazel shutdown kills the build daemon and drops all caches.",
 			Alternative: "Use bazel build <target> to inspect what will be built before running it.",
-			Priority:    500,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-bazel-run", Name: "Escalate bazel run and shutdown", Priority: 500, Enabled: true, Source: "seed"},
 		},
 		{
 			// firebase deploy publishes code and config to live Firebase infrastructure.
@@ -1268,8 +1177,6 @@ func SeedRules() []Rule {
 			// Uses CommandPattern regex because firebase subcommands contain colons (e.g.
 			// "functions:delete") which isSubcommandLike() rejects, making Criteria.Subcommands
 			// unable to match them. This rule fires at priority 500 (before the allow rule at 100).
-			ID:       "seed-escalate-firebase-deploy",
-			Name:     "Escalate firebase deploy, serve, and destructive commands",
 			ToolName: "Bash",
 			//nolint:commandpattern firebase uses colon-namespaced subcommands that isSubcommandLike rejects
 			CommandPattern: regexp.MustCompile(`\bfirebase\s+(deploy|serve|init|functions:delete|login\b|logout\b)`),
@@ -1277,15 +1184,11 @@ func SeedRules() []Rule {
 			RiskLevel:      RiskHigh,
 			Reason:         "firebase deploy publishes to live infrastructure and should be reviewed before proceeding.",
 			Alternative:    "Run 'firebase projects:list' and confirm the active project with 'firebase use' before deploying.",
-			Priority:       500,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-escalate-firebase-deploy", Name: "Escalate firebase deploy, serve, and destructive commands", Priority: 500, Enabled: true, Source: "seed"},
 		},
 		{
 			// pulumi up deploys or updates real cloud infrastructure.
 			// pulumi destroy removes it. Both are irreversible without backup/state management.
-			ID:       "seed-escalate-pulumi-deploy",
-			Name:     "Escalate pulumi up and destroy",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"pulumi"},
@@ -1295,9 +1198,7 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskHigh,
 			Reason:      "pulumi up/destroy modifies or removes real cloud infrastructure and must be reviewed.",
 			Alternative: "Run 'pulumi preview' first to see what changes would be applied before running 'pulumi up'.",
-			Priority:    500,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-pulumi-deploy", Name: "Escalate pulumi up and destroy", Priority: 500, Enabled: true, Source: "seed"},
 		},
 
 		// ══════════════════════════════════════════════════════════════════════════
@@ -1310,35 +1211,25 @@ func SeedRules() []Rule {
 			// base64 -o / --output writes decoded/encoded data directly to a file (BSD/macOS
 			// semantics). All other base64 invocations write to stdout and are harmless
 			// pipeline steps. This rule fires at 101, before text-proc allows base64 at 100.
-			ID:       "seed-escalate-base64-file-output",
-			Name:     "Escalate base64 with file output flag",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match -o/--output flag presence in combined flag strings; regex required
 			CommandPattern: regexp.MustCompile(`\bbase64\b.*\s(-o|--output)\s`),
 			Decision:       Escalate,
 			RiskLevel:      RiskMedium,
 			Reason:         "base64 -o / --output writes to a file; use base64 -d to decode to stdout instead.",
-			Priority:       101,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-escalate-base64-file-output", Name: "Escalate base64 with file output flag", Priority: 101, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:          "seed-allow-read-tools",
-			Name:        "Allow read-only tools",
 			ToolPattern: regexp.MustCompile(`(?i)^(Read|Glob|Grep|WebFetch|WebSearch|ListMcpResourcesTool|ReadMcpResourceTool)$`),
 			Decision:    AutoAllow,
 			RiskLevel:   RiskLow,
 			Reason:      "Read-only operations pose no risk.",
-			Priority:    100,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-allow-read-tools", Name: "Allow read-only tools", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// Note: "env" is intentionally excluded. `env` is a wrapper command
 			// (e.g., `env git reset --hard`) and including it would bypass deny rules
 			// because ExtractAllCommands sets Program="env" for wrapped invocations.
-			ID:       "seed-allow-bash-ls-pwd",
-			Name:     "Allow ls, pwd, echo, and inspection commands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"ls", "pwd", "echo", "printenv", "which", "type", "date", "whoami", "id", "hostname", "["},
@@ -1346,14 +1237,10 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Listing and inspection commands are read-only.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-ls-pwd", Name: "Allow ls, pwd, echo, and inspection commands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// find without -exec/-delete is read-only; the deny rule catches dangerous patterns.
-			ID:       "seed-bash-find-name",
-			Name:     "Allow find (no exec/delete)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"find"},
@@ -1362,13 +1249,9 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskLow,
 			Reason:      "Simple find is read-only.",
 			Alternative: "Use the Glob tool for file pattern matching instead.",
-			Priority:    100,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-bash-find-name", Name: "Allow find (no exec/delete)", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-allow-bash-cat-read",
-			Name:     "Allow cat, head, tail, wc, file, stat",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"cat", "head", "tail", "wc", "file", "stat", "less", "more", "diff", "md5sum", "sha256sum", "strings", "xxd"},
@@ -1377,33 +1260,25 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskLow,
 			Reason:      "Read-only file inspection commands.",
 			Alternative: "Consider using the Read or Grep tools for file inspection.",
-			Priority:    100,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-allow-bash-cat-read", Name: "Allow cat, head, tail, wc, file, stat", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// cat > /tmp/... << 'EOF' is a common Claude Code pattern for writing temp scripts,
 			// queries, or helper files to /tmp before execution. Writing to /tmp is low-risk
 			// (ephemeral, world-readable) and should not require manual review.
-			ID:       "seed-allow-bash-cat-tmp-write",
-			Name:     "Allow cat heredoc writes to /tmp",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot detect shell redirection operators (>) or match path prefixes (/tmp/); regex required
 			CommandPattern: regexp.MustCompile(`\bcat\s*>+\s*/tmp/`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
 			Reason:         "Writing temporary files to /tmp is ephemeral and low-risk.",
-			Priority:       100,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-allow-bash-cat-tmp-write", Name: "Allow cat heredoc writes to /tmp", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// Criteria-based matching correctly handles git -C <path> <subcmd> by skipping
 			// the -C flag and its value before extracting the subcommand.
 			// Note: "branch" is included here for listing (git branch, git branch -a).
 			// The deny/escalate rules at higher priority handle -D and -d deletion.
-			ID:       "seed-allow-git-read",
-			Name:     "Allow read-only git commands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"git"},
@@ -1421,24 +1296,16 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Read-only git operations pose no risk.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-git-read", Name: "Allow read-only git commands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:          "seed-allow-file-tools",
-			Name:        "Allow core file editing tools",
 			ToolPattern: regexp.MustCompile(`(?i)^(Edit|Write|MultiEdit|Update)$`),
 			Decision:    AutoAllow,
 			RiskLevel:   RiskLow,
 			Reason:      "Core Claude Code file editing tools; .env and .git deny rules protect critical paths.",
-			Priority:    100,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-allow-file-tools", Name: "Allow core file editing tools", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-allow-bash-cd",
-			Name:     "Allow cd/pushd/popd",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"cd", "pushd", "popd"},
@@ -1446,13 +1313,9 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Shell navigation commands have no side effects.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-cd", Name: "Allow cd/pushd/popd", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-allow-bash-mkdir",
-			Name:     "Allow mkdir",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"mkdir"},
@@ -1460,13 +1323,9 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Directory creation is low risk.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-mkdir", Name: "Allow mkdir", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-allow-bash-grep",
-			Name:     "Allow grep/rg/ag",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"grep", "egrep", "fgrep", "rg", "ag"},
@@ -1474,17 +1333,13 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Text search commands are read-only.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-grep", Name: "Allow grep/rg/ag", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// Criteria-based matching correctly handles git -C <path> <subcmd>.
 			// "pull" is included: it is fetch+merge and part of standard workflow.
 			// "push" is intentionally excluded — it escalates via seed-escalate-git-push.
 			// "git reset --hard" is denied at 1000; plain "git reset" (e.g. HEAD~1) is allowed here.
-			ID:       "seed-allow-git-write",
-			Name:     "Allow standard git write operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"git"},
@@ -1498,13 +1353,9 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Standard git development workflow; push remains escalated.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-git-write", Name: "Allow standard git write operations", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-allow-bash-sleep",
-			Name:     "Allow sleep",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"sleep"},
@@ -1512,13 +1363,9 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "sleep waits for a duration and has no side effects.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-sleep", Name: "Allow sleep", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-allow-bash-go-safe",
-			Name:     "Allow safe go subcommands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"go"},
@@ -1527,13 +1374,9 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Standard Go toolchain operations.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-go-safe", Name: "Allow safe go subcommands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-allow-bash-gofmt",
-			Name:     "Allow gofmt (Go code formatter)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"gofmt"},
@@ -1541,15 +1384,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "gofmt is a read-only code formatter equivalent to go fmt.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-gofmt", Name: "Allow gofmt (Go code formatter)", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// Matches python/python3/python3.11/pypy/pypy3 running a script, module, or version check.
 			// python -c "..." (inline) is intentionally excluded → escalates for review.
-			ID:       "seed-allow-bash-python-run",
-			Name:     "Allow python running a script or module",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"python", "python2", "python3", "pypy", "pypy3"},
@@ -1558,9 +1397,7 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Python running a project script or module. Inline -c execution escalates for review.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-python-run", Name: "Allow python running a script or module", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// python -c "..." that only imports from the safe stdlib safelist (safeStdlibModules)
@@ -1569,8 +1406,6 @@ func SeedRules() []Rule {
 			// Applies to both single-line ("inline") and multiline ("inline-multiline") -c scripts.
 			// Examples that auto-allow: python3 -c "import json, sys; print(json.dumps(sys.argv))"
 			// Examples that escalate: python3 -c "import requests; r = requests.get(url)"
-			ID:       "seed-allow-python-inline-stdlib",
-			Name:     "Allow python -c with stdlib-only imports",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:              []string{"python", "python2", "python3", "pypy", "pypy3"},
@@ -1580,13 +1415,9 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Inline Python using only safe stdlib modules poses no network or execution risk.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-python-inline-stdlib", Name: "Allow python -c with stdlib-only imports", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-allow-bash-pytest",
-			Name:     "Allow pytest test runner",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"pytest"},
@@ -1594,14 +1425,10 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "pytest runs project tests.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-pytest", Name: "Allow pytest test runner", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// Only known pip subcommands are allowed; arbitrary invocations escalate.
-			ID:       "seed-allow-bash-pip",
-			Name:     "Allow pip package management subcommands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"pip", "pip3"},
@@ -1610,15 +1437,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Standard pip package management operations.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-pip", Name: "Allow pip package management subcommands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// rtk and agy are CLI tools for token optimization and project control.
 			// Safe read-only / info commands (e.g. gain, discover, version) are allowed.
-			ID:       "seed-allow-bash-rtk-agy",
-			Name:     "Allow rtk and agy analytics and metadata commands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"rtk", "agy"},
@@ -1627,14 +1450,10 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "rtk/agy metadata and analytics operations.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-rtk-agy", Name: "Allow rtk and agy analytics and metadata commands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// Known uv subcommands; compound analysis still enforces safety on piped/chained commands.
-			ID:       "seed-allow-bash-uv",
-			Name:     "Allow uv package manager subcommands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"uv"},
@@ -1643,9 +1462,7 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "uv package manager standard operations.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-uv", Name: "Allow uv package manager subcommands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// Note: "sed" is included here for read-only pipeline use (stdout only).
@@ -1653,8 +1470,6 @@ func SeedRules() []Rule {
 			// "base64" encodes/decodes data (e.g. GitHub API returns file contents as
 			// base64; decoding with "base64 -d" is a common pipeline step). The 101
 			// escalate rule at the top of this section blocks the -o/--output variant.
-			ID:       "seed-allow-bash-text-proc",
-			Name:     "Allow text processing tools",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"jq", "awk", "tr", "sort", "uniq", "cut", "paste", "column", "tee", "sed", "base64"},
@@ -1662,14 +1477,10 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Text processing and pipeline tools.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-text-proc", Name: "Allow text processing tools", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// ExtractAllCommands strips the ./ path prefix, so "./gradlew" → program "gradlew".
-			ID:       "seed-allow-bash-gradlew",
-			Name:     "Allow Gradle build tool",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"gradlew", "gradle"},
@@ -1677,13 +1488,9 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Gradle/Gradlew is a standard JVM build tool.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-gradlew", Name: "Allow Gradle build tool", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-allow-bash-node-tools",
-			Name:     "Allow Node.js runtime and TypeScript tools",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"node", "tsc", "ts-node", "tsx"},
@@ -1691,14 +1498,10 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Node.js runtime and TypeScript compiler for project code.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-node-tools", Name: "Allow Node.js runtime and TypeScript tools", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// publish/adduser/login/logout are escalated at priority 500 before this rule fires.
-			ID:       "seed-allow-bash-npm",
-			Name:     "Allow npm, npx, yarn, pnpm",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"npm", "npx", "yarn", "pnpm"},
@@ -1706,13 +1509,9 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Node.js package management and script execution.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-npm", Name: "Allow npm, npx, yarn, pnpm", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-allow-bash-make",
-			Name:     "Allow make",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"make"},
@@ -1720,13 +1519,9 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Make is a standard build tool for running project tasks.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-make", Name: "Allow make", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-allow-bash-file-ops",
-			Name:     "Allow cp, mv, touch, ln",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"cp", "mv", "touch", "ln"},
@@ -1734,15 +1529,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Standard file management operations.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-file-ops", Name: "Allow cp, mv, touch, ln", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// Deep subcommand matching: extractSubcommand captures 2 tokens for gh.
 			// gh api and write operations are escalated at priority 500 before this rule fires.
-			ID:       "seed-allow-bash-gh-read",
-			Name:     "Allow read-only GitHub CLI commands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"gh"},
@@ -1763,14 +1554,10 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Read-only GitHub CLI operations.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-gh-read", Name: "Allow read-only GitHub CLI commands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// publish/login/logout/owner/yank are escalated at priority 500 before this rule fires.
-			ID:       "seed-allow-bash-cargo",
-			Name:     "Allow Rust cargo build subcommands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"cargo"},
@@ -1784,16 +1571,12 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Standard Rust toolchain operations.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-cargo", Name: "Allow Rust cargo build subcommands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// mvn and the ./mvnw wrapper (path-stripped to "mvnw" by ExtractAllCommands).
 			// All lifecycle phases (compile, test, package, verify, install) are allowed.
 			// "deploy" (remote repository upload) is intentionally omitted — escalates by default.
-			ID:       "seed-allow-bash-mvn",
-			Name:     "Allow Maven build operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"mvn", "mvnw"},
@@ -1801,15 +1584,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Maven build lifecycle operations for Java projects.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-mvn", Name: "Allow Maven build operations", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// Covers both legacy (docker ps) and modern (docker container ls) subcommand forms.
 			// docker is in deepSubcommandPrograms, so 2-token subcommands are captured.
-			ID:       "seed-allow-bash-docker-read",
-			Name:     "Allow read-only Docker commands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"docker"},
@@ -1833,9 +1612,7 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Read-only Docker inspection commands.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-docker-read", Name: "Allow read-only Docker commands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 
 		{
@@ -1843,36 +1620,26 @@ func SeedRules() []Rule {
 			// These tools pose no risk (they ask questions, manage task lists, or signal
 			// plan approval) and should never require manual review.
 			// Uses ToolCategory so new agent tools are auto-matched without rule updates.
-			ID:           "seed-allow-agent-tools",
-			Name:         "Allow Claude Code agent and planning tools",
 			ToolCategory: ToolCategoryBuiltinAgent,
 			Decision:     AutoAllow,
 			RiskLevel:    RiskLow,
 			Reason:       "Core Claude Code agent interaction and task management tools.",
-			Priority:     100,
-			Enabled:      true,
-			Source:       "seed",
+			RuleMeta:     RuleMeta{ID: "seed-allow-agent-tools", Name: "Allow Claude Code agent and planning tools", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// MCP read-only tools: filesystem reads, documentation lookup, sequential thinking,
 			// and codebase analysis output reading. Write/mutate MCP tools are excluded and escalate.
 			// Uses ToolCategory so newly registered read-only MCP operations are auto-matched.
-			ID:           "seed-allow-mcp-read",
-			Name:         "Allow read-only MCP tools",
 			ToolCategory: ToolCategoryMCPRead,
 			Decision:     AutoAllow,
 			RiskLevel:    RiskLow,
 			Reason:       "Read-only MCP tools pose no risk.",
-			Priority:     100,
-			Enabled:      true,
-			Source:       "seed",
+			RuleMeta:     RuleMeta{ID: "seed-allow-mcp-read", Name: "Allow read-only MCP tools", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// curl read-only: GET requests without file output or write methods.
 			// The 500-priority rules (seed-escalate-curl-output, seed-escalate-curl-write-method)
 			// intercept unsafe curl invocations before this rule fires.
-			ID:       "seed-allow-curl-read",
-			Name:     "Allow curl read-only (GET, no file output)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"curl"},
@@ -1880,9 +1647,7 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "curl GET requests without output flags or write methods are read-only.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-curl-read", Name: "Allow curl read-only (GET, no file output)", Priority: 100, Enabled: true, Source: "seed"},
 		},
 
 		{
@@ -1890,8 +1655,6 @@ func SeedRules() []Rule {
 			// Only read-only tmux subcommands are auto-allowed. Subcommands like
 			// new-session, run-shell, and send-keys can execute arbitrary shell code
 			// and must not bypass the normal Bash rule evaluation.
-			ID:       "seed-allow-bash-tmux",
-			Name:     "Allow tmux read-only subcommands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"tmux"},
@@ -1900,15 +1663,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Read-only tmux queries pose no execution risk.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-tmux", Name: "Allow tmux read-only subcommands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// javap disassembles Java .class files to show their bytecode and signatures.
 			// It is a read-only inspection tool — no files are created or modified.
-			ID:       "seed-allow-bash-javap",
-			Name:     "Allow javap (Java bytecode disassembler)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"javap"},
@@ -1916,16 +1675,12 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "javap disassembles Java class files; it is a read-only inspection tool.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-javap", Name: "Allow javap (Java bytecode disassembler)", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// jar is the standard Java archive tool used for creating, listing, and
 			// extracting JARs/AARs/WARs. All forms (tf=list, xf=extract, cf=create) are
 			// standard build-step operations. The deny rules protect .env and .git.
-			ID:       "seed-allow-bash-jar",
-			Name:     "Allow jar (Java archive tool)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"jar"},
@@ -1933,15 +1688,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "jar creates, lists, and extracts Java archives; a standard build step.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-jar", Name: "Allow jar (Java archive tool)", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// unzip is commonly used in JVM/Android workflows to inspect AAR/APK archives
 			// and in general for extracting downloaded packages.
-			ID:       "seed-allow-bash-unzip",
-			Name:     "Allow unzip archive extraction",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"unzip"},
@@ -1949,15 +1700,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "unzip extracts archives; a standard build and inspection step.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-unzip", Name: "Allow unzip archive extraction", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// jest and vitest are the standard JavaScript/TypeScript test runners.
 			// They mirror the pytest rule and should be auto-allowed.
-			ID:       "seed-allow-bash-jest",
-			Name:     "Allow jest and vitest test runners",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"jest", "vitest"},
@@ -1965,15 +1712,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "jest/vitest runs JavaScript/TypeScript project tests.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-jest", Name: "Allow jest and vitest test runners", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// buf is the standard Protocol Buffer toolchain used for code generation,
 			// linting, and format checking. All operations are local build steps.
-			ID:       "seed-allow-bash-buf",
-			Name:     "Allow buf Protocol Buffer tooling",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"buf"},
@@ -1982,15 +1725,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "buf generates and validates Protocol Buffer definitions; a standard build step.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-buf", Name: "Allow buf Protocol Buffer tooling", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// jfr (Java Flight Recorder) CLI reads JVM recording files for profiling.
 			// summary, print, view, metadata, and disassemble are all read-only operations.
-			ID:       "seed-allow-bash-jfr",
-			Name:     "Allow jfr (Java Flight Recorder) read-only commands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"jfr"},
@@ -1999,15 +1738,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "jfr reads JVM flight recording files; summary and print are read-only.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-jfr", Name: "Allow jfr (Java Flight Recorder) read-only commands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// aapt/aapt2 is the Android Asset Packaging Tool used to inspect APKs.
 			// dump, list, and version are read-only operations on the archive.
-			ID:       "seed-allow-bash-aapt",
-			Name:     "Allow aapt/aapt2 APK inspection",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"aapt", "aapt2"},
@@ -2016,15 +1751,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "aapt dump reads APK metadata without modifying it.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-aapt", Name: "Allow aapt/aapt2 APK inspection", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// pixi is a conda-compatible package manager that creates isolated project
 			// environments. Its standard operations mirror those of npm/pip.
-			ID:       "seed-allow-bash-pixi",
-			Name:     "Allow pixi package manager",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"pixi"},
@@ -2033,15 +1764,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "pixi manages isolated project environments (conda-compatible).",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-pixi", Name: "Allow pixi package manager", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// mktemp only creates a temporary filename/directory; it does not execute code
 			// or write data. Cleanup is automatic on the next system reboot at latest.
-			ID:       "seed-allow-bash-mktemp",
-			Name:     "Allow mktemp",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"mktemp"},
@@ -2049,16 +1776,12 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "mktemp creates temporary files/directories with no lasting side effects.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-mktemp", Name: "Allow mktemp", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// Read-only systemctl queries check service state without modifying it.
 			// Write operations (start, stop, restart, enable, daemon-reload, …) escalate
 			// at priority 50 via seed-escalate-systemctl-write.
-			ID:       "seed-allow-bash-systemctl-read",
-			Name:     "Allow systemctl read-only operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"systemctl"},
@@ -2067,14 +1790,10 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Read-only systemctl commands check service state without modifying it.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-systemctl-read", Name: "Allow systemctl read-only operations", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// hugo is a static site generator. build/serve are standard local dev operations.
-			ID:       "seed-allow-bash-hugo",
-			Name:     "Allow hugo static site generator",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"hugo"},
@@ -2083,14 +1802,10 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "hugo is a static site generator; build and serve are standard dev operations.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-hugo", Name: "Allow hugo static site generator", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// tailscale read-only queries inspect VPN status and routing without changing them.
-			ID:       "seed-allow-bash-tailscale-read",
-			Name:     "Allow tailscale read-only commands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"tailscale"},
@@ -2099,9 +1814,7 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Read-only tailscale commands inspect VPN state without modifying it.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-tailscale-read", Name: "Allow tailscale read-only commands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 
 		{
@@ -2115,8 +1828,6 @@ func SeedRules() []Rule {
 			//
 			// Bare invocations (ip route, ip addr) capture only one token ("route") which
 			// is not blocked, so they auto-allow (bare = show).
-			ID:       "seed-allow-bash-ip-read",
-			Name:     "Allow ip read-only network inspection",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"ip"},
@@ -2144,9 +1855,7 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Read-only ip commands inspect network state without modifying it.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-ip-read", Name: "Allow ip read-only network inspection", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// pacman read-only: -Q (query installed packages), -F (file database query),
@@ -2156,17 +1865,13 @@ func SeedRules() []Rule {
 			//
 			// Matches any -Q variant (-Qs, -Qi, -Ql, etc.), -F variants, and the two
 			// safe -S sub-modes: -Ss (search) and -Si (show package info).
-			ID:       "seed-allow-bash-pacman-query",
-			Name:     "Allow pacman read-only query operations",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match combined pacman flag variants (-Q, -Qi, -Ql, -Ss, -Si); regex required for flag-class detection
 			CommandPattern: regexp.MustCompile(`^pacman\s+(-Q[a-zA-Z]*\b|--query\b|-F[a-zA-Z]*\b|--files\b|-[Vh]\b|--version\b|--help\b|-Ss\b|-Si\b)`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
 			Reason:         "pacman -Q, -F, -Ss, and -Si operations query packages without modifying them.",
-			Priority:       100,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-allow-bash-pacman-query", Name: "Allow pacman read-only query operations", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// sqlite3 read-only: allow a safe subset of dot commands that only inspect
@@ -2175,25 +1880,19 @@ func SeedRules() []Rule {
 			//
 			// Matched: .tables, .schema [table], .indexes [table], .databases, .pragma <name>
 			// NOT matched: "SELECT ...", "INSERT INTO ...", bare invocations without dot cmds.
-			ID:       "seed-allow-bash-sqlite3-read",
-			Name:     "Allow sqlite3 read-only schema inspection",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match sqlite3 dot commands (.tables, .schema) inside quoted argument values; regex required
 			CommandPattern: regexp.MustCompile(`\bsqlite3\b\s+\S+\s+["']?\.(tables|databases?|schema(\s+\w+)?|indexes?(\s+\w+)?|pragma\s+\w+)["']?\s*$`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
 			Reason:         "sqlite3 dot commands (.tables, .schema, .indexes, .pragma) are read-only metadata inspection.",
-			Priority:       100,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-allow-bash-sqlite3-read", Name: "Allow sqlite3 read-only schema inspection", Priority: 100, Enabled: true, Source: "seed"},
 		},
 
 		{
 			// pgrep and ps are read-only process inspection tools. pgrep lists PIDs by name
 			// or pattern; ps shows a snapshot of running processes. Neither modifies state.
 			// pkill/killall (which send signals) are escalated at priority 50.
-			ID:       "seed-allow-bash-process-inspect",
-			Name:     "Allow pgrep and ps (read-only process inspection)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"pgrep", "ps"},
@@ -2201,16 +1900,12 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "pgrep and ps are read-only process inspection tools; they do not modify state.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-process-inspect", Name: "Allow pgrep and ps (read-only process inspection)", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// kill with a PID argument is common and targeted — it only affects the specific
 			// process whose PID was explicitly supplied. Escalated patterns (pkill, killall)
 			// match by name and can hit unrelated processes.
-			ID:       "seed-allow-bash-kill-pid",
-			Name:     "Allow kill with explicit PID",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"kill"},
@@ -2218,16 +1913,12 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "kill with an explicit PID is targeted and commonly used to stop a known process.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-kill-pid", Name: "Allow kill with explicit PID", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// java -version, java --version are read-only informational queries.
 			// java -jar runs an executable JAR in development contexts (common for Spring Boot,
 			// Gradle-built services, etc.). Escalate if more specific review is warranted.
-			ID:       "seed-allow-bash-java-dev",
-			Name:     "Allow java version check and -jar execution",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:      []string{"java"},
@@ -2236,9 +1927,7 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "java -version and java -jar are standard development operations.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-java-dev", Name: "Allow java version check and -jar execution", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// asdf read-only top-level subcommands: list, current, which, where are all
@@ -2247,8 +1936,6 @@ func SeedRules() []Rule {
 			// Mutations (install, uninstall, global, local, plugin add/remove/update) fall
 			// through to seed-escalate-asdf at priority 50.
 			// asdf is in deepSubcommandPrograms so two-word subcommands are captured.
-			ID:       "seed-allow-bash-asdf-read",
-			Name:     "Allow asdf read-only query operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"asdf"},
@@ -2257,16 +1944,12 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "asdf list/current/which/where/plugin list are read-only operations that do not modify tool state.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-asdf-read", Name: "Allow asdf read-only query operations", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// docker compose logs/ps/stats/top are read-only container observation operations.
 			// They are distinct from docker compose up/down/rm which modify container state.
 			// docker is in deepSubcommandPrograms so "compose logs" is captured as a 2-word sub.
-			ID:       "seed-allow-bash-docker-compose-read",
-			Name:     "Allow docker compose read-only operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"docker"},
@@ -2275,16 +1958,12 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "docker compose logs/ps/stats/top/config are read-only container observation operations.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-docker-compose-read", Name: "Allow docker compose read-only operations", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// gh auth list and gh auth token inspect authentication state without modifying it.
 			// gh auth status is already covered by seed-allow-bash-gh-read.
 			// gh auth login/logout are write operations escalated by seed-escalate-gh-write.
-			ID:       "seed-allow-bash-gh-auth-read",
-			Name:     "Allow gh auth list and token (read-only)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"gh"},
@@ -2293,33 +1972,25 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "gh auth list/token inspect authentication state without modifying it.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-gh-auth-read", Name: "Allow gh auth list and token (read-only)", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// source/. for Python virtualenv activation is a common development pattern.
 			// Sourcing activate scripts only modifies PATH and VIRTUAL_ENV in the current shell.
 			// Generic source (arbitrary scripts) is escalated at priority 50 by seed-escalate-source.
-			ID:       "seed-allow-bash-source-venv",
-			Name:     "Allow source/. for virtualenv activation",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match argument path content (activate filename); regex required to distinguish virtualenv activation from arbitrary script sourcing
 			CommandPattern: regexp.MustCompile(`(?:source|\.)\s+[^\s]+/(?:activate|activate\.fish|activate\.csh|activate\.ps1)\s*$`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
 			Reason:         "Sourcing a virtualenv activate script only modifies PATH in the current shell.",
-			Priority:       100,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-allow-bash-source-venv", Name: "Allow source/. for virtualenv activation", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// Common Node.js project linters and formatters installed locally under
 			// node_modules/.bin/. The path is stripped to the bare name by ExtractAllCommands,
 			// so "./node_modules/.bin/stylelint" → prog="stylelint".
 			// These are read-only code-quality tools that do not modify package state.
-			ID:       "seed-allow-bash-node-bin-linters",
-			Name:     "Allow node_modules/.bin/ linters and formatters",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"stylelint", "eslint", "prettier", "tslint", "lint-staged", "biome", "oxlint", "knip"},
@@ -2327,16 +1998,12 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Local node_modules/.bin/ linters and formatters are read-only code-quality tools.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-node-bin-linters", Name: "Allow node_modules/.bin/ linters and formatters", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// localdev is the FBG internal developer CLI. The ai-setup sub-tool has read-only
 			// inspection operations (status, config get, --help) and write operations (config set,
 			// install). localdev is in deepSubcommandPrograms so "ai-setup status" is captured.
-			ID:       "seed-allow-bash-localdev-read",
-			Name:     "Allow localdev ai-setup read-only operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"localdev"},
@@ -2345,17 +2012,13 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "localdev ai-setup status/help/version are read-only developer configuration inspection.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-localdev-read", Name: "Allow localdev ai-setup read-only operations", Priority: 100, Enabled: true, Source: "seed"},
 		},
 
 		{
 			// adb (Android Debug Bridge) read-only subcommands inspect device state and
 			// read logcat/dumpsys output without modifying the device or installing software.
 			// Write operations (install, push, shell rm, uninstall) are escalated at priority 50.
-			ID:       "seed-allow-bash-adb-read",
-			Name:     "Allow adb read-only subcommands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:           []string{"adb"},
@@ -2365,15 +2028,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "adb devices/shell/logcat are read-only device inspection operations.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-adb-read", Name: "Allow adb read-only subcommands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// nix build/develop/eval/flake are standard Nix development workflow operations.
 			// Install/profile add are package mutations and must escalate.
-			ID:       "seed-allow-bash-nix-dev",
-			Name:     "Allow nix development subcommands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:           []string{"nix"},
@@ -2383,15 +2042,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "nix develop/build/eval/flake are standard Nix development workflow commands.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-nix-dev", Name: "Allow nix development subcommands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// r2 (radare2) is a reverse-engineering framework used in the RE skill for binary
 			// analysis. Analysis-only invocations (-A, -q, -c "?", -c "aa") do not modify files.
-			ID:       "seed-allow-bash-r2",
-			Name:     "Allow r2 (radare2) binary analysis",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"r2", "radare2", "r2pipe"},
@@ -2399,15 +2054,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "radare2 is a read-only binary analysis tool used in reverse-engineering workflows.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-r2", Name: "Allow r2 (radare2) binary analysis", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// sleeper is the internal mock/test process used in this project's test suite.
 			// It is never a user-installed tool and poses no risk.
-			ID:       "seed-allow-bash-sleeper",
-			Name:     "Allow sleeper (internal test process)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"sleeper"},
@@ -2415,15 +2066,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "sleeper is an internal test/mock process; it has no side effects.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-sleeper", Name: "Allow sleeper (internal test process)", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// zcat/gzcat reads compressed files to stdout — equivalent to cat but for .gz files.
 			// Purely read-only; no state is modified.
-			ID:       "seed-allow-bash-zcat",
-			Name:     "Allow zcat/gzcat (compressed file reader)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"zcat", "gzcat"},
@@ -2431,15 +2078,11 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "zcat/gzcat decompresses files to stdout without modifying any state.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-zcat", Name: "Allow zcat/gzcat (compressed file reader)", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// journalctl reads the systemd journal — a read-only log inspection tool.
 			// Common usage: journalctl -u <service> --since "today" -n 50
-			ID:       "seed-allow-bash-journalctl",
-			Name:     "Allow journalctl (systemd log reader)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"journalctl"},
@@ -2447,16 +2090,12 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "journalctl is a read-only log inspection tool; it does not modify journal state.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-journalctl", Name: "Allow journalctl (systemd log reader)", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// golangci-lint runs Go linters against the current project. It is always
 			// read-only — it reports issues but never modifies files (use --fix for that,
 			// which is a distinct and deliberate action).
-			ID:       "seed-allow-bash-golangci-lint",
-			Name:     "Allow golangci-lint (Go linter)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"golangci-lint"},
@@ -2464,16 +2103,12 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "golangci-lint is a read-only static analysis tool for Go projects.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-golangci-lint", Name: "Allow golangci-lint (Go linter)", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// bazel build/test/query/mod/info/fetch/clean are standard build-system operations
 			// used in CI and local development. They do not execute the built artifacts.
 			// `bazel run` executes an arbitrary binary and is escalated at priority 500.
-			ID:       "seed-allow-bash-bazel-build",
-			Name:     "Allow bazel build, test, query, and inspection commands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"bazel"},
@@ -2482,9 +2117,7 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "bazel build/test/query/mod/info are standard CI build operations that do not execute output binaries.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-bazel-build", Name: "Allow bazel build, test, query, and inspection commands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// firebase CLI commands. Most subcommands (projects:list, functions:list, etc.)
@@ -2493,8 +2126,6 @@ func SeedRules() []Rule {
 			// NOTE: Firebase uses colon-namespaced subcommands (e.g. "projects:list") which
 			// isSubcommandLike() rejects. Subcommand-based matching is therefore not used here;
 			// the priority-500 escalate rule catches the dangerous subcommands via regex instead.
-			ID:       "seed-allow-bash-firebase",
-			Name:     "Allow firebase commands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"firebase"},
@@ -2502,16 +2133,12 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "firebase CLI commands are generally read-only inspection operations.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-firebase", Name: "Allow firebase commands", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		{
 			// pulumi config, preview, stack, and about are safe read-only or local-state
 			// operations. `pulumi up`, `destroy`, and `cancel` mutate real infrastructure
 			// and are escalated at priority 500.
-			ID:       "seed-allow-bash-pulumi-read",
-			Name:     "Allow pulumi config, preview, and stack inspection",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:           []string{"pulumi"},
@@ -2521,9 +2148,7 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "pulumi config/preview/stack are local-state or dry-run operations that do not modify cloud infrastructure.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-allow-bash-pulumi-read", Name: "Allow pulumi config, preview, and stack inspection", Priority: 100, Enabled: true, Source: "seed"},
 		},
 		// ══════════════════════════════════════════════════════════════════════════
 		// Escalate targeted (Priority 60) — more specific than catch-all; provides
@@ -2536,8 +2161,6 @@ func SeedRules() []Rule {
 			// Safe stdlib-only multiline scripts are auto-allowed at priority 100 by
 			// seed-allow-python-inline-stdlib. This rule catches multiline scripts that
 			// are not purely safe stdlib (e.g. they use open() or non-stdlib imports).
-			ID:       "seed-escalate-python-inline-multiline",
-			Name:     "Escalate multiline python -c inline script",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"python", "python2", "python3", "pypy", "pypy3"},
@@ -2547,9 +2170,7 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "Multiline python -c scripts with embedded newlines and # comments are difficult to review safely inline.",
 			Alternative: "Save the code to a named script in /tmp/claude-scripts/ (e.g. /tmp/claude-scripts/parse-json.py) and run: python3 /tmp/claude-scripts/parse-json.py — named scripts are clearer, easier to review, and make it obvious they were generated by Claude.",
-			Priority:    60,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-python-inline-multiline", Name: "Escalate multiline python -c inline script", Priority: 60, Enabled: true, Source: "seed"},
 		},
 
 		// ══════════════════════════════════════════════════════════════════════════
@@ -2560,8 +2181,6 @@ func SeedRules() []Rule {
 			// rm (without -rf on root/home) is not caught by the deny rule, but it still
 			// deletes files permanently. Escalate with a helpful reason so reviewers can
 			// confirm the target before proceeding.
-			ID:       "seed-escalate-rm",
-			Name:     "Escalate rm (file deletion)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"rm", "rmdir"},
@@ -2570,16 +2189,12 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "rm deletes files permanently. Confirm the target path before proceeding.",
 			Alternative: "Move the file to /tmp first if you want a recoverable deletion.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-rm", Name: "Escalate rm (file deletion)", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
 			// pkill/killall send signals to processes matched by name or pattern.
 			// A broad pattern (pkill -f "gradle") can inadvertently kill unrelated processes.
 			// `kill` is excluded: PID-targeted signals are safe and common in scripts.
-			ID:       "seed-escalate-pkill",
-			Name:     "Escalate pkill/killall (process termination by name)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"pkill", "killall"},
@@ -2588,16 +2203,12 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "pkill/killall terminates processes by name and can accidentally affect unrelated processes.",
 			Alternative: "Use 'pgrep <name>' to preview which PIDs would be affected before killing.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-pkill", Name: "Escalate pkill/killall (process termination by name)", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
 			// python3 -c with imports outside the stdlib safelist should be reviewed.
 			// Inline code that only uses safe stdlib modules is auto-allowed at priority 100
 			// by seed-allow-python-inline-stdlib. This rule catches the rest.
-			ID:       "seed-escalate-python-inline",
-			Name:     "Escalate python -c with non-stdlib imports",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"python", "python2", "python3", "pypy", "pypy3"},
@@ -2607,15 +2218,11 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "python -c with non-stdlib imports (e.g. requests, httpx) can make network calls or execute arbitrary code.",
 			Alternative: "Write the code to a .py file and run it with python script.py instead.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-python-inline", Name: "Escalate python -c with non-stdlib imports", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
 			// systemctl write operations modify service state. Read-only subcommands are
 			// allowed at priority 100 by seed-allow-bash-systemctl-read.
-			ID:       "seed-escalate-systemctl-write",
-			Name:     "Escalate systemctl write operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"systemctl"},
@@ -2625,14 +2232,10 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "systemctl write operations modify service state and should be reviewed.",
 			Alternative: "Confirm the service name and intended state change before proceeding.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-systemctl-write", Name: "Escalate systemctl write operations", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
 			// All git push operations escalate; force pushes are denied at priority 1000.
-			ID:       "seed-escalate-git-push",
-			Name:     "Escalate git push",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"git"},
@@ -2641,26 +2244,18 @@ func SeedRules() []Rule {
 			Decision:  Escalate,
 			RiskLevel: RiskHigh,
 			Reason:    "git push modifies remote state and should be reviewed.",
-			Priority:  50,
-			Enabled:   true,
-			Source:    "seed",
+			RuleMeta:  RuleMeta{ID: "seed-escalate-git-push", Name: "Escalate git push", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-escalate-network-write",
-			Name:     "Escalate curl/wget with output flags",
 			ToolName: "Bash",
 			//nolint:commandpattern Criteria cannot match -o/-O/--output flag presence; regex required for output-flag detection across curl/wget variants
 			CommandPattern: regexp.MustCompile(`^\s*(curl|wget)\s+.*(-o\s|-O\s|--output)`),
 			Decision:       Escalate,
 			RiskLevel:      RiskHigh,
 			Reason:         "Downloading files to disk should be reviewed.",
-			Priority:       50,
-			Enabled:        true,
-			Source:         "seed",
+			RuleMeta:       RuleMeta{ID: "seed-escalate-network-write", Name: "Escalate curl/wget with output flags", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-escalate-brew",
-			Name:     "Escalate Homebrew package management",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"brew"},
@@ -2669,16 +2264,12 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "Homebrew operations install or modify system-level packages.",
 			Alternative: "Review the package and its dependencies before installing.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-brew", Name: "Escalate Homebrew package management", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
 			// . (dot-source) is matched as a program name by the AST parser when it appears
 			// as a command (e.g., `. ~/.bashrc`). This is distinct from . as an argument to
 			// find or other programs, which would have Program: "find", not ".".
-			ID:       "seed-escalate-source",
-			Name:     "Escalate source/dot-source (shell script sourcing)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"source", "."},
@@ -2687,13 +2278,9 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "Sourcing shell scripts executes arbitrary code in the current shell and modifies the environment.",
 			Alternative: "For Python virtualenvs, use 'python -m venv .venv && .venv/bin/python' directly instead of sourcing activate scripts.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-source", Name: "Escalate source/dot-source (shell script sourcing)", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-escalate-asdf",
-			Name:     "Escalate asdf (runtime version manager)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"asdf"},
@@ -2702,13 +2289,9 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "asdf installs and activates language runtimes, modifying system-level tool state.",
 			Alternative: "Review the asdf command and plugin before proceeding. Consider using project-local .tool-versions.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-asdf", Name: "Escalate asdf (runtime version manager)", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
-			ID:       "seed-escalate-chmod-chown",
-			Name:     "Escalate chmod/chown",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"chmod", "chown"},
@@ -2717,16 +2300,12 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "Changing file permissions or ownership can affect system security.",
 			Alternative: "Confirm the intended permissions and target files before proceeding.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-chmod-chown", Name: "Escalate chmod/chown", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
 			// sqlite3 is an interactive/batch database CLI. Queries can be read-only
 			// (SELECT) or destructive (DROP, DELETE, INSERT). Escalate so the user can
 			// confirm the query before it runs against a production database.
-			ID:       "seed-escalate-sqlite3",
-			Name:     "Escalate sqlite3 database CLI",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"sqlite3"},
@@ -2735,17 +2314,13 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "sqlite3 can read or modify databases; review the query before proceeding.",
 			Alternative: "Add '.mode readonly' at the start of the script for safe inspection.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-sqlite3", Name: "Escalate sqlite3 database CLI", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
 			// seed-escalate-xvfb-run removed: xvfb-run is now in recursiveEvalPrograms.
 			// Its inner command is extracted and classified through the full rule engine.
 			// pacman is the Arch Linux system package manager. Installing or removing
 			// packages modifies system-wide state and should be reviewed.
-			ID:       "seed-escalate-pacman",
-			Name:     "Escalate pacman Arch package manager",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"pacman"},
@@ -2754,9 +2329,7 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "pacman installs or modifies system packages.",
 			Alternative: "Review the package name and its dependencies before installing.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-pacman", Name: "Escalate pacman Arch package manager", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
 			// ip is the Linux IP networking tool. While read-only invocations (ip route,
@@ -2764,8 +2337,6 @@ func SeedRules() []Rule {
 			// the first positional argument (e.g., "route") does not distinguish show from
 			// add/del, we escalate all ip operations rather than allow potentially
 			// destructive network changes.
-			ID:       "seed-escalate-ip-networking",
-			Name:     "Escalate ip networking commands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"ip"},
@@ -2774,17 +2345,13 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "ip can modify network routing, addresses, and interfaces; review before proceeding.",
 			Alternative: "Use 'ip route show' or 'ip addr show' to confirm current state first.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-ip-networking", Name: "Escalate ip networking commands", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
 			// docker exec runs commands inside containers; docker run creates and starts new
 			// containers; docker compose manages multi-container stacks; docker rm/stop/kill
 			// mutate container state. The read-only commands are allowed at 100 by
 			// seed-allow-bash-docker-read.
-			ID:       "seed-escalate-docker-write",
-			Name:     "Escalate docker container lifecycle and execution operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs: []string{"docker"},
@@ -2813,15 +2380,11 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "docker operations that create, modify, execute in, or remove containers should be reviewed.",
 			Alternative: "Review the container configuration and command before proceeding.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-docker-write", Name: "Escalate docker container lifecycle and execution operations", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
 			// adb write operations install apps, push files, or run shell commands that mutate
 			// device state. These require review before proceeding.
-			ID:       "seed-escalate-adb-write",
-			Name:     "Escalate adb write and install operations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"adb"},
@@ -2831,15 +2394,11 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "adb install/push/connect operations modify device state and should be reviewed.",
 			Alternative: "Review the target device and operation before proceeding.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-adb-write", Name: "Escalate adb write and install operations", Priority: 50, Enabled: true, Source: "seed"},
 		},
 		{
 			// nix profile install and profile add persistently mutate the user's Nix profile.
 			// upgrade-nix and copy can also have broad effects.
-			ID:       "seed-escalate-nix-install",
-			Name:     "Escalate nix profile install and system mutations",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"nix"},
@@ -2849,9 +2408,7 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "nix profile install/add/remove persistently modifies the user's Nix profile.",
 			Alternative: "Review the package and profile before installing.",
-			Priority:    50,
-			Enabled:     true,
-			Source:      "seed",
+			RuleMeta:    RuleMeta{ID: "seed-escalate-nix-install", Name: "Escalate nix profile install and system mutations", Priority: 50, Enabled: true, Source: "seed"},
 		},
 	}
 }

@@ -31,6 +31,7 @@ function makeItem(linkedSessions: LinkedSession[], overrides: Partial<BacklogIte
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions,

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
@@ -1145,7 +1146,7 @@ func TestIsPathUnderAnyRoot(t *testing.T) {
 // before any file is read -- readPlanFile must return "" rather than the
 // content of a plan.md that happens to live outside the sandbox.
 func TestReadPlanFile_RejectsPathEscapingAllowedRoots(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	repoPath := t.TempDir()
 
 	// A directory entirely unrelated to repoPath, the worktrees dir, or the
@@ -1162,7 +1163,7 @@ func TestReadPlanFile_RejectsPathEscapingAllowedRoots(t *testing.T) {
 // works: an artifactsDir under repoPath (one of planArtifactsAllowedRoots)
 // is read normally.
 func TestReadPlanFile_AllowsPathUnderRepoPath(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	repoPath := t.TempDir()
 	artifactsDir := filepath.Join(repoPath, "triage-artifacts")
 	require.NoError(t, os.MkdirAll(artifactsDir, 0o755))

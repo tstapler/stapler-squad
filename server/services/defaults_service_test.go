@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 )
 
@@ -22,7 +23,7 @@ import (
 // directory, preventing config state from leaking between tests.
 func newIsolatedDefaultsService(t *testing.T) *DefaultsService {
 	t.Helper()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	return NewDefaultsService()
 }
 
@@ -885,4 +886,127 @@ func TestDeleteAlias_CaseInsensitive(t *testing.T) {
 
 	cfg := config.LoadConfig()
 	assert.Empty(t, cfg.SessionDefaults.Aliases)
+}
+
+func TestListProgramsConfig_ReturnsBuiltInsAndCustomPrograms(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+	ctx := context.Background()
+
+	resp, err := svc.ListProgramsConfig(ctx, connect.NewRequest(&sessionv1.ListProgramsConfigRequest{}))
+	require.NoError(t, err)
+	require.NotEmpty(t, resp.Msg.Programs)
+
+	// Built-in programs present
+	var builtInIDs []string
+	for _, p := range resp.Msg.Programs {
+		if p.IsBuiltin {
+			builtInIDs = append(builtInIDs, p.Id)
+		}
+	}
+	assert.Contains(t, builtInIDs, "claude")
+	assert.Contains(t, builtInIDs, "pi")
+	assert.Contains(t, builtInIDs, "aider")
+
+	// Upsert custom program
+	_, err = svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{
+			Id:          "my-agent",
+			Label:       "My Agent",
+			Command:     "custom-agent-bin",
+			CliFlags:    "--verbose",
+			Description: "Custom CLI agent",
+			Env:         map[string]string{"FOO": "BAR"},
+		},
+	}))
+	require.NoError(t, err)
+
+	resp, err = svc.ListProgramsConfig(ctx, connect.NewRequest(&sessionv1.ListProgramsConfigRequest{}))
+	require.NoError(t, err)
+
+	var custom *sessionv1.ProgramConfigProto
+	for _, p := range resp.Msg.Programs {
+		if p.Id == "my-agent" {
+			custom = p
+			break
+		}
+	}
+	require.NotNil(t, custom)
+	assert.False(t, custom.IsBuiltin)
+	assert.Equal(t, "My Agent", custom.Label)
+	assert.Equal(t, "custom-agent-bin", custom.Command)
+	assert.Equal(t, "--verbose", custom.CliFlags)
+	assert.Equal(t, "Custom CLI agent", custom.Description)
+	assert.Equal(t, "BAR", custom.Env["FOO"])
+}
+
+func TestUpsertProgramConfig_ValidationErrors(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+	ctx := context.Background()
+
+	// Nil program
+	_, err := svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{Program: nil}))
+	require.Error(t, err)
+
+	// Empty ID
+	_, err = svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{Id: "", Label: "Label", Command: "cmd"},
+	}))
+	require.Error(t, err)
+
+	// Invalid ID characters
+	_, err = svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{Id: "invalid ID!", Label: "Label", Command: "cmd"},
+	}))
+	require.Error(t, err)
+
+	// Empty Label
+	_, err = svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{Id: "valid-id", Label: "", Command: "cmd"},
+	}))
+	require.Error(t, err)
+
+	// Empty Command
+	_, err = svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{Id: "valid-id", Label: "Label", Command: ""},
+	}))
+	require.Error(t, err)
+
+	// Override built-in program
+	_, err = svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{Id: "claude", Label: "Label", Command: "cmd"},
+	}))
+	require.Error(t, err)
+}
+
+func TestDeleteProgramConfig_SuccessAndErrors(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+	ctx := context.Background()
+
+	// Upsert a custom program first
+	_, err := svc.UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{
+			Id:      "temp-agent",
+			Label:   "Temp Agent",
+			Command: "temp-bin",
+		},
+	}))
+	require.NoError(t, err)
+
+	// Delete built-in fails
+	_, err = svc.DeleteProgramConfig(ctx, connect.NewRequest(&sessionv1.DeleteProgramConfigRequest{Id: "claude"}))
+	require.Error(t, err)
+
+	// Delete non-existent fails
+	_, err = svc.DeleteProgramConfig(ctx, connect.NewRequest(&sessionv1.DeleteProgramConfigRequest{Id: "non-existent"}))
+	require.Error(t, err)
+
+	// Delete custom program succeeds
+	_, err = svc.DeleteProgramConfig(ctx, connect.NewRequest(&sessionv1.DeleteProgramConfigRequest{Id: "temp-agent"}))
+	require.NoError(t, err)
+
+	// Verify deleted
+	cfg := config.LoadConfig()
+	for _, p := range cfg.SessionDefaults.Programs {
+		assert.NotEqual(t, "temp-agent", p.ID)
+	}
 }

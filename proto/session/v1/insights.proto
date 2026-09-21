@@ -22,6 +22,11 @@ service InsightsService {
   // on-demand when the session detail drawer opens (not embedded in list responses).
   rpc GetSessionTurnTimeline(GetSessionTurnTimelineRequest)
       returns (GetSessionTurnTimelineResponse) {}
+
+  // DismissFinding persists a waste finding as dismissed by its stable
+  // finding_id, so future GetInsightsSummary calls exclude it — see
+  // WasteFinding.finding_id's doc comment for the identity/recurrence contract.
+  rpc DismissFinding(DismissFindingRequest) returns (DismissFindingResponse) {}
 }
 
 // Severity classifies how urgently a WasteFinding should be acted on.
@@ -63,6 +68,14 @@ message WasteFinding {
   string      session_id        = 4;
   string      conversation_id   = 5;
   string      message           = 6;
+  // finding_id is a stable, content-addressed identity derived from
+  // (session_id or conversation_id) + finding_type + message, used as the
+  // DismissFinding key. Content-addressed rather than purely
+  // (session_id, finding_type) so a still-active session whose underlying
+  // condition changes (message/impact numbers change) gets a new finding_id
+  // and is never silently suppressed by an old dismissal — see
+  // ComputeFindingID's doc comment (session/tokens/findings.go).
+  string      finding_id        = 7;
 }
 
 // SessionTokenSummary is the per-session aggregated token record.
@@ -93,6 +106,13 @@ message SessionTokenSummary {
   optional double waste_score = 19;
   // activity_type is populated by Epic 1.3's ClassifyActivity. Reserved now.
   ActivityType activity_type = 20;
+  // tags mirrors the session's persisted Instance.Tags at build time (session/instance_tags.go).
+  repeated string tags = 21;
+  // session_role is the persisted ItemSession.session_role for this session's stapler-squad
+  // Instance.UUID (one of "work"/"triage"/"review"/"jules_work", or an ad hoc value — see
+  // session/backlog.go), sourced once per request/event (ADR-029). Empty string means the
+  // session was never linked to a backlog item, or its ItemSession row was hard-deleted.
+  string session_role = 22;
 }
 
 // TopToolEntry records a tool name and its call count in a session.
@@ -152,6 +172,37 @@ message ActivityCostBreakdown {
   int32        session_count      = 3;
 }
 
+// ItemRoleCost is one backlog item's cost within a single RoleCostBreakdown
+// bucket (Epic 4.1's item-drilldown data).
+message ItemRoleCost {
+  string item_id                 = 1;
+  string item_title              = 2;
+  double estimated_cost_usd      = 3;
+  int32  session_count           = 4;
+  int32  unpriced_session_count  = 5;
+}
+
+// RoleCostBreakdown aggregates estimated cost by SessionRole ("triage",
+// "review", "work", or "" for a session with no backlog-item attribution),
+// with a per-item drilldown. sum(role_breakdown[].estimated_cost_usd) across
+// a GetInsightsSummaryResponse always equals its total_cost_usd — both
+// exclude the same unpriced-session subset, see unpriced_session_count.
+message RoleCostBreakdown {
+  // session_role is a plain string (mirroring ItemSession.session_role's own
+  // proto representation), not ActivityType's enum — SessionRole is
+  // currently string-typed end-to-end.
+  string session_role            = 1;
+  double estimated_cost_usd      = 2;
+  int32  session_count           = 3;
+  repeated ItemRoleCost items    = 4;
+  // unpriced_session_count is the count of sessions in this bucket whose cost
+  // could not be trustworthily priced (mirrors ModelBreakdown.pricing_unavailable's
+  // "abstain rather than guess" convention). Those sessions are excluded from
+  // estimated_cost_usd (and from the response's total_cost_usd) rather than
+  // silently folded in as $0.
+  int32  unpriced_session_count  = 5;
+}
+
 // TopEntry is a generic name/value pair for top-N tables.
 message TopEntry {
   reserved 4;
@@ -197,6 +248,12 @@ message GetInsightsSummaryResponse {
   // activity_breakdown is total cost and session count sliced by ActivityType
   // across all in-range sessions, sorted by estimated_cost_usd descending.
   repeated ActivityCostBreakdown activity_breakdown = 15;
+  // role_breakdown is total cost sliced by SessionRole across all in-range
+  // sessions (Epic 4.1), sorted by estimated_cost_usd descending. Includes
+  // ItemSession-sourced costs with no matching Claude transcript (Story
+  // 4.1.4, e.g. a Gemini-priced triage call), which are folded into
+  // total_cost_usd above but not into daily/models/activity_breakdown.
+  repeated RoleCostBreakdown role_breakdown = 16;
 }
 
 // ListSessionTokensRequest supports paginated session listing.
@@ -249,4 +306,19 @@ message GetSessionTurnTimelineRequest {
 // GetSessionTurnTimelineResponse returns the per-turn breakdown for one session.
 message GetSessionTurnTimelineResponse {
   repeated TurnTokenStat turns = 1;
+}
+
+// DismissFindingRequest identifies one WasteFinding to dismiss. session_id/
+// conversation_id/finding_type are redundant with finding_id (which already
+// encodes them) but are stored alongside it for debuggability/introspection.
+message DismissFindingRequest {
+  string      finding_id      = 1;
+  string      session_id      = 2;
+  string      conversation_id = 3;
+  FindingType finding_type    = 4;
+}
+
+// DismissFindingResponse confirms the dismissal was persisted.
+message DismissFindingResponse {
+  bool success = 1;
 }

@@ -299,6 +299,11 @@ type Config struct {
 	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
 	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
+	// AutonomousMaxTurns caps how many turns a single AutonomousDriver run gets before
+	// stopping without a DONE signal (session/autonomous_driver.go). 0 = use the default
+	// (60); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
+	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
+	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`
 	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
@@ -424,9 +429,10 @@ type Config struct {
 	// "reconnect cleanly under the legacy path"; tymux's rollback cannot mean
 	// that, since it means "new sessions honor the reverted default while
 	// existing tymux-backed sessions stay pinned to tymux for their
-	// lifetime". nil means "never completed". ResolveGlobalTymuxDefault
-	// refuses to let the *global* tymux default resolve to true until this
-	// is set. Set via RecordTymuxRollbackRehearsalCompleted.
+	// lifetime". nil means "never completed". Purely a historical record now
+	// — the global default no longer gates on it (see EffectiveTymuxEnabled;
+	// SetTymuxGlobalOverride sets the "tymux" feature flag unconditionally).
+	// Set via RecordTymuxRollbackRehearsalCompleted.
 	TymuxRollbackRehearsalCompletedAt *time.Time `json:"tymux_rollback_rehearsal_completed_at,omitempty"`
 	// TymuxSessionOverrides forces the tymux-bundled-integration project's
 	// process-manager backend for specific named tmux sessions, regardless of
@@ -469,6 +475,24 @@ const StreamHubFeatureFlag = "stream_hub"
 // still required, same as the STAPLER_SQUAD_USE_TYMUX env var it replaces.
 const TymuxFeatureFlag = "tymux"
 
+// TriageGuidanceHaltFeatureFlag is the config.FeatureFlags key backing
+// EffectiveTriageGuidanceHaltEnabled — gates whether automated triage halts
+// and asks via a durable GuidanceRequest instead of guessing on a genuinely
+// ambiguous item (durable-guidance-request AC2). Defaults to off: no rollback
+// rehearsal has vouched for this as the global default yet, same posture as
+// TymuxFeatureFlag.
+const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
+
+// EffectiveTriageGuidanceHaltEnabled reports whether automated triage should
+// halt and create a GuidanceRequest on ambiguity rather than guess. Callers
+// must read this fresh at the exact halt-decision instant, not cache it at
+// pass start — triage is a long-running background call, not a
+// request/response RPC, so staleness at the decision point is the risk that
+// matters (mirrors EffectiveTymuxEnabled's live-read contract).
+func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, false)
+}
+
 // NativeWorktreeFeatureFlag is the config.FeatureFlags key backing
 // EffectiveNativeWorktreeEnabled — the global native (go-git) worktree
 // implementation default. Defaults to off (ADR-002): this is
@@ -497,10 +521,10 @@ func EffectiveNativeMergeEnabled(cfg *Config) bool {
 }
 
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
-// backend default is active. Read once at process startup
-// (main.go's resolveStartupBackend) — deliberately not live-settable, so
-// switching the default backend for every new session stays a conscious
-// operator action rather than a live UI toggle.
+// backend default is active. Resolved fresh on every call (session.getSelectedBackend)
+// via SetTymuxGlobalOverride — live-settable, no process restart required.
+// main.go's own startup-time read of this (via ResolveSessionBackend) is only
+// for tymuxNeeded's supervision decision, not a cache of this value.
 func EffectiveTymuxEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(TymuxFeatureFlag, false)
 }
@@ -509,8 +533,9 @@ func EffectiveTymuxEnabled(cfg *Config) bool {
 // TymuxRollbackRehearsalCompletedAt and saves the config — intended to be
 // called exactly once, after manually verifying a tymux rollback rehearsal
 // (new sessions honor the reverted default while existing tymux-backed
-// sessions stay pinned) passed against a real disposable session. Unblocks
-// ResolveGlobalTymuxDefault from refusing to enable the global default.
+// sessions stay pinned) passed against a real disposable session.
+// TymuxRollbackRehearsalCompletedAt's own doc comment covers why this is a
+// historical record only, not an enforced gate.
 func (c *Config) RecordTymuxRollbackRehearsalCompleted() error {
 	now := time.Now()
 	c.TymuxRollbackRehearsalCompletedAt = &now
@@ -867,6 +892,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.SessionDefaults.Tags = []string{}
 	cfg.SessionDefaults.DirectoryRules = []DirectoryRule{}
 	cfg.SessionDefaults.Aliases = []AliasConfig{}
+	cfg.SessionDefaults.Programs = []ProgramConfig{}
 	// Escape analytics defaults. LoadConfigFromPath applies the same defaults
 	// after JSON decode (for fields absent from an existing config.json);
 	// DefaultConfig must mirror them so the two code paths are equivalent.
@@ -914,12 +940,22 @@ func (c *Config) OneOffBaseDirOrDefault() (string, error) {
 }
 
 // HibernationCheckpointDirOrDefault returns the resolved hibernation checkpoint directory.
-// If CheckpointDir is empty, it returns "~/.stapler-squad/checkpoints" with ~ expanded.
-// The directory is NOT created here — the checkpoint writer creates it on first use.
+// If CheckpointDir is empty, it defaults to "checkpoints" under GetConfigDir() (so it
+// inherits the same test/instance/workspace isolation as config.json/sessions.json —
+// see GetConfigDirForDir's priority list — rather than always writing to the real
+// ~/.stapler-squad regardless of STAPLER_SQUAD_TEST_DIR/IsTestMode()). An explicit
+// CheckpointDir override still expands "~" against the real home dir, since a
+// user-configured absolute/tilde path is an intentional override of the state dir,
+// not app state itself. The directory is NOT created here — the checkpoint writer
+// creates it on first use.
 func (c *Config) HibernationCheckpointDirOrDefault() (string, error) {
 	dir := c.Hibernation.CheckpointDir
 	if dir == "" {
-		dir = "~/.stapler-squad/checkpoints"
+		configDir, err := GetConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve config dir: %w", err)
+		}
+		return filepath.Join(configDir, "checkpoints"), nil
 	}
 	if strings.HasPrefix(dir, "~/") {
 		home, err := os.UserHomeDir()
@@ -939,48 +975,59 @@ func (c *Config) HibernationCheckpointDirOrDefault() (string, error) {
 
 // TriageArtifactDirOrDefault returns the resolved triage artifact directory.
 // Triage workers write their planning files here instead of into the item's repo.
-// Always defaults to "~/.stapler-squad/triage-artifacts".
+// "triage-artifacts" under GetConfigDir() — see HibernationCheckpointDirOrDefault's
+// doc comment for why this routes through GetConfigDir() rather than a hardcoded
+// ~/.stapler-squad path.
 func (c *Config) TriageArtifactDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "triage-artifacts"), nil
+	return filepath.Join(configDir, "triage-artifacts"), nil
 }
 
 // HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
 // headless (triage/review claude -p) failure captures — see
-// session.WriteHeadlessFailureCapture. Always defaults to
-// "~/.stapler-squad/headless-failures".
+// session.WriteHeadlessFailureCapture. "headless-failures" under GetConfigDir() —
+// see HibernationCheckpointDirOrDefault's doc comment for why this routes through
+// GetConfigDir() rather than a hardcoded ~/.stapler-squad path. Previously hardcoded
+// to os.UserHomeDir() regardless of test mode: every go test run that exercised a
+// headless-failure capture wrote real files into the developer's actual
+// ~/.stapler-squad/headless-failures (656+ accumulated on this maintainer's machine),
+// and concurrent test processes competed with each other and the live production
+// service for real disk I/O in that one shared directory — see BUG-103 item 2.
 func (c *Config) HeadlessFailureCaptureDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "headless-failures"), nil
+	return filepath.Join(configDir, "headless-failures"), nil
 }
 
 // BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.
 // Uploaded images referenced from backlog item descriptions are stored here,
 // durably (unlike the 24h temp paste dir) since they're linked from persisted
-// markdown text. Always defaults to "~/.stapler-squad/backlog-attachments".
+// markdown text. "backlog-attachments" under GetConfigDir() — see
+// HibernationCheckpointDirOrDefault's doc comment for why this routes through
+// GetConfigDir() rather than a hardcoded ~/.stapler-squad path.
 func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "backlog-attachments"), nil
+	return filepath.Join(configDir, "backlog-attachments"), nil
 }
 
 // PromptCacheDirOrDefault returns the resolved directory for temp-file-backed
-// session launch prompts (see Instance.promptArg). Always defaults to
-// "~/.stapler-squad/prompt-cache".
+// session launch prompts (see Instance.promptArg). "prompt-cache" under
+// GetConfigDir() — see HibernationCheckpointDirOrDefault's doc comment for why
+// this routes through GetConfigDir() rather than a hardcoded ~/.stapler-squad path.
 func (c *Config) PromptCacheDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "prompt-cache"), nil
+	return filepath.Join(configDir, "prompt-cache"), nil
 }
 
 // NewProjectBaseDirOrDefault returns the resolved new-project base directory.
@@ -1028,6 +1075,28 @@ func (c *Config) MaxAutoReworkIterationsOrDefault() int {
 		return 20
 	}
 	return c.MaxAutoReworkIterations
+}
+
+// autonomousMaxTurnsDefault is used when the config value is unset (0 or negative).
+// Raised from the driver's own historical fallback of 20, which was observed cutting
+// off recoverable multi-round work. autonomousMaxTurnsHardCeiling guards against a
+// runaway config value burning billed turns on a non-converging run.
+const (
+	autonomousMaxTurnsDefault     = 60
+	autonomousMaxTurnsHardCeiling = 200
+)
+
+// AutonomousMaxTurnsOrDefault returns the configured autonomous-driver turn cap,
+// clamped to [1, autonomousMaxTurnsHardCeiling]. Falls back to the default (60)
+// if unset (<=0) or c is nil.
+func (c *Config) AutonomousMaxTurnsOrDefault() int {
+	if c == nil || c.AutonomousMaxTurns <= 0 {
+		return autonomousMaxTurnsDefault
+	}
+	if c.AutonomousMaxTurns > autonomousMaxTurnsHardCeiling {
+		return autonomousMaxTurnsHardCeiling
+	}
+	return c.AutonomousMaxTurns
 }
 
 // maxConcurrentBacklogWorkItemsDefault is used when the config value is unset (0
@@ -1214,7 +1283,7 @@ func (c *Config) GetAvailablePrograms() []string {
 		shell = "/bin/bash"
 	}
 
-	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy"}
+	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy", "aider"}
 
 	for _, candidate := range candidates {
 		var shellCmd string
@@ -1428,6 +1497,9 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	if cfg.SessionDefaults.Aliases == nil {
 		cfg.SessionDefaults.Aliases = []AliasConfig{}
 	}
+	if cfg.SessionDefaults.Programs == nil {
+		cfg.SessionDefaults.Programs = []ProgramConfig{}
+	}
 	if cfg.ConfigVersion == 0 {
 		cfg.ConfigVersion = 1
 	}
@@ -1625,6 +1697,17 @@ func (c *Config) SlackSigningSecretOverride() string {
 // See project_plans/pi-support/implementation/plan.md, Epic 2.1.
 const FeaturePiSupport = "pi-support"
 
+// FeatureAppScrollForwardingClaude gates forwarding Claude Code's own PageUp
+// scroll keybinding into its fullscreen conversation view (instead of relying
+// solely on tmux-native scrollback capture) for eligible Claude Code sessions
+// -- eligibility itself is AppScrollGate's job, this flag is the independent
+// kill switch on top of it. Off by default, live-settable, never an env var
+// (Risk Control's "Feature flags" bullet). See
+// project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
+// Scoped per-adapter deliberately: the future pi/agy equivalents
+// (":pi"/":agy") are separate flag keys, not covered by this one.
+const FeatureAppScrollForwardingClaude = "terminal:app-scrollback-forwarding:claude"
+
 // GetFeatureFlag returns the persisted enabled state of the named feature flag.
 // Absent key returns false — all feature flags default to disabled.
 // Currently recognized flags:
@@ -1637,6 +1720,8 @@ const FeaturePiSupport = "pi-support"
 //	  "webhook_triggers", but has no effect unless "webhook_triggers" is also enabled (that
 //	  flag gates whether the route is registered at all).
 //	"pi-support" (FeaturePiSupport) — pi-coding-agent support, off by default.
+//	"terminal:app-scrollback-forwarding:claude" (FeatureAppScrollForwardingClaude) —
+//	  app-scrollback forwarding for Claude Code sessions, off by default.
 func (c *Config) GetFeatureFlag(name string) bool {
 	if c == nil || c.FeatureFlags == nil {
 		return false

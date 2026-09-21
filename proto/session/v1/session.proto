@@ -174,6 +174,16 @@ service SessionService {
   // retained.
   rpc ReloadClaudeSettingsRules(ReloadClaudeSettingsRulesRequest) returns (ReloadClaudeSettingsRulesResponse) {}
 
+  // ListTaggingRules returns all session-tagging rules (user and seed), each with its
+  // 7-day fire count.
+  rpc ListTaggingRules(ListTaggingRulesRequest) returns (ListTaggingRulesResponse) {}
+
+  // UpsertTaggingRule creates or updates a user-defined session-tagging rule.
+  rpc UpsertTaggingRule(UpsertTaggingRuleRequest) returns (UpsertTaggingRuleResponse) {}
+
+  // DeleteTaggingRule removes a user-defined session-tagging rule by ID.
+  rpc DeleteTaggingRule(DeleteTaggingRuleRequest) returns (DeleteTaggingRuleResponse) {}
+
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
 
@@ -386,14 +396,14 @@ service SessionService {
   rpc SetStreamHubSessionOverride(SetStreamHubSessionOverrideRequest) returns (StreamHubRolloutStatus) {}
 
   // SetStreamHubGlobalOverride sets or clears a live, config.json-backed
-  // override of the global stream-hub default, taking effect immediately
-  // for every session connection resolved after this call — no process
-  // restart required. Forcing it on still goes through the same rollback
-  // rehearsal gate as the env var path (ResolveGlobalStreamHubDefault);
-  // clearing it (force_hub unset) reverts to the STAPLER_SQUAD_USE_STREAM_HUB
-  // env var default. Like all stream-hub resolution, this can only affect
-  // sessions whose ownership lock hasn't resolved yet — an already-connected
-  // session's resolution is cached for its lifetime and cannot be moved.
+  // override of the global stream-hub default (the "stream_hub" feature
+  // flag), taking effect immediately for every session connection resolved
+  // after this call — no process restart required, and no rollback-rehearsal
+  // gate on either direction (config.EffectiveStreamHubEnabled). Clearing it
+  // (force_hub unset) reverts to that flag's on-by-default resolution. Like
+  // all stream-hub resolution, this can only affect sessions whose ownership
+  // lock hasn't resolved yet — an already-connected session's resolution is
+  // cached for its lifetime and cannot be moved.
   rpc SetStreamHubGlobalOverride(SetStreamHubGlobalOverrideRequest) returns (StreamHubRolloutStatus) {}
 
   // ListWorktrees returns the git worktrees for a given repository path.
@@ -520,6 +530,13 @@ service SessionService {
   // RunWorkflow immediately fires a workflow (outside of cron schedule).
   rpc RunWorkflow(RunWorkflowRequest) returns (RunWorkflowResponse) {}
 
+  // WatchWorkflows streams real-time workflow definition events
+  // (created/updated/deleted/run). Server-streaming RPC so every open
+  // Workflows panel reflects changes from any client (MCP tool, another
+  // tab, a cron fire) without a manual refresh -- mirrors WatchBacklogItems'
+  // snapshot-then-live-fanout shape.
+  rpc WatchWorkflows(WatchWorkflowsRequest) returns (stream WorkflowEvent) {}
+
   // ListTriggerFireEvents returns the trigger-fire audit trail (fired/no-match/
   // rejected) for a workflow, newest first. Query-only — shipped in Phase 1 ahead of
   // the Phase 7 TriggersPanel UI so existing cron-workflow users can observe
@@ -543,6 +560,15 @@ service SessionService {
 
   // DeleteAlias removes an alias preset by name.
   rpc DeleteAlias(DeleteAliasRequest) returns (DeleteAliasResponse) {}
+
+  // ListProgramsConfig returns all program configurations (built-in and custom).
+  rpc ListProgramsConfig(ListProgramsConfigRequest) returns (ListProgramsConfigResponse) {}
+
+  // UpsertProgramConfig creates or updates a custom program configuration.
+  rpc UpsertProgramConfig(UpsertProgramConfigRequest) returns (UpsertProgramConfigResponse) {}
+
+  // DeleteProgramConfig removes a custom program configuration by ID.
+  rpc DeleteProgramConfig(DeleteProgramConfigRequest) returns (DeleteProgramConfigResponse) {}
 
   // ArchiveSession soft-archives a session by setting archived_at.
   // Archived sessions are excluded from the default session list.
@@ -573,6 +599,23 @@ service SessionService {
   // ~/.claude/settings.json. Idempotent per hook.
   // +api: hooks:install
   rpc InstallHooks(InstallHooksRequest) returns (InstallHooksResponse) {}
+
+  // GetTmuxVersionStatus reports any detected tmux client/server version
+  // mismatch (see session/tmux/version_check.go) -- a mismatch disables
+  // control mode for the affected socket, degrading terminal input/output to
+  // slower per-command subprocess calls instead of failing outright.
+  // +api: tmux:version-status
+  rpc GetTmuxVersionStatus(GetTmuxVersionStatusRequest) returns (GetTmuxVersionStatusResponse) {}
+
+  // RestartTmuxServer kills the tmux server backing the given socket so it
+  // restarts on this process's own tmux binary, resolving a version
+  // mismatch. DESTRUCTIVE: every session currently attached to that socket
+  // loses its live terminal (running processes, scrollback) -- their
+  // underlying git worktrees/work directories are untouched, and sessions
+  // reconnect to a fresh tmux session lazily on next access. Callers must
+  // obtain explicit user confirmation before calling this.
+  // +api: tmux:restart-server
+  rpc RestartTmuxServer(RestartTmuxServerRequest) returns (RestartTmuxServerResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -1692,6 +1735,14 @@ message MarkNotificationReadResponse {
 }
 
 // ClearNotificationHistoryRequest removes notifications from history.
+//
+// This request carries no per-item exclusion or ID list — Clear() applies
+// before_timestamp (or clears everything, if unset) across the entire store.
+// The server-side NotificationHistoryStore.Clear() guarantees it never
+// removes a record that is unread and actionable (approval_needed/question/
+// error/task_failed/warning), regardless of this cutoff — that guarantee is
+// unconditional and not expressible/overridable via this request (Task
+// 3.1.5c; see design/ux.md Surface 11).
 message ClearNotificationHistoryRequest {
   // Optional: Clear notifications older than this timestamp (RFC3339 string).
   optional string before_timestamp = 1;
@@ -1740,6 +1791,34 @@ message ReloadClaudeSettingsRulesResponse {
   bool success = 1;
   int32 rule_count = 2;
   string message = 3;
+}
+
+// ============================================================================
+// Session-Tagging Rules Messages
+// ============================================================================
+
+message ListTaggingRulesRequest {}
+
+message ListTaggingRulesResponse {
+  repeated TaggingRuleProto rules = 1;
+}
+
+message UpsertTaggingRuleRequest {
+  TaggingRuleProto rule = 1;
+}
+
+message UpsertTaggingRuleResponse {
+  TaggingRuleProto rule = 1;
+  bool created = 2;
+}
+
+message DeleteTaggingRuleRequest {
+  string id = 1;
+}
+
+message DeleteTaggingRuleResponse {
+  bool success = 1;
+  string message = 2;
 }
 
 message GetApprovalAnalyticsRequest {
@@ -2443,6 +2522,37 @@ message DeleteAliasRequest {
 
 message DeleteAliasResponse {}
 
+// ProgramConfigProto represents one program definition (built-in or custom).
+message ProgramConfigProto {
+  string id = 1;
+  string label = 2;
+  string command = 3;
+  string cli_flags = 4;
+  string description = 5;
+  map<string, string> env = 6;
+  bool is_builtin = 7;
+}
+
+message ListProgramsConfigRequest {}
+
+message ListProgramsConfigResponse {
+  repeated ProgramConfigProto programs = 1;
+}
+
+message UpsertProgramConfigRequest {
+  ProgramConfigProto program = 1;
+}
+
+message UpsertProgramConfigResponse {
+  ProgramConfigProto program = 1;
+}
+
+message DeleteProgramConfigRequest {
+  string id = 1;
+}
+
+message DeleteProgramConfigResponse {}
+
 // LauncherPresetProto represents one hand-authored launcher preset loaded from
 // ~/.stapler-squad/launcher-presets.json.
 message LauncherPresetProto {
@@ -2836,6 +2946,37 @@ message InstallHooksResponse {
   repeated string messages = 2;
 }
 
+message GetTmuxVersionStatusRequest {}
+
+// TmuxVersionMismatch describes one socket where the client and the
+// already-running server disagree on tmux version.
+message TmuxVersionMismatch {
+  // The tmux server socket affected ("" means the default/shared server).
+  string server_socket = 1;
+  // This process's own tmux client version (Binary() -V).
+  string client_version = 2;
+  // The running server's reported version (display-message -p '#{version}').
+  string server_version = 3;
+  // Number of sessions currently on this socket, for the confirmation UI.
+  int32 affected_session_count = 4;
+}
+
+message GetTmuxVersionStatusResponse {
+  // Empty when no mismatch has been detected on any socket.
+  repeated TmuxVersionMismatch mismatches = 1;
+}
+
+message RestartTmuxServerRequest {
+  // Which server socket to restart ("" for the default/shared server) --
+  // must match a server_socket from a prior GetTmuxVersionStatus response.
+  string server_socket = 1;
+}
+
+message RestartTmuxServerResponse {
+  // Number of sessions that were attached to the killed server.
+  int32 sessions_affected = 1;
+}
+
 message UpdateFeatureFlagRequest {
   // The feature name to update (e.g. "backlog").
   string name = 1;
@@ -2865,6 +3006,8 @@ message EscapeEventProto {
   string mangle_type = 10;
   google.protobuf.Timestamp wall_time = 11;
   int64 session_seq = 12;
+  string project_path = 13;
+  string sequence_signature = 14;
 }
 
 message QueryEscapeAnalyticsRequest {
@@ -2901,6 +3044,11 @@ message GetEscapeAnalyticsSummaryResponse {
   int64 total_sequences = 2;
   int64 total_mangled = 3;
   double mangle_rate = 4;
+  int64 correlation_outcomes = 5;
+  int64 matched_sequences = 6;
+  int64 stripped_sequences = 7;
+  double correlation_coverage = 8;
+  bool capture_healthy = 9;
 }
 
 message GetEscapeAnalyticsGlobalSummaryRequest {
@@ -2914,6 +3062,13 @@ message GetEscapeAnalyticsGlobalSummaryResponse {
   int64 total_mangled = 3;
   double mangle_rate = 4;
   repeated SessionEscapeSummary per_session = 5;
+  int64 correlation_outcomes = 6;
+  int64 matched_sequences = 7;
+  int64 stripped_sequences = 8;
+  double correlation_coverage = 9;
+  bool capture_healthy = 10;
+  int64 dropped_events = 11;
+  repeated ProjectEscapeSummary per_project = 12;
 }
 
 message SessionEscapeSummary {
@@ -2921,6 +3076,24 @@ message SessionEscapeSummary {
   int64 total_sequences = 2;
   int64 total_mangled = 3;
   double mangle_rate = 4;
+  string project_path = 5;
+  int64 correlation_outcomes = 6;
+  int64 matched_sequences = 7;
+  int64 stripped_sequences = 8;
+  double correlation_coverage = 9;
+  bool capture_healthy = 10;
+}
+
+message ProjectEscapeSummary {
+  string project_path = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
+  int64 correlation_outcomes = 5;
+  int64 matched_sequences = 6;
+  int64 stripped_sequences = 7;
+  double correlation_coverage = 8;
+  bool capture_healthy = 9;
 }
 
 // ============================================================================
@@ -3285,6 +3458,73 @@ message ListSlashCommandsResponse {
 message RunWorkflowResponse {
   string session_id = 1;
 }
+
+message WatchWorkflowsRequest {
+  // Optional: if non-zero, replay buffered events with seq > after_seq
+  // before going live, instead of sending a fresh initial snapshot. Pass
+  // the last seq received before disconnecting. Mirrors
+  // WatchSessionsRequest.after_seq / WatchBacklogItemsRequest.after_seq.
+  uint64 after_seq = 1;
+}
+
+// WorkflowEvent represents a real-time change to a saved workflow
+// definition. Used by the WatchWorkflows streaming RPC.
+message WorkflowEvent {
+  google.protobuf.Timestamp timestamp = 1;
+
+  oneof event {
+    WorkflowCreatedEvent workflow_created = 2;
+    WorkflowUpdatedEvent workflow_updated = 3;
+    WorkflowDeletedEvent workflow_deleted = 4;
+    WorkflowRunEvent workflow_run = 5;
+    // Synthetic marker (no corresponding bus event) sent exactly once, at
+    // the end of WatchWorkflows' initial phase (fresh snapshot or after_seq
+    // replay), but ONLY when that phase sent zero other events -- e.g. no
+    // workflows saved yet. Without it, a zero-workflow connection produces
+    // zero bytes on the wire and the client's `for await` loop never
+    // resolves past its first iteration -- see
+    // BacklogItemEvent.snapshot_complete's identical doc comment.
+    WorkflowSnapshotCompleteEvent snapshot_complete = 6;
+  }
+
+  // Monotonically increasing sequence number assigned by the server
+  // EventBus, mirroring SessionEvent.seq/BacklogItemEvent.seq. Zero means
+  // "no sequence information" -- used for the synthetic initial-snapshot
+  // events, which don't correspond to a single published bus event.
+  uint64 seq = 7;
+}
+
+// WorkflowCreatedEvent is emitted when a new workflow is saved.
+message WorkflowCreatedEvent {
+  WorkflowProto workflow = 1;
+  // True when sent as part of WatchWorkflows' initial snapshot rather than
+  // a live creation. The frontend should not flash/notify for these.
+  bool is_snapshot = 2;
+}
+
+// WorkflowUpdatedEvent is emitted when an existing workflow is modified.
+message WorkflowUpdatedEvent {
+  WorkflowProto workflow = 1;
+  bool is_snapshot = 2;
+}
+
+// WorkflowDeletedEvent is emitted when a workflow is permanently removed.
+message WorkflowDeletedEvent {
+  string id = 1;
+}
+
+// WorkflowRunEvent is emitted when RunWorkflow fires a workflow manually
+// (including via the MCP run_workflow tool) -- distinct from a
+// cron-triggered fire, which does not go through the RunWorkflow RPC and is
+// not broadcast here.
+message WorkflowRunEvent {
+  string workflow_id = 1;
+  string session_id = 2;
+}
+
+// WorkflowSnapshotCompleteEvent carries no data -- see
+// WorkflowEvent.snapshot_complete's doc comment.
+message WorkflowSnapshotCompleteEvent {}
 
 // TriggerFireEventProto is the wire representation of a single trigger evaluation
 // attempt (fired/no-match/rejected) — the durable audit trail behind

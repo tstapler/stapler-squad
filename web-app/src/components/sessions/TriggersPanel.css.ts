@@ -216,7 +216,6 @@ export const typeBadge = style({
 export const typeCron = style({ background: vars.color.panelBgSecondary, color: vars.color.textSecondary });
 export const typeGithubPush = style({ background: vars.color.accentHover, color: vars.color.primary });
 export const typeWebhook = style({ background: vars.color.warningBg, color: vars.color.warning });
-export const typeManual = style({ background: vars.color.panelBgSecondary, color: vars.color.textMuted });
 
 // ── 5-state outcome/status badges (research/ux.md §4) ──────────────────────
 // Status must never be color-only (WCAG 1.4.1) — every badge below pairs a
@@ -237,7 +236,6 @@ export const statusFiredSuccess = style({ background: vars.color.successBg, colo
 export const statusFiredFailed = style({ background: vars.color.warningBg, color: vars.color.warning });
 export const statusRejected = style({ background: vars.color.errorBg, color: vars.color.error });
 export const statusNoMatch = style({ background: vars.color.panelBgSecondary, color: vars.color.textMuted });
-export const statusDisabled = style({ background: vars.color.panelBgSecondary, color: vars.color.textMuted, border: `1px solid ${vars.color.borderSubtle}` });
 
 export const lastFired = style({
   fontSize: 12,

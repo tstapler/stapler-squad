@@ -52,3 +52,14 @@ make restart-web-profile PROFILE_PORT=8080
 ```
 
 See `docs/PROFILING.md` for the comprehensive guide.
+
+## Continuous profiling / flamegraphs in Grafana
+
+If the local observability stack is running (`~/dotfiles/stapler-scripts/observability`,
+see the `observability-victoriametrics-tempo` skill), Grafana Alloy already
+scrapes this app's `:6060` pprof endpoint (CPU, heap, goroutine, mutex,
+block) into Pyroscope whenever `--profile` is on — no extra flags needed.
+Open the "stapler-squad: pprof profiles (flamegraphs)" dashboard at
+`http://localhost:48300` (folder: stapler-squad) for CPU/heap/goroutine
+flamegraphs over any time range, instead of pulling a one-off
+`.prof` file with `curl` + `go tool pprof` for a live investigation.

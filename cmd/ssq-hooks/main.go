@@ -591,16 +591,12 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 	for _, r := range rules {
 		// Convert domain model to classifier rule
 		cr := classifier.Rule{
-			ID:          r.ID,
-			Name:        r.Name,
 			ToolName:    r.ToolName,
 			Decision:    classifier.ClassificationDecision(r.Decision),
 			RiskLevel:   classifier.RiskLevel(r.RiskLevel),
 			Reason:      r.Reason,
 			Alternative: r.Alternative,
-			Priority:    r.Priority,
-			Enabled:     r.Enabled,
-			Source:      r.Source,
+			RuleMeta:    classifier.RuleMeta{ID: r.ID, Name: r.Name, Priority: r.Priority, Enabled: r.Enabled, Source: r.Source},
 		}
 		// Pattern compilation happens in AddRules if we use strings,
 		// but here we might need to compile them if we use the Rule struct directly.
@@ -688,13 +684,9 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 					decision = classifier.AutoDeny
 				}
 				cr := classifier.Rule{
-					ID:       "config-" + strings.ReplaceAll(r.Name, " ", "-"),
-					Name:     r.Name,
 					ToolName: r.Tool,
 					Decision: decision,
-					Priority: priority,
-					Enabled:  enabled,
-					Source:   "config",
+					RuleMeta: classifier.RuleMeta{ID: "config-" + strings.ReplaceAll(r.Name, " ", "-"), Name: r.Name, Priority: priority, Enabled: enabled, Source: "config"},
 				}
 				if r.ToolPattern != "" {
 					if compiled, err := regexp.Compile(r.ToolPattern); err == nil {
@@ -1373,6 +1365,13 @@ func installOpenCode() {
 // and fires with zero trust-prompt friction on the very first invocation in a brand-new
 // directory, confirming ADR-002's premise rather than leaving it doc-derived.
 //
+// ctx.sessionId does NOT exist on pi's ExtensionContext (confirmed 2026-09-12 against the
+// installed package's dist/core/extensions/types.d.ts — ExtensionContext has cwd but no
+// sessionId field at all) — an earlier version of this template read it anyway and always
+// got undefined, silently sending session_id:"" on every request. The real accessor is
+// ctx.sessionManager.getSessionId() (ReadonlySessionManager, same file). ctx.cwd, by
+// contrast, is a real confirmed field — no bug there.
+//
 // Per ADR-001, the handler calls fetch() directly against the running server's
 // /api/hooks/permission-request endpoint — never `ssq-hooks check --pi` — so classification
 // runs against the server's live, hot-reloadable RulesService instead of a disk-reloaded
@@ -1453,7 +1452,7 @@ export default function ssqApproval(pi) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            session_id: (ctx && ctx.sessionId) || "",
+            session_id: (ctx && ctx.sessionManager && typeof ctx.sessionManager.getSessionId === "function" ? ctx.sessionManager.getSessionId() : "") || "",
             transcript_path: "",
             cwd: (ctx && ctx.cwd) || "",
             permission_mode: "",

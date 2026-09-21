@@ -29,6 +29,23 @@ func NewFakeTmuxRegistry() *FakeTmuxRegistry {
 	}
 }
 
+// registryWithExistingSessions returns a healthy FakeTmuxRegistry pre-populated
+// with names (given as the caller's unprefixed session names, sanitized here the
+// same way TmuxSession construction does). Pass it to WithRegistry so
+// DoesSessionExist()'s registry fast path reports true, letting a test reach the
+// subprocess/gate/cancellation behavior it actually wants to exercise instead of
+// short-circuiting on the "session already known gone" guard in
+// CapturePaneContentContext/CapturePaneContentPriority.
+func registryWithExistingSessions(names ...string) *FakeTmuxRegistry {
+	reg := NewFakeTmuxRegistry()
+	sanitized := make([]string, len(names))
+	for i, name := range names {
+		sanitized[i] = toStaplerSquadTmuxNameWithPrefix(name, TmuxPrefix)
+	}
+	reg.SetSessions(sanitized)
+	return reg
+}
+
 // SetSessions replaces the in-memory session map with the provided names.
 func (f *FakeTmuxRegistry) SetSessions(names []string) {
 	f.mu.Lock()

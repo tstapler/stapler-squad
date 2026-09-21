@@ -107,6 +107,3 @@ export const hibernateAllBtn = style({
   },
 });
 
-export const pressureHighlight = style({
-  borderLeft: `3px solid ${vars.color.warning}`,
-});

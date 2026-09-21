@@ -68,7 +68,14 @@ var cmCommandsEnabled atomic.Bool
 const controlModeSlowSubscriberGrace = 250 * time.Millisecond
 
 func init() {
-	cmCommandsEnabled.Store(os.Getenv("STAPLER_SQUAD_CM_COMMANDS") != "false")
+	cmCommandsEnabled.Store(parseCMCommandsEnabled(os.Getenv("STAPLER_SQUAD_CM_COMMANDS")))
+}
+
+// parseCMCommandsEnabled implements cmCommandsEnabled's default-on policy:
+// only the exact value "false" opts out, so an unset/empty/misspelled env var
+// never silently disables the zero-fork control-mode command path.
+func parseCMCommandsEnabled(raw string) bool {
+	return raw != "false"
 }
 
 // StartControlMode begins streaming terminal output via tmux control mode (-C flag).
@@ -116,6 +123,25 @@ func (t *TmuxSession) StartControlMode() error {
 	// analog of Process.Kill(), see sshSessionStdout.Close()'s doc comment).
 	if t.commandRunner().IsRemote() {
 		return t.startRemoteControlMode()
+	}
+
+	// A tmux client/server version mismatch (see version_check.go's doc
+	// comment) makes control mode's %begin/%end handshake never complete,
+	// silently timing out every command for as long as the server lives.
+	// Detect it once per socket and skip straight to "not running" so every
+	// existing caller's already-correct subprocess fallback fires
+	// immediately instead of each command separately discovering the same
+	// dead end. controlModeCmd/highPriSendCh/normPriSendCh are left nil
+	// (their zero value), which is exactly what every downstream caller
+	// already treats as "control mode unavailable" -- refcount is still
+	// bumped so the paired StopControlMode() call stays balanced instead of
+	// logging a spurious "called with refcount already 0" warning.
+	t.checkControlModeVersionMatchOnce(context.Background())
+	if t.controlModeDisabledForSocket() {
+		t.controlModeSubMu.Lock()
+		t.controlModeRefCount++
+		t.controlModeSubMu.Unlock()
+		return nil
 	}
 
 	// Build tmux -C attach command
@@ -260,8 +286,10 @@ func (t *TmuxSession) StopControlMode() error {
 	t.controlModeStartMu.Lock()
 	defer t.controlModeStartMu.Unlock()
 
-	// Decrement refcount under the lock. Only proceed to teardown when the count
-	// reaches zero (i.e., this is the last caller).
+	// Decrement refcount and snapshot the cmd/remoteProc pointers under the same
+	// lock readControlModeOutput's unilateral-exit teardown path (control_mode.go's
+	// %exit/EOF handlers) nils them under -- re-reading the bare t.controlModeCmd/
+	// t.controlModeRemoteProc fields after unlocking here raced with that write.
 	t.controlModeSubMu.Lock()
 	if t.controlModeRefCount > 0 {
 		t.controlModeRefCount--
@@ -269,13 +297,15 @@ func (t *TmuxSession) StopControlMode() error {
 		log.Warn("StopControlMode called with refcount already 0", "session", t.sanitizedName)
 	}
 	remaining := t.controlModeRefCount
+	cmd := t.controlModeCmd
+	remoteProc := t.controlModeRemoteProc
 	t.controlModeSubMu.Unlock()
 
 	if remaining > 0 {
 		return nil // Other callers still active; leave the process running.
 	}
 
-	if t.controlModeCmd == nil && t.controlModeRemoteProc == nil {
+	if cmd == nil && remoteProc == nil {
 		return nil // Not running (or already stopped by a prior call).
 	}
 
@@ -324,21 +354,21 @@ func (t *TmuxSession) StopControlMode() error {
 	}
 	t.cmdSendMu.Unlock()
 
-	// Wait for process to exit (with timeout). Exactly one of
-	// t.controlModeCmd/t.controlModeRemoteProc is non-nil here (guarded by
-	// the early-return above); wait/kill are resolved to the matching
-	// local (*exec.Cmd) or remote (SSH-channel) implementation.
+	// Wait for process to exit (with timeout). Exactly one of cmd/remoteProc
+	// is non-nil here (guarded by the early-return above) -- use the pointers
+	// snapshotted under the lock earlier rather than re-reading t.controlModeCmd/
+	// t.controlModeRemoteProc, which raced with readControlModeOutput's teardown
+	// write. wait/kill are resolved to the matching local (*exec.Cmd) or remote
+	// (SSH-channel) implementation.
 	var wait func() error
 	var kill func()
-	if t.controlModeCmd != nil {
-		UntrackChildPID(t.controlModeCmd.Process.Pid)
-		cmd := t.controlModeCmd
+	if cmd != nil {
+		UntrackChildPID(cmd.Process.Pid)
 		wait = cmd.Wait
 		kill = func() { _ = cmd.Process.Kill() }
 	} else {
-		proc := t.controlModeRemoteProc
-		wait = proc.wait
-		kill = proc.kill
+		wait = remoteProc.wait
+		kill = remoteProc.kill
 	}
 
 	done := make(chan error, 1)
@@ -1193,9 +1223,10 @@ func (t *TmuxSession) UnsubscribeFromControlModeUpdates(subscriberID string) {
 // control mode connection. Uses the HIGH-PRIORITY queue so user keystrokes always
 // jump ahead of any queued background operations (capture-pane, resize, etc.).
 //
-// Fire-and-forget: enqueues the send-keys command and returns immediately without
-// waiting for the tmux %begin/%end ack. The ack is consumed by the reader goroutine
-// and discarded. This eliminates one CM round-trip from the interactive input path.
+// Waits for the tmux %begin/%end ack (bounded by ctx) instead of firing-and-forgetting:
+// a wedged control-mode pipe can accept the enqueue and stdin write without ever
+// erroring, so callers rely on this returning an error to trigger their subprocess
+// send-keys fallback instead of silently dropping the keystroke.
 func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) error {
 	if len(data) == 0 {
 		return nil
@@ -1210,15 +1241,6 @@ func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) 
 	for _, b := range data {
 		args = append(args, fmt.Sprintf("%02x", b))
 	}
-	// resultCh is buffered(1): the reader goroutine delivers the ack into it and
-	// moves on; nobody reads it, and Go GCs it. Safe because all send sites use
-	// `select { case ch <- result: default: }` (non-blocking).
-	resultCh := make(chan cmdResult, 1)
-	req := cmSendReq{line: strings.Join(args, " "), resultCh: resultCh}
-	select {
-	case ch <- req:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	_, err := t.enqueueCMCommand(ctx, ch, args...)
+	return err
 }

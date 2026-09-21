@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -25,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/binaries"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
 )
 
@@ -202,9 +204,9 @@ func TestCreateSession_should_RejectSecondDuplicate_When_TwoRapidCallsShareTitle
 	// that other process's config.json instead of getting a fresh
 	// testModeSentinelProgram default -- an empty/real DefaultProgram there
 	// fails Session.program's NotEmpty validator. Matches the same
-	// t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir()) pattern used elsewhere
-	// in this file (e.g. the "ModeIsAlias" subtest) for the identical reason.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	// envtest.NewIsolatedStateDir(t) call used elsewhere in this file (e.g.
+	// the "ModeIsAlias" subtest) for the identical reason.
+	envtest.NewIsolatedStateDir(t)
 
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
@@ -3148,7 +3150,7 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
 		[]byte(`{"default_program": "claude", "feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
-	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false)
+	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false, "")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
@@ -3172,12 +3174,77 @@ func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	worktreePath := t.TempDir()
 	initGitRepoWithCommit(t, worktreePath)
 
-	inst, err := svc.CreateWorktreeSession(context.Background(), title, t.TempDir(), worktreePath, "", nil, true, false)
+	inst, err := svc.CreateWorktreeSession(context.Background(), title, t.TempDir(), worktreePath, "", nil, true, false, "")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
 	assert.Equal(t, session.BackendTmux, inst.Backend,
 		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
+}
+
+// --------------------------------------------------------------------------
+// CreateDirectorySession / CreateWorktreeSession — programOverride (Epic 2.4,
+// Story 2.4.1): the narrowest seam for confirming the kickoff prompt (Prompt,
+// a CLI arg baked in at process-spawn time via buildClaudeCommand) survives a
+// spawn that carries a work-stage program override, since both are set on the
+// same InstanceOptions value before NewInstance/Start(true) — never via a
+// later SwitchProgram/Restart call. See Epic 2.4's design note.
+// --------------------------------------------------------------------------
+
+// TestCreateDirectorySession_should_SetProgramFromOverride_When_ProgramOverrideNonEmpty
+// proves a non-empty programOverride replaces resolved.Program on
+// InstanceOptions, and that Prompt (the kickoff prompt argument) is passed
+// through unaffected by the override.
+func TestCreateDirectorySession_should_SetProgramFromOverride_When_ProgramOverrideNonEmpty(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	inst, err := svc.CreateDirectorySession(context.Background(), "program-override-directory-session", t.TempDir(), "do the thing", nil, true, false, "claude --model claude-sonnet-4-6")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, "claude --model claude-sonnet-4-6", inst.Program,
+		"a non-empty programOverride must replace resolved.Program on InstanceOptions before NewInstance/Start")
+	assert.Equal(t, "do the thing", inst.Prompt,
+		"the kickoff prompt must survive unaffected by the program override — both are set on the same InstanceOptions value before spawn")
+}
+
+// TestCreateDirectorySession_should_UseResolvedProgram_When_ProgramOverrideEmpty
+// is the byte-identical-to-today counterpart: an empty programOverride leaves
+// resolved.Program (config.ResolveDefaults' default) untouched.
+func TestCreateDirectorySession_should_UseResolvedProgram_When_ProgramOverrideEmpty(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"default_program": "claude"}`), 0o644))
+
+	inst, err := svc.CreateDirectorySession(context.Background(), "no-override-directory-session", t.TempDir(), "do the thing", nil, true, false, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, "claude", inst.Program,
+		"an empty programOverride must leave resolved.Program byte-identical to pre-Epic-2.4 behavior")
+}
+
+// TestCreateWorktreeSession_should_SetProgramFromOverride_When_ProgramOverrideNonEmpty
+// is the CreateWorktreeSession analogue of the CreateDirectorySession test above.
+func TestCreateWorktreeSession_should_SetProgramFromOverride_When_ProgramOverrideNonEmpty(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	worktreePath := t.TempDir()
+	initGitRepoWithCommit(t, worktreePath)
+
+	inst, err := svc.CreateWorktreeSession(context.Background(), "program-override-worktree-session", t.TempDir(), worktreePath, "do the thing", nil, true, false, "claude --model claude-sonnet-4-6")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, "claude --model claude-sonnet-4-6", inst.Program,
+		"a non-empty programOverride must replace resolved.Program on InstanceOptions before NewInstance/Start")
+	assert.Equal(t, "do the thing", inst.Prompt,
+		"the kickoff prompt must survive unaffected by the program override — both are set on the same InstanceOptions value before spawn")
 }
 
 // TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_HandlerInvoked
@@ -3249,7 +3316,7 @@ func TestCreateSession_RestartFromSessionId_DerivesPathFromSource(t *testing.T) 
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the source session")
+	assert.Equal(t, sourcePath, resp.Msg.Session.RepoRoot, "path should be derived from the source session")
 	assert.Equal(t, "restart-source", resp.Msg.Session.RestartedFromSessionId)
 }
 
@@ -3280,7 +3347,7 @@ func TestCreateSession_RestartFromSessionId_ExplicitPathWins(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	assert.Equal(t, explicitPath, resp.Msg.Session.Path, "explicit path must win over the restart-derived path")
+	assert.Equal(t, explicitPath, resp.Msg.Session.RepoRoot, "explicit path must win over the restart-derived path")
 	assert.Equal(t, "restart-source-explicit", resp.Msg.Session.RestartedFromSessionId, "lineage must still be recorded even when path is explicit")
 }
 
@@ -3370,7 +3437,7 @@ func TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed(t *t
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
 
-	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the confirmed live source")
+	assert.Equal(t, sourcePath, resp.Msg.Session.RepoRoot, "path should be derived from the confirmed live source")
 	assert.Equal(t, "restart-source-live-confirmed", resp.Msg.Session.RestartedFromSessionId)
 }
 
@@ -3808,7 +3875,7 @@ func TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden(t *testing.
 		notifs := drainNotificationEvents(ch)
 		require.Len(t, notifs, 1, "expected exactly one cold-restore-lost-history notification")
 		assert.Equal(t, int32(8), notifs[0].NotificationType, "must be NotificationType_WARNING")
-		assert.Equal(t, int32(2), notifs[0].NotificationPriority, "must be NotificationPriority_MEDIUM")
+		assert.Equal(t, int32(3), notifs[0].NotificationPriority, "must be NotificationPriority_HIGH (important-but-not-urgent)")
 		assert.Contains(t, notifs[0].NotificationTitle, inst.Title)
 	})
 
@@ -3940,6 +4007,24 @@ func TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable(t *testing.T) 
 	t.Cleanup(func() { svc.Shutdown() })
 
 	assert.NotNil(t, svc.GetClaudeSettingsWatcher())
+}
+
+// TestNewSessionService_WiresApprovalServiceIntoRulesService is the
+// construction-order regression guard for Task 2.1.2b (validation.md Scope 4 /
+// Epic 2.1.2 — "gap — add"): after NewSessionService returns, rulesSvc's
+// approvalSvc field must be non-nil, so a future edit can't silently drop the
+// rulesSvc.SetApprovalService(approvalSvc) call without a test noticing.
+func TestNewSessionService_WiresApprovalServiceIntoRulesService(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	require.NotNil(t, svc.rulesSvc)
+	assert.NotNil(t, svc.rulesSvc.approvalSvc, "rulesSvc.approvalSvc must be wired by NewSessionService")
 }
 
 // TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules is the
@@ -4200,7 +4285,7 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 		t.Cleanup(fix.cleanup)
 		wireRegistryForActorSerialization(fix)
 
-		t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+		envtest.NewIsolatedStateDir(t)
 		aliasPath := t.TempDir()
 		cfg := config.DefaultConfig()
 		cfg.SessionDefaults.Aliases = []config.AliasConfig{
@@ -4347,7 +4432,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 	// STAPLER_SQUAD_TEST_DIR/STAPLER_SQUAD_INSTANCE leaking in from elsewhere
 	// (e.g. a live e2e/demo run in the same shell) would otherwise make this
 	// test read that other process's config.json instead.
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	fix := setupForkTestFixture(t)
 	wireRegistryForActorSerialization(fix)
@@ -4382,7 +4467,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 
 		inst := fix.svc.FindLiveInstance(id)
 		require.NotNil(t, inst)
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			return session.Status(inst.GetStatus()) == session.Active
 		}, awaitTimeout, pollInterval, "precondition: fixture instance must reach Active before being forced to Failed")
 
@@ -4392,7 +4477,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 				Id: id,
 			}))
 			require.NoError(t, retryErr)
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				status := session.Status(inst.GetStatus())
 				return status == session.Active || status == session.Failed
 			}, awaitTimeout, pollInterval, "retried pipeline must reach a terminal status")
@@ -4432,7 +4517,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 		// well-defined to clean up.
 		inst := fix.svc.FindLiveInstance(id)
 		if inst != nil {
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				return session.Status(inst.GetStatus()) == session.Failed
 			}, awaitTimeout, pollInterval, "pipeline must still reach Failed after losing the cancel race")
 		}
@@ -4460,7 +4545,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 		// The pipeline's Active write won the race instead.
 		inst := fix.svc.FindLiveInstance(id)
 		if inst != nil {
-			require.Eventually(t, func() bool {
+			wait.RequireEventually(t, func() bool {
 				return session.Status(inst.GetStatus()) == session.Active
 			}, awaitTimeout, pollInterval, "pipeline must still reach Active after winning the cancel race")
 		}
@@ -4581,4 +4666,91 @@ func TestCreateSession_should_PersistCreationProgressUpdatedAt_When_PhaseTransit
 			"creation_progress_updated_at must be persisted to storage, not left zero, once a phase transition has occurred")
 	}
 	require.True(t, found, "created instance must be present in storage")
+}
+
+// --------------------------------------------------------------------------
+// ListTaggingRules / UpsertTaggingRule / DeleteTaggingRule (Story 5.2.1)
+// --------------------------------------------------------------------------
+
+// TestSessionService_ListTaggingRules_should_ReturnUpsertedRule_When_UpsertTaggingRuleRPCCalledFirst
+// covers Story 5.2.1's Given-When-Then: a rule upserted via the UpsertTaggingRule RPC with
+// output_tag "Hotfix" appears in a subsequent ListTaggingRules RPC call.
+func TestSessionService_ListTaggingRules_should_ReturnUpsertedRule_When_UpsertTaggingRuleRPCCalledFirst(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	upsertResp, err := svc.UpsertTaggingRule(context.Background(), connect.NewRequest(&sessionv1.UpsertTaggingRuleRequest{
+		Rule: &sessionv1.TaggingRuleProto{
+			Name:          "Hotfix branch",
+			BranchPattern: "^hotfix/",
+			OutputTag:     "Hotfix",
+			Priority:      50,
+			Enabled:       true,
+		},
+	}))
+	require.NoError(t, err)
+	require.NotEmpty(t, upsertResp.Msg.GetRule().GetId(), "an id should be generated when the caller omits one")
+
+	listResp, err := svc.ListTaggingRules(context.Background(), connect.NewRequest(&sessionv1.ListTaggingRulesRequest{}))
+	require.NoError(t, err)
+
+	var found bool
+	for _, r := range listResp.Msg.GetRules() {
+		if r.GetOutputTag() == "Hotfix" {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected a rule with output_tag=Hotfix in ListTaggingRules, got: %+v", listResp.Msg.GetRules())
+}
+
+// TestSessionService_UpsertTaggingRule_should_ReturnValidationError_When_OutputTagEmpty
+// covers Story 5.2.1's validation acceptance criterion: an empty output_tag is rejected
+// with a client-visible error, not silently accepted.
+func TestSessionService_UpsertTaggingRule_should_ReturnValidationError_When_OutputTagEmpty(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	_, err := svc.UpsertTaggingRule(context.Background(), connect.NewRequest(&sessionv1.UpsertTaggingRuleRequest{
+		Rule: &sessionv1.TaggingRuleProto{
+			Name: "Missing output tag",
+		},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestSessionService_DeleteTaggingRule_should_RemoveRule_When_RuleExists covers the delete
+// half of the CRUD surface Story 5.2.1 exposes.
+func TestSessionService_DeleteTaggingRule_should_RemoveRule_When_RuleExists(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	upsertResp, err := svc.UpsertTaggingRule(context.Background(), connect.NewRequest(&sessionv1.UpsertTaggingRuleRequest{
+		Rule: &sessionv1.TaggingRuleProto{
+			Name:      "To delete",
+			OutputTag: "ToDelete",
+		},
+	}))
+	require.NoError(t, err)
+
+	deleteResp, err := svc.DeleteTaggingRule(context.Background(), connect.NewRequest(&sessionv1.DeleteTaggingRuleRequest{
+		Id: upsertResp.Msg.GetRule().GetId(),
+	}))
+	require.NoError(t, err)
+	assert.True(t, deleteResp.Msg.GetSuccess())
+
+	listResp, err := svc.ListTaggingRules(context.Background(), connect.NewRequest(&sessionv1.ListTaggingRulesRequest{}))
+	require.NoError(t, err)
+	for _, r := range listResp.Msg.GetRules() {
+		assert.NotEqual(t, upsertResp.Msg.GetRule().GetId(), r.GetId(), "deleted rule must not reappear in ListTaggingRules")
+	}
 }

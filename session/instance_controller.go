@@ -1,7 +1,8 @@
 package session
 
 // instance_controller.go contains ClaudeController lifecycle methods and
-// rate limit delegation for Instance.
+// rate limit delegation for Instance. The programExtension contract and its
+// runtime registry live in instance_program_extension.go.
 
 import (
 	"context"
@@ -14,40 +15,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
 
-// programExtension is implemented by a per-coding-agent-program controller
-// lifecycle manager, so StartController/StopController dispatch through one
-// interface instead of growing an if-branch per new program (mirroring
-// instance_tmux.go's programKind sum type for command building). Currently
-// only *piExtension implements this: the default (Claude/plain) path below
-// isn't itself an "extension" -- ClaudeController's lifecycle is separate
-// business logic that happens to also be named "claude" (claudeExtension,
-// by contrast, only holds resume-session data unrelated to controller
-// lifecycle -- see its doc comment in instance_claude.go).
-type programExtension interface {
-	// supported reports whether i's current Program/config should route
-	// through this extension for a NEW StartController call.
-	supported(i *Instance) bool
-	// running reports whether this extension currently owns live
-	// controller-lifecycle state for i, independent of supported() -- see
-	// StopController's Bug 2 fix doc comment for why StopController routes
-	// on this instead of re-evaluating supported().
-	running() bool
-	// startController starts this extension's controller-equivalent
-	// lifecycle for i.
-	startController(i *Instance) error
-	// stopController stops it. Safe to call even if nothing was ever started.
-	stopController(i *Instance)
-}
-
-// controllerExtensions returns the ordered set of program extensions
-// StartController/StopController check before falling back to the default
-// Claude-controller path below. A future program gets a new programExtension
-// implementation appended to this slice instead of a new if-branch in either
-// method.
-func (i *Instance) controllerExtensions() []programExtension {
-	return []programExtension{&i.piExtension}
-}
-
 // StartController creates and starts a ClaudeController for this instance,
 // UNLESS a programExtension (currently: a pi-support-enabled pi session) is
 // supported, in which case it starts that extension instead (Epic 5.2) — pi
@@ -56,8 +23,8 @@ func (i *Instance) controllerExtensions() []programExtension {
 // The controller enables automated idle detection and queue management.
 func (i *Instance) StartController() error {
 	for _, ext := range i.controllerExtensions() {
-		if ext.supported(i) {
-			return ext.startController(i)
+		if ext.Supported(i) {
+			return ext.StartController(i)
 		}
 	}
 
@@ -232,10 +199,10 @@ func (i *Instance) SetControllerForTest(c *ClaudeController) {
 // instance, or the running programExtension (currently: the PiStatusSource
 // for a pi-support-enabled pi session) — see StartController's doc comment.
 //
-// Routing is gated on actual live registration state (ext.running()), not on
-// re-evaluating ext.supported() (Bug 2 fix): the pi-support feature flag is
+// Routing is gated on actual live registration state (ext.Running()), not on
+// re-evaluating ext.Supported() (Bug 2 fix): the pi-support feature flag is
 // mutable at runtime (Story 2.1.2's disable-warning dialog), and
-// supported() re-checks it live. If a user disables the flag while a pi
+// Supported() re-checks it live. If a user disables the flag while a pi
 // session's PiStatusSource is still running, re-checking the flag here
 // would route to the Claude-controller branch instead and never call
 // Stop() on the still-live PiStatusSource — a goroutine/subprocess leak, and
@@ -246,10 +213,20 @@ func (i *Instance) SetControllerForTest(c *ClaudeController) {
 // always be stoppable regardless of the flag's current value.
 func (i *Instance) StopController() {
 	for _, ext := range i.controllerExtensions() {
-		if ext.running() {
-			ext.stopController(i)
+		if ext.Running() {
+			ext.StopController(i)
 			return
 		}
+	}
+
+	// HasController is lock-free (atomic.Pointer read) — skip i.mu.Lock()
+	// entirely on the common no-controller-to-stop path, mirroring
+	// GetController's doc comment above about avoiding needless i.mu
+	// contention. Re-checked below once the lock is actually held, since a
+	// concurrent StartController could register one between this check and
+	// the Lock() call.
+	if !i.controllerManager.HasController() {
+		return
 	}
 
 	i.mu.Lock()
@@ -268,13 +245,13 @@ func (i *Instance) StopController() {
 // programExtension, e.g. PiStatusSource for a pi-support-enabled pi
 // session — see StartController's doc comment) from within an actor
 // command. See StopController's doc comment for why routing is gated on
-// ext.running() (live registration state) rather than ext.supported()
+// ext.Running() (live registration state) rather than ext.Supported()
 // (Bug 2 fix).
 func stopControllerLocked(s *instanceState) {
 	i := s.inst
 	for _, ext := range i.controllerExtensions() {
-		if ext.running() {
-			ext.stopController(i)
+		if ext.Running() {
+			ext.StopController(i)
 			return
 		}
 	}

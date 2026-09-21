@@ -4,10 +4,16 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -124,6 +130,60 @@ func TestIsDirtyWithHint_BacksOffAfterError(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("calls after second check within backoff TTL = %d; want still 1 (no recomputation)", calls)
 	}
+}
+
+// TestIsDirtyUncached_should_ReturnTrue_When_IsDirtyWithHintCacheIsStillClean is
+// validation.md's Story 1.1.2 happy-path test: IsDirtyUncached must genuinely bypass
+// IsDirtyWithHint's own 30s/5min TTL cache rather than reusing its cached answer. A
+// clean IsDirtyWithHint(false) call populates the 5-minute clean-cache entry; a file
+// created immediately afterward must be invisible to a same-instant IsDirtyWithHint(false)
+// (still serving the stale cached false) but visible to IsDirtyUncached(), proving the
+// two are decoupled.
+func TestIsDirtyUncached_should_ReturnTrue_When_IsDirtyWithHintCacheIsStillClean(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	g := NewGitWorktreeFromStorageWithExecutor(repoDir, repoDir, "test-session", "main", "")
+	require.NotNil(t, g)
+
+	clean, err := g.IsDirtyWithHint(false)
+	require.NoError(t, err)
+	require.False(t, clean, "sanity check: freshly committed repo must start clean")
+
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "untracked.txt"), []byte("new"), 0o644))
+
+	uncached, err := g.IsDirtyUncached()
+	require.NoError(t, err)
+	assert.True(t, uncached, "IsDirtyUncached must see the new untracked file immediately")
+
+	hinted, err := g.IsDirtyWithHint(false)
+	require.NoError(t, err)
+	assert.False(t, hinted, "IsDirtyWithHint must still serve its stale 5-minute clean-cache entry, proving the two are decoupled")
+}
+
+// TestIsDirtyUncached_should_ReuseHeadTreeCache_When_HeadUnchangedAcrossCalls guards
+// against a future regression back to worktreeIsDirtyFast(path, nil, nil): IsDirtyUncached
+// must still populate and reuse GitWorktree's own headTreeCache across calls against an
+// unchanged HEAD, not just bypass IsDirtyWithHint's outer TTL cache. Mirrors
+// TestCachedHeadTreeHashes_ReusesCacheUntilHeadMoves's pointer-identity check.
+func TestIsDirtyUncached_should_ReuseHeadTreeCache_When_HeadUnchangedAcrossCalls(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	g := NewGitWorktreeFromStorageWithExecutor(repoDir, repoDir, "test-session", "main", "")
+	require.NotNil(t, g)
+
+	_, err := g.IsDirtyUncached()
+	require.NoError(t, err)
+	first, ok := g.headTreeCache.v.Load().(headTreeCacheEntry)
+	require.True(t, ok, "IsDirtyUncached must populate g.headTreeCache, not leave it empty")
+	require.NotNil(t, first.hashes, "cached entry must carry a real hashes map")
+
+	_, err = g.IsDirtyUncached()
+	require.NoError(t, err)
+	second, ok := g.headTreeCache.v.Load().(headTreeCacheEntry)
+	require.True(t, ok)
+
+	assert.Equal(t, fmt.Sprintf("%p", first.hashes), fmt.Sprintf("%p", second.hashes),
+		"a second IsDirtyUncached call against an unchanged HEAD must reuse the cached hashes map, not recompute it")
 }
 
 // TestParsePRStatusPayload_ConflictDetection is a table-driven test over the
@@ -830,5 +890,67 @@ func TestRunGitCommand_UsesInjectedCommandRunner(t *testing.T) {
 		if call.args[i] != arg {
 			t.Errorf("spy.Run args[%d] = %q, want %q", i, call.args[i], arg)
 		}
+	}
+}
+
+// erroringMeter is a metric.Meter stand-in whose Int64Counter/Int64Histogram
+// always fail, standing in for a real OTel SDK meter that rejects an
+// instrument (e.g. an invalid name). Embeds metric.Meter (left nil) so it
+// satisfies the interface's forward-compat embedded.Meter marker without
+// implementing every method — no other method is ever called on it here.
+type erroringMeter struct {
+	metric.Meter
+}
+
+func (erroringMeter) Int64Counter(name string, _ ...metric.Int64CounterOption) (metric.Int64Counter, error) {
+	return nil, fmt.Errorf("simulated registration failure for %s", name)
+}
+
+func (erroringMeter) Int64Histogram(name string, _ ...metric.Int64HistogramOption) (metric.Int64Histogram, error) {
+	return nil, fmt.Errorf("simulated registration failure for %s", name)
+}
+
+// TestTelemetry_GHCommandRegistrationErrorIsNonFatal is the regression test
+// for the MUST FIX bug: mustGHCommandCounter/mustGHCommandDurationHistogram
+// used to panic(err) on a registration failure from a package-level var
+// initializer, which would have crashed the whole binary at startup. With
+// registerGHCommandTelemetryWithMeter, a failing meter must leave the
+// instrument vars nil and only log — never panic.
+func TestTelemetry_GHCommandRegistrationErrorIsNonFatal(t *testing.T) {
+	origCalls, origDur := ghCommandCallsTotal, ghCommandDurationMs
+	defer func() { ghCommandCallsTotal, ghCommandDurationMs = origCalls, origDur }()
+
+	registerGHCommandTelemetryWithMeter(erroringMeter{})
+
+	if ghCommandCallsTotal != nil {
+		t.Error("ghCommandCallsTotal should be nil after a failed registration")
+	}
+	if ghCommandDurationMs != nil {
+		t.Error("ghCommandDurationMs should be nil after a failed registration")
+	}
+}
+
+// TestRunGHCommand_NilInstruments_DoesNotPanic proves the nil-guard added to
+// runGHCommand's metric.Add/.Record calls: with both instruments left nil
+// (the state a failed registration now leaves them in, per
+// TestTelemetry_GHCommandRegistrationErrorIsNonFatal above), a real gh
+// command invocation must still complete without panicking.
+func TestRunGHCommand_NilInstruments_DoesNotPanic(t *testing.T) {
+	origCalls, origDur := ghCommandCallsTotal, ghCommandDurationMs
+	ghCommandCallsTotal, ghCommandDurationMs = nil, nil
+	defer func() { ghCommandCallsTotal, ghCommandDurationMs = origCalls, origDur }()
+
+	spy := &gitSpyCommandRunner{runOut: []byte("ok\n")}
+	g := NewGitWorktreeFromStorageWithExecutor(
+		"/fake/repo", "/fake/worktree", "test-session", "test-branch", "",
+		WithCommandRunner(spy),
+	)
+
+	out, err := g.runGHCommand(context.Background(), "test.site", "status")
+	if err != nil {
+		t.Fatalf("runGHCommand returned error: %v", err)
+	}
+	if string(out) != "ok\n" {
+		t.Errorf("runGHCommand output = %q, want %q", out, "ok\n")
 	}
 }

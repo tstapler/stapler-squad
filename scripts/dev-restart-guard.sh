@@ -61,4 +61,17 @@ for pid in $(pgrep -f "$STAPLER_PATTERN" 2>/dev/null || true); do
     kill "$pid" 2>/dev/null || true
 done
 
+# NOTE: the plain kill above is a single SIGTERM with no SIGKILL follow-up —
+# if a dev process ignores it, wait_for_port_release below just waits 10s
+# and proceeds anyway with the port still held. That's the same class of gap
+# that caused a real production incident in install-service.sh's
+# macos_stop_service (now fixed via pkg/portguard's tested SIGTERM-then-
+# SIGKILL-then-confirm reaper — see that package's doc comment). Left as
+# wait_for_port_release here rather than also wiring in pkg/portguard: this
+# is a foreground dev-only script (no launchd crash-loop consequence, a
+# stuck port just fails loudly in the terminal), and this file's test
+# (dev-restart-guard.test.sh) hermetically stubs pgrep/launchctl/lsof with no
+# real stapler-squad binary present — shelling out to the real binary here
+# would make that test's outcome depend on whatever happens to sit at
+# ./stapler-squad on the machine running it.
 wait_for_port_release "$@"

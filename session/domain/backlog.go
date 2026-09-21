@@ -269,6 +269,50 @@ func (r StuckReason) IsValid() bool {
 	return false
 }
 
+// RequestScope is a validated string-backed enum identifying what a
+// GuidanceRequest is attached to — matching the house StuckReason/
+// BacklogStatus style. Determines the ownership check and delivery branch
+// (see GuidanceRequestDeliveryService).
+type RequestScope string
+
+const (
+	// RequestScopeBacklogItem: attached to a BacklogItem via item_id.
+	RequestScopeBacklogItem RequestScope = "backlog-item"
+	// RequestScopeSession: attached to a live/paused session via session_uuid.
+	RequestScopeSession RequestScope = "session"
+	// RequestScopeStandalone: not attached to anything; human-only surface.
+	RequestScopeStandalone RequestScope = "standalone"
+)
+
+// IsValid reports whether s is a known request scope value.
+func (s RequestScope) IsValid() bool {
+	switch s {
+	case RequestScopeBacklogItem, RequestScopeSession, RequestScopeStandalone:
+		return true
+	}
+	return false
+}
+
+// QuestionType is a validated string-backed enum identifying a
+// GuidanceRequest's answer shape, driving which control the React component
+// renders.
+type QuestionType string
+
+const (
+	QuestionTypeYesNo          QuestionType = "yes-no"
+	QuestionTypeMultipleChoice QuestionType = "multiple-choice"
+	QuestionTypeShortAnswer    QuestionType = "short-answer"
+)
+
+// IsValid reports whether t is a known question type value.
+func (t QuestionType) IsValid() bool {
+	switch t {
+	case QuestionTypeYesNo, QuestionTypeMultipleChoice, QuestionTypeShortAnswer:
+		return true
+	}
+	return false
+}
+
 // AcStatus represents the status of a single acceptance criterion.
 type AcStatus string
 

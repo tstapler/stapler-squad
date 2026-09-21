@@ -55,15 +55,15 @@ func TestPool_RealClaude_SessionResumption(t *testing.T) {
 
 	require.Len(t, capturedArgs, 2, "should have captured 2 calls")
 
-	// First call: should have --output-format json.
+	// First call: should have --output-format stream-json.
 	found := false
 	for i, a := range capturedArgs[0] {
-		if a == "--output-format" && i+1 < len(capturedArgs[0]) && capturedArgs[0][i+1] == "json" {
+		if a == "--output-format" && i+1 < len(capturedArgs[0]) && capturedArgs[0][i+1] == "stream-json" {
 			found = true
 			break
 		}
 	}
-	assert.True(t, found, "first call should use --output-format json; got: %v", capturedArgs[0])
+	assert.True(t, found, "first call should use --output-format stream-json; got: %v", capturedArgs[0])
 
 	// Second call: should have --resume.
 	foundResume := false

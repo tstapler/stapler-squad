@@ -15,9 +15,11 @@ func (EscapeEvent) Fields() []ent.Field {
 	return []ent.Field{
 		field.String("id").Unique().NotEmpty().Immutable(),
 		field.String("session_id").NotEmpty(),
+		field.String("project_path").Optional(),
 		field.String("stage").NotEmpty(),
 		field.String("sequence_type").NotEmpty(),
 		field.String("sequence_subtype").Optional(),
+		field.String("sequence_signature").Optional(),
 		field.Int("byte_length"),
 		field.String("payload_hash").Optional(),
 		field.Bytes("raw_bytes").Optional(),
@@ -36,5 +38,6 @@ func (EscapeEvent) Indexes() []ent.Index {
 		index.Fields("wall_time"),
 		index.Fields("mangled"),
 		index.Fields("sequence_type"),
+		index.Fields("project_path"),
 	}
 }

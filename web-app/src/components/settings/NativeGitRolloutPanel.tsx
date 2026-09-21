@@ -363,7 +363,7 @@ export function NativeGitRolloutPanel() {
       .then((res) => {
         if (cancelled) return;
         setSessionTitles(res.sessions.map((s) => s.title).filter(Boolean));
-        setSessionPaths(res.sessions.map((s) => s.path).filter(Boolean));
+        setSessionPaths(res.sessions.map((s) => s.repoRoot).filter(Boolean));
       })
       .catch(() => {
         // Non-fatal — both inputs still work as free text.

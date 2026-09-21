@@ -814,3 +814,92 @@ export const autoHandledTimestamp = style({
   flexShrink: 0,
   marginTop: "0.0625rem",
 });
+
+// "Needs a decision" section (Task 3.1.2b) — always-expanded top tier, plus
+// its calm/hidden-by-filter empty states and staleness indicator.
+
+export const needsDecisionSection = style({
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+});
+
+export const needsDecisionHeadingRow = style({
+  display: "flex",
+  alignItems: "baseline",
+  flexWrap: "wrap",
+  gap: "0.5rem",
+  padding: "0.75rem 1.25rem 0.25rem",
+});
+
+export const needsDecisionHeading = style({
+  margin: 0,
+  fontSize: "0.75rem",
+  fontWeight: 700,
+  letterSpacing: "0.4px",
+  textTransform: "uppercase",
+  color: vars.color.textSecondary,
+});
+
+// Mirrors ReviewQueuePanel.css.ts's stalenessIndicator/stalenessRetry (Task
+// 3.2.1d) so the "Last updated <Xm ago> · Retry" affordance reads identically
+// on both surfaces (Task 3.1.2h, AC38).
+export const stalenessIndicator = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textMuted,
+  whiteSpace: "nowrap",
+});
+
+export const stalenessRetry = style({
+  background: "none",
+  border: "none",
+  padding: 0,
+  color: vars.color.primary,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 600,
+  cursor: "pointer",
+  textDecoration: "underline",
+});
+
+export const needsDecisionEmpty = style({
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "1.5rem 1.25rem",
+  textAlign: "center",
+  color: vars.color.textSecondary,
+  gap: "0.25rem",
+});
+
+export const needsDecisionEmptyIcon = style({
+  fontSize: "1.75rem",
+});
+
+export const needsDecisionEmptyText = style({
+  fontSize: "0.9375rem",
+  fontWeight: 600,
+  margin: 0,
+  color: vars.color.textPrimary,
+});
+
+export const needsDecisionEmptySubtext = style({
+  fontSize: "0.8125rem",
+  margin: 0,
+  color: vars.color.textSecondary,
+});
+
+export const needsDecisionClearFilterButton = style({
+  marginTop: "0.25rem",
+  padding: "0.375rem 0.75rem",
+  fontSize: "0.8125rem",
+  fontWeight: 500,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "6px",
+  background: "transparent",
+  color: vars.color.primary,
+  cursor: "pointer",
+  selectors: {
+    "&:hover": {
+      borderColor: vars.color.primary,
+    },
+  },
+});

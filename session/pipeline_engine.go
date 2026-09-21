@@ -92,6 +92,13 @@ type PipelineEngine interface {
 	// backed content can't drift without a redeploy — nothing to hash) or an
 	// unresolved slug.
 	ContentHashFor(mode PipelineMode) (hash string, ok bool)
+	// ExecutorFor resolves item's configured program/model override for role,
+	// following the identical 3-branch fallback shape as the other 5 methods:
+	// PipelineModeDefault -> ("", ""); unresolved slug -> Warn log + ("", "");
+	// resolved mode with no override configured for role -> ("", ""). An
+	// empty return value from either half means "inherit the pool/session
+	// default" for that half, not "run with an empty program/model".
+	ExecutorFor(item *BacklogItemData, role StageRole) (program, model string)
 }
 
 // resolvedPipelineMode is an unexported, immutable snapshot of one enabled
@@ -118,6 +125,11 @@ type resolvedPipelineMode struct {
 	// 16 characters, over the 9 content-template fields above concatenated in
 	// the fixed declaration order shown here (see ComputeContentHash).
 	ContentHash string
+
+	// StageExecutors is ParseStageExecutors(m.StageExecutorsJSON), parsed once
+	// at cache load/refresh time so ExecutorFor never re-parses JSON on the hot
+	// path. Nil (not just empty) on a parse error — see refresh's handling.
+	StageExecutors map[StageRole]PipelineStageExecutor
 }
 
 // pipelineModeCache is an in-process, copy-on-write cache of enabled pipeline
@@ -170,6 +182,11 @@ func (c *pipelineModeCache) refresh(ctx context.Context, repo PipelineModeReposi
 
 	next := make(map[string]resolvedPipelineMode, len(modes))
 	for _, m := range modes {
+		stageExecutors, err := ParseStageExecutors(m.StageExecutorsJSON)
+		if err != nil {
+			log.WarningLog().Printf("[PipelineEngine] pipeline_mode slug=%q has malformed stage_executors_json, treating as no overrides configured: %v", m.Slug, err)
+			stageExecutors = map[StageRole]PipelineStageExecutor{}
+		}
 		next[m.Slug] = resolvedPipelineMode{
 			Slug:                  m.Slug,
 			Name:                  m.Name,
@@ -193,6 +210,7 @@ func (c *pipelineModeCache) refresh(ctx context.Context, repo PipelineModeReposi
 				m.ReviewPromptTemplate,
 				m.InitialPromptTemplate,
 			),
+			StageExecutors: stageExecutors,
 		}
 	}
 
@@ -457,7 +475,13 @@ func (e *CachingPipelineEngine) InitialPromptFor(item *BacklogItemData, priorSes
 		return BuildTokenBudgetedPrompt(item, priorSessions)
 	}
 
-	return renderTemplate(rm.InitialPromptTemplate, itemPlaceholders(item))
+	// A custom-mode template renders no prior-attempt history of its own, so
+	// prepend the same escalation nudge BuildSessionInitialPrompt renders for
+	// default-mode items — AutoReopenAfterFailedReview's escalate-once-then-park
+	// decision (server/services/backlog_service_triage.go) applies identically
+	// regardless of pipeline mode; without this, an item on a custom mode would
+	// silently never receive the nudge on its escalated retry.
+	return EscalationNoticeFor(priorSessions) + renderTemplate(rm.InitialPromptTemplate, itemPlaceholders(item))
 }
 
 // ContentHashFor implements PipelineEngine.
@@ -477,4 +501,55 @@ func (e *CachingPipelineEngine) ContentHashFor(mode PipelineMode) (string, bool)
 		return "", false
 	}
 	return rm.ContentHash, true
+}
+
+// ExecutorFor implements PipelineEngine.
+func (e *CachingPipelineEngine) ExecutorFor(item *BacklogItemData, role StageRole) (program, model string) {
+	mode := PipelineMode(item.PipelineMode)
+	if mode == PipelineModeDefault {
+		return "", ""
+	}
+
+	rm, ok := e.cache.Get(string(mode))
+	if !ok {
+		log.WarningLog().Printf("[PipelineEngine] unresolved pipeline_mode=%q item=%s — falling back to default", mode, item.ID)
+		return "", ""
+	}
+
+	entry, ok := rm.StageExecutors[role]
+	if !ok {
+		return "", ""
+	}
+	return entry.Program, entry.Model
+}
+
+// ComputeExecutorHash returns a SHA-256 hex digest, truncated to 16
+// characters, of "program|model" — mirroring ComputeContentHash's truncation
+// convention and fixed-order concatenation discipline.
+//
+// CRITICAL: every call site MUST pass the raw, pre-ResolveModel (program,
+// model) pair — i.e. the value stored on PipelineMode.stage_executors and
+// returned directly by ExecutorFor, such as the literal string
+// "family:opus" — never a family-alias-resolved concrete model ID (e.g.
+// "claude-opus-4-8"). This function performs no resolution itself; it is a
+// pure hash over whatever strings it is given.
+//
+// The reason this matters: the mode-side hash (computed from the same raw,
+// unresolved stage_executors entry) and every session-side hash this
+// function produces must be comparable so a "did this session's executor
+// config drift from what the mode currently says?" check works correctly.
+// If a session-side call site hashed the ResolveModel-resolved concrete ID
+// instead, a family-aliased stage (e.g. "family:opus") would hash
+// differently on the session side than on the mode side even when the
+// mode's configuration was never edited — a permanent false-positive drift
+// report with no way to distinguish it from a real edit. Getting this wrong
+// went through 3 rounds of repair at the planning level (see plan.md's Task
+// 2.1.2b) — do not "fix" a call site by resolving the model before hashing.
+func ComputeExecutorHash(program, model string) string {
+	h := sha256.New()
+	h.Write([]byte(program))
+	h.Write([]byte("|"))
+	h.Write([]byte(model))
+	sum := hex.EncodeToString(h.Sum(nil))
+	return sum[:16]
 }

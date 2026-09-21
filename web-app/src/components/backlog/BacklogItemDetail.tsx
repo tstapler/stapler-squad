@@ -12,6 +12,7 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAnalytics } from "@/lib/analytics";
 import { useCurrentWorkSession } from "@/lib/backlog/currentWorkSession";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
+import { summarizeStuckItemGroup } from "@/components/backlog-stuck/stuckReason";
 import { classifySessionKind } from "@/lib/backlog/sessionKind";
 import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
@@ -20,6 +21,7 @@ import { useBacklogItemShipStatus } from "@/lib/hooks/useBacklogItemShipStatus";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
+import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { useAppSelector } from "@/lib/store";
 import { store } from "@/lib/store/store";
@@ -29,6 +31,7 @@ import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
 import { getErrorMessage } from "@/lib/utils/connectError";
+import { SendBackError } from "./detail/SendBackError";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
@@ -61,6 +64,12 @@ import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { ActivityLogSection } from "./detail/ActivityLogSection";
 import { NotesSection } from "./detail/NotesSection";
 import { ManualOverrideSection } from "./detail/ManualOverrideSection";
+import { GateBlockingSection } from "./GateBlockingSection";
+import { ItemBudgetWarning } from "@/app/insights/ItemBudgetWarning";
+import { ItemStageCostTable, type ItemStageCostRow } from "@/app/insights/ItemStageCostTable";
+import { errorState as itemStageCostErrorState } from "@/app/insights/ItemStageCostTable.css";
+import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
+import { Skeleton } from "@/components/ui/Skeleton";
 import * as styles from "./BacklogItemDetail.css";
 
 interface BacklogItemDetailProps {
@@ -86,8 +95,6 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   unarchive: "Unarchived — back in the idea column. Needs a fresh session.",
   reopen: "Reopened for review.",
   send_back_idea: "Sent back to triage.",
-  send_back_refining: "Sent back to refining.",
-  send_back_ready: "Sent back to ready.",
 };
 
 export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
@@ -117,6 +124,19 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Guards the Edit action against the #146 loading-gate's other half: `item`
+  // can become non-null (and the full detail view, including Edit, render)
+  // from the shared backlogItemsSlice store's synchronous hydration (the
+  // liveRawItem effect below) *before* this item's own authoritative
+  // getBacklogItem() fetch has resolved even once. If that store entry is a
+  // stale/incomplete snapshot (e.g. cached before triage assigned a
+  // category), opening Edit against it seeds BacklogItemForm's local state
+  // from stale data — and, worse, a correction that lands afterward while
+  // editMode is true only gets buffered (Story 5.3.2), never applied to the
+  // open form. Blocking Edit specifically (not the read-only view) until at
+  // least one authoritative response has confirmed `item` closes that
+  // window without reintroducing #146's remount/loading-flash regression.
+  const [itemConfirmed, setItemConfirmed] = useState(false);
   /** The action key currently in flight (e.g. "mark_ready"), or null when idle. */
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -216,7 +236,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // on every remount (this component remounts via `key={selectedItemId}` on
   // every backlog item click — see stapler-squad PR #208 review).
   const { items: stuckItems, triggerRemediationNow } = useStuckBacklogItems();
-  const stuckItem = item ? stuckItems.find((i) => i.itemId === item.id) : undefined;
+  // BUG-105: an item can have several simultaneous open StuckBacklogItem rows
+  // (e.g. BOUNCING + BOUNCE_CAP_EXHAUSTED + MULTIPLE_REASONS all open at
+  // once) — `summarizeStuckItemGroup` resolves the SAME shared-priority
+  // primary reason BacklogBoard/BacklogItemCard resolve for the same item,
+  // instead of this component picking array order 0 (`.find()`) on its own.
+  const stuckItemGroup = item ? stuckItems.filter((i) => i.itemId === item.id) : [];
+  const stuckSummary = summarizeStuckItemGroup(stuckItemGroup);
+  const stuckItem = stuckSummary?.primary;
 
   // Version control state for the most recent work session's worktree.
   const latestWorkSession = useCurrentWorkSession(item);
@@ -244,6 +271,39 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const pipelineDisplay = latestWorkSession
     ? resolvePipelineModeDisplay(latestWorkSession, pipelineModes)
     : undefined;
+
+  // CONFIGURABILITY GAP fix (UX audit 2026-09-11): the item's own configured
+  // pipeline mode, resolved to a display name for LifecycleSummary's
+  // automation-profile chips. Distinct from pipelineDisplay above — that
+  // reflects what actually ran in the latest work session (or is undefined
+  // before any session exists), while this reflects the item's current
+  // configuration regardless of session history, so it's the only glanceable
+  // signal available before a session has ever spawned.
+  const configuredPipelineModeName = item?.pipelineMode
+    ? (pipelineModes.find((m) => m.slug === item.pipelineMode)?.name ?? item.pipelineMode)
+    : undefined;
+
+  // Story 5.2.3: this item's cost broken down by stage, sourced from
+  // GetInsightsSummaryResponse.role_breakdown[].items filtered to item.id —
+  // no new RPC (per plan.md), reusing the same Insights fetch the
+  // dashboard's own StageCostChart consumes. This is BacklogItemDetail.tsx's
+  // first Insights-summary fetch (ux.md Surface I), so its own
+  // loading/error states are handled explicitly below rather than assumed
+  // to piggyback on an existing fetch.
+  const { summary: insightsSummary, loading: insightsLoading, error: insightsError } = useInsightsSummary();
+  const itemStageCostRows: ItemStageCostRow[] = (insightsSummary?.roleBreakdown ?? [])
+    .map((bucket) => {
+      const entry = bucket.items.find((i) => i.itemId === item?.id);
+      return entry
+        ? {
+            role: bucket.sessionRole,
+            costUsd: entry.estimatedCostUsd,
+            sessionCount: entry.sessionCount,
+            unpricedSessionCount: entry.unpricedSessionCount,
+          }
+        : null;
+    })
+    .filter((row): row is ItemStageCostRow => row !== null);
 
   // Epic 5.3 (Story 5.3.1, backlog-event-driven-updates): live updates
   // replace the old 5s poll entirely. Subscribed unfiltered (no status/
@@ -488,6 +548,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           setItem(result);
           setNotesValue(result.notes ?? "");
         }
+        // Set regardless of whether this particular result "won" the
+        // staleness comparison above: either way, the server has now been
+        // consulted at least once for this itemId, so whatever `item` holds
+        // has been reconciled against it — safe to allow editing.
+        setItemConfirmed(true);
       }
     } catch (e) {
       if (mountedRef.current) setError(getErrorMessage(e, "Failed to load item."));
@@ -495,6 +560,13 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       if (mountedRef.current) setLoading(false);
     }
   }, [itemId, getBacklogItem]);
+
+  // Re-arms the itemConfirmed gate whenever the viewed item changes, so a
+  // second item opened in the same mounted component instance can't inherit
+  // the previous item's already-confirmed state.
+  useEffect(() => {
+    setItemConfirmed(false);
+  }, [itemId]);
 
   useEffect(() => {
     void load();
@@ -744,12 +816,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           case "send_back_idea":
             await transitionStatus(item.id, "idea");
             break;
-          case "send_back_refining":
-            await transitionStatus(item.id, "refining");
-            break;
-          case "send_back_ready":
-            await transitionStatus(item.id, "ready");
-            break;
           default:
             return;
         }
@@ -789,17 +855,18 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     }
   }, [item, manualReviewOutcome, manualReviewSummary, submitManualReview, showActionToast, load]);
 
-  // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR
-  // unconditionally on every UpdateBacklogItem call (they're plain proto bools, not
-  // optional — no "unset" wire representation), so any partial update that omits them
-  // silently resets them to false. Every partial updateBacklogItem call below must
-  // spread these current values.
+  // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR/
+  // autoApprovePlan unconditionally on every UpdateBacklogItem call (they're plain
+  // proto bools, not optional — no "unset" wire representation), so any partial
+  // update that omits them silently resets them to false. Every partial
+  // updateBacklogItem call below must spread these current values.
   const currentFlags = useCallback(
     () => ({
       skipPlanning: item?.skipPlanning ?? false,
       skipReviewGate: item?.skipReviewGate ?? false,
       autoSpawnSession: item?.autoSpawnSession ?? false,
       autoCreatePR: item?.autoCreatePR ?? false,
+      autoApprovePlan: item?.autoApprovePlan ?? false,
     }),
     [item]
   );
@@ -957,6 +1024,68 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       }
     },
     [item, rejectPlan, load, showActionToast]
+  );
+
+  // Story 2.2.1: chains transitionStatus -> rejectPlan -> triggerTriage as
+  // one operator action. Each call is wrapped in its own try/catch (not one
+  // shared try) so the outer catch knows exactly which of the three failed
+  // (resolves BLOCKER 5.2) — SendBackFeedbackBox renders distinct recovery
+  // copy per failedAt. See ux.md Surface 7 and pre-mortem P1 #1.
+  const handleSendBackWithFeedback = useCallback(
+    async (feedback: string) => {
+      if (!item) return;
+      const toastKey = `${item.id}:send_back_ready`;
+      setActionLoading("send_back_ready");
+      try {
+        try {
+          await transitionStatus(item.id, "ready", {
+            expectedStatus: item.status,
+            expectedUpdatedAt: item.updatedAtRaw,
+            overrideReason: feedback,
+          });
+        } catch (e) {
+          // Nothing has changed server-side — item.status is still accurate.
+          throw new SendBackError("transition", item.status, e);
+        }
+        try {
+          await rejectPlan(item.id, feedback);
+        } catch (e) {
+          // transitionStatus committed; the item is "ready" even though this
+          // call failed (rejectPlan doesn't change status).
+          throw new SendBackError("reject", "ready", e);
+        }
+        try {
+          await triggerTriage(item.id, feedback);
+        } catch (e) {
+          // Can't assume "ready" here (pre-mortem P1 #1): triggerTriage's own
+          // internal CAS may have already moved the item to "idea" before
+          // this failure. Re-fetch directly (not via load(), whose result
+          // isn't returned to this scope) to learn the real status.
+          const fresh = await getBacklogItem(item.id);
+          throw new SendBackError("triage", fresh?.status ?? "ready", e);
+        }
+        showActionToast("Feedback sent — retriage started.", "success", toastKey);
+        await load();
+      } catch (e) {
+        // Re-fetch unconditionally: once transitionStatus (call 1) commits, a
+        // stale local `item` would replay it with an outdated CAS precondition
+        // on retry, failing again with a confusing ErrPreconditionFailed.
+        await load();
+        // Partial failure (call 1 committed, call 2/3 failed) gets a neutral
+        // toast so it doesn't contradict SendBackFeedbackBox's more specific
+        // in-form message (ux.md Surface 7); only a true call-1 failure keeps
+        // the "Failed to send back." framing.
+        const toastMessage =
+          e instanceof SendBackError && e.failedAt !== "transition"
+            ? "Send-back needs attention — see details below."
+            : getErrorMessage(e, "Failed to send back.");
+        showActionToast(toastMessage, "error", toastKey);
+        throw e; // still a SendBackError (or the original error) — SendBackFeedbackBox's catch reads it
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, transitionStatus, rejectPlan, triggerTriage, getBacklogItem, load, showActionToast]
   );
 
   const handleRegeneratePlanWithFeedback = useCallback(async () => {
@@ -1377,6 +1506,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               <button
                 className={styles.editButton}
                 onClick={() => setEditMode(true)}
+                disabled={!itemConfirmed}
+                title={itemConfirmed ? undefined : "Confirming latest data before editing…"}
                 aria-label="Edit item"
                 data-testid="backlog-detail-edit"
               >
@@ -1400,12 +1531,39 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         <LifecycleSummary
           item={item}
           pipelineDisplay={pipelineDisplay}
+          configuredPipelineModeName={configuredPipelineModeName}
           stuckItem={stuckItem}
+          otherStuckReasons={stuckSummary?.otherReasons}
           onTriggerRemediationNow={triggerRemediationNow}
+        />
+        {/* Epic 5.3 (D2): per-item soft-budget warning — renders null until
+            costBudgetThresholdUsd is configured and crossed. Pinned here
+            alongside LifecycleSummary so it stays visible while scrolling,
+            same rationale as the edit-mode bannerBar above. */}
+        <ItemBudgetWarning
+          thresholdUsd={item.costBudgetThresholdUsd}
+          totalCostUsd={item.totalEstimatedCostUsd}
         />
       </div>
 
       <div className={styles.scrollArea}>
+        {/* ADR-005: "what's blocking this transition" gate checklist —
+            immediately below LifecycleSummary (which occupies the
+            top-billed liveness-panel slot) and above the rest of the
+            scroll-area content. */}
+        <GateBlockingSection item={item} />
+
+        {/* Durable guidance requests scoped to this item (AC3) — same shared
+            component also embedded in TriageReviewPanel and SessionDetailView.
+            Skipped here while TriageReviewPanel is shown below — that panel
+            renders its own copy inline with the triage-generated content it's
+            about, instead of showing the list twice for the same scope. */}
+        {!(item.triageStatus === "completed" && item.status === "idea" && item.triageResult) && (
+          <div className={styles.section}>
+            <GuidanceRequestPanel scope="backlog-item" scopeKey={item.id} />
+          </div>
+        )}
+
         {/* Inline action error banner */}
         {error && (
           <div className={styles.errorBanner} role="alert">
@@ -1590,6 +1748,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             julesDispatchTriggerRef.current = event.currentTarget;
             setShowJulesDispatch(true);
           }}
+          activeWorkSessionCount={activeWorkSessionCount}
+          onSendBackWithFeedback={handleSendBackWithFeedback}
         />
 
         {/* Secondary sections — sibling CollapsibleSections sharing one
@@ -1672,6 +1832,23 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           />
 
           <AutonomousHealthStrip item={item} />
+
+          {/* Story 5.2.3: per-item cost-by-stage table. Placed alongside
+              ItemBudgetWarning above (both are per-item cost surfaces on this
+              view) — three states per ux.md Surface I: loading (Skeleton,
+              sized to the table's row height), error (distinct from "no
+              data" so a failed fetch never reads as "this item has no
+              sessions yet"), and the legitimate empty case (table omitted
+              entirely, handled inside ItemStageCostTable itself). */}
+          {insightsLoading && !insightsSummary ? (
+            <Skeleton variant="rectangular" width="100%" height={96} />
+          ) : insightsError ? (
+            <div className={itemStageCostErrorState} data-testid="item-stage-cost-error">
+              Couldn&apos;t load cost data.
+            </div>
+          ) : (
+            <ItemStageCostTable rows={itemStageCostRows} />
+          )}
 
           <SessionsSection
             item={item}

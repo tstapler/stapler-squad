@@ -55,7 +55,7 @@ func TestFetchAndUpdatePRStatus_DiscoveryError_NotMisreadAsNoPR(t *testing.T) {
 	p := newTestPRStatusPoller()
 	inst := newDiscoveryTestInstance(t)
 
-	p.fetchAndUpdatePRStatus(inst)
+	p.fetchAndUpdatePRStatus(context.Background(), inst)
 
 	p.mu.RLock()
 	_, backoffArmed := p.noPRPollAfter[inst.Title]
@@ -84,7 +84,7 @@ func TestFetchAndUpdatePRStatus_DiscoveryRateLimited_NotMisreadAsNoPR(t *testing
 	p := newTestPRStatusPoller()
 	inst := newDiscoveryTestInstance(t)
 
-	p.fetchAndUpdatePRStatus(inst)
+	p.fetchAndUpdatePRStatus(context.Background(), inst)
 
 	p.mu.RLock()
 	_, backoffArmed := p.noPRPollAfter[inst.Title]
@@ -107,7 +107,7 @@ func TestFetchAndUpdatePRStatus_DiscoveryParseFailure_NotMisreadAsNoPR(t *testin
 	p := newTestPRStatusPoller()
 	inst := newDiscoveryTestInstance(t)
 
-	p.fetchAndUpdatePRStatus(inst)
+	p.fetchAndUpdatePRStatus(context.Background(), inst)
 
 	p.mu.RLock()
 	_, backoffArmed := p.noPRPollAfter[inst.Title]
@@ -132,7 +132,7 @@ func TestFetchAndUpdatePRStatus_DiscoveryTrue304_ArmsBackoff(t *testing.T) {
 	p := newTestPRStatusPoller()
 	inst := newDiscoveryTestInstance(t)
 
-	p.fetchAndUpdatePRStatus(inst)
+	p.fetchAndUpdatePRStatus(context.Background(), inst)
 
 	p.mu.RLock()
 	_, backoffArmed := p.noPRPollAfter[inst.Title]
@@ -158,7 +158,7 @@ func TestFetchAndUpdatePRStatus_DiscoveryErrNoPR_AppliesNoPR(t *testing.T) {
 	p := newTestPRStatusPoller()
 	inst := newDiscoveryTestInstance(t)
 
-	p.fetchAndUpdatePRStatus(inst)
+	p.fetchAndUpdatePRStatus(context.Background(), inst)
 
 	p.mu.RLock()
 	_, backoffArmed := p.noPRPollAfter[inst.Title]

@@ -303,7 +303,23 @@ jobs:
 
           echo "Affected packages:"
           echo "$PKGS"
-          TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=8m \
+          # 12m, not the original 8m: a change to a foundational, heavily-imported
+          # package (e.g. session/tmux) makes test-affected.py conservatively pull
+          # in every transitive importer -- observed 2026-09-07 pulling in ~27
+          # packages including server/services' ~2857-test suite, which alone
+          # already runs at ~84% of an 8m budget in isolation (405s/480s, PR #733).
+          # Bundled with 26 sibling packages under -race on a shared runner, that
+          # margin reliably tipped over into a whole-run "test timed out after
+          # 8m0s" (confirmed twice in a row, PR #735 CI runs 34164579438 attempts
+          # 1-2 -- each kill caught an unrelated, normally-fast subtest still
+          # "running", not a hang/deadlock, ruling out a real code regression).
+          # 12m keeps meaningful margin below the 22m full-suite fallback while
+          # covering this wide-but-not-__ALL__ blast-radius case.
+          # PKGS is deliberately unquoted below: it's a space-separated list
+          # of package paths that must word-split into separate `go test`
+          # arguments, not one quoted string.
+          # shellcheck disable=SC2086
+          TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=12m \
             -coverprofile=coverage.affected.out -covermode=atomic $PKGS
 
       # Advisory only -- a global-threshold-style gate doesn't make sense
@@ -391,9 +407,9 @@ jobs:
           OUTPUT=$(npx ts-node feature-coverage.ts ../../docs/registry/backend-features.json '../../tests/e2e/**/*.spec.ts' 2>&1)
           echo "$OUTPUT"
           SUMMARY=$(echo "$OUTPUT" | grep 'Feature E2E coverage:' | head -1 || echo "Feature E2E coverage: N/A")
-          echo "summary=${SUMMARY}" >> $GITHUB_OUTPUT
+          echo "summary=${SUMMARY}" >> "$GITHUB_OUTPUT"
           PCT=$(SUMMARY="$SUMMARY" node -e "console.log(require('../ci-gates/coverage-delta.js').parseCoveragePct(process.env.SUMMARY) ?? '')")
-          echo "pct=${PCT:-}" >> $GITHUB_OUTPUT
+          echo "pct=${PCT:-}" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
       - name: Post feature coverage PR comment
@@ -625,6 +641,10 @@ jobs:
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
           run_test_suite() {
             REST_TEST_PKGS="$(go list ./server/... ./session/... ./config/... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux)$')"
+            # REST_TEST_PKGS is deliberately unquoted below: it's a
+            # newline/space-separated list of package paths that must
+            # word-split into separate `go test` arguments.
+            # shellcheck disable=SC2086
             TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -timeout=28m -coverprofile=coverage.rest.out \
               -covermode=atomic $REST_TEST_PKGS \
               || (TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format standard-verbose -- -race -timeout=28m $REST_TEST_PKGS; exit 1)
@@ -796,14 +816,26 @@ jobs:
   #
   # Previously built and launched a separate `stapler-squad-cov` binary under
   # GOCOVERDIR to capture runtime coverage from a live process. Removed
-  # 2026-08-22: none of the 4 `//go:build integration` test files actually talk
+  # 2026-08-22: none of the `//go:build integration` test files actually talk
   # to that background process over HTTP -- server/mcp/server_integration_test.go
-  # builds and launches its own binary directly, and the tmux/mcp integration
-  # tests shell out to the real `tmux` CLI, not to a live stapler-squad server.
-  # The background binary was only ever measuring its own idle startup path.
-  # Standard in-process `-coverprofile` (same mechanism the `test` job already
-  # uses) captures everything these tests actually exercise, with no live
-  # process to launch or reap.
+  # builds and launches its own binary directly, and the tmux/tymux/mcp
+  # integration tests shell out to the real `tmux`/`tymuxd` binaries, not to a
+  # live stapler-squad server. The background binary was only ever measuring
+  # its own idle startup path. Standard in-process `-coverprofile` (same
+  # mechanism the `test` job already uses) captures everything these tests
+  # actually exercise, with no live process to launch or reap.
+  #
+  # session/tymux/supervise_integration_test.go (added alongside BUG-106/
+  # BUG-110) and its sibling integration_test.go's daemon-restart drill both
+  # gate on findTymuxdBinary, which silently t.Skip()s without a real tymuxd
+  # binary -- exactly how these bugs went uncaught until they hit production
+  # (see docs/bugs/fixed/BUG-110-*.md). Fetched below via ADR-001's pinned-
+  # release-download path (no cargo/rustc toolchain needed) and pointed at via
+  # TYMUXD_BIN, so these actually run instead of skip. NOT fixed by this:
+  # integration_test.go's TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose
+  # has no skip guard at all and assumes an externally-managed daemon already
+  # listening -- it still fails here the same way it always has; harmless
+  # only because this job is advisory (continue-on-error below).
   # ─────────────────────────────────────────────────────────────────────────────
   integration-coverage:
     name: Integration coverage (advisory)
@@ -831,6 +863,9 @@ jobs:
         with:
           install-socat: 'true'
 
+      - name: Fetch pinned tymuxd binary
+        uses: ./.github/actions/fetch-tymuxd
+
       - name: Integration coverage (advisory)
         # Same tmux-under-CPU-contention rationale as the "test" job's "Run tests
         # with coverage" step -- this step's `-tags integration` run spawns real
@@ -839,7 +874,7 @@ jobs:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
-          TMUX_BIN="$(pwd)/bin/tmux" timeout 20m go test -race -tags integration \
+          TMUX_BIN="$(pwd)/bin/tmux" TYMUXD_BIN="$(pwd)/session/tymux/embed/tymuxd" timeout 20m go test -race -tags integration \
             -coverprofile=integration.out -covermode=atomic ./... \
             || { echo "::error::CI-BUDGET-EXCEEDED: 'integration-coverage' exceeded its 20m budget"; echo "CI-BUDGET-EXCEEDED: 'integration-coverage' exceeded its 20m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
         continue-on-error: true

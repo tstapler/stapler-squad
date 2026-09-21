@@ -17,15 +17,26 @@ import (
 func newCapturePaneCountingTmuxSession(t *testing.T, name string) (*tmux.TmuxSession, *int) {
 	t.Helper()
 	calls := 0
+	// sessionExists is filled in after s is constructed below, so the
+	// CombinedOutputFunc closure (built first) reads it by reference rather
+	// than needing to duplicate tmux's own name-sanitization logic.
+	var sessionExists string
 	cmdExec := tmux.MockCmdExec{
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
 			calls++
 			return []byte("content-" + string(rune('0'+calls))), nil
 		},
-		RunFunc:            func(cmd *exec.Cmd) error { return nil },
-		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
+		RunFunc: func(cmd *exec.Cmd) error { return nil },
+		// Reports the session as existing to tmux's list-sessions, so
+		// CapturePaneContentContext's DoesSessionExist() guard (which the
+		// underlying capture call now checks before forking) doesn't
+		// short-circuit before this test's mocked capture-pane call runs.
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			return []byte(sessionExists), nil
+		},
 	}
 	s := tmux.NewTmuxSessionWithDeps(name, "echo", tmux.MakePtyFactory(), cmdExec)
+	sessionExists = s.GetSanitizedName()
 	return s, &calls
 }
 

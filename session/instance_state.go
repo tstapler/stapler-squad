@@ -469,21 +469,52 @@ func markStartedIfTmuxAliveLocked(s *instanceState) {
 	i.fireLifecycleEvent(EventStarted, "streamhub-self-heal-tmux-alive")
 }
 
-// RecoverFromStopped resets a stale Stopped or PermanentlyFailed status to
-// Creating so the instance can be hot-restored via Start(false). Only call
-// this during startup reconciliation (Stopped case) or from restartForRetry's
-// PermanentlyFailed/Stopped recovery branch when the tmux session is confirmed
-// alive or being cold-restored; it bypasses the state machine intentionally.
-// The PermanentlyFailed case backs RetryNow()'s manual "Retry now" recovery
-// (AC6) — without it, RecoverFromStopped silently no-op'd for a
-// PermanentlyFailed instance (it only ever checked Status == Stopped), and
-// startLocked's later `if i.Status != Active` transition would then be
-// attempted from PermanentlyFailed, which has no entry in transitionIndex.
+// IsHotRestoreRecoverable reports whether the instance's current status is
+// one RecoverFromStopped will actually reset (Stopped, PermanentlyFailed, or
+// Failed) — the single source of truth for "which terminal statuses can be
+// cold-recovered via RecoverFromStopped()+Start(false)". Every caller that
+// needs to decide whether an instance is a RecoverFromStopped candidate
+// (rather than duplicating the Stopped/PermanentlyFailed/Failed status list
+// inline) must go through this method: BUG (2026-09-08) was a boot-time
+// reconcile loop in server/dependencies.go that only checked Stopped,
+// independently of this same status list already duplicated in
+// restartForRetry (retry_state.go) — a session that reached
+// PermanentlyFailed/Failed before a restart, with its tmux session still
+// alive, was left permanently stuck because the boot path's copy of the list
+// silently drifted out of sync with RecoverFromStopped's actual behavior.
+func (i *Instance) IsHotRestoreRecoverable() bool {
+	switch i.GetLifecycleStatus() {
+	case Stopped, PermanentlyFailed, Failed:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsArchived reports whether the session has been archived (deliberately
+// retired, e.g. by archiveItemWorkSessions when a backlog rework round is
+// superseded). Archived sessions must never be auto-started, auto-revived or
+// auto-retried — see ADR-001 (superseded-rework-session-retirement).
+// Reads the published snapshot, not the raw i.ArchivedAt field
+// (.claude/rules/instance-lock-free-reads.md).
+func (i *Instance) IsArchived() bool {
+	return i.Snapshot().ArchivedAt != nil
+}
+
+// RecoverFromStopped resets a stale Stopped, PermanentlyFailed, or Failed
+// status to Creating so the instance can be hot-restored via Start(false).
+// Stopped/PermanentlyFailed have no registered edge to Creating, so this
+// bypasses the state machine intentionally; Failed does have one
+// (state_machine.go's Failed→Creating, "the retry path") but is included
+// here too so every RetryNow-reachable status shares one recovery path.
 // Deprecated: prefer transitionTo(ctx, Active) on the Stopped→Active path.
+//
+// The status set checked here MUST match IsHotRestoreRecoverable's switch —
+// that method exists so callers never need their own copy of this list.
 func (i *Instance) RecoverFromStopped() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.Status == Stopped || i.Status == PermanentlyFailed {
+	if i.Status == Stopped || i.Status == PermanentlyFailed || i.Status == Failed {
 		i.loadStatus(Creating)
 		i.touchUpdatedAt()
 		i.started.Store(false)

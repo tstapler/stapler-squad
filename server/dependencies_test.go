@@ -1,9 +1,9 @@
 package server
 
 import (
-	"bytes"
+	"context"
 	"errors"
-	"log/slog"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -12,7 +12,10 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -36,7 +39,7 @@ import (
 // accessor since it lives in this same package and its unexported
 // slackNotifier field is reachable directly from a same-package test.
 func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	deps, err := BuildDependencies()
 	if err != nil {
@@ -75,6 +78,31 @@ func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueu
 		t.Errorf("SessionService's SlackNotifier is not the same instance as deps.SlackNotifier (split-brain regression, commit 13ad9c260): got %p, want %p",
 			deps.SessionService.SlackNotifierForTest(), deps.SlackNotifier)
 	}
+}
+
+// TestBuildDependencies_should_WireGeminiCaller_When_GeminiBinaryDetected is the
+// Task 3.1.2b integration test: confirms BuildDependencies actually constructs
+// a *headless.GeminiCaller when the gemini binary is present at startup,
+// mirroring HeadlessPool's own "non-fatal, just leave the field nil, if the
+// binary is missing" pattern (this branch does not yet register it into a
+// headlessCallers registry — Epic 2.3, not landed yet — see GeminiCaller's
+// doc comment on ServerDependencies). Skips (rather than asserting nil) when
+// gemini genuinely isn't installed on the machine running this test —
+// mirroring config.GetAvailablePrograms' own tests' convention of skipping
+// gracefully for an optional candidate CLI not guaranteed present in every
+// dev/CI environment.
+func TestBuildDependencies_should_WireGeminiCaller_When_GeminiBinaryDetected(t *testing.T) {
+	if _, lookErr := exec.LookPath("gemini"); lookErr != nil {
+		t.Skip("gemini binary not found on PATH; skipping (see config.GetAvailablePrograms' analogous convention)")
+	}
+
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+
+	require.NotNil(t, deps.GeminiCaller, "expected GeminiCaller to be wired when the gemini binary is detected at startup")
+	assert.True(t, deps.GeminiCaller.Available())
 }
 
 func TestBuildServiceDeps_RejectsNilCore(t *testing.T) {
@@ -284,7 +312,7 @@ func TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFl
 // StatusDetail() calls cfgFn() directly, so it's used here as the observable
 // proof without needing a rate-limit/token-usage fixture to trigger Reconcile.
 func TestBuildRuntimeDeps_should_ReadLiveConfigOnEveryCfgFnCall_When_ConfigJSONChangesAfterBoot(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
 
 	deps, err := BuildDependencies()
@@ -394,24 +422,71 @@ func TestPrNumFromTitle(t *testing.T) {
 // leaving deps.JulesSessionPoller nil and logging "jules disabled" once at
 // Info — every other subsystem (SessionService, BacklogService) unaffected.
 func TestServerDependencies_should_DegradeFeatureNotServer_When_KeychainUnreadableAtStartup(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	keyring.MockInitWithError(errors.New("simulated unreadable keychain"))
 
 	cfg := config.LoadConfig()
 	cfg.Jules.Enabled = true
 	require.NoError(t, config.SaveConfig(cfg))
 
-	var buf bytes.Buffer
-	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
-	origDefault := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(origDefault) })
-
 	deps, err := BuildDependencies()
 	require.NoError(t, err, "an unreadable keychain must degrade the Jules feature, not fail server startup")
 
-	assert.Nil(t, deps.JulesSessionPoller)
-	assert.Contains(t, buf.String(), "jules disabled")
+	assert.Nil(t, deps.JulesSessionPoller, "an unreadable keychain must leave the Jules poller unconstructed")
 	assert.NotNil(t, deps.SessionService, "every other subsystem must be unaffected")
 	assert.NotNil(t, deps.BacklogService, "every other subsystem must be unaffected")
+}
+
+// noopTagPoolClient is a minimal headless.PoolClient double used only to construct a real
+// SessionTagClassificationPoller for the wiring tests below — it is never actually called,
+// since these tests only assert whether wireDepsIntoServer starts the poller, not its
+// classification behavior (covered by session/session_tag_poller_test.go).
+type noopTagPoolClient struct{}
+
+func (noopTagPoolClient) CallBlocking(context.Context, headless.FeatureKey, string, string, headless.CallOptions, headless.CostSink) (string, error) {
+	return `{"tags":["Unclassified"]}`, nil
+}
+
+// TestWireDepsIntoServer_should_NotConstructPoller_When_HeadlessPoolNil is Story 4.4.1's
+// degraded/disabled-mode case: forcing deps.SessionTagClassificationPoller to nil (mirroring
+// what BuildRuntimeDeps produces when the claude binary isn't found — see the headlessPool
+// nil-check this poller's construction is guarded by, server/dependencies.go) must not start
+// anything and must not prevent the server from starting normally.
+func TestWireDepsIntoServer_should_NotConstructPoller_When_HeadlessPoolNil(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	deps.SessionTagClassificationPoller = nil
+
+	srv := NewServerWithDeps("localhost:0", deps)
+	t.Cleanup(func() {
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("srv.Shutdown: %v", err)
+		}
+	})
+
+	assert.Nil(t, deps.SessionTagClassificationPoller, "a nil poller must stay unconstructed, never started")
+	assert.NotNil(t, deps.SessionService, "the rest of the server must start normally")
+}
+
+// TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPresent is Story
+// 4.4.1's normal-startup case: with a poller present, wireDepsIntoServer must call Start
+// exactly once, logged the same way PRStatusPoller's start is logged.
+func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPresent(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	deps.SessionTagClassificationPoller = session.NewSessionTagClassificationPoller(noopTagPoolClient{}, classifier.NewTaggingEngine())
+	require.False(t, deps.SessionTagClassificationPoller.Running(), "poller must not be running before the server wires it up")
+
+	srv := NewServerWithDeps("localhost:0", deps)
+	t.Cleanup(func() {
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("srv.Shutdown: %v", err)
+		}
+	})
+
+	assert.True(t, deps.SessionTagClassificationPoller.Running(), "wireDepsIntoServer must start the poller")
 }

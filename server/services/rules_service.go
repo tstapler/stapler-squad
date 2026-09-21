@@ -53,6 +53,45 @@ type RulesService struct {
 	// claude-settings files. Nil until SetClaudeSettingsWatcher is called (or if fsnotify
 	// is unavailable) — ReloadClaudeSettingsRules degrades to CodeUnimplemented in that case.
 	claudeSettingsWatcher *ClaudeSettingsWatcher
+
+	// approvalSvc is nil until SetApprovalService is called — reconcilePendingApprovals
+	// no-ops when nil, same idiom as claudeSettingsWatcher.
+	approvalSvc reconciliationResolver
+
+	// reconcileDoneHook is a test-only synchronization point invoked exactly once per
+	// reconcilePendingApprovalsSafe call, after that call's recover()-and-summary-log logic
+	// has run — whether or not the pass panicked. Nil in production. Lets tests observe
+	// completion of the async reconciliation goroutine via <-doneCh instead of sleeping,
+	// the same rationale as testHook above.
+	reconcileDoneHook func()
+}
+
+// maxReconcileAutoResolvesPerPass caps how many pending approvals a single reconciliation
+// pass will auto-resolve, so a pathological rule edit against a large pending backlog can't
+// make one pass run unbounded. Excess items are left pending for the next pass.
+const maxReconcileAutoResolvesPerPass = 50
+
+// reconcileCounts accumulates one pass's counters in reconcilePendingApprovalsSafe's
+// stack frame (not reconcilePendingApprovals'), so a mid-loop panic in the
+// latter never leaves the deferred summary log with stale/zeroed counts —
+// it reads the same struct the loop was just incrementing by pointer.
+type reconcileCounts struct {
+	resolved, skipped, declinedByGuard, deferredToHuman, lostToConcurrentPass int
+}
+
+// reconciliationResolver is the narrow contract reconcilePendingApprovals needs
+// from ApprovalService, satisfied implicitly by *ApprovalService. Letting
+// RulesService depend on this instead of the concrete type lets
+// reconciliation-loop tests inject a lightweight fake for cases that only
+// exercise classify-and-branch logic, without a real ApprovalStore.
+type reconciliationResolver interface {
+	ListPendingApprovalsInternal() []*PendingApproval
+	ResolveApprovalReconciled(ctx context.Context, approvalID, decision, ruleName string) error
+	// IsApprovalPending disambiguates a genuine CI-red-guard decline from
+	// "lost the race to a concurrent reconciliation pass" when
+	// ResolveApprovalReconciled returns connect.CodeFailedPrecondition for
+	// both (adversarial-review.md Concern 2) — see Task 2.2.1a.
+	IsApprovalPending(approvalID string) bool
 }
 
 // SetClaudeSettingsWatcher wires the watcher constructed alongside this service in
@@ -60,6 +99,14 @@ type RulesService struct {
 // SetHeadlessPool elsewhere in this package.
 func (rs *RulesService) SetClaudeSettingsWatcher(w *ClaudeSettingsWatcher) {
 	rs.claudeSettingsWatcher = w
+}
+
+// SetApprovalService wires the ApprovalService reference used by
+// reconcilePendingApprovals to resolve newly-covered pending approvals.
+// Accepting the interface (not *ApprovalService) lets a test fake be passed
+// directly without an adapter.
+func (rs *RulesService) SetApprovalService(as reconciliationResolver) {
+	rs.approvalSvc = as
 }
 
 // afterRebuildReadHook calls testHook if set (see field doc comment); a no-op in production.
@@ -523,27 +570,162 @@ func filterRulesBySource(rules []classifier.Rule, allowed ...classifier.RuleSour
 // so a concurrent rebuildClaudeSettingsRules call can't interleave its own read-filter-replace
 // sequence with this one and silently drop one side's update.
 func (rs *RulesService) rebuildClassifier() {
-	rs.rebuildMu.Lock()
-	defer rs.rebuildMu.Unlock()
+	func() {
+		rs.rebuildMu.Lock()
+		defer rs.rebuildMu.Unlock()
 
-	userRules := rs.rulesStore.ToRules()
-	existing := rs.classifier.Rules()
-	rs.afterRebuildReadHook() // test-only: see field doc comment
-	nonUser := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceClaudeSettings)
-	rs.classifier.ReplaceRules(append(nonUser, userRules...))
+		userRules := rs.rulesStore.ToRules()
+		existing := rs.classifier.Rules()
+		rs.afterRebuildReadHook() // test-only: see field doc comment
+		nonUser := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceClaudeSettings)
+		rs.classifier.ReplaceRules(append(nonUser, userRules...))
+	}()
+	// Per ADR-004: reconciliation runs asynchronously, after rebuildMu releases, so the
+	// RPC that triggered this rebuild (UpsertApprovalRule/DeleteApprovalRule) returns
+	// before a large pending backlog finishes reconciling. Always the panic-recovering
+	// wrapper, never the bare method — see reconcilePendingApprovalsSafe's doc comment.
+	go rs.reconcilePendingApprovalsSafe()
 }
 
 // rebuildClaudeSettingsRules hot-swaps the claude-settings-sourced rules in the classifier,
 // keeping seed and DB-backed user rules unchanged. Guarded by rebuildMu for the same reason
 // as rebuildClassifier — see that method's doc comment.
 func (rs *RulesService) rebuildClaudeSettingsRules(newClaudeRules []classifier.Rule) {
-	rs.rebuildMu.Lock()
-	defer rs.rebuildMu.Unlock()
+	func() {
+		rs.rebuildMu.Lock()
+		defer rs.rebuildMu.Unlock()
 
-	existing := rs.classifier.Rules()
-	rs.afterRebuildReadHook() // test-only: see field doc comment
-	kept := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceUser)
-	rs.classifier.ReplaceRules(append(kept, newClaudeRules...))
+		existing := rs.classifier.Rules()
+		rs.afterRebuildReadHook() // test-only: see field doc comment
+		kept := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceUser)
+		rs.classifier.ReplaceRules(append(kept, newClaudeRules...))
+	}()
+	// See rebuildClassifier's identical comment above — same ADR-004 rationale.
+	go rs.reconcilePendingApprovalsSafe()
+}
+
+// reconcilePendingApprovalsSafe wraps reconcilePendingApprovals with panic
+// recovery, matching ReviewQueuePoller.checkSessionsSafe's house idiom for
+// background goroutines. The summary log lives here (not in
+// reconcilePendingApprovals) so a mid-loop panic still logs whatever partial
+// progress counts had reached — see adversarial-review.md for the analysis.
+func (rs *RulesService) reconcilePendingApprovalsSafe() {
+	counts := &reconcileCounts{}
+	defer func() {
+		r := recover()
+		if r != nil {
+			log.Error("[RulesService] panic in reconcilePendingApprovals recovered", "panic", r,
+				"resolved_count", counts.resolved, "skipped_count", counts.skipped,
+				"declined_by_ci_guard_count", counts.declinedByGuard)
+		}
+		if r != nil || counts.resolved > 0 || counts.skipped > 0 || counts.declinedByGuard > 0 ||
+			counts.deferredToHuman > 0 || counts.lostToConcurrentPass > 0 {
+			log.Info("[RulesService] reconciliation pass complete",
+				"resolved_count", counts.resolved, "skipped_count", counts.skipped,
+				"declined_by_ci_guard_count", counts.declinedByGuard,
+				"deferred_to_human_count", counts.deferredToHuman,
+				"lost_to_concurrent_pass_count", counts.lostToConcurrentPass,
+				"capped", counts.skipped > 0, "panicked", r != nil)
+		}
+		if rs.reconcileDoneHook != nil {
+			rs.reconcileDoneHook()
+		}
+	}()
+	rs.reconcilePendingApprovals(counts)
+}
+
+// reconcilePendingApprovals re-runs Classify() against every currently
+// pending, Escalate-sourced approval using the just-rebuilt rule set, and
+// resolves any that now decide via ApprovalService.ResolveApprovalReconciled.
+// counts is owned by the caller (reconcilePendingApprovalsSafe) and
+// incremented in place so its summary log survives a panic here. Called
+// after rebuildMu releases — Classify() is a pure read, so this needs no
+// lock of its own. Always call via reconcilePendingApprovalsSafe, never
+// directly, outside of tests that intentionally exercise the panic path.
+//
+// Accepted limitation: no rule-generation snapshot is taken at pass start, so
+// a concurrent rule edit mid-pass (ADR-004 permits this) can classify later
+// items in the same pass against a newer ruleset than earlier ones — see
+// adversarial-review.md Minor 3 for why this is only a summary-log framing
+// issue, not a per-item accuracy one.
+//
+// Accepted gap: SessionIdleMinutes is left at its zero value below because
+// RulesService has no live-instance idle-minutes lookup (only ApprovalHandler
+// does); a MinSessionIdleMinutes > 0 rule fails closed here and is picked up
+// on the item's next natural classification instead. See adversarial-review.md.
+func (rs *RulesService) reconcilePendingApprovals(counts *reconcileCounts) {
+	if rs.approvalSvc == nil {
+		return
+	}
+	// Deterministic, oldest-escalated-first order before the cap is applied
+	// (pre-mortem.md #5): ApprovalStore.pending is a map, and
+	// ListPendingApprovalsInternal/ListAll iterate it directly, so which N
+	// of a >maxReconcileAutoResolvesPerPass backlog get resolved would
+	// otherwise be arbitrary and different on every pass. Sorting by
+	// CreatedAt makes repeated passes monotonic: the same oldest items
+	// resolve first every time, so a capped pass followed by the next
+	// unrelated rule edit continues draining the backlog in order instead
+	// of touching a random subset each time.
+	pending := rs.approvalSvc.ListPendingApprovalsInternal()
+	sort.Slice(pending, func(i, j int) bool { return pending[i].CreatedAt.Before(pending[j].CreatedAt) })
+	for _, a := range pending {
+		payload := classifier.PermissionRequestPayload{
+			ToolName: a.ToolName, ToolInput: a.ToolInput,
+			Cwd: a.Cwd, PermissionMode: a.PermissionMode,
+		}
+		ctx := classifier.ClassificationContext{Cwd: a.Cwd}
+		result := rs.classifier.Classify(payload, ctx)
+		if result.Decision == classifier.Escalate {
+			continue
+		}
+		if counts.resolved >= maxReconcileAutoResolvesPerPass {
+			counts.skipped++
+			continue
+		}
+		decision := "deny"
+		if result.Decision == classifier.AutoAllow {
+			decision = "allow"
+		}
+		if err := rs.approvalSvc.ResolveApprovalReconciled(context.Background(), a.ID, decision, result.RuleName); err != nil {
+			// Three-way classification (adversarial-review.md Blocker + Concern 1/2,
+			// iteration 2). All three below can surface as errors from
+			// ResolveApprovalReconciled, and must not be conflated:
+			switch {
+			case connect.CodeOf(err) == connect.CodeAborted:
+				// Lost the race to an in-flight HUMAN decision (Task 2.1.1c's
+				// arbitration) — research/ux.md's "favor the human" mandate in
+				// action, not an error. Never retried within this pass.
+				counts.deferredToHuman++
+				log.Info("[RulesService] reconciliation deferred to in-flight human decision",
+					"approval_id", a.ID, "session_id", a.SessionID)
+			case connect.CodeOf(err) == connect.CodeFailedPrecondition:
+				// Both the CI-red guard (approval_service.go's block-on-red-CI check,
+				// *before* approvalStore.Resolve is reached) and "another reconciliation
+				// pass already resolved this" (Task 2.1.1c's IsReconciled()-aware
+				// not-found branch) surface this same code — disambiguate by checking
+				// whether the item is still present in the store (adversarial-review.md
+				// Concern 2): a real CI-guard decline leaves it pending; a lost race to a
+				// concurrent pass has already removed it.
+				if rs.approvalSvc.IsApprovalPending(a.ID) {
+					counts.declinedByGuard++
+					log.Info("[RulesService] reconciliation declined by CI-red guard",
+						"approval_id", a.ID, "session_id", a.SessionID,
+						"rule_id", result.RuleID, "rule_name", result.RuleName)
+				} else {
+					counts.lostToConcurrentPass++
+					log.Info("[RulesService] reconciliation lost race to a concurrent reconciliation pass",
+						"approval_id", a.ID, "session_id", a.SessionID)
+				}
+			}
+			continue // otherwise (e.g. CodeNotFound): lost the race to a human's
+			// already-completed, non-reconciled resolution — expected, uncounted
+		}
+		counts.resolved++
+		log.Info("[RulesService] reconciled pending approval",
+			"approval_id", a.ID, "session_id", a.SessionID,
+			"rule_id", result.RuleID, "rule_name", result.RuleName,
+			"before_decision", "escalate", "after_decision", decision)
+	}
 }
 
 // -- Mapping helpers ----------------------------------------------------------

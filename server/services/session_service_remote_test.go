@@ -45,6 +45,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // remoteSessionTestSSHServer is this file's own minimal in-process SSH server,
@@ -330,7 +331,7 @@ func TestCreateSession_RemoteTarget_CreatesRemoteWorktreeAndTmuxSession(t *testi
 	require.NotNil(t, resp.Msg.Session)
 
 	sessionName := "staplersquad_remote-create-worktree"
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
 	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist on the remote host")
 
@@ -455,7 +456,7 @@ func TestCreateSession_RemoteTarget_ExistingWorktree_AttachesWithoutCreatingNewO
 	require.NotNil(t, resp.Msg.Session)
 
 	sessionName := "staplersquad_remote-existing-worktree"
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
 	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist on the remote host")
 
@@ -512,7 +513,7 @@ func TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree(t *testing
 	require.NotNil(t, resp.Msg.Session)
 
 	sessionName := "staplersquad_remote-directory-session"
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
 	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist on the remote host")
 
@@ -525,7 +526,7 @@ func TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree(t *testing
 	// NOT be persisted as a worktree at all -- no synthetic "unknown" branch sentinel,
 	// matching a local Directory session's Branch="" exactly (pre-ship review finding;
 	// see session_service.go's remote block and instance_worktree.go's default case).
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		data, listErr := fix.storage.ListInstanceData()
 		if listErr != nil {
 			return false
@@ -549,7 +550,7 @@ func TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree(t *testing
 // TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree.
 func requireRemoteSessionPersistedWithBranch(t *testing.T, fix *remoteSessionFixture, title string) {
 	t.Helper()
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		data, listErr := fix.storage.ListInstanceData()
 		if listErr != nil {
 			return false
@@ -614,7 +615,7 @@ func TestCreateSession_RemoteTarget_NewProject_InitializesGitRepoOnRemoteHost(t 
 	require.NotNil(t, resp.Msg.Session)
 
 	sessionName := "staplersquad_remote-new-project-session"
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
 	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist on the remote host")
 
@@ -632,7 +633,7 @@ func TestCreateSession_RemoteTarget_NewProject_InitializesGitRepoOnRemoteHost(t 
 	// Matches Directory's persistence contract exactly: no worktree row, no
 	// synthetic "unknown" branch sentinel -- see setupFirstTimeWorktree's
 	// NewProject case and requireRemoteSessionPersistedWithBranch's doc comment.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		data, listErr := fix.storage.ListInstanceData()
 		if listErr != nil {
 			return false

@@ -197,7 +197,7 @@ func TestNativeProcessManager_StartAfterClose_Restarts(t *testing.T) {
 	// been reaped yet (ProcessState == nil, i.e. IsAlive() still true) — wait
 	// for supervise()'s cmd.Wait() to actually observe the SIGTERM'd process
 	// exit instead of sleeping a fixed duration that can be too short under load.
-	require.Eventually(t, func() bool { return !mgr.IsAlive() }, 5*time.Second, 10*time.Millisecond,
+	wait.RequireEventually(t, func() bool { return !mgr.IsAlive() }, 5*time.Second, 10*time.Millisecond,
 		"process manager never reported exited after Close()")
 
 	require.NoError(t, mgr.Start(dir))

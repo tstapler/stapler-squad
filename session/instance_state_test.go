@@ -146,3 +146,95 @@ func TestSetCreationProgress_should_UpdateTimestamp_When_Called(t *testing.T) {
 	inst.SetCreationProgress("Starting tmux session...")
 	assert.True(t, inst.CreationProgressUpdatedAt().After(firstTimestamp), "second call must advance the timestamp")
 }
+
+// TestIsHotRestoreRecoverable_MatchesRecoverFromStopped is the single test
+// enforcing that IsHotRestoreRecoverable's status set never drifts out of
+// sync with what RecoverFromStopped actually resets. Before IsHotRestoreRecoverable
+// existed, that status list (Stopped/PermanentlyFailed/Failed) was duplicated
+// inline at two independent call sites — server/dependencies.go's boot-time
+// reconcile loop and retry_state.go's restartForRetry — and the boot-time copy
+// silently omitted PermanentlyFailed/Failed. A session that reached one of
+// those statuses before a server restart, with its tmux session still alive,
+// was left permanently stuck: Start(false) rejects the PermanentlyFailed/Failed
+// -> Active transition, and nothing else in the boot path recovered it, so
+// every capture/resync against it failed indefinitely.
+//
+// Iterating every real Status constant and asserting IsHotRestoreRecoverable
+// agrees with RecoverFromStopped's actual before/after effect means any future
+// edit to either one that isn't mirrored in the other fails this test —
+// closing the class rather than just the one instance of it.
+func TestIsHotRestoreRecoverable_MatchesRecoverFromStopped(t *testing.T) {
+	t.Parallel()
+	every := []Status{Creating, Active, Paused, Stopped, Hibernated, Restoring, Crashed, PermanentlyFailed, Failed}
+
+	for _, status := range every {
+		status := status
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			inst := &Instance{Title: "test-hot-restore-recoverable", Status: status}
+
+			predicted := inst.IsHotRestoreRecoverable()
+			inst.RecoverFromStopped()
+			after := inst.GetLifecycleStatus()
+
+			if predicted {
+				assert.Equal(t, Creating, after,
+					"IsHotRestoreRecoverable(%s) = true but RecoverFromStopped() left status = %s, want it reset to Creating",
+					status, after)
+			} else {
+				assert.Equal(t, status, after,
+					"IsHotRestoreRecoverable(%s) = false but RecoverFromStopped() changed status to %s — it should have been a no-op",
+					status, after)
+			}
+		})
+	}
+}
+
+// TestInstance_IsArchived_should_ReadPublishedSnapshot_When_ArchivedAtSet pins
+// that IsArchived() goes through the published snapshot rather than the raw
+// i.ArchivedAt field (.claude/rules/instance-lock-free-reads.md). Every
+// auto-lifecycle guard added for ADR-001 (health checker, poller, session
+// driver, stale-resume recovery) reads this one predicate from a non-actor
+// goroutine, so a raw-field read here would race the actor setters.
+func TestInstance_IsArchived_should_ReadPublishedSnapshot_When_ArchivedAtSet(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+
+	tests := []struct {
+		name       string
+		status     Status
+		archivedAt *time.Time
+		want       bool
+	}{
+		{name: "stopped_not_archived", status: Stopped, archivedAt: nil, want: false},
+		{name: "stopped_archived", status: Stopped, archivedAt: &now, want: true},
+		{name: "permanently_failed_archived", status: PermanentlyFailed, archivedAt: &now, want: true},
+		{name: "active_archived", status: Active, archivedAt: &now, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// ArchivedAt must be set before anything calls Snapshot(): the first
+			// call caches its lazily-built value (see Snapshot's doc comment).
+			inst := &Instance{Title: "archived-predicate-" + tt.name, Status: tt.status, ArchivedAt: tt.archivedAt}
+			assert.Equal(t, tt.want, inst.IsArchived())
+		})
+	}
+}
+
+// TestInstance_IsArchived_should_SeeTheWrite_When_SetViaActorSetter guards the
+// other half of the predicate: an archive written through the actor setter
+// republishes the snapshot, so IsArchived() flips. A raw `inst.ArchivedAt =`
+// write (the defect fixed in server/services/workflow_service.go) leaves this
+// false for the rest of the process lifetime.
+func TestInstance_IsArchived_should_SeeTheWrite_When_SetViaActorSetter(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "archived-via-actor-setter", Status: Stopped}
+	require.False(t, inst.IsArchived(), "precondition: not archived")
+
+	require.True(t, inst.SetArchivedAtIfNil(time.Now()), "first archive should apply (CAS)")
+	assert.True(t, inst.IsArchived(), "IsArchived() must see an actor-routed archive")
+
+	assert.False(t, inst.SetArchivedAtIfNil(time.Now()), "second archive is a no-op (CAS)")
+}

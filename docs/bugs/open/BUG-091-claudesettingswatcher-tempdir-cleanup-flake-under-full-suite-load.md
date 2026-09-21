@@ -92,6 +92,80 @@ full-suite runs must not reproduce the `TempDir RemoveAll cleanup` failure for t
 
 ## Related
 
+- **2026-09-17 sighting (second, same day)**: recurred on yet another unrelated test,
+  `TestScanner_Start_should_persistPeriodically_When_MaintenanceTickFires` (`session/unfinished`),
+  same symptom (`testing.go:1464: TempDir RemoveAll cleanup: unlinkat ... directory not empty`), in
+  the "Test (affected packages only, fast signal)" CI job on the same PR #817 CI cycle as the sighting
+  below — `session/unfinished` is untouched by that PR's diff. Re-ran via `gh run rerun --failed`
+  rather than investigating further, consistent with this bug's own scope boundary. Two sightings on
+  two different, unrelated tests in the same CI cycle strengthens the case (already made by the
+  2026-09-02 sighting) that this is a broad shared-teardown-ordering gap, not a per-test issue.
+- **2026-09-17 sighting**: recurred on the exact test this bug is named for,
+  `TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable`, same symptom
+  (`testing.go:1464: TempDir RemoveAll cleanup: unlinkat ... directory not empty`), in the "MCP
+  Integration Tests" CI job on PR #817 (`app-scrollback-forwarding`) — an unrelated diff. Re-ran the
+  job via `gh run rerun --failed` rather than investigating further, consistent with this bug's own
+  scope boundary.
+- **2026-09-16 sighting (second, same day)**: 2 more `TempDir RemoveAll cleanup: unlinkat ...
+  directory not empty` failures in the same `make ci` cycle as the sighting below, this time in
+  `make test-integration`'s second (non-`session`/`session/tmux`) invocation — one on
+  `TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_Headless...` (name truncated by the
+  capturing pipe; `server/dependencies_test.go` family), the other not captured due to the same
+  truncation. Immediately re-ran `make test-integration` standalone with output captured to a file
+  instead of a truncating pipe: 7179 tests, 0 failures, 37.7s. Confirms both were transient
+  full-suite-load flakes in this same shared teardown-ordering gap, not a regression from the
+  logging fix being pushed; re-ran rather than investigating further, consistent with this bug's own
+  scope boundary.
+- **2026-09-16 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not
+  empty` symptom recurred again on the same test,
+  `TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService`
+  (`server/dependencies_test.go`), during `make ci`'s full `test-race` run (7075 tests, 330s) on
+  `main` while syncing a rebase-exposed lint fix — unrelated to that diff (which touched only
+  `server/services/backlog_service_triage.go` logging calls). Passed 10/10 in isolation with `-race`
+  immediately after (`go test ./server -race -run
+  TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
+  -count=10`). Confirms this remains the same shared teardown-ordering gap, not a new regression;
+  re-ran rather than investigating further, consistent with this bug's own scope boundary.
+- **2026-09-13 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not
+  empty` symptom recurred on a fourth test, in a different package this time --
+  `TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService`
+  (`server/dependencies_test.go`), during `make quick-check`'s full `test-race` run (6909 tests,
+  288s) on the `backlog/stapler-squad-fix-fork-pressure-flap-and-status-banner` branch (fork-pressure
+  hysteresis + status-banner work, unrelated to this test or its `BuildDependencies()`/
+  `wireDepsIntoServer` construction path). Passed 5/5 in isolation with `-race` immediately after (`go
+  test ./server/... -race -run TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
+  -count=5`). Confirms the failure family isn't confined to `server/services` -- `server`'s own
+  `BuildDependencies()` path (already flagged non-hermetic, starting ~30 real subsystems including
+  sweepers/notifiers/analytics writers) hits the same teardown-ordering gap. Not investigated further,
+  consistent with this bug's own scope boundary.
+- **2026-09-08: `TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo` instance
+  root-caused and fixed** (unlike this bug's own still-unconfirmed ClaudeSettingsWatcher hypothesis).
+  Hit during `make quick-check` on PR #735 (`fix-control-mode-input-silent-drop`, an unrelated
+  control-mode diff) after merging `main`. Confirmed root cause via reading
+  `server/services/backlog_service_triage.go`'s `TriggerTriage`: the test's only synchronization was
+  `require.Eventually(pool.callCount() == 1)`, which only proves `CallBlocking` was *invoked* — the
+  background goroutine keeps running past that point (commit + `retitleTriageWorktreeToFinalBranch`
+  writing into the worktree under `repoPath/.git/worktrees/`, i.e. exactly the `t.TempDir()` the test
+  is about to tear down), so the test could return — starting `RemoveAll` — while that goroutine was
+  still writing files. This is the *general* mechanism this bug's title names ("something outlives
+  test teardown and still touches the TempDir"), now confirmed for one concrete instance instead of
+  hypothesized. Fixed both this test and its sibling `TestTriggerTriage_FallsBackToRepoPathDirectly_When_RepoPathIsNotAGitRepo`
+  by polling `storage.ListItemSessions(...)[0].EndedAt != nil` instead (the trailing write that lands
+  after all worktree file writes are done) — the same pattern `TestTriggerTriage_Success` already used
+  for the identical reason. Did not use the package's `testTriageCompleteHook` (used by other tests for
+  this same wait) because both fixed tests call `t.Parallel()`, and that hook is a single
+  package-global function var — a sibling parallel test's own registration would silently clobber this
+  test's, dropping its completion signal (see the hook's own doc comment warning). This closes the
+  TriggerTriage instance specifically; BUG-091 stays open for the still-unconfirmed
+  ClaudeSettingsWatcher root cause below.
+- **2026-09-07 sighting (second, same day)**: the identical `TempDir RemoveAll cleanup: unlinkat ...
+  directory not empty` symptom recurred again on the *same* test,
+  `TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo` (`server/services`), CI run
+  [34157839904](https://github.com/tstapler/stapler-squad/actions/runs/34157839904/attempts/1) (job
+  101853656914), on PR #733 (`fix-worktree-browse-button-e2e-timeout`) — an unrelated diff. Re-running
+  the same job with no code changes (attempt 2) passed cleanly. Confirms this recurrence is the same
+  shared teardown-ordering gap, not something PR #733's diff introduced; re-ran rather than investigating
+  further, consistent with this bug's own scope boundary and the precedent set by the entry below.
 - **2026-09-07 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not empty`
   symptom recurred on a third test, `TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo`
   (`server/services`), CI run [34075111973](https://github.com/tstapler/stapler-squad/actions/runs/34075111973/job/101599943522),

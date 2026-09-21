@@ -13,16 +13,21 @@ import { useWorkflows } from "@/lib/hooks/useWorkflows";
 
 const mockUpdateWorkflow = jest.fn().mockResolvedValue({});
 const mockListWorkflows = jest.fn().mockResolvedValue({ workflows: [] });
+// eslint-disable-next-line @typescript-eslint/require-await -- async generator body intentionally yields nothing
+async function* emptyWorkflowStream() {}
+const mockWatchWorkflows = jest.fn().mockImplementation(() => emptyWorkflowStream());
 
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({
     listWorkflows: mockListWorkflows,
     updateWorkflow: mockUpdateWorkflow,
+    watchWorkflows: mockWatchWorkflows,
   }),
 }));
 
 jest.mock("@/lib/api/transport", () => ({
   getConnectTransport: () => ({}),
+  getWatchTransport: () => ({}),
 }));
 
 jest.mock("@bufbuild/protobuf", () => ({

@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -450,6 +451,16 @@ func listShippedCommitsWithCap(ctx context.Context, repoPath, baseSHA, headSHA s
 		return nil, false, fmt.Errorf("failed to resolve commit %s: %w", baseSHA, err)
 	}
 
+	// baseAncestors is base's reachable-commit set, computed once up front.
+	// The naive alternative — calling c.IsAncestor(base) inside the walk below
+	// for every node c — makes IsAncestor's own O(history-depth) BFS run once
+	// per visited node, i.e. O(N×M) overall; this single bounded walk plus an
+	// O(1) map lookup per node is O(M) total.
+	baseAncestors, err := reachableAncestors(repo, base.Hash)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to compute ancestor set for %s: %w", baseSHA, err)
+	}
+
 	var commits []ShippedCommit
 	seen := map[plumbing.Hash]bool{head.Hash: true}
 	queue := []*object.Commit{head}
@@ -459,11 +470,7 @@ func listShippedCommitsWithCap(ctx context.Context, repoPath, baseSHA, headSHA s
 		}
 		c := queue[0]
 		queue = queue[1:]
-		isAncestor, err := c.IsAncestor(base)
-		if err != nil {
-			return commits, len(commits) >= maxCommits, err
-		}
-		if isAncestor {
+		if baseAncestors[c.Hash] {
 			continue
 		}
 		summary, _, _ := strings.Cut(c.Message, "\n")
@@ -484,6 +491,34 @@ func listShippedCommitsWithCap(ctx context.Context, repoPath, baseSHA, headSHA s
 		}
 	}
 	return commits, len(commits) >= maxCommits, nil
+}
+
+// maxReachableAncestorsCommits caps reachableAncestors' walk, mirroring
+// session/unfinished's maxReachableSetCommits — a bound on an otherwise
+// unbounded history walk. Declared as a var so a test can lower it without
+// needing thousands of fixture commits.
+var maxReachableAncestorsCommits = 50_000
+
+// reachableAncestors returns the set of commits reachable from start by
+// walking parent links (i.e. start's ancestors, including start itself), up
+// to maxReachableAncestorsCommits commits.
+func reachableAncestors(repo *git.Repository, start plumbing.Hash) (map[plumbing.Hash]bool, error) {
+	seen := make(map[plumbing.Hash]bool, 64)
+	iter, err := repo.Log(&git.LogOptions{From: start})
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk history from %s: %w", start, err)
+	}
+	defer iter.Close()
+	if err := iter.ForEach(func(c *object.Commit) error {
+		if len(seen) >= maxReachableAncestorsCommits {
+			return storer.ErrStop
+		}
+		seen[c.Hash] = true
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("failed to walk history from %s: %w", start, err)
+	}
+	return seen, nil
 }
 
 // AggregateDiffStat is the files-changed/additions/deletions summary

@@ -21,6 +21,7 @@ import (
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 
 	"github.com/tstapler/stapler-squad/session/lifecycle"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // testTymuxMetricReader backs the single real MeterProvider installed for
@@ -239,7 +240,7 @@ func TestStandingStream_SnapshotEvent_SeedsLiveness(t *testing.T) {
 	// 2.2.1c) rather than trusting the cache, so assert on the cached
 	// field the reader goroutine actually writes instead.
 	concrete := sess.(*tymuxGRPCSession)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		concrete.mu.RLock()
 		defer concrete.mu.RUnlock()
 		return concrete.liveness == v1.Liveness_LIVENESS_DEAD
@@ -317,7 +318,7 @@ func TestStandingStream_ExitedEvent_UpdatesLivenessAndFiresRegisteredCallback(t 
 	}
 
 	concrete := sess.(*tymuxGRPCSession)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		concrete.mu.RLock()
 		defer concrete.mu.RUnlock()
 		return concrete.liveness == v1.Liveness_LIVENESS_DEAD
@@ -476,7 +477,7 @@ func TestReconnectLoop_Fires_OnTransportErrorNotPrecededByDetach(t *testing.T) {
 
 	close(stream.events) // drop, not preceded by DetachSafely/Close
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return atomic.LoadInt32(&transport.attachCalls) >= 2
 	}, time.Second, time.Millisecond, "a non-deliberate stream end must trigger ReconnectLoop (a second Attach call)")
 }
@@ -605,7 +606,7 @@ func TestReconnectLoop_NoDuplicateRenderedOutput_AcrossReconnectBoundary(t *test
 	}
 	assert.Contains(t, string(redraw), "RW")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		secondMu.Lock()
 		defer secondMu.Unlock()
 		return second != nil
@@ -666,7 +667,7 @@ func TestReconnectLoop_DetectsDaemonRestart_RevivesSession_AndSurfacesDistinctSt
 	}
 
 	concrete := sess.(*tymuxGRPCSession)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		restarted, _ := concrete.BackendRestarted()
 		return restarted
 	}, time.Second, time.Millisecond, "BackendRestarted should report true after a FailedPrecondition-detected daemon restart")
@@ -706,7 +707,7 @@ func TestReadAttachLoop_CleanExitThenStreamEnd_DoesNotReconnectOrRevive(t *testi
 	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Exited{Exited: &v1.ExitStatus{Code: &code}}})
 
 	concrete := sess.(*tymuxGRPCSession)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		concrete.mu.RLock()
 		defer concrete.mu.RUnlock()
 		return concrete.exited
@@ -750,7 +751,7 @@ func TestReconnectLoop_OrdinaryDrop_DoesNotSetBackendRestarted(t *testing.T) {
 
 	close(stream.events) // ordinary transport drop, pane stays live
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return atomic.LoadInt32(&transport.attachCalls) >= 2
 	}, time.Second, time.Millisecond)
 	time.Sleep(50 * time.Millisecond)
@@ -838,7 +839,7 @@ func TestOpenStandingStream_ReadAttachLoop_CleanExit_IncrementsEndsTotalWithClea
 		t.Fatal("Attach's channel never closed after a clean exit followed by stream end")
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		after := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_stream", "clean_exit")
 		return after == before+1
 	}, time.Second, time.Millisecond,
@@ -945,7 +946,7 @@ func TestOpenStandingStream_TearDownForReopen_ProceedsAnyway_WhenOldReaderIsWedg
 	assert.EqualValues(t, 2, atomic.LoadInt32(&transport.attachCalls),
 		"reopen must still open a fresh Attach stream despite the old reader being wedged")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		after := sumForSubsystem(t, collectMetric(t, "session_lifecycle_active_generations"), "tymux_stream", "")
 		return after == before+1
 	}, time.Second, time.Millisecond,
