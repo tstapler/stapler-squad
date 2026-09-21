@@ -520,18 +520,30 @@ func (s *tymuxGRPCSession) TapEnter() error {
 	})
 }
 
+// tymuxPromptSettleDelay is a fixed stand-in for TmuxProcessManager's
+// event-driven waitForPaneSettleTPM: this backend's HasUpdated is stubbed to
+// always report no change (see its doc comment below), so there is no
+// settle-signal to poll on. Splitting one write into two RPC calls with no
+// gap between them does not by itself guarantee the target TUI's
+// paste-detector sees them far enough apart to avoid folding them back
+// together — the fixed delay is what actually buys that separation until
+// this backend gets a real settle signal to poll instead.
+// ponytail: fixed delay, not event-driven — replace with a real settle-wait
+// once HasUpdated can observe pane content for this backend.
+const tymuxPromptSettleDelay = 150 * time.Millisecond
+
 // SendPromptWithEnter sends the prompt and the Enter keystroke as two
 // separate AttachRequest_Input sends (BUG-031), not one concatenated byte
 // slice — architecture.md §1 originally flagged the single-send shape as an
 // unresolved parity risk against TmuxProcessManager's two-step
-// SendKeys-then-TapEnter shape; this closes that gap. HasUpdated is stubbed
-// to always report no change for this backend (see its doc comment below),
-// so there is no settle-signal to poll between the two sends here, unlike
+// SendKeys-then-TapEnter shape. See tymuxPromptSettleDelay's doc comment for
+// why a fixed delay sits between the two sends here instead of
 // TmuxProcessManager's waitForPaneSettleTPM.
 func (s *tymuxGRPCSession) SendPromptWithEnter(p string) error {
 	if _, err := s.SendKeys(p); err != nil {
 		return err
 	}
+	time.Sleep(tymuxPromptSettleDelay)
 	return s.TapEnter()
 }
 

@@ -316,13 +316,19 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 // session.ErrSubmitNotConfirmed rather than being masked by a premature
 // PTY_WRITE_TIMEOUT.
 func submitContentWithEnter(ctx context.Context, inst *session.Instance, content string) error {
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- session.SubmitDriverContent(ctx, inst, content, session.DefaultPaneSettlePollInterval, session.DefaultPaneSettleMaxWait)
-	}()
-
+	// timeoutCtx (not ctx) is handed to the goroutine so that once this
+	// function gives up on it — whether via the timeout branch below, or via
+	// the deferred cancel() on the success path — SubmitDriverContent's
+	// internal settle/confirm polls (which check ctx.Done()) stop promptly
+	// too, instead of continuing unobserved and potentially firing the
+	// blind retry-Enter write after the caller has already moved on.
 	timeoutCtx, cancel := context.WithTimeout(ctx, 3*session.DefaultPaneSettleMaxWait+2*time.Second)
 	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.SubmitDriverContent(timeoutCtx, inst, content, session.DefaultPaneSettlePollInterval, session.DefaultPaneSettleMaxWait)
+	}()
 
 	select {
 	case err := <-errCh:

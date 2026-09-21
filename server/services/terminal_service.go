@@ -128,16 +128,27 @@ func (ts *TerminalService) WriteToSession(
 		err = inst.SendKeys(req.Msg.Input)
 	}
 	if err != nil {
-		if errors.Is(err, session.ErrSubmitNotConfirmed) {
-			return nil, connect.NewError(connect.CodeAborted, err)
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("timed out writing to session PTY"))
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("send keys failed: %w", err))
+		return nil, submitErrToConnectError(err)
 	}
 
 	return connect.NewResponse(&sessionv1.WriteToSessionResponse{Success: true}), nil
+}
+
+// submitErrToConnectError maps an error from submitContentWithEnter/SendKeys
+// to the matching connect error: ErrSubmitNotConfirmed (BUG-031's
+// swallowed-submit case) becomes CodeAborted, a context deadline becomes
+// CodeDeadlineExceeded, anything else is CodeInternal. Mirrors
+// server/mcp/tools_terminal.go's submitErrResult, which does the same
+// three-way mapping for the MCP error-result shape instead of a connect
+// error.
+func submitErrToConnectError(err error) error {
+	if errors.Is(err, session.ErrSubmitNotConfirmed) {
+		return connect.NewError(connect.CodeAborted, err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("timed out writing to session PTY"))
+	}
+	return connect.NewError(connect.CodeInternal, fmt.Errorf("send keys failed: %w", err))
 }
 
 // submitContentWithEnter routes content through session.SubmitDriverContent
@@ -148,13 +159,18 @@ func (ts *TerminalService) WriteToSession(
 // timeout since SubmitDriverContent's settle-wait plus up to one retried
 // confirmation can take noticeably longer than a single SendKeys call.
 func submitContentWithEnter(ctx context.Context, inst *session.Instance, content string) error {
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- session.SubmitDriverContent(ctx, inst, content, session.DefaultPaneSettlePollInterval, session.DefaultPaneSettleMaxWait)
-	}()
-
+	// timeoutCtx (not ctx) is handed to the goroutine so that once this
+	// function gives up on it, SubmitDriverContent's internal settle/confirm
+	// polls (which check ctx.Done()) stop promptly too, instead of
+	// continuing unobserved and potentially firing the blind retry-Enter
+	// write after the caller has already moved on.
 	timeoutCtx, cancel := context.WithTimeout(ctx, 3*session.DefaultPaneSettleMaxWait+2*time.Second)
 	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.SubmitDriverContent(timeoutCtx, inst, content, session.DefaultPaneSettlePollInterval, session.DefaultPaneSettleMaxWait)
+	}()
 
 	select {
 	case err := <-errCh:
