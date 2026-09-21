@@ -68,9 +68,12 @@ function makeSession(overrides: Partial<Record<string, unknown>> = {}): Session 
   } as unknown as Session;
 }
 
-function openMenu() {
+function openMenu(section?: string) {
   const toggle = screen.getByRole("button", { name: /more session actions/i });
   fireEvent.click(toggle);
+  // Section header is absent when none of its items apply; "omits X" tests rely on that.
+  const header = section && screen.queryByRole("menuitem", { name: section });
+  if (header) fireEvent.click(header);
 }
 
 // ---------------------------------------------------------------------------
@@ -125,31 +128,31 @@ describe("SessionActionsOverflow", () => {
   describe("conditional menu items", () => {
     it("shows Clone when onClone provided", () => {
       renderOverflow({ onClone: jest.fn() });
-      openMenu();
+      openMenu("Organize");
       expect(screen.getByRole("menuitem", { name: /clone/i })).toBeInTheDocument();
     });
 
     it("omits Clone when onClone not provided", () => {
       renderOverflow();
-      openMenu();
+      openMenu("Organize");
       expect(screen.queryByRole("menuitem", { name: /clone/i })).not.toBeInTheDocument();
     });
 
     it("shows Clear Conversation when onClearConversationState provided", () => {
       renderOverflow({ onClearConversationState: jest.fn() });
-      openMenu();
+      openMenu("More");
       expect(screen.getByRole("menuitem", { name: /clear conversation/i })).toBeInTheDocument();
     });
 
     it("omits Clear Conversation when prop not provided", () => {
       renderOverflow();
-      openMenu();
+      openMenu("More");
       expect(screen.queryByRole("menuitem", { name: /clear conversation/i })).not.toBeInTheDocument();
     });
 
     it("shows Rename when onRenameRequest provided", () => {
       renderOverflow({ onRenameRequest: jest.fn() });
-      openMenu();
+      openMenu("Organize");
       expect(screen.getByRole("menuitem", { name: /rename/i })).toBeInTheDocument();
     });
   });
@@ -184,7 +187,7 @@ describe("SessionActionsOverflow", () => {
   describe("restart flow", () => {
     it("shows restart confirmation dialog when Restart clicked", () => {
       renderOverflow({ onRestart: jest.fn() });
-      openMenu();
+      openMenu("More");
       fireEvent.click(screen.getByRole("menuitem", { name: /restart/i }));
       expect(screen.getByRole("dialog", { name: /restart session/i })).toBeInTheDocument();
     });
@@ -192,7 +195,7 @@ describe("SessionActionsOverflow", () => {
     it("calls onRestart when confirmed", async () => {
       const onRestart = jest.fn().mockResolvedValue(true);
       renderOverflow({ onRestart });
-      openMenu();
+      openMenu("More");
       fireEvent.click(screen.getByRole("menuitem", { name: /restart/i }));
       fireEvent.click(screen.getByRole("button", { name: /^restart$/i }));
       await waitFor(() => expect(onRestart).toHaveBeenCalledWith("session-1"));
@@ -202,21 +205,21 @@ describe("SessionActionsOverflow", () => {
   describe("retry now flow (AC6)", () => {
     it("omits Retry now menu item for a running session with no pending retry", () => {
       renderOverflow({ onRetryNow: jest.fn() });
-      openMenu();
+      openMenu("More");
       expect(screen.queryByRole("menuitem", { name: /retry.*now/i })).not.toBeInTheDocument();
     });
 
     it("shows Retry now menu item when session is PERMANENTLY_FAILED", () => {
       const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
       renderOverflow({ session, onRetryNow: jest.fn() });
-      openMenu();
+      openMenu("More");
       expect(screen.getByRole("menuitem", { name: /retry.*now/i })).toBeInTheDocument();
     });
 
     it("shows Retry now menu item mid-backoff-wait (nextRetryAt set, not yet permanently failed)", () => {
       const session = makeSession({ nextRetryAt: { seconds: BigInt(Math.floor(Date.now() / 1000) + 60), nanos: 0 } });
       renderOverflow({ session, onRetryNow: jest.fn() });
-      openMenu();
+      openMenu("More");
       expect(screen.getByRole("menuitem", { name: /retry.*now/i })).toBeInTheDocument();
     });
 
@@ -229,7 +232,7 @@ describe("SessionActionsOverflow", () => {
     it("shows retry confirmation dialog when Retry now clicked", () => {
       const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
       renderOverflow({ session, onRetryNow: jest.fn() });
-      openMenu();
+      openMenu("More");
       fireEvent.click(screen.getByRole("menuitem", { name: /retry.*now/i }));
       expect(screen.getByRole("dialog", { name: /retry session/i })).toBeInTheDocument();
     });
@@ -238,7 +241,7 @@ describe("SessionActionsOverflow", () => {
       const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
       const onRetryNow = jest.fn().mockResolvedValue(true);
       renderOverflow({ session, onRetryNow });
-      openMenu();
+      openMenu("More");
       fireEvent.click(screen.getByRole("menuitem", { name: /retry.*now/i }));
       fireEvent.click(screen.getByRole("button", { name: /^retry now$/i }));
       await waitFor(() => expect(onRetryNow).toHaveBeenCalledWith("session-1"));
@@ -248,7 +251,7 @@ describe("SessionActionsOverflow", () => {
       const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
       const onRetryNow = jest.fn().mockResolvedValue(false);
       renderOverflow({ session, onRetryNow });
-      openMenu();
+      openMenu("More");
       fireEvent.click(screen.getByRole("menuitem", { name: /retry.*now/i }));
       fireEvent.click(screen.getByRole("button", { name: /^retry now$/i }));
       await waitFor(() => expect(screen.getByText(/failed to retry session/i)).toBeInTheDocument());
@@ -260,7 +263,7 @@ describe("SessionActionsOverflow", () => {
     it("calls onClearConversationState with session id when clicked", () => {
       const onClear = jest.fn().mockResolvedValue(true);
       renderOverflow({ onClearConversationState: onClear });
-      openMenu();
+      openMenu("More");
       fireEvent.click(screen.getByRole("menuitem", { name: /clear conversation/i }));
       expect(onClear).toHaveBeenCalledWith("session-1");
     });
@@ -416,7 +419,7 @@ describe("SessionActionsOverflow", () => {
     it("disables the Create PR trigger (with tooltip) when the session has no commits ahead (State B)", () => {
       const session = makeSession({ hasCommitsAhead: false, githubPrUrl: "" });
       renderOverflow({ session });
-      openMenu();
+      openMenu("Workflow");
 
       const trigger = screen.getByTestId(`create-pr-trigger-${session.id}`);
       expect(trigger).toBeDisabled();
@@ -426,7 +429,7 @@ describe("SessionActionsOverflow", () => {
     it("enables the Create PR trigger when the session has commits ahead (State A)", () => {
       const session = makeSession({ hasCommitsAhead: true, githubPrUrl: "" });
       renderOverflow({ session });
-      openMenu();
+      openMenu("Workflow");
 
       const trigger = screen.getByTestId(`create-pr-trigger-${session.id}`);
       expect(trigger).not.toBeDisabled();
@@ -438,7 +441,7 @@ describe("SessionActionsOverflow", () => {
         githubPrNumber: 99,
       });
       renderOverflow({ session });
-      openMenu();
+      openMenu("Workflow");
 
       expect(screen.queryByTestId(`create-pr-trigger-${session.id}`)).not.toBeInTheDocument();
       const link = screen.getByTestId("github-pr-link");
@@ -449,7 +452,7 @@ describe("SessionActionsOverflow", () => {
     it("opens the shared CreatePullRequestModal for the session when the enabled trigger is clicked", () => {
       const session = makeSession({ hasCommitsAhead: true, githubPrUrl: "" });
       renderOverflow({ session });
-      openMenu();
+      openMenu("Workflow");
 
       fireEvent.click(screen.getByTestId(`create-pr-trigger-${session.id}`));
 
@@ -461,7 +464,7 @@ describe("SessionActionsOverflow", () => {
     it("closes the modal when the modal's onClose fires", () => {
       const session = makeSession({ hasCommitsAhead: true, githubPrUrl: "" });
       renderOverflow({ session });
-      openMenu();
+      openMenu("Workflow");
 
       fireEvent.click(screen.getByTestId(`create-pr-trigger-${session.id}`));
       fireEvent.click(screen.getByRole("button", { name: /close/i }));
@@ -479,7 +482,7 @@ describe("SessionActionsOverflow", () => {
     function openSteerDialog(onSteerAutonomousSession: jest.Mock) {
       const session = makeSession({ autonomousMode: true });
       renderOverflow({ session, onSteerAutonomousSession });
-      openMenu();
+      openMenu("Modes");
       fireEvent.click(screen.getByRole("menuitem", { name: /give direction/i }));
       const input = screen.getByPlaceholderText(/focus on the ui tests first/i);
       fireEvent.change(input, { target: { value: "fix the bug" } });
@@ -573,5 +576,26 @@ describe("fitMenuTop", () => {
 
   it("clamps to the top margin when it fits in neither direction", () => {
     expect(fitMenuTop(300, 296, 900, 800)).toBe(8);
+  });
+});
+
+describe("accordion sections", () => {
+  it("keeps Pause, Change Program and Delete at the top level and other items collapsed", () => {
+    renderOverflow({ onPause: jest.fn(), onChangeProgram: jest.fn(), onDelete: jest.fn(), onClone: jest.fn() });
+    openMenu();
+    expect(screen.getByRole("menuitem", { name: /pause session/i })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /change program/i })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /delete session/i })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /clone session/i })).not.toBeInTheDocument();
+  });
+
+  it("expands one section at a time", () => {
+    renderOverflow({ onClone: jest.fn(), onClearConversationState: jest.fn() });
+    openMenu("Organize");
+    expect(screen.getByRole("menuitem", { name: "Organize" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("menuitem", { name: /clone session/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "More" }));
+    expect(screen.queryByRole("menuitem", { name: /clone session/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /clear conversation/i })).toBeInTheDocument();
   });
 });

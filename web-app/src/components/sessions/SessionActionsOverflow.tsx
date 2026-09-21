@@ -80,6 +80,29 @@ export function fitMenuTop(top: number, anchorTop: number, height: number, viewp
   return Math.max(VIEWPORT_MARGIN, anchorTop - height);
 }
 
+/** Collapsible group inside the overflow menu; one section open at a time keeps the menu short. */
+function MenuSection({ id, label, openId, onToggle, children }: {
+  id: string; label: string; openId: string | null; onToggle: (id: string) => void; children: React.ReactNode;
+}) {
+  const open = openId === id;
+  return (
+    <>
+      <button
+        role="menuitem"
+        className={overflowMenuItem}
+        aria-expanded={open}
+        aria-controls={`overflow-section-${id}`}
+        onClick={(e) => { e.stopPropagation(); onToggle(id); }}
+        style={{ justifyContent: "space-between" }}
+      >
+        <span>{label}</span>
+        <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && <div id={`overflow-section-${id}`} role="group" aria-label={label} style={{ paddingLeft: 8 }}>{children}</div>}
+    </>
+  );
+}
+
 const menuSeparator = (
   <div role="separator" style={{ height: 1, background: "var(--border-color)", margin: "4px 0" }} />
 );
@@ -125,6 +148,8 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
 
   const [showOverflow, setShowOverflow] = useState(false);
   const [menuPos, setMenuPos] = useState({ top: 0, right: 0, anchorTop: 0 });
+  const [openSection, setOpenSection] = useState<string | null>(null);
+  const toggleSection = useCallback((id: string) => setOpenSection((cur) => (cur === id ? null : id)), []);
   const [fitTop, setFitTop] = useState<number | null>(null);
   const [isRestartConfirmOpen, setIsRestartConfirmOpen] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
@@ -210,7 +235,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     if (!showOverflow || !overflowMenuRef.current) return;
     const { height } = overflowMenuRef.current.getBoundingClientRect();
     setFitTop(fitMenuTop(menuPos.top, menuPos.anchorTop, height, window.innerHeight));
-  }, [showOverflow, menuPos]);
+  }, [showOverflow, menuPos, openSection]);
 
   useEffect(() => {
     if (showOverflow && overflowMenuRef.current) {
@@ -235,6 +260,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
 
   useImperativeHandle(ref, () => ({
     openAt(x: number, y: number) {
+      setOpenSection(null);
       setMenuPos({ top: y, right: window.innerWidth - x, anchorTop: y });
       setShowOverflow(true);
     },
@@ -244,6 +270,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     e.stopPropagation();
     if (!overflowButtonRef.current) return;
     const rect = overflowButtonRef.current.getBoundingClientRect();
+    setOpenSection(null);
     setMenuPos({
       top: rect.bottom + 4,
       right: window.innerWidth - rect.right,
@@ -362,19 +389,13 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     }
   };
 
-  // Group visibility booleans — used to decide whether to render separators.
-  const hasGroup1 = !!(
-    (!(isPaused || isReady) && !isStopped && !isPermanentlyFailed && onResume) ||
-    (isRunning && !isCreating && onPause) ||
-    (isRunning && onHibernate) ||
-    (isHibernated && onResumeFromHibernation)
-  );
+  // Accordion section visibility. Resume/Pause/Hibernate, Change Program and Delete stay top-level.
   // Create/View PR item is now always rendered (no longer gated on a
   // caller-supplied callback prop — see Task 2.3.1a).
   const hasGroup2 = true;
-  const hasGroup3 = !!(onRenameRequest || onChangeProgram || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
-  const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode || onToggleAutoApprove);
-  const hasGroup5 = !!(onClearConversationState || (onRestart && !isCreating) || (onRetryNow && (isPermanentlyFailed || isMidBackoffWait)) || onDelete);
+  const hasOrganize = !!(onRenameRequest || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
+  const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode || onToggleAutoApprove || (onSteerAutonomousSession && session.autonomousMode));
+  const hasMore = !!(onClearConversationState || (onRestart && !isCreating) || (onRetryNow && (isPermanentlyFailed || isMidBackoffWait)));
 
   return (
     <>
@@ -821,8 +842,27 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                 </button>
               )}
 
-              {/* Group 2: Workflow */}
-              {hasGroup1 && hasGroup2 && menuSeparator}
+              {onChangeProgram && (
+                <button role="menuitem" className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); setProgramPickerValue(session.program || ""); setProgramError(""); setIsProgramPickerOpen(true); }}
+                  aria-label={`Change program for session ${session.title}`}
+                >
+                  <span aria-hidden="true">⚙️</span> Change Program
+                </button>
+              )}
+              {onDelete && (
+                <button role="menuitem" className={`${overflowMenuItem} ${overflowMenuItemDanger}`}
+                  onClick={(e) => { e.stopPropagation(); close(); setIsDeleteConfirmOpen(true); }}
+                  disabled={isDeleting}
+                  aria-label={`Delete session ${session.title}`}
+                >
+                  {isDeleting ? "Deleting..." : <><span aria-hidden="true">🗑️</span> Delete</>}
+                </button>
+              )}
+
+              {(hasGroup2 || hasOrganize || hasGroup4 || hasMore) && menuSeparator}
+              {hasGroup2 && (
+                <MenuSection id="workflow" label="Workflow" openId={openSection} onToggle={toggleSection}>
               {session.githubPrUrl ? (
                 <a
                   href={session.githubPrUrl}
@@ -860,23 +900,16 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">📍</span> Checkpoint
                 </button>
               )}
-
-              {/* Group 3: Organization */}
-              {(hasGroup1 || hasGroup2) && hasGroup3 && menuSeparator}
+                </MenuSection>
+              )}
+              {hasOrganize && (
+                <MenuSection id="organize" label="Organize" openId={openSection} onToggle={toggleSection}>
               {onRenameRequest && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onRenameRequest(); }}
                   aria-label={`Rename session ${session.title}`}
                 >
                   <span aria-hidden="true">✏️</span> Rename
-                </button>
-              )}
-              {onChangeProgram && (
-                <button role="menuitem" className={overflowMenuItem}
-                  onClick={(e) => { e.stopPropagation(); setProgramPickerValue(session.program || ""); setProgramError(""); setIsProgramPickerOpen(true); }}
-                  aria-label={`Change program for session ${session.title}`}
-                >
-                  <span aria-hidden="true">⚙️</span> Change Program
                 </button>
               )}
               {onClone && (
@@ -919,9 +952,10 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">⎇</span> Switch Workspace
                 </button>
               )}
-
-              {/* Group 4: Mode toggles — auto-resume and autonomous mode */}
-              {(hasGroup1 || hasGroup2 || hasGroup3) && hasGroup4 && menuSeparator}
+                </MenuSection>
+              )}
+              {hasGroup4 && (
+                <MenuSection id="modes" label="Modes" openId={openSection} onToggle={toggleSection}>
               {onSetRateLimitEnabled && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onSetRateLimitEnabled(session.id, !session.rateLimitEnabled); }}
@@ -992,9 +1026,10 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   {session.autoApprove ? "Disable auto-approve" : "Enable auto-approve"}
                 </button>
               )}
-
-              {/* Group 5: Destructive */}
-              {(hasGroup1 || hasGroup2 || hasGroup3 || hasGroup4) && hasGroup5 && menuSeparator}
+                </MenuSection>
+              )}
+              {hasMore && (
+                <MenuSection id="more" label="More" openId={openSection} onToggle={toggleSection}>
               {/* UX-003: Clear Conversation — calls handler directly without confirmation dialog */}
               {onClearConversationState && (
                 <button
@@ -1027,14 +1062,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">🔁</span> Retry now
                 </button>
               )}
-              {onDelete && (
-                <button role="menuitem" className={`${overflowMenuItem} ${overflowMenuItemDanger}`}
-                  onClick={(e) => { e.stopPropagation(); close(); setIsDeleteConfirmOpen(true); }}
-                  disabled={isDeleting}
-                  aria-label={`Delete session ${session.title}`}
-                >
-                  {isDeleting ? "Deleting..." : <><span aria-hidden="true">🗑️</span> Delete</>}
-                </button>
+                </MenuSection>
               )}
             </div>,
             document.body
