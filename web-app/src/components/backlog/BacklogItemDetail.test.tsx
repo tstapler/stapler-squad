@@ -81,6 +81,13 @@ jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
   useStuckBacklogItems: (...args: unknown[]) => useStuckBacklogItemsMock(...args),
 }));
 
+// Story 5.2.3: BacklogItemDetail's own Insights fetch for ItemStageCostTable
+// — stub so this suite never opens a real WatchInsights transport.
+const useInsightsSummaryMock = jest.fn();
+jest.mock("@/lib/hooks/useInsightsService", () => ({
+  useInsightsSummary: (...args: unknown[]) => useInsightsSummaryMock(...args),
+}));
+
 // The edit-mode branch renders BacklogItemForm -> RepoPathInput, which uses
 // useSessionRepoPaths (Redux) and usePathCompletions (RPC). Stub both so this
 // test doesn't need a Redux store or ConnectRPC transport. Not exercised by
@@ -197,6 +204,7 @@ jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn().mockReturnValue({}),
 }));
 
+
 // The jest styleMock for `.css.ts` files wraps every export (including plain
 // `style()` string exports) in a callable proxy function, which triggers a
 // benign "Invalid value for prop className" React warning. Pre-existing
@@ -217,6 +225,13 @@ beforeEach(() => {
   mockTerminalStreamEvents = [];
   updateBacklogItem.mockClear().mockResolvedValue(null);
   useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
+  useInsightsSummaryMock.mockReturnValue({
+    summary: { roleBreakdown: [] },
+    loading: false,
+    isLiveUpdating: false,
+    error: null,
+    refetch: jest.fn(),
+  });
   overrideVerdict.mockReset();
   triggerTriage.mockClear().mockResolvedValue(undefined);
   rejectPlan.mockReset().mockResolvedValue(null);
@@ -289,6 +304,7 @@ function makeItem(linkedSessions: LinkedSession[]): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions,
@@ -741,6 +757,71 @@ describe("BacklogItemDetail — Story 5.3.2: edit-mode buffering", () => {
     expect(screen.getByRole("button", { name: "Edit item" })).toBeInTheDocument();
     expect(screen.getByText("Refactor auth middleware (renamed live)")).toBeInTheDocument();
   });
+
+  // Regression test for the 2026-09-11 UI audit finding: BacklogItemDetail's
+  // loading gate is `loading && !item` (not just `loading`) so a stale entry
+  // already sitting in the shared backlogItemsSlice store (e.g. left over
+  // from a category-less snapshot cached before triage classified the item)
+  // can populate `item` before the authoritative getBacklogItem() fetch
+  // resolves. If Edit were clickable during that window, BacklogItemForm
+  // would mount from the stale snapshot's category — and a correction that
+  // lands afterward, while editMode is already true, only gets buffered
+  // (Story 5.3.2's `if (editMode) { setBufferedItem(...); return; }`), never
+  // applied to the open form. The fix: block Edit specifically (not the
+  // read-only view, preserving #146's no-remount-on-background-refresh
+  // behavior) until the authoritative fetch has confirmed `item` at least
+  // once for this itemId.
+  it("disables Edit until the authoritative getBacklogItem() fetch confirms the item, even if a stale store entry already populated it", async () => {
+    // The shared store already has a category-less snapshot for this item
+    // present *before* the component even mounts (e.g. left by an earlier,
+    // pre-triage live event or list-view load).
+    mockLiveItemsMap = {
+      "item-1": {
+        id: "item-1",
+        title: "Refactor auth middleware",
+        status: "idea",
+        priority: 3,
+        repoPath: "/tmp/repo",
+        category: "",
+      },
+    };
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    // getBacklogItem's authoritative response (category: "bugfix") is held
+    // back so the test can inspect the window before it resolves.
+    let resolveFetch!: (item: BacklogItem) => void;
+    getBacklogItem.mockReset().mockReturnValue(
+      new Promise<BacklogItem>((resolve) => {
+        resolveFetch = resolve;
+      })
+    );
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    // Flush just the synchronous liveRawItem-effect hydration, without
+    // letting the still-pending getBacklogItem() promise resolve.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The stale snapshot is already showing (view mode isn't blocked)...
+    expect(screen.getByText("Refactor auth middleware")).toBeInTheDocument();
+    // ...but Edit is disabled until the server has actually been consulted.
+    expect(screen.getByRole("button", { name: "Edit item" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Edit item" }));
+    expect(screen.queryByTestId("backlog-item-form")).not.toBeInTheDocument();
+
+    // The authoritative fetch lands with the item's real category.
+    await act(async () => {
+      resolveFetch({ ...makeItem([]), category: "bugfix" });
+      await Promise.resolve();
+    });
+
+    // Edit is now safe to open, and correctly shows "bugfix".
+    expect(screen.getByRole("button", { name: "Edit item" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Edit item" }));
+    expect(screen.getByTestId("backlog-category-bugfix")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("backlog-category-uncategorized")).toHaveAttribute("aria-checked", "false");
+  });
 });
 
 describe("BacklogItemDetail — Task 5.3.1c: terminal-state banner", () => {
@@ -1048,6 +1129,41 @@ describe("BacklogItemDetail — Story 2.1.4: LifecycleSummary replaces the old s
 
     expect(triggerRemediationNow).toHaveBeenCalledTimes(1);
     expect(triggerRemediationNow).toHaveBeenCalledWith("item-1", StuckReason.STALE_WORK);
+  });
+
+  it("BacklogItemDetail_should_ResolveBounceCapExhaustedAsPrimaryAndIndicateOthers_When_ItemHasFourOpenStuckReasons", async () => {
+    // BUG-105: live item 09e91e3e-e13d-4166-a5f2-447242447f77 had 4 reasons
+    // open at once. See BacklogItemCard.test.tsx's matching BacklogBoard
+    // test — both must resolve the same primary reason from this fixture.
+    const baseRow = {
+      title: "Refactor auth middleware",
+      status: "in_progress",
+      firstDetectedAt: timestampFromDate(new Date(Date.now() - 4 * 60 * 60 * 1000)),
+      lastCheckedAt: timestampFromDate(new Date()),
+      prNumber: 0,
+      prUrl: "",
+      context: "",
+    };
+    const stuckRows: StuckBacklogItem[] = [
+      { itemId: "item-1", ...baseRow, reason: StuckReason.BOUNCING } as StuckBacklogItem,
+      { itemId: "item-1", ...baseRow, reason: StuckReason.REWORK_BLOCKED_STALE } as StuckBacklogItem,
+      { itemId: "item-1", ...baseRow, reason: StuckReason.MULTIPLE_REASONS } as StuckBacklogItem,
+      { itemId: "item-1", ...baseRow, reason: StuckReason.BOUNCE_CAP_EXHAUSTED } as StuckBacklogItem,
+    ];
+    useStuckBacklogItemsMock.mockReturnValue({ items: stuckRows, isLoading: false, error: null });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Bounce cap exhausted")).toBeInTheDocument();
+    expect(screen.queryByText("Not converging")).not.toBeInTheDocument();
+    // The 3 dropped reasons must be indicated, not silently invisible.
+    expect(screen.getByTestId("blocker-chip-more")).toHaveTextContent("+3 more");
   });
 });
 
@@ -1649,5 +1765,68 @@ describe("BacklogItemDetail — Copy ID/Copy Link (backlog-deep-linking Story 2.
       expect(copyLinkButton).toHaveAttribute("aria-label", "Copied link to clipboard");
     });
     expect(screen.getByTestId("copy-status-announcement")).toHaveTextContent("Link copied to clipboard");
+  });
+});
+
+describe("BacklogItemDetail — Story 5.2.3: per-item cost-by-stage table", () => {
+  it("BacklogItemDetail_should_RenderItemStageCostTable_When_RoleBreakdownHasMatchingItemEntries", async () => {
+    useInsightsSummaryMock.mockReturnValue({
+      summary: {
+        roleBreakdown: [
+          {
+            sessionRole: "triage",
+            items: [{ itemId: "item-1", itemTitle: "Refactor auth middleware", estimatedCostUsd: 0.02, sessionCount: 3, unpricedSessionCount: 0 }],
+          },
+          {
+            sessionRole: "review",
+            items: [{ itemId: "item-1", itemTitle: "Refactor auth middleware", estimatedCostUsd: 0.15, sessionCount: 1, unpricedSessionCount: 0 }],
+          },
+          {
+            sessionRole: "work",
+            items: [{ itemId: "item-2", itemTitle: "Some other item", estimatedCostUsd: 9.0, sessionCount: 1, unpricedSessionCount: 0 }],
+          },
+        ],
+      },
+      loading: false,
+      isLiveUpdating: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    await renderWithSession(makeSession(), []);
+
+    const costTable = screen.getByTestId("item-stage-cost-table");
+    expect(within(costTable).getByText("Triage")).toBeInTheDocument();
+    expect(within(costTable).getByText("Review")).toBeInTheDocument();
+    expect(within(costTable).queryByText("Work")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_OmitItemStageCostTable_When_NoMatchingRoleBreakdownEntries", async () => {
+    useInsightsSummaryMock.mockReturnValue({
+      summary: { roleBreakdown: [] },
+      loading: false,
+      isLiveUpdating: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    await renderWithSession(makeSession(), []);
+
+    expect(screen.queryByTestId("item-stage-cost-table")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_ShowErrorState_When_InsightsFetchFails", async () => {
+    useInsightsSummaryMock.mockReturnValue({
+      summary: null,
+      loading: false,
+      isLiveUpdating: false,
+      error: "network error",
+      refetch: jest.fn(),
+    });
+
+    await renderWithSession(makeSession(), []);
+
+    expect(screen.getByTestId("item-stage-cost-error")).toHaveTextContent("Couldn't load cost data.");
+    expect(screen.queryByTestId("item-stage-cost-table")).not.toBeInTheDocument();
   });
 });

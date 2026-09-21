@@ -379,7 +379,7 @@ func (d *Detector) parseTimestamp(input string) time.Time {
 	retryMatchNumber := regexp.MustCompile(`^(\d+)$`).FindStringSubmatch(input)
 	if len(retryMatchNumber) == 2 {
 		var amount int
-		fmt.Sscanf(retryMatchNumber[1], "%d", &amount)
+		_, _ = fmt.Sscanf(retryMatchNumber[1], "%d", &amount) // regex guarantees a valid digit string
 		return baseTime.Add(time.Duration(amount) * time.Second)
 	}
 
@@ -387,7 +387,7 @@ func (d *Detector) parseTimestamp(input string) time.Time {
 	if len(retryMatch) > 2 {
 		var duration time.Duration
 		var amount int
-		fmt.Sscanf(retryMatch[1], "%d", &amount)
+		_, _ = fmt.Sscanf(retryMatch[1], "%d", &amount) // regex guarantees a valid digit string
 		switch strings.ToLower(retryMatch[2]) {
 		case "second", "seconds":
 			duration = time.Duration(amount) * time.Second
@@ -403,7 +403,7 @@ func (d *Detector) parseTimestamp(input string) time.Time {
 	if len(retryMatchFull) > 2 {
 		var duration time.Duration
 		var amount int
-		fmt.Sscanf(retryMatchFull[1], "%d", &amount)
+		_, _ = fmt.Sscanf(retryMatchFull[1], "%d", &amount) // regex guarantees a valid digit string
 		switch strings.ToLower(retryMatchFull[2]) {
 		case "second", "seconds":
 			duration = time.Duration(amount) * time.Second

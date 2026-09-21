@@ -54,6 +54,48 @@ func TestAttachSessionToItem_should_RejectViaConnectError_When_ItemStatusGuardFa
 	assert.Contains(t, connErr.Error(), "done")
 }
 
+// TestAttachSessionToItem_should_NotCallTransitionBacklogItemStatus_When_ConfiguredWorkflowEngineHasDisabledTheEdge
+// is the Story 2.1.2 regression test, mirroring
+// TestOverrideVerdict_should_RefuseTransition_When_ConfiguredWorkflowEngineHasDisabledTheEdge
+// (backlog_service_lifecycle_test.go) for the ready->in_progress call site:
+// AttachSessionToItem must not transition the item when the injected engine
+// refuses the edge, even though the static validTransitions map allows it.
+func TestAttachSessionToItem_should_NotCallTransitionBacklogItemStatus_When_ConfiguredWorkflowEngineHasDisabledTheEdge(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	engine := disabledEdgeWorkflowEngine{
+		WorkflowEngine: session.NewDefaultWorkflowEngine(),
+		deniedFrom:     session.BacklogStatusReady,
+		deniedTo:       session.BacklogStatusInProgress,
+	}
+	svc := NewBacklogService(storage, nil, nil, engine, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with ready->in_progress disabled by the configured engine",
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipTriage:   true,
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	resp, err := svc.AttachSessionToItem(t.Context(), connect.NewRequest(&sessionv1.AttachSessionToItemRequest{
+		ItemId:      itemID,
+		SessionUuid: "attach-session-disabled-edge",
+	}))
+	require.NoError(t, err, "attach itself must still succeed — only the follow-on transition is skipped")
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	final, err := storage.GetBacklogItem(t.Context(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReady), final.Status, "item must stay at ready when the engine refuses ready->in_progress")
+}
+
 // TestAttachSessionToItem_should_RegenerateSlashCommandsWithNewItemID_When_RelinkedToDifferentItem
 // satisfies AC5's literal "verified by reading the file contents post-call in a test"
 // requirement at the RPC layer: relinking the same live instance to a second item must

@@ -1,5 +1,5 @@
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
-import { StuckReason } from "@/gen/session/v1/backlog_pb";
+import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import {
   getStuckReasonLabel,
   getStuckReasonClass,
@@ -8,6 +8,10 @@ import {
   formatStuckDuration,
   formatAgo,
   PR_STATUS_STALE_THRESHOLD_MS,
+  STUCK_REASON_PRIORITY,
+  selectPrimaryStuckItem,
+  groupStuckItemsByItemId,
+  summarizeStuckItemGroup,
 } from "./stuckReason";
 
 const ALL_REASONS: StuckReason[] = [
@@ -198,6 +202,103 @@ describe("stuckReason", () => {
     it("formats a sub-hour duration as 'Nm'", () => {
       const since = timestampFromDate(new Date(Date.now() - 18 * 60 * 1000));
       expect(formatStuckDuration(since)).toBe("18m");
+    });
+  });
+
+  // BUG-105: BacklogItemDetail's `.find()` and BacklogBoard's `new
+  // Map(stuckItems.map(s => [s.itemId, s]))` each independently collapsed a
+  // multi-reason item to one reason, with no shared order between them — the
+  // same live item showed "Not converging" (BOUNCING) in one view and
+  // "Bounce cap exhausted" (BOUNCE_CAP_EXHAUSTED) in the other, with neither
+  // view indicating there were 4 open reasons, not 1.
+  function allNumericStuckReasons(): StuckReason[] {
+    return Object.values(StuckReason).filter((v): v is StuckReason => typeof v === "number");
+  }
+
+  function makeStuckRow(reason: StuckReason, itemId = "item-1"): StuckBacklogItem {
+    return { itemId, title: "t", status: "in_progress", reason, prNumber: 0, prUrl: "", context: "" } as StuckBacklogItem;
+  }
+
+  describe("STUCK_REASON_PRIORITY", () => {
+    it("assigns every StuckReason enum value a distinct priority (exhaustive, no gaps or ties)", () => {
+      const reasons = allNumericStuckReasons();
+      const priorities = reasons.map((r) => STUCK_REASON_PRIORITY[r]);
+      for (const p of priorities) {
+        expect(typeof p).toBe("number");
+        expect(Number.isFinite(p)).toBe(true);
+      }
+      expect(new Set(priorities).size).toBe(reasons.length);
+    });
+
+    it("ranks the two synthetic escalation reasons above every specific reason", () => {
+      const nonEscalation = allNumericStuckReasons().filter(
+        (r) => r !== StuckReason.BOUNCE_CAP_EXHAUSTED && r !== StuckReason.MULTIPLE_REASONS
+      );
+      for (const r of nonEscalation) {
+        expect(STUCK_REASON_PRIORITY[StuckReason.BOUNCE_CAP_EXHAUSTED]).toBeLessThan(STUCK_REASON_PRIORITY[r]);
+      }
+    });
+  });
+
+  describe("selectPrimaryStuckItem / groupStuckItemsByItemId / summarizeStuckItemGroup", () => {
+    it("selectPrimaryStuckItem_should_ReturnBounceCapExhausted_When_LiveBug09e91e3eFourReasonFixture", () => {
+      // Exact reason set from the live-verified bug report (item
+      // 09e91e3e-e13d-4166-a5f2-447242447f77): BOUNCING, REWORK_BLOCKED_STALE,
+      // MULTIPLE_REASONS, BOUNCE_CAP_EXHAUSTED all open at once.
+      const rows = [
+        makeStuckRow(StuckReason.BOUNCING),
+        makeStuckRow(StuckReason.REWORK_BLOCKED_STALE),
+        makeStuckRow(StuckReason.MULTIPLE_REASONS),
+        makeStuckRow(StuckReason.BOUNCE_CAP_EXHAUSTED),
+      ];
+      expect(selectPrimaryStuckItem(rows)?.reason).toBe(StuckReason.BOUNCE_CAP_EXHAUSTED);
+    });
+
+    it("selectPrimaryStuckItem_should_BeOrderIndependent_When_RowsShuffled", () => {
+      const rows = [
+        makeStuckRow(StuckReason.BOUNCE_CAP_EXHAUSTED),
+        makeStuckRow(StuckReason.MULTIPLE_REASONS),
+        makeStuckRow(StuckReason.BOUNCING),
+        makeStuckRow(StuckReason.REWORK_BLOCKED_STALE),
+      ];
+      const reversed = [...rows].reverse();
+      expect(selectPrimaryStuckItem(rows)?.reason).toBe(selectPrimaryStuckItem(reversed)?.reason);
+    });
+
+    it("selectPrimaryStuckItem_should_ReturnUndefined_When_ListEmpty", () => {
+      expect(selectPrimaryStuckItem([])).toBeUndefined();
+    });
+
+    it("groupStuckItemsByItemId_should_GroupRowsByItemIdOnly", () => {
+      const rows = [
+        makeStuckRow(StuckReason.BOUNCING, "item-1"),
+        makeStuckRow(StuckReason.BOUNCE_CAP_EXHAUSTED, "item-1"),
+        makeStuckRow(StuckReason.STALE_WORK, "item-2"),
+      ];
+      const grouped = groupStuckItemsByItemId(rows);
+      expect(grouped.get("item-1")).toHaveLength(2);
+      expect(grouped.get("item-2")).toHaveLength(1);
+      expect(grouped.get("item-3")).toBeUndefined();
+    });
+
+    it("summarizeStuckItemGroup_should_SurfaceOtherReasons_When_MultipleRowsOpen", () => {
+      const rows = [
+        makeStuckRow(StuckReason.BOUNCING),
+        makeStuckRow(StuckReason.REWORK_BLOCKED_STALE),
+        makeStuckRow(StuckReason.MULTIPLE_REASONS),
+        makeStuckRow(StuckReason.BOUNCE_CAP_EXHAUSTED),
+      ];
+      const summary = summarizeStuckItemGroup(rows);
+      expect(summary?.primary.reason).toBe(StuckReason.BOUNCE_CAP_EXHAUSTED);
+      // The dropped reasons must be indicated, not invisible.
+      expect(summary?.otherReasons).toHaveLength(3);
+      expect(summary?.otherReasons).toEqual(
+        expect.arrayContaining([StuckReason.BOUNCING, StuckReason.REWORK_BLOCKED_STALE, StuckReason.MULTIPLE_REASONS])
+      );
+    });
+
+    it("summarizeStuckItemGroup_should_ReturnUndefined_When_GroupEmpty", () => {
+      expect(summarizeStuckItemGroup([])).toBeUndefined();
     });
   });
 

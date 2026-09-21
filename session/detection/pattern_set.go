@@ -85,25 +85,35 @@ func matchFirst(regexes []*regexp.Regexp, patterns []StatusPattern, status Detec
 }
 
 // matchWaitingForAgent scans the WaitingForAgent regexes and, on a match, extracts the
-// subagent/shell/monitor count from the pattern's capture group. See the capturing group on
-// the three WaitingForAgent patterns in binaries.ClaudeDetector.Patterns()
-// (session/detection/binaries/claude.go), the single source of truth delegated to by
-// getDefaultPatterns().
+// subagent/shell/monitor count by summing every non-empty captured digit group — mirrors
+// footerAgentCount's summation (session/detection/detector.go) so a pattern with more than one
+// capture group (e.g. shells_still_running's optional comma-joined monitor count) is not
+// undercounted. See the capturing groups on the three WaitingForAgent patterns in
+// binaries.ClaudeDetector.Patterns() (session/detection/binaries/claude.go), the single source
+// of truth delegated to by getDefaultPatterns().
+//
+// If every captured group is empty/non-numeric/zero, this pattern is treated as no match
+// (falls through to the next WaitingForAgent pattern) rather than returning ok=true with a
+// zero count — mirrors footerAgentCount's total<=0 guard.
 func (ps *PatternSet) matchWaitingForAgent(text string) (name, desc string, count int, ok bool) {
 	for i, regex := range ps.waitingForAgentRegexes {
 		m := regex.FindStringSubmatch(text)
 		if m == nil {
 			continue
 		}
-		// len(m) > 1 guard is defensive insurance against a future pattern edit
-		// dropping/reordering the capture group; today's 3 patterns always produce
-		// len(m) == 2 on match (idiom from session/git/worktree_git.go:372-375).
-		if len(m) > 1 {
-			if n, convErr := strconv.Atoi(m[1]); convErr == nil && n > 0 {
-				count = n
+		total := 0
+		for _, group := range m[1:] {
+			if group == "" {
+				continue
+			}
+			if n, convErr := strconv.Atoi(group); convErr == nil && n > 0 {
+				total += n
 			}
 		}
-		return ps.patterns.WaitingForAgent[i].Name, ps.patterns.WaitingForAgent[i].Description, count, true
+		if total <= 0 {
+			continue
+		}
+		return ps.patterns.WaitingForAgent[i].Name, ps.patterns.WaitingForAgent[i].Description, total, true
 	}
 	return "", "", 0, false
 }

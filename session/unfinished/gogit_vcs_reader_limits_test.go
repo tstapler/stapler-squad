@@ -28,6 +28,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 )
 
 // initRepoInternal mirrors initRepo from vcsreader_test.go for white-box tests.
@@ -825,7 +826,7 @@ func TestReachableSet_CapsAtLimit(t *testing.T) {
 	}
 	// Total history: 6 commits.
 
-	gitRepo, err := git.PlainOpen(repo)
+	gitRepo, err := gitutil.OpenRepo(repo)
 	if err != nil {
 		t.Fatalf("PlainOpen: %v", err)
 	}
@@ -864,7 +865,7 @@ func TestCountCommitsTo_StopsAtBoundOnDeeplyDivergedBranch(t *testing.T) {
 	}
 	// Total history: 6 commits (1 stop commit + 5 more reachable from HEAD).
 
-	gitRepo, err := git.PlainOpen(repo)
+	gitRepo, err := gitutil.OpenRepo(repo)
 	if err != nil {
 		t.Fatalf("PlainOpen: %v", err)
 	}

@@ -53,6 +53,10 @@ func (c *tmuxSessionController) GetPaneCursorPosition() (x, y int, err error) {
 	return c.session.GetCursorPosition()
 }
 
+func (c *tmuxSessionController) StartControlMode() error {
+	return c.session.StartControlMode()
+}
+
 func (c *tmuxSessionController) StopControlMode() error {
 	return c.session.StopControlMode()
 }

@@ -19,8 +19,7 @@ import (
 
 // resetGhBaseURL overrides GhBaseURL for a test and returns a restore func.
 func resetGhBaseURL(ts *httptest.Server) func() {
-	gh.GhBaseURL = ts.URL + "/"
-	return func() { gh.GhBaseURL = "https://api.github.com/" }
+	return gh.SetGhBaseURLForTest(ts.URL + "/")
 }
 
 // fakeGitHubEnterpriseHandler serves both REST (GET /user) and GraphQL

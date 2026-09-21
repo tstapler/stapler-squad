@@ -88,6 +88,15 @@ export function getWsCloseCode(err: unknown): number | null {
  * `createClient`), and a top-level `Code.Unauthenticated` reference would
  * throw at import time under those mocks even though the mocked test never
  * exercises this branch.
+ *
+ * Deliberately does NOT include Code.FailedPrecondition: this helper is
+ * shared by the session-list "watch" stream (useSessionService.ts) as well
+ * as the terminal stream, and FailedPrecondition's one current meaning
+ * (see isWorktreeMissingError below) is specific to the terminal stream's
+ * missing-working-directory case. A future unrelated FailedPrecondition on
+ * the watch stream must not silently stop reconnecting there too — callers
+ * that need the worktree-missing behavior check isWorktreeMissingError
+ * explicitly alongside this function instead.
  */
 export function isNonRetriableConnectError(err: unknown): err is ConnectError {
   if (!(err instanceof ConnectError)) return false;
@@ -96,6 +105,19 @@ export function isNonRetriableConnectError(err: unknown): err is ConnectError {
     return !isRetriableCloseCode(wsCode);
   }
   return err.code === Code.Unauthenticated || err.code === Code.NotFound;
+}
+
+/**
+ * Returns true if `err` is specifically the "session's working directory no
+ * longer exists" stream failure (server/services/connectrpc_websocket.go's
+ * handleTmuxRestoreFailure sends Code.FailedPrecondition only for this
+ * case — see isNonRetriableConnectError above). Lets a caller show a more
+ * actionable message than the generic hard-failed banner: reconnecting the
+ * terminal stream can never fix this on its own, but the session-level
+ * "Retry now" action re-creates the worktree before restarting.
+ */
+export function isWorktreeMissingError(err: unknown): err is ConnectError {
+  return err instanceof ConnectError && err.code === Code.FailedPrecondition;
 }
 
 // ---------------------------------------------------------------------------

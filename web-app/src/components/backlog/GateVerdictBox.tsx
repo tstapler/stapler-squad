@@ -106,7 +106,19 @@ export function GateVerdictBox(props: GateVerdictBoxProps) {
   const overrideToggleRef = useRef<HTMLButtonElement>(null);
   const skipLinkRef = useRef<HTMLButtonElement>(null);
   const skipConfirmDialogRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(skipConfirmDialogRef, showSkipConfirm, skipLinkRef);
+  // skipLinkRef's button and the dialog occupy the same position in a
+  // ternary, so React unmounts/remounts a brand-new button element on every
+  // toggle — useFocusTrap's own triggerRef restore would capture a DOM node
+  // that's already disconnected by the time its cleanup runs. Restore focus
+  // to the (new) button ourselves once it has actually remounted instead.
+  useFocusTrap(skipConfirmDialogRef, showSkipConfirm);
+  const wasSkipConfirmOpenRef = useRef(false);
+  useEffect(() => {
+    if (wasSkipConfirmOpenRef.current && !showSkipConfirm) {
+      skipLinkRef.current?.focus();
+    }
+    wasSkipConfirmOpenRef.current = showSkipConfirm;
+  }, [showSkipConfirm]);
 
   // Focus override reason textarea when form opens
   useEffect(() => {

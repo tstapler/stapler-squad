@@ -5,7 +5,7 @@
   "method": "TriggerTriage",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_triage.go",
+  "handlerFile": "server/services/backlog_service_trigger_triage.go",
   "tested": true,
   "testIds": [
     "BacklogItemDetail — Epic 1.1: triage question answer wiring \u003e calls triggerTriage with the composed Q:/A: feedback when a question is answered",
@@ -14,5 +14,5 @@
     "tests/e2e/triage-question-answer.spec.ts",
     "tests/e2e/plan-review.spec.ts"
   ],
-  "lastModified": "2026-08-12T00:00:00Z"
+  "lastModified": "2026-09-12T10:44:50.199271328-07:00"
 }

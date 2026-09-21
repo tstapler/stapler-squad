@@ -1,6 +1,7 @@
 package log
 
 import (
+	"bytes"
 	"io"
 	"log"
 	"log/slog"
@@ -34,6 +35,28 @@ func withCleanEnv(t *testing.T) {
 	})
 }
 
+// TestGetConfigDir_UsesTestModeIsolation_WhenNoOverrideSet guards Priority 3
+// parity with config.GetConfigDirForDir: running inside a `go test` binary
+// itself triggers test-mode auto-detection (see config_test.go's "uses test
+// mode isolation for tests" case for the equivalent config-package guard),
+// so this now lands in a pid-scoped test dir rather than the bare shared
+// baseDir. This supersedes TestGetConfigDir's former "unset instance returns
+// unchanged base dir" case below, which predates Priority 3-6 support and
+// would otherwise assert the pre-fix (wrong) behavior.
+func TestGetConfigDir_UsesTestModeIsolation_WhenNoOverrideSet(t *testing.T) {
+	withCleanEnv(t)
+	t.Setenv("HOME", t.TempDir()) // keep the real-homedir fallback off the developer's actual ~/.stapler-squad
+
+	dir, err := GetConfigDir()
+	if err != nil {
+		t.Fatalf("GetConfigDir failed: %v", err)
+	}
+	wantSubstr := filepath.Join(".stapler-squad", "test", "test-")
+	if !strings.Contains(dir, wantSubstr) {
+		t.Errorf("expected test-mode isolated path containing %q, got %s", wantSubstr, dir)
+	}
+}
+
 func TestGetConfigDir(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -41,11 +64,6 @@ func TestGetConfigDir(t *testing.T) {
 		wantSuffix      string
 		wantNoInstances bool // dir must not contain "instances"
 	}{
-		{
-			name:            "unset instance returns unchanged base dir",
-			wantSuffix:      ".stapler-squad",
-			wantNoInstances: true,
-		},
 		{
 			name:            "shared instance returns unchanged base dir",
 			instance:        "shared",
@@ -156,9 +174,13 @@ func TestGetLogDir(t *testing.T) {
 		t.Errorf("GetLogDir failed with default log dir: %v", err)
 	}
 
-	// Should contain .stapler-squad/logs
-	if !strings.Contains(dir, ".stapler-squad"+string(filepath.Separator)+"logs") {
-		t.Errorf("GetLogDir should return default log dir, got %s", dir)
+	// Should be under .stapler-squad, and end in logs. Not a bare
+	// ".stapler-squad/logs" suffix: running inside `go test` itself now
+	// triggers Priority 3 test-mode auto-detection (parity with
+	// config.GetConfigDirForDir), so the actual path is
+	// .stapler-squad/test/test-<pid>/logs.
+	if !strings.Contains(dir, ".stapler-squad") || !strings.HasSuffix(dir, string(filepath.Separator)+"logs") {
+		t.Errorf("GetLogDir should return a default log dir under .stapler-squad, got %s", dir)
 	}
 }
 
@@ -441,4 +463,53 @@ func TestAtomicLoggerConcurrentAccess(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+// TestInitializeWithConfig_SlogDefaultAndSeamStayInSync verifies that
+// initializeWithConfig stores the exact same *slog.Logger instance into both
+// the real slog.Default() and the injectable slogDefault seam read by
+// logAt/ForSession — production logging behavior must not diverge between the
+// two, since only the seam is what server/services tests swap out.
+func TestInitializeWithConfig_SlogDefaultAndSeamStayInSync(t *testing.T) {
+	prevSlog := slog.Default()
+	prevSeam := slogDefault.Load()
+	t.Cleanup(func() {
+		slog.SetDefault(prevSlog)
+		slogDefault.Store(prevSeam)
+	})
+
+	cfg := DefaultLogConfig()
+	cfg.FileEnabled = false
+	cfg.ConsoleEnabled = false
+	initializeWithConfig(false, cfg)
+	// initializeWithConfig starts a background drain goroutine (via AsyncHandler.StartDrain)
+	// with no way to reach it from outside except through the LogManager it just installed
+	// as defaultManager. Close() flushes that handler and stops the goroutine; without this,
+	// every run of this test leaks one goroutine for the life of the test binary.
+	t.Cleanup(Close)
+
+	if slog.Default() != slogDefault.Load() {
+		t.Error("slog.Default() and slogDefault.Load() must be the same *slog.Logger instance after initializeWithConfig")
+	}
+}
+
+// TestSetSlogDefaultForTest_LeavesSlogDefaultUntouched locks in the seam's core contract:
+// swapping it must redirect what log.Info/Warn/etc. write to (via logAt/ForSession's
+// slogDefault.Load()) without also touching the real slog.Default() — that's what let
+// tests stop calling slog.SetDefault() directly, which was also rewiring stdlib
+// log.Print process-wide and racing with concurrent tests' log-capture buffers.
+func TestSetSlogDefaultForTest_LeavesSlogDefaultUntouched(t *testing.T) {
+	realDefault := slog.Default()
+	var buf bytes.Buffer
+	prev := SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { SetSlogDefaultForTest(prev) })
+
+	Info("via seam")
+
+	if slog.Default() != realDefault {
+		t.Error("SetSlogDefaultForTest must not mutate slog.Default()")
+	}
+	if !strings.Contains(buf.String(), "via seam") {
+		t.Error("Info() must route through the seam installed by SetSlogDefaultForTest, not the real default")
+	}
 }

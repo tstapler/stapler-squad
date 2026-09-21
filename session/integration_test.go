@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/tmuxreap"
@@ -36,6 +37,18 @@ func TestMain(m *testing.M) {
 	// Settings > GitHub Accounts) returns a real token instead of "", making
 	// those tests fail non-deterministically depending on local machine state.
 	keyring.MockInit()
+
+	// See envtest.ClearAmbientStaplerSquadStateEnv's doc comment: an ambient
+	// STAPLER_SQUAD_TEST_DIR/STAPLER_SQUAD_INSTANCE left set in the shell (e.g.
+	// by an earlier e2e run) silently wins over this package's own per-PID test
+	// isolation, so tests that call config.LoadConfig() (e.g. SwitchProgram's
+	// empty-string default resolution) read someone else's shared config.json
+	// instead of a fresh default. Previously worked around ad hoc per-test via
+	// t.Setenv (see TestSwitchProgram_EmptyString_ResolvesToConfigDefault's
+	// comment) — this closes the gap for every other test in the package that
+	// never got that treatment.
+	restoreStaplerSquadEnv := envtest.ClearAmbientStaplerSquadStateEnv()
+	defer restoreStaplerSquadEnv()
 
 	tmuxreap.ReapLeakedTestServers()
 	tmuxreap.StartTestServerWatchdog(os.Getpid())
@@ -492,11 +505,14 @@ func testFailsLoudlyWhenWorktreePathMissing(t *testing.T) {
 // t.Name() is hashed rather than embedded verbatim — a deeply nested subtest
 // name plus pid/timestamp/suffix can otherwise exceed that limit and fail
 // with tmux's "(File name too long)" error instead of connecting.
+//
+// Must start with "test_" — that's the prefix testutil/tmuxreap sweeps for,
+// so a leaked server here gets cleaned up even after a SIGKILL/timeout.
 func uniqueTestTmuxSocket(t *testing.T, suffix string) string {
 	t.Helper()
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(t.Name()))
-	name := fmt.Sprintf("ssq_%08x_%d_%d", h.Sum32(), os.Getpid(), time.Now().UnixNano())
+	name := fmt.Sprintf("test_ssq_%08x_%d_%d", h.Sum32(), os.Getpid(), time.Now().UnixNano())
 	if suffix != "" {
 		name += "_" + suffix
 	}

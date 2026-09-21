@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newTestRepoWithRemote creates a real (empty) git repository at a fresh temp
@@ -125,7 +126,7 @@ func TestTriggerPRFixForEvent_should_ReconcileItemAndReturnMatchedTrue_When_Item
 	// Reconciliation runs asynchronously (dispatched onto l.shutdownCtx in a goroutine,
 	// see TriggerPRFixForEvent's doc comment) so matched=true only means "queued," not
 	// "completed" — poll for the done transition rather than asserting immediately.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		refreshed, refreshErr := storage.GetBacklogItem(ctx, item.ID)
 		return refreshErr == nil && refreshed.Status == string(BacklogStatusDone)
 	}, 2*time.Second, 20*time.Millisecond, "reconcilePRPendingItem should have run for the matched item (merged PR -> done)")
@@ -220,7 +221,7 @@ func TestTriggerPRFixForEvent_should_TagFixAttemptLogAsWebhookTriggered(t *testi
 	assert.True(t, matched)
 	// Reconciliation runs asynchronously — poll for the log line rather than asserting
 	// immediately (see TriggerPRFixForEvent's doc comment).
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return strings.Contains(buf.String(), "attempting fix (trigger_source=webhook)")
 	}, 2*time.Second, 20*time.Millisecond, "webhook-triggered reconciliation must tag its fix-attempt log line as trigger_source=webhook; got: %s", buf.String())
 }

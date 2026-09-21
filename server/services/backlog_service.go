@@ -18,6 +18,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -28,11 +29,16 @@ import (
 
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
 type SessionCreator interface {
-	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error)
+	// programOverride, when non-empty, replaces config.ResolveDefaults' resolved.Program
+	// as the spawned Instance's InstanceOptions.Program — set before session.NewInstance/
+	// instance.Start(true), never via a post-hoc SwitchProgram/Restart (see Epic 2.4's
+	// design note). Pass "" for callers unaffected by per-stage program overrides.
+	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
 	// CreateWorktreeSession spawns a session inside an already-created git worktree at
 	// worktreePath. repoPath is the parent repo used for program resolution; worktreePath
-	// must already exist on disk before this is called.
-	CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error)
+	// must already exist on disk before this is called. See programOverride's doc comment
+	// on CreateDirectorySession above.
+	CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error)
 }
 
 // AutonomousDriverStarter allows BacklogService to start an AutonomousDriver on an existing instance.
@@ -134,8 +140,15 @@ type BacklogService struct {
 	// self-service "Ship PR" action on the item detail page. nil (the default)
 	// makes TriggerShipPR return CodeUnimplemented; wired via SetOneShotRunner.
 	oneShotRunner PRRunner
-	cfg           *config.Config
-	engine        session.WorkflowEngine
+	// julesDispatcher drives DispatchToJules (backlog_service_jules.go). nil
+	// (the default — Jules disabled, or its dependencies unresolvable at
+	// startup) makes DispatchToJules return CodeFailedPrecondition pointing at
+	// Settings → Jules, mirroring checkEgressConsent's own message for the
+	// same underlying condition; wired via SetJulesDispatcher
+	// (server/dependencies.go, Task 2.4.4a).
+	julesDispatcher JulesDispatcher
+	cfg             *config.Config
+	engine          session.WorkflowEngine
 	// worktreeMu serializes context-file writes to the same worktree path so that
 	// concurrent SpawnSessionFromItem / AttachSessionToItem calls cannot produce
 	// a partially-written .claude/backlog-context.md.
@@ -211,6 +224,24 @@ type BacklogService struct {
 	shutdownCancel context.CancelFunc
 	triageSem      chan struct{}
 
+	// headlessCallers maps a stage executor's configured program name (e.g.
+	// "gemini") to the headless.PoolClient that runs it, consulted by
+	// resolveHeadlessCaller. Always contains at least "claude" -> headlessPool
+	// once SetHeadlessPool has run (see NewBacklogService's degradation
+	// contract: a nil creator/headlessPool is expected in test environments).
+	// Populated incrementally as dependencies.go wires each caller in, since
+	// GeminiCaller (Epic 3.1) is constructed after backlogSvc itself.
+	headlessCallers map[string]headless.PoolClient
+
+	// modelFamilies resolves a stage executor's "family:<alias>" Model value
+	// (e.g. "family:opus") to a concrete model ID via session.ResolveModel,
+	// mirroring server/workflows.Scheduler's own modelFamilies field.
+	// Defaults to workflows.DefaultModelFamilies() in NewBacklogService;
+	// overridable via SetModelFamilies from the same
+	// model_family_overrides.json dependencies.go loads for the Scheduler, so
+	// both fire paths resolve a given alias identically.
+	modelFamilies map[string]string
+
 	// triageInFlight tracks, per item ID, whether a headless triage call this
 	// process itself started is still genuinely running. tombstoneOrphanTriageSessions
 	// has no other way to tell a still-running headless call apart from a dead one —
@@ -227,11 +258,23 @@ type BacklogService struct {
 	// goroutine in the new process could possibly still be running an old triage call.
 	triageInFlight sync.Map
 
-	// capabilityCheck gates the first codebase-read call per process lifetime (Story
-	// 2.2.6). Defaults to headless.DefaultCapabilitySelfCheck (shared with
-	// ReviewGateRunner so a failure discovered via either call site short-circuits
-	// the other) but is a field — not a hardcoded package-var reference — so tests
-	// can inject a fresh instance instead of fighting the singleton's sync.Once.
+	// budgetWarnedItems tracks, per item ID, whether the work-stage soft
+	// budget warning (Story 4.2.3, ADR-003) has already fired for that item's
+	// current over-threshold streak — deduped for the process lifetime so a
+	// recurring poll/push of WatchBacklogItems/GetBacklogItem doesn't re-log
+	// on every read while an item stays over threshold. Mirrors
+	// InsightsService.warnNewUnpricedFamilies' per-process-lifetime dedup
+	// convention. checkWorkStageBudget deletes an item's entry once its cost
+	// drops back under threshold, so a future re-crossing warns again.
+	budgetWarnedItems sync.Map
+
+	// capabilityCheck gates codebase-read calls with a cached smoke-test result
+	// (Story 2.2.6): a success is cached for the process lifetime, a failure only
+	// for a bounded window before it's re-attempted. Defaults to
+	// headless.DefaultCapabilitySelfCheck (shared with ReviewGateRunner so a
+	// failure discovered via either call site short-circuits the other) but is a
+	// field — not a hardcoded package-var reference — so tests can inject a fresh
+	// instance instead of fighting the shared singleton's cached state.
 	capabilityCheck *headless.CodebaseReadCapabilitySelfCheck
 
 	// triageCleanupTimeout bounds the post-LLM-call DB writes in TriggerTriage's
@@ -304,6 +347,101 @@ type BacklogService struct {
 	// uses to construct pipelineEngine (Epic 1.5.1a). May be nil in tests
 	// that don't pass one; handlers nil-check and return CodeUnavailable.
 	pipelineModeRepo session.PipelineModeRepository
+
+	// livenessRepo backs the LivenessDefinition CRUD RPCs (Epic 1.3 of
+	// backlog-custom-workflow-stages): CreateLivenessDefinition/
+	// UpdateLivenessDefinition/DeleteLivenessDefinition/GetLivenessDefinition/
+	// ListLivenessDefinitions. Wired post-construction via
+	// SetLivenessRepository — not a NewBacklogService constructor parameter,
+	// unlike pipelineModeRepo above, to avoid touching every one of this
+	// struct's existing test call sites for a dependency Epic 1.3 introduces;
+	// Epic 1.4 may fold this into the constructor once its own
+	// livenessEngine-in-sweeps wiring needs to. May be nil; handlers nil-check
+	// and return CodeUnavailable.
+	livenessRepo session.LivenessRepository
+	// livenessEngine is the LivenessEngine (session.CachingLivenessEngine in
+	// production) whose in-process cache the CRUD RPC write handlers
+	// invalidate on Create/Update/Delete. Wired post-construction via
+	// SetLivenessEngine, same rationale as livenessRepo above. May be nil;
+	// cache invalidation is then a no-op (matching invalidatePipelineCache's
+	// duck-typed no-op-if-unwired shape for pipelineEngine).
+	livenessEngine session.LivenessEngine
+
+	// stageCRUDRepo backs the Stage/StageTransition/TransitionGate CRUD RPCs
+	// (Epic 2.7 of backlog-custom-workflow-stages):
+	// CreateStage/UpdateStage/DeleteStage/GetStage/ListStages and their
+	// transition/gate siblings. Wired post-construction via
+	// SetStageCRUDRepository, same rationale as livenessRepo above. May be
+	// nil; handlers nil-check and return CodeUnavailable.
+	stageCRUDRepo session.StageCRUDRepository
+	// stageConfigEngine is the ConfiguredWorkflowEngine whose stageConfigCache
+	// the stage/transition/gate CRUD write handlers invalidate on success.
+	// Wired post-construction via SetStageConfigEngine. May be nil; cache
+	// invalidation is then a no-op, mirroring livenessEngine above.
+	stageConfigEngine stageConfigCacheInvalidator
+	// gateSatisfactionRepo backs the RecordGateApproval RPC (Epic 2.4, Story
+	// 2.4.1). Wired post-construction via SetGateSatisfactionRepository, same
+	// rationale as stageCRUDRepo above. May be nil; the handler nil-checks and
+	// returns CodeUnavailable.
+	gateSatisfactionRepo session.GateSatisfactionRepository
+}
+
+// stageConfigCacheInvalidator is a narrow, consumer-defined interface (see
+// pipelineCacheInvalidator's identical rationale in
+// backlog_service_pipeline_mode.go) matched via duck typing against
+// s.stageConfigEngine. *session.ConfiguredWorkflowEngine satisfies it.
+type stageConfigCacheInvalidator interface {
+	InvalidateCache(ctx context.Context) error
+}
+
+// SetStageCRUDRepository wires the repository backing the Stage/
+// StageTransition/TransitionGate CRUD RPCs. nil (the default) makes those
+// RPCs return CodeUnavailable, mirroring pipelineModeRepo's nil-guard shape.
+func (s *BacklogService) SetStageCRUDRepository(repo session.StageCRUDRepository) {
+	s.stageCRUDRepo = repo
+}
+
+// SetStageConfigEngine wires the engine whose stageConfigCache the stage/
+// transition/gate CRUD write handlers invalidate on success. nil (the
+// default) makes cache invalidation a no-op.
+func (s *BacklogService) SetStageConfigEngine(engine stageConfigCacheInvalidator) {
+	s.stageConfigEngine = engine
+}
+
+// invalidateStageConfigCache re-fetches the enabled stage/transition graph
+// into s.stageConfigEngine's cache after a successful stage/transition/gate
+// write. id is used only for the Warn log line if invalidation fails.
+// No-op (silently) if stageConfigEngine is unwired. Deliberately returns
+// nothing — mirrors invalidatePipelineCache's rationale: a cache-invalidation
+// failure after a successful DB write must never fail the RPC.
+func (s *BacklogService) invalidateStageConfigCache(ctx context.Context, id string) {
+	if s.stageConfigEngine == nil {
+		return
+	}
+	if err := s.stageConfigEngine.InvalidateCache(ctx); err != nil {
+		log.WarningLog().Printf("[ConfiguredWorkflowEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
+	}
+}
+
+// SetGateSatisfactionRepository wires the repository backing the
+// RecordGateApproval RPC. nil (the default) makes that RPC return
+// CodeUnavailable, mirroring stageCRUDRepo's nil-guard shape.
+func (s *BacklogService) SetGateSatisfactionRepository(repo session.GateSatisfactionRepository) {
+	s.gateSatisfactionRepo = repo
+}
+
+// SetLivenessRepository wires the repository backing the LivenessDefinition
+// CRUD RPCs. nil (the default) makes those RPCs return CodeUnavailable,
+// mirroring pipelineModeRepo's nil-guard shape.
+func (s *BacklogService) SetLivenessRepository(repo session.LivenessRepository) {
+	s.livenessRepo = repo
+}
+
+// SetLivenessEngine wires the LivenessEngine whose cache the LivenessDefinition
+// CRUD RPC write handlers invalidate on success. nil (the default) makes
+// cache invalidation a no-op.
+func (s *BacklogService) SetLivenessEngine(engine session.LivenessEngine) {
+	s.livenessEngine = engine
 }
 
 // PipelineEngine returns the PipelineEngine injected at construction (nil if none was
@@ -420,12 +558,78 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		triageCleanupTimeout: defaultTriageCleanupTimeout,
 		resolveGitHubInput:   session.ResolveGitHubInput,
 		capabilityCheck:      headless.DefaultCapabilitySelfCheck,
+		modelFamilies:        workflows.DefaultModelFamilies(),
 	}
 }
 
-// SetHeadlessPool wires the headless pool for autonomous triage calls.
+// SetModelFamilies replaces the family alias -> concrete model ID map used to
+// resolve a stage executor's "family:<alias>" Model value. See the
+// modelFamilies field's doc comment.
+func (s *BacklogService) SetModelFamilies(families map[string]string) {
+	s.modelFamilies = families
+}
+
+// SetHeadlessPool wires the headless pool for autonomous triage calls and
+// registers it in headlessCallers under "claude" — the fallback target every
+// resolveHeadlessCaller branch degrades to.
 func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 	s.headlessPool = pool
+	if s.headlessCallers == nil {
+		s.headlessCallers = make(map[string]headless.PoolClient)
+	}
+	s.headlessCallers["claude"] = pool
+}
+
+// SetGeminiCaller registers caller in headlessCallers under "gemini" so a
+// PipelineMode stage executor configured with program="gemini" resolves to it
+// (Epic 3.1/2.3). Takes the concrete *headless.GeminiCaller type rather than
+// the headless.PoolClient interface so a nil caller (gemini binary not found
+// at startup — see server/dependencies.go) is caught by this ordinary nil
+// check: wrapping a typed nil pointer in an interface first would make an
+// interface-level `== nil` check pass a non-nil caller through by mistake.
+func (s *BacklogService) SetGeminiCaller(caller *headless.GeminiCaller) {
+	if caller == nil {
+		return
+	}
+	if s.headlessCallers == nil {
+		s.headlessCallers = make(map[string]headless.PoolClient)
+	}
+	s.headlessCallers["gemini"] = caller
+}
+
+// availabilityChecker is satisfied by a headless.PoolClient that can re-probe
+// its own runtime availability at call time (e.g. GeminiCaller.Available(),
+// Task 3.1.1g) — not part of the headless.PoolClient interface itself since
+// Claude's Pool has no equivalent "goes missing mid-run" failure mode (see
+// GeminiCaller.Available's doc comment).
+type availabilityChecker interface {
+	Available() bool
+}
+
+// resolveHeadlessCaller picks the headless.PoolClient to run a stage's
+// configured program, failing closed to Claude — loudly, via a Warn log and a
+// returned fallbackReason for persistence onto the ItemSession row — rather
+// than silently no-op'ing, crashing, or trusting a startup-time-only
+// availability check that can go stale (Story 2.3.1).
+//
+// program is the raw value ExecutorFor returned (empty or "claude" is the
+// overwhelmingly common case and skips the map lookup and availability probe
+// entirely). itemID/stage are for the log line and are not otherwise
+// interpreted.
+func (s *BacklogService) resolveHeadlessCaller(program, itemID, stage string) (caller headless.PoolClient, configuredProgram, fallbackReason string) {
+	if program == "" || program == "claude" {
+		return s.headlessPool, "", ""
+	}
+	found, ok := s.headlessCallers[program]
+	if !ok {
+		log.Warn("[PipelineEngine] unsupported headless program", "program", program, "item", itemID, "stage", stage, "fallback", "claude")
+		return s.headlessPool, program, "unsupported_program"
+	}
+	if ac, ok := found.(availabilityChecker); ok && !ac.Available() {
+		log.Warn("[PipelineEngine] headless program unavailable", "program", program, "item", itemID, "stage", stage, "fallback", "claude")
+		return s.headlessPool, program, program + "_unavailable"
+	}
+	return found, "", ""
 }
 
 // claimantHostID returns the stable per-host/per-instance identifier for the
@@ -605,14 +809,22 @@ func (s *BacklogService) resolveRepoPathInput(input string) (string, error) {
 // costFor, if non-nil, is called with the tmux session UUID to populate EstimatedCostUsd.
 func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID string) float64) *sessionv1.ItemSession {
 	p := &sessionv1.ItemSession{
-		Id:                       is.ID,
-		SessionUuid:              is.SessionUUID,
-		SessionRole:              is.Role,
+		Id:          is.ID,
+		SessionUuid: is.SessionUUID,
+		SessionRole: is.Role,
+		// #nosec G115 -- git commit count for a single session's worktree, bounded
+		// by realistic repo activity during one session's lifetime.
 		CommitCountSinceSpawn:    int32(is.CommitCountSinceSpawn),
 		LastCommitMessage:        is.LastCommitMessage,
 		CreatedAt:                timestamppb.New(is.CreatedAt),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
+		ResolvedProgram:          is.ResolvedProgram,
+		ResolvedModel:            is.ResolvedModel,
+		ExecutorSnapshotHash:     is.ExecutorSnapshotHash,
+		ConfiguredProgram:        is.ConfiguredProgram,
+		ExecutorFallbackReason:   is.ExecutorFallbackReason,
+		CostPriced:               is.CostPriced,
 		EndReason:                is.EndReason,
 		FailureCapturePath:       is.FailureCapturePath,
 		ClaimantHostId:           is.ClaimantHostID,
@@ -635,6 +847,8 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 			Id:             rv.ID,
 			OverallOutcome: rv.OverallOutcome,
 			Summary:        rv.Summary,
+			// #nosec G115 -- token count for one review's diff, bounded by realistic
+			// diff/LLM-context sizes, nowhere near int32 range.
 			DiffTokenCount: int32(rv.DiffTokenCount),
 			DiffTruncated:  rv.DiffTruncated,
 			OverrideBy:     rv.OverrideBy,
@@ -651,6 +865,8 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 				p.ReviewVerdict.PerCriterion = make([]*sessionv1.CriterionVerdict, len(cvs))
 				for i, cv := range cvs {
 					p.ReviewVerdict.PerCriterion[i] = &sessionv1.CriterionVerdict{
+						// #nosec G115 -- index into one backlog item's acceptance-criteria
+						// list, bounded by realistic AC list length (a handful of entries).
 						CriterionIndex: int32(cv.CriterionIndex),
 						Outcome:        string(cv.Outcome),
 						Evidence:       cv.Evidence,
@@ -687,8 +903,10 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 				Suggestions:         suggs,
 				ClarifyingQuestions: clarifying,
 				Tasks:               tasks,
-				Iteration:           int32(tr.Iteration),
-				Feedback:            tr.Feedback,
+				// #nosec G115 -- triage rework iteration counter, bounded by the small
+				// configurable rework cap (config.MaxAutoReworkIterationsOrDefault, default 3).
+				Iteration: int32(tr.Iteration),
+				Feedback:  tr.Feedback,
 			}
 		}
 	}
@@ -716,22 +934,44 @@ type triageResultJSON struct {
 
 // backlogItemSummaryToProto maps a BacklogItemSummary to the proto BacklogItem message.
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
-func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+// engine must be the caller's s.engine (see allowedTransitionStrings); no
+// per-item StageConfigSnapshot fallback is passed here — unlike
+// backlogItemToProto, BacklogItemSummary doesn't carry StatusEvents (that's
+// the whole point of the "summary" — avoid over-hydration), so
+// BuildStageConfigSnapshotFallback has nothing to reconstruct from.
+func backlogItemSummaryToProto(item *session.BacklogItemSummary, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:                 item.ID,
-		PublicId:           item.PublicIDRaw,
-		Title:              item.Title,
-		Priority:           int32(item.Priority),
-		Status:             string(item.Status),
-		RepoPath:           item.RepoPath,
-		Notes:              item.Notes,
-		ExternalId:         item.ExternalID,
-		Labels:             item.Labels,
-		PrUrl:              item.PrURL,
+		Id:       item.ID,
+		PublicId: item.PublicIDRaw,
+		Title:    item.Title,
+		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))
+		Priority:   int32(item.Priority),
+		Status:     string(item.Status),
+		RepoPath:   item.RepoPath,
+		Notes:      item.Notes,
+		ExternalId: item.ExternalID,
+		Labels:     item.Labels,
+		PrUrl:      item.PrURL,
+		// #nosec G115 -- pr_number is a GitHub PR number; production writers store it
+		// from a *int32 RPC field, structurally bounded well under int32 range.
 		PrNumber:           int32(item.PrNumber),
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
-		AllowedTransitions: allowedTransitionStrings(item.Status),
+		AllowedTransitions: allowedTransitionStrings(engine, item.Status, nil),
+		// Plan-gating fields: board/list-view cards derive their primary
+		// action (getAvailableActions in itemActions.ts) from
+		// SkipPlanning/PlanApproved/PlanArtifactsPath directly, so this
+		// "lightweight" summary must carry them too, not just GetBacklogItem's
+		// full backlogItemToProto — omitting them here silently zero-valued
+		// PlanArtifactsPath for any item whose data reached the client via
+		// ListBacklogItems (or a WatchBacklogItems reconnect resync, which
+		// shares this same conversion), flipping a ready item with an
+		// approved-pending plan to show "Trigger Triage" instead of "Approve
+		// Plan". Same class of gap as AllowedTransitions (#585).
+		SkipPlanning:        item.SkipPlanning,
+		PlanApproved:        item.PlanApproved,
+		PlanArtifactsPath:   item.PlanArtifactsPath,
+		PlanRejectionReason: item.PlanRejectionReason,
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
@@ -745,6 +985,8 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 			protoAC := make([]*sessionv1.AcCriterion, len(criteria))
 			for i, c := range criteria {
 				protoAC[i] = &sessionv1.AcCriterion{
+					// #nosec G115 -- index into one backlog item's acceptance-criteria
+					// list, bounded by realistic AC list length (a handful of entries).
 					Index:  int32(c.Index),
 					Text:   c.Text,
 					Status: string(c.Status),
@@ -767,18 +1009,15 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 	return p
 }
 
-// protoWorkflowEngine is a stateless, read-only WorkflowEngine used only to
-// surface AllowedTransitions on the wire (backlogItemToProto below) — package
-// state is safe here since the underlying transitions map is never mutated
-// after construction. Not s.engine: backlogItemToProto is a free function
-// called from many BacklogService methods, and threading an engine parameter
-// through every call site would be a much larger change for the same result.
-var protoWorkflowEngine = session.NewDefaultWorkflowEngine()
-
 // allowedTransitionStrings returns the string form of
-// protoWorkflowEngine.AllowedTransitions(from), for BacklogItem.allowed_transitions.
-func allowedTransitionStrings(from session.BacklogStatus) []string {
-	targets := protoWorkflowEngine.AllowedTransitions(from)
+// engine.AllowedTransitions(from, fallback), for BacklogItem.allowed_transitions.
+// engine must be the caller's real, request-scoped s.engine (not a hardcoded
+// DefaultWorkflowEngine) so a CUSTOM-stage item gets its actual configured
+// transitions rather than an empty slice (#585) — see the docstrings on
+// backlogItemToProto/backlogItemSummaryToProto below for how fallback is
+// derived per caller.
+func allowedTransitionStrings(engine session.WorkflowEngine, from session.BacklogStatus, fallback *session.StageConfigSnapshot) []string {
+	targets := engine.AllowedTransitions(from, fallback)
 	out := make([]string, len(targets))
 	for i, t := range targets {
 		out[i] = string(t)
@@ -787,11 +1026,13 @@ func allowedTransitionStrings(from session.BacklogStatus) []string {
 }
 
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
-func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+// engine must be the caller's s.engine — see allowedTransitionStrings.
+func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:                  item.ID,
-		Title:               item.Title,
-		Description:         item.Description,
+		Id:          item.ID,
+		Title:       item.Title,
+		Description: item.Description,
+		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))
 		Priority:            int32(item.Priority),
 		Status:              item.Status,
 		RepoPath:            item.RepoPath,
@@ -799,6 +1040,7 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		SkipPlanning:        item.SkipPlanning,
 		AutoSpawnSession:    item.AutoSpawnSession,
 		AutoCreatePr:        item.AutoCreatePR,
+		AutoApprovePlan:     item.AutoApprovePlan,
 		PipelineMode:        &item.PipelineMode,
 		Category:            &item.Category,
 		PlanApproved:        item.PlanApproved,
@@ -809,14 +1051,19 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		Labels:              item.Labels,
 		SourceId:            item.SourceID,
 		PrUrl:               item.PrURL,
-		PrNumber:            int32(item.PrNumber),
-		CreatedAt:           timestamppb.New(item.CreatedAt),
-		UpdatedAt:           timestamppb.New(item.UpdatedAt),
-		AllowedTransitions:  allowedTransitionStrings(session.BacklogStatus(item.Status)),
-		PublicId:            item.PublicIDRaw,
+		// #nosec G115 -- pr_number is a GitHub PR number; production writers store it
+		// from a *int32 RPC field, structurally bounded well under int32 range.
+		PrNumber:           int32(item.PrNumber),
+		CreatedAt:          timestamppb.New(item.CreatedAt),
+		UpdatedAt:          timestamppb.New(item.UpdatedAt),
+		AllowedTransitions: allowedTransitionStrings(engine, session.BacklogStatus(item.Status), session.BuildStageConfigSnapshotFallback(item)),
+		PublicId:           item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
+	}
+	if item.BaseBranch != "" {
+		p.BaseBranch = &item.BaseBranch
 	}
 	if item.PlanApprovedAt != nil {
 		p.PlanApprovedAt = timestamppb.New(*item.PlanApprovedAt)
@@ -828,8 +1075,15 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
 	}
 	if item.ReworkCapOverride != nil {
+		// #nosec G115 -- rework_cap_override is only ever set from a *int32 RPC field
+		// (backlog_service_lifecycle.go's int(*req.Msg.ReworkCapOverride)), so this
+		// int -> int32 round trip cannot lose information.
 		override := int32(*item.ReworkCapOverride)
 		p.ReworkCapOverride = &override
+	}
+	if item.CostBudgetThresholdUsd != nil {
+		threshold := *item.CostBudgetThresholdUsd
+		p.CostBudgetThresholdUsd = &threshold
 	}
 
 	// Parse acceptance criteria JSON into repeated AcCriterion.
@@ -839,6 +1093,8 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 			protoAC := make([]*sessionv1.AcCriterion, len(criteria))
 			for i, c := range criteria {
 				protoAC[i] = &sessionv1.AcCriterion{
+					// #nosec G115 -- index into one backlog item's acceptance-criteria
+					// list, bounded by realistic AC list length (a handful of entries).
 					Index:  int32(c.Index),
 					Text:   c.Text,
 					Status: string(c.Status),
@@ -866,12 +1122,14 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		protoEvents := make([]*sessionv1.BacklogStatusEvent, len(item.StatusEvents))
 		for i, ev := range item.StatusEvents {
 			protoEvents[i] = &sessionv1.BacklogStatusEvent{
-				Id:          ev.ID,
-				FromStatus:  ev.FromStatus,
-				ToStatus:    ev.ToStatus,
-				TriggeredBy: ev.TriggeredBy,
-				CreatedAt:   timestamppb.New(ev.CreatedAt),
-				Note:        ev.Note,
+				Id:                         ev.ID,
+				FromStatus:                 ev.FromStatus,
+				ToStatus:                   ev.ToStatus,
+				TriggeredBy:                ev.TriggeredBy,
+				CreatedAt:                  timestamppb.New(ev.CreatedAt),
+				Note:                       ev.Note,
+				StageNameSnapshot:          ev.StageNameSnapshot,
+				AllowedTransitionsSnapshot: ev.AllowedTransitionsSnapshot,
 			}
 		}
 		p.StatusEvents = protoEvents
@@ -883,7 +1141,9 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		protoNotes := make([]*sessionv1.BacklogProgressNote, len(item.ProgressNotes))
 		for i, n := range item.ProgressNotes {
 			protoNotes[i] = &sessionv1.BacklogProgressNote{
-				Id:             n.ID,
+				Id: n.ID,
+				// #nosec G115 -- index into one backlog item's acceptance-criteria
+				// list, bounded by realistic AC list length (a handful of entries).
 				CriterionIndex: int32(n.CriterionIndex),
 				Note:           n.Note,
 				Status:         n.Status,
@@ -997,6 +1257,25 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 	}
 }
 
+// CleanupTerminalItem removes git worktrees and archives/kills the tmux panes
+// of every work/review session on itemID — the same synchronous cleanup
+// TransitionBacklogItemStatus runs inline on a terminal transition, exported
+// so it can also be invoked from the session/ package (see
+// session.WorktreeCleaner) by internal transition paths that call the
+// storage layer directly (bounce-to-done, PR-merge done) and would otherwise
+// depend solely on the 60s reconcileTerminalItemSessions safety-net sweep.
+// Best-effort: a listing failure is logged, never returned — mirrors
+// cleanupItemWorktrees's and archiveItemWorkSessions's own contract.
+func (s *BacklogService) CleanupTerminalItem(ctx context.Context, itemID string) {
+	sessions, err := s.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		log.WarningLog().Printf("[CleanupTerminalItem] ListItemSessions item=%s: %v", itemID, err)
+		return
+	}
+	s.cleanupItemWorktrees(ctx, sessions)
+	s.archiveItemWorkSessions(ctx, sessions)
+}
+
 // archiveItemWorkSessions soft-archives every work- or review-role session in
 // sessions so it stops accumulating in the default session list, and kills its live
 // tmux pane so the underlying claude process (and its MCP server subprocess fleet)
@@ -1030,4 +1309,63 @@ func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions [
 			log.WarningLog().Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
 		}
 	}
+}
+
+// cumulativeItemSpendUSD sums EstimatedCostUsd across sessions and counts how
+// many of them are unpriced (cost_priced == false). Per Epic 2.5, an unpriced
+// session's EstimatedCostUsd is always 0 by construction (never incremented),
+// so summing every session's EstimatedCostUsd unconditionally already yields
+// the correct known-spend total — unpricedCount exists only so callers can
+// surface the gap in a log line rather than silently treating it as "under
+// threshold" (Task 4.2.2b).
+func cumulativeItemSpendUSD(sessions []session.ItemSessionSummary) (totalUSD float64, unpricedCount int) {
+	for _, is := range sessions {
+		totalUSD += is.EstimatedCostUsd
+		if !is.CostPriced {
+			unpricedCount++
+		}
+	}
+	return totalUSD, unpricedCount
+}
+
+// logBudgetWarningIfCrossed evaluates the per-item soft budget threshold
+// (ADR-003) inline at cost-recording time for a headless triage/review call:
+// priorSessions is that item's ItemSession set fetched before this call's own
+// row was created/persisted, so priorSessions' cost sum plus callCostUSD is
+// the item's new cumulative spend. Purely observational — never blocks,
+// retries, or errors the call that triggered it (see EvaluateBudgetThreshold's
+// own doc comment).
+func logBudgetWarningIfCrossed(itemID, stage string, thresholdUSD *float64, priorSessions []session.ItemSessionSummary, callCostUSD float64) {
+	priorTotal, unpricedCount := cumulativeItemSpendUSD(priorSessions)
+	cumulative := priorTotal + callCostUSD
+	if !session.EvaluateBudgetThreshold(itemID, stage, thresholdUSD, cumulative) {
+		return
+	}
+	suffix := ""
+	if unpricedCount > 0 {
+		suffix = fmt.Sprintf(" (excludes %d unpriced session(s))", unpricedCount)
+	}
+	log.WarningLog().Printf("[BudgetWarning] item=%s stage=%s threshold=%.2f spent=%.2f%s", itemID, stage, *thresholdUSD, cumulative, suffix)
+}
+
+// checkWorkStageBudget evaluates the per-item soft budget threshold (ADR-003)
+// for an active work-stage session at live-cost-recompute time (Story 4.2.3)
+// — called from WatchBacklogItems's snapshot/live paths and GetBacklogItem,
+// the smallest set of call sites that already recompute an item's live
+// TotalEstimatedCostUsd on a recurring/subscribed basis. Deduped via
+// budgetWarnedItems so a repeated poll while still over threshold doesn't
+// re-log; deleting the item's entry once its cost drops back under threshold
+// lets a future re-crossing warn again. No-ops when thresholdUSD is nil.
+func (s *BacklogService) checkWorkStageBudget(itemID string, thresholdUSD *float64, totalCostUSD float64) {
+	if thresholdUSD == nil {
+		return
+	}
+	if !session.EvaluateBudgetThreshold(itemID, "work", thresholdUSD, totalCostUSD) {
+		s.budgetWarnedItems.Delete(itemID)
+		return
+	}
+	if _, alreadyWarned := s.budgetWarnedItems.LoadOrStore(itemID, struct{}{}); alreadyWarned {
+		return
+	}
+	log.WarningLog().Printf("[BudgetWarning] item=%s stage=work threshold=%.2f spent=%.2f", itemID, *thresholdUSD, totalCostUSD)
 }

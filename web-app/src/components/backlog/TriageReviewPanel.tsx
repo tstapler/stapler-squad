@@ -7,6 +7,7 @@ import { getErrorMessage } from "@/lib/utils/connectError";
 import { TriageDiffSection } from "./TriageDiffSection";
 import { TriageErrorBanner } from "./TriageErrorBanner";
 import { TriageRelatedWorkSection } from "./TriageRelatedWorkSection";
+import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel";
 import * as styles from "./TriageReviewPanel.css";
 
 const DISMISSED_KEY = (id: string) => `triage-panel-dismissed-${id}`;
@@ -222,6 +223,13 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
           <p className={styles.sectionLabel}>Summary</p>
           <p className={styles.summaryText}>{triageResult.summary}</p>
         </div>
+
+        {/* Clarifying questions triage asked via ask_user (AC2/AC3) — same
+            shared component as BacklogItemDetail/SessionDetailView. Renders
+            nothing of its own when there's nothing pending/answered, so no
+            divider is added here — its own card styling separates it when
+            it does render. */}
+        <GuidanceRequestPanel scope="backlog-item" scopeKey={item.id} title="Triage questions" />
 
         {!readOnly && (
           <>

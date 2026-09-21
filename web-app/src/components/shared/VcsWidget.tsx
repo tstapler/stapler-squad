@@ -17,6 +17,20 @@ import { formatRelativeTime } from "@/lib/utils/datetime";
 import type { VcsWidgetData, VcsWidgetMode } from "@/lib/vcs/types";
 import * as styles from "./VcsWidget.css";
 
+/**
+ * Extracts the GHE host from a PR URL, e.g. "https://github.netflix.net/o/r/pull/1"
+ * -> "github.netflix.net". Returns undefined for github.com or an unparseable
+ * URL, so callers can fall back to "github.com" the same way GitHubBadge does.
+ */
+function hostFromPrUrl(prUrl: string): string | undefined {
+  try {
+    const host = new URL(prUrl).host;
+    return host === "github.com" ? undefined : host;
+  } catch {
+    return undefined;
+  }
+}
+
 interface VcsWidgetProps {
   data: VcsWidgetData;
   mode: VcsWidgetMode;
@@ -151,6 +165,7 @@ export function VcsWidget({
               owner={data.github.owner}
               repo={data.github.repo}
               prNumber={data.github.prNumber}
+              host={hostFromPrUrl(data.github.prUrl)}
               sessionId={sessionId}
             />
           )}

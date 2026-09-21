@@ -613,6 +613,75 @@ func TestReviewQueuePoller_AcknowledgedSession_ResurfacesAfterNewOutput(t *testi
 	}
 }
 
+// TestReviewQueuePoller_SkipIdleSession_StaysSuppressedAcrossPolls is the integration-level
+// regression test for review_queue_determiner.go's suppressedByAck helper (wrapping
+// IsAcknowledgedAfterOutput()): a session the user has "Skip"ped must not reappear in the
+// review queue on the very next poll tick, or any subsequent tick, as long as no new
+// terminal output arrives. Mirrors
+// TestDefaultStatusDeterminer_IdleAckSuppression_StaysOutUntilNewOutput's scenario but
+// drives it through a real ReviewQueuePoller + Instance across multiple checkSessionsSafe()
+// ticks instead of calling Determine() directly — this is the actual "doesn't reappear on
+// the very next poll tick" success metric, not just the pure-function unit test.
+func TestReviewQueuePoller_SkipIdleSession_StaysSuppressedAcrossPolls(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+
+	inst := &Instance{
+		Title:  "skip-idle-session",
+		UUID:   "uuid-skip-idle",
+		Status: Running,
+	}
+	inst.started.Store(true)
+
+	// Idle long enough to cross the no-controller basicIdleThreshold (5s), but recent
+	// enough to stay well under the default StalenessThreshold (5m) so ReasonStale never fires.
+	past := time.Now().Add(-10 * time.Second)
+	inst.CreatedAt = past
+	inst.UpdatedAt = past
+	inst.LastMeaningfulOutput = past
+	inst.SyncAtomicTimestamps()
+
+	// Pre-warm the content cache so GetContent() returns "" without needing a live tmux
+	// session — same pattern as makeStaleInstance.
+	poller.injectCachedContent(inst.Title, "")
+
+	poller.AddInstance(inst)
+
+	// Tick 1: the session is genuinely idle with no acknowledgment — must be added.
+	if err := poller.checkSessionsSafe(); err != nil {
+		t.Fatalf("checkSessionsSafe (tick 1) returned error: %v", err)
+	}
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("expected idle session to be added to the review queue on tick 1")
+	}
+	if item.Reason != ReasonIdle {
+		t.Errorf("expected ReasonIdle on tick 1, got %v", item.Reason)
+	}
+
+	// Simulate the user clicking "Skip". The real skip handler
+	// (server/services/review_queue_service.go's AcknowledgeSession) calls exactly this
+	// method on the live instance — reuse it rather than reinventing the acknowledgment
+	// mechanism by poking timestamp fields directly.
+	inst.MarkAcknowledged()
+
+	// Tick 2 (the very next poll after Skip): must not reappear.
+	if err := poller.checkSessionsSafe(); err != nil {
+		t.Fatalf("checkSessionsSafe (tick 2) returned error: %v", err)
+	}
+	if _, exists := poller.queue.Get(inst.Title); exists {
+		t.Error("session must not reappear in the queue on the very next poll tick after Skip")
+	}
+
+	// Tick 3: still no new output — must remain suppressed.
+	if err := poller.checkSessionsSafe(); err != nil {
+		t.Fatalf("checkSessionsSafe (tick 3) returned error: %v", err)
+	}
+	if _, exists := poller.queue.Get(inst.Title); exists {
+		t.Error("session must remain suppressed across a second subsequent poll tick with no new output")
+	}
+}
+
 // TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue verifies
 // that sessions with GetController() != nil (controller wired but not yet started) are
 // evaluated by the poller rather than skipped. When approval-prompt content is present in
@@ -892,6 +961,71 @@ func TestReviewQueuePoller_ReconcileSessions_ActiveInstancesOnDifferentSockets_S
 	}
 }
 
+// TestReviewQueuePoller_ReconcileSessions_TymuxBackend_NeverQueriedOrFlipped is
+// the regression test for a real incident (tymux-validation-test,
+// 2026-09-06/07): a tymux-backed instance has no tmux server socket at all,
+// so it can never appear in a ListSessions result — reconcileSessions used to
+// treat that as "not found in live sessions" and transition every tymux
+// session to Stopped within one poll cycle, moments after creation. tymux
+// liveness is push-based instead (the standing Attach stream's
+// exit/reconnect-exhaustion callback), so reconcileSessions must skip tymux
+// instances entirely — not just leave them Active, but never even query a
+// socket on their behalf.
+func TestReviewQueuePoller_ReconcileSessions_TymuxBackend_NeverQueriedOrFlipped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	tymuxInst := makeSocketTestInstance("tymux-session", "session-tymux", "tymux-only-socket", Active)
+	tymuxInst.Backend = BackendTymux
+	poller.SetInstances([]*Instance{tymuxInst})
+
+	// Deliberately do NOT call querier.setLiveSessions for "tymux-only-socket"
+	// — if reconcileSessions ever queries it, ListSessions returns an empty
+	// live set and the old bug (flip to Stopped) would reproduce immediately.
+
+	poller.reconcileSessions()
+
+	if tymuxInst.Status != Active {
+		t.Errorf("tymux instance: got status %v, want Active (untouched — tymux liveness isn't polled here)", tymuxInst.Status)
+	}
+	if sockets := querier.socketsQueried(); len(sockets) != 0 {
+		t.Errorf("expected reconcileSessions to never query a tymux-backed instance's socket, got %v", sockets)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_MixedBackends_TmuxStillReconciled
+// covers the actual rollout scenario the all-tymux test above doesn't:
+// tmux and tymux instances coexisting, including sharing a socket string.
+// The tymux instance must never be queried/flipped and the tmux instance
+// must still be reconciled normally against its own real socket data.
+func TestReviewQueuePoller_ReconcileSessions_MixedBackends_TmuxStillReconciled(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	tmuxInst := makeSocketTestInstance("tmux-session", "session-tmux", "shared-socket", Active)
+	tymuxInst := makeSocketTestInstance("tymux-session", "session-tymux-name", "shared-socket", Active)
+	tymuxInst.Backend = BackendTymux
+	poller.SetInstances([]*Instance{tmuxInst, tymuxInst})
+
+	// tmux session genuinely alive; the tymux instance's name is deliberately
+	// absent -- if it leaked into the query, this socket's live set wouldn't
+	// contain it and it would wrongly flip to Stopped.
+	querier.setLiveSessions("shared-socket", "session-tmux")
+
+	poller.reconcileSessions()
+
+	if tmuxInst.Status != Active {
+		t.Errorf("tmux instance: got status %v, want Active", tmuxInst.Status)
+	}
+	if tymuxInst.Status != Active {
+		t.Errorf("tymux instance: got status %v, want Active (never touched)", tymuxInst.Status)
+	}
+}
+
 // TestReviewQueuePoller_ReconcileSessions_StoppedInstancesOnDifferentSockets_ReviveIndependently
 // covers the Stopped→Active direction: only the instance actually alive on its own
 // socket should revive; the other must stay Stopped.
@@ -916,6 +1050,81 @@ func TestReviewQueuePoller_ReconcileSessions_StoppedInstancesOnDifferentSockets_
 	}
 	if instCustom.Status != Stopped {
 		t.Errorf("custom-socket instance: got status %v, want Stopped (still not found on its own socket)", instCustom.Status)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_StoppedWithDeadPane_StaysStopped is the
+// regression test for the 2026-09-06 incident: remain-on-exit keeps a tmux pane
+// object alive as a "Pane is dead (signal N, ...)" placeholder after the wrapped
+// program exits, so liveSessions[name] alone cannot distinguish "pane exists with
+// a live process" from "pane exists, program already dead". Blindly reviving on
+// pane existence alone left sessions stuck showing Active with no live process
+// behind them -- frozen terminal, no response to input or resize.
+func TestReviewQueuePoller_ReconcileSessions_StoppedWithDeadPane_StaysStopped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-dead-pane",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     true, // remain-on-exit placeholder: wrapped program already exited
+		paneExitCode:     1,
+		paneExitSignal:   "",
+	}
+	inst := &Instance{
+		Title:            "dead-pane-session",
+		Status:           Stopped,
+		IsManaged:        true,
+		TmuxServerSocket: "",
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	querier.setLiveSessions("", "session-dead-pane")
+
+	poller.reconcileSessions()
+
+	if inst.Status != Stopped {
+		t.Errorf("got status %v, want Stopped (pane object exists but wrapped program has exited -- must not be reported Active)", inst.Status)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_StoppedWithLivePane_RevivesToActive proves
+// the companion positive case still works: a genuinely live process (not just a
+// live pane object) does revive to Active, so the dead-pane check above isn't
+// blocking legitimate revival.
+func TestReviewQueuePoller_ReconcileSessions_StoppedWithLivePane_RevivesToActive(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-live-pane",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     false, // wrapped program still running
+	}
+	inst := &Instance{
+		Title:            "live-pane-session",
+		Status:           Stopped,
+		IsManaged:        true,
+		TmuxServerSocket: "",
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	querier.setLiveSessions("", "session-live-pane")
+
+	poller.reconcileSessions()
+
+	if inst.Status != Active {
+		t.Errorf("got status %v, want Active (pane's wrapped program is genuinely still running)", inst.Status)
 	}
 }
 
@@ -1005,6 +1214,29 @@ func TestReviewQueuePoller_ShouldSkipSession_SkipsCrashed(t *testing.T) {
 
 	if !poller.shouldSkipSession(inst) {
 		t.Error("expected shouldSkipSession(Crashed instance) to be true")
+	}
+}
+
+// TestReviewQueuePoller_ShouldSkipSession_SkipsHibernatedAndPermanentlyFailed pins the
+// gap closed by switching shouldSkipSession to Status.IsSuspended(): Hibernated and
+// PermanentlyFailed sessions have no live tmux pane either (hibernation explicitly kills
+// the tmux session; PermanentlyFailed is terminal, awaiting an explicit Retry), so they
+// must be excluded from review-queue attention-reason checks exactly like
+// Stopped/Paused/Crashed already were.
+func TestReviewQueuePoller_ShouldSkipSession_SkipsHibernatedAndPermanentlyFailed(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+
+	hibernated := makeSocketTestInstance("hibernated-session", "session-hibernated", "", Hibernated)
+	hibernated.started.Store(true)
+	if !poller.shouldSkipSession(hibernated) {
+		t.Error("expected shouldSkipSession(Hibernated instance) to be true")
+	}
+
+	permFailed := makeSocketTestInstance("perm-failed-session", "session-perm-failed", "", PermanentlyFailed)
+	permFailed.started.Store(true)
+	if !poller.shouldSkipSession(permFailed) {
+		t.Error("expected shouldSkipSession(PermanentlyFailed instance) to be true")
 	}
 }
 
@@ -1274,5 +1506,111 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T
 	}
 	if got := item.Metadata["pending_approval_id"]; got != "approval-title-fallback" {
 		t.Errorf("pending_approval_id = %q, want %q (queried keys: %v)", got, "approval-title-fallback", provider.queried)
+	}
+}
+
+// If this fails, an archived session whose pane outlived its archive-time kill
+// is ratcheted back off Stopped on every poll tick (ADR-001,
+// superseded-rework-session-retirement). reconcileSessions never calls
+// shouldSkipSession, the file's only other ArchivedAt reader, so the guard has
+// to live here.
+func TestReviewQueuePoller_ReconcileSessions_ArchivedStoppedWithLivePane_StaysStopped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-archived-live-pane",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     false, // wrapped program still running — the incident's shape
+	}
+	archivedAt := time.Now()
+	inst := &Instance{
+		Title:      "archived-live-pane-session",
+		Status:     Stopped,
+		IsManaged:  true,
+		ArchivedAt: &archivedAt,
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	querier.setLiveSessions("", "session-archived-live-pane")
+
+	poller.reconcileSessions()
+
+	if got := inst.Snapshot().Status; got != Stopped {
+		t.Errorf("got status %v, want Stopped (an archived session must never be revived to Active)", got)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_ArchivedActiveWithNoPane_StillTransitionsToStopped
+// proves guard 3 did not over-apply: the Active → Stopped correction arm is
+// deliberately left unguarded, so an archived row that is still Active with no
+// tmux session must keep converging to Stopped rather than being stranded.
+func TestReviewQueuePoller_ReconcileSessions_ArchivedActiveWithNoPane_StillTransitionsToStopped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	archivedAt := time.Now()
+	inst := makeSocketTestInstance("archived-active-no-pane", "session-archived-gone", "", Active)
+	inst.ArchivedAt = &archivedAt
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	// No live sessions on this socket at all.
+	querier.setLiveSessions("")
+
+	poller.reconcileSessions()
+
+	if got := inst.Snapshot().Status; got != Stopped {
+		t.Errorf("got status %v, want Stopped (archived rows must still converge when their pane is gone)", got)
+	}
+}
+
+// If this fails, warnArchivedLivePaneOnce's sync.Map throttle is not holding and
+// every poll tick re-runs its tmux probe for the same archived session.
+func TestReviewQueuePoller_WarnArchivedLivePane_ThrottledPerProcess(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-archived-warn-once",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     false,
+	}
+	archivedAt := time.Now()
+	inst := &Instance{
+		Title:      "archived-warn-once-session",
+		Status:     Stopped,
+		IsManaged:  true,
+		ArchivedAt: &archivedAt,
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+	querier.setLiveSessions("", "session-archived-warn-once")
+
+	poller.reconcileSessions()
+	poller.reconcileSessions()
+
+	if mock.paneExitStatusCalls != 1 {
+		t.Errorf("got %d PaneExitStatus() probes across two ticks, want 1 (the warning is throttled per process)", mock.paneExitStatusCalls)
+	}
+
+	// RemoveInstance prunes the entry, so a re-added session warns again.
+	poller.RemoveInstance(inst.Title)
+	poller.SetInstances([]*Instance{inst})
+	poller.reconcileSessions()
+
+	if mock.paneExitStatusCalls != 2 {
+		t.Errorf("got %d PaneExitStatus() probes after RemoveInstance, want 2 (removal must prune the throttle entry)", mock.paneExitStatusCalls)
 	}
 }

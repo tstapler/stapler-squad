@@ -57,10 +57,6 @@ jest.mock("../BrowserTab", () => ({
   ),
   VNCStatus: { UNSPECIFIED: 0, STARTING: 1, READY: 2, NO_BROWSER: 3, UNAVAILABLE: 4 },
 }));
-jest.mock("../NoVNCViewer", () => ({
-  __esModule: true,
-  default: () => <div data-testid="novnc-viewer-stub" />,
-}));
 jest.mock("@/components/ui/ActionBar", () => ({
   ActionBar: ({ children, className }: { children: React.ReactNode; className?: string }) => (
     <div className={className}>{children}</div>
@@ -87,7 +83,10 @@ jest.mock("@/lib/contexts/SessionVcsContext", () => ({
   SessionVcsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 jest.mock("@/lib/hooks/useVcsStatus", () => ({ prefetchVcsStatus: jest.fn() }));
-jest.mock("@/lib/config", () => ({ getApiBaseUrl: () => "http://localhost:8543" }));
+jest.mock("@/lib/config", () => ({
+  getApiBaseUrl: () => "http://localhost:8543",
+  createAuthInterceptor: jest.fn(() => jest.fn()),
+}));
 jest.mock("@/lib/constants/programs", () => ({
   getProgramDisplay: (p: string) => p,
   isKnownProgram: () => true,

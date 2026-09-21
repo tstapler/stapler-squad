@@ -3,8 +3,8 @@ package session
 import (
 	"context"
 	"fmt"
-	"sync"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -19,24 +19,20 @@ import (
 // tmux fallback would mask that.
 var ErrUnrecognizedBackend = fmt.Errorf("session: unrecognized ProcessManagerBackend")
 
-var (
-	selectedBackendMu    sync.RWMutex
-	selectedBackendValue ProcessManagerBackend = BackendTmux
-)
-
-// RegisterBackendProvider sets the backend used by NewProcessManager.
-// Call once at startup, before any session is created.
-func RegisterBackendProvider(backend ProcessManagerBackend) {
-	selectedBackendMu.Lock()
-	selectedBackendValue = backend
-	selectedBackendMu.Unlock()
-}
-
+// getSelectedBackend resolves the process-wide default backend live, on
+// every call — no process restart required to change it. cfg.ProcessManagerBackend
+// (hand-editable in config.json) or the "tymux" feature flag
+// (config.EffectiveTymuxEnabled, live-settable via SetTymuxGlobalOverride)
+// each force BackendTymux; otherwise cfg.ProcessManagerBackend passes
+// through as-is (so "native" still works), and "" falls through to
+// NewProcessManager's defaultBackend/BackendTmux.
 func getSelectedBackend() ProcessManagerBackend {
-	selectedBackendMu.RLock()
-	v := selectedBackendValue
-	selectedBackendMu.RUnlock()
-	return v
+	cfg := config.LoadConfig()
+	backend := ProcessManagerBackend(cfg.ProcessManagerBackend)
+	if backend == BackendTymux || config.EffectiveTymuxEnabled(cfg) {
+		return BackendTymux
+	}
+	return backend
 }
 
 // NewProcessManager returns the ProcessManager implementation selected by, in order

@@ -41,7 +41,6 @@ WORKFLOWS=(
   "goreleaser-check.yml|push,pull_request,workflow_dispatch"
   "lint.yml|push,pull_request,workflow_dispatch"
   "mcp-integration.yml|push,pull_request"
-  "registry-validation.yml|pull_request"
   "release-please.yml|push"
   "release.yml|workflow_dispatch"
   "ux-analysis.yml|pull_request"

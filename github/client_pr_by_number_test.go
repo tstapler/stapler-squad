@@ -16,8 +16,16 @@ import (
 // func. Same-package variant of the pattern used in
 // server/services/backlog_github_rpc_test.go.
 func resetGhBaseURLForTest(ts *httptest.Server) func() {
-	GhBaseURL = ts.URL + "/"
-	return func() { GhBaseURL = "https://api.github.com/" }
+	return SetGhBaseURLForTest(ts.URL + "/")
+}
+
+// tstaplerSquadRef builds a RepoRef for "tstapler/stapler-squad" test fixtures.
+func tstaplerSquadRef() RepoRef {
+	ref, err := NewRepoRef("tstapler", "stapler-squad")
+	if err != nil {
+		panic(err)
+	}
+	return ref
 }
 
 func TestGetPRByNumber_should_ReturnPRInfo_When_PRExists(t *testing.T) {
@@ -47,7 +55,7 @@ func TestGetPRByNumber_should_ReturnPRInfo_When_PRExists(t *testing.T) {
 	defer resetGhBaseURLForTest(ts)()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
-	info, err := GetPRByNumber(context.Background(), "tstapler", "stapler-squad", 326)
+	info, err := GetPRByNumber(context.Background(), tstaplerSquadRef(), 326)
 	if err != nil {
 		t.Fatalf("GetPRByNumber returned error: %v", err)
 	}
@@ -73,7 +81,7 @@ func TestGetPRByNumber_should_ReturnErrNoPR_When_PRDoesNotExist(t *testing.T) {
 	defer resetGhBaseURLForTest(ts)()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
-	_, err := GetPRByNumber(context.Background(), "tstapler", "stapler-squad", 99999)
+	_, err := GetPRByNumber(context.Background(), tstaplerSquadRef(), 99999)
 	if !errors.Is(err, ErrNoPR) {
 		t.Fatalf("err = %v, want errors.Is(err, ErrNoPR)", err)
 	}
@@ -87,7 +95,7 @@ func TestGetPRByNumber_should_ReturnError_When_Forbidden(t *testing.T) {
 	defer resetGhBaseURLForTest(ts)()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
-	_, err := GetPRByNumber(context.Background(), "tstapler", "stapler-squad", 326)
+	_, err := GetPRByNumber(context.Background(), tstaplerSquadRef(), 326)
 	if err == nil {
 		t.Fatal("expected non-nil error, got nil")
 	}
@@ -104,7 +112,7 @@ func TestGetPRByNumber_should_ReturnError_When_ServerError(t *testing.T) {
 	defer resetGhBaseURLForTest(ts)()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
-	_, err := GetPRByNumber(context.Background(), "tstapler", "stapler-squad", 326)
+	_, err := GetPRByNumber(context.Background(), tstaplerSquadRef(), 326)
 	if err == nil {
 		t.Fatal("expected non-nil error, got nil")
 	}
@@ -140,7 +148,7 @@ func TestGetPRByNumber_should_ReturnError_When_RepoFullNameMismatch(t *testing.T
 	defer resetGhBaseURLForTest(ts)()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
-	_, err := GetPRByNumber(context.Background(), "tstapler", "stapler-squad", 326)
+	_, err := GetPRByNumber(context.Background(), tstaplerSquadRef(), 326)
 	if err == nil {
 		t.Fatal("expected non-nil error for repo full_name mismatch, got nil")
 	}
@@ -154,13 +162,13 @@ func TestGetPRByNumber_should_ReturnError_When_RepoFullNameMismatch(t *testing.T
 // reuse (CheckGHAuth talks to the GitHub REST API directly, not via `gh`).
 func stubGHAuthForTest(t *testing.T) {
 	t.Helper()
-	prior := ghAuthState.Load()
-	ghAuthState.Store(authResult{err: nil, expiry: time.Now().Add(time.Hour)})
+	prior, hadPrior := ghAuthCache.Load("")
+	ghAuthCache.Store("", authResult{err: nil, expiry: time.Now().Add(time.Hour)})
 	t.Cleanup(func() {
-		if prior != nil {
-			ghAuthState.Store(prior)
+		if hadPrior {
+			ghAuthCache.Store("", prior)
 		} else {
-			ghAuthState.Store(authResult{err: errors.New("test cleanup: auth not re-checked"), expiry: time.Now().Add(-time.Hour)})
+			ghAuthCache.Store("", authResult{err: errors.New("test cleanup: auth not re-checked"), expiry: time.Now().Add(-time.Hour)})
 		}
 	})
 }
@@ -212,7 +220,7 @@ func TestGetPRInfoCtx_should_PopulateChecksAndReviews_When_StatusCheckRollupAndR
 	stubGHAuthForTest(t)
 	installFakeGHForTest(t, ghJSON)
 
-	info, err := GetPRInfoCtx(context.Background(), "tstapler", "stapler-squad", 456)
+	info, err := GetPRInfoCtx(context.Background(), tstaplerSquadRef(), 456)
 	if err != nil {
 		t.Fatalf("GetPRInfoCtx returned error: %v", err)
 	}

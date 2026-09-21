@@ -231,7 +231,8 @@ func (c *ChainFirer) Fire(ctx context.Context, item *BacklogItemData) (fired boo
 		}
 	}
 	priorItemSummary := BuildSessionInitialPrompt(item, priorSessions)
-	chainDepth := int32(item.TriggeredByChainDepth + 1) //nolint:gosec // bounded by maxChainDepth above
+	// #nosec G115 -- item.TriggeredByChainDepth is checked against maxChainDepth above, so +1 stays far below int32's range
+	chainDepth := int32(item.TriggeredByChainDepth + 1)
 
 	// Claim BEFORE firing (see doc comment above) — must happen after the
 	// depth/expiry checks (which read item fields only) but before the one

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -249,7 +250,7 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 
 	// Implementation plan (if available).
 	if item.PlanArtifactsPath != "" {
-		if planContent := readPlanFile(item.PlanArtifactsPath); planContent != "" {
+		if planContent := readPlanFile(item.PlanArtifactsPath, item.RepoPath); planContent != "" {
 			sb.WriteString("## Implementation Plan\n")
 			sb.WriteString(sanitizeField(planContent, 8000))
 			sb.WriteString("\n\n")
@@ -344,7 +345,7 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 
 	// Implementation plan (if available).
 	if item.PlanArtifactsPath != "" {
-		if planContent := readPlanFile(item.PlanArtifactsPath); planContent != "" {
+		if planContent := readPlanFile(item.PlanArtifactsPath, item.RepoPath); planContent != "" {
 			sb.WriteString("## Implementation Plan\n")
 			sb.WriteString(sanitizeField(planContent, 8000))
 			sb.WriteString("\n\n")
@@ -802,11 +803,62 @@ func RecoverBaseCommitSHA(ctx context.Context, dir, branchName string) (string, 
 	return "", fmt.Errorf("no merge-base found for %s against any default branch (%s) in %s: %w", branchName, strings.Join(git.CandidateDefaultBranches, "/"), dir, errors.Join(errs...))
 }
 
+// planArtifactsAllowedRoots returns the set of directories a legitimate
+// PlanArtifactsPath may live under: the item's own repo checkout, the
+// dedicated worktree base directory (session/git's getWorktreeDirectory,
+// config.GetConfigDir()+"/worktrees"), and the default triage-artifacts
+// directory (config.TriageArtifactDirOrDefault, "~/.stapler-squad/triage-artifacts").
+// Errors resolving any individual root are swallowed — an unresolvable root
+// just isn't added to the allowlist, it never widens it.
+func planArtifactsAllowedRoots(repoPath string) []string {
+	var roots []string
+	if repoPath != "" {
+		roots = append(roots, repoPath)
+	}
+	if configDir, err := config.GetConfigDir(); err == nil {
+		roots = append(roots, filepath.Join(configDir, "worktrees"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		roots = append(roots, filepath.Join(home, ".stapler-squad", "triage-artifacts"))
+	}
+	return roots
+}
+
+// isPathUnderAnyRoot reports whether cleanPath (already filepath.Clean'd) is
+// equal to, or a descendant of, one of roots.
+func isPathUnderAnyRoot(cleanPath string, roots []string) bool {
+	for _, root := range roots {
+		cleanRoot := filepath.Clean(root)
+		if cleanPath == cleanRoot {
+			return true
+		}
+		rel, err := filepath.Rel(cleanRoot, cleanPath)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // readPlanFile reads plan.md from the given artifacts directory.
-// Returns "" on any error (plan is best-effort context, not required).
-func readPlanFile(artifactsDir string) string {
-	planPath := filepath.Join(artifactsDir, "plan.md")
-	b, err := os.ReadFile(planPath)
+// artifactsDir originates from BacklogItemData.PlanArtifactsPath, which can be
+// set directly from untrusted MCP tool input (server/mcp/tools_backlog.go's
+// submit_triage_result "plan_artifact_path" argument) — so this enforces
+// containment under one of planArtifactsAllowedRoots(repoPath) before ever
+// touching disk, the same baseDir-prefix pattern used in
+// server/services/database_service.go and server/services/file_service.go.
+// Returns "" on any error, including a containment rejection (plan is
+// best-effort context, not required).
+func readPlanFile(artifactsDir, repoPath string) string {
+	cleanDir := filepath.Clean(artifactsDir)
+	if !isPathUnderAnyRoot(cleanDir, planArtifactsAllowedRoots(repoPath)) {
+		log.WarningLog().Printf("[readPlanFile] rejecting plan_artifacts_path %q: outside all allowed roots", artifactsDir)
+		return ""
+	}
+
+	planPath := filepath.Join(cleanDir, "plan.md")
+	b, err := os.ReadFile(planPath) // #nosec G304 -- planPath is contained under an allowlisted root, verified above
 	if err != nil {
 		return ""
 	}

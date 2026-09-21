@@ -371,7 +371,7 @@ func findConversationFilePath(ctx context.Context, sessionID string) (string, er
 			return nil
 		}
 
-		file, err := os.Open(path)
+		file, err := os.Open(path) // #nosec G304 -- path comes from filepath.Walk enumerating ~/.claude/projects, not external input
 		if err != nil {
 			return nil
 		}
@@ -445,7 +445,7 @@ func extractMsgContent(raw conversationMessage) (ClaudeConversationMessage, bool
 // readAllMessagesFromFile reads every user/assistant message from the JSONL file
 // at path in chronological order (oldest first).
 func readAllMessagesFromFile(path string) ([]ClaudeConversationMessage, error) {
-	file, err := os.Open(path)
+	file, err := os.Open(path) // #nosec G304 -- callers only ever pass a conversationFile resolved by findConversationFilePath's safe directory walk, or an internal HistoryFilePath, never external input
 	if err != nil {
 		return nil, fmt.Errorf("failed to open conversation file: %w", err)
 	}
@@ -485,7 +485,7 @@ func readLastNMessagesFromFile(path string, n int) ([]ClaudeConversationMessage,
 		return readAllMessagesFromFile(path)
 	}
 
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- callers only ever pass a conversationFile resolved by findConversationFilePath's safe directory walk, or an internal HistoryFilePath, never external input
 	if err != nil {
 		return nil, fmt.Errorf("failed to open conversation file: %w", err)
 	}

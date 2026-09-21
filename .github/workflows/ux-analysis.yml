@@ -48,6 +48,23 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
+      # make stapler-squad's ensure-tools prerequisite hard-requires buf on PATH
+      # (Makefile's ASDF_STAMP check), even when proto-gen itself is a cached
+      # no-op — without this the Playwright global-setup's rebuild
+      # (tests/e2e/helpers/test-server.ts) fails with "go/buf/pnpm not found"
+      # before any test runs. Mirrors build.yml's buf setup.
+      - name: Cache buf binary
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/buf
+          key: buf-1.41.0-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Set up buf
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+        with:
+          version: '1.41.0'
+          setup_only: 'true'
+
       - name: Set up pnpm
         uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:

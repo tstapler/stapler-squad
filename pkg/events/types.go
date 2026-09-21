@@ -3,6 +3,7 @@ package events
 import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"time"
 )
@@ -33,6 +34,9 @@ const (
 	// connection health transitions between connected/reconnecting/
 	// disconnected (session/sshremote.RemoteHealthProber, Epic 6.4).
 	EventRemoteHealthChanged EventType = "remote.health_changed"
+	// EventWorkflowChanged is emitted when a saved workflow definition is
+	// created, updated, or deleted, or manually fired via RunWorkflow.
+	EventWorkflowChanged EventType = "workflow_changed"
 )
 
 // BacklogChangeKind identifies which kind of backlog item mutation a
@@ -102,6 +106,40 @@ type BacklogItemEventPayload struct {
 	IsSnapshot bool
 }
 
+// WorkflowChangeKind identifies which kind of workflow mutation a
+// WorkflowEventPayload describes.
+type WorkflowChangeKind string
+
+const (
+	// WorkflowChangeCreated is emitted when a new workflow is saved.
+	WorkflowChangeCreated WorkflowChangeKind = "created"
+	// WorkflowChangeUpdated is emitted when an existing workflow is modified.
+	WorkflowChangeUpdated WorkflowChangeKind = "updated"
+	// WorkflowChangeDeleted is emitted when a workflow is permanently removed.
+	WorkflowChangeDeleted WorkflowChangeKind = "deleted"
+	// WorkflowChangeRun is emitted when RunWorkflow fires a workflow outside
+	// its cron schedule. Distinct from a cron-triggered fire, which does not
+	// go through the RunWorkflow RPC and is not broadcast.
+	WorkflowChangeRun WorkflowChangeKind = "run"
+)
+
+// WorkflowEventPayload carries the workflow-specific data for an
+// EventWorkflowChanged event. Only the fields relevant to Kind are expected
+// to be populated.
+type WorkflowEventPayload struct {
+	// Kind identifies which workflow mutation this payload describes.
+	Kind WorkflowChangeKind
+	// Workflow is the current row after the mutation. Nil for
+	// WorkflowChangeDeleted (nothing left to describe) and
+	// WorkflowChangeRun (firing doesn't change the definition).
+	Workflow *ent.Workflow
+	// WorkflowID identifies the workflow for WorkflowChangeDeleted and
+	// WorkflowChangeRun, where Workflow above may be nil.
+	WorkflowID string
+	// SessionID is the session RunWorkflow started, for WorkflowChangeRun.
+	SessionID string
+}
+
 // RemoteHealthEventPayload carries the remote-specific data for an
 // EventRemoteHealthChanged event (session/sshremote.RemoteHealthProber,
 // Epic 6.4).
@@ -161,6 +199,9 @@ type Event struct {
 	// RemoteHealthPayload carries remote connection-health transition data
 	// for EventRemoteHealthChanged events. Nil for all other event types.
 	RemoteHealthPayload *RemoteHealthEventPayload
+	// WorkflowPayload carries workflow mutation data for EventWorkflowChanged
+	// events. Nil for all other event types.
+	WorkflowPayload *WorkflowEventPayload
 }
 
 // NewSessionCreatedEvent creates an event for session creation.
@@ -265,6 +306,15 @@ func NewRemoteHealthChangedEvent(remoteName string, state, previousState sshremo
 			State:         state,
 			PreviousState: previousState,
 		},
+	}
+}
+
+// NewWorkflowChangedEvent creates an event for a workflow mutation or run.
+func NewWorkflowChangedEvent(payload *WorkflowEventPayload) *Event {
+	return &Event{
+		Type:            EventWorkflowChanged,
+		Timestamp:       time.Now(),
+		WorkflowPayload: payload,
 	}
 }
 

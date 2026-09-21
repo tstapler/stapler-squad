@@ -5,7 +5,11 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useApprovalResolution } from "@/lib/hooks/useApprovalResolution";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
-import { notificationTypeFilter } from "@/lib/utils/notificationMapping";
+import {
+  notificationTypeFilter,
+  isActionableNotification,
+  computeScopedMarkReadIds,
+} from "@/lib/utils/notificationMapping";
 import { NotificationItem, AutoHandledSection } from "./NotificationItem";
 import {
   overlay,
@@ -54,7 +58,6 @@ export function NotificationPanel() {
     isPanelOpen,
     togglePanel,
     markAsRead,
-    markAllAsRead,
     removeFromHistory,
     acknowledgeNotification,
     clearHistory,
@@ -70,7 +73,7 @@ export function NotificationPanel() {
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [autoHandledOpen, setAutoHandledOpen] = useState(false);
 
-  const { resolvedApprovals, pendingApprovals, blockedApprovals, resolveApproval } = useApprovalResolution({
+  const { resolvedApprovals, pendingApprovals, blockedApprovals, failedApprovals, resolveApproval } = useApprovalResolution({
     notificationHistory,
     acknowledgeNotification,
   });
@@ -105,6 +108,23 @@ export function NotificationPanel() {
   }, [notificationHistory]);
 
   const unreadCount = getUnreadCount();
+
+  // Task 3.1.5a: reuses the identical scoping helper Task 3.1.2e's Notifications-page
+  // button calls — never a second hand-written filter that could drift.
+  const scopedMarkReadIds = useMemo(
+    () => computeScopedMarkReadIds(notificationHistory),
+    [notificationHistory]
+  );
+
+  const handleMarkActivityRead = () => markAsRead(scopedMarkReadIds);
+
+  const handleClearHistory = () => {
+    // Task 3.1.5d: irreversible, so gate behind a confirm — the actual
+    // exclusion of unread actionable records lives server-side (Task 3.1.5c).
+    if (window.confirm("Clear read notifications? This can't be undone. Items still needing a decision won't be cleared.")) {
+      clearHistory();
+    }
+  };
 
   const handleNotificationClick = (ids: string | string[], onView?: () => void, sessionId?: string) => {
     markAsRead(ids);
@@ -143,21 +163,21 @@ export function NotificationPanel() {
           <div className={headerActions}>
             {notificationHistory.length > 0 && (
               <>
-                {unreadCount > 0 && (
+                {scopedMarkReadIds.length > 0 && (
                   <button
                     className={markAllButton}
-                    onClick={markAllAsRead}
-                    aria-label="Mark all as read"
+                    onClick={handleMarkActivityRead}
+                    aria-label="Mark activity as read"
                   >
-                    Mark all read
+                    Mark activity read
                   </button>
                 )}
                 <button
                   className={clearButton}
-                  onClick={clearHistory}
-                  aria-label="Clear all notifications"
+                  onClick={handleClearHistory}
+                  aria-label="Clear notification history"
                 >
-                  Clear all
+                  Clear history
                 </button>
               </>
             )}
@@ -223,8 +243,16 @@ export function NotificationPanel() {
                   resolvedApprovals={resolvedApprovals}
                   pendingApprovals={pendingApprovals}
                   blockedApprovals={blockedApprovals}
+                  failedApprovals={failedApprovals}
                   resolveApproval={resolveApproval}
-                  removeFromHistory={removeFromHistory}
+                  removeFromHistory={
+                    // Task 3.1.5b: exempt an unread actionable item from the ✕
+                    // control, same as NeedsDecisionSection — this dropdown has no
+                    // tiered sections, so the exemption is applied inline per item.
+                    isActionableNotification(group.notification.notificationType) && !group.notification.isRead
+                      ? undefined
+                      : removeFromHistory
+                  }
                   handleNotificationClick={handleNotificationClick}
                   onNavigate={togglePanel}
                 />

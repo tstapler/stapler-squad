@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -100,13 +101,13 @@ func EnsureNetworkTLSCerts(networks map[string][]string) (caFile string, certs m
 		if genErr != nil {
 			return "", nil, fmt.Errorf("generate cert for network %s: %w", key, genErr)
 		}
-		if err := os.WriteFile(certFile, certPEM, 0644); err != nil {
+		if err := os.WriteFile(certFile, certPEM, 0600); err != nil {
 			return "", nil, fmt.Errorf("write cert for network %s: %w", key, err)
 		}
 		if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
 			return "", nil, fmt.Errorf("write key for network %s: %w", key, err)
 		}
-		if err := os.WriteFile(hashFile, []byte(want), 0644); err != nil {
+		if err := os.WriteFile(hashFile, []byte(want), 0600); err != nil {
 			return "", nil, fmt.Errorf("write cert hash for network %s: %w", key, err)
 		}
 
@@ -121,12 +122,38 @@ func EnsureNetworkTLSCerts(networks map[string][]string) (caFile string, certs m
 	return caFile, certs, nil
 }
 
+// NetworkCertStore publishes the current network->cert map for
+// GetCertificateByLocalAddr's per-handshake read, replacing a plain
+// captured map so a runtime-added network's cert doesn't race a live
+// TLS handshake reading the old map.
+type NetworkCertStore struct {
+	certs atomic.Pointer[map[string]*NetworkCert]
+}
+
+func NewNetworkCertStore(initial map[string]*NetworkCert) *NetworkCertStore {
+	s := &NetworkCertStore{}
+	s.Store(initial)
+	return s
+}
+
+func (s *NetworkCertStore) Store(certs map[string]*NetworkCert) { s.certs.Store(&certs) }
+
+func (s *NetworkCertStore) Load() map[string]*NetworkCert {
+	if p := s.certs.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
 // GetCertificateByLocalAddr returns a tls.Config.GetCertificate callback that
 // selects the leaf certificate matching the local IP a connection was
 // accepted on. The server binds one listener across all interfaces, but each
-// network still only ever presents the certificate scoped to it.
-func GetCertificateByLocalAddr(certs map[string]*NetworkCert) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+// network still only ever presents the certificate scoped to it. store is
+// re-read on every invocation so a runtime-published cert update takes effect
+// without restarting the listener.
+func GetCertificateByLocalAddr(store *NetworkCertStore) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		certs := store.Load()
 		if chi.Conn != nil {
 			if host, _, err := net.SplitHostPort(chi.Conn.LocalAddr().String()); err == nil {
 				if nc, ok := certs[host]; ok {
@@ -169,7 +196,7 @@ func ensureCA(caFile string) (caKey *ecdsa.PrivateKey, caCert *x509.Certificate,
 	if err != nil {
 		return nil, nil, false, err
 	}
-	if err := os.WriteFile(caFile, caCertPEM, 0644); err != nil {
+	if err := os.WriteFile(caFile, caCertPEM, 0600); err != nil {
 		return nil, nil, false, fmt.Errorf("write CA cert: %w", err)
 	}
 
@@ -187,6 +214,8 @@ func ensureCA(caFile string) (caKey *ecdsa.PrivateKey, caCert *x509.Certificate,
 
 // loadCA reads the CA cert and key from disk. Returns (nil, nil, false) on any error.
 func loadCA(caFile, caKeyFile string) (*ecdsa.PrivateKey, *x509.Certificate, bool) {
+	// #nosec G304 -- caFile is configDir+caFileName, built from config.GetConfigDir() and a
+	// package constant; never derived from network/RPC input.
 	certData, err := os.ReadFile(caFile)
 	if err != nil {
 		return nil, nil, false
@@ -200,6 +229,8 @@ func loadCA(caFile, caKeyFile string) (*ecdsa.PrivateKey, *x509.Certificate, boo
 		return nil, nil, false
 	}
 
+	// #nosec G304 -- caKeyFile is configDir+caKeyFileName, same trusted-internal-path
+	// construction as caFile above.
 	keyData, err := os.ReadFile(caKeyFile)
 	if err != nil {
 		return nil, nil, false
@@ -230,12 +261,17 @@ func sanHash(hostnames []string) string {
 // the stored SAN hash matches want.
 func certCurrent(certFile, hashFile, want string) bool {
 	// Check stored hash first — cheapest test.
+	// #nosec G304 -- hashFile is configDir+networkHashFileName(key); key is a
+	// locally-detected LAN IP from detectLANIPs() in main.go, never network/RPC input,
+	// and is filename-sanitized by sanitizeKey before use.
 	stored, err := os.ReadFile(hashFile)
 	if err != nil || strings.TrimSpace(string(stored)) != want {
 		return false
 	}
 
 	// Check cert expiry.
+	// #nosec G304 -- certFile is configDir+networkCertFileName(key), same trusted,
+	// sanitized-key construction as hashFile above.
 	data, err := os.ReadFile(certFile)
 	if err != nil {
 		return false

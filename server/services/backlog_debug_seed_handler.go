@@ -15,7 +15,9 @@ package services
 // section) — never reachable in a normal deploy.
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -40,6 +42,72 @@ func NewBacklogDebugSeedHandler(storage *session.Storage) *BacklogDebugSeedHandl
 	return &BacklogDebugSeedHandler{storage: storage}
 }
 
+// requirePostWithStorage writes the appropriate error response and returns
+// false if the request isn't a POST or storage isn't wired up — the guard
+// every debug seed handler below starts with.
+func (h *BacklogDebugSeedHandler) requirePostWithStorage(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	if h.storage == nil {
+		http.Error(w, "storage not available", http.StatusServiceUnavailable)
+		return false
+	}
+	return true
+}
+
+// decodeJSONBody decodes r.Body into a zero-valued T, writing a 400 response
+// and returning ok=false on failure.
+func decodeJSONBody[T any](w http.ResponseWriter, r *http.Request) (req T, ok bool) {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return req, false
+	}
+	return req, true
+}
+
+// requireTitleAndDefaultStatus validates title is non-empty (writing a 400
+// and returning ok=false otherwise) and defaults status to "review" when
+// empty — the Title/Status validation repeated across every seed request
+// shaped that way.
+func requireTitleAndDefaultStatus(w http.ResponseWriter, title, status string) (string, bool) {
+	if title == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return "", false
+	}
+	if status == "" {
+		status = string(session.BacklogStatusReview)
+	}
+	return status, true
+}
+
+// writeInternalError logs err under logMsg (plus any extra slog key/value
+// pairs) and writes it as a 500 response prefixed with userMsg — the
+// log.Error+http.Error(500) pairing repeated after nearly every fallible
+// storage/filesystem call in this file.
+func writeInternalError(w http.ResponseWriter, logMsg, userMsg string, err error, extra ...any) {
+	log.Error(logMsg, append([]any{"err", err}, extra...)...)
+	http.Error(w, userMsg+": "+err.Error(), http.StatusInternalServerError)
+}
+
+// createSimpleBacklogItem creates a backlog item with just Title/Status,
+// writing a 500 response and returning ok=false on failure — the shape used
+// by every seed handler that doesn't need extra fields (handleSeed sets
+// QueuedAt/PrNumber and handleSeedWorkSessionWithWorktree sets RepoPath, so
+// those call storage.CreateBacklogItem directly instead).
+func (h *BacklogDebugSeedHandler) createSimpleBacklogItem(w http.ResponseWriter, ctx context.Context, title, status string) (*session.BacklogItemData, bool) {
+	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  title,
+		Status: status,
+	})
+	if err != nil {
+		writeInternalError(w, "backlog debug seed: create item failed", "failed to create backlog item", err)
+		return nil, false
+	}
+	return item, true
+}
+
 // RegisterRoutes registers the debug seed endpoints on the given mux. Callers
 // MUST only invoke this when running as the e2e-local instance.
 func (h *BacklogDebugSeedHandler) RegisterRoutes(mux *http.ServeMux) {
@@ -48,6 +116,7 @@ func (h *BacklogDebugSeedHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/debug/backlog/seed-headless-triage-session", h.handleSeedHeadlessTriageSession)
 	mux.HandleFunc("/api/debug/backlog/seed-work-item-session", h.handleSeedWorkItemSession)
 	mux.HandleFunc("/api/debug/backlog/seed-work-session-with-worktree", h.handleSeedWorkSessionWithWorktree)
+	mux.HandleFunc("/api/debug/backlog/seed-jules-work-session", h.handleSeedJulesWorkSession)
 }
 
 type seedQueuedItemRequest struct {
@@ -62,18 +131,12 @@ type seedQueuedItemResponse struct {
 // the real WIP-cap gate so the e2e suite can assert on the queued badge/section
 // without first spawning enough real sessions to fill the concurrency cap.
 func (h *BacklogDebugSeedHandler) handleSeedQueued(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if h.storage == nil {
-		http.Error(w, "storage not available", http.StatusServiceUnavailable)
+	if !h.requirePostWithStorage(w, r) {
 		return
 	}
 
-	var req seedQueuedItemRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+	req, ok := decodeJSONBody[seedQueuedItemRequest](w, r)
+	if !ok {
 		return
 	}
 	if req.Title == "" {
@@ -89,8 +152,7 @@ func (h *BacklogDebugSeedHandler) handleSeedQueued(w http.ResponseWriter, r *htt
 		QueuedAt: &now,
 	})
 	if err != nil {
-		log.Error("backlog debug seed: create queued item failed", "err", err)
-		http.Error(w, "failed to create backlog item: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, "backlog debug seed: create queued item failed", "failed to create backlog item", err)
 		return
 	}
 
@@ -142,18 +204,12 @@ func statusForSeedReason(reason domain.StuckReason) session.BacklogStatus {
 }
 
 func (h *BacklogDebugSeedHandler) handleSeed(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if h.storage == nil {
-		http.Error(w, "storage not available", http.StatusServiceUnavailable)
+	if !h.requirePostWithStorage(w, r) {
 		return
 	}
 
-	var req seedStuckStateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+	req, ok := decodeJSONBody[seedStuckStateRequest](w, r)
+	if !ok {
 		return
 	}
 	if req.Title == "" {
@@ -173,8 +229,7 @@ func (h *BacklogDebugSeedHandler) handleSeed(w http.ResponseWriter, r *http.Requ
 		Status: string(status),
 	})
 	if err != nil {
-		log.Error("backlog debug seed: create item failed", "err", err)
-		http.Error(w, "failed to create backlog item: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, "backlog debug seed: create item failed", "failed to create backlog item", err)
 		return
 	}
 
@@ -185,8 +240,7 @@ func (h *BacklogDebugSeedHandler) handleSeed(w http.ResponseWriter, r *http.Requ
 			PrNumber: &prNumber,
 			PrURL:    &prURL,
 		}, nil); err != nil {
-			log.Error("backlog debug seed: set PR fields failed", "err", err)
-			http.Error(w, "failed to set PR fields: "+err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, "backlog debug seed: set PR fields failed", "failed to set PR fields", err)
 			return
 		}
 	}
@@ -200,27 +254,23 @@ func (h *BacklogDebugSeedHandler) handleSeed(w http.ResponseWriter, r *http.Requ
 		// which deletes the whole test dir when the run ends.
 		configDir, err := config.GetConfigDir()
 		if err != nil {
-			log.Error("backlog debug seed: resolve config dir failed", "err", err)
-			http.Error(w, "failed to resolve config dir: "+err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, "backlog debug seed: resolve config dir failed", "failed to resolve config dir", err)
 			return
 		}
 		planDir := filepath.Join(configDir, "e2e-plan-artifacts", item.ID)
-		if err := os.MkdirAll(planDir, 0o755); err != nil {
-			log.Error("backlog debug seed: create plan dir failed", "err", err)
-			http.Error(w, "failed to create plan artifacts dir: "+err.Error(), http.StatusInternalServerError)
+		if err := os.MkdirAll(planDir, 0o750); err != nil {
+			writeInternalError(w, "backlog debug seed: create plan dir failed", "failed to create plan artifacts dir", err)
 			return
 		}
 		planPath := filepath.Join(planDir, "plan.md")
-		if err := os.WriteFile(planPath, []byte("# Seeded e2e plan\n"), 0o644); err != nil {
-			log.Error("backlog debug seed: write plan file failed", "err", err)
-			http.Error(w, "failed to write plan artifacts file: "+err.Error(), http.StatusInternalServerError)
+		if err := os.WriteFile(planPath, []byte("# Seeded e2e plan\n"), 0o600); err != nil {
+			writeInternalError(w, "backlog debug seed: write plan file failed", "failed to write plan artifacts file", err)
 			return
 		}
 		if _, err := h.storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
 			PlanArtifactsPath: &planPath,
 		}, nil); err != nil {
-			log.Error("backlog debug seed: set plan_artifacts_path failed", "err", err)
-			http.Error(w, "failed to set plan_artifacts_path: "+err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, "backlog debug seed: set plan_artifacts_path failed", "failed to set plan_artifacts_path", err)
 			return
 		}
 	}
@@ -250,8 +300,7 @@ func (h *BacklogDebugSeedHandler) handleSeed(w http.ResponseWriter, r *http.Requ
 		SetLastCheckedAt(time.Now()).
 		SetContext(req.Context).
 		Exec(ctx); err != nil {
-		log.Error("backlog debug seed: insert stuck row failed", "err", err)
-		http.Error(w, "failed to seed stuck row: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, "backlog debug seed: insert stuck row failed", "failed to seed stuck row", err)
 		return
 	}
 
@@ -292,27 +341,17 @@ type seedHeadlessTriageSessionResponse struct {
 // classifySessionKind() (web-app/src/lib/backlog/sessionKind.ts) classifies
 // the seeded row identically to a production one.
 func (h *BacklogDebugSeedHandler) handleSeedHeadlessTriageSession(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if h.storage == nil {
-		http.Error(w, "storage not available", http.StatusServiceUnavailable)
+	if !h.requirePostWithStorage(w, r) {
 		return
 	}
 
-	var req seedHeadlessTriageSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+	req, ok := decodeJSONBody[seedHeadlessTriageSessionRequest](w, r)
+	if !ok {
 		return
 	}
-	if req.Title == "" {
-		http.Error(w, "title is required", http.StatusBadRequest)
+	status, ok := requireTitleAndDefaultStatus(w, req.Title, req.Status)
+	if !ok {
 		return
-	}
-	status := req.Status
-	if status == "" {
-		status = string(session.BacklogStatusReview)
 	}
 	summary := req.Summary
 	if summary == "" {
@@ -320,13 +359,8 @@ func (h *BacklogDebugSeedHandler) handleSeedHeadlessTriageSession(w http.Respons
 	}
 
 	ctx := r.Context()
-	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
-		Title:  req.Title,
-		Status: status,
-	})
-	if err != nil {
-		log.Error("backlog debug seed: create item failed", "err", err)
-		http.Error(w, "failed to create backlog item: "+err.Error(), http.StatusInternalServerError)
+	item, ok := h.createSimpleBacklogItem(w, ctx, req.Title, status)
+	if !ok {
 		return
 	}
 
@@ -343,8 +377,7 @@ func (h *BacklogDebugSeedHandler) handleSeedHeadlessTriageSession(w http.Respons
 	}
 	triageResultJSON, err := json.Marshal(triageResult)
 	if err != nil {
-		log.Error("backlog debug seed: marshal triage result failed", "err", err)
-		http.Error(w, "failed to marshal triage result: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, "backlog debug seed: marshal triage result failed", "failed to marshal triage result", err)
 		return
 	}
 
@@ -356,15 +389,13 @@ func (h *BacklogDebugSeedHandler) handleSeedHeadlessTriageSession(w http.Respons
 		TriageResult: string(triageResultJSON),
 	})
 	if err != nil {
-		log.Error("backlog debug seed: create headless triage item session failed", "err", err)
-		http.Error(w, "failed to create item session: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, "backlog debug seed: create headless triage item session failed", "failed to create item session", err)
 		return
 	}
 
 	if req.Ended {
 		if err := h.storage.UpdateItemSessionEnded(ctx, itemSession.ID, time.Now()); err != nil {
-			log.Error("backlog debug seed: mark headless triage item session ended failed", "err", err)
-			http.Error(w, "failed to mark item session ended: "+err.Error(), http.StatusInternalServerError)
+			writeInternalError(w, "backlog debug seed: mark headless triage item session ended failed", "failed to mark item session ended", err)
 			return
 		}
 	}
@@ -393,37 +424,22 @@ type seedWorkItemSessionResponse struct {
 // ReviewChangesModal's "View Changes" trigger (gated on a truthy work
 // session only), without a real worktree/tmux spin-up.
 func (h *BacklogDebugSeedHandler) handleSeedWorkItemSession(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if h.storage == nil {
-		http.Error(w, "storage not available", http.StatusServiceUnavailable)
+	if !h.requirePostWithStorage(w, r) {
 		return
 	}
 
-	var req seedWorkItemSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+	req, ok := decodeJSONBody[seedWorkItemSessionRequest](w, r)
+	if !ok {
 		return
 	}
-	if req.Title == "" {
-		http.Error(w, "title is required", http.StatusBadRequest)
+	status, ok := requireTitleAndDefaultStatus(w, req.Title, req.Status)
+	if !ok {
 		return
-	}
-	status := req.Status
-	if status == "" {
-		status = string(session.BacklogStatusReview)
 	}
 
 	ctx := r.Context()
-	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
-		Title:  req.Title,
-		Status: status,
-	})
-	if err != nil {
-		log.Error("backlog debug seed: create item failed", "err", err)
-		http.Error(w, "failed to create backlog item: "+err.Error(), http.StatusInternalServerError)
+	item, ok := h.createSimpleBacklogItem(w, ctx, req.Title, status)
+	if !ok {
 		return
 	}
 
@@ -434,8 +450,7 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkItemSession(w http.ResponseWrite
 		SessionRole: session.SessionRoleWork,
 	})
 	if err != nil {
-		log.Error("backlog debug seed: create work item session failed", "err", err)
-		http.Error(w, "failed to create item session: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, "backlog debug seed: create work item session failed", "failed to create item session", err)
 		return
 	}
 
@@ -448,9 +463,31 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkItemSession(w http.ResponseWrite
 	}
 }
 
+const (
+	// baseFixtureFileCount is the number of fixture files handleSeedWorkSessionWithWorktree
+	// always writes (README.md, NOTES.md) before any FileCount-driven extras.
+	baseFixtureFileCount = 2
+	// maxSeedFileCount bounds FileCount so a bad test value can't make this
+	// debug-only endpoint write an unbounded number of files.
+	maxSeedFileCount = 1000
+)
+
 type seedWorkSessionWithWorktreeRequest struct {
 	Title  string `json:"title"`
 	Status string `json:"status"` // defaults to "review" if empty
+	// RepoPath, when set, becomes the created item's RepoPath — so a test
+	// can seed an item whose repo matches a ConfirmEgressConsent/
+	// RevokeEgressConsent call's repo_path (jules-dispatch.spec.ts's §7.2/
+	// §7.13 scenarios need both a tracked branch, only this endpoint
+	// produces, and a known repo path to (un)acknowledge). Omitted defaults
+	// to "", unchanged from before this field existed.
+	RepoPath string `json:"repoPath"`
+	// FileCount, when > 2, seeds that many flat fixture files instead of the
+	// default two — needed by tests that must force react-arborist to
+	// virtualize (and later recycle) rows, e.g. the FileTree Tab-boundary
+	// scroll test in accessibility.spec.ts. 0 keeps the original two-file
+	// (README.md, NOTES.md) behavior unchanged.
+	FileCount int `json:"fileCount"`
 }
 
 type seedWorkSessionWithWorktreeResponse struct {
@@ -464,27 +501,21 @@ type seedWorkSessionWithWorktreeResponse struct {
 // dir — needed because BacklogFileBrowserModal's trigger is gated on a
 // truthy worktreePath, which only a real ent.Worktree join produces.
 func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if h.storage == nil {
-		http.Error(w, "storage not available", http.StatusServiceUnavailable)
+	if !h.requirePostWithStorage(w, r) {
 		return
 	}
 
-	var req seedWorkSessionWithWorktreeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+	req, ok := decodeJSONBody[seedWorkSessionWithWorktreeRequest](w, r)
+	if !ok {
 		return
 	}
-	if req.Title == "" {
-		http.Error(w, "title is required", http.StatusBadRequest)
+	status, ok := requireTitleAndDefaultStatus(w, req.Title, req.Status)
+	if !ok {
 		return
 	}
-	status := req.Status
-	if status == "" {
-		status = string(session.BacklogStatusReview)
+	if req.FileCount > maxSeedFileCount {
+		http.Error(w, fmt.Sprintf("fileCount exceeds max of %d", maxSeedFileCount), http.StatusBadRequest)
+		return
 	}
 
 	// Rooted under this instance's own isolated config/state dir
@@ -498,38 +529,53 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 	// else cleans up outside STAPLER_SQUAD_TEST_DIR).
 	configDir, err := config.GetConfigDir()
 	if err != nil {
-		log.Error("backlog debug seed: resolve config dir failed", "err", err)
-		http.Error(w, "failed to resolve config dir: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, "backlog debug seed: resolve config dir failed", "failed to resolve config dir", err)
 		return
 	}
 	worktreePath := filepath.Join(configDir, "e2e-worktree-artifacts", uuid.New().String())
-	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
-		log.Error("backlog debug seed: create worktree dir failed", "err", err)
-		http.Error(w, "failed to create worktree dir: "+err.Error(), http.StatusInternalServerError)
+	if err := os.MkdirAll(worktreePath, 0o750); err != nil {
+		writeInternalError(w, "backlog debug seed: create worktree dir failed", "failed to create worktree dir", err)
 		return
 	}
-	if err := os.WriteFile(filepath.Join(worktreePath, "README.md"), []byte("# e2e fixture\n"), 0o644); err != nil {
-		log.Error("backlog debug seed: write worktree fixture file failed", "err", err)
-		http.Error(w, "failed to write worktree fixture file: "+err.Error(), http.StatusInternalServerError)
+	if err := os.WriteFile(filepath.Join(worktreePath, "README.md"), []byte("# e2e fixture\n"), 0o600); err != nil {
+		writeInternalError(w, "backlog debug seed: write worktree fixture file failed", "failed to write worktree fixture file", err)
 		return
+	}
+	// A second file so the file tree has more than one row — needed for
+	// tests that navigate between rows (modal-focus-trap AC5's tabindex-churn
+	// e2e test requires react-arborist to move focus off one row and onto
+	// another to exercise its roving-tabindex behavior).
+	if err := os.WriteFile(filepath.Join(worktreePath, "NOTES.md"), []byte("# notes\n"), 0o600); err != nil {
+		writeInternalError(w, "backlog debug seed: write second worktree fixture file failed", "failed to write second worktree fixture file", err)
+		return
+	}
+	// Extra flat fixture files beyond the baseFixtureFileCount above, only
+	// when the caller asked for enough rows to force react-arborist's row
+	// virtualization (default rowHeight * ~20-30 visible rows) to kick in
+	// and later recycle rows on scroll.
+	for i := baseFixtureFileCount + 1; i <= req.FileCount; i++ {
+		name := fmt.Sprintf("file-%03d.md", i)
+		if err := os.WriteFile(filepath.Join(worktreePath, name), []byte("# fixture\n"), 0o600); err != nil {
+			writeInternalError(w, "backlog debug seed: write extra worktree fixture file failed", "failed to write extra worktree fixture file", err, "file", name)
+			return
+		}
 	}
 	// A real (tiny) git repo, not just a bare directory: GetVCSStatus (the
 	// backend behind the VcsWidget the "Browse Files" trigger lives in) 404s
 	// the widget entirely for a non-version-controlled directory.
 	if err := sessiongit.InitializeProjectDirectory(worktreePath); err != nil {
-		log.Error("backlog debug seed: git-init worktree dir failed", "err", err)
-		http.Error(w, "failed to git-init worktree dir: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, "backlog debug seed: git-init worktree dir failed", "failed to git-init worktree dir", err)
 		return
 	}
 
 	ctx := r.Context()
 	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
-		Title:  req.Title,
-		Status: status,
+		Title:    req.Title,
+		Status:   status,
+		RepoPath: req.RepoPath,
 	})
 	if err != nil {
-		log.Error("backlog debug seed: create item failed", "err", err)
-		http.Error(w, "failed to create backlog item: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, "backlog debug seed: create item failed", "failed to create backlog item", err)
 		return
 	}
 
@@ -552,8 +598,7 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 			BaseCommitSHA: "0000000000000000000000000000000000000000",
 		},
 	}); err != nil {
-		log.Error("backlog debug seed: create work session instance failed", "err", err)
-		http.Error(w, "failed to create work session: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, "backlog debug seed: create work session instance failed", "failed to create work session", err)
 		return
 	}
 
@@ -562,8 +607,7 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 		SessionUUID: sessionUUID,
 		SessionRole: session.SessionRoleWork,
 	}); err != nil {
-		log.Error("backlog debug seed: create work item session failed", "err", err)
-		http.Error(w, "failed to create item session: "+err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, "backlog debug seed: create work item session failed", "failed to create item session", err)
 		return
 	}
 
@@ -572,6 +616,132 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 		ItemID:       item.ID,
 		SessionID:    sessionUUID,
 		WorktreePath: worktreePath,
+	}); err != nil {
+		log.Error("backlog debug seed: encode response failed", "err", err)
+	}
+}
+
+type seedJulesWorkSessionRequest struct {
+	Title  string `json:"title"`
+	Status string `json:"status"` // defaults to "review" if empty
+	// ItemID, when set, attaches the seeded jules_work ItemSession to an
+	// already-existing backlog item instead of creating a new one via
+	// Title/Status (both ignored when ItemID is set) — lets a test simulate
+	// "a dispatch just completed for this exact item" after driving
+	// JulesDispatchDialog's real UI through a DispatchToJules call that was
+	// intercepted client-side to avoid a live billed Jules API round trip
+	// (jules-dispatch.spec.ts's §7.2 scenario: DispatchToJules's own guard
+	// chain calls the real Jules ListSources/CreateSession endpoints, which
+	// no e2e-local test credential can pass). Everything downstream of the
+	// seeded row — the storage write and the real WatchBacklogItems event it
+	// emits — runs unmocked, so the UI observes the new row through the same
+	// live-update path a genuine dispatch would use.
+	ItemID string `json:"itemId"`
+	// Ended, when true, closes the seeded jules_work ItemSession so
+	// SessionsSection.tsx's computeJulesPhase resolves it to "done"/"failed"
+	// (per EndReason) instead of "running" — the only two closed-row phases
+	// that computation can produce (see JulesStatusBadge.tsx's phase union
+	// vs. computeJulesPhase's binary open/closed branching: "queued" and
+	// "needs-review" are never reachable through this real data path today).
+	Ended     bool   `json:"ended"`
+	EndReason string `json:"endReason"` // e.g. "jules_completed" or "jules_failed"; defaults to "jules_completed" when Ended is true and this is empty
+	// PrNumber/PrUrl, when set, are written onto the created item (mirrors
+	// handleSeed's PR-field seeding above) so a test can also exercise
+	// PullRequestSection.tsx's "Opened by Jules" provenance marker, which
+	// requires status "pr_pending" + a PR URL + the item's newest linked
+	// session having role jules_work.
+	PrNumber int    `json:"prNumber"`
+	PrUrl    string `json:"prUrl"`
+}
+
+type seedJulesWorkSessionResponse struct {
+	ItemID    string `json:"itemId"`
+	SessionID string `json:"sessionId"`
+}
+
+// handleSeedJulesWorkSession creates a backlog item with a linked jules_work
+// ItemSession (Story 3.3.2) directly through the storage layer — no real
+// Jules API dispatch/poll involved — so the e2e suite can put
+// JulesStatusBadge/PullRequestSection's Jules-provenance marker in front of
+// the UI in a chosen phase without a live jules.google.com session. Mirrors
+// handleSeedWorkItemSession's shape.
+func (h *BacklogDebugSeedHandler) handleSeedJulesWorkSession(w http.ResponseWriter, r *http.Request) {
+	if !h.requirePostWithStorage(w, r) {
+		return
+	}
+
+	req, ok := decodeJSONBody[seedJulesWorkSessionRequest](w, r)
+	if !ok {
+		return
+	}
+
+	ctx := r.Context()
+	var item *session.BacklogItemData
+	if req.ItemID != "" {
+		existing, err := h.storage.GetBacklogItem(ctx, req.ItemID)
+		if err != nil {
+			log.Error("backlog debug seed: get item failed", "err", err, "item_id", req.ItemID)
+			http.Error(w, "failed to find backlog item: "+err.Error(), http.StatusNotFound)
+			return
+		}
+		item = existing
+	} else {
+		status, ok := requireTitleAndDefaultStatus(w, req.Title, req.Status)
+		if !ok {
+			return
+		}
+		created, ok := h.createSimpleBacklogItem(w, ctx, req.Title, status)
+		if !ok {
+			return
+		}
+		item = created
+	}
+
+	if req.PrNumber > 0 || req.PrUrl != "" {
+		prNumber := req.PrNumber
+		prURL := req.PrUrl
+		if _, err := h.storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+			PrNumber: &prNumber,
+			PrURL:    &prURL,
+		}, nil); err != nil {
+			writeInternalError(w, "backlog debug seed: set PR fields failed", "failed to set PR fields", err)
+			return
+		}
+	}
+
+	// julesSessionUUIDPrefix ("jules-", jules_dispatch_service.go) + the
+	// "sessions/<id>" shape a real Jules session name takes, so the seeded
+	// row reproduces the exact "jules-sessions/{id}" storage form ADR-004
+	// documents — julesWebUrlFor (SessionsSection.tsx) strips this same
+	// prefix to build the jules.google.com escape-hatch link.
+	sessionUUID := julesSessionUUIDPrefix + "sessions/" + uuid.New().String()
+	itemSession, err := h.storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleJulesWork,
+	})
+	if err != nil {
+		log.Error("backlog debug seed: create jules_work item session failed", "err", err)
+		http.Error(w, "failed to create item session: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if req.Ended {
+		endReason := req.EndReason
+		if endReason == "" {
+			endReason = "jules_completed"
+		}
+		if err := h.storage.UpdateItemSessionEndedWithReason(ctx, itemSession.ID, time.Now(), endReason); err != nil {
+			log.Error("backlog debug seed: end jules_work item session failed", "err", err)
+			http.Error(w, "failed to mark item session ended: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(seedJulesWorkSessionResponse{
+		ItemID:    item.ID,
+		SessionID: sessionUUID,
 	}); err != nil {
 		log.Error("backlog debug seed: encode response failed", "err", err)
 	}

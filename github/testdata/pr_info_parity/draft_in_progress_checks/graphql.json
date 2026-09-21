@@ -1,0 +1,47 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 801,
+        "title": "WIP: add draft feature",
+        "body": "Work in progress.",
+        "headRefName": "feature/draft-thing",
+        "headRefOid": "abc123draft0000000000000000000000000000",
+        "baseRefName": "main",
+        "state": "OPEN",
+        "url": "https://github.com/tstapler/stapler-squad/pull/801",
+        "createdAt": "2026-09-01T10:00:00Z",
+        "updatedAt": "2026-09-01T12:00:00Z",
+        "isDraft": true,
+        "mergeable": "MERGEABLE",
+        "additions": 42,
+        "deletions": 3,
+        "changedFiles": 5,
+        "author": { "login": "tstapler" },
+        "labels": { "nodes": [{ "name": "wip" }] },
+        "reviewDecision": "",
+        "reviews": { "nodes": [] },
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": {
+                  "contexts": {
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "build",
+                        "status": "IN_PROGRESS",
+                        "conclusion": ""
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

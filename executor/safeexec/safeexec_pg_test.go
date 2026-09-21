@@ -44,6 +44,10 @@ func (b *syncBuffer) String() string {
 
 // captureLogs swaps slog's default logger for one writing to an in-memory
 // buffer at the given level, restoring the previous default on cleanup.
+// This package's production code (safeexec_pg.go) calls stdlib slog.Warn/Debug
+// directly rather than this repo's log package, so it must be captured via the
+// real slog.Default() — not log.SetSlogDefaultForTest, which only affects the
+// injectable seam read by log.Warn/Info/etc.
 func captureLogs(t *testing.T, level slog.Level) *syncBuffer {
 	t.Helper()
 	buf := &syncBuffer{}

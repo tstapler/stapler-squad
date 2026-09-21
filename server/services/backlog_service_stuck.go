@@ -127,12 +127,17 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 // (Story 4.1.4) owns fetching and populating the per-repo, TTL-cached value.
 func stuckBacklogItemToProto(row session.OpenStuckStateData) *sessionv1.StuckBacklogItem {
 	item := &sessionv1.StuckBacklogItem{
-		ItemId:              row.ItemID,
-		Title:               row.ItemTitle,
-		Status:              string(row.ItemStatus),
-		Reason:              toProtoStuckReason(row.Reason),
-		FirstDetectedAt:     timestamppb.New(row.FirstDetectedAt),
-		LastCheckedAt:       timestamppb.New(row.LastCheckedAt),
+		ItemId:          row.ItemID,
+		Title:           row.ItemTitle,
+		Status:          string(row.ItemStatus),
+		Reason:          toProtoStuckReason(row.Reason),
+		FirstDetectedAt: timestamppb.New(row.FirstDetectedAt),
+		LastCheckedAt:   timestamppb.New(row.LastCheckedAt),
+		// #nosec G115 -- pr_number is a GitHub PR number: the production write path
+		// (backlog_service_lifecycle.go) stores it from a *int32 RPC field, and the
+		// only other writer is the e2e-only debug seed handler (never registered
+		// outside STAPLER_SQUAD_INSTANCE=e2e-local); either way it's a real GitHub
+		// PR number, structurally bounded well under int32 range.
 		PrNumber:            int32(row.PrNumber),
 		PrUrl:               row.PrURL,
 		Context:             row.Context,
@@ -265,6 +270,8 @@ func (s *BacklogService) BulkResetStuckRemediation(
 		s.notifyBulkResetParked(reasonFilter, n)
 	}
 
+	// #nosec G115 -- n is a count of rows updated in the local single-user backlog
+	// DB, bounded by the total number of backlog items that could ever exist there.
 	return connect.NewResponse(&sessionv1.BulkResetStuckRemediationResponse{ResetCount: int32(n)}), nil
 }
 
@@ -288,7 +295,7 @@ func (s *BacklogService) notifyBulkResetParked(reasonFilter *domain.StuckReason,
 	s.eventBus.Publish(events.NewNotificationEvent(
 		sessionID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		derivePriority(false, false), // urgent, important — a bulk-reset confirmation, purely informational
 		"Parked items reset",
 		fmt.Sprintf("Reset %d parked item%s (%s) — they'll get automated attempts again.",
 			resetCount, pluralSuffix(resetCount), scope),

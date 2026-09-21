@@ -324,7 +324,7 @@ func TestPreviewWorktreePath_RejectsTraversal(t *testing.T) {
 // test unable to tell "untouched" from "recreated identically" apart).
 func commitRealFile(t *testing.T, repoDir, name, content, message string) string {
 	t.Helper()
-	repo, err := git.PlainOpen(repoDir)
+	repo, err := OpenRepo(repoDir)
 	if err != nil {
 		t.Fatalf("failed to open repo at %s: %v", repoDir, err)
 	}
@@ -542,7 +542,7 @@ func TestFindGitRepoRoot_ExistingRepoWithHeadResolutionFailure_DoesNotCorruptRep
 		t.Errorf(".gitignore content = %q, want untouched %q", gitignore, "node_modules/\n")
 	}
 
-	repo, err := git.PlainOpen(dir)
+	repo, err := OpenRepo(dir)
 	if err != nil {
 		t.Fatalf("failed to reopen repo: %v", err)
 	}
@@ -571,7 +571,7 @@ func TestInitializeProjectDirectory_should_NotOverwriteGitignore_When_CalledTwic
 	if err != nil {
 		t.Fatalf("failed to read .gitignore after first call: %v", err)
 	}
-	repo, err := git.PlainOpen(dir)
+	repo, err := OpenRepo(dir)
 	if err != nil {
 		t.Fatalf("failed to open repo after first call: %v", err)
 	}
@@ -592,7 +592,7 @@ func TestInitializeProjectDirectory_should_NotOverwriteGitignore_When_CalledTwic
 		t.Errorf(".gitignore content changed after second call: got %q, want unchanged %q", gitignoreAfter, gitignoreBefore)
 	}
 
-	repo2, err := git.PlainOpen(dir)
+	repo2, err := OpenRepo(dir)
 	if err != nil {
 		t.Fatalf("failed to reopen repo after second call: %v", err)
 	}

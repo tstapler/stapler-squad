@@ -77,6 +77,7 @@ const baseItem: BacklogItem = {
   activityNotes: [],
   autoSpawnSession: false,
   autoCreatePR: false,
+  autoApprovePlan: false,
 };
 
 describe("BacklogItemDetail — description markdown rendering", () => {

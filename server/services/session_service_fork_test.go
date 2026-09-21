@@ -25,7 +25,7 @@ type forkTestFixture struct {
 	cleanup func()
 }
 
-func setupForkTestFixture(t *testing.T) *forkTestFixture {
+func setupForkTestFixture(t testing.TB) *forkTestFixture {
 	t.Helper()
 
 	repo := session.NewTestEntRepository(t)

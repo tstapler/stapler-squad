@@ -1,0 +1,12 @@
+{
+  "id": "backlog:record-gate-approval",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "RecordGateApproval",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_gates.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-04T16:20:26.29889642-07:00"
+}

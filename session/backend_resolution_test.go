@@ -6,10 +6,22 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 )
 
-func TestResolveSessionBackend_RequestOverrideWinsOverEverything(t *testing.T) {
-	RegisterBackendProvider(BackendTymux)
-	defer RegisterBackendProvider(BackendTmux) // restore default for other tests
+// setGlobalTymuxForTest forces the live "tymux" feature flag (the actual
+// config getSelectedBackend reads via config.LoadConfig(), independent of
+// whatever *config.Config literal a test passes as ResolveSessionBackend's
+// cfg argument) and restores it via t.Cleanup.
+func setGlobalTymuxForTest(t *testing.T, enabled bool) {
+	t.Helper()
+	live := config.LoadConfig()
+	if err := live.SetTymuxGlobalOverride(&enabled); err != nil {
+		t.Fatalf("SetTymuxGlobalOverride: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = config.LoadConfig().SetTymuxGlobalOverride(nil)
+	})
+}
 
+func TestResolveSessionBackend_RequestOverrideWinsOverEverything(t *testing.T) {
 	cfg := &config.Config{
 		TymuxSessionOverrides: map[string]bool{"my-session": false},
 	}
@@ -22,9 +34,6 @@ func TestResolveSessionBackend_RequestOverrideWinsOverEverything(t *testing.T) {
 }
 
 func TestResolveSessionBackend_SessionOverrideForcesTymuxOverGlobalTmux(t *testing.T) {
-	RegisterBackendProvider(BackendTmux)
-	defer RegisterBackendProvider(BackendTmux) // restore default for other tests
-
 	cfg := &config.Config{
 		TymuxSessionOverrides: map[string]bool{"my-session": true},
 	}
@@ -47,8 +56,7 @@ func TestResolveSessionBackend_SessionOverrideForcesTymuxOverGlobalTmux(t *testi
 // returns the override outright instead of OR-ing it into the global, so it
 // does not have that limitation.
 func TestResolveSessionBackend_SessionOverrideForcesTmuxOverGlobalTymux(t *testing.T) {
-	RegisterBackendProvider(BackendTymux)
-	defer RegisterBackendProvider(BackendTmux) // restore default for other tests
+	setGlobalTymuxForTest(t, true)
 
 	cfg := &config.Config{
 		TymuxSessionOverrides: map[string]bool{"my-session": false},
@@ -62,8 +70,7 @@ func TestResolveSessionBackend_SessionOverrideForcesTmuxOverGlobalTymux(t *testi
 }
 
 func TestResolveSessionBackend_FallsBackToGlobalWhenNoOverrides(t *testing.T) {
-	RegisterBackendProvider(BackendTymux)
-	defer RegisterBackendProvider(BackendTmux) // restore default for other tests
+	setGlobalTymuxForTest(t, true)
 
 	cfg := &config.Config{}
 
@@ -75,9 +82,6 @@ func TestResolveSessionBackend_FallsBackToGlobalWhenNoOverrides(t *testing.T) {
 }
 
 func TestResolveSessionBackend_FallsBackToTmuxWhenNothingSet(t *testing.T) {
-	RegisterBackendProvider("")
-	defer RegisterBackendProvider(BackendTmux) // restore default for other tests
-
 	cfg := &config.Config{}
 
 	got := ResolveSessionBackend(cfg, "my-session", "")

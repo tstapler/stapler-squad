@@ -1,10 +1,12 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +38,9 @@ exit 1
 
 	// No known instances -- the fake "staplersquad_orphan-test" session is an orphan,
 	// which drives all three call sites (list-sessions, show-environment, kill-session).
-	ReconcileOrphanedTmuxSessions(nil)
+	// minAge=0 (this fake script's list-sessions output has no session_created field,
+	// so a nonzero minAge could never skip it anyway -- ParseInt fails closed to "check it").
+	ReconcileOrphanedTmuxSessions(nil, 0)
 
 	logBytes, err := os.ReadFile(logPath)
 	require.NoError(t, err, "expected the fake tmux binary to have been invoked")
@@ -83,7 +87,7 @@ exit 1
 		TmuxSessionName: "staplersquad_parent_shell_shell-1",
 	})
 
-	ReconcileOrphanedTmuxSessions([]*Instance{inst})
+	ReconcileOrphanedTmuxSessions([]*Instance{inst}, 0)
 
 	logBytes, err := os.ReadFile(logPath)
 	require.NoError(t, err)
@@ -91,4 +95,59 @@ exit 1
 	logStr := string(logBytes)
 	require.Contains(t, logStr, "list-sessions", "expected list-sessions to have been called")
 	require.NotContains(t, logStr, "kill-session", "the known shell session must not be killed")
+}
+
+// newFakeTmuxWithSessionAge writes a fake tmux script that reports one orphan-looking
+// session ("staplersquad_orphan-test") created createdAgo in the past, and returns the
+// argv-log path plus the script path (for TMUX_BIN).
+func newFakeTmuxWithSessionAge(t *testing.T, createdAgo time.Duration) (logPath, fakeTmux string) {
+	t.Helper()
+	dir := t.TempDir()
+	logPath = filepath.Join(dir, "argv.log")
+	fakeTmux = filepath.Join(dir, "tmux")
+
+	createdUnix := time.Now().Add(-createdAgo).Unix()
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$@" >> "%s"
+case "$*" in
+  *list-sessions*) echo "staplersquad_orphan-test	%d"; exit 0 ;;
+  *show-environment*) exit 1 ;;
+  *kill-session*) exit 0 ;;
+esac
+exit 1
+`, logPath, createdUnix)
+	require.NoError(t, os.WriteFile(fakeTmux, []byte(script), 0o755))
+	return logPath, fakeTmux
+}
+
+// TestReconcileOrphanedTmuxSessions_GracePeriodProtectsNewSession is the regression
+// guard for the registration race a periodic (post-startup) sweep introduces: a tmux
+// session created moments ago — inside CreateSession's window between instance.Start()
+// and the new instance being registered with the live provider — must never be killed
+// as a false-positive orphan just because it doesn't appear in instances yet.
+func TestReconcileOrphanedTmuxSessions_GracePeriodProtectsNewSession(t *testing.T) {
+	logPath, fakeTmux := newFakeTmuxWithSessionAge(t, 10*time.Second)
+	t.Setenv("TMUX_BIN", fakeTmux)
+
+	ReconcileOrphanedTmuxSessions(nil, 5*time.Minute)
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	require.NotContains(t, string(logBytes), "kill-session",
+		"a session younger than minAge must never be killed, regardless of DB knowledge")
+}
+
+// TestReconcileOrphanedTmuxSessions_KillsOldOrphanDespiteGracePeriod is the companion
+// case: a genuinely stale, unknown session older than minAge is still killed — the
+// grace period must not silently disable orphan detection altogether.
+func TestReconcileOrphanedTmuxSessions_KillsOldOrphanDespiteGracePeriod(t *testing.T) {
+	logPath, fakeTmux := newFakeTmuxWithSessionAge(t, 20*time.Minute)
+	t.Setenv("TMUX_BIN", fakeTmux)
+
+	ReconcileOrphanedTmuxSessions(nil, 5*time.Minute)
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	require.Contains(t, string(logBytes), "kill-session",
+		"a session older than minAge with no DB record must still be killed")
 }

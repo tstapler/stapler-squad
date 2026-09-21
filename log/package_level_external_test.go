@@ -40,9 +40,8 @@ func TestInfo_AttributesToCallerNotLogPackage(t *testing.T) {
 
 	var buf bytes.Buffer
 	base := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	origDefault := slog.Default()
-	slog.SetDefault(slog.New(applog.NewPackageLevelHandler(base)))
-	t.Cleanup(func() { slog.SetDefault(origDefault) })
+	origDefault := applog.SetSlogDefaultForTest(slog.New(applog.NewPackageLevelHandler(base)))
+	t.Cleanup(func() { applog.SetSlogDefaultForTest(origDefault) })
 
 	pkg := applog.PackageForPC(externalCallerPC())
 	if pkg == "log" {

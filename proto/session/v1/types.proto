@@ -13,11 +13,20 @@ message Session {
   // Human-readable session title.
   string title = 2;
 
-  // Path to workspace repository root.
-  string path = 3;
+  // Deprecated: use existing_dir to open files, or active_dir to compare
+  // sessions. Despite the name this is NOT the repository root — it carries
+  // Workspace().ExistingDir, which falls back to the repo root when a worktree
+  // is gone from disk.
+  string path = 3 [deprecated = true];
 
-  // Directory within repository to start in.
-  string working_dir = 4;
+  // Deprecated: use active_dir, which this now duplicates exactly.
+  //
+  // Despite the name it is an absolute directory, not the "directory within the
+  // repository to start in" — that is the relative subdirectory
+  // UpdateSessionRequest.working_dir writes into Instance.WorkingDir. Reading
+  // this field and saving it back therefore corrupts the value; see the
+  // read/write asymmetry noted on UpdateSessionRequest.
+  string working_dir = 4 [deprecated = true];
 
   // Git branch name for this session.
   string branch = 5;
@@ -91,6 +100,42 @@ message Session {
 
   // Repository name.
   string github_repo = 28;
+
+  // GitHub Enterprise host owning github_owner/github_repo, e.g.
+  // "github.netflix.net". Empty means github.com.
+  string github_host = 90;
+
+  // Where this session's code lives. Four concepts, because the domain has
+  // four — picking the wrong one has already shipped a bug.
+  //
+  //   comparing two sessions' locations -> active_dir
+  //   reading or writing files          -> existing_dir
+  //   "same repository?"                -> repo_root, or workspace_key
+
+  // The path this session was created against. For a session created from a
+  // pre-existing worktree this is that worktree, not the main checkout.
+  string repo_root = 91;
+
+  // The git worktree created for this session, empty when it works directly in
+  // repo_root.
+  //
+  // Differs from git_worktree.worktree_path, which is only populated once the
+  // session has started — this field is set for stopped sessions too, so it is
+  // the one to use when a session may not be running.
+  string worktree_dir = 92;
+
+  // Where this session works: worktree_dir if it has one, else repo_root.
+  // Stable whether or not the directory currently exists, so this is the
+  // correct key for comparing, correlating, or identifying sessions — and the
+  // right default when unsure.
+  string active_dir = 93;
+
+  // active_dir when that directory exists on disk, else repo_root. Use it only
+  // to open files.
+  //
+  // Lossy by construction: two sessions whose worktrees were both cleaned up
+  // share an existing_dir without being in the same place. Never compare it.
+  string existing_dir = 94;
 
   // Original URL or reference used to create this session.
   // Could be a PR URL, repository URL, or git URL.
@@ -298,6 +343,46 @@ message Session {
   // Reason + timestamp per past automated or manual retry attempt, newest
   // last, capped at 10 entries.
   repeated RetryAttemptRecord retry_history = 87;
+
+  // Human-readable reason the async creation pipeline (Background Resolution
+  // Pipeline) failed. Only meaningful when status == SESSION_STATUS_FAILED;
+  // empty otherwise. One of "GitHubResolutionError", "StartupError", "Stale",
+  // or "Cancelled" (see session.Instance.FailureReason and ADR-001) — the
+  // client maps these to reason-specific copy for the Failed-state card and
+  // failure toast rather than displaying the raw string.
+  string failure_reason = 88;
+
+  // pi approval-extension health (pi-support Epic 4.2). Only meaningful when
+  // program == "pi" and the pi-support feature flag is on; UNSPECIFIED for
+  // every other session. Derived live at read time from
+  // PiExtensionHealthTracker.HealthFor(sessionID) -- never persisted, since a
+  // server restart legitimately resets it back to Unknown until the extension's
+  // periodic re-ping (Story 4.2.3) re-arms it.
+  PiExtensionHealth pi_extension_health = 89;
+
+  // Maps a tag value in `tags` to the rule/mechanism that applied it: a
+  // TaggingRule.ID for rule-derived tags, or the sentinel "llm" for
+  // LLM-classifier-derived tags (session-classifier-pipeline Epic 6.2).
+  // Absent entries mean the tag was added manually. Mirrors
+  // session.Instance's RuleTagProvenance field.
+  map<string, string> rule_tag_provenance = 95;
+}
+
+// PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi
+// session's globally-installed ssq-approval.ts extension has confirmed it
+// loaded and is enforcing approval rules. Three states, not a bool -- see
+// project_plans/pi-support/implementation/plan.md's Domain Glossary entry:
+// "unknown" must be visually distinct from a confirmed failure, and must
+// never be presented to the user as "loaded" before a signal arrives.
+enum PiExtensionHealth {
+  // Not a pi session, or pi-support is off -- the badge this feeds is not shown at all.
+  PI_EXTENSION_HEALTH_UNSPECIFIED = 0;
+  // No health ping received yet, and the grace window has not elapsed -- default state.
+  PI_EXTENSION_HEALTH_UNKNOWN = 1;
+  // At least one health ping has been received within the grace window.
+  PI_EXTENSION_HEALTH_LOADED = 2;
+  // The grace window elapsed with no ping -- tool calls are unenforced.
+  PI_EXTENSION_HEALTH_FAILED = 3;
 }
 
 // RetryAttemptRecord is one entry in Session.retry_history.
@@ -426,6 +511,12 @@ enum SessionStatus {
   // retry at all. Terminal state pending human action via "Retry now"
   // (RetrySession RPC) — unlike STOPPED, not auto-revived by reconciliation.
   SESSION_STATUS_PERMANENTLY_FAILED = 11;
+  // Session's async creation pipeline (Background Resolution Pipeline) failed
+  // before the session ever reached ACTIVE. Non-terminal: distinct from
+  // CRASHED (a previously-ACTIVE session whose process later exited
+  // abnormally) — a FAILED session can be retried back to CREATING. See
+  // ADR-001.
+  SESSION_STATUS_FAILED = 12;
 }
 
 // SessionType determines the session workflow.
@@ -840,8 +931,10 @@ message GithubReviewFeedback {
 
 // PRComment represents a comment on a GitHub pull request.
 message PRComment {
-  // Comment ID.
-  int32 id = 1;
+  // Comment ID. int64, not int32: GitHub's own comment IDs already exceed
+  // int32 range in practice (observed values over 5 billion as of 2026-09),
+  // so int32 here would silently truncate/wrap a real ID.
+  int64 id = 1;
 
   // Comment author username.
   string author = 2;
@@ -1282,6 +1375,28 @@ message ApprovalRuleProto {
   // been idle >= N minutes since its last meaningful output. 0 = condition not
   // applied. Combinable (AND) with all other conditions.
   int32 min_session_idle_minutes = 30;
+}
+
+// TaggingRuleProto represents a single session-tagging rule. Mirrors
+// ApprovalRuleProto's field shape for the sibling auto-tagging rule system.
+message TaggingRuleProto {
+  string id = 1;
+  string name = 2;
+  string name_pattern = 3;
+  string branch_pattern = 4;
+  string path_pattern = 5;
+  string program_pattern = 6;
+  repeated string required_tags = 7;
+  string output_tag = 8;
+  int32 priority = 9;
+  bool enabled = 10;
+  string source = 11;
+  google.protobuf.Timestamp created_at = 12;
+  // fire_count_7d is the number of times this rule matched in the last 7
+  // days; populated server-side by ListTaggingRules from
+  // AnalyticsStore.GetTaggingRuleFireCounts (ux.md Surface 6's "Fires(7d)"
+  // column).
+  int32 fire_count_7d = 13;
 }
 
 // AnalyticsSummaryProto aggregates classification decisions over a time window.

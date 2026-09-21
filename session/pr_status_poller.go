@@ -20,6 +20,28 @@ type pollerAuthResult struct {
 	checkedAt time.Time
 }
 
+// prGitHubClient is every outbound GitHub call PRStatusPoller makes. It exists so
+// tests can inject a fake instead of shelling out to `gh` (checkAllSessions and
+// fetchAndUpdatePRStatus would otherwise require real gh auth and network access
+// to exercise). realGHClient below is the only production implementation.
+type prGitHubClient interface {
+	CheckGHAuth(ctx context.Context) error
+	GetPRForBranchConditional(ctx context.Context, ref github.RepoRef, branch, etag string) (info *github.PRInfo, newEtag string, changed bool, err error)
+	GetPRInfoConditional(ctx context.Context, ref github.RepoRef, prNumber int, cache *github.ETagCache) (info *github.PRInfo, changed bool, err error)
+}
+
+type realGHClient struct{}
+
+func (realGHClient) CheckGHAuth(ctx context.Context) error { return github.CheckGHAuth(ctx) }
+
+func (realGHClient) GetPRForBranchConditional(ctx context.Context, ref github.RepoRef, branch, etag string) (*github.PRInfo, string, bool, error) {
+	return github.GetPRForBranchConditional(ctx, ref, branch, etag)
+}
+
+func (realGHClient) GetPRInfoConditional(ctx context.Context, ref github.RepoRef, prNumber int, cache *github.ETagCache) (*github.PRInfo, bool, error) {
+	return github.GetPRInfoConditional(ctx, ref, prNumber, cache)
+}
+
 // PRStatusPollerConfig contains configuration for the PR status poller.
 type PRStatusPollerConfig struct {
 	// PollInterval controls how often all sessions are checked.
@@ -54,6 +76,7 @@ type PRStatusPoller struct {
 	storage   *Storage
 	config    PRStatusPollerConfig
 	etagCache *github.ETagCache
+	ghClient  prGitHubClient
 
 	// onUpdated is called when a session's PR priority changes.
 	// Intended for EventBus notification; injected from the server layer.
@@ -75,6 +98,11 @@ type PRStatusPoller struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	mu     deadlock.RWMutex
+
+	// dispatchWG tracks InvalidateAndRefresh's out-of-band fetchAndUpdatePRStatus
+	// goroutines, so tests can wait for a dispatch to fully finish rather than
+	// just for its HTTP request to reach a fake server (see pr_status_poller_test.go).
+	dispatchWG sync.WaitGroup
 }
 
 // NewPRStatusPoller creates a new poller with default configuration.
@@ -89,6 +117,7 @@ func NewPRStatusPollerWithConfig(storage *Storage, config PRStatusPollerConfig) 
 		storage:       storage,
 		config:        config,
 		etagCache:     github.NewETagCache(),
+		ghClient:      realGHClient{},
 		noPRPollAfter: make(map[string]time.Time),
 	}
 }
@@ -106,6 +135,47 @@ func (p *PRStatusPoller) PollInterval() time.Duration {
 // GitHub API call volume for repos both pollers hit.
 func (p *PRStatusPoller) ETagCache() *github.ETagCache {
 	return p.etagCache
+}
+
+// InvalidateAndRefresh drops the shared ETagCache entry for (owner, repo,
+// prNumber) and dispatches an out-of-band fetchAndUpdatePRStatus for every
+// tracked instance matching that PR (plural — two Instances, e.g. a worktree
+// session and its parent, can track the same PR). Returns matched=true if at
+// least one instance matched; a miss still invalidates the cache (harmless
+// sync.Map no-op) and returns false.
+//
+// The dispatched fetch's context is built from p.ctx (the poller's own
+// lifetime), not derived from the passed-in ctx: the caller (the webhook
+// handler) does not block on this call, so deriving from its request-scoped
+// ctx would cancel the fetch as soon as the HTTP response is written.
+func (p *PRStatusPoller) InvalidateAndRefresh(ctx context.Context, owner, repo string, prNumber int) bool {
+	_ = ctx // request-scoped; not used for the dispatched fetch's lifetime, see doc comment
+	// Host unknown at this call site (webhook's repoFullName carries no host) —
+	// github.com is the safe default; see poller_invalidation_adapter.go.
+	if ref, refErr := github.NewRepoRef(owner, repo); refErr == nil {
+		p.etagCache.Invalidate(ref, prNumber)
+	}
+
+	matched := false
+	for _, inst := range p.GetInstances() {
+		snap := inst.Snapshot()
+		if snap.GitHub.GitHubOwner != owner || snap.GitHub.GitHubRepo != repo || snap.GitHub.GitHubPRNumber != prNumber {
+			continue
+		}
+		matched = true
+
+		captured := inst
+		fetchCtx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
+		fetchCtx = github.WithGitHubCallOrigin(fetchCtx, github.OriginWebhookReconcile)
+		p.dispatchWG.Add(1)
+		go func() {
+			defer cancel()
+			defer p.dispatchWG.Done()
+			p.fetchAndUpdatePRStatus(fetchCtx, captured)
+		}()
+	}
+
+	return matched
 }
 
 // SetInstances replaces the full list of monitored instances.
@@ -232,6 +302,10 @@ func (p *PRStatusPoller) checkAllSessions() {
 		// the explicit stateMutex.RLock() for GitHubPRStatusTerminal / GitHubIsFork.
 		instSnap := inst.Snapshot()
 
+		if instSnap.Status.IsSuspended() {
+			continue // paused/hibernated/stopped/crashed/permanently-failed: nothing to poll for
+		}
+
 		if instSnap.GitHub.GitHubOwner == "" || instSnap.GitHub.GitHubRepo == "" {
 			continue // no GitHub info for this session
 		}
@@ -254,7 +328,10 @@ func (p *PRStatusPoller) checkAllSessions() {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			p.fetchAndUpdatePRStatus(captured)
+			ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
+			defer cancel()
+			ctx = github.WithGitHubCallOrigin(ctx, github.OriginPRStatusPoller)
+			p.fetchAndUpdatePRStatus(ctx, captured)
 		}()
 	}
 
@@ -271,7 +348,7 @@ func (p *PRStatusPoller) isAuthOK() bool {
 		}
 	}
 
-	if err := github.CheckGHAuth(); err != nil {
+	if err := p.ghClient.CheckGHAuth(p.ctx); err != nil {
 		log.Warn("PR status poller: github auth unavailable", "err", err)
 		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
 		return false
@@ -282,16 +359,20 @@ func (p *PRStatusPoller) isAuthOK() bool {
 }
 
 // fetchAndUpdatePRStatus fetches fresh PR status for one instance and applies it.
-func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
-	ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
-	defer cancel()
-
+// ctx carries the caller's timeout and github.CallOrigin tag — the ticker fan-out
+// loop (checkAllSessions) tags OriginPRStatusPoller; InvalidateAndRefresh tags
+// OriginWebhookReconcile — so the two call paths stay distinguishable in telemetry.
+func (p *PRStatusPoller) fetchAndUpdatePRStatus(ctx context.Context, inst *Instance) {
 	// Use Snapshot() — actor-based writes (SetGitHubPRNumber etc.) do not hold mu,
 	// so mu.RLock would not synchronize with them.
 	snap := inst.Snapshot()
 	prNumber := snap.GitHub.GitHubPRNumber
 	owner := snap.GitHub.GitHubOwner
 	repo := snap.GitHub.GitHubRepo
+	ref, refErr := github.NewRepoRefWithHost(owner, repo, snap.GitHub.GitHubHost)
+	if refErr != nil {
+		return // owner/repo empty — already guarded by caller, but stay defensive
+	}
 
 	// Auto-discovery: find PR for branch when PR number not yet known.
 	// CurrentBranch() reads live from git for directory sessions (Branch field is empty).
@@ -305,18 +386,9 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 		if v, ok := p.listEtags.Load(listKey); ok {
 			listEtag = v.(string)
 		}
-		prInfo, newEtag, changed, err := github.GetPRForBranchConditional(ctx, owner, repo, branch, listEtag)
+		prInfo, newEtag, changed, err := p.ghClient.GetPRForBranchConditional(ctx, ref, branch, listEtag)
 		if newEtag != "" {
 			p.listEtags.Store(listKey, newEtag)
-		}
-		if !changed {
-			// 304: branch list unchanged, still no PR — re-arm backoff to avoid constant polling.
-			if p.config.NoPRBackoff > 0 {
-				p.mu.Lock()
-				p.noPRPollAfter[inst.Title] = time.Now().Add(p.config.NoPRBackoff)
-				p.mu.Unlock()
-			}
-			return
 		}
 		if err != nil {
 			if errors.Is(err, github.ErrNoPR) {
@@ -327,6 +399,15 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 				return
 			}
 			log.Warn("PR status poller: PR discovery failed", "session", inst.Title, "owner", owner, "repo", repo, "branch", branch, "err", err)
+			return
+		}
+		if !changed {
+			// 304: branch list unchanged, still no PR — re-arm backoff to avoid constant polling.
+			if p.config.NoPRBackoff > 0 {
+				p.mu.Lock()
+				p.noPRPollAfter[inst.Title] = time.Now().Add(p.config.NoPRBackoff)
+				p.mu.Unlock()
+			}
 			return
 		}
 		// Persist discovered PR number and clear no-PR backoff.
@@ -344,7 +425,7 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 	}
 
 	// Conditional fetch using ETag cache (304 = no change)
-	prInfo, changed, err := github.GetPRInfoConditional(ctx, owner, repo, prNumber, p.etagCache)
+	prInfo, changed, err := p.ghClient.GetPRInfoConditional(ctx, ref, prNumber, p.etagCache)
 	if err != nil {
 		if p.handleFetchError(err) {
 			return
@@ -362,7 +443,8 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 	p.applyPRUpdate(inst, prInfo)
 }
 
-// handleFetchError inspects an error for rate limits and auth failures.
+// handleFetchError inspects an error for rate limits, auth failures, and
+// admission-control rejections (AdmitOrigin, github/http_client.go).
 // Returns true if the error was handled (caller should not log separately).
 // Rate-limit state is managed by github.DefaultRateLimiter (updated by the
 // transport); this method only needs to detect the error type and signal auth
@@ -376,6 +458,10 @@ func (p *PRStatusPoller) handleFetchError(err error) bool {
 	if strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized") {
 		log.Warn("PR status poller: github auth error, invalidating auth cache")
 		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
+		return true
+	}
+	if strings.Contains(msg, "admission control rejected") {
+		log.Warn("PR status poller: admission control rejected request")
 		return true
 	}
 	return false

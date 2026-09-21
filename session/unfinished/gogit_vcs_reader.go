@@ -232,17 +232,37 @@ const approxBytesPerCachedRepo = 96 * 1024 * 1024
 // repoCacheMaxEntries*approxBytesPerCachedRepo ceiling (~9.6 GB): this process
 // runs alongside many other memory-hungry tools on a single host, and a
 // scanner cache has no business claiming multiple GB of that budget on its
-// own. 1.5 GB covers roughly 16 simultaneously "hot" repos at the ~96 MB
-// estimate, which comfortably covers realistic concurrent-viewing workloads.
-const repoCacheMemoryBudgetBytes = 1536 * 1024 * 1024
+// own.
+//
+// 3 GB covers roughly 32 simultaneously "hot" repos at the ~96 MB estimate --
+// doubled from an original 1.5 GB/16-repo budget after live /debug/blob-cache
+// stats on a host running dozens of concurrent sessions showed a 0.07% hit
+// rate (77 hits / 117330 misses): with more actively-scanned repos than the
+// cache had room for, every poll cycle evicted and reopened a cold repo,
+// wiping its per-repo blobCache before the next poll could ever hit it. This
+// is a size trade-off, not a fix for unbounded growth -- the
+// high/severeMemoryPressureThreshold tiers below still shrink this budget
+// under real process memory pressure, so a host that can't afford the extra
+// headroom degrades gracefully rather than OOMing.
+const repoCacheMemoryBudgetBytes = 3072 * 1024 * 1024
 
 // highMemoryPressureThreshold/severeMemoryPressureThreshold gate
-// effectiveCacheBudgetBytes' tiered response. Measured against the Go
-// runtime's own HeapInuse (this process's heap, not host-wide memory) so the
-// signal is specific to this process's contribution to memory pressure.
+// effectiveCacheBudgetBytes' tiered response, measured against the Go
+// runtime's own HeapInuse (this process's heap, not host-wide memory).
+//
+// Both are derived from repoCacheMemoryBudgetBytes rather than independent
+// constants, specifically so normal cache growth toward its own budget can
+// never itself cross into a pressure tier: an earlier version set
+// highMemoryPressureThreshold to a flat 3 GB, identical to the budget it
+// gates, so filling the cache to its own full budget triggered the
+// high-pressure branch, which halved the budget and forced eviction --
+// heap then dropped back below 3 GB, the budget rose back to 3 GB, and the
+// cache refilled toward 3 GB again, an oscillating grow/evict loop that
+// re-created the exact cache-thrashing symptom repoCacheMemoryBudgetBytes'
+// own doc comment describes fixing.
 const (
-	highMemoryPressureThreshold   = 3 * 1024 * 1024 * 1024 // 3 GB heap in-use: halve the budget
-	severeMemoryPressureThreshold = 6 * 1024 * 1024 * 1024 // 6 GB heap in-use: floor to a handful of repos
+	highMemoryPressureThreshold   = repoCacheMemoryBudgetBytes + repoCacheMemoryBudgetBytes/2 // 1.5x budget: 4.5 GB
+	severeMemoryPressureThreshold = repoCacheMemoryBudgetBytes * 2                            // 2x budget: 6 GB
 )
 
 // readHeapInUse returns the process's current in-use heap bytes. Declared as
@@ -390,6 +410,7 @@ func (g *GoGitVCSReader) pruneRepoCache() {
 		if ts < cutoff {
 			g.repoCache.Delete(k)
 			atomic.AddInt64(&g.repoCacheSize, -1)
+			atomic.AddInt64(&g.repoCacheEvictions, 1)
 			releaseGogitstoreRef(entry)
 		} else {
 			live = append(live, liveEntry{k.(string), ts, entry})
@@ -407,6 +428,7 @@ func (g *GoGitVCSReader) pruneRepoCache() {
 		for _, e := range live[:int64(len(live))-maxEntries] {
 			g.repoCache.Delete(e.key)
 			atomic.AddInt64(&g.repoCacheSize, -1)
+			atomic.AddInt64(&g.repoCacheEvictions, 1)
 			releaseGogitstoreRef(e.entry)
 		}
 	}
@@ -451,6 +473,7 @@ func (g *GoGitVCSReader) ClearCache() {
 	g.repoCache.Range(func(k, v any) bool {
 		g.repoCache.Delete(k)
 		atomic.AddInt64(&g.repoCacheSize, -1)
+		atomic.AddInt64(&g.repoCacheEvictions, 1)
 		releaseGogitstoreRef(v.(*cachedRepo))
 		return true
 	})
@@ -471,6 +494,19 @@ type GoGitVCSReader struct {
 	// repoCacheSize tracks the approximate entry count atomically so eviction
 	// can be triggered without a full Range scan on every cache miss.
 	repoCacheSize int64
+
+	// repoCacheColdOpens/repoCacheEvictions back RepoCacheStats: instrumentation
+	// added to root-cause the blob-cache's near-zero hit rate observed in
+	// production (see /debug/blob-cache) before deciding whether to decouple
+	// blobCache from cachedRepo's lifetime the way matcherCache already is.
+	// blobCache lives inside *cachedRepo (gogit_vcs_reader.go's cachedRepo
+	// struct), so every eviction here also discards that repo's blob cache —
+	// if repoCacheEvictions tracks repoCacheColdOpens closely, evictions (not a
+	// genuinely low same-blob-revisit workload) are the reason blobCache never
+	// warms up, which would justify that decoupling; if evictions are rare
+	// relative to opens, the low hit rate reflects the workload instead.
+	repoCacheColdOpens int64
+	repoCacheEvictions int64
 
 	// diffStatCache caches DiffShortstat results keyed by absolute worktreePath.
 	// Values are diffStatEntry (stored by value; no mutation after Store).
@@ -641,6 +677,38 @@ func BlobCacheStatsSnapshot() BlobCacheStats {
 	return r.BlobCacheStats()
 }
 
+// RepoCacheStats reports repoCache churn: how many *cachedRepo entries were
+// ever opened cold (ColdOpens) versus evicted (Evictions, via pruneRepoCache's
+// TTL/LRU passes or ClearCache). Since blobCache lives inside *cachedRepo
+// (see that struct's doc comment), every eviction discards the evicted repo's
+// blob cache along with it. Evictions tracking ColdOpens closely means most
+// opens are actually re-opens of a previously-evicted path — the likely
+// explanation for a low BlobCacheStats hit rate; Evictions staying small
+// relative to ColdOpens means most opens are genuinely first-time, and the low
+// hit rate instead reflects the workload rarely revisiting the same blob.
+type RepoCacheStats struct {
+	CurrentSize int64
+	ColdOpens   int64
+	Evictions   int64
+}
+
+func (g *GoGitVCSReader) RepoCacheStats() RepoCacheStats {
+	return RepoCacheStats{
+		CurrentSize: atomic.LoadInt64(&g.repoCacheSize),
+		ColdOpens:   atomic.LoadInt64(&g.repoCacheColdOpens),
+		Evictions:   atomic.LoadInt64(&g.repoCacheEvictions),
+	}
+}
+
+// RepoCacheStatsSnapshot mirrors BlobCacheStatsSnapshot for RepoCacheStats.
+func RepoCacheStatsSnapshot() RepoCacheStats {
+	r := currentReader.Load()
+	if r == nil {
+		return RepoCacheStats{}
+	}
+	return r.RepoCacheStats()
+}
+
 // perRepoObjectCacheSize replaces go-git's PlainOpenWithOptions default of
 // cache.DefaultMaxSize (96MB, plumbing/cache/common.go) with a much smaller
 // budget. 96MB was sized for an interactive single-repo CLI tool holding one
@@ -739,7 +807,9 @@ func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) 
 		base := filepath.Join(worktreesDir, entry.Name())
 
 		// gitdir file contains the absolute path to the worktree's .git file.
-		gitdirData, err := os.ReadFile(filepath.Join(base, "gitdir"))
+		// base is built from entry.Name(), enumerated by os.ReadDir(worktreesDir)
+		// just above -- a trusted filesystem listing, not user input.
+		gitdirData, err := os.ReadFile(filepath.Join(base, "gitdir")) // #nosec G304 -- base comes from a trusted os.ReadDir listing, not user input
 		if err != nil {
 			continue
 		}
@@ -749,7 +819,7 @@ func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) 
 		wt := WorktreeInfo{Path: wtPath}
 
 		// Read HEAD: either "ref: refs/heads/<branch>" or a bare SHA.
-		headData, err := os.ReadFile(filepath.Join(base, "HEAD"))
+		headData, err := os.ReadFile(filepath.Join(base, "HEAD")) // #nosec G304 -- base comes from a trusted os.ReadDir listing, not user input
 		if err == nil {
 			headStr := strings.TrimSpace(string(headData))
 			const refPrefix = "ref: refs/heads/"
@@ -1013,8 +1083,8 @@ func (g *GoGitVCSReader) hasUncommittedGoGitPhase(entry *cachedRepo, worktreePat
 // Strategy (no subprocess, low allocations):
 //  1. Staged changes: compare index entry hashes against HEAD tree hashes — O(n)
 //     hash comparisons, zero file I/O.
-//  2. Working-tree changes: stat each tracked file and compare mtime/size against
-//     the index record — O(n) stat calls, no file reads.
+//  2. Working-tree changes: stat each tracked file and compare full-precision
+//     mtime/size against the index record — O(n) stat calls, no file reads.
 //
 // This avoids the 1.85 GB allocation caused by wt.Status(), which hashes every
 // modified file in full.
@@ -1061,8 +1131,7 @@ func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 				}
 				continue
 			}
-			if info.Size() != int64(tf.size) ||
-				!info.ModTime().Truncate(time.Second).Equal(tf.modifiedAt.Truncate(time.Second)) {
+			if info.Size() != int64(tf.size) || !info.ModTime().Equal(tf.modifiedAt) {
 				r := true
 				g.hasUncommittedCache.Store(worktreePath, hasUncommittedEntry{
 					result: r, expiry: time.Now().Add(diffStatCacheTTL),
@@ -1631,7 +1700,9 @@ func readFileIfSmall(path string) ([]byte, bool) {
 	if info.Size() > maxUntrackedFileSize {
 		return nil, false
 	}
-	data, err := os.ReadFile(path) //nolint:gosec
+	// path is walked from repoPath by walkUntrackedFiles (an internal directory
+	// walk over the session's own git worktree), not user/RPC input.
+	data, err := os.ReadFile(path) // #nosec G304 -- path comes from an internal directory walk over the worktree, not user input
 	if err != nil {
 		return nil, false
 	}
@@ -1834,7 +1905,10 @@ func walkUntrackedRec(dir string, indexed map[string]struct{}, matcher gitignore
 // index) always live here, never in the shared commondir.
 func worktreeGitDir(repoPath string) string {
 	gitPath := filepath.Join(repoPath, ".git")
-	data, err := os.ReadFile(gitPath)
+	// repoPath is the local repo/worktree directory this server itself
+	// manages for the session (Instance.Path), validated to exist at session
+	// creation -- not raw untrusted network/RPC input.
+	data, err := os.ReadFile(gitPath) // #nosec G304 -- repoPath is the session's own worktree directory, not user-supplied network input
 	if err != nil {
 		// .git is a directory (or missing).
 		return gitPath
@@ -1858,7 +1932,8 @@ func worktreeGitDir(repoPath string) string {
 // resolving through the .git file in linked worktrees.
 func gitCommonDir(repoPath string) string {
 	gitPath := filepath.Join(repoPath, ".git")
-	data, err := os.ReadFile(gitPath)
+	// repoPath is the session's own worktree directory (see worktreeGitDir above).
+	data, err := os.ReadFile(gitPath) // #nosec G304 -- repoPath is the session's own worktree directory, not user-supplied network input
 	if err != nil {
 		// .git is a directory (or missing).
 		return gitPath
@@ -1870,8 +1945,9 @@ func gitCommonDir(repoPath string) string {
 		return gitPath
 	}
 	wtGitDir := strings.TrimPrefix(line, prefix)
-	// Each per-worktree gitdir contains a "commondir" file pointing to the main .git.
-	if cdData, err := os.ReadFile(filepath.Join(wtGitDir, "commondir")); err == nil {
+	// wtGitDir is parsed from gitPath above, which is itself rooted at the
+	// trusted repoPath -- not user input.
+	if cdData, err := os.ReadFile(filepath.Join(wtGitDir, "commondir")); err == nil { // #nosec G304 -- wtGitDir derives from repoPath's own .git file, not user input
 		commondir := strings.TrimSpace(string(cdData))
 		if !filepath.IsAbs(commondir) {
 			commondir = filepath.Join(wtGitDir, commondir)
@@ -1925,6 +2001,7 @@ func (g *GoGitVCSReader) openRepoEntry(path string) (*cachedRepo, error) {
 	actual, loaded := g.repoCache.LoadOrStore(path, entry)
 	if !loaded {
 		atomic.AddInt64(&g.repoCacheSize, 1)
+		atomic.AddInt64(&g.repoCacheColdOpens, 1)
 	} else {
 		// Another goroutine won the race to store the canonical entry for
 		// this path first. The repo we just opened here — and its

@@ -327,7 +327,7 @@ func TestParseLogs_should_ParseMixedJSONAndLegacyLines_When_FileHasBothFormats(t
 		`{"time":"2026-08-25T11:02:00Z","level":"ERROR","msg":"json line three"}`,
 	}, "\n")
 
-	result, err := parseLogs(strings.NewReader(content), &sessionv1.GetLogsRequest{})
+	result, err := parseLogs(strings.NewReader(content), &sessionv1.GetLogsRequest{}, "")
 
 	require.NoError(t, err)
 	require.Len(t, result.Entries, 3, "the 3 valid lines must all parse; the garbage line is skipped")
@@ -350,9 +350,65 @@ func TestParseLogs_should_FilterByLevel_When_JSONLinesHaveDifferentLevels(t *tes
 
 	result, err := parseLogs(strings.NewReader(content), &sessionv1.GetLogsRequest{
 		Levels: []string{"ERROR"},
-	})
+	}, "")
 
 	require.NoError(t, err)
 	require.Len(t, result.Entries, 1)
 	assert.Equal(t, "error line", result.Entries[0].Message)
+}
+
+// TestParseJSONLogLine_should_ExtractSessionAttribute_When_LinePresent covers
+// the "session" attribute log.ForSession tags every session-scoped entry
+// with — it must be extracted into parsedLogLine.Session, not folded into
+// Message like an arbitrary attribute (GetLogs' session filter reads this
+// field, not the message text).
+func TestParseJSONLogLine_should_ExtractSessionAttribute_When_LinePresent(t *testing.T) {
+	t.Parallel()
+	line := `{"time":"2026-08-25T11:00:00Z","level":"INFO","msg":"session started","session":"my-session"}`
+
+	parsed, ok := parseJSONLogLine(line)
+
+	require.True(t, ok)
+	assert.Equal(t, "my-session", parsed.Session)
+	assert.Equal(t, "session started", parsed.Message, "session must not also appear folded into Message")
+}
+
+// TestParseJSONLogLine_should_ExcludeSessionFromMessage_When_ValueIsEmptyOrNonString
+// covers the edge case an all-or-nothing "consume iff non-empty" check would
+// miss: an empty-string or non-string "session" attribute must still be
+// treated as structural (excluded from the message fold), not leak through
+// as a noisy "session=" suffix in Message.
+func TestParseJSONLogLine_should_ExcludeSessionFromMessage_When_ValueIsEmptyOrNonString(t *testing.T) {
+	t.Parallel()
+	for _, line := range []string{
+		`{"time":"2026-08-25T11:00:00Z","level":"INFO","msg":"m","session":""}`,
+		`{"time":"2026-08-25T11:00:00Z","level":"INFO","msg":"m","session":123}`,
+	} {
+		parsed, ok := parseJSONLogLine(line)
+
+		require.True(t, ok, "line %q must parse", line)
+		assert.Empty(t, parsed.Session)
+		assert.Equal(t, "m", parsed.Message, "line %q: session must not leak into Message", line)
+	}
+}
+
+// TestParseLogs_should_FilterBySession_When_SessionIdSet is the regression
+// test for the "Logs tab is always empty" bug: entries are written to the
+// single global log file tagged with a "session" attribute (see
+// log.ForSession), not to separate per-session log files, so GetLogs must
+// filter the global file's entries by that attribute rather than trying to
+// open a file that nothing ever writes.
+func TestParseLogs_should_FilterBySession_When_SessionIdSet(t *testing.T) {
+	t.Parallel()
+	content := strings.Join([]string{
+		`{"time":"2026-08-25T11:00:00Z","level":"INFO","msg":"line for session A","session":"session-a"}`,
+		`{"time":"2026-08-25T11:01:00Z","level":"INFO","msg":"line for session B","session":"session-b"}`,
+		`{"time":"2026-08-25T11:02:00Z","level":"INFO","msg":"line with no session tag"}`,
+	}, "\n")
+
+	result, err := parseLogs(strings.NewReader(content), &sessionv1.GetLogsRequest{}, "session-a")
+
+	require.NoError(t, err)
+	require.Len(t, result.Entries, 1)
+	assert.Equal(t, "line for session A", result.Entries[0].Message)
 }

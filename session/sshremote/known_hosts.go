@@ -350,7 +350,7 @@ func (s *KnownHostsStore) writeLinesLocked(lines []string) error {
 		out.WriteByte('\n')
 	}
 	if _, err := tmp.WriteString(out.String()); err != nil {
-		tmp.Close() //nolint:errcheck
+		_ = tmp.Close()
 		return fmt.Errorf("write temp %s: %w", tmpPath, err)
 	}
 	if err := tmp.Close(); err != nil {

@@ -1,0 +1,17 @@
+{
+  "id": "guidance:request-panel",
+  "type": "frontend",
+  "description": "Shared component rendering durable guidance requests' pending/answered state, embedded identically in BacklogItemDetail, TriageReviewPanel, and SessionDetailView (AC3)",
+  "component": "GuidanceRequestPanel",
+  "path": "web-app/src/components/guidance/GuidanceRequestPanel.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "GuidanceRequestPanel > renders nothing when there are no requests for the scope",
+    "GuidanceRequestPanel > renders a pending yes/no question and submits an answer",
+    "GuidanceRequestPanel > renders multiple-choice options and submits the chosen one",
+    "GuidanceRequestPanel > renders a short-answer form and submits typed text",
+    "GuidanceRequestPanel > shows the answer and no form for an answered question"
+  ],
+  "lastModified": "2026-09-12T19:40:00Z"
+}

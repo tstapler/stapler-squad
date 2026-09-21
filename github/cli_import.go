@@ -46,6 +46,9 @@ func ListCLIHosts() ([]CLIHost, error) {
 	if err != nil {
 		return nil, err
 	}
+	// #nosec G304 -- dir is resolved by ghConfigDir() from GH_CONFIG_DIR/XDG_CONFIG_HOME/
+	// $HOME env vars plus a fixed "gh" subdir; the joined filename is the constant
+	// "hosts.yml" — not RPC/user-request-controlled input.
 	data, err := os.ReadFile(filepath.Join(dir, "hosts.yml"))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -75,7 +78,7 @@ func GetCLIToken(ctx context.Context, host string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	cmd := safeexec.CommandContext(ctx, "gh", "auth", "token", "--hostname", NormalizeHost(host))
-	out, err := cmd.Output()
+	out, err := runGHCLICommand(ctx, "auth.token", func() ([]byte, error) { return cmd.Output() })
 	if err != nil {
 		return "", fmt.Errorf("gh auth token --hostname %s: %w", host, err)
 	}

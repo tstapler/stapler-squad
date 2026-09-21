@@ -16,6 +16,12 @@ jest.mock("@connectrpc/connect", () => ({
 jest.mock("@/lib/api/transport", () => ({
   getConnectTransport: jest.fn(() => ({})),
 }));
+// VcsWidgetCommentsBody calls useAnalytics() unconditionally (retry-button
+// click tracking) — mocked here the same way VcsWidgetComments.test.tsx does,
+// since this suite renders VcsWidget's full tree with no AnalyticsContextProvider.
+jest.mock("@/lib/contexts/AnalyticsContext", () => ({
+  useAnalytics: () => ({ track: jest.fn() }),
+}));
 
 function makeData(overrides: Partial<VcsWidgetData> = {}): VcsWidgetData {
   return {
@@ -392,8 +398,8 @@ describe("VcsWidget", () => {
     // to session-2's PR left session-1's cached comments on screen with no refetch.
     mockGetPRComments.mockClear();
     mockGetPRComments
-      .mockResolvedValueOnce({ comments: [{ id: 1, author: "octocat", body: "PR one", isReview: false }] })
-      .mockResolvedValueOnce({ comments: [{ id: 2, author: "hubot", body: "PR two", isReview: false }] });
+      .mockResolvedValueOnce({ comments: [{ id: 1n, author: "octocat", body: "PR one", isReview: false }] })
+      .mockResolvedValueOnce({ comments: [{ id: 2n, author: "hubot", body: "PR two", isReview: false }] });
 
     const githubFor = (prNumber: number) => ({
       owner: "acme",

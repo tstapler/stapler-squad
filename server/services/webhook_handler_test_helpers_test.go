@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/workflows"
@@ -71,7 +72,7 @@ func newWebhookTestInfra(t *testing.T) *webhookTestInfra {
 	t.Helper()
 	// Isolate config so GetOrCreateEncryptionKey's SaveConfig call does not write to
 	// the shared test-mode config dir (mirrors backlog_service_encryption_test.go).
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	entRepo := session.NewTestEntRepository(t)
 
