@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -88,8 +89,8 @@ type cachedTagResult struct {
 }
 
 // SessionTagClassificationPoller polls all monitored sessions at a shared interval and, for
-// any session whose classifier.TagContentHash has changed since the last successful or failed
-// classification, calls headless.GenerateSessionTags to (re)classify it. Mirrors PRStatusPoller's
+// any session not yet classified (or degraded and past its retry backoff), batches it into one
+// headless.GenerateSessionTagsBatch call. Mirrors PRStatusPoller's
 // shape (build-vs-buy.md 4a) rather than forking a new poller idiom.
 type SessionTagClassificationPoller struct {
 	instances []*Instance
@@ -340,7 +341,7 @@ func (p *SessionTagClassificationPoller) classificationNeeded(inst *Instance, no
 // ClassifyNow synchronously (re)classifies one monitored session, bypassing the classify-once
 // gate — the programmatic back end of the user's manual "re-run classification" action. It
 // runs a single-session batch call bounded by CallTimeout and cancelled with ctx or the
-// poller. It returns an error only when no monitored session matches title.
+// poller. It errors when no session matches title or the classification degraded.
 func (p *SessionTagClassificationPoller) ClassifyNow(ctx context.Context, title string) error {
 	p.mu.RLock()
 	instances := make([]*Instance, len(p.instances))
@@ -359,16 +360,22 @@ func (p *SessionTagClassificationPoller) ClassifyNow(ctx context.Context, title 
 			continue
 		}
 		snap := inst.Snapshot()
-		p.classifyBatch(ctx, []pendingClassification{{inst: inst, meta: metaForSession(snap)}}, currentVocabulary(p.engine), time.Now())
+		if p.classifyBatch(ctx, []pendingClassification{{inst: inst, meta: metaForSession(snap)}}, currentVocabulary(p.engine), time.Now()) > 0 {
+			return ErrClassificationDegraded
+		}
 		return nil
 	}
 	return fmt.Errorf("tag poller: no monitored session matches %q", title)
 }
 
-// classifyBatch classifies the batch in one call over the model hierarchy, applies each
-// result, and caches it: applied entries are final, degraded ones retry after
-// MinReclassifyInterval. A model legitimately choosing Unclassified is still "applied".
-func (p *SessionTagClassificationPoller) classifyBatch(ctx context.Context, batch []pendingClassification, vocabulary []string, now time.Time) {
+// ErrClassificationDegraded means every model in the hierarchy failed, so no tags were applied.
+var ErrClassificationDegraded = errors.New("tag classification degraded: all models failed")
+
+// classifyBatch classifies the batch in one call over the model hierarchy and caches each
+// result: applied entries are final, degraded ones retry after MinReclassifyInterval and
+// leave existing tags untouched. A model choosing Unclassified is still "applied". Returns
+// the number of degraded sessions.
+func (p *SessionTagClassificationPoller) classifyBatch(ctx context.Context, batch []pendingClassification, vocabulary []string, now time.Time) int {
 	callCtx, cancel := context.WithTimeout(ctx, p.config.CallTimeout)
 	defer cancel()
 
@@ -383,16 +390,19 @@ func (p *SessionTagClassificationPoller) classifyBatch(ctx context.Context, batc
 
 	log.Info("session tag poller: batch classified", "sessions", len(batch), "batch_cost_usd", cost, "latency_ms", latency.Milliseconds())
 
+	degraded := 0
 	for _, b := range batch {
 		res := results[b.meta.Name]
-		outcome := "applied"
 		if res.Degraded {
-			log.Warn("session tag classification poller: batch classification degraded to Unclassified", "session", b.meta.Name)
-			outcome = "failed_unclassified"
+			degraded++
+			log.Warn("session tag classification poller: batch classification degraded", "session", b.meta.Name)
+			log.Info("session tag poller: LLM classification", "session", b.meta.Name, "outcome", "failed_unclassified")
+			p.cache.Store(b.meta.Name, cachedTagResult{classifiedAt: now, applied: false})
+			continue
 		}
-		log.Info("session tag poller: LLM classification", "session", b.meta.Name, "outcome", outcome, "tags", res.Tags)
-
+		log.Info("session tag poller: LLM classification", "session", b.meta.Name, "outcome", "applied", "tags", res.Tags)
 		b.inst.ApplyLLMTagResult(res.Tags, llmSentinelRuleID)
-		p.cache.Store(b.meta.Name, cachedTagResult{tags: res.Tags, classifiedAt: now, applied: !res.Degraded})
+		p.cache.Store(b.meta.Name, cachedTagResult{tags: res.Tags, classifiedAt: now, applied: true})
 	}
+	return degraded
 }

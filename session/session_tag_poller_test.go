@@ -183,28 +183,42 @@ func TestSessionTagPoller_should_CallLLMAndUpdateCache_When_ContentHashChanged(t
 	}
 }
 
-func TestSessionTagPoller_should_ApplyUnclassifiedAndUpdateCache_When_LLMCallFails(t *testing.T) {
+func TestSessionTagPoller_should_KeepExistingTagsAndBackOff_When_LLMCallFails(t *testing.T) {
 	t.Parallel()
 	fake := &fakeTagPoolClient{err: errors.New("fake pool client error")}
 	fx := newTagPollerFixture(fake, "Feature")
 	inst := primedInstance("sess-2", "feature/x")
+	inst.ApplyLLMTagResult([]string{"Feature"}, llmSentinelRuleID)
 	fx.poller.SetInstances([]*Instance{inst})
 
 	fx.poller.pollOnce()
 
-	tags := inst.GetTags()
-	if len(tags) != 1 || tags[0] != UnclassifiedTag {
-		t.Fatalf("expected tags=[%s] after failed call, got %v", UnclassifiedTag, tags)
+	if tags := inst.GetTags(); len(tags) != 1 || tags[0] != "Feature" {
+		t.Fatalf("degraded result must not wipe existing LLM tags, got %v", tags)
 	}
-	if inst.RuleTagProvenance[UnclassifiedTag] != llmSentinelRuleID {
-		t.Errorf("RuleTagProvenance[%s] = %q, want %q", UnclassifiedTag, inst.RuleTagProvenance[UnclassifiedTag], llmSentinelRuleID)
+	if cached, ok := fx.poller.cache.Load("sess-2"); !ok || cached.applied {
+		t.Fatalf("degraded result must be cached with applied=false, got %+v (ok=%v)", cached, ok)
 	}
 
-	// Second tick with no session change must not re-call the LLM (cache updated on failure too).
+	// Second tick is inside the retry backoff, so it must not re-call the LLM.
 	fx.poller.pollOnce()
 	if got := fake.callCount(); got != 1 {
-		t.Fatalf("second tick after failure with no session change: CallBlocking called %d times total, want still 1 (skipped)", got)
+		t.Fatalf("second tick after failure: CallBlocking called %d times total, want still 1 (backoff)", got)
 	}
+}
+
+func TestSessionTagPoller_should_ReturnErrClassificationDegraded_When_ClassifyNowDegrades(t *testing.T) {
+	t.Parallel()
+	fake := &fakeTagPoolClient{err: errors.New("fake pool client error")}
+	fx := newTagPollerFixture(fake, "Feature")
+	inst := primedInstance("sess-3", "feature/x")
+	inst.ApplyLLMTagResult([]string{"Feature"}, llmSentinelRuleID)
+	fx.poller.SetInstances([]*Instance{inst})
+
+	err := fx.poller.ClassifyNow(context.Background(), "sess-3")
+
+	assert.ErrorIs(t, err, ErrClassificationDegraded)
+	assert.Equal(t, []string{"Feature"}, inst.GetTags())
 }
 
 // TestSessionTagPoller_should_LogFailedUnclassifiedOutcome_When_GenerateSessionTagsDegrades is
