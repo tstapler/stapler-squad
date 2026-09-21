@@ -2,7 +2,7 @@
 
 **Date**: 2026-09-21
 
-Derived from `plan.md` (task IDs in brackets), `../requirements.md` (AC1-AC10) and `../design/ux.md` (UX-1..UX-42 plus the 5 S6 vocabulary criteria). Type names follow the plan's Domain Glossary. No fake `CommandExecutor` and no sleeping-script binaries: `Prober` tests use injected function fakes (`lookPath`, `run`, `stat`); fakes include an injected `readHead` for the native-vs-script gate; runner tests re-exec the test binary through the unexported `runWith` seam (tasks 1.1.2b-c). No `time.Sleep`; use `require.Eventually` and a fake clock.
+Derived from `plan.md` (task IDs in brackets), `../requirements.md` (AC1-AC10) and `../design/ux.md` (UX-1..UX-45 plus the 5 S6 vocabulary criteria). Type names follow the plan's Domain Glossary. No fake `CommandExecutor` and no sleeping-script binaries: `Prober` tests use injected function fakes (`lookPath`, `run`, `stat`); fakes include an injected `readHead` for the native-vs-script gate; runner tests re-exec the test binary through the unexported `runWith` seam (tasks 1.1.2b-c). No `time.Sleep`; use `testutil/wait` (`RequireEventually`, `ScaleTimeout`, commit `d722197683a5`) and a fake clock. **No fixed tight wall-clock thresholds**: every 80ms/500ms/1s/100ms bound in the rows below is a base value passed through `wait.ScaleTimeout`, and the load-independent behavioural assertion (`TimedOut`, `Truncated`, group gone) is the proof. New Go tests live in `config/clihelp` where possible, not `server/services` (BUG-067/BUG-099).
 
 ## Happy Path Scenario
 Given Program Config with a saved-form command field and a server whose PATH contains `claude` (baseline: today a typo surfaces only when the tmux session fails), when the user types `claude`, blurs the field, then types `--mo` in Default CLI Flags, then presses Down and Enter, then the badge reads "Found: /usr/bin/claude", the listbox offers `--model` with its description, and the value becomes `--model `.
@@ -20,6 +20,8 @@ Go tests live in `config/clihelp/*_test.go` (package `clihelp`), `server/service
 | REQ-AC1 | defaults_service_probe_test.go | TestProbeResultToProto_should_DeriveFoundFromStatus_When_EachProbeStatus | Unit | Table: FOUND_PARSED/FOUND_NO_FLAGS/TIMEOUT/NEEDS_CONFIRM true; NOT_FOUND/ERROR/BUSY false |
 | REQ-AC1 | defaults_service_probe_test.go | TestProbeProgram_should_MapAliasesWrapperAndTruncated_When_ProberReturnsThem | Unit | Field mapping |
 | REQ-AC1 | defaults_service_probe_test.go | TestProbeProgram_should_ReturnAiderFlagShape_When_RealProberWithFakeRunAndAiderFixture | Integration | Real `Prober` + real handler; asserts `--model`, `takes_value`, description (task 1.2.2e) |
+| REQ-AC1 | feature_flag_service_test.go | TestProbeProgram_should_ReturnUnimplementedAndResumeOnToggle_When_FlagProgramsCliFlagProbeOffThenOn | Integration | Kill switch (Task 1.2.4a): default ON passes; `UpdateFeatureFlag` off -> `CodeUnimplemented` on the next request without restart; on again passes; no env var involved |
+| REQ-AC1 | useProbeProgram.test.ts | useProbeProgram_should_MapUnimplementedToDisabledAndRenderNothing_When_KillSwitchOff | Unit | `Code.Unimplemented` -> `disabled` state; badge and combobox suggestions render nothing (Task 1.2.4b) |
 
 ### AC2: LookPath on first token, `~` expanded, missing is `found=false` not an RPC error
 
@@ -101,11 +103,11 @@ Go tests live in `config/clihelp/*_test.go` (package `clihelp`), `server/service
 | REQ-AC5 | ProbeStatusBadge.test.tsx | ProbeStatusBadge_should_RenderAliasAwareNotFoundCopy_When_NotFound | Unit | Error path |
 | REQ-AC5 | ProbeStatusBadge.test.tsx | ProbeStatusBadge_should_RenderCouldntCheckWithRetry_When_TransportOrBusyAndNeverNotFound | Unit | Error path |
 | REQ-AC5 | ProbeStatusBadge.test.tsx | ProbeStatusBadge_should_RenderNoFlagsTimeoutAndWrapperVariants_When_Given | Unit | Variants; TIMEOUT reads "Timed out reading flags — try Check again", distinct from the no-flags copy |
-| REQ-AC5 | ProbeStatusBadge.test.tsx | ProbeStatusBadge_should_RenderNotRunYetCopyAndCheckButton_When_NeedsConfirm | Unit | `needsConfirm` variant, 44px `Check` calls `onConfirm` |
+| REQ-AC5 | ProbeStatusBadge.test.tsx | ProbeStatusBadge_should_RenderNotCheckedYetCopyAndCheckButton_When_NeedsConfirm | Unit | Exact copy "Found: <path>. Not checked for flags yet. Check runs `<program> --help` on this server."; 44px `Check` calls `onConfirm`; no "script" or "Not run yet" text |
 | REQ-AC5 | ProgramsManager.test.tsx | ProgramsManager_should_ShowFoundStatus_When_CommandBlurs | Unit | Happy path |
-| REQ-AC5 | ProgramsManager.test.tsx | ProgramsManager_should_RunCheckAndNotSubmit_When_EnterPressedInCommandField | Unit | D1 |
+| REQ-AC5 | ProgramsManager.test.tsx | ProgramsManager_should_RunImplicitProbeAndNotSubmit_When_EnterPressedInCommandField | Unit | D1 as changed: Enter sends no `confirm_execute`; on a script it shows the NEEDS_CONFIRM hint and does not run it |
 | REQ-AC5 | ProgramsManager.test.tsx | ProgramsManager_should_KeepSaveEnabled_When_NotFoundOrTransportError | Unit | Error path |
-| REQ-AC5 | cli-flag-discovery.spec.ts | programs_settings_should_ShowNotRunYetOnBlurThenFlagsAfterCheckAndNotFoundForMissingPath_When_FixtureScript | Integration | Playwright vs isolated server, real RPC, real fixture script (shebang): blur -> "Not run yet", marker file absent; Check -> marker present, flags listed; missing path -> "Not found" |
+| REQ-AC5 | cli-flag-discovery.spec.ts | programs_settings_should_ShowNotCheckedYetOnBlurThenFlagsAfterCheckAndNotFoundForMissingPath_When_FixtureScript | Integration | Playwright vs isolated server, real RPC, real fixture script (shebang): blur -> "Not checked for flags yet", marker file absent; Check -> marker present, flags listed; missing path -> "Not found" |
 
 ### AC6: Flag autocomplete, non-blocking unknown-flag warning, description per flag
 
@@ -138,6 +140,7 @@ Go tests live in `config/clihelp/*_test.go` (package `clihelp`), `server/service
 | REQ-AC7 | ProgramProbeSection.test.tsx | ProgramProbeSection_should_ShowResolvedPathBadge_When_ProgramFound | Unit | Happy path |
 | REQ-AC7 | ProgramProbeSection.test.tsx | ProgramProbeSection_should_ListOnlyBogus_When_SavedFlagsYesAlwaysAndBogus | Unit | Saved-flag warning |
 | REQ-AC7 | ProgramProbeSection.test.tsx | ProgramProbeSection_should_ShowNotFoundBadgeWithoutDuplicateWarning_When_BinaryMissing | Unit | Error path, `preset-program-warning` testid kept |
+| REQ-AC7 | ProgramProbeSection.test.tsx | ProgramProbeSection_should_ShowFlagsWithoutCheckPrompt_When_ServerReturnsFoundParsedForPreviouslyConfirmedProgram | Unit | Picker relies on the server confirmed set (Task 1.1.4f); no client-side consent record; `resolve_only` still sent on selection |
 | REQ-AC7 | ProgramProbeSection.test.tsx | ProgramProbeSection_should_ShowNothing_When_TransportErrorOrWrapperOrBusy | Unit | Error path (transport/busy show the "Couldn't check right now." badge, no flag warning) |
 | REQ-AC7 | ProgramProbeSection.test.tsx | ProgramProbeSection_should_SendResolveOnlyOnSelectionAndConfirmOnlyOnCheck_When_SelectionChangesThenCheckClicked | Unit | Picker never executes on selection (`resolve_only:true`, no `confirm_execute`); `Check` sends `confirm_execute:true` |
 | REQ-AC7 | OmnibarCreationPanel.test.tsx | OmnibarCreationPanel_should_RenderProgramProbeSectionAndNoOldSpan_When_ProgramSelected | Integration | Panel with real section, mocked RPC; diff gains one element |
@@ -165,6 +168,9 @@ Go tests live in `config/clihelp/*_test.go` (package `clihelp`), `server/service
 | REQ-AC8 | prober_test.go | TestProbe_should_RunOnceAndRemember_When_ConfirmExecuteThenImplicitProbeOfSameKey | Unit | Confirmed set; changed mtime returns `NEEDS_CONFIRM` again |
 | REQ-AC8 | prober_test.go | TestProbe_should_RunNativeImplicitly_When_ElfOrMachoHead | Unit | Native magic table (ELF, Mach-O, fat) |
 | REQ-AC8 | prober_confirm_test.go | TestProbe_should_NotCreateMarker_When_ScriptProbedImplicitlyAndCreateItAfterConfirm | Integration | Real `Run` and script that touches a marker file (task 1.1.4g) |
+| REQ-AC8 | prober_confirm_test.go | TestProbe_should_RunOnResolveOnlyAndNotRegress_When_ConfirmedKeyAndCacheTtlExpired | Unit | Fake clock past 10 min: `ResolveOnly` on a previously confirmed key returns real flags, not `NEEDS_CONFIRM` (UX finding a) |
+| REQ-AC8 | prober_confirm_test.go | TestProbe_should_ReturnNeedsConfirmOnResolveOnly_When_ConfirmedKeyMtimeChangedOrProberRestarted | Unit | Changed mtime/size and a fresh `Prober` re-prompt on purpose (consent covers the old bytes; set is in memory) |
+| REQ-AC8 | (gate) | make security | Integration | gosec clean with the two targeted `//nolint:gosec` G204 annotations (Task 1.1.2e); no file- or package-level suppression |
 | REQ-AC8 | defaults_service_probe_test.go | TestProbeProgram_should_PassConfirmExecuteAndResolveOnlyToProber_When_SetOnRequest | Unit | Field plumbing; `NEEDS_CONFIRM` maps to `found=true` in the `probeResultToProto` table |
 | REQ-AC8 | probeguard_test.go | TestProbeGuard_should_LeaveOtherProceduresUntouched_When_DifferentPath | Unit | Scope |
 | REQ-AC8 | runner_test.go | TestRunWith_should_ReportNoLeakedSecretsAndEmptyTempCwd_When_Helper_printenv_PoisonedParentEnv | Integration | Real child; control asserts poison present in `parentEnv` and `HOME` arrived |
@@ -195,7 +201,7 @@ Go tests live in `config/clihelp/*_test.go` (package `clihelp`), `server/service
 
 ## UX Acceptance Tests
 
-Every criterion in `design/ux.md` has one row (47 = UX-1..UX-42 plus S6-1..S6-5; UX-21 is withdrawn and keeps a negative test). "Jest" means React Testing Library in the named file; "Playwright" means `tests/e2e/cli-flag-discovery.spec.ts` (data-testid/ARIA locators only, no `waitForTimeout`); "Manual" is a numbered checklist item on the dev instance (`PORT=62871`, `STAPLER_SQUAD_INSTANCE=claude-manual-test`, never the live `:8543`).
+Every criterion in `design/ux.md` has at least one row (50 = UX-1..UX-45 plus S6-1..S6-5; UX-21 is withdrawn and keeps a negative test). "Jest" means React Testing Library in the named file; "Playwright" means `tests/e2e/cli-flag-discovery.spec.ts` (data-testid/ARIA locators only, no `waitForTimeout`); "Manual" is a numbered checklist item on the dev instance (`PORT=62871`, `STAPLER_SQUAD_INSTANCE=claude-manual-test`, never the live `:8543`).
 
 Plan decisions applied: D4 dropped, so UX-21 is withdrawn (a negative test remains) and UX-30/UX-31 are validated on what remains. `design/ux.md` S6/S7 were aligned to the plan: UX-34 now states Info for every outcome and Warn for BUSY, and the test asserts exactly that.
 
@@ -246,15 +252,21 @@ Plan decisions applied: D4 dropped, so UX-21 is withdrawn (a negative test remai
 | UX-38: color paired with icon and text | ProbeStatusBadge.test.tsx | ProbeStatusBadge_should_PairColorWithIconAndText_When_AllTones | Jest | Each tone has icon + text (contrast covered by S6-4) |
 | UX-39: touch targets >= 44px (Check, Retry, `[i]`, rows, path toggle) | cli-flag-discovery.spec.ts | touch_targets_should_Be44pxMinimum_When_Viewport375HasTouch | Playwright | Bounding boxes of each control (Check, Retry, `[i]`, option rows, path toggle) |
 | UX-40: no autocapitalize/autocorrect/spellcheck | ProgramsManager.test.tsx | ProgramsManager_should_DisableAutoCapAutoCorrectSpellcheck_When_CommandAndFlagsInputs | Jest | Assert three attributes on both inputs |
-| UX-42: script never run on blur or picker selection | cli-flag-discovery.spec.ts | programs_should_NotRunScriptOnBlurAndRunAfterCheck_When_FixtureIsShebang | Playwright | Blur -> marker file absent and "Not run yet"; Check (and separately Enter) -> marker present |
-| UX-42 (unit) | ProgramsManager.test.tsx | ProgramsManager_should_SendConfirmExecuteOnlyForCheckOrEnter_When_BlurThenCheckThenEnter | Jest | Request-shape spy: blur sends neither flag |
+| UX-42: script never run on blur, Enter or picker selection | cli-flag-discovery.spec.ts | programs_should_NotRunScriptOnBlurOrEnterAndRunAfterCheck_When_FixtureIsShebang | Playwright | Blur -> marker file absent and "Not checked for flags yet"; Enter -> marker still absent, hint showing, form not submitted; Check -> marker present |
+| UX-42 (unit) | ProgramsManager.test.tsx | ProgramsManager_should_SendConfirmExecuteOnlyForCheck_When_BlurThenEnterThenCheck | Jest | Request-shape spy: blur and Enter send neither flag; only the Check button sends `confirm_execute` |
 | UX-41: no added required step | cli-flag-discovery.spec.ts | programs_should_SaveInSameStepsAsBefore_When_ProbeAndWarningVisible | Playwright | Fill, Save immediately (no Check, warning present); count actions equals baseline |
+| UX-43: Check stays mounted and focused; disabled + `aria-busy` during run; debounced announcement | ProgramsManager.test.tsx | ProgramsManager_should_KeepCheckMountedFocusedAndBusyAndDebounceCheckingAnnouncement_When_CheckRuns | Jest | Fake timers: `prog-command-check` same node and focused after result; `disabled` and `aria-busy="true"` while pending; a second click sends no second request; live-region "Checking..." absent at 100ms, present after 300ms, and no separate "Checking..." announcement for a fast (<300ms) probe |
+| UX-43 (e2e) | cli-flag-discovery.spec.ts | check_should_RemainFocusedAfterResult_When_CheckClicked | Playwright | `toBeFocused` on `prog-command-check` after the result renders |
+| UX-44: Tab never alters text unless arrowed | FlagCombobox.test.tsx | FlagCombobox_should_NotAcceptOnTabAndKeepText_When_ListOpenAndNoArrowNavigation | Jest | Type `--v`, Tab: value unchanged, focus moves, list closed; Down then Tab accepts the option; Enter accepts |
+| UX-45: 375px full-width 44px Check row; 640-1024px inline; keyboard-open viewport | cli-flag-discovery.spec.ts | check_should_BeFullWidth44pxAt375AndInlineAt800AndStayReachableWithKeyboardViewport_When_NeedsConfirm | Playwright | 375x667: `prog-command-check` width equals container width, height >= 44; 800x1024: inline, no clipping or horizontal scroll; 375x300 (keyboard emulation): active option and Save reachable by scroll (Task 4.2.3b) |
+| UX-45 (unit) | ProgramProbeSection.test.tsx | ProgramProbeSection_should_RenderCheckRowFullWidthAndKeepReachable_When_NeedsConfirmNarrowViewport | Jest | Layout token/class assertion and `scrollIntoView` called for the Check row under reduced visual viewport |
+| UX flags-field hint (S2) | ProgramsManager.test.tsx | ProgramsManager_should_ShowSuggestionsAppearAfterCheckHintWithDescribedBy_When_NeedsConfirm | Jest | Hint text present and referenced by `aria-describedby` on `prog-flags-input`; "Check the command above" hint when no probe has run |
 
 ## Test Stack
 - **Unit (Go)**: `testing` + `testify` (`require`), table-driven, `-race`; `goleak` or `require.Eventually` for the flight-exit test; fake clock; `slog` capture handler; `FuzzParseHelp`.
 - **Integration (Go)**: re-exec helper in `runner_helper_test.go` (modes `bigout`, `flood`, `hang`, `orphan`, `printenv`, `sid`; `CLIHELP_TEST_HELPER` marker passed through the permitted `CLIHELP_TEST_` env prefix); `httptest` for `ProbeGuard` and per-listener chains; real Connect handler behind the guard.
 - **Unit and component (web-app)**: Jest + React Testing Library + `userEvent`, shared mock `web-app/src/lib/hooks/__mocks__/probeProgramMock.ts` (keeps jscpd at or below 0.12%); `jest-axe` only if already a dependency.
-- **E2E / UX**: Playwright + Allure in `tests/e2e/cli-flag-discovery.spec.ts` (first line `// @feature program_config:probe, settings-programs`), page helper `tests/e2e/pages/ProgramsSettingsPage.ts`, fixture `tests/e2e/fixtures/probe-fixture.sh` (chmod +x, not world-writable); global-setup provisions the isolated server. Manual checklist for UX-36 and the screen-reader clause of UX-11 only.
+- **E2E / UX**: Playwright + Allure in `tests/e2e/cli-flag-discovery.spec.ts` (first line `// @feature program_config:probe, settings-programs`), page helper `tests/e2e/pages/ProgramsSettingsPage.ts`, fixture `tests/e2e/fixtures/probe-fixture.sh` (chmod +x, not world-writable); global-setup provisions the isolated server. Manual checklist for UX-36 and the screen-reader clauses of UX-11, UX-43 and UX-44 (plan Task 5.2.1b: NVDA and VoiceOver on the dev instance; Axe cannot verify a moving `aria-describedby` or live-region announcements).
 - **Migration**: N/A (plan: no schema or data changes; additive proto). No `migration_should_be_reversible` test.
 
 ## Coverage Targets and How to Measure
@@ -268,22 +280,25 @@ Plan decisions applied: D4 dropped, so UX-21 is withdrawn (a negative test remai
 
 - All public service methods: happy path + error paths covered (`Probe`, `Resolve`, `ParseHelp`, `Run`/`runWith`, `ProbeProgram`, `ProbeGuard`).
 - All external integrations (child process, HTTP guard, Connect handler): unit with fakes plus at least one integration test (see Integration rows above).
-- UX acceptance criteria: each of the 47 criteria in `design/ux.md` has a row above.
+- UX acceptance criteria: each of the 50 criteria in `design/ux.md` has a row above.
 
 ## Known gaps and dependencies (recorded, not silently dropped)
 - ADR-001 owner sign-off and the AC7 scope-down (saved `cli_flags` only; alias `extraFlags` not validated) are PENDING human acceptance (plan Unresolved Questions); AC7 tests validate the scoped-down behavior only.
-- Fixture-capture unknowns (plan 1.1.3a): `git --help` may spawn `man`; whether claude/aider/gemini `--help` writes to `$HOME`. Outcomes may change the `git` negative fixture and the child `HOME` in `probeEnv`.
-- Measured `--help` timings (plan Flagged Choice 11) are UNMEASURED until Task 1.1.3a; the `slowTools` row above exists only if the measurement adds entries, and the real-binary smoke test skips where the binary is absent.
+- Fixture-capture unknowns (plan Task 1.0.1, the first task): `git --help` may spawn `man`; whether claude/aider/gemini `--help` writes to `$HOME`. Outcomes may change the `git` negative fixture and the child `HOME` in `probeEnv`.
+- Measured `--help` timings (plan Flagged Choice 11) are UNMEASURED until Task 1.0.1 (first task); the `slowTools` row above exists only if the measurement adds entries, and the real-binary smoke test skips where the binary is absent.
 - ADR-001 mitigation for scripts (`NEEDS_CONFIRM`) and its first-click cost for claude/gemini/aider are PENDING human acceptance along with the ADR.
 - `LoopbackBound` accessor is unresolved (plan Unresolved Q #7); the guard tests use an injected `ProbeGuardConfig` function, so they do not depend on it.
 - Plan residual concerns (`remoteChain` helper, `localhost` as loopback, Host parsing with `net.SplitHostPort`) are covered by `TestRemoteChain_*` and `TestProbeGuard_should_Pass_*` rows.
+
+- Picker `NEEDS_CONFIRM` returns after a server restart or a changed mtime/size by design (confirmed set is in memory; persisting execution consent is a deferred security-model change); tested by `TestProbe_should_ReturnNeedsConfirmOnResolveOnly_When_ConfirmedKeyMtimeChangedOrProberRestarted`.
+- Pending human decisions H1 (ADR-001), H2 (AC7 scope-down), H3 (first-click cost) are listed at the top of `plan.md` and remain PENDING; no test row implies approval.
 
 ## Pre-mortem (risks and where covered)
 - Hanging or noisy binaries: `hang`/`flood`/`orphan` runner tests, early kill, `WaitDelay=200ms`.
 - Cancelled or busy probe poisoning the cache: cancel-then-reprobe, follower-of-cancelled-leader, BUSY-not-cached, flight-exit tests.
 - False "not found" from PATH mismatch: login-PATH tests (failure not cached, `$SHELL` unset, bash early-return, background-helper shell); alias-only NOT_FOUND copy; guard 403 rendered as "Couldn't check".
 - Wrapper false warnings: wrapper skip tests and the built-in Proxy entry case.
-- Timeout too short for slow CLIs (pre-mortem #1): timing go/no-go in Task 1.1.3a, TIMEOUT copy/TTL/Check-bypass tests, real-binary smoke test.
+- Timeout too short for slow CLIs (pre-mortem #1): timing go/no-go in Task 1.0.1 (first task) and Gate G1 (>=3 of 5 targets parse >0 flags, else ship the badge only), TIMEOUT copy/TTL/Check-bypass tests, real-binary smoke test.
 - Implicit execution of scripts (pre-mortem #2): `NEEDS_CONFIRM` gate, request-shape tests, real-process marker test, e2e marker check.
 - Guard vs real hostnames (pre-mortem #3): `SetHostnames` pass test plus "Couldn't check" mapping.
 - Login-PATH goroutine and rc noise (pre-mortem #4): hermetic-constructor test and sentinel-pollution tests.

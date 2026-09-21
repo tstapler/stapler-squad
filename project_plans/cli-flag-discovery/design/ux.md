@@ -23,10 +23,10 @@ Single source of wording, used by both forms. Icon shapes differ (color is redun
 | `ProbeUiState` / status | Icon (aria-hidden) | Text | Tone |
 |---|---|---|---|
 | idle | none | (nothing rendered) | - |
-| checking | spinner (static under reduced-motion) | `Checking...` | neutral |
+| checking | spinner (static under reduced-motion) | `Checking...` (the live-region text is announced only after 300ms; a fast probe announces just the result) | neutral |
 | FOUND_PARSED | check | `Found: /usr/bin/claude` + ` 14 flags detected`; detail `Checked on this server only` | success |
 | FOUND_NO_FLAGS | check | `Found: /usr/bin/claude. Couldn't read flags from --help; flag suggestions unavailable.` | neutral |
-| NEEDS_CONFIRM (script, or picker resolve-only) | check (found) + info | `Found: /path. Not run yet: this program is a script. Select Check to run it with --help and read its flags.` + `Check` control | neutral |
+| NEEDS_CONFIRM (script, or picker resolve-only) | check (found) + info | `Found: <path>. Not checked for flags yet. Check runs `<program> --help` on this server.` (`<program>` is the command token, for example `claude`) + `Check` control; the `Check` control is a full-width 44px row under the text below 640px, inline after the text at 640-1024px | neutral |
 | TIMEOUT | check (found) + info | `Found: /path. Timed out reading flags — try Check again.` (distinct from "Couldn't read flags") | neutral |
 | wrapper (`is_wrapper`) | check + info | `Wrapper command (env): flags for the wrapped program are not checked.` | neutral |
 | ERROR / BUSY | info | `Couldn't check right now.` + Retry | neutral |
@@ -95,7 +95,8 @@ Inputs carry `autoCapitalize="off" autoCorrect="off" spellCheck={false}`. The `C
 |---|---|---|
 | 1 | Types in command field | Badge unchanged (no per-keystroke probing). If a prior result exists for a different command, badge switches to idle (stale result hidden) |
 | 2 | Blurs field | Implicit probe: badge shows `Checking...`; a native binary is run with `--help`, a script is not (step 3e). Field stays editable; focus not moved |
-| 2b | Presses `Check`, or presses Enter in the field while it is non-empty | Explicit probe (this is the user's confirmation to run a script; also bypasses a cached TIMEOUT) |
+| 2b | Presses `Check` | Explicit probe: the only action that confirms running a script; also bypasses a cached TIMEOUT. The `Check` button stays mounted and keeps focus, is `disabled` with `aria-busy="true"` while the run is in flight (no double submit), and is relabelled `Check again` afterwards |
+| 2c | Presses Enter in the field while it is non-empty | Immediate implicit probe (same as blur, no waiting for blur). A native binary runs; a script shows the NEEDS_CONFIRM hint and is **not** run. The form is never submitted |
 | 3a | Server returns found | Badge shows found variant; flags field becomes autocomplete-capable (S2) |
 | 3b | Server returns NOT_FOUND | Warning variant; Save stays enabled |
 | 3c | Response arrives for an older command (user kept typing) | Discarded; badge remains idle/checking for the current command |
@@ -106,7 +107,7 @@ Inputs carry `autoCapitalize="off" autoCorrect="off" spellCheck={false}`. The `C
 | 6 | Clears the field | Badge disappears (idle); no probe on empty command |
 | Exit | Cancel, Save, or navigating away | Aborts in-flight probe on unmount; no leftover state |
 
-Enter behavior: Enter in the command field triggers `check` only; it does not submit the form (prevents accidental save on mobile keyboards' "Go").
+Enter behavior: Enter in the command field runs the implicit probe only and never submits the form (prevents accidental save on mobile keyboards' "Go"). It is deliberately not consent to execute a script, because on mobile "Go" would consent silently; consent is the explicit `Check` button.
 
 ### Error and edge states
 
@@ -114,7 +115,7 @@ Enter behavior: Enter in the command field triggers `check` only; it does not su
 |---|---|---|
 | Not found | Warning variant | Fix command and re-check, or Save anyway |
 | Command has only env assignments / unbalanced quote / starts with `-` / relative path | NOT_FOUND text (server maps every `ResolveError` to not-found) | Edit and re-check, or Save anyway |
-| Program is a script (shebang) | NEEDS_CONFIRM variant; not run on blur | `Check` to run, or Save anyway |
+| Program is a script (shebang) | NEEDS_CONFIRM variant ("Not checked for flags yet. Check runs `<program> --help` on this server."); not run on blur or Enter; the flags field shows the hint "Suggestions appear after Check reads the flags." | `Check` to run, or Save anyway |
 | Probe times out | TIMEOUT variant (found retained if path resolved), "try Check again" | Check again; flags typed by hand |
 | Server unreachable or guard refuses | transportError + Retry | Retry or Save anyway |
 | Semaphore saturated / spawn failure | ERROR/BUSY variant ("Couldn't check right now.") + Retry | Retry, Save anyway |
@@ -123,7 +124,7 @@ Enter behavior: Enter in the command field triggers `check` only; it does not su
 
 ### Acceptance criteria
 
-- UX-1: A user can learn whether a typed command exists in 1 action after typing (blur, Enter, or one tap on `Check`), with no extra navigation.
+- UX-1: A user can learn whether a typed command exists in 1 action after typing (blur, Enter, or one tap on `Check`; a script is only resolved by blur/Enter, and read for flags by `Check`), with no extra navigation.
 - UX-2: The badge is a `role="status"` (`aria-live="polite"`) region with a stable id referenced by the command input's `aria-describedby`; `aria-invalid` is never set by a probe result.
 - UX-3: Save is enabled and clickable in every probe state, including `checking`, NOT_FOUND and transportError; no confirmation modal is introduced.
 - UX-4: A slow response for a previous command never overwrites the state for the current command (stale drop).
@@ -131,7 +132,7 @@ Enter behavior: Enter in the command field triggers `check` only; it does not su
 - UX-6: Probe results never move keyboard focus or scroll the page.
 - UX-7: On a 375px viewport the badge text wraps; no horizontal scroll appears; full path is reachable via a 44px toggle.
 - UX-8: Under `prefers-reduced-motion` the spinner is static and the text `Checking...` is still present.
-- UX-42: A script (shebang) is never executed on blur or on picker selection; it runs only after `Check` (or Enter in the command field), and the badge says it has not been run.
+- UX-42: A script (shebang) is never executed on blur, on Enter in the command field, or on picker selection; it runs only after the `Check` button, and the badge says the flags have not been checked yet and what Check does.
 
 ---
 
@@ -177,7 +178,7 @@ Descriptions for flags that are not the active option are reachable through the 
 |---|---|---|
 | 1 | Types a token starting with `-` | Listbox opens with prefix matches, then substring matches, for the token at the caret only; max 8 visible then scroll |
 | 2 | Down / Up | Moves active option (wraps); `aria-activedescendant` updates; the active option's description shows inline and is exposed via `aria-describedby` on the input; DOM focus stays in the input |
-| 3 | Enter or Tab (list open, option active) | Replaces the token at caret with the flag; appends a trailing space; list closes. Value-taking flags do not add `=` |
+| 3 | Enter (list open, option active), or Tab **only if the user has already arrowed to an option** | Replaces the token at caret with the flag; appends a trailing space; list closes. Value-taking flags do not add `=` |
 | 4 | Escape | Closes list; text unchanged; focus stays |
 | 5 | Alt+Down | Opens list for the current token |
 | 6 | Taps an option (touch) | Option selected via pointer-down (input does not blur, so no re-probe); list closes; keyboard stays open |
@@ -188,11 +189,12 @@ Descriptions for flags that are not the active option are reachable through the 
 
 | Situation | User sees | Exit path |
 |---|---|---|
-| No probe yet / NOT_FOUND / NEEDS_CONFIRM / zero flags / TIMEOUT / transportError / wrapper | Plain text input (no popup, no error) | Type flags by hand |
+| No probe yet / NOT_FOUND / NEEDS_CONFIRM / zero flags / TIMEOUT / transportError / wrapper | Plain text input (no popup, no error). Hint under the field, referenced by `aria-describedby`: "Check the command above" when no probe has run, "Suggestions appear after Check reads the flags." when NEEDS_CONFIRM | Type flags by hand |
 | Filter matches nothing | List closes silently (no "no results" row while typing) | Continue typing |
 | Command changed after flags were fetched | Suggestions stay tied to the last found command until the new probe settles; a stale-result note is not shown; combobox reverts to plain input while checking | Re-check |
 | Tab pressed with list closed | Normal focus move | - |
-| Tab with list open and an option active | Accepts option (documented in hint text for screen readers via `aria-describedby`) | Escape first to leave without accepting |
+| Tab with list open and no option arrowed to (`aria-activedescendant` not set by the user; the first option is never auto-active) | Normal focus move; typed text untouched; list closes | - |
+| Tab with list open after the user arrowed to an option | Accepts that option (same as Enter) | Escape first to leave without accepting |
 
 ### Acceptance criteria
 
@@ -312,8 +314,11 @@ Program
 Script not yet checked (selection never runs a program):
 
 ```
- [check] Found: /usr/local/bin/aider. Not run yet: this program is a script.
-         Select Check to run it with --help and read its flags.   [ Check ]
+ [check] Found: /usr/local/bin/aider. Not checked for flags yet.
+         Check runs `aider --help` on this server.
+ +---------------------------------------------+
+ |                   Check                     |   <- full-width 44px row at 375px;
+ +---------------------------------------------+      inline after the text at 640-1024px
 ```
 
 Not found (replaces the old `preset-program-warning`; same testid retained on this variant, only one message ever rendered):
@@ -328,14 +333,14 @@ Not found (replaces the old `preset-program-warning`; same testid retained on th
 
 | Step | User | System |
 |---|---|---|
-| 1 | Opens Advanced Options / picker shows a program | Panel resolves the option's `command` and sends a resolve-only request (no execution): shows `Checking...`, then found, not found, or NEEDS_CONFIRM; a cached prior result includes flags |
+| 1 | Opens Advanced Options / picker shows a program | Panel resolves the option's `command` and sends a resolve-only request: shows `Checking...`, then found, not found, or NEEDS_CONFIRM. Nothing unconfirmed is executed. A program the user already checked on this server (same path, mtime and size, this server process) is served from the cache or re-probed by the server and **never regresses to NEEDS_CONFIRM after the 10-minute cache TTL** |
 | 2 | Changes selection | Previous request aborted; new resolve-only request fires; badge resets to checking for the new program |
 | 3 | Sees found / not found / needs-confirm / no flags / timeout / transport variants | Same vocabulary as S6 |
 | 4 | Selects `Check` on a NEEDS_CONFIRM badge | Explicit probe runs the program with `--help`; flags and saved-flag warning then appear |
 | 5 | Creates the session anyway | Creation is never blocked or delayed by the probe |
 | Exit | Change program or continue creating | No modal, nothing to dismiss |
 
-Results are memoized per command for the session so re-selecting a program does not re-probe.
+Results are memoized per command for the session so re-selecting a program does not re-probe. NEEDS_CONFIRM returns for an already-checked program only when its file changed (new mtime or size: the earlier consent covered different bytes) or the server restarted (the confirmed set is in memory; persisting execution consent to disk is a security-model change and is deferred, see plan Unresolved Questions). The `Check` button stays mounted and focused, disabled with `aria-busy` during a run.
 
 ### Error and edge states
 
@@ -381,8 +386,11 @@ Acceptance criteria:
 - UX-39: Touch targets (`Check`, Retry, `[i]`, option rows, path toggle) are at least 44x44 CSS px.
 - UX-40: Both command and flags inputs disable auto-capitalization, autocorrect and spellcheck so mobile keyboards do not alter `--flags`.
 - UX-41: Time-to-save for the config form is unchanged: no probe or warning adds a required step.
+- UX-43: The `Check` button stays mounted and keeps keyboard focus through a run and after the result; it is `disabled` with `aria-busy="true"` while a run is in flight (no double submit); the "Checking..." text in the live region is announced only if the run exceeds 300ms.
+- UX-44: In the flags combobox Tab never changes typed text unless the user has arrowed to an option first; Enter accepts the active option.
+- UX-45: At 375px the `Check` control is a full-width row at least 44px high; at 640-1024px it sits inline and wraps without clipping; with the on-screen keyboard open (about 300px of visual viewport) the active option and Save stay reachable by scroll.
 
-Total UX acceptance criteria: 42 (UX-1 to UX-42; UX-21 withdrawn), plus the 5 in the S6 vocabulary block.
+Total UX acceptance criteria: 45 (UX-1 to UX-45; UX-21 withdrawn), plus the 5 in the S6 vocabulary block.
 
 ## Flow completeness check (no dead ends)
 
@@ -396,7 +404,7 @@ Total UX acceptance criteria: 42 (UX-1 to UX-42; UX-21 withdrawn), plus the 5 in
 
 ## Decisions (status against the plan)
 
-- D1: `Enter` in the command field runs `Check` and does not submit the form. Adopted (plan task 2.2.1a).
+- D1: `Enter` in the command field never submits the form and runs the implicit probe; for a script it shows the NEEDS_CONFIRM hint and does not run it (only the `Check` button confirms). Adopted with this change (plan task 2.2.1a; the original D1 made Enter equal to Check).
 - D2: Copy `Checked on this server only` in the badge detail of every found variant. Adopted (plan task 2.1.2a).
 - D3: Keyboard access to descriptions: inline description on the active option; `FlagInfoButton` only outside options (warnings list, "Available flags" disclosure); no Radix tooltip. Adopted (plan task 4.2.2a).
 - D4: A suggestion action in the warning and an "edit in Program Config" link in the panel. Dropped; no AC depends on them.

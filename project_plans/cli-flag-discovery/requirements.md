@@ -32,3 +32,10 @@ These record how the plan (`implementation/plan.md`) reads the ACs where the lit
 - **AC6 ("tooltip")**: delivered as a tap-to-reveal inline description plus a disclosure button, with no hover dependency (also satisfies AC9). No Radix tooltip is used.
 - **AC7 (session creation)**: scoped to the selected program's saved `cli_flags`. Alias `extraFlags` are not validated (they never reach the creation panel). This scope-down needs reviewer acceptance.
 - **AC10 (fixtures)**: `git` is a negative fixture (no options table); `tmux` is a second negative; `gh`, `rg`, `uv`, `aider`, `claude`, `gemini` and `agy` are positive fixtures.
+
+### Outcome checks, value-risk assumption and cut line (added by the triad repair; not AC text)
+
+- **Outcome checks** (two, proportional to a single-user tool): (1) on the dev machine the found badge is correct for `claude`, `aider`, `gemini` and `agy` (found with the right resolved path, or an explanatory not-found for alias-only programs); (2) a mistyped binary or a mistyped flag is flagged in Program Config before launch, instead of surfacing as a failed tmux session.
+- **Value-risk assumption**: the `--help` output of the target CLIs parses into usable flags, and alias-only programs (for example `proxy-claude` defined only as a shell alias) report `NOT_FOUND` with explanatory copy rather than confusing the user. The plan tests this cheaply before building autocomplete: Gate G1 (`implementation/plan.md`) continues past the walking skeleton only if at least 3 of the 5 measured targets (claude, aider, gemini, agy, gh) yield more than 0 parsed flags.
+- **Effort and cut line**: about 151 estimated hours in total (plan hour table), of which the MVP (found/not-found badge in both UIs, Milestone M1) is about 68 hours; flag parsing, autocomplete, warnings and descriptions are Milestone M2. Effort is large relative to impact, so the cut line exists to let the badge ship and be judged before M2 is built.
+
