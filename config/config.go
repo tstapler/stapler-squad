@@ -1007,6 +1007,9 @@ func (c *Config) HeadlessFailureCaptureDirOrDefault() (string, error) {
 	return filepath.Join(configDir, "headless-failures"), nil
 }
 
+// BacklogAttachmentDirName is the attachments directory's name under GetConfigDir().
+const BacklogAttachmentDirName = "backlog-attachments"
+
 // BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.
 // Uploaded images referenced from backlog item descriptions are stored here,
 // durably (unlike the 24h temp paste dir) since they're linked from persisted
@@ -1018,7 +1021,7 @@ func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(configDir, "backlog-attachments"), nil
+	return filepath.Join(configDir, BacklogAttachmentDirName), nil
 }
 
 // PromptCacheDirOrDefault returns the resolved directory for temp-file-backed
