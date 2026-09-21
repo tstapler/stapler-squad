@@ -34,6 +34,8 @@ func (s ProbeStatus) String() string {
 		return "BUSY"
 	case ProbeStatusNeedsConfirm:
 		return "NEEDS_CONFIRM"
+	case ProbeStatusUnspecified:
+		return "UNSPECIFIED"
 	default:
 		return "UNSPECIFIED"
 	}
@@ -50,5 +52,10 @@ type ProbeOpts struct {
 type ProbeResult struct {
 	Status       ProbeStatus
 	ResolvedPath ResolvedPath
-	IsWrapper    bool
+	// Flags is shared with the cache; callers must not mutate it.
+	Flags     []Flag
+	Truncated bool
+	IsWrapper bool
+	// CacheHit is diagnostic only (audit log); it is never stored in the cache.
+	CacheHit bool
 }

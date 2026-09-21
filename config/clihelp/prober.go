@@ -2,17 +2,31 @@ package clihelp
 
 import (
 	"context"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
-// Prober resolves a command to a safe executable. In this milestone it never
-// runs the program: Probe stops after resolve and the file checks.
+// maxConcurrentRuns caps distinct binaries running --help at once.
+const maxConcurrentRuns = 2
+
+// Prober resolves a command to a safe executable and, when a RunFunc is
+// configured, runs its --help and parses the flags. Without a RunFunc it
+// stops after resolve and the file checks.
 type Prober struct {
+	run          RunFunc
+	limits       Limits
+	readHead     func(path string) ([]byte, error)
+	cache        *probeCache
+	confirmed    *keySet
+	flights      singleflight.Group
+	sem          chan struct{}
 	lookPath     func(name string) (string, error)
 	stat         func(path string) (fs.FileInfo, error)
 	evalSymlinks func(path string) (string, error)
@@ -34,6 +48,29 @@ func WithStat(f func(path string) (fs.FileInfo, error)) Option { return func(p *
 func WithEvalSymlinks(f func(path string) (string, error)) Option {
 	return func(p *Prober) { p.evalSymlinks = f }
 }
+
+// WithRun installs the runner; without one, Probe never executes anything.
+func WithRun(f RunFunc) Option { return func(p *Prober) { p.run = f } }
+
+// WithDefaultRunner installs the real runner, using the prober's login PATH as the child PATH.
+func WithDefaultRunner() Option {
+	return func(p *Prober) {
+		p.run = func(ctx context.Context, path ResolvedPath, lim Limits) (RunOutput, error) {
+			spec := helpSpec(path, lim)
+			spec.loginPath = p.LoginPathEnv()
+			return runWith(ctx, spec)
+		}
+	}
+}
+
+// WithLimits sets the Limits handed to the runner on every call.
+func WithLimits(l Limits) Option { return func(p *Prober) { p.limits = l } }
+
+// WithReadHead overrides how the first bytes of a target are read for the native-binary check.
+func WithReadHead(f func(path string) ([]byte, error)) Option {
+	return func(p *Prober) { p.readHead = f }
+}
+
 func WithHome(home string) Option           { return func(p *Prober) { p.home = home } }
 func WithClock(now func() time.Time) Option { return func(p *Prober) { p.now = now } }
 
@@ -52,6 +89,10 @@ func NewProber(opts ...Option) *Prober {
 		now:          time.Now,
 		shell:        func() string { return os.Getenv("SHELL") },
 		shellRun:     runShellScript,
+		limits:       DefaultLimits(),
+		readHead:     readHead4,
+		confirmed:    newKeySet(),
+		sem:          make(chan struct{}, maxConcurrentRuns),
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		p.home = home
@@ -59,6 +100,7 @@ func NewProber(opts ...Option) *Prober {
 	for _, o := range opts {
 		o(p)
 	}
+	p.cache = newProbeCache(func() time.Time { return p.now() })
 	if p.loginPath == nil {
 		p.login = newLoginPathSource(p.shell, serverPathFromEnv, func() string { return p.home }, p.shellRun, p.now)
 		p.loginPath = p.login.Dirs
@@ -105,12 +147,6 @@ func (p *Prober) probe(ctx context.Context, command string, opts ProbeOpts) Prob
 		return ProbeResult{Status: ProbeStatusFoundNoFlags, ResolvedPath: path, IsWrapper: true}
 	}
 	return p.execute(ctx, path, opts)
-}
-
-// execute is the seam for the --help run (cache, gate, flight, parse). Without
-// a runner it reports the program as found with no flags.
-func (p *Prober) execute(_ context.Context, path ResolvedPath, _ ProbeOpts) ProbeResult {
-	return ProbeResult{Status: ProbeStatusFoundNoFlags, ResolvedPath: path}
 }
 
 // locate maps a target to a checked, symlink-resolved path. Any lookup error,
@@ -168,11 +204,25 @@ func logProbe(res ProbeResult, opts ProbeOpts, took time.Duration) {
 	slog.LogAttrs(context.Background(), level, "program_probe",
 		slog.String("resolved_path", string(res.ResolvedPath)),
 		slog.String("status", res.Status.String()),
-		slog.Int("flags", 0),
+		slog.Int("flags", len(res.Flags)),
 		slog.Duration("duration", took),
-		slog.Bool("cache_hit", false),
-		slog.Bool("truncated", false),
+		slog.Bool("cache_hit", res.CacheHit),
+		slog.Bool("truncated", res.Truncated),
 		slog.Bool("confirmed", opts.ConfirmExecute),
 		slog.Bool("resolve_only", opts.ResolveOnly),
 	)
+}
+
+func readHead4(path string) ([]byte, error) {
+	f, err := os.Open(path) //nolint:gosec // G304: path is a locate-validated executable
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	head := make([]byte, 4)
+	n, err := io.ReadFull(f, head)
+	if n == 0 {
+		return nil, err
+	}
+	return head[:n], nil
 }
