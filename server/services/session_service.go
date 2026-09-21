@@ -2484,13 +2484,8 @@ func (s *SessionService) CreateSession(
 					instanceEnvVars[k] = v
 				}
 			}
-			if resolvedProg.CLIFlags != "" {
-				if instanceCLIFlags != "" {
-					instanceCLIFlags = resolvedProg.CLIFlags + " " + instanceCLIFlags
-				} else {
-					instanceCLIFlags = resolvedProg.CLIFlags
-				}
-			}
+			// Program CLIFlags are NOT prepended here: buildLaunchCommand resolves them
+			// from the stored custom program ID at launch, so doing it here doubles them.
 		}
 	}
 
