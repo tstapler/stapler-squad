@@ -617,13 +617,16 @@ func normalizeBatchResults(resp batchResponse, metas []classifier.SessionTagging
 	return out
 }
 
-// GenerateSessionTagsBatch classifies all metas in one LLM call, with the same per-session
-// vocabulary filtering as GenerateSessionTags. Failures never return an error: affected
-// sessions come back as degraded Unclassified so callers can apply-and-cache uniformly.
-//
-// models is the ordered hierarchy (empty means "haiku"): the first model whose call succeeds
-// and parses wins, and every attempt's reported cost accumulates into the returned total.
+// GenerateSessionTagsBatch is GenerateSessionTagsBatchWithTimeout with no per-attempt timeout.
 func GenerateSessionTagsBatch(ctx context.Context, pool PoolClient, metas []classifier.SessionTaggingContext, vocabulary []string, models []string) (map[string]SessionTagResult, float64) {
+	return GenerateSessionTagsBatchWithTimeout(ctx, pool, metas, vocabulary, models, 0)
+}
+
+// GenerateSessionTagsBatchWithTimeout classifies all metas in one LLM call, trying models in
+// order (empty means "haiku") until one parses. Failures return degraded Unclassified results,
+// never an error. Each attempt gets its own perAttempt timeout (0 = none) so a hung primary
+// can't starve the fallbacks; the returned cost sums every attempt.
+func GenerateSessionTagsBatchWithTimeout(ctx context.Context, pool PoolClient, metas []classifier.SessionTaggingContext, vocabulary []string, models []string, perAttempt time.Duration) (map[string]SessionTagResult, float64) {
 	if len(metas) == 0 {
 		return map[string]SessionTagResult{}, 0
 	}
@@ -638,8 +641,13 @@ func GenerateSessionTagsBatch(ctx context.Context, pool PoolClient, metas []clas
 	for _, model := range models {
 		var callCost float64
 		var raw string
-		raw, err = pool.CallBlocking(ctx, FeatureKeySessionTagging, sessionTaggingBatchSystemPrompt, prompt,
+		attemptCtx, cancel := ctx, context.CancelFunc(func() {})
+		if perAttempt > 0 {
+			attemptCtx, cancel = context.WithTimeout(ctx, perAttempt)
+		}
+		raw, err = pool.CallBlocking(attemptCtx, FeatureKeySessionTagging, sessionTaggingBatchSystemPrompt, prompt,
 			CallOptions{Model: model}, func(usd float64, _ bool) { callCost = usd })
+		cancel()
 		totalCost += callCost
 		if err != nil {
 			continue // model failed (down, rejected, timed out): try the next in the hierarchy

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -608,5 +609,38 @@ func TestGenerateSessionTagsBatch_should_UseHaikuDefault_When_NoModelsConfigured
 
 	results, _ := GenerateSessionTagsBatch(context.Background(), fake, batchMetas("a"), sessionTaggingVocabulary, nil)
 	assert.Equal(t, []string{"haiku"}, fake.models)
+	assert.False(t, results["a"].Degraded)
+}
+
+// blockingPrimaryFake blocks the first call until its ctx ends, then serves later calls normally.
+type blockingPrimaryFake struct {
+	calls int
+	resp  string
+}
+
+func (f *blockingPrimaryFake) CallBlocking(ctx context.Context, _ FeatureKey, _, _ string, _ CallOptions, sink CostSink) (string, error) {
+	f.calls++
+	sink(0, true)
+	if f.calls == 1 {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	return f.resp, nil
+}
+
+// A hung primary must time out on its own attempt budget and leave the fallback a live context.
+func TestGenerateSessionTagsBatchWithTimeout_should_TryFallback_When_PrimaryHangsUntilDeadline(t *testing.T) {
+	t.Parallel()
+	fake := &blockingPrimaryFake{resp: `{"results":[{"name":"a","tags":["Feature"]}]}`}
+	outer, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	results, _ := GenerateSessionTagsBatchWithTimeout(outer, fake, batchMetas("a"), sessionTaggingVocabulary, []string{"sonnet", "proxy-free"}, 50*time.Millisecond)
+
+	assert.Equal(t, 2, fake.calls)
+	assert.Equal(t, []string{"Feature"}, results["a"].Tags)
 	assert.False(t, results["a"].Degraded)
 }

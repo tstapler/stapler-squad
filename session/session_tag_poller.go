@@ -376,7 +376,9 @@ var ErrClassificationDegraded = errors.New("tag classification degraded: all mod
 // leave existing tags untouched. A model choosing Unclassified is still "applied". Returns
 // the number of degraded sessions.
 func (p *SessionTagClassificationPoller) classifyBatch(ctx context.Context, batch []pendingClassification, vocabulary []string, now time.Time) int {
-	callCtx, cancel := context.WithTimeout(ctx, p.config.CallTimeout)
+	models := p.modelHierarchy()
+	// Outer bound is one CallTimeout per model; each attempt is also capped at CallTimeout.
+	callCtx, cancel := context.WithTimeout(ctx, p.config.CallTimeout*time.Duration(len(models)))
 	defer cancel()
 
 	metas := make([]classifier.SessionTaggingContext, len(batch))
@@ -385,7 +387,7 @@ func (p *SessionTagClassificationPoller) classifyBatch(ctx context.Context, batc
 	}
 
 	start := time.Now()
-	results, cost := headless.GenerateSessionTagsBatch(callCtx, p.pool, metas, vocabulary, p.modelHierarchy())
+	results, cost := headless.GenerateSessionTagsBatchWithTimeout(callCtx, p.pool, metas, vocabulary, models, p.config.CallTimeout)
 	latency := time.Since(start)
 
 	log.Info("session tag poller: batch classified", "sessions", len(batch), "batch_cost_usd", cost, "latency_ms", latency.Milliseconds())
