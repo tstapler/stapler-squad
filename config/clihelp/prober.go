@@ -130,7 +130,9 @@ func (p *Prober) LoginPathEnv() string {
 func (p *Prober) Probe(ctx context.Context, command string, opts ProbeOpts) ProbeResult {
 	start := p.now()
 	res := p.probe(ctx, command, opts)
-	logProbe(res, opts, p.now().Sub(start))
+	// Only the token is logged (never args or env assignments); a failed resolve yields an empty token.
+	target, _ := Resolve(command, p.home)
+	logProbe(res, opts, target, p.now().Sub(start))
 	return res
 }
 
@@ -196,16 +198,18 @@ func lookInDirs(name string, dirs []string) (string, error) {
 }
 
 // logProbe emits the single audit line per call; it never includes args or env values.
-func logProbe(res ProbeResult, opts ProbeOpts, took time.Duration) {
+func logProbe(res ProbeResult, opts ProbeOpts, target Target, took time.Duration) {
 	level := slog.LevelInfo
 	if res.Status == ProbeStatusBusy {
 		level = slog.LevelWarn
 	}
 	slog.LogAttrs(context.Background(), level, "program_probe",
+		slog.String("command_token", target.Name),
 		slog.String("resolved_path", string(res.ResolvedPath)),
 		slog.String("status", res.Status.String()),
+		slog.Bool("is_wrapper", target.Wrapper),
 		slog.Int("flags", len(res.Flags)),
-		slog.Duration("duration", took),
+		slog.Int64("duration_ms", took.Milliseconds()),
 		slog.Bool("cache_hit", res.CacheHit),
 		slog.Bool("truncated", res.Truncated),
 		slog.Bool("confirmed", opts.ConfirmExecute),

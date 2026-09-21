@@ -31,8 +31,8 @@ func ProbeGuard(procedurePath string, cfg ProbeGuardConfig) func(http.Handler) h
 				return
 			}
 			if reason, status := probeGuardVerdict(r, cfg); reason != "" {
-				log.Warn("ProbeProgram request rejected", "reason", reason, "host", r.Host,
-					"origin", r.Header.Get("Origin"), "remote_addr", r.RemoteAddr)
+				log.Warn("ProbeProgram request rejected", "reason", reason, "host", clipForLog(r.Host),
+					"origin", clipForLog(r.Header.Get("Origin")), "remote_addr", r.RemoteAddr)
 				http.Error(w, http.StatusText(status), status)
 				return
 			}
@@ -106,6 +106,17 @@ func originAllowed(origin string, allowed func() []string) bool {
 		}
 	}
 	return false
+}
+
+const maxLoggedHeaderLen = 128
+
+// clipForLog bounds an attacker-controlled header before it is logged; %q-style
+// escaping is left to the structured logger.
+func clipForLog(s string) string {
+	if len(s) <= maxLoggedHeaderLen {
+		return s
+	}
+	return s[:maxLoggedHeaderLen] + "...(truncated)"
 }
 
 // ListenAddrIsLoopback reports whether a listen address such as

@@ -141,7 +141,7 @@ func TestProbe_should_LogInfoForNotFound_When_Probed(t *testing.T) {
 	line := buf.String()
 	assert.Contains(t, line, "level=INFO")
 	assert.Contains(t, line, "status=NOT_FOUND")
-	for _, field := range []string{"resolved_path=", "flags=", "duration=", "cache_hit=", "truncated=", "confirmed=", "resolve_only="} {
+	for _, field := range []string{"command_token=nope", "resolved_path=", "is_wrapper=", "flags=", "duration_ms=", "cache_hit=", "truncated=", "confirmed=", "resolve_only="} {
 		assert.Contains(t, line, field)
 	}
 }
@@ -150,10 +150,10 @@ func TestProbe_should_NotLogArgsOrEnvValues_When_CommandHasArgsAndAssignments(t 
 	dir := t.TempDir()
 	writeExec(t, dir, "claude", 0o755)
 	buf := captureLogs(t)
-	hermeticProber(t, []string{dir}).Probe(context.Background(), "FOO=secret claude --x tok", ProbeOpts{})
+	hermeticProber(t, []string{dir}).Probe(context.Background(), "FOO=secret claude --x argvalue123", ProbeOpts{})
 	line := buf.String()
-	assert.Contains(t, line, "claude")
-	for _, leaked := range []string{"secret", "FOO", "--x", "tok"} {
+	assert.Contains(t, line, "command_token=claude")
+	for _, leaked := range []string{"secret", "FOO", "--x", "argvalue123"} {
 		assert.NotContains(t, line, leaked)
 	}
 }

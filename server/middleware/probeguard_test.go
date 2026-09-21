@@ -16,6 +16,14 @@ import (
 
 const testProbePath = "/api/session.v1.SessionService/ProbeProgram"
 
+func TestClipForLog_should_BoundLongHeaderValues_When_LoggingRejections(t *testing.T) {
+	assert.Equal(t, "localhost:8543", clipForLog("localhost:8543"))
+	long := strings.Repeat("a", 10_000)
+	got := clipForLog(long)
+	assert.Less(t, len(got), 200)
+	assert.True(t, strings.HasSuffix(got, "(truncated)"))
+}
+
 type guardHarness struct {
 	origins  []string
 	hosts    []string
