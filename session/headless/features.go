@@ -564,26 +564,16 @@ func batchUnclassifiedFor(metas []classifier.SessionTaggingContext) map[string]S
 	return out
 }
 
-// GenerateSessionTagsBatch classifies up to len(metas) sessions in a single LLM call: one
-// <session_metadata name="..."> block per session, one {"name","tags"} result entry expected per
-// block. Per-session vocabulary filtering and Unclassified-fallback semantics are identical to
-// GenerateSessionTags; a session missing from the model's response is treated as degraded
-// Unclassified (never an error return — callers apply-and-cache uniformly). With zero metas it
-// returns an empty map without touching the pool.
-//
-// models is the ordered model hierarchy: the primary model first, free/proxy fallbacks after.
-// The first model whose call succeeds AND whose response parses wins; each attempt's cost
-// accumulates into the returned total. An empty models slice means "haiku" (the historical
-// default). All models share the haiku-class cost profile assumption in spirit, but cost is
-// always the real reported sum — a free proxy simply reports 0.
-func GenerateSessionTagsBatch(ctx context.Context, pool PoolClient, metas []classifier.SessionTaggingContext, vocabulary []string, models []string) (map[string]SessionTagResult, float64) {
-	if len(metas) == 0 {
-		return map[string]SessionTagResult{}, 0
-	}
-	if len(models) == 0 {
-		models = []string{"haiku"}
-	}
+// batchResponse is the model's JSON reply to a batch classification prompt.
+type batchResponse struct {
+	Results []struct {
+		Name string   `json:"name"`
+		Tags []string `json:"tags"`
+	} `json:"results"`
+}
 
+// buildBatchPrompt renders the vocabulary plus one <session_metadata> block per session.
+func buildBatchPrompt(metas []classifier.SessionTaggingContext, vocabulary []string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Vocabulary (choose only from these): %s\n\n", strings.Join(vocabulary, ", "))
 	for _, meta := range metas {
@@ -596,48 +586,12 @@ func GenerateSessionTagsBatch(ctx context.Context, pool PoolClient, metas []clas
 		sb.WriteString("</session_metadata>\n\n")
 	}
 	sb.WriteString("Classify each session above into zero or one vocabulary tag.")
+	return sb.String()
+}
 
-	var totalCost float64
-	var raw string
-	var err error
-	for _, model := range models {
-		var callCost float64
-		raw, err = pool.CallBlocking(ctx, FeatureKeySessionTagging, sessionTaggingBatchSystemPrompt, sb.String(),
-			CallOptions{Model: model}, func(usd float64, _ bool) { callCost = usd })
-		totalCost += callCost
-		if err != nil {
-			continue // model failed (down, rejected, timed out): try the next in the hierarchy
-		}
-		var probe struct {
-			Results []struct {
-				Name string   `json:"name"`
-				Tags []string `json:"tags"`
-			} `json:"results"`
-		}
-		if jsonErr := json.Unmarshal([]byte(raw), &probe); jsonErr != nil {
-			err = jsonErr
-			continue // unparseable from this model: try the next in the hierarchy
-		}
-		err = nil
-		break
-	}
-	if err != nil {
-		return batchUnclassifiedFor(metas), totalCost
-	}
-
-	var resp struct {
-		Results []struct {
-			Name string   `json:"name"`
-			Tags []string `json:"tags"`
-		} `json:"results"`
-	}
-	// Proven parseable by the in-loop probe; raw is function-local so it cannot have changed.
-	// The error return is dead in practice but keeps the failure shape total (never panics,
-	// never returns a partial map).
-	if jsonErr := json.Unmarshal([]byte(raw), &resp); jsonErr != nil {
-		return batchUnclassifiedFor(metas), totalCost
-	}
-
+// normalizeBatchResults filters each session's tags to the vocabulary; a session missing from
+// the response, or left with no valid tag, becomes degraded Unclassified.
+func normalizeBatchResults(resp batchResponse, metas []classifier.SessionTaggingContext, vocabulary []string) map[string]SessionTagResult {
 	allowed := make(map[string]bool, len(vocabulary))
 	for _, v := range vocabulary {
 		allowed[v] = true
@@ -648,13 +602,8 @@ func GenerateSessionTagsBatch(ctx context.Context, pool PoolClient, metas []clas
 	}
 	out := make(map[string]SessionTagResult, len(metas))
 	for _, meta := range metas {
-		rawTags, ok := byName[meta.Name]
-		if !ok {
-			out[meta.Name] = SessionTagResult{Tags: []string{UnclassifiedTag}, Degraded: true}
-			continue
-		}
-		valid := make([]string, 0, len(rawTags))
-		for _, tag := range rawTags {
+		valid := make([]string, 0, len(byName[meta.Name]))
+		for _, tag := range byName[meta.Name] {
 			if allowed[tag] {
 				valid = append(valid, tag)
 			}
@@ -663,7 +612,45 @@ func GenerateSessionTagsBatch(ctx context.Context, pool PoolClient, metas []clas
 			out[meta.Name] = SessionTagResult{Tags: []string{UnclassifiedTag}, Degraded: true}
 			continue
 		}
-		out[meta.Name] = SessionTagResult{Tags: valid, Degraded: false}
+		out[meta.Name] = SessionTagResult{Tags: valid}
 	}
-	return out, totalCost
+	return out
+}
+
+// GenerateSessionTagsBatch classifies all metas in one LLM call, with the same per-session
+// vocabulary filtering as GenerateSessionTags. Failures never return an error: affected
+// sessions come back as degraded Unclassified so callers can apply-and-cache uniformly.
+//
+// models is the ordered hierarchy (empty means "haiku"): the first model whose call succeeds
+// and parses wins, and every attempt's reported cost accumulates into the returned total.
+func GenerateSessionTagsBatch(ctx context.Context, pool PoolClient, metas []classifier.SessionTaggingContext, vocabulary []string, models []string) (map[string]SessionTagResult, float64) {
+	if len(metas) == 0 {
+		return map[string]SessionTagResult{}, 0
+	}
+	if len(models) == 0 {
+		models = []string{"haiku"}
+	}
+
+	prompt := buildBatchPrompt(metas, vocabulary)
+	var totalCost float64
+	var resp batchResponse
+	var err error
+	for _, model := range models {
+		var callCost float64
+		var raw string
+		raw, err = pool.CallBlocking(ctx, FeatureKeySessionTagging, sessionTaggingBatchSystemPrompt, prompt,
+			CallOptions{Model: model}, func(usd float64, _ bool) { callCost = usd })
+		totalCost += callCost
+		if err != nil {
+			continue // model failed (down, rejected, timed out): try the next in the hierarchy
+		}
+		resp = batchResponse{}
+		if err = json.Unmarshal([]byte(raw), &resp); err == nil {
+			break // parsed: this model wins
+		}
+	}
+	if err != nil {
+		return batchUnclassifiedFor(metas), totalCost
+	}
+	return normalizeBatchResults(resp, metas, vocabulary), totalCost
 }

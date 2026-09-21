@@ -472,7 +472,7 @@ func TestGenerateSessionTagsBatch_should_DegradeAll_When_ResponseUnparseable(t *
 		assert.Equal(t, []string{UnclassifiedTag}, results[name].Tags)
 		assert.True(t, results[name].Degraded)
 	}
-	_ = cost
+	assert.InDelta(t, 0.0, cost, 1e-9, "fake reports zero cost")
 }
 
 // TestGenerateSessionTagsBatch_should_DegradeAll_When_PoolClientCallFails verifies a hard call
@@ -593,7 +593,7 @@ func TestGenerateSessionTagsBatch_should_DegradeAll_When_WholeHierarchyFails(t *
 
 	results, cost := GenerateSessionTagsBatch(context.Background(), fake, batchMetas("a", "b"), sessionTaggingVocabulary, []string{"sonnet", "opus"})
 	assert.Equal(t, 2, fake.calls)
-	assert.Equal(t, 0.05, cost)
+	assert.InDelta(t, 0.05, cost, 1e-9)
 	for _, name := range []string{"a", "b"} {
 		assert.Equal(t, []string{UnclassifiedTag}, results[name].Tags)
 		assert.True(t, results[name].Degraded)
