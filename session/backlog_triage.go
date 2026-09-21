@@ -3,8 +3,37 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"regexp"
 	"strings"
 )
+
+// attachedImageRe matches the markdown BacklogItemForm inserts for an uploaded
+// image: ![name](/api/local/serve/<abs path under backlog-attachments>).
+var attachedImageRe = regexp.MustCompile(`!\[[^\]]*\]\(/api/local/serve(/[^)\s]+)\)`)
+
+// writeAttachedImages lists description-embedded images as absolute file paths so
+// the triage agent can open them; the raw markdown URL only resolves via the web
+// server. Restricted to the backlog-attachments dir since descriptions can come
+// from external sources (e.g. synced GitHub issues).
+func writeAttachedImages(sb *strings.Builder, description string) {
+	var paths []string
+	for _, m := range attachedImageRe.FindAllStringSubmatch(description, -1) {
+		p, err := url.PathUnescape(m[1])
+		if err != nil || !strings.Contains(p, "/backlog-attachments/") || strings.Contains(p, "..") {
+			continue
+		}
+		paths = append(paths, p)
+	}
+	if len(paths) == 0 {
+		return
+	}
+	sb.WriteString("## Attached Images\nThe description references these images; view them with the Read tool:\n")
+	for _, p := range paths {
+		fmt.Fprintf(sb, "- %s\n", p)
+	}
+	sb.WriteString("\n")
+}
 
 // TriageSuggestion is a canonical suggestion entry shared by the headless triage
 // path and the submit_triage_result MCP tool.
@@ -59,6 +88,7 @@ func BuildHeadlessTriagePrompt(item *BacklogItemData, artifactAbsPath string) st
 	fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)
 	if item.Description != "" {
 		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
+		writeAttachedImages(&sb, item.Description)
 	}
 	if item.AcceptanceCriteria != "" {
 		criteria, _ := ParseAcCriteria(item.AcceptanceCriteria)
@@ -121,6 +151,7 @@ func BuildHeadlessRetriagePrompt(item *BacklogItemData, artifactAbsPath string, 
 	fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)
 	if item.Description != "" {
 		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
+		writeAttachedImages(&sb, item.Description)
 	}
 
 	sb.WriteString("## Prior triage result (iteration ")

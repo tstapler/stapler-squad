@@ -294,3 +294,20 @@ func TestBuildHeadlessRetriagePrompt_ReferencesExistingArtifacts(t *testing.T) {
 	assert.Contains(t, prompt, "/tmp/artifacts/plan.md")
 	assert.Contains(t, prompt, "do not start from scratch")
 }
+
+func TestBuildHeadlessTriagePrompt_ListsAttachedImagePaths(t *testing.T) {
+	desc := "Bug ![a.png](/api/local/serve/home/u/.stapler-squad/backlog-attachments/a%20b.png) " +
+		"and ![x](/api/local/serve/etc/passwd) and ![y](/api/local/serve/x/backlog-attachments/../../etc/shadow)"
+	item := &BacklogItemData{ID: "i1", Title: "t", Description: desc}
+	for name, prompt := range map[string]string{
+		"triage":   BuildHeadlessTriagePrompt(item, "/tmp/art"),
+		"retriage": BuildHeadlessRetriagePrompt(item, "/tmp/art", HeadlessTriageResult{}, "fb"),
+	} {
+		if !strings.Contains(prompt, "- /home/u/.stapler-squad/backlog-attachments/a b.png\n") {
+			t.Errorf("%s: missing decoded attachment path:\n%s", name, prompt)
+		}
+		if strings.Contains(prompt, "- /etc/passwd") || strings.Contains(prompt, "shadow\n") {
+			t.Errorf("%s: listed a path outside backlog-attachments", name)
+		}
+	}
+}
