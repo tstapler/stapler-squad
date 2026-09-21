@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -116,24 +117,49 @@ func (ts *TerminalService) WriteToSession(
 	}
 
 	// BUG-047: must use session.EnterKeySequence ('\r'), not a bare '\n' —
-	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit, so a
-	// trailing '\n' leaves the text sitting unsubmitted in the input buffer.
-	text := session.BuildSubmittableInput(req.Msg.Input, req.Msg.PressEnter)
+	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit.
+	// BUG-031: when PressEnter is set, content and the submit keystroke must
+	// travel as two separate SendKeys writes (session.SubmitDriverContent),
+	// never concatenated into one.
+	var err error
+	if req.Msg.PressEnter {
+		err = submitContentWithEnter(ctx, inst, req.Msg.Input)
+	} else {
+		err = inst.SendKeys(req.Msg.Input)
+	}
+	if err != nil {
+		if errors.Is(err, session.ErrSubmitNotConfirmed) {
+			return nil, connect.NewError(connect.CodeAborted, err)
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("timed out writing to session PTY"))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("send keys failed: %w", err))
+	}
 
+	return connect.NewResponse(&sessionv1.WriteToSessionResponse{Success: true}), nil
+}
+
+// submitContentWithEnter routes content through session.SubmitDriverContent
+// (BUG-031/BUG-047 consolidation) instead of hand-concatenating content +
+// EnterKeySequence into a single SendKeys write — the pattern that lets
+// Claude Code's TUI paste-detector fold a trailing Enter into the pasted
+// block instead of submitting it. Wrapped in a goroutine with a generous
+// timeout since SubmitDriverContent's settle-wait plus up to one retried
+// confirmation can take noticeably longer than a single SendKeys call.
+func submitContentWithEnter(ctx context.Context, inst *session.Instance, content string) error {
 	errCh := make(chan error, 1)
-	go func() { errCh <- inst.SendKeys(text) }()
+	go func() {
+		errCh <- session.SubmitDriverContent(ctx, inst, content, session.DefaultPaneSettlePollInterval, session.DefaultPaneSettleMaxWait)
+	}()
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 3*session.DefaultPaneSettleMaxWait+2*time.Second)
 	defer cancel()
 
 	select {
 	case err := <-errCh:
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("send keys failed: %w", err))
-		}
+		return err
 	case <-timeoutCtx.Done():
-		return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("timed out writing to session PTY"))
+		return context.DeadlineExceeded
 	}
-
-	return connect.NewResponse(&sessionv1.WriteToSessionResponse{Success: true}), nil
 }

@@ -8,7 +8,68 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/sendkeysguard"
 )
+
+// TestMCPPackage_NoDirectSendKeysPlusEnterConcatenation is the server/mcp
+// instance of the BUG-031 structural guard (see sendkeysguard's doc comment
+// and session/pane_submit_test.go's sibling test) — the single-write pattern
+// this guards against was originally reintroduced here, in writeToSession,
+// runCommand, and steerSession, not in the session package.
+func TestMCPPackage_NoDirectSendKeysPlusEnterConcatenation(t *testing.T) {
+	t.Parallel()
+	sendkeysguard.CheckNoSingleWriteEnterConcatenation(t, ".")
+}
+
+// TestSubmitErrResult_MapsErrSubmitNotConfirmedToDistinctErrorCode is the
+// direct AC-5 test: a swallowed submit (session.ErrSubmitNotConfirmed) must
+// surface as an explicit, distinguishable error — not the generic internal
+// error every other SendKeys failure gets, and not success.
+func TestSubmitErrResult_MapsErrSubmitNotConfirmedToDistinctErrorCode(t *testing.T) {
+	res := submitErrResult(session.ErrSubmitNotConfirmed, "message")
+	m := parseResult(t, res)
+
+	if success, _ := m["success"].(bool); success {
+		t.Fatal("expected success=false for a swallowed submit")
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object in result")
+	}
+	if code, _ := errObj["code"].(string); code != "SUBMIT_NOT_CONFIRMED" {
+		t.Errorf("expected code SUBMIT_NOT_CONFIRMED, got %q", code)
+	}
+}
+
+// TestSubmitErrResult_MapsDeadlineExceededToTimeoutCode proves the timeout
+// path is distinguishable from both a swallowed submit and a generic failure.
+func TestSubmitErrResult_MapsDeadlineExceededToTimeoutCode(t *testing.T) {
+	res := submitErrResult(context.DeadlineExceeded, "command")
+	m := parseResult(t, res)
+
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object in result")
+	}
+	if code, _ := errObj["code"].(string); code != "PTY_WRITE_TIMEOUT" {
+		t.Errorf("expected code PTY_WRITE_TIMEOUT, got %q", code)
+	}
+}
+
+// TestSubmitErrResult_MapsOtherErrorsToInternalError verifies the fallback
+// case doesn't silently masquerade as one of the two distinct error codes.
+func TestSubmitErrResult_MapsOtherErrorsToInternalError(t *testing.T) {
+	res := submitErrResult(fmt.Errorf("pty closed"), "input")
+	m := parseResult(t, res)
+
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object in result")
+	}
+	if code, _ := errObj["code"].(string); code != ErrInternalError {
+		t.Errorf("expected code %q, got %q", ErrInternalError, code)
+	}
+}
 
 // TestReadOutputLineCap verifies that readSessionOutput respects the lines cap
 // and sets truncated=true / total_lines correctly when there is more output

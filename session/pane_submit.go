@@ -2,18 +2,30 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
 
-// defaultPaneSettlePollInterval and defaultPaneSettleMaxWait mirror
+// DefaultPaneSettlePollInterval and DefaultPaneSettleMaxWait mirror
 // AutonomousDriver's own defaults (autonomous_driver.go) so every
 // driver-generated submission through SubmitDriverContent waits on the same
 // tuning unless a caller has its own configured values (as AutonomousDriver does).
+// Exported so callers outside the session package (server/mcp, server/services)
+// can drive SubmitDriverContent without duplicating these constants.
 const (
-	defaultPaneSettlePollInterval = 150 * time.Millisecond
-	defaultPaneSettleMaxWait      = 2 * time.Second
+	DefaultPaneSettlePollInterval = 150 * time.Millisecond
+	DefaultPaneSettleMaxWait      = 2 * time.Second
 )
+
+// ErrSubmitNotConfirmed is returned by SubmitDriverContent when the Enter
+// keystroke was written successfully but the pane never showed any change
+// afterward, even after one retry — the signature of Claude Code's TUI
+// paste-detector swallowing the submit keystroke. Before this, a swallowed
+// submit was indistinguishable from success at the call site (SendKeys
+// returning nil), which is exactly the silent-failure shape the original bug
+// report described.
+var ErrSubmitNotConfirmed = errors.New("submit keystroke sent but pane showed no change (may have been swallowed by paste detection)")
 
 // paneSubmitter is the narrow interface SubmitDriverContent needs — satisfied
 // by *Instance's existing SendKeys and HasUpdated methods.
@@ -40,6 +52,13 @@ type paneSubmitter interface {
 // TestSessionPackage_NoDirectSendKeysPlusEnterConcatenation enforces this
 // structurally: any new inst.SendKeys(x + EnterKeySequence) call site outside
 // this file fails that test.
+//
+// After the Enter write, it confirms the submit actually registered by
+// polling for a pane change (waitForPaneUpdate) — a swallowed Enter is
+// otherwise indistinguishable from success (SendKeys returning nil either
+// way). One retry of the Enter write is attempted before giving up, since a
+// slow-to-render pane can otherwise be mistaken for a swallowed submit; if
+// the retry also shows no change, ErrSubmitNotConfirmed is returned.
 func SubmitDriverContent(ctx context.Context, inst paneSubmitter, content string, pollInterval, maxWait time.Duration) error {
 	if err := inst.SendKeys(content); err != nil {
 		return fmt.Errorf("send content: %w", err)
@@ -48,7 +67,18 @@ func SubmitDriverContent(ctx context.Context, inst paneSubmitter, content string
 	if err := inst.SendKeys(EnterKeySequence); err != nil {
 		return fmt.Errorf("send submit keystroke: %w", err)
 	}
-	return nil
+	if waitForPaneUpdate(ctx, inst, pollInterval, maxWait) {
+		return nil
+	}
+	// Retry once: resend just the Enter keystroke in case the first one was
+	// swallowed by the paste detector.
+	if err := inst.SendKeys(EnterKeySequence); err != nil {
+		return fmt.Errorf("send submit keystroke (retry): %w", err)
+	}
+	if waitForPaneUpdate(ctx, inst, pollInterval, maxWait) {
+		return nil
+	}
+	return ErrSubmitNotConfirmed
 }
 
 // waitForPaneUpdate polls inst until it reports a pane change or maxWait
