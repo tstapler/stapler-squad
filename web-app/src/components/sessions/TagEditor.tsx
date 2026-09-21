@@ -1,6 +1,10 @@
 "use client";
 
 import { useState, KeyboardEvent, useRef, RefObject } from "react";
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { SessionService } from "@/gen/session/v1/session_pb";
+import { getApiBaseUrl } from "@/lib/config";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import {
   UNCLASSIFIED_TAG, hasProvenance, removalConfirmationText,
@@ -17,14 +21,20 @@ interface TagEditorProps {
   onCancel: () => void;
   sessionTitle: string;
   triggerRef?: RefObject<HTMLElement | null>;
+  /** Stable session ID used for the manual AI re-classification call. Absent = button hidden. */
+  sessionId?: string;
+  /** Called with the server-applied tags after a manual re-classification succeeds. */
+  onReclassified?: (tags: string[]) => void;
 }
 
-export function TagEditor({ tags, tagProvenance, tagRuleNames = {}, onSave, onCancel, sessionTitle, triggerRef }: TagEditorProps) {
+export function TagEditor({ tags, tagProvenance, tagRuleNames = {}, onSave, onCancel, sessionTitle, triggerRef, sessionId, onReclassified }: TagEditorProps) {
   const [currentTags, setCurrentTags] = useState<string[]>([...tags]);
   const modalRef = useRef<HTMLDivElement>(null);
   useFocusTrap(modalRef, true, triggerRef);
   const [inputValue, setInputValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [reclassifying, setReclassifying] = useState(false);
+  const [reclassifyStatus, setReclassifyStatus] = useState<string | null>(null);
   // ux.md Surface 3: at most one tag's removal confirmation is expanded at a time.
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
   const keepButtonRef = useRef<HTMLButtonElement>(null);
@@ -76,6 +86,30 @@ export function TagEditor({ tags, tagProvenance, tagRuleNames = {}, onSave, onCa
 
   const handleSave = () => {
     onSave(currentTags);
+  };
+
+  // Manual AI re-classification: successfully classified sessions are never re-tagged
+  // automatically (poller classify-once), so this explicit user action is the only path
+  // that re-runs the LLM classifier. The server applies the result; the returned tags
+  // refresh this dialog and propagate to the parent via onReclassified.
+  const handleReclassify = async () => {
+    if (!sessionId || reclassifying) return;
+    setReclassifying(true);
+    setReclassifyStatus(null);
+    setError(null);
+    try {
+      const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+      const client = createClient(SessionService, transport);
+      const response = await client.reclassifySessionTags({ sessionId });
+      const applied = [...response.tags];
+      setCurrentTags(applied);
+      setReclassifyStatus(applied.length > 0 ? `AI classification applied: ${applied.join(", ")}` : "AI classification ran with no tags");
+      onReclassified?.(applied);
+    } catch (e) {
+      setError(e instanceof Error ? `Re-classification failed: ${e.message}` : "Re-classification failed");
+    } finally {
+      setReclassifying(false);
+    }
   };
 
   return (
@@ -178,7 +212,21 @@ export function TagEditor({ tags, tagProvenance, tagRuleNames = {}, onSave, onCa
           </div>
         </div>
 
+        {reclassifyStatus && <p className={styles.unclassifiedCaption} role="status">{reclassifyStatus}</p>}
+
         <div className={styles.footer}>
+          {sessionId && (
+            <button
+              type="button"
+              onClick={handleReclassify}
+              className={styles.cancelButton}
+              disabled={reclassifying}
+              data-testid="tag-reclassify-button"
+              title="Re-run AI tag classification for this session"
+            >
+              {reclassifying ? "Classifying…" : "Re-run AI classification"}
+            </button>
+          )}
           <button type="button" onClick={onCancel} className={styles.cancelButton}>
             Cancel
           </button>

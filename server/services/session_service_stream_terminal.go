@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -346,8 +347,12 @@ func (s *SessionService) StreamTerminal(
 							// Loop back around to re-check streamCtx/pauseCh.
 							continue
 						}
-						// EOF or other read error
-						if readErr.Error() != "EOF" {
+						// EOF or other PTY close error (Linux PTY returns EIO / "input/output error" on close)
+						errMsg := readErr.Error()
+						if readErr != io.EOF && errMsg != "EOF" &&
+							!strings.Contains(errMsg, "file already closed") &&
+							!strings.Contains(errMsg, "bad file descriptor") &&
+							!strings.Contains(errMsg, "input/output error") {
 							errCh <- fmt.Errorf("PTY read error: %w", readErr)
 						}
 						return

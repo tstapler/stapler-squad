@@ -1,5 +1,5 @@
 {
-  "id": "UpsertTaggingRule",
+  "id": "tagging-rule:upsert",
   "type": "backend",
   "service": "SessionService",
   "method": "UpsertTaggingRule",
@@ -10,5 +10,5 @@
     "TestSessionService_ListTaggingRules_should_ReturnUpsertedRule_When_UpsertTaggingRuleRPCCalledFirst",
     "TestSessionService_UpsertTaggingRule_should_ReturnValidationError_When_OutputTagEmpty"
   ],
-  "lastModified": "2026-09-11T19:04:53.770708379-07:00"
+  "lastModified": "2026-09-20T22:52:25.623406288-07:00"
 }

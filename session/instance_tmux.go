@@ -144,8 +144,12 @@ func piStderrLogPath(i *Instance) (string, error) {
 // isClaude reports whether the program command invokes the claude binary.
 // It checks each whitespace-delimited token's basename to avoid false positives
 // from env wrappers (e.g. "env -u VAR claude") and to reject similar names
-// like "claude-squad" or "myclaudeapp".
+// like "claude-squad" or "myclaudeapp". Custom program IDs are resolved first.
 func isClaude(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
 	for _, token := range strings.Fields(program) {
 		if filepath.Base(token) == "claude" {
 			return true
@@ -158,8 +162,12 @@ func isClaude(program string) bool {
 // isClaude: it checks each whitespace-delimited token's basename, so it
 // matches bare ("pi") and path-qualified ("/usr/local/bin/pi") invocations
 // while rejecting lookalikes like "pipenv" or "mypi" whose basename isn't
-// exactly "pi".
+// exactly "pi". Custom program IDs are resolved first.
 func isPi(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
 	for _, token := range strings.Fields(program) {
 		if filepath.Base(token) == "pi" {
 			return true
@@ -180,8 +188,12 @@ var yoloFlagByAgent = map[string]string{
 
 // yoloFlagFor returns the yolo/auto-approve flag for the agent detected in
 // program's whitespace-delimited tokens (basename match, mirroring isClaude),
-// or "" if the agent has no known flag.
+// or "" if the agent has no known flag. Custom program IDs are resolved first.
 func yoloFlagFor(program string) string {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
 	for _, token := range strings.Fields(program) {
 		if flag, ok := yoloFlagByAgent[filepath.Base(token)]; ok {
 			return flag
@@ -247,15 +259,27 @@ func (i *Instance) currentLaunchCommand() string {
 // type's doc comment); a program none of them recognizes is shell-quoted and
 // run as-is, with AutoApprove's yolo-flag lookup as the only adjustment.
 func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
-	// Single read, reused below for both Matches and Build -- see
-	// .claude/rules/instance-lock-free-reads.md: i.Program is mutated by
-	// SetProgram under i.mu.Lock(), so reading the field twice here could
-	// observe two different values if a mutation lands in between.
-	program := i.Program
+	// One Snapshot() read: SetProgram mutates Program under i.mu, so two raw reads
+	// could observe different values (.claude/rules/instance-lock-free-reads.md).
+	snap := i.Snapshot()
+	program := snap.Program
+	cliFlags := snap.CLIFlags
+
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+		if res.CLIFlags != "" {
+			if cliFlags != "" {
+				cliFlags = res.CLIFlags + " " + cliFlags
+			} else {
+				cliFlags = res.CLIFlags
+			}
+		}
+	}
 
 	matched := matchLaunchBuilder(program)
 	cmd := i.buildBaseLaunchCommand(program, claudeSessionID, matched)
-	cmd = appendLaunchExtras(cmd, i.CLIFlags, i.ExtraArgs)
+	cmd = appendLaunchExtras(cmd, cliFlags, i.ExtraArgs)
 	if matched != nil {
 		cmd = cmd + matched.StderrRedirect(i)
 	}
@@ -512,16 +536,67 @@ func (i *Instance) claudeMCPConfigArgs() (string, string) {
 	return "--mcp-config", shellQuote(cfg)
 }
 
+// buildExtraEnv returns the KEY=VALUE environment variable pairs to inject via
+// tmux new-session -e flags. Combines STAPLER_SESSION_UUID, custom program env vars,
+// and instance-level EnvVars.
+func (i *Instance) buildExtraEnv() []string {
+	// Snapshot() also serves pre-publication callers (fromInstanceData): it lazily builds one.
+	snap := i.Snapshot()
+	var extraEnv []string
+	if snap.UUID != "" {
+		extraEnv = append(extraEnv, "STAPLER_SESSION_UUID="+snap.UUID)
+	}
+	// Add custom program env vars if applicable
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, snap.Program); res.IsCustom {
+		for k, v := range res.EnvVars {
+			extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", k, v))
+		}
+	}
+	// Instance-level EnvVars take precedence over program-level defaults
+	for k, v := range snap.EnvVars {
+		extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", k, v))
+	}
+	return extraEnv
+}
+
+// wireTmuxSession constructs the tmux.TmuxSession object with full environment configuration
+// and sets it on the instance's process manager.
+func (i *Instance) wireTmuxSession(program string) *tmux.TmuxSession {
+	snap := i.Snapshot()
+	tmuxPrefix := snap.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+
+	runner := i.executionTarget().Runner()
+	opts := []tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand)}
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		if mgr, ok := tb.TmuxManager().(*TmuxProcessManager); ok {
+			// Kills a leftover pane process before a restart so it can't race the new one.
+			opts = append(opts, tmux.WithOrphanProcessGuard(mgr.CachedPanePIDStillAlive, mgr.TerminateCachedPanePID))
+		}
+	}
+	var session *tmux.TmuxSession
+	if snap.TmuxServerSocket != "" {
+		// nil registry: a reconnect loop on isolated sockets causes intermittent "exit status 1".
+		session = tmux.NewTmuxSessionWithServerSocket(snap.Title, program, tmuxPrefix, snap.TmuxServerSocket,
+			append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
+	} else {
+		session = tmux.NewTmuxSessionWithPrefix(snap.Title, program, tmuxPrefix, opts...)
+	}
+	if extraEnv := i.buildExtraEnv(); len(extraEnv) > 0 {
+		session.SetExtraEnv(extraEnv)
+	}
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		tb.TmuxManager().SetSession(session)
+	}
+	return session
+}
+
 // initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
-//
-// Reuse requires HasSession() AND (the cheap cached IsAlive() OR the
-// canonical IsBackendProcessAlive() truth check): the pointer alone stays
-// non-nil forever once set, even after the tmux server backing it is killed,
-// which let recovery skip buildLaunchCommand() and relaunch without --resume
-// after a tmux-kill-server crash (2026-09-12 incident, #791). The cached
-// check is tried first to avoid a subprocess round trip on the hot path; the
-// canonical check only runs when it says no, so a merely-stale cache entry
-// doesn't force an unnecessary rebuild.
+// Reuse needs HasSession() AND (cached IsAlive() OR IsBackendProcessAlive()): the pointer
+// stays non-nil after the tmux server dies, which once skipped the --resume rebuild (#791).
 func (i *Instance) initTmuxSession() {
 	if i.pm().HasSession() && (i.pm().IsAlive() || i.IsBackendProcessAlive()) {
 		log.Info("reusing existing tmux session", "session", i.Title)
@@ -533,54 +608,12 @@ func (i *Instance) initTmuxSession() {
 	}
 	enrichedProgram := i.buildLaunchCommand(claudeSessionID)
 	i.LaunchCommand = enrichedProgram
-	// This func runs for every backend despite its name (BUG-109) -- log the
-	// real one instead of hardcoding "tmux".
 	log.Info("creating session", "session", i.Title, "program", enrichedProgram, "backend", string(processManagerBackendLabel(i.processManager)))
 
-	// Pre-trust the working directory so claude never blocks this
-	// (possibly-unattended) session on its interactive "trust this folder?"
-	// dialog. Every Start() path calls initTmuxSession() before starting the
-	// tmux session, so this is the single choke point that covers all of
-	// them (first-time setup, cold/hot restore, worktree creation). See
-	// markWorkingDirTrusted's doc comment.
+	// Single choke point: every Start path funnels through here.
 	i.markWorkingDirTrusted()
 
-	tmuxPrefix := i.TmuxPrefix
-	if tmuxPrefix == "" {
-		tmuxPrefix = "staplersquad_"
-	}
-
-	// runner threads i.ExecutionTarget through TmuxSession construction (ssh-remote-workspaces
-	// Phase 4, Task 4.2.1d) -- tmux.LocalRunner{} for LocalTarget (the default, identical to
-	// every construction site's pre-Phase-4 behavior) or the dialed *tmux.SSHRunner for a
-	// remote target, so this session's tmux subprocess calls run on the same host the
-	// CreateSession mode-specific block (server/services/session_service.go) already created
-	// the remote tmux session on.
-	runner := i.executionTarget().Runner()
-	opts := []tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand)}
-	// Wires RestoreWithWorkDir's orphan guard (BUG matching #791, a different
-	// call site -- see that method's doc comment) to this instance's cached
-	// pane PID, so a later restore that finds tmux has no record of the
-	// session can tell a genuinely dead pane from one whose OS process
-	// outlived a killed/restarted tmux server.
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		if mgr, ok := tb.TmuxManager().(*TmuxProcessManager); ok {
-			opts = append(opts, tmux.WithOrphanProcessGuard(mgr.CachedPanePIDStillAlive, mgr.TerminateCachedPanePID))
-		}
-	}
-	var session *tmux.TmuxSession
-	if i.TmuxServerSocket != "" {
-		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket,
-			append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
-	} else {
-		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix, opts...)
-	}
-	if i.UUID != "" {
-		session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
-	}
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		tb.TmuxManager().SetSession(session)
-	}
+	i.wireTmuxSession(enrichedProgram)
 }
 
 // KillSession terminates the tmux session only (leaves worktree intact).

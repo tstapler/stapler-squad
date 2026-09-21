@@ -1,5 +1,5 @@
 {
-  "id": "ListTaggingRules",
+  "id": "tagging-rule:list",
   "type": "backend",
   "service": "SessionService",
   "method": "ListTaggingRules",
@@ -9,5 +9,5 @@
   "testIds": [
     "TestSessionService_ListTaggingRules_should_ReturnUpsertedRule_When_UpsertTaggingRuleRPCCalledFirst"
   ],
-  "lastModified": "2026-09-11T19:04:53.770708379-07:00"
+  "lastModified": "2026-09-20T22:52:25.623406288-07:00"
 }
