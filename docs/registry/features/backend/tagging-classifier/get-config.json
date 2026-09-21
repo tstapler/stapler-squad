@@ -6,7 +6,10 @@
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
   "handlerFile": "server/services/tagging_classifier_service.go",
-  "tested": false,
-  "testIds": [],
+  "tested": true,
+  "testIds": [
+    "TestTaggingClassifierService_should_ReturnHaikuDefault_When_Unconfigured",
+    "TestTaggingClassifierService_should_PreferEnv_When_EnvOverridesSet"
+  ],
   "lastModified": "2026-09-20T22:52:25.623406288-07:00"
 }

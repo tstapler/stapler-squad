@@ -6,7 +6,11 @@
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
   "handlerFile": "server/services/tagging_classifier_service.go",
-  "tested": false,
-  "testIds": [],
+  "tested": true,
+  "testIds": [
+    "TestTaggingClassifierService_should_RejectReclassify_When_BadRequest",
+    "TestTaggingClassifierService_should_ReturnTags_When_ReclassifySucceeds",
+    "TestTaggingClassifierService_should_ReturnUnavailable_When_ReclassifyDegrades"
+  ],
   "lastModified": "2026-09-20T22:52:25.623406288-07:00"
 }
