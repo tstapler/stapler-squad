@@ -66,6 +66,22 @@ describe("useProbeProgram", () => {
     expect(result.current.state).toMatchObject({ kind: "found", path: "/bin/claude" });
   });
 
+  it("useProbeProgram_should_SendExplicitCheck_When_ImplicitProbeOfSameCommandInFlight", async () => {
+    const blurProbe = deferred<unknown>();
+    probe.mockReturnValueOnce(blurProbe.promise).mockResolvedValueOnce(probeResponse());
+    const { result } = renderHook(() => useProbeProgram("./run-me.sh", "program-config"));
+    act(() => result.current.check());
+    act(() => result.current.check({ explicit: true }));
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(probe.mock.calls[1][0]).toMatchObject({ confirmExecute: true });
+    await act(async () => {
+      blurProbe.resolve(probeResponse({ probeStatus: ProbeStatus.NEEDS_CONFIRM }));
+      await blurProbe.promise;
+    });
+    // the superseded implicit response must not overwrite the explicit result
+    expect(result.current.state.kind).not.toBe("needsConfirm");
+  });
+
   it("useProbeProgram_should_MapToTransportError_When_RpcRejectsOrPermissionDenied", async () => {
     const { result } = renderHook(() => useProbeProgram("claude", "program-config"));
     for (const err of [

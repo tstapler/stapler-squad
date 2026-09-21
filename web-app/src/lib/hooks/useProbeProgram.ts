@@ -128,7 +128,8 @@ export function useProbeProgram(
         return;
       }
       const explicit = opts.explicit === true;
-      if (inFlightRef.current === cmd) return;
+      // An explicit Check supersedes an implicit probe of the same command (blur fires before the click).
+      if (inFlightRef.current === cmd && !explicit) return;
       if (!explicit && !opts.immediate) {
         const kind = stateRef.current.kind;
         if (settledCommandRef.current === cmd && !UNSETTLED.has(kind)) return;
