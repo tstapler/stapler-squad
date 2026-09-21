@@ -204,12 +204,8 @@ func (p *SessionTagClassificationPoller) Stop() {
 	log.Info("session tag classification poller stopped")
 }
 
-// pollLoop runs the main ticker loop. ctx is passed in by Start rather than read from p.ctx:
-// Stop() resets p.ctx to nil under p.mu to make the poller restartable, so any read of p.ctx from
-// this goroutine — even a lock-guarded one — races against a Stop() that runs before this
-// goroutine gets scheduled, or against later ticks after Stop() runs. Each Start() call spawns a
-// fresh pollLoop goroutine with its own ctx parameter, so it stays valid for the lifetime of this
-// goroutine even after a later Stop() nils out p.ctx.
+// pollLoop runs the ticker loop. ctx is passed in because reading p.ctx would race a Stop()
+// that nils it (Stop makes the poller restartable).
 func (p *SessionTagClassificationPoller) pollLoop(ctx context.Context) {
 	defer p.wg.Done()
 	ticker := time.NewTicker(p.config.PollInterval)
