@@ -66,7 +66,7 @@ type DefaultsService struct {
 
 // NewDefaultsService creates a DefaultsService.
 func NewDefaultsService() *DefaultsService {
-	return &DefaultsService{prober: clihelp.NewProber()}
+	return &DefaultsService{prober: clihelp.NewProber(clihelp.WithDefaultRunner(), clihelp.WithLimits(clihelp.DefaultLimits()))}
 }
 
 // SetProber replaces the program prober (tests inject fakes).
@@ -835,8 +835,27 @@ func probeResultToProto(res clihelp.ProbeResult) *sessionv1.ProbeProgramResponse
 		Found:        found,
 		ResolvedPath: string(res.ResolvedPath),
 		ProbeStatus:  status,
+		Flags:        flagsToProto(res.Flags),
+		Truncated:    res.Truncated,
 		IsWrapper:    res.IsWrapper,
 	}
+}
+
+func flagsToProto(flags []clihelp.Flag) []*sessionv1.FlagInfo {
+	if len(flags) == 0 {
+		return nil
+	}
+	out := make([]*sessionv1.FlagInfo, len(flags))
+	for i, f := range flags {
+		out[i] = &sessionv1.FlagInfo{
+			Name:        f.Name,
+			Short:       f.Short,
+			TakesValue:  f.TakesValue,
+			Description: f.Description,
+			Aliases:     append([]string(nil), f.Aliases...),
+		}
+	}
+	return out
 }
 
 func probeStatusToProto(s clihelp.ProbeStatus) (status sessionv1.ProbeStatus, found bool) {
