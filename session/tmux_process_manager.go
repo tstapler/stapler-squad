@@ -442,7 +442,20 @@ func (tm *TmuxProcessManager) RestoreWithWorkDir(workDir string) error {
 	if s == nil {
 		return fmt.Errorf("tmux session not initialized")
 	}
-	return s.RestoreWithWorkDir(workDir)
+	err := s.RestoreWithWorkDir(workDir)
+	if err == nil {
+		tm.primePanePID()
+	}
+	return err
+}
+
+// primePanePID caches the pane PID while tmux is reachable so the orphan guard
+// still has a PID to check after the tmux server dies (e.g. post server
+// restart, when nothing else has called GetPanePID yet). Best-effort.
+func (tm *TmuxProcessManager) primePanePID() {
+	if !tm.panePIDSet.Load() {
+		_, _ = tm.GetPanePID()
+	}
 }
 
 // Start creates and starts the tmux session in the given directory.
@@ -451,7 +464,11 @@ func (tm *TmuxProcessManager) Start(dir string) error {
 	if s == nil {
 		return fmt.Errorf("tmux session not initialized")
 	}
-	return s.Start(dir)
+	err := s.Start(dir)
+	if err == nil {
+		tm.primePanePID()
+	}
+	return err
 }
 
 // FilterBanners strips banner/header content from terminal output.

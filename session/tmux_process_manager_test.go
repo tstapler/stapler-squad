@@ -83,3 +83,24 @@ func TestTmuxProcessManager_CapturePaneContentContext_RefetchesAfterTTLExpires(t
 	require.Equal(t, 2, *calls, "an expired cache entry must trigger a fresh subprocess call")
 	require.NotEqual(t, first, second, "content after cache expiry should reflect the fresh subprocess call")
 }
+
+// primePanePID must cache the pane PID up front so the orphan guard still has
+// a PID to check after the tmux server dies (criterion: uncached-PID case).
+func TestTmuxProcessManager_PrimePanePID_CachesWhenUnset(t *testing.T) {
+	var sessionExists string
+	cmdExec := tmux.MockCmdExec{
+		OutputFunc:         func(cmd *exec.Cmd) ([]byte, error) { return []byte("4242\n"), nil },
+		RunFunc:            func(cmd *exec.Cmd) error { return nil },
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(sessionExists), nil },
+	}
+	s := tmux.NewTmuxSessionWithDeps("prime-pid-test", "echo", tmux.MakePtyFactory(), cmdExec)
+	sessionExists = s.GetSanitizedName()
+	tm := &TmuxProcessManager{}
+	tm.SetSession(s)
+	require.False(t, tm.panePIDSet.Load())
+
+	tm.primePanePID()
+
+	require.True(t, tm.panePIDSet.Load(), "primePanePID must populate the pane PID cache when unset")
+	require.Equal(t, int32(4242), tm.panePIDCached.Load())
+}
