@@ -6,8 +6,9 @@ import { useState, useEffect, useCallback } from "react";
 import { SessionService, type ProgramConfigProto } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
-import { useProbeProgram } from "@/lib/hooks/useProbeProgram";
+import { useProbeProgram, type ProbeUiState } from "@/lib/hooks/useProbeProgram";
 import { ProbeStatusBadge } from "@/components/ui/ProbeStatusBadge";
+import { FlagCombobox } from "@/components/ui/FlagCombobox";
 import {
   container,
   heading,
@@ -38,7 +39,14 @@ import {
   fieldError,
   commandRow,
   checkButton,
+  hintText,
 } from "./ProgramsManager.css";
+
+// Explains the absence of suggestions; states not listed need no hint.
+const FLAGS_HINTS: Partial<Record<ProbeUiState["kind"], string>> = {
+  idle: "Check the command above to enable flag suggestions",
+  needsConfirm: "Suggestions appear after Check reads the flags.",
+};
 
 const PROGRAM_ID_RE = /^[\w-]+$/;
 
@@ -78,6 +86,7 @@ export function ProgramsManager() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const probe = useProbeProgram(formData.command, "program-config");
+  const flagsHint = FLAGS_HINTS[probe.state.kind];
 
   const getClient = useCallback(() => {
     return createClient(SessionService, getConnectTransport());
@@ -360,18 +369,21 @@ export function ProgramsManager() {
 
             <div className={field}>
               <label className={labelClass} htmlFor="prog-flags">Default CLI Flags (optional)</label>
-              <input
+              <FlagCombobox
                 id="prog-flags"
-                type="text"
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
                 className={input}
                 value={formData.cliFlags}
-                onChange={(e) => setFormData({ ...formData, cliFlags: e.target.value })}
+                onChange={(cliFlags) => setFormData({ ...formData, cliFlags })}
+                flags={probe.state.kind === "found" ? probe.state.flags : []}
                 placeholder="e.g. --verbose --auto"
-                data-testid="prog-flags-input"
+                testId="prog-flags-input"
+                describedBy={flagsHint ? "prog-flags-hint" : undefined}
               />
+              {flagsHint && (
+                <span id="prog-flags-hint" className={hintText} data-testid="prog-flags-hint">
+                  {flagsHint}
+                </span>
+              )}
             </div>
 
             <div className={field}>

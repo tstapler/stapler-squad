@@ -48,3 +48,8 @@ export const checkButton = style({
   cursor: "pointer",
   selectors: { "&:disabled": { cursor: "progress", opacity: 0.7 } },
 });
+
+export const hintText = style({
+  color: vars.color.textSecondary,
+  fontSize: vars.fontSize.xs,
+});

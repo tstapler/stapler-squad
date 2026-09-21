@@ -80,7 +80,7 @@ export const probeStates: Record<string, ProbeUiState> = {
   idle: { kind: "idle" },
   disabled: { kind: "disabled" },
   checking: { kind: "checking" },
-  found: { kind: "found", path: "/usr/bin/claude", flagCount: 14 },
+  found: { kind: "found", path: "/usr/bin/claude", flagCount: 14, flags: [] },
   noFlags: { kind: "noFlags", path: "/usr/bin/claude" },
   timeout: { kind: "timeout", path: "/usr/bin/claude" },
   needsConfirm: { kind: "needsConfirm", path: "/usr/bin/claude" },

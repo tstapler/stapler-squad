@@ -257,4 +257,36 @@ describe("ProgramsManager probe badge", () => {
       jest.useRealTimers();
     }
   });
+
+  it("ProgramsManager_should_SuggestFlagsInFlagsField_When_ProbeFound", async () => {
+    await openForm({
+      ...(probeStates.found as Extract<ProbeUiState, { kind: "found" }>),
+      flags: [{ name: "--model", short: "", takesValue: true, description: "Model to use", aliases: [] }] as never,
+    });
+    const flagsInput = screen.getByTestId("prog-flags-input");
+    fireEvent.change(flagsInput, { target: { value: "--mo", selectionStart: 4, selectionEnd: 4 } });
+    expect(screen.getByRole("option", { name: "--model, takes a value" })).toBeInTheDocument();
+    expect(screen.queryByTestId("prog-flags-hint")).toBeNull();
+  });
+
+  it.each(["notFound", "noFlags", "wrapper", "found"])(
+    "ProgramsManager_should_KeepFlagsFieldPlain_When_%s",
+    async (name) => {
+      await openForm(probeStates[name]);
+      const flagsInput = screen.getByTestId("prog-flags-input");
+      fireEvent.change(flagsInput, { target: { value: "--mo", selectionStart: 4, selectionEnd: 4 } });
+      expect(screen.queryByRole("listbox")).toBeNull();
+      expect(flagsInput).not.toHaveAttribute("role");
+    },
+  );
+
+  it.each([
+    ["needsConfirm", "Suggestions appear after Check reads the flags."],
+    ["idle", "Check the command above to enable flag suggestions"],
+  ])("ProgramsManager_should_ExplainMissingSuggestionsViaDescribedBy_When_%s", async (name, text) => {
+    await openForm(probeStates[name]);
+    const hint = screen.getByTestId("prog-flags-hint");
+    expect(hint).toHaveTextContent(text);
+    expect(screen.getByTestId("prog-flags-input")).toHaveAttribute("aria-describedby", hint.id);
+  });
 });

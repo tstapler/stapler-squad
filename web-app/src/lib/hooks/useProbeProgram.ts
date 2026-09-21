@@ -6,6 +6,7 @@ import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import {
   ProbeStatus,
   SessionService,
+  type FlagInfo,
   type ProbeProgramResponse,
 } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -14,7 +15,7 @@ export type ProbeUiState =
   | { kind: "idle" }
   | { kind: "disabled" }
   | { kind: "checking" }
-  | { kind: "found"; path: string; flagCount: number }
+  | { kind: "found"; path: string; flagCount: number; flags: FlagInfo[] }
   | { kind: "noFlags"; path: string }
   | { kind: "timeout"; path: string }
   | { kind: "needsConfirm"; path: string }
@@ -61,7 +62,7 @@ export function toUiState(res: ProbeProgramResponse): ProbeUiState {
       return { kind: "noFlags", path };
     default:
       return res.found
-        ? { kind: "found", path, flagCount: res.flags.length }
+        ? { kind: "found", path, flagCount: res.flags.length, flags: res.flags }
         : { kind: "notFound" };
   }
 }

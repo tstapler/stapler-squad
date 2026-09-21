@@ -29,7 +29,12 @@ describe("useProbeProgram", () => {
     const { result } = renderHook(() => useProbeProgram("claude --x", "program-config"));
     expect(result.current.state.kind).toBe("idle");
     await act(async () => result.current.check());
-    expect(result.current.state).toEqual({ kind: "found", path: "/usr/bin/claude", flagCount: 2 });
+    expect(result.current.state).toEqual({
+      kind: "found",
+      path: "/usr/bin/claude",
+      flagCount: 2,
+      flags: [{}, {}],
+    });
     expect(result.current.checkedToken).toBe("claude");
     // blur sends neither flag
     expect(probe.mock.calls[0][0]).toEqual({
