@@ -1,13 +1,14 @@
 "use client";
 // +feature: session-change-program
 
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, forwardRef, useImperativeHandle } from "react";
+import { useState, useRef, useContext, useEffect, useLayoutEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
 import { MoreHorizontal } from "lucide-react";
 import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionStatus } from "@/gen/session/v1/types_pb";
 import { TagEditor } from "./TagEditor";
 import { CreatePullRequestModal } from "./CreatePullRequestModal";
+import { AnalyticsContext } from "@/lib/contexts/AnalyticsContext";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
 import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
@@ -103,6 +104,16 @@ function MenuSection({ id, label, openId, onToggle, children }: {
   );
 }
 
+/** Stable action label from a menu item's visible text: "🔀 Create PR" -> "create-pr", "View PR #12" -> "view-pr". */
+export function menuActionLabel(text: string): string {
+  return text
+    .replace(/#\d+/g, "")
+    .replace(/[^\p{L}\p{N}\s-]/gu, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-");
+}
+
 const menuSeparator = (
   <div role="separator" style={{ height: 1, background: "var(--border-color)", margin: "4px 0" }} />
 );
@@ -145,6 +156,15 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   // exhausted) — "Retry now" here skips the wait rather than reviving a
   // terminal state.
   const isMidBackoffWait = !isPermanentlyFailed && !!session.nextRetryAt;
+
+  // Optional (not useAnalytics) so the menu still renders outside an AnalyticsContextProvider.
+  const track = useContext(AnalyticsContext)?.track;
+  const trackMenu = useCallback((name: string, action?: string) => {
+    track?.({
+      name, category: "user_action", component: "SessionActionsOverflow", sessionId: session.id,
+      ...(action ? { labels: { action } } : {}),
+    });
+  }, [track, session.id]);
 
   const [showOverflow, setShowOverflow] = useState(false);
   const [menuPos, setMenuPos] = useState({ top: 0, right: 0, anchorTop: 0 });
@@ -261,23 +281,25 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   useImperativeHandle(ref, () => ({
     openAt(x: number, y: number) {
       setOpenSection(null);
+      trackMenu("session_menu_open");
       setMenuPos({ top: y, right: window.innerWidth - x, anchorTop: y });
       setShowOverflow(true);
     },
-  }), []);
+  }), [trackMenu]);
 
   const openMenu = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (!overflowButtonRef.current) return;
     const rect = overflowButtonRef.current.getBoundingClientRect();
     setOpenSection(null);
+    trackMenu("session_menu_open");
     setMenuPos({
       top: rect.bottom + 4,
       right: window.innerWidth - rect.right,
       anchorTop: rect.top - 4,
     });
     setShowOverflow((o) => !o);
-  }, []);
+  }, [trackMenu]);
 
   // sendSteerMessage is the steer dialog's single submit path, shared by the
   // input's Enter-key handler and the Send button's onClick — both need the
@@ -804,6 +826,11 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               style={{ top: fitTop ?? menuPos.top, right: menuPos.right }}
               role="menu"
               aria-labelledby={`overflow-btn-${session.id}`}
+              // Capture phase: each item's own onClick calls stopPropagation, so a bubbling handler never sees the click.
+              onClickCapture={(e) => {
+                const item = (e.target as HTMLElement).closest('[role^="menuitem"]');
+                if (item) trackMenu("session_menu_click", menuActionLabel(item.textContent ?? ""));
+              }}
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => { if (e.key === "Escape") setShowOverflow(false); }}
             >

@@ -13,7 +13,8 @@
 
 import React from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import { SessionActionsOverflow, fitMenuTop } from "../SessionActionsOverflow";
+import { AnalyticsContext } from "@/lib/contexts/AnalyticsContext";
+import { SessionActionsOverflow, fitMenuTop, menuActionLabel } from "../SessionActionsOverflow";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { SessionStatus, InstanceType } from "@/gen/session/v1/types_pb";
 
@@ -597,5 +598,29 @@ describe("accordion sections", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "More" }));
     expect(screen.queryByRole("menuitem", { name: /clone session/i })).not.toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /clear conversation/i })).toBeInTheDocument();
+  });
+});
+
+describe("click tracking", () => {
+  it("normalizes visible menu text into a stable action label", () => {
+    expect(menuActionLabel("🔀 Create PR")).toBe("create-pr");
+    expect(menuActionLabel("✅ View PR #123")).toBe("view-pr");
+    expect(menuActionLabel("⏸ Disable auto-resume")).toBe("disable-auto-resume");
+  });
+
+  it("tracks menu opens and item clicks with the session id and action label", () => {
+    const track = jest.fn();
+    render(
+      <AnalyticsContext.Provider value={{ provider: {} as never, track }}>
+        <SessionActionsOverflow session={makeSession()} onClone={jest.fn()} />
+      </AnalyticsContext.Provider>
+    );
+    openMenu("Organize");
+    fireEvent.click(screen.getByRole("menuitem", { name: /clone session/i }));
+
+    const base = { category: "user_action", component: "SessionActionsOverflow", sessionId: "session-1" };
+    expect(track).toHaveBeenCalledWith({ ...base, name: "session_menu_open" });
+    expect(track).toHaveBeenCalledWith({ ...base, name: "session_menu_click", labels: { action: "organize" } });
+    expect(track).toHaveBeenCalledWith({ ...base, name: "session_menu_click", labels: { action: "clone" } });
   });
 });
