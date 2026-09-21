@@ -63,7 +63,6 @@ export const pathExpanded = style({ overflowWrap: "anywhere" });
 export const detail = style({
   flexBasis: "100%",
   fontSize: vars.fontSize.xs,
-  opacity: 0.9,
 });
 
 // 44px targets: full-width row under the text below 640px, inline after it above.

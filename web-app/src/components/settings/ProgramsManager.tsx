@@ -2,7 +2,7 @@
 
 // analytics-exempt
 // +feature: settings-programs
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { SessionService, type ProgramConfigProto } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -90,6 +90,18 @@ export function ProgramsManager() {
 
   const probe = useProbeProgram(formData.command, "program-config");
   const flagsHint = FLAGS_HINTS[probe.state.kind];
+  // A disabled button drops focus in browsers, so hand it back once the run settles.
+  const checkButtonRef = useRef<HTMLButtonElement>(null);
+  const checkClicked = useRef(false);
+  const wasChecking = useRef(false);
+  useEffect(() => {
+    const checking = probe.state.kind === "checking";
+    if (wasChecking.current && !checking && checkClicked.current && document.activeElement === document.body) {
+      checkButtonRef.current?.focus();
+    }
+    if (!checking) checkClicked.current = false;
+    wasChecking.current = checking;
+  }, [probe.state.kind]);
   const [flagsFocused, setFlagsFocused] = useState(false);
   const probedFlags = useMemo(() => (probe.state.kind === "found" ? probe.state.flags : []), [probe.state]);
   // The token still being typed is not judged until the field blurs or a space follows it.
@@ -359,9 +371,13 @@ export function ProgramsManager() {
                   data-testid="prog-command-input"
                 />
                 <button
+                  ref={checkButtonRef}
                   type="button"
                   className={checkButton}
-                  onClick={() => probe.check({ explicit: true })}
+                  onClick={() => {
+                    checkClicked.current = true;
+                    probe.check({ explicit: true });
+                  }}
                   disabled={probe.state.kind === "checking"}
                   aria-busy={probe.state.kind === "checking"}
                   data-testid="prog-command-check"

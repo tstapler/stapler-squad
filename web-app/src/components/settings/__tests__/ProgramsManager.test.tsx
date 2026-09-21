@@ -289,6 +289,17 @@ describe("ProgramsManager probe badge", () => {
     expect(hint).toHaveTextContent(text);
     expect(screen.getByTestId("prog-flags-input")).toHaveAttribute("aria-describedby", hint.id);
   });
+  it("ProgramsManager_should_RestoreFocusToCheck_When_ExplicitCheckSettlesAndFocusWasDropped", async () => {
+    const { rerender } = await openForm(probeStates.needsConfirm);
+    fireEvent.click(check());
+    setProbeHookState(probeStates.checking);
+    rerender(<ProgramsManager />);
+    (document.activeElement as HTMLElement | null)?.blur(); // browsers drop focus on a disabled button
+    setProbeHookState(probeStates.found);
+    rerender(<ProgramsManager />);
+    expect(check()).toHaveFocus();
+  });
+
   describe("unknown-flag warnings", () => {
     const FOUND_WITH_MODEL = {
       ...(probeStates.found as Extract<ProbeUiState, { kind: "found" }>),
