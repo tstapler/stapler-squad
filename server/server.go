@@ -411,7 +411,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	log.Info("Registered CDP stream WebSocket handler at /api/sessions/{id}/cdp-stream")
 
 	// Register general ConnectRPC handler (unary calls)
-	path, handler := sessionv1connect.NewSessionServiceHandler(deps.SessionService, ConnectOptions(deps.ErrorRegistry)...)
+	sessionOpts := append(
+		ConnectOptions(deps.ErrorRegistry),
+		connect.WithInterceptors(interceptors.NewScopedFeatureFlagInterceptor(
+			"programs:cli-flag-probe",
+			services.ProgramCLIFlagProbeEnabled,
+			services.ProgramCLIFlagProbeGatedMethod,
+		)),
+	)
+	path, handler := sessionv1connect.NewSessionServiceHandler(deps.SessionService, sessionOpts...)
 	apiPath := "/api" + path
 
 	// Register StreamingWSBridge for server-streaming Watch* RPCs so browsers use
@@ -1371,12 +1379,8 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Build middleware chain:
 	// otelhttp -> logging -> CORS -> gzip -> [auth] -> mux
-	inner := http.Handler(s)
-	if s.authMiddleware != nil {
-		inner = s.authMiddleware(inner)
-	}
 	handler := otelhttp.NewHandler(
-		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))),
+		s.localChain(),
 		"stapler-squad-http",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
@@ -1635,17 +1639,51 @@ func (s *Server) registerServerInfoHandler() {
 	})
 }
 
+// probeProcedurePath is the full request path of ProbeProgram as seen by the
+// outer handler, before the mux strips the "/api" prefix.
+const probeProcedurePath = "/api" + sessionv1connect.SessionServiceProbeProgramProcedure
+
+// localChain is the :8543 middleware chain (inside otelhttp):
+// Logging -> CORS -> Compress -> [auth | ProbeGuard] -> mux.
+// The listener has no auth unless authMiddleware is set, so ProbeGuard is the
+// boundary for the one RPC that executes a program; with auth, auth is the boundary.
+func (s *Server) localChain() http.Handler {
+	inner := http.Handler(s)
+	if s.authMiddleware != nil {
+		inner = s.authMiddleware(inner)
+	} else {
+		inner = middleware.ProbeGuard(probeProcedurePath, s.probeGuardConfig())(inner)
+	}
+	return middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner)))
+}
+
+// remoteChain is the :8444 chain. It never carries ProbeGuard: auth is the
+// boundary there and its Host is a LAN/Tailscale name the guard would reject.
+func (s *Server) remoteChain(authMW func(http.Handler) http.Handler) http.Handler {
+	inner := http.Handler(s)
+	if authMW != nil {
+		inner = authMW(inner)
+	}
+	return middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner)))
+}
+
+// probeGuardConfig reads everything lazily: origins, hostnames and the bound
+// address are all set or resolved after construction.
+func (s *Server) probeGuardConfig() middleware.ProbeGuardConfig {
+	return middleware.ProbeGuardConfig{
+		LoopbackBound:  func() bool { return middleware.ListenAddrIsLoopback(s.GetAddr()) },
+		AllowedOrigins: s.GetOrigins,
+		AllowedHosts:   s.GetHostnames,
+	}
+}
+
 // StartRemote starts a second HTTPS server on remoteAddr, sharing the same
 // route mux as the local server but protected by TLS and auth middleware.
 // It binds eagerly (returns a bind error immediately if the port is in use),
 // then runs the server in a background goroutine until ctx is cancelled.
 func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls.Config, authMW func(http.Handler) http.Handler) error {
-	inner := http.Handler(s)
-	if authMW != nil {
-		inner = authMW(inner)
-	}
 	handler := otelhttp.NewHandler(
-		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))),
+		s.remoteChain(authMW),
 		"stapler-squad-remote",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)

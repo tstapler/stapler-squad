@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/config/clihelp"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 
@@ -25,6 +26,11 @@ var programIDRE = regexp.MustCompile(`^[\w-]+$`)
 
 // DefaultsService handles session defaults RPC methods.
 type DefaultsService struct {
+	// prober backs ProbeProgram. Built hermetically (no login-shell derivation)
+	// so tests spawn nothing; production starts derivation via
+	// StartProgramProbeLoginPath.
+	prober *clihelp.Prober
+
 	// onGlobalDefaultsUpdated, if set, is called (in a goroutine) after every
 	// successful UpdateGlobalDefaults save. Wired in server/dependencies.go to
 	// trigger an immediate backlog-queue dequeue sweep when the concurrency
@@ -60,7 +66,18 @@ type DefaultsService struct {
 
 // NewDefaultsService creates a DefaultsService.
 func NewDefaultsService() *DefaultsService {
-	return &DefaultsService{}
+	return &DefaultsService{prober: clihelp.NewProber()}
+}
+
+// SetProber replaces the program prober (tests inject fakes).
+func (d *DefaultsService) SetProber(p *clihelp.Prober) {
+	d.prober = p
+}
+
+// StartProgramProbeLoginPath begins background derivation of the user's
+// login-shell PATH for ProbeProgram lookups. Production wiring only.
+func (d *DefaultsService) StartProgramProbeLoginPath() {
+	d.prober.StartLoginPathDerivation()
 }
 
 // SetOnGlobalDefaultsUpdated wires in the callback invoked after every
@@ -791,4 +808,55 @@ func (d *DefaultsService) DeleteProgramConfig(
 
 	log.Info("deleted custom program", "id", id)
 	return connect.NewResponse(&sessionv1.DeleteProgramConfigResponse{}), nil
+}
+
+// +api: program_config:probe
+// ProbeProgram reports whether a program command names a usable executable on
+// the server. An unfound program is a normal response; only an empty command
+// is an error.
+func (d *DefaultsService) ProbeProgram(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ProbeProgramRequest],
+) (*connect.Response[sessionv1.ProbeProgramResponse], error) {
+	if strings.TrimSpace(req.Msg.Command) == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("command is required"))
+	}
+	res := d.prober.Probe(ctx, req.Msg.Command, clihelp.ProbeOpts{
+		ConfirmExecute: req.Msg.ConfirmExecute,
+		ResolveOnly:    req.Msg.ResolveOnly,
+	})
+	return connect.NewResponse(probeResultToProto(res)), nil
+}
+
+// probeResultToProto is the only place ProbeProgramResponse.Found is set.
+func probeResultToProto(res clihelp.ProbeResult) *sessionv1.ProbeProgramResponse {
+	status, found := probeStatusToProto(res.Status)
+	return &sessionv1.ProbeProgramResponse{
+		Found:        found,
+		ResolvedPath: string(res.ResolvedPath),
+		ProbeStatus:  status,
+		IsWrapper:    res.IsWrapper,
+	}
+}
+
+func probeStatusToProto(s clihelp.ProbeStatus) (status sessionv1.ProbeStatus, found bool) {
+	switch s {
+	case clihelp.ProbeStatusFoundParsed:
+		return sessionv1.ProbeStatus_PROBE_STATUS_FOUND_PARSED, true
+	case clihelp.ProbeStatusFoundNoFlags:
+		return sessionv1.ProbeStatus_PROBE_STATUS_FOUND_NO_FLAGS, true
+	case clihelp.ProbeStatusTimeout:
+		return sessionv1.ProbeStatus_PROBE_STATUS_TIMEOUT, true
+	case clihelp.ProbeStatusNeedsConfirm:
+		return sessionv1.ProbeStatus_PROBE_STATUS_NEEDS_CONFIRM, true
+	case clihelp.ProbeStatusNotFound:
+		return sessionv1.ProbeStatus_PROBE_STATUS_NOT_FOUND, false
+	case clihelp.ProbeStatusError:
+		return sessionv1.ProbeStatus_PROBE_STATUS_ERROR, false
+	case clihelp.ProbeStatusBusy:
+		return sessionv1.ProbeStatus_PROBE_STATUS_BUSY, false
+	case clihelp.ProbeStatusUnspecified:
+		return sessionv1.ProbeStatus_PROBE_STATUS_UNSPECIFIED, false
+	}
+	return sessionv1.ProbeStatus_PROBE_STATUS_UNSPECIFIED, false
 }

@@ -570,6 +570,12 @@ service SessionService {
   // DeleteProgramConfig removes a custom program configuration by ID.
   rpc DeleteProgramConfig(DeleteProgramConfigRequest) returns (DeleteProgramConfigResponse) {}
 
+  // ProbeProgram resolves a command to an executable on the server and, when
+  // permitted, parses its --help output into flags. Deliberately not marked
+  // NO_SIDE_EFFECTS: that would enable Connect GET, and the RPC executes a
+  // program (ADR-001).
+  rpc ProbeProgram(ProbeProgramRequest) returns (ProbeProgramResponse) {}
+
   // ArchiveSession soft-archives a session by setting archived_at.
   // Archived sessions are excluded from the default session list.
   rpc ArchiveSession(ArchiveSessionRequest) returns (ArchiveSessionResponse) {}
@@ -2531,6 +2537,49 @@ message ProgramConfigProto {
   string description = 5;
   map<string, string> env = 6;
   bool is_builtin = 7;
+}
+
+// ProbeProgramRequest asks the server to check one program command.
+message ProbeProgramRequest {
+  string command = 1;
+  // confirm_execute: the user explicitly asked to run this program's --help.
+  // Required for scripts; sent only by the explicit Check button.
+  bool confirm_execute = 2;
+  // resolve_only: resolve and stat only, never execute.
+  bool resolve_only = 3;
+}
+
+// FlagInfo is one option parsed from a program's --help output.
+message FlagInfo {
+  string name = 1;
+  string short = 2;
+  bool takes_value = 3;
+  string description = 4;
+  repeated string aliases = 5;
+}
+
+enum ProbeStatus {
+  PROBE_STATUS_UNSPECIFIED = 0;
+  PROBE_STATUS_FOUND_PARSED = 1;
+  PROBE_STATUS_FOUND_NO_FLAGS = 2;
+  PROBE_STATUS_NOT_FOUND = 3;
+  PROBE_STATUS_TIMEOUT = 4;
+  PROBE_STATUS_ERROR = 5;
+  PROBE_STATUS_BUSY = 6;
+  PROBE_STATUS_NEEDS_CONFIRM = 7;
+}
+
+// ProbeProgramResponse: found is derived from probe_status (true iff
+// FOUND_PARSED, FOUND_NO_FLAGS, TIMEOUT or NEEDS_CONFIRM). NEEDS_CONFIRM means
+// the file exists but was not executed. ERROR and BUSY mean "could not
+// determine": found is false, but clients must not render them as "not found".
+message ProbeProgramResponse {
+  bool found = 1;
+  string resolved_path = 2;
+  repeated FlagInfo flags = 3;
+  ProbeStatus probe_status = 4;
+  bool truncated = 5;
+  bool is_wrapper = 6;
 }
 
 message ListProgramsConfigRequest {}

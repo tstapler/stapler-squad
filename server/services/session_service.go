@@ -5222,6 +5222,16 @@ func (s *SessionService) UpsertProgramConfig(ctx context.Context, req *connect.R
 	return s.defaultsSvc.UpsertProgramConfig(ctx, req)
 }
 
+// ProbeProgram checks whether a program command resolves to a usable executable.
+func (s *SessionService) ProbeProgram(ctx context.Context, req *connect.Request[sessionv1.ProbeProgramRequest]) (*connect.Response[sessionv1.ProbeProgramResponse], error) {
+	return s.defaultsSvc.ProbeProgram(ctx, req)
+}
+
+// StartProgramProbeLoginPath starts login-shell PATH derivation for ProbeProgram.
+func (s *SessionService) StartProgramProbeLoginPath() {
+	s.defaultsSvc.StartProgramProbeLoginPath()
+}
+
 // DeleteProgramConfig removes a custom program configuration by ID.
 func (s *SessionService) DeleteProgramConfig(ctx context.Context, req *connect.Request[sessionv1.DeleteProgramConfigRequest]) (*connect.Response[sessionv1.DeleteProgramConfigResponse], error) {
 	return s.defaultsSvc.DeleteProgramConfig(ctx, req)
