@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -59,8 +60,8 @@ func TestSessionTaggingPipeline_should_ProduceFinalLLMTagWithNoUnclassified_When
 	require.NotContains(t, inst.GetTags(), UnclassifiedTag)
 
 	// And: one poller tick runs against a fake PoolClient that succeeds on the very first
-	// attempt with an in-vocabulary tag.
-	fake := &fakeTagPoolClient{response: `{"tags":["Refactor"]}`}
+	// attempt with an in-vocabulary tag (batch envelope keyed by the instance title).
+	fake := &fakeTagPoolClient{response: `{"results":[{"name":` + strconv.Quote(t.Name()) + `,"tags":["Refactor"]}]}`}
 	poller := NewSessionTagClassificationPoller(fake, engine)
 	poller.SetInstances([]*Instance{inst})
 	poller.pollOnce()
@@ -91,6 +92,9 @@ func TestSessionTaggingPipeline_should_ShowUnclassifiedThenRealTag_When_FirstPol
 
 	fake := &fakeTagPoolClient{err: errors.New("fake pool client error")}
 	poller := NewSessionTagClassificationPoller(fake, engine)
+	// Cooldown disabled: the second tick must re-classify immediately after the branch
+	// change (this test proves Unclassified-drop coexistence, not the cooldown gate).
+	poller.config.MinReclassifyInterval = 0
 	poller.SetInstances([]*Instance{inst})
 
 	// First tick: the LLM call fails, so Unclassified is applied and the cache updates so an
@@ -106,7 +110,7 @@ func TestSessionTaggingPipeline_should_ShowUnclassifiedThenRealTag_When_FirstPol
 	renameAndResnapshot(inst, "", "feature/y")
 	fake.mu.Lock()
 	fake.err = nil
-	fake.response = `{"tags":["Feature"]}`
+	fake.response = `{"results":[{"name":` + strconv.Quote(t.Name()) + `,"tags":["Feature"]}]}`
 	fake.mu.Unlock()
 
 	poller.pollOnce()

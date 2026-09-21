@@ -774,7 +774,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// simply never gets an LLM-derived tag, sync rules still work unaffected (ADR-001).
 	var sessionTagPoller *session.SessionTagClassificationPoller
 	if headlessPool != nil {
-		sessionTagPoller = session.NewSessionTagClassificationPoller(headlessPool, sessionService.GetTaggingEngine())
+		tagPollerCfg := session.DefaultSessionTagPollerConfig()
+		tagModel, tagFallbacks := services.TaggingClassifierModelHierarchy(cfg)
+		tagPollerCfg.Model = tagModel
+		tagPollerCfg.FallbackModels = tagFallbacks
+		sessionTagPoller = session.NewSessionTagClassificationPollerWithConfig(headlessPool, sessionService.GetTaggingEngine(), tagPollerCfg)
 		// Wire into SessionService so every session-creation path (CreateSession,
 		// CreateDirectorySession, CreateWorktreeSession, ForkSession) registers new
 		// sessions with the poller too, not just the boot-time instance list set via

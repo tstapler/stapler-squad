@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -117,9 +118,9 @@ func TestSessionTagPoller_should_NotRaceOrPanic_When_StartStopCalledRepeatedly(t
 	}
 }
 
-func TestSessionTagPoller_should_SkipLLMCall_When_ContentHashUnchanged(t *testing.T) {
+func TestSessionTagPoller_should_SkipLLMCall_When_AlreadyClassified(t *testing.T) {
 	t.Parallel()
-	fake := &fakeTagPoolClient{response: `{"tags":["Feature"]}`}
+	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-1","tags":["Feature"]}]}`}
 	fx := newTagPollerFixture(fake, "Feature")
 	inst := primedInstance("sess-1", "feature/x")
 	fx.poller.SetInstances([]*Instance{inst})
@@ -137,7 +138,7 @@ func TestSessionTagPoller_should_SkipLLMCall_When_ContentHashUnchanged(t *testin
 
 func TestSessionTagPoller_should_CallLLMAndUpdateCache_When_ContentHashChanged(t *testing.T) {
 	t.Parallel()
-	fake := &fakeTagPoolClient{response: `{"tags":["Feature"]}`}
+	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-1","tags":["Feature"]},{"name":"sess-1-renamed","tags":["Feature"]}]}`}
 	fx := newTagPollerFixture(fake, "Feature")
 	inst := primedInstance("sess-1", "feature/x")
 	fx.poller.SetInstances([]*Instance{inst})
@@ -147,8 +148,8 @@ func TestSessionTagPoller_should_CallLLMAndUpdateCache_When_ContentHashChanged(t
 		t.Fatalf("first tick: CallBlocking called %d times, want 1", got)
 	}
 
-	// Simulate a rename that changes the content hash; re-register under the poller's instance
-	// slice so the cache lookup (keyed by title) misses and re-triggers classification.
+	// Simulate a rename: the new title has no cache entry, so classify-once does not cover
+	// it and the next tick classifies it (renames are deliberate, not flaps).
 	renameAndResnapshot(inst, "sess-1-renamed", "")
 	fx.poller.SetInstances([]*Instance{inst})
 
@@ -216,7 +217,7 @@ func TestSessionTagPoller_should_LogAppliedOutcome_When_ModelLegitimatelyReturns
 	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
 
-	fake := &fakeTagPoolClient{response: `{"tags":["Unclassified"]}`}
+	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-genuine-unclassified","tags":["Unclassified"]}]}`}
 	fx := newTagPollerFixture(fake, "Feature")
 	inst := primedInstance("sess-genuine-unclassified", "feature/x")
 	fx.poller.SetInstances([]*Instance{inst})
@@ -252,7 +253,7 @@ func vocabularyFromPrompt(prompt string) []string {
 
 func TestSessionTagPoller_should_RecomputeVocabularyFromLiveEngine_When_RuleAddedBetweenTicks(t *testing.T) {
 	t.Parallel()
-	fake := &fakeTagPoolClient{response: `{"tags":["Hotfix"]}`}
+	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-3","tags":["Hotfix"]},{"name":"sess-4","tags":["Hotfix"]}]}`}
 	fx := newTagPollerFixture(fake, "Bugfix", "Feature")
 	inst := primedInstance("sess-3", "feature/x")
 	fx.poller.SetInstances([]*Instance{inst})
@@ -267,12 +268,13 @@ func TestSessionTagPoller_should_RecomputeVocabularyFromLiveEngine_When_RuleAdde
 	}
 
 	// Simulate a CRUD-added rule (TaggingRulesService.UpsertTaggingRule → engine.ReplaceRules)
-	// landing mid-run, and force a hash change so the second tick actually re-classifies.
+	// landing mid-run. Classify-once covers sess-3, so the second tick classifies a NEW
+	// session — proving the recomputed vocabulary reaches classifications with no restart.
 	fx.engine.AddRules([]classifier.TaggingRule{{
 		RuleMeta:  classifier.RuleMeta{ID: "rule-hotfix", Name: "Hotfix", Priority: 1, Enabled: true, Source: "user"},
 		OutputTag: "Hotfix",
 	}})
-	renameAndResnapshot(inst, "", "hotfix/y")
+	fx.poller.SetInstances([]*Instance{inst, primedInstance("sess-4", "hotfix/y")})
 
 	fx.poller.pollOnce()
 	secondVocab := vocabularyFromPrompt(fake.userPrompt())
@@ -288,4 +290,197 @@ func slicesContainString(items []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// TestSessionTagPoller_should_IssueOneCall_When_MultipleSessionsChanged verifies the batching
+// contract at the poller level: three simultaneously-changed sessions cost exactly one LLM call,
+// and every session still gets its own tags applied.
+func TestSessionTagPoller_should_IssueOneCall_When_MultipleSessionsChanged(t *testing.T) {
+	t.Parallel()
+	fake := &fakeTagPoolClient{response: `{"results":[
+		{"name":"sess-a","tags":["Feature"]},
+		{"name":"sess-b","tags":["Bugfix"]},
+		{"name":"sess-c","tags":["Unclassified"]}]}`}
+	fx := newTagPollerFixture(fake, "Feature", "Bugfix")
+	fx.poller.SetInstances([]*Instance{
+		primedInstance("sess-a", "feature/x"),
+		primedInstance("sess-b", "bugfix/y"),
+		primedInstance("sess-c", "main"),
+	})
+
+	fx.poller.pollOnce()
+
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("one tick classifying 3 changed sessions: CallBlocking called %d times, want 1 batch call", got)
+	}
+	for _, inst := range fx.poller.Instances() {
+		if len(inst.GetTags()) == 0 {
+			t.Errorf("session %q has no tags after batch classification", inst.Snapshot().Title)
+		}
+	}
+}
+
+// TestSessionTagPoller_should_DeferSurplusSessions_When_ChangedExceedBatchSize verifies the
+// backpressure: with MaxBatchSessions=1 and two changed sessions, the first tick classifies
+// exactly one session in one call, and the second session waits for the next tick instead of
+// triggering a second call in the same tick.
+func TestSessionTagPoller_should_DeferSurplusSessions_When_ChangedExceedBatchSize(t *testing.T) {
+	t.Parallel()
+	fake := &fakeTagPoolClient{response: `{"results":[
+		{"name":"sess-a","tags":["Feature"]},
+		{"name":"sess-b","tags":["Feature"]}]}`}
+	fx := newTagPollerFixture(fake, "Feature")
+	fx.poller.config.MaxBatchSessions = 1
+	fx.poller.config.MinReclassifyInterval = 0
+	instA := primedInstance("sess-a", "feature/x")
+	instB := primedInstance("sess-b", "feature/y")
+	fx.poller.SetInstances([]*Instance{instA, instB})
+
+	fx.poller.pollOnce()
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("first tick: CallBlocking called %d times, want 1 (surplus deferred)", got)
+	}
+	classified := len(instA.GetTags()) > 0
+	deferred := len(instB.GetTags()) > 0
+	if classified == deferred {
+		t.Fatalf("first tick must classify exactly one of the two sessions (a=%v b=%v)", classified, deferred)
+	}
+
+	fx.poller.pollOnce()
+	if got := fake.callCount(); got != 2 {
+		t.Fatalf("second tick: CallBlocking called %d times total, want 2 (deferred session classified)", got)
+	}
+	if len(instA.GetTags()) == 0 || len(instB.GetTags()) == 0 {
+		t.Fatalf("both sessions must be tagged after two ticks (a=%v b=%v)", instA.GetTags(), instB.GetTags())
+	}
+}
+
+// TestSessionTagPoller_should_NeverReclassify_When_AlreadyApplied verifies classify-once: a
+// branch change landing after a successful classification issues no LLM call, no matter how
+// much time passes — the session is left alone until the user explicitly re-runs it.
+func TestSessionTagPoller_should_NeverReclassify_When_AlreadyApplied(t *testing.T) {
+	t.Parallel()
+	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-1","tags":["Feature"]}]}`}
+	fx := newTagPollerFixture(fake, "Feature")
+	inst := primedInstance("sess-1", "feature/x")
+	fx.poller.SetInstances([]*Instance{inst})
+
+	fx.poller.pollOnce()
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("first tick: CallBlocking called %d times, want 1", got)
+	}
+
+	renameAndResnapshot(inst, "", "feature/y")
+	fx.poller.pollOnce()
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("re-tick after branch change on applied session: CallBlocking called %d times, want still 1 (left alone)", got)
+	}
+}
+
+// TestSessionTagPoller_should_RetryDegraded_When_BackoffExpired verifies the degraded-retry
+// backoff: a failed classification is NOT retried on the immediate next tick (no retry storm
+// against a down proxy), but becomes retryable once MinReclassifyInterval elapses.
+func TestSessionTagPoller_should_RetryDegraded_When_BackoffExpired(t *testing.T) {
+	t.Parallel()
+	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-1","tags":["Feature"]}]}`}
+	fx := newTagPollerFixture(fake, "Feature")
+	inst := primedInstance("sess-1", "feature/x")
+	fx.poller.SetInstances([]*Instance{inst})
+
+	// Seed a degraded entry as if the last attempt failed just now.
+	fx.poller.cache.Store("sess-1", cachedTagResult{tags: []string{UnclassifiedTag}, classifiedAt: time.Now(), applied: false})
+	fx.poller.pollOnce()
+	if got := fake.callCount(); got != 0 {
+		t.Fatalf("tick inside degraded backoff: CallBlocking called %d times, want 0", got)
+	}
+
+	if cached, ok := fx.poller.cache.Load("sess-1"); ok {
+		cached.classifiedAt = time.Now().Add(-time.Hour)
+		fx.poller.cache.Store("sess-1", cached)
+	} else {
+		t.Fatal("expected a cache entry for sess-1")
+	}
+	fx.poller.pollOnce()
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("tick after backoff expiry: CallBlocking called %d times, want 1", got)
+	}
+	if tags := inst.GetTags(); len(tags) != 1 || tags[0] != "Feature" {
+		t.Fatalf("expected tags=[Feature] after successful retry, got %v", tags)
+	}
+}
+
+// TestSessionTagPoller_should_HotSwapModels_When_SetModelConfigCalled verifies the settings-UI
+// path: SetModelConfig changes the hierarchy the next batch call uses, with no restart.
+func TestSessionTagPoller_should_HotSwapModels_When_SetModelConfigCalled(t *testing.T) {
+	t.Parallel()
+	fake := &fakeTagPoolClient{response: `{"results":[]}`}
+	fx := newTagPollerFixture(fake, "Feature")
+
+	if got := fx.poller.modelHierarchy(); len(got) != 1 || got[0] != "haiku" {
+		t.Fatalf("default hierarchy = %v, want [haiku]", got)
+	}
+	fx.poller.SetModelConfig("sonnet", []string{"proxy-free"})
+	if got := fx.poller.modelHierarchy(); len(got) != 2 || got[0] != "sonnet" || got[1] != "proxy-free" {
+		t.Fatalf("hierarchy after SetModelConfig = %v, want [sonnet proxy-free]", got)
+	}
+	fx.poller.SetModelConfig("", nil)
+	if got := fx.poller.modelHierarchy(); len(got) != 1 || got[0] != "haiku" {
+		t.Fatalf("hierarchy after blank reset = %v, want [haiku]", got)
+	}
+}
+
+// TestSessionTagPoller_should_ClassifySynchronously_When_ClassifyNowCalled verifies the manual
+// path: ClassifyNow bypasses the classify-once gate and applies fresh tags immediately,
+// returning an error only for unknown titles.
+func TestSessionTagPoller_should_ClassifySynchronously_When_ClassifyNowCalled(t *testing.T) {
+	t.Parallel()
+	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-1","tags":["Feature"]}]}`}
+	fx := newTagPollerFixture(fake, "Feature")
+	inst := primedInstance("sess-1", "feature/x")
+	fx.poller.SetInstances([]*Instance{inst})
+
+	fx.poller.pollOnce()
+	renameAndResnapshot(inst, "", "feature/y")
+	fx.poller.pollOnce()
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("automatic re-tick must not reclassify (classify-once): calls=%d, want 1", got)
+	}
+
+	if err := fx.poller.ClassifyNow("sess-1"); err != nil {
+		t.Fatalf("ClassifyNow(sess-1) returned error: %v", err)
+	}
+	if got := fake.callCount(); got != 2 {
+		t.Fatalf("ClassifyNow: CallBlocking called %d times total, want 2", got)
+	}
+
+	if err := fx.poller.ClassifyNow("no-such-session"); err == nil {
+		t.Fatal("ClassifyNow(unknown) must return an error")
+	}
+}
+
+// TestSessionTagPoller_should_NotLogClassificationLines_When_NothingChanged verifies the log
+// hygiene fix: a tick where every session is a cache hit must not emit per-session
+// "LLM classification" INFO lines (the wall that prompted this change) — only classified
+// sessions log that message.
+func TestSessionTagPoller_should_NotLogClassificationLines_When_NothingChanged(t *testing.T) {
+	var buf bytes.Buffer
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
+
+	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-1","tags":["Feature"]}]}`}
+	fx := newTagPollerFixture(fake, "Feature")
+	fx.poller.SetInstances([]*Instance{primedInstance("sess-1", "feature/x")})
+
+	fx.poller.pollOnce() // classifies: one INFO classification line expected
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("first tick: CallBlocking called %d times, want 1", got)
+	}
+
+	buf.Reset()
+	fx.poller.pollOnce() // all cache hits: zero LLM spend, zero classification lines
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("second tick: CallBlocking called %d times, want still 1", got)
+	}
+	assert.NotContains(t, buf.String(), "LLM classification",
+		"cache-hit tick must not log per-session classification lines")
 }
