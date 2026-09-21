@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io/fs"
+	"log/slog"
 )
 
 // Native executable magic numbers: ELF, Mach-O (both byte orders, 32/64-bit), fat.
@@ -43,7 +44,14 @@ func (p *Prober) execute(ctx context.Context, path ResolvedPath, opts ProbeOpts)
 		return ProbeResult{Status: ProbeStatusError, ResolvedPath: path}
 	}
 
-	ch := p.flights.DoChan(key.flightKey(), func() (any, error) {
+	ch := p.flights.DoChan(key.flightKey(), func() (res any, err error) {
+		// The flight runs on its own goroutine: a panic here would take the whole server down.
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("program_probe flight panicked", "panic", r)
+				res = ProbeResult{Status: ProbeStatusError, ResolvedPath: path}
+			}
+		}()
 		return p.flight(context.WithoutCancel(ctx), path, key, opts), nil
 	})
 	select {

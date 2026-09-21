@@ -91,6 +91,19 @@ func TestProbe_should_ParseFlagsAndCacheByMtime_When_RunnerConfigured(t *testing
 	assert.EqualValues(t, 2, f.calls.Load(), "a changed mtime invalidates the cache")
 }
 
+func TestProbe_should_ReturnErrorAndKeepSlots_When_RunnerPanics(t *testing.T) {
+	dir, _ := toolIn(t, "tool")
+	p := hermeticProber(t, []string{dir},
+		WithRun(func(context.Context, ResolvedPath, Limits) (RunOutput, error) { panic("boom") }),
+		WithReadHead(func(string) ([]byte, error) { return elfHead(), nil }))
+
+	// More probes than maxConcurrentRuns: a leaked slot would surface as BUSY.
+	for i := 0; i < maxConcurrentRuns+1; i++ {
+		res := p.Probe(context.Background(), "tool", ProbeOpts{})
+		assert.Equal(t, ProbeStatusError, res.Status, "probe %d", i)
+	}
+}
+
 func TestProbe_should_ReportNoFlagsAndTruncated_When_HelpHasNoFlags(t *testing.T) {
 	dir, _ := toolIn(t, "tool")
 	f := newFakeRun("nothing to see here\n")
