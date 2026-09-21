@@ -471,6 +471,11 @@ func resolveJulesOwnerRepo(repoPath string) (githubpkg.RepoRef, error) {
 	for _, h := range ghHosts {
 		enterpriseHosts = append(enterpriseHosts, h.Host)
 	}
+	// A GitHub URL (e.g. the settings panel's test-connection field) has no
+	// local git remote to read; parse it directly.
+	if parsed, perr := session.ParseGitHubURLWithHosts(repoPath, enterpriseHosts); perr == nil {
+		return githubpkg.NewRepoRef(parsed.Owner, parsed.Repo)
+	}
 	ref, err := githubpkg.GetOwnerRepoFromRemote(repoPath, enterpriseHosts)
 	if err != nil {
 		return githubpkg.RepoRef{}, fmt.Errorf("resolving GitHub owner/repo for %s: %w", repoPath, err)
