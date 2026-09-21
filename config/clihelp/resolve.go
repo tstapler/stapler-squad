@@ -24,9 +24,12 @@ const (
 )
 
 // wrappers run another program; their own --help says nothing about the wrapped one.
-var wrappers = map[string]struct{}{
-	"env": {}, "sudo": {}, "npx": {}, "uv": {}, "uvx": {}, "nice": {},
-	"time": {}, "exec": {}, "nohup": {}, "xargs": {}, "command": {},
+func isWrapper(name string) bool {
+	switch name {
+	case "env", "sudo", "npx", "uv", "uvx", "nice", "time", "exec", "nohup", "xargs", "command":
+		return true
+	}
+	return false
 }
 
 // Target is the single binary named by a command. Only meaningful when Resolve
@@ -66,8 +69,7 @@ func Resolve(command, home string) (Target, ResolveError) {
 	if !abs && (strings.ContainsRune(name, '/') || name == "." || name == "..") {
 		return Target{}, ResolveRelativePath
 	}
-	_, isWrapper := wrappers[filepath.Base(name)]
-	return Target{Name: name, IsAbsolute: abs, Wrapper: isWrapper}, ResolveOK
+	return Target{Name: name, IsAbsolute: abs, Wrapper: isWrapper(filepath.Base(name))}, ResolveOK
 }
 
 // splitTokens splits on spaces and tabs, honouring single quotes, double

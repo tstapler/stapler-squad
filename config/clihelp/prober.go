@@ -214,7 +214,8 @@ func logProbe(res ProbeResult, opts ProbeOpts, took time.Duration) {
 }
 
 func readHead4(path string) ([]byte, error) {
-	f, err := os.Open(path) //nolint:gosec // G304: path is a locate-validated executable
+	// #nosec G304 -- path is a locate-validated executable, opened read-only for a 4-byte magic check.
+	f, err := os.Open(path) //nolint:gosec
 	if err != nil {
 		return nil, err
 	}
