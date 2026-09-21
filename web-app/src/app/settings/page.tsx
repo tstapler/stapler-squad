@@ -114,6 +114,11 @@ function SettingsPageInner() {
                 Jules (Google cloud agent) →
               </Link>
             </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsTaggingClassifier} className={styles.helpLink} data-testid="settings-tagging-classifier-link">
+                Tag Classification (AI tagging model) →
+              </Link>
+            </section>
             {/* Help subsection */}
             <section className={styles.section}>
               <div className={styles.helpSection}>

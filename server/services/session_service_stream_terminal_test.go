@@ -58,14 +58,12 @@ func newBidiStreamTestServer(t *testing.T) (*SessionService, *httptest.Server) {
 // (always Output, never any other variant) rather than specific echoed
 // content.
 func TestStreamTerminal_SendsRawOutput(t *testing.T) {
-	t.Parallel()
 	svc, srv := newBidiStreamTestServer(t)
 
 	statusMgr := session.NewInstanceStatusManager()
 	queue := session.NewReviewQueue()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
-	svc.SetStatusManager(statusMgr)
 
 	// Wire the actor registry exactly as production does (server/dependencies.go):
 	// without it, CreateSession never wraps the new Instance in a LiveInstance, so

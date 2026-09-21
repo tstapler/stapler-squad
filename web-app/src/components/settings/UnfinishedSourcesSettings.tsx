@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useUnfinishedWorkConfig } from "@/lib/hooks/useUnfinishedWorkConfig";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import * as styles from "./UnfinishedSourcesSettings.css";
 
 /**
@@ -95,14 +96,10 @@ export function UnfinishedSourcesSettings() {
         </div>
 
         <div className={styles.addRow}>
-          <input
-            type="text"
-            className={styles.input}
-            placeholder="/Users/you/code"
+          <RepoPathInput
             value={newWatchDir}
-            onChange={(e) => setNewWatchDir(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleAddWatchDir()}
-            aria-label="New watch directory path"
+            onChange={setNewWatchDir}
+            placeholder="/Users/you/code"
           />
           <button
             className={styles.addBtn}
