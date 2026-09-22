@@ -136,7 +136,7 @@ func TestAbortNativeMerge_should_ReturnError_When_PreMergeIndexSnapshotMissing(t
 
 // TestNativeMergeMainIntoWorktree_UpToDate covers Task 3.4.1a's up-to-date short-circuit:
 // a branch that already contains origin/main's tip must be reported UpToDate with no ref
-// change, matching legacyMergeMainIntoWorktree's existing semantics exactly.
+// change.
 func TestNativeMergeMainIntoWorktree_UpToDate(t *testing.T) {
 	t.Parallel()
 	origin := setupTestRepo(t)
@@ -375,9 +375,9 @@ func TestNativeMergeMainIntoWorktree_Conflicted_LeavesWorktreeClean(t *testing.T
 	assert.Empty(t, strings.TrimSpace(status), "worktree must be exactly as clean as a real git merge --abort would leave it")
 }
 
-// TestNativeMergeMainIntoWorktree_should_ReturnError_When_FetchFails mirrors the existing
-// legacy-path test of the same shape: an unreachable origin must surface as an error, not
-// any MergeMainResult state, and must leave no partial merge state on disk.
+// TestNativeMergeMainIntoWorktree_should_ReturnError_When_FetchFails covers: an unreachable
+// origin must surface as an error, not any MergeMainResult state, and must leave no partial
+// merge state on disk.
 func TestNativeMergeMainIntoWorktree_should_ReturnError_When_FetchFails(t *testing.T) {
 	t.Parallel()
 	origin := setupTestRepo(t)
@@ -440,14 +440,6 @@ func TestNativeMerge_And_NativeSetup_SerializeThroughSameLock(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(origin, "main-fix.txt"), []byte("fix on main\n"), 0o644))
 	runGit(t, origin, "add", "main-fix.txt")
 	runGit(t, origin, "commit", "-m", "fix landed on main")
-
-	origWorktree := useNativeWorktree
-	useNativeWorktree = func(string) bool { return true }
-	t.Cleanup(func() { useNativeWorktree = origWorktree })
-
-	origMerge := useNativeMerge
-	useNativeMerge = func(string) bool { return true }
-	t.Cleanup(func() { useNativeMerge = origMerge })
 
 	wt, _, err := NewGitWorktreeWithBranch(work, "sess-merge-lock", "sess-merge-lock-branch")
 	require.NoError(t, err)

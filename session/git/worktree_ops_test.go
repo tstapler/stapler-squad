@@ -76,11 +76,6 @@ func TestBranchRefExists_ReturnsError_When_PackedRefsCorrupted(t *testing.T) {
 // TestSetup_SurfacesError_When_BranchRefIsMalformed is the regression test for the bug: a
 // non-ErrReferenceNotFound repo.Reference() error must surface from Setup() instead of being
 // silently treated as "branch does not exist" and falling through to worktree creation.
-// Both the sentinel check and the message check matter here: cleanupExistingBranch() (see
-// worktree_branch.go) also touches the same corrupted packed-refs file and fails with its
-// own, differently-worded error if the misclassification bug is reintroduced, so the
-// sentinel check is what actually pins this test to branchRefExists's own classification
-// rather than to whichever call site happens to fail first on this fixture.
 func TestSetup_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
@@ -102,23 +97,15 @@ func TestSetup_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "worktree must not have been created after a ref-check error")
 }
 
-// TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed covers
-// setupLockedWithNative's own re-check call site directly (not reachable through Setup()
-// alone, since Setup()'s upfront goroutine check would already have surfaced the same
-// error and never reached this second call site at all) — this exercises that second call
-// site's own use of branchRefExists independently, e.g. as it would be reached via a
-// stale/racy upstream read. It also guards against data loss: this ref check is the only gate
-// before cleanupExistingBranch() unconditionally calls RemoveReference on the ref store, so
-// a misclassified error here previously fell through into that call. The source shows the
-// early return on a non-nil branchRefExists error precedes the cleanupExistingBranch() call
-// (worktree_ops.go), so cleanupExistingBranch() cannot run here; the packed-refs-unchanged
-// assertion below is a best-effort regression guard on top of that, not independent proof —
-// for this specific corrupted-packed-refs fixture, an errantly-invoked RemoveReference would
-// also fail to parse the file and leave it unchanged, so the assertion alone can't
-// distinguish "never called" from "called but failed before writing." See
-// TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails below for a test that
-// proves, via a fault injected below the packed-refs layer, that a real branch ref actually
-// still resolves after the classification helper both call sites share returns this error.
+// TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed covers setupLocked's own
+// re-check call site directly (not reachable through Setup() alone, since Setup()'s
+// upfront goroutine check would already have surfaced the same error and never reached
+// this second call site at all) — this exercises that second call site's own use of
+// branchRefExists independently, e.g. as it would be reached via a stale/racy upstream
+// read. See TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails below for a
+// test that proves, via a fault injected below the packed-refs layer, that a real branch
+// ref actually still resolves after the classification helper both call sites share
+// returns this error.
 func TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
@@ -132,8 +119,8 @@ func TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed(t *testing.T) 
 	before, readErr := os.ReadFile(packedRefsPath)
 	require.NoError(t, readErr)
 
-	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
-	require.Error(t, err, "setupLockedWithNative() must surface a malformed ref as an error")
+	err = wt.setupLocked()
+	require.Error(t, err, "setupLocked() must surface a malformed ref as an error")
 	assert.False(t, errors.Is(err, plumbing.ErrReferenceNotFound),
 		"a genuine ref-read failure must not be classified as ErrReferenceNotFound")
 	assert.Contains(t, err.Error(), "failed to check branch reference")
@@ -144,7 +131,7 @@ func TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed(t *testing.T) 
 	after, readErr := os.ReadFile(packedRefsPath)
 	require.NoError(t, readErr)
 	assert.Equal(t, before, after,
-		"packed-refs must be untouched after a ref-check error (regression guard, see doc comment above for what this does and doesn't prove)")
+		"packed-refs must be untouched after a ref-check error")
 }
 
 // refFailStorer wraps a real storage.Storer and forces Reference() to return a fabricated
@@ -169,7 +156,7 @@ func (s *refFailStorer) Reference(name plumbing.ReferenceName) (*plumbing.Refere
 
 // TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails proves the literal
 // requirement behind AC5 (worktree-branch-exists-race): when branchRefExists — the single
-// helper both Setup() and setupLockedWithNative() call — encounters a non-ErrReferenceNotFound
+// helper both Setup() and setupLocked() call — encounters a non-ErrReferenceNotFound
 // error, the real branch ref on disk is left completely untouched. Unlike the
 // corrupted-packed-refs fixture, this uses a wrapped storer to fail only the read for the
 // target branch, leaving the rest of the real filesystem-backed ref store fully intact and
@@ -245,7 +232,7 @@ func TestSetupNewWorktree_RespectsPreSetBaseCommitSHA(t *testing.T) {
 	wt, _, err := NewGitWorktreeFromCommitSHA(repoDir, "test-pre-set-base", branchName, baseSHA)
 	require.NoError(t, err)
 
-	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
+	err = wt.setupLocked()
 	require.NoError(t, err)
 	defer func() { _ = wt.Cleanup() }()
 
@@ -317,10 +304,10 @@ func TestInitBaseCommitSHA_UsesWorktreePath_NotRepoPathAmbientCheckout(t *testin
 		"initBaseCommitSHA must find feature's real merge-base with main by running inside the worktree, unaffected by repoPath's ambient checkout")
 }
 
-// TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists covers
-// setupLockedWithNative's own reuse path directly, independent of Setup()'s upfront
-// goroutine (which would normally short-circuit straight to setupFromExistingBranch and
-// never reach that call site at all when the branch already exists).
+// TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists covers setupLocked's own
+// reuse path directly, independent of Setup()'s upfront goroutine (which would normally
+// short-circuit straight to setupFromExistingBranch and never reach that call site at all
+// when the branch already exists).
 func TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
@@ -333,7 +320,7 @@ func TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists(t *testing.T) 
 	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-existing-direct", branchName)
 	require.NoError(t, err)
 
-	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
+	err = wt.setupLocked()
 	require.NoError(t, err)
 	defer func() { _ = wt.Cleanup() }()
 
@@ -356,11 +343,11 @@ func TestWorktreeAlreadyRegisteredForBranch_MatchesRawAgainstCanonicalPath(t *te
 	branchName := "already-registered-raw-vs-canonical"
 	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-raw-vs-canonical", branchName)
 	require.NoError(t, err)
-	require.NoError(t, wt.setupLockedWithNative(useNativeWorktree(wt.sessionName)))
+	require.NoError(t, wt.setupLocked())
 	defer func() { _ = wt.Cleanup() }()
 
 	// Build a symlink alias to the real worktree directory and point g.worktreePath at
-	// the alias (the "raw" spelling) instead of the canonical path setupLockedWithNative
+	// the alias (the "raw" spelling) instead of the canonical path setupLocked
 	// actually created on disk. git itself only ever knows about the real directory, so
 	// 'worktree list --porcelain' will report the canonical path — exercising exactly the
 	// raw-vs-canonicalized mismatch this fix must tolerate.
@@ -374,252 +361,134 @@ func TestWorktreeAlreadyRegisteredForBranch_MatchesRawAgainstCanonicalPath(t *te
 		"raw alias path %q for the same worktree as git's canonical report must still match", rawAlias)
 }
 
-// TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate is the regression
-// test for the self-heal fallback in setupLockedWithNative's "worktree add -b" error handling.
-// Unlike TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists — which pre-creates the
-// branch before calling setupLockedWithNative, so branchRefExists is already true at the
-// function's own upfront check and setupFromExistingBranch is reached via that early path —
-// this test starts with the branch absent for both callers and races two real
-// setupLockedWithNative calls against the identical branch name, the same shape as two concurrent
-// backlog spawns for the same item computing the same deterministic branchWorkSlug. Both
-// callers' upfront branchRefExists checks can observe "false" before either has created the
-// branch; the loser's "git worktree add -b" fails with "a branch named '<branch>' already
-// exists", triggering setupLockedWithNative's fallback into setupFromExistingBranch — which then
-// hits its own second race window: by the time it runs, the winner has often already checked
-// out the branch into its worktree, so setupFromExistingBranch's own "worktree add <path>
-// <branch>" (no -b) fails too, with git 2.50.1's "'<branch>' is already used by worktree at
-// '<path>'" (older git instead says "already checked out") — which setupFromExistingBranch
-// must also recognize to find and reuse the winner's worktree rather than hard-failing. This
-// test exercises both layers together. Which of the two callers wins vs. loses is inherently
-// nondeterministic (real git subprocess timing), so this test does not assert on which one
-// self-healed — only on the invariant the fix guarantees: neither concurrent caller may
-// hard-fail.
-func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *testing.T) {
+// TestBranchExistsAfterAddFailure_ReturnsTrue_When_BranchAlreadyExists covers
+// branchExistsAfterAddFailure's (the Ground-Truth Re-Query loop, ADR-001) fast path: a
+// branch that already exists by the very first check (attempt 0, no sleep) is found
+// immediately.
+func TestBranchExistsAfterAddFailure_ReturnsTrue_When_BranchAlreadyExists(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
-	branchName := "backlog/concurrent-race-fixture"
+	branchName := "backlog/immediate-branch-exists"
+	cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
+	require.NoError(t, cmd.Run())
 
-	wt1, _, err := NewGitWorktreeWithBranch(repoDir, "test-race-1", branchName)
-	require.NoError(t, err)
-	wt2, _, err := NewGitWorktreeWithBranch(repoDir, "test-race-2", branchName)
-	require.NoError(t, err)
-
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		<-start
-		errs[0] = wt1.setupLockedWithNative(useNativeWorktree(wt1.sessionName))
-	}()
-	go func() {
-		defer wg.Done()
-		<-start
-		errs[1] = wt2.setupLockedWithNative(useNativeWorktree(wt2.sessionName))
-	}()
-	close(start)
-	wg.Wait()
-
-	require.NoError(t, errs[0], "first concurrent setup must not hard-fail on a lost branch-create race")
-	require.NoError(t, errs[1], "second concurrent setup must not hard-fail on a lost branch-create race")
-	defer func() { _ = wt1.Cleanup() }()
-	defer func() { _ = wt2.Cleanup() }()
-
-	out, statErr := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", "--list", branchName).CombinedOutput()
-	require.NoError(t, statErr)
-	assert.True(t, strings.Contains(string(out), branchName), "branch must exist once the race resolves")
-}
-
-// isWorktreeAddDashBCall reports whether a recorded gitSpyRunCall is legacySetupNewWorktree's
-// "git worktree add -b <branch> <path> <commit>" call, as opposed to the unconditional
-// "worktree remove -f" cleanup call or a "rev-parse HEAD" call that also route through the
-// same spy.
-func isWorktreeAddDashBCall(call gitSpyRunCall) bool {
-	return len(call.args) >= 3 && call.args[0] == "worktree" && call.args[1] == "add" && call.args[2] == "-b"
-}
-
-// TestSetupNewWorktree_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError is the
-// deterministic regression test for Ground-Truth Re-Query (ADR-001) at legacySetupNewWorktree's
-// layer: an error string the old strings.Contains("already exists") check would NOT have
-// matched (git's real "signal: killed" message for a timeout-killed subprocess, confirmed
-// in research/features.md) must still self-heal when the branch was actually created by a
-// race winner at that exact moment — proving the self-heal decision no longer depends on
-// err.Error() content at all.
-func TestSetupNewWorktree_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError(t *testing.T) {
-	t.Parallel()
-	repoDir := setupTestRepo(t)
-	branchName := "backlog/unrecognized-error-layer1"
-
-	spy := &gitSpyCommandRunner{}
-	spy.runFunc = func() ([]byte, error) {
-		call := spy.runCalls[len(spy.runCalls)-1]
-		if !isWorktreeAddDashBCall(call) {
-			return nil, nil
-		}
-		// Simulate the race winner completing at the exact instant our "subprocess"
-		// would have run.
-		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
-		require.NoError(t, cmd.Run())
-		return nil, errors.New("signal: killed")
-	}
-
-	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-unrecognized-error-layer1", branchName, WithCommandRunner(spy))
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-immediate-exists", branchName)
 	require.NoError(t, err)
 
-	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
-	require.NoError(t, err, "must self-heal on an error string neither old literal matched, since the branch now exists")
-	defer func() { _ = wt.Cleanup() }()
+	assert.True(t, wt.branchExistsAfterAddFailure(plumbing.NewBranchReferenceName(branchName)))
 }
 
-// TestSetupNewWorktree_SelfHeals_When_BranchCreatedByDelayedRaceWinner is the pre-mortem
-// Failure #5 addendum: the happy-path test above creates the branch synchronously before
-// returning the error, so branchExistsAfterAddFailure's very first check already succeeds
-// and the retry loop's actual looping/backoff behavior is never exercised. This test delays
-// branch creation until after the loop's first two checks would have observed "not found",
-// so it only passes if the loop genuinely retries rather than checking once.
-func TestSetupNewWorktree_SelfHeals_When_BranchCreatedByDelayedRaceWinner(t *testing.T) {
+// TestBranchExistsAfterAddFailure_ReturnsTrue_When_BranchAppearsDuringRetryWindow is the
+// pre-mortem Failure #5 addendum: the test above finds the branch on attempt 0, so the
+// retry loop's actual looping/backoff behavior is never exercised. This test delays branch
+// creation until after the loop's first two checks would have observed "not found", so it
+// only passes if the loop genuinely retries rather than checking once.
+func TestBranchExistsAfterAddFailure_ReturnsTrue_When_BranchAppearsDuringRetryWindow(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
 	branchName := "backlog/delayed-race-winner-layer1"
 
-	spy := &gitSpyCommandRunner{}
-	spy.runFunc = func() ([]byte, error) {
-		call := spy.runCalls[len(spy.runCalls)-1]
-		if !isWorktreeAddDashBCall(call) {
-			return nil, nil
-		}
-		go func() {
-			// Past the loop's first two checks (attempt 0 has no pre-sleep; attempt 1
-			// sleeps once) but well within its total budget.
-			time.Sleep(2 * worktreeAddRetryDelay)
-			cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
-			_ = cmd.Run()
-		}()
-		return nil, errors.New("signal: killed")
-	}
+	go func() {
+		// Past the loop's first two checks (attempt 0 has no pre-sleep; attempt 1
+		// sleeps once) but well within its total budget.
+		time.Sleep(2 * worktreeAddRetryDelay)
+		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
+		_ = cmd.Run()
+	}()
 
-	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-delayed-race-winner-layer1", branchName, WithCommandRunner(spy))
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-delayed-race-winner-layer1", branchName)
 	require.NoError(t, err)
 
-	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
-	require.NoError(t, err, "must self-heal once the delayed race winner's branch appears within the retry window")
-	defer func() { _ = wt.Cleanup() }()
+	assert.True(t, wt.branchExistsAfterAddFailure(plumbing.NewBranchReferenceName(branchName)),
+		"must self-heal once the delayed race winner's branch appears within the retry window")
 }
 
-// TestSetupNewWorktree_should_IncrementRetryCounter_When_GroundTruthRequeryRetries is Task
-// 4.4.2b's validation.md test: a branch-creation race that forces the Ground-Truth
-// Re-Query loop (branchExistsAfterAddFailure) to actually retry must increment
-// git_worktree_retry_total. Deliberately not t.Parallel(): git_worktree_retry_total has no
-// attribute dimension to filter a before/after delta by, and Go's testing package runs
-// every non-parallel test in this package to completion before any t.Parallel() test
-// resumes, so this avoids racing against this package's other (parallel) self-heal race
-// tests that also exercise this same retry loop.
-func TestSetupNewWorktree_should_IncrementRetryCounter_When_GroundTruthRequeryRetries(t *testing.T) {
+// TestBranchExistsAfterAddFailure_IncrementsRetryCounter_When_ItRetries is Task 4.4.2b's
+// validation.md test: a branch-creation race that forces the Ground-Truth Re-Query loop to
+// actually retry must increment git_worktree_retry_total. Deliberately not t.Parallel():
+// git_worktree_retry_total has no attribute dimension to filter a before/after delta by,
+// and Go's testing package runs every non-parallel test in this package to completion
+// before any t.Parallel() test resumes, so this avoids racing against this package's other
+// (parallel) self-heal race tests that also exercise this same retry loop.
+func TestBranchExistsAfterAddFailure_IncrementsRetryCounter_When_ItRetries(t *testing.T) {
 	repoDir := setupTestRepo(t)
 	branchName := "backlog/retry-counter-fixture"
 
-	spy := &gitSpyCommandRunner{}
-	spy.runFunc = func() ([]byte, error) {
-		call := spy.runCalls[len(spy.runCalls)-1]
-		if !isWorktreeAddDashBCall(call) {
-			return nil, nil
-		}
-		go func() {
-			// Past the loop's first two checks (attempt 0 has no pre-sleep; attempt 1
-			// sleeps once) but well within its total budget — forces at least two
-			// actual retries, mirroring
-			// TestSetupNewWorktree_SelfHeals_When_BranchCreatedByDelayedRaceWinner.
-			time.Sleep(2 * worktreeAddRetryDelay)
-			cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
-			_ = cmd.Run()
-		}()
-		return nil, errors.New("signal: killed")
-	}
+	go func() {
+		time.Sleep(2 * worktreeAddRetryDelay)
+		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
+		_ = cmd.Run()
+	}()
 
-	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-retry-counter-fixture", branchName, WithCommandRunner(spy))
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-retry-counter-fixture", branchName)
 	require.NoError(t, err)
 
 	before := collectGitMetric(t, "git_worktree_retry_total")
 	baseline := sumGitCounter(t, before)
 
-	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
-	require.NoError(t, err, "must self-heal once the delayed race winner's branch appears within the retry window")
-	defer func() { _ = wt.Cleanup() }()
+	assert.True(t, wt.branchExistsAfterAddFailure(plumbing.NewBranchReferenceName(branchName)),
+		"must self-heal once the delayed race winner's branch appears within the retry window")
 
 	after := collectGitMetric(t, "git_worktree_retry_total")
 	require.NotNil(t, after)
 	assert.Greater(t, sumGitCounter(t, after), baseline, "expected at least one Ground-Truth Re-Query retry to be recorded")
 }
 
-// TestSetupNewWorktree_HardFails_When_WorktreeAddErrorsAndBranchStillDoesNotExist is Story
-// 1.1.1's negative case: Ground-Truth Re-Query must not spuriously mask a genuine failure
-// (disk full, permissions) by self-healing when the branch never actually appears.
-func TestSetupNewWorktree_HardFails_When_WorktreeAddErrorsAndBranchStillDoesNotExist(t *testing.T) {
+// TestBranchExistsAfterAddFailure_ReturnsFalse_When_BranchNeverAppears is Story 1.1.1's
+// negative case: Ground-Truth Re-Query must not spuriously report success (masking a
+// genuine failure, e.g. disk full, permissions) when the branch never actually appears.
+func TestBranchExistsAfterAddFailure_ReturnsFalse_When_BranchNeverAppears(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
 	branchName := "backlog/never-created-layer1"
 
-	spy := &gitSpyCommandRunner{}
-	spy.runFunc = func() ([]byte, error) {
-		call := spy.runCalls[len(spy.runCalls)-1]
-		if !isWorktreeAddDashBCall(call) {
-			return nil, nil
-		}
-		return nil, errors.New("signal: killed")
-	}
-
-	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-never-created-layer1", branchName, WithCommandRunner(spy))
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-never-created-layer1", branchName)
 	require.NoError(t, err)
 
-	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
-	require.Error(t, err, "must not self-heal when the branch genuinely never appears")
-	assert.Contains(t, err.Error(), "failed to create worktree from commit")
+	assert.False(t, wt.branchExistsAfterAddFailure(plumbing.NewBranchReferenceName(branchName)),
+		"must not self-heal when the branch genuinely never appears")
 }
 
 // isWorktreeAddNoBranchCall reports whether a recorded gitSpyRunCall is
 // setupFromExistingBranch's "git worktree add <path> <branch>" call (no "-b"), as opposed
-// to the "worktree unlock"/"worktree remove -f" cleanup calls or a "worktree list
-// --porcelain" call that also route through the same spy.
+// to the "worktree unlock"/"worktree remove -f" cleanup calls that also route through the
+// same spy.
 func isWorktreeAddNoBranchCall(call gitSpyRunCall) bool {
 	return len(call.args) == 4 && call.args[0] == "worktree" && call.args[1] == "add"
 }
 
-func isWorktreeListCall(call gitSpyRunCall) bool {
-	return len(call.args) >= 2 && call.args[0] == "worktree" && call.args[1] == "list"
-}
-
-// worktreeListPorcelainFor synthesizes a 'git worktree list --porcelain' response
-// reporting branchName checked out at path.
-func worktreeListPorcelainFor(path, branchName string) []byte {
-	return []byte(fmt.Sprintf("worktree %s\nHEAD 0000000000000000000000000000000000000000\nbranch refs/heads/%s\n", path, branchName))
+// newWorktreeAddFailureSpy returns a gitSpyCommandRunner that fails
+// setupFromExistingBranch's "worktree add <path> <branch>" call with an error string
+// neither of the old "already checked out"/"already used by worktree" literals would have
+// matched, letting every other call through unchanged.
+func newWorktreeAddFailureSpy() *gitSpyCommandRunner {
+	spy := &gitSpyCommandRunner{}
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		if isWorktreeAddNoBranchCall(call) {
+			return nil, errors.New("signal: killed")
+		}
+		return nil, nil
+	}
+	return spy
 }
 
 // TestSetupFromExistingBranch_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError is the
 // deterministic regression test for Ground-Truth Re-Query (ADR-001) at
 // setupFromExistingBranch's layer: an error string neither of the old
 // "already checked out"/"already used by worktree" literals would have matched must still
-// self-heal by adopting the winner's worktree path once 'worktree list --porcelain' reports
+// self-heal by adopting the winner's worktree path once findLiveWorktreeForBranch reports
 // it registered there.
 func TestSetupFromExistingBranch_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
 	branchName := "backlog/unrecognized-error-layer2"
-	winnerPath := CanonicalizeWorktreePath(t.TempDir())
+	winnerPath := CanonicalizeWorktreePath(filepath.Join(t.TempDir(), "winner-worktree"))
 
-	spy := &gitSpyCommandRunner{}
-	spy.runFunc = func() ([]byte, error) {
-		call := spy.runCalls[len(spy.runCalls)-1]
-		switch {
-		case isWorktreeAddNoBranchCall(call):
-			return nil, errors.New("signal: killed")
-		case isWorktreeListCall(call):
-			return worktreeListPorcelainFor(winnerPath, branchName), nil
-		default:
-			return nil, nil
-		}
-	}
+	winnerWt := NewGitWorktreeFromStorageWithExecutor(repoDir, winnerPath, "test-unrecognized-error-layer2-winner", branchName, "")
+	require.NoError(t, winnerWt.nativeSetupNewWorktree())
 
+	spy := newWorktreeAddFailureSpy()
 	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, filepath.Join(t.TempDir(), "loser-worktree"), "test-unrecognized-error-layer2", branchName, "", WithCommandRunner(spy))
 
 	err := wt.setupFromExistingBranch()
@@ -628,41 +497,29 @@ func TestSetupFromExistingBranch_SelfHeals_When_WorktreeAddFailsWithUnrecognized
 }
 
 // TestSetupFromExistingBranch_SelfHeals_When_WorktreeRegisteredByDelayedRaceWinner is the
-// pre-mortem Failure #5 addendum for layer 2: the happy-path test above reports the winner
-// registered on the very first 'worktree list --porcelain' call, so
-// findLiveWorktreeForBranch's retry loop is never actually exercised. This test reports
-// "not found" for the first two calls and only registers the winner on the third, so it
-// only passes if the loop genuinely retries.
+// pre-mortem Failure #5 addendum for layer 2: the happy-path test above registers the
+// winner before setupFromExistingBranch ever runs, so findLiveWorktreeForBranch's retry
+// loop is never actually exercised. This test registers the winner only after a delay well
+// into the retry window, so it only passes if the loop genuinely retries rather than
+// checking once.
 func TestSetupFromExistingBranch_SelfHeals_When_WorktreeRegisteredByDelayedRaceWinner(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
 	branchName := "backlog/delayed-race-winner-layer2"
-	winnerPath := CanonicalizeWorktreePath(t.TempDir())
+	winnerPath := CanonicalizeWorktreePath(filepath.Join(t.TempDir(), "winner-worktree"))
 
-	spy := &gitSpyCommandRunner{}
-	listCalls := 0
-	spy.runFunc = func() ([]byte, error) {
-		call := spy.runCalls[len(spy.runCalls)-1]
-		switch {
-		case isWorktreeAddNoBranchCall(call):
-			return nil, errors.New("signal: killed")
-		case isWorktreeListCall(call):
-			listCalls++
-			if listCalls < 3 {
-				return []byte(""), nil
-			}
-			return worktreeListPorcelainFor(winnerPath, branchName), nil
-		default:
-			return nil, nil
-		}
-	}
+	go func() {
+		time.Sleep(2 * worktreeAddRetryDelay)
+		winnerWt := NewGitWorktreeFromStorageWithExecutor(repoDir, winnerPath, "test-delayed-race-winner-layer2-winner", branchName, "")
+		_ = winnerWt.nativeSetupNewWorktree()
+	}()
 
+	spy := newWorktreeAddFailureSpy()
 	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, filepath.Join(t.TempDir(), "loser-worktree"), "test-delayed-race-winner-layer2", branchName, "", WithCommandRunner(spy))
 
 	err := wt.setupFromExistingBranch()
 	require.NoError(t, err, "must self-heal once the delayed race winner's registration appears within the retry window")
 	assert.Equal(t, winnerPath, wt.worktreePath)
-	assert.GreaterOrEqual(t, listCalls, 3, "must have actually retried, not just checked once")
 }
 
 // TestSetupFromExistingBranch_HardFails_When_WorktreeAddErrorsAndBranchNotFoundAnywhere is
@@ -673,19 +530,7 @@ func TestSetupFromExistingBranch_HardFails_When_WorktreeAddErrorsAndBranchNotFou
 	repoDir := setupTestRepo(t)
 	branchName := "backlog/never-registered-layer2"
 
-	spy := &gitSpyCommandRunner{}
-	spy.runFunc = func() ([]byte, error) {
-		call := spy.runCalls[len(spy.runCalls)-1]
-		switch {
-		case isWorktreeAddNoBranchCall(call):
-			return nil, errors.New("signal: killed")
-		case isWorktreeListCall(call):
-			return []byte(""), nil
-		default:
-			return nil, nil
-		}
-	}
-
+	spy := newWorktreeAddFailureSpy()
 	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, filepath.Join(t.TempDir(), "loser-worktree"), "test-never-registered-layer2", branchName, "", WithCommandRunner(spy))
 
 	err := wt.setupFromExistingBranch()
@@ -698,7 +543,7 @@ func TestSetupFromExistingBranch_HardFails_When_WorktreeAddErrorsAndBranchNotFou
 // backlog-triage spawns, or duplicate server processes) hitting the same repo's shared
 // .git/worktrees/ administrative metadata at once, each for a distinct branch/worktree path.
 // Unlike TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate (which calls the
-// unlocked setupLockedWithNative() directly to exercise same-branch self-heal logic), this test calls
+// unlocked setupLocked() directly to exercise same-branch self-heal logic), this test calls
 // the public, now-lock-wrapped Setup() to verify WithRepoWorktreeLock actually prevents the
 // metadata race rather than merely tolerating one branch-create collision.
 func TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo(t *testing.T) {
@@ -739,20 +584,13 @@ func TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceO
 	}
 }
 
-// TestSetup_NativeFlagOn_UsesNativeImplementation_ZeroSubprocessCalls covers Story
-// 2.1.3's second acceptance criterion. Deliberately not t.Parallel(): it mutates the
-// shared useNativeWorktree package var, and a non-parallel test always runs to full
-// completion before the next sequential test starts, so it never overlaps with another
-// test's body (mirrors this file's existing testInfoLogMu-documented reasoning for
-// shared-var overrides, which only applies to two tests both marked parallel).
-func TestSetup_NativeFlagOn_UsesNativeImplementation_ZeroSubprocessCalls(t *testing.T) {
+// TestSetup_UsesNativeImplementation_ZeroSubprocessCalls covers Story 2.1.3's acceptance
+// criterion.
+func TestSetup_UsesNativeImplementation_ZeroSubprocessCalls(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	branchName := "feature-native-on"
 	worktreePath := filepath.Join(t.TempDir(), branchName)
-
-	orig := useNativeWorktree
-	useNativeWorktree = func(string) bool { return true }
-	t.Cleanup(func() { useNativeWorktree = orig })
 
 	spy := &gitSpyCommandRunner{}
 	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-flag-on", branchName, "", WithCommandRunner(spy))
@@ -771,43 +609,16 @@ func TestSetup_NativeFlagOn_UsesNativeImplementation_ZeroSubprocessCalls(t *test
 	assert.NoError(t, err)
 }
 
-// TestSetup_NativeFlagOff_UsesLegacyImplementation_Unchanged covers Story 2.1.3's first
-// acceptance criterion: with the flag off (default, no override), Setup() still runs the
-// legacy subprocess implementation exactly as before this epic's dispatch wrapper was
-// added.
-func TestSetup_NativeFlagOff_UsesLegacyImplementation_Unchanged(t *testing.T) {
-	repoDir := setupTestRepo(t)
-	branchName := "feature-native-off"
-	worktreePath := filepath.Join(t.TempDir(), branchName)
-
-	spy := &gitSpyCommandRunner{}
-	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-flag-off", branchName, "", WithCommandRunner(spy))
-
-	require.NoError(t, wt.Setup())
-
-	found := false
-	for _, call := range spy.runCalls {
-		if isWorktreeAddDashBCall(call) {
-			found = true
-		}
-	}
-	assert.True(t, found, "legacy path must still issue the subprocess `worktree add -b` call, unchanged from before this epic")
-}
-
-// TestSetupFromExistingBranch_NativeFlagOn_UnlockUsesNativeImplementation covers Story
-// 2.1.4's dispatch test: with the flag on, setupFromExistingBranch's unlock step routes
-// through nativeUnlockWorktree (a direct filesystem removal, no subprocess) rather than
-// legacyUnlockWorktree's `git worktree unlock` call, while the surrounding
-// remove/re-add subprocess calls are unaffected (Task 2.1.4b's explicitly scoped-down
-// unlock-only dispatch).
-func TestSetupFromExistingBranch_NativeFlagOn_UnlockUsesNativeImplementation(t *testing.T) {
+// TestSetupFromExistingBranch_UnlockUsesNativeImplementation covers Story 2.1.4's dispatch
+// test: setupFromExistingBranch's unlock step routes through nativeUnlockWorktree (a
+// direct filesystem removal, no subprocess), while the surrounding remove/re-add
+// subprocess calls are unaffected (Task 2.1.4b's explicitly scoped-down unlock-only
+// dispatch).
+func TestSetupFromExistingBranch_UnlockUsesNativeImplementation(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	branchName := "feature-native-unlock"
 	worktreePath := filepath.Join(t.TempDir(), branchName)
-
-	orig := useNativeWorktree
-	useNativeWorktree = func(string) bool { return true }
-	t.Cleanup(func() { useNativeWorktree = orig })
 
 	// Seed a real, native-created worktree, then simulate an interrupted subsequent
 	// operation leaving a stale LockedMarker behind — the exact state
@@ -827,7 +638,7 @@ func TestSetupFromExistingBranch_NativeFlagOn_UnlockUsesNativeImplementation(t *
 
 	for _, call := range spy.runCalls {
 		if len(call.args) >= 2 && call.args[0] == "worktree" && call.args[1] == "unlock" {
-			t.Fatalf("unlock step must not shell out to git when the native flag is on, got call: %+v", call)
+			t.Fatalf("unlock step must not shell out to git, got call: %+v", call)
 		}
 	}
 
@@ -835,18 +646,14 @@ func TestSetupFromExistingBranch_NativeFlagOn_UnlockUsesNativeImplementation(t *
 	assert.True(t, os.IsNotExist(statErr), "nativeUnlockWorktree must have removed the locked marker directly")
 }
 
-// TestRemove_NativeFlagOn_UsesNativeImplementation_ZeroSubprocessCalls covers Story
-// 2.2.2's acceptance criterion: with the flag on, Remove() dispatches to
-// nativeRemoveWorktree with zero subprocess calls recorded, instead of legacyRemoveWorktree's
-// `git worktree prune`/`git worktree remove` subprocess calls.
-func TestRemove_NativeFlagOn_UsesNativeImplementation_ZeroSubprocessCalls(t *testing.T) {
+// TestRemove_UsesNativeImplementation_ZeroSubprocessCalls covers Story 2.2.2's acceptance
+// criterion: Remove() dispatches to nativeRemoveWorktree with zero subprocess calls
+// recorded.
+func TestRemove_UsesNativeImplementation_ZeroSubprocessCalls(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	branchName := "feature-native-remove"
 	worktreePath := filepath.Join(t.TempDir(), branchName)
-
-	orig := useNativeWorktree
-	useNativeWorktree = func(string) bool { return true }
-	t.Cleanup(func() { useNativeWorktree = orig })
 
 	seedWt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-remove-seed", branchName, "")
 	require.NoError(t, seedWt.nativeSetupNewWorktree())
@@ -866,18 +673,13 @@ func TestRemove_NativeFlagOn_UsesNativeImplementation_ZeroSubprocessCalls(t *tes
 	assert.True(t, os.IsNotExist(err), "native remove must have deleted the admin dir")
 }
 
-// TestFindLiveWorktreeForBranch_NativeFlagOn_ZeroSubprocessCalls covers Epic 2.3's Story
-// 2.3.2 acceptance criterion: with the flag on, findLiveWorktreeForBranch finds a
-// matching branch's live worktree via nativeListWorktrees, with zero subprocess calls.
-// Deliberately not t.Parallel(), same reasoning as this file's other useNativeWorktree
-// package-var overrides above.
-func TestFindLiveWorktreeForBranch_NativeFlagOn_ZeroSubprocessCalls(t *testing.T) {
+// TestFindLiveWorktreeForBranch_ZeroSubprocessCalls covers Epic 2.3's Story 2.3.2
+// acceptance criterion: findLiveWorktreeForBranch finds a matching branch's live worktree
+// via nativeListWorktrees, with zero subprocess calls.
+func TestFindLiveWorktreeForBranch_ZeroSubprocessCalls(t *testing.T) {
+	t.Parallel()
 	branchName := "feature-native-find-live"
 	repoPath, worktreePath := newNativeRemoveFixture(t, branchName)
-
-	orig := useNativeWorktree
-	useNativeWorktree = func(string) bool { return true }
-	t.Cleanup(func() { useNativeWorktree = orig })
 
 	spy := &gitSpyCommandRunner{}
 	wt := NewGitWorktreeFromStorageWithExecutor(repoPath, worktreePath, "test-native-find-live", branchName, "", WithCommandRunner(spy))
@@ -889,16 +691,12 @@ func TestFindLiveWorktreeForBranch_NativeFlagOn_ZeroSubprocessCalls(t *testing.T
 	assert.Empty(t, spy.runCalls, "native path must issue zero git subprocess invocations")
 }
 
-// TestFindLiveWorktreeForBranch_NativeFlagOn_NotFound_ZeroSubprocessCalls covers the
-// symmetric miss case: no worktree registered for the branch, still zero subprocess
-// calls, and the retry loop's sleeps don't apply forever (bounded by
-// worktreeAddRetryAttempts).
-func TestFindLiveWorktreeForBranch_NativeFlagOn_NotFound_ZeroSubprocessCalls(t *testing.T) {
+// TestFindLiveWorktreeForBranch_NotFound_ZeroSubprocessCalls covers the symmetric miss
+// case: no worktree registered for the branch, still zero subprocess calls, and the retry
+// loop's sleeps don't apply forever (bounded by worktreeAddRetryAttempts).
+func TestFindLiveWorktreeForBranch_NotFound_ZeroSubprocessCalls(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
-
-	orig := useNativeWorktree
-	useNativeWorktree = func(string) bool { return true }
-	t.Cleanup(func() { useNativeWorktree = orig })
 
 	spy := &gitSpyCommandRunner{}
 	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, filepath.Join(t.TempDir(), "unused"), "test-native-find-live-miss", "does-not-exist", "", WithCommandRunner(spy))
@@ -909,19 +707,14 @@ func TestFindLiveWorktreeForBranch_NativeFlagOn_NotFound_ZeroSubprocessCalls(t *
 	assert.Empty(t, spy.runCalls, "native path must issue zero git subprocess invocations even on a miss")
 }
 
-// TestPrune_NativeFlagOn_UsesNativeImplementation covers Story 2.4.2's acceptance
-// criterion: with the flag on, Prune() dispatches to nativeWorktreePrune with zero
-// subprocess calls recorded, removing a prunable entry's admin dir.
-// Deliberately not t.Parallel(), same reasoning as this file's other useNativeWorktree
-// package-var overrides above.
-func TestPrune_NativeFlagOn_UsesNativeImplementation(t *testing.T) {
+// TestPrune_UsesNativeImplementation covers Story 2.4.2's acceptance criterion: Prune()
+// dispatches to nativeWorktreePrune with zero subprocess calls recorded, removing a
+// prunable entry's admin dir.
+func TestPrune_UsesNativeImplementation(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	branchName := "feature-native-prune"
 	worktreePath := filepath.Join(t.TempDir(), branchName)
-
-	orig := useNativeWorktree
-	useNativeWorktree = func(string) bool { return true }
-	t.Cleanup(func() { useNativeWorktree = orig })
 
 	seedWt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-prune-seed", branchName, "")
 	require.NoError(t, seedWt.nativeSetupNewWorktree())
@@ -939,15 +732,11 @@ func TestPrune_NativeFlagOn_UsesNativeImplementation(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "native prune must have removed the prunable admin dir")
 }
 
-// TestCleanupWorktreesPrune_NativeFlagOn_UsesNativeImplementation covers the Epic 2.2 gap
-// this epic closes (CleanupWorktrees' doc comment): with the flag on, its trailing prune
-// step dispatches to nativeWorktreePrune against the process's current working directory
-// instead of shelling out to `git worktree prune`, mirroring safeexec.CommandContext's
-// unset-Dir default that the legacy subprocess call relies on.
-// Deliberately not t.Parallel(): t.Chdir forbids it, and this file's other
-// useNativeWorktree package-var overrides already avoid it for the same mutable-global
-// reason.
-func TestCleanupWorktreesPrune_NativeFlagOn_UsesNativeImplementation(t *testing.T) {
+// TestCleanupWorktreesPrune_UsesNativeImplementation covers the Epic 2.2 gap this epic
+// closes (CleanupWorktrees' doc comment): its trailing prune step dispatches to
+// nativeWorktreePrune against the process's current working directory. Deliberately not
+// t.Parallel(): t.Chdir forbids it.
+func TestCleanupWorktreesPrune_UsesNativeImplementation(t *testing.T) {
 	repoDir := setupTestRepo(t)
 	branchName := "feature-native-cleanup-prune"
 	worktreePath := filepath.Join(t.TempDir(), branchName)
@@ -955,10 +744,6 @@ func TestCleanupWorktreesPrune_NativeFlagOn_UsesNativeImplementation(t *testing.
 	seedWt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-cleanup-prune-seed", branchName, "")
 	require.NoError(t, seedWt.nativeSetupNewWorktree())
 	require.NoError(t, os.RemoveAll(worktreePath))
-
-	orig := useNativeWorktree
-	useNativeWorktree = func(string) bool { return true }
-	t.Cleanup(func() { useNativeWorktree = orig })
 
 	t.Chdir(repoDir)
 
@@ -969,33 +754,25 @@ func TestCleanupWorktreesPrune_NativeFlagOn_UsesNativeImplementation(t *testing.
 	assert.True(t, os.IsNotExist(err), "native cleanup prune must have removed the prunable admin dir")
 }
 
-// TestSetupRemove_MixedImplementations_SerializeThroughSameLock covers Story 2.5.1's
-// acceptance criterion: a native-flagged Setup() and a legacy-flagged Setup() against the
-// same repoPath, started concurrently, must serialize through the same repoWorktreeLock
-// registry entry (Task 2.5.1a confirmed Setup()/removeLocked()/pruneLocked() already wrap
-// WithRepoWorktreeLock around the flag-dispatch point, not one branch of it, so no
-// production change was needed there — this test is the regression proof for that
-// confirmation).
+// TestSetup_ConcurrentCalls_SerializeThroughSameLock covers Story 2.5.1's acceptance
+// criterion: two Setup() calls against the same repoPath, started concurrently, must
+// serialize through the same repoWorktreeLock registry entry.
 //
 // Proof strategy: the test acquires the shared repoWorktreeLock's intra-process mutex
 // itself, *before* launching either Setup() call, then confirms both calls are still
 // blocked (neither has returned) after a generous wait. Since WithRepoWorktreeLock's mu
-// is a genuine sync.Mutex, this is not a timing heuristic — if either dispatch branch
-// resolved to a *different* lock (or skipped WithRepoWorktreeLock entirely), that call
-// would complete immediately instead of blocking, and the test would fail deterministically
-// rather than flakily. This avoids measuring the calls' own wall-clock windows (which
-// naturally "overlap" whenever one is blocked waiting on the other — not evidence of a
-// race, just proof a wait happened).
-func TestSetupRemove_MixedImplementations_SerializeThroughSameLock(t *testing.T) {
+// is a genuine sync.Mutex, this is not a timing heuristic — if either call resolved to a
+// *different* lock (or skipped WithRepoWorktreeLock entirely), that call would complete
+// immediately instead of blocking, and the test would fail deterministically rather than
+// flakily. This avoids measuring the calls' own wall-clock windows (which naturally
+// "overlap" whenever one is blocked waiting on the other — not evidence of a race, just
+// proof a wait happened).
+func TestSetup_ConcurrentCalls_SerializeThroughSameLock(t *testing.T) {
 	repoDir := setupTestRepo(t)
 
-	orig := useNativeWorktree
-	useNativeWorktree = func(sessionName string) bool { return sessionName == "sess-native" }
-	t.Cleanup(func() { useNativeWorktree = orig })
-
-	wtNative, _, err := NewGitWorktreeWithBranch(repoDir, "sess-native", "backlog/mixed-native")
+	wt1, _, err := NewGitWorktreeWithBranch(repoDir, "sess-1", "backlog/concurrent-lock-1")
 	require.NoError(t, err)
-	wtLegacy, _, err := NewGitWorktreeWithBranch(repoDir, "sess-legacy", "backlog/mixed-legacy")
+	wt2, _, err := NewGitWorktreeWithBranch(repoDir, "sess-2", "backlog/concurrent-lock-2")
 	require.NoError(t, err)
 
 	lockInstance, err := lockForRepo(repoDir)
@@ -1006,17 +783,17 @@ func TestSetupRemove_MixedImplementations_SerializeThroughSameLock(t *testing.T)
 	errs := make([]error, 2)
 	done := make(chan int, 2)
 	go func() {
-		errs[0] = wtNative.Setup()
+		errs[0] = wt1.Setup()
 		done <- 0
 	}()
 	go func() {
-		errs[1] = wtLegacy.Setup()
+		errs[1] = wt2.Setup()
 		done <- 1
 	}()
 
 	select {
 	case which := <-done:
-		t.Fatalf("Setup() call %d completed while the test held repoWorktreeLock.mu externally -- its dispatch branch is bypassing WithRepoWorktreeLock", which)
+		t.Fatalf("Setup() call %d completed while the test held repoWorktreeLock.mu externally -- it is bypassing WithRepoWorktreeLock", which)
 	case <-time.After(150 * time.Millisecond):
 		// Expected: both goroutines are blocked on mu.Lock() inside WithRepoWorktreeLock.
 	}
@@ -1025,35 +802,29 @@ func TestSetupRemove_MixedImplementations_SerializeThroughSameLock(t *testing.T)
 
 	<-done
 	<-done
-	require.NoError(t, errs[0], "native Setup() must not fail")
-	require.NoError(t, errs[1], "legacy Setup() must not fail")
-	defer func() { _ = wtNative.Cleanup() }()
-	defer func() { _ = wtLegacy.Cleanup() }()
+	require.NoError(t, errs[0], "first Setup() must not fail")
+	require.NoError(t, errs[1], "second Setup() must not fail")
+	defer func() { _ = wt1.Cleanup() }()
+	defer func() { _ = wt2.Cleanup() }()
 
 	lockAfter, err := lockForRepo(repoDir)
 	require.NoError(t, err)
 	assert.Same(t, lockInstance, lockAfter, "both calls must resolve to the same repoWorktreeLock singleton for repoPath")
 
 	out := runRealGit(t, repoDir, "worktree", "list", "--porcelain")
-	assert.Contains(t, out, "backlog/mixed-native", "native worktree must be registered and clean")
-	assert.Contains(t, out, "backlog/mixed-legacy", "legacy worktree must be registered and clean")
+	assert.Contains(t, out, "backlog/concurrent-lock-1", "first worktree must be registered and clean")
+	assert.Contains(t, out, "backlog/concurrent-lock-2", "second worktree must be registered and clean")
 	assert.NotContains(t, out, "prunable", "neither worktree may be left prunable/corrupted")
 }
 
-// TestSetupNewWorktree_NativeFlag_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate is the
-// native-flag counterpart of TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate
-// (Task 2.5.2b): the same two-unlocked-goroutines same-branch race, but with
-// useNativeWorktree forced on, proving nativeSetupNewWorktreeWithSelfHeal's Ground-Truth
-// Re-Query (Task 2.5.2a) closes the identical race for the native path. Deliberately not
-// t.Parallel() — it mutates the shared useNativeWorktree package var, mirroring this file's
-// other such tests' documented reasoning.
-func TestSetupNewWorktree_NativeFlag_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *testing.T) {
+// TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate covers Task
+// 2.5.2b: two concurrent, unlocked setupLocked() calls for the identical branch name (the
+// same shape as two concurrent backlog spawns for the same item computing the same
+// deterministic branchWorkSlug) must not hard-fail — nativeSetupNewWorktreeWithSelfHeal's
+// Ground-Truth Re-Query (Task 2.5.2a) must close the race for whichever call loses it.
+func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *testing.T) {
 	repoDir := setupTestRepo(t)
 	branchName := "backlog/native-concurrent-race-fixture"
-
-	orig := useNativeWorktree
-	useNativeWorktree = func(string) bool { return true }
-	t.Cleanup(func() { useNativeWorktree = orig })
 
 	wt1, _, err := NewGitWorktreeWithBranch(repoDir, "test-native-race-1", branchName)
 	require.NoError(t, err)
@@ -1067,12 +838,12 @@ func TestSetupNewWorktree_NativeFlag_SelfHeals_When_ConcurrentSpawnsRaceOnBranch
 	go func() {
 		defer wg.Done()
 		<-start
-		errs[0] = wt1.setupLockedWithNative(useNativeWorktree(wt1.sessionName))
+		errs[0] = wt1.setupLocked()
 	}()
 	go func() {
 		defer wg.Done()
 		<-start
-		errs[1] = wt2.setupLockedWithNative(useNativeWorktree(wt2.sessionName))
+		errs[1] = wt2.setupLocked()
 	}()
 	close(start)
 	wg.Wait()

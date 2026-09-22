@@ -1313,6 +1313,12 @@ func (s *Storage) UpdateItemSessionEndedWithReason(ctx context.Context, id strin
 	return s.repo.UpdateItemSessionEndedWithReason(ctx, id, endedAt, reason)
 }
 
+// UpdateItemSessionConversationUUID records a headless call's Claude transcript UUID.
+// See EntRepository.UpdateItemSessionConversationUUID.
+func (s *Storage) UpdateItemSessionConversationUUID(ctx context.Context, id string, conversationUUID string) error {
+	return s.repo.UpdateItemSessionConversationUUID(ctx, id, conversationUUID)
+}
+
 // UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
 // capture file for a headless triage/review call that errored or produced
 // unparseable output. See EntRepository.UpdateItemSessionFailureCapture.
@@ -1444,6 +1450,12 @@ func (s *Storage) UpdateItemSessionSessionUUID(ctx context.Context, id string, s
 // Delegates to EntRepository; returns an error for non-ent backends.
 func (s *Storage) GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]ItemSessionBacklogEntry, error) {
 	return s.repo.GetAllItemSessionsWithBacklogInfo(ctx)
+}
+
+// GetDeletedItemSessionCostLedger returns the durable deleted-item cost
+// ledger. Delegates to EntRepository; returns an error for non-ent backends.
+func (s *Storage) GetDeletedItemSessionCostLedger(ctx context.Context) ([]DeletedItemSessionCostEntry, error) {
+	return s.repo.GetDeletedItemSessionCostLedger(ctx)
 }
 
 // --- Session Goal ---

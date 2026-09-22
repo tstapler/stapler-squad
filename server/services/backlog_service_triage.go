@@ -2955,6 +2955,8 @@ Do not modify the code. Only write the review verdict.
 		// incurred" rather than as an untrustworthy $0 — see the identical
 		// rationale on TriggerTriage's triageCostPriced.
 		callCostPriced := true
+		var reviewConversationID string
+		callOpts.OnConversationID = func(id string) { reviewConversationID = id }
 		reviewResult, callErr := reviewCaller.CallBlocking(
 			reviewCtx, headless.FeatureKeyReview, systemPrompt, headlessPrompt, callOpts,
 			func(usd float64, priced bool) {
@@ -3038,6 +3040,7 @@ Do not modify the code. Only write the review verdict.
 		is, createErr := s.storage.CreateItemSessionWithVerdict(cleanupCtx, session.ItemSessionData{
 			ItemID:                 item.ID,
 			SessionUUID:            reviewSessionUUID,
+			ConversationUUID:       reviewConversationID,
 			SessionRole:            session.SessionRoleReview,
 			AcSnapshot:             session.AcCriteriaJSON(acSnapshotJSON),
 			EstimatedCostUsd:       callCostUSD,

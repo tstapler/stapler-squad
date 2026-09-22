@@ -7,9 +7,9 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// nativeRemoveWorktree is the pure-Go replacement for removeLocked's subprocess `git
-// worktree remove -f` + admin-file cleanup (Epic 2.2, Story 2.2.1), dispatched from
-// removeLocked via useNativeWorktree (Task 2.2.2a). It removes worktreePath's working
+// nativeRemoveWorktree is the pure-Go replacement for removeLocked's former subprocess
+// `git worktree remove -f` + admin-file cleanup (Epic 2.2, Story 2.2.1), called directly
+// from removeLocked (Task 2.2.2a). It removes worktreePath's working
 // directory and its WorktreeAdminDir but never touches refs/heads/<branch> — branch
 // deletion is not this function's job, matching Cleanup()'s existing doc comment and
 // guarding against the previously-fixed "stop_session silently deletes the git branch"

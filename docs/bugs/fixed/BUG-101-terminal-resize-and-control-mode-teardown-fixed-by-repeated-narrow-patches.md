@@ -12,7 +12,7 @@ Two files have each accumulated multiple independent fixes to the same conceptua
 `20da32505`, `417d370dc`/`e5a42e730`, `9651edd5e`, `e8060fb1b`/`b5dba385e` (#728), and this investigation's fix (generalizing the #728 bounce check from an exact 2-back match to a small history window, since a real oscillation observed live on `staplersquad_stelekit` wandered across 3+ distinct values — `10x6 -> 67x38 -> 67x22 -> 67x38` — not a clean A-B-A flip-flop).
 
 **`session/tmux/control_mode.go`'s subscriber-close/teardown timing** — fixed at least 4 times:
-`6e6a9f676` (close slow subscribers instead of dropping bytes), `b0416e224` (add a grace period before closing), `c6bc8585c` (synchronize `controlModeDone` reads), BUG-090 (fixed: streamhub teardown races ahead of `StopControlMode`), plus BUG-086 (open: a refcounting data race under concurrent Start/Stop), plus this investigation's fix (moving the slow-subscriber grace-period wait off the tmux stdout read loop, since blocking it could stall tmux long enough that it stops noticing its own stdin close, forcing `StopControlMode`'s hard-kill path on every single teardown of a busy session).
+`6e6a9f676` (close slow subscribers instead of dropping bytes), `b0416e224` (add a grace period before closing), `c6bc8585c` (synchronize `controlModeDone` reads), BUG-090 (fixed: streamhub teardown races ahead of `StopControlMode`), BUG-086 (fixed: `readControlModeOutput`/`monitorControlModeErrors` read `controlModeDone`/`controlModeStdout` from the struct instead of capturing them at spawn time), plus this investigation's fix (moving the slow-subscriber grace-period wait off the tmux stdout read loop, since blocking it could stall tmux long enough that it stops noticing its own stdin close, forcing `StopControlMode`'s hard-kill path on every single teardown of a busy session).
 
 ## Root Cause
 
@@ -54,5 +54,5 @@ Both recommended consolidations were implemented.
 
 ## Related
 
-- BUG-086 (open): control-mode refcounting race under concurrent Start/Stop — explicitly out of scope for this fix, left untouched.
+- BUG-086 (fixed): control-mode refcounting/generation-capture race under concurrent Start/Stop — explicitly out of scope for this fix, left untouched.
 - BUG-090 (fixed): streamhub teardown state races ahead of `StopControlMode` call
