@@ -613,6 +613,35 @@ func TestTymuxGRPCSession_SendInputViaControlMode_ValidContext_SendsOnStream(t *
 	assert.Equal(t, []byte("hello"), last.GetInput())
 }
 
+// TestTymuxGRPCSession_SendPromptWithEnter_SendsContentAndEnterAsSeparateSends
+// is the direct regression test for BUG-031 at this backend: the old
+// single-write shape concatenated the prompt and a trailing 0x0D into one
+// AttachRequest_Input send, which sendkeysguard_test.go's AST guard only
+// proves is absent from the source text — it never calls
+// SendPromptWithEnter itself. This asserts the actual runtime behavior:
+// exactly two separate stream sends, content first, then the bare Enter
+// byte, mirroring TestTymuxGRPCSession_SendInputViaControlMode_ValidContext_SendsOnStream's
+// pattern of asserting on stream.sentRequests().
+func TestTymuxGRPCSession_SendPromptWithEnter_SendsContentAndEnterAsSeparateSends(t *testing.T) {
+	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
+
+	err := sess.SendPromptWithEnter("some long driver-generated prompt text")
+
+	require.NoError(t, err)
+	// Filter to Input sends only: the standing stream's initial Attach
+	// request (opened by Start(), before this call) carries a pane_id with
+	// no Input payload and would otherwise be miscounted as a write.
+	var inputSends []*v1.AttachRequest
+	for _, req := range stream.sentRequests() {
+		if len(req.GetInput()) > 0 {
+			inputSends = append(inputSends, req)
+		}
+	}
+	require.Len(t, inputSends, 2, "expected exactly two separate AttachRequest_Input sends (content, then Enter), got %#v", stream.sentRequests())
+	assert.Equal(t, []byte("some long driver-generated prompt text"), inputSends[0].GetInput(), "first send must be the prompt content with no Enter suffix")
+	assert.Equal(t, []byte{0x0D}, inputSends[1].GetInput(), "second send must be the bare Enter byte sent on its own")
+}
+
 // --- Story 2.4.2: SetOnExitCallback / ResetExitOnce fire-once semantics ---
 
 // TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredBeforePaneExits

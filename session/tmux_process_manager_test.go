@@ -84,6 +84,57 @@ func TestTmuxProcessManager_CapturePaneContentContext_RefetchesAfterTTLExpires(t
 	require.NotEqual(t, first, second, "content after cache expiry should reflect the fresh subprocess call")
 }
 
+// fakeTPMPaneSettleChecker is a scripted tpmPaneSettleChecker: each call to
+// HasUpdated pops the next value off updates (repeating the last one once
+// exhausted), so waitForPaneSettleTPM can be tested without a real tmux
+// session (AC3: TmuxProcessManager.SendPromptWithEnter's fixed 100ms sleep
+// replaced with event-driven settle detection).
+type fakeTPMPaneSettleChecker struct {
+	updates []bool
+	calls   int
+}
+
+func (f *fakeTPMPaneSettleChecker) HasUpdated() (bool, bool, string) {
+	idx := f.calls
+	f.calls++
+	if idx >= len(f.updates) {
+		idx = len(f.updates) - 1
+	}
+	return f.updates[idx], false, ""
+}
+
+// TestWaitForPaneSettleTPM_ReturnsAsSoonAsSettled proves the replacement for
+// the fixed 100ms sleep returns as soon as two consecutive "no change" polls
+// are observed, rather than waiting out the full maxWait window every time.
+func TestWaitForPaneSettleTPM_ReturnsAsSoonAsSettled(t *testing.T) {
+	checker := &fakeTPMPaneSettleChecker{updates: []bool{true, true, false, false, false}}
+
+	start := time.Now()
+	waitForPaneSettleTPM(checker, time.Millisecond, time.Second)
+	elapsed := time.Since(start)
+
+	if elapsed >= time.Second {
+		t.Errorf("waitForPaneSettleTPM took %v — should have returned once settled, not waited out the full window", elapsed)
+	}
+	if checker.calls < 4 {
+		t.Errorf("HasUpdated called %d times, want at least 4 (2 changing + 2 settled)", checker.calls)
+	}
+}
+
+// TestWaitForPaneSettleTPM_GivesUpAfterMaxWait_WhenPaneNeverSettles proves the
+// best-effort fallback: a pane that never stops changing doesn't hang forever.
+func TestWaitForPaneSettleTPM_GivesUpAfterMaxWait_WhenPaneNeverSettles(t *testing.T) {
+	checker := &fakeTPMPaneSettleChecker{updates: []bool{true}}
+
+	start := time.Now()
+	waitForPaneSettleTPM(checker, time.Millisecond, 20*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if elapsed > 200*time.Millisecond {
+		t.Errorf("waitForPaneSettleTPM took %v, want it to give up close to the 20ms maxWait", elapsed)
+	}
+}
+
 // primePanePID must cache the pane PID up front so the orphan guard still has
 // a PID to check after the tmux server dies (criterion: uncached-PID case).
 func TestTmuxProcessManager_PrimePanePID_CachesWhenUnset(t *testing.T) {

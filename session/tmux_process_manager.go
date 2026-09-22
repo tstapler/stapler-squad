@@ -509,7 +509,9 @@ func (tm *TmuxProcessManager) CaptureViewport(lines int) (string, error) {
 }
 
 // SendPromptWithEnter sends text to the session followed by Enter key.
-// Includes a brief pause between text and Enter to prevent interpretation issues.
+// Waits for the pane to settle between text and Enter (rather than a fixed
+// sleep) to give Claude Code's TUI paste-detector a chance to close first —
+// see waitForPaneSettleTPM's doc comment.
 func (tm *TmuxProcessManager) SendPromptWithEnter(prompt string) error {
 	s := tm.session.Load()
 	if s == nil {
@@ -518,11 +520,54 @@ func (tm *TmuxProcessManager) SendPromptWithEnter(prompt string) error {
 	if _, err := s.SendKeys(prompt); err != nil {
 		return fmt.Errorf("error sending keys to tmux session: %w", err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	waitForPaneSettleTPM(tm, defaultTPMPaneSettlePollInterval, defaultTPMPaneSettleMaxWait)
 	if err := s.TapEnter(); err != nil {
 		return fmt.Errorf("error tapping enter: %w", err)
 	}
 	return nil
+}
+
+// defaultTPMPaneSettlePollInterval and defaultTPMPaneSettleMaxWait mirror
+// DefaultPaneSettlePollInterval/DefaultPaneSettleMaxWait (pane_submit.go),
+// scaled down to stay close to the fixed 100ms this replaced — the
+// significantly larger driver-content defaults aren't warranted here since
+// SendPromptWithEnter's callers send comparatively short prompts.
+const (
+	defaultTPMPaneSettlePollInterval = 25 * time.Millisecond
+	defaultTPMPaneSettleMaxWait      = 300 * time.Millisecond
+)
+
+// tpmPaneSettleChecker is the narrow interface waitForPaneSettleTPM needs —
+// satisfied by *TmuxProcessManager's HasUpdated, and by a test fake so this
+// settle-wait logic is unit-testable without a real tmux session.
+type tpmPaneSettleChecker interface {
+	HasUpdated() (updated bool, hasPrompt bool, content string)
+}
+
+// waitForPaneSettleTPM polls tm.HasUpdated until the pane stops changing for
+// two consecutive polls, or maxWait elapses — the TmuxProcessManager-layer
+// equivalent of waitForPaneSettle (autonomous_driver.go), which needs
+// *Instance's 2-return-value HasUpdated rather than TmuxProcessManager's
+// 3-return-value one. Best-effort: a pane that never settles is left alone
+// once the deadline passes, same as its Instance-layer counterpart.
+// Not context-cancellable, unlike pane_submit.go's settle-wait family —
+// SendPromptWithEnter takes no context.Context to plumb through, and maxWait
+// is bounded at 300ms so the practical cost of that is low.
+func waitForPaneSettleTPM(tm tpmPaneSettleChecker, pollInterval, maxWait time.Duration) {
+	deadline := time.Now().Add(maxWait)
+	stableCount := 0
+	for time.Now().Before(deadline) {
+		time.Sleep(pollInterval)
+		updated, _, _ := tm.HasUpdated()
+		if updated {
+			stableCount = 0
+			continue
+		}
+		stableCount++
+		if stableCount >= 2 {
+			return
+		}
+	}
 }
 
 // GetPanePID returns the PID of the foreground process in the pane.

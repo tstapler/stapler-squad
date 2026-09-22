@@ -229,21 +229,36 @@ func TestExtractPRURL_NoURL(t *testing.T) {
 // exercising run()'s real-send path (nudge suppression / distinct-send
 // behavior) without a real tmux backend. Embeds a nil ProcessManager, per
 // fakePauseResumeProcessManager's precedent, so any unexpected method call
-// panics loudly. HasUpdated is intentionally NOT overridden: Instance.HasUpdated
-// short-circuits via !TmuxAlive() before ever reaching the embedded
-// ProcessManager, so waitForPaneSettle never touches this fake's HasUpdated.
+// panics loudly. HasSession/IsAlive report the pane as live and HasUpdated
+// simulates a real pane changing once in response to each SendKeys call, so
+// SubmitDriverContent's pane-changed confirmation check (session/pane_submit.go)
+// sees the same "content changed after I typed" signal a real tmux pane would
+// give it — without this, Instance.HasUpdated() always reported false and
+// every submit looked swallowed, driving the AutonomousDriver loop to "max
+// turns reached" instead of completing (see the 4
+// TestAutonomousDriver_run_should_*/TestAutonomousDriver_SuppressesDuplicateNudge_When_PaneUnchanged
+// tests below).
 type fakeSendKeysProcessManager struct {
 	ProcessManager
-	mu       sync.Mutex
-	sent     []string
-	failOn   map[int]bool // 1-based call index -> force an error for that call
-	sendCall int
+	mu            sync.Mutex
+	sent          []string
+	failOn        map[int]bool // 1-based call index -> force an error for that call
+	sendCall      int
+	pendingUpdate bool // set by SendKeys, consumed once by the next HasUpdated poll
 }
 
-// HasSession reports false so Instance.TmuxAlive() short-circuits to false
-// cleanly, which in turn makes Instance.HasUpdated() short-circuit before
-// ever reaching this fake's (unstubbed) HasUpdated/IsAlive methods.
-func (f *fakeSendKeysProcessManager) HasSession() bool { return false }
+// HasSession and IsAlive report the fake pane as live so Instance.TmuxAlive()
+// proceeds far enough to reach this fake's HasUpdated, rather than
+// short-circuiting to "never updated". HasMeaningfulContent/FilterBanners are
+// stubbed too: Instance.HasUpdated's UpdateTerminalTimestamps calls them once
+// HasSession() is true, and the embedded nil ProcessManager panics on any
+// unstubbed call.
+func (f *fakeSendKeysProcessManager) HasSession() bool                         { return true }
+func (f *fakeSendKeysProcessManager) IsAlive() bool                            { return true }
+func (f *fakeSendKeysProcessManager) HasMeaningfulContent(content string) bool { return false }
+func (f *fakeSendKeysProcessManager) FilterBanners(content string) (string, int) {
+	return content, 0
+}
 
 func (f *fakeSendKeysProcessManager) SendKeys(keys string) (int, error) {
 	f.mu.Lock()
@@ -253,7 +268,23 @@ func (f *fakeSendKeysProcessManager) SendKeys(keys string) (int, error) {
 		return 0, errTestSendKeysFailure
 	}
 	f.sent = append(f.sent, keys)
+	f.pendingUpdate = true
 	return len(keys), nil
+}
+
+// HasUpdated reports a single pane change immediately after each SendKeys
+// call, then reports no further change until the next SendKeys — mirroring a
+// real pane's render-then-settle behavior closely enough for
+// waitForPaneSettle/waitForPaneUpdate (session/pane_submit.go) to behave as
+// they would against a real tmux pane.
+func (f *fakeSendKeysProcessManager) HasUpdated() (updated bool, hasPrompt bool, content string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.pendingUpdate {
+		f.pendingUpdate = false
+		return true, false, "updated"
+	}
+	return false, false, ""
 }
 
 func (f *fakeSendKeysProcessManager) recorded() []string {
