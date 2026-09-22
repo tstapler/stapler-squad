@@ -57,6 +57,14 @@ func (DeletedItemSessionCost) Edges() []ent.Edge {
 func (DeletedItemSessionCost) Indexes() []ent.Index {
 	return []ent.Index{
 		// Mirrors item_sessions' own conversation_uuid index — same lookup shape.
+		// Currently unused: the only read (GetDeletedItemSessionCostLedger) is
+		// an unfiltered full scan, matched against conversation_uuid in Go, not
+		// SQL. Kept as forward-looking for a future filtered query.
 		index.Fields("conversation_uuid"),
+		// Each ItemSession row is hard-deleted exactly once, so its ledger
+		// snapshot is unique on session_uuid — the natural key that
+		// identifies it. Rejects a duplicate ledger row from a retried
+		// DeleteBacklogItem after a partial failure.
+		index.Fields("session_uuid").Unique(),
 	}
 }

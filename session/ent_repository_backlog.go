@@ -1481,6 +1481,21 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 		return fmt.Errorf("failed to query item sessions for backlog item %s: %w", id, err)
 	}
 
+	// The ledger write and the three deletes below must commit atomically: a
+	// partial failure between the ledger CreateBulk and BacklogItem.DeleteOneID
+	// would otherwise leave a retry racing a live ItemSession that a fresh
+	// DeleteBacklogItem call would ledger AGAIN — a permanent duplicate cost
+	// row (the ledger has no other retry-idempotency guard, only the
+	// session_uuid unique index added alongside this transaction to make a
+	// same-key retry fail loudly instead of double-counting). Follows the
+	// same r.client.Tx(ctx) pattern as MarkStuck/AddBacklogItemDependency
+	// above.
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("delete backlog item: begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
 	if len(itemSessions) > 0 {
 		// Story 3: preserve each ItemSession's cost attribution in a durable
 		// ledger before it's hard-deleted below — see
@@ -1490,7 +1505,7 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 		itemSessionIDs := make([]uuid.UUID, 0, len(itemSessions))
 		for _, is := range itemSessions {
 			itemSessionIDs = append(itemSessionIDs, is.ID)
-			ledgerBuilders = append(ledgerBuilders, r.client.DeletedItemSessionCost.Create().
+			ledgerBuilders = append(ledgerBuilders, tx.DeletedItemSessionCost.Create().
 				SetConversationUUID(is.ConversationUUID).
 				SetSessionUUID(is.SessionUUID).
 				SetSessionRole(is.SessionRole).
@@ -1500,31 +1515,35 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 				SetCostPriced(is.CostPriced).
 				SetCreatedAt(is.CreatedAt))
 		}
-		if _, err := r.client.DeletedItemSessionCost.CreateBulk(ledgerBuilders...).Save(ctx); err != nil {
-			return fmt.Errorf("failed to write deleted-cost ledger for backlog item %s: %w", id, err)
+		if _, err := tx.DeletedItemSessionCost.CreateBulk(ledgerBuilders...).Save(ctx); err != nil {
+			return fmt.Errorf("delete backlog item: write deleted-cost ledger for %s: %w", id, err)
 		}
 
-		_, err = r.client.ReviewVerdict.Delete().
+		_, err = tx.ReviewVerdict.Delete().
 			Where(reviewverdict.HasItemSessionWith(itemsession.IDIn(itemSessionIDs...))).
 			Exec(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to delete review verdicts for backlog item %s: %w", id, err)
+			return fmt.Errorf("delete backlog item: delete review verdicts for %s: %w", id, err)
 		}
 
-		_, err = r.client.ItemSession.Delete().
+		_, err = tx.ItemSession.Delete().
 			Where(itemsession.IDIn(itemSessionIDs...)).
 			Exec(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to delete item sessions for backlog item %s: %w", id, err)
+			return fmt.Errorf("delete backlog item: delete item sessions for %s: %w", id, err)
 		}
 	}
 
-	err = r.client.BacklogItem.DeleteOneID(parsedID).Exec(ctx)
+	err = tx.BacklogItem.DeleteOneID(parsedID).Exec(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
 		}
-		return fmt.Errorf("failed to delete backlog item %s: %w", id, err)
+		return fmt.Errorf("delete backlog item: delete %s: %w", id, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete backlog item: commit: %w", err)
 	}
 
 	// Best-effort publish: never blocks or fails the delete itself. result was
