@@ -419,8 +419,15 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 									))
 								}
 								if due {
+									// Exempt exactly sessionUUID (never inferred) from
+									// spawnSessionAfterGates' 8b2 confirmed-liveness
+									// check — see spawnLivenessBypassUUID's doc comment
+									// in backlog_service_triage.go: this branch just
+									// ended that exact session's row a few lines above
+									// without any guarantee its pane is dead yet.
+									respawnCtx := withSpawnLivenessBypass(a.lifecycleCtx, sessionUUID)
 									go func() {
-										if respawnErr := respawner.AutoRespawnAutonomousWork(a.lifecycleCtx, itemID); respawnErr != nil {
+										if respawnErr := respawner.AutoRespawnAutonomousWork(respawnCtx, itemID); respawnErr != nil {
 											log.Warn("[AutonomousDriver] AutoRespawnAutonomousWork failed", "item", itemID, "err", respawnErr)
 											a.notifyAutonomousRespawnAttemptFailed(itemID, itemTitle, respawnErr)
 										}

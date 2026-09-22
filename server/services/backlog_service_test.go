@@ -2327,6 +2327,61 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 	assert.True(t, newOpen, "the newly-spawned work session must be open")
 }
 
+// TestRemediateStaleWorkSession_should_StillBlockOnUnrelatedConfirmedLiveRound
+// is the precision regression test for spawnLivenessBypassUUID
+// (backlog_service_triage.go): RemediateStaleWorkSession exempts ONLY the
+// exact session it just ended and killed from spawnSessionAfterGates' 8b2
+// check, by tagging ctx with that session's own UUID — never an inferred
+// "most recently ended" guess, which could pick the wrong session (e.g. if
+// tombstoneOrphanWorkSessions also tombstones an unrelated dead round in the
+// same call). Here a second, genuinely different work session round is
+// already EndedAt (wrongly tombstoned by an unrelated bug) but the stopper
+// still confirms it live — the exact AC1/AC2 incident shape — and must still
+// block the respawn even though the intentionally-retired session is
+// exempted.
+func TestRemediateStaleWorkSession_should_StillBlockOnUnrelatedConfirmedLiveRound(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{
+		"stale-work-session-uuid":      true,
+		"unrelated-wrongly-tombstoned": true,
+	}}
+	svc.SetSessionStopper(stopper)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with a stale round and an unrelated wrongly-tombstoned-but-alive round")
+
+	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "unrelated-wrongly-tombstoned",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	unrelated, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	require.Len(t, unrelated, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), unrelated[0].ID, time.Now().Add(-time.Hour)))
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "stale-work-session-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
+	require.Error(t, remediateErr, "an unrelated confirmed-live round must still block the respawn even though the intentionally-retired session is exempted")
+	assert.Contains(t, remediateErr.Error(), "unrelated-wrongly-tombstoned")
+	assert.Contains(t, stopper.killedPaneUUIDs, "stale-work-session-uuid", "the stale pane is still killed — only the respawn is blocked")
+	assert.Empty(t, creator.calls, "no new work session may be spawned while a different round is confirmed live")
+}
+
 // TestRemediateStaleWorkSession_should_Defer_When_AutomatedRetryAlreadyPending
 // is the AC8 regression test for session-retry-backoff's double-remediation
 // fix: if the driver's own configurable retry policy already has a restart
