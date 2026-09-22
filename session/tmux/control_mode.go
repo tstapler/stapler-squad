@@ -192,17 +192,18 @@ func (t *TmuxSession) StartControlMode() error {
 	t.controlModeSubMu.Unlock()
 
 	// Start goroutines: priority sender, output reader, stderr monitor.
-	// highPriSendCh/normPriSendCh are captured here (not read from the struct
-	// fields inside runCMSender) so a later StartControlMode call reassigning
-	// those fields for a fresh session can never race with this goroutine's
-	// own reads of its own channels -- see runCMSender's doc comment.
+	// doneCh/highPriSendCh/normPriSendCh/stdout are captured here (not read
+	// from the struct fields inside each goroutine) so a later
+	// StartControlMode call reassigning those fields for a fresh session can
+	// never race with this goroutine's own reads of its own channels/pipe --
+	// see runCMSender's and readControlModeOutput's doc comments.
 	doneCh := t.controlModeDone
 	highPriSendCh := t.highPriSendCh
 	normPriSendCh := t.normPriSendCh
 	cmSenderExited := t.cmSenderExited
 	go t.runCMSender(doneCh, stdin, highPriSendCh, normPriSendCh, cmSenderExited)
-	go t.readControlModeOutput()
-	go t.monitorControlModeErrors(stderr)
+	go t.readControlModeOutput(doneCh, stdout)
+	go t.monitorControlModeErrors(stderr, doneCh)
 
 	return nil
 }
@@ -271,7 +272,7 @@ func (t *TmuxSession) startRemoteControlMode() error {
 	normPriSendCh := t.normPriSendCh
 	cmSenderExited := t.cmSenderExited
 	go t.runCMSender(doneCh, stdin, highPriSendCh, normPriSendCh, cmSenderExited)
-	go t.readControlModeOutput()
+	go t.readControlModeOutput(doneCh, stdout)
 
 	log.Info("successfully started remote control mode", "session", t.sanitizedName)
 
@@ -440,7 +441,22 @@ func (t *TmuxSession) endControlModeGenerationV2(span trace.Span, reason lifecyc
 //	%output %0 hello world
 //	%session-changed $13 session-name
 //	%exit
-func (t *TmuxSession) readControlModeOutput() {
+//
+// doneCh/stdout are passed as parameters -- captured by the caller
+// (StartControlMode/startRemoteControlMode) under controlModeSubMu at the
+// same moment the fields are assigned -- rather than read from
+// t.controlModeDone/t.controlModeStdout here. Reading those fields directly
+// from inside this goroutine raced against a concurrent StopControlMode
+// (which nils/closes controlModeDone and closes+nils controlModeStdout with
+// no lock at all on the latter) in the window between `go
+// t.readControlModeOutput()` returning and this goroutine actually being
+// scheduled: BUG-086's repro (session/tmux/control_mode_interleaved_start_stop_test.go)
+// hit exactly this window under -race, observing doneCh as nil and later
+// panicking on close(nil) in the scanner-EOF cleanup below. Mirrors the fix
+// already applied to runCMSender's doneCh/highPriSendCh/normPriSendCh/
+// cmSenderExited parameters for the identical bug class (see its doc
+// comment).
+func (t *TmuxSession) readControlModeOutput(doneCh chan struct{}, stdout io.ReadCloser) {
 	// Captured once, like doneCh below, so every decision in this generation
 	// (whether to open the span, the scanner-EOF fallback, the doneCh-closed
 	// exit, and processControlModeLineWithV2's %exit/%session-closed cases)
@@ -459,14 +475,7 @@ func (t *TmuxSession) readControlModeOutput() {
 		_, span = lifecycle.StartGeneration(context.Background(), "tmux_control_mode")
 	}
 
-	// Capture under RLock — StopControlMode nils/closes controlModeDone under
-	// controlModeSubMu.Lock(), so reading the field without a lock races against
-	// that write. The comment below predates the fix; the snapshot itself (using
-	// a possibly-stale channel value after unlock) remains safe and intentional.
-	t.controlModeSubMu.RLock()
-	doneCh := t.controlModeDone // capture before StopControlMode can nil it
-	t.controlModeSubMu.RUnlock()
-	scanner := bufio.NewScanner(t.controlModeStdout)
+	scanner := bufio.NewScanner(stdout)
 
 	for scanner.Scan() {
 		select {
@@ -612,13 +621,10 @@ func (t *TmuxSession) pendingCommandDepth() int {
 	return len(t.pendingCmds)
 }
 
-// monitorControlModeErrors monitors stderr for control mode errors.
-func (t *TmuxSession) monitorControlModeErrors(stderr io.ReadCloser) {
-	// Capture under RLock — see readControlModeOutput for why the raw field
-	// read races against StopControlMode's write under controlModeSubMu.
-	t.controlModeSubMu.RLock()
-	doneCh := t.controlModeDone // capture before StopControlMode can nil it
-	t.controlModeSubMu.RUnlock()
+// monitorControlModeErrors monitors stderr for control mode errors. doneCh is
+// passed as a parameter -- see readControlModeOutput's doc comment for why
+// reading t.controlModeDone directly from inside this goroutine is unsafe.
+func (t *TmuxSession) monitorControlModeErrors(stderr io.ReadCloser, doneCh <-chan struct{}) {
 	defer stderr.Close()
 
 	scanner := bufio.NewScanner(stderr)

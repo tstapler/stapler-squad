@@ -54,10 +54,12 @@ pass unmodified, since they all already used matching cursor-up counts between c
 ## Scope Decision
 
 This closes one concrete content-loss gap in the client-side write pipeline. It does not touch
-`BUG-101`'s resize-oscillation/control-mode-teardown chain or `BUG-086`'s control-mode refcounting
-race — those are separate mechanisms (client resize settling, server-side tmux control-mode
-lifecycle) and remain open under their own tracking. Other hypotheses investigated and ruled out
-during this pass (see below) are not fixes because they were not, in fact, bugs.
+`BUG-101`'s resize-oscillation/control-mode-teardown chain — a separate mechanism (client resize
+settling) that remains open under its own tracking. `BUG-086`'s control-mode refcounting race
+(server-side tmux control-mode lifecycle) has since been fixed separately — see
+`docs/bugs/fixed/BUG-086-tmux-control-mode-refcounting-race-under-concurrent-start-stop.md`. Other
+hypotheses investigated and ruled out during this pass (see below) are not fixes because they were
+not, in fact, bugs.
 
 ## Hypotheses investigated and ruled out (documented so they aren't re-investigated)
 
@@ -89,5 +91,5 @@ during this pass (see below) are not fixes because they were not, in fact, bugs.
 ## Related
 
 - `docs/bugs/open/BUG-101-terminal-resize-and-control-mode-teardown-fixed-by-repeated-narrow-patches.md`
-- `docs/bugs/open/BUG-086-tmux-control-mode-refcounting-race-under-concurrent-start-stop.md`
+- `docs/bugs/fixed/BUG-086-tmux-control-mode-refcounting-race-under-concurrent-start-stop.md`
 - `docs/tasks/terminal-jank.md` (Story 1 introduced the `isFullRedraw` heuristic this bug refines)
