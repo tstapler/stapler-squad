@@ -1243,6 +1243,14 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 	if err != nil {
 		return "", false
 	}
+	// CanonicalizeWorktreePath resolves symlinks (e.g. macOS's /var ->
+	// /private/var) so this comparison isn't fooled by the same directory
+	// having two spellings -- one from a target worktree path already
+	// canonicalized when loaded from storage (git.NewGitWorktreeFromStorage),
+	// the other from a sibling's live pane cwd that may not be. See the /var
+	// vs /private/var path-inconsistency bug class already documented in
+	// backlog_service_test.go.
+	cleanTarget = git.CanonicalizeWorktreePath(cleanTarget)
 	for _, inst := range s.reviewQueuePoller.GetInstances() {
 		if inst == nil || inst.UUID == excludeUUID || !inst.IsBackendProcessAlive() {
 			continue
@@ -1255,6 +1263,7 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 		if absErr != nil {
 			continue
 		}
+		cleanCwd = git.CanonicalizeWorktreePath(cleanCwd)
 		if cleanCwd == cleanTarget || strings.HasPrefix(cleanCwd, cleanTarget+string(os.PathSeparator)) {
 			return inst.UUID, true
 		}
