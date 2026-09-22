@@ -332,18 +332,15 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 	t.Parallel()
 
 	ended := time.Now().Add(-time.Hour)
-	olderEnded := time.Now().Add(-2 * time.Hour)
 	open := session.ItemSessionSummary{SessionUUID: "uuid-open-work", Role: session.SessionRoleWork}
 	tombstoned := session.ItemSessionSummary{SessionUUID: "uuid-ended-work", Role: session.SessionRoleWork, EndedAt: &ended}
-	olderTombstoned := session.ItemSessionSummary{SessionUUID: "uuid-older-ended-work", Role: session.SessionRoleWork, EndedAt: &olderEnded}
 	review := session.ItemSessionSummary{SessionUUID: "uuid-review", Role: session.SessionRoleReview}
 
 	cases := []struct {
-		name        string
-		stopper     SessionStopper
-		prior       []session.ItemSessionSummary
-		excludeUUID string
-		wantUUID    string
+		name     string
+		stopper  SessionStopper
+		prior    []session.ItemSessionSummary
+		wantUUID string
 	}{
 		{
 			name:    "nil stopper never blocks",
@@ -377,25 +374,12 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 			prior:    []session.ItemSessionSummary{tombstoned, review, open},
 			wantUUID: "uuid-open-work",
 		},
-		{
-			name:        "excluded session confirmed live does not block a respawn that is deliberately replacing it",
-			stopper:     &mockSessionStopper{liveUUIDs: map[string]bool{"uuid-ended-work": true}},
-			prior:       []session.ItemSessionSummary{tombstoned},
-			excludeUUID: "uuid-ended-work",
-		},
-		{
-			name:        "excluding the just-replaced session still catches a different confirmed-live stale round",
-			stopper:     &mockSessionStopper{liveUUIDs: map[string]bool{"uuid-ended-work": true, "uuid-older-ended-work": true}},
-			prior:       []session.ItemSessionSummary{olderTombstoned, tombstoned},
-			excludeUUID: "uuid-ended-work",
-			wantUUID:    "uuid-older-ended-work",
-		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := findConfirmedLiveWorkSession(tc.stopper, tc.prior, tc.excludeUUID)
+			got := findConfirmedLiveWorkSession(tc.stopper, tc.prior)
 			if tc.wantUUID == "" {
 				assert.Nil(t, got)
 				return

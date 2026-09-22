@@ -3204,12 +3204,17 @@ func TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfi
 	itemID, workUUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
 
 	// Simulate the wrongly-tombstoned record: EndedAt is set in storage even
-	// though the session is genuinely still alive.
+	// though the session is genuinely still alive. killIneffectiveUUIDs models
+	// that spawnSessionAfterGates' own killEndedWorkSessionPanes (8a2) will
+	// attempt — and fail — to kill it, exactly like a stuck/zombie pane in
+	// production: the whole point of this test is that a kill attempt does
+	// NOT reach this session.
 	sessions, err := storage.ListItemSessions(ctx, itemID)
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	require.NoError(t, storage.UpdateItemSessionEnded(ctx, sessions[0].ID, time.Now()))
 	stopper.liveUUIDs[workUUID] = true
+	stopper.killIneffectiveUUIDs = map[string]bool{workUUID: true}
 
 	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
 	require.Error(t, err, "a confirmed-live session must block a concurrent respawn even though its EndedAt column says otherwise")
@@ -3274,6 +3279,10 @@ func TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossMany
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(ctx, round5.ID, time.Now()))
 	stopper.liveUUIDs[round5UUID] = true
+	// killIneffectiveUUIDs models killEndedWorkSessionPanes (8a2) attempting —
+	// and failing — to kill this round's pane, same as the single-round test
+	// above: the point is that a kill attempt does not reach it.
+	stopper.killIneffectiveUUIDs = map[string]bool{round5UUID: true}
 
 	allSessions, err := storage.ListItemSessions(ctx, itemID)
 	require.NoError(t, err)
