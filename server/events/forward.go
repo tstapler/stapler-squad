@@ -18,6 +18,7 @@ const (
 	EventSessionCreated      = pkgevents.EventSessionCreated
 	EventSessionUpdated      = pkgevents.EventSessionUpdated
 	EventSessionDeleted      = pkgevents.EventSessionDeleted
+	EventSessionArchived     = pkgevents.EventSessionArchived
 	EventUserInteraction     = pkgevents.EventUserInteraction
 	EventSessionAcknowledged = pkgevents.EventSessionAcknowledged
 	EventApprovalResponse    = pkgevents.EventApprovalResponse
@@ -59,6 +60,7 @@ var (
 	NewSessionUpdatedEvent              = pkgevents.NewSessionUpdatedEvent
 	NewSessionUpdatedEventWithDetection = pkgevents.NewSessionUpdatedEventWithDetection
 	NewSessionDeletedEvent              = pkgevents.NewSessionDeletedEvent
+	NewSessionArchivedEvent             = pkgevents.NewSessionArchivedEvent
 	NewUserInteractionEvent             = pkgevents.NewUserInteractionEvent
 	NewSessionAcknowledgedEvent         = pkgevents.NewSessionAcknowledgedEvent
 	NewApprovalResponseEvent            = pkgevents.NewApprovalResponseEvent

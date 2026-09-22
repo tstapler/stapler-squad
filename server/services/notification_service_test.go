@@ -168,6 +168,94 @@ func TestSendNotification_PollerMissFallsBackToStorage(t *testing.T) {
 	}
 }
 
+// TestSendNotification_SuppressesLowPriorityForHiddenSession verifies that a
+// LOW-priority notification (the shape ssq-hook-handler's native Claude Code
+// Stop hook sends for routine "Task Complete") is suppressed for a Hidden
+// (headless/review) session. Regression: Hidden review sessions were never
+// taught to any of the hook-installation code, so their routine completion
+// hook fired exactly like a normal session's, landing in notification
+// history/push for a session the UI hides and "View Session" can't open.
+func TestSendNotification_SuppressesLowPriorityForHiddenSession(t *testing.T) {
+	t.Parallel()
+	svc, bus, srv := newNotificationTestServer(t)
+
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+
+	const sessionTitle = "hidden-review-session"
+	inst := &session.Instance{Title: sessionTitle, UUID: "hidden-uuid", Hidden: true}
+	poller.SetInstances([]*session.Instance{inst})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := bus.Subscribe(ctx)
+
+	client := newTestClient(srv)
+	_, err := client.SendNotification(ctx, connect.NewRequest(&sessionv1.SendNotificationRequest{
+		SessionId:        sessionTitle,
+		Title:            "Task Complete",
+		NotificationType: sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE,
+		Priority:         sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW,
+	}))
+	require.NoError(t, err)
+
+	select {
+	case e := <-eventCh:
+		if e.Type == events.EventNotification {
+			t.Fatalf("expected LOW-priority notification for hidden session to be suppressed, got %+v", e)
+		}
+	case <-time.After(300 * time.Millisecond):
+		// No notification event arrived — suppressed as expected.
+	}
+}
+
+// TestSendNotification_SurfacesHighPriorityForHiddenSession verifies that a
+// HIGH-priority notification (e.g. ssq-hook-handler's "Task Failed") still
+// publishes for a Hidden session — mirroring ReactiveQueueManager's
+// suppressForHidden, which likewise never suppresses error-shaped reasons:
+// nothing else watches a stuck-in-error hidden session.
+func TestSendNotification_SurfacesHighPriorityForHiddenSession(t *testing.T) {
+	t.Parallel()
+	svc, bus, srv := newNotificationTestServer(t)
+
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+
+	const sessionTitle = "hidden-review-session-failed"
+	inst := &session.Instance{Title: sessionTitle, UUID: "hidden-uuid-failed", Hidden: true}
+	poller.SetInstances([]*session.Instance{inst})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := bus.Subscribe(ctx)
+
+	client := newTestClient(srv)
+	_, err := client.SendNotification(ctx, connect.NewRequest(&sessionv1.SendNotificationRequest{
+		SessionId:        sessionTitle,
+		Title:            "Task Failed",
+		NotificationType: sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE,
+		Priority:         sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH,
+	}))
+	require.NoError(t, err)
+
+	var gotEvent *events.Event
+	timeout := time.After(2 * time.Second)
+	for gotEvent == nil {
+		select {
+		case e := <-eventCh:
+			if e.Type == events.EventNotification {
+				gotEvent = e
+			}
+		case <-timeout:
+			t.Fatal("expected HIGH-priority notification for hidden session to still publish")
+		}
+	}
+}
+
 // TestSendNotification_UnknownSessionUsesRawID verifies that when no session
 // matches the incoming ID, the raw value is used as-is (graceful fallback).
 func TestSendNotification_UnknownSessionUsesRawID(t *testing.T) {

@@ -277,6 +277,46 @@ func TestReactiveQueueManager_EventSessionDeleted_RemovesFromQueue(t *testing.T)
 	}
 }
 
+// TestReactiveQueueManager_EventSessionArchived_RemovesFromQueue verifies that
+// publishing EventSessionArchived (soft-archival, e.g. archiveItemWorkSessions
+// superseding a prior round) removes the session from the review queue the same
+// way EventSessionDeleted does — regression for archived/superseded sessions
+// leaving a permanently stuck "no activity" queue entry behind.
+func TestReactiveQueueManager_EventSessionArchived_RemovesFromQueue(t *testing.T) {
+	mgr, poller, bus := newReactiveQueueTestSetup(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go mgr.Start(ctx)
+
+	if err := testutil.WaitForCondition(func() bool {
+		return poller.IsRunning()
+	}, testutil.FastWaitConfig()); err != nil {
+		t.Fatalf("manager failed to initialize: %v", err)
+	}
+	defer mgr.Stop()
+
+	const sessionID = "archive-target-session"
+	mgr.queue.Add(&session.ReviewItem{
+		SessionID:  sessionID,
+		Reason:     session.ReasonStale,
+		Priority:   session.PriorityLow,
+		DetectedAt: time.Now(),
+	})
+
+	if items := mgr.queue.List(); len(items) == 0 {
+		t.Fatal("expected item to be in queue before archival")
+	}
+
+	bus.Publish(events.NewSessionArchivedEvent(sessionID))
+
+	if err := testutil.WaitForCondition(func() bool {
+		return len(mgr.queue.List()) == 0
+	}, testutil.FastWaitConfig()); err != nil {
+		t.Errorf("session was not removed from queue after EventSessionArchived: queue len = %d", len(mgr.queue.List()))
+	}
+}
+
 // drainEvents drains all events from channel within timeout
 func drainEvents(ch <-chan *sessionv1.ReviewQueueEvent, timeout time.Duration) {
 	deadline := time.After(timeout)
