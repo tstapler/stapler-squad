@@ -3,69 +3,8 @@ package session
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
-	"path/filepath"
-	"regexp"
 	"strings"
-	"unicode"
-
-	"github.com/tstapler/stapler-squad/config"
 )
-
-// attachedImageRe matches the markdown BacklogItemForm inserts for an uploaded
-// image: ![name](/api/local/serve/<abs path>). encodeURI leaves parentheses
-// unescaped, so one level of balanced parens is allowed inside the path.
-var attachedImageRe = regexp.MustCompile(`!\[[^\n]*?\]\(/api/local/serve(/(?:[^()\s]|\([^()\s]*\))+)\)`)
-
-// attachedImageExts mirrors the types backlog_attachment_upload_handler.go accepts.
-var attachedImageExts = map[string]bool{".png": true, ".jpg": true, ".gif": true, ".webp": true}
-
-// writeAttachedImages lists description-embedded images as absolute paths, since
-// the /api/local/serve URL only resolves through the web server. Descriptions can
-// come from untrusted sources (synced GitHub issues), so only image files under
-// attachDir are listed, and paths with control characters (prompt injection) are dropped.
-func writeAttachedImages(sb *strings.Builder, description, attachDir string) {
-	if attachDir == "" {
-		return
-	}
-	root := filepath.Clean(attachDir) + string(filepath.Separator)
-	seen := map[string]bool{}
-	var paths []string
-	for _, m := range attachedImageRe.FindAllStringSubmatch(description, -1) {
-		p, err := url.PathUnescape(m[1])
-		if err != nil || strings.ContainsFunc(p, isControlOrLineBreak) {
-			continue
-		}
-		p = filepath.Clean(p)
-		if !strings.HasPrefix(p, root) || !attachedImageExts[strings.ToLower(filepath.Ext(p))] || seen[p] {
-			continue
-		}
-		seen[p] = true
-		paths = append(paths, p)
-	}
-	if len(paths) == 0 {
-		return
-	}
-	sb.WriteString("## Attached Images\nThe description references these images; view them with the Read tool:\n")
-	for _, p := range paths {
-		fmt.Fprintf(sb, "- %s\n", p)
-	}
-	sb.WriteString("\n")
-}
-
-func isControlOrLineBreak(r rune) bool {
-	return unicode.IsControl(r) || r == '\u2028' || r == '\u2029'
-}
-
-// backlogAttachmentDir returns "" when the config dir can't be resolved, which
-// disables the attached-images section rather than failing prompt construction.
-func backlogAttachmentDir() string {
-	dir, err := config.GetConfigDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(dir, config.BacklogAttachmentDirName)
-}
 
 // TriageSuggestion is a canonical suggestion entry shared by the headless triage
 // path and the submit_triage_result MCP tool.
@@ -119,8 +58,7 @@ func BuildHeadlessTriagePrompt(item *BacklogItemData, artifactAbsPath string) st
 	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
 	fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)
 	if item.Description != "" {
-		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
-		writeAttachedImages(&sb, item.Description, backlogAttachmentDir())
+		WriteDescriptionSection(&sb, item.Description, 0)
 	}
 	if item.AcceptanceCriteria != "" {
 		criteria, _ := ParseAcCriteria(item.AcceptanceCriteria)
@@ -182,8 +120,7 @@ func BuildHeadlessRetriagePrompt(item *BacklogItemData, artifactAbsPath string, 
 	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
 	fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)
 	if item.Description != "" {
-		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
-		writeAttachedImages(&sb, item.Description, backlogAttachmentDir())
+		WriteDescriptionSection(&sb, item.Description, 0)
 	}
 
 	sb.WriteString("## Prior triage result (iteration ")
