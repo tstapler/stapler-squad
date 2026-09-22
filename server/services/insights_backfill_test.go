@@ -68,3 +68,30 @@ func TestBackfillConversationUUIDs(t *testing.T) {
 		})
 	}
 }
+
+// TestBackfillConversationUUIDs_RespectsCanceledContext guards the fix: the
+// O(n×m) match loop must check ctx itself, not rely solely on the (unreached,
+// in this test) UpdateItemSessionConversationUUID DB call to enforce the
+// caller's timeout.
+func TestBackfillConversationUUIDs_RespectsCanceledContext(t *testing.T) {
+	t.Parallel()
+	created := time.Now().UTC().Add(-time.Hour)
+	wt := "/home/u/.stapler-squad/worktrees/x"
+	entries := []session.ItemSessionBacklogEntry{
+		{ItemSessionID: "is-1", SessionUUID: uuid.NewString(), SessionRole: session.SessionRoleWork, CreatedAt: created},
+	}
+	results := []*tokens.ParseResult{newResult("conv-1", "claude-sonnet-4", wt, 1, 1, 0, created.Add(4*time.Second))}
+	reader := &stampingBacklogReader{fakeBacklogReader: fakeBacklogReader{entries: entries}, stamped: map[string]string{}}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(),
+		tokens.NewAssociator(&fakeSessionStorage{}), reader)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	n, err := svc.BackfillConversationUUIDs(ctx)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, n)
+	assert.Empty(t, reader.stamped, "a canceled context must stop the match loop before it writes any stamp")
+}

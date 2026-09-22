@@ -22,12 +22,11 @@ type conversationStamper interface {
 	UpdateItemSessionConversationUUID(ctx context.Context, id string, conversationUUID string) error
 }
 
-// BackfillConversationUUIDs links pre-existing ItemSessions (whose session row was
-// deleted before conversation_uuid existed) to their transcripts, so Insights can
-// attribute them. Conservative: a transcript is linked only when exactly one unlinked,
-// non-live ItemSession with a real session UUID was created within backfillWindow
-// before its first message and the transcript ran in a worktree. Ambiguous or
-// unmatched transcripts are left alone. Idempotent; returns how many rows it stamped.
+// BackfillConversationUUIDs links pre-existing ItemSessions to their transcripts
+// so Insights can attribute them. Conservative: links only when exactly one
+// unlinked, non-live ItemSession was created within backfillWindow before the
+// transcript's first message; ambiguous or unmatched transcripts are left
+// alone. Idempotent; returns how many rows it stamped.
 func (s *InsightsService) BackfillConversationUUIDs(ctx context.Context) (int, error) {
 	stamper, ok := s.backlogReader.(conversationStamper)
 	if !ok || s.associator == nil {
@@ -80,6 +79,13 @@ func (s *InsightsService) BackfillConversationUUIDs(ctx context.Context) (int, e
 	stamped := 0
 	used := make(map[string]bool) // ItemSession IDs stamped this run
 	for _, tr := range transcripts {
+		// Checked once per outer-loop iteration (not per inner-loop candidate
+		// comparison): the O(n×m) match loop below has no other suspension
+		// point, so without this a caller's timeout is only ever enforced by
+		// the DB calls inside the loop, never by the loop itself.
+		if err := ctx.Err(); err != nil {
+			return stamped, err
+		}
 		var match *session.ItemSessionBacklogEntry
 		matches := 0
 		for i := range candidates {
