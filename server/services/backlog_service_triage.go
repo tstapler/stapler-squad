@@ -2763,15 +2763,19 @@ func (s *BacklogService) TriggerReReview(
 		priorVerdictSection = fmt.Sprintf("\n## Prior Review Verdict\nOutcome: %s\nSummary: %s\n", rv.OverallOutcome, rv.Summary)
 	}
 
+	attachedImages := session.AttachedImagesSection(item.Description)
+	if attachedImages != "" {
+		attachedImages = "\n" + attachedImages
+	}
 	reReviewPrompt := fmt.Sprintf(`You are re-reviewing a backlog item that previously entered the review state.
 
 # Item: %s
 
 ## Description
 %s
-%s
+%s%s
 ## Acceptance Criteria (at time of work session)
-`, item.Title, item.Description, priorVerdictSection)
+`, item.Title, item.Description, attachedImages, priorVerdictSection)
 
 	for _, ac := range acSnapshot {
 		reReviewPrompt += fmt.Sprintf("%d. %s (status: %s)\n", ac.Index, ac.Text, ac.Status)
