@@ -34,6 +34,19 @@ type insightsBacklogReader interface {
 	GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]session.ItemSessionBacklogEntry, error)
 }
 
+// insightsDeletedCostLedgerReader is the narrow interface InsightsService
+// uses to source the durable deleted-item cost ledger (Story 3 — see
+// session/ent/schema/deleted_item_session_cost.go). Satisfied by
+// *session.Storage. Kept as a separate seam from insightsBacklogReader
+// rather than growing that interface, since not every backlogReader test
+// double needs to care about the ledger; InsightsService asserts
+// s.backlogReader against this interface at read time, so a double that
+// doesn't implement it is simply treated as having no ledger (nil-safe,
+// mirrors DismissedFindingsRepository's "nil means unavailable" idiom).
+type insightsDeletedCostLedgerReader interface {
+	GetDeletedItemSessionCostLedger(ctx context.Context) ([]session.DeletedItemSessionCostEntry, error)
+}
+
 // DismissedFindingsRepository is the seam for finding-dismissal persistence.
 // Satisfied implicitly by *session.Storage. nil (the zero value of
 // InsightsService.dismissedFindings) means the feature is unavailable — the
@@ -177,6 +190,28 @@ func (s *InsightsService) sessionMetaForSessions(ctx context.Context) map[string
 		if e.ConversationUUID != "" {
 			if _, exists := meta[conversationKey(e.ConversationUUID)]; !exists {
 				meta[conversationKey(e.ConversationUUID)] = m
+			}
+		}
+	}
+
+	// Story 3: fold in the deleted-item cost ledger, keyed by conversation UUID
+	// only — a ledger row's snapshotted session_uuid belongs to a session row
+	// that was already gone before the item was even deleted, so it can never
+	// resolve a live association; only metaFor's conversation-UUID fallback can
+	// ever reach these rows.
+	if ledgerReader, ok := s.backlogReader.(insightsDeletedCostLedgerReader); ok {
+		ledgerEntries, err := ledgerReader.GetDeletedItemSessionCostLedger(ctx)
+		if err != nil {
+			log.Warn("failed to fetch deleted item session cost ledger for insights", "err", err)
+		} else {
+			for _, e := range ledgerEntries {
+				if e.ConversationUUID == "" {
+					continue
+				}
+				key := conversationKey(e.ConversationUUID)
+				if _, exists := meta[key]; !exists {
+					meta[key] = SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle}
+				}
 			}
 		}
 	}
@@ -330,6 +365,11 @@ func (s *InsightsService) GetInsightsSummary(
 		// ItemSession row already counted here, so it never double-counts a
 		// Claude-backed session that has both a transcript and an ItemSession row.
 		transcriptCoveredSessionIDs = make(map[string]bool)
+		// transcriptCoveredConversationUUIDs is every transcript's own conversation
+		// UUID seen in this loop — Story 3's ledger fold-in pass skips any ledger
+		// row already counted here, so a deleted item's transcript (still on disk)
+		// is never double-counted against its own ledger row.
+		transcriptCoveredConversationUUIDs = make(map[string]bool)
 	)
 
 	sessions := make([]*sessionv1.SessionTokenSummary, 0, len(results))
@@ -392,6 +432,12 @@ func (s *InsightsService) GetInsightsSummary(
 			// 4.1.4's fold-in pass still recognizes this session as
 			// transcript-covered even if this particular response excludes it.
 			transcriptCoveredSessionIDs[sessionID] = true
+		}
+		if r != nil && r.SessionUUID != "" {
+			// Recorded unconditionally, mirroring sessionID above, so Story 3's
+			// ledger fold-in pass below still recognizes this transcript as
+			// covered even if this particular response excludes it.
+			transcriptCoveredConversationUUIDs[r.SessionUUID] = true
 		}
 
 		// Apply orphan filter.
@@ -583,6 +629,37 @@ func (s *InsightsService) GetInsightsSummary(
 			for _, e := range entries {
 				if e.SessionUUID == "" || transcriptCoveredSessionIDs[e.SessionUUID] {
 					continue // no real session, or already counted via its transcript above
+				}
+				if !fromTime.IsZero() && !e.CreatedAt.IsZero() && e.CreatedAt.Before(fromTime) {
+					continue
+				}
+				if !toTime.IsZero() && !e.CreatedAt.IsZero() && e.CreatedAt.After(toTime) {
+					continue
+				}
+				entryUnpriced := !e.CostPriced
+				if !entryUnpriced {
+					totalCostUSD += e.EstimatedCostUsd
+				}
+				accumulateRoleCost(roleAccums, SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle}, e.EstimatedCostUsd, entryUnpriced)
+			}
+		}
+	}
+
+	// Story 3: fold in the deleted-item cost ledger the same way Story 4.1.4
+	// folds in transcript-less ItemSession rows above — a headless triage/review
+	// cost has no JSONL transcript to find it through even before its item is
+	// deleted, so once the item (and its ItemSession row) is gone, the ledger is
+	// the only surviving record. Deduped against transcriptCoveredConversationUUIDs
+	// so a ledger row whose transcript *was* found by the main loop (a deleted
+	// work session's JSONL, still on disk) isn't counted a second time.
+	if ledgerReader, ok := s.backlogReader.(insightsDeletedCostLedgerReader); ok {
+		ledgerEntries, err := ledgerReader.GetDeletedItemSessionCostLedger(ctx)
+		if err != nil {
+			log.Warn("insights: failed to fetch deleted item session cost ledger for cost fold-in", "err", err)
+		} else {
+			for _, e := range ledgerEntries {
+				if e.ConversationUUID == "" || transcriptCoveredConversationUUIDs[e.ConversationUUID] {
+					continue // no transcript to ever find, or already counted via its transcript above
 				}
 				if !fromTime.IsZero() && !e.CreatedAt.IsZero() && e.CreatedAt.Before(fromTime) {
 					continue

@@ -531,6 +531,25 @@ type ItemSessionBacklogEntry struct {
 	CreatedAt        time.Time
 }
 
+// DeletedItemSessionCostEntry is a ledger row preserving one deleted
+// ItemSession's cost attribution — written by DeleteBacklogItem just before
+// the item's ItemSession rows are hard-deleted. Returned by
+// GetDeletedItemSessionCostLedger. Field names mirror ItemSessionBacklogEntry
+// so callers can fold both shapes through the same SessionMeta path.
+type DeletedItemSessionCostEntry struct {
+	ConversationUUID string
+	SessionUUID      string
+	SessionRole      string
+	ItemID           string
+	ItemTitle        string
+	EstimatedCostUsd float64
+	CostPriced       bool
+	// CreatedAt is the original ItemSession's created_at (not this ledger
+	// row's deleted_at) — Insights' time-range filter needs the work's
+	// original timestamp.
+	CreatedAt time.Time
+}
+
 // BacklogItemFilter controls which items ListBacklogItems returns.
 type BacklogItemFilter struct {
 	// Statuses restricts results to these statuses. Empty means no restriction.

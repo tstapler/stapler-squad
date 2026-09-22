@@ -20,8 +20,21 @@ Work-session rows also never record `estimated_cost_usd`; headless triage/review
    `ItemSessionData.ConversationUUID` at creation. Fold-in dedupe skips rows matched by conversation
    UUID. Not covered: other `CallBlocking` callers that write no per-call ItemSession (intent,
    approval, gate custom check, autonomous driver) and the Gemini adapter.
-3. **Deleted backlog items (not started).** `DeleteBacklogItem` deletes the item's `ItemSession` rows,
-   so attribution dies with the item. Options: soft-delete, or a durable cost ledger. Needs a decision.
+3. **Deleted backlog items (done).** `DeleteBacklogItem` (`session/ent_repository_backlog.go`) writes a
+   `DeletedItemSessionCost` ledger row (`session/ent/schema/deleted_item_session_cost.go`, no FK — the item
+   and session are both gone by the time a row exists) per `ItemSession` before hard-deleting them. Chose
+   the ledger over soft-delete: additive, touches one write site and one read-merge site, can't regress
+   `GetAllItemSessionsWithBacklogInfo`'s existing scan or `BacklogItem.title`'s `Unique()` constraint the
+   way a soft-delete's unbounded list/query-site blast radius could. `InsightsService` folds ledger rows in
+   at both surfaces Story 4.1.4 already feeds, keyed by `conversation_uuid` only (a ledger row's snapshotted
+   `session_uuid` can never resolve — that session row was gone before the item was even deleted):
+   `sessionMetaForSessions` (lets a still-on-disk transcript recover its role/item via `metaFor`'s
+   conversation-UUID fallback) and a new ledger fold-in pass mirroring the 4.1.4 transcript-less pass,
+   deduped via a `transcriptCoveredConversationUUIDs` set (same double-count guard shape as Story 1's).
+   Caveats: a ledger row with no `conversation_uuid` ever stamped (Gemini triage/review — Story 2's known
+   gap) is dropped, not folded in blind, since there's no key to dedupe it against a transcript by; and
+   `SessionsTable`'s backlog badge still links to `/backlog?item=<id>`, which 404s for a ledger-sourced row
+   since the item is gone — not worth plumbing a "is this a live item" check just for the link.
 4. **Tighten path-prefix match (done).** `isPathPrefixMatch` (`session/tokens/association.go`) dropped
    its reverse-direction branch (sessionPath under resultPath): a transcript decoded to a short, generic
    path (e.g. "/home/tstapler" from a `claude` run straight in $HOME) was matching every session rooted

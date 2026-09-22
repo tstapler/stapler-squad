@@ -918,6 +918,45 @@ func TestEntRepository_Delete_StampsConversationUUIDOnItemSessions(t *testing.T)
 	assert.Equal(t, "conv-uuid-1", entries[0].ConversationUUID)
 }
 
+// TestEntRepository_DeleteBacklogItem_PreservesCostInLedger (Story 3) proves
+// DeleteBacklogItem writes a DeletedItemSessionCost ledger row for each of the
+// item's ItemSession rows before hard-deleting them, so the deletion doesn't
+// silently erase their cost attribution.
+func TestEntRepository_DeleteBacklogItem_PreservesCostInLedger(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "ledger item", Status: string(BacklogStatusInProgress)})
+	require.NoError(t, err)
+	is, err := repo.CreateItemSession(ctx, ItemSessionData{
+		ItemID:           item.ID,
+		SessionUUID:      "headless-review-1",
+		SessionRole:      SessionRoleReview,
+		ConversationUUID: "conv-ledger-1",
+		EstimatedCostUsd: 1.23,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.DeleteBacklogItem(ctx, item.ID))
+
+	// The ItemSession row itself is gone.
+	_, err = repo.GetItemSession(ctx, is.ID)
+	require.Error(t, err)
+
+	ledger, err := repo.GetDeletedItemSessionCostLedger(ctx)
+	require.NoError(t, err)
+	require.Len(t, ledger, 1)
+	assert.Equal(t, "conv-ledger-1", ledger[0].ConversationUUID)
+	assert.Equal(t, "headless-review-1", ledger[0].SessionUUID)
+	assert.Equal(t, SessionRoleReview, ledger[0].SessionRole)
+	assert.Equal(t, item.ID, ledger[0].ItemID)
+	assert.Equal(t, "ledger item", ledger[0].ItemTitle)
+	assert.InDelta(t, 1.23, ledger[0].EstimatedCostUsd, 0.001)
+	assert.True(t, ledger[0].CostPriced)
+}
+
 func TestEntRepository_UpdateItemSessionConversationUUID_RoundTrips(t *testing.T) {
 	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)

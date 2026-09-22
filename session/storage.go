@@ -1452,6 +1452,12 @@ func (s *Storage) GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]Item
 	return s.repo.GetAllItemSessionsWithBacklogInfo(ctx)
 }
 
+// GetDeletedItemSessionCostLedger returns the durable deleted-item cost
+// ledger. Delegates to EntRepository; returns an error for non-ent backends.
+func (s *Storage) GetDeletedItemSessionCostLedger(ctx context.Context) ([]DeletedItemSessionCostEntry, error) {
+	return s.repo.GetDeletedItemSessionCostLedger(ctx)
+}
+
 // --- Session Goal ---
 
 // SetSessionGoal upserts the goal for a session (1:1 per session_uuid).

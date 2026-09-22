@@ -1472,15 +1472,38 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 	result := backlogItemToData(existing)
 	r.attachItemSessionsForPublish(ctx, &result)
 
-	// Resolve item_session IDs first so we can delete their review_verdicts.
-	itemSessionIDs, err := r.client.ItemSession.Query().
+	// Resolve full item_session rows (not just IDs) so their cost fields can be
+	// preserved in the deleted-cost ledger below before they're hard-deleted.
+	itemSessions, err := r.client.ItemSession.Query().
 		Where(itemsession.HasBacklogItemWith(backlogitem.ID(parsedID))).
-		IDs(ctx)
+		All(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to query item sessions for backlog item %s: %w", id, err)
 	}
 
-	if len(itemSessionIDs) > 0 {
+	if len(itemSessions) > 0 {
+		// Story 3: preserve each ItemSession's cost attribution in a durable
+		// ledger before it's hard-deleted below — see
+		// session/ent/schema/deleted_item_session_cost.go's doc comment for why
+		// this is additive-ledger rather than soft-delete.
+		ledgerBuilders := make([]*ent.DeletedItemSessionCostCreate, 0, len(itemSessions))
+		itemSessionIDs := make([]uuid.UUID, 0, len(itemSessions))
+		for _, is := range itemSessions {
+			itemSessionIDs = append(itemSessionIDs, is.ID)
+			ledgerBuilders = append(ledgerBuilders, r.client.DeletedItemSessionCost.Create().
+				SetConversationUUID(is.ConversationUUID).
+				SetSessionUUID(is.SessionUUID).
+				SetSessionRole(is.SessionRole).
+				SetItemID(parsedID.String()).
+				SetItemTitle(existing.Title).
+				SetEstimatedCostUsd(is.EstimatedCostUsd).
+				SetCostPriced(is.CostPriced).
+				SetCreatedAt(is.CreatedAt))
+		}
+		if _, err := r.client.DeletedItemSessionCost.CreateBulk(ledgerBuilders...).Save(ctx); err != nil {
+			return fmt.Errorf("failed to write deleted-cost ledger for backlog item %s: %w", id, err)
+		}
+
 		_, err = r.client.ReviewVerdict.Delete().
 			Where(reviewverdict.HasItemSessionWith(itemsession.IDIn(itemSessionIDs...))).
 			Exec(ctx)
@@ -2822,6 +2845,33 @@ func (r *EntRepository) GetAllItemSessionsWithBacklogInfo(ctx context.Context) (
 			EstimatedCostUsd: is.EstimatedCostUsd,
 			CostPriced:       is.CostPriced,
 			CreatedAt:        is.CreatedAt,
+		})
+	}
+	return results, nil
+}
+
+// GetDeletedItemSessionCostLedger returns every DeletedItemSessionCost row —
+// the durable cost-attribution ledger DeleteBacklogItem writes before
+// hard-deleting an item's ItemSession rows (Story 3). Used by Insights to
+// keep a deleted item's cost attributed by conversation UUID after the item
+// itself is gone.
+func (r *EntRepository) GetDeletedItemSessionCostLedger(ctx context.Context) ([]DeletedItemSessionCostEntry, error) {
+	//nolint:entfullscan feeds the Insights dashboard, which needs the full ledger.
+	rows, err := r.client.DeletedItemSessionCost.Query().All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query deleted item session cost ledger: %w", err)
+	}
+	results := make([]DeletedItemSessionCostEntry, 0, len(rows))
+	for _, row := range rows {
+		results = append(results, DeletedItemSessionCostEntry{
+			ConversationUUID: row.ConversationUUID,
+			SessionUUID:      row.SessionUUID,
+			SessionRole:      row.SessionRole,
+			ItemID:           row.ItemID,
+			ItemTitle:        row.ItemTitle,
+			EstimatedCostUsd: row.EstimatedCostUsd,
+			CostPriced:       row.CostPriced,
+			CreatedAt:        row.CreatedAt,
 		})
 	}
 	return results, nil

@@ -85,6 +85,30 @@ func (f *fakeBacklogReader) GetAllItemSessionsWithBacklogInfo(_ context.Context)
 var _ insightsBacklogReader = (*fakeBacklogReader)(nil)
 
 // --------------------------------------------------------------------------
+// Fake insightsDeletedCostLedgerReader (Story 3 — deleted-item cost ledger)
+// --------------------------------------------------------------------------
+
+// fakeBacklogReaderWithLedger extends fakeBacklogReader with a controllable
+// deleted-item cost ledger, mirroring fakeBacklogReader's controllable-entries
+// shape for the second seam InsightsService optionally asserts for.
+type fakeBacklogReaderWithLedger struct {
+	fakeBacklogReader
+	ledgerEntries []session.DeletedItemSessionCostEntry
+	ledgerErr     error
+}
+
+func (f *fakeBacklogReaderWithLedger) GetDeletedItemSessionCostLedger(_ context.Context) ([]session.DeletedItemSessionCostEntry, error) {
+	if f.ledgerErr != nil {
+		return nil, f.ledgerErr
+	}
+	return f.ledgerEntries, nil
+}
+
+// Compile-time assertions: fakeBacklogReaderWithLedger must implement both seams.
+var _ insightsBacklogReader = (*fakeBacklogReaderWithLedger)(nil)
+var _ insightsDeletedCostLedgerReader = (*fakeBacklogReaderWithLedger)(nil)
+
+// --------------------------------------------------------------------------
 // Helpers
 // --------------------------------------------------------------------------
 
@@ -1960,6 +1984,66 @@ func TestDismissFinding_WhenFinishedSessionRecomputedIdentically_ExpectDismissal
 	second, err := svc2.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
 	require.NoError(t, err)
 	assert.Empty(t, second.Msg.Findings, "an unchanged finished session's recomputation must keep matching the earlier dismissal")
+}
+
+// TestGetInsightsSummary_should_IncludeDeletedItemLedgerCost_When_NoMatchingTranscript
+// (Story 3) proves a deleted item's cost ledger row is folded into
+// total_cost_usd/role_breakdown when no transcript in the current token-store
+// scan carries its conversation UUID — the ledger-only equivalent of Story
+// 4.1.4's transcript-less ItemSession fold-in.
+func TestGetInsightsSummary_should_IncludeDeletedItemLedgerCost_When_NoMatchingTranscript(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	backlogReader := &fakeBacklogReaderWithLedger{
+		ledgerEntries: []session.DeletedItemSessionCostEntry{
+			{ConversationUUID: "conv-deleted-1", SessionUUID: "sess-old-1", SessionRole: session.SessionRoleReview,
+				ItemID: "deleted-1", ItemTitle: "Deleted Item", EstimatedCostUsd: 0.5, CostPriced: true, CreatedAt: now},
+		},
+	}
+	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), backlogReader)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+	require.NoError(t, err)
+
+	assert.InDelta(t, 0.5, resp.Msg.TotalCostUsd, 0.0001)
+	require.Len(t, resp.Msg.RoleBreakdown, 1)
+	assert.Equal(t, session.SessionRoleReview, resp.Msg.RoleBreakdown[0].SessionRole)
+	require.Len(t, resp.Msg.RoleBreakdown[0].Items, 1)
+	assert.Equal(t, "deleted-1", resp.Msg.RoleBreakdown[0].Items[0].ItemId)
+	assert.Equal(t, "Deleted Item", resp.Msg.RoleBreakdown[0].Items[0].ItemTitle)
+}
+
+// TestGetInsightsSummary_WhenDeletedItemTranscriptStillOnDisk_ExpectAttributedByConversationUUIDAndNotDoubleCountedByLedger
+// (Story 3) proves that when a deleted item's ledger row's conversation UUID
+// still matches a transcript in the current scan (the deleted session's JSONL
+// is still on disk), the transcript path attributes it via
+// sessionMetaForSessions' ledger fold, and the raw-cost ledger fold-in pass
+// does not additionally sum the ledger row's own EstimatedCostUsd on top.
+func TestGetInsightsSummary_WhenDeletedItemTranscriptStillOnDisk_ExpectAttributedByConversationUUIDAndNotDoubleCountedByLedger(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("conv-deleted-2", "claude-sonnet-4", "/wt/deleted", 1000, 500, 0, now),
+	}
+	// No live session record: the transcript is an orphan by path/UUID association.
+	associator := tokens.NewAssociator(&fakeSessionStorage{})
+	backlogReader := &fakeBacklogReaderWithLedger{
+		ledgerEntries: []session.DeletedItemSessionCostEntry{
+			{ConversationUUID: "conv-deleted-2", SessionUUID: "sess-old-2", SessionRole: session.SessionRoleWork,
+				ItemID: "deleted-2", ItemTitle: "T2", EstimatedCostUsd: 9, CostPriced: true, CreatedAt: now},
+		},
+	}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+	require.NoError(t, err)
+
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Equal(t, session.SessionRoleWork, resp.Msg.Sessions[0].SessionRole)
+	require.Len(t, resp.Msg.RoleBreakdown, 1)
+	assert.Equal(t, session.SessionRoleWork, resp.Msg.RoleBreakdown[0].SessionRole)
+	// The ledger row's own $9 must not be folded in on top of its transcript.
+	assert.InDelta(t, resp.Msg.Sessions[0].EstimatedCostUsd, resp.Msg.TotalCostUsd, 1e-9)
 }
 
 func TestGetInsightsSummary_WhenSessionDeleted_ExpectAttributedByConversationUUIDAndNotDoubleCounted(t *testing.T) {
