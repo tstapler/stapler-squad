@@ -40,7 +40,19 @@ Work-session rows also never record `estimated_cost_usd`; headless triage/review
    path (e.g. "/home/tstapler" from a `claude` run straight in $HOME) was matching every session rooted
    anywhere under it. Verified against live data: 288 sessions / $90 were misattributed this way — lower
    than the ~290/$307 first estimated, which conflated this bug with other no-role associations.
-5. **UI bucket split (not started).** Separate "external (not stapler-squad)" from "unattributed".
+5. **UI bucket split (done).** `groupUnattributed` (`insights_service.go`) now also sets
+   `meta.Role = "external"` when a no-attribution session's project path doesn't match
+   `worktreeTitlePattern` — a Claude run in some unrelated repo (kibitzer, tymux, the personal wiki),
+   as distinct from a stapler-squad worktree session that just never got linked to a backlog item.
+   No other backend change needed: `accumulateRoleCost`/`buildRoleBreakdown` already bucket generically
+   by `Role` string, so `"external"` flows through existing aggregation, sorting and `StageCostChart`'s
+   `r.sessionRole || "unattributed"` label with no code change there. `UnattributedByTitleTable.tsx`
+   takes a `title` prop (was hardcoded); `InsightsDashboard.tsx` renders it twice, once per bucket, each
+   independently empty-hiding. Verified against live data (2026-09-21): kibitzer/consolette/tymux/wiki/
+   dotfiles/mcp/tstapler(bare-home) correctly land "external"; steering/ci-speed stay "" (unattributed).
+   Caveat, deliberately unaddressed: a raw `claude` run directly in the main stapler-squad checkout
+   (no worktree) is indistinguishable from any other external repo and also lands "external" — no
+   portable way to know "the" main-repo path across machines/users.
 6. **Backfill existing rows (done, low yield).** `InsightsService.BackfillConversationUUIDs` runs once
    per process on the first summary request. Links a worktree transcript to an unlinked, non-live
    ItemSession (real UUID) created 0-3 min before the transcript's first message, only if exactly one

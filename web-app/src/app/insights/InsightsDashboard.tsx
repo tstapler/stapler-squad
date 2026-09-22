@@ -230,7 +230,14 @@ function InsightsDashboardInner() {
               />
             </div>
             <UnattributedByTitleTable
+              title="Unattributed Cost by Session"
+              testId="unattributed-by-title-table"
               items={summary.roleBreakdown.find((r) => r.sessionRole === "")?.items ?? []}
+            />
+            <UnattributedByTitleTable
+              title="External (Non-Stapler-Squad) Cost by Session"
+              testId="external-by-title-table"
+              items={summary.roleBreakdown.find((r) => r.sessionRole === "external")?.items ?? []}
             />
           </section>
 

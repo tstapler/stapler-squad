@@ -4,19 +4,27 @@ import { fmtCost } from "./insightsFormatters";
 import type { ItemRoleCost } from "@/gen/session/v1/insights_pb";
 
 /**
- * Breaks the "unattributed" role_breakdown bucket (role_breakdown[].session_role
- * === "") down by session title — the server groups it that way (see
- * groupUnattributed, server/services/insights_service.go) precisely so this
- * table isn't one shapeless "unattributed" blob. `items` is already sorted by
- * cost descending (buildRoleBreakdown's own sort). Renders nothing when empty,
+ * Breaks a no-backlog-attribution role_breakdown bucket (session_role === ""
+ * or "external") down by session title — the server groups both that way
+ * (see groupUnattributed, server/services/insights_service.go) precisely so
+ * this table isn't one shapeless blob. `items` is already sorted by cost
+ * descending (buildRoleBreakdown's own sort). Renders nothing when empty,
  * matching ItemStageCostTable's "absent, not an empty table" convention.
  */
-export function UnattributedByTitleTable({ items }: { items: ItemRoleCost[] }) {
+export function UnattributedByTitleTable({
+  title: heading,
+  items,
+  testId = "unattributed-by-title-table",
+}: {
+  title: string;
+  items: ItemRoleCost[];
+  testId?: string;
+}) {
   if (items.length === 0) return null;
 
   return (
-    <div className={card} data-testid="unattributed-by-title-table">
-      <div className={title}>Unattributed Cost by Session</div>
+    <div className={card} data-testid={testId}>
+      <div className={title}>{heading}</div>
       <table className={table}>
         <thead>
           <tr>

@@ -1684,8 +1684,11 @@ func TestGetInsightsSummary_should_SumRoleBreakdownToTotalCost_When_MultipleRole
 	assert.InDelta(t, 0.15, byRole[session.SessionRoleReview].EstimatedCostUsd, 0.0001)
 	require.Contains(t, byRole, session.SessionRoleWork)
 	assert.InDelta(t, 1.40, byRole[session.SessionRoleWork].EstimatedCostUsd, 0.0001)
-	require.Contains(t, byRole, "", "an unattributed session must bucket under an explicit \"\" role, not be dropped")
-	assert.InDelta(t, 0.05, byRole[""].EstimatedCostUsd, 0.0001)
+	// sess-adhoc's project path ("/proj") isn't a stapler-squad worktree path, so
+	// groupUnattributed (Story 5) buckets it under "external" rather than "" —
+	// it must still bucket somewhere explicit, not be dropped.
+	require.Contains(t, byRole, "external", "an unattributed, non-worktree session must bucket under an explicit \"external\" role, not be dropped")
+	assert.InDelta(t, 0.05, byRole["external"].EstimatedCostUsd, 0.0001)
 
 	require.Len(t, byRole[session.SessionRoleTriage].Items, 1)
 	assert.Equal(t, "bl_abc123", byRole[session.SessionRoleTriage].Items[0].ItemId)
@@ -2077,11 +2080,9 @@ func TestGetInsightsSummary_UnattributedRoleBreakdown_GroupsByWorktreeTitle(t *t
 	now := time.Now().UTC()
 	wt1 := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25"
 	wt2 := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25/tests/e2e"
-	other := "/home/u/code/github/com/tstapler/kibitzer"
 	results := []*tokens.ParseResult{
 		newResult("u1", "claude-sonnet-4", wt1, 1000, 500, 0, now),
 		newResult("u2", "claude-sonnet-4", wt2, 1000, 500, 0, now),
-		newResult("u3", "claude-sonnet-4", other, 1000, 500, 0, now),
 	}
 	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), nil)
 
@@ -2091,13 +2092,45 @@ func TestGetInsightsSummary_UnattributedRoleBreakdown_GroupsByWorktreeTitle(t *t
 	require.Len(t, resp.Msg.RoleBreakdown, 1)
 	unattributed := resp.Msg.RoleBreakdown[0]
 	assert.Equal(t, "", unattributed.SessionRole)
-	require.Len(t, unattributed.Items, 2, "two distinct titles: steam-controls (2 sessions) and kibitzer (1)")
-	byTitle := map[string]*sessionv1.ItemRoleCost{}
-	for _, it := range unattributed.Items {
-		byTitle[it.ItemTitle] = it
+	require.Len(t, unattributed.Items, 1, "one title: steam-controls (2 sessions, same worktree)")
+	assert.Equal(t, "steam-controls", unattributed.Items[0].ItemTitle)
+	assert.EqualValues(t, 2, unattributed.Items[0].SessionCount)
+}
+
+// TestGetInsightsSummary_UnattributedRoleBreakdown_SplitsExternalFromWorktree
+// (Story 5) asserts groupUnattributed's role split: a worktree-path session
+// with no backlog attribution stays in the "" (plain unattributed) bucket,
+// while a non-worktree-path session with no backlog attribution — some other
+// repo entirely (kibitzer here) — lands in a separate "external" bucket.
+func TestGetInsightsSummary_UnattributedRoleBreakdown_SplitsExternalFromWorktree(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	worktreePath := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25"
+	externalPath := "/home/u/code/github/com/tstapler/kibitzer"
+	results := []*tokens.ParseResult{
+		newResult("u1", "claude-sonnet-4", worktreePath, 1000, 500, 0, now),
+		newResult("u2", "claude-sonnet-4", externalPath, 1000, 500, 0, now),
 	}
-	require.Contains(t, byTitle, "steam-controls")
-	assert.EqualValues(t, 2, byTitle["steam-controls"].SessionCount)
-	require.Contains(t, byTitle, "kibitzer")
-	assert.EqualValues(t, 1, byTitle["kibitzer"].SessionCount)
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), nil)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.RoleBreakdown, 2)
+	byRole := map[string]*sessionv1.RoleCostBreakdown{}
+	for _, r := range resp.Msg.RoleBreakdown {
+		byRole[r.SessionRole] = r
+	}
+
+	require.Contains(t, byRole, "")
+	unattributed := byRole[""]
+	require.Len(t, unattributed.Items, 1)
+	assert.Equal(t, "steam-controls", unattributed.Items[0].ItemTitle)
+	assert.EqualValues(t, 1, unattributed.Items[0].SessionCount)
+
+	require.Contains(t, byRole, "external")
+	external := byRole["external"]
+	require.Len(t, external.Items, 1)
+	assert.Equal(t, "kibitzer", external.Items[0].ItemTitle)
+	assert.EqualValues(t, 1, external.Items[0].SessionCount)
 }

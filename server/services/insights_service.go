@@ -128,6 +128,15 @@ func sessionDisplayTitle(projectPath string) string {
 // break down by session instead. The untrackedItemIDPrefix keeps synthetic IDs
 // unambiguous from real backlog-item UUIDs (relied on by BacklogItemDetail's
 // itemId match).
+//
+// Story 5: meta.Role is additionally set to "external" when projectPath isn't
+// a stapler-squad worktree path — a Claude run in some unrelated repo
+// (kibitzer, tymux, the personal wiki, ...), as distinct from a stapler-squad
+// session that simply never got linked to a backlog item. Caveat: a raw
+// `claude` run directly inside the main stapler-squad checkout itself (no
+// worktree) is indistinguishable from any other external repo and lands here
+// too — there's no reliable, portable way to know "the" main-repo path across
+// machines/users, so this is accepted, not solved.
 func groupUnattributed(meta SessionMeta, projectPath string) SessionMeta {
 	if meta.Role != "" {
 		return meta
@@ -135,6 +144,9 @@ func groupUnattributed(meta SessionMeta, projectPath string) SessionMeta {
 	title := sessionDisplayTitle(projectPath)
 	if title == "" {
 		return meta
+	}
+	if !worktreeTitlePattern.MatchString(projectPath) {
+		meta.Role = "external"
 	}
 	meta.ItemID = untrackedItemIDPrefix + title
 	meta.ItemTitle = title
