@@ -117,17 +117,7 @@ func resumeFromHibernationLocked(s *instanceState, _ context.Context) {
 		if err := i.Start(false); err != nil {
 			log.Error("hibernation resume: failed to start session",
 				"session", i.Title, "err", err.Error())
-			i.send(func(s *instanceState) {
-				// Hold i.mu across the write and buildSnapshot so this is ordered
-				// against the legacy direct-lock setters (MarkViewed & co.) that
-				// read every field via buildSnapshot under i.mu.Lock() from
-				// outside the actor. See runActor's doc comment in actor.go.
-				s.inst.mu.Lock()
-				s.inst.loadStatus(Hibernated)
-				snap := buildSnapshot(s.inst)
-				s.inst.mu.Unlock()
-				s.inst.snapshot.Store(snap)
-			})
+			i.send(rollbackFailedResume)
 			return
 		}
 		if i.controllerManager.GetStatusManager() != nil {
@@ -162,41 +152,21 @@ func JoinHibernation(i *Instance) {
 	}
 }
 
-// resumeFromHibernation re-launches the AI process and cleans up the checkpoint.
-// Called from the Hibernated → Active After hook in a goroutine (legacy path used
-// by state_machine.go transitionDefs After hooks — kept for StartWithCleanup path).
-// Must NOT hold stateMutex.
-func (i *Instance) resumeFromHibernation(ctx context.Context) {
-	// Re-launch via the cold-restore path. started is atomic.Bool (BUG-025
-	// follow-up) so this write is race-free without needing mu — it's also
-	// excluded from InstanceSnapshot, so no buildSnapshot() call is needed here.
-	i.started.Store(false)
-	if err := i.Start(false); err != nil {
-		log.Error("hibernation resume: failed to start session",
-			"session", i.Title, "err", err.Error())
-		// Roll back to Hibernated on failure
-		i.mu.Lock()
-		i.loadStatus(Hibernated)
-		i.snapshot.Store(buildSnapshot(i))
+// rollbackFailedResume reverts Status to Hibernated after a failed
+// hibernation-resume Start(), but only if the instance is still Active --
+// i.e. nothing else legitimately transitioned it away in the meantime (e.g.
+// a concurrent StopByUser() call landing before this async rollback runs).
+// Applying the rollback unconditionally would silently clobber that later,
+// legitimate transition with a stale Hibernated status.
+func rollbackFailedResume(s *instanceState) {
+	i := s.inst
+	i.mu.Lock()
+	if i.Status != Active {
 		i.mu.Unlock()
 		return
 	}
-	// Start the controller and session driver
-	if i.controllerManager.GetStatusManager() != nil {
-		if err := i.StartController(); err != nil {
-			log.Warn("hibernation resume: failed to start controller",
-				"session", i.Title, "err", err)
-		}
-	}
-	StartSessionDriver(i, i.GetEffectiveRootDir())
-	// Clean up checkpoint files
-	cfg := appconfig.LoadConfig()
-	checkpointDir, err := cfg.HibernationCheckpointDirOrDefault()
-	if err == nil && checkpointDir != "" {
-		writer := hibernation.NewWriter(checkpointDir)
-		if err := writer.Delete(i.UUID); err != nil {
-			log.Warn("hibernation resume: failed to delete checkpoint",
-				"session", i.Title, "err", err)
-		}
-	}
+	i.loadStatus(Hibernated)
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 }

@@ -52,18 +52,22 @@ var transitionDefs = []TransitionDef{
 	{From: Failed, To: Creating},
 	{From: Active, To: Paused},
 	{From: Active, To: Stopped},
-	{From: Active, To: Hibernated, After: func(ctx context.Context, i *Instance) {
-		// After is called with mu held — launch heavy work in a goroutine.
-		go i.hibernateProcess(ctx)
-	}},
+	// Active->Hibernated and Hibernated->Active carry no After hook: the only
+	// production path to either edge is transitionToLocked (via Hibernate()/
+	// ResumeFromHibernation()), which handles the hibernate/resume side effects
+	// inline via hibernateProcessLocked/resumeFromHibernationLocked instead of
+	// through this table (see transitionToLocked's doc comment) and tracks
+	// those goroutines in hibernateWG so JoinHibernation can wait on them. A
+	// prior After hook here (`go i.hibernateProcess`/`go i.resumeFromHibernation`)
+	// fired only when a caller invoked transitionTo directly — untracked by
+	// hibernateWG — and raced under -race against callers that violate
+	// transitionTo's "caller holds i.mu" contract.
+	{From: Active, To: Hibernated},
 	{From: Active, To: Crashed},
 	{From: Paused, To: Active},
 	{From: Paused, To: Stopped},
 	{From: Stopped, To: Active},
-	{From: Hibernated, To: Active, After: func(ctx context.Context, i *Instance) {
-		// After is called with mu held — launch heavy work in a goroutine.
-		go i.resumeFromHibernation(ctx)
-	}},
+	{From: Hibernated, To: Active},
 	{From: Hibernated, To: Stopped},
 	{From: Crashed, To: Active},
 	{From: Crashed, To: Stopped},
