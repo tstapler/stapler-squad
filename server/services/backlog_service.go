@@ -1217,7 +1217,10 @@ func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []se
 }
 
 // cleanupItemWorktreesExcept is cleanupItemWorktrees with one path exempted from
-// removal. Reopen/rework spawns reuse the same "backlog/<item>" branch and worktree
+// removal. It also owns backlog-scaffolding cleanup (CleanupSlashCommands,
+// CleanupBacklogContextFile) for every worktree it removes — a second responsibility
+// beyond worktree removal itself; see CleanupSlashCommands' doc comment for why that's
+// safe here. Reopen/rework spawns reuse the same "backlog/<item>" branch and worktree
 // directory across revisions (see SpawnSessionFromItem step 10's comment) rather than
 // creating a fresh one, so a prior work session's worktree row can point at the exact
 // path the brand-new session just started using. Cleaning that up unconditionally —

@@ -228,13 +228,12 @@ func buildBlockAndDuplicateCommands(itemID string) map[string]string {
 // CleanupSlashCommands removes the backlog slash command directory.
 // Logs but does not return an error if the directory is absent.
 //
-// Called from ReconcilePRPending (session/backlog_lifecycle.go) once an item's PR has
-// merged and the item transitions to done — NOT from review exit or any earlier
-// teardown path. shipViaAgentOrFallback relies on ship.md still being present in the
-// worktree after a work session exits review, so it can re-invoke `/backlog/ship` as a
-// one-shot headless call; by the time ReconcilePRPending sees a merged PR, that flow has
-// already completed and ship.md is no longer needed. Also exported for direct/manual
-// invocation and exercised by tests.
+// Called from ReconcilePRPending (session/backlog_lifecycle_pr.go) once an item's PR
+// merges, and from cleanupItemWorktreesExcept (server/services/backlog_service.go) on
+// archive/reopen/tombstone. Both exclude worktrees with a live/EndedAt==nil work
+// session, so ship.md — which shipViaAgentOrFallback needs present to re-invoke
+// `/backlog/ship` as a one-shot headless call — is never removed out from under it.
+// Also exported for direct/manual invocation and exercised by tests.
 func CleanupSlashCommands(worktreePath string) error {
 	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
 	if err := os.RemoveAll(cmdDir); err != nil {
@@ -302,16 +301,16 @@ func WriteBacklogContextFile(item *BacklogItemData, priorSessions []ItemSessionS
 // CleanupBacklogContextFile removes .backlog-context.md from the worktree root.
 // Logs but does not fail if the file is absent.
 //
-// Called from ReconcilePRPending (session/backlog_lifecycle.go) once an item's PR has
-// merged and the item transitions to done. Worktree teardown (Instance.Kill, Instance.Pause)
-// often already removes the entire worktree directory by that point, so this is frequently a
-// no-op — the file is untracked anyway (via addWorktreeExcludes + selfHealWorktreeScaffolding
-// + the commit-time staging guard), so it never appears in a git diff/PR regardless of how
-// long it lingers on disk. Kept as a best-effort cleanup for the case where the worktree is
-// still around, and exported for direct/manual invocation and exercised by tests. Do not wire
-// this into a review-exit or ship-time teardown path — see CleanupSlashCommands' doc comment
-// for why (ship.md in particular is deliberately relied on to still exist after a work session
-// ends, until the PR actually merges).
+// Called from ReconcilePRPending (session/backlog_lifecycle_pr.go) once an item's PR
+// merges, and from cleanupItemWorktreesExcept (server/services/backlog_service.go) on
+// archive/reopen/tombstone — see CleanupSlashCommands' doc comment for why neither call
+// site can race a live ship.md-dependent session. Worktree teardown (Instance.Kill,
+// Instance.Pause) often already removes the entire worktree directory by that point, so
+// this is frequently a no-op — the file is untracked anyway (via addWorktreeExcludes +
+// selfHealWorktreeScaffolding + the commit-time staging guard), so it never appears in a
+// git diff/PR regardless of how long it lingers on disk. Kept as a best-effort cleanup
+// for the case where the worktree is still around, and exported for direct/manual
+// invocation and exercised by tests.
 func CleanupBacklogContextFile(worktreePath string) error {
 	path := filepath.Join(worktreePath, ".backlog-context.md")
 	if err := os.Remove(path); err != nil {

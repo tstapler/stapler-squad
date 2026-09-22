@@ -2750,6 +2750,93 @@ func TestCleanupItemWorktreesExcept_should_notTellScannerToStopWatching_When_Pat
 	assert.NoError(t, statErr, "sanity: the exempted worktree directory must still exist")
 }
 
+// TestCleanupItemWorktreesExcept_should_RemoveBacklogScaffolding_When_WorktreeCleanupSucceeds
+// is the call-site regression test for cleanupItemWorktreesExcept's own
+// CleanupSlashCommands/CleanupBacklogContextFile calls (archive/reopen/tombstone
+// paths) — mirroring session/backlog_lifecycle_test.go's
+// TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged for the other call
+// site. The worktree removal itself already deletes these files as a side effect;
+// this pins that the explicit calls also run, not just that the directory disappears.
+func TestCleanupItemWorktreesExcept_should_RemoveBacklogScaffolding_When_WorktreeCleanupSucceeds(t *testing.T) {
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	const workBranch = "backlog/scaffolding-cleanup-test"
+	workWT := filepath.Join(t.TempDir(), "work-wt")
+	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+
+	cmdDir := filepath.Join(workWT, ".claude", "commands", "backlog")
+	require.NoError(t, os.MkdirAll(cmdDir, 0o755))
+	statusPath := filepath.Join(cmdDir, "status.md")
+	require.NoError(t, os.WriteFile(statusPath, []byte("stale status"), 0o644))
+	contextPath := filepath.Join(workWT, ".backlog-context.md")
+	require.NoError(t, os.WriteFile(contextPath, []byte("stale context"), 0o644))
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	svc.SetRepoWatchRemover(&fakeRepoWatchRemover{})
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Scaffolding cleanup test item",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	attachPRFixWorkSession(t, storage, repo, item, "scaffolding-cleanup-work-uuid", repoPath, workWT, workBranch)
+
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(context.Background(), sessions, "")
+
+	_, statErr := os.Stat(statusPath)
+	assert.True(t, os.IsNotExist(statErr), "slash command scaffolding must be cleaned up")
+	_, statErr = os.Stat(contextPath)
+	assert.True(t, os.IsNotExist(statErr), ".backlog-context.md must be cleaned up")
+}
+
+// TestCleanupItemWorktreesExcept_should_KeepBacklogScaffolding_When_PathIsExempted
+// proves the exempted (still-in-use, reused across a rework round) worktree keeps its
+// scaffolding — cleanupItemWorktreesExcept must not reach into a worktree a brand-new
+// session is actively using.
+func TestCleanupItemWorktreesExcept_should_KeepBacklogScaffolding_When_PathIsExempted(t *testing.T) {
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	const workBranch = "backlog/scaffolding-except-test"
+	workWT := filepath.Join(t.TempDir(), "work-wt")
+	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+
+	cmdDir := filepath.Join(workWT, ".claude", "commands", "backlog")
+	require.NoError(t, os.MkdirAll(cmdDir, 0o755))
+	shipPath := filepath.Join(cmdDir, "ship.md")
+	require.NoError(t, os.WriteFile(shipPath, []byte("ship instructions"), 0o644))
+	contextPath := filepath.Join(workWT, ".backlog-context.md")
+	require.NoError(t, os.WriteFile(contextPath, []byte("live context"), 0o644))
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	svc.SetRepoWatchRemover(&fakeRepoWatchRemover{})
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Scaffolding except-path test item",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	attachPRFixWorkSession(t, storage, repo, item, "scaffolding-except-work-uuid", repoPath, workWT, workBranch)
+
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(context.Background(), sessions, workWT)
+
+	_, statErr := os.Stat(shipPath)
+	assert.NoError(t, statErr, "ship.md must survive on the exempted, still-in-use worktree")
+	_, statErr = os.Stat(contextPath)
+	assert.NoError(t, statErr, ".backlog-context.md must survive on the exempted, still-in-use worktree")
+}
+
 // TestAutoReopenForPRFix_should_MergeAndPushMain_When_BranchIsStaleButMergesCleanly
 // verifies the preventive-sync path: a fix landed on main after the PR's branch was
 // created (drift unrelated to the PR's own diff). AutoReopenForPRFix must merge main
