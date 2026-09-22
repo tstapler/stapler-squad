@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 // backfillWindow is how long after an ItemSession's creation its transcript's first
@@ -51,30 +52,8 @@ func (s *InsightsService) BackfillConversationUUIDs(ctx context.Context) (int, e
 		}
 	}
 
-	var candidates []session.ItemSessionBacklogEntry
-	for _, e := range entries {
-		// A synthetic UUID (headless-*, empty-diff-*, ...) never had a session; live
-		// sessions get stamped by EntRepository.Delete instead.
-		if _, perr := uuid.Parse(e.SessionUUID); perr != nil || e.ConversationUUID != "" || liveSessions[e.SessionUUID] || e.CreatedAt.IsZero() {
-			continue
-		}
-		candidates = append(candidates, e)
-	}
-
-	type transcript struct {
-		conversationUUID string
-		firstTs          time.Time
-	}
-	var transcripts []transcript
-	for _, r := range s.store.GetAll() {
-		if r == nil || r.SessionUUID == "" || claimed[r.SessionUUID] || liveConversations[r.SessionUUID] || !strings.Contains(r.ProjectPath, "/worktrees/") {
-			continue
-		}
-		if first, _ := sessionTimestamps(r); !first.IsZero() {
-			transcripts = append(transcripts, transcript{r.SessionUUID, first})
-		}
-	}
-	sort.Slice(transcripts, func(i, j int) bool { return transcripts[i].firstTs.Before(transcripts[j].firstTs) })
+	candidates := backfillCandidates(entries, liveSessions)
+	transcripts := backfillTranscripts(s.store.GetAll(), claimed, liveConversations)
 
 	stamped := 0
 	used := make(map[string]bool) // ItemSession IDs stamped this run
@@ -111,4 +90,43 @@ func (s *InsightsService) BackfillConversationUUIDs(ctx context.Context) (int, e
 		log.Info("insights backfill: linked historical transcripts to item sessions", "count", stamped)
 	}
 	return stamped, nil
+}
+
+// backfillTranscript is a transcript's conversation UUID and first-message time,
+// the two fields the match loop in BackfillConversationUUIDs needs.
+type backfillTranscript struct {
+	conversationUUID string
+	firstTs          time.Time
+}
+
+// backfillCandidates filters entries down to ItemSessions eligible for stamping: a
+// real (non-synthetic) session UUID, not already linked, and not currently live.
+func backfillCandidates(entries []session.ItemSessionBacklogEntry, liveSessions map[string]bool) []session.ItemSessionBacklogEntry {
+	var candidates []session.ItemSessionBacklogEntry
+	for _, e := range entries {
+		// A synthetic UUID (headless-*, empty-diff-*, ...) never had a session; live
+		// sessions get stamped by EntRepository.Delete instead.
+		if _, perr := uuid.Parse(e.SessionUUID); perr != nil || e.ConversationUUID != "" || liveSessions[e.SessionUUID] || e.CreatedAt.IsZero() {
+			continue
+		}
+		candidates = append(candidates, e)
+	}
+	return candidates
+}
+
+// backfillTranscripts filters transcript records down to worktree-backed sessions
+// not already claimed or live, sorted by first-message time so the match loop in
+// BackfillConversationUUIDs processes earliest transcripts first.
+func backfillTranscripts(records []*tokens.ParseResult, claimed, liveConversations map[string]bool) []backfillTranscript {
+	var transcripts []backfillTranscript
+	for _, r := range records {
+		if r == nil || r.SessionUUID == "" || claimed[r.SessionUUID] || liveConversations[r.SessionUUID] || !strings.Contains(r.ProjectPath, "/worktrees/") {
+			continue
+		}
+		if first, _ := sessionTimestamps(r); !first.IsZero() {
+			transcripts = append(transcripts, backfillTranscript{r.SessionUUID, first})
+		}
+	}
+	sort.Slice(transcripts, func(i, j int) bool { return transcripts[i].firstTs.Before(transcripts[j].firstTs) })
+	return transcripts
 }
