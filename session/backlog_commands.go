@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -82,15 +81,10 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 	return nil
 }
 
-// staleCommandFileRe matches the per-criterion slash command filenames whose
-// count varies per item — done-N.md/fail-N.md — as opposed to status.md,
-// review.md, ship.md, help.md, which every item has regardless of AC count.
-var staleCommandFileRe = regexp.MustCompile(`^(done|fail)-\d+\.md$`)
-
-// pruneStaleSlashCommandFiles removes done-N.md/fail-N.md files in cmdDir not present in
-// newFiles (leftover from a prior item with more acceptance criteria). Never touches the
-// fixed status/review/ship/help.md set. Best-effort — logs and continues past a single
-// removal failure rather than failing the whole write.
+// pruneStaleSlashCommandFiles removes every file in cmdDir not present in newFiles: leftovers
+// from a prior item (more acceptance criteria) or a different pipeline mode's template set
+// would otherwise keep a stale item_id callable. cmdDir is stapler-squad-owned scaffolding.
+// Best-effort — logs and continues past a single removal failure rather than failing the write.
 func pruneStaleSlashCommandFiles(cmdDir string, newFiles map[string]string) {
 	entries, err := os.ReadDir(cmdDir)
 	if err != nil {
@@ -101,9 +95,6 @@ func pruneStaleSlashCommandFiles(cmdDir string, newFiles map[string]string) {
 			continue
 		}
 		name := e.Name()
-		if !staleCommandFileRe.MatchString(name) {
-			continue
-		}
 		if _, keep := newFiles[name]; keep {
 			continue
 		}

@@ -1203,6 +1203,15 @@ export function SessionDetailView({
                   <button onClick={() => handleCopy('instanceId', session.id)} className={styles.editButton} title="Copy to clipboard">{copiedField === 'instanceId' ? '✓' : '📋'}</button>
                 </span>
               </div>
+              {session.claudeSession?.sessionId && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Claude Session ID:</span>
+                  <span className={styles.infoValue} style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
+                    {session.claudeSession.sessionId}
+                    <button onClick={() => handleCopy('claudeSessionId', session.claudeSession!.sessionId)} className={styles.editButton} title="Copy to clipboard">{copiedField === 'claudeSessionId' ? '✓' : '📋'}</button>
+                  </span>
+                </div>
+              )}
               <div className={styles.infoItem}>
                 <span className={styles.infoLabel}>Status:</span>
                 <span className={styles.infoValue}>{getStatusLabel(session.status)}</span>
