@@ -177,6 +177,21 @@ func registerTerminalTools(s *mcpserver.MCPServer, th *terminalHandlers) {
 	)
 }
 
+// sessionNotReadyResult returns a SESSION_NOT_READY error result when
+// sessionID's scrollback sequence hasn't advanced since creation (no bytes
+// ever arrived from the PTY/tmux stream) -- distinct from a command that
+// legitimately printed nothing, which still advances the sequence via the
+// shell's own prompt redraw. Returns nil when the session is ready. Shared by
+// readSessionOutput and runCommand so the two checks cannot silently diverge.
+func (th *terminalHandlers) sessionNotReadyResult(sessionID string) *mcpgo.CallToolResult {
+	if th.scrollback.CurrentSequence(sessionID) != 0 {
+		return nil
+	}
+	return errResult(ErrSessionNotReady,
+		fmt.Sprintf("session %q hasn't produced any terminal output yet", sessionID),
+		"The session's PTY/tmux stream may still be starting up. Wait a moment and retry.")
+}
+
 // ---- read_session_output ----
 
 func (th *terminalHandlers) readSessionOutput(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -215,10 +230,8 @@ func (th *terminalHandlers) readSessionOutput(_ context.Context, req mcpgo.CallT
 		return errResult(ErrSessionNotFound, fmt.Sprintf("session %q not found", sessionID), "Use list_sessions to find available sessions"), nil
 	}
 
-	if th.scrollback.CurrentSequence(sessionID) == 0 {
-		return errResult(ErrSessionNotReady,
-			fmt.Sprintf("session %q hasn't produced any terminal output yet", sessionID),
-			"The session's PTY/tmux stream may still be starting up. Wait a moment and retry."), nil
+	if res := th.sessionNotReadyResult(sessionID); res != nil {
+		return res, nil
 	}
 
 	raw, err := th.scrollback.GetRecentBytes(sessionID, maxOutputBytes)
@@ -598,14 +611,8 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 		}
 	}
 
-	// A sequence of 0 means the session's PTY/tmux stream hasn't delivered a
-	// single byte since creation -- distinct from a command that legitimately
-	// produced no output (cd, export, true), which still advances the sequence
-	// via the shell's own prompt redraw. See readSessionOutput's identical check.
-	if th.scrollback.CurrentSequence(sessionID) == 0 {
-		return errResult(ErrSessionNotReady,
-			fmt.Sprintf("session %q hasn't produced any terminal output yet", sessionID),
-			"The session's PTY/tmux stream may still be starting up. Wait a moment and retry."), nil
+	if res := th.sessionNotReadyResult(sessionID); res != nil {
+		return res, nil
 	}
 
 	// Read final output.

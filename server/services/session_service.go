@@ -2683,15 +2683,7 @@ func (s *SessionService) CreateSession(
 			if baseSHA != "" {
 				branchArgs = append(branchArgs, baseSHA)
 				if diverged, ambientBranch := git.RemoteAmbientHEADDivergesFromBase(ctx, runner, resolvedPath, baseSHA); diverged {
-					if ambientBranch != "" {
-						remoteCreationWarning = fmt.Sprintf(
-							"branched from %s's default branch %q instead of %q, which %s was checked out to and has diverged from it",
-							resolvedPath, defaultBranch, ambientBranch, resolvedPath)
-					} else {
-						remoteCreationWarning = fmt.Sprintf(
-							"branched from %s's default branch %q instead of its ambient checked-out HEAD, which has diverged from it",
-							resolvedPath, defaultBranch)
-					}
+					remoteCreationWarning = git.FormatAmbientDivergenceWarning(resolvedPath, defaultBranch, ambientBranch)
 				}
 			}
 

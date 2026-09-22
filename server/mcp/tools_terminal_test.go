@@ -174,6 +174,27 @@ func TestReadOutputSucceeds_When_ReadyWithNoNewBytes(t *testing.T) {
 	}
 }
 
+// TestSessionNotReadyResult verifies the readiness check shared by
+// readSessionOutput and runCommand (sessionNotReadyResult) directly, so the
+// two call sites cannot silently diverge from each other.
+func TestSessionNotReadyResult(t *testing.T) {
+	mgr := makeScrollbackMgr(t)
+	th := &terminalHandlers{scrollback: mgr}
+
+	if res := th.sessionNotReadyResult("never-appended"); res == nil {
+		t.Fatal("expected non-nil SESSION_NOT_READY result for a session with no scrollback yet")
+	} else if errObj, _ := parseResult(t, res)["error"].(map[string]interface{}); errObj == nil || errObj["code"] != ErrSessionNotReady {
+		t.Errorf("expected error code %q, got %v", ErrSessionNotReady, errObj)
+	}
+
+	if err := mgr.AppendOutput("has-output", []byte("$ ")); err != nil {
+		t.Fatalf("AppendOutput: %v", err)
+	}
+	if res := th.sessionNotReadyResult("has-output"); res != nil {
+		t.Errorf("expected nil (ready) once scrollback has advanced, got %v", res)
+	}
+}
+
 // TestWriteInputLengthCap verifies that writeToSession rejects inputs longer
 // than maxInputBytes with an INPUT_TOO_LONG error.  (U-4.9)
 func TestWriteInputLengthCap(t *testing.T) {

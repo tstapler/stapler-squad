@@ -153,15 +153,10 @@ func ResolveWorktreeBaseCommit(repoPath string) (defaultBranch, baseSHA string, 
 	return "", "", fmt.Errorf("resolve default branch (origin fetch failed: %w, local lookup failed: %v)", fetchErr, localErr)
 }
 
-// AmbientHEADDivergesFromBase reports whether repoPath's currently checked-out
-// branch differs from baseSHA (the commit a new worktree is about to branch
-// from, per ResolveWorktreeBaseCommit) — i.e. whether a caller who instead
-// branched from ambient HEAD, as new_worktree sessions used to
-// (session/instance_worktree.go), would have silently forked from unrelated
-// in-progress work. ambientBranch is "" when it can't be determined (detached
-// HEAD, unborn repo) — diverged is still meaningful in that case. Best-effort:
-// any lookup failure reports no divergence, since this only gates an
-// informational warning, not the branch resolution itself.
+// AmbientHEADDivergesFromBase reports whether repoPath's ambient checked-out
+// branch differs from baseSHA, the commit a new worktree is about to branch
+// from — best-effort, since this only gates an informational warning, not
+// the branch resolution itself.
 func AmbientHEADDivergesFromBase(repoPath, baseSHA string) (diverged bool, ambientBranch string) {
 	headSHA, err := GetHeadCommitSHA(repoPath)
 	if err != nil || headSHA == baseSHA {
@@ -171,14 +166,24 @@ func AmbientHEADDivergesFromBase(repoPath, baseSHA string) (diverged bool, ambie
 	return true, branch
 }
 
-// ResolveRemoteWorktreeBaseCommit is ResolveWorktreeBaseCommit's remote-host
-// counterpart (ssh-remote-workspaces): resolves the same default-branch/
-// origin-tip/unborn-repo contract, but through runner.Run against repoPath on
-// the remote host instead of go-git against the local filesystem, since a
-// remote SessionTypeNewWorktree (server/services/session_service.go's
-// CreateSession mode-specific block) can only run git via the dialed SSH
-// runner. Mirrors ResolveWorktreeBaseCommit's exact fallback order and
-// baseSHA == "" (err == nil) unborn-repo convention -- see its doc comment.
+// FormatAmbientDivergenceWarning builds the CreationWarning message shared by
+// the local (Instance.newWorktreeFromResolvedBase) and remote
+// (session_service.go's CreateSession) new_worktree paths for an
+// ambient-HEAD-diverges-from-base signal.
+func FormatAmbientDivergenceWarning(repoPath, defaultBranch, ambientBranch string) string {
+	if ambientBranch != "" {
+		return fmt.Sprintf(
+			"branched from %s's default branch %q instead of %q, which %s was checked out to and has diverged from it",
+			repoPath, defaultBranch, ambientBranch, repoPath)
+	}
+	return fmt.Sprintf(
+		"branched from %s's default branch %q instead of its ambient checked-out HEAD, which has diverged from it",
+		repoPath, defaultBranch)
+}
+
+// ResolveRemoteWorktreeBaseCommit mirrors ResolveWorktreeBaseCommit's fallback
+// order and baseSHA == "" (err == nil) unborn-repo convention, but through
+// runner.Run over SSH instead of go-git against the local filesystem.
 func ResolveRemoteWorktreeBaseCommit(ctx context.Context, runner tmux.CommandRunner, repoPath string) (defaultBranch, baseSHA string, err error) {
 	var errs []error
 	for _, candidate := range CandidateDefaultBranches {
@@ -203,23 +208,12 @@ func ResolveRemoteWorktreeBaseCommit(ctx context.Context, runner tmux.CommandRun
 			}
 		}
 	}
-	// Unborn-repo detection must not just be "rev-parse HEAD failed" -- that's
-	// also exactly what a connection drop or resource-shortage rejection on
-	// this same runner looks like (both return a non-nil error with no way to
-	// tell them apart from the error alone), which would silently misroute a
-	// broken connection into "no commits, ambient HEAD is safe" instead of a
-	// loud error. `git symbolic-ref -q HEAD` succeeds even on a genuinely
-	// unborn repo (HEAD is a valid symbolic ref to an as-yet-commitless
-	// branch) but fails the same way rev-parse HEAD would on a connection
-	// problem -- so only treat it as unborn when the symbolic ref resolves
-	// but the commit it points to does not.
+	// "rev-parse HEAD failed" alone is ambiguous between an unborn repo and a
+	// dropped connection; symbolic-ref resolving while rev-parse still fails
+	// disambiguates the true unborn case, which is safe to fall back to
+	// ambient HEAD for (no other branch to misattribute to).
 	if _, symErr := runner.Run(ctx, repoPath, "git", "symbolic-ref", "-q", "HEAD"); symErr == nil {
 		if _, headErr := runner.Run(ctx, repoPath, "git", "rev-parse", "HEAD"); headErr != nil {
-			// No candidate default branch and HEAD is a valid ref pointing to
-			// no commit yet: an unborn repo (freshly `git init`'d on the
-			// remote host), the one case ResolveWorktreeBaseCommit also lets
-			// a caller fall back to ambient HEAD for, since no other branch
-			// exists to misattribute to.
 			return "", "", nil
 		}
 	}
