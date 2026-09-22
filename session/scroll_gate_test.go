@@ -73,6 +73,19 @@ func TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsSuccess(t *testing
 	}
 }
 
+// TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsReady covers the
+// other member of isIdleStatus's allowlist (session/autonomous_driver.go)
+// alongside StatusIdle and StatusSuccess above.
+func TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsReady(t *testing.T) {
+	inst := newScrollGateTestInstance(t, "claude", true, detection.StatusReady)
+
+	ok, failure, reason := AppScrollGate(inst, 1)
+
+	if !ok || failure != ScrollGateOK || reason != "" {
+		t.Fatalf("AppScrollGate() = (%v, %v, %q), want (true, ScrollGateOK, \"\")", ok, failure, reason)
+	}
+}
+
 // TestAppScrollGate_should_ReturnFalseWithNoActiveControllerReason_When_NoControllerIsRegistered
 // covers the other source of StatusUnknown: GetDetectedStatus also returns
 // it when no ClaudeController/PiStatusSource is active at all, which must

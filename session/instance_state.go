@@ -337,13 +337,11 @@ func (i *Instance) GetDetectedStatus() detection.DetectedStatus {
 
 // GetDetectedStatusInfo returns both the raw DetectedStatus and whether a
 // status controller (ClaudeController or PiStatusSource) is actually active
-// for this instance. GetDetectedStatus alone cannot distinguish "a controller
+// for this instance. GetDetectedStatus alone can't distinguish "a controller
 // is active and genuinely reported StatusUnknown" from "no controller is
-// active at all" -- both collapse to the same StatusUnknown value -- which
-// matters to callers like AppScrollGate that need to tell "Claude's
-// catch-all ready-prompt match (see pattern_set.go's MatchLines, which
-// deliberately reports that as StatusUnknown)" apart from "no live signal,
-// treat as unsafe."
+// active at all" -- both collapse to the same StatusUnknown value, which
+// callers like AppScrollGate need told apart before treating StatusUnknown
+// as safe.
 func (i *Instance) GetDetectedStatusInfo() (status detection.DetectedStatus, controllerActive bool) {
 	mgr := i.GetStatusManager()
 	if mgr == nil {
