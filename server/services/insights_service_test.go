@@ -72,9 +72,13 @@ func (f *fakeSessionStorage) ListSessionRecords() []tokens.SessionRecord { retur
 type fakeBacklogReader struct {
 	entries []session.ItemSessionBacklogEntry
 	err     error
+	// calls counts GetAllItemSessionsWithBacklogInfo invocations — see
+	// TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce.
+	calls int
 }
 
 func (f *fakeBacklogReader) GetAllItemSessionsWithBacklogInfo(_ context.Context) ([]session.ItemSessionBacklogEntry, error) {
+	f.calls++
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -95,9 +99,13 @@ type fakeBacklogReaderWithLedger struct {
 	fakeBacklogReader
 	ledgerEntries []session.DeletedItemSessionCostEntry
 	ledgerErr     error
+	// ledgerCalls counts GetDeletedItemSessionCostLedger invocations — see
+	// TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce.
+	ledgerCalls int
 }
 
 func (f *fakeBacklogReaderWithLedger) GetDeletedItemSessionCostLedger(_ context.Context) ([]session.DeletedItemSessionCostEntry, error) {
+	f.ledgerCalls++
 	if f.ledgerErr != nil {
 		return nil, f.ledgerErr
 	}
@@ -947,7 +955,7 @@ func TestBuildSessionSummary_WhenCalledDirectly_ExpectProtoEqualToHandBuiltExpec
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
 	snapshot := associator.Snapshot()
 
-	got := buildSessionSummary(result, pt, associator, snapshot, nil)
+	got, _ := buildSessionSummary(result, pt, associator, snapshot, nil)
 
 	// Derivation (see Story 1.5.2's fixture comment above for full formulas):
 	//  - EstimatedCostUsd: 1.0*3.0 + 0.5*15.0 + 0.25*0.3 = 10.575 (1M input,
@@ -1000,7 +1008,7 @@ func TestBuildSessionSummary_WhenCalledDirectly_ExpectProtoEqualToHandBuiltExpec
 		// SessionRole (Story 5): no backlog attribution (sessionMeta is nil) and
 		// "/home/user/proj" has no /worktrees/ segment, so groupUnattributed
 		// classifies it "external" rather than leaving it "".
-		SessionRole: "external",
+		SessionRole: session.SessionRoleExternal,
 	}
 
 	require.Empty(t, got.UnpricedModels)
@@ -1091,7 +1099,7 @@ func TestBuildSessionSummary_WhenSessionHasNoTags_ExpectTagsFieldEmptySlice(t *t
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
 	snapshot := associator.Snapshot()
 
-	got := buildSessionSummary(result, pt, associator, snapshot, nil)
+	got, _ := buildSessionSummary(result, pt, associator, snapshot, nil)
 
 	assert.False(t, got.IsOrphan)
 	assert.Empty(t, got.Tags, "Tags should be empty (not causing a proto nil-vs-empty-slice issue) when the matched record has no tags")
@@ -1535,7 +1543,7 @@ func TestGetInsightsSummary_WhenNoItemSessionRow_ExpectSessionRoleClassifiedExte
 	require.Len(t, resp.Msg.Sessions, 1)
 	// "/home/user/proj" has no /worktrees/ segment, so groupUnattributed
 	// (Story 5) classifies it "external" rather than leaving it "".
-	assert.Equal(t, "external", resp.Msg.Sessions[0].SessionRole)
+	assert.Equal(t, session.SessionRoleExternal, resp.Msg.Sessions[0].SessionRole)
 }
 
 func TestGetInsightsSummary_WhenBacklogReaderNil_ExpectNoPanicAndExternalRole(t *testing.T) {
@@ -1557,7 +1565,7 @@ func TestGetInsightsSummary_WhenBacklogReaderNil_ExpectNoPanicAndExternalRole(t 
 		)
 		require.NoError(t, err)
 		require.Len(t, resp.Msg.Sessions, 1)
-		assert.Equal(t, "external", resp.Msg.Sessions[0].SessionRole)
+		assert.Equal(t, session.SessionRoleExternal, resp.Msg.Sessions[0].SessionRole)
 	})
 }
 
@@ -1568,7 +1576,7 @@ func TestSessionMetaForSessions_should_RetainItemIDAndItemTitle_When_BuildingMap
 	}}
 	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
 
-	meta := svc.sessionMetaForSessions(context.Background())
+	meta := svc.sessionMetaForSessions(context.Background()).meta
 
 	require.Contains(t, meta, "sess-1")
 	assert.Equal(t, SessionMeta{Role: session.SessionRoleTriage, ItemID: "bl_abc123", ItemTitle: "Fix login bug", ItemSessionUUID: "sess-1"}, meta["sess-1"])
@@ -1584,7 +1592,7 @@ func TestSessionMetaForSessions_WhenSessionUUIDHasMultipleItemSessionEntries_Exp
 	}}
 	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
 
-	meta := svc.sessionMetaForSessions(context.Background())
+	meta := svc.sessionMetaForSessions(context.Background()).meta
 
 	require.Contains(t, meta, "dup-uuid")
 	assert.Equal(t, session.SessionRoleWork, meta["dup-uuid"].Role, "must keep the first (newest) entry seen per session uuid")
@@ -1608,7 +1616,7 @@ func TestBuildSessionSummary_WhenSessionHasTagsAndRole_ExpectBothPopulated(t *te
 	snapshot := associator.Snapshot()
 	sessionMeta := map[string]SessionMeta{"sess-tags-role": {Role: session.SessionRoleReview}}
 
-	got := buildSessionSummary(result, pt, associator, snapshot, sessionMeta)
+	got, _ := buildSessionSummary(result, pt, associator, snapshot, sessionMeta)
 
 	assert.Equal(t, []string{"backend"}, got.Tags)
 	assert.Equal(t, session.SessionRoleReview, got.SessionRole)
@@ -1632,10 +1640,10 @@ func TestBuildSessionSummary_WhenNoBacklogLinkage_ExpectSessionRoleClassifiedNot
 	snapshot := associator.Snapshot()
 
 	require.NotPanics(t, func() {
-		got := buildSessionSummary(result, pt, associator, snapshot, nil)
+		got, _ := buildSessionSummary(result, pt, associator, snapshot, nil)
 		// "/home/user/proj" has no /worktrees/ segment, so groupUnattributed
 		// (Story 5) classifies it "external" rather than leaving it "".
-		assert.Equal(t, "external", got.SessionRole)
+		assert.Equal(t, session.SessionRoleExternal, got.SessionRole)
 	})
 }
 
@@ -1695,8 +1703,8 @@ func TestGetInsightsSummary_should_SumRoleBreakdownToTotalCost_When_MultipleRole
 	// sess-adhoc's project path ("/proj") isn't a stapler-squad worktree path, so
 	// groupUnattributed (Story 5) buckets it under "external" rather than "" —
 	// it must still bucket somewhere explicit, not be dropped.
-	require.Contains(t, byRole, "external", "an unattributed, non-worktree session must bucket under an explicit \"external\" role, not be dropped")
-	assert.InDelta(t, 0.05, byRole["external"].EstimatedCostUsd, 0.0001)
+	require.Contains(t, byRole, session.SessionRoleExternal, "an unattributed, non-worktree session must bucket under an explicit \"external\" role, not be dropped")
+	assert.InDelta(t, 0.05, byRole[session.SessionRoleExternal].EstimatedCostUsd, 0.0001)
 
 	require.Len(t, byRole[session.SessionRoleTriage].Items, 1)
 	assert.Equal(t, "bl_abc123", byRole[session.SessionRoleTriage].Items[0].ItemId)
@@ -1997,6 +2005,33 @@ func TestDismissFinding_WhenFinishedSessionRecomputedIdentically_ExpectDismissal
 	assert.Empty(t, second.Msg.Findings, "an unchanged finished session's recomputation must keep matching the earlier dismissal")
 }
 
+// TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce guards
+// the fetch-once fix: GetAllItemSessionsWithBacklogInfo and
+// GetDeletedItemSessionCostLedger were each queried twice per
+// GetInsightsSummary call (once by sessionMetaForSessions, once again by the
+// fold-in loop) before sessionMetaForSessions started returning its raw rows
+// for the fold-in loop to reuse.
+func TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	backlogReader := &fakeBacklogReaderWithLedger{
+		fakeBacklogReader: fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+			{SessionUUID: "sess-once", SessionRole: session.SessionRoleWork, ItemID: "item-1", ItemTitle: "T", EstimatedCostUsd: 1, CostPriced: true, CreatedAt: now},
+		}},
+		ledgerEntries: []session.DeletedItemSessionCostEntry{
+			{ConversationUUID: "conv-once", SessionUUID: "sess-old-once", SessionRole: session.SessionRoleReview,
+				ItemID: "deleted-1", ItemTitle: "Deleted", EstimatedCostUsd: 0.5, CostPriced: true, CreatedAt: now},
+		},
+	}
+	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
+
+	_, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, backlogReader.calls, "GetAllItemSessionsWithBacklogInfo must be fetched exactly once per GetInsightsSummary call")
+	assert.Equal(t, 1, backlogReader.ledgerCalls, "GetDeletedItemSessionCostLedger must be fetched exactly once per GetInsightsSummary call")
+}
+
 // TestGetInsightsSummary_should_IncludeDeletedItemLedgerCost_When_NoMatchingTranscript
 // (Story 3) proves a deleted item's cost ledger row is folded into
 // total_cost_usd/role_breakdown when no transcript in the current token-store
@@ -2136,8 +2171,8 @@ func TestGetInsightsSummary_UnattributedRoleBreakdown_SplitsExternalFromWorktree
 	assert.Equal(t, "steam-controls", unattributed.Items[0].ItemTitle)
 	assert.EqualValues(t, 1, unattributed.Items[0].SessionCount)
 
-	require.Contains(t, byRole, "external")
-	external := byRole["external"]
+	require.Contains(t, byRole, session.SessionRoleExternal)
+	external := byRole[session.SessionRoleExternal]
 	require.Len(t, external.Items, 1)
 	assert.Equal(t, "kibitzer", external.Items[0].ItemTitle)
 	assert.EqualValues(t, 1, external.Items[0].SessionCount)
@@ -2168,5 +2203,5 @@ func TestGetInsightsSummary_SessionRole_MatchesRoleBreakdownBucket(t *testing.T)
 		byConversation[s.ConversationId] = s.SessionRole
 	}
 	assert.Equal(t, "", byConversation["u1"], "worktree session stays in the plain unattributed bucket")
-	assert.Equal(t, "external", byConversation["u2"], "non-worktree session must report \"external\", matching its role_breakdown bucket")
+	assert.Equal(t, session.SessionRoleExternal, byConversation["u2"], "non-worktree session must report \"external\", matching its role_breakdown bucket")
 }
