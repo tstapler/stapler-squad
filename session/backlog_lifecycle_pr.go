@@ -73,9 +73,10 @@ type OneShotShipRunner interface {
 // next per taskProtocolBlock rules 8-9 (PASS -> run /backlog/ship), so we
 // invoke that same slash command directly: WriteSlashCommands
 // (session/backlog_commands.go) already wrote ship.md into this worktree at
-// session-spawn time, and nothing cleans it up before the item leaves
-// "review" (CleanupSlashCommands is not wired to fire on review exit — see
-// its call sites), so it is still present. ship.md's own instructions run
+// session-spawn time. CleanupSlashCommands does now also run from
+// cleanupItemWorktreesExcept (server/services/backlog_service.go), but that
+// path excludes worktrees with a live/EndedAt==nil work session, so ship.md
+// is still present here. ship.md's own instructions run
 // /github:pr-ship (local CI, code review, remote CI, and actual
 // merge-conflict resolution — the whole reason this path was added) and
 // already special-case "review already returned PASS" by skipping the
@@ -1491,10 +1492,11 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			// The PR is merged, so ship.md's "must still exist for a
 			// possible one-shot /backlog/ship re-invocation" constraint
 			// (see CleanupSlashCommands' doc comment) no longer applies —
-			// this is the first point in the lifecycle where scaffolding
-			// cleanup is safe. Best-effort: the worktree directory is
-			// often already gone by now (Instance.Kill/Pause deletes it
-			// independently), in which case these are no-ops.
+			// PR-merge is A safe point for scaffolding cleanup (see also
+			// cleanupItemWorktreesExcept's archive/reopen/tombstone call
+			// site). Best-effort: the worktree directory is often already
+			// gone by now (Instance.Kill/Pause deletes it independently),
+			// in which case these are no-ops.
 			if wt != nil && wt.WorktreePath != "" {
 				if cleanupErr := CleanupBacklogContextFile(wt.WorktreePath); cleanupErr != nil {
 					log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending CleanupBacklogContextFile item=%s: %v", item.ID, cleanupErr)

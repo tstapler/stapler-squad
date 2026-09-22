@@ -585,6 +585,8 @@ function SessionCardInner({
           onCancel={() => setIsTagEditorOpen(false)}
           triggerRef={tagEditorTriggerRef}
           sessionTitle={session.title}
+          sessionId={session.id}
+          onReclassified={(appliedTags) => { onUpdateTags(session.id, appliedTags); }}
         />
       )}
     <div

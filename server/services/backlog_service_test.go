@@ -238,6 +238,15 @@ type mockSessionStopper struct {
 	// should report. Absent (or false) means no retry pending — the default
 	// for every existing test, preserving prior behavior.
 	retryPendingUUIDs map[string]bool
+	// killIneffectiveUUIDs marks a UUID whose KillTmuxPaneOnly call must NOT
+	// flip liveUUIDs to false — models a kill attempt that genuinely fails to
+	// reach the process (a stuck/zombie pane, or an EndedAt set by something
+	// other than a real kill). Every other UUID's default KillTmuxPaneOnly
+	// behavior flips it to not-live, matching the real
+	// SessionService.KillTmuxPaneOnly: Instance.KillSession's underlying tmux
+	// kill-session call is synchronous, so a genuinely successful kill is
+	// confirmed dead immediately, not eventually.
+	killIneffectiveUUIDs map[string]bool
 }
 
 func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
@@ -269,6 +278,12 @@ func (m *mockSessionStopper) KillTmuxPaneOnly(_ context.Context, uuid string) er
 		m.onKillTmuxPaneOnly(uuid)
 	}
 	m.killedPaneUUIDs = append(m.killedPaneUUIDs, uuid)
+	if m.killIneffectiveUUIDs[uuid] {
+		return fmt.Errorf("mockSessionStopper: kill did not reach %s (killIneffectiveUUIDs)", uuid)
+	}
+	if m.liveUUIDs != nil {
+		m.liveUUIDs[uuid] = false
+	}
 	return nil
 }
 
@@ -2325,6 +2340,66 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 	}
 	assert.True(t, staleEnded, "the stale session must be tombstoned (EndedAt set)")
 	assert.True(t, newOpen, "the newly-spawned work session must be open")
+}
+
+// TestRemediateStaleWorkSession_should_StillBlockOnUnrelatedConfirmedLiveRound
+// is the precision regression test for spawnSessionAfterGates' 8b2 check
+// (findConfirmedLiveWorkSession, backlog_service_triage.go) as exercised
+// through RemediateStaleWorkSession end to end: killEndedWorkSessionPanes
+// (8a2) unconditionally attempts to kill every already-ended work session's
+// pane before 8b2 re-asks liveness, including the one this call just
+// deliberately retired — a genuinely successful kill (the default
+// mockSessionStopper.KillTmuxPaneOnly behavior, matching production's
+// synchronous Instance.KillSession) naturally clears it from 8b2's view with
+// no special-casing needed. Here a second, genuinely different work session
+// round is already EndedAt (wrongly tombstoned by an unrelated bug) whose
+// kill attempt does NOT take effect (killIneffectiveUUIDs — a stuck/zombie
+// pane) — the exact AC1/AC2 incident shape — and must still block the
+// respawn even though the intentionally-retired session's own kill succeeds.
+func TestRemediateStaleWorkSession_should_StillBlockOnUnrelatedConfirmedLiveRound(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{
+			"stale-work-session-uuid":      true,
+			"unrelated-wrongly-tombstoned": true,
+		},
+		killIneffectiveUUIDs: map[string]bool{"unrelated-wrongly-tombstoned": true},
+	}
+	svc.SetSessionStopper(stopper)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with a stale round and an unrelated wrongly-tombstoned-but-alive round")
+
+	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "unrelated-wrongly-tombstoned",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	unrelated, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	require.Len(t, unrelated, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), unrelated[0].ID, time.Now().Add(-time.Hour)))
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "stale-work-session-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
+	require.Error(t, remediateErr, "an unrelated confirmed-live round must still block the respawn even though the intentionally-retired session is exempted")
+	assert.Contains(t, remediateErr.Error(), "unrelated-wrongly-tombstoned")
+	assert.Contains(t, stopper.killedPaneUUIDs, "stale-work-session-uuid", "the stale pane is still killed — only the respawn is blocked")
+	assert.Empty(t, creator.calls, "no new work session may be spawned while a different round is confirmed live")
 }
 
 // TestRemediateStaleWorkSession_should_Defer_When_AutomatedRetryAlreadyPending

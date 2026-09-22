@@ -58,7 +58,7 @@ func BuildHeadlessTriagePrompt(item *BacklogItemData, artifactAbsPath string) st
 	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
 	fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)
 	if item.Description != "" {
-		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
+		WriteDescriptionSection(&sb, item.Description, 0)
 	}
 	if item.AcceptanceCriteria != "" {
 		criteria, _ := ParseAcCriteria(item.AcceptanceCriteria)
@@ -120,7 +120,7 @@ func BuildHeadlessRetriagePrompt(item *BacklogItemData, artifactAbsPath string, 
 	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
 	fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)
 	if item.Description != "" {
-		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
+		WriteDescriptionSection(&sb, item.Description, 0)
 	}
 
 	sb.WriteString("## Prior triage result (iteration ")

@@ -333,7 +333,8 @@ func verifyNoLeaksTolerant(t *testing.T, baseline goleak.Option, options ...gole
 	t.Helper()
 	opts := append([]goleak.Option{
 		baseline,
-		goleak.IgnoreTopFunction("net/http.(*http2ClientConn).readLoop"),
+		goleak.IgnoreAnyFunction("net/http.(*http2clientConnReadLoop).run"),
+		goleak.IgnoreAnyFunction("net/http.(*http2ClientConn).readLoop"),
 	}, options...)
 	runGoleakTolerant(t, func() { goleak.VerifyNone(t, opts...) })
 }

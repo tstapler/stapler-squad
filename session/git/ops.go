@@ -20,6 +20,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // FetchBranch fetches a specific branch from the origin remote.
@@ -150,6 +151,90 @@ func ResolveWorktreeBaseCommit(repoPath string) (defaultBranch, baseSHA string, 
 		return "", "", nil
 	}
 	return "", "", fmt.Errorf("resolve default branch (origin fetch failed: %w, local lookup failed: %v)", fetchErr, localErr)
+}
+
+// AmbientHEADDivergesFromBase reports whether repoPath's ambient checked-out
+// branch differs from baseSHA, the commit a new worktree is about to branch
+// from — best-effort, since this only gates an informational warning, not
+// the branch resolution itself.
+func AmbientHEADDivergesFromBase(repoPath, baseSHA string) (diverged bool, ambientBranch string) {
+	headSHA, err := GetHeadCommitSHA(repoPath)
+	if err != nil || headSHA == baseSHA {
+		return false, ""
+	}
+	branch, _ := GetCurrentBranchName(repoPath)
+	return true, branch
+}
+
+// FormatAmbientDivergenceWarning builds the CreationWarning message shared by
+// the local (Instance.newWorktreeFromResolvedBase) and remote
+// (session_service.go's CreateSession) new_worktree paths for an
+// ambient-HEAD-diverges-from-base signal.
+func FormatAmbientDivergenceWarning(repoPath, defaultBranch, ambientBranch string) string {
+	if ambientBranch != "" {
+		return fmt.Sprintf(
+			"branched from %s's default branch %q instead of %q, which %s was checked out to and has diverged from it",
+			repoPath, defaultBranch, ambientBranch, repoPath)
+	}
+	return fmt.Sprintf(
+		"branched from %s's default branch %q instead of its ambient checked-out HEAD, which has diverged from it",
+		repoPath, defaultBranch)
+}
+
+// ResolveRemoteWorktreeBaseCommit mirrors ResolveWorktreeBaseCommit's fallback
+// order and baseSHA == "" (err == nil) unborn-repo convention, but through
+// runner.Run over SSH instead of go-git against the local filesystem.
+func ResolveRemoteWorktreeBaseCommit(ctx context.Context, runner tmux.CommandRunner, repoPath string) (defaultBranch, baseSHA string, err error) {
+	var errs []error
+	for _, candidate := range CandidateDefaultBranches {
+		out, fetchErr := runner.Run(ctx, repoPath, "git", "fetch", "origin", "--", candidate)
+		if fetchErr != nil {
+			errs = append(errs, fmt.Errorf("fetch %s: %s: %w", candidate, strings.TrimSpace(string(out)), fetchErr))
+			continue
+		}
+		out, revErr := runner.Run(ctx, repoPath, "git", "rev-parse", "origin/"+candidate)
+		if revErr != nil {
+			errs = append(errs, fmt.Errorf("rev-parse origin/%s: %s: %w", candidate, strings.TrimSpace(string(out)), revErr))
+			continue
+		}
+		if sha := strings.TrimSpace(string(out)); sha != "" {
+			return candidate, sha, nil
+		}
+	}
+	for _, candidate := range CandidateDefaultBranches {
+		if out, revErr := runner.Run(ctx, repoPath, "git", "rev-parse", "refs/heads/"+candidate); revErr == nil {
+			if sha := strings.TrimSpace(string(out)); sha != "" {
+				return candidate, sha, nil
+			}
+		}
+	}
+	// "rev-parse HEAD failed" alone is ambiguous between an unborn repo and a
+	// dropped connection; symbolic-ref resolving while rev-parse still fails
+	// disambiguates the true unborn case, which is safe to fall back to
+	// ambient HEAD for (no other branch to misattribute to).
+	if _, symErr := runner.Run(ctx, repoPath, "git", "symbolic-ref", "-q", "HEAD"); symErr == nil {
+		if _, headErr := runner.Run(ctx, repoPath, "git", "rev-parse", "HEAD"); headErr != nil {
+			return "", "", nil
+		}
+	}
+	return "", "", fmt.Errorf("resolve default branch on remote repo %s (%v)", repoPath, errors.Join(errs...))
+}
+
+// RemoteAmbientHEADDivergesFromBase is AmbientHEADDivergesFromBase's remote
+// counterpart, resolving repoPath's checked-out HEAD via runner.Run instead
+// of a local go-git open.
+func RemoteAmbientHEADDivergesFromBase(ctx context.Context, runner tmux.CommandRunner, repoPath, baseSHA string) (diverged bool, ambientBranch string) {
+	out, err := runner.Run(ctx, repoPath, "git", "rev-parse", "HEAD")
+	headSHA := strings.TrimSpace(string(out))
+	if err != nil || headSHA == "" || headSHA == baseSHA {
+		return false, ""
+	}
+	if brOut, brErr := runner.Run(ctx, repoPath, "git", "rev-parse", "--abbrev-ref", "HEAD"); brErr == nil {
+		if br := strings.TrimSpace(string(brOut)); br != "" && br != "HEAD" {
+			ambientBranch = br
+		}
+	}
+	return true, ambientBranch
 }
 
 // ResolveExplicitBranchSHA resolves branchName's tip commit SHA for a caller
