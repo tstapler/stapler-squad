@@ -299,9 +299,18 @@ func itemPlaceholders(item *BacklogItemData) map[string]string {
 	return map[string]string{
 		"item_id":          item.ID,
 		"item_title":       item.Title,
-		"item_description": item.Description,
+		"item_description": item.Description + attachedImagesSuffix(item.Description),
 		"repo_path":        item.RepoPath,
 	}
+}
+
+// attachedImagesSuffix appends the attached-image path list to a bare description
+// placeholder value so every stage template gets it without opting in.
+func attachedImagesSuffix(description string) string {
+	if section := AttachedImagesSection(description); section != "" {
+		return "\n\n" + strings.TrimRight(section, "\n")
+	}
+	return ""
 }
 
 // CachingPipelineEngine is the single concrete implementation of

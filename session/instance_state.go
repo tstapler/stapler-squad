@@ -335,6 +335,25 @@ func (i *Instance) GetDetectedStatus() detection.DetectedStatus {
 	return statusInfo.ClaudeStatus
 }
 
+// GetDetectedStatusInfo returns both the raw DetectedStatus and whether a
+// status controller (ClaudeController or PiStatusSource) is actually active
+// for this instance. GetDetectedStatus alone can't distinguish "a controller
+// is active and genuinely reported StatusUnknown" from "no controller is
+// active at all" -- both collapse to the same StatusUnknown value, which
+// callers like AppScrollGate need told apart before treating StatusUnknown
+// as safe.
+func (i *Instance) GetDetectedStatusInfo() (status detection.DetectedStatus, controllerActive bool) {
+	mgr := i.GetStatusManager()
+	if mgr == nil {
+		return detection.StatusUnknown, false
+	}
+	statusInfo := mgr.GetStatus(i)
+	if !statusInfo.IsControllerActive {
+		return detection.StatusUnknown, false
+	}
+	return statusInfo.ClaudeStatus, true
+}
+
 // GetDetectedContext returns the human-readable context string from the terminal detection layer.
 // Returns an empty string when no controller is active or no context is available.
 func (i *Instance) GetDetectedContext() string {

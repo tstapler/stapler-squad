@@ -121,7 +121,7 @@ func newControlModeOutputTestSession(t *testing.T) (*TmuxSession, io.WriteCloser
 		sanitizedName:          "cm_output_test",
 		controlModeStdout:      pr,
 		controlModeDone:        make(chan struct{}),
-		controlModeSubscribers: make(map[string]chan []byte),
+		controlModeSubscribers: make(map[string]*controlModeSubscriber),
 		onExit:                 rec.record,
 	}
 	t.Cleanup(func() {
@@ -133,11 +133,18 @@ func newControlModeOutputTestSession(t *testing.T) (*TmuxSession, io.WriteCloser
 // startReader runs sess.readControlModeOutput() in a goroutine and returns a
 // channel closed once it returns, so tests can deterministically wait for the
 // generation to end instead of polling onExit call counts on a timer.
+// doneCh/stdout are read from sess's fields here (single-threaded test setup,
+// no concurrent Start/Stop in flight) and passed as the same explicit
+// parameters production code now captures at spawn time -- see
+// readControlModeOutput's doc comment for why it no longer reads them from
+// the struct itself.
 func startReader(sess *TmuxSession) <-chan struct{} {
 	done := make(chan struct{})
+	doneCh := sess.controlModeDone
+	stdout := sess.controlModeStdout
 	go func() {
 		defer close(done)
-		sess.readControlModeOutput()
+		sess.readControlModeOutput(doneCh, stdout)
 	}()
 	return done
 }
@@ -595,7 +602,7 @@ func TestControlMode_ScanLoopDoneChRace_EndsGenerationWithoutFiringOnExit(t *tes
 		sanitizedName:          "cm_donech_race_test",
 		controlModeStdout:      reader,
 		controlModeDone:        doneCh,
-		controlModeSubscribers: make(map[string]chan []byte),
+		controlModeSubscribers: make(map[string]*controlModeSubscriber),
 		onExit:                 rec.record,
 	}
 	t.Cleanup(func() { _ = reader.Close() })

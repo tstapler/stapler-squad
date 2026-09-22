@@ -202,6 +202,15 @@ type Instance struct {
 	WorkingDir string
 	// Branch is the branch of the instance.
 	Branch string
+	// CreationWarning is a one-time, non-fatal signal set during
+	// setupFirstTimeWorktree (SessionTypeNewWorktree) when the source repo's
+	// ambient checked-out HEAD diverged from the resolved default branch the
+	// new worktree actually branched from — see newWorktreeFromResolvedBase.
+	// Surfaced to MCP callers via instanceToDetail rather than logged only,
+	// per this bug's AC1. Never cleared or updated again after creation, so
+	// no actor setter is needed for it the way GetPath()'s doc comment
+	// requires for fields background goroutines can mutate later.
+	CreationWarning string
 	// Status is the status of the instance.
 	Status Status
 	// Program is the program to run in the instance.
@@ -901,6 +910,13 @@ type InstanceOptions struct {
 	// Branch is the git branch name to use when creating a new worktree.
 	// If empty and SessionType is SessionTypeNewWorktree, a branch name is derived from the title.
 	Branch string
+	// CreationWarning seeds Instance.CreationWarning up front for a remote
+	// SessionTypeNewWorktree, whose base-branch resolution (and any ambient-
+	// HEAD-divergence detection) already ran synchronously in CreateSession's
+	// remote mode-specific block, before this Instance exists. The local
+	// path's equivalent (newWorktreeFromResolvedBase) instead sets the field
+	// directly during setupFirstTimeWorktree, since it runs after construction.
+	CreationWarning string
 	// Program is the program to run in the instance (e.g. "claude", "aider --model ollama_chat/gemma3:1b")
 	Program string
 	// If AutoYes is true, automatically accept prompts
@@ -1063,6 +1079,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		Status:           Creating,
 		Path:             absPath,
 		Branch:           opts.Branch,
+		CreationWarning:  opts.CreationWarning,
 		Program:          opts.Program,
 		Height:           0,
 		Width:            0,

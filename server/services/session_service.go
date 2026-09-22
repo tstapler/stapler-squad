@@ -1262,6 +1262,25 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 	return "", false
 }
 
+// RefuseIfWorktreeSharedWithOtherLiveSession resolves
+// OtherLiveSessionInsideWorktree into a ready-to-return error, shared by
+// every worktree-deleting path: MCP pause/stop, RPC UpdateSession, and
+// DeleteSession. inst may be nil (no live Instance to inspect) — returns
+// nil, same as a non-worktree session.
+func (s *SessionService) RefuseIfWorktreeSharedWithOtherLiveSession(inst *session.Instance) error {
+	if inst == nil || !inst.HasGitWorktree() {
+		return nil
+	}
+	worktreePath := inst.GetEffectiveRootDir()
+	blockingUUID, blocked := s.OtherLiveSessionInsideWorktree(inst.UUID, worktreePath)
+	if !blocked {
+		return nil
+	}
+	return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf(
+		"cannot proceed: worktree %q is still in use by another active session (%s)",
+		worktreePath, blockingUUID))
+}
+
 // IsRetryPending satisfies the BacklogService.SessionStopper interface. It
 // reports whether sessionUUID's live Instance currently has a driver-managed
 // automated retry claimed or scheduled (session-retry-backoff AC8). Returns
@@ -1280,6 +1299,13 @@ func (s *SessionService) IsRetryPending(sessionUUID string) bool {
 // CleanupWorktree and would delete a worktree still in use by the next rework
 // round. Best-effort: errors are logged, not returned, since this runs as
 // cleanup alongside a new spawn that should proceed regardless.
+//
+// Deregisters the instance from every poller on a successful kill —
+// findConfirmedLiveInstance's fast path trusts FindLiveInstance's poller-map
+// hit unconditionally as "live" (its IsBackendProcessAlive fallback check
+// only runs on a map miss), so a killed-but-still-registered instance would
+// otherwise be misreported live by every later IsSessionLive call, including
+// spawnSessionAfterGates' 8b2 check moments after this exact kill.
 func (s *SessionService) KillTmuxPaneOnly(ctx context.Context, sessionUUID string) error {
 	inst := s.findConfirmedLiveInstance(sessionUUID)
 	if inst == nil {
@@ -1289,6 +1315,7 @@ func (s *SessionService) KillTmuxPaneOnly(ctx context.Context, sessionUUID strin
 		log.Warn("KillTmuxPaneOnly: kill failed", "uuid", sessionUUID, "err", err)
 		return err
 	}
+	s.removeFromAllPollers(sessionUUID)
 	return nil
 }
 
@@ -2602,6 +2629,11 @@ func (s *SessionService) CreateSession(
 	// Directory, which NewProject would otherwise reintroduce.
 	var executionTarget session.ExecutionTarget = session.LocalTarget{}
 	existingWorktreeOverride := req.Msg.ExistingWorktree
+	// remoteCreationWarning mirrors Instance.CreationWarning (see
+	// InstanceOptions.CreationWarning's doc comment) for a remote
+	// SessionTypeNewWorktree, whose base-branch resolution runs synchronously
+	// in this block, before the Instance exists to set the field itself.
+	var remoteCreationWarning string
 	if remoteRequested {
 		switch sessionType {
 		case session.SessionTypeNewWorktree, session.SessionTypeExistingWorktree, session.SessionTypeDirectory, session.SessionTypeNewProject:
@@ -2663,16 +2695,36 @@ func (s *SessionService) CreateSession(
 			worktreeOps = git.NewRemoteWorktreeOps(runner)
 			remoteWT = git.RemoteWorktree{RepoPath: resolvedPath, WorktreePath: remoteWorkingPath, Branch: branch}
 
+			// Resolve the base commit the same way the local path does
+			// (git.ResolveWorktreeBaseCommit) instead of branching off
+			// resolvedPath's ambient checked-out HEAD -- see
+			// Instance.newWorktreeFromResolvedBase's doc comment for the
+			// misattribution bug this avoids. baseSHA == "" (err == nil) means
+			// an unborn repo, the one case ambient HEAD is safe to use.
+			defaultBranch, baseSHA, resolveErr := git.ResolveRemoteWorktreeBaseCommit(ctx, runner, resolvedPath)
+			if resolveErr != nil {
+				return nil, connect.NewError(connect.CodeInternal,
+					fmt.Errorf("failed to resolve default branch on remote %q: %w", resolvedRemote.Name, resolveErr))
+			}
+			branchArgs := []string{"branch", branch}
+			if baseSHA != "" {
+				branchArgs = append(branchArgs, baseSHA)
+				if diverged, ambientBranch := git.RemoteAmbientHEADDivergesFromBase(ctx, runner, resolvedPath, baseSHA); diverged {
+					remoteCreationWarning = git.FormatAmbientDivergenceWarning(resolvedPath, defaultBranch, ambientBranch)
+				}
+			}
+
 			// RemoteWorktreeOps.CreateWorktree (Phase 2, session/git/remote_worktree.go)
 			// mirrors the local "attach to an already-existing branch" `git worktree add
 			// <path> <branch>` shape deliberately, with no -b -- so a session that wants
 			// a fresh branch on the remote (the common case, mirroring local
-			// SessionTypeNewWorktree's own branch auto-creation) needs it created first.
-			// Best-effort: "git branch <name>" failing because the branch already exists
-			// is expected and ignored; any other failure (unreachable repo, invalid
-			// resolvedPath) is surfaced immediately rather than deferred to a more
-			// confusing failure from CreateWorktree itself.
-			if out, branchErr := runner.Run(ctx, resolvedPath, "git", "branch", branch); branchErr != nil &&
+			// SessionTypeNewWorktree's own branch auto-creation) needs it created first,
+			// from baseSHA rather than ambient HEAD (see above).
+			// Best-effort: "git branch <name> [sha]" failing because the branch already
+			// exists is expected and ignored; any other failure (unreachable repo,
+			// invalid resolvedPath) is surfaced immediately rather than deferred to a
+			// more confusing failure from CreateWorktree itself.
+			if out, branchErr := runner.Run(ctx, resolvedPath, "git", branchArgs...); branchErr != nil &&
 				!strings.Contains(string(out), "already exists") {
 				return nil, connect.NewError(connect.CodeInternal,
 					fmt.Errorf("failed to create branch %q on remote %q: %s (%w)",
@@ -2776,6 +2828,7 @@ func (s *SessionService) CreateSession(
 		Prompt:           req.Msg.Prompt,
 		InitialPrompt:    initialPrompt,
 		ExistingWorktree: existingWorktreeOverride,
+		CreationWarning:  remoteCreationWarning,
 		Category:         req.Msg.Category,
 		SessionType:      sessionType,
 		TmuxPrefix:       "", // Use default from config
@@ -3399,12 +3452,18 @@ func (s *SessionService) UpdateSession(
 		targetStatus := adapters.ProtoToStatus(*req.Msg.Status)
 
 		if targetStatus == session.Stopped && instance.Status != session.Stopped {
+			if err := s.RefuseIfWorktreeSharedWithOtherLiveSession(instance); err != nil {
+				return nil, err
+			}
 			if err := instance.StopByUser(); err != nil {
 				return nil, classifyStopErr(err, "stop")
 			}
 			updatedFields = append(updatedFields, "status")
 			sideEffectChanged = true
 		} else if targetStatus == session.Paused && instance.Status != session.Paused {
+			if err := s.RefuseIfWorktreeSharedWithOtherLiveSession(instance); err != nil {
+				return nil, err
+			}
 			if err := instance.Pause(); err != nil {
 				return nil, classifyPauseResumeErr(err, "pause")
 			}
@@ -3495,22 +3554,13 @@ func (s *SessionService) steerInstance(ctx context.Context, instance *session.In
 	}
 
 	// Non-autonomous sessions get the same PTY send primitive the MCP
-	// steer_session tool falls back to, bounded with a timeout so a browser
-	// click against a wedged/dead session can't hang this goroutine forever.
-	text := session.BuildSubmittableInputAndSubmit(message)
-	errCh := make(chan error, 1)
-	go func() { errCh <- instance.SendKeys(text) }()
-
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return fmt.Errorf("steer session %q: %w", instance.Title, err)
-		}
-	case <-timeoutCtx.Done():
-		return fmt.Errorf("timed out steering session %q: %w", instance.Title, timeoutCtx.Err())
+	// steer_session tool falls back to (session.SubmitContentWithEnter,
+	// bounded with a generous timeout so a browser click against a
+	// wedged/dead session can't hang this goroutine forever) — content and
+	// the submit keystroke travel as two separate SendKeys writes (BUG-031),
+	// never concatenated.
+	if err := session.SubmitContentWithEnter(ctx, instance, message); err != nil {
+		return fmt.Errorf("steer session %q: %w", instance.Title, err)
 	}
 	s.notifySteerSent(instance, message)
 	return nil
@@ -3829,6 +3879,15 @@ func (s *SessionService) DeleteSession(
 	// that without reopening the race the ordering comment below is about (that
 	// race is between removeFromAllPollers and storage.DeleteInstance, not this).
 	liveInst := s.FindLiveInstance(sessionTitle)
+
+	// Refuse before any destructive step below if another live session's real
+	// cwd is inside this session's worktree (deleting is Destroy()'s job,
+	// reached only via the liveInst-found cleanup goroutine further down —
+	// same guard as UpdateSession's pause/stop transitions and MCP's
+	// pause_session/stop_session).
+	if err := s.RefuseIfWorktreeSharedWithOtherLiveSession(liveInst); err != nil {
+		return nil, err
+	}
 
 	// Fence out an in-flight Background Resolution Pipeline before cleanup,
 	// bumping the epoch before re-reading status exactly like
@@ -5234,6 +5293,16 @@ func (s *SessionService) ListProgramsConfig(ctx context.Context, req *connect.Re
 // UpsertProgramConfig creates or updates a custom program configuration.
 func (s *SessionService) UpsertProgramConfig(ctx context.Context, req *connect.Request[sessionv1.UpsertProgramConfigRequest]) (*connect.Response[sessionv1.UpsertProgramConfigResponse], error) {
 	return s.defaultsSvc.UpsertProgramConfig(ctx, req)
+}
+
+// ProbeProgram checks whether a program command resolves to a usable executable.
+func (s *SessionService) ProbeProgram(ctx context.Context, req *connect.Request[sessionv1.ProbeProgramRequest]) (*connect.Response[sessionv1.ProbeProgramResponse], error) {
+	return s.defaultsSvc.ProbeProgram(ctx, req)
+}
+
+// StartProgramProbeLoginPath starts login-shell PATH derivation for ProbeProgram.
+func (s *SessionService) StartProgramProbeLoginPath() {
+	s.defaultsSvc.StartProgramProbeLoginPath()
 }
 
 // DeleteProgramConfig removes a custom program configuration by ID.

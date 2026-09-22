@@ -445,6 +445,10 @@ var (
 				srv = server.NewServerWithDeps(address, rt.ToServerDeps())
 				srv.SetHostnames(hostnames)
 
+				// Derive the login-shell PATH for ProbeProgram lookups off the request
+				// path; the service constructor stays hermetic (Task 1.1.4d2).
+				coreDeps.SessionService.StartProgramProbeLoginPath()
+
 				localOrigin := fmt.Sprintf("http://%s", address)
 				srv.SetOrigins([]string{localOrigin})
 

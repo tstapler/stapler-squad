@@ -61,6 +61,13 @@ type SessionDetail struct {
 	// path; this field's relative-subdirectory meaning has no ActiveDir-style
 	// replacement here yet.
 	WorkingDir string `json:"working_dir,omitempty"`
+	// CreationWarning is set once, at create_session time, when a
+	// new_worktree session's source repo had an ambient checked-out HEAD
+	// that diverged from the default branch it actually branched from (see
+	// session.Instance.CreationWarning) — a non-fatal signal, distinct from
+	// silent success, that the caller should double check nothing unrelated
+	// was expected to carry into this worktree.
+	CreationWarning string `json:"creation_warning,omitempty"`
 }
 
 // ListSessionsResult is returned by list_sessions.
@@ -137,6 +144,14 @@ const (
 	// timeout, or a vanish — distinct from both of the above and from the
 	// timeout's still_creating success result.
 	ErrSessionCreationAwaitCanceled = "SESSION_CREATION_AWAIT_CANCELED"
+	// ErrSessionNotReady: the session's PTY/tmux stream hasn't produced a
+	// single byte of scrollback since creation — read_session_output/
+	// run_command return this instead of an empty-output success, so a
+	// caller can tell "still initializing" from "the command legitimately
+	// printed nothing" (session/scrollback.ScrollbackManager.CurrentSequence
+	// == 0). Never returned once the session has emitted anything at all,
+	// even if a later command is itself silent.
+	ErrSessionNotReady = "SESSION_NOT_READY"
 )
 
 // BacklogItemSummaryResult is a trimmed backlog item shown in list_backlog_items results.

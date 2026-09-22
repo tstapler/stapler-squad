@@ -1,0 +1,19 @@
+{
+  "id": "ProbeProgram",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ProbeProgram",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestProbeProgram_should_ReturnInvalidArgument_When_CommandEmpty",
+    "TestProbeProgram_should_ReturnNotFoundWithNilError_When_TildePathMissing",
+    "TestProbeProgram_should_ReturnFoundWithPath_When_CommandResolvesViaLoginPath",
+    "TestProbeProgram_should_FlagWrapperAndNotRun_When_EnvCommand",
+    "TestProbeProgram_should_ReachProberOptsUnchanged_When_ConfirmAndResolveOnlySet",
+    "TestProbeProgram_should_PreserveStatusAndReportNotFound_When_TimeoutOrRunnerBusy",
+    "TestProbeProgram_should_ReturnAiderFlags_When_RealProberRunsFakeAiderHelp"
+  ],
+  "lastModified": "2026-09-21T09:30:48.426468249-07:00"
+}

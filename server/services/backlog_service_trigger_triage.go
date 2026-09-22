@@ -480,6 +480,7 @@ func (s *BacklogService) TriggerTriage(
 		// cost incurred," matching cost_priced's own schema default, rather than as
 		// an untrustworthy $0 that would otherwise trip the persistence guard below.
 		triageCostPriced := true
+		var triageConversationID string
 		raw, callErr := triageCaller.CallBlocking(triageCtx,
 			headless.FeatureKeyTriage,
 			headless.HeadlessTriageSystemPrompt(),
@@ -497,7 +498,7 @@ func (s *BacklogService) TriggerTriage(
 			// earlier), not a permission-mode gap. Do not add bypassPermissions here
 			// without a fresh empirical repro, per ADR-001's own "don't trust
 			// unverified CLI-behavior assumptions" precedent.
-			headless.CallOptions{WorkDir: triageWorkDir, Model: triageResolvedModel},
+			headless.CallOptions{WorkDir: triageWorkDir, Model: triageResolvedModel, OnConversationID: func(id string) { triageConversationID = id }},
 			func(usd float64, priced bool) {
 				triageCostUSD = usd
 				triageCostPriced = priced
@@ -524,6 +525,12 @@ func (s *BacklogService) TriggerTriage(
 		if triageCostUSD > 0 || !triageCostPriced {
 			if costErr := s.storage.UpdateItemSessionCost(cleanupCtx, isID, triageCostUSD, triageCostPriced); costErr != nil {
 				log.Warn("[TriggerTriage] failed to persist cost", "item", itemID, "error", costErr)
+			}
+		}
+
+		if triageConversationID != "" {
+			if convErr := s.storage.UpdateItemSessionConversationUUID(cleanupCtx, isID, triageConversationID); convErr != nil {
+				log.Warn("[TriggerTriage] failed to persist conversation uuid", "item", itemID, "error", convErr)
 			}
 		}
 

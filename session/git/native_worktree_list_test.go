@@ -29,10 +29,7 @@ func TestNativeListWorktrees_LiveWorktree(t *testing.T) {
 
 // TestNativeFindExistingWorktreeForBranch_FindsLiveWorktree_ReportsNotFoundForOtherBranch
 // covers PR #730 Gate 2's noted gap: nativeFindExistingWorktreeForBranch (worktree.go),
-// findExistingWorktreeForBranch's native counterpart dispatched to when useNativeWorktree
-// is on (worktree.go's findOrCreateWorktree), had no direct test of its own — every
-// existing test of this dispatch point (worktree_creation_test.go) only exercised the
-// legacy path.
+// called from worktree.go's findOrCreateWorktree, had no direct test of its own.
 func TestNativeFindExistingWorktreeForBranch_FindsLiveWorktree_ReportsNotFoundForOtherBranch(t *testing.T) {
 	t.Parallel()
 	branchName := "feature-native-find-existing"
