@@ -397,16 +397,15 @@ func repoPathForWorktree(worktreePath WorktreePath) (string, error) {
 }
 
 // nativeMergeMainIntoWorktree is MergeMainIntoWorktree's pure-Go, go-git-based
-// implementation (Epic 3.4), dispatched to by the public MergeMainIntoWorktree when
-// useNativeMerge(worktreePath) is true (ADR-002). It fetches mainBranch from origin (the
-// one subprocess call this path still makes — FetchBranch, shared with the legacy path),
+// implementation (Epic 3.4), called directly by the public MergeMainIntoWorktree. It
+// fetches mainBranch from origin (the one subprocess call this path makes — FetchBranch),
 // then resolves the merge outcome purely via go-git object reads: up-to-date and
 // fast-forward are ancestor checks (Task 3.4.1a), a real divergence runs the diff3
 // pipeline assembled across Epics 3.1-3.3 and either produces a real two-parent merge
 // commit (Task 3.4.1b) or materializes conflict markers/index and immediately aborts
-// (Task 3.4.1c) — MergeMainResult's semantics match legacyMergeMainIntoWorktree's exactly
-// so every real call site (drift.go, backlog_service_triage.go,
-// session.backlog_lifecycle.go's branchReconciler) behaves identically either way.
+// (Task 3.4.1c), so every real call site (drift.go, backlog_service_triage.go,
+// session.backlog_lifecycle.go's branchReconciler) sees the same MergeMainResult
+// semantics.
 func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
 	if err := FetchBranch(worktreePath, mainBranch); err != nil {
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to fetch %s: %w", mainBranch, err)

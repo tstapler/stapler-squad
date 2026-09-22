@@ -505,19 +505,6 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered TymuxRolloutService handler", "path", tymuxRolloutAPIPath)
 	}
 
-	// Register NativeGitRolloutService handler (go-git-worktree-and-merge
-	// Epic 4.2: operator-facing controls for the staged native-worktree/
-	// native-merge rollout, mirroring TymuxRolloutService's registration).
-	// Config-backed with no external deps, so it's constructed inline rather
-	// than threaded through ServerDependencies.
-	{
-		nativeGitRolloutSvc := services.NewNativeGitRolloutService()
-		nativeGitRolloutPath, nativeGitRolloutHandler := sessionv1connect.NewNativeGitRolloutServiceHandler(nativeGitRolloutSvc, ConnectOptions(deps.ErrorRegistry)...)
-		nativeGitRolloutAPIPath := "/api" + nativeGitRolloutPath
-		srv.RegisterConnectHandler(nativeGitRolloutAPIPath, http.StripPrefix("/api", nativeGitRolloutHandler))
-		log.Info("Registered NativeGitRolloutService handler", "path", nativeGitRolloutAPIPath)
-	}
-
 	// Register GuidanceRequestService handler (durable-guidance-request Phase
 	// 2: create/answer/read a durable question/answer, mirroring
 	// TymuxRolloutService's registration). Storage-backed, so it's threaded

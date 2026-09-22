@@ -77,8 +77,8 @@ func ResolveDefaultBranchSHA(repoPath string) (branch, sha string, err error) {
 // repoPath's own checkout, this always fetches first, so the returned SHA reflects
 // origin's true current tip rather than whatever repoPath happened to have checked
 // out last — the gap that let a new backlog work session's worktree branch from a
-// days-stale local checkout instead of the real main tip (see legacySetupNewWorktree's
-// "branch from current HEAD" comment, and CreateBacklogWorktree's use of this func).
+// days-stale local checkout instead of the real main tip (see CreateBacklogWorktree's
+// use of this func).
 func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
 	if err := FetchBranch(repoPath, mainBranch); err != nil {
 		return "", fmt.Errorf("failed to fetch %s: %w", mainBranch, err)
@@ -938,33 +938,26 @@ type MergeMainResult struct {
 // conflicting paths, so the caller can hand that context to whoever resolves it rather
 // than leaving a half-merged working tree behind for the next thing that touches it.
 //
-// Dispatches to nativeMergeMainIntoWorktree (Epic 3.4) or legacyMergeMainIntoWorktree
-// (the original subprocess-based implementation below) based on useNativeMerge, keyed by
-// worktreePath per ADR-002 — every real call site (drift.go's EnsureBranchSyncedWithMain,
-// backlog_service_triage.go's syncPRBranchWithMain, session/backlog_lifecycle.go's
-// branchReconciler, which is assigned this exact function value) gets flag coverage with
-// no changes of its own.
+// Dispatches to nativeMergeMainIntoWorktreeLocked (Epic 3.4) — every real call site
+// (drift.go's EnsureBranchSyncedWithMain, backlog_service_triage.go's
+// syncPRBranchWithMain, session/backlog_lifecycle.go's branchReconciler, which is
+// assigned this exact function value) needs no change of its own.
 func MergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
 	var result *MergeMainResult
 	ctx := withOperationAttrs(context.Background(), attribute.String("worktree_path", worktreePath))
 	err := withOperationSpan(ctx, "git.merge.main", func() (string, string, error) {
-		native := useNativeMerge(worktreePath)
 		var mergeErr error
-		if native {
-			result, mergeErr = nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch)
-		} else {
-			result, mergeErr = legacyMergeMainIntoWorktree(worktreePath, mainBranch)
-		}
-		return implementationLabel(native), mergeOutcomeLabel(result, mergeErr), mergeErr
+		result, mergeErr = nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch)
+		return implementationNative, mergeOutcomeLabel(result, mergeErr), mergeErr
 	})
 	return result, err
 }
 
 // mergeOutcomeLabel is MergeMainIntoWorktree's outer-span outcome value: a coarser
-// up_to_date/merged/conflicted breakdown than git_merge_outcome_total's native-only
-// four-way UpToDate/FastForward/CleanMerge/Conflicted split (native_merge.go), since
-// MergeMainResult itself (shared by both the native and legacy implementations) doesn't
-// distinguish a fast-forward from a three-way clean merge — both just set Merged: true.
+// up_to_date/merged/conflicted breakdown than git_merge_outcome_total's four-way
+// UpToDate/FastForward/CleanMerge/Conflicted split (native_merge.go), since
+// MergeMainResult doesn't distinguish a fast-forward from a three-way clean merge — both
+// just set Merged: true.
 func mergeOutcomeLabel(result *MergeMainResult, err error) string {
 	if err != nil || result == nil {
 		return outcomeError
@@ -979,74 +972,4 @@ func mergeOutcomeLabel(result *MergeMainResult, err error) string {
 	default:
 		return outcomeSuccess
 	}
-}
-
-// legacyMergeMainIntoWorktree is MergeMainIntoWorktree's original subprocess-based
-// implementation (`git fetch` + `git merge` + `git merge --abort` on conflict), unchanged
-// by Epic 3.4's dispatch seam.
-func legacyMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
-	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer fetchCancel()
-	fetchCmd := safeexec.CommandContext(fetchCtx, "git", "-C", worktreePath, "fetch", "origin", mainBranch)
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("failed to fetch %s: %s (%w)", mainBranch, out, err)
-	}
-
-	// Capture HEAD before the merge so up-to-date can be detected by comparing SHAs
-	// rather than parsing merge output text ("Already up to date." is locale- and
-	// git-version-dependent, e.g. older git prints "Already up-to-date.").
-	beforeSHA, headErr := getHeadCommitSHA(worktreePath)
-	if headErr != nil {
-		return nil, fmt.Errorf("failed to resolve HEAD before merge: %w", headErr)
-	}
-
-	mergeCtx, mergeCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer mergeCancel()
-	mergeCmd := safeexec.CommandContext(mergeCtx, "git", "-C", worktreePath, "merge", "--no-edit", "origin/"+mainBranch)
-	mergeOut, mergeErr := mergeCmd.CombinedOutput()
-	if mergeErr == nil {
-		afterSHA, headErr := getHeadCommitSHA(worktreePath)
-		if headErr != nil {
-			return nil, fmt.Errorf("failed to resolve HEAD after merge: %w", headErr)
-		}
-		if afterSHA == beforeSHA {
-			return &MergeMainResult{UpToDate: true}, nil
-		}
-		return &MergeMainResult{Merged: true}, nil
-	}
-
-	// The merge failed. Distinguish real conflicts (recoverable — abort and report)
-	// from any other git failure (propagate as-is; aborting a non-conflict failure
-	// could mask the real problem).
-	conflictFiles, conflictErr := conflictedFiles(worktreePath)
-	if conflictErr != nil || len(conflictFiles) == 0 {
-		return nil, fmt.Errorf("failed to merge %s: %s (%w)", mainBranch, mergeOut, mergeErr)
-	}
-
-	abortCtx, abortCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer abortCancel()
-	abortCmd := safeexec.CommandContext(abortCtx, "git", "-C", worktreePath, "merge", "--abort")
-	if abortOut, abortErr := abortCmd.CombinedOutput(); abortErr != nil {
-		return nil, fmt.Errorf("merge of %s conflicted in %v, and merge --abort failed: %s (%w)", mainBranch, conflictFiles, abortOut, abortErr)
-	}
-
-	return &MergeMainResult{Conflicted: true, ConflictedFiles: conflictFiles}, nil
-}
-
-// conflictedFiles returns the paths with unresolved merge conflicts in worktreePath.
-func conflictedFiles(worktreePath string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "-C", worktreePath, "diff", "--name-only", "--diff-filter=U")
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			files = append(files, line)
-		}
-	}
-	return files, nil
 }
