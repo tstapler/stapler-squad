@@ -65,6 +65,9 @@ describe("InsightsDashboard bar-click cross-filter (Story 5.2.2)", () => {
     });
   });
 
+  // First it() in the file pays the cold next/dynamic import() of StageCostChart
+  // (module registry is shared across tests in a file) — slow enough under CI's
+  // constrained runners to exceed the default 5000ms timeout.
   it("InsightsDashboard_should_FilterSessionsTableToWorkRole_When_WorkBarClicked", async () => {
     render(<InsightsDashboard />);
 
@@ -78,7 +81,7 @@ describe("InsightsDashboard bar-click cross-filter (Story 5.2.2)", () => {
     expect(screen.getByText("sess-work-1")).toBeInTheDocument();
     expect(screen.queryByText("sess-triage-1")).not.toBeInTheDocument();
     expect(screen.queryByText("sess-review-1")).not.toBeInTheDocument();
-  });
+  }, 15000);
 
   it("InsightsDashboard_should_ClearRoleFilter_When_ActiveBarClickedAgain", async () => {
     render(<InsightsDashboard />);
