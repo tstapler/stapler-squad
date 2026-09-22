@@ -1242,6 +1242,10 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 		if exceptPath != "" && wt.WorktreePath == exceptPath {
 			continue
 		}
+		// Scaffolding first: if Cleanup below fails or the path isn't a removable
+		// worktree, the item-pinned /backlog:* files must not outlive the item.
+		_ = session.CleanupSlashCommands(wt.WorktreePath)
+		_ = session.CleanupBacklogContextFile(wt.WorktreePath)
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		if cleanErr := g.Cleanup(); cleanErr != nil {
 			log.WarningLog().Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
