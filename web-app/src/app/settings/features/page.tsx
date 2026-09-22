@@ -7,7 +7,6 @@ import { usePageView } from "@/lib/analytics";
 import { vars } from "@/styles/theme.css";
 import { StreamHubRolloutPanel } from "@/components/settings/StreamHubRolloutPanel";
 import { TymuxRolloutPanel } from "@/components/settings/TymuxRolloutPanel";
-import { NativeGitRolloutPanel } from "@/components/settings/NativeGitRolloutPanel";
 import { PiDisableWarningDialog } from "@/components/settings/PiDisableWarningDialog";
 import { PI_SUPPORT_FLAG_NAME } from "@/lib/constants/programs";
 import {
@@ -156,7 +155,6 @@ export default function FeaturesPage() {
 
       <StreamHubRolloutPanel />
       <TymuxRolloutPanel />
-      <NativeGitRolloutPanel />
 
       {pendingPiDisable && (
         <PiDisableWarningDialog onAcknowledge={confirmPiDisable} onCancel={cancelPiDisable} />

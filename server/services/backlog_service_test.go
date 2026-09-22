@@ -1570,7 +1570,7 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 	// Force an isolated worktree base dir — without this, config.GetConfigDirForDir's
 	// IsTestMode() branch scopes it by OS PID only (shared by every test in this binary),
 	// so a stale worktree/branch left by another server/services test can be "reused" by
-	// findExistingWorktreeForBranch, silently failing the async triage goroutine's git
+	// nativeFindExistingWorktreeForBranch, silently failing the async triage goroutine's git
 	// status check and leaving the item stuck below (never reaching "ready"). Same fix as
 	// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession, below.
 	envtest.NewIsolatedStateDir(t)
@@ -4108,7 +4108,7 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	// this test's own repoPath := t.TempDir() below is always #2, so both are always
 	// named "002" regardless of repetition), a leftover worktree directory or git
 	// worktree-admin entry from an earlier repetition could be discovered and "reused"
-	// by session/git/worktree.go's findExistingWorktreeForBranch, which matches on
+	// by session/git/worktree.go's nativeFindExistingWorktreeForBranch, which matches on
 	// branch name only within git's own repo-local registry and never validates the
 	// found worktree's gitlink still resolves to a live repo. That produced the
 	// intermittent "Condition never satisfied" flake (require.Eventually never seeing

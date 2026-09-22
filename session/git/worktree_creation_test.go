@@ -391,12 +391,12 @@ func TestNewGitWorktreeFromExisting_DetectsBranchAndBase(t *testing.T) {
 
 // TestNewGitWorktreeWithBranch_FreshPathMatchesGitRediscoveredPath verifies AC1: a
 // worktree path computed fresh via joinWithinDir(worktreeDir, sanitizedName) at creation
-// time, and the same directory rediscovered later via `git worktree list --porcelain`
-// (the "already checked out elsewhere" fallback in findExistingWorktreeForBranch), must
-// be byte-identical strings -- not merely equal after a test-side filepath.EvalSymlinks
-// normalization. On macOS this is only true because getWorktreeDirectory() resolves
-// symlinks on the base dir up front (see its doc comment) and the rediscovery path
-// canonicalizes git's porcelain output the same way before returning it.
+// time, and the same directory rediscovered later via nativeFindExistingWorktreeForBranch
+// (the "already checked out elsewhere" fallback), must be byte-identical strings -- not
+// merely equal after a test-side filepath.EvalSymlinks normalization. On macOS this is
+// only true because getWorktreeDirectory() resolves symlinks on the base dir up front (see
+// its doc comment) and the rediscovery path canonicalizes git's reported view the same way
+// before returning it.
 func TestNewGitWorktreeWithBranch_FreshPathMatchesGitRediscoveredPath(t *testing.T) {
 	repoDir := setupTestRepo(t)
 	const branch = "backlog/ac1-fresh-vs-rediscovered"
@@ -407,10 +407,8 @@ func TestNewGitWorktreeWithBranch_FreshPathMatchesGitRediscoveredPath(t *testing
 	freshPath := wt1.GetWorktreePath()
 	defer func() { _ = wt1.Cleanup() }()
 
-	// Rediscover the same worktree the way a second, independent construction would:
-	// findExistingWorktreeForBranch parses `git worktree list --porcelain`, which
-	// reports git's own realpath'd view of the directory.
-	rediscoveredPath, found := findExistingWorktreeForBranch(repoDir, branch)
+	// Rediscover the same worktree the way a second, independent construction would.
+	rediscoveredPath, found := nativeFindExistingWorktreeForBranch(repoDir, branch)
 	require.True(t, found, "git must report the worktree just created via Setup()")
 	rediscoveredPath = CanonicalizeWorktreePath(rediscoveredPath)
 

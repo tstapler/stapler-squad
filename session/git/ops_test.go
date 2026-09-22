@@ -260,12 +260,13 @@ func assertNoGitMergeSubcommand(t *testing.T, logPath string) {
 	}
 }
 
-// TestMergeMainIntoWorktree_NativeFlagOn_UsesNativePipeline covers Story 3.4.2's
-// acceptance criterion: with the merge flag on for worktreePath, the public
-// MergeMainIntoWorktree dispatches to the native pipeline instead of shelling out to
-// `git merge`/`git merge --abort` (`git fetch` may still run) — verified at the real
-// subprocess level via installGitSubcommandLogger, not just by checking the outcome.
-func TestMergeMainIntoWorktree_NativeFlagOn_UsesNativePipeline(t *testing.T) {
+// TestMergeMainIntoWorktree_UsesNativePipeline covers Story 3.4.2's acceptance criterion:
+// the public MergeMainIntoWorktree dispatches to the native pipeline instead of shelling
+// out to `git merge`/`git merge --abort` (`git fetch` may still run) — verified at the
+// real subprocess level via installGitSubcommandLogger, not just by checking the outcome.
+func TestMergeMainIntoWorktree_UsesNativePipeline(t *testing.T) {
+	// Not t.Parallel(): installGitSubcommandLogger uses t.Setenv, which
+	// panics when combined with t.Parallel().
 	origin := setupTestRepo(t)
 	work := cloneTestRepo(t, origin)
 	runGit(t, work, "checkout", "-b", "feature")
@@ -277,10 +278,6 @@ func TestMergeMainIntoWorktree_NativeFlagOn_UsesNativePipeline(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "git-invocations.log")
 	installGitSubcommandLogger(t, logPath)
 
-	prevUseNativeMerge := useNativeMerge
-	useNativeMerge = func(worktreePath string) bool { return worktreePath == work }
-	t.Cleanup(func() { useNativeMerge = prevUseNativeMerge })
-
 	result, err := MergeMainIntoWorktree(work, "main")
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -289,15 +286,15 @@ func TestMergeMainIntoWorktree_NativeFlagOn_UsesNativePipeline(t *testing.T) {
 	assertNoGitMergeSubcommand(t, logPath)
 }
 
-// TestMergeMainIntoWorktree_NativeFlagOn_TransitivelyUsedByRealCallSites covers Story
-// 3.4.2's second acceptance criterion: drift.go's EnsureBranchSyncedWithMain calls the
-// exact same package-level MergeMainIntoWorktree the dispatch test above exercises
-// directly, and session/backlog_lifecycle.go's branchReconciler field is assigned this
-// exact function value (git.MergeMainIntoWorktree, session/backlog_lifecycle.go:672)
-// with no wrapper of its own — so proving EnsureBranchSyncedWithMain picks up the native
-// flag here, in-package, is sufficient: neither real call site has a separate code path
-// left unexercised.
-func TestMergeMainIntoWorktree_NativeFlagOn_TransitivelyUsedByRealCallSites(t *testing.T) {
+// TestMergeMainIntoWorktree_TransitivelyUsedByRealCallSites covers Story 3.4.2's second
+// acceptance criterion: drift.go's EnsureBranchSyncedWithMain calls the exact same
+// package-level MergeMainIntoWorktree the dispatch test above exercises directly, and
+// session/backlog_lifecycle.go's branchReconciler field is assigned this exact function
+// value (git.MergeMainIntoWorktree, session/backlog_lifecycle.go:672) with no wrapper of
+// its own — so proving EnsureBranchSyncedWithMain actually merges here, in-package, is
+// sufficient: neither real call site has a separate code path left unexercised.
+func TestMergeMainIntoWorktree_TransitivelyUsedByRealCallSites(t *testing.T) {
+	t.Parallel()
 	origin := setupTestRepo(t)
 	work := cloneTestRepo(t, origin)
 	runGit(t, work, "checkout", "-b", "feature")
@@ -314,17 +311,8 @@ func TestMergeMainIntoWorktree_NativeFlagOn_TransitivelyUsedByRealCallSites(t *t
 	beforeSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
 	wantSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "main"))
 
-	prevUseNativeMerge := useNativeMerge
-	var nativeCalledFor string
-	useNativeMerge = func(worktreePath string) bool {
-		nativeCalledFor = worktreePath
-		return true
-	}
-	t.Cleanup(func() { useNativeMerge = prevUseNativeMerge })
-
 	_, _ = EnsureBranchSyncedWithMain(work, "feature", "main", DefaultBranchDriftThreshold)
 
-	assert.Equal(t, work, nativeCalledFor, "EnsureBranchSyncedWithMain must dispatch through the shared MergeMainIntoWorktree seam that branchReconciler is also assigned directly")
 	afterSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "feature"))
 	assert.NotEqual(t, beforeSHA, afterSHA, "the native pipeline must have actually merged, regardless of the subsequent push outcome")
 	assert.Equal(t, wantSHA, afterSHA, "native merge must fast-forward to main's tip")

@@ -5771,7 +5771,7 @@ func TestShouldSkipWorkTombstoneForRestartGrace_should_OnlySkipPreBootSessionsWi
 // Two items whose titles differ only in characters slugify() strips (punctuation)
 // collide on the exact same branch name, and — confirmed here — CreateBacklogWorktree
 // then hands the second item the exact same worktree directory as the first, via
-// findExistingWorktreeForBranch's (session/git/worktree.go) "branch already checked
+// nativeFindExistingWorktreeForBranch's (session/git/worktree.go) "branch already checked
 // out, reuse its worktree" path.
 //
 // This is a known limitation, not something this bug fix addresses (no tracked
