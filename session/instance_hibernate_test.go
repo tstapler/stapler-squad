@@ -1,6 +1,9 @@
 package session
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // TestRollbackFailedResume_DoesNotClobberLaterTransition verifies AC1: a
 // failed async hibernation-resume must not overwrite a status that already
@@ -35,5 +38,22 @@ func TestRollbackFailedResume_RevertsWhenStillActive(t *testing.T) {
 
 	if got := inst.Snapshot().Status; got != Hibernated {
 		t.Errorf("rollbackFailedResume did not revert: got %s, want Hibernated", got)
+	}
+}
+
+// TestRollbackFailedResume_BumpsUpdatedAt covers rollbackFailedResume, a
+// fourth bypass-the-state-machine path sharing the same touchUpdatedAt fix
+// as TestForceStatus_BumpsUpdatedAt/TestRecoverFromStopped_BumpsUpdatedAt in
+// state_machine_test.go -- without it, the frontend's upsertSession reducer
+// silently drops the reverted status.
+func TestRollbackFailedResume_BumpsUpdatedAt(t *testing.T) {
+	before := time.Now().Add(-time.Hour)
+	inst := &Instance{Title: "test-rollback-updatedat", Status: Active, UpdatedAt: before}
+	inst.snapshot.Store(buildSnapshot(inst))
+
+	rollbackFailedResume(&instanceState{inst: inst})
+
+	if got := inst.Snapshot().UpdatedAt; !got.After(before) {
+		t.Errorf("UpdatedAt = %v, want a time after %v (rollbackFailedResume must bump it)", got, before)
 	}
 }

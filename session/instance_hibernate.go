@@ -152,12 +152,9 @@ func JoinHibernation(i *Instance) {
 	}
 }
 
-// rollbackFailedResume reverts Status to Hibernated after a failed
-// hibernation-resume Start(), but only if the instance is still Active --
-// i.e. nothing else legitimately transitioned it away in the meantime (e.g.
-// a concurrent StopByUser() call landing before this async rollback runs).
-// Applying the rollback unconditionally would silently clobber that later,
-// legitimate transition with a stale Hibernated status.
+// rollbackFailedResume reverts Status to Hibernated after a failed resume,
+// but only if nothing else (e.g. a concurrent StopByUser) already moved the
+// instance on -- an unconditional revert would clobber that later status.
 func rollbackFailedResume(s *instanceState) {
 	i := s.inst
 	i.mu.Lock()
@@ -166,6 +163,7 @@ func rollbackFailedResume(s *instanceState) {
 		return
 	}
 	i.loadStatus(Hibernated)
+	i.touchUpdatedAt()
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
 	i.snapshot.Store(snap)
