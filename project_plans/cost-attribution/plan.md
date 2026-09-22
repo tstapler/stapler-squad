@@ -22,8 +22,11 @@ Work-session rows also never record `estimated_cost_usd`; headless triage/review
    approval, gate custom check, autonomous driver) and the Gemini adapter.
 3. **Deleted backlog items (not started).** `DeleteBacklogItem` deletes the item's `ItemSession` rows,
    so attribution dies with the item. Options: soft-delete, or a durable cost ledger. Needs a decision.
-4. **Tighten path-prefix match (not started).** `associateRecord` strategy 2 matches a session rooted at
-   `/home/tstapler` to ~290 unrelated transcripts.
+4. **Tighten path-prefix match (done).** `isPathPrefixMatch` (`session/tokens/association.go`) dropped
+   its reverse-direction branch (sessionPath under resultPath): a transcript decoded to a short, generic
+   path (e.g. "/home/tstapler" from a `claude` run straight in $HOME) was matching every session rooted
+   anywhere under it. Verified against live data: 288 sessions / $90 were misattributed this way — lower
+   than the ~290/$307 first estimated, which conflated this bug with other no-role associations.
 5. **UI bucket split (not started).** Separate "external (not stapler-squad)" from "unattributed".
 6. **Backfill existing rows (done, low yield).** `InsightsService.BackfillConversationUUIDs` runs once
    per process on the first summary request. Links a worktree transcript to an unlinked, non-live
