@@ -997,6 +997,10 @@ func TestBuildSessionSummary_WhenCalledDirectly_ExpectProtoEqualToHandBuiltExpec
 		// CacheRoiUsd (Story 1.3.1c): cacheRead*(input-cacheRead)/1e6 -
 		// cacheCreation*cacheWrite/1e6 = 250,000*(3.0-0.3)/1e6 - 0 = 0.675.
 		CacheRoiUsd: 0.675,
+		// SessionRole (Story 5): no backlog attribution (sessionMeta is nil) and
+		// "/home/user/proj" has no /worktrees/ segment, so groupUnattributed
+		// classifies it "external" rather than leaving it "".
+		SessionRole: "external",
 	}
 
 	require.Empty(t, got.UnpricedModels)
@@ -1508,7 +1512,7 @@ func TestGetInsightsSummary_WhenBacklogItemArchived_ExpectSessionRoleAndTagsPopu
 	assert.Equal(t, []string{"triage-tag"}, resp.Msg.Sessions[0].Tags)
 }
 
-func TestGetInsightsSummary_WhenNoItemSessionRow_ExpectSessionRoleEmpty(t *testing.T) {
+func TestGetInsightsSummary_WhenNoItemSessionRow_ExpectSessionRoleClassifiedExternal(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
@@ -1529,10 +1533,12 @@ func TestGetInsightsSummary_WhenNoItemSessionRow_ExpectSessionRoleEmpty(t *testi
 
 	require.NoError(t, err)
 	require.Len(t, resp.Msg.Sessions, 1)
-	assert.Equal(t, "", resp.Msg.Sessions[0].SessionRole)
+	// "/home/user/proj" has no /worktrees/ segment, so groupUnattributed
+	// (Story 5) classifies it "external" rather than leaving it "".
+	assert.Equal(t, "external", resp.Msg.Sessions[0].SessionRole)
 }
 
-func TestGetInsightsSummary_WhenBacklogReaderNil_ExpectNoPanicAndEmptyRole(t *testing.T) {
+func TestGetInsightsSummary_WhenBacklogReaderNil_ExpectNoPanicAndExternalRole(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
@@ -1551,7 +1557,7 @@ func TestGetInsightsSummary_WhenBacklogReaderNil_ExpectNoPanicAndEmptyRole(t *te
 		)
 		require.NoError(t, err)
 		require.Len(t, resp.Msg.Sessions, 1)
-		assert.Equal(t, "", resp.Msg.Sessions[0].SessionRole)
+		assert.Equal(t, "external", resp.Msg.Sessions[0].SessionRole)
 	})
 }
 
@@ -1608,7 +1614,7 @@ func TestBuildSessionSummary_WhenSessionHasTagsAndRole_ExpectBothPopulated(t *te
 	assert.Equal(t, session.SessionRoleReview, got.SessionRole)
 }
 
-func TestBuildSessionSummary_WhenNoBacklogLinkage_ExpectSessionRoleEmptyStringNotError(t *testing.T) {
+func TestBuildSessionSummary_WhenNoBacklogLinkage_ExpectSessionRoleClassifiedNotError(t *testing.T) {
 	t.Parallel()
 	pt := tokens.DefaultPricingTable()
 	result := &tokens.ParseResult{
@@ -1627,7 +1633,9 @@ func TestBuildSessionSummary_WhenNoBacklogLinkage_ExpectSessionRoleEmptyStringNo
 
 	require.NotPanics(t, func() {
 		got := buildSessionSummary(result, pt, associator, snapshot, nil)
-		assert.Equal(t, "", got.SessionRole)
+		// "/home/user/proj" has no /worktrees/ segment, so groupUnattributed
+		// (Story 5) classifies it "external" rather than leaving it "".
+		assert.Equal(t, "external", got.SessionRole)
 	})
 }
 
@@ -2133,4 +2141,32 @@ func TestGetInsightsSummary_UnattributedRoleBreakdown_SplitsExternalFromWorktree
 	require.Len(t, external.Items, 1)
 	assert.Equal(t, "kibitzer", external.Items[0].ItemTitle)
 	assert.EqualValues(t, 1, external.Items[0].SessionCount)
+}
+
+// TestGetInsightsSummary_SessionRole_MatchesRoleBreakdownBucket guards the
+// cross-filter bug: SessionTokenSummary.SessionRole must report the same value
+// a session is actually counted under in role_breakdown (groupUnattributed's
+// classification), not the raw pre-classification "" for every unattributed
+// session — otherwise a UI click on the "external" bar filters SessionsTable
+// by a role value no session's SessionRole ever reports, and zero rows match.
+func TestGetInsightsSummary_SessionRole_MatchesRoleBreakdownBucket(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	worktreePath := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25"
+	externalPath := "/home/u/code/github/com/tstapler/kibitzer"
+	results := []*tokens.ParseResult{
+		newResult("u1", "claude-sonnet-4", worktreePath, 1000, 500, 0, now),
+		newResult("u2", "claude-sonnet-4", externalPath, 1000, 500, 0, now),
+	}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), nil)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
+
+	require.NoError(t, err)
+	byConversation := map[string]string{}
+	for _, s := range resp.Msg.Sessions {
+		byConversation[s.ConversationId] = s.SessionRole
+	}
+	assert.Equal(t, "", byConversation["u1"], "worktree session stays in the plain unattributed bucket")
+	assert.Equal(t, "external", byConversation["u2"], "non-worktree session must report \"external\", matching its role_breakdown bucket")
 }

@@ -68,3 +68,26 @@ Work-session rows also never record `estimated_cost_usd`; headless triage/review
      comment) instead of one blob keyed by item_id `""`. Synthetic IDs are prefixed `untracked:` so they
      can never collide with a real backlog-item UUID. New `UnattributedByTitleTable` renders it below the
      "Cost by Stage" chart.
+
+## Follow-up: role-cross-filter cross-filter gap (fixed)
+
+Clicking the "unattributed"/"external" bar or legend chip never filtered `SessionsTable`, for two
+independent reasons, both fixed:
+
+1. **Backend**: `SessionTokenSummary.SessionRole` (set in `buildSessionSummary`) was never run through
+   `groupUnattributed`'s "" → "external" reclassification — only `role_breakdown` was. A session counted
+   under the "external" bucket still reported `SessionRole == ""`, matching nothing. Fixed by calling
+   `groupUnattributed(attributed, r.ProjectPath)` in `buildSessionSummary` too.
+2. **Frontend**: `StageCostChart`'s `toDataPoints` substituted the display placeholder `"unattributed"` for
+   `role: r.sessionRole || "unattributed"`, and emitted that placeholder as the click/filter value — never
+   matching a real `SessionRole`, which is `""` for that bucket. Fixed by keeping `role` as the raw value
+   throughout (dataKey, click emission, `activeRole` comparison) and introducing `roleDisplayLabel`
+   (`insightsFormatters.ts`) purely for display text (tick labels, legend text, aria-labels, the filter
+   chip). This surfaced a second bug: every `roleFilter` truthiness check (`if (roleFilter)`,
+   `!!roleFilter`) in `SessionsTable`/`InsightsDashboard` treated `""` (a real, valid filter value) the same
+   as "no filter selected" (`undefined`) — all five call sites now use explicit `roleFilter !== undefined`.
+
+Verified: new `TestGetInsightsSummary_SessionRole_MatchesRoleBreakdownBucket` (Go) and two new
+`InsightsDashboard` integration tests (clicking each bar actually filters to the right sessions). Four
+pre-existing tests asserted `SessionRole == ""` for a non-worktree path with no backlog link — that's now
+correctly `"external"`, so their assertions (and one test name) were updated, not the code.

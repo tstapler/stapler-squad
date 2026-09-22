@@ -33,7 +33,7 @@ import {
   roleFilterChip,
   roleFilterChipClear,
 } from "./SessionsTable.css";
-import { fmtCost, fmtTokens, fmtPct, shortId, pathBasename } from "./insightsFormatters";
+import { fmtCost, fmtTokens, fmtPct, shortId, pathBasename, roleDisplayLabel } from "./insightsFormatters";
 
 interface Props {
   sessions: SessionTokenSummary[];
@@ -166,8 +166,10 @@ export function SessionsTable({
 
     // Role cross-filter (Task 5.2.2c) — applied as its own array filter, not
     // fuzzy-matched through Fuse's free-text search, since a role name isn't
-    // meant to be searched, only exactly matched.
-    if (roleFilter) {
+    // meant to be searched, only exactly matched. Explicit !== undefined (not
+    // truthiness): "" is itself a real, filterable role value — the
+    // no-backlog-attribution bucket — distinct from "no filter selected".
+    if (roleFilter !== undefined) {
       result = result.filter((s) => s.sessionRole === roleFilter);
     }
 
@@ -268,7 +270,7 @@ export function SessionsTable({
     [sortCol, sortAsc]
   );
 
-  const hasActiveFilters = searchText !== "" || modelFilter !== "" || tagFilter !== "" || !!roleFilter;
+  const hasActiveFilters = searchText !== "" || modelFilter !== "" || tagFilter !== "" || roleFilter !== undefined;
 
   function clearFilters() {
     setSearchText("");
@@ -286,9 +288,9 @@ export function SessionsTable({
   const [roleFilterAnnouncement, setRoleFilterAnnouncement] = useState("");
   useEffect(() => {
     if (prevRoleFilterRef.current === roleFilter) return;
-    if (roleFilter) {
-      setRoleFilterAnnouncement(`Filtered to ${roleFilter}, showing ${displayed.length} sessions`);
-    } else if (prevRoleFilterRef.current) {
+    if (roleFilter !== undefined) {
+      setRoleFilterAnnouncement(`Filtered to ${roleDisplayLabel(roleFilter)}, showing ${displayed.length} sessions`);
+    } else if (prevRoleFilterRef.current !== undefined) {
       setRoleFilterAnnouncement("Filter cleared, showing all sessions");
     }
     prevRoleFilterRef.current = roleFilter;
@@ -450,14 +452,14 @@ export function SessionsTable({
           )}
         </div>
         <div className={filterBar}>
-          {roleFilter && (
+          {roleFilter !== undefined && (
             <span className={roleFilterChip} data-testid="role-filter-chip">
-              Filtered to: {roleFilter}
+              Filtered to: {roleDisplayLabel(roleFilter)}
               <button
                 type="button"
                 className={roleFilterChipClear}
                 onClick={onClearRoleFilter}
-                aria-label={`Clear filter: ${roleFilter}`}
+                aria-label={`Clear filter: ${roleDisplayLabel(roleFilter)}`}
               >
                 ×
               </button>

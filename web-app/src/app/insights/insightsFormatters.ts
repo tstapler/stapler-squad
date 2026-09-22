@@ -42,6 +42,16 @@ export function shortId(id: string): string {
   return id.length > 8 ? id.slice(0, 8) + "…" : id;
 }
 
+/**
+ * Display text for a SessionRole/session_role value ("" for a stapler-squad
+ * session with no backlog attribution). The raw "" must stay "" everywhere it's
+ * used as data (filter state, StageCostChart's dataKey, SessionTokenSummary
+ * comparisons) — this is for text shown to a person only.
+ */
+export function roleDisplayLabel(role: string): string {
+  return role || "unattributed";
+}
+
 // Session worktree dirs are `<title>_<16-hex id>`; the transcript's project path
 // decoding turns every "_" and "-" into "/", so the id is the segment after the title.
 const WORKTREE_PATH = /\/worktrees\/(.+?)\/[0-9a-f]{16}(?:\/|$)/;

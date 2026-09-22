@@ -280,6 +280,11 @@ func buildSessionSummary(
 	if byConversation {
 		isOrphan = false
 	}
+	// Reclassify "" -> "external" the same way accumulateRoleCost's caller does
+	// (groupUnattributed), so SessionRole matches the role_breakdown bucket this
+	// session is actually counted under — otherwise a click on the "external" bar
+	// would filter SessionsTable by a role value no session ever reports.
+	attributed = groupUnattributed(attributed, r.ProjectPath)
 
 	costUSD, unpriced := pt.EstimateCost(r)
 	cacheHitRate := tokens.ComputeCacheHitRate(r.TotalInput, r.CacheRead)
