@@ -74,8 +74,13 @@ type fakeHeadlessPool struct {
 	err       error
 	delay     time.Duration // simulates a slow LLM call; see TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext
 	cost      float64       // returned as CallBlocking's cost; see TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession
-	calls     []fakePoolCall
-	onCall    func(workDir string) // optional: simulates the LLM writing files into WorkDir before the response returns
+	// conversationID, if set, is passed to opts.OnConversationID before
+	// CallBlocking returns, mirroring the real headless.Pool's contract (see
+	// caller.go:759) — see TestTriggerTriage_Success_PersistsConversationUUID
+	// and TestTriggerReReview_HappyPath_PersistsConversationUUID.
+	conversationID string
+	calls          []fakePoolCall
+	onCall         func(workDir string) // optional: simulates the LLM writing files into WorkDir before the response returns
 	// onEnter, if set, is invoked synchronously the moment CallBlocking is entered
 	// (call recorded, before delay/ctx.Done blocking) -- lets a test observe "N
 	// concurrent callers have actually started blocking" deterministically via a
@@ -134,6 +139,9 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 	}
 	if onCall != nil {
 		onCall(opts.WorkDir)
+	}
+	if opts.OnConversationID != nil && f.conversationID != "" {
+		opts.OnConversationID(f.conversationID)
 	}
 	sink(f.cost, true)
 	return resp, f.err
@@ -3337,6 +3345,40 @@ func TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession(t *testing.T) 
 		"TriggerReReview's success path must thread CallBlocking's cost into the persisted ItemSession")
 }
 
+// TestTriggerReReview_HappyPath_PersistsConversationUUID guards the review-side
+// entry point for the conversation-UUID-stamping feature (mirrors
+// TestTriggerTriage_Success_PersistsConversationUUID for the triage side):
+// TriggerReReview wires OnConversationID and threads the captured ID straight
+// into CreateItemSessionWithVerdict (backlog_service_triage.go:2958-2959,3043).
+func TestTriggerReReview_HappyPath_PersistsConversationUUID(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "marker.txt"), []byte("x"), 0o644))
+	itemID := setupItemInReview(t, svc, repoDir)
+
+	const wantConversationID = "66666666-7777-8888-9999-aaaaaaaaaaaa"
+	pool := &fakeHeadlessPool{
+		response:       `{"overall":"PASS","summary":"found it","tool_reads":["marker.txt"],"verdicts":[]}`,
+		conversationID: wantConversationID,
+	}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	parsedID, parseErr := uuid.Parse(resp.Msg.ItemSession.Id)
+	require.NoError(t, parseErr)
+	is, getErr := storage.GetEntClient().ItemSession.Get(t.Context(), parsedID)
+	require.NoError(t, getErr)
+	assert.Equal(t, wantConversationID, is.ConversationUUID,
+		"TriggerReReview's success path must persist OnConversationID's captured UUID onto the ItemSession")
+}
+
 // TestTriggerReReview_should_ResolveFamilyAliasToConcreteModelId_When_ReviewStageConfiguresFamilyOpus
 // (Story 2.3.3) proves TriggerReReview resolves the item's configured review
 // executor through PipelineEngine.ExecutorFor and, per the plan's own
@@ -3824,6 +3866,47 @@ func TestTriggerTriage_Success(t *testing.T) {
 		sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
 		return listErr == nil && len(sessions) == 1 && sessions[0].EndedAt != nil
 	}, 5*time.Second, 50*time.Millisecond, "triage item session should be marked ended on success")
+}
+
+// TestTriggerTriage_Success_PersistsConversationUUID guards the entry point for
+// the conversation-UUID-stamping feature: TriggerTriage wires
+// headless.CallOptions.OnConversationID to capture the transcript UUID and
+// persists it via UpdateItemSessionConversationUUID
+// (backlog_service_trigger_triage.go:501,531-535). Without fakeHeadlessPool
+// actually invoking OnConversationID, that persistence branch never runs
+// under test.
+func TestTriggerTriage_Success_PersistsConversationUUID(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	const wantConversationID = "11111111-2222-3333-4444-555555555555"
+	pool := &fakeHeadlessPool{response: validTriageJSON(), conversationID: wantConversationID}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "headless triage item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	resp, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+	isID := resp.Msg.ItemSession.Id
+
+	parsedID, parseErr := uuid.Parse(isID)
+	require.NoError(t, parseErr)
+
+	// Goroutine runs asynchronously — poll for the conversation UUID to land,
+	// the same way TestTriggerTriage_Success polls for status/EndedAt.
+	wait.RequireEventually(t, func() bool {
+		is, getErr := storage.GetEntClient().ItemSession.Get(t.Context(), parsedID)
+		return getErr == nil && is.ConversationUUID == wantConversationID
+	}, 5*time.Second, 50*time.Millisecond, "triage's ItemSession must persist the conversation UUID from OnConversationID")
 }
 
 // TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo guards the
