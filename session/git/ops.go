@@ -20,6 +20,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // FetchBranch fetches a specific branch from the origin remote.
@@ -150,6 +151,96 @@ func ResolveWorktreeBaseCommit(repoPath string) (defaultBranch, baseSHA string, 
 		return "", "", nil
 	}
 	return "", "", fmt.Errorf("resolve default branch (origin fetch failed: %w, local lookup failed: %v)", fetchErr, localErr)
+}
+
+// AmbientHEADDivergesFromBase reports whether repoPath's currently checked-out
+// branch differs from baseSHA (the commit a new worktree is about to branch
+// from, per ResolveWorktreeBaseCommit) — i.e. whether a caller who instead
+// branched from ambient HEAD, as new_worktree sessions used to
+// (session/instance_worktree.go), would have silently forked from unrelated
+// in-progress work. ambientBranch is "" when it can't be determined (detached
+// HEAD, unborn repo) — diverged is still meaningful in that case. Best-effort:
+// any lookup failure reports no divergence, since this only gates an
+// informational warning, not the branch resolution itself.
+func AmbientHEADDivergesFromBase(repoPath, baseSHA string) (diverged bool, ambientBranch string) {
+	headSHA, err := GetHeadCommitSHA(repoPath)
+	if err != nil || headSHA == baseSHA {
+		return false, ""
+	}
+	branch, _ := GetCurrentBranchName(repoPath)
+	return true, branch
+}
+
+// ResolveRemoteWorktreeBaseCommit is ResolveWorktreeBaseCommit's remote-host
+// counterpart (ssh-remote-workspaces): resolves the same default-branch/
+// origin-tip/unborn-repo contract, but through runner.Run against repoPath on
+// the remote host instead of go-git against the local filesystem, since a
+// remote SessionTypeNewWorktree (server/services/session_service.go's
+// CreateSession mode-specific block) can only run git via the dialed SSH
+// runner. Mirrors ResolveWorktreeBaseCommit's exact fallback order and
+// baseSHA == "" (err == nil) unborn-repo convention -- see its doc comment.
+func ResolveRemoteWorktreeBaseCommit(ctx context.Context, runner tmux.CommandRunner, repoPath string) (defaultBranch, baseSHA string, err error) {
+	var errs []error
+	for _, candidate := range CandidateDefaultBranches {
+		out, fetchErr := runner.Run(ctx, repoPath, "git", "fetch", "origin", "--", candidate)
+		if fetchErr != nil {
+			errs = append(errs, fmt.Errorf("fetch %s: %s: %w", candidate, strings.TrimSpace(string(out)), fetchErr))
+			continue
+		}
+		out, revErr := runner.Run(ctx, repoPath, "git", "rev-parse", "origin/"+candidate)
+		if revErr != nil {
+			errs = append(errs, fmt.Errorf("rev-parse origin/%s: %s: %w", candidate, strings.TrimSpace(string(out)), revErr))
+			continue
+		}
+		if sha := strings.TrimSpace(string(out)); sha != "" {
+			return candidate, sha, nil
+		}
+	}
+	for _, candidate := range CandidateDefaultBranches {
+		if out, revErr := runner.Run(ctx, repoPath, "git", "rev-parse", "refs/heads/"+candidate); revErr == nil {
+			if sha := strings.TrimSpace(string(out)); sha != "" {
+				return candidate, sha, nil
+			}
+		}
+	}
+	// Unborn-repo detection must not just be "rev-parse HEAD failed" -- that's
+	// also exactly what a connection drop or resource-shortage rejection on
+	// this same runner looks like (both return a non-nil error with no way to
+	// tell them apart from the error alone), which would silently misroute a
+	// broken connection into "no commits, ambient HEAD is safe" instead of a
+	// loud error. `git symbolic-ref -q HEAD` succeeds even on a genuinely
+	// unborn repo (HEAD is a valid symbolic ref to an as-yet-commitless
+	// branch) but fails the same way rev-parse HEAD would on a connection
+	// problem -- so only treat it as unborn when the symbolic ref resolves
+	// but the commit it points to does not.
+	if _, symErr := runner.Run(ctx, repoPath, "git", "symbolic-ref", "-q", "HEAD"); symErr == nil {
+		if _, headErr := runner.Run(ctx, repoPath, "git", "rev-parse", "HEAD"); headErr != nil {
+			// No candidate default branch and HEAD is a valid ref pointing to
+			// no commit yet: an unborn repo (freshly `git init`'d on the
+			// remote host), the one case ResolveWorktreeBaseCommit also lets
+			// a caller fall back to ambient HEAD for, since no other branch
+			// exists to misattribute to.
+			return "", "", nil
+		}
+	}
+	return "", "", fmt.Errorf("resolve default branch on remote repo %s (%v)", repoPath, errors.Join(errs...))
+}
+
+// RemoteAmbientHEADDivergesFromBase is AmbientHEADDivergesFromBase's remote
+// counterpart, resolving repoPath's checked-out HEAD via runner.Run instead
+// of a local go-git open.
+func RemoteAmbientHEADDivergesFromBase(ctx context.Context, runner tmux.CommandRunner, repoPath, baseSHA string) (diverged bool, ambientBranch string) {
+	out, err := runner.Run(ctx, repoPath, "git", "rev-parse", "HEAD")
+	headSHA := strings.TrimSpace(string(out))
+	if err != nil || headSHA == "" || headSHA == baseSHA {
+		return false, ""
+	}
+	if brOut, brErr := runner.Run(ctx, repoPath, "git", "rev-parse", "--abbrev-ref", "HEAD"); brErr == nil {
+		if br := strings.TrimSpace(string(brOut)); br != "" && br != "HEAD" {
+			ambientBranch = br
+		}
+	}
+	return true, ambientBranch
 }
 
 // ResolveExplicitBranchSHA resolves branchName's tip commit SHA for a caller

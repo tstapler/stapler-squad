@@ -202,6 +202,15 @@ type Instance struct {
 	WorkingDir string
 	// Branch is the branch of the instance.
 	Branch string
+	// CreationWarning is a one-time, non-fatal signal set during
+	// setupFirstTimeWorktree (SessionTypeNewWorktree) when the source repo's
+	// ambient checked-out HEAD diverged from the resolved default branch the
+	// new worktree actually branched from — see newWorktreeFromResolvedBase.
+	// Surfaced to MCP callers via instanceToDetail rather than logged only,
+	// per this bug's AC1. Never cleared or updated again after creation, so
+	// no actor setter is needed for it the way GetPath()'s doc comment
+	// requires for fields background goroutines can mutate later.
+	CreationWarning string
 	// Status is the status of the instance.
 	Status Status
 	// Program is the program to run in the instance.
@@ -897,6 +906,13 @@ type InstanceOptions struct {
 	// Branch is the git branch name to use when creating a new worktree.
 	// If empty and SessionType is SessionTypeNewWorktree, a branch name is derived from the title.
 	Branch string
+	// CreationWarning seeds Instance.CreationWarning up front for a remote
+	// SessionTypeNewWorktree, whose base-branch resolution (and any ambient-
+	// HEAD-divergence detection) already ran synchronously in CreateSession's
+	// remote mode-specific block, before this Instance exists. The local
+	// path's equivalent (newWorktreeFromResolvedBase) instead sets the field
+	// directly during setupFirstTimeWorktree, since it runs after construction.
+	CreationWarning string
 	// Program is the program to run in the instance (e.g. "claude", "aider --model ollama_chat/gemma3:1b")
 	Program string
 	// If AutoYes is true, automatically accept prompts
@@ -1059,6 +1075,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		Status:           Creating,
 		Path:             absPath,
 		Branch:           opts.Branch,
+		CreationWarning:  opts.CreationWarning,
 		Program:          opts.Program,
 		Height:           0,
 		Width:            0,
@@ -2211,19 +2228,8 @@ func (i *Instance) Resume() error {
 		}
 		program := i.buildLaunchCommand(claudeSessionID)
 		i.LaunchCommand = program
-		tmuxPrefix := i.TmuxPrefix
-		if tmuxPrefix == "" {
-			tmuxPrefix = "staplersquad_"
-		}
-		if tb, ok := i.processManager.(*TmuxBackend); ok {
-			if i.TmuxServerSocket != "" {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil)))
-			} else {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(i.Title, program, tmuxPrefix))
-			}
-			if i.UUID != "" {
-				tb.TmuxManager().Session().SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
-			}
+		if _, ok := i.processManager.(*TmuxBackend); ok {
+			i.wireTmuxSession(program)
 			if claudeSessionID != "" {
 				log.Info("resume: reinitializing tmux session with --resume", "session", i.Title, "uuid", claudeSessionID)
 			}
@@ -2422,24 +2428,9 @@ func (i *Instance) Restart(preserveOutput bool) error {
 	i.piSession = restorePiSession
 	i.piSessionMu.Unlock()
 
-	// Create a new tmux session
-	// Use configurable prefix or default
-	tmuxPrefix := i.TmuxPrefix
-	if tmuxPrefix == "" {
-		tmuxPrefix = "staplersquad_" // Default fallback
-	}
-
-	// Record the full launch command for diagnostics (MCP injection verification, etc.)
 	i.LaunchCommand = program
-
-	// Use server socket isolation if specified, otherwise use prefix-only isolation
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		if i.TmuxServerSocket != "" {
-			tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil)))
-		} else {
-			tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(i.Title, program, tmuxPrefix))
-		}
-	}
+	// Create and wire a new tmux session with full environment configuration
+	i.wireTmuxSession(program)
 
 	// Start the new session
 	if err := i.pm().Start(worktreePath); err != nil {

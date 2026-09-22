@@ -329,9 +329,14 @@ func runGoleakTolerant(t *testing.T, check func()) {
 // trigger Go's own stack-trace elision (e.g. tests that fork subprocesses,
 // like tmux.StartZombieWatcher's `ps` calls). See
 // goleakElidedStackPanicMarker and runGoleakTolerant for the full rationale.
-func verifyNoLeaksTolerant(t *testing.T, baseline goleak.Option) {
+func verifyNoLeaksTolerant(t *testing.T, baseline goleak.Option, options ...goleak.Option) {
 	t.Helper()
-	runGoleakTolerant(t, func() { goleak.VerifyNone(t, baseline) })
+	opts := append([]goleak.Option{
+		baseline,
+		goleak.IgnoreAnyFunction("net/http.(*http2clientConnReadLoop).run"),
+		goleak.IgnoreAnyFunction("net/http.(*http2ClientConn).readLoop"),
+	}, options...)
+	runGoleakTolerant(t, func() { goleak.VerifyNone(t, opts...) })
 }
 
 // ignoreCurrentTolerant is goleak.IgnoreCurrent wrapped in the same

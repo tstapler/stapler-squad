@@ -86,3 +86,9 @@ No BLOCKER or MUST FIX findings surfaced at any layer — repair loop never ente
 ## Verdict
 
 ✅ PASS — ready for `/sdd:7-ship` (via `/backlog/ship`).
+
+## Resolution (backlog item 892af771)
+
+Every acceptance criterion is already satisfied on `main` by commit `8b365d5a0` (#669): `useFocusTrap_should_RestoreFocusToTrigger_When_IsActiveTogglesFalseWithoutUnmount` at `web-app/src/lib/hooks/useFocusTrap.test.tsx:96`, reusing `TrapHarness`. `npx jest --no-coverage --testPathPatterns="useFocusTrap.test"` passes 15/15. This backlog item duplicates #669; its branch adds only this note.
+
+The modal-level `isActive` derivation is intentionally **not** actioned. `ReviewChangesModal.tsx` and `BacklogFileBrowserModal.tsx` keep `useFocusTrap(modalRef, true, triggerRef)` per the item's "When to act" clause: derive `isActive` from open state only when a modal must stay mounted while closed (exit transitions).

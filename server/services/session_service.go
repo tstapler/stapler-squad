@@ -1617,7 +1617,7 @@ func (s *SessionService) TriggerReviewForSession(sessionUUID string) {
 // BacklogLifecycleListener can spawn one-shot review sessions automatically when
 // a work session exits. The session is tagged "backlog:review" and runs one-shot.
 func (s *SessionService) SpawnReviewSession(ctx context.Context, item *session.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error) {
-	inst, err := s.CreateDirectorySession(ctx, "review:"+item.ID[:8], item.RepoPath, prompt, []string{"backlog:review"}, true, true)
+	inst, err := s.CreateDirectorySession(ctx, "review:"+item.ID[:8], item.RepoPath, prompt, []string{"backlog:review"}, true, true, "")
 	if err != nil {
 		return nil, err
 	}
@@ -1629,13 +1629,17 @@ func (s *SessionService) SpawnReviewSession(ctx context.Context, item *session.B
 // BacklogService can spawn sessions without importing SessionService directly.
 // It creates a directory-type session with the given title, path, initial prompt,
 // tags, and oneShot flag, wires it into the live poller, and returns the Instance.
-func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error) {
+func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error) {
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, path, "")
+	program := resolved.Program
+	if programOverride != "" {
+		program = programOverride
+	}
 	opts := session.InstanceOptions{
 		Title:            title,
 		Path:             path,
-		Program:          resolved.Program,
+		Program:          program,
 		PermissionMode:   session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
 		SessionType:      session.SessionTypeDirectory,
 		Prompt:           prompt,
@@ -1692,13 +1696,17 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 // CreateWorktreeSession satisfies the services.SessionCreator interface.
 // It spawns a session that uses an already-created git worktree at worktreePath.
 // repoPath is the parent repo (for program resolution). worktreePath must exist on disk.
-func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error) {
+func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error) {
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, repoPath, "")
+	program := resolved.Program
+	if programOverride != "" {
+		program = programOverride
+	}
 	opts := session.InstanceOptions{
 		Title:            title,
 		Path:             repoPath,
-		Program:          resolved.Program,
+		Program:          program,
 		PermissionMode:   session.PermissionModeAuto,
 		SessionType:      session.SessionTypeExistingWorktree,
 		ExistingWorktree: worktreePath,
@@ -2467,6 +2475,20 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
+	// If program refers to a custom program ID, resolve its underlying command, CLI flags, and env vars.
+	if program != "" {
+		resolvedProg := config.ResolveProgramConfig(cfg, program)
+		if resolvedProg.IsCustom {
+			for k, v := range resolvedProg.EnvVars {
+				if _, exists := instanceEnvVars[k]; !exists {
+					instanceEnvVars[k] = v
+				}
+			}
+			// Program CLIFlags are NOT prepended here: buildLaunchCommand resolves them
+			// from the stored custom program ID at launch, so doing it here doubles them.
+		}
+	}
+
 	// Determine session type - use explicit session_type if provided, otherwise infer from fields.
 	// If the session was created via alias and the alias specifies a session type,
 	// use it as the fallback when the request itself didn't set one.
@@ -2580,6 +2602,11 @@ func (s *SessionService) CreateSession(
 	// Directory, which NewProject would otherwise reintroduce.
 	var executionTarget session.ExecutionTarget = session.LocalTarget{}
 	existingWorktreeOverride := req.Msg.ExistingWorktree
+	// remoteCreationWarning mirrors Instance.CreationWarning (see
+	// InstanceOptions.CreationWarning's doc comment) for a remote
+	// SessionTypeNewWorktree, whose base-branch resolution runs synchronously
+	// in this block, before the Instance exists to set the field itself.
+	var remoteCreationWarning string
 	if remoteRequested {
 		switch sessionType {
 		case session.SessionTypeNewWorktree, session.SessionTypeExistingWorktree, session.SessionTypeDirectory, session.SessionTypeNewProject:
@@ -2641,16 +2668,44 @@ func (s *SessionService) CreateSession(
 			worktreeOps = git.NewRemoteWorktreeOps(runner)
 			remoteWT = git.RemoteWorktree{RepoPath: resolvedPath, WorktreePath: remoteWorkingPath, Branch: branch}
 
+			// Resolve the base commit the same way the local path does
+			// (git.ResolveWorktreeBaseCommit) instead of branching off
+			// resolvedPath's ambient checked-out HEAD -- see
+			// Instance.newWorktreeFromResolvedBase's doc comment for the
+			// misattribution bug this avoids. baseSHA == "" (err == nil) means
+			// an unborn repo, the one case ambient HEAD is safe to use.
+			defaultBranch, baseSHA, resolveErr := git.ResolveRemoteWorktreeBaseCommit(ctx, runner, resolvedPath)
+			if resolveErr != nil {
+				return nil, connect.NewError(connect.CodeInternal,
+					fmt.Errorf("failed to resolve default branch on remote %q: %w", resolvedRemote.Name, resolveErr))
+			}
+			branchArgs := []string{"branch", branch}
+			if baseSHA != "" {
+				branchArgs = append(branchArgs, baseSHA)
+				if diverged, ambientBranch := git.RemoteAmbientHEADDivergesFromBase(ctx, runner, resolvedPath, baseSHA); diverged {
+					if ambientBranch != "" {
+						remoteCreationWarning = fmt.Sprintf(
+							"branched from %s's default branch %q instead of %q, which %s was checked out to and has diverged from it",
+							resolvedPath, defaultBranch, ambientBranch, resolvedPath)
+					} else {
+						remoteCreationWarning = fmt.Sprintf(
+							"branched from %s's default branch %q instead of its ambient checked-out HEAD, which has diverged from it",
+							resolvedPath, defaultBranch)
+					}
+				}
+			}
+
 			// RemoteWorktreeOps.CreateWorktree (Phase 2, session/git/remote_worktree.go)
 			// mirrors the local "attach to an already-existing branch" `git worktree add
 			// <path> <branch>` shape deliberately, with no -b -- so a session that wants
 			// a fresh branch on the remote (the common case, mirroring local
-			// SessionTypeNewWorktree's own branch auto-creation) needs it created first.
-			// Best-effort: "git branch <name>" failing because the branch already exists
-			// is expected and ignored; any other failure (unreachable repo, invalid
-			// resolvedPath) is surfaced immediately rather than deferred to a more
-			// confusing failure from CreateWorktree itself.
-			if out, branchErr := runner.Run(ctx, resolvedPath, "git", "branch", branch); branchErr != nil &&
+			// SessionTypeNewWorktree's own branch auto-creation) needs it created first,
+			// from baseSHA rather than ambient HEAD (see above).
+			// Best-effort: "git branch <name> [sha]" failing because the branch already
+			// exists is expected and ignored; any other failure (unreachable repo,
+			// invalid resolvedPath) is surfaced immediately rather than deferred to a
+			// more confusing failure from CreateWorktree itself.
+			if out, branchErr := runner.Run(ctx, resolvedPath, "git", branchArgs...); branchErr != nil &&
 				!strings.Contains(string(out), "already exists") {
 				return nil, connect.NewError(connect.CodeInternal,
 					fmt.Errorf("failed to create branch %q on remote %q: %s (%w)",
@@ -2754,6 +2809,7 @@ func (s *SessionService) CreateSession(
 		Prompt:           req.Msg.Prompt,
 		InitialPrompt:    initialPrompt,
 		ExistingWorktree: existingWorktreeOverride,
+		CreationWarning:  remoteCreationWarning,
 		Category:         req.Msg.Category,
 		SessionType:      sessionType,
 		TmuxPrefix:       "", // Use default from config
@@ -5192,6 +5248,31 @@ func (s *SessionService) UpsertAlias(ctx context.Context, req *connect.Request[s
 // DeleteAlias removes an alias preset by name.
 func (s *SessionService) DeleteAlias(ctx context.Context, req *connect.Request[sessionv1.DeleteAliasRequest]) (*connect.Response[sessionv1.DeleteAliasResponse], error) {
 	return s.defaultsSvc.DeleteAlias(ctx, req)
+}
+
+// ListProgramsConfig returns all program configurations (built-in and custom).
+func (s *SessionService) ListProgramsConfig(ctx context.Context, req *connect.Request[sessionv1.ListProgramsConfigRequest]) (*connect.Response[sessionv1.ListProgramsConfigResponse], error) {
+	return s.defaultsSvc.ListProgramsConfig(ctx, req)
+}
+
+// UpsertProgramConfig creates or updates a custom program configuration.
+func (s *SessionService) UpsertProgramConfig(ctx context.Context, req *connect.Request[sessionv1.UpsertProgramConfigRequest]) (*connect.Response[sessionv1.UpsertProgramConfigResponse], error) {
+	return s.defaultsSvc.UpsertProgramConfig(ctx, req)
+}
+
+// ProbeProgram checks whether a program command resolves to a usable executable.
+func (s *SessionService) ProbeProgram(ctx context.Context, req *connect.Request[sessionv1.ProbeProgramRequest]) (*connect.Response[sessionv1.ProbeProgramResponse], error) {
+	return s.defaultsSvc.ProbeProgram(ctx, req)
+}
+
+// StartProgramProbeLoginPath starts login-shell PATH derivation for ProbeProgram.
+func (s *SessionService) StartProgramProbeLoginPath() {
+	s.defaultsSvc.StartProgramProbeLoginPath()
+}
+
+// DeleteProgramConfig removes a custom program configuration by ID.
+func (s *SessionService) DeleteProgramConfig(ctx context.Context, req *connect.Request[sessionv1.DeleteProgramConfigRequest]) (*connect.Response[sessionv1.DeleteProgramConfigResponse], error) {
+	return s.defaultsSvc.DeleteProgramConfig(ctx, req)
 }
 
 // SearchFiles performs a recursive name-substring search in a session's worktree.

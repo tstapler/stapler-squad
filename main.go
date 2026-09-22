@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/telemetry"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -326,11 +327,11 @@ var (
 
 			// Detect every LAN IP (not just the OS-preferred outbound one, which
 			// can be a VPN tunnel) for hostname resolution and display.
-			lanIPs := detectLANIPs()
+			lanIPs := detectLANIPs(ctx)
 			hostnameSeen := make(map[string]bool)
 			var hostnames []string
 			for _, ip := range lanIPs {
-				for _, name := range resolveLANHostnames(ip) {
+				for _, name := range resolveLANHostnames(ctx, ip) {
 					if !hostnameSeen[name] {
 						hostnameSeen[name] = true
 						hostnames = append(hostnames, name)
@@ -433,6 +434,10 @@ var (
 				srv = server.NewServerWithDeps(address, rt.ToServerDeps())
 				srv.SetHostnames(hostnames)
 
+				// Derive the login-shell PATH for ProbeProgram lookups off the request
+				// path; the service constructor stays hermetic (Task 1.1.4d2).
+				coreDeps.SessionService.StartProgramProbeLoginPath()
+
 				localOrigin := fmt.Sprintf("http://%s", address)
 				srv.SetOrigins([]string{localOrigin})
 
@@ -452,9 +457,12 @@ var (
 				}
 
 				// Start a second HTTPS server with passkey auth for remote access.
+				var remoteAccess *remoteAccessResult
 				if remoteAccessFlag || cfg.PasskeyEnabled {
-					if err := startRemoteAccess(ctx, srv, address, cfg, remotePortFlag); err != nil {
-						return fmt.Errorf("start remote access: %w", err)
+					var raErr error
+					remoteAccess, raErr = startRemoteAccess(ctx, srv, address, cfg, remotePortFlag)
+					if raErr != nil {
+						return fmt.Errorf("start remote access: %w", raErr)
 					}
 				}
 
@@ -464,6 +472,22 @@ var (
 						log.Error("HTTP server stopped", "err", err)
 					}
 				})
+
+				// The hostname detector always starts, regardless of the
+				// remote-access/passkey setting -- periodic redetection of
+				// Server.hostnames is this feature's primary success metric
+				// and must not depend on remote access being enabled
+				// (project_plans/network-hostname-redetect Task 2.1.2c).
+				// WAHandler/CertStore are nil when remote access is
+				// disabled; redetect's nil-checks (Epic 2.2) mean this still
+				// keeps Server.hostnames current, just without RPID/TLS
+				// publication. Extracted into startHostnameDetector (mirrors
+				// the superviseTymuxd extraction below) so the disable-flag
+				// branch and wiring are independently testable without a
+				// real *warren.App or OS network monitor.
+				startHostnameDetector(srv.Mux(), srv, remoteAccess,
+					func() (NetworkChangeSource, error) { return newTailscaleNetmonSource() },
+					a.Go, a.OnStop)
 
 				return nil
 			})
@@ -732,13 +756,13 @@ var (
 			}
 			fmt.Fprintf(os.Stderr, "New setup token written to %s (valid 1h)\n", setupTokenPath)
 
-			lanIPs := detectLANIPs()
+			lanIPs := detectLANIPs(cmd.Context())
 			lanIPStr := lanIPs[0]
 
 			var hostnames []string
 			hostnameSeen := make(map[string]bool)
 			for _, ip := range lanIPs {
-				for _, name := range resolveLANHostnames(ip) {
+				for _, name := range resolveLANHostnames(cmd.Context(), ip) {
 					if !hostnameSeen[name] {
 						hostnameSeen[name] = true
 						hostnames = append(hostnames, name)
@@ -964,7 +988,10 @@ func parseExtraOrigins(raw string) (valid []string, rejected []string) {
 
 // resolveLANHostnames returns a list of domain names suitable for use as a WebAuthn rpID
 // or TLS SANs. It collects all identifiable hostnames from various sources.
-func resolveLANHostnames(lanIPStr string) []string {
+// ctx bounds every subprocess/DNS call this makes -- a caller with a tight
+// per-cycle deadline (HostnameDetector.redetect) can cancel it mid-call
+// instead of merely gating the next call from starting.
+func resolveLANHostnames(ctx context.Context, lanIPStr string) []string {
 	var hostnames []string
 	seen := make(map[string]bool)
 
@@ -997,12 +1024,12 @@ func resolveLANHostnames(lanIPStr string) []string {
 	// exists and answers fine when queried directly. Ask every
 	// nameserver scutil knows about — including scoped ones — so that
 	// record isn't lost.
-	for _, name := range reverseDNSViaKnownNameservers(lanIPStr) {
+	for _, name := range reverseDNSViaKnownNameservers(ctx, lanIPStr) {
 		add(name)
 	}
 
 	// 2. Linux-specific: mDNS reverse lookup via avahi-resolve
-	avahiCtx, avahiCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	avahiCtx, avahiCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer avahiCancel()
 	avahiCmd := safeexec.CommandContext(avahiCtx, "avahi-resolve", "-a", lanIPStr)
 	if out, err := avahiCmd.Output(); err == nil {
@@ -1013,7 +1040,7 @@ func resolveLANHostnames(lanIPStr string) []string {
 	}
 
 	// 3. Try hostname -f for FQDN
-	hostnameCtx, hostnameCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	hostnameCtx, hostnameCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer hostnameCancel()
 	hostnameCmd := safeexec.CommandContext(hostnameCtx, "hostname", "-f")
 	if out, err := hostnameCmd.Output(); err == nil {
@@ -1023,7 +1050,7 @@ func resolveLANHostnames(lanIPStr string) []string {
 	hostname, hostErr := os.Hostname()
 	if hostErr == nil && hostname != "" {
 		// 4. hostname + search domains
-		for _, domain := range getDNSSearchDomains() {
+		for _, domain := range getDNSSearchDomains(ctx) {
 			if domain == "local" {
 				continue
 			}
@@ -1040,7 +1067,7 @@ func resolveLANHostnames(lanIPStr string) []string {
 // getDNSSearchDomains returns the DNS search domains configured on this system.
 // It checks /etc/resolv.conf first, then falls back to `scutil --dns` on macOS
 // (where /etc/resolv.conf is not the authoritative source).
-func getDNSSearchDomains() []string {
+func getDNSSearchDomains(ctx context.Context) []string {
 	seen := make(map[string]bool)
 	var domains []string
 
@@ -1064,7 +1091,7 @@ func getDNSSearchDomains() []string {
 	}
 
 	// scutil --dns — macOS authoritative source for search domains.
-	scutilCtx, scutilCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	scutilCtx, scutilCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer scutilCancel()
 	scutilCmd := safeexec.CommandContext(scutilCtx, "scutil", "--dns")
 	if out, err := scutilCmd.Output(); err == nil {
@@ -1086,8 +1113,8 @@ func getDNSSearchDomains() []string {
 // including ones scoped to a single search domain (e.g. a LAN router
 // handling only a home domain while a VPN resolver handles everything
 // else). Returns nil on non-macOS systems where scutil isn't present.
-func scutilNameservers() []string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func scutilNameservers(parent context.Context) []string {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	out, err := safeexec.CommandContext(ctx, "scutil", "--dns").Output()
 	if err != nil {
@@ -1124,10 +1151,10 @@ func scutilNameservers() []string {
 // the wrong resolver even though the LAN router would have answered.
 // Querying each known nameserver directly finds a LAN-only A record that
 // step would otherwise miss.
-func forwardLookupViaKnownNameservers(hostname string) []string {
+func forwardLookupViaKnownNameservers(parent context.Context, hostname string) []string {
 	seen := make(map[string]bool)
 	var ips []string
-	for _, server := range scutilNameservers() {
+	for _, server := range scutilNameservers(parent) {
 		resolver := &net.Resolver{
 			PreferGo: true,
 			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -1135,7 +1162,7 @@ func forwardLookupViaKnownNameservers(hostname string) []string {
 				return d.DialContext(ctx, network, net.JoinHostPort(server, "53"))
 			},
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 		found, err := resolver.LookupHost(ctx, hostname)
 		cancel()
 		if err != nil {
@@ -1159,10 +1186,10 @@ func forwardLookupViaKnownNameservers(hostname string) []string {
 // correctly — it always falls through to whichever resolver is unscoped or
 // listed first. Querying each known nameserver directly finds a LAN-only
 // PTR record that step 1's net.LookupAddr would otherwise miss.
-func reverseDNSViaKnownNameservers(lanIPStr string) []string {
+func reverseDNSViaKnownNameservers(parent context.Context, lanIPStr string) []string {
 	seen := make(map[string]bool)
 	var names []string
-	for _, server := range scutilNameservers() {
+	for _, server := range scutilNameservers(parent) {
 		resolver := &net.Resolver{
 			PreferGo: true,
 			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -1170,7 +1197,7 @@ func reverseDNSViaKnownNameservers(lanIPStr string) []string {
 				return d.DialContext(ctx, network, net.JoinHostPort(server, "53"))
 			},
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 		found, err := resolver.LookupAddr(ctx, lanIPStr)
 		cancel()
 		if err != nil {
@@ -1245,8 +1272,11 @@ func listNonLoopbackIPs() []string {
 // should cover: the OS-preferred outbound address first (preserving prior
 // single-IP behavior and its use as the default display/rpID address), then
 // any other interface addresses listNonLoopbackIPs finds that
-// getOutboundIP's routing-table heuristic missed.
-func detectLANIPs() []string {
+// getOutboundIP's routing-table heuristic missed. ctx is accepted (though
+// unused today, since neither collaborator here shells out or does network
+// I/O with a cancelable context) so this matches HostnameDetector's
+// detectFn func(context.Context) []string signature.
+func detectLANIPs(_ context.Context) []string {
 	seen := make(map[string]bool)
 	var ips []string
 	if lanIP, err := getOutboundIP(); err == nil && lanIP != nil {
@@ -1266,12 +1296,122 @@ func detectLANIPs() []string {
 	return ips
 }
 
+// verifyHostnameOwnership reports whether hostname forward-resolves to an IP
+// this machine actually owns. It gates two independent consumers against a
+// single implementation: startRemoteAccess's boot-time candidate filter and
+// reactive per-request rpID acceptance (both below), and (Epic 2.2)
+// HostnameDetector's periodic-redetection validation gate -- a hostname
+// discovered post-boot must pass the exact same ownership check as one seen
+// at startup, not a second hand-rolled copy of it.
+//
+// A hostname not owned by this host may still be a legitimate LAN client --
+// discovery (detectLANIPs/resolveLANHostnames) is one-shot at boot and can
+// miss anything not yet resolvable at that instant (e.g. Wi-Fi/DHCP still
+// coming up when launchd started this process). Accept it as a new rpID only
+// if it forward-resolves to an IP this machine actually owns, so a request
+// can't claim an arbitrary hostname as its RPID.
+// ctx bounds the underlying DNS lookups -- HostnameDetector passes its
+// per-cycle cycleCtx so a hung resolver can't stall redetect past
+// cycleTimeout (see hostname_detector.go's redetect/cycleCtx doc comments);
+// startRemoteAccess's one-shot boot-time call uses context.Background() via
+// a thin adapter below since it isn't part of a bounded cycle loop.
+func verifyHostnameOwnership(ctx context.Context, hostname string) bool {
+	resolvedIPs, _ := net.DefaultResolver.LookupHost(ctx, hostname)
+	// The OS's default resolver order can shadow a LAN-only search domain
+	// with an unscoped VPN resolver (see forwardLookupViaKnownNameservers)
+	// -- always also check every nameserver scutil knows about directly
+	// rather than only falling back to it when net.LookupHost errors.
+	resolvedIPs = append(resolvedIPs, forwardLookupViaKnownNameservers(ctx, hostname)...)
+	ownIPs := listNonLoopbackIPs()
+	for _, resolved := range resolvedIPs {
+		for _, own := range ownIPs {
+			if resolved == own {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// remoteAccessResult carries the collaborators startRemoteAccess builds that
+// HostnameDetector needs to keep publishing hostname/TLS/RPID state after
+// startup: the WebAuthn handler (to register newly-verified hostnames as
+// trusted RPIDs), the TLS cert store (to keep SANs current), and the initial
+// per-IP hostname map (the detector's starting `networks` state).
+type remoteAccessResult struct {
+	Handler   *serverauth.Handler
+	CertStore *server.NetworkCertStore
+	Networks  map[string][]string
+}
+
+// remoteAuthSetup carries the auth-subsystem collaborators initRemoteAuth
+// builds that startRemoteAccess still needs afterward: configDir (for the
+// host-advertisement identity load that follows), store/setupMgr (for the
+// bootstrap QR-code check), and sessions/waHandler (for the auth middleware
+// and remoteAccessResult respectively).
+type remoteAuthSetup struct {
+	ConfigDir string
+	Store     *serverauth.CredentialStore
+	Sessions  *serverauth.SessionManager
+	WAHandler *serverauth.Handler
+	SetupMgr  *serverauth.SetupManager
+}
+
+// initRemoteAuth brings up the WebAuthn credential store, session manager,
+// setup-token watcher, and route registration for the remote HTTPS server.
+// Extracted out of startRemoteAccess to keep that function under the funlen
+// gate -- this block is a self-contained "auth subsystem bring-up" unit with
+// no branching into the surrounding TLS/hostname-detection logic, so it can
+// be named and tested independently.
+func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins []string, hostnameValidator func(string) bool, caFile, displayHost string, remotePort int) (*remoteAuthSetup, error) {
+	store, err := serverauth.NewCredentialStore()
+	if err != nil {
+		return nil, fmt.Errorf("create credential store: %w", err)
+	}
+
+	// Persist auth sessions so the phone stays logged in across server restarts.
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("get config dir: %w", err)
+	}
+	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
+	sessions := serverauth.NewSessionManager(sessionsPath)
+
+	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions, hostnameValidator)
+	if err != nil {
+		return nil, fmt.Errorf("create webauthn handler: %w", err)
+	}
+
+	setupMgr := serverauth.NewSetupManager()
+	inviteMgr := serverauth.NewInviteManager()
+
+	// Ensure the auth subdirectory exists so WatchFile can watch a quiet directory
+	// instead of the busy root state dir (eliminates spurious fsnotify wakeups).
+	authDir := filepath.Join(configDir, serverauth.SetupTokenDir)
+	if err := os.MkdirAll(authDir, 0700); err != nil {
+		log.Warn("failed to create auth dir", "path", authDir, "err", err)
+	}
+	setupTokenPath := filepath.Join(authDir, serverauth.SetupTokenFile)
+	go setupMgr.WatchFile(ctx, setupTokenPath)
+
+	// Register auth routes on the shared mux (accessible via both servers).
+	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort)
+
+	return &remoteAuthSetup{
+		ConfigDir: configDir,
+		Store:     store,
+		Sessions:  sessions,
+		WAHandler: waHandler,
+		SetupMgr:  setupMgr,
+	}, nil
+}
+
 // startRemoteAccess starts a second HTTPS server on all interfaces with passkey
 // authentication, while the local server on localhost stays unchanged.
-func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int) error {
+func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int) (*remoteAccessResult, error) {
 	// Detect every LAN IP (not just the OS-preferred outbound one, which can
 	// be a VPN tunnel) for QR code URLs and TLS cert SANs.
-	lanIPs := detectLANIPs()
+	lanIPs := detectLANIPs(ctx)
 	lanIPStr := lanIPs[0]
 
 	// Use hostnames already resolved and stored on the server -- this is
@@ -1289,43 +1429,27 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 		"127.0.0.1": {"localhost", "127.0.0.1"},
 	}
 	for _, ip := range lanIPs {
-		networks[ip] = append([]string{ip}, resolveLANHostnames(ip)...)
+		networks[ip] = append([]string{ip}, resolveLANHostnames(ctx, ip)...)
 	}
 
 	caFile, netCerts, err := server.EnsureNetworkTLSCerts(networks)
 	if err != nil {
-		return fmt.Errorf("ensure TLS certs: %w", err)
+		return nil, fmt.Errorf("ensure TLS certs: %w", err)
 	}
+	certStore := server.NewNetworkCertStore(netCerts)
 
 	tlsCfg := &tls.Config{
-		GetCertificate: server.GetCertificateByLocalAddr(netCerts),
+		GetCertificate: server.GetCertificateByLocalAddr(certStore),
 		MinVersion:     tls.VersionTLS12,
 	}
 
-	// A hostname not in allRPIDs at startup may still be a legitimate LAN
-	// client -- discovery is one-shot at boot (see detectLANIPs/
-	// resolveLANHostnames above) and misses anything not yet resolvable at
-	// that instant (e.g. Wi-Fi/DHCP still coming up when launchd started
-	// this process). Accept it as a new rpID only if it forward-resolves to
-	// an IP this machine actually owns, so a request can't claim an
-	// arbitrary hostname as its RPID.
+	// startRemoteAccess's own hostnameValidator is just verifyHostnameOwnership
+	// -- no second implementation (see that function's doc comment). This is
+	// a one-shot boot-time check, not part of a bounded per-cycle loop, so
+	// context.Background() is fine here (unlike HostnameDetector's ValidateFn,
+	// which must thread the cycle's own bounded context).
 	hostnameValidator := func(hostname string) bool {
-		resolvedIPs, _ := net.LookupHost(hostname)
-		// The OS's default resolver order can shadow a LAN-only search
-		// domain with an unscoped VPN resolver (see
-		// forwardLookupViaKnownNameservers) -- always also check every
-		// nameserver scutil knows about directly rather than only falling
-		// back to it when net.LookupHost errors.
-		resolvedIPs = append(resolvedIPs, forwardLookupViaKnownNameservers(hostname)...)
-		ownIPs := listNonLoopbackIPs()
-		for _, resolved := range resolvedIPs {
-			for _, own := range ownIPs {
-				if resolved == own {
-					return true
-				}
-			}
-		}
-		return false
+		return verifyHostnameOwnership(context.Background(), hostname)
 	}
 
 	// resolveLANHostnames' boot-time candidates (reverse DNS/PTR, avahi/mDNS,
@@ -1384,39 +1508,11 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 
 	srv.SetOrigins(append(srv.GetOrigins(), origins...))
 
-	// Initialise auth subsystem.
-	store, err := serverauth.NewCredentialStore()
+	auth, err := initRemoteAuth(ctx, srv, allRPIDs, origins, hostnameValidator, caFile, displayHost, remotePort)
 	if err != nil {
-		return fmt.Errorf("create credential store: %w", err)
+		return nil, err
 	}
-
-	// Persist auth sessions so the phone stays logged in across server restarts.
-	configDir, err := config.GetConfigDir()
-	if err != nil {
-		return fmt.Errorf("get config dir: %w", err)
-	}
-	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
-	sessions := serverauth.NewSessionManager(sessionsPath)
-
-	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions, hostnameValidator)
-	if err != nil {
-		return fmt.Errorf("create webauthn handler: %w", err)
-	}
-
-	setupMgr := serverauth.NewSetupManager()
-	inviteMgr := serverauth.NewInviteManager()
-
-	// Ensure the auth subdirectory exists so WatchFile can watch a quiet directory
-	// instead of the busy root state dir (eliminates spurious fsnotify wakeups).
-	authDir := filepath.Join(configDir, serverauth.SetupTokenDir)
-	if err := os.MkdirAll(authDir, 0700); err != nil {
-		log.Warn("failed to create auth dir", "path", authDir, "err", err)
-	}
-	setupTokenPath := filepath.Join(authDir, serverauth.SetupTokenFile)
-	go setupMgr.WatchFile(ctx, setupTokenPath)
-
-	// Register auth routes on the shared mux (accessible via both servers).
-	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort)
+	configDir, store, sessions, waHandler, setupMgr := auth.ConfigDir, auth.Store, auth.Sessions, auth.WAHandler, auth.SetupMgr
 
 	// Register the gossip-style host advertisement endpoint (ADR-002) on the
 	// same shared mux/remote server -- see host_advertisement.go's doc
@@ -1444,7 +1540,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 
 	// Start the remote HTTPS server with auth middleware applied.
 	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions)); err != nil {
-		return fmt.Errorf("start remote server: %w", err)
+		return nil, fmt.Errorf("start remote server: %w", err)
 	}
 
 	// Store the HTTPS URL so /api/server-info can expose it to the settings UI.
@@ -1482,7 +1578,73 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 
 	log.Info("auth: remote access enabled", "port", remotePort, "rpID", rpID, "host", displayHost, "lan_ip", lanIPStr)
 	log.Info("auth: TLS CA cert", "path", caFile)
-	return nil
+	return &remoteAccessResult{Handler: waHandler, CertStore: certStore, Networks: networks}, nil
+}
+
+// startHostnameDetector wires up LAN hostname redetection: builds the
+// HostnameDetector from remoteAccess's collaborators (nil-safe -- see
+// HostnameDetectorConfig's doc comment), starts the OS-network-change source
+// and its cleanup hook, starts the Run goroutine, and registers the
+// manual-trigger HTTP endpoint. Extracted out of the cobra "runtime" phase's
+// RunE closure, mirroring the superviseTymuxd extraction below, so the
+// STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE branch and the wiring itself are
+// independently testable via injected goFn/onStop/newSource instead of a
+// real *warren.App or OS network monitor.
+//
+// The disable-flag check runs before newSource is invoked (not after), so a
+// disabled detector never starts the real netmon/eventbus goroutine at all.
+func startHostnameDetector(mux *http.ServeMux, srv *server.Server, remoteAccess *remoteAccessResult,
+	newSource func() (NetworkChangeSource, error),
+	goFn func(name string, fn func(context.Context)),
+	onStop func(name string, fn func(context.Context) error)) *HostnameDetector {
+	initialNetworks := map[string][]string{}
+	var waHandler *serverauth.Handler
+	var certStore *server.NetworkCertStore
+	if remoteAccess != nil {
+		initialNetworks = remoteAccess.Networks
+		waHandler = remoteAccess.Handler
+		certStore = remoteAccess.CertStore
+	}
+
+	// STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE is a Risk Control (plan.md
+	// Story 4.2.1): an operator can turn off the redetection loop without a
+	// code change. When disabled, no goroutine ever drains detector.manual,
+	// so the manual-trigger endpoint below must independently check the same
+	// env var rather than assume Run is listening.
+	redetectDisabled := os.Getenv("STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE") == "true"
+
+	var netChangeEvents chan struct{}
+	if redetectDisabled {
+		log.Info("hostname-detect: disabled via STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE")
+	} else {
+		var netChangeCleanup func()
+		netChangeEvents, netChangeCleanup = setupNetworkChangeEvents(newSource)
+		onStop("hostname-detector-netchange", func(ctx context.Context) error {
+			netChangeCleanup()
+			return nil
+		})
+	}
+
+	detector := NewHostnameDetector(HostnameDetectorConfig{
+		Srv:             srv,
+		InitialNetworks: initialNetworks,
+		Tick:            time.NewTicker(hostnameRedetectInterval()).C,
+		Events:          netChangeEvents,
+		WAHandler:       waHandler,
+		CertStore:       certStore,
+		// ValidateFn left nil: NewHostnameDetector defaults it to
+		// verifyHostnameOwnership unconditionally.
+	})
+
+	if !redetectDisabled {
+		goFn("hostname-detector", func(ctx context.Context) {
+			detector.Run(ctx)
+		})
+	}
+
+	registerRedetectHostnamesEndpoint(mux, detector, redetectDisabled, defaultRedetectHostnamesManualTimeout)
+
+	return detector
 }
 
 func main() {

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/gitfixture"
 )
 
@@ -478,6 +479,117 @@ func TestResolveWorktreeBaseCommit_ReturnsError_When_NoCandidateAndNotUnborn(t *
 	assert.Empty(t, branch)
 	assert.Empty(t, sha)
 }
+
+// TestAmbientHEADDivergesFromBase_True_When_CheckedOutBranchDiffersFromBase
+// covers the bug report's exact scenario: work's ambient checked-out branch
+// has its own commit not on the resolved base, so a caller who branched from
+// ambient HEAD instead of baseSHA would have silently forked from unrelated
+// in-progress work.
+func TestAmbientHEADDivergesFromBase_True_When_CheckedOutBranchDiffersFromBase(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "unrelated-in-progress-work")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "unrelated.txt"), []byte("unrelated\n"), 0o644))
+	runGit(t, work, "add", "unrelated.txt")
+	runGit(t, work, "commit", "-m", "unrelated in-progress commit")
+
+	_, baseSHA, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+
+	diverged, ambientBranch := AmbientHEADDivergesFromBase(work, baseSHA)
+	assert.True(t, diverged)
+	assert.Equal(t, "unrelated-in-progress-work", ambientBranch)
+}
+
+// TestAmbientHEADDivergesFromBase_False_When_AmbientHEADIsBase verifies the
+// no-divergence case reports false, so a session created from a repo already
+// on its default branch gets no spurious warning.
+func TestAmbientHEADDivergesFromBase_False_When_AmbientHEADIsBase(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	_, baseSHA, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+
+	diverged, ambientBranch := AmbientHEADDivergesFromBase(work, baseSHA)
+	assert.False(t, diverged)
+	assert.Empty(t, ambientBranch)
+}
+
+// TestResolveRemoteWorktreeBaseCommit_MatchesLocalResolution verifies the
+// remote (CommandRunner-based) resolver reaches the same answer as
+// ResolveWorktreeBaseCommit for the same repo, using tmux.LocalRunner{} to
+// exercise the exact command sequence a real SSH runner would run, without
+// needing a real SSH server.
+func TestResolveRemoteWorktreeBaseCommit_MatchesLocalResolution(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "some-other-feature-branch")
+
+	wantBranch, wantSHA, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+
+	gotBranch, gotSHA, err := ResolveRemoteWorktreeBaseCommit(context.Background(), tmux.LocalRunner{}, work)
+	require.NoError(t, err)
+	assert.Equal(t, wantBranch, gotBranch)
+	assert.Equal(t, wantSHA, gotSHA)
+}
+
+// TestResolveRemoteWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn
+// mirrors TestResolveWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn:
+// a repo with no commits anywhere is the one case safe to fall back to
+// ambient HEAD for.
+func TestResolveRemoteWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+
+	branch, sha, err := ResolveRemoteWorktreeBaseCommit(context.Background(), tmux.LocalRunner{}, dir)
+	require.NoError(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// TestResolveRemoteWorktreeBaseCommit_ReturnsError_When_RunnerFailsEntirely
+// is the regression this bug's remote-path fix needed: a runner that fails
+// every single command (simulating a dead/rejected SSH connection, not a
+// genuinely unborn repo) must surface a hard error, not be silently
+// misclassified as "unborn repo, fall back to ambient HEAD" -- the same
+// class of misattribution this whole bug report is about, just one layer
+// deeper. Before the symbolic-ref check, a connection failure on the final
+// `git rev-parse HEAD` looked identical to an unborn repo's failure.
+func TestResolveRemoteWorktreeBaseCommit_ReturnsError_When_RunnerFailsEntirely(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@localhost")
+	runGit(t, dir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("x\n"), 0o644))
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "initial commit")
+
+	branch, sha, err := ResolveRemoteWorktreeBaseCommit(context.Background(), alwaysFailRunner{}, dir)
+	require.Error(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// alwaysFailRunner is a tmux.CommandRunner whose every Run call fails,
+// simulating a dead or resource-exhausted remote connection.
+type alwaysFailRunner struct{}
+
+func (alwaysFailRunner) Run(context.Context, string, string, ...string) ([]byte, error) {
+	return nil, fmt.Errorf("simulated connection failure")
+}
+
+func (alwaysFailRunner) Start(context.Context, string, string, ...string) (io.WriteCloser, io.ReadCloser, func() error, error) {
+	return nil, nil, nil, fmt.Errorf("simulated connection failure")
+}
+
+func (alwaysFailRunner) IsRemote() bool { return true }
 
 // TestResolveExplicitBranchSHA_UsesOrigin verifies the explicit-override
 // resolver (BacklogItem.BaseBranch) fetches the named branch from origin

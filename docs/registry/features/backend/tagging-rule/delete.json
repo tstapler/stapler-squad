@@ -1,5 +1,5 @@
 {
-  "id": "DeleteTaggingRule",
+  "id": "tagging-rule:delete",
   "type": "backend",
   "service": "SessionService",
   "method": "DeleteTaggingRule",
@@ -9,5 +9,5 @@
   "testIds": [
     "TestSessionService_DeleteTaggingRule_should_RemoveRule_When_RuleExists"
   ],
-  "lastModified": "2026-09-11T19:04:53.770708379-07:00"
+  "lastModified": "2026-09-20T22:52:25.623406288-07:00"
 }

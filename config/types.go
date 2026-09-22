@@ -85,6 +85,19 @@ type SlackConfig struct {
 	DashboardBaseURL string `json:"dashboard_base_url,omitempty"`
 }
 
+// TaggingClassifierConfig holds the LLM model hierarchy for session-tag
+// classification (config.Config.TaggingClassifier). The primary model is tried
+// first; each fallback is tried in order until one succeeds. Model names are
+// passed as --model to the headless CLI; a free local proxy is used by naming
+// its model here (ANTHROPIC_BASE_URL already flows to the subprocess).
+type TaggingClassifierConfig struct {
+	// Model is the primary classification model (e.g. "haiku"). Empty means
+	// the server default ("haiku").
+	Model string `json:"model,omitempty"`
+	// FallbackModels is the ordered fallback hierarchy tried after Model fails.
+	FallbackModels []string `json:"fallback_models,omitempty"`
+}
+
 // JulesConfig holds configuration for the Google Jules dispatch-and-poll
 // integration (config.Config.Jules). The API key is deliberately absent from
 // this struct — it lives in the OS keychain (jules.KeyringTokenSource,
@@ -470,6 +483,16 @@ func (c *BrowserPassthroughConfig) IsEnabled() bool {
 	return *c.Enabled
 }
 
+// ProgramConfig defines a user-configured executable program.
+type ProgramConfig struct {
+	ID          string            `json:"id"`
+	Label       string            `json:"label"`
+	Command     string            `json:"command"`
+	CLIFlags    string            `json:"cli_flags,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+}
+
 // SessionDefaults is the top-level container for all session default configuration.
 type SessionDefaults struct {
 	// Program is the default AI program (e.g., "claude", "aider").
@@ -488,6 +511,8 @@ type SessionDefaults struct {
 	DirectoryRules []DirectoryRule `json:"directory_rules,omitempty"`
 	// Aliases are named session presets invoked via @name in the omnibar.
 	Aliases []AliasConfig `json:"aliases,omitempty"`
+	// Programs holds custom program definitions.
+	Programs []ProgramConfig `json:"programs,omitempty"`
 }
 
 // ProfileDefaults holds the configurable fields for a named profile.

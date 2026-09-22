@@ -33,6 +33,9 @@ jest.mock("@/components/settings/DirectoryRulesManager", () => ({
 jest.mock("@/components/settings/AliasesManager", () => ({
   AliasesManager: () => <div data-testid="aliases-manager" />,
 }));
+jest.mock("@/components/settings/ProgramsManager", () => ({
+  ProgramsManager: () => <div data-testid="programs-manager" />,
+}));
 jest.mock("@/components/settings/PushNotificationSettings", () => ({
   PushNotificationSettings: () => <div data-testid="push-notification-settings" />,
 }));

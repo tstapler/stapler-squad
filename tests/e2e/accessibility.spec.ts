@@ -1064,3 +1064,132 @@ test.describe('Accessibility — notification-revamp (WCAG 2.1 AA)', () => {
     await expect(header).toHaveAttribute('aria-expanded', 'false');
   });
 });
+
+// backlog-stage-execution-costs (implementation/validation.md UX row 16):
+// StageCostChart (Insights) and ItemBudgetWarning (backlog item detail) are
+// the two new surfaces this feature adds. Following this file's established
+// technique (see the describe blocks above) for pinning a "no new violations"
+// gate to a feature: scope Axe's color-contrast rule to only the elements the
+// feature introduces via `.include(...)`, in both themes, rather than scanning
+// the whole page (which would also flag pre-existing, out-of-scope issues).
+test.describe('Accessibility — backlog-stage-execution-costs (WCAG 2.1 AA)', () => {
+  test.setTimeout(120_000);
+
+  test('stage cost chart and item budget warning introduce no new axe color-contrast violations', async ({ page, context, request }) => {
+    await enableBacklogFeatureFlag(request);
+    try {
+      // Real item with a real, persisted, already-crossed budget threshold —
+      // set once via the actual UpdateBacklogItem RPC (threshold=0 crosses the
+      // strict `totalCostUsd < thresholdUsd` guard immediately against a
+      // freshly created item's real $0 totalEstimatedCostUsd, per
+      // item-budget-warning.spec.ts's identical technique) so every themed
+      // page load below sees the same server-side state.
+      const title = `e2e-axe-budget-warning-${Date.now()}`;
+      await createBacklogItemDirect(request, { title });
+
+      await page.addInitScript(() => {
+        localStorage.setItem('stapler-squad:backlog-onboarded', 'true');
+        localStorage.setItem('stapler-squad:onboarded', 'true');
+      });
+      const backlogPage = new BacklogPage(page);
+      await backlogPage.goto();
+      await backlogPage.waitForPageLoad();
+      await backlogPage.openItemDetail(title);
+      await page.getByTestId('backlog-detail-edit').click();
+      await page.getByTestId('backlog-cost-budget-threshold-input').fill('0');
+      await page.getByTestId('backlog-form-submit').click();
+      await expect(page.getByTestId('backlog-item-form')).toHaveCount(0);
+      await expect(page.getByTestId('item-budget-warning')).toBeVisible({ timeout: 10000 });
+
+      const now = new Date();
+      const year = now.getUTCFullYear();
+      const month = now.getUTCMonth();
+      const dailyBuckets = Array.from({ length: 7 }, (_, i) => ({
+        date: new Date(Date.UTC(year, month, i + 1)).toISOString(),
+        totalInputTokens: '1000',
+        totalOutputTokens: '500',
+        cacheReadTokens: '0',
+        estimatedCostUsd: 500,
+        sessionCount: 1,
+      }));
+
+      async function mockInsightsWithRoleBreakdown(p: import('@playwright/test').Page) {
+        await p.route('**/api/session.v1.InsightsService/GetInsightsSummary', async (route) => {
+          await route.fulfill({
+            json: {
+              sessions: [
+                {
+                  sessionId: 's-axe-stage-cost',
+                  conversationId: 'c-axe-stage-cost',
+                  primaryModel: 'claude-sonnet-4-6',
+                  totalInputTokens: '7000',
+                  totalOutputTokens: '3500',
+                  cacheReadTokens: '0',
+                  estimatedCostUsd: 3500,
+                  cacheHitRate: 0,
+                  messageCount: 10,
+                },
+              ],
+              totalCostUsd: 3500,
+              totalInputTokens: '7000',
+              totalOutputTokens: '3500',
+              totalCacheReadTokens: '0',
+              overallCacheHitRate: 0,
+              daily: dailyBuckets,
+              // StageCostChart's own palette is reused unchanged from
+              // ModelBreakdownChart (StageCostChart.tsx's PALETTE comment) —
+              // this fixture exists to get real bars/legend rendered at all,
+              // not to introduce new colors.
+              roleBreakdown: [
+                { sessionRole: 'work', estimatedCostUsd: 2000, sessionCount: 5 },
+                { sessionRole: 'review', estimatedCostUsd: 1000, sessionCount: 3 },
+                { sessionRole: 'triage', estimatedCostUsd: 500, sessionCount: 2 },
+              ],
+            },
+          });
+        });
+      }
+
+      for (const themeName of ['light', 'dark'] as const) {
+        // StageCostChart on /insights
+        const insightsPage = await context.newPage();
+        await mockInsightsWithRoleBreakdown(insightsPage);
+        await insightsPage.addInitScript((name) => {
+          localStorage.setItem('stapler-theme', name);
+        }, themeName);
+        await insightsPage.emulateMedia({ reducedMotion: 'reduce' });
+        await insightsPage.goto(`${BASE_URL}/insights`, { waitUntil: 'domcontentloaded' });
+        await expect(insightsPage.getByTestId('stage-cost-chart')).toBeVisible({ timeout: 15000 });
+
+        const chartResults = await new AxeBuilder({ page: insightsPage })
+          .include('[data-testid="stage-cost-chart"]')
+          .withRules(['color-contrast'])
+          .analyze();
+        expect(chartResults.violations, `StageCostChart color-contrast violations in ${themeName} theme`).toHaveLength(0);
+        await insightsPage.close();
+
+        // ItemBudgetWarning on the backlog item detail page
+        const detailPage = await context.newPage();
+        await detailPage.addInitScript((name) => {
+          localStorage.setItem('stapler-theme', name);
+          localStorage.setItem('stapler-squad:backlog-onboarded', 'true');
+          localStorage.setItem('stapler-squad:onboarded', 'true');
+        }, themeName);
+        const detailBacklogPage = new BacklogPage(detailPage);
+        await detailBacklogPage.goto();
+        await detailBacklogPage.waitForPageLoad();
+        await detailBacklogPage.openItemDetail(title);
+        await expect(detailPage.getByTestId('item-budget-warning')).toBeVisible({ timeout: 10000 });
+
+        const warningResults = await new AxeBuilder({ page: detailPage })
+          .include('[data-testid="item-budget-warning"]')
+          .withRules(['color-contrast'])
+          .analyze();
+        expect(warningResults.violations, `ItemBudgetWarning color-contrast violations in ${themeName} theme`).toHaveLength(0);
+        await detailPage.close();
+      }
+    } finally {
+      await disableBacklogFeatureFlag(request);
+    }
+  });
+});

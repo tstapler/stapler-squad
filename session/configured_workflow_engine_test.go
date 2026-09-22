@@ -7,9 +7,7 @@ package session
 // ConfiguredWorkflowEngine.
 
 import (
-	"bytes"
 	"context"
-	stdlog "log"
 	"testing"
 	"time"
 
@@ -254,8 +252,6 @@ func TestConfiguredWorkflowEngine_should_AllowNewCustomTransitionImmediately_Whe
 // OnDelete(Cascade) edges), AllowedTransitions/CanTransition must fall back
 // to the item's own captured StageConfigSnapshot rather than reporting an
 // empty slice/false, and must log a Warn noting the live config is stale.
-// Not run with t.Parallel(): SetWarningLogForTest swaps a shared
-// package-level logger (see liveness_cache_test.go's identical convention).
 func TestAllowedTransitions_should_ReturnSnapshottedTransitionsWithWarnLog_When_ItemsCurrentStageWasSinceDeleted(t *testing.T) {
 	engine, client := newSeededConfiguredWorkflowEngine(t)
 	ctx := context.Background()
@@ -292,9 +288,8 @@ func TestAllowedTransitions_should_ReturnSnapshottedTransitionsWithWarnLog_When_
 	require.Empty(t, engine.AllowedTransitions(customSlug, nil))
 	require.False(t, engine.CanTransition(customSlug, BacklogStatusReady, nil))
 
-	var buf bytes.Buffer
-	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
-	t.Cleanup(func() { tslog.SetWarningLogForTest(orig) })
+	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
+	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
 	// With the item's own captured StageConfigSnapshot: the transitions legal
 	// at the moment it entered the now-deleted stage.

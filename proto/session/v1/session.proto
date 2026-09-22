@@ -184,6 +184,19 @@ service SessionService {
   // DeleteTaggingRule removes a user-defined session-tagging rule by ID.
   rpc DeleteTaggingRule(DeleteTaggingRuleRequest) returns (DeleteTaggingRuleResponse) {}
 
+  // ReclassifySessionTags synchronously re-runs the LLM tag classifier for one session,
+  // bypassing the poller's classify-once gate. Successfully applied sessions are otherwise
+  // never reclassified automatically — this RPC is the explicit user action that does.
+  rpc ReclassifySessionTags(ReclassifySessionTagsRequest) returns (ReclassifySessionTagsResponse) {}
+
+  // GetTaggingClassifierConfig returns the LLM model hierarchy used for session-tag
+  // classification (primary model plus ordered fallbacks).
+  rpc GetTaggingClassifierConfig(GetTaggingClassifierConfigRequest) returns (GetTaggingClassifierConfigResponse) {}
+
+  // UpdateTaggingClassifierConfig replaces the LLM model hierarchy used for session-tag
+  // classification. Takes effect on the next classification with no restart.
+  rpc UpdateTaggingClassifierConfig(UpdateTaggingClassifierConfigRequest) returns (UpdateTaggingClassifierConfigResponse) {}
+
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
 
@@ -560,6 +573,21 @@ service SessionService {
 
   // DeleteAlias removes an alias preset by name.
   rpc DeleteAlias(DeleteAliasRequest) returns (DeleteAliasResponse) {}
+
+  // ListProgramsConfig returns all program configurations (built-in and custom).
+  rpc ListProgramsConfig(ListProgramsConfigRequest) returns (ListProgramsConfigResponse) {}
+
+  // UpsertProgramConfig creates or updates a custom program configuration.
+  rpc UpsertProgramConfig(UpsertProgramConfigRequest) returns (UpsertProgramConfigResponse) {}
+
+  // DeleteProgramConfig removes a custom program configuration by ID.
+  rpc DeleteProgramConfig(DeleteProgramConfigRequest) returns (DeleteProgramConfigResponse) {}
+
+  // ProbeProgram resolves a command to an executable on the server and, when
+  // permitted, parses its --help output into flags. Deliberately not marked
+  // NO_SIDE_EFFECTS: that would enable Connect GET, and the RPC executes a
+  // program (ADR-001).
+  rpc ProbeProgram(ProbeProgramRequest) returns (ProbeProgramResponse) {}
 
   // ArchiveSession soft-archives a session by setting archived_at.
   // Archived sessions are excluded from the default session list.
@@ -1812,6 +1840,42 @@ message DeleteTaggingRuleResponse {
   string message = 2;
 }
 
+message ReclassifySessionTagsRequest {
+  // Session ID or title (matched the same way as the tag poller's instance list).
+  string session_id = 1;
+}
+
+message ReclassifySessionTagsResponse {
+  // Tags applied by this run (post provenance/suppression filtering, as stored).
+  repeated string tags = 1;
+}
+
+message TaggingClassifierConfigProto {
+  // Primary model passed as --model to the headless CLI (e.g. "haiku").
+  // Empty means the server default ("haiku").
+  string model = 1;
+  // Ordered fallback models tried after the primary fails, first success wins.
+  repeated string fallback_models = 2;
+}
+
+message GetTaggingClassifierConfigRequest {}
+
+message GetTaggingClassifierConfigResponse {
+  TaggingClassifierConfigProto config = 1;
+  // True when STAPLER_SQUAD_TAGGING_MODEL / STAPLER_SQUAD_TAGGING_FALLBACK_MODELS
+  // are set: env wins over the stored config, so form edits take effect only after
+  // the env overrides are unset. The UI surfaces this as a warning banner.
+  bool env_override_active = 2;
+}
+
+message UpdateTaggingClassifierConfigRequest {
+  TaggingClassifierConfigProto config = 1;
+}
+
+message UpdateTaggingClassifierConfigResponse {
+  TaggingClassifierConfigProto config = 1;
+}
+
 message GetApprovalAnalyticsRequest {
   // Time window in days (default 7, max 90).
   optional int32 window_days = 1;
@@ -2512,6 +2576,80 @@ message DeleteAliasRequest {
 }
 
 message DeleteAliasResponse {}
+
+// ProgramConfigProto represents one program definition (built-in or custom).
+message ProgramConfigProto {
+  string id = 1;
+  string label = 2;
+  string command = 3;
+  string cli_flags = 4;
+  string description = 5;
+  map<string, string> env = 6;
+  bool is_builtin = 7;
+}
+
+// ProbeProgramRequest asks the server to check one program command.
+message ProbeProgramRequest {
+  string command = 1;
+  // confirm_execute: the user explicitly asked to run this program's --help.
+  // Required for scripts; sent only by the explicit Check button.
+  bool confirm_execute = 2;
+  // resolve_only: resolve and stat only, never execute.
+  bool resolve_only = 3;
+}
+
+// FlagInfo is one option parsed from a program's --help output.
+message FlagInfo {
+  string name = 1;
+  string short = 2;
+  bool takes_value = 3;
+  string description = 4;
+  repeated string aliases = 5;
+}
+
+enum ProbeStatus {
+  PROBE_STATUS_UNSPECIFIED = 0;
+  PROBE_STATUS_FOUND_PARSED = 1;
+  PROBE_STATUS_FOUND_NO_FLAGS = 2;
+  PROBE_STATUS_NOT_FOUND = 3;
+  PROBE_STATUS_TIMEOUT = 4;
+  PROBE_STATUS_ERROR = 5;
+  PROBE_STATUS_BUSY = 6;
+  PROBE_STATUS_NEEDS_CONFIRM = 7;
+}
+
+// ProbeProgramResponse: found is derived from probe_status (true iff
+// FOUND_PARSED, FOUND_NO_FLAGS, TIMEOUT or NEEDS_CONFIRM). NEEDS_CONFIRM means
+// the file exists but was not executed. ERROR and BUSY mean "could not
+// determine": found is false, but clients must not render them as "not found".
+message ProbeProgramResponse {
+  bool found = 1;
+  string resolved_path = 2;
+  repeated FlagInfo flags = 3;
+  ProbeStatus probe_status = 4;
+  bool truncated = 5;
+  bool is_wrapper = 6;
+}
+
+message ListProgramsConfigRequest {}
+
+message ListProgramsConfigResponse {
+  repeated ProgramConfigProto programs = 1;
+}
+
+message UpsertProgramConfigRequest {
+  ProgramConfigProto program = 1;
+}
+
+message UpsertProgramConfigResponse {
+  ProgramConfigProto program = 1;
+}
+
+message DeleteProgramConfigRequest {
+  string id = 1;
+}
+
+message DeleteProgramConfigResponse {}
 
 // LauncherPresetProto represents one hand-authored launcher preset loaded from
 // ~/.stapler-squad/launcher-presets.json.

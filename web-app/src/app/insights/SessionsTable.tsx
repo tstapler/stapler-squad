@@ -1,11 +1,12 @@
 // +feature: insights-dashboard
 "use client";
 
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import Fuse from "fuse.js";
 import type { SessionTokenSummary } from "@/gen/session/v1/insights_pb";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
+import { LiveRegion } from "@/components/ui/LiveRegion";
 import {
   tableCard,
   tableHeader,
@@ -29,6 +30,8 @@ import {
   clickableRow,
   sortableTh,
   sortOrderHint,
+  roleFilterChip,
+  roleFilterChipClear,
 } from "./SessionsTable.css";
 import { fmtCost, fmtTokens, fmtPct, shortId } from "./insightsFormatters";
 
@@ -36,6 +39,22 @@ interface Props {
   sessions: SessionTokenSummary[];
   onSessionClick?: (session: SessionTokenSummary) => void;
   backlogIndex?: Map<string, BacklogIndexEntry>;
+  /**
+   * Controlled search text (Task 5.2.2a) — when provided alongside
+   * onSearchTextChange, the table's search box reflects/drives this value
+   * instead of its own internal state. Omitting both preserves the table's
+   * original fully-uncontrolled behavior for every existing caller.
+   */
+  searchText?: string;
+  onSearchTextChange?: (text: string) => void;
+  /**
+   * Cross-filter set by a StageCostChart bar/legend click (Task 5.2.2c) —
+   * an additional array filter applied before Fuse's text search runs, not
+   * fuzzy-matched as free text. Renders a "Filtered to: <role> ×" chip
+   * (Task 5.2.2e) when set.
+   */
+  roleFilter?: string;
+  onClearRoleFilter?: () => void;
 }
 
 function pathBasename(p: string): string {
@@ -76,10 +95,24 @@ type SortColumn =
   | "cacheRoi"
   | "wasteScore";
 
-export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props) {
+export function SessionsTable({
+  sessions,
+  onSessionClick,
+  backlogIndex,
+  searchText: controlledSearchText,
+  onSearchTextChange,
+  roleFilter,
+  onClearRoleFilter,
+}: Props) {
   const [showOrphans, setShowOrphans] = useState(true);
-  const [searchText, setSearchText] = useState("");
+  const [internalSearchText, setInternalSearchText] = useState("");
+  // Controlled/uncontrolled hybrid (Task 5.2.2a): a caller supplying both
+  // props drives the search box; every other caller keeps the original
+  // fully-uncontrolled behavior unchanged.
+  const searchText = controlledSearchText ?? internalSearchText;
+  const setSearchText = onSearchTextChange ?? setInternalSearchText;
   const [modelFilter, setModelFilter] = useState("");
+  const [tagFilter, setTagFilter] = useState("");
   const [sortCol, setSortCol] = useState<SortColumn | null>(null);
   const [sortAsc, setSortAsc] = useState(false);
 
@@ -99,7 +132,7 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
   const fuse = useMemo(
     () =>
       new Fuse(fuseDocs, {
-        keys: ["session.projectPath", "backlogTitle"],
+        keys: ["session.projectPath", "backlogTitle", "session.tags"],
         threshold: 0.4,
       }),
     [fuseDocs]
@@ -113,6 +146,11 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
     return Array.from(seen).sort();
   }, [sessions]);
 
+  const uniqueTags = useMemo(
+    () => Array.from(new Set(sessions.flatMap((s) => s.tags ?? []))).sort(),
+    [sessions]
+  );
+
   const displayed = useMemo(() => {
     let result: SessionTokenSummary[];
 
@@ -124,6 +162,17 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
 
     if (modelFilter) {
       result = result.filter((s) => s.primaryModel === modelFilter);
+    }
+
+    if (tagFilter) {
+      result = result.filter((s) => s.tags?.includes(tagFilter));
+    }
+
+    // Role cross-filter (Task 5.2.2c) — applied as its own array filter, not
+    // fuzzy-matched through Fuse's free-text search, since a role name isn't
+    // meant to be searched, only exactly matched.
+    if (roleFilter) {
+      result = result.filter((s) => s.sessionRole === roleFilter);
     }
 
     if (!showOrphans) {
@@ -201,7 +250,7 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
       }
       return sortAsc ? cmp : -cmp;
     });
-  }, [sessions, searchText, modelFilter, showOrphans, fuse, sortCol, sortAsc]);
+  }, [sessions, searchText, modelFilter, tagFilter, roleFilter, showOrphans, fuse, sortCol, sortAsc]);
 
   const handleSortClick = useCallback((col: SortColumn) => {
     // Reads sortCol from closure rather than nesting setSortAsc inside
@@ -223,12 +272,32 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
     [sortCol, sortAsc]
   );
 
-  const hasActiveFilters = searchText !== "" || modelFilter !== "";
+  const hasActiveFilters = searchText !== "" || modelFilter !== "" || tagFilter !== "" || !!roleFilter;
 
   function clearFilters() {
     setSearchText("");
     setModelFilter("");
+    setTagFilter("");
   }
+
+  // Announces the role cross-filter's state change (ux.md Surface B+C step
+  // 7 / AC21) — a screen-reader user learns the table narrowed or the
+  // filter cleared without needing to re-scan the table. Only fires on a
+  // roleFilter transition, not on every displayed.length change (e.g. a
+  // live session update while filtered would otherwise re-announce
+  // needlessly).
+  const prevRoleFilterRef = useRef<string | undefined>(roleFilter);
+  const [roleFilterAnnouncement, setRoleFilterAnnouncement] = useState("");
+  useEffect(() => {
+    if (prevRoleFilterRef.current === roleFilter) return;
+    if (roleFilter) {
+      setRoleFilterAnnouncement(`Filtered to ${roleFilter}, showing ${displayed.length} sessions`);
+    } else if (prevRoleFilterRef.current) {
+      setRoleFilterAnnouncement("Filter cleared, showing all sessions");
+    }
+    prevRoleFilterRef.current = roleFilter;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roleFilter]);
 
   const handleRowKeyDown = useCallback((e: React.KeyboardEvent<HTMLTableRowElement>, s: SessionTokenSummary) => {
     if ((e.key === "Enter" || e.key === " ") && onSessionClick) {
@@ -237,9 +306,10 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
     }
   }, [onSessionClick]);
 
-  const sortableHeaderCell = (col: SortColumn, label: string) => (
+  const sortableHeaderCell = (col: SortColumn, label: string, title?: string) => (
     <th
       className={thRight}
+      title={title}
       scope="col"
       aria-sort={sortCol === col ? (sortAsc ? "ascending" : "descending") : "none"}
     >
@@ -273,7 +343,11 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
       {sortableHeaderCell("duration", "Duration")}
       {sortableHeaderCell("costPerMessage", "Cost/Msg")}
       {sortableHeaderCell("cacheRoi", "Cache ROI")}
-      {sortableHeaderCell("wasteScore", "Waste Score")}
+      {sortableHeaderCell(
+        "wasteScore",
+        "Waste Score",
+        "Weighted 0-100 badness blend, not dollars. Higher is worse. Empty (\"Not evaluated\") means too few turns to evaluate."
+      )}
     </tr>
   );
 
@@ -290,15 +364,18 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
           ) : (
             shortId(s.sessionId || s.conversationId)
           )}
+          {!backlogEntry && s.sessionRole && (
+            <span className={backlogBadge} data-testid="role-badge">{s.sessionRole}</span>
+          )}
           {backlogEntry && (
             <a
               href={`/backlog?item=${backlogEntry.itemId}`}
               className={backlogBadge}
               data-testid="backlog-badge"
-              title={`${backlogEntry.sessionRole}: ${backlogEntry.itemTitle}`}
+              title={`${backlogEntry.sessionRole || s.sessionRole}: ${backlogEntry.itemTitle}`}
               onClick={(e) => e.stopPropagation()}
             >
-              {backlogEntry.sessionRole}: {backlogEntry.itemTitle}
+              {backlogEntry.sessionRole || s.sessionRole}: {backlogEntry.itemTitle}
             </a>
           )}
         </td>
@@ -377,10 +454,24 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
           )}
         </div>
         <div className={filterBar}>
+          {roleFilter && (
+            <span className={roleFilterChip} data-testid="role-filter-chip">
+              Filtered to: {roleFilter}
+              <button
+                type="button"
+                className={roleFilterChipClear}
+                onClick={onClearRoleFilter}
+                aria-label={`Clear filter: ${roleFilter}`}
+              >
+                ×
+              </button>
+            </span>
+          )}
+          <LiveRegion message={roleFilterAnnouncement} />
           <input
             type="search"
             className={searchInput}
-            placeholder="Search by path…"
+            placeholder="Search by path or tag…"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             aria-label="Search sessions by project path"
@@ -396,6 +487,19 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
               <option key={m} value={m}>{m}</option>
             ))}
           </select>
+          {uniqueTags.length > 0 && (
+            <select
+              className={modelSelect}
+              value={tagFilter}
+              onChange={(e) => setTagFilter(e.target.value)}
+              aria-label="Filter by tag"
+            >
+              <option value="">All tags</option>
+              {uniqueTags.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          )}
           {hasActiveFilters && (
             <button
               type="button"

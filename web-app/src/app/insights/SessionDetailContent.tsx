@@ -22,6 +22,7 @@ import {
   outlierCell,
 } from "./SessionDetailDrawer.css";
 import { fmtCost, fmtPct, fmtTokens, fmtDate, computeCacheHitRate } from "./insightsFormatters";
+import { TokenBreakdownBar } from "./TokenBreakdownBar";
 import { EstimatedValue } from "@/components/ui/EstimatedValue";
 import {
   sortTurnsByTokensDesc,
@@ -63,6 +64,20 @@ export function SessionDetailContent({ session, backlogEntry, turns }: Props) {
           <dt className={metaLabel}>Message count</dt>
           <dd className={metaValue}>{session.messageCount}</dd>
 
+          {session.sessionRole && (
+            <>
+              <dt className={metaLabel}>Role</dt>
+              <dd className={metaValue} data-testid="session-role">{session.sessionRole}</dd>
+            </>
+          )}
+
+          {session.tags.length > 0 && (
+            <>
+              <dt className={metaLabel}>Tags</dt>
+              <dd className={metaValue}>{session.tags.join(", ")}</dd>
+            </>
+          )}
+
           <dt className={metaLabel}>Cache hit rate</dt>
           <dd className={metaValue}>{fmtPct(session.cacheHitRate)}</dd>
 
@@ -81,6 +96,16 @@ export function SessionDetailContent({ session, backlogEntry, turns }: Props) {
           <dt className={metaLabel}>Conversation ID</dt>
           <dd className={metaValue}>{session.conversationId || "—"}</dd>
         </dl>
+      </div>
+
+      <div className={section}>
+        <h3 className={sectionTitle}>Token Breakdown</h3>
+        <TokenBreakdownBar
+          input={session.totalInputTokens}
+          output={session.totalOutputTokens}
+          cacheCreation={session.cacheCreationTokens}
+          cacheRead={session.cacheReadTokens}
+        />
       </div>
 
       {backlogEntry && (

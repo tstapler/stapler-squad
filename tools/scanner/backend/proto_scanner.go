@@ -201,6 +201,10 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ImportGitHubIssue": "ImportGitHubIssue",
 	// Launcher presets RPCs
 	"GetLauncherPresets": "launcher_presets:get",
+	// Program config RPCs
+	"ListProgramsConfig":  "program_config:list",
+	"UpsertProgramConfig": "program_config:upsert",
+	"DeleteProgramConfig": "program_config:delete",
 	// Session lifecycle RPCs
 	"ArchiveSession":          "session:archive",
 	"UnarchiveSession":        "session:unarchive",
@@ -318,8 +322,15 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// remote.proto/headless.proto above, caught by TestMethodToIDCompleteness's
 	// glob. Wired fully (map entry + Makefile enumeration) like remote.proto,
 	// not left as a followup like headless.proto, since it was cheap here.
-	"GetHandoffSummary":     "handoff-summary:get",
-	"TriggerHandoffSummary": "handoff-summary:trigger",
+	// Tagging-classifier RPCs (tagging_classifier_service.go).
+	"GetTaggingClassifierConfig":    "tagging-classifier:get-config",
+	"UpdateTaggingClassifierConfig": "tagging-classifier:update-config",
+	"ReclassifySessionTags":         "tagging-classifier:reclassify-session",
+	"ListTaggingRules":              "tagging-rule:list",
+	"UpsertTaggingRule":             "tagging-rule:upsert",
+	"DeleteTaggingRule":             "tagging-rule:delete",
+	"GetHandoffSummary":             "handoff-summary:get",
+	"TriggerHandoffSummary":         "handoff-summary:trigger",
 	// LivenessDefinition CRUD RPCs (Epic 1.3 of backlog-custom-workflow-stages)
 	// -- pre-existing collateral debt found by TestMethodToIDCompleteness
 	// while wiring Epic 2.7's own methodToID entries below: these markers

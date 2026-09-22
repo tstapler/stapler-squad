@@ -1924,3 +1924,54 @@ func TestGetNativeMergeGlobalOverride_should_ReportUnset_Then_Set(t *testing.T) 
 		t.Fatal("expected clearing the override to remove it")
 	}
 }
+
+// TestGetAvailablePrograms_should_IncludeAider_When_AiderIsOnPath (plan Task
+// 1.3.2b): GetAvailablePrograms' candidate list includes "aider" so the
+// settings UI's program dropdown can detect it if installed — mirrors this
+// repo's existing pattern for other candidates (skip gracefully if not
+// found, verified here via a mocked executor rather than the real PATH).
+func TestGetAvailablePrograms_should_IncludeAider_When_AiderIsOnPath(t *testing.T) {
+	originalShell := os.Getenv("SHELL")
+	defer os.Setenv("SHELL", originalShell)
+	os.Setenv("SHELL", "/bin/bash")
+
+	aiderPath := "/usr/local/bin/aider"
+	mockExecutor := &mockCommandExecutor{
+		CommandFunc: func(name string, args ...string) *exec.Cmd {
+			return exec.Command(name, args...) //nolint:norawexec // test mock helper
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			shellCmd := cmd.Args[len(cmd.Args)-1]
+			if strings.Contains(shellCmd, "aider") {
+				return []byte(aiderPath), nil
+			}
+			return []byte(""), nil
+		},
+	}
+
+	programs := NewConfigWithExecutor(mockExecutor).GetAvailablePrograms()
+
+	assert.Contains(t, programs, aiderPath)
+}
+
+// TestGetAvailablePrograms_should_OmitAider_When_AiderNotOnPath is the
+// zero-regression companion: an undetected "aider" candidate is silently
+// skipped, same as any other undetected candidate, never an error.
+func TestGetAvailablePrograms_should_OmitAider_When_AiderNotOnPath(t *testing.T) {
+	originalShell := os.Getenv("SHELL")
+	defer os.Setenv("SHELL", originalShell)
+	os.Setenv("SHELL", "/bin/bash")
+
+	mockExecutor := &mockCommandExecutor{
+		CommandFunc: func(name string, args ...string) *exec.Cmd {
+			return exec.Command(name, args...) //nolint:norawexec // test mock helper
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			return []byte(""), nil
+		},
+	}
+
+	programs := NewConfigWithExecutor(mockExecutor).GetAvailablePrograms()
+
+	assert.Empty(t, programs)
+}

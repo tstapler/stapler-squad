@@ -318,6 +318,26 @@ func (s *BacklogService) TriggerTriage(
 	if s.pipelineEngine != nil {
 		triagePipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(session.PipelineMode(item.PipelineMode))
 	}
+
+	// Resolve this stage's configured (program, model) executor before creating
+	// the ItemSession row, so the row's snapshot fields reflect exactly what
+	// will run. ComputeExecutorHash is deliberately computed from the RAW
+	// triageExecModel (e.g. "family:opus"), never the ResolveModel-resolved
+	// concrete ID below — see ComputeExecutorHash's doc comment for why hashing
+	// the resolved value would permanently false-flag drift against the
+	// mode-side hash (Task 5.2.4a).
+	var triageExecProgram, triageExecModel string
+	if s.pipelineEngine != nil {
+		triageExecProgram, triageExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleTriage)
+	}
+	triageExecutorHash := session.ComputeExecutorHash(triageExecProgram, triageExecModel)
+	triageCaller, triageConfiguredProgram, triageFallbackReason := s.resolveHeadlessCaller(triageExecProgram, item.ID, "triage")
+	triageResolvedModel, modelErr := session.ResolveModel(s.modelFamilies, triageExecModel)
+	if modelErr != nil {
+		log.Warn("[PipelineEngine] failed to resolve triage model family alias, using empty model", "item", item.ID, "model", triageExecModel, "err", modelErr)
+		triageResolvedModel = ""
+	}
+
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:                   item.ID,
 		SessionUUID:              triageSessionUUID,
@@ -325,6 +345,11 @@ func (s *BacklogService) TriggerTriage(
 		AcSnapshot:               item.AcceptanceCriteria,
 		PipelineModeSnapshot:     item.PipelineMode,
 		PipelineModeSnapshotHash: triagePipelineModeSnapshotHash,
+		ResolvedProgram:          triageExecProgram,
+		ResolvedModel:            triageResolvedModel,
+		ExecutorSnapshotHash:     triageExecutorHash,
+		ConfiguredProgram:        triageConfiguredProgram,
+		ExecutorFallbackReason:   triageFallbackReason,
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create triage item session: %w", err))
@@ -450,7 +475,12 @@ func (s *BacklogService) TriggerTriage(
 
 		callStart := time.Now()
 		var triageCostUSD float64
-		raw, callErr := s.headlessPool.CallBlocking(triageCtx,
+		// triageCostPriced defaults true (not Go's zero value) so a call that fails
+		// before the sink ever fires (e.g. subprocess launch failure) reads as "no
+		// cost incurred," matching cost_priced's own schema default, rather than as
+		// an untrustworthy $0 that would otherwise trip the persistence guard below.
+		triageCostPriced := true
+		raw, callErr := triageCaller.CallBlocking(triageCtx,
 			headless.FeatureKeyTriage,
 			headless.HeadlessTriageSystemPrompt(),
 			triagePrompt,
@@ -467,8 +497,12 @@ func (s *BacklogService) TriggerTriage(
 			// earlier), not a permission-mode gap. Do not add bypassPermissions here
 			// without a fresh empirical repro, per ADR-001's own "don't trust
 			// unverified CLI-behavior assumptions" precedent.
-			headless.CallOptions{WorkDir: triageWorkDir},
-			func(usd float64) { triageCostUSD = usd },
+			headless.CallOptions{WorkDir: triageWorkDir, Model: triageResolvedModel},
+			func(usd float64, priced bool) {
+				triageCostUSD = usd
+				triageCostPriced = priced
+				logBudgetWarningIfCrossed(itemID, "triage", item.CostBudgetThresholdUsd, existingSessions, usd)
+			},
 		)
 
 		// cleanupCtx outlives shutdownCtx so DB writes succeed even during graceful
@@ -483,9 +517,12 @@ func (s *BacklogService) TriggerTriage(
 
 		// Persisted unconditionally, before the success/failure branches below: the
 		// LLM call already incurred this cost whether or not it errored or produced
-		// parseable output, so it must not be lost down either failure path.
-		if triageCostUSD > 0 {
-			if costErr := s.storage.UpdateItemSessionCost(cleanupCtx, isID, triageCostUSD); costErr != nil {
+		// parseable output, so it must not be lost down either failure path. Also
+		// fires when the call was unpriced (triageCostUSD == 0 in that case) so an
+		// untrustworthy $0 gets recorded as unpriced rather than silently read back
+		// as "genuinely free."
+		if triageCostUSD > 0 || !triageCostPriced {
+			if costErr := s.storage.UpdateItemSessionCost(cleanupCtx, isID, triageCostUSD, triageCostPriced); costErr != nil {
 				log.Warn("[TriggerTriage] failed to persist cost", "item", itemID, "error", costErr)
 			}
 		}

@@ -3731,7 +3731,7 @@ func TestReportPRCreated_should_RejectReassignment_When_AuthorMismatch(t *testin
 type fakeTriageHeadlessPool struct{}
 
 func (f *fakeTriageHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions, sink headless.CostSink) (string, error) {
-	sink(0)
+	sink(0, true)
 	return `{"title":"t","summary":"s","suggestions":[]}`, nil
 }
 

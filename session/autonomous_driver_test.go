@@ -31,7 +31,7 @@ func (f *fakeHeadlessPool) CallBlocking(_ context.Context, key headless.FeatureK
 	}
 	idx := int(atomic.AddInt32(&f.callCount, 1)) - 1
 	f.capturedKeys = append(f.capturedKeys, key)
-	sink(0)
+	sink(0, true)
 	if idx < len(f.responses) {
 		return f.responses[idx], nil
 	}

@@ -1458,6 +1458,32 @@ func TestGetInsightsSummary_WhenSessionHasItemSessionRole_ExpectSessionRolePopul
 	assert.Equal(t, session.SessionRoleWork, resp.Msg.Sessions[0].SessionRole)
 }
 
+func TestGetInsightsSummary_WhenBacklogItemArchived_ExpectSessionRoleAndTagsPopulated(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-archived", "claude-sonnet-4", "/home/user/proj", 1000, 500, 0, now),
+	}
+	sessionRecords := []tokens.SessionRecord{
+		{SessionID: "sess-archived", ConversationID: "uuid-archived", Path: "/home/user/proj", Tags: []string{"triage-tag"}},
+	}
+	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
+	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		{SessionUUID: "sess-archived", SessionRole: session.SessionRoleTriage, ItemStatus: string(session.BacklogStatusArchived)},
+	}}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+
+	resp, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Equal(t, session.SessionRoleTriage, resp.Msg.Sessions[0].SessionRole)
+	assert.Equal(t, []string{"triage-tag"}, resp.Msg.Sessions[0].Tags)
+}
+
 func TestGetInsightsSummary_WhenNoItemSessionRow_ExpectSessionRoleEmpty(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
@@ -1505,7 +1531,20 @@ func TestGetInsightsSummary_WhenBacklogReaderNil_ExpectNoPanicAndEmptyRole(t *te
 	})
 }
 
-func TestSessionRolesForSessions_WhenSessionUUIDHasMultipleItemSessionEntries_ExpectFirstEntrySeenWins(t *testing.T) {
+func TestSessionMetaForSessions_should_RetainItemIDAndItemTitle_When_BuildingMapFromBacklogEntries(t *testing.T) {
+	t.Parallel()
+	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		{SessionUUID: "sess-1", SessionRole: session.SessionRoleTriage, ItemID: "bl_abc123", ItemTitle: "Fix login bug"},
+	}}
+	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
+
+	meta := svc.sessionMetaForSessions(context.Background())
+
+	require.Contains(t, meta, "sess-1")
+	assert.Equal(t, SessionMeta{Role: session.SessionRoleTriage, ItemID: "bl_abc123", ItemTitle: "Fix login bug"}, meta["sess-1"])
+}
+
+func TestSessionMetaForSessions_WhenSessionUUIDHasMultipleItemSessionEntries_ExpectFirstEntrySeenWins(t *testing.T) {
 	t.Parallel()
 	// Mirrors the real query's explicit Order(Desc(CreatedAt)): the newest row
 	// comes first, so it must be the one the map keeps.
@@ -1515,10 +1554,10 @@ func TestSessionRolesForSessions_WhenSessionUUIDHasMultipleItemSessionEntries_Ex
 	}}
 	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
 
-	roles := svc.sessionRolesForSessions(context.Background())
+	meta := svc.sessionMetaForSessions(context.Background())
 
-	require.Contains(t, roles, "dup-uuid")
-	assert.Equal(t, session.SessionRoleWork, roles["dup-uuid"], "must keep the first (newest) entry seen per session uuid")
+	require.Contains(t, meta, "dup-uuid")
+	assert.Equal(t, session.SessionRoleWork, meta["dup-uuid"].Role, "must keep the first (newest) entry seen per session uuid")
 }
 
 func TestBuildSessionSummary_WhenSessionHasTagsAndRole_ExpectBothPopulated(t *testing.T) {
@@ -1537,9 +1576,9 @@ func TestBuildSessionSummary_WhenSessionHasTagsAndRole_ExpectBothPopulated(t *te
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
 	snapshot := associator.Snapshot()
-	roleMap := map[string]string{"sess-tags-role": session.SessionRoleReview}
+	sessionMeta := map[string]SessionMeta{"sess-tags-role": {Role: session.SessionRoleReview}}
 
-	got := buildSessionSummary(result, pt, associator, snapshot, roleMap)
+	got := buildSessionSummary(result, pt, associator, snapshot, sessionMeta)
 
 	assert.Equal(t, []string{"backend"}, got.Tags)
 	assert.Equal(t, session.SessionRoleReview, got.SessionRole)
@@ -1566,6 +1605,140 @@ func TestBuildSessionSummary_WhenNoBacklogLinkage_ExpectSessionRoleEmptyStringNo
 		got := buildSessionSummary(result, pt, associator, snapshot, nil)
 		assert.Equal(t, "", got.SessionRole)
 	})
+}
+
+// --------------------------------------------------------------------------
+// Role/item cost breakdown (Epic 4.1)
+// --------------------------------------------------------------------------
+
+// TestGetInsightsSummary_should_SumRoleBreakdownToTotalCost_When_MultipleRolesPlusUnattributedSessionPresent
+// uses claude-haiku-4 (output-only tokens, $5/MTok output) so each session's
+// cost is a clean, hand-checkable number: 4000/30000/280000/10000 output
+// tokens -> $0.02/$0.15/$1.40/$0.05.
+func TestGetInsightsSummary_should_SumRoleBreakdownToTotalCost_When_MultipleRolesPlusUnattributedSessionPresent(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("conv-triage", "claude-haiku-4", "/proj", 0, 4000, 0, now),
+		newResult("conv-review", "claude-haiku-4", "/proj", 0, 30000, 0, now),
+		newResult("conv-work", "claude-haiku-4", "/proj", 0, 280000, 0, now),
+		newResult("conv-adhoc", "claude-haiku-4", "/proj", 0, 10000, 0, now),
+	}
+	sessionRecords := []tokens.SessionRecord{
+		{SessionID: "sess-triage", ConversationID: "conv-triage", Path: "/proj"},
+		{SessionID: "sess-review", ConversationID: "conv-review", Path: "/proj"},
+		{SessionID: "sess-work", ConversationID: "conv-work", Path: "/proj"},
+		{SessionID: "sess-adhoc", ConversationID: "conv-adhoc", Path: "/proj"},
+	}
+	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
+	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		{SessionUUID: "sess-triage", SessionRole: session.SessionRoleTriage, ItemID: "bl_abc123", ItemTitle: "Fix login bug"},
+		{SessionUUID: "sess-review", SessionRole: session.SessionRoleReview, ItemID: "bl_abc123", ItemTitle: "Fix login bug"},
+		{SessionUUID: "sess-work", SessionRole: session.SessionRoleWork, ItemID: "bl_xyz789", ItemTitle: "Add feature"},
+		// sess-adhoc has no matching entry — an ad hoc session with no backlog attribution.
+	}}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+	require.NoError(t, err)
+
+	assert.InDelta(t, 1.62, resp.Msg.TotalCostUsd, 0.0001)
+
+	var sum float64
+	for _, rb := range resp.Msg.RoleBreakdown {
+		sum += rb.EstimatedCostUsd
+	}
+	assert.InDelta(t, resp.Msg.TotalCostUsd, sum, 0.0001, "sum(role_breakdown[].estimated_cost_usd) must equal total_cost_usd exactly")
+
+	byRole := make(map[string]*sessionv1.RoleCostBreakdown, len(resp.Msg.RoleBreakdown))
+	for _, rb := range resp.Msg.RoleBreakdown {
+		byRole[rb.SessionRole] = rb
+	}
+	require.Contains(t, byRole, session.SessionRoleTriage)
+	assert.InDelta(t, 0.02, byRole[session.SessionRoleTriage].EstimatedCostUsd, 0.0001)
+	require.Contains(t, byRole, session.SessionRoleReview)
+	assert.InDelta(t, 0.15, byRole[session.SessionRoleReview].EstimatedCostUsd, 0.0001)
+	require.Contains(t, byRole, session.SessionRoleWork)
+	assert.InDelta(t, 1.40, byRole[session.SessionRoleWork].EstimatedCostUsd, 0.0001)
+	require.Contains(t, byRole, "", "an unattributed session must bucket under an explicit \"\" role, not be dropped")
+	assert.InDelta(t, 0.05, byRole[""].EstimatedCostUsd, 0.0001)
+
+	require.Len(t, byRole[session.SessionRoleTriage].Items, 1)
+	assert.Equal(t, "bl_abc123", byRole[session.SessionRoleTriage].Items[0].ItemId)
+	assert.Equal(t, "Fix login bug", byRole[session.SessionRoleTriage].Items[0].ItemTitle)
+	assert.InDelta(t, 0.02, byRole[session.SessionRoleTriage].Items[0].EstimatedCostUsd, 0.0001)
+}
+
+func TestGetInsightsSummary_RoleBreakdown_should_ExcludeUnpricedSessionFromCostSum_When_SessionSummaryReportsUnpricedModel(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("conv-review-priced", "claude-haiku-4", "/proj", 0, 4000, 0, now),
+		newResult("conv-review-unpriced", "claude-opus-9000", "/proj", 1000, 500, 0, now),
+	}
+	sessionRecords := []tokens.SessionRecord{
+		{SessionID: "sess-review-priced", ConversationID: "conv-review-priced", Path: "/proj"},
+		{SessionID: "sess-review-unpriced", ConversationID: "conv-review-unpriced", Path: "/proj"},
+	}
+	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
+	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		{SessionUUID: "sess-review-priced", SessionRole: session.SessionRoleReview, ItemID: "bl_1", ItemTitle: "Item One"},
+		{SessionUUID: "sess-review-unpriced", SessionRole: session.SessionRoleReview, ItemID: "bl_1", ItemTitle: "Item One"},
+	}}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+	require.NoError(t, err)
+
+	require.Len(t, resp.Msg.RoleBreakdown, 1)
+	rb := resp.Msg.RoleBreakdown[0]
+	assert.Equal(t, session.SessionRoleReview, rb.SessionRole)
+	assert.InDelta(t, 0.02, rb.EstimatedCostUsd, 0.0001, "the unpriced session's $0 must not be folded in as genuinely free")
+	assert.Equal(t, int32(2), rb.SessionCount)
+	assert.Equal(t, int32(1), rb.UnpricedSessionCount)
+	assert.InDelta(t, 0.02, resp.Msg.TotalCostUsd, 0.0001, "total_cost_usd must exclude the same subset as the role bucket")
+}
+
+func TestGetInsightsSummary_should_IncludeGeminiPricedSessionWithNoTranscript_When_ItemSessionHasNoMatchingParseResult(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("conv-claude-triage", "claude-haiku-4", "/proj", 0, 4000, 0, now),
+	}
+	sessionRecords := []tokens.SessionRecord{
+		{SessionID: "sess-claude-triage", ConversationID: "conv-claude-triage", Path: "/proj"},
+	}
+	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
+	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		// Has a matching Claude transcript above — must be counted once, via the
+		// transcript path, not double-counted via this row's own EstimatedCostUsd.
+		{SessionUUID: "sess-claude-triage", SessionRole: session.SessionRoleTriage, ItemID: "bl_claude", ItemTitle: "Claude Item", EstimatedCostUsd: 0.02, CostPriced: true},
+		// No matching transcript anywhere in results (a Gemini headless call
+		// writes no JSONL) — must be folded in via Story 4.1.4's synthetic pass.
+		{SessionUUID: "sess-gemini-triage", SessionRole: session.SessionRoleTriage, ItemID: "bl_gemini", ItemTitle: "Gemini Item", EstimatedCostUsd: 0.003, CostPriced: true},
+	}}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+	require.NoError(t, err)
+
+	assert.InDelta(t, 0.023, resp.Msg.TotalCostUsd, 0.0001, "claude session's transcript cost (0.02) plus the gemini fold-in (0.003), not double-counted")
+
+	require.Len(t, resp.Msg.RoleBreakdown, 1)
+	rb := resp.Msg.RoleBreakdown[0]
+	assert.Equal(t, session.SessionRoleTriage, rb.SessionRole)
+	assert.InDelta(t, 0.023, rb.EstimatedCostUsd, 0.0001)
+	require.Len(t, rb.Items, 2)
+
+	byItem := make(map[string]*sessionv1.ItemRoleCost, len(rb.Items))
+	for _, it := range rb.Items {
+		byItem[it.ItemId] = it
+	}
+	require.Contains(t, byItem, "bl_gemini")
+	assert.InDelta(t, 0.003, byItem["bl_gemini"].EstimatedCostUsd, 0.0001)
+	assert.Equal(t, int32(1), byItem["bl_gemini"].SessionCount)
+	require.Contains(t, byItem, "bl_claude")
+	assert.InDelta(t, 0.02, byItem["bl_claude"].EstimatedCostUsd, 0.0001)
 }
 
 // --------------------------------------------------------------------------

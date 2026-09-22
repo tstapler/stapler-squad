@@ -143,6 +143,16 @@ func programBinaryName(program string) string {
 	return filepath.Base(fields[0])
 }
 
+// binaryAliases maps alternate binary names to the registry key holding
+// their detector. "antigravity" is the long-form name users put in Program
+// (AgyAdapter.CanHandle accepts both "agy" and "antigravity"), but the
+// built-in registry entry is keyed "agy" — without this alias an
+// "antigravity" session silently falls back to the generic detector and
+// misses every agy_* pattern (notably the approval-prompt ones).
+var binaryAliases = map[string]string{
+	"antigravity": "agy",
+}
+
 // lookupBinaryDetector returns the *StatusDetector currently published for
 // program, and whether one exists. This is the read path DetectForProgram
 // uses in place of the old package-level built-in-detectors map index.
@@ -151,8 +161,15 @@ func lookupBinaryDetector(program string) (*StatusDetector, bool) {
 	if snap == nil {
 		return nil, false
 	}
-	sd, ok := snap.byBinary[programBinaryName(program)]
-	return sd, ok
+	name := programBinaryName(program)
+	if sd, ok := snap.byBinary[name]; ok {
+		return sd, ok
+	}
+	if alias, ok := binaryAliases[name]; ok {
+		sd, ok := snap.byBinary[alias]
+		return sd, ok
+	}
+	return nil, false
 }
 
 // ResolveDetectorForProgram returns a StatusDetector for program (built-in or user

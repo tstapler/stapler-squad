@@ -171,6 +171,70 @@ func TestReadOutputSessionNotFound(t *testing.T) {
 	}
 }
 
+// TestReadOutputSessionNotReady verifies readSessionOutput returns
+// SESSION_NOT_READY (not an empty-output success) when the session exists but
+// its scrollback sequence hasn't advanced since creation -- i.e. no bytes
+// have ever arrived from the PTY/tmux stream, distinct from a command that
+// legitimately printed nothing (see TestReadOutputSucceeds_When_ReadyWithNoNewBytes).
+func TestReadOutputSessionNotReady(t *testing.T) {
+	sessionID := "not-ready-session"
+	store := &stubStore{instances: []*session.Instance{{Title: sessionID}}}
+	th := &terminalHandlers{
+		store:      store,
+		scrollback: makeScrollbackMgr(t), // no AppendOutput call -- sequence stays 0
+		writeLim:   newTokenBucket(10, 10),
+	}
+
+	req := makeToolReq(map[string]interface{}{"session_id": sessionID})
+	result, err := th.readSessionOutput(context.Background(), req)
+	if err != nil {
+		t.Fatalf("readSessionOutput returned unexpected Go error: %v", err)
+	}
+
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); success {
+		t.Error("expected success=false, got true")
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object in result")
+	}
+	if code, _ := errObj["code"].(string); code != ErrSessionNotReady {
+		t.Errorf("expected error code %q, got %q", ErrSessionNotReady, code)
+	}
+}
+
+// TestReadOutputSucceeds_When_ReadyWithNoNewBytes verifies a session whose
+// scrollback sequence has already advanced (has emitted at least one byte
+// since creation) is never flagged SESSION_NOT_READY, even when the most
+// recent read finds no output -- e.g. a command like `true` that legitimately
+// prints nothing.
+func TestReadOutputSucceeds_When_ReadyWithNoNewBytes(t *testing.T) {
+	mgr := makeScrollbackMgr(t)
+	sessionID := "ready-session"
+	if err := mgr.AppendOutput(sessionID, []byte("$ ")); err != nil {
+		t.Fatalf("AppendOutput: %v", err)
+	}
+
+	store := &stubStore{instances: []*session.Instance{{Title: sessionID}}}
+	th := &terminalHandlers{
+		store:      store,
+		scrollback: mgr,
+		writeLim:   newTokenBucket(10, 10),
+	}
+
+	req := makeToolReq(map[string]interface{}{"session_id": sessionID})
+	result, err := th.readSessionOutput(context.Background(), req)
+	if err != nil {
+		t.Fatalf("readSessionOutput returned unexpected Go error: %v", err)
+	}
+
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); !success {
+		t.Fatalf("expected success=true, got false; result=%v", m)
+	}
+}
+
 // TestWriteInputLengthCap verifies that writeToSession rejects inputs longer
 // than maxInputBytes with an INPUT_TOO_LONG error.  (U-4.9)
 func TestWriteInputLengthCap(t *testing.T) {

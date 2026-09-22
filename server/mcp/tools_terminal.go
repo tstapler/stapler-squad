@@ -216,6 +216,12 @@ func (th *terminalHandlers) readSessionOutput(_ context.Context, req mcpgo.CallT
 		return errResult(ErrSessionNotFound, fmt.Sprintf("session %q not found", sessionID), "Use list_sessions to find available sessions"), nil
 	}
 
+	if th.scrollback.CurrentSequence(sessionID) == 0 {
+		return errResult(ErrSessionNotReady,
+			fmt.Sprintf("session %q hasn't produced any terminal output yet", sessionID),
+			"The session's PTY/tmux stream may still be starting up. Wait a moment and retry."), nil
+	}
+
 	raw, err := th.scrollback.GetRecentBytes(sessionID, maxOutputBytes)
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("failed to read scrollback: %v", err), ""), nil
@@ -624,6 +630,16 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 			timedOut = true
 			break
 		}
+	}
+
+	// A sequence of 0 means the session's PTY/tmux stream hasn't delivered a
+	// single byte since creation -- distinct from a command that legitimately
+	// produced no output (cd, export, true), which still advances the sequence
+	// via the shell's own prompt redraw. See readSessionOutput's identical check.
+	if th.scrollback.CurrentSequence(sessionID) == 0 {
+		return errResult(ErrSessionNotReady,
+			fmt.Sprintf("session %q hasn't produced any terminal output yet", sessionID),
+			"The session's PTY/tmux stream may still be starting up. Wait a moment and retry."), nil
 	}
 
 	// Read final output.

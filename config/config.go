@@ -368,6 +368,9 @@ type Config struct {
 	// OS keychain (see jules.KeyringTokenSource) — this struct only holds the
 	// opt-in flag, per-repo egress acknowledgements, and spend guard caps.
 	Jules JulesConfig `json:"jules,omitempty"`
+	// TaggingClassifier holds the LLM model hierarchy for session-tag
+	// classification (primary model plus ordered fallbacks).
+	TaggingClassifier TaggingClassifierConfig `json:"tagging_classifier,omitempty"`
 
 	// Escape analytics configuration
 
@@ -892,6 +895,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.SessionDefaults.Tags = []string{}
 	cfg.SessionDefaults.DirectoryRules = []DirectoryRule{}
 	cfg.SessionDefaults.Aliases = []AliasConfig{}
+	cfg.SessionDefaults.Programs = []ProgramConfig{}
 	// Escape analytics defaults. LoadConfigFromPath applies the same defaults
 	// after JSON decode (for fields absent from an existing config.json);
 	// DefaultConfig must mirror them so the two code paths are equivalent.
@@ -1003,6 +1007,9 @@ func (c *Config) HeadlessFailureCaptureDirOrDefault() (string, error) {
 	return filepath.Join(configDir, "headless-failures"), nil
 }
 
+// BacklogAttachmentDirName is the attachments directory's name under GetConfigDir().
+const BacklogAttachmentDirName = "backlog-attachments"
+
 // BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.
 // Uploaded images referenced from backlog item descriptions are stored here,
 // durably (unlike the 24h temp paste dir) since they're linked from persisted
@@ -1014,7 +1021,7 @@ func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(configDir, "backlog-attachments"), nil
+	return filepath.Join(configDir, BacklogAttachmentDirName), nil
 }
 
 // PromptCacheDirOrDefault returns the resolved directory for temp-file-backed
@@ -1164,6 +1171,41 @@ func (c *Config) MaxJulesSessionsPerDayOrDefault() int {
 	return c.Jules.MaxJulesSessionsPerDay
 }
 
+// taggingClassifierModelDefault is the primary classification model when
+// TaggingClassifierConfig.Model is unset.
+const taggingClassifierModelDefault = "haiku"
+
+// TaggingClassifierModelOrDefault returns the configured primary classification model,
+// falling back to "haiku" when unset or c is nil. Whitespace is trimmed; an empty result
+// also falls back to the default (an all-spaces model name would otherwise reach --model).
+func (c *Config) TaggingClassifierModelOrDefault() string {
+	if c == nil {
+		return taggingClassifierModelDefault
+	}
+	if model := strings.TrimSpace(c.TaggingClassifier.Model); model != "" {
+		return model
+	}
+	return taggingClassifierModelDefault
+}
+
+// TaggingClassifierFallbacks returns the configured fallback model hierarchy with blanks
+// dropped, or nil when none is configured. Never returns a slice containing the primary —
+// a fallback equal to the primary is silently dropped (retrying the identical model twice
+// in a row only doubles cost without new information).
+func (c *Config) TaggingClassifierFallbacks() []string {
+	if c == nil {
+		return nil
+	}
+	primary := c.TaggingClassifierModelOrDefault()
+	var out []string
+	for _, m := range c.TaggingClassifier.FallbackModels {
+		if m = strings.TrimSpace(m); m != "" && m != primary {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // AutoSpawnReadyItemsOrDefault reports whether "ready" items should be automatically
 // dequeued and spawned — in priority order, respecting the WIP cap — the moment a
 // slot frees up, without a human manually clicking "Spawn Session". Defaults to true
@@ -1282,7 +1324,7 @@ func (c *Config) GetAvailablePrograms() []string {
 		shell = "/bin/bash"
 	}
 
-	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy"}
+	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy", "aider"}
 
 	for _, candidate := range candidates {
 		var shellCmd string
@@ -1495,6 +1537,9 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	}
 	if cfg.SessionDefaults.Aliases == nil {
 		cfg.SessionDefaults.Aliases = []AliasConfig{}
+	}
+	if cfg.SessionDefaults.Programs == nil {
+		cfg.SessionDefaults.Programs = []ProgramConfig{}
 	}
 	if cfg.ConfigVersion == 0 {
 		cfg.ConfigVersion = 1
