@@ -60,15 +60,27 @@ type paneSubmitter interface {
 // slow-to-render pane can otherwise be mistaken for a swallowed submit; if
 // the retry also shows no change, ErrSubmitNotConfirmed is returned.
 func SubmitDriverContent(ctx context.Context, inst paneSubmitter, content string, pollInterval, maxWait time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("submit cancelled before sending content: %w", err)
+	}
 	if err := inst.SendKeys(content); err != nil {
 		return fmt.Errorf("send content: %w", err)
 	}
 	waitForPaneSettle(ctx, inst, pollInterval, maxWait)
+	// A ctx that expired during waitForPaneSettle must stop us here — otherwise
+	// an abandoned goroutine (caller already gave up on timeoutCtx) still fires
+	// a real Enter keystroke into the pane after the fact.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("submit cancelled before sending Enter: %w", err)
+	}
 	if err := inst.SendKeys(EnterKeySequence); err != nil {
 		return fmt.Errorf("send submit keystroke: %w", err)
 	}
 	if waitForPaneUpdate(ctx, inst, pollInterval, maxWait) {
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("submit cancelled before retrying Enter: %w", err)
 	}
 	// Retry once: resend just the Enter keystroke in case the first one was
 	// swallowed by the paste detector.
