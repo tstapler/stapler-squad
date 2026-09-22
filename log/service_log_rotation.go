@@ -67,6 +67,13 @@ func rotateServiceLogIfLarge(path string) {
 		Error("service log rotation: failed to read log for copytruncate", "err", err)
 		return
 	}
+	// Keep one extra generation (.old -> .old.1) before overwriting .old, so a
+	// crash loop that straddles two rotation windows doesn't erase the
+	// evidence from the first one. Best-effort: a missing/failed-to-rename
+	// .old is fine, just means there's nothing to preserve yet.
+	if err := os.Rename(path+".old", path+".old.1"); err != nil && !os.IsNotExist(err) {
+		Warn("service log rotation: failed to age out previous .old generation", "err", err)
+	}
 	if err := os.WriteFile(path+".old", data, 0600); err != nil {
 		Error("service log rotation: failed to write rotated log", "err", err)
 		return

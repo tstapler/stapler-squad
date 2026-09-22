@@ -34,6 +34,38 @@ func TestRotateServiceLogIfLarge_CopyTruncatesWhenOversized(t *testing.T) {
 	}
 }
 
+func TestRotateServiceLogIfLarge_AgesOutPreviousOldGeneration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "service.log")
+	first := strings.Repeat("a", serviceLogMaxBytes+1)
+	if err := os.WriteFile(path, []byte(first), 0600); err != nil {
+		t.Fatalf("failed to seed first log file: %v", err)
+	}
+	rotateServiceLogIfLarge(path)
+
+	second := strings.Repeat("b", serviceLogMaxBytes+1)
+	if err := os.WriteFile(path, []byte(second), 0600); err != nil {
+		t.Fatalf("failed to seed second log file: %v", err)
+	}
+	rotateServiceLogIfLarge(path)
+
+	gen1, err := os.ReadFile(path + ".old.1")
+	if err != nil {
+		t.Fatalf("expected first rotation preserved as .old.1: %v", err)
+	}
+	if string(gen1) != first {
+		t.Fatalf(".old.1 should hold the first rotation's content, got %d bytes want %d", len(gen1), len(first))
+	}
+
+	gen0, err := os.ReadFile(path + ".old")
+	if err != nil {
+		t.Fatalf("expected second rotation as .old: %v", err)
+	}
+	if string(gen0) != second {
+		t.Fatalf(".old should hold the second rotation's content, got %d bytes want %d", len(gen0), len(second))
+	}
+}
+
 func TestRotateServiceLogIfLarge_NoopWhenUnderThreshold(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "service.log")
