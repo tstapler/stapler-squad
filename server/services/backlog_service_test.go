@@ -278,7 +278,10 @@ func (m *mockSessionStopper) KillTmuxPaneOnly(_ context.Context, uuid string) er
 		m.onKillTmuxPaneOnly(uuid)
 	}
 	m.killedPaneUUIDs = append(m.killedPaneUUIDs, uuid)
-	if !m.killIneffectiveUUIDs[uuid] && m.liveUUIDs != nil {
+	if m.killIneffectiveUUIDs[uuid] {
+		return fmt.Errorf("mockSessionStopper: kill did not reach %s (killIneffectiveUUIDs)", uuid)
+	}
+	if m.liveUUIDs != nil {
 		m.liveUUIDs[uuid] = false
 	}
 	return nil

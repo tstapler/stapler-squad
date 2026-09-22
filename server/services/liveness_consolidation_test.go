@@ -188,6 +188,51 @@ func TestFindConfirmedLiveInstance_MapMiss_ShadowConfirmsAlive_ReturnsInstance(t
 	assert.True(t, svc.IsSessionLive(uuid), "IsSessionLive must route through the same confirmed-liveness check")
 }
 
+// TestKillTmuxPaneOnly_DeregistersFromPollerOnSuccess is the regression test
+// for a real bug found in code review: findConfirmedLiveInstance's fast path
+// (FindLiveInstance's poller-map hit) trusts poller registration
+// unconditionally, with no IsBackendProcessAlive() check — that verification
+// only runs on the map-miss fallback path. KillTmuxPaneOnly used to kill the
+// tmux pane but never deregister the Instance from the poller, so a
+// subsequent IsSessionLive call on the same UUID kept hitting the fast path
+// and reporting it live — exactly the failure mode spawnSessionAfterGates'
+// 8b2 check (findConfirmedLiveWorkSession) exists to catch, self-inflicted by
+// killEndedWorkSessionPanes' own kill a few lines earlier in the same call.
+// Uses a real, isolated-socket tmux session (not a mock) so this proves an
+// actual kill-session subprocess call, not just an in-memory bookkeeping
+// change.
+func TestKillTmuxPaneOnly_DeregistersFromPollerOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	title := "kill-pane-dereg-" + fmt.Sprint(time.Now().UnixNano())
+	const uuid = "uuid-kill-pane-dereg"
+	socket := startRealTmuxSession(t, title)
+
+	inst, err := session.FromInstanceDataDeferred(session.InstanceData{
+		Title:            title,
+		UUID:             uuid,
+		Path:             t.TempDir(),
+		Status:           session.Active,
+		TmuxServerSocket: socket,
+		TmuxPrefix:       tmux.TmuxPrefix,
+		Program:          "claude",
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+	})
+	require.NoError(t, err)
+
+	poller := newEmptyPoller()
+	poller.SetInstances([]*session.Instance{inst})
+	svc := &SessionService{reviewQueuePoller: poller}
+
+	require.True(t, svc.IsSessionLive(uuid), "precondition: instance is genuinely alive in tmux and registered in the poller")
+
+	require.NoError(t, svc.KillTmuxPaneOnly(context.Background(), uuid))
+
+	assert.False(t, svc.IsSessionLive(uuid),
+		"after a successful kill, the poller-registered instance must no longer report live — otherwise every later confirmed-liveness check (spawnSessionAfterGates' 8b2) keeps seeing a genuinely-dead session as live forever")
+}
+
 // startRealTmuxSession starts a real, detached tmux session named exactly as a
 // persisted instance with this title resolves to, on the per-process isolated
 // socket tmux.ResolveSocket hands every tmux call inside a `go test` binary,
@@ -319,15 +364,19 @@ func TestOtherLiveSessionInsideWorktree_ExcludedAndUnrelatedAndDead_NotBlocked(t
 // TestFindConfirmedLiveWorkSession covers the 8b2 concurrent-liveness cap's
 // contract. The "open + confirmed live" case is the one that fails against an
 // EndedAt-only staleness check, since that check alone is what the 2026-09-12
-// incident showed can be wrong. The "already-tombstoned but confirmed live"
-// case is the guard's actual reason for existing per its doc comment: 8b
-// (findActiveWorkSession) already blocks every EndedAt==nil work session
-// regardless of confirmed liveness, so this function only ever runs against
-// sessions 8b let through — i.e. ones already marked ended. Excluding
-// EndedAt!=nil sessions here (the pre-fix behavior) made 8b2 permanently
-// unreachable in production; see
+// incident showed can be wrong. The "already-tombstoned but confirmed live,
+// in mustRecheck" case is the guard's actual reason for existing per its doc
+// comment: 8b (findActiveWorkSession) already blocks every EndedAt==nil work
+// session regardless of confirmed liveness, so this function only ever runs
+// against sessions 8b let through — i.e. ones already marked ended.
+// Excluding EndedAt!=nil sessions entirely (the pre-fix behavior) made 8b2
+// permanently unreachable in production; see
 // TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfirmedLive
-// for the end-to-end regression.
+// for the end-to-end regression. The "not in mustRecheck" case is the
+// performance fix on top of that: killEndedWorkSessionPanes (8a2) already
+// confirmed dead every EndedAt!=nil session it doesn't report back in
+// mustRecheck, so this must not pay for an extra IsSessionLive call — proven
+// here by a stopper that would (wrongly) claim it live if asked.
 func TestFindConfirmedLiveWorkSession(t *testing.T) {
 	t.Parallel()
 
@@ -335,12 +384,14 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 	open := session.ItemSessionSummary{SessionUUID: "uuid-open-work", Role: session.SessionRoleWork}
 	tombstoned := session.ItemSessionSummary{SessionUUID: "uuid-ended-work", Role: session.SessionRoleWork, EndedAt: &ended}
 	review := session.ItemSessionSummary{SessionUUID: "uuid-review", Role: session.SessionRoleReview}
+	allEndedRecheck := map[string]bool{"uuid-ended-work": true}
 
 	cases := []struct {
-		name     string
-		stopper  SessionStopper
-		prior    []session.ItemSessionSummary
-		wantUUID string
+		name        string
+		stopper     SessionStopper
+		prior       []session.ItemSessionSummary
+		mustRecheck map[string]bool
+		wantUUID    string
 	}{
 		{
 			name:    "nil stopper never blocks",
@@ -348,15 +399,24 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 			prior:   []session.ItemSessionSummary{open},
 		},
 		{
-			name:     "already-tombstoned work session confirmed live still blocks the spawn",
-			stopper:  &mockSessionStopper{liveUUIDs: map[string]bool{"uuid-ended-work": true}},
-			prior:    []session.ItemSessionSummary{tombstoned},
-			wantUUID: "uuid-ended-work",
+			name:        "already-tombstoned work session confirmed live still blocks the spawn",
+			stopper:     &mockSessionStopper{liveUUIDs: map[string]bool{"uuid-ended-work": true}},
+			prior:       []session.ItemSessionSummary{tombstoned},
+			mustRecheck: allEndedRecheck,
+			wantUUID:    "uuid-ended-work",
 		},
 		{
-			name:    "tombstoned work session the stopper cannot confirm live does not block",
-			stopper: &mockSessionStopper{liveUUIDs: map[string]bool{}},
+			name:        "tombstoned work session the stopper cannot confirm live does not block",
+			stopper:     &mockSessionStopper{liveUUIDs: map[string]bool{}},
+			prior:       []session.ItemSessionSummary{tombstoned},
+			mustRecheck: allEndedRecheck,
+		},
+		{
+			name:    "already-confirmed-dead tombstoned session is not rechecked even if the stopper would (wrongly) call it live",
+			stopper: &mockSessionStopper{liveUUIDs: map[string]bool{"uuid-ended-work": true}},
 			prior:   []session.ItemSessionSummary{tombstoned},
+			// mustRecheck omitted: killEndedWorkSessionPanes already confirmed
+			// this one dead, so IsSessionLive must never be consulted for it.
 		},
 		{
 			name:    "non-work role is out of scope",
@@ -369,7 +429,7 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 			prior:   []session.ItemSessionSummary{open},
 		},
 		{
-			name:     "open work session confirmed live blocks the spawn",
+			name:     "open work session confirmed live blocks the spawn regardless of mustRecheck",
 			stopper:  &mockSessionStopper{liveUUIDs: map[string]bool{"uuid-open-work": true}},
 			prior:    []session.ItemSessionSummary{tombstoned, review, open},
 			wantUUID: "uuid-open-work",
@@ -379,7 +439,7 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := findConfirmedLiveWorkSession(tc.stopper, tc.prior)
+			got := findConfirmedLiveWorkSession(tc.stopper, tc.prior, tc.mustRecheck)
 			if tc.wantUUID == "" {
 				assert.Nil(t, got)
 				return

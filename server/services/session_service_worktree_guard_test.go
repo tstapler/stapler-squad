@@ -150,3 +150,28 @@ func TestDeleteSession_RefusesWhenWorktreeSharedWithOtherLiveSession(t *testing.
 	}
 	assert.True(t, found, "the target session must still exist in storage once the guard refused the delete")
 }
+
+// TestDeleteSession_AllowsWhenNoOtherLiveSessionInsideWorktree is
+// TestDeleteSession_RefusesWhenWorktreeSharedWithOtherLiveSession's positive
+// counterpart: a worktree-backed delete with no sibling live session inside
+// it must still succeed — the guard is not a blanket refusal for every
+// worktree-backed session, only one whose worktree is genuinely shared.
+func TestDeleteSession_AllowsWhenNoOtherLiveSessionInsideWorktree(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	worktree := t.TempDir()
+	elsewhere := newLiveProbeInstance(t, "guard-elsewhere-delete-"+t.Name(), t.TempDir())
+	target := newWorktreeGuardTarget("guard-target-delete-alone", "uuid-guard-target-delete-alone", worktree)
+	addInstanceToPoller(fix.poller, elsewhere)
+	addInstanceToPoller(fix.poller, target)
+	require.NoError(t, fix.storage.AddInstance(target))
+
+	resp, err := fix.svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "guard-target-delete-alone",
+	}))
+
+	require.NoError(t, err, "no other live session occupies the worktree, so delete must proceed")
+	assert.True(t, resp.Msg.Success)
+}

@@ -910,8 +910,11 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// nothing previously closed a finished round's tmux pane — it sat around
 	// indefinitely as an idle "[exited]" pane, accumulating with every rework
 	// cycle. KillTmuxPaneOnly (not StopSessionByUUID/Instance.Kill) leaves the
-	// worktree alone, since rework rounds share one worktree/branch.
-	s.killEndedWorkSessionPanes(ctx, priorSessions)
+	// worktree alone, since rework rounds share one worktree/branch. Returns
+	// the UUIDs whose kill attempt did NOT confirm dead — see its doc comment
+	// and 8b2 below for why that set, not every ended session, is what 8b2
+	// needs to re-check.
+	unconfirmedDeadUUIDs := s.killEndedWorkSessionPanes(ctx, priorSessions)
 
 	// 8b. Guard against spawning a duplicate work session when one is already active.
 	if active := findActiveWorkSession(priorSessions); active != nil {
@@ -926,7 +929,13 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// session wrongly tombstoned by a transient liveness-check miss would
 	// pass the 8b guard above (its EndedAt is now set) but still fail here if
 	// IsSessionLive's OS-truth fallback confirms it's actually still running.
-	if live := findConfirmedLiveWorkSession(s.sessionStopper, priorSessions); live != nil {
+	// unconfirmedDeadUUIDs scopes the recheck to sessions 8a2 could not just
+	// confirm dead itself — every other already-ended session was either
+	// already gone or was just successfully killed (and deregistered, see
+	// KillTmuxPaneOnly), so re-asking IsSessionLive for it would repeat the
+	// exact same expensive tmux/storage round trip 8a2 already paid, once per
+	// historical rework round, on every single spawn attempt.
+	if live := findConfirmedLiveWorkSession(s.sessionStopper, priorSessions, unconfirmedDeadUUIDs); live != nil {
 		return nil, connect.NewError(connect.CodeAlreadyExists,
 			fmt.Errorf("a work session (%s) is already confirmed live for this item; refusing to spawn a concurrent one", live.SessionUUID))
 	}
@@ -1259,42 +1268,29 @@ func findActiveWorkSession(priorSessions []session.ItemSessionSummary) *session.
 	return nil
 }
 
-// findConfirmedLiveWorkSession is spawnSessionAfterGates' 8b2 concurrent-liveness
-// cap: it re-derives "is a work session already running for this item" straight
-// from sessionStopper.IsSessionLive (OS/tmux truth, via
-// SessionService.findConfirmedLiveInstance) instead of priorSessions' EndedAt
-// column, which findActiveWorkSession relies on and tombstoneOrphanWorkSessions
-// writes. Deliberately does NOT skip sessions whose EndedAt is already set —
-// EndedAt is exactly the bookkeeping that can be wrong (a past tombstone sweep
-// hitting the same transient liveness-check miss findConfirmedLiveInstance
-// exists to catch), so this is the guard of last resort for a session that
-// was already wrongly marked ended but is still genuinely alive; excluding
-// EndedAt!=nil here would make this check unreachable in practice, since any
-// EndedAt==nil work session already blocks earlier at 8b's
-// findActiveWorkSession regardless of confirmed liveness. Returns nil (never
-// blocks) if stopper is nil, matching this file's existing "unknown liveness
-// assumes alive is not assumed, tombstoning is skipped" conservative-nil
-// convention elsewhere (e.g. tombstoneOrphanWorkSessions).
+// findConfirmedLiveWorkSession is spawnSessionAfterGates' 8b2 concurrent-
+// liveness cap: re-derives "is a work session already running" from
+// sessionStopper.IsSessionLive (OS/tmux truth) rather than trusting
+// ItemSession.EndedAt, which can be wrongly set by a stale tombstone sweep —
+// the 2026-09-12 incident this guards against. Checks EndedAt!=nil sessions
+// too (8b's findActiveWorkSession already covers EndedAt==nil) for defense
+// in depth against exactly that wrong-EndedAt case; nil stopper never blocks,
+// matching this file's conservative-nil convention elsewhere.
 //
-// This runs AFTER killEndedWorkSessionPanes (8a2) in spawnSessionAfterGates,
-// which unconditionally kills the pane of every already-ended work session,
-// including one a caller like RemediateStaleWorkSession or
-// onAutonomousDriverComplete just deliberately retired moments ago (BUG-064).
-// Instance.KillSession's underlying tmux kill-session call is synchronous, so
-// a session that pane-kill actually reached is already gone by the time this
-// check re-asks IsSessionLive — no special-casing needed for "the session
-// this respawn is replacing." A session that kill genuinely could not reach
-// (a stuck/zombie process, or one whose EndedAt was set by something other
-// than a real kill attempt) correctly still blocks here, satisfying this
-// backlog item's AC1 "refuse, or terminate the prior session's process first"
-// contract for every caller uniformly.
-func findConfirmedLiveWorkSession(stopper SessionStopper, priorSessions []session.ItemSessionSummary) *session.ItemSessionSummary {
+// mustRecheck restricts which EndedAt!=nil sessions actually call
+// IsSessionLive — see killEndedWorkSessionPanes' doc comment for why every
+// other one is already known dead by the time this runs, and re-asking would
+// just repeat the same expensive round trip.
+func findConfirmedLiveWorkSession(stopper SessionStopper, priorSessions []session.ItemSessionSummary, mustRecheck map[string]bool) *session.ItemSessionSummary {
 	if stopper == nil {
 		return nil
 	}
 	for i := range priorSessions {
 		is := &priorSessions[i]
 		if is.Role != string(session.SessionRoleWork) {
+			continue
+		}
+		if is.EndedAt != nil && !mustRecheck[is.SessionUUID] {
 			continue
 		}
 		if stopper.IsSessionLive(is.SessionUUID) {
@@ -3248,18 +3244,30 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 // StopSessionByUUID, since rework rounds share one worktree/branch across
 // their "-rN" revisions (see buildRevisionTitle) and StopSessionByUUID's
 // Instance.Kill also runs CleanupWorktree.
-func (s *BacklogService) killEndedWorkSessionPanes(ctx context.Context, sessions []session.ItemSessionSummary) {
+//
+// Returns the UUIDs whose kill attempt errored — KillTmuxPaneOnly
+// deregisters a session it actually kills, so every UUID NOT in this set is
+// already confirmed dead (killed just now, or already gone before the
+// attempt); only a genuine kill failure leaves real doubt worth
+// findConfirmedLiveWorkSession (8b2) re-checking.
+func (s *BacklogService) killEndedWorkSessionPanes(ctx context.Context, sessions []session.ItemSessionSummary) map[string]bool {
 	if s.sessionStopper == nil {
-		return
+		return nil
 	}
+	var unconfirmedDead map[string]bool
 	for _, is := range sessions {
 		if is.Role != string(session.SessionRoleWork) || is.EndedAt == nil {
 			continue
 		}
 		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
 			log.Warn("[killEndedWorkSessionPanes] kill failed", "session", is.SessionUUID, "error", err)
+			if unconfirmedDead == nil {
+				unconfirmedDead = make(map[string]bool)
+			}
+			unconfirmedDead[is.SessionUUID] = true
 		}
 	}
+	return unconfirmedDead
 }
 
 // tombstoneOrphanTriageSessions marks any open triage ItemSessions that are no longer

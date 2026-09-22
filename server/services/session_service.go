@@ -1262,16 +1262,11 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 	return "", false
 }
 
-// RefuseIfWorktreeSharedWithOtherLiveSession is OtherLiveSessionInsideWorktree
-// resolved into a ready-to-return error, shared by every path that deletes a
-// session's git worktree: MCP pause_session/stop_session
-// (server/mcp/tools_lifecycle.go), and RPC UpdateSession's pause/stop status
-// transitions and DeleteSession below. inst may be nil (e.g. DeleteSession's
-// not-currently-live branch, which has no live Instance to introspect a
-// worktree path from) — returns nil in that case, same as a non-worktree
-// session, since a nil/non-live inst never reaches this codebase's other
-// worktree-deleting call (Destroy() only runs from the liveInst-found
-// branch).
+// RefuseIfWorktreeSharedWithOtherLiveSession resolves
+// OtherLiveSessionInsideWorktree into a ready-to-return error, shared by
+// every worktree-deleting path: MCP pause/stop, RPC UpdateSession, and
+// DeleteSession. inst may be nil (no live Instance to inspect) — returns
+// nil, same as a non-worktree session.
 func (s *SessionService) RefuseIfWorktreeSharedWithOtherLiveSession(inst *session.Instance) error {
 	if inst == nil || !inst.HasGitWorktree() {
 		return nil
@@ -1282,7 +1277,7 @@ func (s *SessionService) RefuseIfWorktreeSharedWithOtherLiveSession(inst *sessio
 		return nil
 	}
 	return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf(
-		"cannot proceed: worktree %q is still in use by another active session (%s); stop or pause that session first",
+		"cannot proceed: worktree %q is still in use by another active session (%s)",
 		worktreePath, blockingUUID))
 }
 
@@ -1304,6 +1299,13 @@ func (s *SessionService) IsRetryPending(sessionUUID string) bool {
 // CleanupWorktree and would delete a worktree still in use by the next rework
 // round. Best-effort: errors are logged, not returned, since this runs as
 // cleanup alongside a new spawn that should proceed regardless.
+//
+// Deregisters the instance from every poller on a successful kill —
+// findConfirmedLiveInstance's fast path trusts FindLiveInstance's poller-map
+// hit unconditionally as "live" (its IsBackendProcessAlive fallback check
+// only runs on a map miss), so a killed-but-still-registered instance would
+// otherwise be misreported live by every later IsSessionLive call, including
+// spawnSessionAfterGates' 8b2 check moments after this exact kill.
 func (s *SessionService) KillTmuxPaneOnly(ctx context.Context, sessionUUID string) error {
 	inst := s.findConfirmedLiveInstance(sessionUUID)
 	if inst == nil {
@@ -1313,6 +1315,7 @@ func (s *SessionService) KillTmuxPaneOnly(ctx context.Context, sessionUUID strin
 		log.Warn("KillTmuxPaneOnly: kill failed", "uuid", sessionUUID, "err", err)
 		return err
 	}
+	s.removeFromAllPollers(sessionUUID)
 	return nil
 }
 
