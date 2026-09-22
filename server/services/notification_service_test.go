@@ -211,6 +211,68 @@ func TestSendNotification_SuppressesLowPriorityForHiddenSession(t *testing.T) {
 	}
 }
 
+// TestSendNotification_SuppressesLowPriorityForHiddenSession_ViaStorageFallback combines
+// TestSendNotification_PollerMissFallsBackToStorage's poller-miss setup with
+// TestSendNotification_SuppressesLowPriorityForHiddenSession's suppression assertion:
+// the storage-fallback branch also has to read Hidden off InstanceData, not just the
+// poller's live Instance, or a hidden session's routine notifications leak once it falls
+// out of the poller (e.g. shortly after a server restart).
+func TestSendNotification_SuppressesLowPriorityForHiddenSession_ViaStorageFallback(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	bus := events.NewEventBus(32)
+	t.Cleanup(bus.Close)
+	svc := NewSessionServiceWithSearchEngine(storage, bus, nil)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	mux := http.NewServeMux()
+	path, handler := sessionv1connect.NewSessionServiceHandler(svc)
+	mux.Handle(path, handler)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// Wire an empty poller (simulates the poller not having this session yet), same as
+	// TestSendNotification_PollerMissFallsBackToStorage.
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+
+	const sessionTitle = "hidden-review-session-storage-fallback"
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:     sessionTitle,
+		UUID:      "hidden-uuid-storage-fallback",
+		Path:      t.TempDir(),
+		Status:    session.Paused,
+		Program:   "claude",
+		Hidden:    true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := bus.Subscribe(ctx)
+
+	client := newTestClient(srv)
+	_, err := client.SendNotification(ctx, connect.NewRequest(&sessionv1.SendNotificationRequest{
+		SessionId:        sessionTitle, // hook sends the title; poller doesn't have it yet
+		Title:            "Task Complete",
+		NotificationType: sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE,
+		Priority:         sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW,
+	}))
+	require.NoError(t, err)
+
+	select {
+	case e := <-eventCh:
+		if e.Type == events.EventNotification {
+			t.Fatalf("expected LOW-priority notification for hidden session (via storage fallback) to be suppressed, got %+v", e)
+		}
+	case <-time.After(300 * time.Millisecond):
+		// No notification event arrived — suppressed as expected.
+	}
+}
+
 // TestSendNotification_SurfacesHighPriorityForHiddenSession verifies that a
 // HIGH-priority notification (e.g. ssq-hook-handler's "Task Failed") still
 // publishes for a Hidden session — mirroring ReactiveQueueManager's

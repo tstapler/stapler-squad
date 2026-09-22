@@ -6269,6 +6269,8 @@ func (s *SessionService) ArchiveSession(
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
+	// Notifies event-driven cleanup (ReactiveQueueManager evicting any stale review-queue entry), mirroring ArchiveSessionByUUID.
+	s.eventBus.Publish(events.NewSessionArchivedEvent(inst.UUID))
 	return connect.NewResponse(&sessionv1.ArchiveSessionResponse{}), nil
 }
 

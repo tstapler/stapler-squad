@@ -38,6 +38,53 @@ func TestArchiveSession_SetsStatusStopped(t *testing.T) {
 	assert.Equal(t, session.Stopped, snap.Status, "expected Status to transition to Stopped when archiving")
 }
 
+// waitForSessionArchivedEvent blocks until an EventSessionArchived with the given session
+// UUID arrives on eventCh, or fails the test — shared assertion for the ArchiveSession/
+// ArchiveSessionByUUID publish tests below.
+func waitForSessionArchivedEvent(t *testing.T, eventCh <-chan *events.Event, expectedUUID string) {
+	t.Helper()
+	var got *events.Event
+	require.NoError(t, testutil.WaitForCondition(func() bool {
+		select {
+		case e := <-eventCh:
+			if e.Type == events.EventSessionArchived {
+				got = e
+				return true
+			}
+			return false
+		default:
+			return false
+		}
+	}, testutil.FastWaitConfig()), "expected EventSessionArchived to be published")
+	assert.Equal(t, expectedUUID, got.SessionID)
+}
+
+// TestArchiveSession_PublishesSessionArchivedEvent verifies the ArchiveSession RPC
+// publishes EventSessionArchived — mirrors
+// TestArchiveSessionByUUID_PublishesSessionArchivedEvent; regression for the RPC's stale
+// review-queue entries never getting evicted because the event was never published.
+func TestArchiveSession_PublishesSessionArchivedEvent(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+
+	addPausedSession(t, fix, "archive-me-event")
+	inst := fix.poller.FindInstance("archive-me-event")
+	require.NotNil(t, inst)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eventCh, subID := fix.bus.Subscribe(ctx)
+	defer fix.bus.Unsubscribe(subID)
+
+	req := connect.NewRequest(&sessionv1.ArchiveSessionRequest{SessionId: "archive-me-event"})
+	resp, err := fix.svc.ArchiveSession(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	waitForSessionArchivedEvent(t, eventCh, inst.UUID)
+}
+
 // addLivePausedInstance persists a Paused instance under storage/uuid/title and wires it
 // into fix.poller, returning the loaded (storage-backed) *session.Instance — the
 // add+load+find+addInstanceToPoller boilerplate shared by the ArchiveSessionByUUID tests
@@ -104,20 +151,7 @@ func TestArchiveSessionByUUID_PublishesSessionArchivedEvent(t *testing.T) {
 	err := fix.svc.ArchiveSessionByUUID(context.Background(), "test-uuid-publishes-event")
 	require.NoError(t, err)
 
-	var got *events.Event
-	require.NoError(t, testutil.WaitForCondition(func() bool {
-		select {
-		case e := <-eventCh:
-			if e.Type == events.EventSessionArchived {
-				got = e
-				return true
-			}
-			return false
-		default:
-			return false
-		}
-	}, testutil.FastWaitConfig()), "expected EventSessionArchived to be published")
-	assert.Equal(t, "test-uuid-publishes-event", got.SessionID)
+	waitForSessionArchivedEvent(t, eventCh, "test-uuid-publishes-event")
 }
 
 // TestArchiveSessionByUUID_should_useStorageFallback_When_SessionNotInLivePoller is the
@@ -143,6 +177,11 @@ func TestArchiveSessionByUUID_should_useStorageFallback_When_SessionNotInLivePol
 	require.NoError(t, fix.storage.AddInstance(inst))
 	require.Nil(t, fix.poller.FindInstance("test-uuid-not-in-poller"), "precondition: session must not be in the live poller")
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eventCh, subID := fix.bus.Subscribe(ctx)
+	defer fix.bus.Unsubscribe(subID)
+
 	err := fix.svc.ArchiveSessionByUUID(context.Background(), "test-uuid-not-in-poller")
 	require.NoError(t, err)
 
@@ -150,6 +189,10 @@ func TestArchiveSessionByUUID_should_useStorageFallback_When_SessionNotInLivePol
 	require.NoError(t, err)
 	assert.NotNil(t, data.ArchivedAt, "expected ArchivedAt to be set via the storage fallback")
 	assert.Equal(t, session.Stopped, data.Status, "expected Status to transition to Stopped via the storage fallback")
+
+	// Confirms EventSessionArchived publishes on this storage-fallback branch specifically,
+	// not just the live-instance branch TestArchiveSessionByUUID_PublishesSessionArchivedEvent covers.
+	waitForSessionArchivedEvent(t, eventCh, "test-uuid-not-in-poller")
 }
 
 // TestArchiveSessionByUUID_should_returnNilWithoutPanicking_When_ConcStorageIsNil covers
