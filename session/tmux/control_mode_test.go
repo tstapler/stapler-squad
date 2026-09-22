@@ -121,7 +121,7 @@ func newControlModeOutputTestSession(t *testing.T) (*TmuxSession, io.WriteCloser
 		sanitizedName:          "cm_output_test",
 		controlModeStdout:      pr,
 		controlModeDone:        make(chan struct{}),
-		controlModeSubscribers: make(map[string]chan []byte),
+		controlModeSubscribers: make(map[string]*controlModeSubscriber),
 		onExit:                 rec.record,
 	}
 	t.Cleanup(func() {
@@ -545,7 +545,7 @@ func TestControlMode_ScanLoopDoneChRace_EndsGenerationWithoutFiringOnExit(t *tes
 		sanitizedName:          "cm_donech_race_test",
 		controlModeStdout:      reader,
 		controlModeDone:        doneCh,
-		controlModeSubscribers: make(map[string]chan []byte),
+		controlModeSubscribers: make(map[string]*controlModeSubscriber),
 		onExit:                 rec.record,
 	}
 	t.Cleanup(func() { _ = reader.Close() })
