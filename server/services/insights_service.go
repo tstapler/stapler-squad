@@ -3,8 +3,11 @@ package services
 import (
 	"context"
 	"fmt"
+	"path"
+	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,6 +65,10 @@ type InsightsService struct {
 	// bounded in practice by the number of distinct model families ever seen —
 	// safe to leave unbounded (see pre-mortem's minor note).
 	loggedUnpricedFamilies map[string]bool
+	// backfillOnce runs BackfillConversationUUIDs once per process, on the first
+	// summary request. If the token store is still empty then, nothing is stamped
+	// and the next process start retries.
+	backfillOnce sync.Once
 }
 
 // NewInsightsService creates a new InsightsService.
@@ -80,6 +87,47 @@ func NewInsightsService(
 	}
 }
 
+// untrackedItemIDPrefix marks a role_breakdown item entry synthesized by
+// sessionDisplayTitle rather than sourced from a real backlog item — see
+// groupUnattributed's doc comment.
+const untrackedItemIDPrefix = "untracked:"
+
+// worktreeTitlePattern extracts a stapler-squad worktree's session title from a
+// Claude transcript's decoded project path (".../worktrees/<title>/<16-hex id>").
+// Mirrors web-app/src/app/insights/insightsFormatters.ts's WORKTREE_PATH regex —
+// keep the two in sync.
+var worktreeTitlePattern = regexp.MustCompile(`/worktrees/(.+?)/[0-9a-f]{16}(?:/|$)`)
+
+// sessionDisplayTitle returns a human-readable label for projectPath: the
+// worktree's session title if the path is a stapler-squad worktree, else the
+// path's final segment. "" in, "" out.
+func sessionDisplayTitle(projectPath string) string {
+	if m := worktreeTitlePattern.FindStringSubmatch(projectPath); m != nil {
+		return strings.ReplaceAll(m[1], "/", "-")
+	}
+	return path.Base(strings.TrimRight(projectPath, "/"))
+}
+
+// groupUnattributed returns meta unchanged unless it carries no backlog
+// attribution (Role == ""), in which case it returns a copy grouped under a
+// synthetic per-title item keyed by sessionDisplayTitle(projectPath) — so the
+// "" role bucket's items (previously one shapeless blob keyed by ItemID "")
+// break down by session instead. The untrackedItemIDPrefix keeps synthetic IDs
+// unambiguous from real backlog-item UUIDs (relied on by BacklogItemDetail's
+// itemId match).
+func groupUnattributed(meta SessionMeta, projectPath string) SessionMeta {
+	if meta.Role != "" {
+		return meta
+	}
+	title := sessionDisplayTitle(projectPath)
+	if title == "" {
+		return meta
+	}
+	meta.ItemID = untrackedItemIDPrefix + title
+	meta.ItemTitle = title
+	return meta
+}
+
 // SessionMeta is the per-session backlog attribution sessionMetaForSessions
 // looks up by tmux session ID: its SessionRole plus the backlog item it
 // belongs to (Epic 4.1's item-drilldown data).
@@ -87,7 +135,26 @@ type SessionMeta struct {
 	Role      string
 	ItemID    string
 	ItemTitle string
+	// ItemSessionUUID is the ItemSession's session_uuid, so a conversation-matched
+	// transcript can mark that row covered for the fold-in dedupe.
+	ItemSessionUUID string
 }
+
+// metaFor resolves r's attribution: by live session ID first, else by Claude
+// conversation UUID (survives the session row's deletion). ok reports a match.
+func metaFor(meta map[string]SessionMeta, sessionID string, r *tokens.ParseResult) (SessionMeta, bool) {
+	if m, ok := meta[sessionID]; ok && sessionID != "" {
+		return m, true
+	}
+	if r != nil && r.SessionUUID != "" {
+		m, ok := meta[conversationKey(r.SessionUUID)]
+		return m, ok
+	}
+	return SessionMeta{}, false
+}
+
+// conversationKey namespaces conversation UUIDs inside the shared SessionMeta map.
+func conversationKey(conversationUUID string) string { return "conv:" + conversationUUID }
 
 // sessionMetaForSessions builds a sessionUUID→SessionMeta map from one unfiltered
 // GetAllItemSessionsWithBacklogInfo scan, keeping the first (most-recently-created,
@@ -103,8 +170,14 @@ func (s *InsightsService) sessionMetaForSessions(ctx context.Context) map[string
 	}
 	meta := make(map[string]SessionMeta, len(entries))
 	for _, e := range entries {
+		m := SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle, ItemSessionUUID: e.SessionUUID}
 		if _, exists := meta[e.SessionUUID]; !exists {
-			meta[e.SessionUUID] = SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle}
+			meta[e.SessionUUID] = m
+		}
+		if e.ConversationUUID != "" {
+			if _, exists := meta[conversationKey(e.ConversationUUID)]; !exists {
+				meta[conversationKey(e.ConversationUUID)] = m
+			}
 		}
 	}
 	return meta
@@ -156,6 +229,10 @@ func buildSessionSummary(
 		rec, isOrphan = associator.AssociateRecordWithSnapshot(r, snapshot)
 		sessionID, tags = rec.SessionID, rec.Tags
 	}
+	attributed, byConversation := metaFor(sessionMeta, sessionID, r)
+	if byConversation {
+		isOrphan = false
+	}
 
 	costUSD, unpriced := pt.EstimateCost(r)
 	cacheHitRate := tokens.ComputeCacheHitRate(r.TotalInput, r.CacheRead)
@@ -186,7 +263,7 @@ func buildSessionSummary(
 		UnpricedModels:   unpriced,
 		ActivityType:     activityType,
 		Tags:             tags,
-		SessionRole:      sessionMeta[sessionID].Role,
+		SessionRole:      attributed.Role,
 	}
 	if !firstTs.IsZero() {
 		summary.FirstMessageAt = timestamppb.New(firstTs)
@@ -208,6 +285,15 @@ func (s *InsightsService) GetInsightsSummary(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetInsightsSummaryRequest],
 ) (*connect.Response[sessionv1.GetInsightsSummaryResponse], error) {
+	s.backfillOnce.Do(func() {
+		go func() {
+			bctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			if _, err := s.BackfillConversationUUIDs(bctx); err != nil {
+				log.Warn("insights backfill failed", "err", err)
+			}
+		}()
+	})
 	results := s.store.GetAll()
 	msg := req.Msg
 
@@ -294,6 +380,13 @@ func (s *InsightsService) GetInsightsSummary(
 		if s.associator != nil {
 			sessionID, isOrphan = s.associator.AssociateWithSnapshot(r, sessionSnapshot)
 		}
+		attributed, byConversation := metaFor(sessionMeta, sessionID, r)
+		if byConversation {
+			isOrphan = false // a deleted session's transcript, still attributable by conversation UUID
+			if attributed.ItemSessionUUID != "" {
+				transcriptCoveredSessionIDs[attributed.ItemSessionUUID] = true
+			}
+		}
 		if sessionID != "" {
 			// Recorded before the orphan/session-id filters below so Story
 			// 4.1.4's fold-in pass still recognizes this session as
@@ -373,7 +466,7 @@ func (s *InsightsService) GetInsightsSummary(
 		if !sessionUnpriced {
 			totalCostUSD += costUSD
 		}
-		accumulateRoleCost(roleAccums, sessionMeta[sessionID], costUSD, sessionUnpriced)
+		accumulateRoleCost(roleAccums, groupUnattributed(attributed, r.ProjectPath), costUSD, sessionUnpriced)
 		totalInputTokens += r.TotalInput
 		totalOutputTokens += r.TotalOutput
 		totalCacheReadTokens += r.CacheRead

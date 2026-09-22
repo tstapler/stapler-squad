@@ -13,6 +13,7 @@ import { FindingsPanel } from "./FindingsPanel";
 import { TopNTable } from "./TopNTables";
 import { ActivityBreakdownTable } from "./ActivityBreakdownTable";
 import { SessionsTable } from "./SessionsTable";
+import { UnattributedByTitleTable } from "./UnattributedByTitleTable";
 import { SessionDetailDrawer } from "./SessionDetailDrawer";
 import { ProjectedCostCard } from "./ProjectedCostCard";
 import { TimeRangeFilter, resolveTimeRangeDates } from "./TimeRangeFilter";
@@ -228,6 +229,9 @@ function InsightsDashboardInner() {
                 onRoleClick={handleRoleClick}
               />
             </div>
+            <UnattributedByTitleTable
+              items={summary.roleBreakdown.find((r) => r.sessionRole === "")?.items ?? []}
+            />
           </section>
 
           <section className={section}>

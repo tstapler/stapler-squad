@@ -1541,7 +1541,7 @@ func TestSessionMetaForSessions_should_RetainItemIDAndItemTitle_When_BuildingMap
 	meta := svc.sessionMetaForSessions(context.Background())
 
 	require.Contains(t, meta, "sess-1")
-	assert.Equal(t, SessionMeta{Role: session.SessionRoleTriage, ItemID: "bl_abc123", ItemTitle: "Fix login bug"}, meta["sess-1"])
+	assert.Equal(t, SessionMeta{Role: session.SessionRoleTriage, ItemID: "bl_abc123", ItemTitle: "Fix login bug", ItemSessionUUID: "sess-1"}, meta["sess-1"])
 }
 
 func TestSessionMetaForSessions_WhenSessionUUIDHasMultipleItemSessionEntries_ExpectFirstEntrySeenWins(t *testing.T) {
@@ -1960,4 +1960,60 @@ func TestDismissFinding_WhenFinishedSessionRecomputedIdentically_ExpectDismissal
 	second, err := svc2.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
 	require.NoError(t, err)
 	assert.Empty(t, second.Msg.Findings, "an unchanged finished session's recomputation must keep matching the earlier dismissal")
+}
+
+func TestGetInsightsSummary_WhenSessionDeleted_ExpectAttributedByConversationUUIDAndNotDoubleCounted(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("conv-gone", "claude-sonnet-4", "/wt/gone", 1000, 500, 0, now),
+	}
+	// No live session record: the transcript is an orphan by path/UUID association.
+	associator := tokens.NewAssociator(&fakeSessionStorage{})
+	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		{SessionUUID: "sess-gone", ConversationUUID: "conv-gone", SessionRole: session.SessionRoleWork,
+			ItemID: "item-1", ItemTitle: "T", EstimatedCostUsd: 9, CostPriced: true, CreatedAt: now},
+	}}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+
+	// IncludeOrphans is false: a conversation-attributed transcript must not be filtered as an orphan.
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Equal(t, session.SessionRoleWork, resp.Msg.Sessions[0].SessionRole)
+	require.Len(t, resp.Msg.RoleBreakdown, 1)
+	assert.Equal(t, session.SessionRoleWork, resp.Msg.RoleBreakdown[0].SessionRole)
+	// The item session's own $9 must not be folded in on top of its transcript.
+	assert.InDelta(t, resp.Msg.Sessions[0].EstimatedCostUsd, resp.Msg.TotalCostUsd, 1e-9)
+}
+
+func TestGetInsightsSummary_UnattributedRoleBreakdown_GroupsByWorktreeTitle(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	wt1 := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25"
+	wt2 := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25/tests/e2e"
+	other := "/home/u/code/github/com/tstapler/kibitzer"
+	results := []*tokens.ParseResult{
+		newResult("u1", "claude-sonnet-4", wt1, 1000, 500, 0, now),
+		newResult("u2", "claude-sonnet-4", wt2, 1000, 500, 0, now),
+		newResult("u3", "claude-sonnet-4", other, 1000, 500, 0, now),
+	}
+	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), nil)
+
+	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.RoleBreakdown, 1)
+	unattributed := resp.Msg.RoleBreakdown[0]
+	assert.Equal(t, "", unattributed.SessionRole)
+	require.Len(t, unattributed.Items, 2, "two distinct titles: steam-controls (2 sessions) and kibitzer (1)")
+	byTitle := map[string]*sessionv1.ItemRoleCost{}
+	for _, it := range unattributed.Items {
+		byTitle[it.ItemTitle] = it
+	}
+	require.Contains(t, byTitle, "steam-controls")
+	assert.EqualValues(t, 2, byTitle["steam-controls"].SessionCount)
+	require.Contains(t, byTitle, "kibitzer")
+	assert.EqualValues(t, 1, byTitle["kibitzer"].SessionCount)
 }

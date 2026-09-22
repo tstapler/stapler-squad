@@ -1313,6 +1313,12 @@ func (s *Storage) UpdateItemSessionEndedWithReason(ctx context.Context, id strin
 	return s.repo.UpdateItemSessionEndedWithReason(ctx, id, endedAt, reason)
 }
 
+// UpdateItemSessionConversationUUID records a headless call's Claude transcript UUID.
+// See EntRepository.UpdateItemSessionConversationUUID.
+func (s *Storage) UpdateItemSessionConversationUUID(ctx context.Context, id string, conversationUUID string) error {
+	return s.repo.UpdateItemSessionConversationUUID(ctx, id, conversationUUID)
+}
+
 // UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
 // capture file for a headless triage/review call that errored or produced
 // unparseable output. See EntRepository.UpdateItemSessionFailureCapture.

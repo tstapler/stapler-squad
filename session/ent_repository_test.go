@@ -894,3 +894,45 @@ func createTestEntRepository(t *testing.T) (*EntRepository, func()) {
 
 	return repo, func() {}
 }
+
+func TestEntRepository_Delete_StampsConversationUUIDOnItemSessions(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	data := createTestSession("stamp-test")
+	data.UUID = "sess-uuid-1"
+	data.ClaudeSession.ConversationUUID = "conv-uuid-1"
+	require.NoError(t, repo.Create(ctx, data))
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "stamp item", Status: string(BacklogStatusInProgress)})
+	require.NoError(t, err)
+	_, err = repo.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "sess-uuid-1", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Delete(ctx, data.Title))
+
+	entries, err := repo.GetAllItemSessionsWithBacklogInfo(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "conv-uuid-1", entries[0].ConversationUUID)
+}
+
+func TestEntRepository_UpdateItemSessionConversationUUID_RoundTrips(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "conv item", Status: string(BacklogStatusInProgress)})
+	require.NoError(t, err)
+	is, err := repo.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-x", SessionRole: SessionRoleTriage})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.UpdateItemSessionConversationUUID(ctx, is.ID, "conv-triage-1"))
+
+	entries, err := repo.GetAllItemSessionsWithBacklogInfo(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "conv-triage-1", entries[0].ConversationUUID)
+}

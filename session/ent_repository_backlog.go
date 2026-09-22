@@ -2812,7 +2812,9 @@ func (r *EntRepository) GetAllItemSessionsWithBacklogInfo(ctx context.Context) (
 			continue
 		}
 		results = append(results, ItemSessionBacklogEntry{
+			ItemSessionID:    is.ID.String(),
 			SessionUUID:      is.SessionUUID,
+			ConversationUUID: is.ConversationUUID,
 			SessionRole:      is.SessionRole,
 			ItemID:           is.Edges.BacklogItem.ID.String(),
 			ItemTitle:        is.Edges.BacklogItem.Title,

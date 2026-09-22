@@ -33,7 +33,7 @@ import {
   roleFilterChip,
   roleFilterChipClear,
 } from "./SessionsTable.css";
-import { fmtCost, fmtTokens, fmtPct, shortId } from "./insightsFormatters";
+import { fmtCost, fmtTokens, fmtPct, shortId, pathBasename } from "./insightsFormatters";
 
 interface Props {
   sessions: SessionTokenSummary[];
@@ -55,10 +55,6 @@ interface Props {
    */
   roleFilter?: string;
   onClearRoleFilter?: () => void;
-}
-
-function pathBasename(p: string): string {
-  return p.split("/").pop() || p;
 }
 
 // sessionDurationSeconds returns lastMessageAt - firstMessageAt in seconds,
