@@ -828,6 +828,12 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 		return fmt.Errorf("failed to delete diff stats: %w", err)
 	}
 
+	// Stamp the conversation UUID onto the session's item_sessions before the claude_sessions
+	// row is deleted, so Insights can still attribute the transcript afterward.
+	if err := stampItemSessionConversationUUID(ctx, tx, sess); err != nil {
+		return err
+	}
+
 	// Delete claude session and its metadata if exists
 	// Delete all claude metadata associated with claude sessions for this session
 	if _, err := tx.ClaudeMetadata.Delete().Where(claudemetadata.HasClaudeSessionWith(claudesession.HasSessionWith(session.ID(sess.ID)))).Exec(ctx); err != nil {
