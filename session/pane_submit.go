@@ -18,6 +18,12 @@ const (
 	DefaultPaneSettleMaxWait      = 2 * time.Second
 )
 
+// DefaultSendKeysTimeout bounds a plain (no-Enter) SendKeys write via
+// SendKeysWithTimeout, matching the timeout server/mcp and server/services
+// have historically used to guard against a wedged PTY write hanging a
+// request handler indefinitely.
+const DefaultSendKeysTimeout = 5 * time.Second
+
 // ErrSubmitNotConfirmed is returned by SubmitDriverContent when the Enter
 // keystroke was written successfully but the pane never showed any change
 // afterward, even after one retry — the signature of Claude Code's TUI
@@ -27,11 +33,17 @@ const (
 // report described.
 var ErrSubmitNotConfirmed = errors.New("submit keystroke sent but pane showed no change (may have been swallowed by paste detection)")
 
+// keySender is the narrow interface SendKeysWithTimeout needs — satisfied by
+// *Instance's existing SendKeys method.
+type keySender interface {
+	SendKeys(keys string) error
+}
+
 // paneSubmitter is the narrow interface SubmitDriverContent needs — satisfied
 // by *Instance's existing SendKeys and HasUpdated methods.
 type paneSubmitter interface {
 	paneSettleChecker
-	SendKeys(keys string) error
+	keySender
 }
 
 // SubmitDriverContent sends driver-generated content to inst, then submits it
@@ -58,7 +70,10 @@ type paneSubmitter interface {
 // otherwise indistinguishable from success (SendKeys returning nil either
 // way). One retry of the Enter write is attempted before giving up, since a
 // slow-to-render pane can otherwise be mistaken for a swallowed submit; if
-// the retry also shows no change, ErrSubmitNotConfirmed is returned.
+// the retry also shows no change, ErrSubmitNotConfirmed is returned. This can
+// double-submit a bare Enter if the first one actually registered but the
+// pane simply hadn't rendered within maxWait — a rarer failure than the one
+// this guards against.
 func SubmitDriverContent(ctx context.Context, inst paneSubmitter, content string, pollInterval, maxWait time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("submit cancelled before sending content: %w", err)
@@ -91,6 +106,56 @@ func SubmitDriverContent(ctx context.Context, inst paneSubmitter, content string
 		return nil
 	}
 	return ErrSubmitNotConfirmed
+}
+
+// SubmitContentWithEnter routes content through SubmitDriverContent, bounding
+// the whole call with a generous timeout since the settle-wait plus
+// up-to-one-retry confirmation can take noticeably longer than a single
+// SendKeys call. Shared by server/mcp and server/services so both MCP-tool
+// and Connect-RPC call sites use identical submit mechanics instead of each
+// duplicating this goroutine+timeout wrapper.
+func SubmitContentWithEnter(ctx context.Context, inst paneSubmitter, content string) error {
+	// timeoutCtx (not ctx) is handed to the goroutine so that once this
+	// function gives up on it, SubmitDriverContent's internal settle/confirm
+	// polls (which check ctx.Done()) stop promptly too, instead of
+	// continuing unobserved and potentially firing the blind retry-Enter
+	// write after the caller has already moved on.
+	timeoutCtx, cancel := context.WithTimeout(ctx, 3*DefaultPaneSettleMaxWait+2*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- SubmitDriverContent(timeoutCtx, inst, content, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait)
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-timeoutCtx.Done():
+		return context.DeadlineExceeded
+	}
+}
+
+// SendKeysWithTimeout writes content to inst with no trailing Enter, bounded
+// by timeout so a PTY write that blocks forever (the scenario a wedged
+// session can trigger) surfaces as context.DeadlineExceeded instead of
+// hanging the caller indefinitely. This is the no-Enter counterpart to
+// SubmitContentWithEnter — every SendKeys call from server/mcp and
+// server/services must go through one of the two, never inst.SendKeys bare,
+// so a blocking write can't hang a request handler.
+func SendKeysWithTimeout(ctx context.Context, inst keySender, content string, timeout time.Duration) error {
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- inst.SendKeys(content) }()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-timeoutCtx.Done():
+		return context.DeadlineExceeded
+	}
 }
 
 // waitForPaneUpdate polls inst until it reports a pane change or maxWait

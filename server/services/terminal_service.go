@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -120,12 +119,13 @@ func (ts *TerminalService) WriteToSession(
 	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit.
 	// BUG-031: when PressEnter is set, content and the submit keystroke must
 	// travel as two separate SendKeys writes (session.SubmitDriverContent),
-	// never concatenated into one.
+	// never concatenated into one. Both branches are timeout-bounded so a
+	// wedged PTY write can't hang this handler indefinitely.
 	var err error
 	if req.Msg.PressEnter {
-		err = submitContentWithEnter(ctx, inst, req.Msg.Input)
+		err = session.SubmitContentWithEnter(ctx, inst, req.Msg.Input)
 	} else {
-		err = inst.SendKeys(req.Msg.Input)
+		err = session.SendKeysWithTimeout(ctx, inst, req.Msg.Input, session.DefaultSendKeysTimeout)
 	}
 	if err != nil {
 		return nil, submitErrToConnectError(err)
@@ -134,10 +134,10 @@ func (ts *TerminalService) WriteToSession(
 	return connect.NewResponse(&sessionv1.WriteToSessionResponse{Success: true}), nil
 }
 
-// submitErrToConnectError maps an error from submitContentWithEnter/SendKeys
-// to the matching connect error: ErrSubmitNotConfirmed (BUG-031's
-// swallowed-submit case) becomes CodeAborted, a context deadline becomes
-// CodeDeadlineExceeded, anything else is CodeInternal. Mirrors
+// submitErrToConnectError maps an error from session.SubmitContentWithEnter/
+// SendKeysWithTimeout to the matching connect error: ErrSubmitNotConfirmed
+// (BUG-031's swallowed-submit case) becomes CodeAborted, a context deadline
+// becomes CodeDeadlineExceeded, anything else is CodeInternal. Mirrors
 // server/mcp/tools_terminal.go's submitErrResult, which does the same
 // three-way mapping for the MCP error-result shape instead of a connect
 // error.
@@ -149,33 +149,4 @@ func submitErrToConnectError(err error) error {
 		return connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("timed out writing to session PTY"))
 	}
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("send keys failed: %w", err))
-}
-
-// submitContentWithEnter routes content through session.SubmitDriverContent
-// (BUG-031/BUG-047 consolidation) instead of hand-concatenating content +
-// EnterKeySequence into a single SendKeys write — the pattern that lets
-// Claude Code's TUI paste-detector fold a trailing Enter into the pasted
-// block instead of submitting it. Wrapped in a goroutine with a generous
-// timeout since SubmitDriverContent's settle-wait plus up to one retried
-// confirmation can take noticeably longer than a single SendKeys call.
-func submitContentWithEnter(ctx context.Context, inst *session.Instance, content string) error {
-	// timeoutCtx (not ctx) is handed to the goroutine so that once this
-	// function gives up on it, SubmitDriverContent's internal settle/confirm
-	// polls (which check ctx.Done()) stop promptly too, instead of
-	// continuing unobserved and potentially firing the blind retry-Enter
-	// write after the caller has already moved on.
-	timeoutCtx, cancel := context.WithTimeout(ctx, 3*session.DefaultPaneSettleMaxWait+2*time.Second)
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- session.SubmitDriverContent(timeoutCtx, inst, content, session.DefaultPaneSettlePollInterval, session.DefaultPaneSettleMaxWait)
-	}()
-
-	select {
-	case err := <-errCh:
-		return err
-	case <-timeoutCtx.Done():
-		return context.DeadlineExceeded
-	}
 }

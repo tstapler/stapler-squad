@@ -256,6 +256,78 @@ func TestSubmitDriverContent_ContextExpiresDuringSettle_StopsBeforeEnter(t *test
 	}
 }
 
+// blockingKeySender's SendKeys blocks until unblock is closed, simulating a
+// wedged PTY write — the scenario SendKeysWithTimeout exists to bound.
+type blockingKeySender struct {
+	unblock chan struct{}
+}
+
+func (b *blockingKeySender) SendKeys(_ string) error {
+	<-b.unblock
+	return nil
+}
+
+// TestSendKeysWithTimeout_WedgedWrite_ReturnsDeadlineExceeded proves a wedged
+// PTY write bounds out instead of hanging the caller forever.
+func TestSendKeysWithTimeout_WedgedWrite_ReturnsDeadlineExceeded(t *testing.T) {
+	t.Parallel()
+	inst := &blockingKeySender{unblock: make(chan struct{})}
+	defer close(inst.unblock) // let the leaked goroutine's SendKeys return
+
+	err := SendKeysWithTimeout(context.Background(), inst, "input", 20*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SendKeysWithTimeout error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// TestSendKeysWithTimeout_NormalWrite_ReturnsUnderlyingError proves the
+// non-timeout path still surfaces SendKeys' own error rather than masking it.
+func TestSendKeysWithTimeout_NormalWrite_ReturnsUnderlyingError(t *testing.T) {
+	t.Parallel()
+	inst := newFakePaneSubmitter()
+	inst.failOnCall = 0
+
+	err := SendKeysWithTimeout(context.Background(), inst, "input", time.Second)
+	if err == nil || err.Error() != "fake send failure" {
+		t.Fatalf("SendKeysWithTimeout error = %v, want the underlying SendKeys failure", err)
+	}
+}
+
+// TestSubmitContentWithEnter_DelegatesToSubmitDriverContent proves the shared
+// wrapper still sends content and Enter as two separate writes.
+func TestSubmitContentWithEnter_DelegatesToSubmitDriverContent(t *testing.T) {
+	t.Parallel()
+	inst := newFakePaneSubmitter()
+
+	if err := SubmitContentWithEnter(context.Background(), inst, "hello"); err != nil {
+		t.Fatalf("SubmitContentWithEnter error = %v, want nil", err)
+	}
+	if len(inst.sendCalls) != 2 || inst.sendCalls[0] != "hello" || inst.sendCalls[1] != EnterKeySequence {
+		t.Fatalf("sendCalls = %#v, want [\"hello\", EnterKeySequence]", inst.sendCalls)
+	}
+}
+
+// TestSubmitDriverContent_ContextExpiresBeforeRetry_StopsBeforeRetryEnter
+// covers the one ctx.Err() guard in SubmitDriverContent without direct
+// coverage elsewhere: ctx expiring after the first confirmation poll finds no
+// change, but before the retry Enter would be sent — sibling to
+// TestSubmitDriverContent_ContextExpiresDuringSettle_StopsBeforeEnter.
+func TestSubmitDriverContent_ContextExpiresBeforeRetry_StopsBeforeRetryEnter(t *testing.T) {
+	t.Parallel()
+	inst := newFakePaneSubmitter()
+	inst.updates = []bool{false} // settles immediately; confirmation poll never sees a change
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Millisecond)
+	defer cancel()
+
+	err := SubmitDriverContent(ctx, inst, "content", time.Millisecond, 2*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SubmitDriverContent error = %v, want wrapping context.DeadlineExceeded", err)
+	}
+	if len(inst.sendCalls) != 2 {
+		t.Fatalf("SendKeys called %d times, want exactly 2 (content, first Enter — no retry) — got %#v", len(inst.sendCalls), inst.sendCalls)
+	}
+}
+
 // TestSessionPackage_NoDirectSendKeysPlusEnterConcatenation is a structural
 // regression guard for BUG-031 — see sendkeysguard's doc comment. Also run
 // against server/mcp, server/services, and session/tymux, since the pattern

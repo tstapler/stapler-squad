@@ -294,12 +294,13 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit.
 	// BUG-031: content and the submit keystroke must travel as two separate
 	// SendKeys writes (session.SubmitDriverContent), never concatenated into
-	// one — see submitContentWithEnter's doc comment.
+	// one. Both branches are timeout-bounded so a wedged PTY write can't hang
+	// this handler indefinitely.
 	var err error
 	if pressEnter {
-		err = submitContentWithEnter(ctx, inst, input)
+		err = session.SubmitContentWithEnter(ctx, inst, input)
 	} else {
-		err = inst.SendKeys(input)
+		err = session.SendKeysWithTimeout(ctx, inst, input, session.DefaultSendKeysTimeout)
 	}
 	if err != nil {
 		return submitErrResult(err, "input"), nil
@@ -311,40 +312,8 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 	}), nil
 }
 
-// submitContentWithEnter routes content through session.SubmitDriverContent
-// (BUG-031/BUG-047 consolidation) instead of hand-concatenating content +
-// EnterKeySequence into a single SendKeys write — the pattern that lets
-// Claude Code's TUI paste-detector fold a trailing Enter into the pasted
-// block instead of submitting it. Wrapped in a goroutine with a generous
-// timeout since SubmitDriverContent's settle-wait + up-to-one-retry
-// confirmation can take noticeably longer than a single SendKeys call; the
-// timeout is sized so a genuinely swallowed submit has room to surface
-// session.ErrSubmitNotConfirmed rather than being masked by a premature
-// PTY_WRITE_TIMEOUT.
-func submitContentWithEnter(ctx context.Context, inst *session.Instance, content string) error {
-	// timeoutCtx (not ctx) is handed to the goroutine so that once this
-	// function gives up on it — whether via the timeout branch below, or via
-	// the deferred cancel() on the success path — SubmitDriverContent's
-	// internal settle/confirm polls (which check ctx.Done()) stop promptly
-	// too, instead of continuing unobserved and potentially firing the
-	// blind retry-Enter write after the caller has already moved on.
-	timeoutCtx, cancel := context.WithTimeout(ctx, 3*session.DefaultPaneSettleMaxWait+2*time.Second)
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- session.SubmitDriverContent(timeoutCtx, inst, content, session.DefaultPaneSettlePollInterval, session.DefaultPaneSettleMaxWait)
-	}()
-
-	select {
-	case err := <-errCh:
-		return err
-	case <-timeoutCtx.Done():
-		return context.DeadlineExceeded
-	}
-}
-
-// submitErrResult maps an error from submitContentWithEnter/SendKeys to the
+// submitErrResult maps an error from session.SubmitContentWithEnter/
+// SendKeysWithTimeout to the
 // matching MCP error result, shared by writeToSession, runCommand, and
 // steerSession: ErrSubmitNotConfirmed (BUG-031's swallowed-submit case)
 // becomes SUBMIT_NOT_CONFIRMED, a context deadline becomes PTY_WRITE_TIMEOUT,
@@ -594,10 +563,10 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 		return errResult_, nil
 	}
 
-	// Send the command via submitContentWithEnter (BUG-031/BUG-047): content
-	// and the submit keystroke must travel as two separate SendKeys writes,
-	// never concatenated into one.
-	if err := submitContentWithEnter(ctx, inst, command); err != nil {
+	// Send the command via session.SubmitContentWithEnter (BUG-031/BUG-047):
+	// content and the submit keystroke must travel as two separate SendKeys
+	// writes, never concatenated into one.
+	if err := session.SubmitContentWithEnter(ctx, inst, command); err != nil {
 		return submitErrResult(err, "command"), nil
 	}
 
@@ -731,9 +700,9 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 	}
 
 	// Fallback: send via PTY send-keys (interactive sessions or sessions
-	// without UUID), via submitContentWithEnter (BUG-031) so content and the
-	// submit keystroke travel as two separate SendKeys writes.
-	if err := submitContentWithEnter(ctx, inst, message); err != nil {
+	// without UUID), via session.SubmitContentWithEnter (BUG-031) so content
+	// and the submit keystroke travel as two separate SendKeys writes.
+	if err := session.SubmitContentWithEnter(ctx, inst, message); err != nil {
 		return submitErrResult(err, "message"), nil
 	}
 

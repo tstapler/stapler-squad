@@ -3529,11 +3529,12 @@ func (s *SessionService) steerInstance(ctx context.Context, instance *session.In
 	}
 
 	// Non-autonomous sessions get the same PTY send primitive the MCP
-	// steer_session tool falls back to (submitContentWithEnter, bounded with
-	// a generous timeout so a browser click against a wedged/dead session
-	// can't hang this goroutine forever) — content and the submit keystroke
-	// travel as two separate SendKeys writes (BUG-031), never concatenated.
-	if err := submitContentWithEnter(ctx, instance, message); err != nil {
+	// steer_session tool falls back to (session.SubmitContentWithEnter,
+	// bounded with a generous timeout so a browser click against a
+	// wedged/dead session can't hang this goroutine forever) — content and
+	// the submit keystroke travel as two separate SendKeys writes (BUG-031),
+	// never concatenated.
+	if err := session.SubmitContentWithEnter(ctx, instance, message); err != nil {
 		return fmt.Errorf("steer session %q: %w", instance.Title, err)
 	}
 	s.notifySteerSent(instance, message)

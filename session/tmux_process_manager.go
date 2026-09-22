@@ -550,6 +550,9 @@ type tpmPaneSettleChecker interface {
 // *Instance's 2-return-value HasUpdated rather than TmuxProcessManager's
 // 3-return-value one. Best-effort: a pane that never settles is left alone
 // once the deadline passes, same as its Instance-layer counterpart.
+// Not context-cancellable, unlike pane_submit.go's settle-wait family —
+// SendPromptWithEnter takes no context.Context to plumb through, and maxWait
+// is bounded at 300ms so the practical cost of that is low.
 func waitForPaneSettleTPM(tm tpmPaneSettleChecker, pollInterval, maxWait time.Duration) {
 	deadline := time.Now().Add(maxWait)
 	stableCount := 0
