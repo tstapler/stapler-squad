@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -1534,6 +1535,88 @@ func TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgr
 		}
 	}
 	assert.Equal(t, 1, workCount, "must not spawn a second work session when one is already active")
+}
+
+// TestAutoReopenAfterFailedReview_MapMissButTmuxAlive_ReusesInsteadOfRespawning
+// is AC0's regression test: a work session that is absent from the live
+// poller map (session.ReviewQueuePoller) but whose real tmux process is still
+// running. Before #804, SessionService.IsSessionLive was literally
+// `FindLiveInstance(uuid) != nil` — a map-only check — so
+// tombstoneOrphanWorkSessions would wrongly conclude this session was dead,
+// set its EndedAt, and let AutoReopenAfterFailedReview fall through to
+// spawning a duplicate work session into the same shared worktree the
+// original was still writing to (the 2026-09-12 incident). Wires a real
+// *SessionService (not mockSessionStopper) as the BacklogService's stopper,
+// exactly as production does, so this exercises the real
+// findConfirmedLiveInstance shadow-instance fallback end to end rather than a
+// mock's configured answer.
+func TestAutoReopenAfterFailedReview_MapMissButTmuxAlive_ReusesInsteadOfRespawning(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	// A real, detached tmux session — but the poller backing FindLiveInstance
+	// is empty, so this session is a map miss.
+	title := "map-miss-alive-" + fmt.Sprint(time.Now().UnixNano())
+	socket := startRealTmuxSession(t, title)
+	sessSvc := &SessionService{
+		storage:           storage,
+		concStorage:       storage,
+		reviewQueuePoller: newEmptyPoller(),
+	}
+	svc.SetSessionStopper(sessSvc)
+
+	const workUUID = "map-miss-alive-work-uuid"
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:            title,
+		UUID:             workUUID,
+		Path:             t.TempDir(),
+		Status:           session.Active,
+		TmuxServerSocket: socket,
+		TmuxPrefix:       tmux.TmuxPrefix,
+		Program:          "claude",
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+	}))
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item whose work session is alive in tmux but missing from the live poller map",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// Sanity-check the premise directly: a naive map-only check would report
+	// this session dead, but the confirmed-liveness check must not.
+	require.True(t, sessSvc.IsSessionLive(workUUID),
+		"session is genuinely alive in tmux; a map-miss must not be mistaken for dead")
+
+	reopenErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
+	require.NoError(t, reopenErr, "reusing a confirmed-live work session is an expected outcome, not a failure")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+	workSessions := 0
+	for _, is := range sessions {
+		if is.Role != session.SessionRoleWork {
+			continue
+		}
+		workSessions++
+		assert.Nil(t, is.EndedAt, "a session confirmed live via tmux/process truth must not be tombstoned")
+	}
+	assert.Equal(t, 1, workSessions, "no duplicate work session must be spawned for a confirmed-live session")
+	assert.Empty(t, creator.calls, "no new session should be spawned while the existing one is confirmed live")
 }
 
 // TestAutoReopenAfterFailedReview_CalledTwiceForSameItem_SecondCallFailsHarmlessly
@@ -3096,6 +3179,121 @@ func spawnReadyItemWithActiveWorkSession(t *testing.T, svc *BacklogService, stor
 	require.NotEmpty(t, spawnResp.Msg.SessionUuid)
 
 	return itemID, spawnResp.Msg.SessionUuid
+}
+
+// TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfirmedLive
+// is AC1's regression test for spawnSessionAfterGates' 8b2 guard
+// (findConfirmedLiveWorkSession): the scenario its own doc comment describes
+// — a work session whose ItemSession.EndedAt was already wrongly set (by a
+// past, unrelated tombstone sweep that itself hit a transient liveness-check
+// miss), so 8a's tombstone loop no-ops on it (EndedAt already non-nil) and
+// 8b's findActiveWorkSession doesn't see it as "active" either (same
+// EndedAt-based check) — yet sessionStopper.IsSessionLive confirms the real
+// tmux process is still running. 8b2 is the only remaining guard that can
+// catch this, and per AC1 the chosen behavior is refuse-with-clear-error
+// (not kill-then-spawn).
+func TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfirmedLive(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+	ctx := t.Context()
+
+	itemID, workUUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+
+	// Simulate the wrongly-tombstoned record: EndedAt is set in storage even
+	// though the session is genuinely still alive. killIneffectiveUUIDs models
+	// that spawnSessionAfterGates' own killEndedWorkSessionPanes (8a2) will
+	// attempt — and fail — to kill it, exactly like a stuck/zombie pane in
+	// production: the whole point of this test is that a kill attempt does
+	// NOT reach this session.
+	sessions, err := storage.ListItemSessions(ctx, itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, sessions[0].ID, time.Now()))
+	stopper.liveUUIDs[workUUID] = true
+	stopper.killIneffectiveUUIDs = map[string]bool{workUUID: true}
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err, "a confirmed-live session must block a concurrent respawn even though its EndedAt column says otherwise")
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "already confirmed live")
+	assert.Contains(t, err.Error(), workUUID)
+	assert.Len(t, creator.calls, 1, "no duplicate work session may be spawned while the original is confirmed live — only the initial spawn from spawnReadyItemWithActiveWorkSession should be recorded")
+}
+
+// TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossManyReworkRounds
+// is AC2's (1-indexed AC3) regression test: the concurrent-liveness cap must
+// find and block on the ONE confirmed-live session among many historical
+// rework rounds, independent of how many rounds exist. reworkCap
+// (effectiveReworkCap) is a historical-attempt-count cap enforced only by the
+// Auto* respawn paths (AutoReopenAfterFailedReview et al.) — SpawnSessionFromItem
+// itself never consults it (see effectiveReworkCap's four call sites, none in
+// spawnSessionAfterGates) — so this test calls SpawnSessionFromItem directly
+// with five historical rounds (well beyond any typical rework cap) to prove
+// the concurrent-liveness block fires independent of that mechanism entirely,
+// not merely under a cap it happens not to hit.
+func TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossManyReworkRounds(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+	ctx := t.Context()
+
+	itemID, round1UUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+
+	// Round 1 (the initial spawn) ends normally.
+	sessions, err := storage.ListItemSessions(ctx, itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, sessions[0].ID, time.Now()))
+	require.False(t, stopper.liveUUIDs[round1UUID], "round 1 must not be live")
+
+	// Rounds 2-4: further historical rework rounds, all ended normally and
+	// all genuinely dead — noise the cap must see through to find the one
+	// live round among several.
+	for i := 2; i <= 4; i++ {
+		is, createErr := storage.CreateItemSession(ctx, session.ItemSessionData{
+			ItemID:      itemID,
+			SessionUUID: fmt.Sprintf("round-%d-uuid", i),
+			SessionRole: session.SessionRoleWork,
+		})
+		require.NoError(t, createErr)
+		require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+	}
+
+	// Round 5: the current round, wrongly tombstoned in the DB but confirmed
+	// live via tmux/process truth — same shape as
+	// TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfirmedLive,
+	// just with several unrelated historical rounds also present.
+	const round5UUID = "round-5-uuid"
+	round5, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: round5UUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, round5.ID, time.Now()))
+	stopper.liveUUIDs[round5UUID] = true
+	// killIneffectiveUUIDs models killEndedWorkSessionPanes (8a2) attempting —
+	// and failing — to kill this round's pane, same as the single-round test
+	// above: the point is that a kill attempt does not reach it.
+	stopper.killIneffectiveUUIDs = map[string]bool{round5UUID: true}
+
+	allSessions, err := storage.ListItemSessions(ctx, itemID)
+	require.NoError(t, err)
+	require.Len(t, allSessions, 5, "five historical work-session rounds must be on record")
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err, "the one confirmed-live round among five must still block a concurrent respawn")
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), round5UUID, "the error must name the actually-live round, not an arbitrary or earlier one")
+	assert.NotContains(t, strings.ToLower(err.Error()), "cap", "the block must come from the concurrent-liveness check, not a rework-cap message")
+	assert.Len(t, creator.calls, 1, "no duplicate work session may be spawned while any round is confirmed live")
 }
 
 // TestSpawnSessionFromItem_should_ReportStalled_When_BlockedByActiveWorkSession

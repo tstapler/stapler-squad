@@ -1262,6 +1262,25 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 	return "", false
 }
 
+// RefuseIfWorktreeSharedWithOtherLiveSession resolves
+// OtherLiveSessionInsideWorktree into a ready-to-return error, shared by
+// every worktree-deleting path: MCP pause/stop, RPC UpdateSession, and
+// DeleteSession. inst may be nil (no live Instance to inspect) — returns
+// nil, same as a non-worktree session.
+func (s *SessionService) RefuseIfWorktreeSharedWithOtherLiveSession(inst *session.Instance) error {
+	if inst == nil || !inst.HasGitWorktree() {
+		return nil
+	}
+	worktreePath := inst.GetEffectiveRootDir()
+	blockingUUID, blocked := s.OtherLiveSessionInsideWorktree(inst.UUID, worktreePath)
+	if !blocked {
+		return nil
+	}
+	return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf(
+		"cannot proceed: worktree %q is still in use by another active session (%s)",
+		worktreePath, blockingUUID))
+}
+
 // IsRetryPending satisfies the BacklogService.SessionStopper interface. It
 // reports whether sessionUUID's live Instance currently has a driver-managed
 // automated retry claimed or scheduled (session-retry-backoff AC8). Returns
@@ -1280,6 +1299,13 @@ func (s *SessionService) IsRetryPending(sessionUUID string) bool {
 // CleanupWorktree and would delete a worktree still in use by the next rework
 // round. Best-effort: errors are logged, not returned, since this runs as
 // cleanup alongside a new spawn that should proceed regardless.
+//
+// Deregisters the instance from every poller on a successful kill —
+// findConfirmedLiveInstance's fast path trusts FindLiveInstance's poller-map
+// hit unconditionally as "live" (its IsBackendProcessAlive fallback check
+// only runs on a map miss), so a killed-but-still-registered instance would
+// otherwise be misreported live by every later IsSessionLive call, including
+// spawnSessionAfterGates' 8b2 check moments after this exact kill.
 func (s *SessionService) KillTmuxPaneOnly(ctx context.Context, sessionUUID string) error {
 	inst := s.findConfirmedLiveInstance(sessionUUID)
 	if inst == nil {
@@ -1289,6 +1315,7 @@ func (s *SessionService) KillTmuxPaneOnly(ctx context.Context, sessionUUID strin
 		log.Warn("KillTmuxPaneOnly: kill failed", "uuid", sessionUUID, "err", err)
 		return err
 	}
+	s.removeFromAllPollers(sessionUUID)
 	return nil
 }
 
@@ -3433,12 +3460,18 @@ func (s *SessionService) UpdateSession(
 		targetStatus := adapters.ProtoToStatus(*req.Msg.Status)
 
 		if targetStatus == session.Stopped && instance.Status != session.Stopped {
+			if err := s.RefuseIfWorktreeSharedWithOtherLiveSession(instance); err != nil {
+				return nil, err
+			}
 			if err := instance.StopByUser(); err != nil {
 				return nil, classifyStopErr(err, "stop")
 			}
 			updatedFields = append(updatedFields, "status")
 			sideEffectChanged = true
 		} else if targetStatus == session.Paused && instance.Status != session.Paused {
+			if err := s.RefuseIfWorktreeSharedWithOtherLiveSession(instance); err != nil {
+				return nil, err
+			}
 			if err := instance.Pause(); err != nil {
 				return nil, classifyPauseResumeErr(err, "pause")
 			}
@@ -3863,6 +3896,15 @@ func (s *SessionService) DeleteSession(
 	// that without reopening the race the ordering comment below is about (that
 	// race is between removeFromAllPollers and storage.DeleteInstance, not this).
 	liveInst := s.FindLiveInstance(sessionTitle)
+
+	// Refuse before any destructive step below if another live session's real
+	// cwd is inside this session's worktree (deleting is Destroy()'s job,
+	// reached only via the liveInst-found cleanup goroutine further down —
+	// same guard as UpdateSession's pause/stop transitions and MCP's
+	// pause_session/stop_session).
+	if err := s.RefuseIfWorktreeSharedWithOtherLiveSession(liveInst); err != nil {
+		return nil, err
+	}
 
 	// Fence out an in-flight Background Resolution Pipeline before cleanup,
 	// bumping the epoch before re-reading status exactly like
