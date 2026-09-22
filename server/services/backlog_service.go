@@ -1217,7 +1217,10 @@ func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []se
 }
 
 // cleanupItemWorktreesExcept is cleanupItemWorktrees with one path exempted from
-// removal. Reopen/rework spawns reuse the same "backlog/<item>" branch and worktree
+// removal. It also owns backlog-scaffolding cleanup (CleanupSlashCommands,
+// CleanupBacklogContextFile) for every worktree it removes — a second responsibility
+// beyond worktree removal itself; see CleanupSlashCommands' doc comment for why that's
+// safe here. Reopen/rework spawns reuse the same "backlog/<item>" branch and worktree
 // directory across revisions (see SpawnSessionFromItem step 10's comment) rather than
 // creating a fresh one, so a prior work session's worktree row can point at the exact
 // path the brand-new session just started using. Cleaning that up unconditionally —
@@ -1242,6 +1245,10 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 		if exceptPath != "" && wt.WorktreePath == exceptPath {
 			continue
 		}
+		// Scaffolding first: if Cleanup below fails or the path isn't a removable
+		// worktree, the item-pinned /backlog:* files must not outlive the item.
+		_ = session.CleanupSlashCommands(wt.WorktreePath)
+		_ = session.CleanupBacklogContextFile(wt.WorktreePath)
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		if cleanErr := g.Cleanup(); cleanErr != nil {
 			log.WarningLog().Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
