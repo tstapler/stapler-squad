@@ -342,22 +342,23 @@ func mapCreationOutcome(outcome services.CreationOutcome, err error) *mcpgo.Call
 
 // refuseIfWorktreeSharedWithOtherLiveSession guards pauseSession/stopSession
 // against deleting a git worktree another currently-live session is actually
-// running in — see SessionService.OtherLiveSessionInsideWorktree's doc
-// comment for why this matters (rework rounds deliberately share one
+// running in, via the same SessionService.RefuseIfWorktreeSharedWithOtherLiveSession
+// used by RPC UpdateSession's pause/stop transitions and DeleteSession — see
+// its doc comment for why this matters (rework rounds deliberately share one
 // worktree). Returns nil when it's safe to proceed (not a worktree session,
 // or no other live occupant), otherwise the CallToolResult to return
 // unchanged.
 func (lh *lifecycleHandlers) refuseIfWorktreeSharedWithOtherLiveSession(inst *session.Instance) *mcpgo.CallToolResult {
-	if !inst.HasGitWorktree() {
+	err := lh.svc.RefuseIfWorktreeSharedWithOtherLiveSession(inst)
+	if err == nil {
 		return nil
 	}
-	worktreePath := inst.GetEffectiveRootDir()
-	blockingUUID, blocked := lh.svc.OtherLiveSessionInsideWorktree(inst.UUID, worktreePath)
-	if !blocked {
-		return nil
+	msg := err.Error()
+	var connErr *connect.Error
+	if errors.As(err, &connErr) {
+		msg = connErr.Message()
 	}
-	return errResult(ErrConflict,
-		fmt.Sprintf("cannot proceed: worktree %q is still in use by another active session (%s)", worktreePath, blockingUUID),
+	return errResult(ErrConflict, msg,
 		"Stop or pause that session first, or wait for it to finish, before removing this worktree.")
 }
 

@@ -926,7 +926,9 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// session wrongly tombstoned by a transient liveness-check miss would
 	// pass the 8b guard above (its EndedAt is now set) but still fail here if
 	// IsSessionLive's OS-truth fallback confirms it's actually still running.
-	if live := findConfirmedLiveWorkSession(s.sessionStopper, priorSessions); live != nil {
+	// spawnLivenessBypassUUID exempts exactly one session ctx was tagged with
+	// by AutoRespawnAutonomousWork — see that helper's doc comment.
+	if live := findConfirmedLiveWorkSession(s.sessionStopper, priorSessions, spawnLivenessBypassUUID(ctx)); live != nil {
 		return nil, connect.NewError(connect.CodeAlreadyExists,
 			fmt.Errorf("a work session (%s) is already confirmed live for this item; refusing to spawn a concurrent one", live.SessionUUID))
 	}
@@ -1264,16 +1266,33 @@ func findActiveWorkSession(priorSessions []session.ItemSessionSummary) *session.
 // from sessionStopper.IsSessionLive (OS/tmux truth, via
 // SessionService.findConfirmedLiveInstance) instead of priorSessions' EndedAt
 // column, which findActiveWorkSession relies on and tombstoneOrphanWorkSessions
-// writes. Returns nil (never blocks) if stopper is nil, matching this file's
-// existing "unknown liveness assumes alive is not assumed, tombstoning is
-// skipped" conservative-nil convention elsewhere (e.g. tombstoneOrphanWorkSessions).
-func findConfirmedLiveWorkSession(stopper SessionStopper, priorSessions []session.ItemSessionSummary) *session.ItemSessionSummary {
+// writes. Deliberately does NOT skip sessions whose EndedAt is already set —
+// EndedAt is exactly the bookkeeping that can be wrong (a past tombstone sweep
+// hitting the same transient liveness-check miss findConfirmedLiveInstance
+// exists to catch), so this is the guard of last resort for a session that
+// was already wrongly marked ended but is still genuinely alive; excluding
+// EndedAt!=nil here would make this check unreachable in practice, since any
+// EndedAt==nil work session already blocks earlier at 8b's
+// findActiveWorkSession regardless of confirmed liveness. Returns nil (never
+// blocks) if stopper is nil, matching this file's existing "unknown liveness
+// assumes alive is not assumed, tombstoning is skipped" conservative-nil
+// convention elsewhere (e.g. tombstoneOrphanWorkSessions).
+//
+// excludeUUID skips one specific session (empty = skip nothing) rather than
+// disabling the whole check for it — see spawnLivenessBypassUUID's doc
+// comment for why a caller needs this: AutoRespawnAutonomousWork's own
+// deliberate "retire this exact session, then respawn" flows (BUG-064)
+// legitimately end a session without necessarily killing its pane yet, and
+// would otherwise trip this exact guard on the very session they're replacing
+// — while a genuinely different stale-but-alive round from earlier history
+// must still block normally.
+func findConfirmedLiveWorkSession(stopper SessionStopper, priorSessions []session.ItemSessionSummary, excludeUUID string) *session.ItemSessionSummary {
 	if stopper == nil {
 		return nil
 	}
 	for i := range priorSessions {
 		is := &priorSessions[i]
-		if is.Role != string(session.SessionRoleWork) || is.EndedAt != nil {
+		if is.Role != string(session.SessionRoleWork) || (excludeUUID != "" && is.SessionUUID == excludeUUID) {
 			continue
 		}
 		if stopper.IsSessionLive(is.SessionUUID) {
@@ -1281,6 +1300,34 @@ func findConfirmedLiveWorkSession(stopper SessionStopper, priorSessions []sessio
 		}
 	}
 	return nil
+}
+
+// spawnLivenessBypassKey/withSpawnLivenessBypass/spawnLivenessBypassUUID thread
+// a single session UUID through ctx into spawnSessionAfterGates' 8b2 check
+// (findConfirmedLiveWorkSession) — used exclusively by AutoRespawnAutonomousWork,
+// whose whole job is to deliberately retire one specific, already-identified
+// work session (RemediateStaleWorkSession's stale-pane kill, or
+// onAutonomousDriverComplete's turn-cap-without-DONE branch) and replace it.
+// Both of those callers end that session's ItemSession row without any
+// guarantee its tmux pane is dead yet (BUG-064: ending and killing are
+// deliberately decoupled, and the kill itself is best-effort/async) — so 8b2,
+// re-asking OS/tmux truth moments later, would otherwise refuse the very
+// respawn this function exists to perform, on the exact session it was just
+// told to replace. Never set by SpawnSessionFromItem's own callers (the RPC
+// path, AutoReopenAfterFailedReview) — those must keep failing 8b2 exactly as
+// before when a session is unexpectedly still alive.
+type spawnLivenessBypassKey struct{}
+
+func withSpawnLivenessBypass(ctx context.Context, sessionUUID string) context.Context {
+	if sessionUUID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, spawnLivenessBypassKey{}, sessionUUID)
+}
+
+func spawnLivenessBypassUUID(ctx context.Context) string {
+	uuid, _ := ctx.Value(spawnLivenessBypassKey{}).(string)
+	return uuid
 }
 
 // findSupersededSessions returns every tmux-backed (work or review role)
@@ -2047,7 +2094,17 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 		return nil
 	}
 
-	_, spawnErr := s.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+	// This call's own caller (RemediateStaleWorkSession, or
+	// onAutonomousDriverComplete's turn-cap-without-DONE branch) has already
+	// ended the specific work session it wants replaced — see
+	// spawnLivenessBypassUUID's doc comment for why spawnSessionAfterGates'
+	// 8b2 check would otherwise wrongly refuse this exact respawn. The
+	// most-recently-ended work session in this snapshot is that one (both
+	// callers end their target immediately before reaching here); any other,
+	// older ended-but-somehow-still-live round is a genuinely different
+	// problem and must still block normally.
+	bypassCtx := withSpawnLivenessBypass(ctx, mostRecentlyEndedWorkSessionUUID(sessions))
+	_, spawnErr := s.SpawnSessionFromItem(bypassCtx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
 		ItemId:     itemID,
 		Autonomous: true,
 	}))
@@ -2056,6 +2113,26 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 	}
 	log.Info("[AutoRespawnAutonomousWork] respawned with a fresh turn budget", "item", itemID)
 	return nil
+}
+
+// mostRecentlyEndedWorkSessionUUID returns the SessionUUID of the work-role
+// session with the latest non-nil EndedAt in sessions, or "" if none has
+// ended. See AutoRespawnAutonomousWork's call site for why this identifies
+// "the session this respawn attempt is replacing."
+func mostRecentlyEndedWorkSessionUUID(sessions []session.ItemSessionSummary) string {
+	var latestUUID string
+	var latestEndedAt time.Time
+	for i := range sessions {
+		is := &sessions[i]
+		if is.Role != session.SessionRoleWork || is.EndedAt == nil {
+			continue
+		}
+		if latestUUID == "" || is.EndedAt.After(latestEndedAt) {
+			latestUUID = is.SessionUUID
+			latestEndedAt = *is.EndedAt
+		}
+	}
+	return latestUUID
 }
 
 // RemediateStaleWorkSession implements session.StaleWorkRemediator, consumed

@@ -1262,6 +1262,30 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 	return "", false
 }
 
+// RefuseIfWorktreeSharedWithOtherLiveSession is OtherLiveSessionInsideWorktree
+// resolved into a ready-to-return error, shared by every path that deletes a
+// session's git worktree: MCP pause_session/stop_session
+// (server/mcp/tools_lifecycle.go), and RPC UpdateSession's pause/stop status
+// transitions and DeleteSession below. inst may be nil (e.g. DeleteSession's
+// not-currently-live branch, which has no live Instance to introspect a
+// worktree path from) — returns nil in that case, same as a non-worktree
+// session, since a nil/non-live inst never reaches this codebase's other
+// worktree-deleting call (Destroy() only runs from the liveInst-found
+// branch).
+func (s *SessionService) RefuseIfWorktreeSharedWithOtherLiveSession(inst *session.Instance) error {
+	if inst == nil || !inst.HasGitWorktree() {
+		return nil
+	}
+	worktreePath := inst.GetEffectiveRootDir()
+	blockingUUID, blocked := s.OtherLiveSessionInsideWorktree(inst.UUID, worktreePath)
+	if !blocked {
+		return nil
+	}
+	return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf(
+		"cannot proceed: worktree %q is still in use by another active session (%s); stop or pause that session first",
+		worktreePath, blockingUUID))
+}
+
 // IsRetryPending satisfies the BacklogService.SessionStopper interface. It
 // reports whether sessionUUID's live Instance currently has a driver-managed
 // automated retry claimed or scheduled (session-retry-backoff AC8). Returns
@@ -3385,12 +3409,18 @@ func (s *SessionService) UpdateSession(
 		targetStatus := adapters.ProtoToStatus(*req.Msg.Status)
 
 		if targetStatus == session.Stopped && instance.Status != session.Stopped {
+			if err := s.RefuseIfWorktreeSharedWithOtherLiveSession(instance); err != nil {
+				return nil, err
+			}
 			if err := instance.StopByUser(); err != nil {
 				return nil, classifyStopErr(err, "stop")
 			}
 			updatedFields = append(updatedFields, "status")
 			sideEffectChanged = true
 		} else if targetStatus == session.Paused && instance.Status != session.Paused {
+			if err := s.RefuseIfWorktreeSharedWithOtherLiveSession(instance); err != nil {
+				return nil, err
+			}
 			if err := instance.Pause(); err != nil {
 				return nil, classifyPauseResumeErr(err, "pause")
 			}
@@ -3815,6 +3845,15 @@ func (s *SessionService) DeleteSession(
 	// that without reopening the race the ordering comment below is about (that
 	// race is between removeFromAllPollers and storage.DeleteInstance, not this).
 	liveInst := s.FindLiveInstance(sessionTitle)
+
+	// Refuse before any destructive step below if another live session's real
+	// cwd is inside this session's worktree (deleting is Destroy()'s job,
+	// reached only via the liveInst-found cleanup goroutine further down —
+	// same guard as UpdateSession's pause/stop transitions and MCP's
+	// pause_session/stop_session).
+	if err := s.RefuseIfWorktreeSharedWithOtherLiveSession(liveInst); err != nil {
+		return nil, err
+	}
 
 	// Fence out an in-flight Background Resolution Pipeline before cleanup,
 	// bumping the epoch before re-reading status exactly like

@@ -317,24 +317,33 @@ func TestOtherLiveSessionInsideWorktree_ExcludedAndUnrelatedAndDead_NotBlocked(t
 // --------------------------------------------------------------------------
 
 // TestFindConfirmedLiveWorkSession covers the 8b2 concurrent-liveness cap's
-// contract. The "ended work session stays skipped even when the stopper says
-// live" case pins the deliberate scope boundary against findActiveWorkSession;
-// the "open + confirmed live" case is the one that fails against an
+// contract. The "open + confirmed live" case is the one that fails against an
 // EndedAt-only staleness check, since that check alone is what the 2026-09-12
-// incident showed can be wrong.
+// incident showed can be wrong. The "already-tombstoned but confirmed live"
+// case is the guard's actual reason for existing per its doc comment: 8b
+// (findActiveWorkSession) already blocks every EndedAt==nil work session
+// regardless of confirmed liveness, so this function only ever runs against
+// sessions 8b let through — i.e. ones already marked ended. Excluding
+// EndedAt!=nil sessions here (the pre-fix behavior) made 8b2 permanently
+// unreachable in production; see
+// TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfirmedLive
+// for the end-to-end regression.
 func TestFindConfirmedLiveWorkSession(t *testing.T) {
 	t.Parallel()
 
 	ended := time.Now().Add(-time.Hour)
+	olderEnded := time.Now().Add(-2 * time.Hour)
 	open := session.ItemSessionSummary{SessionUUID: "uuid-open-work", Role: session.SessionRoleWork}
 	tombstoned := session.ItemSessionSummary{SessionUUID: "uuid-ended-work", Role: session.SessionRoleWork, EndedAt: &ended}
+	olderTombstoned := session.ItemSessionSummary{SessionUUID: "uuid-older-ended-work", Role: session.SessionRoleWork, EndedAt: &olderEnded}
 	review := session.ItemSessionSummary{SessionUUID: "uuid-review", Role: session.SessionRoleReview}
 
 	cases := []struct {
-		name     string
-		stopper  SessionStopper
-		prior    []session.ItemSessionSummary
-		wantUUID string
+		name        string
+		stopper     SessionStopper
+		prior       []session.ItemSessionSummary
+		excludeUUID string
+		wantUUID    string
 	}{
 		{
 			name:    "nil stopper never blocks",
@@ -342,8 +351,14 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 			prior:   []session.ItemSessionSummary{open},
 		},
 		{
-			name:    "ended work session is skipped even when the stopper reports it live",
-			stopper: &mockSessionStopper{liveUUIDs: map[string]bool{"uuid-ended-work": true}},
+			name:     "already-tombstoned work session confirmed live still blocks the spawn",
+			stopper:  &mockSessionStopper{liveUUIDs: map[string]bool{"uuid-ended-work": true}},
+			prior:    []session.ItemSessionSummary{tombstoned},
+			wantUUID: "uuid-ended-work",
+		},
+		{
+			name:    "tombstoned work session the stopper cannot confirm live does not block",
+			stopper: &mockSessionStopper{liveUUIDs: map[string]bool{}},
 			prior:   []session.ItemSessionSummary{tombstoned},
 		},
 		{
@@ -362,12 +377,25 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 			prior:    []session.ItemSessionSummary{tombstoned, review, open},
 			wantUUID: "uuid-open-work",
 		},
+		{
+			name:        "excluded session confirmed live does not block a respawn that is deliberately replacing it",
+			stopper:     &mockSessionStopper{liveUUIDs: map[string]bool{"uuid-ended-work": true}},
+			prior:       []session.ItemSessionSummary{tombstoned},
+			excludeUUID: "uuid-ended-work",
+		},
+		{
+			name:        "excluding the just-replaced session still catches a different confirmed-live stale round",
+			stopper:     &mockSessionStopper{liveUUIDs: map[string]bool{"uuid-ended-work": true, "uuid-older-ended-work": true}},
+			prior:       []session.ItemSessionSummary{olderTombstoned, tombstoned},
+			excludeUUID: "uuid-ended-work",
+			wantUUID:    "uuid-older-ended-work",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := findConfirmedLiveWorkSession(tc.stopper, tc.prior)
+			got := findConfirmedLiveWorkSession(tc.stopper, tc.prior, tc.excludeUUID)
 			if tc.wantUUID == "" {
 				assert.Nil(t, got)
 				return
