@@ -18,6 +18,14 @@ const (
 	EventSessionUpdated EventType = "session.updated"
 	// EventSessionDeleted is emitted when a session is deleted
 	EventSessionDeleted EventType = "session.deleted"
+	// EventSessionArchived is emitted when a session is soft-archived (ArchivedAt
+	// set) rather than deleted outright — e.g. archiveItemWorkSessions superseding
+	// a backlog item's prior work/review sessions. The session row still exists
+	// in storage, so listeners that need "gone for good" semantics (frontend
+	// tombstoning, analytics) should keep using EventSessionDeleted; this event
+	// exists for cleanup that must react to a session leaving the *live/visible*
+	// set, such as ReactiveQueueManager evicting stale review-queue entries.
+	EventSessionArchived EventType = "session.archived"
 	// EventUserInteraction is emitted when user interacts with a session
 	EventUserInteraction EventType = "session.user_interaction"
 	// EventSessionAcknowledged is emitted when user acknowledges a session
@@ -247,6 +255,15 @@ func NewSessionUpdatedEventWithDetection(
 func NewSessionDeletedEvent(sessionID string) *Event {
 	return &Event{
 		Type:      EventSessionDeleted,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+	}
+}
+
+// NewSessionArchivedEvent creates an event for session soft-archival.
+func NewSessionArchivedEvent(sessionID string) *Event {
+	return &Event{
+		Type:      EventSessionArchived,
 		Timestamp: time.Now(),
 		SessionID: sessionID,
 	}

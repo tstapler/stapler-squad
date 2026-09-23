@@ -98,10 +98,12 @@ func (ns *NotificationService) SendNotification(
 	sessionName := req.Msg.SessionId // Default to session ID
 	resolvedSessionID := req.Msg.SessionId
 	resolved := false
+	hidden := false
 	if ns.reviewQueuePoller != nil {
 		if inst := ns.reviewQueuePoller.FindInstance(req.Msg.SessionId); inst != nil {
 			sessionName = inst.Title
 			resolvedSessionID = inst.GetStableID()
+			hidden = inst.Snapshot().Hidden
 			resolved = true
 		}
 	}
@@ -120,10 +122,28 @@ func (ns *NotificationService) SendNotification(
 				if matchesIDData(d, req.Msg.SessionId) {
 					sessionName = d.Title
 					resolvedSessionID = stableIDForData(d)
+					hidden = d.Hidden
 					break
 				}
 			}
 		}
+	}
+
+	// Hidden (headless/background, e.g. review) sessions run a real Claude Code
+	// CLI process and get the same native Stop/Notification hooks as any visible
+	// session (session/mux/hooks.go's GenerateHooksFile has no concept of
+	// Hidden) — so ssq-hook-handler's routine "Task Complete"/"Subagent
+	// Complete" hook fires for them exactly like a normal session, landing in
+	// notification history/push for a session the UI hides and "View Session"
+	// can't open. Suppress only LOW-priority (routine) notifications for Hidden
+	// sessions, mirroring ReactiveQueueManager's suppressForHidden: a failure
+	// (task_failed, sent at high priority) must still surface regardless of
+	// Hidden, since nothing else watches a stuck-in-error hidden session.
+	if hidden && req.Msg.Priority == sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW {
+		return connect.NewResponse(&sessionv1.SendNotificationResponse{
+			Success: true,
+			Message: "Notification suppressed for hidden session",
+		}), nil
 	}
 
 	// Apply rate limiting (applies to both managed and external sessions)

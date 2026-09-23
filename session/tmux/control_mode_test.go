@@ -312,21 +312,22 @@ func syncWriteControlModeLine(t *testing.T, pw io.WriteCloser, line string) {
 // ("close of nil channel" in readControlModeOutput's post-loop cleanup) and
 // crash-looped the live stapler-squad service.
 //
-// The race: StopControlMode can close-and-nil t.controlModeDone before a
-// freshly spawned readControlModeOutput goroutine's own RLock capture of
-// that field runs (control_mode.go's doneCh := t.controlModeDone), so doneCh
-// is captured as nil. Post-loop cleanup's `if t.controlModeDone == doneCh`
-// guard then sees nil == nil -- true for Go channel comparison -- and used
-// to unconditionally close(doneCh), i.e. close(nil), which panics. This test
-// reproduces the capture side of that race directly (constructing the
-// session with controlModeDone already nil, as if StopControlMode had beaten
-// the reader goroutine to it) and asserts the cleanup path tolerates it.
+// The race: StopControlMode could close-and-nil t.controlModeDone before a
+// freshly spawned readControlModeOutput goroutine captured that field, so
+// doneCh was captured as nil. Post-loop cleanup's `if t.controlModeDone ==
+// doneCh` guard then saw nil == nil -- true for Go channel comparison -- and
+// used to unconditionally close(doneCh), i.e. close(nil), which panics.
+// doneCh/stdout are now parameters captured by the caller
+// (StartControlMode/startRemoteControlMode, serialized against
+// StopControlMode by controlModeStartMu -- see readControlModeOutput's doc
+// comment) rather than read from the struct fields inside the goroutine, so
+// this test reproduces the capture-time-nil scenario directly by passing nil
+// as doneCh and asserts the post-loop cleanup's nil guard tolerates it.
 func TestControlMode_NilDoneChAtCapture_PostLoopCleanupDoesNotPanic(t *testing.T) {
 	pr, pw := io.Pipe()
 	sess := &TmuxSession{
 		sanitizedName:          "nil_donech_test",
 		controlModeStdout:      pr,
-		controlModeDone:        nil, // simulates StopControlMode already having closed-and-nilled it
 		controlModeSubscribers: make(map[string]*controlModeSubscriber),
 	}
 	t.Cleanup(func() { _ = pw.Close() })
@@ -340,7 +341,7 @@ func TestControlMode_NilDoneChAtCapture_PostLoopCleanupDoesNotPanic(t *testing.T
 				panicVal <- r
 			}
 		}()
-		sess.readControlModeOutput(nil, pr)
+		sess.readControlModeOutput(nil, pr) // nil doneCh simulates capture-time-nil
 	}()
 
 	// EOF the pipe immediately so the scan loop falls straight through to

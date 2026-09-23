@@ -1128,6 +1128,7 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 					return fmt.Errorf("failed to re-save resumed session %s after storage fallback race: %w", sessionUUID, err)
 				}
 			}
+			s.eventBus.Publish(events.NewSessionArchivedEvent(sessionUUID))
 		}
 		return nil
 	}
@@ -1139,6 +1140,10 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return fmt.Errorf("failed to save archived session %s: %w", sessionUUID, err)
 	}
+	// Notifies event-driven cleanup (ReactiveQueueManager evicting any stale
+	// review-queue entry) that this session left the live/visible set, mirroring
+	// DeleteSession's EventSessionDeleted publish below.
+	s.eventBus.Publish(events.NewSessionArchivedEvent(sessionUUID))
 	return nil
 }
 
@@ -6273,6 +6278,8 @@ func (s *SessionService) ArchiveSession(
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
+	// Notifies event-driven cleanup (ReactiveQueueManager evicting any stale review-queue entry), mirroring ArchiveSessionByUUID.
+	s.eventBus.Publish(events.NewSessionArchivedEvent(inst.UUID))
 	return connect.NewResponse(&sessionv1.ArchiveSessionResponse{}), nil
 }
 
