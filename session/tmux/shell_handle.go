@@ -65,7 +65,7 @@ func (h *ShellTmuxHandle) buildCmd(args ...string) *exec.Cmd {
 		cmdArgs = append(cmdArgs, "-L", h.serverSocket)
 	}
 	cmdArgs = append(cmdArgs, args...)
-	return safeexec.CommandContext(context.Background(), Binary(), cmdArgs...)
+	return safeexec.CommandContext(context.Background(), ResolveClientForSocket(h.serverSocket), cmdArgs...)
 }
 
 // Spawn creates a new independent sibling tmux session running the given command in workDir.
