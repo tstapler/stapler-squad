@@ -1289,6 +1289,12 @@ func TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits(t *testing.T)
 	if err := cc.Start(context.Background()); err != nil {
 		t.Fatalf("Start() failed: %v", err)
 	}
+	// Safety net: if a t.Fatal below exits before the explicit Stop() call runs,
+	// this still tears the controller down so its background goroutines don't
+	// leak into a later test's goleak snapshot — the same bug class this test
+	// exists to catch. A second Stop() call after the explicit one is a
+	// harmless no-op (cc.lifecycle.cancel is already nil by then).
+	defer cc.Stop()
 
 	var statusLoopDone chan struct{}
 	cc.lifecycle.Read(func(l controllerLifecycle) {
