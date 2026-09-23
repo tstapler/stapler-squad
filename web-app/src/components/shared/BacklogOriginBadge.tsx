@@ -1,4 +1,5 @@
 "use client";
+// +feature: backlog-origin-badge
 
 import Link from "next/link";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
