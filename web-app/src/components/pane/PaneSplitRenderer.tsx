@@ -211,7 +211,7 @@ interface PaneLeafProps {
 function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: React.Dispatch<PaneAction> }) {
   const actions = useCockpitActions();
   const { sessions, loading, error, listSessions, hibernateSession, resumeHibernatedSession } = useSessionServiceContext();
-  const { triggerPicker, triggerPickerForceNew } = usePaneContext();
+  const { triggerPicker, triggerPickerForceNew, backlogIndex } = usePaneContext();
   const { viewMode, setViewMode } = useSessionViewModeContext();
   if (loading) return viewMode === "board" ? <BoardColumnsSkeleton /> : <SessionListSkeleton count={4} />;
   // `error` is useSessionServiceContext's single shared Redux field -- ANY
@@ -265,6 +265,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
     onResumeHibernatedSession: resumeHibernatedSession ? (id: string) => void resumeHibernatedSession(id) : undefined,
     onFetchArchivedSessions: (includeArchived: boolean) => /* analytics-exempt */ void listSessions({ includeArchived }),
     storageKeyPrefix: `pane-${pane.id}.`,
+    backlogIndex,
   };
 
   return (
@@ -318,6 +319,7 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
   const session = pane.viewKind === "session-detail" && pane.sessionId
     ? sessions.find((s) => s.id === pane.sessionId) ?? null
     : null;
+  const sessionBacklogEntry = session ? backlogIndex.get(session.id) : undefined;
 
   const handleFocus = () => dispatch({ type: "FOCUS_PANE", paneId: pane.id });
   const handleClose = () => dispatch({ type: "CLOSE_PANE", paneId: pane.id });
@@ -386,8 +388,8 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
             initialTab={pane.activeTab}
             embedded={true}
             isActive={isFocused}
-            backlogItemId={backlogIndex.get(session.id)?.itemId}
-            backlogEntry={backlogIndex.get(session.id)}
+            backlogItemId={sessionBacklogEntry?.itemId}
+            backlogEntry={sessionBacklogEntry}
           />
         ) : (
           <div className={emptyPaneSlot}>

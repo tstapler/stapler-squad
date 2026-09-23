@@ -1,15 +1,7 @@
-/**
- * Tests for BacklogOriginBadge component.
- *
- * Covers:
- *  - Renders nothing when there is no backlog-index entry (AC3: no badge, no layout shift)
- *  - Renders the role label + link when linked
- *  - Falls back to a generic label for an unexpected/free-form sessionRole value
- *  - Links to /backlog?item=<id>
- */
+// Tests for BacklogOriginBadge — see describe/it names below for coverage.
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { BacklogOriginBadge } from "../BacklogOriginBadge";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 
@@ -49,5 +41,18 @@ describe("BacklogOriginBadge", () => {
   it("BacklogOriginBadge_should_fallBackToGenericLabel_When_sessionRoleIsUnexpected", () => {
     render(<BacklogOriginBadge entry={makeEntry({ sessionRole: "some-future-role" })} />);
     expect(screen.getByText("backlog")).toBeTruthy();
+  });
+
+  it("BacklogOriginBadge_should_stopPropagation_When_clicked", () => {
+    const parentHandler = jest.fn();
+    render(
+      <div onClick={parentHandler}>
+        <BacklogOriginBadge entry={makeEntry()} />
+      </div>
+    );
+
+    fireEvent.click(screen.getByTestId("backlog-origin-badge"));
+
+    expect(parentHandler).not.toHaveBeenCalled();
   });
 });

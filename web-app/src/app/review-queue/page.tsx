@@ -290,6 +290,7 @@ function ReviewQueueContent() {
     ? reviewQueueItems.findIndex((s) => s.id === selectedSession.id) + 1
     : 0;
   const queueTotal = reviewQueueItems.length;
+  const selectedSessionBacklogEntry = selectedSession ? backlogSessionIndex.get(selectedSession.id) : undefined;
 
   return (
     <div className={styles.page}>
@@ -376,8 +377,8 @@ function ReviewQueueContent() {
               onDismissFromQueue={handleDismissFromQueue}
               queuePosition={queuePosition}
               queueTotal={queueTotal}
-              backlogItemId={backlogSessionIndex.get(selectedSession.id)?.itemId}
-              backlogEntry={backlogSessionIndex.get(selectedSession.id)}
+              backlogItemId={selectedSessionBacklogEntry?.itemId}
+              backlogEntry={selectedSessionBacklogEntry}
             />
           </div>
         </div>
