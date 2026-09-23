@@ -813,13 +813,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     manager?.handleAppScrollback({ content, outcome, program, forwardId, blockedReason });
   }, [getOrCreateStreamManager]);
 
-  // Story 1.4.0 bug fix — see TerminalStreamManager.setAltScreenActiveHint's
+  // Story 1.4.0 bug fix — see TerminalStreamManager.setAltScreenActive()'s
   // doc comment: a capture-pane-derived initial/resize snapshot can never
   // carry the DECSET 1049h marker, so this server-authoritative hint (not
   // content-scanning) is what lets a client connecting to an already
   // alt-screen-active session learn that state at all.
   const handleAltScreenActiveHint = useCallback((active: boolean) => {
-    getOrCreateStreamManager()?.setAltScreenActiveHint(active);
+    const manager = getOrCreateStreamManager();
+    if (active) {
+      manager?.setAltScreenActive();
+    } else {
+      manager?.setAltScreenInactive();
+    }
   }, [getOrCreateStreamManager]);
 
   // Cleanup blocked-toast/connection-pulse/scroll-loading-pill timers on unmount.
