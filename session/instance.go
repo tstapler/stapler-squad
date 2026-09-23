@@ -711,6 +711,10 @@ type Instance struct {
 	restartCount       int64
 	recentRestartTimes []time.Time
 	restartMu          deadlock.Mutex
+	// restartStormUntil blocks further Start() attempts until this time once
+	// trackRestartRate observes a crash loop (see its doc comment) — zero
+	// means no active cooldown.
+	restartStormUntil time.Time
 
 	// restartTriggerMu serializes every setter that can trigger a restart on an
 	// Active instance (SwitchProgram, SetAutoApprove) so a manual program-switch
@@ -1456,6 +1460,9 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	log.Info("starting instance", "session", i.Title, "path", i.Path, "program", i.Program, "first_time_setup", firstTimeSetup)
 
 	if !firstTimeSetup {
+		if err := i.checkRestartStorm(); err != nil {
+			return err
+		}
 		i.trackRestartRate()
 	}
 
@@ -1706,6 +1713,9 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	log.Info("starting instance", "session", i.Title, "path", i.Path, "program", i.Program, "first_time_setup", firstTimeSetup)
 
 	if !firstTimeSetup {
+		if err := i.checkRestartStorm(); err != nil {
+			return err
+		}
 		i.trackRestartRate()
 	}
 

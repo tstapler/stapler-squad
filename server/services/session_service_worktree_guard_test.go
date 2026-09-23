@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -11,6 +13,20 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 )
+
+// mustMkdirSiblingCwd creates dir on disk before it's used as a live probe
+// instance's simulated pane cwd. A real tmux pane's cwd always exists on
+// disk -- filepath.EvalSymlinks (used by the production symlink-canonical
+// comparison in OtherLiveSessionInsideWorktree) errors on a path that
+// doesn't exist and silently falls back to leaving it unresolved, which
+// would make these guard tests pass for the wrong reason (or fail outright
+// on hosts like macOS where t.TempDir()'s real path has a symlink hop, e.g.
+// /var -> /private/var) if this directory were never actually created.
+func mustMkdirSiblingCwd(t *testing.T, dir string) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	return dir
+}
 
 // newWorktreeGuardTarget builds a session.Instance whose GetEffectiveRootDir
 // resolves to worktreePath -- the shape UpdateSession's pause/stop status
@@ -44,7 +60,7 @@ func TestUpdateSession_Pause_RefusesWhenWorktreeSharedWithOtherLiveSession(t *te
 	t.Cleanup(fix.cleanup)
 
 	worktree := t.TempDir()
-	sibling := newLiveProbeInstance(t, "guard-sibling-pause-"+t.Name(), worktree+"/server")
+	sibling := newLiveProbeInstance(t, "guard-sibling-pause-"+t.Name(), mustMkdirSiblingCwd(t, filepath.Join(worktree, "server")))
 	target := newWorktreeGuardTarget("guard-target-pause", "uuid-guard-target-pause", worktree)
 	addInstanceToPoller(fix.poller, sibling)
 	addInstanceToPoller(fix.poller, target)
@@ -69,7 +85,7 @@ func TestUpdateSession_Stop_RefusesWhenWorktreeSharedWithOtherLiveSession(t *tes
 	t.Cleanup(fix.cleanup)
 
 	worktree := t.TempDir()
-	sibling := newLiveProbeInstance(t, "guard-sibling-stop-"+t.Name(), worktree+"/web-app")
+	sibling := newLiveProbeInstance(t, "guard-sibling-stop-"+t.Name(), mustMkdirSiblingCwd(t, filepath.Join(worktree, "web-app")))
 	target := newWorktreeGuardTarget("guard-target-stop", "uuid-guard-target-stop", worktree)
 	addInstanceToPoller(fix.poller, sibling)
 	addInstanceToPoller(fix.poller, target)
@@ -124,7 +140,7 @@ func TestDeleteSession_RefusesWhenWorktreeSharedWithOtherLiveSession(t *testing.
 	t.Cleanup(fix.cleanup)
 
 	worktree := t.TempDir()
-	sibling := newLiveProbeInstance(t, "guard-sibling-delete-"+t.Name(), worktree+"/session")
+	sibling := newLiveProbeInstance(t, "guard-sibling-delete-"+t.Name(), mustMkdirSiblingCwd(t, filepath.Join(worktree, "session")))
 	target := newWorktreeGuardTarget("guard-target-delete", "uuid-guard-target-delete", worktree)
 	addInstanceToPoller(fix.poller, sibling)
 	addInstanceToPoller(fix.poller, target)

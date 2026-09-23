@@ -305,6 +305,64 @@ func syncWriteControlModeLine(t *testing.T, pw io.WriteCloser, line string) {
 	}
 }
 
+// TestControlMode_NilDoneChAtCapture_PostLoopCleanupDoesNotPanic is a
+// regression test for the "pre-existing (out-of-scope) nil-channel race"
+// called out in runStopControlModeIntentionalStopScenario's doc comment
+// above -- it stopped being out-of-scope on 2026-09-16, when it panicked
+// ("close of nil channel" in readControlModeOutput's post-loop cleanup) and
+// crash-looped the live stapler-squad service.
+//
+// The race: StopControlMode could close-and-nil t.controlModeDone before a
+// freshly spawned readControlModeOutput goroutine captured that field, so
+// doneCh was captured as nil. Post-loop cleanup's `if t.controlModeDone ==
+// doneCh` guard then saw nil == nil -- true for Go channel comparison -- and
+// used to unconditionally close(doneCh), i.e. close(nil), which panics.
+// doneCh/stdout are now parameters captured by the caller
+// (StartControlMode/startRemoteControlMode, serialized against
+// StopControlMode by controlModeStartMu -- see readControlModeOutput's doc
+// comment) rather than read from the struct fields inside the goroutine, so
+// this test reproduces the capture-time-nil scenario directly by passing nil
+// as doneCh and asserts the post-loop cleanup's nil guard tolerates it.
+func TestControlMode_NilDoneChAtCapture_PostLoopCleanupDoesNotPanic(t *testing.T) {
+	pr, pw := io.Pipe()
+	sess := &TmuxSession{
+		sanitizedName:          "nil_donech_test",
+		controlModeStdout:      pr,
+		controlModeSubscribers: make(map[string]*controlModeSubscriber),
+	}
+	t.Cleanup(func() { _ = pw.Close() })
+
+	readerDone := make(chan struct{})
+	panicVal := make(chan any, 1)
+	go func() {
+		defer close(readerDone)
+		defer func() {
+			if r := recover(); r != nil {
+				panicVal <- r
+			}
+		}()
+		sess.readControlModeOutput(nil, pr) // nil doneCh simulates capture-time-nil
+	}()
+
+	// EOF the pipe immediately so the scan loop falls straight through to
+	// post-loop cleanup without ever needing doneCh to become ready.
+	if err := pw.Close(); err != nil {
+		t.Fatalf("closing pipe: %v", err)
+	}
+
+	select {
+	case <-readerDone:
+	case <-time.After(wait.FastTimeout):
+		t.Fatal("readControlModeOutput did not return")
+	}
+
+	select {
+	case r := <-panicVal:
+		t.Fatalf("readControlModeOutput panicked with nil controlModeDone: %v", r)
+	default:
+	}
+}
+
 // TestControlMode_LifecycleV2FlagUnset_PreservesLegacyBehavior is REQ-15: all
 // 3 of Epic 3.3's scenarios, run with STAPLER_SQUAD_TMUX_LIFECYCLE_V2 unset,
 // asserting the exact pre-migration onExit call-count/argument behavior.

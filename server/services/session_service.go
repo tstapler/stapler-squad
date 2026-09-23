@@ -1128,6 +1128,7 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 					return fmt.Errorf("failed to re-save resumed session %s after storage fallback race: %w", sessionUUID, err)
 				}
 			}
+			s.eventBus.Publish(events.NewSessionArchivedEvent(sessionUUID))
 		}
 		return nil
 	}
@@ -1139,6 +1140,10 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return fmt.Errorf("failed to save archived session %s: %w", sessionUUID, err)
 	}
+	// Notifies event-driven cleanup (ReactiveQueueManager evicting any stale
+	// review-queue entry) that this session left the live/visible set, mirroring
+	// DeleteSession's EventSessionDeleted publish below.
+	s.eventBus.Publish(events.NewSessionArchivedEvent(sessionUUID))
 	return nil
 }
 
@@ -1243,6 +1248,14 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 	if err != nil {
 		return "", false
 	}
+	// CanonicalizeWorktreePath resolves symlinks (e.g. macOS's /var ->
+	// /private/var) so this comparison isn't fooled by the same directory
+	// having two spellings -- one from a target worktree path already
+	// canonicalized when loaded from storage (git.NewGitWorktreeFromStorage),
+	// the other from a sibling's live pane cwd that may not be. See the /var
+	// vs /private/var path-inconsistency bug class already documented in
+	// backlog_service_test.go.
+	cleanTarget = git.CanonicalizeWorktreePath(cleanTarget)
 	for _, inst := range s.reviewQueuePoller.GetInstances() {
 		if inst == nil || inst.UUID == excludeUUID || !inst.IsBackendProcessAlive() {
 			continue
@@ -1255,6 +1268,7 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 		if absErr != nil {
 			continue
 		}
+		cleanCwd = git.CanonicalizeWorktreePath(cleanCwd)
 		if cleanCwd == cleanTarget || strings.HasPrefix(cleanCwd, cleanTarget+string(os.PathSeparator)) {
 			return inst.UUID, true
 		}
@@ -6264,6 +6278,8 @@ func (s *SessionService) ArchiveSession(
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
+	// Notifies event-driven cleanup (ReactiveQueueManager evicting any stale review-queue entry), mirroring ArchiveSessionByUUID.
+	s.eventBus.Publish(events.NewSessionArchivedEvent(inst.UUID))
 	return connect.NewResponse(&sessionv1.ArchiveSessionResponse{}), nil
 }
 

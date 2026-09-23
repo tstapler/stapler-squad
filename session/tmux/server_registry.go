@@ -307,7 +307,7 @@ func (r *TmuxServerRegistry) syncSessionsLocked(ctx context.Context, timeout tim
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	args := prependSocket(r.serverSocket, []string{"list-sessions", "-F", "#{session_name}"})
-	cmd := safeexec.CommandContext(fetchCtx, Binary(), args...)
+	cmd := safeexec.CommandContext(fetchCtx, ResolveClientForSocket(r.serverSocket), args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("list-sessions: %w", err)
@@ -377,7 +377,7 @@ func (r *TmuxServerRegistry) startControlMode() (*exec.Cmd, *bufio.Scanner, io.W
 		createArgs := prependSocket(r.serverSocket, []string{"new-session", "-d", "-s", keepaliveName})
 		keepaliveCtx, keepaliveCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer keepaliveCancel()
-		keepaliveCmd := safeexec.CommandContext(keepaliveCtx, Binary(), createArgs...)
+		keepaliveCmd := safeexec.CommandContext(keepaliveCtx, ResolveClientForSocket(r.serverSocket), createArgs...)
 		_ = keepaliveCmd.Run()
 	}
 
@@ -389,8 +389,8 @@ func (r *TmuxServerRegistry) startControlMode() (*exec.Cmd, *bufio.Scanner, io.W
 	// cancellation never runs if this process is SIGKILLed (e.g. a
 	// `--mcp` invocation killed by its parent), so EnsurePdeathsig backs
 	// that up at the kernel level.
-	// #nosec G204 -- Binary() resolves this repo's own bundled/PATH tmux binary; args are a fixed argv slice plus internal session/socket names, never a shell string.
-	cmd := exec.CommandContext(r.ctx, Binary(), args...) //nolint:norawexec long-running cmd.Start() process
+	// #nosec G204 -- ResolveClientForSocket resolves this repo's own bundled/PATH tmux binary (or a version-matched already-running server's own binary); args are a fixed argv slice plus internal session/socket names, never a shell string.
+	cmd := exec.CommandContext(r.ctx, ResolveClientForSocket(r.serverSocket), args...) //nolint:norawexec long-running cmd.Start() process
 	safeexec.EnsurePdeathsig(cmd)
 
 	stdout, err := cmd.StdoutPipe()

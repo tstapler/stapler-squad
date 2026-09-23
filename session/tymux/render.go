@@ -50,7 +50,13 @@ func (s sgrState) isZero() bool {
 // (Task 2.2.2d) needs and CapturePaneContentRaw() deliberately doesn't
 // (that method only joins Cell.text, no SGR).
 //
-// Rows are newline-joined (mirroring rowsToPlainText's join). Within a row,
+// Rows are newline-joined (mirroring rowsToPlainText's join, and matching
+// the tmux backend's own capture-pane -p -e contract) -- this is a
+// text-capture API, not a live terminal feed. A caller that replays this
+// into a live vt100 parser (e.g. xterm.js) needs "\n" upgraded to "\r\n"
+// first -- see resync.go's applySnapshotResync, the one call site that
+// does that, rather than baking CRLF into every CellsToSGR consumer here.
+// Within a row,
 // an SGR escape sequence is emitted only when a cell's fg/bg/attrs differ
 // from the previous cell's (Task 2.6.1a/Story 2.6.1) — an unbroken
 // attribute run gets exactly one sequence before it, not one per cell.

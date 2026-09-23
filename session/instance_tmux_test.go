@@ -999,6 +999,73 @@ func TestInstance_SetWindowSize_should_Delegate_When_Started(t *testing.T) {
 	}
 }
 
+// TestCheckRestartStorm_AllowsUnderThreshold confirms the breaker stays
+// silent for a normal handful of restarts.
+func TestCheckRestartStorm_AllowsUnderThreshold(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t"}
+	for i := 0; i < restartStormThreshold-1; i++ {
+		if err := inst.checkRestartStorm(); err != nil {
+			t.Fatalf("checkRestartStorm() attempt %d: unexpected error %v", i, err)
+		}
+		inst.trackRestartRate()
+	}
+	if err := inst.checkRestartStorm(); err != nil {
+		t.Fatalf("checkRestartStorm() after %d restarts: unexpected error %v", restartStormThreshold-1, err)
+	}
+}
+
+// TestCheckRestartStorm_BlocksAtThreshold is the regression test for the bug
+// this breaker fixes: previously trackRestartRate only logged a warning on a
+// crash loop, so a session whose Start() kept failing retried forever,
+// forking real tmux subprocesses every time (titus-soaktest-followup hit 89+
+// restarts in under 90 minutes in production, compounding a memory leak —
+// see attachStatusEventsForPublish's cap for the other half of that
+// incident). checkRestartStorm must now refuse once trackRestartRate has
+// recorded restartStormThreshold restarts within restartStormWindow.
+func TestCheckRestartStorm_BlocksAtThreshold(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t"}
+	for i := 0; i < restartStormThreshold; i++ {
+		if err := inst.checkRestartStorm(); err != nil {
+			t.Fatalf("checkRestartStorm() attempt %d: unexpected error %v", i, err)
+		}
+		inst.trackRestartRate()
+	}
+	if err := inst.checkRestartStorm(); err == nil {
+		t.Fatal("checkRestartStorm() = nil, want an error once the crash-loop threshold is reached")
+	}
+}
+
+// TestCheckRestartStorm_ClearsAfterCooldown confirms the breaker is a
+// self-healing rate limiter, not a permanent kill switch: once
+// restartStormCooldown has elapsed, both the cooldown and the aged-out
+// restart timestamps clear, so a session that recovers can restart normally
+// again.
+func TestCheckRestartStorm_ClearsAfterCooldown(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t"}
+	for i := 0; i < restartStormThreshold; i++ {
+		inst.trackRestartRate()
+	}
+	if err := inst.checkRestartStorm(); err == nil {
+		t.Fatal("checkRestartStorm() = nil, want an error immediately after tripping the breaker")
+	}
+
+	// Simulate the cooldown having already elapsed, and the restart
+	// timestamps having aged out of the window along with it (restartStormCooldown
+	// == restartStormWindow, so both always clear together — see the const's
+	// doc comment).
+	inst.restartMu.Lock()
+	inst.restartStormUntil = time.Now().Add(-time.Second)
+	inst.recentRestartTimes = nil
+	inst.restartMu.Unlock()
+
+	if err := inst.checkRestartStorm(); err != nil {
+		t.Fatalf("checkRestartStorm() after cooldown expired: unexpected error %v", err)
+	}
+}
+
 // seedCustomProgram registers a custom program in an isolated config dir.
 func seedCustomProgram(t *testing.T, prog config.ProgramConfig) {
 	t.Helper()
