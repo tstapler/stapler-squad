@@ -311,7 +311,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
 }
 
 function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplits }: PaneLeafProps) {
-  const { pickerPendingSession, cancelPicker } = usePaneContext();
+  const { pickerPendingSession, cancelPicker, backlogIndex } = usePaneContext();
   const isFocused = state.focusedPaneId === pane.id;
   const isZoomed = state.zoomedPaneId === pane.id;
   const pickerLetter = pickerPendingSession ? getPickerLetter(state.root, pane.id) : null;
@@ -386,6 +386,8 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
             initialTab={pane.activeTab}
             embedded={true}
             isActive={isFocused}
+            backlogItemId={backlogIndex.get(session.id)?.itemId}
+            backlogEntry={backlogIndex.get(session.id)}
           />
         ) : (
           <div className={emptyPaneSlot}>

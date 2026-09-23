@@ -29,6 +29,7 @@ import { selectDetectedStatusMap } from "@/lib/store/sessionsSlice";
 import { ActionBar } from "@/components/ui/ActionBar";
 import { computeRangeIds } from "@/lib/utils/rangeSelect";
 import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
+import { useBacklogSessionIndex, type BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { useFilteredGroupedSessions } from "@/lib/hooks/useFilteredGroupedSessions";
 import {
   container,
@@ -136,6 +137,7 @@ interface SessionRowWrapperProps extends SessionRowHandlers {
   isSelected: boolean;
   suppressApprovalSubStatus: boolean;
   staleThresholdMinutes: number;
+  backlogEntry?: BacklogIndexEntry;
 }
 
 // Memoized wrapper: turns stable per-action handlers into per-session closures
@@ -168,6 +170,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
   onResumeHibernatedSession,
   onUpdateTags,
   onToggleSession,
+  backlogEntry,
 }: SessionRowWrapperProps) {
   const id = session.id;
   return (
@@ -197,6 +200,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
       selectMode={selectMode}
       isSelected={isSelected}
       onToggleSelect={onToggleSession ? (e) => onToggleSession(id, e) : undefined}
+      backlogEntry={backlogEntry}
     />
   );
 });
@@ -365,6 +369,9 @@ export function SessionList({
     const map = new Map(reviewItems.map(item => [item.sessionId, item]));
     return map;
   }, [reviewItems]);
+
+  // Backlog-origin index for the badge shown on backlog-automation-dispatched sessions
+  const { index: backlogSessionIndex } = useBacklogSessionIndex();
 
   // Terminal-detected status data from Redux store
   const detectedStatusMap = useAppSelector(selectDetectedStatusMap);
@@ -1338,6 +1345,7 @@ export function SessionList({
                     selectMode={selectMode}
                     isSelected={selectedSessions.has(item.session.id)}
                     onToggleSession={handleToggleSession}
+                    backlogEntry={backlogSessionIndex.get(item.session.id)}
                   />
                   </div>
                 )}
@@ -1520,6 +1528,7 @@ export function SessionList({
                   isSelected={selectedSessions.has(session.id)}
                   onToggleSelect={(e) => handleToggleSession(session.id, e)}
                   reviewItem={reviewItemBySessionId.get(session.id)}
+                  backlogEntry={backlogSessionIndex.get(session.id)}
                   staleThresholdMinutes={staleSessionConfig.thresholdMinutes}
                   detectedStatus={detectedStatusMap[session.id]?.detectedStatus}
                   detectedContext={detectedStatusMap[session.id]?.detectedContext}

@@ -11,6 +11,7 @@ import { SessionDetail, SessionDetailTab } from "@/components/sessions/SessionDe
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { useBacklogSessionIndex } from "@/lib/hooks/useBacklogService";
 import { getAvailableActions } from "@/lib/backlog/itemActions";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
@@ -72,6 +73,9 @@ function ReviewQueueContent() {
     () => backlogItems.filter((item) => getAvailableActions(item).actions.has("approve_plan")),
     [backlogItems]
   );
+
+  // Backlog-origin index for the badge shown on backlog-automation-dispatched sessions
+  const { index: backlogSessionIndex } = useBacklogSessionIndex();
 
   // Acknowledge function for dismissing sessions from the modal.
   // allQueueItems is the unfiltered Redux store list — used as the existence oracle in the
@@ -372,6 +376,8 @@ function ReviewQueueContent() {
               onDismissFromQueue={handleDismissFromQueue}
               queuePosition={queuePosition}
               queueTotal={queueTotal}
+              backlogItemId={backlogSessionIndex.get(selectedSession.id)?.itemId}
+              backlogEntry={backlogSessionIndex.get(selectedSession.id)}
             />
           </div>
         </div>

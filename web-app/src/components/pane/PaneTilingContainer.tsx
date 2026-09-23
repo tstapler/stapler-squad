@@ -12,6 +12,7 @@ import { PaneSplitRenderer } from "./PaneSplitRenderer";
 import { PaneContext } from "./PaneContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { SessionPeekModal } from "@/components/sessions/SessionPeekModal";
+import { useBacklogSessionIndex } from "@/lib/hooks/useBacklogService";
 import {
   pickerActionBar,
   pickerActionButton,
@@ -62,6 +63,7 @@ export function PaneTilingContainer({
   const mobilePickerSheetRef = useRef<HTMLDivElement>(null);
   const { isMobile, isFoldable } = useViewport();
   const isNarrow = isMobile || isFoldable;
+  const { index: backlogIndex } = useBacklogSessionIndex();
 
   const cancelPicker = useCallback(() => {
     setPickerPendingSession(null);
@@ -220,7 +222,7 @@ export function PaneTilingContainer({
   const listPane = allLeaves.find((l) => l.viewKind === "session-list") ?? null;
 
   return (
-    <PaneContext.Provider value={{ state, dispatch, sessions, pickerPendingSession, triggerPicker, triggerPickerForceNew, cancelPicker }}>
+    <PaneContext.Provider value={{ state, dispatch, sessions, pickerPendingSession, triggerPicker, triggerPickerForceNew, cancelPicker, backlogIndex }}>
       <div
         ref={containerRef}
         style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0, position: "relative" }}
