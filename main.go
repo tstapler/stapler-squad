@@ -219,6 +219,17 @@ var (
 				log.Close()
 			}()
 
+			// Keep the launchd/systemd-captured raw stdout/stderr log bounded
+			// even when the process runs for a long time between installs --
+			// scripts/install-service.sh's own rotation only fires at
+			// install/restart time. Unconditional (not gated behind
+			// --profile like the goroutine monitor below).
+			{
+				serviceLogCtx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				go log.MonitorServiceLogSize(serviceLogCtx, 5*time.Minute)
+			}
+
 			// Start profiling if enabled
 			if profileFlag || traceFlag {
 				cleanup, err := profiling.StartProfiling(profiling.Config{
@@ -433,6 +444,10 @@ var (
 
 				srv = server.NewServerWithDeps(address, rt.ToServerDeps())
 				srv.SetHostnames(hostnames)
+
+				// Derive the login-shell PATH for ProbeProgram lookups off the request
+				// path; the service constructor stays hermetic (Task 1.1.4d2).
+				coreDeps.SessionService.StartProgramProbeLoginPath()
 
 				localOrigin := fmt.Sprintf("http://%s", address)
 				srv.SetOrigins([]string{localOrigin})

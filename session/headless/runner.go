@@ -21,6 +21,9 @@ type StreamChunk struct {
 	Err     error
 	Done    bool
 	CostUSD float64 // non-zero only on the final chunk from a first-call JSON response
+	// ConversationID is the Claude session_id of the call (its transcript's file
+	// name); set only on the final chunk of a first-call JSON response.
+	ConversationID string
 }
 
 // ClaudeRunner abstracts how claude -p subprocesses are started.

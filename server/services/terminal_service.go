@@ -2,9 +2,9 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -116,24 +116,37 @@ func (ts *TerminalService) WriteToSession(
 	}
 
 	// BUG-047: must use session.EnterKeySequence ('\r'), not a bare '\n' —
-	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit, so a
-	// trailing '\n' leaves the text sitting unsubmitted in the input buffer.
-	text := session.BuildSubmittableInput(req.Msg.Input, req.Msg.PressEnter)
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- inst.SendKeys(text) }()
-
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("send keys failed: %w", err))
-		}
-	case <-timeoutCtx.Done():
-		return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("timed out writing to session PTY"))
+	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit.
+	// BUG-031: when PressEnter is set, content and the submit keystroke must
+	// travel as two separate SendKeys writes (session.SubmitDriverContent),
+	// never concatenated into one. Both branches are timeout-bounded so a
+	// wedged PTY write can't hang this handler indefinitely.
+	var err error
+	if req.Msg.PressEnter {
+		err = session.SubmitContentWithEnter(ctx, inst, req.Msg.Input)
+	} else {
+		err = session.SendKeysWithTimeout(ctx, inst, req.Msg.Input, session.DefaultSendKeysTimeout)
+	}
+	if err != nil {
+		return nil, submitErrToConnectError(err)
 	}
 
 	return connect.NewResponse(&sessionv1.WriteToSessionResponse{Success: true}), nil
+}
+
+// submitErrToConnectError maps an error from session.SubmitContentWithEnter/
+// SendKeysWithTimeout to the matching connect error: ErrSubmitNotConfirmed
+// (BUG-031's swallowed-submit case) becomes CodeAborted, a context deadline
+// becomes CodeDeadlineExceeded, anything else is CodeInternal. Mirrors
+// server/mcp/tools_terminal.go's submitErrResult, which does the same
+// three-way mapping for the MCP error-result shape instead of a connect
+// error.
+func submitErrToConnectError(err error) error {
+	if errors.Is(err, session.ErrSubmitNotConfirmed) {
+		return connect.NewError(connect.CodeAborted, err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("timed out writing to session PTY"))
+	}
+	return connect.NewError(connect.CodeInternal, fmt.Errorf("send keys failed: %w", err))
 }

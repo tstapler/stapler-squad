@@ -1110,3 +1110,15 @@ func TestPool_CallBlocking_WithWorkDir_ReturnsCostAndUsesWorkDir(t *testing.T) {
 	assert.InDelta(t, 0.0077, cost, 1e-9, "cost_usd must be returned for WorkDir calls too")
 	assert.True(t, priced, "Claude's total_cost_usd is always authoritative, so sink must fire with priced=true")
 }
+
+func TestPool_CallBlocking_ReportsConversationIDViaOnConversationID(t *testing.T) {
+	t.Parallel()
+	pool := newTestPool(PoolConfig{}, NewFakeRunner(firstCallJSON("conv-42", "ok")))
+
+	var got string
+	_, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt",
+		CallOptions{OnConversationID: func(id string) { got = id }}, DiscardCost)
+
+	require.NoError(t, err)
+	assert.Equal(t, "conv-42", got)
+}

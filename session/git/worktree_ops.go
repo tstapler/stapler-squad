@@ -11,7 +11,6 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 
 	"github.com/go-git/go-git/v5"
@@ -19,7 +18,7 @@ import (
 )
 
 // worktreeAddRetryAttempts and worktreeAddRetryDelay bound Ground-Truth Re-Query (ADR-001):
-// after a `worktree add` failure, both self-heal layers (setupLockedWithNative's new-worktree
+// after a `worktree add` failure, both self-heal layers (setupLocked's new-worktree
 // branch, setupFromExistingBranch) re-verify actual git state instead of pattern-matching the
 // failure's error text, retrying briefly in case the race winner's own `worktree
 // add`/`worktree list` is still in flight.
@@ -52,7 +51,7 @@ func branchRefExists(repo *git.Repository, branchRef plumbing.ReferenceName) (bo
 	}
 }
 
-// branchExistsAfterAddFailure is setupLockedWithNative's Ground-Truth Re-Query (ADR-001): after
+// branchExistsAfterAddFailure is setupLocked's Ground-Truth Re-Query (ADR-001): after
 // a `worktree add -b` failure, poll branchRefExists up to worktreeAddRetryAttempts times
 // (sleeping worktreeAddRetryDelay between attempts) to give a concurrent race winner's own
 // still-in-flight `worktree add` a chance to finish, rather than deciding the outcome from
@@ -108,9 +107,8 @@ func (g *GitWorktree) branchExistsAfterAddFailure(branchRef plumbing.ReferenceNa
 func (g *GitWorktree) Setup() error {
 	ctx := withOperationAttrs(context.Background(), attribute.String("session_name", g.sessionName))
 	return withOperationSpan(ctx, "git.worktree.add", func() (string, string, error) {
-		native := useNativeWorktree(g.sessionName)
-		err := WithRepoWorktreeLock(g.repoPath, func() error { return g.setupLockedWithNative(native) })
-		return implementationLabel(native), spanOutcome(err), err
+		err := WithRepoWorktreeLock(g.repoPath, g.setupLocked)
+		return implementationNative, spanOutcome(err), err
 	})
 }
 
@@ -128,16 +126,9 @@ func (g *GitWorktree) SetupLocked() error {
 	return g.setupLocked()
 }
 
+// setupLocked creates a new worktree for g.branchName, reusing an existing checkout for
+// that branch if one is already registered.
 func (g *GitWorktree) setupLocked() error {
-	return g.setupLockedWithNative(useNativeWorktree(g.sessionName))
-}
-
-// setupLockedWithNative is setupLocked's body, taking the native-flag resolution as a
-// parameter instead of re-reading useNativeWorktree(g.sessionName) itself — Setup() reads
-// the flag once and passes it through here so its span's implementation label and its
-// actual dispatch decision can never disagree if the flag flips mid-operation (mirroring
-// removeLocked's and findLiveWorktreeForBranch's existing single-read pattern).
-func (g *GitWorktree) setupLockedWithNative(native bool) error {
 	// Ensure worktrees directory exists early (can be done in parallel with branch check)
 	worktreesDir, err := getWorktreeDirectory()
 	if err != nil {
@@ -182,10 +173,7 @@ func (g *GitWorktree) setupLockedWithNative(native bool) error {
 	if branchExists {
 		return g.setupFromExistingBranch()
 	}
-	if native {
-		return g.nativeSetupNewWorktreeWithSelfHeal()
-	}
-	return g.legacySetupNewWorktree()
+	return g.nativeSetupNewWorktreeWithSelfHeal()
 }
 
 // setupFromExistingBranch creates a worktree from an existing branch, reusing one
@@ -198,11 +186,11 @@ func (g *GitWorktree) setupLockedWithNative(native bool) error {
 // still in_progress/review item with a missing worktree once anything else (a
 // concurrent cleanup call, or simply a slow-running review) touched it mid-recreation.
 //
-// setupLockedWithNative's new-worktree branch and setupFromExistingBranch are only ever
+// setupLocked's new-worktree branch and setupFromExistingBranch are only ever
 // reached, in production, through Setup()/SetupLocked() (worktree_ops.go:53-70), both of
 // which serialize via WithRepoWorktreeLock before calling either. The specific
 // two-unlocked-goroutines race TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate
-// constructs (by calling setupLockedWithNative directly, unlocked) cannot occur through any
+// constructs (by calling setupLocked directly, unlocked) cannot occur through any
 // real caller — confirmed by TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo.
 // The self-heal fallback below is still real defense-in-depth, though: a branch can exist
 // for reasons other than a lost create race (a manual `git branch`, a prior partial run),
@@ -232,7 +220,7 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 		// by version and locale — and, per this fix's root-cause finding, doesn't cover
 		// a timeout-killed subprocess's "signal: killed" either), unconditionally
 		// re-check actual git state for any failure here. This is the second self-heal
-		// layer for the same concurrent-spawn race setupLockedWithNative's own Re-Query
+		// layer for the same concurrent-spawn race setupLocked's own Re-Query
 		// handles: by the time this call runs, a race winner may have already checked
 		// out the branch into its own worktree.
 		log.Info("worktree add failed, checking whether the branch is already checked out elsewhere", "branch", g.branchName, "err", err)
@@ -254,22 +242,10 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 	return nil
 }
 
-// unlockWorktree dispatches to nativeUnlockWorktree/legacyUnlockWorktree per
-// useNativeWorktree(g.sessionName), mirroring setupLockedWithNative's dispatch pattern
-// (Story 2.1.4, Task 2.1.4b).
+// unlockWorktree clears git's "initializing" lock on g.worktreePath left by an interrupted
+// `worktree add`, via the native go-git implementation (Story 2.1.4, Task 2.1.4b).
 func (g *GitWorktree) unlockWorktree() error {
-	if useNativeWorktree(g.sessionName) {
-		return nativeUnlockWorktree(g.repoPath, g.worktreePath)
-	}
-	return g.legacyUnlockWorktree()
-}
-
-// legacyUnlockWorktree is the extracted body of setupFromExistingBranch's original `git
-// worktree unlock` subprocess call — identical logic (error ignored, since an unlocked
-// worktree returns one too), reachable when useNativeWorktree resolves false.
-func (g *GitWorktree) legacyUnlockWorktree() error {
-	_, _ = g.runGitCommand(g.repoPath, "worktree", "unlock", g.worktreePath) // Ignore error if not locked
-	return nil
+	return nativeUnlockWorktree(g.repoPath, g.worktreePath)
 }
 
 // initBaseCommitSHA finds the merge-base of HEAD with common default branches and
@@ -375,78 +351,29 @@ func (g *GitWorktree) findWorktreeForBranch(porcelainOutput, targetBranch string
 	return "", false
 }
 
-// findLiveWorktreeForBranch dispatches to nativeFindLiveWorktreeForBranch/
-// legacyFindLiveWorktreeForBranch per useNativeWorktree(g.sessionName) (Epic 2.3, Task
-// 2.3.2a) — setupFromExistingBranch's caller below needs no change to pick up the native
-// implementation once the flag is on.
+// findLiveWorktreeForBranch looks up whether g.branchName is registered to a live worktree
+// elsewhere, via the native go-git implementation (Epic 2.3, Task 2.3.2a).
 func (g *GitWorktree) findLiveWorktreeForBranch() (string, bool) {
 	var path string
 	var found bool
 	ctx := withOperationAttrs(context.Background(), attribute.String("session_name", g.sessionName))
 	_ = withOperationSpan(ctx, "git.worktree.list", func() (string, string, error) {
-		native := useNativeWorktree(g.sessionName)
-		if native {
-			path, found = g.nativeFindLiveWorktreeForBranch()
-		} else {
-			path, found = g.legacyFindLiveWorktreeForBranch()
-		}
+		path, found = g.nativeFindLiveWorktreeForBranch()
 		outcome := "not_found"
 		if found {
 			outcome = "found"
 		}
-		return implementationLabel(native), outcome, nil
+		return implementationNative, outcome, nil
 	})
 	return path, found
 }
 
-// legacyFindLiveWorktreeForBranch is setupFromExistingBranch's Ground-Truth Re-Query
-// (ADR-001): after a `worktree add` failure, poll `git worktree list --porcelain` up to
+// nativeFindLiveWorktreeForBranch is setupFromExistingBranch's Ground-Truth Re-Query
+// (ADR-001): after a `worktree add` failure, poll nativeListWorktrees up to
 // worktreeAddRetryAttempts times (sleeping worktreeAddRetryDelay between attempts) looking
 // for g.branchName registered to some other worktree path — giving a concurrent race
 // winner's own still-in-flight worktree registration a chance to complete, symmetric with
 // branchExistsAfterAddFailure.
-//
-// Before returning a match, verifies the path is actually present on disk (os.Stat),
-// mirroring worktreeAlreadyRegisteredForBranch's existing liveness check: a stale/prunable
-// 'worktree list --porcelain' entry left by an earlier crashed run (registered in git's
-// metadata but with no directory on disk) must not be silently adopted as a live worktree
-// — that would mask a genuine, unrelated `worktree add` failure (disk full, permission
-// denied) that happened to coincide with such a stale entry for the same branch name.
-//
-// A transient error from the `worktree list` subprocess itself consumes an attempt and the
-// loop continues, rather than aborting immediately, for the same reason
-// branchExistsAfterAddFailure does.
-func (g *GitWorktree) legacyFindLiveWorktreeForBranch() (string, bool) {
-	for attempt := 0; attempt < worktreeAddRetryAttempts; attempt++ {
-		if attempt > 0 {
-			time.Sleep(worktreeAddRetryDelay)
-		}
-		output, err := g.runGitCommand(g.repoPath, "worktree", "list", "--porcelain")
-		if err != nil {
-			log.Warn("findLiveWorktreeForBranch: transient error listing worktrees, retrying", "branch", g.branchName, "attempt", attempt, "err", err)
-			continue
-		}
-		path, found := g.findWorktreeForBranch(output, g.branchName)
-		if !found {
-			continue
-		}
-		// git realpath's the path it reports in 'worktree list' output, so canonicalize
-		// before storing to keep this consistent with the already-resolved paths
-		// getWorktreeDirectory hands to fresh creates.
-		path = CanonicalizeWorktreePath(path)
-		if _, statErr := os.Stat(path); statErr != nil {
-			log.Warn("findLiveWorktreeForBranch: found branch registered to a worktree path that doesn't exist on disk, treating as not found", "branch", g.branchName, "path", path, "err", statErr)
-			continue
-		}
-		return path, true
-	}
-	return "", false
-}
-
-// nativeFindLiveWorktreeForBranch is legacyFindLiveWorktreeForBranch's native counterpart
-// (Task 2.3.2a): identical retry-and-recheck semantics, sourced from nativeListWorktrees
-// instead of shelling out to `git worktree list --porcelain`, so it issues zero subprocess
-// calls.
 func (g *GitWorktree) nativeFindLiveWorktreeForBranch() (string, bool) {
 	branchRef := plumbing.NewBranchReferenceName(g.branchName).String()
 	for attempt := 0; attempt < worktreeAddRetryAttempts; attempt++ {
@@ -473,12 +400,10 @@ func (g *GitWorktree) nativeFindLiveWorktreeForBranch() (string, bool) {
 	return "", false
 }
 
-// nativeSetupNewWorktreeWithSelfHeal wraps nativeSetupNewWorktree with the native
-// counterpart of legacySetupNewWorktree's Ground-Truth Re-Query (ADR-001, Story 2.5.2):
-// two concurrent spawns computing the identical deterministic branch name race exactly
-// as they do on the legacy path (the underlying race is unchanged by the library swap,
-// per features.md §2), so the loser's nativeSetupNewWorktree (Worktree.Checkout with
-// Create: true) fails too.
+// nativeSetupNewWorktreeWithSelfHeal wraps nativeSetupNewWorktree with a Ground-Truth
+// Re-Query (ADR-001, Story 2.5.2): two concurrent spawns computing the identical
+// deterministic branch name can race, so the loser's nativeSetupNewWorktree
+// (Worktree.Checkout with Create: true) fails.
 //
 // Task 2.5.2a's plan text names git.ErrBranchExists/plumbing.ErrReferenceNotFound as the
 // errors to catch, framed against subprocess-stderr matching (which doesn't apply here at
@@ -486,8 +411,7 @@ func (g *GitWorktree) nativeFindLiveWorktreeForBranch() (string, bool) {
 // go-git/go-git/v5@v5.19.2/worktree.go:204-230) shows the actual collision error is
 // neither of those: it's an unwrapped fmt.Errorf("a branch named %q already exists", ...),
 // so errors.Is against either sentinel can never match it. Rather than pattern-matching
-// error text instead (exactly what Ground-Truth Re-Query exists to avoid), this mirrors
-// legacySetupNewWorktree's own "any error re-checks ground truth" behavior verbatim: any
+// error text instead (exactly what Ground-Truth Re-Query exists to avoid), any
 // nativeSetupNewWorktree failure re-queries actual git state via
 // branchExistsAfterAddFailure, falling through to the original error only if the branch
 // genuinely never appears.
@@ -504,95 +428,6 @@ func (g *GitWorktree) nativeSetupNewWorktreeWithSelfHeal() error {
 	}
 
 	return err
-}
-
-// legacySetupNewWorktree is the renamed body of the original subprocess-based
-// setupNewWorktree (Task 2.1.3b) — identical logic, reachable when useNativeWorktree
-// resolves false. It creates a new worktree from HEAD.
-//
-// Like setupFromExistingBranch (see its doc comment), legacySetupNewWorktree is only ever
-// reached, in production, through Setup()/SetupLocked(), both of which serialize via
-// WithRepoWorktreeLock — the two-unlocked-goroutines race
-// TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate constructs cannot
-// occur through any real caller. The self-heal fallback below is still real
-// defense-in-depth: see ADR-001-ground-truth-requery-over-stderr-matching.md.
-func (g *GitWorktree) legacySetupNewWorktree() error {
-	// Ensure worktrees directory exists
-	worktreesDir := filepath.Join(g.repoPath, "worktrees")
-	if err := os.MkdirAll(worktreesDir, 0750); err != nil {
-		return fmt.Errorf("failed to create worktrees directory: %w", err)
-	}
-
-	// Clean up any existing worktree first
-	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
-
-	// Open the repository
-	repo, err := OpenRepo(g.repoPath)
-	if err != nil {
-		return fmt.Errorf("failed to open repository: %w", err)
-	}
-
-	// Check if the branch already exists - if so, use it instead of cleaning up
-	branchRef := plumbing.NewBranchReferenceName(g.branchName)
-	exists, err := branchRefExists(repo, branchRef)
-	if err != nil {
-		log.Error("failed to check branch reference", "branch", g.branchName, "error", err)
-		return err
-	}
-	if exists {
-		// Branch exists - use setupFromExistingBranch instead
-		log.Info("branch already exists, using existing branch for worktree", "branch", g.branchName)
-		return g.setupFromExistingBranch()
-	}
-
-	// Branch doesn't exist - clean up any orphaned references and create new branch
-	if err := g.cleanupExistingBranch(repo); err != nil {
-		return fmt.Errorf("failed to cleanup existing branch: %w", err)
-	}
-
-	// A caller that already knows the commit it wants (e.g. NewGitWorktreeFromCommitSHA,
-	// or CreateBacklogWorktree resolving origin/main's true tip before branching) sets
-	// baseCommitSHA ahead of time — respect it instead of clobbering it with whatever
-	// repoPath's own checkout happens to have as HEAD right now. Only fall back to
-	// rev-parse HEAD (branch from the current checkout, same as always) when no base
-	// was pre-selected.
-	headCommit := g.baseCommitSHA
-	if headCommit == "" {
-		output, err := g.runGitCommand(g.repoPath, "rev-parse", "HEAD")
-		if err != nil {
-			if strings.Contains(err.Error(), "fatal: ambiguous argument 'HEAD'") ||
-				strings.Contains(err.Error(), "fatal: not a valid object name") ||
-				strings.Contains(err.Error(), "fatal: HEAD: not a valid object name") {
-				return fmt.Errorf("this appears to be a brand new repository: please create an initial commit before creating an instance")
-			}
-			return fmt.Errorf("failed to get HEAD commit hash: %w", err)
-		}
-		headCommit = strings.TrimSpace(string(output))
-		g.baseCommitSHA = headCommit
-	}
-
-	// Create a new worktree from the resolved base commit.
-	// Otherwise, we'll inherit uncommitted changes from the previous worktree.
-	// This way, we can start the worktree with a clean slate.
-	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", "-b", g.branchName, g.worktreePath, headCommit); err != nil {
-		// Two concurrent spawns for the same backlog item compute the identical
-		// deterministic branch name (see backlogWorkBranchSlug) and can both pass the
-		// branchRefExists check above before either creates the branch — the loser's
-		// `worktree add -b` then fails, leaving a branch with no worktree. Ground-Truth
-		// Re-Query (ADR-001): rather than inferring a lost race from err's text (which
-		// misses a timeout-killed subprocess's "signal: killed", a lock-contended
-		// "cannot lock ref", a locale-translated message, or a future git wording
-		// change — see ADR-001), re-check actual git state directly. Any error here
-		// still falls through to the hard error below if the branch genuinely never
-		// appears.
-		if g.branchExistsAfterAddFailure(branchRef) {
-			log.Info("branch already exists (lost a concurrent create race), reusing it for worktree", "branch", g.branchName)
-			return g.setupFromExistingBranch()
-		}
-		return fmt.Errorf("failed to create worktree from commit %s: %w", headCommit, err)
-	}
-
-	return nil
 }
 
 // Cleanup removes the worktree. It deliberately does NOT delete the branch: branch deletion
@@ -618,191 +453,14 @@ func (g *GitWorktree) Remove() error {
 	return WithRepoWorktreeLock(g.repoPath, g.removeLocked)
 }
 
-// removeLocked dispatches to nativeRemoveWorktree/legacyRemoveWorktree per
-// useNativeWorktree(g.sessionName) (Epic 2.2, Task 2.2.2a), mirroring setupLockedWithNative's
-// and unlockWorktree's dispatch pattern.
+// removeLocked removes the worktree via the native go-git implementation (Epic 2.2, Task
+// 2.2.2a).
 func (g *GitWorktree) removeLocked() error {
 	ctx := withOperationAttrs(context.Background(), attribute.String("session_name", g.sessionName))
 	return withOperationSpan(ctx, "git.worktree.remove", func() (string, string, error) {
-		native := useNativeWorktree(g.sessionName)
-		var err error
-		if native {
-			err = nativeRemoveWorktree(g.repoPath, g.worktreePath)
-		} else {
-			err = g.legacyRemoveWorktree()
-		}
-		return implementationLabel(native), spanOutcome(err), err
+		err := nativeRemoveWorktree(g.repoPath, g.worktreePath)
+		return implementationNative, spanOutcome(err), err
 	})
-}
-
-// legacyRemoveWorktree is the renamed body of the original subprocess-based removeLocked
-// (Task 2.2.2a) — identical logic, reachable when useNativeWorktree resolves false.
-func (g *GitWorktree) legacyRemoveWorktree() error {
-	log.Info("starting worktree removal", "path", g.worktreePath)
-
-	// First, prune any stale worktree references
-	if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
-		// Log the prune error but don't fail - continue with removal
-		log.Warn("initial worktree prune failed (continuing with removal)", "err", err)
-	} else {
-		log.Info("initial worktree prune completed successfully")
-	}
-
-	// Check if worktree directory exists before attempting git removal
-	worktreeExists := true
-	if _, err := os.Stat(g.worktreePath); os.IsNotExist(err) {
-		worktreeExists = false
-		log.Info("worktree directory does not exist", "path", g.worktreePath)
-	}
-
-	// Remove the worktree using git command if directory exists
-	if worktreeExists {
-		if _, err := g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath); err != nil {
-			// Check if this is the common "not a working tree" error - treat it as expected
-			errStr := err.Error()
-			isCorruptedWorktree := strings.Contains(errStr, "is not a working tree") ||
-				strings.Contains(errStr, "not a git repository") ||
-				strings.Contains(errStr, "worktree not found")
-
-			if isCorruptedWorktree {
-				log.Info("worktree is corrupted/invalid, cleaning up manually", "path", g.worktreePath)
-			} else {
-				log.Warn("git worktree remove failed", "path", g.worktreePath, "err", err)
-			}
-
-			// Try manual directory removal as fallback
-			if rmErr := os.RemoveAll(g.worktreePath); rmErr != nil {
-				log.Warn("manual directory removal also failed", "path", g.worktreePath, "err", rmErr)
-				// Only return error if both git and manual removal fail for non-corrupted worktrees
-				if !isCorruptedWorktree {
-					return fmt.Errorf("failed to remove worktree: git remove failed (%v), manual remove failed (%v)", err, rmErr)
-				} else {
-					return fmt.Errorf("failed to remove corrupted worktree directory %s: %v", g.worktreePath, rmErr)
-				}
-			} else {
-				if isCorruptedWorktree {
-					log.Info("successfully cleaned up corrupted worktree directory", "path", g.worktreePath)
-				} else {
-					log.Info("successfully removed worktree directory manually", "path", g.worktreePath)
-				}
-			}
-		} else {
-			log.Info("successfully removed worktree with git command", "path", g.worktreePath)
-		}
-	}
-
-	// Clean up any remaining administrative files
-	if err := g.forceCleanupWorktree(); err != nil {
-		log.Warn("administrative cleanup had some issues (not critical)", "err", err)
-		// Don't fail the removal for admin cleanup issues
-	}
-
-	log.Info("worktree removal completed successfully", "path", g.worktreePath)
-	return nil
-}
-
-// forceCleanupWorktree tries multiple strategies to clean up worktree admin files
-func (g *GitWorktree) forceCleanupWorktree() error {
-	var cleanupErrors []error
-
-	// Strategy 1: Direct cleanup of git worktree admin files (most reliable)
-	worktreesDir := filepath.Join(g.repoPath, ".git", "worktrees")
-
-	// Ensure worktrees directory exists before attempting cleanup
-	if _, err := os.Stat(worktreesDir); os.IsNotExist(err) {
-		log.Info("git worktrees directory does not exist, no admin cleanup needed", "path", worktreesDir)
-		return nil
-	}
-
-	worktreeName := filepath.Base(g.worktreePath)
-	worktreeAdminDir := filepath.Join(worktreesDir, worktreeName)
-
-	log.Info("attempting cleanup of worktree admin directory", "path", worktreeAdminDir)
-
-	// Remove the exact match administrative directory
-	if _, err := os.Stat(worktreeAdminDir); err == nil {
-		if rmErr := os.RemoveAll(worktreeAdminDir); rmErr != nil {
-			log.Warn("failed to remove worktree admin dir", "path", worktreeAdminDir, "err", rmErr)
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("failed to remove admin dir %s: %w", worktreeAdminDir, rmErr))
-		} else {
-			log.Info("successfully removed worktree admin directory", "path", worktreeAdminDir)
-		}
-	} else {
-		log.Info("exact worktree admin directory does not exist", "path", worktreeAdminDir)
-	}
-
-	// Strategy 2: Try to find and remove any matching worktree admin directories
-	// This handles cases where the directory name might be slightly different
-	entries, err := os.ReadDir(worktreesDir)
-	if err != nil {
-		log.Warn("could not read worktrees directory", "path", worktreesDir, "err", err)
-		cleanupErrors = append(cleanupErrors, fmt.Errorf("failed to read worktrees dir: %w", err))
-	} else {
-		baseWorktreeName := filepath.Base(g.worktreePath)
-		for _, entry := range entries {
-			if entry.IsDir() && strings.Contains(entry.Name(), baseWorktreeName) {
-				adminPath := filepath.Join(worktreesDir, entry.Name())
-				// Skip if this is the exact match we already processed
-				if adminPath == worktreeAdminDir {
-					continue
-				}
-
-				log.Info("found matching worktree admin directory", "path", adminPath)
-				if rmErr := os.RemoveAll(adminPath); rmErr != nil {
-					log.Warn("failed to remove matching admin dir", "path", adminPath, "err", rmErr)
-					cleanupErrors = append(cleanupErrors, fmt.Errorf("failed to remove matching admin dir %s: %w", adminPath, rmErr))
-				} else {
-					log.Info("successfully removed matching worktree admin directory", "path", adminPath)
-				}
-			}
-		}
-	}
-
-	// Return combined errors, but don't treat cleanup failures as critical
-	if len(cleanupErrors) > 0 {
-		return fmt.Errorf("some cleanup operations failed: %v", cleanupErrors)
-	}
-
-	// Strategy 3: Try git commands only after manual cleanup
-	log.Info("attempting git worktree prune after manual cleanup")
-	if _, err := g.runGitCommand(g.repoPath, "worktree", "prune", "--verbose"); err != nil {
-		// Prune failed, but we've done manual cleanup, so this is not critical
-		log.Warn("git worktree prune failed after manual cleanup (not critical)", "err", err)
-	} else {
-		log.Info("git worktree prune completed successfully")
-	}
-
-	// Strategy 4: Try to list and remove specific worktrees that might still be registered
-	if output, err := g.runGitCommand(g.repoPath, "worktree", "list", "--porcelain"); err == nil {
-		// Parse the output to find any remaining references to our worktree
-		lines := strings.Split(output, "\n")
-		for _, line := range lines {
-			if strings.HasPrefix(line, "worktree ") && strings.Contains(line, filepath.Base(g.worktreePath)) {
-				// Found our worktree still listed, try to remove it by path
-				worktreePath := strings.TrimPrefix(line, "worktree ")
-				log.Info("found worktree still listed, attempting removal", "path", worktreePath)
-				if _, err := g.runGitCommand(g.repoPath, "worktree", "remove", "--force", worktreePath); err != nil {
-					log.Warn("failed to remove listed worktree (not critical)", "err", err)
-				} else {
-					log.Info("successfully removed worktree from git registry", "path", worktreePath)
-				}
-			}
-		}
-	} else {
-		log.Warn("failed to list worktrees for cleanup verification (not critical)", "err", err)
-	}
-
-	// Final prune to clean up any remaining stale references
-	log.Info("performing final git worktree prune")
-	if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
-		log.Warn("final git worktree prune failed (not critical)", "err", err)
-	} else {
-		log.Info("final worktree prune completed successfully")
-	}
-
-	// Always return success - we've done our best with comprehensive cleanup
-	log.Info("worktree administrative cleanup completed successfully")
-	return nil
 }
 
 // Prune removes all working tree administrative files and directories. Serialized
@@ -810,31 +468,9 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 func (g *GitWorktree) Prune() error {
 	ctx := withOperationAttrs(context.Background(), attribute.String("session_name", g.sessionName))
 	return withOperationSpan(ctx, "git.worktree.prune", func() (string, string, error) {
-		native := useNativeWorktree(g.sessionName)
-		err := WithRepoWorktreeLock(g.repoPath, func() error { return g.pruneLockedWithNative(native) })
-		return implementationLabel(native), spanOutcome(err), err
+		err := WithRepoWorktreeLock(g.repoPath, func() error { return nativeWorktreePrune(g.repoPath) })
+		return implementationNative, spanOutcome(err), err
 	})
-}
-
-// pruneLockedWithNative dispatches to nativeWorktreePrune/legacyWorktreePrune per the
-// native flag passed in (Epic 2.4, Task 2.4.2a), mirroring setupLockedWithNative's and
-// removeLocked's single-read dispatch pattern — Prune() reads the flag once and passes it
-// through here so its span's implementation label and its actual dispatch decision can
-// never disagree if the flag flips mid-operation.
-func (g *GitWorktree) pruneLockedWithNative(native bool) error {
-	if native {
-		return nativeWorktreePrune(g.repoPath)
-	}
-	return g.legacyWorktreePrune()
-}
-
-// legacyWorktreePrune is the renamed body of the original subprocess-based Prune (Task
-// 2.4.2a) — identical logic, reachable when useNativeWorktree resolves false.
-func (g *GitWorktree) legacyWorktreePrune() error {
-	if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
-		return fmt.Errorf("failed to prune worktrees: %w", err)
-	}
-	return nil
 }
 
 // CleanupWorktrees removes all worktree directories under the configured worktrees dir.
@@ -846,8 +482,7 @@ func (g *GitWorktree) legacyWorktreePrune() error {
 // Task 2.2.2c disposition: a real, non-test caller exists (main.go's `reset` command),
 // contradicting architecture.md §1a's "none found" — recorded here per the Unresolved
 // Questions entry. Its per-directory removal below is already a direct os.RemoveAll (no
-// subprocess to seam); only its trailing `git worktree prune` step now dispatches
-// natively (Epic 2.4, closing the gap this comment used to describe) via
+// subprocess to seam); only its trailing `git worktree prune` step dispatches natively via
 // cleanupWorktreesPrune.
 func CleanupWorktrees() error {
 	worktreesDir, err := getWorktreeDirectory()
@@ -872,31 +507,14 @@ func CleanupWorktrees() error {
 	return cleanupWorktreesPrune()
 }
 
-// cleanupWorktreesPrune dispatches CleanupWorktrees' trailing `git worktree prune` step to
-// nativeWorktreePrune/legacyCleanupWorktreesPrune per useNativeWorktree("") — there is no
-// session name in scope here (CleanupWorktrees operates across every session's worktrees
-// at once), so this resolves whatever useNativeWorktree treats as its global default the
-// same way a per-session override miss would.
+// cleanupWorktreesPrune runs CleanupWorktrees' trailing `git worktree prune` step via the
+// native go-git implementation, against the process's current working directory (matching
+// the old subprocess call's unset-Dir default) since CleanupWorktrees operates across every
+// session's worktrees at once and has no single repoPath in scope.
 func cleanupWorktreesPrune() error {
-	if useNativeWorktree("") {
-		repoPath, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to resolve current directory for native worktree prune: %w", err)
-		}
-		return nativeWorktreePrune(repoPath)
+	repoPath, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to resolve current directory for native worktree prune: %w", err)
 	}
-	return legacyCleanupWorktreesPrune()
-}
-
-// legacyCleanupWorktreesPrune is the extracted body of CleanupWorktrees' original
-// subprocess `git worktree prune` call — identical logic (runs against the process's
-// current working directory, matching safeexec.CommandContext's unset-Dir default),
-// reachable when useNativeWorktree resolves false.
-func legacyCleanupWorktreesPrune() error {
-	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer pruneCancel()
-	if _, err := safeexec.CommandContext(pruneCtx, "git", "worktree", "prune").Output(); err != nil {
-		return fmt.Errorf("failed to prune worktrees: %w", err)
-	}
-	return nil
+	return nativeWorktreePrune(repoPath)
 }

@@ -68,10 +68,11 @@ func instanceToSummary(inst *session.Instance) SessionSummary {
 func instanceToDetail(inst *session.Instance) SessionDetail {
 	snap := inst.Snapshot()
 	return SessionDetail{
-		SessionSummary: instanceToSummary(inst),
-		Program:        snap.Program,
-		SessionType:    string(snap.SessionType),
-		WorkingDir:     snap.WorkingDir,
+		SessionSummary:  instanceToSummary(inst),
+		Program:         snap.Program,
+		SessionType:     string(snap.SessionType),
+		WorkingDir:      snap.WorkingDir,
+		CreationWarning: snap.CreationWarning,
 	}
 }
 

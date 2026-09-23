@@ -7,10 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
@@ -992,4 +997,151 @@ func TestInstance_SetWindowSize_should_Delegate_When_Started(t *testing.T) {
 	if !pm.resized {
 		t.Error("SetWindowSize should delegate to the process manager once started")
 	}
+}
+
+// TestCheckRestartStorm_AllowsUnderThreshold confirms the breaker stays
+// silent for a normal handful of restarts.
+func TestCheckRestartStorm_AllowsUnderThreshold(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t"}
+	for i := 0; i < restartStormThreshold-1; i++ {
+		if err := inst.checkRestartStorm(); err != nil {
+			t.Fatalf("checkRestartStorm() attempt %d: unexpected error %v", i, err)
+		}
+		inst.trackRestartRate()
+	}
+	if err := inst.checkRestartStorm(); err != nil {
+		t.Fatalf("checkRestartStorm() after %d restarts: unexpected error %v", restartStormThreshold-1, err)
+	}
+}
+
+// TestCheckRestartStorm_BlocksAtThreshold is the regression test for the bug
+// this breaker fixes: previously trackRestartRate only logged a warning on a
+// crash loop, so a session whose Start() kept failing retried forever,
+// forking real tmux subprocesses every time (titus-soaktest-followup hit 89+
+// restarts in under 90 minutes in production, compounding a memory leak —
+// see attachStatusEventsForPublish's cap for the other half of that
+// incident). checkRestartStorm must now refuse once trackRestartRate has
+// recorded restartStormThreshold restarts within restartStormWindow.
+func TestCheckRestartStorm_BlocksAtThreshold(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t"}
+	for i := 0; i < restartStormThreshold; i++ {
+		if err := inst.checkRestartStorm(); err != nil {
+			t.Fatalf("checkRestartStorm() attempt %d: unexpected error %v", i, err)
+		}
+		inst.trackRestartRate()
+	}
+	if err := inst.checkRestartStorm(); err == nil {
+		t.Fatal("checkRestartStorm() = nil, want an error once the crash-loop threshold is reached")
+	}
+}
+
+// TestCheckRestartStorm_ClearsAfterCooldown confirms the breaker is a
+// self-healing rate limiter, not a permanent kill switch: once
+// restartStormCooldown has elapsed, both the cooldown and the aged-out
+// restart timestamps clear, so a session that recovers can restart normally
+// again.
+func TestCheckRestartStorm_ClearsAfterCooldown(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t"}
+	for i := 0; i < restartStormThreshold; i++ {
+		inst.trackRestartRate()
+	}
+	if err := inst.checkRestartStorm(); err == nil {
+		t.Fatal("checkRestartStorm() = nil, want an error immediately after tripping the breaker")
+	}
+
+	// Simulate the cooldown having already elapsed, and the restart
+	// timestamps having aged out of the window along with it (restartStormCooldown
+	// == restartStormWindow, so both always clear together — see the const's
+	// doc comment).
+	inst.restartMu.Lock()
+	inst.restartStormUntil = time.Now().Add(-time.Second)
+	inst.recentRestartTimes = nil
+	inst.restartMu.Unlock()
+
+	if err := inst.checkRestartStorm(); err != nil {
+		t.Fatalf("checkRestartStorm() after cooldown expired: unexpected error %v", err)
+	}
+}
+
+// seedCustomProgram registers a custom program in an isolated config dir.
+func seedCustomProgram(t *testing.T, prog config.ProgramConfig) {
+	t.Helper()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	cfg := config.LoadConfig()
+	cfg.SessionDefaults.Programs = append(cfg.SessionDefaults.Programs, prog)
+	if err := config.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+}
+
+func TestInstance_BuildExtraEnv_IncludesCustomProgramAndInstanceEnvVars(t *testing.T) {
+	seedCustomProgram(t, config.ProgramConfig{
+		ID:      "claude-250k-proxy",
+		Command: "claude",
+		Env:     map[string]string{"PROG_VAR": "prog_val", "CLASH": "from_program"},
+	})
+	instance := &Instance{
+		UUID:    "test-uuid-456",
+		Program: "claude-250k-proxy",
+		EnvVars: map[string]string{"CUSTOM_VAR": "custom_val", "CLASH": "from_instance"},
+	}
+	extraEnv := instance.buildExtraEnv()
+
+	for _, want := range []string{"STAPLER_SESSION_UUID=test-uuid-456", "CUSTOM_VAR=custom_val", "PROG_VAR=prog_val"} {
+		if !slices.Contains(extraEnv, want) {
+			t.Errorf("expected buildExtraEnv to contain %q, got %v", want, extraEnv)
+		}
+	}
+	// tmux applies -e flags in order, so the instance value must come last to win.
+	prog, inst := slices.Index(extraEnv, "CLASH=from_program"), slices.Index(extraEnv, "CLASH=from_instance")
+	if prog < 0 || inst < 0 || inst < prog {
+		t.Errorf("instance CLASH must follow the program-level one, got %v", extraEnv)
+	}
+}
+
+func TestInstance_BuildLaunchCommand_CustomProgramFlags(t *testing.T) {
+	seedCustomProgram(t, config.ProgramConfig{ID: "my-custom", Command: "mytool", CLIFlags: "--prog-flag"})
+
+	tests := []struct {
+		name      string
+		program   string
+		cliFlags  string
+		want      string
+		wantCount map[string]int
+	}{
+		{"custom flags only", "my-custom", "", "'mytool' '--prog-flag'", map[string]int{"--prog-flag": 1}},
+		{"instance flags only", "othertool", "--inst-flag", "'othertool' '--inst-flag'", map[string]int{"--inst-flag": 1}},
+		{"both, program first", "my-custom", "--inst-flag", "'mytool' '--prog-flag' '--inst-flag'", map[string]int{"--prog-flag": 1, "--inst-flag": 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst := &Instance{Program: tt.program, CLIFlags: tt.cliFlags}
+			got := inst.buildLaunchCommand("")
+			if got != tt.want {
+				t.Errorf("buildLaunchCommand = %q, want %q", got, tt.want)
+			}
+			for flag, n := range tt.wantCount {
+				if c := strings.Count(got, flag); c != n {
+					t.Errorf("%s appears %d times in %q, want %d", flag, c, got, n)
+				}
+			}
+		})
+	}
+}
+
+// Custom-program CLIFlags must reach the launch command exactly once: CreateSession stores the
+// custom program ID with no folded-in flags and buildLaunchCommand resolves them at launch.
+func TestBuildLaunchCommand_should_ApplyCustomProgramFlagsOnce_When_ProgramIsCustomID(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	cfg := config.LoadConfig()
+	cfg.SessionDefaults.Programs = []config.ProgramConfig{{ID: "my-agent", Command: "myagent", CLIFlags: "--unique-flag-xyz"}}
+	require.NoError(t, config.SaveConfig(cfg))
+
+	inst := &Instance{Program: "my-agent"}
+	inst.snapshot.Store(buildSnapshot(inst))
+
+	assert.Equal(t, 1, strings.Count(inst.buildLaunchCommand(""), "--unique-flag-xyz"))
 }

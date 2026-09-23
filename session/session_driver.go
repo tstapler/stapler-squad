@@ -682,7 +682,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 	// that the keystrokes were actually received (read-back confirmation).
 	contentBefore, _ := inst.PreviewContext(ctx)
 
-	if err := SubmitDriverContent(ctx, inst, initialPrompt, defaultPaneSettlePollInterval, defaultPaneSettleMaxWait); err != nil {
+	if err := SubmitDriverContent(ctx, inst, initialPrompt, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait); err != nil {
 		log.Warn("SessionDriver: failed to send initial prompt",
 			"session", inst.Title,
 			"claudeAtPrompt", claudeAtPrompt,
@@ -727,7 +727,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 	// "same message delivered repeatedly" bug this replaces the sleep to fix).
 	// Only fall back to the exact-content comparison (the real swallow case)
 	// if the pane never reported any change at all within the wait window.
-	if !waitForPaneUpdate(ctx, inst, defaultPaneSettlePollInterval, 1500*time.Millisecond) {
+	if !waitForPaneUpdate(ctx, inst, DefaultPaneSettlePollInterval, 1500*time.Millisecond) {
 		contentAfter, verifyErr := inst.PreviewContext(ctx)
 		if verifyErr == nil && contentBefore != "" && contentAfter == contentBefore {
 			// Terminal content identical to before the send — the
@@ -863,7 +863,7 @@ func attemptBacklogNudge(ctx context.Context, inst *Instance, idle time.Duration
 	nudge := "You appear to have paused. Run `/backlog/status` to see remaining " +
 		"acceptance criteria. Mark each complete criterion with `/backlog/done-N`, " +
 		"then submit with `/backlog/review` once all are done."
-	if sendErr := SubmitDriverContent(ctx, inst, nudge, defaultPaneSettlePollInterval, defaultPaneSettleMaxWait); sendErr != nil {
+	if sendErr := SubmitDriverContent(ctx, inst, nudge, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait); sendErr != nil {
 		log.Warn("SessionDriver: failed to send backlog nudge, will not retry — falling through to inactivity timeout",
 			"session", inst.Title, "err", sendErr)
 	} else {
