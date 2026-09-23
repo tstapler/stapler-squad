@@ -223,3 +223,22 @@ describe("SessionRow — IDLE substatus chip (Epic 3.2.2)", () => {
     expect(chip).toHaveAttribute("aria-label", "Session is idle");
   });
 });
+
+describe("SessionRow — backlog-origin badge", () => {
+  it("SessionRow_should_RenderBacklogOriginBadge_When_backlogEntryProvided", () => {
+    const session = { ...minimalSession } as unknown as Session;
+    render(
+      <SessionRow
+        session={session}
+        backlogEntry={{ itemId: "item-1", itemTitle: "Fix the thing", itemStatus: "in_progress", sessionRole: "triage" }}
+      />
+    );
+    expect(screen.getByTestId("backlog-origin-badge")).toBeInTheDocument();
+  });
+
+  it("SessionRow_should_NotRenderBacklogOriginBadge_When_noBacklogEntry", () => {
+    const session = { ...minimalSession } as unknown as Session;
+    render(<SessionRow session={session} />);
+    expect(screen.queryByTestId("backlog-origin-badge")).toBeNull();
+  });
+});

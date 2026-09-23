@@ -307,3 +307,22 @@ describe("SessionCard — sub-status chip subagentCount", () => {
     expect(chip.textContent).toContain("3");
   });
 });
+
+describe("SessionCard — backlog-origin badge", () => {
+  it("SessionCard_should_RenderBacklogOriginBadge_When_backlogEntryProvided", () => {
+    const session = { ...minimalSession } as unknown as Session;
+    render(
+      <SessionCard
+        session={session}
+        backlogEntry={{ itemId: "item-1", itemTitle: "Fix the thing", itemStatus: "in_progress", sessionRole: "work" }}
+      />
+    );
+    expect(screen.getByTestId("backlog-origin-badge")).toBeInTheDocument();
+  });
+
+  it("SessionCard_should_NotRenderBacklogOriginBadge_When_noBacklogEntry", () => {
+    const session = { ...minimalSession } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.queryByTestId("backlog-origin-badge")).toBeNull();
+  });
+});

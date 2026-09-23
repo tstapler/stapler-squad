@@ -8,6 +8,10 @@ jest.mock("@/lib/contexts/CockpitActionsContext", () => ({
   useCockpitActions: () => ({}),
 }));
 
+jest.mock("../PaneContext", () => ({
+  usePaneContext: () => ({ backlogIndex: new Map() }),
+}));
+
 const listPane: LeafPane = { type: "leaf", id: "p1", viewKind: "session-list", sessionId: null, activeTab: "info" };
 
 function renderHeader(overrides: Partial<React.ComponentProps<typeof PaneHeader>> = {}) {
