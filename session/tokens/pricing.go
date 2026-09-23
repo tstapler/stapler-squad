@@ -19,6 +19,12 @@ var variantSuffixPattern = regexp.MustCompile(`^(claude-(?:opus|sonnet|haiku)-\d
 // legacyModelPattern matches old-style claude-3-opus-20240229 format.
 var legacyModelPattern = regexp.MustCompile(`^claude-(\d+)-(\w+)(?:-\d{8})?$`)
 
+// geminiVariantSuffixPattern matches a trailing numeric snapshot suffix on a
+// bare Gemini pro/flash model ID, e.g. "gemini-2.5-pro-002" → "gemini-2.5-pro".
+// Anchored to exactly "pro"/"flash" (not "flash-lite" or other variants) so it
+// never merges a distinctly-priced sibling model into these two families.
+var geminiVariantSuffixPattern = regexp.MustCompile(`^(gemini-\d+\.\d+-(?:pro|flash))-\d+$`)
+
 // DefaultPricingTable returns a PricingTable with hardcoded defaults as of 2026-07-27.
 // Prices are in USD per million tokens.
 func DefaultPricingTable() *PricingTable {
@@ -119,6 +125,34 @@ func DefaultPricingTable() *PricingTable {
 				CacheWritePerMTok:  0.30,
 				CacheReadPerMTok:   0.03,
 			},
+			// Gemini entries: rates are per the <=200k-token-prompt tier (Gemini
+			// tiers up for prompts >200k, which this table doesn't model — see
+			// Anthropic entries above for the same simplification). CacheWritePerMTok
+			// is deliberately 0: Gemini bills context-cache writes as a per-hour
+			// storage fee ($4.50/1M tokens/hour for Pro, $1.00/1M/hour for Flash),
+			// not a per-token write cost, so there is no per-token figure to put
+			// here without misrepresenting the billing model; CacheReadPerMTok holds
+			// Gemini's "context caching price" (the discounted rate for tokens served
+			// from cache), which is the one Gemini cache dimension that maps cleanly
+			// onto this struct's per-token semantics.
+			// Verified 2026-09-17 against https://ai.google.dev/gemini-api/docs/pricing:
+			// $1.25/1M input, $10.00/1M output (<=200k token prompts).
+			"gemini-2.5-pro": {
+				ModelFamily:        "gemini-2.5-pro",
+				InputPricePerMTok:  1.25,
+				OutputPricePerMTok: 10.00,
+				CacheReadPerMTok:   0.125,
+				EffectiveDate:      "2026-09-17",
+			},
+			// Verified 2026-09-17 against https://ai.google.dev/gemini-api/docs/pricing:
+			// $0.30/1M input (text/image/video), $2.50/1M output.
+			"gemini-2.5-flash": {
+				ModelFamily:        "gemini-2.5-flash",
+				InputPricePerMTok:  0.30,
+				OutputPricePerMTok: 2.50,
+				CacheReadPerMTok:   0.03,
+				EffectiveDate:      "2026-09-17",
+			},
 		},
 	}
 }
@@ -130,7 +164,10 @@ func LoadPricingOverride(configPath string) (*PricingTable, error) {
 	table := DefaultPricingTable()
 	table.ConfigPath = configPath
 
-	data, err := os.ReadFile(configPath) //nolint:gosec
+	// configPath's only caller (server/dependencies.go) builds it from
+	// config.GetConfigDir() plus the hardcoded "pricing_overrides.json" name,
+	// never from user/RPC input.
+	data, err := os.ReadFile(configPath) // #nosec G304 -- configPath is configDir + a hardcoded filename, not user input
 	if err != nil {
 		return nil, err
 	}
@@ -158,13 +195,16 @@ func LoadPricingOverride(configPath string) (*PricingTable, error) {
 //	"claude-opus-4-7"            → "claude-opus-4"
 //	"claude-3-opus-20240229"     → "claude-opus-3"
 //	"claude-haiku-4"             → "claude-haiku-4"
+//	"gemini-2.5-pro-20250619"    → "gemini-2.5-pro"
+//	"gemini-2.5-flash-002"       → "gemini-2.5-flash"
 //	"unknown-model-xyz"          → "unknown-model-xyz"
 func NormalizeModelFamily(modelID string) string {
 	if modelID == "" {
 		return modelID
 	}
 
-	// Strip date suffix first (-20250514).
+	// Strip date suffix first (-20250514). Applies to any provider's model ID,
+	// not just Claude's.
 	normalized := dateSuffixPattern.ReplaceAllString(modelID, "")
 
 	// Handle legacy format: claude-3-opus → claude-opus-3
@@ -176,6 +216,11 @@ func NormalizeModelFamily(modelID string) string {
 
 	// Handle variant suffix: claude-sonnet-4-6 → claude-sonnet-4
 	if m := variantSuffixPattern.FindStringSubmatch(normalized); len(m) == 2 {
+		return m[1]
+	}
+
+	// Handle Gemini snapshot suffix: gemini-2.5-pro-002 → gemini-2.5-pro
+	if m := geminiVariantSuffixPattern.FindStringSubmatch(normalized); len(m) == 2 {
 		return m[1]
 	}
 
@@ -319,9 +364,109 @@ func (pt *PricingTable) ModelFamilyCost(r *ParseResult) (costs map[string]float6
 	return result, unpriced
 }
 
+// EstimateTurnCost computes USD cost for a single turn's token counts under
+// its own model, mirroring EstimateCost's per-family arithmetic but at turn
+// granularity (a turn has exactly one model, so no per-family map is needed).
+// priced is false when turn.Model normalizes to a family absent from the
+// PricingTable — callers must treat that as "unknown," never as a $0.00 cost.
+func (pt *PricingTable) EstimateTurnCost(turn TurnStats) (cost float64, priced bool) {
+	if pt == nil {
+		return 0, false
+	}
+	family := NormalizeModelFamily(turn.Model)
+	pricing, ok := pt.Prices[family]
+	if !ok {
+		return 0, false
+	}
+	cost = float64(turn.Input)/1_000_000.0*pricing.InputPricePerMTok +
+		float64(turn.Output)/1_000_000.0*pricing.OutputPricePerMTok +
+		float64(turn.CacheCreation)/1_000_000.0*pricing.CacheWritePerMTok +
+		float64(turn.CacheRead)/1_000_000.0*pricing.CacheReadPerMTok
+	return cost, true
+}
+
+// AttributeToolCosts attributes each turn's whole cost once to every distinct
+// tool name that appeared in it (never split, never per-call), marking any
+// turn with more than one distinct tool doubleCounted since its cost is now
+// double-booked across tool buckets — so costs must never be summed across
+// tools. See
+// project_plans/insights-cost-intelligence/decisions/ADR-001-per-tool-cost-attribution.md
+// for the full attribution method and the unpriced/doubleCounted semantics.
+func AttributeToolCosts(r *ParseResult, pt *PricingTable) (costs map[string]float64, doubleCounted map[string]bool, unpriced map[string]bool) {
+	costs = make(map[string]float64)
+	doubleCounted = make(map[string]bool)
+	unpriced = make(map[string]bool)
+	if r == nil || pt == nil {
+		return costs, doubleCounted, unpriced
+	}
+
+	for _, turn := range r.TurnTimeline {
+		if len(turn.ToolNames) == 0 {
+			continue
+		}
+		distinct := make(map[string]bool, len(turn.ToolNames))
+		for _, name := range turn.ToolNames {
+			distinct[name] = true
+		}
+
+		cost, priced := pt.EstimateTurnCost(turn)
+		if !priced {
+			for name := range distinct {
+				unpriced[name] = true
+			}
+			continue
+		}
+
+		for name := range distinct {
+			costs[name] += cost
+		}
+		if len(distinct) > 1 {
+			for name := range distinct {
+				doubleCounted[name] = true
+			}
+		}
+	}
+
+	return costs, doubleCounted, unpriced
+}
+
+// ComputeCacheHitRate returns cache_read / (input + cache_read), or 0 when both are zero.
+func ComputeCacheHitRate(input, cacheRead int64) float64 {
+	denom := input + cacheRead
+	if denom == 0 {
+		return 0
+	}
+	return float64(cacheRead) / float64(denom)
+}
+
+// ComputeCacheROI returns the signed USD amount saved (or lost) by using
+// prompt caching versus paying for every cache-read token as fresh input:
+//
+//	roi = cacheRead*(inputPrice-cacheReadPrice)/1e6 - cacheCreation*cacheWritePrice/1e6
+//
+// A negative result (cache written but never read back) is a real outcome,
+// not an error. Returns (0, false) — never a fake $0.00 — when r's model has
+// no PricingTable entry; see EstimateCost's doc comment for the "abstain
+// rather than guess" rule.
+func ComputeCacheROI(r *ParseResult, pt *PricingTable) (roi float64, ok bool) {
+	if r == nil || pt == nil {
+		return 0, false
+	}
+	pricing, found := pt.LookupByModel(r.PrimaryModel)
+	if !found {
+		return 0, false
+	}
+	roi = float64(r.CacheRead)*(pricing.InputPricePerMTok-pricing.CacheReadPerMTok)/1_000_000.0 -
+		float64(r.CacheCreation)*pricing.CacheWritePerMTok/1_000_000.0
+	return roi, true
+}
+
 // LookupByModel returns the ModelPricing for a raw model ID (normalizes first).
 // Returns zero-value ModelPricing and false if not found.
 func (pt *PricingTable) LookupByModel(modelID string) (ModelPricing, bool) {
+	if pt == nil {
+		return ModelPricing{}, false
+	}
 	family := NormalizeModelFamily(modelID)
 	p, ok := pt.Prices[family]
 	return p, ok

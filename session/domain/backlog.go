@@ -9,7 +9,14 @@ import (
 	"errors"
 )
 
-// BacklogStatus represents the lifecycle state of a backlog item.
+// BacklogStatus represents the lifecycle state of a backlog item. The type
+// is open, not a closed enum: the 9 constants below are its built-in subset,
+// but an operator-configured custom workflow stage (Epic 2.3's
+// ConfiguredWorkflowEngine) is also a valid BacklogStatus value — no
+// distinct "custom stage slug" type exists, and none is planned. See the
+// "BacklogStatus becomes the open stage-slug type" decision
+// (project_plans/backlog-custom-workflow-stages/implementation/plan.md,
+// Epic 2.1) for the full rationale.
 type BacklogStatus string
 
 const (
@@ -196,6 +203,31 @@ const (
 	// meta/aggregate signal with no independent remediation action of its
 	// own.
 	StuckReasonBounceCapExhausted StuckReason = "bounce_cap_exhausted"
+	// StuckReasonSteerFailed: AutoReopenForPRFix attempted to steer an
+	// already-active session with a PR-fix problem description
+	// (SessionSteerer.SteerActiveSession) and the delivery itself failed —
+	// distinct from StuckReasonRespawnBlockedActive, which covers the
+	// degrade paths where a steer was never attempted at all (nil-safe
+	// SessionSteerer, session not live, or dedup/debounce suppression). See
+	// ADR-002 (project_plans/pr-fix-steering/decisions/): reusing
+	// RespawnBlockedActive here would render BlockerChip's fixed "Auto-
+	// respawn skipped" label for a strictly worse outcome (attempted and
+	// failed). Set/resolved by notifyActiveSessionSteered
+	// (server/services/backlog_service_pr_fix_steer.go); the two reasons are
+	// mutually exclusive per item — each path resolves the other.
+	StuckReasonSteerFailed StuckReason = "steer_failed"
+	// StuckReasonGateTimeout: a custom-transition gate check (any GateKind, not
+	// only GateKindCustom) exceeded its bound LivenessDefinition's
+	// StalenessThreshold — e.g. a GateKindCustom invocation (Epic 2.4.4's
+	// InvokeCustomGateCheck) still open past ExpectedDuration+StalenessMargin.
+	// Deliberately one generic reason for every custom-transition/custom-gate
+	// liveness timeout, not a value per gate kind or per individual gate — see
+	// project_plans/backlog-custom-workflow-stages/implementation/plan.md's
+	// "Decision: StuckReasonGateTimeout" (Epic 2.4), which keeps StuckReason a
+	// closed, exhaustively-switchable enum. Set by reconcileCustomGateChecks
+	// (session/backlog_lifecycle_gates.go), mirroring
+	// reconcileOrphanedTriageItems' LivenessEngine-consulting sweep pattern.
+	StuckReasonGateTimeout StuckReason = "gate_timeout"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -218,6 +250,8 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonBlockedByDependency,
 	StuckReasonMultipleReasons,
 	StuckReasonBounceCapExhausted,
+	StuckReasonSteerFailed,
+	StuckReasonGateTimeout,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -228,7 +262,52 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonAutonomousStuck, StuckReasonSpawnFailed, StuckReasonPlanNotApproved,
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
 		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
-		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted:
+		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed,
+		StuckReasonGateTimeout:
+		return true
+	}
+	return false
+}
+
+// RequestScope is a validated string-backed enum identifying what a
+// GuidanceRequest is attached to — matching the house StuckReason/
+// BacklogStatus style. Determines the ownership check and delivery branch
+// (see GuidanceRequestDeliveryService).
+type RequestScope string
+
+const (
+	// RequestScopeBacklogItem: attached to a BacklogItem via item_id.
+	RequestScopeBacklogItem RequestScope = "backlog-item"
+	// RequestScopeSession: attached to a live/paused session via session_uuid.
+	RequestScopeSession RequestScope = "session"
+	// RequestScopeStandalone: not attached to anything; human-only surface.
+	RequestScopeStandalone RequestScope = "standalone"
+)
+
+// IsValid reports whether s is a known request scope value.
+func (s RequestScope) IsValid() bool {
+	switch s {
+	case RequestScopeBacklogItem, RequestScopeSession, RequestScopeStandalone:
+		return true
+	}
+	return false
+}
+
+// QuestionType is a validated string-backed enum identifying a
+// GuidanceRequest's answer shape, driving which control the React component
+// renders.
+type QuestionType string
+
+const (
+	QuestionTypeYesNo          QuestionType = "yes-no"
+	QuestionTypeMultipleChoice QuestionType = "multiple-choice"
+	QuestionTypeShortAnswer    QuestionType = "short-answer"
+)
+
+// IsValid reports whether t is a known question type value.
+func (t QuestionType) IsValid() bool {
+	switch t {
+	case QuestionTypeYesNo, QuestionTypeMultipleChoice, QuestionTypeShortAnswer:
 		return true
 	}
 	return false
@@ -497,6 +576,13 @@ var (
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.
 type BacklogItemTransitionInput struct {
+	// ItemID is the BacklogItem's own ID (string form, matching
+	// session.BacklogItemData.ID). Added for Epic 2.4's
+	// ConfiguredWorkflowEngine.PendingGates, which must look up a stateful
+	// gate's persisted GateSatisfactionRecord by (item, gate) — TransitionGuard
+	// itself never reads this field. Zero value ("") is safe for every
+	// existing caller that only exercises TransitionGuard/DefaultWorkflowEngine.
+	ItemID            string
 	Status            BacklogStatus
 	AcCriteria        AcCriteriaJSON // serialized acceptance criteria
 	PlanApproved      bool
@@ -595,7 +681,13 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		return nil
 
 	default:
-		// All other permitted transitions have no additional guards.
+		// All other permitted transitions have no additional guards. This
+		// also covers every edge into/out of a custom stage: per the
+		// "BacklogStatus becomes the open stage-slug type" decision (Epic
+		// 2.1, Story 2.1.3e), a custom stage does not automatically inherit
+		// any of the built-in guards above — an edge-specific guard for a
+		// custom stage is an explicit opt-in a future epic would add as its
+		// own case, not something this default should infer.
 		return nil
 	}
 }

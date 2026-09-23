@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,7 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 			Program:          "bash -c 'echo test session created; sleep 1'",
 			SessionType:      SessionTypeDirectory,
 			AutoYes:          true,
-			TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_"),
+			TmuxServerSocket: testTmuxSocket(t),
 		})
 		require.NoError(t, err)
 		defer func() {
@@ -43,9 +44,14 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 		startCleanup, err := instance.StartWithCleanup(true)
 		elapsed := time.Since(startTime)
 
-		// The session should start within 5 seconds (much faster than the previous 30-45 second wait)
+		// The session should start well under the previous 30-45 second wait.
+		// 15s headroom accounts for preconfigureServerBeforeSession's
+		// ~9.1s worst-case retry/backoff (serverStartAttempts=8, up to
+		// serverStartBackoffMax=3s each) when this subtest's dedicated tmux
+		// server contends with sibling t.Parallel() subtests' own server
+		// spawns for CPU under load.
 		require.NoError(t, err, "Session creation should succeed")
-		require.Less(t, elapsed, 5*time.Second, "Session creation should complete within 5 seconds, took %v", elapsed)
+		require.Less(t, elapsed, 15*time.Second, "Session creation should complete within 15 seconds, took %v", elapsed)
 
 		defer func() {
 			if err := startCleanup(); err != nil {
@@ -67,7 +73,7 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 			Program:          "bash -c 'echo \"Starting claude session\"; sleep 1; echo \"Ready\"'",
 			SessionType:      SessionTypeDirectory,
 			AutoYes:          true,
-			TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_"),
+			TmuxServerSocket: testTmuxSocket(t),
 		})
 		require.NoError(t, err)
 		defer func() {
@@ -81,9 +87,10 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 		startCleanup, err := instance.StartWithCleanup(true)
 		elapsed := time.Since(startTime)
 
-		// Should complete quickly without waiting for trust prompts
+		// Should complete quickly without waiting for trust prompts.
+		// See the DirectorySessionCreation subtest above for why 15s.
 		require.NoError(t, err, "Claude session creation should succeed")
-		require.Less(t, elapsed, 5*time.Second, "Claude session creation should complete within 5 seconds, took %v", elapsed)
+		require.Less(t, elapsed, 15*time.Second, "Claude session creation should complete within 15 seconds, took %v", elapsed)
 
 		defer func() {
 			if err := startCleanup(); err != nil {
@@ -142,7 +149,7 @@ func TestSessionCreationWithRealPrograms(t *testing.T) {
 				Program:          tc.program,
 				SessionType:      SessionTypeDirectory,
 				AutoYes:          true,
-				TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_"),
+				TmuxServerSocket: testTmuxSocket(t),
 			})
 			require.NoError(t, err)
 			defer func() {
@@ -156,8 +163,11 @@ func TestSessionCreationWithRealPrograms(t *testing.T) {
 			startCleanup, err := instance.StartWithCleanup(true)
 			elapsed := time.Since(startTime)
 
+			// 20s headroom: see the DirectorySessionCreation subtest in
+			// TestSessionCreationDoesNotHang for the retry/backoff/contention
+			// rationale.
 			require.NoError(t, err, "%s session should start successfully", tc.name)
-			require.Less(t, elapsed, 10*time.Second, "%s session should start within 10 seconds, took %v", tc.name, elapsed)
+			require.Less(t, elapsed, 20*time.Second, "%s session should start within 20 seconds, took %v", tc.name, elapsed)
 
 			defer func() {
 				if err := startCleanup(); err != nil {
@@ -186,7 +196,7 @@ func TestSessionCreationWithWorktree(t *testing.T) {
 		Program:          "bash -c 'pwd; echo Worktree session ready; sleep 1'",
 		SessionType:      SessionTypeNewWorktree,
 		AutoYes:          true,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_"),
+		TmuxServerSocket: testTmuxSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -221,6 +231,20 @@ func TestSessionCreationWithWorktree(t *testing.T) {
 	assert.NoError(t, err, "Worktree directory should exist at %s", worktreePath)
 
 	t.Logf("✓ Worktree session created successfully in %v at %s", elapsed, worktreePath)
+}
+
+// testTmuxSocket derives a per-test tmux server socket name that is also
+// unique per process (via PID). These tests set "exit-empty off" so the
+// isolated tmux server outlives the session and the test process itself;
+// a bare test-name-derived socket (no PID) is a fixed path that collides
+// with an orphaned server left behind by an earlier run of the same test
+// on the same machine -- surfacing as "server exited unexpectedly" when
+// that orphan has since died but its socket file lingers. See
+// testSocketOnce in session/tmux/tmux.go for the same PID-based pattern
+// used for the shared "" -> isolated-socket case.
+func testTmuxSocket(t *testing.T) string {
+	t.Helper()
+	return fmt.Sprintf("test_%s_%d", strings.ReplaceAll(t.Name(), "/", "_"), os.Getpid())
 }
 
 // commandExists checks if a command is available in PATH

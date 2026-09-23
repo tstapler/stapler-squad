@@ -112,8 +112,8 @@ export function ApprovalDrawer({ isOpen, onClose }: ApprovalDrawerProps) {
             <ApprovalCard
               key={approval.id}
               approval={approval}
-              onApprove={() => { approve(approval.id); refresh(); }}
-              onDeny={() => { deny(approval.id); refresh(); }}
+              onApprove={() => { approve(approval.id).catch(console.error); refresh(); }}
+              onDeny={() => { deny(approval.id).catch(console.error); refresh(); }}
               sessionTitle={sessionTitleById[approval.sessionId]}
             />
           ))

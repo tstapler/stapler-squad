@@ -78,6 +78,10 @@ jest.mock("@/lib/terminal/TerminalDimensionCache", () => ({
 jest.mock("@/lib/terminal/TerminalStreamManager", () => ({
   TerminalStreamManager: jest.fn().mockImplementation(() => ({
     setOnFirstOutput: jest.fn(),
+    setOnFullSnapshot: jest.fn(),
+    setOnAltScreenChange: jest.fn(),
+    setOnAppScrollback: jest.fn(),
+    handleAppScrollback: jest.fn(),
     installDebugMonitor: jest.fn(),
     writeInitialContent: jest.fn().mockResolvedValue(undefined),
     write: jest.fn(),
@@ -103,6 +107,8 @@ jest.mock("@/lib/hooks/useBrowserLogStream", () => ({
 import { TerminalOutput } from "../TerminalOutput";
 // eslint-disable-next-line import/first
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
+// eslint-disable-next-line import/first
+import { TerminalPoolProvider } from "@/lib/terminal/TerminalPool";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -132,9 +138,14 @@ function makeStreamMock(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Story 3 — TerminalOutput now sources its xterm.js instance from
+// TerminalPoolProvider (see TerminalPool.tsx); every render in this file
+// must be wrapped in one, matching production's app-level provider.
 function renderTerminal(sessionId = "session-a", baseUrl = "http://localhost:8543") {
   return render(
-    <TerminalOutput sessionId={sessionId} baseUrl={baseUrl} isVisible={false} />
+    <TerminalPoolProvider>
+      <TerminalOutput sessionId={sessionId} baseUrl={baseUrl} isVisible={false} />
+    </TerminalPoolProvider>
   );
 }
 
@@ -198,7 +209,7 @@ describe("TerminalOutput — enter-detection (T-UNIT-TS-011 through T-UNIT-TS-01
     await waitForOnData();
 
     act(() => {
-      capturedOnData!("\r");
+      capturedOnData?.("\r");
     });
 
     expect(mockClearForSession).toHaveBeenCalledTimes(1);
@@ -210,7 +221,7 @@ describe("TerminalOutput — enter-detection (T-UNIT-TS-011 through T-UNIT-TS-01
     await waitForOnData();
 
     act(() => {
-      capturedOnData!("a");
+      capturedOnData?.("a");
     });
 
     expect(mockClearForSession).not.toHaveBeenCalled();
@@ -232,7 +243,7 @@ describe("TerminalOutput — enter-detection (T-UNIT-TS-011 through T-UNIT-TS-01
     expect(capturedOnData).not.toBeNull();
 
     act(() => {
-      capturedOnData!("a");
+      capturedOnData?.("a");
     });
 
     // Refresh should not be called immediately (debounced)
@@ -262,9 +273,9 @@ describe("TerminalOutput — enter-detection (T-UNIT-TS-011 through T-UNIT-TS-01
     expect(capturedOnData).not.toBeNull();
 
     // Fire two keystrokes within 300ms
-    act(() => { capturedOnData!("a"); });
+    act(() => { capturedOnData?.("a"); });
     act(() => { jest.advanceTimersByTime(100); }); // 100ms elapsed
-    act(() => { capturedOnData!("b"); });
+    act(() => { capturedOnData?.("b"); });
 
     // Advance past the second debounce window
     act(() => { jest.advanceTimersByTime(300); });
@@ -278,7 +289,7 @@ describe("TerminalOutput — enter-detection (T-UNIT-TS-011 through T-UNIT-TS-01
     await waitForOnData();
 
     act(() => {
-      capturedOnData!("\r");
+      capturedOnData?.("\r");
     });
 
     expect(mockClearForSession).toHaveBeenCalledWith("session-a");
@@ -293,7 +304,7 @@ describe("TerminalOutput — enter-detection (T-UNIT-TS-011 through T-UNIT-TS-01
     await waitForOnData();
 
     act(() => {
-      capturedOnData!("hello");
+      capturedOnData?.("hello");
     });
 
     // The existing sendInput path must not be broken
@@ -316,7 +327,7 @@ describe("TerminalOutput — enter-detection (T-UNIT-TS-011 through T-UNIT-TS-01
     expect(capturedOnData).not.toBeNull();
 
     // Schedule a debounce timer
-    act(() => { capturedOnData!("a"); });
+    act(() => { capturedOnData?.("a"); });
 
     // Unmount before the timer fires
     unmount();
@@ -343,7 +354,7 @@ describe("TerminalOutput — enter-detection (T-UNIT-TS-011 through T-UNIT-TS-01
     // capturedOnData is guaranteed non-null here
     expect(capturedOnData).not.toBeNull();
 
-    act(() => { capturedOnData!("\r"); });
+    act(() => { capturedOnData?.("\r"); });
 
     // clearForSession should be called (it fires the eager refetch internally)
     expect(mockClearForSession).toHaveBeenCalledTimes(1);
@@ -364,7 +375,7 @@ describe("TerminalOutput — enter-detection (T-UNIT-TS-011 through T-UNIT-TS-01
 
     expect(capturedOnData).not.toBeNull();
 
-    act(() => { capturedOnData!("a"); });
+    act(() => { capturedOnData?.("a"); });
 
     act(() => { jest.advanceTimersByTime(300); });
 

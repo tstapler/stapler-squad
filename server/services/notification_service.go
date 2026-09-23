@@ -24,11 +24,14 @@ import (
 //   - notificationRateLimiter: rate-limits per-session notification sends
 //   - eventBus:               broadcasts notification events to connected clients
 //   - reviewQueuePoller:      late-wired; used to resolve session names
+//   - storage:                late-wired; durable fallback for resolveSessionID when the
+//     in-memory poller hasn't (yet) seeded the session (see SendNotification)
 type NotificationService struct {
 	notificationStore       *notifications.NotificationHistoryStore
 	notificationRateLimiter *NotificationRateLimiter
 	eventBus                *events.EventBus
 	reviewQueuePoller       *session.ReviewQueuePoller
+	storage                 session.InstanceStore
 }
 
 // NewNotificationService creates a NotificationService with the given dependencies.
@@ -55,6 +58,12 @@ func (ns *NotificationService) GetNotificationStore() *notifications.Notificatio
 // SetReviewQueuePoller sets the review queue poller for resolving session names.
 func (ns *NotificationService) SetReviewQueuePoller(poller *session.ReviewQueuePoller) {
 	ns.reviewQueuePoller = poller
+}
+
+// SetStorage sets the durable instance store used as a fallback session-id resolver
+// when the in-memory review queue poller hasn't seeded the session yet.
+func (ns *NotificationService) SetStorage(storage session.InstanceStore) {
+	ns.storage = storage
 }
 
 // ---------------------------------------------------------------------------
@@ -88,11 +97,53 @@ func (ns *NotificationService) SendNotification(
 	// resolve to the stable ID (UUID) so the client can match it precisely.
 	sessionName := req.Msg.SessionId // Default to session ID
 	resolvedSessionID := req.Msg.SessionId
+	resolved := false
+	hidden := false
 	if ns.reviewQueuePoller != nil {
 		if inst := ns.reviewQueuePoller.FindInstance(req.Msg.SessionId); inst != nil {
 			sessionName = inst.Title
 			resolvedSessionID = inst.GetStableID()
+			hidden = inst.Snapshot().Hidden
+			resolved = true
 		}
+	}
+	// Poller miss fallback: the hook-supplied SessionId is usually the session's
+	// title/tmux name (see ssq-hook-handler's get_session_id comment), never the
+	// stable UUID -- so a poller miss (session not yet seeded into the in-memory
+	// poller, e.g. shortly after a server restart) previously left resolvedSessionID
+	// permanently pinned to that title/tmux name even for a session whose live
+	// Session.id (instance_adapter.go's GetStableID()) is really its UUID, making
+	// "View Session" in the web UI wrongly conclude the session was gone. Durable
+	// storage doesn't have this population race, so fall back to it exactly like
+	// ApprovalHandler.resolveSessionID already does for the PermissionRequest path.
+	if !resolved && ns.storage != nil {
+		if instances, err := ns.storage.ListInstanceData(); err == nil {
+			for _, d := range instances {
+				if matchesIDData(d, req.Msg.SessionId) {
+					sessionName = d.Title
+					resolvedSessionID = stableIDForData(d)
+					hidden = d.Hidden
+					break
+				}
+			}
+		}
+	}
+
+	// Hidden (headless/background, e.g. review) sessions run a real Claude Code
+	// CLI process and get the same native Stop/Notification hooks as any visible
+	// session (session/mux/hooks.go's GenerateHooksFile has no concept of
+	// Hidden) — so ssq-hook-handler's routine "Task Complete"/"Subagent
+	// Complete" hook fires for them exactly like a normal session, landing in
+	// notification history/push for a session the UI hides and "View Session"
+	// can't open. Suppress only LOW-priority (routine) notifications for Hidden
+	// sessions, mirroring ReactiveQueueManager's suppressForHidden: a failure
+	// (task_failed, sent at high priority) must still surface regardless of
+	// Hidden, since nothing else watches a stuck-in-error hidden session.
+	if hidden && req.Msg.Priority == sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW {
+		return connect.NewResponse(&sessionv1.SendNotificationResponse{
+			Success: true,
+			Message: "Notification suppressed for hidden session",
+		}), nil
 	}
 
 	// Apply rate limiting (applies to both managed and external sessions)
@@ -191,9 +242,11 @@ func (ns *NotificationService) GetNotificationHistory(
 
 	return connect.NewResponse(&sessionv1.GetNotificationHistoryResponse{
 		Notifications: protoRecords,
-		TotalCount:    int32(totalCount),
-		UnreadCount:   int32(unreadCount),
-		HasMore:       hasMore,
+		// #nosec G115 -- totalCount is a local in-memory notification store count, far below int32 range.
+		TotalCount: int32(totalCount),
+		// #nosec G115 -- see TotalCount above.
+		UnreadCount: int32(unreadCount),
+		HasMore:     hasMore,
 	}), nil
 }
 
@@ -217,6 +270,7 @@ func (ns *NotificationService) MarkNotificationRead(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	// #nosec G115 -- count is a local notification-store row count, far below int32 range.
 	return connect.NewResponse(&sessionv1.MarkNotificationReadResponse{
 		Success:     true,
 		MarkedCount: int32(count),
@@ -250,6 +304,7 @@ func (ns *NotificationService) ClearNotificationHistory(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	// #nosec G115 -- count is a local notification-store row count, far below int32 range.
 	return connect.NewResponse(&sessionv1.ClearNotificationHistoryResponse{
 		Success:      true,
 		ClearedCount: int32(count),
@@ -283,7 +338,9 @@ func recordToProto(r *notifications.NotificationRecord) *sessionv1.NotificationH
 		Metadata:         metadata,
 		CreatedAt:        timestamppb.New(r.CreatedAt),
 		IsRead:           r.IsRead,
-		OccurrenceCount:  int32(r.OccurrenceCount),
+		// #nosec G115 -- OccurrenceCount is a per-notification dedup-repeat
+		// counter, far below int32 range.
+		OccurrenceCount: int32(r.OccurrenceCount),
 	}
 
 	if r.ReadAt != nil {

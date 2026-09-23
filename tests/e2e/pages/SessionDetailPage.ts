@@ -65,6 +65,40 @@ export class SessionDetailPage {
   }
 
   // ---------------------------------------------------------------------
+  // Scroll-forward (app-scrollback-forwarding) — Story 1.4.0-1.4.5,
+  // design/ux.md Surfaces 1-4. See tests/e2e/scroll-forward-*.spec.ts and
+  // tests/e2e/helpers/scroll-forward-fixture.ts.
+  // ---------------------------------------------------------------------
+
+  /** Story 1.4.5 — shared loading pill (tmux-native + app-forwarded paths). */
+  getScrollLoadingPill(): Locator {
+    return this.page.getByTestId("scroll-loading-pill");
+  }
+
+  getScrollLoadingPillCancel(): Locator {
+    return this.page.getByTestId("scroll-loading-pill-cancel");
+  }
+
+  /** Story 1.4.2 — persistent "Viewing <Program>'s own history" banner. */
+  getScrollSourceIndicator(): Locator {
+    return this.page.getByTestId("scroll-source-indicator");
+  }
+
+  /** Story 1.4.4 (Task 1.4.4b) — AT_TOP-only "No more history available" line. */
+  getNoMoreAppHistory(): Locator {
+    return this.page.getByTestId("no-more-app-history");
+  }
+
+  /** Story 1.4.3 — BLOCKED-outcome toast, portal-rendered to document.body. */
+  getScrollBlockedToast(): Locator {
+    return this.page.getByTestId("scroll-blocked-toast");
+  }
+
+  getScrollBlockedToastDismiss(): Locator {
+    return this.page.getByTestId("scroll-blocked-toast-dismiss");
+  }
+
+  // ---------------------------------------------------------------------
   // Terminal tab — added for session-completion-summary.spec.ts, which
   // types `exit` into a plain-shell one-off session's terminal to end it
   // naturally (EventExited) and trigger session-summary generation.
@@ -74,12 +108,17 @@ export class SessionDetailPage {
     return this.page.getByRole("tab", { name: /terminal/i });
   }
 
-  /** The active tab's `role="tabpanel"` region — SessionDetailView.tsx sets
-   * `aria-labelledby="tab-terminal"` on it, which resolves its accessible
-   * name to the Terminal tab's label ("Terminal"). Click this to focus
-   * xterm's hidden input before sending keystrokes via `page.keyboard`. */
+  /** The interactive xterm.js container within the active Terminal tabpanel
+   * (SessionDetailView.tsx sets `aria-labelledby="tab-terminal"` on the
+   * tabpanel, resolving its accessible name to "Terminal"). Scoped to
+   * `[data-context="terminal"]` (XtermTerminal.tsx) rather than the tabpanel
+   * itself: clicking the tabpanel's outer wrapper lands on padding/toolbar
+   * area outside xterm's canvas and never focuses its hidden
+   * `textarea.xterm-helper-textarea`, so keystrokes sent via `page.keyboard`
+   * after that click go nowhere. Click this locator instead to reliably
+   * focus xterm's input before sending keystrokes. */
   getTerminalPanel(): Locator {
-    return this.page.getByRole("tabpanel", { name: /terminal/i });
+    return this.page.getByRole("tabpanel", { name: /terminal/i }).locator('[data-context="terminal"]');
   }
 
   /** Terminal toolbar toggle — visible once the terminal has attached and
@@ -111,9 +150,13 @@ export class SessionDetailPage {
   }
 
   /** Shared `aria-live="polite"` status region SessionSummaryPanel.tsx uses
-   * to announce phase transitions and the copy result. */
+   * to announce phase transitions and the copy result. Scoped to the summary
+   * panel (`data-testid="session-summary-panel"`) -- an unscoped
+   * `page.getByRole("status")` also matches unrelated `role="status"` regions
+   * elsewhere on the page (the nav's bulk-feedback/empty-state live regions),
+   * causing a strict-mode violation once this locator is actually reached. */
   getSummaryLiveRegion(): Locator {
-    return this.page.getByRole("status");
+    return this.getSummaryPanel().getByRole("status");
   }
 
   // ---------------------------------------------------------------------
@@ -142,5 +185,66 @@ export class SessionDetailPage {
 
   getNoteRenderedBody(): Locator {
     return this.page.getByTestId("session-note-rendered");
+  }
+
+  // ---------------------------------------------------------------------
+  // Insights session drill-down — route vs. modal (project_plans/insights-cost-intelligence,
+  // design/ux.md B3). Unlike the sections above (the main workspace pane's
+  // <SessionDetail>), these cover `SessionDetailContent` as rendered by
+  // `/insights/session-detail?sessionId=` (SessionDetailPageClient.tsx) and
+  // by the dashboard's quick-peek modal (SessionDetailDrawer.tsx) — both
+  // render the same component, so one set of locators/assertions serves
+  // both surfaces. Added here per this project's page-object reuse
+  // convention rather than forking a second "session detail" page object.
+  // ---------------------------------------------------------------------
+
+  /** Navigates directly to the deep-linkable route (cold navigation, no prior client-side history). */
+  async gotoInsightsSessionRoute(sessionId: string) {
+    // Skip the first-run onboarding tour modal — see InsightsPage.goto()'s
+    // identical addInitScript for why this is needed on every fresh
+    // navigation, not just the dashboard's.
+    await this.page.addInitScript(() => {
+      try {
+        window.localStorage.setItem("stapler-squad:onboarded", "true");
+      } catch {
+        /* ignore */
+      }
+    });
+    await this.page.goto(`${BASE_URL}/insights/session-detail?sessionId=${encodeURIComponent(sessionId)}`, {
+      waitUntil: "domcontentloaded",
+    });
+  }
+
+  /** The route/modal's `<h1>`-equivalent heading — receives focus on route mount (design/ux.md B3). */
+  getInsightsHeading(): Locator {
+    return this.page.getByRole("heading", { level: 1 });
+  }
+
+  /** Present in every route state (found, not-found, error) — the "no dead ends" guarantee. */
+  getInsightsBackToDashboardLink(): Locator {
+    return this.page.getByRole("link", { name: /Back to dashboard/i });
+  }
+
+  getInsightsSessionNotFound(): Locator {
+    return this.page.getByTestId("session-not-found");
+  }
+
+  /** SessionDetailDrawer's dialog container (role="dialog"). */
+  getInsightsModal(): Locator {
+    return this.page.getByRole("dialog", { name: /session details/i });
+  }
+
+  getInsightsModalCloseButton(): Locator {
+    return this.page.getByRole("button", { name: /close session details/i });
+  }
+
+  /** Navigates from the modal (quick-peek) to the deep-linkable route. */
+  getInsightsOpenFullPageLink(): Locator {
+    return this.page.getByRole("link", { name: /Open full page/i });
+  }
+
+  /** SessionDetailContent's "Tools Breakdown" table (shared verbatim by the modal and the route). */
+  getInsightsToolsBreakdownTable(): Locator {
+    return this.page.getByTestId("tools-breakdown-table");
   }
 }

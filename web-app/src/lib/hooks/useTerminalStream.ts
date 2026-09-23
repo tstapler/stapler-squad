@@ -1,13 +1,13 @@
 "use client";
 
-import { createClient } from "@connectrpc/connect";
+import { createClient, ConnectError } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { TerminalData, TerminalDataSchema, CurrentPaneRequest, CurrentPaneRequestSchema } from "@/gen/session/v1/events_pb";
+import { TerminalData, TerminalDataSchema, CurrentPaneRequest, CurrentPaneRequestSchema, ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/events_pb";
 import { create } from "@bufbuild/protobuf";
 import { createWebsocketBasedTransport } from "@/lib/transport/websocket-transport";
 import { createAuthInterceptor } from "@/lib/config";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { BackoffState, connectTimeoutMs, getWsCloseCode, isRetriableCloseCode } from "@/lib/utils/backoff";
+import { BackoffState, connectTimeoutMs, isNonRetriableConnectError, isWorktreeMissingError } from "@/lib/utils/backoff";
 import { MessageQueue } from "@/lib/terminal/MessageQueue";
 import { useTerminalFlowControl } from "./useTerminalFlowControl";
 import { useTerminalMetrics } from "./useTerminalMetrics";
@@ -51,6 +51,31 @@ interface UseTerminalStreamOptions {
    * otherwise.
    */
   onOutput?: (output: string, resyncId?: string) => void;
+  /**
+   * Server-authoritative alt-screen-active hint (events.proto's
+   * TerminalOutput.alt_screen_active) — set only on an initial-connect or
+   * post-resize snapshot, since a capture-pane-derived snapshot can never
+   * itself carry the DECSET 1049h marker the client's own byte-scanning
+   * (TerminalStreamManager.updateAltScreenActive) watches for on live
+   * output. Without this, a client connecting to (or resizing) a session
+   * that entered alt screen before this connection existed never learns it.
+   */
+  onAltScreenActiveHint?: (active: boolean) => void;
+  /**
+   * Story 1.4.1 — callback when an AppScrollbackResponse frame (Epic 1.3's
+   * `Instance.ForwardScroll`) is received. Dispatched from a distinct branch
+   * of this hook's message loop (never through onOutput/onScrollbackReceived)
+   * so a resize resync's onFullSnapshot can't fire for it and vice versa
+   * (research/architecture.md §6, mirrored by TerminalStreamManager's own
+   * handleAppScrollback/onFullSnapshot isolation).
+   */
+  onAppScrollback?: (
+    content: string,
+    outcome: ScrollForwardOutcome,
+    program: string,
+    forwardId: string,
+    blockedReason: ScrollBlockedReason,
+  ) => void;
   /**
    * Shared with useVisibilityResync.ts (Epic 3.1, Task 3.1.2.1) — forwarded
    * to useTerminalFlowControl so both visibility- and resize-triggered
@@ -114,6 +139,8 @@ export function useTerminalStream({
   onError,
   onScrollbackReceived,
   onOutput,
+  onAppScrollback,
+  onAltScreenActiveHint,
   autoConnect = true,
   initialCols,
   initialRows,
@@ -162,7 +189,7 @@ export function useTerminalStream({
   // is a deliberate, internal fast-retry optimization, not a real failure the caller
   // should count toward its own attempt/error UI.
   const connectTimeoutAbortedRef = useRef(false);
-  const connectRef = useRef<(overrideCols?: number, overrideRows?: number) => Promise<void>>(async () => {});
+  const connectRef = useRef<(overrideCols?: number, overrideRows?: number, options?: { isAutoRetry?: boolean }) => Promise<void>>(async () => {});
   const textDecoderRef = useRef(new TextDecoder());
   const scrollbackDecoderRef = useRef(new TextDecoder());
   // Task 2.2.1 — Connection-generation fence (mirrors usePathCompletions.ts's
@@ -261,7 +288,7 @@ export function useTerminalStream({
   }, [onError]);
 
   // ---- Connect ----
-  const connect = useCallback(async (overrideCols?: number, overrideRows?: number) => {
+  const connect = useCallback(async (overrideCols?: number, overrideRows?: number, options?: { isAutoRetry?: boolean }) => {
     // Refuse to reconnect through a hard failure. The only sanctioned way back
     // in is handleManualReconnect below, which clears isHardFailedRef.current
     // to false *before* calling connect() — so this check never blocks Retry,
@@ -271,7 +298,17 @@ export function useTerminalStream({
     if (isConnectedRef.current || isConnectingRef.current || !sessionId) return;
     isConnectingRef.current = true;
     shouldReconnectRef.current = true;
-    terminalBackoffRef.current.reset();
+    // Only the finally block's own self-scheduled automatic retry (below) passes
+    // isAutoRetry: true. Every other caller — mount, manual reconnect, the
+    // visibility/online listener and foreground-transition effect in this file,
+    // and useVisibilityResync's two direct connect() calls — omits it and gets the
+    // fresh backoff sequence a genuinely new attempt sequence should have. Without
+    // this gate, the automatic retry itself reset terminalBackoffRef on every call,
+    // so `.attempt` was always 0 when the hard-fail check below ran and the delay
+    // below never escalated past uniform(0, 1000ms).
+    if (!options?.isAutoRetry) {
+      terminalBackoffRef.current.reset();
+    }
 
     // Task 2.2.1 — bump the connection generation immediately so this call's
     // message-processing loop (started below) can identify itself as "the
@@ -378,6 +415,7 @@ export function useTerminalStream({
             if (firstMessageRef.current) {
               clearConnectTimeout();
               isConnectingRef.current = false;
+              isConnectedRef.current = true; // sync ref before state setter — mirrors the disconnect-path precedent in the finally block below, closing the window where a same-tick second connect() call could read a stale isConnectedRef before React flushes setIsConnected(true)
               setIsConnected(true);
               setScrollbackLoaded(true);
               setTerminalState('LOADING');
@@ -417,6 +455,12 @@ export function useTerminalStream({
               // never fabricated (plan.md Story 4.2.1 AC2).
               if (msg.data.value.connectionCount !== undefined) {
                 setConnectionCount(msg.data.value.connectionCount);
+              }
+
+              // See onAltScreenActiveHint's doc comment — only ever present
+              // on an initial-connect/post-resize snapshot.
+              if (msg.data.value.altScreenActive !== undefined) {
+                onAltScreenActiveHint?.(msg.data.value.altScreenActive);
               }
 
               // Handle raw output
@@ -475,6 +519,15 @@ export function useTerminalStream({
               }
               // Scrollback response received — return to STABLE
               setTerminalState((prev) => prev === 'FETCHING_SCROLLBACK' ? 'STABLE' : prev);
+            } else if (msg.data.case === "appScrollbackResponse") {
+              // Story 1.4.1 — a captured redraw from Instance.ForwardScroll, sent
+              // instead of scrollbackResponse when AppScrollGate passes. Decoded
+              // and dispatched through its own callback so it can never be
+              // confused with either the raw output or tmux-native scrollback path.
+              const resp = msg.data.value;
+              const text = resp.content.length > 0 ? new TextDecoder().decode(resp.content) : "";
+              onAppScrollback?.(text, resp.outcome, resp.program, resp.forwardId, resp.blockedReason);
+              setTerminalState((prev) => prev === 'FETCHING_SCROLLBACK' ? 'STABLE' : prev);
             } else if (msg.data.case === "error") {
               const err = new Error(msg.data.value.message);
               setError(err);
@@ -501,12 +554,15 @@ export function useTerminalStream({
           // refs included — a stale, aborted generation's close should not
           // affect the currently-live generation's reconnect fate).
           if (myGeneration === connectionGenerationRef.current) {
-            const wsCode = getWsCloseCode(err);
-            if (wsCode !== null && !isRetriableCloseCode(wsCode)) {
+            // isWorktreeMissingError is checked here (terminal-stream-specific),
+            // not folded into the shared isNonRetriableConnectError — see that
+            // function's doc comment for why.
+            if (isNonRetriableConnectError(err) || isWorktreeMissingError(err)) {
               shouldReconnectRef.current = false;
               isHardFailedRef.current = true;
               setIsHardFailed(true);
-              console.warn(`[reconnect] stream=terminal non-retriable ws-close-code=${wsCode}, giving up`);
+              const code = err instanceof ConnectError ? err.code : "unknown";
+              console.warn(`[reconnect] stream=terminal non-retriable error code=${code}, giving up`);
             }
             // A connect-timeout abort is our own deliberate fast-retry optimization, not
             // a real failure — don't surface it via onError/setError, or callers that
@@ -539,21 +595,38 @@ export function useTerminalStream({
             if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true"
                 && shouldReconnectRef.current
                 && !isDisconnectingRef.current) {
-              if (terminalBackoffRef.current.attempt >= 5) {
+              if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current);
+                reconnectTimerRef.current = null;
+              }
+              if (connectTimeoutAbortedRef.current) {
+                // A connect-timeout abort is our own deliberate fast-retry optimization
+                // (see the catch block above), not a real stream failure — it must not
+                // consume the 5-attempt hard-fail budget or escalate the backoff delay,
+                // or a connection whose genuine first-message latency exceeds the
+                // connect-timeout (e.g. large scrollback replay over a high-RTT VPN link)
+                // would eventually hard-fail instead of getting the unlimited patience it
+                // had before the per-attempt connect-timeout existed. Retry immediately —
+                // each cycle is already bounded by the connect-timeout itself, so this
+                // can't thundering-herd the way an unthrottled real-failure retry could.
+                console.info(`[reconnect] stream=terminal trigger=connect-timeout attempt=${terminalBackoffRef.current.attempt} delay=0ms (excluded from backoff)`);
+                reconnectTimerRef.current = setTimeout(() => {
+                  reconnectTimerRef.current = null;
+                  if (shouldReconnectRef.current && !isDisconnectingRef.current) {
+                    connectRef.current?.(undefined, undefined, { isAutoRetry: true });
+                  }
+                }, 0);
+              } else if (terminalBackoffRef.current.attempt >= 5) {
                 shouldReconnectRef.current = false;
                 isHardFailedRef.current = true;
                 setIsHardFailed(true);
               } else {
                 const delay = terminalBackoffRef.current.next();
                 console.info(`[reconnect] stream=terminal trigger=close attempt=${terminalBackoffRef.current.attempt} delay=${delay}ms`);
-                if (reconnectTimerRef.current) {
-                  clearTimeout(reconnectTimerRef.current);
-                  reconnectTimerRef.current = null;
-                }
                 reconnectTimerRef.current = setTimeout(() => {
                   reconnectTimerRef.current = null;
                   if (shouldReconnectRef.current && !isDisconnectingRef.current) {
-                    connectRef.current?.();
+                    connectRef.current?.(undefined, undefined, { isAutoRetry: true });
                   }
                 }, delay);
               }
@@ -570,8 +643,8 @@ export function useTerminalStream({
       handleError(err);
       setIsConnected(false);
     }
-  }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput,
-      flowControl, metrics, handleError, initialCols, initialRows, onInputDropped, clearConnectTimeout]);
+  }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput, onAppScrollback,
+      onAltScreenActiveHint, flowControl, metrics, handleError, initialCols, initialRows, onInputDropped, clearConnectTimeout]);
 
   // Keep connectRef in sync so visibility/online listeners always call the current closure
   connectRef.current = connect;

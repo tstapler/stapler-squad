@@ -3,7 +3,7 @@ package protocol
 import (
 	"encoding/binary"
 	"fmt"
-	"io"
+	"math"
 )
 
 // Envelope represents a ConnectRPC envelope message with flags and data.
@@ -46,44 +46,21 @@ func ParseEnvelope(data []byte) (*Envelope, []byte, error) {
 
 // CreateEnvelope creates an envelope with the given flags and data.
 func CreateEnvelope(flags byte, data []byte) []byte {
+	if len(data) > math.MaxUint32 {
+		// In practice unreachable: no PTY output chunk, RPC response body, or
+		// session snapshot this server produces approaches 4 GiB. Silently
+		// truncating the uint32 length header while writing all of data
+		// would desync the receiver's framing (Length would no longer match
+		// Data), so failing loudly beats corrupting the wire protocol.
+		panic(fmt.Sprintf("protocol: envelope data too large to encode: %d bytes", len(data)))
+	}
+
 	envelope := make([]byte, 5+len(data))
 	envelope[0] = flags
+	// #nosec G115 -- bounds-checked above: the len(data) > math.MaxUint32 guard guarantees this fits in uint32
 	binary.BigEndian.PutUint32(envelope[1:5], uint32(len(data)))
 	copy(envelope[5:], data)
 	return envelope
-}
-
-// ReadEnvelope reads a single envelope from an io.Reader.
-func ReadEnvelope(r io.Reader) (*Envelope, error) {
-	// Read header (5 bytes)
-	header := make([]byte, 5)
-	if _, err := io.ReadFull(r, header); err != nil {
-		return nil, fmt.Errorf("failed to read envelope header: %w", err)
-	}
-
-	flags := header[0]
-	length := binary.BigEndian.Uint32(header[1:5])
-
-	// Read data
-	data := make([]byte, length)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return nil, fmt.Errorf("failed to read envelope data: %w", err)
-	}
-
-	return &Envelope{
-		Flags:  flags,
-		Length: length,
-		Data:   data,
-	}, nil
-}
-
-// WriteEnvelope writes an envelope to an io.Writer.
-func WriteEnvelope(w io.Writer, flags byte, data []byte) error {
-	envelope := CreateEnvelope(flags, data)
-	if _, err := w.Write(envelope); err != nil {
-		return fmt.Errorf("failed to write envelope: %w", err)
-	}
-	return nil
 }
 
 // IsEndStream checks if the envelope has the EndStream flag set.

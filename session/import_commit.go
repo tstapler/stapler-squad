@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/tstapler/stapler-squad/config"
 )
 
 // commitMu serializes the collision-check-then-create critical section in
@@ -134,13 +136,20 @@ func CommitImportExternalSession(ctx context.Context, params CommitImportParams)
 			return nil, err
 		}
 
+		title := importInstanceTitle(params.Candidate)
+		cfg := config.LoadConfig()
 		return CreateManagedInstance(ctx, CreateManagedInstanceParams{
 			Options: InstanceOptions{
-				Title:            importInstanceTitle(params.Candidate),
+				Title:            title,
 				Path:             params.Candidate.Path,
 				Program:          params.Candidate.Program,
 				SessionType:      SessionTypeDirectory,
 				TmuxServerSocket: params.TmuxServerSocket,
+				// Backend consults the session-name override map
+				// (tymux-bundled-integration Epic 4.4.3) so a canary override
+				// applies through this restore-from-state path too; there's no
+				// per-request override concept here.
+				Backend: ResolveSessionBackendForTitle(cfg, title, ""),
 			},
 			Storage:  params.Storage,
 			Registry: params.Registry,

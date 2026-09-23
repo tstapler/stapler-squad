@@ -4,7 +4,7 @@ import { Page, Locator, expect } from '@playwright/test';
  * Page-helper for the unified VcsWidget (web-app/src/components/shared/VcsWidget.tsx),
  * shared across Session detail (VcsPanel), Backlog item detail, and Unfinished item
  * detail (compact mode). Locators use data-testid or ARIA roles only, per
- * .claude/rules/e2e-test-conventions.md — VcsWidgetFileList/VcsWidgetCommitList render
+ * the `e2e-test-conventions` skill — VcsWidgetFileList/VcsWidgetCommitList render
  * native <ul>/<li> elements with no explicit `role` attribute, which still resolve via
  * getByRole('list')/getByRole('listitem') through the browser's implicit ARIA mapping.
  */

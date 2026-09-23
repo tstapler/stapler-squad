@@ -2,11 +2,11 @@
 
 import { useCallback, useRef, useEffect, useState, useMemo } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { getErrorMessage } from "@/lib/utils/connectError";
+import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
 import {
   BacklogService,
   BacklogItem as BacklogItemProto,
@@ -17,6 +17,7 @@ import {
   BacklogProgressNote as BacklogProgressNoteProto,
   BacklogActivityNote as BacklogActivityNoteProto,
   PipelineMode as PipelineModeProto,
+  PipelineStageExecutor as PipelineStageExecutorProto,
 } from "@/gen/session/v1/backlog_pb";
 
 // ---------------------------------------------------------------------------
@@ -113,6 +114,37 @@ export interface LinkedSession {
    * parsed cleanly, or nothing was captured.
    */
   failureCapturePath?: string;
+  /**
+   * Concrete program/model this stage actually ran on (never the raw
+   * `family:sonnet`-style alias, never "" for a session that ran) — see
+   * ItemSession.resolved_program/resolved_model (Epic 2.1). Empty for
+   * sessions that predate this field.
+   */
+  resolvedProgram?: string;
+  resolvedModel?: string;
+  /**
+   * SHA-256 (hex, truncated 16 chars) of ComputeExecutorHash(program, model)
+   * for the RAW, pre-resolution (program, model) pair this stage was
+   * configured with at spawn time — "" for a session that predates this
+   * field. Compared against the mode's dense
+   * PipelineMode.stageExecutorHashes[role] to detect executor-config drift —
+   * see resolveExecutorProvenance (pipelineModeDisplay.ts).
+   */
+  executorSnapshotHash?: string;
+  /**
+   * The program this stage was actually configured to run on at spawn time
+   * (before any availability fallback) — "" when no headless-caller
+   * substitution could occur (e.g. a work-stage session). Paired with
+   * executorFallbackReason below.
+   */
+  configuredProgram?: string;
+  /**
+   * Non-empty only when resolveHeadlessCaller fell back away from
+   * configuredProgram at call time (e.g. "gemini_unavailable") — a
+   * persisted, UI-visible fallback marker (Story 2.3.1), never only a log
+   * line.
+   */
+  executorFallbackReason?: string;
 }
 
 export interface BacklogItem {
@@ -136,6 +168,8 @@ export interface BacklogItem {
   autoSpawnSession: boolean;
   /** When true, a PR is created automatically (same one-shot prompt as the manual Review Queue "Create PR" button) once a work session reaches TASK_COMPLETE — no manual click required. */
   autoCreatePR: boolean;
+  /** When true, a plan TriggerTriage produces is approved automatically (mirroring a manual "Approve Plan" click) once its artifacts exist on disk — no manual click required. */
+  autoApprovePlan: boolean;
   planApproved: boolean;
   planArtifactsPath?: string;
   /**
@@ -215,6 +249,13 @@ export interface BacklogItem {
    */
   reworkCapOverride?: number;
   /**
+   * Per-item, optional soft-budget-warning threshold in USD. Undefined means
+   * no threshold is configured and no warning ever fires for this item — 0
+   * is a legitimate configured threshold, distinct from unset. See
+   * ItemBudgetWarning.tsx and session.EvaluateBudgetThreshold.
+   */
+  costBudgetThresholdUsd?: number;
+  /**
    * Live-update generation counter (Epic 6.1, backlog-event-driven-updates).
    * Populated only by `useWatchBacklogItems` — incremented once per genuine
    * live (non-snapshot) `BacklogItemEvent` for this item, so
@@ -248,6 +289,25 @@ export interface PipelineMode {
   initialPromptTemplate: string;
   /** SHA-256 (hex, truncated to 16 chars) over the 9 content-template fields, computed server-side. */
   contentHash: string;
+  /**
+   * Per-stage {program, model} override, keyed by StageRole ("triage",
+   * "review", "work"). A missing key or empty program/model means "inherit
+   * the default executor for that role" — see session.PipelineStageExecutor.
+   * Optional so pre-existing call sites that construct a PipelineMode
+   * without it (older tests, fixtures) keep compiling.
+   */
+  stageExecutors?: Record<string, { program: string; model: string }>;
+  /**
+   * DERIVED, server-computed: session.ComputeExecutorHash(program, model)
+   * for every StageRole ("triage"/"review"/"work"), including roles with no
+   * configured override — a DENSE map, never sparse. An unconfigured role's
+   * entry equals ComputeExecutorHash("", ""), the same value an
+   * unconfigured session's own executorSnapshotHash computes. See
+   * resolveExecutorProvenance (pipelineModeDisplay.ts) — comparing a
+   * session's executorSnapshotHash against a sparse map would falsely flag
+   * every ordinary default-executor session as drifted.
+   */
+  stageExecutorHashes?: Record<string, string>;
 }
 
 /**
@@ -269,6 +329,15 @@ export interface PipelineModeInput {
   triagePromptTemplate?: string;
   reviewPromptTemplate?: string;
   initialPromptTemplate?: string;
+  /** Per-stage {program, model} override — see PipelineMode.stageExecutors. */
+  stageExecutors?: Record<string, { program: string; model: string }>;
+  /**
+   * Bypasses the save-time pricing-table cross-check for an unrecognized
+   * literal model ID (Story 1.3.1's CodeInvalidArgument rejection) — set
+   * when the operator confirms via PipelineModeForm's "use it anyway"
+   * override (Task 5.1.1h).
+   */
+  forceUnknownModel?: boolean;
 }
 
 /**
@@ -317,6 +386,7 @@ export interface BacklogItemInput {
   skipReviewGate?: boolean;
   autoSpawnSession?: boolean;
   autoCreatePR?: boolean;
+  autoApprovePlan?: boolean;
   acCriteria?: AcCriterion[];
   notes?: string;
   skipTriage?: boolean;
@@ -326,6 +396,8 @@ export interface BacklogItemInput {
   category?: string;
   /** Per-item rework-cap override. 0 = unlimited for this item, >0 = this item's own cap. See BacklogItem.reworkCapOverride. */
   reworkCapOverride?: number;
+  /** Per-item soft-budget-warning threshold in USD. Undefined = not configured. See BacklogItem.costBudgetThresholdUsd. */
+  costBudgetThresholdUsd?: number;
   /**
    * Manually associate an existing PR with this item (the "escape hatch" for
    * a PR that shipped via an out-of-band worktree). Must be set together
@@ -334,6 +406,14 @@ export interface BacklogItemInput {
    */
   prUrl?: string;
   prNumber?: number;
+}
+
+/** LLM-structured read of a free-text message — see ParseBacklogItemIntent. */
+export interface ParsedBacklogItemDraft {
+  title: string;
+  description: string;
+  acceptanceCriteria: string[];
+  confidence: number;
 }
 
 export interface ListBacklogItemsFilter {
@@ -380,6 +460,11 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     pipelineModeSnapshotHash: s.pipelineModeSnapshotHash ?? "",
     endReason: s.endReason || undefined,
     failureCapturePath: s.failureCapturePath || undefined,
+    resolvedProgram: s.resolvedProgram || undefined,
+    resolvedModel: s.resolvedModel || undefined,
+    executorSnapshotHash: s.executorSnapshotHash ?? "",
+    configuredProgram: s.configuredProgram || undefined,
+    executorFallbackReason: s.executorFallbackReason || undefined,
   };
 
   // Map review verdict if present
@@ -455,6 +540,18 @@ function mapActivityNote(n: BacklogActivityNoteProto): ActivityNote {
   };
 }
 
+/** Strips the protobuf Message<> wrapper down to the plain {program, model} shape PipelineModeForm consumes. */
+function mapStageExecutors(
+  raw: { [key: string]: PipelineStageExecutorProto } | undefined
+): Record<string, { program: string; model: string }> {
+  const result: Record<string, { program: string; model: string }> = {};
+  if (!raw) return result;
+  for (const [role, executor] of Object.entries(raw)) {
+    result[role] = { program: executor.program, model: executor.model };
+  }
+  return result;
+}
+
 function mapPipelineMode(p: PipelineModeProto): PipelineMode {
   return {
     id: p.id,
@@ -472,6 +569,8 @@ function mapPipelineMode(p: PipelineModeProto): PipelineMode {
     reviewPromptTemplate: p.reviewPromptTemplate,
     initialPromptTemplate: p.initialPromptTemplate,
     contentHash: p.contentHash,
+    stageExecutors: mapStageExecutors(p.stageExecutors),
+    stageExecutorHashes: { ...p.stageExecutorHashes },
   };
 }
 
@@ -538,6 +637,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     skipReviewGate: p.skipReviewGate,
     autoSpawnSession: p.autoSpawnSession,
     autoCreatePR: p.autoCreatePr,
+    autoApprovePlan: p.autoApprovePlan,
     planApproved: p.planApproved,
     planArtifactsPath: p.planArtifactsPath || undefined,
     planRejectionReason: p.planRejectionReason || undefined,
@@ -569,6 +669,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     pipelineMode: p.pipelineMode || undefined,
     category: p.category || undefined,
     reworkCapOverride: p.reworkCapOverride,
+    costBudgetThresholdUsd: p.costBudgetThresholdUsd,
     externalId: p.externalId || undefined,
     externalUrl: p.externalUrl || undefined,
     labels: p.labels ?? [],
@@ -599,6 +700,8 @@ export interface GitHubRepo {
   isLocal: boolean;
   localPath: string;
   description: string;
+  /** GitHub host this repo lives on ("" means github.com). */
+  host: string;
 }
 
 export interface GitHubIssue {
@@ -612,6 +715,8 @@ export interface GitHubIssue {
   createdAt?: string;
   updatedAt?: string;
   isPR: boolean;
+  /** GitHub host this issue lives on ("" means github.com). */
+  host: string;
 }
 
 export class GitHubAuthError extends Error {
@@ -631,9 +736,17 @@ interface UseBacklogServiceReturn {
   createBacklogItem: (data: BacklogItemInput) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   /** One turn of chat-based backlog creation/refinement. Empty existingItemId creates a new item (delegates to createBacklogItem); a set existingItemId delegates to TriggerTriage's feedback-driven refine path. */
   createBacklogItemFromChat: (message: string, existingItemId?: string) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
-  importGitHubIssue: (issueUrl: string, options?: { repoPath?: string; skipPlanning?: boolean }) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
+  /**
+   * Runs a free-text message through an LLM to produce a structured draft
+   * (title/description/acceptance criteria) for the caller to review/edit —
+   * does NOT create anything. Returns null on any failure (call error, or a
+   * set response.error) so the caller can fall back to raw-text creation via
+   * createBacklogItemFromChat — never throws.
+   */
+  parseBacklogItemIntent: (message: string) => Promise<ParsedBacklogItemDraft | null>;
+  importGitHubIssue: (issueUrl: string, options?: { repoPath?: string; skipPlanning?: boolean }) => Promise<{ item: BacklogItem; triageTriggered: boolean; alreadyExisted: boolean } | null>;
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
-  listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number }) => Promise<GitHubIssue[]>;
+  listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number; host?: string }) => Promise<GitHubIssue[]>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
   archiveBacklogItem: (id: string) => Promise<boolean>;
   unarchiveBacklogItem: (id: string) => Promise<boolean>;
@@ -712,11 +825,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
   const clearError = useCallback(() => setLastError(null), []);
 
   useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
-    clientRef.current = createClient(BacklogService, transport);
+    clientRef.current = createClient(BacklogService, getConnectTransport());
   }, []);
 
   const listBacklogItems = useCallback(
@@ -773,6 +882,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           skipReviewGate: data.skipReviewGate ?? false,
           autoSpawnSession: data.autoSpawnSession ?? false,
           autoCreatePr: data.autoCreatePR ?? false,
+          autoApprovePlan: data.autoApprovePlan ?? false,
           acceptanceCriteria: toProtoAcCriteria(data.acCriteria ?? []),
           notes: data.notes ?? "",
           skipTriage: data.skipTriage ?? false,
@@ -812,6 +922,29 @@ export function useBacklogService(): UseBacklogServiceReturn {
     []
   );
 
+  const parseBacklogItemIntent = useCallback(
+    // repo_path is intentionally omitted: the omnibar has no "current repo"
+    // context available before parsing, and the request field is optional
+    // (see its proto doc) — the LLM parses from message text alone.
+    async (message: string): Promise<ParsedBacklogItemDraft | null> => {
+      if (!clientRef.current) return null;
+      try {
+        const resp = await clientRef.current.parseBacklogItemIntent({ message });
+        if (resp.error || !resp.draft) return null;
+        return {
+          title: resp.draft.title,
+          description: resp.draft.description,
+          acceptanceCriteria: resp.draft.acceptanceCriteria,
+          confidence: resp.draft.confidence,
+        };
+      } catch (err) {
+        console.error("[useBacklogService] parseBacklogItemIntent:", err);
+        return null;
+      }
+    },
+    []
+  );
+
   const updateBacklogItem = useCallback(
     async (id: string, data: Partial<BacklogItemInput>): Promise<BacklogItem | null> => {
       if (!clientRef.current) return null;
@@ -827,11 +960,13 @@ export function useBacklogService(): UseBacklogServiceReturn {
           skipReviewGate: data.skipReviewGate,
           autoSpawnSession: data.autoSpawnSession,
           autoCreatePr: data.autoCreatePR,
+          autoApprovePlan: data.autoApprovePlan,
           acceptanceCriteria: data.acCriteria ? toProtoAcCriteria(data.acCriteria) : undefined,
           notes: data.notes,
           pipelineMode: data.pipelineMode,
           category: data.category,
           reworkCapOverride: data.reworkCapOverride,
+          costBudgetThresholdUsd: data.costBudgetThresholdUsd,
           prUrl: data.prUrl,
           prNumber: data.prNumber,
         });
@@ -1091,6 +1226,8 @@ export function useBacklogService(): UseBacklogServiceReturn {
         triagePromptTemplate: data.triagePromptTemplate ?? "",
         reviewPromptTemplate: data.reviewPromptTemplate ?? "",
         initialPromptTemplate: data.initialPromptTemplate ?? "",
+        stageExecutors: data.stageExecutors ?? {},
+        forceUnknownModel: data.forceUnknownModel ?? false,
       });
       if (!resp.item) throw new Error("createPipelineMode: server returned no item");
       return mapPipelineMode(resp.item);
@@ -1118,6 +1255,9 @@ export function useBacklogService(): UseBacklogServiceReturn {
           triagePromptTemplate: data.triagePromptTemplate,
           reviewPromptTemplate: data.reviewPromptTemplate,
           initialPromptTemplate: data.initialPromptTemplate,
+          // undefined = leave stage executors untouched; present (even {}) = replace.
+          stageExecutors: data.stageExecutors !== undefined ? { values: data.stageExecutors } : undefined,
+          forceUnknownModel: data.forceUnknownModel,
         });
         if (!resp.item) throw new Error("updatePipelineMode: server returned no item");
         return mapPipelineMode(resp.item);
@@ -1144,7 +1284,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
     async (
       issueUrl: string,
       options?: { repoPath?: string; skipPlanning?: boolean }
-    ): Promise<{ item: BacklogItem; triageTriggered: boolean } | null> => {
+    ): Promise<{ item: BacklogItem; triageTriggered: boolean; alreadyExisted: boolean } | null> => {
       if (!clientRef.current) return null;
       try {
         setLastError(null);
@@ -1154,7 +1294,11 @@ export function useBacklogService(): UseBacklogServiceReturn {
           skipPlanning: options?.skipPlanning ?? false,
         });
         return resp.item
-          ? { item: mapBacklogItem(resp.item), triageTriggered: resp.triageTriggered }
+          ? {
+              item: mapBacklogItem(resp.item),
+              triageTriggered: resp.triageTriggered,
+              alreadyExisted: resp.alreadyExisted,
+            }
           : null;
       } catch (err) {
         console.error("[useBacklogService] importGitHubIssue:", err);
@@ -1176,6 +1320,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           isLocal: r.isLocal,
           localPath: r.localPath,
           description: r.description,
+          host: r.host,
         }));
       } catch (err) {
         if (err instanceof Error && err.message.toLowerCase().includes("token")) {
@@ -1191,7 +1336,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
     async (
       owner: string,
       repo: string,
-      options?: { state?: string; search?: string; limit?: number }
+      options?: { state?: string; search?: string; limit?: number; host?: string }
     ): Promise<GitHubIssue[]> => {
       if (!clientRef.current) return [];
       try {
@@ -1201,6 +1346,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           state: options?.state ?? "open",
           search: options?.search ?? "",
           limit: options?.limit ?? 30,
+          host: options?.host ?? "",
         });
         return resp.issues.map((i) => ({
           number: i.number,
@@ -1213,6 +1359,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           createdAt: i.createdAt ? new Date(Number(i.createdAt.seconds) * 1000).toISOString() : undefined,
           updatedAt: i.updatedAt ? new Date(Number(i.updatedAt.seconds) * 1000).toISOString() : undefined,
           isPR: i.isPr ?? false,
+          host: i.host,
         }));
       } catch (err) {
         if (err instanceof Error && err.message.toLowerCase().includes("token")) {
@@ -1233,6 +1380,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       getBacklogItem,
       createBacklogItem,
       createBacklogItemFromChat,
+      parseBacklogItemIntent,
       importGitHubIssue,
       searchGitHubRepos,
       listGitHubIssues,
@@ -1287,41 +1435,30 @@ export function useBacklogSessionIndex(): UseBacklogSessionIndexReturn {
   const [index, setIndex] = useState<Map<string, BacklogIndexEntry>>(new Map());
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
-    const client = createClient(BacklogService, transport);
+  useAbortableEffect(async (signal) => {
+    const client = createClient(BacklogService, getConnectTransport());
 
-    let cancelled = false;
-    client
-      .getSessionBacklogIndex({})
-      .then((resp) => {
-        if (cancelled) return;
-        const map = new Map<string, BacklogIndexEntry>();
-        for (const e of resp.entries ?? []) {
-          if (e.sessionUuid) {
-            map.set(e.sessionUuid, {
-              itemId: e.itemId,
-              itemTitle: e.itemTitle,
-              itemStatus: e.itemStatus,
-              sessionRole: e.sessionRole,
-            });
-          }
+    try {
+      const resp = await client.getSessionBacklogIndex({}, { signal });
+      if (signal.aborted) return;
+      const map = new Map<string, BacklogIndexEntry>();
+      for (const e of resp.entries ?? []) {
+        if (e.sessionUuid) {
+          map.set(e.sessionUuid, {
+            itemId: e.itemId,
+            itemTitle: e.itemTitle,
+            itemStatus: e.itemStatus,
+            sessionRole: e.sessionRole,
+          });
         }
-        setIndex(map);
-      })
-      .catch((err) => {
-        console.error("[useBacklogSessionIndex] failed:", err);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+      }
+      setIndex(map);
+    } catch (err) {
+      if (signal.aborted) return;
+      console.error("[useBacklogSessionIndex] failed:", err);
+    } finally {
+      if (!signal.aborted) setLoading(false);
+    }
   }, []);
 
   return { index, loading };

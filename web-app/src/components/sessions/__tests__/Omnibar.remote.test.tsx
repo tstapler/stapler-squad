@@ -13,157 +13,60 @@
  *       omits remoteName entirely, byte-identical to pre-change local behavior.
  */
 
-import React from "react";
-import { render, screen, fireEvent, act } from "@testing-library/react";
-import { Omnibar } from "../Omnibar";
-import type { PathHistoryEntry } from "@/lib/hooks/usePathHistory";
+import { screen, fireEvent, act } from "@testing-library/react";
+import {
+  mockUsePathCompletions,
+  mockUsePathHistory,
+  mockUseAliases,
+  existingPathCompletions,
+  makeHistoryFixture,
+  renderOmnibar,
+  typeAndDetect,
+} from "./omnibarTestFixtures";
 
 // ---------------------------------------------------------------------------
 // Mocks (copied verbatim from Omnibar.submitReset.test.tsx's baseline block)
 // ---------------------------------------------------------------------------
 
-const mockUsePathCompletions = jest.fn();
-const mockUsePathHistory = jest.fn();
-const mockUseAliases = jest.fn();
+jest.mock("next/navigation", () => require("./omnibarTestFixtures").mockNextNavigationModule());
 
-jest.mock("next/navigation", () => ({
-  usePathname: jest.fn(),
-  useRouter: jest.fn(() => ({ push: jest.fn(), replace: jest.fn() })),
-}));
+jest.mock("@/lib/contexts/ThemeContext", () => require("./omnibarTestFixtures").mockThemeContextModule());
 
-jest.mock("@/lib/contexts/ThemeContext", () => ({
-  useTheme: jest.fn(() => ({ setTheme: jest.fn(), theme: "dark" })),
-}));
+jest.mock("@/lib/config", () => require("./omnibarTestFixtures").mockConfigModule());
 
-jest.mock("@/lib/config", () => ({
-  getApiBaseUrl: jest.fn(() => "http://localhost:8543"),
-}));
+jest.mock("@/lib/hooks/usePathCompletions", () => require("./omnibarTestFixtures").mockUsePathCompletionsModule());
 
-jest.mock("@/lib/hooks/usePathCompletions", () => ({
-  usePathCompletions: (...args: unknown[]) => mockUsePathCompletions(...args),
-  clearCompletionCache: jest.fn(),
-}));
+jest.mock("@/lib/hooks/usePathHistory", () => require("./omnibarTestFixtures").mockUsePathHistoryModule());
 
-jest.mock("@/lib/hooks/usePathHistory", () => ({
-  usePathHistory: (...args: unknown[]) => mockUsePathHistory(...args),
-  clearPathHistory: jest.fn(),
-}));
+jest.mock("@/lib/hooks/useSessionSearch", () => require("./omnibarTestFixtures").mockUseSessionSearchModule());
 
-jest.mock("@/lib/hooks/useSessionSearch", () => ({
-  useSessionSearch: jest.fn(() => []),
-}));
+jest.mock("@/lib/hooks/useWorktreeSuggestions", () => require("./omnibarTestFixtures").mockUseWorktreeSuggestionsModule());
 
-jest.mock("@/lib/hooks/useWorktreeSuggestions", () => ({
-  useWorktreeSuggestions: jest.fn(() => ({ worktrees: [], isLoading: false })),
-}));
+jest.mock("@/lib/hooks/useAliases", () => require("./omnibarTestFixtures").mockUseAliasesModule());
 
-jest.mock("@/lib/hooks/useAliases", () => ({
-  useAliases: (...args: unknown[]) => mockUseAliases(...args),
-}));
+jest.mock("@/lib/hooks/useAliasSuggestions", () => require("./omnibarTestFixtures").mockUseAliasSuggestionsModule());
 
-jest.mock("@/lib/hooks/useAliasSuggestions", () => ({
-  useAliasSuggestions: jest.fn(() => ({
-    isAliasBrowse: false,
-    isAliasCompletion: false,
-    filteredAliases: [],
-    complete: jest.fn(),
-  })),
-}));
+jest.mock("@/lib/hooks/useAtCommandSuggestions", () => require("./omnibarTestFixtures").mockUseAtCommandSuggestionsModule());
 
-jest.mock("@/lib/hooks/useAtCommandSuggestions", () => ({
-  useAtCommandSuggestions: jest.fn(() => ({
-    isAtCommand: false,
-    suggestions: [],
-    complete: jest.fn(),
-  })),
-}));
+jest.mock("@/lib/hooks/useAvailablePrograms", () => require("./omnibarTestFixtures").mockUseAvailableProgramsModule());
 
-jest.mock("@/lib/hooks/useAvailablePrograms", () => ({
-  useAvailablePrograms: jest.fn(() => []),
-}));
+jest.mock("@/lib/hooks/useSlashCommands", () => require("./omnibarTestFixtures").mockUseSlashCommandsModule());
 
-jest.mock("@/lib/hooks/useSlashCommands", () => ({
-  useSlashCommands: jest.fn(() => ({ commands: [] })),
-}));
+jest.mock("@/lib/hooks/useSlashCommandSuggestions", () => require("./omnibarTestFixtures").mockUseSlashCommandSuggestionsModule());
 
-jest.mock("@/lib/hooks/useSlashCommandSuggestions", () => ({
-  useSlashCommandSuggestions: jest.fn(() => ({
-    isActive: false,
-    suggestions: [],
-    complete: jest.fn(),
-  })),
-}));
+jest.mock("@/lib/store", () => require("./omnibarTestFixtures").mockStoreModule());
 
-jest.mock("@/lib/store", () => ({
-  useAppSelector: jest.fn(() => []),
-}));
+jest.mock("@/lib/store/sessionsSlice", () => require("./omnibarTestFixtures").mockSessionsSliceModule());
 
-jest.mock("@/lib/store/sessionsSlice", () => ({
-  selectAllSessions: jest.fn(),
-  selectActiveSessionsSortedByUpdatedAt: jest.fn(),
-}));
+jest.mock("@/components/sessions/OmnibarResultList", () => require("./omnibarTestFixtures").mockOmnibarResultListModule());
 
-jest.mock("@/components/sessions/OmnibarResultList", () => ({
-  OmnibarResultList: () => null,
-  getResultListItemCount: jest.fn(() => 0),
-  getHighlightedItemId: jest.fn(() => undefined),
-}));
-
-jest.mock("@/lib/api/transport", () => ({
-  getConnectTransport: jest.fn(() => ({})),
-}));
+jest.mock("@/lib/api/transport", () => require("./omnibarTestFixtures").mockApiTransportModule());
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
-// pathExists: true so canSubmit's "new_worktree" branch isn't blocked by the unrelated
-// "path does not exist" gate — this test isolates remoteName pass-through, not path validation.
-const existingPathCompletions = {
-  entries: [],
-  baseDir: "/home/user",
-  baseDirExists: true,
-  pathExists: true,
-  isLoading: false,
-  error: null,
-};
-
-const emptyHistory = {
-  getMatching: jest.fn((): PathHistoryEntry[] => []),
-  getAll: jest.fn((): PathHistoryEntry[] => []),
-  save: jest.fn(),
-};
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function renderOmnibar(
-  props: { onCreateSession?: jest.Mock; remotes?: { name: string }[] } = {}
-) {
-  const onClose = jest.fn();
-  const onCreateSession = props.onCreateSession ?? jest.fn().mockResolvedValue(undefined);
-  const onNavigateToSession = jest.fn();
-  const utils = render(
-    <Omnibar
-      isOpen={true}
-      onClose={onClose}
-      onCreateSession={onCreateSession}
-      onNavigateToSession={onNavigateToSession}
-      remotes={props.remotes}
-    />
-  );
-  const input = screen.getByRole("combobox", { name: /session source input/i });
-  return { ...utils, input, onClose, onCreateSession, onNavigateToSession };
-}
-
-/** Type a value into the omnibar input and wait for the 150ms detect debounce plus React state flush. */
-async function typeAndDetect(input: Element, value: string) {
-  fireEvent.change(input, { target: { value } });
-  await act(async () => {
-    jest.advanceTimersByTime(200);
-  });
-}
+const emptyHistory = makeHistoryFixture();
 
 beforeEach(() => {
   jest.useFakeTimers();

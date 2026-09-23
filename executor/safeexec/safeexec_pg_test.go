@@ -44,6 +44,10 @@ func (b *syncBuffer) String() string {
 
 // captureLogs swaps slog's default logger for one writing to an in-memory
 // buffer at the given level, restoring the previous default on cleanup.
+// This package's production code (safeexec_pg.go) calls stdlib slog.Warn/Debug
+// directly rather than this repo's log package, so it must be captured via the
+// real slog.Default() — not log.SetSlogDefaultForTest, which only affects the
+// injectable seam read by log.Warn/Info/etc.
 func captureLogs(t *testing.T, level slog.Level) *syncBuffer {
 	t.Helper()
 	buf := &syncBuffer{}
@@ -144,7 +148,7 @@ func sigkillEscalationsDelta(t *testing.T, baseline int64) int64 {
 // restoring it on cleanup — the escalation path is tested via the actual
 // sigkillGrace timer, never a mocked syscall.Kill, so a short grace keeps
 // these tests fast without being flaky (per
-// .claude/rules/fix-flaky-tests-dont-defer.md's timing guidance).
+// the `fix-flaky-tests-dont-defer` skill's timing guidance).
 func withSigkillGrace(t *testing.T, grace time.Duration) {
 	t.Helper()
 	prev := sigkillGrace

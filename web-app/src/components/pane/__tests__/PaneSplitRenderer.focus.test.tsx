@@ -52,6 +52,12 @@ jest.mock("@/components/sessions/SessionDetail", () => ({
 jest.mock("@/components/sessions/SessionList", () => ({
   SessionList: () => <div data-testid="session-list" />,
 }));
+// Same collision as SessionList above, via a different import path: PaneSplitRenderer.tsx
+// also statically imports SessionBoard (board-kanban-view), which transitively loads
+// BoardCard -> SessionCard -> RemoteConnectionIndicator -> its .css.ts module.
+jest.mock("@/components/sessions/SessionBoard", () => ({
+  SessionBoard: () => <div data-testid="session-board" />,
+}));
 jest.mock("@/components/pane/PaneHeader", () => ({
   PaneHeader: () => <div data-testid="pane-header" />,
 }));

@@ -197,7 +197,7 @@ func collectSessionSnapshots(ctx context.Context, instances []*session.Instance)
 			if len(rawContent) > maxPaneContentBytes {
 				rawContent = rawContent[:maxPaneContentBytes]
 			}
-			ss.PaneContentRaw = rawContent
+			ss.PaneContentRaw = string(rawContent)
 		}
 
 		snapshots = append(snapshots, ss)
@@ -322,6 +322,8 @@ func collectRecentLogs(lineCount int) RecentLogsSnapshot {
 
 // tailFile returns the last n lines of a file efficiently.
 func tailFile(path string, n int) ([]string, error) {
+	// #nosec G304 -- path is always logFilePath from log.GetLogFilePath(cfg), the
+	// server's own configured log path; never network/RPC input.
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -371,9 +373,38 @@ func WriteSnapshot(snap *DebugSnapshot, dir string) (string, error) {
 		return "", fmt.Errorf("failed to marshal snapshot: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return "", fmt.Errorf("failed to write snapshot file: %w", err)
 	}
 
+	pruneOldSnapshots(dir)
+
 	return path, nil
+}
+
+// debugSnapshotMaxAge bounds how long debug-snapshot-*.json files accumulate in
+// the log directory. Nothing else ever deletes them, and every high-goroutine-count
+// or crash-loop episode writes one -- 703 of them (66MB) piled up across two months
+// before this was added, all predating the control-mode panic fix (2b93ea421) that
+// was causing them.
+const debugSnapshotMaxAge = 30 * 24 * time.Hour
+
+// pruneOldSnapshots deletes debug-snapshot-*.json files in dir older than
+// debugSnapshotMaxAge. Best-effort: a stat/remove failure for one file is logged
+// and skipped rather than aborting the rest.
+func pruneOldSnapshots(dir string) {
+	matches, err := filepath.Glob(filepath.Join(dir, "debug-snapshot-*.json"))
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-debugSnapshotMaxAge)
+	for _, path := range matches {
+		info, err := os.Stat(path)
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			log.Warn("pruneOldSnapshots: failed to remove stale debug snapshot", "path", path, "err", err)
+		}
+	}
 }

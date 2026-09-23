@@ -1,13 +1,15 @@
 "use client";
 
 // +feature: workspace-peers-panel
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useAppSelector } from "@/lib/store";
 import { selectAllSessions } from "@/lib/store/sessionsSlice";
 import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
 import {
   panelContainer,
   heading,
+  headingRow,
+  dismissButton,
   peerList,
   peerItem,
   peerTitleRow,
@@ -33,7 +35,7 @@ export type PeerLifecycle = "active" | "stuck" | "gone";
  * its goal hasn't been touched in a while. Exported for direct unit testing.
  */
 export function peerLifecycle(peer: Session, nowMs: number): PeerLifecycle {
-  if (peer.status === SessionStatus.STOPPED) return "gone";
+  if (peer.status === SessionStatus.STOPPED || peer.status === SessionStatus.PERMANENTLY_FAILED) return "gone";
   const updatedAt = peer.goal?.updatedAt;
   if (updatedAt) {
     const updatedMs = Number(updatedAt.seconds) * 1000;
@@ -54,28 +56,54 @@ export interface WorkspacePeersPanelProps {
   now?: number;
 }
 
+// ponytail: per-session dismiss, mirrors BacklogItemPanel's
+// `backlog-panel-${sessionId}` localStorage key.
+const dismissedKey = (sessionId: string) => `workspace-peers-dismissed-${sessionId}`;
+
 /**
- * WorkspacePeersPanel lists other active sessions sharing the current session's workspace
- * (same repo, any branch/worktree), live-updated via the existing WatchSessions Redux store —
- * no extra polling or RPC needed since Session already carries workspace_key and goal.updatedAt.
- * Renders nothing when the session has no workspace key or no peers.
+ * WorkspacePeersPanel lists other active sessions in this exact working directory
+ * (session.activeDir), live-updated via the existing WatchSessions Redux store — no
+ * extra polling or RPC needed. Scoped to the literal active directory, not workspaceKey
+ * (which also matches sibling worktrees/branches of the same repo) — a peer editing a
+ * different worktree isn't touching this directory's files. activeDir is populated
+ * regardless of session state, so stopped sessions with an already-cleaned-up worktree
+ * still compare correctly instead of collapsing onto the shared repo root. Renders
+ * nothing when the session has no active dir, no peers, or the user dismissed it.
  */
 export function WorkspacePeersPanel({ session, now }: WorkspacePeersPanelProps) {
   const allSessions = useAppSelector(selectAllSessions);
   const nowMs = now ?? Date.now();
+  const [dismissed, setDismissed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem(dismissedKey(session.id)) === "1";
+  });
 
   const peers = useMemo(() => {
-    if (!session.workspaceKey) return [];
+    if (!session.activeDir) return [];
     return allSessions.filter(
-      (s) => s.id !== session.id && s.workspaceKey === session.workspaceKey
+      (s) => s.id !== session.id && s.activeDir === session.activeDir
     );
-  }, [allSessions, session.workspaceKey, session.id]);
+  }, [allSessions, session.activeDir, session.id]);
 
-  if (!session.workspaceKey || peers.length === 0) return null;
+  if (!session.activeDir || peers.length === 0 || dismissed) return null;
 
   return (
     <div className={panelContainer} data-testid="workspace-peers-panel">
-      <div className={heading}>Other Sessions in This Workspace</div>
+      <div className={headingRow}>
+        <div className={heading}>Other Sessions in This Directory</div>
+        <button
+          type="button"
+          className={dismissButton}
+          aria-label="Dismiss"
+          data-testid="workspace-peers-dismiss"
+          onClick={() => {
+            localStorage.setItem(dismissedKey(session.id), "1");
+            setDismissed(true);
+          }}
+        >
+          ✕
+        </button>
+      </div>
       <ul className={peerList} role="list">
         {peers.map((peer) => {
           const lifecycle = peerLifecycle(peer, nowMs);
@@ -90,7 +118,7 @@ export function WorkspacePeersPanel({ session, now }: WorkspacePeersPanelProps) 
                   {LIFECYCLE_LABELS[lifecycle]}
                 </span>
               </div>
-              <span className={peerMeta}>{peer.branch || peer.path}</span>
+              <span className={peerMeta}>{peer.branch || peer.existingDir}</span>
               {peer.goal?.goalText && (
                 <span className={peerGoal}>{peer.goal.goalText}</span>
               )}

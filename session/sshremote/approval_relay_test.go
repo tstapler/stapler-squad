@@ -22,6 +22,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/tstapler/stapler-squad/session/tmux"
+	testutil "github.com/tstapler/stapler-squad/testutil/socket"
 )
 
 // streamLocalOpenMsg mirrors golang.org/x/crypto/ssh's unexported
@@ -374,7 +375,7 @@ func TestRemoteApprovalRelay_DrivesRequestThroughHandler(t *testing.T) {
 	wantResponse := []byte(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"no"}}}`)
 	handler.handle = func([]byte, string, *http.Request) []byte { return wantResponse }
 
-	basePath := t.TempDir()
+	basePath := testutil.ShortTempSocketDir(t)
 	relay, err := NewRemoteApprovalRelay(pool, handler, RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, StableSessionID: "stable-session-1", Title: "Test Remote Session"}, withPollInterval(20*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewRemoteApprovalRelay() error: %v", err)
@@ -434,7 +435,7 @@ func TestRemoteApprovalRelay_RejectsWrongBearerToken(t *testing.T) {
 
 	handler := newFakePermissionRequestHandler()
 
-	basePath := t.TempDir()
+	basePath := testutil.ShortTempSocketDir(t)
 	relay, err := NewRemoteApprovalRelay(pool, handler, RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, StableSessionID: "session-key", Title: "Test"}, withPollInterval(20*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewRemoteApprovalRelay() error: %v", err)
@@ -469,7 +470,7 @@ func TestRemoteApprovalRelay_RejectsExpiredBearerToken(t *testing.T) {
 
 	handler := newFakePermissionRequestHandler()
 
-	basePath := t.TempDir()
+	basePath := testutil.ShortTempSocketDir(t)
 	relay, err := NewRemoteApprovalRelay(
 		pool, handler,
 		RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, StableSessionID: "session-key", Title: "Test"},
@@ -520,7 +521,7 @@ func TestRemoteApprovalRelay_DialTimeout_DoesNotWedgePollLoop(t *testing.T) {
 
 	handler := newFakePermissionRequestHandler()
 
-	basePath := t.TempDir()
+	basePath := testutil.ShortTempSocketDir(t)
 	relay, err := NewRemoteApprovalRelay(
 		pool, handler,
 		RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, StableSessionID: "session-key", Title: "Test"},
@@ -600,7 +601,7 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 
 	handler := newFakePermissionRequestHandler()
 
-	basePath := t.TempDir()
+	basePath := testutil.ShortTempSocketDir(t)
 	relay, err := NewRemoteApprovalRelay(pool, handler, RemoteApprovalRelayTarget{RemoteName: target.Name, BasePath: basePath, StableSessionID: "session-key", Title: "Test"}, withPollInterval(20*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewRemoteApprovalRelay() error: %v", err)
@@ -688,7 +689,7 @@ func TestRemoteApprovalRelay_ReopensChannelAfterReconnect(t *testing.T) {
 // every other test in this file would fail for the wrong reason, so this
 // pins its basic behavior directly.
 func TestWriteApprovalAndReadResponse_SmokeTestsTheTestHelper(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.ShortTempSocketDir(t)
 	socketPath := filepath.Join(dir, "smoke.sock")
 	payload := relayedApprovalPayload{Token: "t", Request: json.RawMessage(`{"tool_name":"smoke"}`)}
 	resultCh := writeApprovalAndReadResponse(t, socketPath, payload)

@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -719,7 +721,7 @@ func TestClaudeController_IsIdle_should_returnFalse_When_BatchedToolCallSummaryD
 // a future regression at that exact line (e.g. reverting to `rs.SetStableSessionID(cc.sessionName)`)
 // would pass the entire existing suite.
 func TestClaudeController_Start_TagsEscapeAnalyticsWithStableID(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	spy := &escapeEventSpy{}
 	prev := analytics.GetGlobalEscapeWriter()
@@ -785,7 +787,7 @@ func TestClaudeController_Start_TagsEscapeAnalyticsWithStableID(t *testing.T) {
 // exact same code path (detection.ResolveDetectorForProgram resolving cc.instance.GetProgram()
 // against the live snapshot) with zero global state to leak into other tests.
 func TestClaudeController_Start_UsesPerProgramDetector_WhenRegistered(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	reader, writer, err := mockPTY()
 	if err != nil {
@@ -836,7 +838,7 @@ func TestClaudeController_Start_UsesPerProgramDetector_WhenRegistered(t *testing
 // patterns — so every session that isn't running a program with a registered
 // detector sees no behavior change from this story.
 func TestClaudeController_Start_FallsBackToDefaultDetector_WhenProgramUnregistered(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	reader, writer, err := mockPTY()
 	if err != nil {
@@ -1145,11 +1147,8 @@ func TestClaudeController_StatusChangeListener_FiresOnStatusChange(t *testing.T)
 		}
 	})
 
-	// Start the background goroutine. Add(1) mirrors Start()'s own ordering
-	// requirement (synchronously before the `go` statement) since this test
-	// drives runStatusChangeLoop directly rather than through Start().
-	cc.wg.Add(1)
-	go cc.runStatusChangeLoop(ctx)
+	// Start the background goroutine.
+	go cc.runStatusChangeLoop(ctx, make(chan struct{}))
 
 	// Signal an output event.
 	cc.statusCheckCh <- struct{}{}
@@ -1177,8 +1176,7 @@ func TestClaudeController_StatusChangeListener_SuppressedOnNoChange(t *testing.T
 		callCount <- struct{}{}
 	})
 
-	cc.wg.Add(1) // mirrors Start()'s Add(1)-before-go ordering; see FiresOnStatusChange above.
-	go cc.runStatusChangeLoop(ctx)
+	go cc.runStatusChangeLoop(ctx, make(chan struct{}))
 
 	// Send two signals with the same preview content (same status both times).
 	cc.statusCheckCh <- struct{}{}
@@ -1234,11 +1232,7 @@ func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) 
 	})
 
 	loopDone := make(chan struct{})
-	cc.wg.Add(1) // mirrors Start()'s Add(1)-before-go ordering; see FiresOnStatusChange above.
-	go func() {
-		cc.runStatusChangeLoop(ctx)
-		close(loopDone)
-	}()
+	go cc.runStatusChangeLoop(ctx, loopDone)
 
 	// Cancel the context (simulating Stop()).
 	cancel()
@@ -1270,11 +1264,13 @@ func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) 
 
 // TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits covers backlog
 // item 1cea70ed-3127-48db-8e68-f02eac685510 AC1: Stop() must not return until
-// runStatusChangeLoop has actually exited (cc.wg.Done()'d), not just until its
-// context is cancelled — the flake this closes came from Stop() returning
-// while the loop goroutine was still unwinding into a later test's goleak
-// snapshot. Asserted by calling cc.wg.Wait() again immediately after Stop()
-// returns: if the loop hadn't actually joined, this second Wait() would block.
+// runStatusChangeLoop has actually exited (its statusLoopDone channel closed),
+// not just until its context is cancelled — the flake this closes came from
+// Stop() returning while the loop goroutine was still unwinding into a later
+// test's goleak snapshot. Asserted by capturing the loop's done channel before
+// calling Stop(), then checking (non-blocking) that it's already closed
+// immediately after Stop() returns: if Stop() hadn't actually joined it, this
+// read would not see it closed yet.
 func TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits(t *testing.T) {
 	t.Parallel()
 
@@ -1294,19 +1290,242 @@ func TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits(t *testing.T)
 		t.Fatalf("Start() failed: %v", err)
 	}
 
+	var statusLoopDone chan struct{}
+	cc.lifecycle.Read(func(l controllerLifecycle) {
+		statusLoopDone = l.statusLoopDone
+	})
+	if statusLoopDone == nil {
+		t.Fatal("statusLoopDone was not set by Start()")
+	}
+
 	if err := cc.Stop(); err != nil {
 		t.Fatalf("Stop() failed: %v", err)
 	}
 
-	waitDone := make(chan struct{})
-	go func() {
-		cc.wg.Wait()
-		close(waitDone)
-	}()
 	select {
-	case <-waitDone:
-		// Expected: the counter was already 0 when Stop() returned.
-	case <-time.After(2 * time.Second):
-		t.Fatal("runStatusChangeLoop had not joined cc.wg by the time Stop() returned")
+	case <-statusLoopDone:
+		// Expected: runStatusChangeLoop had already closed it by the time Stop() returned.
+	default:
+		t.Fatal("runStatusChangeLoop had not closed statusLoopDone by the time Stop() returned")
 	}
+}
+
+
+// ---------------------------------------------------------------------------
+// OSC title status override (osc-status-signals)
+// ---------------------------------------------------------------------------
+
+func TestGetCurrentStatus_OSCOverride(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+		want    detection.DetectedStatus
+	}{
+		{"spinner overrides false idle", "$ \x1b]0;⠋ working\x07", detection.StatusExecuting},
+		{"idle marker promotes ready-only text", "$ \x1b]0;✳\x07", detection.StatusIdle},
+		{"idle marker does not override active text", "esc to interrupt\x1b]0;✳\x07", detection.StatusExecuting},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cc, _ := newControllerWithMock(tt.content)
+			cc.started.Store(true)
+
+			if status, desc := cc.GetCurrentStatus(); status != tt.want {
+				t.Errorf("GetCurrentStatus() = (%v, %q), want %v", status, desc, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetCurrentStatus_NoOSCTitle_FallsBackToTextPattern(t *testing.T) {
+	t.Parallel()
+	ccWithOSC, _ := newControllerWithMock(tmuxOutputSmall)
+	ccWithOSC.started.Store(true)
+	statusStarted, descStarted := ccWithOSC.GetCurrentStatus()
+
+	ccNotStarted, _ := newControllerWithMock(tmuxOutputSmall)
+	statusNotStarted, descNotStarted := ccNotStarted.GetCurrentStatus()
+
+	// tmuxOutputSmall contains no OSC sequence, so classifyOSC never matches
+	// regardless of cc.started — the result must be identical either way,
+	// proving AC7 (no behavior change when no OSC title is present).
+	if statusStarted != statusNotStarted || descStarted != descNotStarted {
+		t.Errorf("result differs with no OSC title present: started=(%v,%q) not-started=(%v,%q)",
+			statusStarted, descStarted, statusNotStarted, descNotStarted)
+	}
+}
+
+// TestGetStatusAndIdleInfo_UninitializedStatusDetector_DoesNotApplyOSCOverride is the
+// direct regression test for the guard at claude_controller.go's OSC-override site:
+// resolveStatusFromTail leaves status at its zero value (StatusUnknown) when
+// statusDetector is nil, and StatusUnknown is in both OSC promotable sets — without
+// the `cc.statusDetector.Load() != nil` guard, an uninitialized detector could report
+// a confident StatusExecuting/StatusIdle sourced entirely from OSC instead of
+// surfacing the uninitialized state.
+func TestGetStatusAndIdleInfo_UninitializedStatusDetector_DoesNotApplyOSCOverride(t *testing.T) {
+	t.Parallel()
+	inst := &mockInstance{title: "test", preview: "$ \x1b]0;⠋ working\x07"}
+	cc := &ClaudeController{sessionName: "test", instance: inst}
+	// Deliberately no cc.statusDetector.Store(...).
+	cc.idleDetector.Store(detection.NewIdleDetector("test", nil))
+	buf := NewCircularBuffer(256 * 1024)
+	_, _ = buf.Write([]byte("$ \x1b]0;⠋ working\x07"))
+	cc.ptyAccess.Store(NewPTYAccess("test", nil, buf))
+	cc.started.Store(true)
+
+	status, desc, _, _ := cc.GetStatusAndIdleInfo()
+	if status != detection.StatusUnknown {
+		t.Errorf("GetStatusAndIdleInfo() with nil statusDetector = (%v, %q), want StatusUnknown — "+
+			"an OSC-derived status must not be reported when the underlying text detector never ran", status, desc)
+	}
+}
+
+func TestGetStatusAndIdleInfo_OSCPromotesIdleState(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("$ \x1b]0;⠋ working\x07")
+	cc.started.Store(true)
+
+	status, _, idleInfo, _ := cc.GetStatusAndIdleInfo()
+	if status != detection.StatusExecuting {
+		t.Errorf("GetStatusAndIdleInfo() status = %v, want StatusExecuting", status)
+	}
+	if idleInfo.State != detection.IdleStateActive {
+		t.Errorf("GetStatusAndIdleInfo() idleInfo.State = %v, want IdleStateActive", idleInfo.State)
+	}
+}
+
+func TestGetIdleState_OSCSpinnerMatchesGetStatusAndIdleInfo(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("$ \x1b]0;⠋ working\x07")
+	cc.started.Store(true)
+
+	state, _ := cc.GetIdleState()
+	if state != detection.IdleStateActive {
+		t.Errorf("GetIdleState() = %v, want IdleStateActive (consistent with GetStatusAndIdleInfo)", state)
+	}
+}
+
+func TestClassifyOSC_StaleActivity_FallsBackToNone(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("$ \x1b]0;⠋ working\x07")
+	cc.started.Store(true)
+
+	id := cc.idleDetector.Load()
+	id.InitializeFromTimestamp(time.Now().Add(-oscStaleThreshold - time.Second))
+
+	if osc, ok := cc.classifyOSC("$ \x1b]0;⠋ working\x07"); ok {
+		t.Errorf("classifyOSC() with stale activity = (%v, true), want (_, false)", osc)
+	}
+
+	// Recent activity: the spinner title is still classified normally — proves
+	// the guard doesn't fire on legitimate in-progress work.
+	id.InitializeFromTimestamp(time.Now())
+	if _, ok := cc.classifyOSC("$ \x1b]0;⠋ working\x07"); !ok {
+		t.Error("classifyOSC() with recent activity should still classify the OSC title")
+	}
+}
+
+// TestGetCurrentStatus_CacheDoesNotOutliveOSCStaleness is a regression test for a
+// code-review BLOCKER: classifyOSC's own staleness gate (proven above) only runs on a
+// cache MISS. Without re-validating staleness on a cache HIT too, a crashed process's
+// frozen PTY tail (constant tailHash forever) would keep serving a pre-staleness
+// OSC-derived status indefinitely — the exact "stuck at Executing forever" failure
+// AC7 requires guarding against, just reached through the cache instead of through
+// classifyOSC directly.
+func TestGetCurrentStatus_CacheDoesNotOutliveOSCStaleness(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("$ \x1b]0;⠋ working\x07")
+	cc.started.Store(true)
+
+	// First call: fresh activity, OSC spinner promotes to Executing, cache is
+	// populated with this OSC-derived result.
+	status1, _ := cc.GetCurrentStatus()
+	if status1 != detection.StatusExecuting {
+		t.Fatalf("seed: GetCurrentStatus() = %v, want StatusExecuting", status1)
+	}
+
+	// Simulate a crashed process: PTY content is frozen (identical tail, identical
+	// hash — a real cache hit), but the activity clock has gone stale.
+	id := cc.idleDetector.Load()
+	id.InitializeFromTimestamp(time.Now().Add(-oscStaleThreshold - time.Second))
+
+	status2, desc2 := cc.GetCurrentStatus()
+	if status2 == detection.StatusExecuting {
+		t.Errorf("GetCurrentStatus() after staleness elapsed = (%v, %q), want NOT StatusExecuting — "+
+			"the cache served a pre-staleness OSC-derived result instead of re-validating", status2, desc2)
+	}
+}
+
+// TestGetStatusAndIdleInfo_CacheDoesNotOutliveOSCStaleness is the GetStatusAndIdleInfo
+// counterpart to TestGetCurrentStatus_CacheDoesNotOutliveOSCStaleness — it shares a
+// different cache (statusCache is common to both, but this proves the fix applies to
+// the call site GetCurrentStatus doesn't exercise).
+func TestGetStatusAndIdleInfo_CacheDoesNotOutliveOSCStaleness(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("$ \x1b]0;⠋ working\x07")
+	cc.started.Store(true)
+
+	status1, _, _, _ := cc.GetStatusAndIdleInfo()
+	if status1 != detection.StatusExecuting {
+		t.Fatalf("seed: GetStatusAndIdleInfo() status = %v, want StatusExecuting", status1)
+	}
+
+	id := cc.idleDetector.Load()
+	id.InitializeFromTimestamp(time.Now().Add(-oscStaleThreshold - time.Second))
+
+	status2, desc2, _, _ := cc.GetStatusAndIdleInfo()
+	if status2 == detection.StatusExecuting {
+		t.Errorf("GetStatusAndIdleInfo() status after staleness elapsed = (%v, %q), want NOT StatusExecuting", status2, desc2)
+	}
+}
+
+func TestApplyOSCStatusOverride_FullMatrix(t *testing.T) {
+	t.Parallel()
+	allStatuses := []detection.DetectedStatus{
+		detection.StatusUnknown, detection.StatusReady, detection.StatusProcessing,
+		detection.StatusNeedsApproval, detection.StatusInputRequired, detection.StatusError,
+		detection.StatusTestsFailing, detection.StatusIdle, detection.StatusExecuting,
+		detection.StatusSuccess, detection.StatusWaitingForAgent, detection.StatusCompacting,
+	}
+	executingPromotable := map[detection.DetectedStatus]bool{
+		detection.StatusReady: true, detection.StatusUnknown: true,
+		detection.StatusIdle: true, detection.StatusProcessing: true,
+	}
+	idlePromotable := map[detection.DetectedStatus]bool{
+		detection.StatusReady: true, detection.StatusUnknown: true,
+	}
+
+	for _, s := range allStatuses {
+		t.Run(s.String()+"/OSCStatusExecuting", func(t *testing.T) {
+			got, _ := applyOSCStatusOverride(s, "orig", dtypes.OSCStatusExecuting)
+			wantPromoted := executingPromotable[s]
+			if wantPromoted && got != detection.StatusExecuting {
+				t.Errorf("applyOSCStatusOverride(%v, OSCStatusExecuting) = %v, want StatusExecuting (promotable)", s, got)
+			}
+			if !wantPromoted && got != s {
+				t.Errorf("applyOSCStatusOverride(%v, OSCStatusExecuting) = %v, want %v (never demoted/changed)", s, got, s)
+			}
+		})
+		t.Run(s.String()+"/OSCStatusIdle", func(t *testing.T) {
+			got, _ := applyOSCStatusOverride(s, "orig", dtypes.OSCStatusIdle)
+			wantPromoted := idlePromotable[s]
+			if wantPromoted && got != detection.StatusIdle {
+				t.Errorf("applyOSCStatusOverride(%v, OSCStatusIdle) = %v, want StatusIdle (promotable)", s, got)
+			}
+			if !wantPromoted && got != s {
+				t.Errorf("applyOSCStatusOverride(%v, OSCStatusIdle) = %v, want %v (never demoted/changed)", s, got, s)
+			}
+		})
+	}
+
+	t.Run("OSCStatusNone is always a no-op", func(t *testing.T) {
+		for _, s := range allStatuses {
+			got, gotDesc := applyOSCStatusOverride(s, "orig", dtypes.OSCStatusNone)
+			if got != s || gotDesc != "orig" {
+				t.Errorf("applyOSCStatusOverride(%v, OSCStatusNone) = (%v, %q), want (%v, %q)", s, got, gotDesc, s, "orig")
+			}
+		}
+	})
 }

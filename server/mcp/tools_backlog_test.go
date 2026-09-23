@@ -21,10 +21,12 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
 )
 
@@ -1208,6 +1210,327 @@ func TestRequestReview_TransitionsDirectlyToDone_When_SkipReviewGateEnabled(t *t
 	require.Equal(t, string(session.BacklogStatusDone), fetched.Status)
 }
 
+// TestRequestReview_RejectsWhenCriteriaIncomplete verifies the AC-completeness
+// gate: an item with any criterion not yet marked "done" (pass) via
+// report_progress must be rejected with a message naming the unmet
+// criterion, and the item must remain at its source status — no silent
+// transition on a self-declared "done" that report_progress never confirmed.
+func TestRequestReview_RejectsWhenCriteriaIncomplete(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Incomplete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"done"},{"index":1,"text":"Criterion B","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Think I'm done.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	require.Equal(t, ErrInvalidArgument, errObj["code"])
+	require.Contains(t, errObj["message"], "Criterion B")
+	require.Contains(t, errObj["message"], "report_progress")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status,
+		"a rejected request_review must never transition the item's status")
+}
+
+// TestRequestReview_RejectionPersistsVisibleAuditNote verifies AC2: a
+// rejected request_review call must leave a human-readable trace on the item
+// describing what's left, not just an error returned to the calling session
+// (which the item's status alone would never reveal, since it doesn't
+// change) — per the "document AI decisions in edge cases" convention.
+func TestRequestReview_RejectionPersistsVisibleAuditNote(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Incomplete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"done"},{"index":1,"text":"Criterion B","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	_, err = handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Think I'm done.",
+	}))
+	require.NoError(t, err)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Contains(t, fetched.Notes, rejectedNoteMarker)
+	require.Contains(t, fetched.Notes, "Criterion B")
+}
+
+// TestReportBlocked_EscalatesAfterRequestReviewRejectionsPlusOneBlock verifies
+// the shared-counter edge case from validation.md: request_review's
+// AC-completeness rejections and explicit report_blocked calls must escalate
+// on their combined total, not two independent counters that could each stay
+// under blockedCycleThreshold forever. Two rejected request_review calls
+// followed by a single report_blocked call must hit the threshold of 3 and
+// escalate to review.
+func TestReportBlocked_EscalatesAfterRequestReviewRejectionsPlusOneBlock(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Combined escalation counter",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	for i := 0; i < 2; i++ {
+		_, err = handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{
+			"item_id": item.ID,
+			"message": "Think I'm done.",
+		}))
+		require.NoError(t, err)
+	}
+
+	blockedResult, err := handler.reportBlocked(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "rationale": "stuck on Criterion A",
+	}))
+	require.NoError(t, err)
+	tc := requireToolTextResult(t, blockedResult)
+	require.Contains(t, tc, "escalated to review")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status,
+		"2 rejected request_review calls + 1 report_blocked call must cross blockedCycleThreshold together")
+}
+
+// TestRequestReview_AcceptsWhenAllCriteriaPass is the positive-path
+// counterpart to TestRequestReview_RejectsWhenCriteriaIncomplete: every
+// criterion marked "done" must let the transition through as before.
+func TestRequestReview_AcceptsWhenAllCriteriaPass(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Complete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"done"},{"index":1,"text":"Criterion B","status":"done"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "All criteria verified complete.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "review")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+}
+
+// TestRequestReview_SkipReviewGate_StillRequiresCompleteness closes the gap
+// the item's research identified: SkipReviewGate=true must skip the
+// independent LLM review, not the deterministic AC-completeness check —
+// otherwise a SkipReviewGate item could self-declare done with zero
+// verification of any kind.
+func TestRequestReview_SkipReviewGate_StillRequiresCompleteness(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Skip gate, incomplete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		SkipReviewGate:     true,
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"pending"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Think I'm done.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	require.Equal(t, ErrInvalidArgument, errObj["code"])
+	require.Contains(t, errObj["message"], "Criterion A")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status,
+		"SkipReviewGate must not bypass the AC-completeness gate")
+}
+
+// TestRequestReview_SkipReviewGate_CompleteCriteria_GoesDirectToDone is a
+// regression guard: an item that legitimately opts out of the review gate via
+// SkipReviewGate must still go straight to done once its criteria are
+// actually complete — the completeness gate must not force it through a
+// review stage it explicitly opted out of.
+func TestRequestReview_SkipReviewGate_CompleteCriteria_GoesDirectToDone(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Skip gate, complete criteria",
+		Status:             string(session.BacklogStatusInProgress),
+		SkipReviewGate:     true,
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion A","status":"done"}]`,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Implemented the feature, all criteria done.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "SkipReviewGate")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+}
+
+// TestRequestReview_AcceptsWhenNoAcceptanceCriteria verifies the zero-criteria
+// edge case: an item with no acceptance criteria at all (created before ACs
+// were mandatory) must pass the completeness gate trivially rather than being
+// rejected forever with nothing to satisfy it.
+func TestRequestReview_AcceptsWhenNoAcceptanceCriteria(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "No criteria at all",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Nothing to verify.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "review")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+}
+
 // TestRequestReview_PersistsVerificationNotesOnWorkSession verifies that a
 // non-empty verification_notes argument is stored on the caller's ItemSession
 // so the review gate can later surface it in the reviewer's prompt.
@@ -1862,7 +2185,7 @@ func TestReportPRCreated_should_TransitionToPRPending_When_ValidPR(t *testing.T)
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
 	}
@@ -1910,7 +2233,7 @@ func TestReportPRCreated_should_ReturnError_When_PersistFails(t *testing.T) {
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
 	}
@@ -1950,7 +2273,7 @@ func TestReportPRCreated_should_RejectCall_When_ItemStatusIneligible(t *testing.
 			handler := &backlogHandlers{
 				storage:              storage,
 				resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-				verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+				verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 					verifyCalled = true
 					return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 				},
@@ -2015,7 +2338,7 @@ func TestReportPRCreated_should_NoOp_When_AlreadyPRPendingSamePR(t *testing.T) {
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			verifyCalled = true
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
@@ -2089,7 +2412,7 @@ func TestReportPRCreated_should_RejectCall_When_BranchMismatch(t *testing.T) {
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, _ int, expectedBranch string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, _ int, expectedBranch string) (PRVerification, error) {
 			assert.Equal(t, "backlog/ship-it", expectedBranch)
 			// definitive mismatch — a real PR exists, but for a different branch/number
 			return NewPRVerification(true, false, "totally-unrelated-branch", githubpkg.PRStateOpen, "tstapler"), nil
@@ -2131,7 +2454,7 @@ func TestReportPRCreated_should_ReturnRetryableError_When_GitHubLookupTransientl
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return PRVerification{}, fmt.Errorf("GitHub API: rate limited (403)")
 		},
 	}
@@ -2223,7 +2546,7 @@ func TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails(t *testin
 		storage:              storage,
 		getBacklogItemFn:     getBacklogItemFn,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
 	}
@@ -2404,9 +2727,8 @@ func TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds(t *testing
 		}`))
 	}))
 	defer srv.Close()
-	prevBaseURL := githubpkg.GhBaseURL
-	githubpkg.GhBaseURL = srv.URL + "/"
-	defer func() { githubpkg.GhBaseURL = prevBaseURL }()
+	restoreGhBaseURL := githubpkg.SetGhBaseURLForTest(srv.URL + "/")
+	defer restoreGhBaseURL()
 
 	storage := newTestBacklogStorage(t)
 	handler := &backlogHandlers{storage: storage}
@@ -2448,9 +2770,8 @@ func TestImportGitHubIssue_should_Succeed_When_NoSessionUUID(t *testing.T) {
 		}`))
 	}))
 	defer srv.Close()
-	prevBaseURL := githubpkg.GhBaseURL
-	githubpkg.GhBaseURL = srv.URL + "/"
-	defer func() { githubpkg.GhBaseURL = prevBaseURL }()
+	restoreGhBaseURL := githubpkg.SetGhBaseURLForTest(srv.URL + "/")
+	defer restoreGhBaseURL()
 
 	storage := newTestBacklogStorage(t)
 	handler := &backlogHandlers{storage: storage}
@@ -2482,9 +2803,8 @@ func TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathS
 		}`))
 	}))
 	defer srv.Close()
-	prevBaseURL := githubpkg.GhBaseURL
-	githubpkg.GhBaseURL = srv.URL + "/"
-	defer func() { githubpkg.GhBaseURL = prevBaseURL }()
+	restoreGhBaseURL := githubpkg.SetGhBaseURLForTest(srv.URL + "/")
+	defer restoreGhBaseURL()
 
 	storage := newTestBacklogStorage(t)
 	backlogSvc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -2668,16 +2988,15 @@ func TestReportPRCreated_should_TransitionToPRPending_When_FallbackBranchWithOve
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 
 	var buf strings.Builder
-	origLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(origLogger) })
+	origLogger := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(origLogger) })
 
 	handler := &backlogHandlers{
 		storage: storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, false, "feature/ci-status-diff-viewer", githubpkg.PRStateMerged, "tstapler"), nil
 		},
 		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
@@ -2731,7 +3050,7 @@ func TestReportPRCreated_should_RejectCall_When_FallbackBranchMissingOverrideRea
 		resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, false, "feature/ci-status-diff-viewer", githubpkg.PRStateMerged, "tstapler"), nil
 		},
 		resolveCallerGitHubLogin: func(context.Context) (string, error) {
@@ -2778,7 +3097,7 @@ func TestReportPRCreated_should_DocumentOverrideWorkaround_When_BranchMismatchRe
 		resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, false, "feature/ci-status-diff-viewer", githubpkg.PRStateMerged, "tstapler"), nil
 		},
 	}
@@ -2818,7 +3137,7 @@ func TestReportPRCreated_should_RejectCall_When_UnrelatedClosedPRWithOverrideRea
 		resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, false, "totally-unrelated-branch", githubpkg.PRStateClosed, "tstapler"), nil
 		},
 		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
@@ -2863,7 +3182,7 @@ func TestReportPRCreated_should_RejectCall_When_UnrelatedPRAuthorMismatch(t *tes
 		resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, false, "totally-unrelated-branch", githubpkg.PRStateOpen, "a-different-github-user"), nil
 		},
 		resolveCallerGitHubLogin: func(context.Context) (string, error) { return "tstapler", nil },
@@ -2911,7 +3230,7 @@ func TestReportPRCreated_should_RejectCall_When_PRNumberDoesNotExist(t *testing.
 		resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(false, false, "", "", ""), nil
 		},
 		resolveCallerGitHubLogin: func(context.Context) (string, error) {
@@ -2994,7 +3313,7 @@ func TestReportPRCreated_should_ReassignPR_When_AlreadyPRPendingWithOverrideReas
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 			}
@@ -3039,7 +3358,7 @@ func TestReportPRCreated_should_RejectReassignment_When_AlreadyPRPendingMissingO
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			verifyCalled = true
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
@@ -3087,7 +3406,7 @@ func TestReportPRCreated_should_RejectReassignment_When_CurrentPRAlreadyMerged(t
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateMerged, "tstapler"), nil
 			}
@@ -3151,7 +3470,7 @@ func TestReportPRCreated_should_RejectSecondReassignment_When_ConcurrentCASRace(
 		storage:              storage,
 		getBacklogItemFn:     getBacklogItemFn,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 			}
@@ -3233,7 +3552,7 @@ func TestReportPRCreated_should_RecordDistinctAuditNote_When_Reassigned(t *testi
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 			}
@@ -3278,7 +3597,7 @@ func TestReportPRCreated_should_ClearPrFeedbackAddressedAt_When_Reassigned(t *te
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 			}
@@ -3330,7 +3649,7 @@ func TestReportPRCreated_should_ReturnFriendlyError_When_CASFailsOutOfBand(t *te
 		storage:              storage,
 		getBacklogItemFn:     getBacklogItemFn,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
 	}
@@ -3368,7 +3687,7 @@ func TestReportPRCreated_should_RejectReassignment_When_AuthorMismatch(t *testin
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(_ context.Context, _, _ string, prNumber int, _ string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 			}
@@ -3412,7 +3731,7 @@ func TestReportPRCreated_should_RejectReassignment_When_AuthorMismatch(t *testin
 type fakeTriageHeadlessPool struct{}
 
 func (f *fakeTriageHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions, sink headless.CostSink) (string, error) {
-	sink(0)
+	sink(0, true)
 	return `{"title":"t","summary":"s","suggestions":[]}`, nil
 }
 
@@ -3557,8 +3876,7 @@ func (f *fakeReviewTrigger) TriggerReviewForSession(sessionUUID string) {
 // GhBaseURL is exported specifically so each consuming package can point it
 // at an httptest.Server without needing a shared cross-package test helper.
 func resetGhBaseURL(ts *httptest.Server) func() {
-	githubpkg.GhBaseURL = ts.URL + "/"
-	return func() { githubpkg.GhBaseURL = "https://api.github.com/" }
+	return githubpkg.SetGhBaseURLForTest(ts.URL + "/")
 }
 
 // TestReportDuplicate_VerifyGitHubRefExists_DispatchesPRTypeToRealGetPR
@@ -4765,7 +5083,7 @@ func TestReportDuplicate_RejectsThirdCall_AfterSequentialReportPRCreatedThenRepo
 	handler := &backlogHandlers{
 		storage:              storage,
 		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
-		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (PRVerification, error) {
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
 		verifyGitHubRef: func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },
@@ -5542,7 +5860,7 @@ func TestWaitForBacklogEvent_NoGoroutineLeak(t *testing.T) {
 		t.Fatal("matched-path call did not return")
 	}
 
-	require.Eventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
+	wait.RequireEventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
 		"both calls must Unsubscribe on exit")
 	goleak.VerifyNone(t, baseline)
 }
@@ -5709,6 +6027,69 @@ func TestBuildMatchedWaitResult_MapsAllEventKinds(t *testing.T) {
 	}
 }
 
+// TestBuildMatchedWaitResult_should_SetIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage
+// is the Story 2.1.3 (Task 2.1.3d) regression test for buildMatchedWaitResult's
+// switch to session.IsTerminalStatus: a custom stage marked IsTerminal via
+// session.SetTerminalStatusChecker must report IsTerminal true, matching
+// plan.md's AC example verbatim (a "legal-review" custom terminal stage).
+func TestBuildMatchedWaitResult_should_SetIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage(t *testing.T) {
+	const customTerminal = session.BacklogStatus("legal-review")
+	session.SetTerminalStatusChecker(func(s session.BacklogStatus) bool { return s == customTerminal })
+	t.Cleanup(func() { session.SetTerminalStatusChecker(nil) })
+
+	res := buildMatchedWaitResult("item-under-test", &events.BacklogItemEventPayload{
+		Kind: events.BacklogChangeStatusTransition,
+		Item: &session.BacklogItemData{ID: "item-under-test", Status: string(customTerminal)},
+	})
+	require.True(t, res.IsTerminal, "a custom stage marked IsTerminal by the configured checker must be recognized")
+}
+
+// TestBuildMatchedWaitResult_should_NotSetIsTerminal_When_NoCheckerConfigured
+// confirms built-in non-terminal behavior is unchanged when no
+// SetTerminalStatusChecker is wired (today's only production/test state).
+func TestBuildMatchedWaitResult_should_NotSetIsTerminal_When_NoCheckerConfigured(t *testing.T) {
+	res := buildMatchedWaitResult("item-under-test", &events.BacklogItemEventPayload{
+		Kind: events.BacklogChangeStatusTransition,
+		Item: &session.BacklogItemData{ID: "item-under-test", Status: "legal-review"},
+	})
+	require.False(t, res.IsTerminal, "an unrecognized custom status must not be treated as terminal when no checker is configured")
+}
+
+// TestCurrentStateWaitResult_should_ReportIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage
+// mirrors the above for currentStateWaitResult's "already satisfied" precheck
+// (the verdict_recorded branch, which is the one that reads the `terminal`
+// local re-routed to session.IsTerminalStatus).
+func TestCurrentStateWaitResult_should_ReportIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage(t *testing.T) {
+	const customTerminal = session.BacklogStatus("legal-review")
+	session.SetTerminalStatusChecker(func(s session.BacklogStatus) bool { return s == customTerminal })
+	t.Cleanup(func() { session.SetTerminalStatusChecker(nil) })
+
+	item := &session.BacklogItemData{ID: "item-under-test", Status: string(customTerminal)}
+	verdict := &session.ReviewVerdictSummary{OverallOutcome: "pass", Summary: "looks good"}
+
+	res := currentStateWaitResult(item, verdict, eventTypeAny)
+	require.NotNil(t, res)
+	require.True(t, res.IsTerminal, "a custom stage marked IsTerminal by the configured checker must be recognized")
+}
+
+// TestCurrentStateWaitResult_should_ReportBuiltInDoneArchivedUnchanged confirms
+// the built-in Done/Archived behavior this re-route must preserve exactly.
+func TestCurrentStateWaitResult_should_ReportBuiltInDoneArchivedUnchanged(t *testing.T) {
+	for _, status := range []session.BacklogStatus{session.BacklogStatusDone, session.BacklogStatusArchived} {
+		item := &session.BacklogItemData{ID: "item-under-test", Status: string(status)}
+		verdict := &session.ReviewVerdictSummary{OverallOutcome: "pass", Summary: "looks good"}
+		res := currentStateWaitResult(item, verdict, eventTypeAny)
+		require.NotNil(t, res)
+		require.True(t, res.IsTerminal, "%s must remain terminal", status)
+	}
+
+	item := &session.BacklogItemData{ID: "item-under-test", Status: string(session.BacklogStatusInProgress)}
+	verdict := &session.ReviewVerdictSummary{OverallOutcome: "pass", Summary: "looks good"}
+	res := currentStateWaitResult(item, verdict, eventTypeAny)
+	require.NotNil(t, res)
+	require.False(t, res.IsTerminal, "in_progress must remain non-terminal")
+}
+
 // --- list_backlog_items ---
 
 // newTestListBacklogHandlers wires a *backlogHandlers with a real
@@ -5762,6 +6143,67 @@ func TestListBacklogItems_ReturnsInvalidArgument_When_StatusValueUnknown(t *test
 	out := parseResult(t, res)
 	require.False(t, out["success"].(bool))
 	require.Equal(t, ErrInvalidArgument, out["error"].(map[string]interface{})["code"])
+}
+
+// fakeStageLister is a minimal stageLister test double standing in for Epic
+// 2.3's not-yet-built ConfiguredWorkflowEngine (Story 2.1.4, Task 2.1.4c).
+type fakeStageLister struct{ slugs []string }
+
+func (f fakeStageLister) ListEnabledStageSlugs() []string { return f.slugs }
+
+// TestListBacklogItems_should_AcceptConfiguredCustomStage_When_StageEngineWired
+// is the Story 2.1.4 (Task 2.1.4c) regression test: once a stageLister is
+// wired, a status filter value must be validated against its live
+// enabled-stage list (including a custom stage slug), not the fixed built-in
+// 9-entry validBacklogStatuses list.
+func TestListBacklogItems_should_AcceptConfiguredCustomStage_When_StageEngineWired(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	h.stageEngine = fakeStageLister{slugs: []string{"idea", "legal-review", "done"}}
+	createBacklogItemWithStatusAndPriority(t, h.storage, "Legal review item", "legal-review", 3)
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"status": []interface{}{"legal-review"},
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.True(t, out["success"].(bool), "a configured custom stage slug must be accepted as a status filter value: %v", out)
+}
+
+// TestListBacklogItems_should_RejectBuiltInStatus_When_StageEngineOmitsIt
+// confirms the engine's list is authoritative once wired — a built-in status
+// the engine doesn't enumerate is rejected, not silently allowed via the
+// fixed fallback list.
+func TestListBacklogItems_should_RejectBuiltInStatus_When_StageEngineOmitsIt(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	h.stageEngine = fakeStageLister{slugs: []string{"idea", "legal-review", "done"}}
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"status": []interface{}{"in_progress"},
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.False(t, out["success"].(bool), "a status the wired engine doesn't enumerate must be rejected")
+	require.Equal(t, ErrInvalidArgument, out["error"].(map[string]interface{})["code"])
+}
+
+// TestListBacklogItems_should_AcceptAllNineBuiltInStatuses_When_NoStageEngineWired
+// is the "existing 9 built-in filter values are unaffected" half of Task
+// 2.1.4c: with no stageEngine wired (today's only production state), every
+// built-in status must still validate exactly as before this story.
+func TestListBacklogItems_should_AcceptAllNineBuiltInStatuses_When_NoStageEngineWired(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	require.Nil(t, h.stageEngine)
+
+	for _, s := range validBacklogStatuses {
+		t.Run(string(s), func(t *testing.T) {
+			res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+				"status": []interface{}{string(s)},
+			}))
+			require.NoError(t, err)
+			out := parseResult(t, res)
+			require.True(t, out["success"].(bool), "%s must remain a valid filter value: %v", s, out)
+		})
+	}
 }
 
 func TestListBacklogItems_ReturnsInvalidArgument_When_PriorityOutOfRange(t *testing.T) {
@@ -6373,7 +6815,7 @@ func TestWaitForBacklogEvent_should_NotWake_When_ActivityNoteAddedFires(t *testi
 		t.Fatal("waitForBacklogEvent did not return within the timeout window")
 	}
 
-	require.Eventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
+	wait.RequireEventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
 		"the timed-out call must Unsubscribe on exit")
 	goleak.VerifyNone(t, baseline)
 }
@@ -6426,7 +6868,7 @@ func TestWaitForBacklogEvent_should_StillWake_When_StatusTransitionFires(t *test
 		t.Fatal("waitForBacklogEvent did not return after a genuine status-transition event")
 	}
 
-	require.Eventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
+	wait.RequireEventually(t, func() bool { return bus.SubscriberCount() == 0 }, 3*time.Second, 10*time.Millisecond,
 		"the matched call must Unsubscribe on exit")
 	goleak.VerifyNone(t, baseline)
 }
@@ -6858,9 +7300,15 @@ func TestReportBlocked_should_ReturnPermissionDenied_When_CallerRoleNotWork(t *t
 // caught report_blocked and report_duplicate missing this exact guard after a
 // stale-base merge with origin/main.
 func TestBacklogHandlers_should_HaveNoRemainingRawLinkCheck_When_SourceIsScanned(t *testing.T) {
-	data, err := os.ReadFile("tools_backlog.go")
-	require.NoError(t, err, "read tools_backlog.go")
-	content := string(data)
+	// report_pr_created's resolveItemLink call site lives in
+	// tools_backlog_pr.go, not tools_backlog.go — see
+	// docs/reference/hotspot-ranking.md row 5's extraction.
+	var content string
+	for _, f := range []string{"tools_backlog.go", "tools_backlog_pr.go"} {
+		data, err := os.ReadFile(f)
+		require.NoError(t, err, "read %s", f)
+		content += string(data)
+	}
 
 	const staleMessage = "this session is not linked to the specified backlog item"
 	assert.Equal(t, 0, strings.Count(content, staleMessage),
@@ -6870,6 +7318,388 @@ func TestBacklogHandlers_should_HaveNoRemainingRawLinkCheck_When_SourceIsScanned
 		"resolveItemLink must be defined exactly once")
 
 	callSiteCount := strings.Count(content, "h.resolveItemLink(ctx, callerUUID, itemID)")
-	assert.Equal(t, 7, callSiteCount,
-		"expected exactly 7 mutating handlers (report_progress, request_review, submit_review_verdict, report_pr_created, submit_triage_result, report_blocked, report_duplicate) to call resolveItemLink")
+	assert.Equal(t, 8, callSiteCount,
+		"expected exactly 8 mutating handlers (report_progress, request_review, submit_review_verdict, report_pr_created, submit_triage_result, report_blocked, report_duplicate, resume_work) to call resolveItemLink")
+}
+
+// --- resume_work ---
+
+func TestResumeWork_TransitionsReadyToInProgress(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Resume after blocker cleared",
+		Status: string(session.BacklogStatusReady),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	result, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "in_progress")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+
+	require.NotEmpty(t, fetched.StatusEvents)
+	last := fetched.StatusEvents[len(fetched.StatusEvents)-1]
+	require.Equal(t, session.TriggeredByAgent, last.TriggeredBy)
+}
+
+func TestResumeWork_RejectsWhenCallerRoleNotWork(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Wrong role item",
+		Status: string(session.BacklogStatusReady),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleReview, // wrong role
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	result, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrPermissionDenied, errObj["code"])
+	assert.Contains(t, errObj["message"], "only 'work' role may resume work")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReady), fetched.Status, "rejected call must not mutate item status")
+}
+
+func TestResumeWork_RejectsWhenSessionNotLinked(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Unlinked session item",
+		Status: string(session.BacklogStatusReady),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, uuid.New().String())
+
+	result, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrPermissionDenied, errObj["code"])
+}
+
+// TestResumeWork_RejectsWhenSourceStatusNotReady verifies resume_work refuses
+// any source status other than ready, naming the actual status in the
+// rejection message (AC2).
+func TestResumeWork_RejectsWhenSourceStatusNotReady(t *testing.T) {
+	statuses := []string{
+		string(session.BacklogStatusInProgress),
+		string(session.BacklogStatusReview),
+		string(session.BacklogStatusPRPending),
+		string(session.BacklogStatusDone),
+		string(session.BacklogStatusIdea),
+	}
+
+	for _, status := range statuses {
+		status := status
+		t.Run(status, func(t *testing.T) {
+			storage := newTestBacklogStorage(t)
+			ctx := context.Background()
+
+			item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+				Title:  "Disallowed source status",
+				Status: status,
+			})
+			require.NoError(t, err)
+
+			sessionUUID := uuid.New().String()
+			_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+				ItemID:      item.ID,
+				SessionUUID: sessionUUID,
+				SessionRole: session.SessionRoleWork,
+			})
+			require.NoError(t, err)
+
+			handler := &backlogHandlers{storage: storage}
+			ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+			result, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+			require.NoError(t, err)
+
+			m := parseResult(t, result)
+			require.False(t, m["success"].(bool))
+			errObj := m["error"].(map[string]interface{})
+			require.Equal(t, ErrInvalidArgument, errObj["code"])
+			require.Contains(t, errObj["message"], status)
+
+			fetched, err := storage.GetBacklogItem(ctx, item.ID)
+			require.NoError(t, err)
+			require.Equal(t, status, fetched.Status)
+		})
+	}
+}
+
+// TestResumeWork_ThenRequestReview_Succeeds exercises the exact repro
+// sequence from the originating bug report: report_blocked parks the item at
+// ready, resume_work brings it back to in_progress, and request_review (which
+// rejected 'ready' outright) now succeeds.
+func TestResumeWork_ThenRequestReview_Succeeds(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:              "Full repro sequence",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"done"}]`,
+		Status:             string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	blockedResult, err := handler.reportBlocked(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "rationale": "gh auth token invalid",
+	}))
+	require.NoError(t, err)
+	requireToolTextResult(t, blockedResult)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReady), fetched.Status)
+
+	resumeResult, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	requireToolTextResult(t, resumeResult)
+
+	fetched, err = storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+
+	reviewResult, err := handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "message": "Fixed the gh auth issue, work is done.",
+	}))
+	require.NoError(t, err)
+	text := requireToolTextResult(t, reviewResult)
+	require.Contains(t, text, "review", "request_review should succeed after resume_work: %s", text)
+
+	fetched, err = storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+}
+
+// TestResumeWork_ThenReportPRCreated_Succeeds continues the repro sequence
+// past request_review: once the item reaches review via resume_work,
+// report_pr_created (which also rejects 'ready') succeeds and lands the item
+// at pr_pending with the PR recorded.
+func TestResumeWork_ThenReportPRCreated_Succeeds(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReady)
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+	}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	resumeResult, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	requireToolTextResult(t, resumeResult)
+
+	reviewResult, err := handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "message": "Ready for review.",
+	}))
+	require.NoError(t, err)
+	requireToolTextResult(t, reviewResult)
+
+	prResult, err := handler.reportPRCreated(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/42",
+		"pr_number": float64(42),
+		"summary":   "Implemented the feature and shipped it via /backlog:ship.",
+	}))
+	require.NoError(t, err)
+	requireToolTextResult(t, prResult)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	require.Equal(t, 42, fetched.PrNumber)
+}
+
+// TestResumeWork_PreconditionFailedOnConcurrentTransition forces a
+// concurrent actor to transition the item away from ready between
+// resume_work's read and its CAS write, and asserts the same
+// "state changed since your last read" message report_blocked/request_review
+// use, not silent corruption.
+func TestResumeWork_PreconditionFailedOnConcurrentTransition(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Racing resume",
+		Status: string(session.BacklogStatusReady),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	getBacklogItemFn := func(fnCtx context.Context, itemID string) (*session.BacklogItemData, error) {
+		item, err := storage.GetBacklogItem(fnCtx, itemID)
+		if err != nil {
+			return nil, err
+		}
+		// Simulate another actor (e.g. the dequeuer) transitioning the item
+		// out of ready between this read and resumeWork's own CAS write.
+		_, transErr := storage.TransitionBacklogItemStatus(fnCtx, itemID, session.BacklogStatusInProgress,
+			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}, session.TriggeredByAgent)
+		require.NoError(t, transErr)
+		return item, nil
+	}
+
+	handler := &backlogHandlers{storage: storage, getBacklogItemFn: getBacklogItemFn}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	result, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrInternalError, errObj["code"])
+	assert.Contains(t, errObj["message"], "state changed since your last read")
+}
+
+// TestResumeWork_WorksOnReadyItemWithNoPriorBlock confirms resume_work is a
+// general ready -> in_progress bridge, not report_blocked-specific — an item
+// that reached ready some other way (e.g. straight from queued) resumes the
+// same way.
+func TestResumeWork_WorksOnReadyItemWithNoPriorBlock(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Never blocked",
+		Status: string(session.BacklogStatusReady),
+	})
+	require.NoError(t, err)
+	require.Empty(t, item.Notes)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	result, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	requireToolTextResult(t, result)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+}
+
+// TestResumeWork_ResetsBlockedCycleCounter verifies the plan.md decision:
+// a successful resume starts a fresh blocked-cycle count, so a report_blocked
+// call immediately after a resume does not inherit escalation progress from
+// blocked cycles reported before the resume.
+func TestResumeWork_ResetsBlockedCycleCounter(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Reset cycle counter",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	// Two blocked cycles pre-resume (below blockedCycleThreshold of 3, so
+	// neither escalates to review on its own).
+	for i := 0; i < 2; i++ {
+		blockedResult, err := handler.reportBlocked(ctxWithUUID, makeToolReq(map[string]interface{}{
+			"item_id": item.ID, "rationale": fmt.Sprintf("blocked cycle %d", i),
+		}))
+		require.NoError(t, err)
+		requireToolTextResult(t, blockedResult)
+
+		resumeResult, err := handler.resumeWork(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+		require.NoError(t, err)
+		requireToolTextResult(t, resumeResult)
+	}
+
+	// A third report_blocked call would hit blockedCycleThreshold (3) if the
+	// counter carried over uncounted resumes — assert it instead still
+	// returns to ready (not escalated), proving the resumes reset the count.
+	thirdBlocked, err := handler.reportBlocked(ctxWithUUID, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "rationale": "blocked cycle after resumes",
+	}))
+	require.NoError(t, err)
+	requireToolTextResult(t, thirdBlocked)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReady), fetched.Status,
+		"blocked-cycle count must reset on each resume, so this single post-resume block should not escalate to review")
 }

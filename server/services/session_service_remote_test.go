@@ -43,7 +43,9 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // remoteSessionTestSSHServer is this file's own minimal in-process SSH server,
@@ -329,7 +331,7 @@ func TestCreateSession_RemoteTarget_CreatesRemoteWorktreeAndTmuxSession(t *testi
 	require.NotNil(t, resp.Msg.Session)
 
 	sessionName := "staplersquad_remote-create-worktree"
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
 	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist on the remote host")
 
@@ -352,6 +354,73 @@ func TestCreateSession_RemoteTarget_CreatesRemoteWorktreeAndTmuxSession(t *testi
 	require.NotNil(t, found, "created instance must be registered with the poller")
 	require.True(t, found.ExecutionTarget != nil && found.ExecutionTarget.IsRemote(),
 		"Instance.ExecutionTarget.IsRemote() must be true for a remote-created session")
+}
+
+// TestCreateSession_RemoteTarget_NewWorktree_BranchesFromDefaultBranch_NotAmbientHEAD
+// is this bug's remote-path counterpart to
+// TestSetupFirstTimeWorktree_NewWorktree_BranchesFromOriginDefault_NotAmbientHEAD
+// (session/instance_worktree_test.go): repoPath's ambient checked-out HEAD is
+// a divergent, unrelated in-progress branch, and CreateSession's remote
+// SessionTypeNewWorktree block must still branch from the repo's resolved
+// default branch tip, not that ambient HEAD, surfacing the divergence via
+// SessionDetail.CreationWarning.
+func TestCreateSession_RemoteTarget_NewWorktree_BranchesFromDefaultBranch_NotAmbientHEAD(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts a real tmux session")
+	}
+	srv := startRemoteSessionTestSSHServer(t)
+	fix := newRemoteSessionFixture(t, srv)
+
+	repo, err := gitutil.OpenRepo(fix.repoPath)
+	require.NoError(t, err)
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	headRef, err := repo.Head()
+	require.NoError(t, err)
+	defaultBranchSHA := headRef.Hash()
+
+	require.NoError(t, wt.Checkout(&gogit.CheckoutOptions{
+		Branch: plumbing.NewBranchReferenceName("unrelated-in-progress-work"),
+		Create: true,
+	}))
+	require.NoError(t, os.WriteFile(filepath.Join(fix.repoPath, "unrelated.txt"), []byte("unrelated\n"), 0o644))
+	_, err = wt.Add("unrelated.txt")
+	require.NoError(t, err)
+	sig := &object.Signature{Name: "Test", Email: "test@localhost", When: time.Now()}
+	_, err = wt.Commit("unrelated in-progress commit", &gogit.CommitOptions{Author: sig})
+	require.NoError(t, err)
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "remote-diverge-check",
+		Path:        fix.repoPath,
+		Branch:      "feature-y",
+		Program:     "sh",
+		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+		Remote:      &sessionv1.RemoteTarget{RemoteName: "test-remote"},
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+
+	sessionName := "staplersquad_remote-diverge-check"
+	wait.RequireEventually(t, func() bool {
+		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
+	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist on the remote host")
+
+	worktreePath := filepath.Join(fix.basePath, "remote-diverge-check")
+	out, err := safeexec.CommandContext(context.Background(), "git", "-C", worktreePath, "rev-parse", "HEAD").CombinedOutput()
+	require.NoError(t, err, string(out))
+	require.Equal(t, defaultBranchSHA.String(), strings.TrimSpace(string(out)),
+		"new worktree must branch from the default branch's tip, not the ambient checked-out divergent branch")
+
+	var found *session.Instance
+	for _, inst := range fix.poller.GetInstances() {
+		if inst.Title == "remote-diverge-check" {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found, "created instance must be registered with the poller")
+	require.NotEmpty(t, found.GetCreationWarning(), "ambient HEAD divergence must surface a warning, not silent success")
 }
 
 // TestCreateSession_RemoteTarget_TmuxSetupFails_CleansUpWorktree is Task
@@ -390,16 +459,23 @@ func TestCreateSession_RemoteTarget_TmuxSetupFails_CleansUpWorktree(t *testing.T
 // call can complete. The surfaced error must explicitly name the path as
 // possibly orphaned rather than failing silently or claiming success.
 //
-// maxChannels=5 allows exactly the 5 real, successful SSH channels
+// maxChannels=12 allows exactly the 12 real, successful SSH channels
 // CreateSession's remote block opens before attempting to start the remote
-// tmux session (git branch, git worktree add's base_path test -d, git
+// tmux session: git.ResolveRemoteWorktreeBaseCommit's base-branch resolution
+// against fix.repoPath (no origin remote configured, so every "fetch origin
+// <candidate>" fails before falling back to the local-candidate loop) --
+// fetch main/master/develop/trunk (4, all fail), then local rev-parse
+// refs/heads/main (fails) and refs/heads/master (succeeds) (2 more, 6
+// total) -- then RemoteAmbientHEADDivergesFromBase's single rev-parse HEAD
+// (7, ambient HEAD already equals the resolved base here so no second call
+// is needed), then git branch, git worktree add's base_path test -d, git
 // worktree add itself, EnsureRemoteSession's has-session check, and its own
-// remote test -d workDir check -- see tmux.go's EnsureRemoteSession), then
-// rejects every channel after that: the new-session attempt, its
-// has-session recheck, and the compensating RemoveWorktree's git worktree
-// remove all fail.
+// remote test -d workDir check (5 more, 12 total -- see tmux.go's
+// EnsureRemoteSession). Every channel after that is rejected: the
+// new-session attempt, its has-session recheck, and the compensating
+// RemoveWorktree's git worktree remove all fail.
 func TestCreateSession_RemoteTarget_ConnectionDropDuringCleanup_SurfacesOrphanWarning(t *testing.T) {
-	srv := startMaxChannelsTestSSHServer(t, 5)
+	srv := startMaxChannelsTestSSHServer(t, 12)
 	fix := newRemoteSessionFixture(t, srv)
 
 	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -454,7 +530,7 @@ func TestCreateSession_RemoteTarget_ExistingWorktree_AttachesWithoutCreatingNewO
 	require.NotNil(t, resp.Msg.Session)
 
 	sessionName := "staplersquad_remote-existing-worktree"
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
 	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist on the remote host")
 
@@ -511,7 +587,7 @@ func TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree(t *testing
 	require.NotNil(t, resp.Msg.Session)
 
 	sessionName := "staplersquad_remote-directory-session"
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
 	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist on the remote host")
 
@@ -524,7 +600,7 @@ func TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree(t *testing
 	// NOT be persisted as a worktree at all -- no synthetic "unknown" branch sentinel,
 	// matching a local Directory session's Branch="" exactly (pre-ship review finding;
 	// see session_service.go's remote block and instance_worktree.go's default case).
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		data, listErr := fix.storage.ListInstanceData()
 		if listErr != nil {
 			return false
@@ -548,7 +624,7 @@ func TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree(t *testing
 // TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree.
 func requireRemoteSessionPersistedWithBranch(t *testing.T, fix *remoteSessionFixture, title string) {
 	t.Helper()
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		data, listErr := fix.storage.ListInstanceData()
 		if listErr != nil {
 			return false
@@ -613,7 +689,7 @@ func TestCreateSession_RemoteTarget_NewProject_InitializesGitRepoOnRemoteHost(t 
 	require.NotNil(t, resp.Msg.Session)
 
 	sessionName := "staplersquad_remote-new-project-session"
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
 	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist on the remote host")
 
@@ -622,7 +698,7 @@ func TestCreateSession_RemoteTarget_NewProject_InitializesGitRepoOnRemoteHost(t 
 	// mirroring InitializeProjectDirectory's local behavior (util.go's
 	// createInitialCommit) rather than merely creating an empty directory.
 	require.DirExists(t, filepath.Join(newProjectPath, ".git"))
-	repo, openErr := gogit.PlainOpen(newProjectPath)
+	repo, openErr := gitutil.OpenRepo(newProjectPath)
 	require.NoError(t, openErr, "remote path must be a valid git repo after new_project init")
 	head, headErr := repo.Head()
 	require.NoError(t, headErr, "remote repo must have a commit (git worktree add requires at least one)")
@@ -631,7 +707,7 @@ func TestCreateSession_RemoteTarget_NewProject_InitializesGitRepoOnRemoteHost(t 
 	// Matches Directory's persistence contract exactly: no worktree row, no
 	// synthetic "unknown" branch sentinel -- see setupFirstTimeWorktree's
 	// NewProject case and requireRemoteSessionPersistedWithBranch's doc comment.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		data, listErr := fix.storage.ListInstanceData()
 		if listErr != nil {
 			return false

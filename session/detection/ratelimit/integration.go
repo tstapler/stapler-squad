@@ -128,13 +128,13 @@ func (pc *PTYConsumer) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	pc.cancelFn = cancel
 	pc.running = true
-	// done is local to this Start()/Stop() generation, not a struct field:
-	// a sync.WaitGroup field here would panic ("WaitGroup is reused before
-	// previous Wait has returned") under PTYConsumer_StartStop_Concurrent's
-	// repeated concurrent Start()/Stop() cycles, since a new Add() can race
-	// an outstanding Stop()'s Wait() from the previous generation. A fresh
-	// channel per generation, closed by pollLoop and captured locally by
-	// Stop(), has no such reuse hazard.
+	// done is local to this Start()/Stop() generation, not just a struct field
+	// read back later: a sync.WaitGroup field here would panic ("WaitGroup is
+	// reused before previous Wait has returned") under
+	// PTYConsumer_StartStop_Concurrent's repeated concurrent Start()/Stop()
+	// cycles, since a new Add() can race an outstanding Stop()'s Wait() from
+	// the previous generation. A fresh channel per generation, closed by
+	// pollLoop and captured locally by Stop(), has no such reuse hazard.
 	done := make(chan struct{})
 	pc.doneCh = done
 	go pc.pollLoop(ctx, done)
@@ -149,16 +149,20 @@ func (pc *PTYConsumer) Stop() {
 	}
 
 	pc.running = false
+	cancelFn := pc.cancelFn
+	pc.cancelFn = nil
 	done := pc.doneCh
-	if pc.cancelFn != nil {
-		pc.cancelFn()
-		pc.cancelFn = nil
-	}
-	// Unlock explicitly (not via defer) before waiting: the wait below must
+	// Unlock explicitly (not via defer) before cancelling/waiting: both must
 	// run after the lock is released, or a future pollLoop change that takes
-	// pc.mu would deadlock against it.
+	// pc.mu would deadlock against this call.
 	pc.mu.Unlock()
 
+	if cancelFn != nil {
+		cancelFn()
+	}
+	if done == nil {
+		return
+	}
 	select {
 	case <-done:
 	case <-time.After(stopJoinTimeout):

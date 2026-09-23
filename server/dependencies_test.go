@@ -1,11 +1,21 @@
 package server
 
 import (
+	"context"
+	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/zalando/go-keyring"
+
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -29,7 +39,7 @@ import (
 // accessor since it lives in this same package and its unexported
 // slackNotifier field is reachable directly from a same-package test.
 func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	deps, err := BuildDependencies()
 	if err != nil {
@@ -68,6 +78,31 @@ func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueu
 		t.Errorf("SessionService's SlackNotifier is not the same instance as deps.SlackNotifier (split-brain regression, commit 13ad9c260): got %p, want %p",
 			deps.SessionService.SlackNotifierForTest(), deps.SlackNotifier)
 	}
+}
+
+// TestBuildDependencies_should_WireGeminiCaller_When_GeminiBinaryDetected is the
+// Task 3.1.2b integration test: confirms BuildDependencies actually constructs
+// a *headless.GeminiCaller when the gemini binary is present at startup,
+// mirroring HeadlessPool's own "non-fatal, just leave the field nil, if the
+// binary is missing" pattern (this branch does not yet register it into a
+// headlessCallers registry — Epic 2.3, not landed yet — see GeminiCaller's
+// doc comment on ServerDependencies). Skips (rather than asserting nil) when
+// gemini genuinely isn't installed on the machine running this test —
+// mirroring config.GetAvailablePrograms' own tests' convention of skipping
+// gracefully for an optional candidate CLI not guaranteed present in every
+// dev/CI environment.
+func TestBuildDependencies_should_WireGeminiCaller_When_GeminiBinaryDetected(t *testing.T) {
+	if _, lookErr := exec.LookPath("gemini"); lookErr != nil {
+		t.Skip("gemini binary not found on PATH; skipping (see config.GetAvailablePrograms' analogous convention)")
+	}
+
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+
+	require.NotNil(t, deps.GeminiCaller, "expected GeminiCaller to be wired when the gemini binary is detected at startup")
+	assert.True(t, deps.GeminiCaller.Available())
 }
 
 func TestBuildServiceDeps_RejectsNilCore(t *testing.T) {
@@ -191,6 +226,58 @@ func TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_Construc
 	}
 }
 
+// TestBuildRuntimeDeps_should_PopulateBacklogLifecycleListener_When_ServerBoots is the
+// dependency-wiring regression test for pr-event-webhooks Task 3.1.1: before this
+// feature, backlogLifecycleListener was only a local variable inside BuildRuntimeDeps,
+// unreachable from server.go's webhook-route-registration block — NewGitHubWebhookHandler
+// had no way to be given a real PRFixEventRouter. deps.BacklogLifecycleListener must be
+// the exact same instance SetPRFixSpawner/SetAutoReopener etc. were wired onto, not a
+// second, independently-constructed listener.
+func TestBuildRuntimeDeps_should_PopulateBacklogLifecycleListener_When_ServerBoots(t *testing.T) {
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+
+	if deps.BacklogLifecycleListener == nil {
+		t.Fatal("expected BacklogLifecycleListener to be wired")
+	}
+	if deps.SessionService == nil {
+		t.Fatal("expected SessionService to be wired")
+	}
+	listener := deps.SessionService.GetBacklogLifecycleListener()
+	if listener == nil {
+		t.Fatal("expected BacklogLifecycleListener to be wired onto SessionService")
+	}
+	if deps.BacklogLifecycleListener != listener {
+		t.Fatalf("expected deps.BacklogLifecycleListener to be the identical instance wired onto SessionService, got distinct pointers %p vs %p", deps.BacklogLifecycleListener, listener)
+	}
+}
+
+// TestBuildRuntimeDeps_should_WireSessionSteererAndSessionStopper_When_ServerBoots
+// is the pr-fix-steering Task 1.2.2d wiring-assertion test (pre-mortem.md P2 #5):
+// SetSessionSteerer/SetSessionStopper's wiring in BuildRuntimeDeps (one new line
+// each) had no test that would fail if either call were ever omitted or
+// misplaced — both fields' nil-safe degrade paths are, by design, externally
+// indistinguishable from today's shipped behavior, so a forgotten wiring line
+// compiles, passes make ci, and ships the feature silently inert. This is the
+// first such test for either setter — there is no prior instance to extend.
+func TestBuildRuntimeDeps_should_WireSessionSteererAndSessionStopper_When_ServerBoots(t *testing.T) {
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+	if deps.BacklogService.GetSessionSteerer() == nil {
+		t.Fatal("expected SessionSteerer to be wired onto BacklogService")
+	}
+	if deps.BacklogService.GetSessionSteerer() != deps.SessionService {
+		t.Fatal("expected the wired SessionSteerer to be the same *SessionService instance BuildDependencies constructs")
+	}
+	if deps.BacklogService.GetSessionStopper() == nil {
+		t.Fatal("expected SessionStopper to be wired onto BacklogService")
+	}
+}
+
 // TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFlagDisabledByDefault
 // verifies QuotaGate.Enable is only ever reached via quotaGate.Reconcile's own
 // decision path (Story 2.2.2), not a bare unconditional call — exercised against
@@ -225,7 +312,7 @@ func TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFl
 // StatusDetail() calls cfgFn() directly, so it's used here as the observable
 // proof without needing a rate-limit/token-usage fixture to trigger Reconcile.
 func TestBuildRuntimeDeps_should_ReadLiveConfigOnEveryCfgFnCall_When_ConfigJSONChangesAfterBoot(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
 
 	deps, err := BuildDependencies()
@@ -326,4 +413,80 @@ func TestPrNumFromTitle(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestServerDependencies_should_DegradeFeatureNotServer_When_KeychainUnreadableAtStartup
+// covers google-jules-integration Story 2.4.4's construction-failure
+// acceptance criterion: with Jules enabled but the keychain unreadable at
+// startup, BuildDependencies must still succeed (server starts normally),
+// leaving deps.JulesSessionPoller nil and logging "jules disabled" once at
+// Info — every other subsystem (SessionService, BacklogService) unaffected.
+func TestServerDependencies_should_DegradeFeatureNotServer_When_KeychainUnreadableAtStartup(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	keyring.MockInitWithError(errors.New("simulated unreadable keychain"))
+
+	cfg := config.LoadConfig()
+	cfg.Jules.Enabled = true
+	require.NoError(t, config.SaveConfig(cfg))
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err, "an unreadable keychain must degrade the Jules feature, not fail server startup")
+
+	assert.Nil(t, deps.JulesSessionPoller, "an unreadable keychain must leave the Jules poller unconstructed")
+	assert.NotNil(t, deps.SessionService, "every other subsystem must be unaffected")
+	assert.NotNil(t, deps.BacklogService, "every other subsystem must be unaffected")
+}
+
+// noopTagPoolClient is a minimal headless.PoolClient double used only to construct a real
+// SessionTagClassificationPoller for the wiring tests below — it is never actually called,
+// since these tests only assert whether wireDepsIntoServer starts the poller, not its
+// classification behavior (covered by session/session_tag_poller_test.go).
+type noopTagPoolClient struct{}
+
+func (noopTagPoolClient) CallBlocking(context.Context, headless.FeatureKey, string, string, headless.CallOptions, headless.CostSink) (string, error) {
+	return `{"tags":["Unclassified"]}`, nil
+}
+
+// TestWireDepsIntoServer_should_NotConstructPoller_When_HeadlessPoolNil is Story 4.4.1's
+// degraded/disabled-mode case: forcing deps.SessionTagClassificationPoller to nil (mirroring
+// what BuildRuntimeDeps produces when the claude binary isn't found — see the headlessPool
+// nil-check this poller's construction is guarded by, server/dependencies.go) must not start
+// anything and must not prevent the server from starting normally.
+func TestWireDepsIntoServer_should_NotConstructPoller_When_HeadlessPoolNil(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	deps.SessionTagClassificationPoller = nil
+
+	srv := NewServerWithDeps("localhost:0", deps)
+	t.Cleanup(func() {
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("srv.Shutdown: %v", err)
+		}
+	})
+
+	assert.Nil(t, deps.SessionTagClassificationPoller, "a nil poller must stay unconstructed, never started")
+	assert.NotNil(t, deps.SessionService, "the rest of the server must start normally")
+}
+
+// TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPresent is Story
+// 4.4.1's normal-startup case: with a poller present, wireDepsIntoServer must call Start
+// exactly once, logged the same way PRStatusPoller's start is logged.
+func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPresent(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	deps.SessionTagClassificationPoller = session.NewSessionTagClassificationPoller(noopTagPoolClient{}, classifier.NewTaggingEngine())
+	require.False(t, deps.SessionTagClassificationPoller.Running(), "poller must not be running before the server wires it up")
+
+	srv := NewServerWithDeps("localhost:0", deps)
+	t.Cleanup(func() {
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("srv.Shutdown: %v", err)
+		}
+	})
+
+	assert.True(t, deps.SessionTagClassificationPoller.Running(), "wireDepsIntoServer must start the poller")
 }

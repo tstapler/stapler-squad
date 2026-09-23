@@ -3,9 +3,9 @@
 import { useRef, useCallback, useEffect } from "react";
 import { TerminalData, TerminalDataSchema, TerminalInput, TerminalInputSchema, TerminalResize, TerminalResizeSchema, ScrollbackRequest, ScrollbackRequestSchema, CurrentPaneRequest, CurrentPaneRequestSchema, FlowControl, FlowControlSchema } from "@/gen/session/v1/events_pb";
 import { create } from "@bufbuild/protobuf";
-import { dimensionsEqual, type ResizeDimensions } from "@/lib/terminal/types";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { generateSecureId } from "@/lib/pane/paneUtils";
+import { useResizeSettling } from "@/lib/hooks/useResizeSettling";
 import type { Terminal } from '@xterm/xterm';
 
 // Epic 3.1 (AC2) — client-generated correlation ID echoed back on the
@@ -83,9 +83,6 @@ export function useTerminalFlowControl({
   const isResyncingRef = useRef<string | null>(null);
   const waitingForPaneResponseRef = useRef<string | null>(null);
   const lastResyncTimeRef = useRef<number>(0);
-  const lastResizeTimeRef = useRef<number>(0);
-  const lastSentDimsRef = useRef<ResizeDimensions | null>(null);
-  const pendingResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const paneRequestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dimensionSyncRef = useRef<{ cols?: number; rows?: number }>({});
   // Epic 3.1, Task 3.1.1.4a — last dimensions a resync response was actually
@@ -102,10 +99,6 @@ export function useTerminalFlowControl({
   // component/connection.
   useEffect(() => {
     return () => {
-      if (pendingResizeTimerRef.current) {
-        clearTimeout(pendingResizeTimerRef.current);
-        pendingResizeTimerRef.current = null;
-      }
       if (paneRequestTimerRef.current) {
         clearTimeout(paneRequestTimerRef.current);
         paneRequestTimerRef.current = null;
@@ -124,11 +117,22 @@ export function useTerminalFlowControl({
     pushMessageRef.current?.(msg);
   }, [pushMessageRef]);
 
+  // Shared connection gate for every public dispatch function below — a copy-pasted
+  // per-callsite check is how sendInput's copy silently lacked a console.warn. Internal
+  // per-chunk/per-tick continuation checks stay inline (a background retry after the
+  // initial call already logged once shouldn't log again).
+  const ensureConnected = useCallback((action: string): boolean => {
+    if (!pushMessageRef.current || !isConnectedRef.current) {
+      console.warn(`[useTerminalFlowControl] Cannot ${action}: stream not connected`);
+      return false;
+    }
+    return true;
+  }, [pushMessageRef, isConnectedRef]);
+
   // ---- Resync ----
 
   const requestFullResync = useCallback((urgent: boolean = false, isVisibilityTriggered: boolean = false): string | undefined => {
-    if (!pushMessageRef.current || !isConnectedRef.current) {
-      console.warn("[useTerminalFlowControl] Cannot request resync: stream not connected");
+    if (!ensureConnected("request resync")) {
       return undefined;
     }
 
@@ -205,7 +209,7 @@ export function useTerminalFlowControl({
       handleError(err);
       return undefined;
     }
-  }, [sessionId, getTerminal, pushMessage, pushMessageRef, isConnectedRef, handleError, correlationIdEnabled, outstandingResyncIdsRef]);
+  }, [sessionId, getTerminal, pushMessage, ensureConnected, handleError, correlationIdEnabled, outstandingResyncIdsRef]);
 
   // ---- Message dispatch functions ----
 
@@ -213,7 +217,7 @@ export function useTerminalFlowControl({
   const CHUNK_DELAY_MS = 10;   // ms between chunks — yields event loop without stalling input
 
   const sendInput = useCallback((input: string) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) return;
+    if (!ensureConnected("send input")) return;
 
     const encoder = new TextEncoder();
     const inputBytes = encoder.encode(input);
@@ -265,119 +269,77 @@ export function useTerminalFlowControl({
       }
     };
     sendChunk();
-  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
+  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError, ensureConnected]);
 
-  const resize = useCallback((cols: number, rows: number, force: boolean = false) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) {
-      console.warn("Cannot resize terminal: stream not connected");
-      return;
+  // The actual send, invoked by useResizeSettling only once it has judged a
+  // (cols, rows) value settled (BUG-101) — debounce, throttle, and
+  // oscillation/bounce detection all live in that hook now, not here. Stamps
+  // the timestamp, sends the resize RPC, then requests a fresh pane capture
+  // so xterm.js and tmux are guaranteed to agree on content. Returns whether
+  // the send succeeded so useResizeSettling knows whether to record this
+  // value as the last one actually sent.
+  const sendSettledResize = useCallback((cols: number, rows: number): boolean => {
+    if (!pushMessageRef.current || !isConnectedRef.current) return false;
+    try {
+      console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
+      pushMessage(
+        create(TerminalDataSchema, {
+          sessionId,
+          data: { case: "resize", value: create(TerminalResizeSchema, { cols, rows }) },
+        })
+      );
+    } catch (err) {
+      handleError(err);
+      return false;
     }
 
-    // Cancel any previously deferred resize — we have newer dimensions now.
-    // This MUST run before the value-dedup early-return below: otherwise a
-    // bounce-back call whose dimensions match lastSentDimsRef (e.g. A -> B
-    // deferred within the throttle window -> back to A) would dedup-return
-    // without cancelling the still-pending deferred send for B, letting that
-    // stale send fire later with the wrong dimensions.
-    if (pendingResizeTimerRef.current) {
-      clearTimeout(pendingResizeTimerRef.current);
-      pendingResizeTimerRef.current = null;
-    }
-
-    // Value-dedup: skip if this exact (cols, rows) pair was the last one actually
-    // sent, independent of (and checked before) the time throttle below. An
-    // unchanged value must not keep the throttle window "warm" — lastResizeTimeRef
-    // is deliberately left untouched here.
-    if (
-      !force &&
-      lastSentDimsRef.current !== null &&
-      dimensionsEqual(lastSentDimsRef.current, { cols, rows })
-    ) {
-      console.log(`[useTerminalFlowControl] Resize skipped, value unchanged (${cols}x${rows})`);
-      return;
-    }
-
-    const now = Date.now();
-    const timeSinceLastResize = now - lastResizeTimeRef.current;
-    const THROTTLE_MS = 200;
-
-    // Inner send: stamps the timestamp, sends the resize RPC, then requests a
-    // fresh pane capture so xterm.js and tmux are guaranteed to agree on content.
-    const doSend = () => {
+    // After resizing, request fresh terminal content
+    paneRequestTimerRef.current = setTimeout(() => {
+      paneRequestTimerRef.current = null;
       if (!pushMessageRef.current || !isConnectedRef.current) return;
       try {
-        console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
+        console.log(`[useTerminalFlowControl] Requesting fresh pane content after resize`);
+        // Epic 3.1, Task 3.1.1.3 — a resize-triggered pane request always
+        // carries just-measured dimensions, so stale_dimensions is always
+        // explicitly false here (never the isVisibilityTriggered formula
+        // used in requestFullResync).
+        const resyncId = correlationIdEnabled ? generateSecureId() : "";
+        if (resyncId && outstandingResyncIdsRef) {
+          outstandingResyncIdsRef.current.set(resyncId, Date.now());
+        }
         pushMessage(
           create(TerminalDataSchema, {
             sessionId,
-            data: { case: "resize", value: create(TerminalResizeSchema, { cols, rows }) },
+            data: {
+              case: "currentPaneRequest",
+              value: create(CurrentPaneRequestSchema, {
+                lines: 50,
+                includeEscapes: true,
+                targetCols: cols,
+                targetRows: rows,
+                resyncId,
+                staleDimensions: false,
+              }),
+            },
           })
         );
-
-        // Only record success (and refresh the throttle/dedup state) after the
-        // send above completed without throwing.
-        lastResizeTimeRef.current = Date.now();
-        lastSentDimsRef.current = { cols, rows };
-
-        // After resizing, request fresh terminal content
-        paneRequestTimerRef.current = setTimeout(() => {
-          paneRequestTimerRef.current = null;
-          if (!pushMessageRef.current || !isConnectedRef.current) return;
-          try {
-            console.log(`[useTerminalFlowControl] Requesting fresh pane content after resize`);
-            // Epic 3.1, Task 3.1.1.3 — a resize-triggered pane request always
-            // carries just-measured dimensions, so stale_dimensions is always
-            // explicitly false here (never the isVisibilityTriggered formula
-            // used in requestFullResync).
-            const resyncId = correlationIdEnabled ? generateSecureId() : "";
-            if (resyncId && outstandingResyncIdsRef) {
-              outstandingResyncIdsRef.current.set(resyncId, Date.now());
-            }
-            pushMessage(
-              create(TerminalDataSchema, {
-                sessionId,
-                data: {
-                  case: "currentPaneRequest",
-                  value: create(CurrentPaneRequestSchema, {
-                    lines: 50,
-                    includeEscapes: true,
-                    targetCols: cols,
-                    targetRows: rows,
-                    resyncId,
-                    staleDimensions: false,
-                  }),
-                },
-              })
-            );
-          } catch (err) {
-            handleError(err);
-          }
-        }, 100);
       } catch (err) {
         handleError(err);
       }
-    };
+    }, 100);
 
-    if (!force && timeSinceLastResize < THROTTLE_MS && lastResizeTimeRef.current !== 0) {
-      // Defer instead of drop: schedule the trailing-edge send so the final
-      // settled size always reaches the server after rapid resize sequences.
-      const remaining = THROTTLE_MS - timeSinceLastResize;
-      console.log(`[useTerminalFlowControl] Resize deferred ${remaining}ms (${cols}x${rows})`);
-      pendingResizeTimerRef.current = setTimeout(() => {
-        pendingResizeTimerRef.current = null;
-        doSend();
-      }, remaining + 1);
-      return;
-    }
-
-    doSend();
+    return true;
   }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError, correlationIdEnabled, outstandingResyncIdsRef]);
 
+  const { resize: settledResize } = useResizeSettling({ onSettled: sendSettledResize });
+
+  const resize = useCallback((cols: number, rows: number, force: boolean = false) => {
+    if (!ensureConnected("resize terminal")) return;
+    settledResize(cols, rows, force);
+  }, [ensureConnected, settledResize]);
+
   const requestScrollback = useCallback((fromSequence: number, limit: number) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) {
-      console.warn("Cannot request scrollback: stream not connected");
-      return;
-    }
+    if (!ensureConnected("request scrollback")) return;
 
     try {
       console.log(`[useTerminalFlowControl] Requesting scrollback: fromSeq=${fromSequence}, limit=${limit}`);
@@ -396,13 +358,10 @@ export function useTerminalFlowControl({
     } catch (err) {
       handleError(err);
     }
-  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
+  }, [sessionId, pushMessage, ensureConnected, handleError]);
 
   const sendFlowControl = useCallback((paused: boolean, watermark?: number) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) {
-      console.warn("Cannot send flow control: stream not connected");
-      return;
-    }
+    if (!ensureConnected("send flow control")) return;
 
     try {
       console.log(`[useTerminalFlowControl] Sending flow control: paused=${paused}, watermark=${watermark || 'N/A'}`);
@@ -421,7 +380,7 @@ export function useTerminalFlowControl({
     } catch (err) {
       handleError(err);
     }
-  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
+  }, [sessionId, pushMessage, ensureConnected, handleError]);
 
   const markResyncComplete = useCallback(() => {
     isResyncingRef.current = null;

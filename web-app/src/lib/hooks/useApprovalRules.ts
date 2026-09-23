@@ -36,6 +36,40 @@ interface UseApprovalRulesReturn {
 }
 
 /**
+ * Builds an `ApprovalRuleProto` from partial rule data, filling in defaults
+ * for any unset fields. Shared by `upsertRule` and `bulkUpsertRules` so both
+ * construct rules identically.
+ */
+function buildApprovalRuleProto(ruleData: Partial<ApprovalRuleProto> & { id: string }): ApprovalRuleProto {
+  return create(ApprovalRuleProtoSchema, {
+    id: ruleData.id,
+    name: ruleData.name ?? "",
+    toolName: ruleData.toolName ?? "",
+    toolPattern: ruleData.toolPattern ?? "",
+    toolCategory: ruleData.toolCategory ?? "",
+    commandPattern: ruleData.commandPattern ?? "",
+    filePattern: ruleData.filePattern ?? "",
+    programs: ruleData.programs ?? [],
+    subcommands: ruleData.subcommands ?? [],
+    blockedSubcommands: ruleData.blockedSubcommands ?? [],
+    requiredFlags: ruleData.requiredFlags ?? [],
+    forbiddenFlags: ruleData.forbiddenFlags ?? [],
+    requiredFlagPrefixes: ruleData.requiredFlagPrefixes ?? [],
+    pythonModes: ruleData.pythonModes ?? [],
+    safePythonImportsOnly: ruleData.safePythonImportsOnly ?? false,
+    requireCiPassing: ruleData.requireCiPassing ?? false,
+    minSessionIdleMinutes: ruleData.minSessionIdleMinutes ?? 0,
+    decision: ruleData.decision ?? AutoDecision.ESCALATE,
+    riskLevel: ruleData.riskLevel ?? "",
+    reason: ruleData.reason ?? "",
+    alternative: ruleData.alternative ?? "",
+    priority: ruleData.priority ?? 10,
+    enabled: ruleData.enabled ?? true,
+    source: "user",
+  });
+}
+
+/**
  * React hook for managing auto-approval rules.
  *
  * Loads all rules via `listApprovalRules` and exposes upsert/delete actions
@@ -90,32 +124,7 @@ export function useApprovalRules(
   const upsertRule = useCallback(
     async (ruleData: Partial<ApprovalRuleProto> & { id: string }) => {
       if (!clientRef.current) return;
-      const rule = create(ApprovalRuleProtoSchema, {
-        id: ruleData.id,
-        name: ruleData.name ?? "",
-        toolName: ruleData.toolName ?? "",
-        toolPattern: ruleData.toolPattern ?? "",
-        toolCategory: ruleData.toolCategory ?? "",
-        commandPattern: ruleData.commandPattern ?? "",
-        filePattern: ruleData.filePattern ?? "",
-        programs: ruleData.programs ?? [],
-        subcommands: ruleData.subcommands ?? [],
-        blockedSubcommands: ruleData.blockedSubcommands ?? [],
-        requiredFlags: ruleData.requiredFlags ?? [],
-        forbiddenFlags: ruleData.forbiddenFlags ?? [],
-        requiredFlagPrefixes: ruleData.requiredFlagPrefixes ?? [],
-        pythonModes: ruleData.pythonModes ?? [],
-        safePythonImportsOnly: ruleData.safePythonImportsOnly ?? false,
-        requireCiPassing: ruleData.requireCiPassing ?? false,
-        minSessionIdleMinutes: ruleData.minSessionIdleMinutes ?? 0,
-        decision: ruleData.decision ?? AutoDecision.ESCALATE,
-        riskLevel: ruleData.riskLevel ?? "",
-        reason: ruleData.reason ?? "",
-        alternative: ruleData.alternative ?? "",
-        priority: ruleData.priority ?? 10,
-        enabled: ruleData.enabled ?? true,
-        source: "user",
-      });
+      const rule = buildApprovalRuleProto(ruleData);
       const req = create(UpsertApprovalRuleRequestSchema, { rule });
       await clientRef.current.upsertApprovalRule(req);
       await refresh();
@@ -126,34 +135,7 @@ export function useApprovalRules(
   const bulkUpsertRules = useCallback(
     async (rulesData: Array<Partial<ApprovalRuleProto> & { id: string }>): Promise<BulkUpsertRulesResponse> => {
       if (!clientRef.current) return { created: 0, updated: 0, skipped: 0, errors: [] } as unknown as BulkUpsertRulesResponse;
-      const protos = rulesData.map((ruleData) =>
-        create(ApprovalRuleProtoSchema, {
-          id: ruleData.id,
-          name: ruleData.name ?? "",
-          toolName: ruleData.toolName ?? "",
-          toolPattern: ruleData.toolPattern ?? "",
-          toolCategory: ruleData.toolCategory ?? "",
-          commandPattern: ruleData.commandPattern ?? "",
-          filePattern: ruleData.filePattern ?? "",
-          programs: ruleData.programs ?? [],
-          subcommands: ruleData.subcommands ?? [],
-          blockedSubcommands: ruleData.blockedSubcommands ?? [],
-          requiredFlags: ruleData.requiredFlags ?? [],
-          forbiddenFlags: ruleData.forbiddenFlags ?? [],
-          requiredFlagPrefixes: ruleData.requiredFlagPrefixes ?? [],
-          pythonModes: ruleData.pythonModes ?? [],
-          safePythonImportsOnly: ruleData.safePythonImportsOnly ?? false,
-          requireCiPassing: ruleData.requireCiPassing ?? false,
-          minSessionIdleMinutes: ruleData.minSessionIdleMinutes ?? 0,
-          decision: ruleData.decision ?? AutoDecision.ESCALATE,
-          riskLevel: ruleData.riskLevel ?? "",
-          reason: ruleData.reason ?? "",
-          alternative: ruleData.alternative ?? "",
-          priority: ruleData.priority ?? 10,
-          enabled: ruleData.enabled ?? true,
-          source: "user",
-        })
-      );
+      const protos = rulesData.map((ruleData) => buildApprovalRuleProto(ruleData));
       const req = create(BulkUpsertRulesRequestSchema, { rules: protos, overwriteDuplicates: false });
       const resp = await clientRef.current.bulkUpsertRules(req);
       await refresh();

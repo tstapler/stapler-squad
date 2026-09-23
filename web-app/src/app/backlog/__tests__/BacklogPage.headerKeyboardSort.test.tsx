@@ -1,85 +1,23 @@
 import React from "react";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import BacklogPage from "../page";
+import { itemFixture, mockUseWatchBacklogItems } from "./backlogPageTestFixtures";
 
-jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
-  useSearchParams: () => new URLSearchParams(),
-}));
-
-jest.mock("@/lib/analytics", () => ({
-  useAnalytics: () => ({ track: jest.fn() }),
-}));
-
-jest.mock("@/lib/analytics/usePageView", () => ({
-  usePageView: () => {},
-}));
-
-jest.mock("@/components/backlog/BacklogItemDetail", () => ({
-  BacklogItemDetail: () => null,
-}));
-jest.mock("@/components/backlog/BacklogItemForm", () => ({
-  BacklogItemForm: () => null,
-}));
-jest.mock("@/components/backlog/BacklogEmptyState", () => ({
-  BacklogEmptyState: () => null,
-  FilterZeroState: () => null,
-  FooterNudge: () => null,
-}));
-jest.mock("@/components/backlog/VaguenessPromptModal", () => ({
-  VaguenessPromptModal: () => null,
-}));
-jest.mock("@/components/backlog/BacklogTourModal", () => ({
-  BacklogTourModal: () => null,
-}));
-jest.mock("@/components/backlog/GitHubIssuePicker", () => ({
-  GitHubIssuePicker: () => null,
-}));
-
-jest.mock("@connectrpc/connect", () => ({
-  createClient: () => ({ getBacklogItem: jest.fn() }),
-}));
-jest.mock("@connectrpc/connect-web", () => ({
-  createConnectTransport: jest.fn().mockReturnValue({}),
-}));
-jest.mock("@/lib/config", () => ({
-  getApiBaseUrl: () => "http://localhost:8543",
-  createAuthInterceptor: () => jest.fn(),
-}));
-
-jest.mock("@/lib/store", () => ({
-  useAppDispatch: () => jest.fn(),
-}));
-
-jest.mock("@/lib/hooks/useBacklogService", () => {
-  const actual = jest.requireActual("@/lib/hooks/useBacklogService");
-  return {
-    ...actual,
-    useBacklogService: () => ({
-      createBacklogItem: jest.fn(),
-      importGitHubIssue: jest.fn(),
-      triggerTriage: jest.fn(),
-    }),
-  };
-});
-
-const mockUseWatchBacklogItems = jest.fn();
-jest.mock("@/lib/hooks/useWatchBacklogItems", () => ({
-  useWatchBacklogItems: () => mockUseWatchBacklogItems(),
-}));
-
-function itemFixture(overrides: Record<string, unknown>) {
-  return {
-    id: "item-1",
-    title: "Fix retry loop in triage",
-    status: "in_progress",
-    priority: 3,
-    acCriteria: [],
-    liveVersion: 1,
-    repoPath: "owner/repo",
-    ...overrides,
-  } as any;
-}
+jest.mock("next/navigation", () => require("./backlogPageTestFixtures").nextNavigationMock());
+jest.mock("@/lib/analytics", () => require("./backlogPageTestFixtures").analyticsMock());
+jest.mock("@/lib/analytics/usePageView", () => require("./backlogPageTestFixtures").usePageViewMock());
+jest.mock("@/components/backlog/BacklogItemDetail", () => require("./backlogPageTestFixtures").backlogItemDetailMock());
+jest.mock("@/components/backlog/BacklogItemForm", () => require("./backlogPageTestFixtures").backlogItemFormMock());
+jest.mock("@/components/backlog/BacklogEmptyState", () => require("./backlogPageTestFixtures").backlogEmptyStateMock());
+jest.mock("@/components/backlog/VaguenessPromptModal", () => require("./backlogPageTestFixtures").vaguenessPromptModalMock());
+jest.mock("@/components/backlog/BacklogTourModal", () => require("./backlogPageTestFixtures").backlogTourModalMock());
+jest.mock("@/components/backlog/GitHubIssuePicker", () => require("./backlogPageTestFixtures").gitHubIssuePickerMock());
+jest.mock("@connectrpc/connect", () => require("./backlogPageTestFixtures").connectMock());
+jest.mock("@connectrpc/connect-web", () => require("./backlogPageTestFixtures").connectWebMock());
+jest.mock("@/lib/config", () => require("./backlogPageTestFixtures").configMock());
+jest.mock("@/lib/store", () => require("./backlogPageTestFixtures").storeMock());
+jest.mock("@/lib/hooks/useBacklogService", () => require("./backlogPageTestFixtures").useBacklogServiceMockFactory());
+jest.mock("@/lib/hooks/useWatchBacklogItems", () => require("./backlogPageTestFixtures").useWatchBacklogItemsMock());
 
 describe("BacklogPage sortable header keyboard accessibility", () => {
   beforeEach(() => {

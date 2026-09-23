@@ -21,6 +21,7 @@
 
 import { test, expect, Page } from "@playwright/test";
 import { SessionClient } from "./helpers/session-client";
+import { waitUntilSettled } from "./helpers/wait";
 import { SessionsPage } from "./pages/SessionsPage";
 
 const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
@@ -65,20 +66,6 @@ async function mockCreatePullRequest(page: Page, fields: Record<string, unknown>
       body: JSON.stringify(fields),
     });
   });
-}
-
-// A freshly created session starts in SESSION_STATUS_CREATING and the sidebar list
-// excludes it until it settles — WatchSessions is aborted in these tests (see file
-// header), so there is no live update to pick up the transition after page load.
-// Poll until it leaves Creating before navigating.
-async function waitUntilSettled(client: SessionClient, sessionId: string, timeoutMs = 10000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const session = await client.getSession(sessionId);
-    if (session.status !== "SESSION_STATUS_CREATING") return session;
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  throw new Error(`Session ${sessionId} still SESSION_STATUS_CREATING after ${timeoutMs}ms`);
 }
 
 async function openSessionCardMenu(page: Page, title: string) {

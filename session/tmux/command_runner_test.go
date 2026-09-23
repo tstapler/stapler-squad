@@ -133,9 +133,7 @@ func TestLocalRunner_Run_HonorsDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if got := strings.TrimSpace(string(out)); got != resolvedDir {
-		t.Errorf("pwd output = %q, want %q (dir was not honored)", got, resolvedDir)
-	}
+	assertPwdMatchesDir(t, string(out), resolvedDir)
 }
 
 // TestLocalRunner_Start_HonorsDir verifies Start executes the command with
@@ -163,8 +161,26 @@ func TestLocalRunner_Start_HonorsDir(t *testing.T) {
 	if err := wait(); err != nil {
 		t.Fatalf("wait() returned error: %v", err)
 	}
-	if got := strings.TrimSpace(string(out)); got != resolvedDir {
-		t.Errorf("pwd output = %q, want %q (dir was not honored)", got, resolvedDir)
+	assertPwdMatchesDir(t, string(out), resolvedDir)
+}
+
+// assertPwdMatchesDir compares pwd's output against resolvedDir (an
+// already-EvalSymlinks'd path) after also resolving pwdOutput. On macOS,
+// /bin/pwd defaults to POSIX logical mode: once it confirms $PWD names the
+// same directory as the process's actual cwd, it echoes $PWD verbatim
+// (e.g. "/var/folders/...") rather than the physically-resolved path
+// ("/private/var/folders/..."), even though the command genuinely ran in
+// the requested directory. Resolving both sides verifies the directory was
+// honored without depending on that platform-specific string form.
+func assertPwdMatchesDir(t *testing.T, pwdOutput, resolvedDir string) {
+	t.Helper()
+	got := strings.TrimSpace(pwdOutput)
+	resolvedGot, err := filepath.EvalSymlinks(got)
+	if err != nil {
+		t.Fatalf("failed to resolve symlinks for pwd output %q: %v", got, err)
+	}
+	if resolvedGot != resolvedDir {
+		t.Errorf("pwd output = %q (resolved %q), want %q (dir was not honored)", got, resolvedGot, resolvedDir)
 	}
 }
 

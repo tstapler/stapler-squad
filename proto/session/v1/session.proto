@@ -24,6 +24,22 @@ service SessionService {
   // DeleteSession stops and removes a session, cleaning up resources.
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse) {}
 
+  // CancelSessionCreation cancels an in-progress (Status == Creating)
+  // session creation: it interrupts the Background Resolution Pipeline (if a
+  // live goroutine still exists in this process), cleans up any partially
+  // acquired resources, and removes the instance entirely. Unlike
+  // DeleteSession, a cancelled creation is removed outright rather than left
+  // as a Failed card, and no SessionDeletedEvent is published for it (see
+  // Epic 3.2's Known asymmetry note in the async-session-creation plan).
+  rpc CancelSessionCreation(CancelSessionCreationRequest) returns (CancelSessionCreationResponse) {}
+
+  // RetrySessionCreation retries a Failed session creation in place: the
+  // same instance ID and storage row transition Failed -> Creating and the
+  // Background Resolution Pipeline is re-spawned against a fresh fencing
+  // epoch. No SessionCreatedEvent is published for the retry (only
+  // SessionUpdatedEvent), so a client never sees a duplicate card.
+  rpc RetrySessionCreation(RetrySessionCreationRequest) returns (RetrySessionCreationResponse) {}
+
   // WatchSessions streams real-time session events (created/updated/deleted).
   // Server-streaming RPC for live updates without polling.
   rpc WatchSessions(WatchSessionsRequest) returns (stream SessionEvent) {}
@@ -104,6 +120,7 @@ service SessionService {
   // RestartSession restarts a session by killing and recreating the tmux session.
   // Optionally preserves terminal output for debugging purposes.
   rpc RestartSession(RestartSessionRequest) returns (RestartSessionResponse) {}
+  rpc RetrySession(RetrySessionRequest) returns (RetrySessionResponse) {}
 
   // GetWorkspaceInfo retrieves VCS and workspace information for a session.
   // Returns VCS type (Git/JJ), current branch, revision, and uncommitted changes status.
@@ -156,6 +173,29 @@ service SessionService {
   // classifier. Malformed files are skipped; previously loaded rules for that file are
   // retained.
   rpc ReloadClaudeSettingsRules(ReloadClaudeSettingsRulesRequest) returns (ReloadClaudeSettingsRulesResponse) {}
+
+  // ListTaggingRules returns all session-tagging rules (user and seed), each with its
+  // 7-day fire count.
+  rpc ListTaggingRules(ListTaggingRulesRequest) returns (ListTaggingRulesResponse) {}
+
+  // UpsertTaggingRule creates or updates a user-defined session-tagging rule.
+  rpc UpsertTaggingRule(UpsertTaggingRuleRequest) returns (UpsertTaggingRuleResponse) {}
+
+  // DeleteTaggingRule removes a user-defined session-tagging rule by ID.
+  rpc DeleteTaggingRule(DeleteTaggingRuleRequest) returns (DeleteTaggingRuleResponse) {}
+
+  // ReclassifySessionTags synchronously re-runs the LLM tag classifier for one session,
+  // bypassing the poller's classify-once gate. Successfully applied sessions are otherwise
+  // never reclassified automatically — this RPC is the explicit user action that does.
+  rpc ReclassifySessionTags(ReclassifySessionTagsRequest) returns (ReclassifySessionTagsResponse) {}
+
+  // GetTaggingClassifierConfig returns the LLM model hierarchy used for session-tag
+  // classification (primary model plus ordered fallbacks).
+  rpc GetTaggingClassifierConfig(GetTaggingClassifierConfigRequest) returns (GetTaggingClassifierConfigResponse) {}
+
+  // UpdateTaggingClassifierConfig replaces the LLM model hierarchy used for session-tag
+  // classification. Takes effect on the next classification with no restart.
+  rpc UpdateTaggingClassifierConfig(UpdateTaggingClassifierConfigRequest) returns (UpdateTaggingClassifierConfigResponse) {}
 
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
@@ -286,6 +326,39 @@ service SessionService {
   // whether the send succeeded, synchronously.
   rpc TestSlackWebhook(TestSlackWebhookRequest) returns (TestSlackWebhookResponse) {}
 
+  // Jules Config RPCs (google-jules-integration Epic 2.4)
+
+  // GetJulesConfig returns the current Jules dispatch-and-poll configuration.
+  // The API key itself (stored in the OS keychain, never config.json) is
+  // never returned — only has_api_key. auth_reconnect_required is read live
+  // from the running JulesSessionPoller, not persisted config.
+  rpc GetJulesConfig(GetJulesConfigRequest) returns (GetJulesConfigResponse) {}
+
+  // UpdateJulesConfig updates the Jules configuration. An empty api_key means
+  // "leave unchanged"; the sentinel "__clear__" deletes the stored key. The
+  // key is always routed to the OS keychain, never to config.json.
+  rpc UpdateJulesConfig(UpdateJulesConfigRequest) returns (UpdateJulesConfigResponse) {}
+
+  // TestJulesConnection checks whether repo_path's GitHub remote is
+  // registered as a Jules source, using the currently-configured API key.
+  // ok:false names the concrete prerequisite (e.g. "connect it at
+  // jules.google.com") rather than a generic failure.
+  rpc TestJulesConnection(TestJulesConnectionRequest) returns (TestJulesConnectionResponse) {}
+
+  // ConfirmEgressConsent is the ONLY RPC that may append to
+  // JulesConfig.EgressAcknowledgedRepos — called exclusively by
+  // JulesDispatchDialog's checkbox-confirm handler, so "this repo's code may
+  // leave my machine for Google's cloud VM" is always a deliberate,
+  // UI-originated action, never a side effect of DispatchToJules.
+  rpc ConfirmEgressConsent(ConfirmEgressConsentRequest) returns (ConfirmEgressConsentResponse) {}
+
+  // RevokeEgressConsent is the ONLY RPC that may remove an entry from
+  // JulesConfig.EgressAcknowledgedRepos — the removal-side counterpart to
+  // ConfirmEgressConsent, called exclusively by JulesSettings.tsx's Revoke
+  // button. Removing a repo that isn't currently acknowledged is a no-op
+  // (idempotent, mirrors ConfirmEgressConsent's duplicate-add no-op).
+  rpc RevokeEgressConsent(RevokeEgressConsentRequest) returns (RevokeEgressConsentResponse) {}
+
   // UpsertProfile creates or updates a named profile.
   rpc UpsertProfile(UpsertProfileRequest) returns (UpsertProfileResponse) {}
 
@@ -308,6 +381,43 @@ service SessionService {
   // SSRF-validated (ValidateCallbackURL) before being persisted; an unset field leaves
   // that URL unchanged.
   rpc UpdateCallbackConfig(UpdateCallbackConfigRequest) returns (UpdateCallbackConfigResponse) {}
+
+  // Stream Hub Rollout RPCs (terminal-multi-connection-streaming Story 3.3).
+  // Everything these RPCs control is config.json-backed and takes effect
+  // immediately (for session connections resolved from that point on, not
+  // already-connected sessions): the rollback-rehearsal completion gate,
+  // per-session canary overrides, and — via SetStreamHubGlobalOverride — a
+  // live global override, so flipping the effective default no longer
+  // requires editing STAPLER_SQUAD_USE_STREAM_HUB and restarting the process.
+
+  // GetStreamHubRolloutStatus reports the current rollout status: whether
+  // the global env var is set in this process's environment right now,
+  // whether the rollback rehearsal has been completed, and the current
+  // per-session canary overrides.
+  rpc GetStreamHubRolloutStatus(GetStreamHubRolloutStatusRequest) returns (StreamHubRolloutStatus) {}
+
+  // CompleteStreamHubRollbackRehearsal records that Story 3.3.2's rollback
+  // rehearsal has been performed, unblocking the global
+  // STAPLER_SQUAD_USE_STREAM_HUB default from resolving to true. Intended
+  // to be called only after manually verifying the rehearsal (flip a
+  // per-session override on, use it briefly, remove it, confirm a clean
+  // reconnect under the legacy path) against a real disposable session.
+  rpc CompleteStreamHubRollbackRehearsal(CompleteStreamHubRollbackRehearsalRequest) returns (StreamHubRolloutStatus) {}
+
+  // SetStreamHubSessionOverride sets or clears a per-session canary
+  // override (Story 3.3.1), independent of the rollback rehearsal gate.
+  rpc SetStreamHubSessionOverride(SetStreamHubSessionOverrideRequest) returns (StreamHubRolloutStatus) {}
+
+  // SetStreamHubGlobalOverride sets or clears a live, config.json-backed
+  // override of the global stream-hub default (the "stream_hub" feature
+  // flag), taking effect immediately for every session connection resolved
+  // after this call — no process restart required, and no rollback-rehearsal
+  // gate on either direction (config.EffectiveStreamHubEnabled). Clearing it
+  // (force_hub unset) reverts to that flag's on-by-default resolution. Like
+  // all stream-hub resolution, this can only affect sessions whose ownership
+  // lock hasn't resolved yet — an already-connected session's resolution is
+  // cached for its lifetime and cannot be moved.
+  rpc SetStreamHubGlobalOverride(SetStreamHubGlobalOverrideRequest) returns (StreamHubRolloutStatus) {}
 
   // ListWorktrees returns the git worktrees for a given repository path.
   // Used by the Omnibar to populate the "Use Existing Worktree" dropdown.
@@ -433,6 +543,13 @@ service SessionService {
   // RunWorkflow immediately fires a workflow (outside of cron schedule).
   rpc RunWorkflow(RunWorkflowRequest) returns (RunWorkflowResponse) {}
 
+  // WatchWorkflows streams real-time workflow definition events
+  // (created/updated/deleted/run). Server-streaming RPC so every open
+  // Workflows panel reflects changes from any client (MCP tool, another
+  // tab, a cron fire) without a manual refresh -- mirrors WatchBacklogItems'
+  // snapshot-then-live-fanout shape.
+  rpc WatchWorkflows(WatchWorkflowsRequest) returns (stream WorkflowEvent) {}
+
   // ListTriggerFireEvents returns the trigger-fire audit trail (fired/no-match/
   // rejected) for a workflow, newest first. Query-only — shipped in Phase 1 ahead of
   // the Phase 7 TriggersPanel UI so existing cron-workflow users can observe
@@ -456,6 +573,21 @@ service SessionService {
 
   // DeleteAlias removes an alias preset by name.
   rpc DeleteAlias(DeleteAliasRequest) returns (DeleteAliasResponse) {}
+
+  // ListProgramsConfig returns all program configurations (built-in and custom).
+  rpc ListProgramsConfig(ListProgramsConfigRequest) returns (ListProgramsConfigResponse) {}
+
+  // UpsertProgramConfig creates or updates a custom program configuration.
+  rpc UpsertProgramConfig(UpsertProgramConfigRequest) returns (UpsertProgramConfigResponse) {}
+
+  // DeleteProgramConfig removes a custom program configuration by ID.
+  rpc DeleteProgramConfig(DeleteProgramConfigRequest) returns (DeleteProgramConfigResponse) {}
+
+  // ProbeProgram resolves a command to an executable on the server and, when
+  // permitted, parses its --help output into flags. Deliberately not marked
+  // NO_SIDE_EFFECTS: that would enable Connect GET, and the RPC executes a
+  // program (ADR-001).
+  rpc ProbeProgram(ProbeProgramRequest) returns (ProbeProgramResponse) {}
 
   // ArchiveSession soft-archives a session by setting archived_at.
   // Archived sessions are excluded from the default session list.
@@ -486,6 +618,23 @@ service SessionService {
   // ~/.claude/settings.json. Idempotent per hook.
   // +api: hooks:install
   rpc InstallHooks(InstallHooksRequest) returns (InstallHooksResponse) {}
+
+  // GetTmuxVersionStatus reports any detected tmux client/server version
+  // mismatch (see session/tmux/version_check.go) -- a mismatch disables
+  // control mode for the affected socket, degrading terminal input/output to
+  // slower per-command subprocess calls instead of failing outright.
+  // +api: tmux:version-status
+  rpc GetTmuxVersionStatus(GetTmuxVersionStatusRequest) returns (GetTmuxVersionStatusResponse) {}
+
+  // RestartTmuxServer kills the tmux server backing the given socket so it
+  // restarts on this process's own tmux binary, resolving a version
+  // mismatch. DESTRUCTIVE: every session currently attached to that socket
+  // loses its live terminal (running processes, scrollback) -- their
+  // underlying git worktrees/work directories are untouched, and sessions
+  // reconnect to a fresh tmux session lazily on next access. Callers must
+  // obtain explicit user confirmation before calling this.
+  // +api: tmux:restart-server
+  rpc RestartTmuxServer(RestartTmuxServerRequest) returns (RestartTmuxServerResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -664,6 +813,34 @@ message CreateSessionRequest {
   // autonomous_mode (field 23) layers onto whichever session_type was chosen. Unset (nil)
   // means "run locally," the existing behavior.
   RemoteTarget remote = 31;
+
+  // Optional: source session this restart is seeded from. Derives the resolved
+  // path from that session (relaxing the path-required validation above) and
+  // can reject the request with CodeFailedPrecondition if the source is still
+  // live and confirm_restart_with_live_source is not also set — see
+  // resolveRestartSource in server/services/session_service.go.
+  string restart_from_session_id = 32;
+
+  // Required to proceed when restart_from_session_id names a still-live source instance.
+  bool confirm_restart_with_live_source = 33;
+
+  // Optional: force a specific ProcessManager backend for this session ("tmux", "tymux"),
+  // overriding both the per-session config override and the process-wide default. Empty
+  // means no per-request override — normal precedence applies (see
+  // session.ResolveSessionBackend).
+  optional string backend_override = 34;
+
+  // Optional: per-session override for the global default retry policy
+  // (session-retry-backoff). Unset fields inherit the resolved global value.
+  optional RetryPolicyConfig retry_policy_override = 35;
+
+  // Optional: tags applied to the instance at construction time (synchronously, before the
+  // Background Resolution Pipeline dispatches) -- e.g. MCP's always-appended "source:mcp" and
+  // PR-derived tags (async-session-creation Task 2.3.1c). Unlike a post-hoc SetTags call after
+  // AwaitCreationTerminal succeeds, tags set here are never lost if the pipeline's resolution
+  // runs past a caller's own await timeout: they're on the instance from the moment it's
+  // constructed, not applied only on a terminal-success path.
+  repeated string tags = 36;
 }
 
 // RemoteTarget names a previously-saved remote (by RemoteConfig.Name) that a
@@ -745,6 +922,38 @@ message DeleteSessionRequest {
 
 message DeleteSessionResponse {
   // Whether deletion was successful.
+  bool success = 1;
+
+  // Human-readable message.
+  string message = 2;
+}
+
+message CancelSessionCreationRequest {
+  // Session identifier (title or UUID).
+  string id = 1;
+}
+
+message CancelSessionCreationResponse {
+  // Whether cancellation succeeded. Always true on a non-error response —
+  // if cancellation lost the race with the pipeline's own terminal write,
+  // the RPC returns a FailedPrecondition error instead (see
+  // CancelSessionCreation's doc comment).
+  bool success = 1;
+
+  // Human-readable message.
+  string message = 2;
+}
+
+message RetrySessionCreationRequest {
+  // Session identifier (title or UUID).
+  string id = 1;
+}
+
+message RetrySessionCreationResponse {
+  // Whether the retry was accepted. Always true on a non-error response —
+  // if the instance was no longer Failed by the time TryStartRetry's
+  // command ran, the RPC returns a FailedPrecondition error instead (see
+  // RetrySessionCreation's doc comment).
   bool success = 1;
 
   // Human-readable message.
@@ -1336,6 +1545,26 @@ message RestartSessionResponse {
   string message = 3;
 }
 
+// RetrySessionRequest immediately restarts a session's configurable retry
+// policy (session-retry-backoff), bypassing any pending backoff delay —
+// including from SESSION_STATUS_PERMANENTLY_FAILED.
+message RetrySessionRequest {
+  // Session identifier (uses session title as ID).
+  string id = 1;
+}
+
+// RetrySessionResponse indicates whether the manual retry was accepted.
+message RetrySessionResponse {
+  // Retried session.
+  Session session = 1;
+
+  // Whether the retry was accepted.
+  bool success = 2;
+
+  // Human-readable message (error details if failed).
+  string message = 3;
+}
+
 // GetWorkspaceInfoRequest retrieves VCS information for a session.
 message GetWorkspaceInfoRequest {
   // Session identifier.
@@ -1525,6 +1754,14 @@ message MarkNotificationReadResponse {
 }
 
 // ClearNotificationHistoryRequest removes notifications from history.
+//
+// This request carries no per-item exclusion or ID list — Clear() applies
+// before_timestamp (or clears everything, if unset) across the entire store.
+// The server-side NotificationHistoryStore.Clear() guarantees it never
+// removes a record that is unread and actionable (approval_needed/question/
+// error/task_failed/warning), regardless of this cutoff — that guarantee is
+// unconditional and not expressible/overridable via this request (Task
+// 3.1.5c; see design/ux.md Surface 11).
 message ClearNotificationHistoryRequest {
   // Optional: Clear notifications older than this timestamp (RFC3339 string).
   optional string before_timestamp = 1;
@@ -1573,6 +1810,70 @@ message ReloadClaudeSettingsRulesResponse {
   bool success = 1;
   int32 rule_count = 2;
   string message = 3;
+}
+
+// ============================================================================
+// Session-Tagging Rules Messages
+// ============================================================================
+
+message ListTaggingRulesRequest {}
+
+message ListTaggingRulesResponse {
+  repeated TaggingRuleProto rules = 1;
+}
+
+message UpsertTaggingRuleRequest {
+  TaggingRuleProto rule = 1;
+}
+
+message UpsertTaggingRuleResponse {
+  TaggingRuleProto rule = 1;
+  bool created = 2;
+}
+
+message DeleteTaggingRuleRequest {
+  string id = 1;
+}
+
+message DeleteTaggingRuleResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ReclassifySessionTagsRequest {
+  // Session ID or title (matched the same way as the tag poller's instance list).
+  string session_id = 1;
+}
+
+message ReclassifySessionTagsResponse {
+  // Tags applied by this run (post provenance/suppression filtering, as stored).
+  repeated string tags = 1;
+}
+
+message TaggingClassifierConfigProto {
+  // Primary model passed as --model to the headless CLI (e.g. "haiku").
+  // Empty means the server default ("haiku").
+  string model = 1;
+  // Ordered fallback models tried after the primary fails, first success wins.
+  repeated string fallback_models = 2;
+}
+
+message GetTaggingClassifierConfigRequest {}
+
+message GetTaggingClassifierConfigResponse {
+  TaggingClassifierConfigProto config = 1;
+  // True when STAPLER_SQUAD_TAGGING_MODEL / STAPLER_SQUAD_TAGGING_FALLBACK_MODELS
+  // are set: env wins over the stored config, so form edits take effect only after
+  // the env overrides are unset. The UI surfaces this as a warning banner.
+  bool env_override_active = 2;
+}
+
+message UpdateTaggingClassifierConfigRequest {
+  TaggingClassifierConfigProto config = 1;
+}
+
+message UpdateTaggingClassifierConfigResponse {
+  TaggingClassifierConfigProto config = 1;
 }
 
 message GetApprovalAnalyticsRequest {
@@ -1887,6 +2188,21 @@ message SessionDefaultsConfig {
   int32 stale_session_threshold_minutes = 12;
   // Whether crossing the stale threshold also emits a notification.
   bool stale_session_notify_enabled = 13;
+  // Global default configurable crash/stall retry policy
+  // (session-retry-backoff). Always the resolved value in responses.
+  RetryPolicyConfig retry_policy = 14;
+}
+
+// RetryPolicyConfig describes the automated crash/stall retry policy: how
+// many attempts, what backoff, and which failure reasons are eligible.
+message RetryPolicyConfig {
+  bool enabled = 1;
+  int32 max_attempts = 2;
+  string backoff = 3;
+  int32 initial_delay_seconds = 4;
+  int32 max_delay_seconds = 5;
+  repeated string retry_on = 6;
+  bool stale_triggers_retry = 7;
 }
 
 // GetSessionDefaults
@@ -1950,6 +2266,10 @@ message UpdateGlobalDefaultsRequest {
   // 0 = use the server default. See SessionDefaultsConfig.stale_session_threshold_minutes.
   int32 stale_session_threshold_minutes = 10;
   bool stale_session_notify_enabled = 11;
+  // Global default configurable crash/stall retry policy
+  // (session-retry-backoff). Applies to newly-started retry episodes only —
+  // a session already mid-backoff keeps the policy it started with.
+  RetryPolicyConfig retry_policy = 12;
 }
 
 message UpdateGlobalDefaultsResponse {
@@ -2030,6 +2350,87 @@ message TestSlackWebhookResponse {
   string error = 2;
 }
 
+// Jules Config (google-jules-integration Epic 2.4)
+//
+// JulesConfigProto never carries the API key itself — has_api_key reports
+// presence only. usage (Epic 4.1) is a live JulesUsageCounter snapshot.
+
+message JulesConfigProto {
+  bool enabled = 1;
+  bool has_api_key = 2;
+  repeated string egress_acknowledged_repos = 3;
+  int32 max_concurrent_jules_sessions = 4;
+  int32 max_jules_sessions_per_day = 5;
+  // auth_reconnect_required reflects JulesSessionPoller.AuthReconnectRequired()
+  // at response-build time — process/runtime state, never persisted to
+  // config.json. Always false when the poller isn't running (feature
+  // disabled, or not yet started).
+  bool auth_reconnect_required = 6;
+  // usage is a live snapshot of JulesUsageCounter (Epic 4.1) — process/
+  // runtime state, never persisted to config.json. Always all-zero when the
+  // counter dependency isn't wired (feature disabled, or not yet started).
+  JulesUsageProto usage = 7;
+}
+
+// JulesUsageProto mirrors JulesUsageCounter.Snapshot() (server/services/
+// jules_usage_counter.go) — the five counters named in the implementation
+// plan's Observability Plan section.
+message JulesUsageProto {
+  int64 session_dispatched = 1;
+  int64 session_completed = 2;
+  int64 session_failed = 3;
+  int64 api_rate_limited = 4;
+  int64 api_error = 5;
+}
+
+message GetJulesConfigRequest {}
+
+message GetJulesConfigResponse {
+  JulesConfigProto config = 1;
+}
+
+message UpdateJulesConfigRequest {
+  // Empty string means "leave the stored API key unchanged". The sentinel
+  // value "__clear__" deletes it from the OS keychain. Any other non-empty
+  // value replaces the stored key. Never written to config.json.
+  string api_key = 1;
+  bool enabled = 2;
+  int32 max_concurrent_jules_sessions = 3;
+  int32 max_jules_sessions_per_day = 4;
+}
+
+message UpdateJulesConfigResponse {
+  JulesConfigProto config = 1;
+}
+
+message TestJulesConnectionRequest {
+  string repo_path = 1;
+}
+
+message TestJulesConnectionResponse {
+  bool ok = 1;
+  // message names the concrete prerequisite on failure (e.g. which
+  // owner/repo needs to be connected at jules.google.com), not a generic
+  // error string.
+  string message = 2;
+}
+
+message ConfirmEgressConsentRequest {
+  string repo_path = 1;
+}
+
+message ConfirmEgressConsentResponse {
+  repeated string egress_acknowledged_repos = 1;
+}
+
+message RevokeEgressConsentRequest {
+  string repo_path = 1;
+}
+
+message RevokeEgressConsentResponse {
+  repeated string egress_acknowledged_repos = 1;
+}
+
 // Callback Config (webhook-triggers Phase 5, FR7)
 //
 // CallbackConfigProto reports booleans only — the raw URL is never echoed back on any
@@ -2058,6 +2459,46 @@ message UpdateCallbackConfigRequest {
 
 message UpdateCallbackConfigResponse {
   CallbackConfigProto config = 1;
+}
+
+message GetStreamHubRolloutStatusRequest {}
+
+message StreamHubSessionOverrideEntry {
+  string session_name = 1;
+  bool force_hub = 2;
+}
+
+message StreamHubRolloutStatus {
+  // Whether STAPLER_SQUAD_USE_STREAM_HUB=true is set in this process's
+  // environment right now. Purely informational — superseded by
+  // global_override when the latter is set.
+  bool global_env_var_set = 1;
+  // Unset when the rollback rehearsal has never been completed.
+  google.protobuf.Timestamp rollback_rehearsal_completed_at = 2;
+  repeated StreamHubSessionOverrideEntry session_overrides = 3;
+  // Live, config.json-backed override of the global default, settable via
+  // SetStreamHubGlobalOverride with no restart required. Unset means no
+  // override is active and the env var default applies.
+  optional bool global_override = 4;
+}
+
+message CompleteStreamHubRollbackRehearsalRequest {}
+
+message SetStreamHubSessionOverrideRequest {
+  string session_name = 1;
+  // Unset clears any existing override for session_name (falls back to the
+  // global default). true pins the session onto the hub-owned path; false
+  // pins it onto the legacy path — either way, regardless of the global
+  // default.
+  optional bool force_hub = 2;
+}
+
+message SetStreamHubGlobalOverrideRequest {
+  // Unset clears the global override, reverting to the
+  // STAPLER_SQUAD_USE_STREAM_HUB env var default. true/false forces the
+  // global default for every session connection resolved from now on,
+  // still subject to the rollback rehearsal gate when forcing true.
+  optional bool force_hub = 1;
 }
 
 // UpsertProfile
@@ -2135,6 +2576,80 @@ message DeleteAliasRequest {
 }
 
 message DeleteAliasResponse {}
+
+// ProgramConfigProto represents one program definition (built-in or custom).
+message ProgramConfigProto {
+  string id = 1;
+  string label = 2;
+  string command = 3;
+  string cli_flags = 4;
+  string description = 5;
+  map<string, string> env = 6;
+  bool is_builtin = 7;
+}
+
+// ProbeProgramRequest asks the server to check one program command.
+message ProbeProgramRequest {
+  string command = 1;
+  // confirm_execute: the user explicitly asked to run this program's --help.
+  // Required for scripts; sent only by the explicit Check button.
+  bool confirm_execute = 2;
+  // resolve_only: resolve and stat only, never execute.
+  bool resolve_only = 3;
+}
+
+// FlagInfo is one option parsed from a program's --help output.
+message FlagInfo {
+  string name = 1;
+  string short = 2;
+  bool takes_value = 3;
+  string description = 4;
+  repeated string aliases = 5;
+}
+
+enum ProbeStatus {
+  PROBE_STATUS_UNSPECIFIED = 0;
+  PROBE_STATUS_FOUND_PARSED = 1;
+  PROBE_STATUS_FOUND_NO_FLAGS = 2;
+  PROBE_STATUS_NOT_FOUND = 3;
+  PROBE_STATUS_TIMEOUT = 4;
+  PROBE_STATUS_ERROR = 5;
+  PROBE_STATUS_BUSY = 6;
+  PROBE_STATUS_NEEDS_CONFIRM = 7;
+}
+
+// ProbeProgramResponse: found is derived from probe_status (true iff
+// FOUND_PARSED, FOUND_NO_FLAGS, TIMEOUT or NEEDS_CONFIRM). NEEDS_CONFIRM means
+// the file exists but was not executed. ERROR and BUSY mean "could not
+// determine": found is false, but clients must not render them as "not found".
+message ProbeProgramResponse {
+  bool found = 1;
+  string resolved_path = 2;
+  repeated FlagInfo flags = 3;
+  ProbeStatus probe_status = 4;
+  bool truncated = 5;
+  bool is_wrapper = 6;
+}
+
+message ListProgramsConfigRequest {}
+
+message ListProgramsConfigResponse {
+  repeated ProgramConfigProto programs = 1;
+}
+
+message UpsertProgramConfigRequest {
+  ProgramConfigProto program = 1;
+}
+
+message UpsertProgramConfigResponse {
+  ProgramConfigProto program = 1;
+}
+
+message DeleteProgramConfigRequest {
+  string id = 1;
+}
+
+message DeleteProgramConfigResponse {}
 
 // LauncherPresetProto represents one hand-authored launcher preset loaded from
 // ~/.stapler-squad/launcher-presets.json.
@@ -2529,6 +3044,37 @@ message InstallHooksResponse {
   repeated string messages = 2;
 }
 
+message GetTmuxVersionStatusRequest {}
+
+// TmuxVersionMismatch describes one socket where the client and the
+// already-running server disagree on tmux version.
+message TmuxVersionMismatch {
+  // The tmux server socket affected ("" means the default/shared server).
+  string server_socket = 1;
+  // This process's own tmux client version (Binary() -V).
+  string client_version = 2;
+  // The running server's reported version (display-message -p '#{version}').
+  string server_version = 3;
+  // Number of sessions currently on this socket, for the confirmation UI.
+  int32 affected_session_count = 4;
+}
+
+message GetTmuxVersionStatusResponse {
+  // Empty when no mismatch has been detected on any socket.
+  repeated TmuxVersionMismatch mismatches = 1;
+}
+
+message RestartTmuxServerRequest {
+  // Which server socket to restart ("" for the default/shared server) --
+  // must match a server_socket from a prior GetTmuxVersionStatus response.
+  string server_socket = 1;
+}
+
+message RestartTmuxServerResponse {
+  // Number of sessions that were attached to the killed server.
+  int32 sessions_affected = 1;
+}
+
 message UpdateFeatureFlagRequest {
   // The feature name to update (e.g. "backlog").
   string name = 1;
@@ -2558,6 +3104,8 @@ message EscapeEventProto {
   string mangle_type = 10;
   google.protobuf.Timestamp wall_time = 11;
   int64 session_seq = 12;
+  string project_path = 13;
+  string sequence_signature = 14;
 }
 
 message QueryEscapeAnalyticsRequest {
@@ -2594,6 +3142,11 @@ message GetEscapeAnalyticsSummaryResponse {
   int64 total_sequences = 2;
   int64 total_mangled = 3;
   double mangle_rate = 4;
+  int64 correlation_outcomes = 5;
+  int64 matched_sequences = 6;
+  int64 stripped_sequences = 7;
+  double correlation_coverage = 8;
+  bool capture_healthy = 9;
 }
 
 message GetEscapeAnalyticsGlobalSummaryRequest {
@@ -2607,6 +3160,13 @@ message GetEscapeAnalyticsGlobalSummaryResponse {
   int64 total_mangled = 3;
   double mangle_rate = 4;
   repeated SessionEscapeSummary per_session = 5;
+  int64 correlation_outcomes = 6;
+  int64 matched_sequences = 7;
+  int64 stripped_sequences = 8;
+  double correlation_coverage = 9;
+  bool capture_healthy = 10;
+  int64 dropped_events = 11;
+  repeated ProjectEscapeSummary per_project = 12;
 }
 
 message SessionEscapeSummary {
@@ -2614,6 +3174,24 @@ message SessionEscapeSummary {
   int64 total_sequences = 2;
   int64 total_mangled = 3;
   double mangle_rate = 4;
+  string project_path = 5;
+  int64 correlation_outcomes = 6;
+  int64 matched_sequences = 7;
+  int64 stripped_sequences = 8;
+  double correlation_coverage = 9;
+  bool capture_healthy = 10;
+}
+
+message ProjectEscapeSummary {
+  string project_path = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
+  int64 correlation_outcomes = 5;
+  int64 matched_sequences = 6;
+  int64 stripped_sequences = 7;
+  double correlation_coverage = 8;
+  bool capture_healthy = 9;
 }
 
 // ============================================================================
@@ -2978,6 +3556,73 @@ message ListSlashCommandsResponse {
 message RunWorkflowResponse {
   string session_id = 1;
 }
+
+message WatchWorkflowsRequest {
+  // Optional: if non-zero, replay buffered events with seq > after_seq
+  // before going live, instead of sending a fresh initial snapshot. Pass
+  // the last seq received before disconnecting. Mirrors
+  // WatchSessionsRequest.after_seq / WatchBacklogItemsRequest.after_seq.
+  uint64 after_seq = 1;
+}
+
+// WorkflowEvent represents a real-time change to a saved workflow
+// definition. Used by the WatchWorkflows streaming RPC.
+message WorkflowEvent {
+  google.protobuf.Timestamp timestamp = 1;
+
+  oneof event {
+    WorkflowCreatedEvent workflow_created = 2;
+    WorkflowUpdatedEvent workflow_updated = 3;
+    WorkflowDeletedEvent workflow_deleted = 4;
+    WorkflowRunEvent workflow_run = 5;
+    // Synthetic marker (no corresponding bus event) sent exactly once, at
+    // the end of WatchWorkflows' initial phase (fresh snapshot or after_seq
+    // replay), but ONLY when that phase sent zero other events -- e.g. no
+    // workflows saved yet. Without it, a zero-workflow connection produces
+    // zero bytes on the wire and the client's `for await` loop never
+    // resolves past its first iteration -- see
+    // BacklogItemEvent.snapshot_complete's identical doc comment.
+    WorkflowSnapshotCompleteEvent snapshot_complete = 6;
+  }
+
+  // Monotonically increasing sequence number assigned by the server
+  // EventBus, mirroring SessionEvent.seq/BacklogItemEvent.seq. Zero means
+  // "no sequence information" -- used for the synthetic initial-snapshot
+  // events, which don't correspond to a single published bus event.
+  uint64 seq = 7;
+}
+
+// WorkflowCreatedEvent is emitted when a new workflow is saved.
+message WorkflowCreatedEvent {
+  WorkflowProto workflow = 1;
+  // True when sent as part of WatchWorkflows' initial snapshot rather than
+  // a live creation. The frontend should not flash/notify for these.
+  bool is_snapshot = 2;
+}
+
+// WorkflowUpdatedEvent is emitted when an existing workflow is modified.
+message WorkflowUpdatedEvent {
+  WorkflowProto workflow = 1;
+  bool is_snapshot = 2;
+}
+
+// WorkflowDeletedEvent is emitted when a workflow is permanently removed.
+message WorkflowDeletedEvent {
+  string id = 1;
+}
+
+// WorkflowRunEvent is emitted when RunWorkflow fires a workflow manually
+// (including via the MCP run_workflow tool) -- distinct from a
+// cron-triggered fire, which does not go through the RunWorkflow RPC and is
+// not broadcast here.
+message WorkflowRunEvent {
+  string workflow_id = 1;
+  string session_id = 2;
+}
+
+// WorkflowSnapshotCompleteEvent carries no data -- see
+// WorkflowEvent.snapshot_complete's doc comment.
+message WorkflowSnapshotCompleteEvent {}
 
 // TriggerFireEventProto is the wire representation of a single trigger evaluation
 // attempt (fired/no-match/rejected) — the durable audit trail behind

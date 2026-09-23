@@ -131,6 +131,42 @@ export const resetLayoutButton = style({
   color: vars.color.textMuted,
 });
 
+export const viewModeToggleBar = style({
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["1"]} 0`,
+  flexShrink: 0,
+});
+
+export const viewModeToggleButton = recipe({
+  base: {
+    fontSize: vars.fontSize.xs,
+    padding: `2px ${vars.space["2"]}`,
+    background: "transparent",
+    border: `1px solid ${vars.color.borderColor}`,
+    borderRadius: vars.radii.sm,
+    cursor: "pointer",
+    color: vars.color.textMuted,
+    minHeight: "28px",
+  },
+  variants: {
+    active: {
+      // primary/primaryText (not accentBg/accentText) -- every theme verifies this specific
+      // pairing for WCAG AA contrast (see the "#fff on #6366f1 = 4.46:1 fails" comments next
+      // to each theme's `primary` value in theme.css.ts); accentText is documented there as
+      // "unchanged from pre-fix behavior... not in scope" for the exact contrast class this
+      // button hit in CI (axe: 3.84:1 against composited accentBg, needs 4.5:1).
+      true: {
+        background: vars.color.primary,
+        color: vars.color.primaryText,
+        borderColor: vars.color.primary,
+      },
+      false: {},
+    },
+  },
+});
+
 export const rendererRoot = style({
   display: "flex",
   flexDirection: "column",

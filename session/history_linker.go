@@ -315,18 +315,21 @@ func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
 	}
 
 	// SetHistoryInfo is idempotent: if UUID and path already match it returns early.
-	// Log only when we are actually updating a linked session's UUID (e.g., after /clear).
+	// Log only when we are actually updating a linked session's UUID (e.g., after /clear) —
+	// correlateSession runs on every poll/force-rescan, so an unconditional log here would
+	// re-announce the same unchanged link on every tick for every already-linked session.
 	if alreadyLinked {
 		cs := inst.GetClaudeSession()
 		if cs != nil && cs.ConversationUUID != info.ConversationUUID {
 			log.Info("HistoryLinker: updating session UUID after conversation change",
 				"session", inst.Title, "old_uuid", cs.ConversationUUID, "new_uuid", info.ConversationUUID)
+			log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 		}
 	} else {
 		log.Info("HistoryLinker: linked session to conversation UUID",
 			"session", inst.Title, "conv_uuid", info.ConversationUUID)
+		log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 	}
-	log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 	inst.SetHistoryInfo(info.ConversationUUID, info.HistoryFilePath)
 }
 

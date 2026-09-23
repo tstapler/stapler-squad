@@ -36,6 +36,8 @@ function pillContent(state: MergeabilityState): PillContent {
       return { icon: GitPullRequestDraft, label: "Draft" };
     case "conflicted":
       return { icon: GitMerge, label: "Conflicts" };
+    case "diverged":
+      return { icon: GitMerge, label: "Diverged from base" };
     case "changes_requested":
       return { icon: AlertCircle, label: "Changes requested" };
     case "ci_failing":

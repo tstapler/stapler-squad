@@ -1,0 +1,16 @@
+{
+  "id": "retry-badge",
+  "type": "frontend",
+  "name": "Retry attempt count badge on the session card",
+  "component": "RetryBadge",
+  "path": "web-app/src/components/sessions/RetryBadge.tsx",
+  "filePath": "web-app/src/components/sessions/RetryBadge.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "RetryBadge_should_NotRender_When_RetryAttemptIsZero",
+    "RetryBadge_should_ExposeAriaLabelWithAttemptFraction_When_Rendered",
+    "RetryBadge_should_ApplyWarningTokens_When_AttemptEqualsMaxAttempts"
+  ],
+  "lastModified": "2026-08-30T00:00:00Z"
+}

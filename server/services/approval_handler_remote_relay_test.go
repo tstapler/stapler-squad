@@ -39,6 +39,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	testutil "github.com/tstapler/stapler-squad/testutil/socket"
 )
 
 // remoteRelayStreamLocalOpenMsg mirrors golang.org/x/crypto/ssh's unexported
@@ -238,7 +239,7 @@ func TestApprovalHandler_SatisfiesRelayHandlerEndToEnd(t *testing.T) {
 	// this line fails to compile.
 	var _ sshremote.PermissionRequestHandler = handler
 
-	basePath := t.TempDir()
+	basePath := testutil.ShortTempSocketDir(t)
 	relay, err := sshremote.NewRemoteApprovalRelay(pool, handler, sshremote.RemoteApprovalRelayTarget{
 		RemoteName:      target.Name,
 		BasePath:        basePath,
@@ -357,7 +358,7 @@ func TestRemoteApprovalHookCommand_RealShellDeliversToRelay(t *testing.T) {
 	handler := NewApprovalHandler(NewApprovalStore(""), nil, events.NewEventBus(4))
 	handler.SetClassifier(autoAllowClassifier{})
 
-	basePath := t.TempDir()
+	basePath := testutil.ShortTempSocketDir(t)
 	relay, err := sshremote.NewRemoteApprovalRelay(pool, handler, sshremote.RemoteApprovalRelayTarget{
 		RemoteName:      target.Name,
 		BasePath:        basePath,
@@ -439,7 +440,7 @@ func TestRemoteApprovalHookCommand_SurvivesSlowHumanDecision(t *testing.T) {
 	handler := NewApprovalHandler(NewApprovalStore(""), nil, events.NewEventBus(4))
 	handler.SetClassifier(delayingClassifier{delay: 2 * time.Second})
 
-	basePath := t.TempDir()
+	basePath := testutil.ShortTempSocketDir(t)
 	relay, err := sshremote.NewRemoteApprovalRelay(pool, handler, sshremote.RemoteApprovalRelayTarget{
 		RemoteName:      target.Name,
 		BasePath:        basePath,

@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 )
 
 // setupDiffHashTestRepo and the addCommitForDiffHashTest helper are self-contained
@@ -19,7 +20,7 @@ import (
 // not the fuller clone/branch fixtures ops_test.go uses.
 //
 // Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func addCommitForDiffHashTest(t *testing.T, repo *gogit.Repository, path, message string) string {
 	t.Helper()
 	wt, err := repo.Worktree()
@@ -57,7 +58,7 @@ func TestComputeCurrentDiffHash_should_returnNonEmptyHash_When_CompletedWorkSess
 
 	repoPath, baseSHA := setupDiffHashTestRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "foo.go"), []byte("package foo\n"), 0o644))
-	gitRepo, err := gogit.PlainOpen(repoPath)
+	gitRepo, err := gitutil.OpenRepo(repoPath)
 	require.NoError(t, err)
 	headSHA := addCommitForDiffHashTest(t, gitRepo, "foo.go", "add foo.go")
 

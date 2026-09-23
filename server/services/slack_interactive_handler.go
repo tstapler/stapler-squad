@@ -37,7 +37,7 @@ type SlackInteractivePayload struct {
 
 // approvalResolver is the narrow interface SlackInteractiveHandler needs —
 // defined here, at the consumer, per
-// .claude/rules/interface-pollution-checklist.md. Satisfied by
+// the `interface-pollution-checklist` skill. Satisfied by
 // *SessionService (session_service.go's ResolveApproval forwards to its
 // private *ApprovalService).
 type approvalResolver interface {

@@ -289,6 +289,49 @@ func TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip(t *testing.
 	assert.Nil(t, fetchedAfterClear.PrFeedbackAddressedAt)
 }
 
+// TestEntRepositoryBacklog_CostBudgetThresholdUsd_should_RoundTrip verifies
+// Task 4.2.1's nil-pointer-presence convention for CostBudgetThresholdUsd:
+// unset by default, settable via UpdateBacklogItem, and 0.0 is a legitimate
+// configured threshold distinct from "unset" (mirrors ReworkCapOverride).
+func TestEntRepositoryBacklog_CostBudgetThresholdUsd_should_RoundTrip(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title: "item for cost-budget-threshold round-trip",
+	})
+	require.NoError(t, err)
+
+	fetchedPre, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Nil(t, fetchedPre.CostBudgetThresholdUsd)
+
+	threshold := 5.00
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		CostBudgetThresholdUsd: &threshold,
+	}, nil)
+	require.NoError(t, err)
+
+	fetchedAfterUpdate, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetchedAfterUpdate.CostBudgetThresholdUsd)
+	assert.InDelta(t, threshold, *fetchedAfterUpdate.CostBudgetThresholdUsd, 0.0001)
+
+	// 0.0 is a legitimate configured threshold, not "unset".
+	zero := 0.0
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		CostBudgetThresholdUsd: &zero,
+	}, nil)
+	require.NoError(t, err)
+
+	fetchedAfterZero, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetchedAfterZero.CostBudgetThresholdUsd)
+	assert.InDelta(t, 0.0, *fetchedAfterZero.CostBudgetThresholdUsd, 0.0001)
+}
+
 // TestGetBacklogItem_Labels_ReadsEmptyForPreExistingRow is the NULL-safety
 // test for the new labels field (Epic 0.1, Story 0.1.1): a row created
 // without setting Labels must read back as nil/empty, not panic, confirming
@@ -1091,4 +1134,290 @@ func TestMigrationShouldBeReversible_WhenBacklogItemPublicIdColumnAddedThenRemov
 	assert.Equal(t, "item with an explicit public_id", setTitleAfterDown, "id/UUID-keyed row data must be unaffected by the down migration")
 
 	require.NoError(t, verifyDB.Close())
+}
+
+// TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestFirst
+// verifies the ADR-029 collateral fix (Story 1.3.1): two ItemSession rows sharing
+// the same session_uuid but different created_at/session_role must come back with
+// the newer row first, so callers folding this into a map keyed by session UUID
+// can deterministically keep the most-recently-created role.
+func TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestFirst(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title: "item with a reused session uuid",
+	})
+	require.NoError(t, err)
+	itemID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+
+	const sharedSessionUUID = "reused-session-uuid-for-ordering-test"
+	older := time.Now().Add(-1 * time.Hour)
+	newer := time.Now()
+
+	_, err = repo.client.ItemSession.Create().
+		SetSessionUUID(sharedSessionUUID).
+		SetSessionRole(SessionRoleTriage).
+		SetBacklogItemID(itemID).
+		SetCreatedAt(older).
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = repo.client.ItemSession.Create().
+		SetSessionUUID(sharedSessionUUID).
+		SetSessionRole(SessionRoleWork).
+		SetBacklogItemID(itemID).
+		SetCreatedAt(newer).
+		Save(ctx)
+	require.NoError(t, err)
+
+	entries, err := repo.GetAllItemSessionsWithBacklogInfo(ctx)
+	require.NoError(t, err)
+
+	var matches []ItemSessionBacklogEntry
+	for _, e := range entries {
+		if e.SessionUUID == sharedSessionUUID {
+			matches = append(matches, e)
+		}
+	}
+	require.Len(t, matches, 2, "expected both rows for the shared session uuid")
+	assert.Equal(t, SessionRoleWork, matches[0].SessionRole, "newer row (session_role=work) must appear first")
+	assert.Equal(t, SessionRoleTriage, matches[1].SessionRole, "older row (session_role=triage) must appear second")
+}
+
+// TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents is the
+// regression test for the memory-growth incident this cap fixes: a session
+// stuck in a transition crash-loop appends one BacklogStatusEvent row per
+// retry, and attachStatusEventsForPublish previously reloaded and
+// re-broadcast that item's *entire* history on every single subsequent
+// publish -- an O(N) cost per transition that compounded into unbounded live
+// heap growth (confirmed via pprof: 93% of a 7.6GB live heap after ~80
+// minutes of one stuck item's retry storm). Verifies the attached slice is
+// capped at maxPublishedStatusEvents and keeps only the *most recent* rows,
+// still in ascending (oldest-first) order.
+func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "item stuck in a transition crash-loop",
+		Status: string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+	itemID, err := repo.resolveBacklogItemLookup(ctx, created.ID)
+	require.NoError(t, err)
+
+	const totalEvents = maxPublishedStatusEvents + 10
+	for i := 0; i < totalEvents; i++ {
+		recordStatusEvent(ctx, statusEventInput{
+			evClient:    repo.client.BacklogStatusEvent,
+			itemID:      itemID,
+			fromStatus:  string(BacklogStatusIdea),
+			toStatus:    string(BacklogStatusIdea),
+			triggeredBy: TriggeredBySystem,
+			note:        fmt.Sprintf("retry #%d", i),
+		})
+	}
+
+	data := &BacklogItemData{ID: created.ID}
+	repo.attachStatusEventsForPublish(ctx, data)
+
+	require.Len(t, data.StatusEvents, maxPublishedStatusEvents,
+		"attached slice must be capped at maxPublishedStatusEvents even when far more rows exist")
+	// Oldest-first order preserved: the last attached event must be the very
+	// last one recorded (note field carries the retry index).
+	last := data.StatusEvents[len(data.StatusEvents)-1].Note
+	require.NotNil(t, last)
+	assert.Equal(t, fmt.Sprintf("retry #%d", totalEvents-1), *last,
+		"cap must keep the most recent events, not the oldest")
+	first := data.StatusEvents[0].Note
+	require.NotNil(t, first)
+	assert.Equal(t, fmt.Sprintf("retry #%d", totalEvents-maxPublishedStatusEvents), *first,
+		"first retained event must be exactly maxPublishedStatusEvents back from the most recent")
+}
+
+// newTestItemSessionForCost creates a backlog item and an ItemSession for it,
+// for Epic 2.5's UpdateItemSessionCost/cost_priced tests below.
+func newTestItemSessionForCost(t *testing.T, repo *EntRepository, ctx context.Context) ItemSessionSummary {
+	t.Helper()
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item for cost bookkeeping test"})
+	require.NoError(t, err)
+	is, err := repo.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "cost-test-" + item.ID,
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	return is
+}
+
+// TestUpdateItemSessionCost_should_IncrementCostAndKeepPricedTrue_When_CallIsPriced
+// covers Story 2.5.2's happy path: a priced call adds to estimated_cost_usd and
+// leaves cost_priced at its schema default of true.
+func TestUpdateItemSessionCost_should_IncrementCostAndKeepPricedTrue_When_CallIsPriced(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	is := newTestItemSessionForCost(t, repo, ctx)
+
+	require.NoError(t, repo.UpdateItemSessionCost(ctx, is.ID, 1.25, true))
+
+	fetched, err := repo.GetItemSession(ctx, is.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 1.25, fetched.EstimatedCostUsd, 1e-9)
+	assert.True(t, fetched.CostPriced, "a priced call must leave cost_priced true")
+}
+
+// TestUpdateItemSessionCost_should_LeaveCostUnchangedAndSetPricedFalse_When_CallIsUnpriced
+// covers Story 2.5.2's error/edge path: an unpriced call must not be folded into
+// the running cost total as if it were a genuine $0, and must flip cost_priced
+// to false so the row is visibly known-incomplete.
+func TestUpdateItemSessionCost_should_LeaveCostUnchangedAndSetPricedFalse_When_CallIsUnpriced(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	is := newTestItemSessionForCost(t, repo, ctx)
+	require.NoError(t, repo.UpdateItemSessionCost(ctx, is.ID, 2.00, true))
+
+	require.NoError(t, repo.UpdateItemSessionCost(ctx, is.ID, 0, false))
+
+	fetched, err := repo.GetItemSession(ctx, is.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 2.00, fetched.EstimatedCostUsd, 1e-9, "an unpriced call must not change the running cost total")
+	assert.False(t, fetched.CostPriced, "an unpriced call must set cost_priced false")
+}
+
+// TestUpdateItemSessionCost_should_NotResetPricedToTrue_When_PricedCallFollowsUnpricedCall
+// covers the sticky-once-false invariant: once any contributing call for a
+// session has been unpriced, a later priced call must not paper over that by
+// resetting cost_priced back to true — the row's total is permanently missing
+// the unpriced call's real cost.
+func TestUpdateItemSessionCost_should_NotResetPricedToTrue_When_PricedCallFollowsUnpricedCall(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	is := newTestItemSessionForCost(t, repo, ctx)
+	require.NoError(t, repo.UpdateItemSessionCost(ctx, is.ID, 0, false))
+	require.NoError(t, repo.UpdateItemSessionCost(ctx, is.ID, 3.50, true))
+
+	fetched, err := repo.GetItemSession(ctx, is.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 3.50, fetched.EstimatedCostUsd, 1e-9, "the later priced call's cost must still be added")
+	assert.False(t, fetched.CostPriced, "cost_priced must stay false once any contributing call was unpriced")
+}
+
+// TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExecutorFields
+// mirrors TestMigrationShouldBeReversible_WhenBacklogItemGainsOptionalShipSnapshotFields
+// above, applied to the stage-executor fields this project added to PipelineMode
+// (stage_executors_json) and ItemSession (resolved_program, resolved_model,
+// executor_snapshot_hash, configured_program, executor_fallback_reason,
+// cost_priced). Per validation.md's Migration Test spec: (1) Up — a
+// pre-existing-shaped row (created via the repository methods that predate
+// this project, setting none of the new fields, exactly like
+// newTestItemSessionForCost's pattern above) reads back safe defaults; (2)
+// behavior parity — PipelineEngine.ExecutorFor on that pre-existing mode
+// returns ("", "") for every StageRole, proving it is never treated as if it
+// had overrides it never configured; (3) rollback safety — the row round
+// trips through pre-project accessors that don't reference the new fields at
+// all, with no error and no data loss on the fields those accessors do use.
+func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExecutorFields(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// --- (1) Up: pre-existing PipelineMode and ItemSession rows read back safe defaults ---
+
+	pipelineModeRepo := NewEntPipelineModeRepository(repo.client)
+	preExistingMode, err := pipelineModeRepo.Create(ctx, PipelineModeCreateInput{
+		Slug:                  "pre-existing-mode",
+		Name:                  "Mode created before stage-executor fields existed",
+		Enabled:               true,
+		StatusCommandTemplate: "status template",
+		DoneCommandTemplate:   "done template",
+		FailCommandTemplate:   "fail template",
+		ReviewCommandTemplate: "review template",
+		ShipCommandTemplate:   "ship template",
+		HelpCommandTemplate:   "help template",
+		TriagePromptTemplate:  "triage template",
+		ReviewPromptTemplate:  "review prompt template",
+		InitialPromptTemplate: "initial prompt template",
+		// StageExecutors deliberately omitted: simulates a row created before
+		// this field existed.
+	})
+	require.NoError(t, err)
+
+	parsedExecutors, err := ParseStageExecutors(preExistingMode.StageExecutorsJSON)
+	require.NoError(t, err, "a pre-existing row's stage_executors_json must parse cleanly")
+	assert.Equal(t, "{}", preExistingMode.StageExecutorsJSON)
+	assert.Empty(t, parsedExecutors)
+
+	preExistingItem, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title:        "item for pre-existing item-session stage-executor fields",
+		PipelineMode: preExistingMode.Slug,
+	})
+	require.NoError(t, err)
+
+	preExistingSession, err := repo.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      preExistingItem.ID,
+		SessionUUID: "pre-existing-stage-executor-session",
+		SessionRole: SessionRoleWork,
+		// ResolvedProgram/ResolvedModel/ExecutorSnapshotHash/ConfiguredProgram/
+		// ExecutorFallbackReason/CostUnpriced deliberately omitted: simulates a
+		// row created before these fields existed.
+	})
+	require.NoError(t, err)
+
+	fetchedSession, err := repo.GetItemSession(ctx, preExistingSession.ID)
+	require.NoError(t, err)
+	assert.True(t, fetchedSession.CostPriced, "existing Claude-only cost data must be retroactively priced")
+	assert.Equal(t, "", fetchedSession.ResolvedProgram)
+	assert.Equal(t, "", fetchedSession.ResolvedModel)
+	assert.Equal(t, "", fetchedSession.ExecutorSnapshotHash)
+	assert.Equal(t, "", fetchedSession.ConfiguredProgram)
+	assert.Equal(t, "", fetchedSession.ExecutorFallbackReason)
+
+	// --- (2) Behavior parity: ExecutorFor must never invent overrides for a mode that never configured any ---
+
+	engine, err := NewPipelineEngine(pipelineModeRepo)
+	require.NoError(t, err)
+	itemOnPreExistingMode := &BacklogItemData{ID: preExistingItem.ID, PipelineMode: preExistingMode.Slug}
+
+	for _, role := range []StageRole{StageRoleTriage, StageRoleReview, StageRoleWork} {
+		program, model := engine.ExecutorFor(itemOnPreExistingMode, role)
+		assert.Equal(t, "", program, "role %s: pre-existing mode must never resolve a program override", role)
+		assert.Equal(t, "", model, "role %s: pre-existing mode must never resolve a model override", role)
+	}
+
+	// --- (3) Rollback safety: round trip through pre-project accessors that never reference the new fields ---
+
+	newName := "Renamed pre-existing mode"
+	updatedMode, err := pipelineModeRepo.Update(ctx, preExistingMode.ID, PipelineModeUpdateInput{
+		Name: &newName,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, newName, updatedMode.Name)
+	assert.Equal(t, preExistingMode.Slug, updatedMode.Slug, "existing Slug must be unchanged by an update that never references stage_executors_json")
+	assert.Equal(t, "{}", updatedMode.StageExecutorsJSON, "stage_executors_json must be undisturbed by an update that never references it")
+
+	startedAt := time.Now().UTC().Truncate(time.Second)
+	require.NoError(t, repo.UpdateItemSessionStarted(ctx, preExistingSession.ID, startedAt))
+
+	fetchedAfterUpdate, err := repo.GetItemSession(ctx, preExistingSession.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetchedAfterUpdate.StartedAt)
+	assert.True(t, startedAt.Equal(*fetchedAfterUpdate.StartedAt), "StartedAt must round-trip through an accessor that never references the new executor fields")
+	assert.True(t, fetchedAfterUpdate.CostPriced, "cost_priced must be undisturbed by an update that never references it")
+	assert.Equal(t, "", fetchedAfterUpdate.ResolvedProgram, "ResolvedProgram must be undisturbed by an update that never references it")
 }

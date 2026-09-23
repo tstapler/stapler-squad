@@ -1,6 +1,7 @@
 package streamhub
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -70,7 +71,7 @@ func TestNegotiatedSize_should_IgnoreVote_When_SubscriberCapabilityCanResizeIsFa
 	id := hub.AttachSubscriber(noopTransport{}, SubscriberCapability{CanResize: false})
 
 	size := mustTerminalSize(t, 200, 50)
-	hub.RequestResize(id, size)
+	hub.RequestResize(context.Background(), id, size)
 
 	if got := hub.NegotiatedSize(); got != (TerminalSize{}) {
 		t.Fatalf("expected NegotiatedSize to remain unset after a rejected vote, got %+v", got)
@@ -83,7 +84,7 @@ func TestRequestResize_should_UpdateNegotiatedSize_When_SubscriberCanResize(t *t
 	id := hub.AttachSubscriber(noopTransport{}, SubscriberCapability{CanResize: true})
 
 	size := mustTerminalSize(t, 100, 30)
-	hub.RequestResize(id, size)
+	hub.RequestResize(context.Background(), id, size)
 
 	if got := hub.NegotiatedSize(); got != size {
 		t.Fatalf("expected NegotiatedSize %+v, got %+v", size, got)
@@ -93,7 +94,7 @@ func TestRequestResize_should_UpdateNegotiatedSize_When_SubscriberCanResize(t *t
 func TestRequestResize_should_BeNoOp_When_SubscriberIDIsUnknown(t *testing.T) {
 	hub := NewStreamHub("test-session", nil, WithTeardownGrace(time.Hour))
 
-	hub.RequestResize(NewSubscriberID(), mustTerminalSize(t, 100, 30))
+	hub.RequestResize(context.Background(), NewSubscriberID(), mustTerminalSize(t, 100, 30))
 
 	if got := hub.NegotiatedSize(); got != (TerminalSize{}) {
 		t.Fatalf("expected NegotiatedSize to remain unset, got %+v", got)
@@ -112,7 +113,7 @@ func TestNegotiatedSize_should_ExcludeNeverVotedSubscriber_When_AnotherSubscribe
 	defer hub.ForceTeardown()
 
 	voterID := hub.AttachSubscriber(noopTransport{}, SubscriberCapability{CanResize: true})
-	hub.RequestResize(voterID, mustTerminalSize(t, 80, 24))
+	hub.RequestResize(context.Background(), voterID, mustTerminalSize(t, 80, 24))
 
 	// A second CanResize subscriber attaches but never votes.
 	hub.AttachSubscriber(noopTransport{}, SubscriberCapability{CanResize: true})
@@ -122,7 +123,7 @@ func TestNegotiatedSize_should_ExcludeNeverVotedSubscriber_When_AnotherSubscribe
 	// still be governed only by real votes (80x24 here, since it's smaller
 	// than the third subscriber's 200x50).
 	thirdID := hub.AttachSubscriber(noopTransport{}, SubscriberCapability{CanResize: true})
-	hub.RequestResize(thirdID, mustTerminalSize(t, 200, 50))
+	hub.RequestResize(context.Background(), thirdID, mustTerminalSize(t, 200, 50))
 
 	if got, want := hub.NegotiatedSize(), mustTerminalSize(t, 80, 24); got != want {
 		t.Fatalf("expected NegotiatedSize %+v unaffected by the never-voted subscriber, got %+v", want, got)
@@ -132,7 +133,7 @@ func TestNegotiatedSize_should_ExcludeNeverVotedSubscriber_When_AnotherSubscribe
 	// voter; the never-voted subscriber's implicit contribution must track
 	// this new value too, not whatever NegotiatedSize was at its own
 	// attach time.
-	hub.RequestResize(voterID, mustTerminalSize(t, 60, 20))
+	hub.RequestResize(context.Background(), voterID, mustTerminalSize(t, 60, 20))
 	if got, want := hub.NegotiatedSize(), mustTerminalSize(t, 60, 20); got != want {
 		t.Fatalf("expected NegotiatedSize to track the new real-vote minimum %+v, got %+v", want, got)
 	}

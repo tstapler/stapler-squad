@@ -122,3 +122,92 @@ func TestNotifyEnabledOrDefault_should_ReturnFalse_When_ExplicitlyDisabled(t *te
 		t.Errorf("NotifyEnabledOrDefault() = %v, want false", out)
 	}
 }
+
+func TestRetryPolicyConfig_EnabledOrDefault_should_ReturnTrue_When_FieldIsNil(t *testing.T) {
+	cfg := RetryPolicyConfig{}
+	if !cfg.EnabledOrDefault() {
+		t.Error("EnabledOrDefault() = false, want true when Enabled is nil (AC7)")
+	}
+}
+
+func TestRetryPolicyConfig_EnabledOrDefault_should_ReturnFalse_When_ExplicitlyDisabled(t *testing.T) {
+	disabled := false
+	cfg := RetryPolicyConfig{Enabled: &disabled}
+	if cfg.EnabledOrDefault() {
+		t.Error("EnabledOrDefault() = true, want false when explicitly disabled")
+	}
+}
+
+func TestRetryPolicyConfig_MaxAttemptsOrDefault_should_ReturnOne_When_MaxAttemptsIsZeroOrNegative(t *testing.T) {
+	cases := []int{0, -1, -100}
+	for _, v := range cases {
+		cfg := RetryPolicyConfig{MaxAttempts: v}
+		if got := cfg.MaxAttemptsOrDefault(); got != 1 {
+			t.Errorf("MaxAttemptsOrDefault() with MaxAttempts=%d = %d, want 1 (a fat-fingered zero/negative must not silently disable retry)", v, got)
+		}
+	}
+}
+
+func TestRetryPolicyConfig_MaxAttemptsOrDefault_should_PreserveExplicitValue_When_Positive(t *testing.T) {
+	cfg := RetryPolicyConfig{MaxAttempts: 5}
+	if got := cfg.MaxAttemptsOrDefault(); got != 5 {
+		t.Errorf("MaxAttemptsOrDefault() = %d, want 5", got)
+	}
+}
+
+func TestRetryPolicyConfig_RetryOnOrDefault_should_ReturnAllThree_When_Empty(t *testing.T) {
+	cfg := RetryPolicyConfig{}
+	got := cfg.RetryOnOrDefault()
+	if len(got) != 3 {
+		t.Errorf("RetryOnOrDefault() = %v, want all 3 known reasons", got)
+	}
+}
+
+func TestRetryPolicyConfig_RetryOnOrDefault_should_DropUnknownEntries_When_ConfigHasATypo(t *testing.T) {
+	cfg := RetryPolicyConfig{RetryOn: []string{"crashed", "crashd"}}
+	got := cfg.RetryOnOrDefault()
+	if len(got) != 1 || got[0] != "crashed" {
+		t.Errorf("RetryOnOrDefault() = %v, want [crashed] (typo'd entry dropped, not silently kept or falling back to all three)", got)
+	}
+}
+
+func TestRetryPolicyConfig_StaleTriggersRetry_should_DefaultToNilFalse_When_Unset(t *testing.T) {
+	cfg := RetryPolicyConfig{}
+	if cfg.StaleTriggersRetry != nil {
+		t.Error("StaleTriggersRetry should be nil (opt-in flag stays off until the sibling project's consumer wiring lands)")
+	}
+}
+
+func TestRetryPolicyConfig_BackoffOrWarn_should_FallBackToExponential_When_ValueIsUnknown(t *testing.T) {
+	cfg := RetryPolicyConfig{Backoff: "linear"}
+	if got := cfg.BackoffOrWarn(); got != "exponential" {
+		t.Errorf("BackoffOrWarn() = %q, want exponential", got)
+	}
+}
+
+func TestRetryPolicyConfig_BackoffOrWarn_should_ReturnExponential_When_Unset(t *testing.T) {
+	cfg := RetryPolicyConfig{}
+	if got := cfg.BackoffOrWarn(); got != "exponential" {
+		t.Errorf("BackoffOrWarn() = %q, want exponential", got)
+	}
+}
+
+func TestCreationStaleConfig_ThresholdMinutesOrDefault_should_Return10_When_Unset(t *testing.T) {
+	cfg := CreationStaleConfig{}
+
+	out := cfg.ThresholdMinutesOrDefault()
+
+	if out != 10 {
+		t.Errorf("ThresholdMinutesOrDefault() = %v, want 10", out)
+	}
+}
+
+func TestCreationStaleConfig_ThresholdMinutesOrDefault_should_ReturnConfiguredValue_When_Set(t *testing.T) {
+	cfg := CreationStaleConfig{ThresholdMinutes: 20}
+
+	out := cfg.ThresholdMinutesOrDefault()
+
+	if out != 20 {
+		t.Errorf("ThresholdMinutesOrDefault() = %v, want 20 (explicit value must survive defaulting)", out)
+	}
+}

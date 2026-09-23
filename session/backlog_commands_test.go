@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ import (
 // configured test identity, mirroring session/git/worktree_creation_test.go's
 // setupTestRepo helper (duplicated here rather than imported since that one lives in
 // package git and is unexported). Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func setupTestGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -274,6 +275,26 @@ func TestPruneStaleSlashCommandFiles_should_RemoveExtraFiles_When_NewItemHasFewe
 	}
 }
 
+func TestPruneStaleSlashCommandFiles_should_RemoveNonCriterionFiles_When_NotInNewSet(t *testing.T) {
+	cmdDir := t.TempDir()
+	for _, name := range []string{"ship.md", "old-mode-step.md", "status.md"} {
+		if err := os.WriteFile(filepath.Join(cmdDir, name), []byte("old"), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+
+	pruneStaleSlashCommandFiles(cmdDir, map[string]string{"status.md": "new"})
+
+	for _, name := range []string{"ship.md", "old-mode-step.md"} {
+		if _, err := os.Stat(filepath.Join(cmdDir, name)); !os.IsNotExist(err) {
+			t.Errorf("expected stale %s to be pruned", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(cmdDir, "status.md")); err != nil {
+		t.Errorf("status.md is in the new set and must survive: %v", err)
+	}
+}
+
 // TestPruneStaleSlashCommandFiles_should_PreserveAllFiles_When_NewItemHasMoreOrEqualCriteria
 // verifies pruneStaleSlashCommandFiles never deletes a file that's about to be rewritten.
 func TestPruneStaleSlashCommandFiles_should_PreserveAllFiles_When_NewItemHasMoreOrEqualCriteria(t *testing.T) {
@@ -457,6 +478,46 @@ func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
 	}
 	if !strings.Contains(content, "MCP tools are unavailable") {
 		t.Errorf("expected fallback text in context file\nContent:\n%s", content)
+	}
+}
+
+// TestWriteBacklogContextFile_ConcurrentCallsToSameWorktree_NeverLeaveFileMissingOrTruncated
+// is a regression test for the fixed-tmp-filename write race WriteBacklogContextFile used
+// to have (destPath+".tmp") — it's called on every spawn AND re-attach for the same
+// worktreePath, so two concurrent callers must never interleave writes and rename a
+// torn/truncated .backlog-context.md into place. Mirrors config_test.go's
+// TestSaveConfig_ConcurrentWritesToSamePath.
+func TestWriteBacklogContextFile_ConcurrentCallsToSameWorktree_NeverLeaveFileMissingOrTruncated(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	item := &BacklogItemData{ID: "concurrent-test-item", Title: "Concurrent Test", Status: "ready"}
+
+	const n = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- WriteBacklogContextFile(item, nil, worktree)
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		if err != nil {
+			t.Errorf("WriteBacklogContextFile must not error under concurrent callers targeting the same worktree: %v", err)
+		}
+	}
+
+	contextPath := filepath.Join(worktree, ".backlog-context.md")
+	data, err := os.ReadFile(contextPath)
+	if err != nil {
+		t.Fatalf(".backlog-context.md must exist after concurrent WriteBacklogContextFile calls: %v", err)
+	}
+	if !strings.Contains(string(data), "Fallback Instructions") {
+		t.Errorf(".backlog-context.md must contain the full fallback instructions block, not a torn/truncated write:\n%s", data)
 	}
 }
 

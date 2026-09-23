@@ -119,41 +119,15 @@ export const statusBadge = style({
   fontFamily: vars.font.mono,
 });
 
-export const statusIdea = style({
-  background: vars.color.surfaceMuted,
-  color: vars.color.textMuted,
-  border: `1px solid ${vars.color.borderMuted}`,
-});
-export const statusReady = style({
-  background: vars.statusBadge.inputBg,
-  color: vars.statusBadge.inputFg,
-  border: `1px solid ${vars.statusBadge.inputBorder}`,
-});
-export const statusInProgress = style({
-  background: vars.statusBadge.uncommittedBg,
-  color: vars.statusBadge.uncommittedFg,
-  border: `1px solid ${vars.statusBadge.uncommittedBorder}`,
-});
-export const statusReview = style({
-  background: vars.statusBadge.approvalBg,
-  color: vars.statusBadge.approvalFg,
-  border: `1px solid ${vars.statusBadge.approvalBorder}`,
-});
-export const statusDone = style({
-  background: vars.statusBadge.completeBg,
-  color: vars.statusBadge.completeFg,
-  border: `1px solid ${vars.statusBadge.completeBorder}`,
-});
-export const statusArchived = style({
-  background: vars.color.surfaceMuted,
-  color: vars.color.textDisabled,
-  border: `1px solid ${vars.color.borderMuted}`,
-});
-export const statusRefining = style({
-  background: vars.color.warningBg,
-  color: vars.color.warningText,
-  border: `1px solid ${vars.color.warning}`,
-});
+export {
+  statusIdea,
+  statusReady,
+  statusInProgress,
+  statusReview,
+  statusDone,
+  statusArchived,
+  statusRefining,
+} from "@/styles/statusBadgeVariants.css";
 
 export const priorityBadge = style({
   display: "inline-flex",
@@ -236,25 +210,6 @@ export const editButton = style({
     borderColor: vars.color.borderStrong,
     color: vars.color.textPrimary,
   },
-});
-
-export const editFormWrapper = style({
-  padding: vars.space["6"],
-});
-
-export const editFormHeader = style({
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  marginBottom: vars.space["4"],
-  paddingBottom: vars.space["3"],
-  borderBottom: `1px solid ${vars.color.borderSubtle}`,
-});
-
-export const editFormTitle = style({
-  fontSize: vars.fontSize.base,
-  fontWeight: vars.fontWeight.semibold,
-  color: vars.color.textPrimary,
 });
 
 export const closeButton = style({
@@ -356,16 +311,6 @@ export const actionButtonDanger = style({
   },
 });
 
-export const actionButtonSuccess = style({
-  background: vars.statusBadge.completeBg,
-  color: vars.statusBadge.completeFg,
-  borderColor: vars.statusBadge.completeBorder,
-  ":hover": {
-    background: vars.statusBadge.completeBg,
-    borderColor: vars.statusBadge.completeFg,
-  },
-});
-
 export const sessionList = style({
   display: "flex",
   flexDirection: "column",
@@ -396,6 +341,16 @@ export const pipelineGroup = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
   paddingLeft: vars.space["1"],
+  // Story 5.2.4: a row can now carry up to 3 badges (pipeline-mode/
+  // content-drift, executor fallback, executor drift) plus the branch/cost/
+  // ended badges above it — below this repo's standard mobile breakpoint,
+  // wrap onto additional lines rather than truncating or forcing horizontal
+  // scroll (ux.md's narrow-viewport treatment).
+  "@media": {
+    "(max-width: 480px)": {
+      flexWrap: "wrap",
+    },
+  },
 });
 
 export const pipelineLabel = style({
@@ -411,6 +366,39 @@ export const pipelineDriftBadge = style({
   alignItems: "center",
   padding: `1px ${vars.space["2"]}`,
   borderRadius: vars.radii.sm,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  border: `1px solid ${vars.color.warning}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  whiteSpace: "nowrap",
+});
+
+// Story 5.2.4: executor-provenance badges — same warning color family as
+// pipelineDriftBadge above (family resemblance, AC18) but each with its own
+// icon, label text, and a structurally distinct style (dashed vs. solid vs.
+// pill-radius border) so the three "something changed/differs" signals are
+// never pixel-identical when they co-occur in the same pipelineGroup row.
+export const executorFallbackBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "2px",
+  padding: `1px ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  border: `1px dashed ${vars.color.warning}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  whiteSpace: "nowrap",
+});
+
+export const executorDriftBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "2px",
+  padding: `1px ${vars.space["2"]}`,
+  borderRadius: vars.radii.full,
   background: vars.color.warningBg,
   color: vars.color.warningText,
   border: `1px solid ${vars.color.warning}`,
@@ -529,13 +517,6 @@ export const artifactsPath = style({
   wordBreak: "break-all",
 });
 
-export const worktreePathRow = style({
-  display: "flex",
-  alignItems: "center",
-  gap: vars.space["2"],
-  flexWrap: "wrap",
-});
-
 export const workflowTimeline = style({
   display: "flex",
   flexDirection: "column",
@@ -616,6 +597,25 @@ export const reviewContextLabel = style({
   color: vars.color.textMuted,
   textTransform: "uppercase",
   letterSpacing: "0.05em",
+});
+
+/**
+ * Small "Jules" provenance marker (Story 3.3.2, Task 3.3.2b) rendered
+ * beside the existing GitHubBadge in PullRequestSection when the item's
+ * most recent session role is jules_work -- a plain inline label, not a
+ * fork of GitHubBadge itself (ux.md §0/§5).
+ */
+export const julesProvenanceMarker = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "4px",
+  padding: `1px ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.accentBg,
+  color: vars.color.accentText,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  whiteSpace: "nowrap",
 });
 
 export const reviewContextSessionId = style({

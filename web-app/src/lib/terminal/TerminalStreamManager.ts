@@ -9,6 +9,7 @@
  */
 
 import { EscapeSequenceParser } from './EscapeSequenceParser';
+import type { ScrollForwardOutcome, ScrollBlockedReason } from '@/gen/session/v1/events_pb';
 
 /** Minimal terminal interface (subset of xterm.js Terminal) */
 export interface ITerminal {
@@ -34,6 +35,34 @@ const CHUNK_SIZE = 16384;      // 16KB chunks
 const CHUNK_DELAY_MS = 0;      // Yield to event loop between chunks
 
 /**
+ * Mirrors connectrpc_websocket.go's `ansiSnapshotPrefix` (DECSTR + erase-screen +
+ * cursor-home). The server prepends this exact byte sequence to every full-pane
+ * replacement snapshot it sends — the post-resize capture, visibility/focus resync,
+ * and reconnect snapshot all use it — so its presence at the start of a chunk is a
+ * reliable, trigger-independent signal that this chunk replaces the whole screen
+ * rather than appending to it.
+ *
+ * Checked once, here, inside write() — the single funnel every output path (live
+ * streaming, resize snapshots, resync snapshots, and the RESIZING-queue flush in
+ * TerminalOutput.tsx) already goes through — rather than at each call site, so a
+ * future call site can't reintroduce the stale-buffer-overlap bug by forgetting to
+ * check it.
+ */
+export const ANSI_SNAPSHOT_PREFIX = "\x1b[!p\x1b[2J\x1b[H";
+
+/**
+ * One AppScrollbackResponse frame (Story 1.4.1, Epic 1.3's `Instance.ForwardScroll`),
+ * decoded to a plain string for the client's rendering layer.
+ */
+export interface AppScrollbackFrame {
+  content: string;
+  outcome: ScrollForwardOutcome;
+  program: string;
+  forwardId: string;
+  blockedReason: ScrollBlockedReason;
+}
+
+/**
  * RedrawThrottler - Coalesces rapid full-screen redraws to max 30 FPS.
  *
  * Claude performs complete screen redraws at 12-25 FPS, causing visible flicker.
@@ -41,6 +70,10 @@ const CHUNK_DELAY_MS = 0;      // Yield to event loop between chunks
  */
 class RedrawThrottler {
   private pendingRedraw: string | null = null;
+  // Cursor-up count (the \d+ in \x1b[\d+A) of the currently pending redraw —
+  // identifies which screen region it repaints, so a same-region redraw can
+  // be coalesced onto it while a different-region one cannot (see below).
+  private pendingRedrawUpCount: number | null = null;
   private throttleTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly throttleMs = 33; // ~30fps; coalesces burst full-screen redraws
   private onFlush: (data: string) => void;
@@ -54,17 +87,29 @@ class RedrawThrottler {
     // NOTE: \x1b[H (cursor-home) is intentionally excluded - it is also emitted during
     // incremental Ink-style renders and must not be classified as a full redraw.
     // Scoping the check to the first 32 bytes avoids false positives in large output chunks.
-    const isFullRedraw = /^\x1b\[\d+A(?:\x1b\[2K|\x1b\[J)/.test(
-      chunk.substring(0, 32)
-    );
+    const match = /^\x1b\[(\d+)A(?:\x1b\[2K|\x1b\[J)/.exec(chunk.substring(0, 32));
 
-    if (!isFullRedraw) {
+    if (!match) {
       this.flushPending();
       return chunk;
     }
 
-    // This is a full redraw - throttle it
+    // \x1b[NA\x1b[2K (cursor-up N, erase ONE line) is also exactly how a multi-line
+    // Ink-style TUI redraws a SINGLE targeted line (e.g. a spinner or token counter),
+    // not just how it repaints the whole viewport — the leading bytes alone can't tell
+    // the two apart. Coalescing is only safe when the new candidate targets the SAME
+    // cursor-up region as the one already pending (repeated repaints of one region,
+    // which is the flicker this throttler exists to suppress). A different region
+    // arriving mid-window is flushed immediately instead of silently overwriting the
+    // pending one — otherwise the pending region's update is dropped forever, since
+    // nothing else resends it.
+    const upCount = Number(match[1]);
+    if (this.pendingRedraw !== null && upCount !== this.pendingRedrawUpCount) {
+      this.flushPending();
+    }
+
     this.pendingRedraw = chunk;
+    this.pendingRedrawUpCount = upCount;
 
     if (!this.throttleTimer) {
       this.throttleTimer = setTimeout(() => {
@@ -79,6 +124,7 @@ class RedrawThrottler {
     if (this.pendingRedraw) {
       this.onFlush(this.pendingRedraw);
       this.pendingRedraw = null;
+      this.pendingRedrawUpCount = null;
     }
     if (this.throttleTimer) {
       clearTimeout(this.throttleTimer);
@@ -137,6 +183,31 @@ export class TerminalStreamManager {
   private firstOutputReceived: boolean = false;
   private onFirstOutput: (() => void) | null = null;
 
+  // Invoked whenever write() detects a full-pane replacement snapshot (see
+  // ANSI_SNAPSHOT_PREFIX), after this.terminal.clear() has already run — lets the
+  // caller reset state it owns that the manager doesn't (e.g. TerminalOutput.tsx's
+  // scrollback-paging refs).
+  private onFullSnapshot: (() => void) | null = null;
+
+  // Story 1.4.0 — client-local mirror of the server's AltScreenTracker (Task 1.1.1a),
+  // observed independently off the same escape sequences already flowing through
+  // write() rather than round-tripped over the wire. Purely a local scroll-up-trigger
+  // decision (see TerminalOutput.tsx's wheel listener / useTerminalGestures wiring);
+  // the server keeps its own copy for the safety-gate role, and the two are not meant
+  // to be reconciled — they observe the same bytes independently by design.
+  private altScreenActive: boolean = false;
+  private onAltScreenChange: ((active: boolean) => void) | null = null;
+
+  // Story 1.4.1 — registered handler for a captured AppScrollbackResponse frame.
+  // Deliberately dispatched through handleAppScrollback(), a distinct entry point
+  // from write()'s ANSI_SNAPSHOT_PREFIX sniff, so a concurrent resize resync's
+  // onFullSnapshot can never fire for this message type and vice versa
+  // (research/architecture.md §6).
+  private onAppScrollback: ((frame: AppScrollbackFrame) => void) | null = null;
+
+  // Story 3 (Task 3.6 / Bug 3) — set by cleanup(). See cleanup()'s doc comment.
+  private disposed: boolean = false;
+
   constructor(terminal: ITerminal, sendFlowControl: SendFlowControlFn) {
     this.terminal = terminal;
     this.sendFlowControl = sendFlowControl;
@@ -150,6 +221,49 @@ export class TerminalStreamManager {
   /** Set a callback invoked once on first output received. */
   setOnFirstOutput(cb: () => void): void {
     this.onFirstOutput = cb;
+  }
+
+  /** Set a callback invoked whenever a full-pane replacement snapshot is detected in write(). */
+  setOnFullSnapshot(cb: () => void): void {
+    this.onFullSnapshot = cb;
+  }
+
+  /**
+   * Set a callback invoked whenever altScreenActive changes value (Task 1.4.0a) —
+   * called only on an actual transition, mirroring the server-side
+   * `AltScreenTracker.Observe`'s `changed` return convention.
+   */
+  setOnAltScreenChange(cb: (active: boolean) => void): void {
+    this.onAltScreenChange = cb;
+  }
+
+  /**
+   * Directly sets altScreenActive from the server-authoritative
+   * TerminalOutput.alt_screen_active hint (only ever present on an
+   * initial-connect/post-resize snapshot — see useTerminalStream.ts's
+   * onAltScreenActiveHint doc comment) rather than inferring it from
+   * scanning content bytes, which a capture-pane-derived snapshot can never
+   * carry the DECSET 1049h marker for.
+   */
+  setAltScreenActiveHint(active: boolean): void {
+    if (active !== this.altScreenActive) {
+      this.altScreenActive = active;
+      this.onAltScreenChange?.(active);
+    }
+  }
+
+  /** Set a callback invoked when handleAppScrollback() dispatches a captured frame (Task 1.4.1a). */
+  setOnAppScrollback(cb: (frame: AppScrollbackFrame) => void): void {
+    this.onAppScrollback = cb;
+  }
+
+  /**
+   * Dispatch a captured AppScrollbackResponse frame to the registered
+   * onAppScrollback callback. Never routes through write()/onFullSnapshot —
+   * see this.onAppScrollback's doc comment.
+   */
+  handleAppScrollback(frame: AppScrollbackFrame): void {
+    this.onAppScrollback?.(frame);
   }
 
   /** Inject a SerializeAddon for prependScrollbackBatch (serialize-clear-rewrite pattern). */
@@ -188,7 +302,7 @@ export class TerminalStreamManager {
         });
       }
 
-      return self.originalWrite!(data, callback);
+      return self.originalWrite?.(data, callback);
     };
 
     // Wrap refresh to log all calls (only in debug mode)
@@ -212,7 +326,7 @@ export class TerminalStreamManager {
         self.writeCount = 0;
       }
 
-      return self.originalRefresh!(start, end);
+      return self.originalRefresh?.(start, end);
     };
 
     this.debugMonitorInstalled = true;
@@ -226,11 +340,23 @@ export class TerminalStreamManager {
    * This is the primary entry point for streaming output.
    */
   write(output: string): void {
+    if (this.disposed) return;
+
     // Write-lock: if writeInitialContent or prependScrollbackBatch is in progress,
     // queue live output to avoid interleaving history with live data (Pitfall #1 and #8).
     if (this.isWritingInitialContent) {
       this.pendingLiveWrites.push(output);
       return;
+    }
+
+    // A full-pane replacement snapshot must replace the screen, not append to it —
+    // see ANSI_SNAPSHOT_PREFIX's doc comment. Without this, stale rows from before
+    // the snapshot (reflowed under the terminal's previous wrap state, or content
+    // the user had scrolled past) sit underneath the fresh content instead of being
+    // replaced by it.
+    if (output.startsWith(ANSI_SNAPSHOT_PREFIX)) {
+      this.terminal.clear();
+      this.onFullSnapshot?.();
     }
 
     // Track first output
@@ -255,9 +381,17 @@ export class TerminalStreamManager {
    * @returns Promise that resolves when the write completes.
    */
   async writeInitialContent(content: string): Promise<void> {
+    if (this.disposed) return;
     this.isWritingInitialContent = true;
     try {
       this.terminal.clear();
+      // Note: initial/history content here is a tmux capture-pane-derived
+      // snapshot, which can never itself carry a DECSET 1049h marker (it's a
+      // rendered text snapshot, not a replay of the raw byte stream) — so
+      // scanning it for alt-screen transitions would never find anything.
+      // setAltScreenActiveHint(), driven by the server-authoritative
+      // TerminalOutput.alt_screen_active field, is what actually establishes
+      // correct alt-screen state on connect; see its doc comment.
       await this.enqueueWrite(content);
       this.terminal.scrollToBottom();
 
@@ -290,6 +424,7 @@ export class TerminalStreamManager {
    * @returns Promise that resolves when the write completes.
    */
   async prependScrollbackBatch(content: string): Promise<void> {
+    if (this.disposed) return;
     this.isWritingInitialContent = true;
     try {
       if (!this.serializeAddon) {
@@ -322,11 +457,32 @@ export class TerminalStreamManager {
   }
 
   /**
+   * Task 1.4.0a — track altScreenActive off the same enter/exit markers the
+   * needsRefresh scan in handleProcessedOutput already watches for exit.
+   * lastIndexOf + compare (rather than two independent .includes() checks)
+   * resolves the rare case where a single throttled chunk contains both an
+   * exit and a re-entry by picking whichever marker occurs later in the chunk.
+   */
+  private updateAltScreenActive(safeOutput: string): void {
+    const altEnterIdx = Math.max(safeOutput.lastIndexOf('\x1b[?1049h'), safeOutput.lastIndexOf('\x1b[?47h'));
+    const altExitIdx = Math.max(safeOutput.lastIndexOf('\x1b[?1049l'), safeOutput.lastIndexOf('\x1b[?47l'));
+    if (altEnterIdx < 0 && altExitIdx < 0) return;
+
+    const active = altEnterIdx > altExitIdx;
+    if (active !== this.altScreenActive) {
+      this.altScreenActive = active;
+      this.onAltScreenChange?.(active);
+    }
+  }
+
+  /**
    * Handle processed output by routing through the appropriate write path
    * (raw direct/chunked or state batching).
    */
   private handleProcessedOutput(safeOutput: string): void {
     if (safeOutput.length === 0) return;
+
+    this.updateAltScreenActive(safeOutput);
 
     // Detect terminal mode transitions that may need a refresh
     const needsRefresh =
@@ -412,6 +568,15 @@ export class TerminalStreamManager {
     this.isProcessingQueue = true;
 
     while (this.writeQueue.length > 0) {
+      if (this.disposed) {
+        // Drop remaining queued items without writing — cleanup() already
+        // cleared writeQueue, but a chunked item mid-flight below re-checks
+        // this flag between chunks, so this outer guard only matters if
+        // cleanup() ran between two top-level queue items.
+        this.writeQueue.length = 0;
+        break;
+      }
+
       const item = this.writeQueue[0];
       const data = item.data;
 
@@ -446,6 +611,12 @@ export class TerminalStreamManager {
         }
 
         for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+          // Task 3.6 / Bug 3 — re-checked before every chunk (not just once
+          // per queue item): dispose() can land between any two chunks of a
+          // large writeInitialContent/prependScrollbackBatch, and the whole
+          // point is to stop mid-item, not just between items.
+          if (this.disposed) break;
+
           const chunk = data.slice(i, Math.min(i + CHUNK_SIZE, data.length));
           const chunkIndex = Math.floor(i / CHUNK_SIZE) + 1;
 
@@ -561,6 +732,18 @@ export class TerminalStreamManager {
 
     // Clear any pending live writes
     this.pendingLiveWrites.length = 0;
+
+    // Task 3.6 / Bug 3 — stop issuing further terminal.write() calls after
+    // cleanup(). Pooled terminals (TerminalPool.tsx) reuse the underlying
+    // xterm.js Terminal across sessions, so a manager whose owning
+    // TerminalOutput has already unmounted mid-chunked-write must not keep
+    // writing into a Terminal that may now belong to a different session.
+    // Checked in write()/writeInitialContent()/prependScrollbackBatch() and
+    // between chunks in processWriteQueue() — never mid-chunk (an in-flight
+    // terminal.write() call always completes; only the *next* one is
+    // skipped).
+    this.disposed = true;
+    this.writeQueue.length = 0;
   }
 
   // ---- Test/debug accessors ----

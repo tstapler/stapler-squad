@@ -6,7 +6,7 @@
       "severity": "advisory",
       "scope": ["**/*.go"],
       "triggers": ["PostToolUse", "batch"],
-      "message": "Same-typed parameter pile — see .claude/rules/primitive-obsession-checklist.md"
+      "message": "Same-typed parameter pile — see the `primitive-obsession-checklist` skill"
     }
   ]
 }

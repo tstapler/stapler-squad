@@ -1,5 +1,3 @@
-import * as React from "react";
-
 /**
  * Terminal configuration system with localStorage persistence
  *
@@ -198,73 +196,3 @@ export function saveTerminalConfig(config: Partial<TerminalConfig>): void {
   }
 }
 
-/**
- * Reset configuration to defaults
- */
-export function resetTerminalConfig(): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-    window.dispatchEvent(
-      new CustomEvent("terminal-config-changed", { detail: DEFAULT_TERMINAL_CONFIG })
-    );
-  } catch (err) {
-    console.error("[terminalConfig] Failed to reset config:", err);
-  }
-}
-
-/**
- * Apply a configuration preset
- */
-export function applyConfigPreset(presetName: keyof typeof TERMINAL_CONFIG_PRESETS): void {
-  const preset = TERMINAL_CONFIG_PRESETS[presetName];
-  if (preset) {
-    saveTerminalConfig(preset);
-  }
-}
-
-/**
- * Get memory usage estimate for a given scrollback size
- * @param scrollbackLines Number of lines in scrollback buffer
- * @returns Estimated memory usage in MB
- */
-export function estimateMemoryUsage(scrollbackLines: number): number {
-  // Rough estimate: ~5KB per line (including xterm.js overhead)
-  const bytesPerLine = 5 * 1024;
-  return (scrollbackLines * bytesPerLine) / (1024 * 1024);
-}
-
-/**
- * React hook for terminal configuration with live updates
- */
-export function useTerminalConfig(): [
-  TerminalConfig,
-  (config: Partial<TerminalConfig>) => void
-] {
-  const [config, setConfig] = React.useState<TerminalConfig>(loadTerminalConfig);
-
-  React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    const handleConfigChange = (event: Event) => {
-      const customEvent = event as CustomEvent<TerminalConfig>;
-      setConfig(customEvent.detail);
-    };
-
-    window.addEventListener("terminal-config-changed", handleConfigChange);
-
-    return () => {
-      window.removeEventListener("terminal-config-changed", handleConfigChange);
-    };
-  }, []);
-
-  const updateConfig = React.useCallback((partial: Partial<TerminalConfig>) => {
-    if (typeof window === "undefined") return;
-    saveTerminalConfig(partial);
-    setConfig(loadTerminalConfig());
-  }, []);
-
-  return [config, updateConfig];
-}

@@ -44,6 +44,7 @@ import (
 // so it is correct for disabled modes too, which never enter the
 // ListEnabled-backed cache.
 func pipelineModeToProto(pm *ent.PipelineMode) *sessionv1.PipelineMode {
+	stageExecutors := parseStageExecutorsForProto(pm)
 	return &sessionv1.PipelineMode{
 		Id:                    pm.ID.String(),
 		Slug:                  pm.Slug,
@@ -72,11 +73,90 @@ func pipelineModeToProto(pm *ent.PipelineMode) *sessionv1.PipelineMode {
 			pm.ReviewPromptTemplate,
 			pm.InitialPromptTemplate,
 		),
+		StageExecutors:      stageExecutorsToProto(stageExecutors),
+		StageExecutorHashes: stageExecutorHashesToProto(stageExecutors),
 	}
 }
 
+// allStageRoles is the fixed iteration order for the DENSE
+// stage_executor_hashes map built by stageExecutorHashesToProto — every role
+// gets an entry below, whether or not it has a configured override.
+var allStageRoles = [...]session.StageRole{
+	session.StageRoleTriage,
+	session.StageRoleReview,
+	session.StageRoleWork,
+}
+
+// parseStageExecutorsForProto parses pm's stage_executors_json once, shared by
+// stageExecutorsToProto and stageExecutorHashesToProto below. A parse error
+// means a malformed column (should never happen since
+// session.SerializeStageExecutors is the only writer) — logged and treated as
+// no overrides configured rather than failing the whole response for one bad
+// row.
+func parseStageExecutorsForProto(pm *ent.PipelineMode) map[session.StageRole]session.PipelineStageExecutor {
+	stageExecutors, err := session.ParseStageExecutors(pm.StageExecutorsJSON)
+	if err != nil {
+		log.WarningLog().Printf("[PipelineMode] failed to parse stage_executors_json for pipeline mode %s: %v — treating as empty", pm.ID, err)
+		return map[session.StageRole]session.PipelineStageExecutor{}
+	}
+	return stageExecutors
+}
+
+// stageExecutorsToProto converts the already-parsed stage executor map to the
+// proto map shape — sparse, only configured roles appear (unchanged from
+// Task 1.2.2c's original behavior).
+func stageExecutorsToProto(stageExecutors map[session.StageRole]session.PipelineStageExecutor) map[string]*sessionv1.PipelineStageExecutor {
+	protoStageExecutors := make(map[string]*sessionv1.PipelineStageExecutor, len(stageExecutors))
+	for role, executor := range stageExecutors {
+		protoStageExecutors[string(role)] = &sessionv1.PipelineStageExecutor{
+			Program: executor.Program,
+			Model:   executor.Model,
+		}
+	}
+	return protoStageExecutors
+}
+
+// stageExecutorHashesToProto computes a DENSE map<StageRole, hash> — an entry
+// for all 3 roles on every mode, including unconfigured ones, hashed as the
+// zero-value PipelineStageExecutor{} (ComputeExecutorHash("", "")). This is
+// deliberately NOT the same shape as stageExecutorsToProto's sparse map: a
+// sparse hash map would have no entry for an unconfigured role, and the
+// frontend's per-session drift comparison (Task 5.2.4b) would then compare
+// "no entry" against a real per-session hash, falsely flagging every
+// ordinary default-executor session as drifted. See plan.md Story 5.2.4's
+// Engineering-lens design note for the full rationale.
+func stageExecutorHashesToProto(stageExecutors map[session.StageRole]session.PipelineStageExecutor) map[string]string {
+	hashes := make(map[string]string, len(allStageRoles))
+	for _, role := range allStageRoles {
+		entry := stageExecutors[role] // zero-value PipelineStageExecutor{} when absent
+		hashes[string(role)] = session.ComputeExecutorHash(entry.Program, entry.Model)
+	}
+	return hashes
+}
+
+// stageExecutorsFromProto converts the wire map shape into the domain map
+// keyed by session.StageRole. Key validation against the 3 known roles is
+// Epic 1.3's responsibility (ValidatePipelineModeContent); this function
+// performs no validation of its own.
+func stageExecutorsFromProto(m map[string]*sessionv1.PipelineStageExecutor) map[session.StageRole]session.PipelineStageExecutor {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[session.StageRole]session.PipelineStageExecutor, len(m))
+	for role, executor := range m {
+		if executor == nil {
+			continue
+		}
+		out[session.StageRole(role)] = session.PipelineStageExecutor{
+			Program: executor.Program,
+			Model:   executor.Model,
+		}
+	}
+	return out
+}
+
 // pipelineCacheInvalidator is a narrow, consumer-defined interface (per
-// .claude/rules/interface-pollution-checklist.md — defined where consumed,
+// the `interface-pollution-checklist` skill — defined where consumed,
 // not next to CachingPipelineEngine) matched via duck typing against
 // s.pipelineEngine. CachingPipelineEngine.InvalidateCache satisfies it;
 // PipelineEngine itself intentionally does NOT declare this method (it is a
@@ -115,6 +195,8 @@ func (s *BacklogService) CreatePipelineMode(
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("pipeline mode storage not available"))
 	}
 
+	stageExecutors := stageExecutorsFromProto(req.Msg.StageExecutors)
+
 	if err := session.ValidatePipelineModeContent(session.PipelineModeContentFields{
 		Slug:                  req.Msg.Slug,
 		ValidateSlug:          true,
@@ -127,6 +209,8 @@ func (s *BacklogService) CreatePipelineMode(
 		TriagePromptTemplate:  req.Msg.TriagePromptTemplate,
 		ReviewPromptTemplate:  req.Msg.ReviewPromptTemplate,
 		InitialPromptTemplate: req.Msg.InitialPromptTemplate,
+		StageExecutors:        stageExecutors,
+		ForceUnknownModel:     req.Msg.ForceUnknownModel,
 	}); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -145,6 +229,7 @@ func (s *BacklogService) CreatePipelineMode(
 		TriagePromptTemplate:  req.Msg.TriagePromptTemplate,
 		ReviewPromptTemplate:  req.Msg.ReviewPromptTemplate,
 		InitialPromptTemplate: req.Msg.InitialPromptTemplate,
+		StageExecutors:        stageExecutors,
 	}
 
 	pm, err := s.pipelineModeRepo.Create(ctx, input)
@@ -212,6 +297,18 @@ func (s *BacklogService) UpdatePipelineMode(
 	if req.Msg.InitialPromptTemplate != nil {
 		contentFields.InitialPromptTemplate = *req.Msg.InitialPromptTemplate
 	}
+	// nil req.Msg.StageExecutors means "leave untouched" (see the field's own
+	// doc comment) — nothing new to validate in that case. When present,
+	// validate the same map that's about to be written below.
+	var stageExecutors map[session.StageRole]session.PipelineStageExecutor
+	if req.Msg.StageExecutors != nil {
+		stageExecutors = stageExecutorsFromProto(req.Msg.StageExecutors.Values)
+		if stageExecutors == nil {
+			stageExecutors = map[session.StageRole]session.PipelineStageExecutor{}
+		}
+		contentFields.StageExecutors = stageExecutors
+	}
+	contentFields.ForceUnknownModel = req.Msg.GetForceUnknownModel()
 	if err := session.ValidatePipelineModeContent(contentFields); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -229,6 +326,12 @@ func (s *BacklogService) UpdatePipelineMode(
 		TriagePromptTemplate:  req.Msg.TriagePromptTemplate,
 		ReviewPromptTemplate:  req.Msg.ReviewPromptTemplate,
 		InitialPromptTemplate: req.Msg.InitialPromptTemplate,
+	}
+	// nil StageExecutors on the wire means "leave untouched"; present (even
+	// empty) means "replace" — matching StageExecutorsUpdate's doc comment.
+	// stageExecutors was already parsed and validated above.
+	if req.Msg.StageExecutors != nil {
+		update.StageExecutors = &stageExecutors
 	}
 
 	pm, err := s.pipelineModeRepo.Update(ctx, id, update)

@@ -13,34 +13,6 @@ export const page = style({
   overflow: "hidden",
 });
 
-export const main = style({
-  flex: 1,
-  padding: "2rem",
-  maxWidth: "1400px",
-  width: "100%",
-  margin: "0 auto",
-  "@media": {
-    "screen and (max-width: 900px)": {
-      padding: "1rem",
-      paddingBottom: "calc(var(--bottom-nav-height, 56px) + max(env(safe-area-inset-bottom, 0px), 0px) + 1rem)",
-    },
-  },
-});
-
-export const loading = style({
-  padding: "2rem",
-  textAlign: "center",
-  color: vars.color.textMuted,
-});
-
-export const error = style({
-  color: vars.color.error,
-  padding: "1rem",
-  backgroundColor: vars.color.errorBg,
-  borderRadius: "8px",
-  margin: "1rem 0",
-});
-
 export const modal = style({
   position: "fixed",
   top: 0,
@@ -86,22 +58,6 @@ export const modalContent = style({
   },
 });
 
-export const modalContentFullscreen = style({
-  maxWidth: "98vw",
-  width: "98vw",
-  maxHeight: "calc(100dvh - var(--header-height) - 1.5rem)",
-  height: "calc(100dvh - var(--header-height) - 1.5rem)",
-  borderRadius: "8px",
-  "@media": {
-    "screen and (max-width: 768px)": {
-      maxHeight: "calc(var(--viewport-height, 100dvh) - var(--header-height))",
-      height: "calc(var(--viewport-height, 100dvh) - var(--header-height))",
-      // aspect-ratio constraint defeats portrait layout on mobile; disable it
-      aspectRatio: "auto",
-    },
-  },
-});
-
 export const modalHeader = style({
   display: "flex",
   alignItems: "center",
@@ -139,14 +95,6 @@ export const modalBody = style({
       padding: "1rem",
     },
   },
-});
-
-export const placeholder = style({
-  marginTop: "2rem",
-  padding: "2rem",
-  textAlign: "center",
-  color: vars.color.textMuted,
-  fontStyle: "italic",
 });
 
 export const cancelButton = style({

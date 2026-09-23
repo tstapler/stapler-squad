@@ -9,7 +9,9 @@
   "tested": true,
   "testIds": [
     "TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies",
-    "TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled"
+    "TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled",
+    "TestWatchInsights_WhenChannelReceivesNonNilParseResult_ExpectUpdateEventWithPopulatedSession",
+    "TestWatchInsights_WhenChannelReceivesNil_ExpectParseCompleteEventNotBareUpdate"
   ],
-  "lastModified": "2026-08-02T07:21:26.284959911-07:00"
+  "lastModified": "2026-09-04T00:00:00Z"
 }

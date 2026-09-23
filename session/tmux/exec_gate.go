@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"go.opentelemetry.io/otel/attribute"
+
 	appconfig "github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 // execGateAcquireBackoffMax caps the retry backoff while waiting for a slot.
@@ -44,7 +47,9 @@ func AcquireExecSlot(ctx context.Context, serverSocket string) (release func(), 
 		return nil, fmt.Errorf("exec gate: resolve dir: %w", err)
 	}
 	n := appconfig.LoadConfig().TmuxExecGate.SlotsOrDefault()
+	waitStart := time.Now()
 	rel, _, acquireErr := acquireSlot(ctx, dir, n, true)
+	recordExecGateWait("default", time.Since(waitStart), acquireErr != nil)
 	if acquireErr != nil {
 		return nil, acquireErr
 	}
@@ -78,6 +83,7 @@ func AcquireResyncExecSlot(ctx context.Context, serverSocket string) (release fu
 	waitStart := time.Now()
 	rel, _, acquireErr := acquireSlot(ctx, dir, n, true)
 	waitElapsed := time.Since(waitStart)
+	recordExecGateWait("resync", waitElapsed, acquireErr != nil)
 	if acquireErr != nil {
 		log.Debug("resync exec gate: wait for fast-lane slot failed", "serverSocket", serverSocket, "waitMs", waitElapsed.Milliseconds(), "err", acquireErr)
 		return nil, acquireErr
@@ -107,7 +113,9 @@ func AcquireInputExecSlot(ctx context.Context, serverSocket string) (release fun
 		return nil, fmt.Errorf("input exec gate: resolve dir: %w", err)
 	}
 	n := appconfig.LoadConfig().TmuxExecGate.InputFastLaneSlotsOrDefault()
+	waitStart := time.Now()
 	rel, _, acquireErr := acquireSlot(ctx, dir, n, true)
+	recordExecGateWait("input", time.Since(waitStart), acquireErr != nil)
 	if acquireErr != nil {
 		return nil, acquireErr
 	}
@@ -124,7 +132,9 @@ func TryAcquireExecSlot(serverSocket string) (release func(), ok bool) {
 		return func() {}, true
 	}
 	n := appconfig.LoadConfig().TmuxExecGate.SlotsOrDefault()
+	waitStart := time.Now()
 	rel, ok, _ := acquireSlot(context.Background(), dir, n, false)
+	recordExecGateWait("default_nonblocking", time.Since(waitStart), !ok)
 	return rel, ok
 }
 
@@ -146,17 +156,42 @@ const resyncFastLaneAcquireTimeout = 3 * time.Second
 // runGatedWith is the shared acquire/run/release body behind both runGated
 // (execGateAcquireTimeout, the default pool) and runGatedFastLane
 // (resyncFastLaneAcquireTimeout, the resync-only pool) so the two timeout
-// variants don't hand-copy the same 11 lines.
-func runGatedWith[T any](ctx context.Context, serverSocket string, timeout time.Duration, acquire func(ctx context.Context, serverSocket string) (func(), error), fn func() (T, error)) (T, error) {
-	gateCtx, cancel := context.WithTimeout(ctx, timeout)
+// variants don't hand-copy the same 11 lines. pool is a label only (which
+// acquire func to use is still the acquire parameter) — it's what makes the
+// tmux_exec_gate_wait_duration_ms/tmux_exec_gate_exec_duration_ms metrics and
+// the "tmux.exec_gate" span filterable by pool instead of an undifferentiated
+// blob. See exec_gate_observability.go's doc comment for why this exists:
+// diagnosing a real "exec gate: context deadline exceeded" incident (2026-09-06)
+// required manually sampling flock() state on disk because there was no
+// queryable wait-vs-exec breakdown.
+func runGatedWith[T any](ctx context.Context, serverSocket, pool string, timeout time.Duration, acquire func(ctx context.Context, serverSocket string) (func(), error), fn func() (T, error)) (T, error) {
+	spanCtx, span := telemetry.StartSpan(ctx, "tmux.exec_gate")
+	span.SetAttributes(attribute.String("pool", pool), attribute.String("server_socket", serverSocket))
+	defer span.End()
+
+	gateCtx, cancel := context.WithTimeout(spanCtx, timeout)
 	defer cancel()
+	waitStart := time.Now()
 	release, err := acquire(gateCtx, serverSocket)
+	waitElapsed := time.Since(waitStart)
+	span.SetAttributes(attribute.Int64("wait_ms", waitElapsed.Milliseconds()))
 	if err != nil {
+		span.SetAttributes(attribute.Bool("timed_out", true))
+		span.RecordError(err)
 		var zero T
 		return zero, fmt.Errorf("exec gate: %w", err)
 	}
 	defer release()
-	return fn()
+
+	execStart := time.Now()
+	result, fnErr := fn()
+	execElapsed := time.Since(execStart)
+	span.SetAttributes(attribute.Int64("exec_ms", execElapsed.Milliseconds()))
+	recordExecGateExec(pool, execElapsed)
+	if fnErr != nil {
+		span.RecordError(fnErr)
+	}
+	return result, fnErr
 }
 
 // runGated acquires an exec-gate slot for serverSocket (bounded by whichever
@@ -165,7 +200,7 @@ func runGatedWith[T any](ctx context.Context, serverSocket string, timeout time.
 // subprocess spawn in this package should use instead of hand-rolling
 // acquire/timeout/release around each one.
 func runGated[T any](ctx context.Context, serverSocket string, fn func() (T, error)) (T, error) {
-	return runGatedWith(ctx, serverSocket, execGateAcquireTimeout, AcquireExecSlot, fn)
+	return runGatedWith(ctx, serverSocket, "default", execGateAcquireTimeout, AcquireExecSlot, fn)
 }
 
 // runGatedFastLane is runGated's resync-only counterpart: it acquires from
@@ -174,22 +209,74 @@ func runGated[T any](ctx context.Context, serverSocket string, fn func() (T, err
 // of execGateAcquireTimeout. Used by CapturePaneContentPriority/
 // RefreshClientPriority so resync-triggered tmux subprocess calls never queue
 // behind ordinary tmux traffic on the same socket.
+//
+// Note this only bounds the *wait* for a free slot (via ctx passed down into
+// runGatedWith's gateCtx) — it does not, by itself, bound fn()'s own
+// execution once the slot is acquired. Prefer runFastLaneSubprocess below
+// over calling this directly: it closes that gap.
 func runGatedFastLane[T any](ctx context.Context, serverSocket string, fn func() (T, error)) (T, error) {
-	return runGatedWith(ctx, serverSocket, resyncFastLaneAcquireTimeout, AcquireResyncExecSlot, fn)
+	return runGatedWith(ctx, serverSocket, "resync", resyncFastLaneAcquireTimeout, AcquireResyncExecSlot, fn)
+}
+
+// ResyncFastLaneTimeout bounds the ENTIRE runFastLaneSubprocess call — both
+// the exec-gate acquire wait and the subprocess execution that follows it —
+// not just the acquire step runGatedFastLane's own ctx parameter bounds.
+// 2026-08-25 incident: CapturePaneContentPriority/CapturePaneContentRawPriority
+// each hand-built their own context.WithTimeout(context.Background(),
+// defaultCapturePaneTimeout) — 10s, sized for the unrelated default pool —
+// and RefreshClientPriority had no bound on its subprocess call at all
+// (context.Background(), built via the context-less buildTmuxCommand rather
+// than buildTmuxCommandContext). A capture that took a few seconds under real
+// load (confirmed via debug tracing: the exec-gate slot itself was acquired
+// in 0ms, so the delay was entirely in the subprocess call, not gate
+// contention) stayed well within 10s and so never errored — but the client's
+// own RESYNC_STALL_TIMEOUT_MS (4s, useVisibilityResync.ts) had already given
+// up and force-disconnected, so the slow response was wasted work landing on
+// a closed connection. Mirrors resyncFastLaneAcquireTimeout's margin logic:
+// 3s leaves a 1s safety margin under the 4s client ceiling for network/
+// marshal/dispatch latency after the call returns.
+const ResyncFastLaneTimeout = 3 * time.Second
+
+// runFastLaneSubprocess is the single call-site pattern every fast-lane tmux
+// subprocess spawn (the *Priority() methods) must use instead of hand-rolling
+// context creation + runGatedFastLane around each one — see
+// ResyncFastLaneTimeout's doc comment for the incident this closes off.
+//
+// ctx is caller-supplied, not manufactured fresh here — a single resync
+// operation (handleCurrentPaneRequest) makes several of these calls in
+// sequence (up to 3 refresh-client calls, a dimension verify, a final
+// capture), and each minting its own independent ResyncFastLaneTimeout
+// budget let the *total* elapsed time silently exceed the client's stall
+// watchdog even after the per-call bound was fixed — 5 sequential 3s
+// allowances is still up to 15s of real wall-clock time. The caller
+// constructs ctx ONCE via context.WithTimeout(context.Background(),
+// ResyncFastLaneTimeout) at the start of the whole operation and threads it
+// through every call in that operation instead, so the shared deadline
+// actually decreases call to call rather than resetting every time — a real
+// remaining-time budget, not a repeated arbitrary default. Build the
+// *exec.Cmd inside fn via buildTmuxCommandContext(ctx, ...) — never the
+// context-less buildTmuxCommand (see its own doc comment: "callers that need
+// timeout protection should use exec.CommandContext directly") — so ctx
+// expiring actually kills a wedged subprocess mid-flight, not just gives up
+// waiting for a free gate slot.
+func runFastLaneSubprocess[T any](ctx context.Context, serverSocket string, fn func(ctx context.Context) (T, error)) (T, error) {
+	return runGatedFastLane(ctx, serverSocket, func() (T, error) {
+		return fn(ctx)
+	})
+}
+
+// runFastLaneSubprocessErr is runFastLaneSubprocess for the common
+// error-only result, mirroring runGatedErr's relationship to runGated.
+func runFastLaneSubprocessErr(ctx context.Context, serverSocket string, fn func(ctx context.Context) error) error {
+	_, err := runFastLaneSubprocess(ctx, serverSocket, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, fn(ctx)
+	})
+	return err
 }
 
 // runGatedErr is runGated for the common case of an error-only result.
 func runGatedErr(ctx context.Context, serverSocket string, fn func() error) error {
 	_, err := runGated(ctx, serverSocket, func() (struct{}, error) {
-		return struct{}{}, fn()
-	})
-	return err
-}
-
-// runGatedErrFastLane is runGatedFastLane for the common case of an
-// error-only result, mirroring runGatedErr's relationship to runGated.
-func runGatedErrFastLane(ctx context.Context, serverSocket string, fn func() error) error {
-	_, err := runGatedFastLane(ctx, serverSocket, func() (struct{}, error) {
 		return struct{}{}, fn()
 	})
 	return err

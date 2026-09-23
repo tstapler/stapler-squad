@@ -1,0 +1,16 @@
+{
+  "id": "stream-hub-rollout",
+  "type": "frontend",
+  "component": "StreamHubRolloutPanel",
+  "path": "web-app/src/components/settings/StreamHubRolloutPanel.tsx",
+  "filePath": "web-app/src/components/settings/StreamHubRolloutPanel.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "StreamHubRolloutPanel > renders the global env var status and no-overrides state",
+    "StreamHubRolloutPanel > marks the rehearsal complete and reflects the new status",
+    "StreamHubRolloutPanel > adds a session override and lists it",
+    "StreamHubRolloutPanel > removes a session override"
+  ],
+  "lastModified": "2026-08-23T09:53:16.504851981-07:00"
+}

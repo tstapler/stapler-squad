@@ -7,10 +7,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	ssqlog "github.com/tstapler/stapler-squad/log"
 )
 
 // fakeClock is a controllable Clock for deterministic TTL/prune tests --
-// never wall-clock time.Sleep, per .claude/rules/fix-flaky-tests-dont-defer.md.
+// never wall-clock time.Sleep, per the `fix-flaky-tests-dont-defer` skill.
 type fakeClock struct {
 	now time.Time
 }
@@ -132,9 +134,8 @@ func TestHostRegistry_Prune_should_LogHostRegistryEntryExpired_When_EntryDropped
 	clock.Advance(ttl + time.Second)
 
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
 
 	if err := registry.Prune(); err != nil {
 		t.Fatalf("Prune() error = %v, want nil", err)
@@ -168,9 +169,8 @@ func TestHostRegistry_Prune_should_NotLogHostRegistryEntryExpired_When_NoEntryDr
 	}
 
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
 
 	if err := registry.Prune(); err != nil {
 		t.Fatalf("Prune() error = %v, want nil", err)

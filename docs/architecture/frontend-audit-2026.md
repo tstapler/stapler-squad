@@ -573,7 +573,7 @@ Sorted by Priority (P1 first), then Risk (Low first within each priority tier).
 
 **Risk:** High — touching `SessionCard.tsx` (1,183 lines) requires verifying all call sites; the 7-touchpoint session creation registry does not apply directly here, but the omnibar action registry must be consulted if `onNewSession` is affected.
 
-> **Registry note:** This opportunity does not directly modify session creation mode code. However, `onNewSession` in `CockpitActionsContext` ultimately calls `useOmnibar().openInCreationMode()`. Any structural change to how session creation is triggered from `SessionCard` must be reviewed against the omnibar action registry (`.claude/rules/feature-testing-registry.md`).
+> **Registry note:** This opportunity does not directly modify session creation mode code. However, `onNewSession` in `CockpitActionsContext` ultimately calls `useOmnibar().openInCreationMode()`. Any structural change to how session creation is triggered from `SessionCard` must be reviewed against the omnibar action registry (`docs/reference/feature-testing-registry.md`).
 
 **Priority:** P2
 
@@ -620,7 +620,7 @@ Sorted by Priority (P1 first), then Risk (Low first within each priority tier).
 
 **Risk:** High — the 7-touchpoint session creation registry applies to any structural change here. Both the omnibar action registry and the session creation 7-touchpoint checklist must be completed before any implementation.
 
-> **Registry note (MANDATORY):** Any change to `SessionWizard.tsx`, `Omnibar.tsx`, or `OmnibarCreationPanel.tsx` requires completing the session creation mode registry checklist at `.claude/rules/session-creation-registry.md` (7 touchpoints: proto enum, request message, Go handler, session type constants, frontend type union, frontend radio group, frontend context + hook). The omnibar action registry (`.claude/rules/feature-testing-registry.md`) also applies to changes in `OmnibarContext.tsx`.
+> **Registry note (MANDATORY):** Any change to `SessionWizard.tsx`, `Omnibar.tsx`, or `OmnibarCreationPanel.tsx` requires completing the session creation mode registry checklist at `docs/reference/session-creation-registry.md` (7 touchpoints: proto enum, request message, Go handler, session type constants, frontend type union, frontend radio group, frontend context + hook). The omnibar action registry (`docs/reference/feature-testing-registry.md`) also applies to changes in `OmnibarContext.tsx`.
 
 **Priority:** P3 (requires ADR-3 decision first — see Section 8)
 
@@ -1015,9 +1015,9 @@ These require ADR decisions before proceeding. Each carries session creation reg
 
 **Recommendation:** Determine the intended UX model first. If the Omnibar is the primary creation interface for all users, Option A is the highest-impact low-risk change in the codebase. If the wizard provides a distinct onboarding experience (step-by-step guidance for new users vs. power-user quick creation), Option C with explicit documentation of the distinction is appropriate.
 
-**Why it cannot be deferred:** Any change to session creation code triggers the 7-touchpoint registry checklist at `.claude/rules/session-creation-registry.md`. The checklist cannot be completed without knowing which component is canonical. Both `SessionWizard.tsx` and `OmnibarCreationPanel.tsx` are listed in the checklist's touchpoint 6 (frontend radio group). Having two active implementations means the checklist is ambiguous about which must be updated for a given creation mode change.
+**Why it cannot be deferred:** Any change to session creation code triggers the 7-touchpoint registry checklist at `docs/reference/session-creation-registry.md`. The checklist cannot be completed without knowing which component is canonical. Both `SessionWizard.tsx` and `OmnibarCreationPanel.tsx` are listed in the checklist's touchpoint 6 (frontend radio group). Having two active implementations means the checklist is ambiguous about which must be updated for a given creation mode change.
 
-> **7-touchpoint reminder:** Any future implementation work on Opp 8, or any new session creation mode, requires completing all 7 checkpoints in `.claude/rules/session-creation-registry.md`: proto enum, proto request message, `make generate-proto`, Go handler (path guard + switch case + mode logic), `session/instance.go` constants, `Omnibar.tsx` type union, `OmnibarCreationPanel.tsx` SESSION_TYPES, `OmnibarContext.tsx` sessionTypeMap, and `useSessionService.ts` RPC body.
+> **7-touchpoint reminder:** Any future implementation work on Opp 8, or any new session creation mode, requires completing all 7 checkpoints in `docs/reference/session-creation-registry.md`: proto enum, proto request message, `make generate-proto`, Go handler (path guard + switch case + mode logic), `session/instance.go` constants, `Omnibar.tsx` type union, `OmnibarCreationPanel.tsx` SESSION_TYPES, `OmnibarContext.tsx` sessionTypeMap, and `useSessionService.ts` RPC body.
 
 ---
 

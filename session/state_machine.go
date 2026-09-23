@@ -4,12 +4,13 @@ import "context"
 
 // State machine diagram (6-state model):
 //
-//	Creating      --> Active, Stopped
+//	Creating      --> Active, Stopped, Failed
 //	Active        --> Paused, Stopped, Hibernated, Crashed
 //	Paused        --> Active, Stopped
 //	Stopped       --> Active
 //	Hibernated    --> Active, Stopped
 //	Crashed       --> Active, Stopped
+//	Failed        --> Creating
 //
 // Design notes:
 //   - Creating is the initial state for newly constructed instances.
@@ -18,9 +19,12 @@ import "context"
 //   - Crashed sessions had their tmux pane exit abnormally (remain-on-exit dead pane,
 //     non-zero exit/signal) as detected by SessionHealthChecker (session/health.go).
 //     Unlike Hibernated, transitioning to Crashed is not operator-initiated.
-//   - After hooks for Active→Hibernated and Hibernated→Active launch goroutines so
-//     that heavy I/O (checkpoint write, process kill, process start) does not block
-//     the caller while the state-machine mutex is held.
+//   - Failed sessions had their async creation pipeline (Epic 2.2) fail before
+//     ever reaching Active. Stopped stays terminal — no Stopped→Failed edge is
+//     defined. Failed→Creating is the retry path (Epic 1.2); epoch gating for
+//     that transition happens one layer up (ADR-002), not in this table.
+//   - Active↔Hibernated carry no After hook; transitionToLocked dispatches
+//     their heavy I/O inline instead (see its doc comment).
 
 // transitionKey identifies a (from, to) state machine edge.
 type transitionKey struct{ from, to Status }
@@ -43,20 +47,19 @@ type TransitionDef struct {
 var transitionDefs = []TransitionDef{
 	{From: Creating, To: Active},
 	{From: Creating, To: Stopped},
+	{From: Creating, To: Failed},
+	{From: Failed, To: Creating},
 	{From: Active, To: Paused},
 	{From: Active, To: Stopped},
-	{From: Active, To: Hibernated, After: func(ctx context.Context, i *Instance) {
-		// After is called with mu held — launch heavy work in a goroutine.
-		go i.hibernateProcess(ctx)
-	}},
+	// No After hook: a prior goroutine here ran untracked by hibernateWG and
+	// raced with transitionTo's "caller holds i.mu" contract. See the file's
+	// "Design notes" above.
+	{From: Active, To: Hibernated},
 	{From: Active, To: Crashed},
 	{From: Paused, To: Active},
 	{From: Paused, To: Stopped},
 	{From: Stopped, To: Active},
-	{From: Hibernated, To: Active, After: func(ctx context.Context, i *Instance) {
-		// After is called with mu held — launch heavy work in a goroutine.
-		go i.resumeFromHibernation(ctx)
-	}},
+	{From: Hibernated, To: Active},
 	{From: Hibernated, To: Stopped},
 	{From: Crashed, To: Active},
 	{From: Crashed, To: Stopped},
@@ -72,8 +75,29 @@ func init() {
 	}
 }
 
+// lookupTransition returns the TransitionDef for the from->to edge, if one exists
+// in transitionDefs. This is the single source of truth for edge legality —
+// CanTransition, canTransitionLocked, and transitionToLocked all resolve through
+// it so they cannot drift apart.
+func lookupTransition(from, to Status) (TransitionDef, bool) {
+	def, ok := transitionIndex[transitionKey{from, to}]
+	return def, ok
+}
+
 // CanTransition returns true if transitioning from -> to is a valid state transition.
 func CanTransition(from, to Status) bool {
-	_, ok := transitionIndex[transitionKey{from, to}]
+	_, ok := lookupTransition(from, to)
 	return ok
+}
+
+// canTransitionLocked reports whether the instance's current status can legally
+// transition to `to`, without mutating any state. Must only be called from
+// within sendSyncErr/send/sendCtx closures (reads i.Status under i.mu.RLock,
+// matching transitionToLocked's read).
+func canTransitionLocked(s *instanceState, to Status) bool {
+	i := s.inst
+	i.mu.RLock()
+	status := i.Status
+	i.mu.RUnlock()
+	return CanTransition(status, to)
 }

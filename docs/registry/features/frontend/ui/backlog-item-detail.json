@@ -26,7 +26,12 @@
     "Backlog item ID + deep link > a malformed item ID shows the not-found state without crashing",
     "Backlog item ID + deep link > copy buttons are 44px+ touch targets on a mobile viewport",
     "BacklogItemDetail_should_OmitSourceSection_When_ExternalUrlEmpty",
-    "BacklogItemDetail_should_RenderSourceSection_When_ExternalUrlPresent"
+    "BacklogItemDetail_should_RenderSourceSection_When_ExternalUrlPresent",
+    "BacklogItemDetail_should_RenderShippedPillWithViewDiff_When_VcsStatusNullAndShipStatusShipped",
+    "BacklogItemDetail_should_PreferLiveVcsStatusOverShipStatus_When_BothResolveNonNull",
+    "BacklogItemDetail_should_OpenFileBrowserModal_When_BrowseFilesButtonClicked",
+    "BacklogItemDetail_should_RenderShippedCiConclusionAndReviewCounts_When_ShipStatusHasSnapshot",
+    "BacklogItemDetail_should_RenderCaptureFailedCopy_When_ShipStatusSnapshotCaptureFailedTrue"
   ],
-  "lastModified": "2026-08-03T00:00:00Z"
+  "lastModified": "2026-08-29T00:00:00Z"
 }

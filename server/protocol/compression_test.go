@@ -152,7 +152,7 @@ func TestCompressEnvelopeIfLarge_should_BeSafeForConcurrentUse_When_PoolIsShared
 
 // BenchmarkCompressEnvelopeIfLarge_ConcurrentBursts measures CPU/latency overhead of gzip
 // compression under concurrent load (Task 5.1.1.3). Run backgrounded per
-// .claude/docs/benchmarks.md convention:
+// docs/reference/benchmarks.md convention:
 //
 //	go test -bench=BenchmarkCompressEnvelopeIfLarge_ConcurrentBursts -benchmem ./server/protocol -timeout=5m &
 func BenchmarkCompressEnvelopeIfLarge_ConcurrentBursts(b *testing.B) {

@@ -41,6 +41,10 @@ type AnalyticsEntry struct {
 	CommandSubcategory string `json:"command_subcommand,omitempty"`
 	// PythonImports lists top-level module names imported in inline Python (-c) invocations.
 	PythonImports []string `json:"python_imports,omitempty"`
+	// Source identifies which agent's hook produced this request ("claude" or "pi").
+	// Defaulted to "claude" by the caller (ApprovalHandler.HandlePermissionRequest) when
+	// the wire payload omits it — see pi-support Epic 4.3.
+	Source string `json:"source,omitempty"`
 }
 
 // ToolStat is a tool name with a count.
@@ -188,7 +192,10 @@ func (s *AnalyticsStore) Record(entry AnalyticsEntry) {
 }
 
 // RecordFromResult builds and records an AnalyticsEntry from classification output.
-func (s *AnalyticsStore) RecordFromResult(payload classifier.PermissionRequestPayload, result classifier.ClassificationResult, sessionID, approvalID string, durationMs int64) {
+// source identifies which agent's hook produced payload ("claude" or "pi") — callers are
+// expected to have already defaulted it to "claude" when the wire payload omitted the field
+// (see ApprovalHandler.HandlePermissionRequest), so this function never re-defaults it.
+func (s *AnalyticsStore) RecordFromResult(payload classifier.PermissionRequestPayload, result classifier.ClassificationResult, sessionID, approvalID string, durationMs int64, source string) {
 	cmd, _ := payload.ToolInput["command"].(string)
 	filePath, _ := payload.ToolInput["file_path"].(string)
 	preview := cmd
@@ -212,6 +219,7 @@ func (s *AnalyticsStore) RecordFromResult(payload classifier.PermissionRequestPa
 		Alternative:    result.Alternative,
 		DurationMs:     durationMs,
 		ApprovalID:     approvalID,
+		Source:         source,
 	}
 
 	// For Bash tool calls, extract which programs are being invoked.
@@ -246,6 +254,26 @@ func (s *AnalyticsStore) DroppedCount() int64 {
 	return atomic.LoadInt64(&s.dropped)
 }
 
+// RecordTaggingRuleFire asynchronously records that a tagging rule matched, independent of
+// whether the resulting tag survives suppression filtering. Fire-and-forget like
+// RecordFromResult — callers (the tagging pipeline, holding an Instance's actor lock) must
+// never block on this. Backed by a dedicated TaggingRuleFire table (not the buffered
+// AnalyticsEntry channel/table, whose fields are approval/command-decision-specific), so
+// writes go straight to storage in a detached goroutine rather than through s.ch/flush.
+func (s *AnalyticsStore) RecordTaggingRuleFire(ruleID string) {
+	go func() {
+		if err := s.storage.RecordTaggingRuleFire(context.Background(), ruleID, time.Now()); err != nil {
+			log.Warn("[AnalyticsStore] failed to record tagging rule fire", "rule_id", ruleID, "err", err)
+		}
+	}()
+}
+
+// GetTaggingRuleFireCounts returns the number of recorded fires per rule ID since the given
+// instant (e.g. 7 days ago for the "Fires(7d)" UX column).
+func (s *AnalyticsStore) GetTaggingRuleFireCounts(ctx context.Context, since time.Time) (map[string]int, error) {
+	return s.storage.GetTaggingRuleFireCounts(ctx, since)
+}
+
 // analyticsDataToEntry maps a session.AnalyticsData row to an AnalyticsEntry.
 func analyticsDataToEntry(d session.AnalyticsData) AnalyticsEntry {
 	return AnalyticsEntry{
@@ -272,8 +300,8 @@ func analyticsDataToEntry(d session.AnalyticsData) AnalyticsEntry {
 
 // LoadWindow reads entries from DB with timestamps >= since.
 // Uses a DB-level WHERE clause via ListAnalyticsSince (AC-1).
-func (s *AnalyticsStore) LoadWindow(since time.Time) ([]AnalyticsEntry, error) {
-	data, err := s.storage.ListAnalyticsSince(context.Background(), since, 0)
+func (s *AnalyticsStore) LoadWindow(ctx context.Context, since time.Time) ([]AnalyticsEntry, error) {
+	data, err := s.storage.ListAnalyticsSince(ctx, since, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list analytics since %s from DB: %w", since.Format(time.RFC3339), err)
 	}
@@ -571,6 +599,7 @@ func (s *AnalyticsStore) flush(ctx interface{ Done() <-chan struct{} }) {
 			CommandCategory:    e.CommandCategory,
 			CommandSubcategory: e.CommandSubcategory,
 			PythonImports:      e.PythonImports,
+			Source:             e.Source,
 			CreatedAt:          e.Timestamp,
 		}
 		_ = s.storage.RecordAnalytics(context.Background(), data)

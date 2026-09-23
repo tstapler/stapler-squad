@@ -8,11 +8,13 @@ import (
 
 // Stage1Observation records a sequence seen at Stage 1 (PTY read) for later correlation with Stage 2.
 type Stage1Observation struct {
-	PayloadHash  string
-	ByteLen      int
-	WallTime     time.Time
-	SessionID    string
-	SequenceType string
+	PayloadHash       string
+	ByteLen           int
+	WallTime          time.Time
+	SessionID         string
+	ProjectPath       string
+	SequenceType      string
+	SequenceSignature string
 }
 
 // MangleCorrelator correlates Stage 1 and Stage 2 escape sequence observations to detect
@@ -60,26 +62,34 @@ type MangleCorrelator struct {
 	// pruned pending. Confirmed as the #1 live-heap consumer (25.18% inuse_space)
 	// before this field was added: sessions come and go, but their ordinal
 	// counters never did.
-	ordinalLastSeen map[ordinalKey]time.Time
-	maxAge          time.Duration
-	maxSize         int
+	ordinalLastSeen   map[ordinalKey]time.Time
+	transportLastSeen map[string]time.Time
+	maxAge            time.Duration
+	maxSize           int
 }
 
 // NewMangleCorrelator creates a correlator with the given TTL and max pending size.
 func NewMangleCorrelator(maxAge time.Duration, maxSize int) *MangleCorrelator {
 	return &MangleCorrelator{
-		pending:         make(map[pendingKey]Stage1Observation),
-		stage1Ordinals:  make(map[ordinalKey]int64),
-		stage2Ordinals:  make(map[ordinalKey]int64),
-		ordinalLastSeen: make(map[ordinalKey]time.Time),
-		maxAge:          maxAge,
-		maxSize:         maxSize,
+		pending:           make(map[pendingKey]Stage1Observation),
+		stage1Ordinals:    make(map[ordinalKey]int64),
+		stage2Ordinals:    make(map[ordinalKey]int64),
+		ordinalLastSeen:   make(map[ordinalKey]time.Time),
+		transportLastSeen: make(map[string]time.Time),
+		maxAge:            maxAge,
+		maxSize:           maxSize,
 	}
 }
 
 // RecordStage1 records a Stage 1 observation for later correlation. It is assigned the next
 // ordinal for this (sessionID, sequenceType) pair.
 func (c *MangleCorrelator) RecordStage1(sessionID, sequenceType, hash string, byteLen int) {
+	c.RecordStage1WithMetadata(sessionID, "", sequenceType, "", hash, byteLen)
+}
+
+// RecordStage1WithMetadata preserves project and normalized command attribution
+// when an unmatched observation is later emitted as stripped.
+func (c *MangleCorrelator) RecordStage1WithMetadata(sessionID, projectPath, sequenceType, sequenceSignature, hash string, byteLen int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -98,12 +108,23 @@ func (c *MangleCorrelator) RecordStage1(sessionID, sequenceType, hash string, by
 	c.ordinalLastSeen[ok] = time.Now()
 
 	c.pending[pendingKey{sessionID, sequenceType, ordinal}] = Stage1Observation{
-		PayloadHash:  hash,
-		ByteLen:      byteLen,
-		WallTime:     time.Now(),
-		SessionID:    sessionID,
-		SequenceType: sequenceType,
+		PayloadHash:       hash,
+		ByteLen:           byteLen,
+		WallTime:          time.Now(),
+		SessionID:         sessionID,
+		ProjectPath:       projectPath,
+		SequenceType:      sequenceType,
+		SequenceSignature: sequenceSignature,
 	}
+}
+
+// ObserveTransport records that a transport is actively carrying output for
+// the session. This prevents sessions with no consumer from being reported as
+// stripped merely because Stage 2 was never expected.
+func (c *MangleCorrelator) ObserveTransport(sessionID string) {
+	c.mu.Lock()
+	c.transportLastSeen[sessionID] = time.Now()
+	c.mu.Unlock()
 }
 
 // CheckStage2 checks whether the next Stage 2 observation for this (sessionID, sequenceType)
@@ -138,20 +159,62 @@ func (c *MangleCorrelator) CheckStage2(sessionID, sequenceType, hash string, byt
 
 // EvictExpired removes observations older than maxAge and emits them as "stripped" escape events.
 // Call this periodically (e.g., every maxAge/2).
+//
+// Deliberately scans only c.pending, not the ordinal-counter maps (see PruneStaleOrdinals) —
+// this runs on StartEviction's frequent maxAge/2 ticker (2.5s for the production TTL), so
+// its critical section stays as short as live pprof/Pyroscope evidence showed matters: on a
+// production instance running ~50-100 concurrent sessions, mutex-contention profiling
+// attributed 1,229 events / 224.6s of waiter delay to this function — ~183ms average per
+// event, far too long for a map scan this small to explain on its own. Cross-referencing the
+// same window's CPU profile (17% in runtime.gcBgMarkWorker/scanSpan) and `uptime`'s load
+// average (32 runnable threads on an 18-core machine) pins the real cause on scheduler/GC
+// preemption while the lock is held, not this critical section's own cost — so the fix here
+// is to minimize exposure (shrink what runs under the frequent lock), not to restructure the
+// lock itself; the systemic fix is reducing allocation/goroutine pressure elsewhere.
 func (c *MangleCorrelator) EvictExpired(ctx context.Context, writer EscapeEventWriter) {
 	c.mu.Lock()
 	var expired []Stage1Observation
 	cutoff := time.Now().Add(-c.maxAge)
 	for key, obs := range c.pending {
 		if obs.WallTime.Before(cutoff) {
-			expired = append(expired, obs)
+			// Absence is only evidence of stripping while a transport was
+			// active near this observation. Otherwise discard the pending
+			// correlation without manufacturing a false failure.
+			if seen, ok := c.transportLastSeen[obs.SessionID]; ok && seen.After(obs.WallTime.Add(-c.maxAge)) {
+				expired = append(expired, obs)
+			}
 			delete(c.pending, key)
 		}
 	}
-	// Prune ordinal counters for (session, type) pairs that have gone quiet:
-	// a session that ended (or a sequence type it stopped emitting) leaves
-	// stage1Ordinals/stage2Ordinals entries with no further writer to ever
-	// clean them up otherwise.
+	c.mu.Unlock()
+
+	for _, obs := range expired {
+		writer.WriteEscapeEvent(ctx, EscapeEventRecord{
+			SessionID:         obs.SessionID,
+			ProjectPath:       obs.ProjectPath,
+			Stage:             StageTransport,
+			SequenceType:      obs.SequenceType,
+			SequenceSignature: obs.SequenceSignature,
+			ByteLen:           obs.ByteLen,
+			PayloadHash:       obs.PayloadHash,
+			Mangled:           true,
+			MangleType:        "stripped",
+			WallTime:          obs.WallTime,
+		})
+	}
+}
+
+// PruneStaleOrdinals removes stage1Ordinals/stage2Ordinals/ordinalLastSeen entries for
+// (session, type) pairs that have gone quiet for longer than maxAge: a session that ended
+// (or a sequence type it stopped emitting) leaves these with no further writer to ever clean
+// them up otherwise. Split out of EvictExpired (see its doc comment) so this second map scan
+// doesn't add to the lock hold time of the frequent maxAge/2 eviction tick — StartEviction
+// calls this on its own, much less frequent, ordinalPruneEveryNTicks cadence instead, since
+// staleness here is only ever session-idle-scale, not sequence-TTL-scale.
+func (c *MangleCorrelator) PruneStaleOrdinals() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cutoff := time.Now().Add(-c.maxAge)
 	for key, lastSeen := range c.ordinalLastSeen {
 		if lastSeen.Before(cutoff) {
 			delete(c.ordinalLastSeen, key)
@@ -159,31 +222,34 @@ func (c *MangleCorrelator) EvictExpired(ctx context.Context, writer EscapeEventW
 			delete(c.stage2Ordinals, key)
 		}
 	}
-	c.mu.Unlock()
-
-	for _, obs := range expired {
-		writer.WriteEscapeEvent(ctx, EscapeEventRecord{
-			SessionID:    obs.SessionID,
-			Stage:        StageTransport,
-			SequenceType: obs.SequenceType,
-			ByteLen:      obs.ByteLen,
-			PayloadHash:  obs.PayloadHash,
-			Mangled:      true,
-			MangleType:   "stripped",
-			WallTime:     obs.WallTime,
-		})
+	for sessionID, lastSeen := range c.transportLastSeen {
+		if lastSeen.Before(cutoff) {
+			delete(c.transportLastSeen, sessionID)
+		}
 	}
 }
 
-// StartEviction starts a background goroutine that calls EvictExpired periodically.
-// Returns when ctx is cancelled.
+// ordinalPruneEveryNTicks is how many EvictExpired ticks pass between PruneStaleOrdinals
+// calls in StartEviction's loop. Ordinal staleness only matters at session-idle timescales,
+// so it doesn't need the same maxAge/2 cadence pending-eviction does; 10 ticks keeps it
+// comfortably faster than any reasonable session lifetime while cutting the frequent lock's
+// critical section down to just the pending scan.
+const ordinalPruneEveryNTicks = 10
+
+// StartEviction starts a background goroutine that calls EvictExpired periodically, and
+// PruneStaleOrdinals every ordinalPruneEveryNTicks-th tick. Returns when ctx is cancelled.
 func (c *MangleCorrelator) StartEviction(ctx context.Context, writer EscapeEventWriter) {
 	ticker := time.NewTicker(c.maxAge / 2)
 	defer ticker.Stop()
+	tick := 0
 	for {
 		select {
 		case <-ticker.C:
 			c.EvictExpired(ctx, writer)
+			tick++
+			if tick%ordinalPruneEveryNTicks == 0 {
+				c.PruneStaleOrdinals()
+			}
 		case <-ctx.Done():
 			return
 		}

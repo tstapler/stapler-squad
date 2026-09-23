@@ -5,7 +5,8 @@
  * Follows StateApplicator.test.ts pattern with MockTerminal class.
  */
 
-import { TerminalStreamManager, HIGH_WATERMARK, LOW_WATERMARK, CHUNK_SIZE, type ITerminal, type SendFlowControlFn } from '../TerminalStreamManager';
+import { TerminalStreamManager, HIGH_WATERMARK, LOW_WATERMARK, CHUNK_SIZE, ANSI_SNAPSHOT_PREFIX, type SendFlowControlFn } from '../TerminalStreamManager';
+import { MockTerminal } from './mockTerminal';
 
 // RAF mock for deterministic testing
 let rafCallback: FrameRequestCallback | null = null;
@@ -35,70 +36,6 @@ function flushRAF(): void {
 function flushAllRAF(): void {
   while (rafCallback) {
     flushRAF();
-  }
-}
-
-// Mock Terminal
-class MockTerminal implements ITerminal {
-  rows = 24;
-  cols = 80;
-  private written: Array<{ data: string; callback?: () => void }> = [];
-  private cleared = false;
-  private refreshed: Array<{ start: number; end: number }> = [];
-  private scrolledToBottom = false;
-
-  write(data: string | Uint8Array, callback?: () => void): void {
-    const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
-    this.written.push({ data: str, callback });
-    // Auto-invoke callback to simulate xterm.js processing
-    callback?.();
-  }
-
-  clear(): void {
-    this.cleared = true;
-  }
-
-  refresh(start: number, end: number): void {
-    this.refreshed.push({ start, end });
-  }
-
-  scrollToBottom(): void {
-    this.scrolledToBottom = true;
-  }
-
-  get buffer() {
-    return {
-      active: { cursorY: 0, viewportY: 0, length: 0 },
-      normal: { length: 0 },
-    };
-  }
-
-  // Test helpers
-  getWrittenData(): string[] {
-    return this.written.map(w => w.data);
-  }
-
-  getWrittenItems(): Array<{ data: string; callback?: () => void }> {
-    return [...this.written];
-  }
-
-  wasCleared(): boolean {
-    return this.cleared;
-  }
-
-  getRefreshCalls(): Array<{ start: number; end: number }> {
-    return [...this.refreshed];
-  }
-
-  wasScrolledToBottom(): boolean {
-    return this.scrolledToBottom;
-  }
-
-  resetTracking(): void {
-    this.written = [];
-    this.cleared = false;
-    this.refreshed = [];
-    this.scrolledToBottom = false;
   }
 }
 
@@ -379,6 +316,126 @@ describe('TerminalStreamManager', () => {
 
       const written = terminal.getWrittenData();
       expect(written.some(w => w.includes('Clean text'))).toBe(true);
+    });
+  });
+
+  // Regression coverage (reflect-and-fix, 2026-08-23) for the stale-buffer-overlap
+  // bug: a post-resize/resync snapshot used to be appended onto whatever xterm
+  // already had buffered (content reflowed under the terminal's OLD wrap state, or
+  // rows the user had scrolled past), producing visibly overlapping/misaligned text.
+  // ANSI_SNAPSHOT_PREFIX (mirroring connectrpc_websocket.go's ansiSnapshotPrefix) is
+  // the server's reliable, trigger-independent signal that a chunk replaces the
+  // whole screen rather than appending to it — write() is the single funnel every
+  // output path goes through, so checking it here (not at each TerminalOutput.tsx
+  // call site) means a future call site can't reintroduce the bug by forgetting to.
+  describe('full-pane replacement snapshot detection (ANSI_SNAPSHOT_PREFIX)', () => {
+    it('clears the terminal and fires onFullSnapshot when a write starts with ANSI_SNAPSHOT_PREFIX', () => {
+      const onFullSnapshot = jest.fn();
+      manager.setOnFullSnapshot(onFullSnapshot);
+
+      manager.write(ANSI_SNAPSHOT_PREFIX + 'fresh pane content');
+
+      expect(terminal.wasCleared()).toBe(true);
+      expect(onFullSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not clear the terminal or fire onFullSnapshot for ordinary incremental output', () => {
+      const onFullSnapshot = jest.fn();
+      manager.setOnFullSnapshot(onFullSnapshot);
+
+      manager.write('regular incremental output, no snapshot prefix');
+
+      expect(terminal.wasCleared()).toBe(false);
+      expect(onFullSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('does not throw when a full-pane snapshot arrives with no onFullSnapshot callback registered', () => {
+      // TerminalOutput.tsx always registers one, but write() must not assume a
+      // caller has — clear() alone is the correctness-critical half of the fix.
+      expect(() => manager.write(ANSI_SNAPSHOT_PREFIX + 'content')).not.toThrow();
+      expect(terminal.wasCleared()).toBe(true);
+    });
+  });
+
+  // Story 1.4.0 (Task 1.4.0a) — client-local altScreenActive tracking.
+  describe('altScreenActive tracking (Task 1.4.0a)', () => {
+    it('fires onAltScreenChange(true) once on entry and not again for repeated entry output', () => {
+      const onAltScreenChange = jest.fn();
+      manager.setOnAltScreenChange(onAltScreenChange);
+
+      manager.write('\x1b[?1049hsome redrawn content');
+      manager.write('more redrawn content, still alt screen');
+
+      expect(onAltScreenChange).toHaveBeenCalledTimes(1);
+      expect(onAltScreenChange).toHaveBeenCalledWith(true);
+    });
+
+    it('fires onAltScreenChange(false) on exit', () => {
+      const onAltScreenChange = jest.fn();
+      manager.setOnAltScreenChange(onAltScreenChange);
+
+      manager.write('\x1b[?1049hentering alt screen');
+      manager.write('\x1b[?1049lback to normal screen');
+
+      expect(onAltScreenChange).toHaveBeenNthCalledWith(1, true);
+      expect(onAltScreenChange).toHaveBeenNthCalledWith(2, false);
+    });
+
+    it('does not fire onAltScreenChange for ordinary output containing no mode markers', () => {
+      const onAltScreenChange = jest.fn();
+      manager.setOnAltScreenChange(onAltScreenChange);
+
+      manager.write('plain incremental output');
+
+      expect(onAltScreenChange).not.toHaveBeenCalled();
+    });
+  });
+
+  // Story 1.4.1 (Task 1.4.1a) — AppScrollbackResponse dispatch, isolated from onFullSnapshot.
+  describe('handleAppScrollback dispatch (Task 1.4.1a)', () => {
+    it('calls onAppScrollback and not onFullSnapshot when an AppScrollbackResponse frame arrives', () => {
+      const onAppScrollback = jest.fn();
+      const onFullSnapshot = jest.fn();
+      manager.setOnAppScrollback(onAppScrollback);
+      manager.setOnFullSnapshot(onFullSnapshot);
+
+      const frame = {
+        content: '...transcript...',
+        outcome: 1 /* DELIVERED */,
+        program: 'claude',
+        forwardId: 'fwd-1',
+        blockedReason: 0,
+      } as any;
+      manager.handleAppScrollback(frame);
+
+      expect(onAppScrollback).toHaveBeenCalledTimes(1);
+      expect(onAppScrollback).toHaveBeenCalledWith(frame);
+      expect(onFullSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('calls onFullSnapshot (not onAppScrollback) for a normal ANSI_SNAPSHOT_PREFIX write immediately after', () => {
+      const onAppScrollback = jest.fn();
+      const onFullSnapshot = jest.fn();
+      manager.setOnAppScrollback(onAppScrollback);
+      manager.setOnFullSnapshot(onFullSnapshot);
+
+      manager.handleAppScrollback({
+        content: '...transcript...',
+        outcome: 1,
+        program: 'claude',
+        forwardId: 'fwd-1',
+        blockedReason: 0,
+      } as any);
+      manager.write(ANSI_SNAPSHOT_PREFIX + 'fresh pane content');
+
+      expect(onFullSnapshot).toHaveBeenCalledTimes(1);
+      expect(onAppScrollback).toHaveBeenCalledTimes(1); // unchanged from the prior call
+    });
+
+    it('does not throw when handleAppScrollback is called with no onAppScrollback callback registered', () => {
+      expect(() => manager.handleAppScrollback({
+        content: '', outcome: 4, program: 'claude', forwardId: 'fwd-2', blockedReason: 1,
+      } as any)).not.toThrow();
     });
   });
 });

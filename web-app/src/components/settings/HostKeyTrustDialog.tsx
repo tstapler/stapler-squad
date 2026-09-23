@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
+import { useId, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useDialogFocusTrap } from "@/lib/hooks/useDialogFocusTrap";
 import * as styles from "./HostKeyTrustDialog.css";
 
 export interface HostKeyTrustDialogProps {
@@ -12,9 +13,6 @@ export interface HostKeyTrustDialogProps {
   onTrust: () => void;
   onCancel: () => void;
 }
-
-const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
  * HostKeyTrustDialog — the TOFU (trust-on-first-use) confirmation modal
@@ -35,43 +33,10 @@ export function HostKeyTrustDialog({ host, port, fingerprint, onTrust, onCancel 
   const headingId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(
-    typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null
-  );
 
-  useEffect(() => {
-    // Default focus lands on Cancel, not "Trust and connect" -- ux.md
-    // Surface 3 interaction flow step 1.
-    cancelButtonRef.current?.focus();
-    return () => {
-      previouslyFocusedRef.current?.focus();
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onCancel();
-        return;
-      }
-      if (e.key === "Tab" && dialogRef.current) {
-        const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
-        if (focusable.length === 0) return;
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onCancel]);
+  // Default focus lands on Cancel, not "Trust and connect" -- ux.md
+  // Surface 3 interaction flow step 1.
+  useDialogFocusTrap({ dialogRef, initialFocusRef: cancelButtonRef, onEscape: onCancel });
 
   const content = (
     <div
@@ -130,7 +95,7 @@ export function HostKeyTrustDialog({ host, port, fingerprint, onTrust, onCancel 
   );
 
   // createPortal escapes any ancestor CSS transform/filter/will-change that
-  // would break position:fixed (ADR-009 / .claude/rules/css-architecture.md).
+  // would break position:fixed (ADR-009 / docs/reference/css-architecture.md).
   if (typeof document === "undefined") return null;
   return createPortal(content, document.body);
 }

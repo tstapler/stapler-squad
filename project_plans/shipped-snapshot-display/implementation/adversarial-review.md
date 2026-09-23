@@ -1,0 +1,18 @@
+# Adversarial Review: shipped-snapshot-display
+
+**Date**: 2026-08-29
+**Verdict**: CONCERNS (all items below patched into plan.md post-review; see resolution notes)
+
+## Blockers
+- [x] **RESOLVED in plan.md Task 3.2.1a.** Task 3.2.1a instructs closing backlog item `9832b7e3-edf8-469f-af79-e128604904f6` via "backlog:* skills or equivalent MCP/CLI for this item ID," but every `backlog:done-N`/`backlog:fail-N`/`backlog:review`/`backlog:status` skill currently bound in this environment is pre-parameterized for a *different* item, `b608ab1e-b86e-4130-8879-7328cd363063` (visible in the skill listing: "Call report_progress with item_id=b608ab1e-..."). If whoever executes Task 3.2.1a invokes those bound skills as-is, they will report progress or close the wrong backlog item's criteria instead of `9832b7e3-...`. — Resolution: Task 3.2.1a now opens with an explicit guard requiring `get_backlog_item(item_id="9832b7e3-...")` confirmation first and explicit `item_id=` passing to every subsequent tool call, never a bound skill default.
+
+## Concerns
+- [x] **RESOLVED in plan.md Story 2.1.1.** Story 2.1.1's "CI + reviews render" fixture omitted `prUrl` and `snapshotAt`, both required for `github` to populate (`adapters.ts:136,164,174`). — Resolution: both fields added to the fixture in plan.md, with the gating logic cited inline.
+- [x] **RESOLVED in plan.md Epic 3.1.** Registry acceptance criterion incorrectly stated "28->30 entries" for `backlog-item-detail.json`; actual count is 19. — Resolution: corrected to "19->21" (plus the backfill below, making it 19→24) in plan.md.
+- [x] **RESOLVED in plan.md Task 3.1.1a.** The three existing Story 2.2.3 tests (`BacklogItemDetail.test.tsx:331,365,403`) were missing from `backlog-item-detail.json`'s `testIds` — a pre-existing gap the plan would have compounded by only adding the 2 new IDs. — Resolution: Task 3.1.1a now backfills all three pre-existing test names alongside the 2 new ones (5 additions, 19→24 entries).
+- [x] **RESOLVED in plan.md Story 1.1.1/Task 1.1.1a.** Citation `BacklogItemDetail.tsx:177,180-181` was off by one line; the real fallback ternary is at line 182, comment at 178-180. — Resolution: re-cited to `177-182` and the pre-existing proof test `BacklogItemDetail.test.tsx:331` added as corroborating evidence.
+
+## Minors
+- The plan's rejected-alternative table correctly avoids `VersionControlSection.test.tsx`/`VcsWidget.test.tsx` (hand-built prop, bypasses the real adapter) and correctly avoids re-plumbing `useBacklogService.ts` per the requirements' explicit rabbit-hole warning — no scope drift found here.
+- `useBacklogItemShipStatus.ts` swallows RPC failures into `data: null` (`catch { setData(null); }`), which is indistinguishable from "item never shipped." This is pre-existing behavior outside this plan's stated scope (no backend/hook changes), so not blocking, but worth a one-line note in the closure annotation (Task 3.2.1a) so a future triager doesn't mistake a transient RPC failure for "nothing to display" and re-file this same backlog item a third time.
+- Acceptance Criterion 2 in requirements.md ("VersionControlSection confirmed to render as fallback once live PR closed / useVcsStatus returns null") is actually satisfied by the *existing* test at `BacklogItemDetail.test.tsx:331` (`VcsStatusNullAndShipStatusShipped`), but the plan's Phase 1 citations don't point to it — Phase 1 only cites `adapters.ts` and the `BacklogItemDetail.tsx` wiring lines, not the pre-existing test that actually proves the fallback renders. Citing it would make AC2 fully evidence-backed rather than inferred from reading the source.

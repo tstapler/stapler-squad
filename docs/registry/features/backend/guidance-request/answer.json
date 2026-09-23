@@ -1,0 +1,12 @@
+{
+  "id": "guidance-request:answer",
+  "type": "backend",
+  "service": "GuidanceRequestService",
+  "method": "AnswerGuidanceRequest",
+  "protoFile": "proto/session/v1/guidance_request.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/guidance_request_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-14T13:20:09.108189379-07:00"
+}

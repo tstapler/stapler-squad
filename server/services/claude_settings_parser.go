@@ -33,6 +33,9 @@ var (
 // ParseClaudeSettings reads a Claude settings.json file and extracts permissions.
 // Returns nil permissions (no error) if the file does not exist or has no permissions key.
 func ParseClaudeSettings(path string) (*ClaudePermissions, error) {
+	// #nosec G304 -- path always comes from settingsPaths(), built from os.UserHomeDir()
+	// or the server's own projectDir plus literal ".claude/settings*.json" suffixes; never
+	// network/RPC input.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -208,14 +211,16 @@ func claudePatternsToRules(patterns []string, priority int, label, idPrefix stri
 	var rules []classifier.Rule
 	for i, pattern := range patterns {
 		rule := classifier.Rule{
-			ID:        fmt.Sprintf("%s-%s-%d", idPrefix, label, i),
-			Name:      fmt.Sprintf("Claude settings %s: %s", verb, pattern),
+			RuleMeta: classifier.RuleMeta{
+				ID:       fmt.Sprintf("%s-%s-%d", idPrefix, label, i),
+				Name:     fmt.Sprintf("Claude settings %s: %s", verb, pattern),
+				Priority: priority,
+				Enabled:  true,
+				Source:   string(classifier.SourceClaudeSettings),
+			},
 			Decision:  decision,
 			RiskLevel: riskLevel,
 			Reason:    fmt.Sprintf("%s by Claude settings (%s): %s", verbPast, label, pattern),
-			Priority:  priority,
-			Enabled:   true,
-			Source:    string(classifier.SourceClaudeSettings),
 		}
 
 		// Parse "ToolName(commandGlob)" or just "ToolName".

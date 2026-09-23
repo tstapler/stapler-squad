@@ -25,9 +25,11 @@ interface SubStatusChipProps {
  * SubStatusChip renders a small inline chip showing fine-grained session activity.
  * Returns null for UNSPECIFIED only.
  *
- * Note: SessionRow filters out IDLE and READY before rendering this component —
- * those states are intentionally suppressed in the list view as low-signal noise.
- * Direct callers (e.g. detail headers) may still render IDLE/READY chips.
+ * Note: SessionRow filters out READY before rendering this component — that state
+ * is intentionally suppressed in the list view as low-signal noise. IDLE is no longer
+ * suppressed (Epic 3.2.2, ADR-002): idle-reason items were removed from the Review
+ * Queue entirely, so this chip is now the Sessions-list's only "ready for next task"
+ * signal. Direct callers (e.g. detail headers) may still render READY chips.
  */
 export function SubStatusChip({ subStatus, subagentCount }: SubStatusChipProps) {
   // Guard against undefined subStatus (e.g. when session proto field is not set)

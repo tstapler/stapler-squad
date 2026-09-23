@@ -1,6 +1,10 @@
 package streamhub
 
-import "github.com/tstapler/stapler-squad/log"
+import (
+	"context"
+
+	"github.com/tstapler/stapler-squad/log"
+)
 
 // ResizeVote is a {SubscriberID, TerminalSize} tuple submitted by a
 // capability-eligible Subscriber toward the hub's NegotiatedSize (Task
@@ -20,12 +24,33 @@ func (h *StreamHub) NegotiatedSize() TerminalSize {
 	return h.negotiatedSize
 }
 
+// ResizeActivity returns the hub's current resize bookkeeping: resizing
+// reports whether applyNegotiatedSize is running right now, and generation
+// is a monotonically increasing counter incremented once per completed
+// applyNegotiatedSize call (success or failure). Callers with their own
+// independent pane-capture window that must not race a resize (Fix 5 --
+// session.Instance.ForwardScroll's captureViaRedrawQuiescence) sample this
+// before and after their capture: a changed generation, or resizing true at
+// either end, means a resize may have reflowed the pane mid-capture, and the
+// capture's result cannot be trusted.
+func (h *StreamHub) ResizeActivity() (generation uint64, resizing bool) {
+	h.resizeMu.Lock()
+	defer h.resizeMu.Unlock()
+	return h.resizeGeneration, h.resizing
+}
+
 // RequestResize records subscriber id's vote for size and re-runs
 // negotiation, but only if that subscriber was attached with
 // SubscriberCapability.CanResize == true (Task 1.3.1c) — a read-only sink's
 // vote is rejected and logged, never applied. Requesting resize for an
 // unknown SubscriberID is a no-op.
-func (h *StreamHub) RequestResize(id SubscriberID, size TerminalSize) {
+//
+// ctx should be scoped to the calling connection's lifetime (canceled when
+// that caller disconnects), not a fixed background timeout — it becomes the
+// deadline applyNegotiatedSize bounds its SetWindowSize/CapturePaneContentRaw
+// calls with, so an early disconnect stops those calls instead of always
+// waiting out a fixed ceiling.
+func (h *StreamHub) RequestResize(ctx context.Context, id SubscriberID, size TerminalSize) {
 	h.mu.Lock()
 	sub, ok := h.subscribers[id]
 	h.mu.Unlock()
@@ -66,7 +91,7 @@ func (h *StreamHub) RequestResize(id SubscriberID, size TerminalSize) {
 	recordResizeNegotiation(changed)
 
 	if changed {
-		h.applyNegotiatedSize(current)
+		h.applyNegotiatedSize(ctx, current)
 	}
 }
 

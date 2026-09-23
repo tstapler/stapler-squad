@@ -17,11 +17,14 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/dismissedfinding"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	entshell "github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
+	"github.com/tstapler/stapler-squad/session/ent/taggingrule"
+	"github.com/tstapler/stapler-squad/session/ent/taggingrulefire"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 
 	"entgo.io/ent/dialect"
@@ -107,7 +110,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// "file:" URI DSN (e.g. a shared-cache in-memory database used by tests)
 	// rather than a real filesystem path.
 	if !strings.HasPrefix(expandedPath, "file:") {
-		if err := os.MkdirAll(filepath.Dir(expandedPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(expandedPath), 0750); err != nil {
 			return nil, fmt.Errorf("failed to create database directory: %w", err)
 		}
 	}
@@ -184,69 +187,31 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	err = client.Schema.Create(context.Background())
 	EntSchemaCreateMu.Unlock()
 	if err != nil {
-		client.Close()
+		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
 		return nil, fmt.Errorf("failed to create schema: %w", err)
-	}
-
-	// Run status integer remap migration (idempotent).
-	// Old iota: Running=0, Ready=1, Loading=2, Paused=3, NeedsApproval=4, Creating=5, Stopped=6
-	// New iota: Creating=0, Active=1, Paused=2, Stopped=3, Hibernated=4
-	// Values 0–6 on disk (old) must be remapped to the new scheme.
-	// Only run if the database has any legacy-range status values (>4 indicates old Stopped=6).
-	if err := runStatusRemap(db); err != nil {
-		client.Close()
-		return nil, fmt.Errorf("failed to remap status values: %w", err)
 	}
 
 	repo.client = client
 
-	// Normalize any pre-existing BacklogItem.updated_at rows from Local to
-	// UTC (idempotent) — see backlog_item_updated_at_utc_migration.go for
-	// why this is required, not just cosmetic: mixed Local/UTC-formatted
-	// TEXT rows sort incorrectly and spuriously fail CAS preconditions
-	// built from a protobuf Timestamp (always UTC) until each row is
-	// touched once.
-	if err := runBacklogItemUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
-		client.Close()
-		return nil, fmt.Errorf("failed to backfill backlog item updated_at to UTC: %w", err)
-	}
-
-	// Same fix, same reason, for Workflow.updated_at — see
-	// workflow_updated_at_utc_migration.go. UpdateWorkflowRequest.expected_updated_at
-	// (webhook-triggers verify follow-ups AC9) is the same protobuf-Timestamp-derived
-	// CAS precondition class as TransitionBacklogItemStatusRequest's.
-	if err := runWorkflowUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
-		client.Close()
-		return nil, fmt.Errorf("failed to backfill workflow updated_at to UTC: %w", err)
-	}
-
 	// One-time-per-database correction for rows that predate the enabled field
 	// — see workflow_enabled_field_migration.go's doc comment for why this
 	// must be gated on workflowEnabledColumnAlreadyExisted rather than run
-	// unconditionally on every startup like its sibling backfills above.
+	// unconditionally like startupMigrations below. Doesn't implement
+	// Migration for the same reason (see ent_repository_migrations.go): the
+	// preexisted check has to be taken before Schema.Create() runs, above.
 	if !workflowEnabledColumnAlreadyExisted {
 		runWorkflowEnabledFieldBackfill(context.Background(), repo)
 	}
 
-	// Populate github_pr_url for pre-existing sessions that have a known PR
-	// number/owner/repo but were created before CreateSession started
-	// building the URL itself (idempotent) — see
-	// github_pr_url_backfill.go.
-	if err := runGitHubPRURLBackfill(context.Background(), repo); err != nil {
-		client.Close()
-		return nil, fmt.Errorf("failed to backfill github pr url: %w", err)
-	}
-
-	// Assign a public_id to every pre-existing BacklogItem row that predates
-	// this feature (idempotent) — see BackfillBacklogItemPublicIDs in
-	// storage_backlog.go. Unlike the backfills above, this one is
-	// flock-guarded: it mints a fresh random BacklogItemID per row rather
-	// than deterministically recomputing the same value, so an unguarded
-	// race between two processes could assign two different ids to the same
-	// row.
-	if err := repo.BackfillBacklogItemPublicIDs(context.Background()); err != nil {
-		client.Close()
-		return nil, fmt.Errorf("failed to backfill backlog item public id: %w", err)
+	// Every other startup data migration is uniform-shaped (idempotent,
+	// (ctx, *EntRepository) error) and lives in startupMigrations — see
+	// session/ent_repository_migrations.go for why the enabled-field backfill
+	// above this point is the documented exception that doesn't.
+	for _, m := range startupMigrations {
+		if err := m.Run(context.Background(), repo); err != nil {
+			_ = client.Close() // best-effort cleanup; we're already returning the real startup error
+			return nil, fmt.Errorf("failed to run migration %q: %w", m.Name(), err)
+		}
 	}
 
 	return repo, nil
@@ -314,11 +279,26 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.Note != "" {
 		sessionCreate.SetNote(data.Note)
 	}
+	if len(data.RuleTagProvenance) > 0 {
+		sessionCreate.SetRuleTagProvenance(data.RuleTagProvenance)
+	}
+	if len(data.SuppressedRuleTags) > 0 {
+		sessionCreate.SetSuppressedRuleTags(suppressedRuleTagsToSlice(data.SuppressedRuleTags))
+	}
 	if data.SessionType != "" {
 		sessionCreate.SetSessionType(string(data.SessionType))
 	}
 	if data.TmuxPrefix != "" {
 		sessionCreate.SetTmuxPrefix(data.TmuxPrefix)
+	}
+	// Backend is write-once per instance today (set at construction via
+	// session.ResolveSessionBackend, never reset to "" afterward) -- this guard
+	// intentionally only ever sets a non-empty value, mirroring TmuxPrefix above,
+	// not clearing an explicit unset like PauseReason/ExitReason do. If a future
+	// feature ever needs to unpin an instance's backend back to "", this needs an
+	// explicit ClearBackend() branch too, or the clear will silently no-op here.
+	if data.Backend != "" {
+		sessionCreate.SetBackend(string(data.Backend))
 	}
 	if !data.LastTerminalUpdate.IsZero() {
 		sessionCreate.SetLastTerminalUpdate(data.LastTerminalUpdate)
@@ -356,14 +336,23 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.GitHubPRNumber > 0 {
 		sessionCreate.SetGithubPrNumber(data.GitHubPRNumber)
 	}
+	if data.GitHubPRStatusTerminal {
+		sessionCreate.SetGithubPrStatusTerminal(true)
+	}
 	if data.GitHubOwner != "" {
 		sessionCreate.SetGithubOwner(data.GitHubOwner)
 	}
 	if data.GitHubRepo != "" {
 		sessionCreate.SetGithubRepo(data.GitHubRepo)
 	}
+	if data.GitHubHost != "" {
+		sessionCreate.SetGithubHost(data.GitHubHost)
+	}
 	if data.ArchivedAt != nil {
 		sessionCreate.SetArchivedAt(*data.ArchivedAt)
+	}
+	if !data.CreationProgressUpdatedAt.IsZero() {
+		sessionCreate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
 	}
 
 	// Link project if specified (look up by name)
@@ -531,11 +520,21 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	// meaningful, intentionally-reachable state ("cleared"), not an "unset" sentinel, so the
 	// guarded-update convention would silently prevent a user from ever clearing it.
 	sessionUpdate.SetNote(data.Note)
+	// RuleTagProvenance/SuppressedRuleTags are set unconditionally too: retracting the last
+	// rule-owned tag or un-suppressing the last tag are meaningful "cleared to empty" states
+	// (same rationale as Note above), not an "unset" sentinel a guarded update would preserve.
+	sessionUpdate.SetRuleTagProvenance(data.RuleTagProvenance)
+	sessionUpdate.SetSuppressedRuleTags(suppressedRuleTagsToSlice(data.SuppressedRuleTags))
 	if data.SessionType != "" {
 		sessionUpdate.SetSessionType(string(data.SessionType))
 	}
 	if data.TmuxPrefix != "" {
 		sessionUpdate.SetTmuxPrefix(data.TmuxPrefix)
+	}
+	// See the matching comment in Create above: Backend is write-once per
+	// instance today, so this guard is intentionally set-only, never clear.
+	if data.Backend != "" {
+		sessionUpdate.SetBackend(string(data.Backend))
 	}
 	if !data.LastTerminalUpdate.IsZero() {
 		sessionUpdate.SetLastTerminalUpdate(data.LastTerminalUpdate)
@@ -597,17 +596,26 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	} else {
 		sessionUpdate.ClearArchivedAt()
 	}
+	if !data.CreationProgressUpdatedAt.IsZero() {
+		sessionUpdate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
+	}
 	if data.GitHubPRURL != "" {
 		sessionUpdate.SetGithubPrURL(data.GitHubPRURL)
 	}
 	if data.GitHubPRNumber > 0 {
 		sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
 	}
+	if data.GitHubPRStatusTerminal {
+		sessionUpdate.SetGithubPrStatusTerminal(true)
+	}
 	if data.GitHubOwner != "" {
 		sessionUpdate.SetGithubOwner(data.GitHubOwner)
 	}
 	if data.GitHubRepo != "" {
 		sessionUpdate.SetGithubRepo(data.GitHubRepo)
+	}
+	if data.GitHubHost != "" {
+		sessionUpdate.SetGithubHost(data.GitHubHost)
 	}
 
 	// Update project link (look up by name or clear if empty)
@@ -820,6 +828,12 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 		return fmt.Errorf("failed to delete diff stats: %w", err)
 	}
 
+	// Stamp the conversation UUID onto the session's item_sessions before the claude_sessions
+	// row is deleted, so Insights can still attribute the transcript afterward.
+	if err := stampItemSessionConversationUUID(ctx, tx, sess); err != nil {
+		return err
+	}
+
 	// Delete claude session and its metadata if exists
 	// Delete all claude metadata associated with claude sessions for this session
 	if _, err := tx.ClaudeMetadata.Delete().Where(claudemetadata.HasClaudeSessionWith(claudesession.HasSessionWith(session.ID(sess.ID)))).Exec(ctx); err != nil {
@@ -976,6 +990,24 @@ func (r *EntRepository) UpdateGitHubPRNumber(ctx context.Context, title string, 
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to update github_pr_number: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
+// UpdateGitHubPRStatusTerminal persists whether a session's PR has reached a
+// terminal (merged/closed) state. Called by PRStatusPoller on every poll so the
+// flag survives a restart — see SessionRetentionSweeper.baseSafeToDelete, which
+// reads it back from storage rather than the in-memory Instance.
+func (r *EntRepository) UpdateGitHubPRStatusTerminal(ctx context.Context, title string, terminal bool) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetGithubPrStatusTerminal(terminal).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update github_pr_status_terminal: %w", err)
 	}
 	if n == 0 {
 		return fmt.Errorf("session not found: %s", title)
@@ -1216,6 +1248,36 @@ func nilIfEmptyJSON(j AcCriteriaJSON) *string {
 	return &s
 }
 
+// suppressedRuleTagsToSlice converts Instance.SuppressedRuleTags' in-memory
+// map[string]bool representation to the []string set persisted in the
+// suppressed_rule_tags JSON column (session/ent/schema/session.go) — a simpler
+// on-disk shape than a bool-valued JSON object, per Task 3.1.2a.
+func suppressedRuleTagsToSlice(m map[string]bool) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for tag, suppressed := range m {
+		if suppressed {
+			out = append(out, tag)
+		}
+	}
+	return out
+}
+
+// suppressedRuleTagsFromSlice is suppressedRuleTagsToSlice's inverse, used when
+// loading a session back from the suppressed_rule_tags JSON column.
+func suppressedRuleTagsFromSlice(s []string) map[string]bool {
+	if len(s) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(s))
+	for _, tag := range s {
+		out[tag] = true
+	}
+	return out
+}
+
 // sessionToInstanceData converts an Ent Session entity to InstanceData
 func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	data := &InstanceData{
@@ -1240,6 +1302,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		Note:                sess.Note,
 		IsExpanded:          sess.IsExpanded,
 		TmuxPrefix:          sess.TmuxPrefix,
+		Backend:             ProcessManagerBackend(sess.Backend),
 		LastOutputSignature: sess.LastOutputSignature,
 		MCPServerURL:        sess.McpServerURL,
 		OneShot:             sess.OneShot,
@@ -1276,10 +1339,15 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	data.ExitReason = sess.ExitReason
 	data.WorkflowID = sess.WorkflowID
 	data.ArchivedAt = sess.ArchivedAt
+	if sess.CreationProgressUpdatedAt != nil {
+		data.CreationProgressUpdatedAt = *sess.CreationProgressUpdatedAt
+	}
 	data.GitHubPRURL = sess.GithubPrURL
 	data.GitHubPRNumber = sess.GithubPrNumber
+	data.GitHubPRStatusTerminal = sess.GithubPrStatusTerminal
 	data.GitHubOwner = sess.GithubOwner
 	data.GitHubRepo = sess.GithubRepo
+	data.GitHubHost = sess.GithubHost
 
 	// Set session type
 	if sess.SessionType != "" {
@@ -1313,6 +1381,12 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 			data.Tags[i] = t.Name
 		}
 	}
+
+	// RuleTagProvenance/SuppressedRuleTags (ADR-002). A pre-migration row lacking
+	// these JSON columns decodes both to nil maps via ent's Default(), never an
+	// error — same backward-compat shape as the Category->Tags shim above.
+	data.RuleTagProvenance = sess.RuleTagProvenance
+	data.SuppressedRuleTags = suppressedRuleTagsFromSlice(sess.SuppressedRuleTags)
 
 	// Populate project ID from project edge (stored as name for string compatibility)
 	if sess.Edges.Project != nil {
@@ -1394,8 +1468,31 @@ func (r *EntRepository) GetWithOptions(ctx context.Context, title string, option
 	return r.sessionToInstanceData(sess), nil
 }
 
+// FindByIDWithOptions retrieves a single session by stable UUID or title (mirroring
+// InstanceData.MatchesID's dual-key lookup) via an indexed WHERE clause, with
+// selective child data loading. Returns ErrInstanceDataNotFound when no match exists,
+// including for id == "" — uuid has no uniqueness constraint, so an empty id would
+// otherwise match every session that has never had a UUID assigned.
+func (r *EntRepository) FindByIDWithOptions(ctx context.Context, id string, options LoadOptions) (*InstanceData, error) {
+	if id == "" {
+		return nil, ErrInstanceDataNotFound
+	}
+	sess, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.Or(session.Title(id), session.UUID(id))),
+		options,
+	).First(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, ErrInstanceDataNotFound
+		}
+		return nil, fmt.Errorf("failed to query session by id %s: %w", id, err)
+	}
+	return r.sessionToInstanceData(sess), nil
+}
+
 // ListWithOptions retrieves all sessions with selective child data loading.
 func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions) ([]InstanceData, error) {
+	//nolint:entfullscan the base "list all sessions" query genuinely needs every row; callers select fields via LoadOptions, not row filtering.
 	sessions, err := applyLoadOptions(r.client.Session.Query(), options).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sessions: %w", err)
@@ -1445,6 +1542,7 @@ func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tagName string
 // --- Permissions & Analytics --------------------------------------------------
 
 func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error) {
+	//nolint:entfullscan approval rules are a small, admin-configured table; the whole set is needed to evaluate rule precedence.
 	rules, err := r.client.ApprovalRule.Query().
 		Order(ent.Asc(approvalrule.FieldPriority)).
 		All(ctx)
@@ -1553,6 +1651,136 @@ func (r *EntRepository) DeleteRule(ctx context.Context, id string) error {
 	return err
 }
 
+func (r *EntRepository) AllTaggingRules(ctx context.Context) ([]TaggingRuleData, error) {
+	//nolint:entfullscan tagging rules are a small, admin-configured table; the whole set is needed to evaluate rule precedence.
+	rules, err := r.client.TaggingRule.Query().
+		Order(ent.Asc(taggingrule.FieldPriority)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]TaggingRuleData, len(rules))
+	for i, rule := range rules {
+		result[i] = TaggingRuleData{
+			RuleID:         rule.RuleID,
+			Name:           rule.Name,
+			NamePattern:    rule.NamePattern,
+			BranchPattern:  rule.BranchPattern,
+			PathPattern:    rule.PathPattern,
+			ProgramPattern: rule.ProgramPattern,
+			RequiredTags:   rule.RequiredTags,
+			OutputTag:      rule.OutputTag,
+			Priority:       rule.Priority,
+			Enabled:        rule.Enabled,
+			Source:         rule.Source,
+			CreatedAt:      rule.CreatedAt,
+			UpdatedAt:      rule.UpdatedAt,
+		}
+	}
+	return result, nil
+}
+
+func (r *EntRepository) UpsertTaggingRule(ctx context.Context, data TaggingRuleData) error {
+	requiredTags := data.RequiredTags
+	if requiredTags == nil {
+		requiredTags = []string{}
+	}
+	return r.client.TaggingRule.Create().
+		SetRuleID(data.RuleID).
+		SetName(data.Name).
+		SetNamePattern(data.NamePattern).
+		SetBranchPattern(data.BranchPattern).
+		SetPathPattern(data.PathPattern).
+		SetProgramPattern(data.ProgramPattern).
+		SetRequiredTags(requiredTags).
+		SetOutputTag(data.OutputTag).
+		SetPriority(data.Priority).
+		SetEnabled(data.Enabled).
+		SetSource(data.Source).
+		OnConflictColumns(taggingrule.FieldRuleID).
+		UpdateNewValues().
+		Exec(ctx)
+}
+
+// DismissFinding upserts a DismissedFinding row keyed by data.FindingID.
+// Idempotent — dismissing an already-dismissed finding_id just refreshes
+// session_id/conversation_id/finding_type (dismissed_at is immutable, so a
+// re-dismiss never resets it).
+func (r *EntRepository) DismissFinding(ctx context.Context, data DismissedFindingData) error {
+	dismissedAt := data.DismissedAt
+	if dismissedAt.IsZero() {
+		dismissedAt = time.Now()
+	}
+	return r.client.DismissedFinding.Create().
+		SetFindingID(data.FindingID).
+		SetSessionID(data.SessionID).
+		SetConversationID(data.ConversationID).
+		SetFindingType(data.FindingType).
+		SetDismissedAt(dismissedAt).
+		OnConflictColumns(dismissedfinding.FieldFindingID).
+		UpdateNewValues().
+		Exec(ctx)
+}
+
+func (r *EntRepository) DeleteTaggingRule(ctx context.Context, id string) error {
+	_, err := r.client.TaggingRule.Delete().
+		Where(taggingrule.RuleID(id)).
+		Exec(ctx)
+	return err
+}
+
+// RecordTaggingRuleFire inserts a fire record for ruleID at firedAt.
+func (r *EntRepository) RecordTaggingRuleFire(ctx context.Context, ruleID string, firedAt time.Time) error {
+	return r.client.TaggingRuleFire.Create().
+		SetRuleID(ruleID).
+		SetFiredAt(firedAt).
+		Exec(ctx)
+}
+
+// GetTaggingRuleFireCounts returns a rule_id -> count map of fires recorded at or after since.
+func (r *EntRepository) GetTaggingRuleFireCounts(ctx context.Context, since time.Time) (map[string]int, error) {
+	type fireCountRow struct {
+		RuleID string `json:"rule_id"`
+		Count  int    `json:"count"`
+	}
+	var rows []fireCountRow
+	err := r.client.TaggingRuleFire.Query().
+		Where(taggingrulefire.FiredAtGTE(since)).
+		GroupBy(taggingrulefire.FieldRuleID).
+		Aggregate(ent.Count()).
+		Scan(ctx, &rows)
+	if err != nil {
+		return nil, fmt.Errorf("get tagging rule fire counts since %s: %w", since.Format(time.RFC3339), err)
+	}
+
+	result := make(map[string]int, len(rows))
+	for _, row := range rows {
+		result[row.RuleID] = row.Count
+	}
+	return result, nil
+}
+
+// ListDismissedFindingIDs returns the set of currently-dismissed finding_id
+// values, for GetInsightsSummary to filter against.
+func (r *EntRepository) ListDismissedFindingIDs(ctx context.Context) (map[string]bool, error) {
+	//nolint:entfullscan dismissed findings are a small table (bounded by the
+	// findingsCap-capped panel's realistic dismissal volume); the whole set is
+	// needed to filter every request's freshly computed findings, same
+	// rationale as AllRules above.
+	rows, err := r.client.DismissedFinding.Query().
+		Select(dismissedfinding.FieldFindingID).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		ids[row.FindingID] = true
+	}
+	return ids, nil
+}
+
 func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData) error {
 	return r.client.ClassificationAnalytics.Create().
 		SetAnalyticsID(data.ID).
@@ -1572,6 +1800,7 @@ func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData)
 		SetCommandCategory(data.CommandCategory).
 		SetCommandSubcategory(data.CommandSubcategory).
 		SetPythonImports(data.PythonImports).
+		SetSource(data.Source).
 		SetCreatedAt(data.CreatedAt).
 		Exec(ctx)
 }
@@ -1584,6 +1813,7 @@ func (r *EntRepository) ListAnalytics(ctx context.Context, limit int) ([]Analyti
 		query = query.Limit(limit)
 	}
 
+	//nolint:entfullscan Order()+optional caller-supplied Limit(); no Where by design (returns most-recent-N analytics rows), acceptable for an analytics/debug endpoint.
 	entries, err := query.All(ctx)
 	if err != nil {
 		return nil, err
@@ -1612,6 +1842,7 @@ func convertAnalyticsEntry(e *ent.ClassificationAnalytics) AnalyticsData {
 		CommandCategory:    e.CommandCategory,
 		CommandSubcategory: e.CommandSubcategory,
 		PythonImports:      e.PythonImports,
+		Source:             e.Source,
 		CreatedAt:          e.CreatedAt,
 	}
 }
@@ -1767,6 +1998,7 @@ func (r *EntRepository) CreateProject(ctx context.Context, data ProjectData) (*P
 
 // ListProjects returns all projects.
 func (r *EntRepository) ListProjects(ctx context.Context) ([]ProjectData, error) {
+	//nolint:entfullscan small, bounded-by-nature table (one row per configured repo), intentionally returns all.
 	projects, err := r.client.Project.Query().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list projects: %w", err)

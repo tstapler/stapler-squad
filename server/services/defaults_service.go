@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/config/clihelp"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 
@@ -20,8 +21,16 @@ import (
 // aliasNameRE validates alias names: letters, digits, hyphens, underscores only.
 var aliasNameRE = regexp.MustCompile(`^[\w-]+$`)
 
+// programIDRE validates program IDs: letters, digits, hyphens, underscores only.
+var programIDRE = regexp.MustCompile(`^[\w-]+$`)
+
 // DefaultsService handles session defaults RPC methods.
 type DefaultsService struct {
+	// prober backs ProbeProgram. Built hermetically (no login-shell derivation)
+	// so tests spawn nothing; production starts derivation via
+	// StartProgramProbeLoginPath.
+	prober *clihelp.Prober
+
 	// onGlobalDefaultsUpdated, if set, is called (in a goroutine) after every
 	// successful UpdateGlobalDefaults save. Wired in server/dependencies.go to
 	// trigger an immediate backlog-queue dequeue sweep when the concurrency
@@ -57,7 +66,18 @@ type DefaultsService struct {
 
 // NewDefaultsService creates a DefaultsService.
 func NewDefaultsService() *DefaultsService {
-	return &DefaultsService{}
+	return &DefaultsService{prober: clihelp.NewProber(clihelp.WithDefaultRunner(), clihelp.WithLimits(clihelp.DefaultLimits()))}
+}
+
+// SetProber replaces the program prober (tests inject fakes).
+func (d *DefaultsService) SetProber(p *clihelp.Prober) {
+	d.prober = p
+}
+
+// StartProgramProbeLoginPath begins background derivation of the user's
+// login-shell PATH for ProbeProgram lookups. Production wiring only.
+func (d *DefaultsService) StartProgramProbeLoginPath() {
+	d.prober.StartLoginPathDerivation()
 }
 
 // SetOnGlobalDefaultsUpdated wires in the callback invoked after every
@@ -132,6 +152,23 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 	cfg.StaleSession.ThresholdMinutes = int(req.Msg.StaleSessionThresholdMinutes)
 	notifyEnabled := req.Msg.StaleSessionNotifyEnabled
 	cfg.StaleSession.NotifyEnabled = &notifyEnabled
+	if rp := req.Msg.RetryPolicy; rp != nil {
+		enabled := rp.Enabled
+		staleTriggers := rp.StaleTriggersRetry
+		cfg.RetryPolicy = config.RetryPolicyConfig{
+			Enabled:             &enabled,
+			MaxAttempts:         int(rp.MaxAttempts),
+			Backoff:             rp.Backoff,
+			InitialDelaySeconds: int(rp.InitialDelaySeconds),
+			MaxDelaySeconds:     int(rp.MaxDelaySeconds),
+			RetryOn:             rp.RetryOn,
+			StaleTriggersRetry:  &staleTriggers,
+		}
+		// Normalize immediately, matching LoadConfigFromPath's boot-time
+		// normalization -- otherwise an invalid value persists un-normalized in
+		// config.json until the next restart.
+		cfg.RetryPolicy.Backoff = cfg.RetryPolicy.BackoffOrWarn()
+	}
 	if req.Msg.EnvVars != nil {
 		cfg.SessionDefaults.EnvVars = req.Msg.EnvVars
 	} else {
@@ -499,18 +536,34 @@ func (d *DefaultsService) DeleteDirectoryRule(
 func sessionDefaultsToProto(cfg *config.Config) *sessionv1.SessionDefaultsConfig {
 	sd := cfg.SessionDefaults
 	proto := &sessionv1.SessionDefaultsConfig{
-		Program:                       sd.Program,
-		AutoYes:                       sd.AutoYes,
-		Tags:                          sd.Tags,
-		EnvVars:                       sd.EnvVars,
-		CliFlags:                      sd.CLIFlags,
-		Profiles:                      make(map[string]*sessionv1.ProfileDefaultsProto),
-		DirectoryRules:                make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
-		OneOffBaseDir:                 cfg.OneOffBaseDir,
-		MaxAutoReworkIterations:       int32(cfg.MaxAutoReworkIterationsOrDefault()),
+		Program:        sd.Program,
+		AutoYes:        sd.AutoYes,
+		Tags:           sd.Tags,
+		EnvVars:        sd.EnvVars,
+		CliFlags:       sd.CLIFlags,
+		Profiles:       make(map[string]*sessionv1.ProfileDefaultsProto),
+		DirectoryRules: make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
+		OneOffBaseDir:  cfg.OneOffBaseDir,
+		// #nosec G115 -- small local config knobs (rework/backlog iteration
+		// limits, minutes), far below int32 range.
+		MaxAutoReworkIterations: int32(cfg.MaxAutoReworkIterationsOrDefault()),
+		// #nosec G115 -- see MaxAutoReworkIterations above.
 		MaxConcurrentBacklogWorkItems: int32(cfg.MaxConcurrentBacklogWorkItemsOrDefault()),
-		StaleSessionThresholdMinutes:  int32(cfg.StaleSession.ThresholdMinutesOrDefault()),
-		StaleSessionNotifyEnabled:     cfg.StaleSession.NotifyEnabledOrDefault(),
+		// #nosec G115 -- see MaxAutoReworkIterations above.
+		StaleSessionThresholdMinutes: int32(cfg.StaleSession.ThresholdMinutesOrDefault()),
+		StaleSessionNotifyEnabled:    cfg.StaleSession.NotifyEnabledOrDefault(),
+		RetryPolicy: &sessionv1.RetryPolicyConfig{
+			Enabled: cfg.RetryPolicy.EnabledOrDefault(),
+			// #nosec G115 -- small local retry-policy config knobs (attempt
+			// counts, delay seconds), far below int32 range.
+			MaxAttempts: int32(cfg.RetryPolicy.MaxAttemptsOrDefault()),
+			Backoff:     cfg.RetryPolicy.BackoffOrWarn(),
+			// #nosec G115 -- see MaxAttempts above.
+			InitialDelaySeconds: int32(cfg.RetryPolicy.InitialDelaySeconds),
+			// #nosec G115 -- see MaxAttempts above.
+			MaxDelaySeconds: int32(cfg.RetryPolicy.MaxDelaySecondsOrDefault()),
+			RetryOn:         cfg.RetryPolicy.RetryOnOrDefault(),
+		},
 	}
 	// Use resolved defaults so the frontend receives ~/Projects rather than "" when unset.
 	if resolvedNewProjectDir, err := cfg.NewProjectBaseDirOrDefault(); err == nil {
@@ -586,4 +639,243 @@ func directoryRuleToProto(r config.DirectoryRule) *sessionv1.DirectoryRuleProto 
 		Overrides: profileDefaultsToProto(r.Overrides),
 	}
 	return proto
+}
+
+// BuiltInPrograms returns the set of built-in programs supported out of the box.
+func BuiltInPrograms() []config.ProgramConfig {
+	return []config.ProgramConfig{
+		{ID: "claude", Label: "Claude Code", Command: "claude", Description: "Anthropic's CLI assistant"},
+		{ID: "pi", Label: "pi", Command: "pi", Description: "@earendil-works/pi-coding-agent — TypeScript-extensible CLI"},
+		{ID: "aider", Label: "Aider", Command: "aider", Description: "AI pair programming with git"},
+		{ID: "opencode", Label: "OpenCode", Command: "opencode", Description: "OpenCode CLI assistant"},
+		{ID: "gemini", Label: "Gemini CLI", Command: "gemini", Description: "Google Gemini CLI"},
+		{ID: "agy", Label: "Antigravity", Command: "agy", Description: "Antigravity CLI (agy)"},
+		{ID: "bash", Label: "Terminal", Command: "bash", Description: "Interactive shell session"},
+	}
+}
+
+// IsBuiltInProgram checks if an ID belongs to a built-in program.
+func IsBuiltInProgram(id string) bool {
+	for _, p := range BuiltInPrograms() {
+		if strings.EqualFold(p.ID, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func programConfigToProto(p config.ProgramConfig, isBuiltin bool) *sessionv1.ProgramConfigProto {
+	env := p.Env
+	if env == nil {
+		env = make(map[string]string)
+	}
+	return &sessionv1.ProgramConfigProto{
+		Id:          p.ID,
+		Label:       p.Label,
+		Command:     p.Command,
+		CliFlags:    p.CLIFlags,
+		Description: p.Description,
+		Env:         env,
+		IsBuiltin:   isBuiltin,
+	}
+}
+
+// +api: program_config:list
+// ListProgramsConfig returns all configured programs (built-in and custom).
+func (d *DefaultsService) ListProgramsConfig(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListProgramsConfigRequest],
+) (*connect.Response[sessionv1.ListProgramsConfigResponse], error) {
+	cfg := config.LoadConfig()
+
+	builtIns := BuiltInPrograms()
+	result := make([]*sessionv1.ProgramConfigProto, 0, len(builtIns)+len(cfg.SessionDefaults.Programs))
+
+	for _, p := range builtIns {
+		result = append(result, programConfigToProto(p, true))
+	}
+
+	for _, p := range cfg.SessionDefaults.Programs {
+		result = append(result, programConfigToProto(p, false))
+	}
+
+	return connect.NewResponse(&sessionv1.ListProgramsConfigResponse{
+		Programs: result,
+	}), nil
+}
+
+// +api: program_config:upsert
+// UpsertProgramConfig creates or updates a custom program definition.
+func (d *DefaultsService) UpsertProgramConfig(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UpsertProgramConfigRequest],
+) (*connect.Response[sessionv1.UpsertProgramConfigResponse], error) {
+	if req.Msg.Program == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("program is required"))
+	}
+	id := strings.TrimSpace(req.Msg.Program.Id)
+	if id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("program id is required"))
+	}
+	if !programIDRE.MatchString(id) {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("program id %q must match ^[\\w-]+$ (letters, digits, hyphens, underscores only)", id))
+	}
+
+	label := strings.TrimSpace(req.Msg.Program.Label)
+	if label == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("program label is required"))
+	}
+
+	command := strings.TrimSpace(req.Msg.Program.Command)
+	if command == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("program command is required"))
+	}
+
+	if IsBuiltInProgram(id) {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cannot override built-in program %q", id))
+	}
+
+	cfg := config.LoadConfig()
+
+	prog := config.ProgramConfig{
+		ID:          id,
+		Label:       label,
+		Command:     command,
+		CLIFlags:    req.Msg.Program.CliFlags,
+		Description: req.Msg.Program.Description,
+		Env:         req.Msg.Program.Env,
+	}
+	if prog.Env == nil {
+		prog.Env = make(map[string]string)
+	}
+
+	found := false
+	for i, existing := range cfg.SessionDefaults.Programs {
+		if strings.EqualFold(existing.ID, prog.ID) {
+			cfg.SessionDefaults.Programs[i] = prog
+			found = true
+			break
+		}
+	}
+	if !found {
+		cfg.SessionDefaults.Programs = append(cfg.SessionDefaults.Programs, prog)
+	}
+
+	if err := config.SaveConfig(cfg); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
+	}
+
+	log.Info("upserted custom program", "id", prog.ID, "label", prog.Label)
+	return connect.NewResponse(&sessionv1.UpsertProgramConfigResponse{
+		Program: programConfigToProto(prog, false),
+	}), nil
+}
+
+// +api: program_config:delete
+// DeleteProgramConfig removes a custom program configuration by ID.
+func (d *DefaultsService) DeleteProgramConfig(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeleteProgramConfigRequest],
+) (*connect.Response[sessionv1.DeleteProgramConfigResponse], error) {
+	id := strings.TrimSpace(req.Msg.Id)
+	if id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("program id is required"))
+	}
+
+	if IsBuiltInProgram(id) {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cannot delete built-in program %q", id))
+	}
+
+	cfg := config.LoadConfig()
+
+	idx := -1
+	for i, existing := range cfg.SessionDefaults.Programs {
+		if strings.EqualFold(existing.ID, id) {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("program %q not found", id))
+	}
+
+	cfg.SessionDefaults.Programs = append(cfg.SessionDefaults.Programs[:idx], cfg.SessionDefaults.Programs[idx+1:]...)
+
+	if err := config.SaveConfig(cfg); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
+	}
+
+	log.Info("deleted custom program", "id", id)
+	return connect.NewResponse(&sessionv1.DeleteProgramConfigResponse{}), nil
+}
+
+// +api: program_config:probe
+// ProbeProgram reports whether a program command names a usable executable on
+// the server. An unfound program is a normal response; only an empty command
+// is an error.
+func (d *DefaultsService) ProbeProgram(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ProbeProgramRequest],
+) (*connect.Response[sessionv1.ProbeProgramResponse], error) {
+	if strings.TrimSpace(req.Msg.Command) == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("command is required"))
+	}
+	res := d.prober.Probe(ctx, req.Msg.Command, clihelp.ProbeOpts{
+		ConfirmExecute: req.Msg.ConfirmExecute,
+		ResolveOnly:    req.Msg.ResolveOnly,
+	})
+	return connect.NewResponse(probeResultToProto(res)), nil
+}
+
+// probeResultToProto is the only place ProbeProgramResponse.Found is set.
+func probeResultToProto(res clihelp.ProbeResult) *sessionv1.ProbeProgramResponse {
+	status, found := probeStatusToProto(res.Status)
+	return &sessionv1.ProbeProgramResponse{
+		Found:        found,
+		ResolvedPath: string(res.ResolvedPath),
+		ProbeStatus:  status,
+		Flags:        flagsToProto(res.Flags),
+		Truncated:    res.Truncated,
+		IsWrapper:    res.IsWrapper,
+	}
+}
+
+func flagsToProto(flags []clihelp.Flag) []*sessionv1.FlagInfo {
+	if len(flags) == 0 {
+		return nil
+	}
+	out := make([]*sessionv1.FlagInfo, len(flags))
+	for i, f := range flags {
+		out[i] = &sessionv1.FlagInfo{
+			Name:        f.Name,
+			Short:       f.Short,
+			TakesValue:  f.TakesValue,
+			Description: f.Description,
+			Aliases:     append([]string(nil), f.Aliases...),
+		}
+	}
+	return out
+}
+
+func probeStatusToProto(s clihelp.ProbeStatus) (status sessionv1.ProbeStatus, found bool) {
+	switch s {
+	case clihelp.ProbeStatusFoundParsed:
+		return sessionv1.ProbeStatus_PROBE_STATUS_FOUND_PARSED, true
+	case clihelp.ProbeStatusFoundNoFlags:
+		return sessionv1.ProbeStatus_PROBE_STATUS_FOUND_NO_FLAGS, true
+	case clihelp.ProbeStatusTimeout:
+		return sessionv1.ProbeStatus_PROBE_STATUS_TIMEOUT, true
+	case clihelp.ProbeStatusNeedsConfirm:
+		return sessionv1.ProbeStatus_PROBE_STATUS_NEEDS_CONFIRM, true
+	case clihelp.ProbeStatusNotFound:
+		return sessionv1.ProbeStatus_PROBE_STATUS_NOT_FOUND, false
+	case clihelp.ProbeStatusError:
+		return sessionv1.ProbeStatus_PROBE_STATUS_ERROR, false
+	case clihelp.ProbeStatusBusy:
+		return sessionv1.ProbeStatus_PROBE_STATUS_BUSY, false
+	case clihelp.ProbeStatusUnspecified:
+		return sessionv1.ProbeStatus_PROBE_STATUS_UNSPECIFIED, false
+	}
+	return sessionv1.ProbeStatus_PROBE_STATUS_UNSPECIFIED, false
 }

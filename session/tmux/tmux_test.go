@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,11 +20,17 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/wait"
+	"go.uber.org/goleak"
 )
 
 type MockPtyFactory struct {
 	t *testing.T
 
+	// mu guards cmds/files: RestoreWithWorkDir intentionally invokes
+	// attachPTYAfterRestore (and therefore Start/StartWithSize) concurrently
+	// across callers by design, so this bookkeeping must be safe for that.
+	mu sync.Mutex
 	// Array of commands and the corresponding file handles representing PTYs.
 	cmds  []*exec.Cmd
 	files []*os.File
@@ -36,8 +43,10 @@ func (pt *MockPtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
 	filePath := filepath.Join(pt.t.TempDir(), fmt.Sprintf("pty-%s-%d", safeName, rand.Int31()))
 	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
 	if err == nil {
+		pt.mu.Lock()
 		pt.cmds = append(pt.cmds, cmd)
 		pt.files = append(pt.files, f)
+		pt.mu.Unlock()
 	}
 	return f, cmd, err
 }
@@ -79,6 +88,61 @@ func TestSanitizeName(t *testing.T) {
 	// Test combined special characters
 	session = NewTmuxSession("My: Session. Name", "program")
 	require.Equal(t, TmuxPrefix+"My_Session_Name", session.sanitizedName)
+
+	// Regression (2026-09-10): a workflow-fired title's " <em dash> " separator
+	// (e.g. "PR Code Review — 2026-09-10 12:03") produced a sanitizedName that
+	// kept the em dash. `tmux new-session -s <that name>` reported success and
+	// t.sanitizedName kept the em dash throughout, but a `tmux list-sessions`
+	// moments later, on the same socket, only ever showed the
+	// underscore-substituted form -- so Start()'s post-creation existence
+	// check never found the session it had just (successfully) created, and
+	// timed out treating a live, healthy session as failed. Every ASCII-only
+	// session name round-trips correctly; this asserts non-ASCII never
+	// reaches sanitizedName at all, regardless of the exact tmux-side
+	// transformation (never fully identified -- see nonSafeTmuxNameChar's doc
+	// comment).
+	session = NewTmuxSession("PR Code Review — 2026-09-10 12:03", "program")
+	require.Equal(t, TmuxPrefix+"PRCodeReview_2026-09-1012_03", session.sanitizedName)
+
+	// Same class, different offending character: "&" in a workflow title.
+	session = NewTmuxSession("Research & Synthesize to Notes — 2026-09-10 12:04", "program")
+	require.Equal(t, TmuxPrefix+"Research_SynthesizetoNotes_2026-09-1012_04", session.sanitizedName)
+}
+
+// safeTmuxNameBody matches the character set toStaplerSquadTmuxNameWithPrefix
+// must produce for the portion of sanitizedName after the (already-safe,
+// constant) prefix -- see nonSafeTmuxNameChar.
+var safeTmuxNameBody = regexp.MustCompile(`^[a-zA-Z0-9_-]*$`)
+
+// FuzzToStaplerSquadTmuxName asserts the sanitizer's invariant holds for any
+// input, not just the specific em-dash/ampersand cases known today: the
+// portion of the sanitized name after the prefix must only ever contain
+// characters already proven to round-trip safely through tmux (see
+// nonSafeTmuxNameChar's doc comment for why "known-safe allowlist" replaced
+// the previous "known-unsafe denylist" after this exact class of bug
+// recurred). Run with `go test -fuzz=FuzzToStaplerSquadTmuxName` to search
+// for counterexamples beyond the seed corpus.
+func FuzzToStaplerSquadTmuxName(f *testing.F) {
+	for _, seed := range []string{
+		"asdf",
+		"a sd f . . asdf",
+		"Resumed: test-session",
+		"PR Code Review — 2026-09-10 12:03",
+		"Research & Synthesize to Notes — 2026-09-10 12:04",
+		"emoji 🎉 title",
+		"curly ’quotes’ and “these”",
+		"ünïcödé évérywhere",
+		"", // empty title is a valid input (e.g. a not-yet-titled instance)
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, title string) {
+		got := ToStaplerSquadTmuxName(title)
+		require.True(t, strings.HasPrefix(got, TmuxPrefix), "sanitized name %q lost its prefix", got)
+		body := strings.TrimPrefix(got, TmuxPrefix)
+		require.True(t, safeTmuxNameBody.MatchString(body),
+			"sanitized name body %q (from title %q) contains a character outside [a-zA-Z0-9_-]", body, title)
+	})
 }
 
 func TestStartTmuxSession(t *testing.T) {
@@ -845,7 +909,10 @@ func TestGetPaneCurrentPath_ReturnsTrimmedPath(t *testing.T) {
 		RunFunc:            func(cmd *exec.Cmd) error { return nil },
 		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
-	session := newTmuxSession("capture-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix)
+	reg := NewFakeTmuxRegistry()
+	reg.SetHealthy(true)
+	session := newTmuxSession("capture-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, WithRegistry(reg))
+	reg.SetSessions([]string{session.GetSanitizedName()})
 
 	path, err := session.GetPaneCurrentPath()
 
@@ -1125,12 +1192,22 @@ func TestCapturePaneSemaphore(t *testing.T) {
 		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
 
+	// DoesSessionExist() short-circuits capture-pane against a session already
+	// known gone (see CapturePaneContentContext's doc comment) -- register every
+	// session as existing so each goroutine's call actually reaches cmdExec.Output
+	// instead of failing fast with ErrSessionNotFound.
+	sessionNames := make([]string, goroutines)
+	for i := range sessionNames {
+		sessionNames[i] = fmt.Sprintf("sem-test-%d", i)
+	}
+	reg := registryWithExistingSessions(sessionNames...)
+
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 	for i := 0; i < goroutines; i++ {
 		go func(i int) {
 			defer wg.Done()
-			session := newTmuxSession(fmt.Sprintf("sem-test-%d", i), "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix)
+			session := newTmuxSession(fmt.Sprintf("sem-test-%d", i), "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, WithRegistry(reg))
 			_, _ = session.CapturePaneContent()
 		}(i)
 	}
@@ -1157,7 +1234,12 @@ func TestCapturePaneContentPriority_should_UseFastLaneGate_When_ExecGateFastLane
 		RunFunc:            func(cmd *exec.Cmd) error { return nil },
 		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
-	session := newTmuxSessionWithSocket("fast-lane-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, serverSocket)
+	// CapturePaneContent()'s CapturePaneContentContext short-circuits via
+	// DoesSessionExist() against a session already known gone (see that
+	// method's doc comment) -- register the session as existing so the call
+	// below actually reaches cmdExec.
+	reg := registryWithExistingSessions("fast-lane-test")
+	session := newTmuxSessionWithSocket("fast-lane-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, serverSocket, WithRegistry(reg))
 
 	releaseFastLane, err := AcquireResyncExecSlot(context.Background(), serverSocket)
 	require.NoError(t, err)
@@ -1598,6 +1680,95 @@ func TestLockedPTMX_ReflectsNewestGeneration_When_SetPTYTripleSwapsMidLoop(t *te
 	require.NoError(t, r2.Close())
 }
 
+// TestCapturePaneContentContext_RespectsCancellation is the regression guard for the
+// goroutine-leak fix (see defaultCapturePaneTimeout's doc comment): before that fix,
+// CapturePaneContentContext's subprocess call (fn() inside runGated) had no way to be
+// interrupted by the caller's ctx, so a wedged tmux server would block the calling
+// goroutine indefinitely. The mock's OutputFunc simulates a real subprocess by blocking
+// until either the caller-supplied ctx is canceled (mirroring exec.CommandContext killing
+// the real process) or a long fallback timer fires — proving cancellation, not the
+// fallback timer, is what unblocks the call.
+func TestCapturePaneContentContext_RespectsCancellation(t *testing.T) {
+	// Not t.Parallel(): this test's goleak baseline diff would otherwise catch
+	// unrelated parallel sibling tests' (e.g. TestSessionResumption) in-flight
+	// cleanup goroutines mid-Close()/waitForSessionGone() as false-positive leaks.
+	baseline := goleak.IgnoreCurrent()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	fakeCmdExec := MockCmdExec{
+		OutputFunc: func(*exec.Cmd) ([]byte, error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(30 * time.Second):
+				return []byte("should never be reached"), nil
+			}
+		},
+	}
+	// DoesSessionExist() short-circuits capture-pane against a session already
+	// known gone (see CapturePaneContentContext's doc comment) -- register the
+	// session as existing so the call below reaches the mock's blocking
+	// OutputFunc instead of failing fast on the exists check.
+	reg := registryWithExistingSessions("capture-pane-cancel-test")
+	session := newTmuxSession("capture-pane-cancel-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix, WithRegistry(reg))
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := session.CapturePaneContentContext(ctx)
+		errCh <- err
+	}()
+
+	// Give the call a moment to reach the blocking mock, then cancel.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.Error(t, err)
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("CapturePaneContentContext did not return promptly after ctx cancellation")
+	}
+
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestCapturePaneContentContext_RespectsTimeout proves the same mechanism
+// CapturePaneContent()'s defaultCapturePaneTimeout wrapper relies on: a context
+// deadline actually terminates an in-flight capture-pane call rather than letting it
+// hang forever if the underlying command never responds. Uses a short caller-supplied
+// deadline instead of the production 10s constant so the test stays fast; the
+// enforcement mechanism (ctx passed through to the mock's blocking call) is identical.
+func TestCapturePaneContentContext_RespectsTimeout(t *testing.T) {
+	// See TestCapturePaneContentContext_RespectsCancellation for why this isn't t.Parallel().
+	baseline := goleak.IgnoreCurrent()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	fakeCmdExec := MockCmdExec{
+		OutputFunc: func(*exec.Cmd) ([]byte, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	// See TestCapturePaneContentContext_RespectsCancellation for why the session
+	// must be registered as existing: otherwise DoesSessionExist() short-circuits
+	// the call before it ever reaches the mock's blocking OutputFunc.
+	reg := registryWithExistingSessions("capture-pane-timeout-test")
+	session := newTmuxSession("capture-pane-timeout-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix, WithRegistry(reg))
+
+	start := time.Now()
+	_, err := session.CapturePaneContentContext(ctx)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, elapsed, 5*time.Second, "capture-pane call should time out promptly, not hang")
+
+	goleak.VerifyNone(t, baseline)
+}
+
 // gatedPtyFactory blocks every Start/StartWithSize call on a channel until the test
 // releases it, letting the test force multiple goroutines into
 // AttachToExisting's/RestoreWithWorkDir's check-then-act window simultaneously --
@@ -1669,7 +1840,7 @@ func TestAttachToExisting_ConcurrentCalls_ExactlyOnePTYSurvives(t *testing.T) {
 		}(i)
 	}
 
-	require.Eventually(t, func() bool { return factory.waiting.Load() == callers }, 2*time.Second, time.Millisecond,
+	wait.RequireEventually(t, func() bool { return factory.waiting.Load() == callers }, 2*time.Second, time.Millisecond,
 		"both AttachToExisting() calls must reach the blocking ptyFactory.Start call")
 	close(factory.release)
 
@@ -1731,7 +1902,7 @@ func TestRestoreWithWorkDir_RacingClose_NoPTYInstalledAfterTeardown(t *testing.T
 		restoreDone <- session.RestoreWithWorkDir(t.TempDir())
 	}()
 
-	require.Eventually(t, func() bool { return factory.waiting.Load() == 1 }, 2*time.Second, time.Millisecond,
+	wait.RequireEventually(t, func() bool { return factory.waiting.Load() == 1 }, 2*time.Second, time.Millisecond,
 		"RestoreWithWorkDir must reach the blocking ptyFactory.StartWithSize call")
 
 	// Close() must fully complete -- including flipping ptyClosed -- before the gated
@@ -1774,7 +1945,7 @@ func TestAttachToExisting_RacingClose_NoPTYInstalledAfterTeardown(t *testing.T) 
 		attachDone <- session.AttachToExisting()
 	}()
 
-	require.Eventually(t, func() bool { return factory.waiting.Load() == 1 }, 2*time.Second, time.Millisecond,
+	wait.RequireEventually(t, func() bool { return factory.waiting.Load() == 1 }, 2*time.Second, time.Millisecond,
 		"AttachToExisting must reach the blocking ptyFactory.Start call")
 
 	// Close() must fully complete -- including flipping ptyClosed -- before the gated
@@ -1813,4 +1984,57 @@ func TestClose_CalledTwice_IsIdempotent(t *testing.T) {
 
 	_, _, closed := session.ptySnapshot()
 	require.True(t, closed)
+}
+
+// TestValidateWorkDir covers ValidateWorkDir's three rejection branches — none were
+// tested in either package before this function was exported for session/tymux's reuse
+// (Task 2.2.1a), including the "not a directory" branch, which no test anywhere hit.
+func TestValidateWorkDir(t *testing.T) {
+	regularFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(regularFile, []byte("x"), 0o644))
+
+	tests := []struct {
+		name    string
+		workDir string
+	}{
+		{"empty", ""},
+		{"nonexistent", filepath.Join(t.TempDir(), "does-not-exist")},
+		{"not a directory", regularFile},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateWorkDir(tt.workDir)
+			require.Error(t, err)
+			require.ErrorIs(t, err, ErrWorkDirMissing)
+		})
+	}
+
+	require.NoError(t, ValidateWorkDir(t.TempDir()))
+}
+
+// TestClampWinsizeDim is the regression test for the gosec G115 fix: window
+// dimensions are clamped to [1, 65535] (the tmux/pty winsize field range)
+// before the narrowing conversion to uint16, rather than truncating or
+// wrapping a value outside that range.
+func TestClampWinsizeDim(t *testing.T) {
+	tests := []struct {
+		name string
+		in   int
+		want uint16
+	}{
+		{name: "negative clamps to 1", in: -5, want: 1},
+		{name: "zero clamps to 1", in: 0, want: 1},
+		{name: "one is the lower boundary and passes through", in: 1, want: 1},
+		{name: "normal cols value passes through", in: 80, want: 80},
+		{name: "normal rows value passes through", in: 24, want: 24},
+		{name: "65535 is the upper boundary and passes through", in: 65535, want: 65535},
+		{name: "above 65535 clamps to 65535", in: 70000, want: 65535},
+		{name: "far above 65535 clamps to 65535", in: 1 << 20, want: 65535},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ClampWinsizeDim(tt.in))
+		})
+	}
 }

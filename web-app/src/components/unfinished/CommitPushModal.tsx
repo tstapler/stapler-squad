@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
@@ -8,6 +8,7 @@ import { UnfinishedWorkService } from "@/gen/session/v1/unfinished_pb";
 import { QuickCommitPushRequestSchema } from "@/gen/session/v1/unfinished_pb";
 import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import * as styles from "./CommitPushModal.css";
 
 interface CommitPushModalProps {
@@ -23,11 +24,9 @@ export function CommitPushModal({ repoPath, branch, onClose }: CommitPushModalPr
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    textareaRef.current?.focus();
-  }, []);
+  useFocusTrap(dialogRef, true);
 
   const transport = createConnectTransport({
     baseUrl: getApiBaseUrl(),
@@ -68,6 +67,7 @@ export function CommitPushModal({ repoPath, branch, onClose }: CommitPushModalPr
 
   const modalContent = (
     <div
+      ref={dialogRef}
       className={styles.overlay}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       onKeyDown={handleKeyDown}
@@ -86,7 +86,6 @@ export function CommitPushModal({ repoPath, branch, onClose }: CommitPushModalPr
           </label>
           <textarea
             id="commit-message"
-            ref={textareaRef}
             className={styles.textarea}
             value={message}
             onChange={(e) => setMessage(e.target.value)}

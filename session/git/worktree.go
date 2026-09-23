@@ -1,26 +1,25 @@
 package git
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"time"
 
-	"github.com/go-git/go-git/v5"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
+
+	"github.com/go-git/go-git/v5/plumbing"
 	"golang.org/x/sync/singleflight"
 )
 
 // getWorktreeDirectory returns the base directory fresh worktree paths are computed
 // under. It must return a symlink-resolved path: git itself resolves symlinks when it
-// records a worktree's path in .git/worktrees/<id>/gitdir, so findExistingWorktreeForBranch
-// (which reads that path back via `git worktree list`) sees the resolved form. If this
+// records a worktree's path in .git/worktrees/<id>/gitdir, so
+// nativeFindExistingWorktreeForBranch (which reads that path back) sees the resolved form.
+// If this
 // function returned an unresolved path (e.g. macOS's /tmp -> /private/tmp, or any
 // symlinked/NFS-automounted config dir), a freshly-computed path and the same worktree's
 // git-reported path would differ as strings despite naming the identical directory --
@@ -33,7 +32,7 @@ func getWorktreeDirectory() (string, error) {
 	}
 
 	dir := filepath.Join(configDir, "worktrees")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", fmt.Errorf("failed to create worktree base directory %s: %w", dir, err)
 	}
 	resolved, err := filepath.EvalSymlinks(dir)
@@ -96,12 +95,31 @@ type GitWorktree struct {
 	// addendum.
 	runner tmux.CommandRunner
 
+	// dirtyChecker computes IsDirtyWithHint's uncached "is the worktree dirty"
+	// result. Defaults to worktreeIsDirty (go-git's Worktree.Status(), no
+	// subprocess — see worktree_git.go) via dirtyCheckerFunc() below; tests in
+	// this package override the field directly (same-package access) to
+	// simulate a racing cache writer or a persistent failure without needing a
+	// real git worktree on disk for every case.
+	dirtyChecker func(worktreePath string) (bool, error)
+
 	// ponytail: atomic.Value replaces sync.RWMutex+bool+time — lock-free reads on the fast cache-hit path
 	isDirtyCache atomic.Value // stores dirtyCacheState; zero value = cache invalid
 
 	// isDirtySF coalesces concurrent dirty-checks on the same worktree so only
 	// one in-process status check runs at a time.
 	isDirtySF singleflight.Group //nolint:exhaustruct
+
+	// gitignoreFS caches the filesystem reads go-git's Worktree.Status() issues
+	// while re-walking gitignore patterns on every call — see worktreeIsDirty and
+	// HasStagedChanges. Zero value is ready to use; cleared by InvalidateDirtyCache.
+	gitignoreFS gitignoreFSCache
+
+	// headTreeCache memoizes the HEAD tree hash walk worktreeIsDirtyFast and
+	// HasStagedChanges both need — see headTreeHashCache's doc comment. Zero
+	// value is ready to use; cleared by InvalidateDirtyCache (defensive —
+	// keying by HEAD's own hash already self-invalidates on every HEAD move).
+	headTreeCache headTreeHashCache
 }
 
 // GitWorktreeOption is a functional option for GitWorktree construction,
@@ -127,6 +145,12 @@ func WithCommandRunner(r tmux.CommandRunner) GitWorktreeOption {
 func NewGitWorktreeFromCommitSHA(repoPath, sessionName, branchName, commitSHA string, opts ...GitWorktreeOption) (*GitWorktree, string, error) {
 	if commitSHA == "" {
 		return nil, "", fmt.Errorf("commitSHA must not be empty")
+	}
+	if repoPath == "" {
+		// filepath.Abs("") below would otherwise silently resolve to the
+		// process's own cwd instead of erroring — reject up front so a caller
+		// that failed to resolve a real path fails loudly here.
+		return nil, "", fmt.Errorf("repoPath must not be empty")
 	}
 
 	absPath, err := filepath.Abs(repoPath)
@@ -220,22 +244,30 @@ func NewGitWorktreeWithBranch(repoPath string, sessionName string, customBranch 
 	return NewGitWorktreeWithBranchAndExecutor(repoPath, sessionName, customBranch, opts...)
 }
 
+// ResolveBranchName returns customBranch if set, else a branch name generated
+// from sessionName (config.BranchPrefix + sanitizeBranchName(sessionName)) —
+// the naming NewGitWorktreeWithBranch has always applied, extracted so
+// NewGitWorktreeFromCommitSHA callers that also need branch-name generation
+// (e.g. setupFirstTimeWorktree's SessionTypeNewWorktree case) don't duplicate it.
+func ResolveBranchName(customBranch, sessionName string) string {
+	if customBranch != "" {
+		return customBranch
+	}
+	cfg := config.LoadConfig()
+	return fmt.Sprintf("%s%s", cfg.BranchPrefix, sanitizeBranchName(sessionName))
+}
+
 // NewGitWorktreeWithBranchAndExecutor creates a new GitWorktree with an optional branch name.
 // The "WithExecutor" name predates CommandRunner (ADR-002) — see
 // NewGitWorktreeFromStorageWithExecutor's doc comment; use WithCommandRunner to
 // override how this worktree's subprocesses run.
 func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, customBranch string, opts ...GitWorktreeOption) (tree *GitWorktree, branchname string, err error) {
-	cfg := config.LoadConfig()
-
-	var branchName string
-	if customBranch != "" {
-		// Use the custom branch name directly
-		branchName = customBranch
-	} else {
-		// Generate branch name from session name
-		sanitizedName := sanitizeBranchName(sessionName)
-		branchName = fmt.Sprintf("%s%s", cfg.BranchPrefix, sanitizedName)
+	if repoPath == "" {
+		// See NewGitWorktreeFromCommitSHA's identical check.
+		return nil, "", fmt.Errorf("repoPath must not be empty")
 	}
+
+	branchName := ResolveBranchName(customBranch, sessionName)
 
 	// Convert repoPath to absolute path
 	absPath, err := filepath.Abs(repoPath)
@@ -255,8 +287,9 @@ func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, cu
 		return nil, "", err
 	}
 
-	// First check if the branch is already checked out in an existing worktree
-	existingWorktreePath, found := findExistingWorktreeForBranch(repoPath, branchName)
+	// First check if the branch is already checked out in an existing worktree, via the
+	// native go-git implementation (Epic 2.3, Task 2.3.2b).
+	existingWorktreePath, found := nativeFindExistingWorktreeForBranch(repoPath, branchName)
 	if found {
 		// git realpath's the path it reports in 'worktree list' output, so
 		// canonicalize before storing to keep this consistent with the
@@ -336,7 +369,7 @@ func findExistingGitRepoRootReadOnly(path string) (string, error) {
 
 	currentPath := path
 	for {
-		if _, err := git.PlainOpen(currentPath); err == nil {
+		if _, err := OpenRepo(currentPath); err == nil {
 			return currentPath, nil
 		}
 
@@ -361,6 +394,18 @@ func (g *GitWorktree) commandRunner() tmux.CommandRunner {
 		return tmux.LocalRunner{}
 	}
 	return g.runner
+}
+
+// dirtyCheckerFunc returns g.dirtyChecker, defaulting to worktreeIsDirtyFast (mtime/hash
+// short-circuit, no go-git Worktree.Status() tree-diff — see its doc comment) backed by
+// g.gitignoreFS when unset.
+func (g *GitWorktree) dirtyCheckerFunc() func(string) (bool, error) {
+	if g.dirtyChecker == nil {
+		return func(path string) (bool, error) {
+			return worktreeIsDirtyFast(path, &g.gitignoreFS, &g.headTreeCache)
+		}
+	}
+	return g.dirtyChecker
 }
 
 // GetBranchName returns the name of the branch associated with this worktree
@@ -439,50 +484,21 @@ func NewGitWorktreeFromExistingWithExecutor(existingWorktreePath string, session
 	return g, nil
 }
 
-// findExistingWorktreeForBranch checks if the given branch is already checked out in an existing worktree
-// Returns the path to the existing worktree and true if found, empty string and false otherwise
-func findExistingWorktreeForBranch(repoPath, branchName string) (string, bool) {
-	// Run git worktree list --porcelain to get detailed worktree information
-	wtCtx, wtCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer wtCancel()
-	cmd := safeexec.CommandContext(wtCtx, "git", "worktree", "list", "--porcelain")
-	cmd.Dir = repoPath
-	output, err := cmd.Output()
+// nativeFindExistingWorktreeForBranch checks if the given branch is already checked out
+// in an existing worktree, sourced from nativeListWorktrees (Epic 2.3, Task 2.3.2b).
+// Returns the path to the existing worktree and true if found, empty string and false
+// otherwise.
+func nativeFindExistingWorktreeForBranch(repoPath, targetBranch string) (string, bool) {
+	entries, err := nativeListWorktrees(repoPath)
 	if err != nil {
-		// If the command fails, assume no existing worktrees
 		log.Info("failed to list worktrees for branch check", "err", err)
 		return "", false
 	}
-
-	// Parse the porcelain output to find matching branch
-	return parseWorktreeListForBranch(string(output), branchName)
-}
-
-// parseWorktreeListForBranch parses the output of 'git worktree list --porcelain'
-// and returns the path of the worktree that has the specified branch checked out
-func parseWorktreeListForBranch(porcelainOutput, targetBranch string) (string, bool) {
-	lines := strings.Split(strings.TrimSpace(porcelainOutput), "\n")
-	var currentWorktreePath string
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			// Empty line separates worktree entries
-			currentWorktreePath = ""
-			continue
-		}
-
-		if strings.HasPrefix(line, "worktree ") {
-			// Extract worktree path
-			currentWorktreePath = strings.TrimPrefix(line, "worktree ")
-		} else if strings.HasPrefix(line, "branch ") && currentWorktreePath != "" {
-			// Extract branch name and check if it matches
-			branchName := strings.TrimPrefix(line, "branch refs/heads/")
-			if branchName == targetBranch {
-				return currentWorktreePath, true
-			}
+	targetRef := plumbing.NewBranchReferenceName(targetBranch).String()
+	for _, entry := range entries {
+		if entry.BranchRef == targetRef {
+			return entry.WorktreePath, true
 		}
 	}
-
 	return "", false
 }

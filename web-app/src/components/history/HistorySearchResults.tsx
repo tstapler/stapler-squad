@@ -255,5 +255,3 @@ export function HistorySearchResults({
     </div>
   );
 }
-
-export default HistorySearchResults;

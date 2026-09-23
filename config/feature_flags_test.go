@@ -57,6 +57,65 @@ func TestGetFeatureFlag_Present(t *testing.T) {
 	}
 }
 
+// TestGetFeatureFlagWithDefault_NilConfig verifies that GetFeatureFlagWithDefault on a
+// nil *Config returns defaultValue, not false.
+func TestGetFeatureFlagWithDefault_NilConfig(t *testing.T) {
+	var cfg *Config
+	if got := cfg.GetFeatureFlagWithDefault("terminal:resync-exec-gate-fast-lane", true); got != true {
+		t.Errorf("GetFeatureFlagWithDefault on nil config: got %v, want true", got)
+	}
+}
+
+// TestGetFeatureFlagWithDefault_NilMap verifies that a non-nil Config with a nil
+// FeatureFlags map returns defaultValue.
+func TestGetFeatureFlagWithDefault_NilMap(t *testing.T) {
+	cfg := &Config{} // FeatureFlags is nil by zero value
+	if got := cfg.GetFeatureFlagWithDefault("terminal:resync-exec-gate-fast-lane", true); got != true {
+		t.Errorf("GetFeatureFlagWithDefault with nil map: got %v, want true", got)
+	}
+}
+
+// TestGetFeatureFlagWithDefault_MissingKey verifies that a genuinely absent key falls
+// through to defaultValue, not false.
+func TestGetFeatureFlagWithDefault_MissingKey(t *testing.T) {
+	cfg := &Config{
+		FeatureFlags: map[string]bool{
+			"other": true,
+		},
+	}
+	if got := cfg.GetFeatureFlagWithDefault("terminal:resync-exec-gate-fast-lane", true); got != true {
+		t.Errorf("GetFeatureFlagWithDefault for missing key: got %v, want true (the default)", got)
+	}
+}
+
+// TestGetFeatureFlagWithDefault_ExplicitFalseOverridesDefault is the regression case
+// this helper exists for: a flag graduated to "default true" must still respect an
+// explicitly persisted false, distinguishing "never set" from "set to false" — which a
+// plain map[string]bool lookup alone (GetFeatureFlag) cannot do.
+func TestGetFeatureFlagWithDefault_ExplicitFalseOverridesDefault(t *testing.T) {
+	cfg := &Config{
+		FeatureFlags: map[string]bool{
+			"terminal:resync-exec-gate-fast-lane": false,
+		},
+	}
+	if got := cfg.GetFeatureFlagWithDefault("terminal:resync-exec-gate-fast-lane", true); got != false {
+		t.Errorf("GetFeatureFlagWithDefault: got %v, want false (explicit override of the true default)", got)
+	}
+}
+
+// TestGetFeatureFlagWithDefault_ExplicitTrueMatchesDefault verifies the unsurprising
+// case: an explicit true reads back as true regardless of defaultValue.
+func TestGetFeatureFlagWithDefault_ExplicitTrueMatchesDefault(t *testing.T) {
+	cfg := &Config{
+		FeatureFlags: map[string]bool{
+			"terminal:resync-exec-gate-fast-lane": true,
+		},
+	}
+	if got := cfg.GetFeatureFlagWithDefault("terminal:resync-exec-gate-fast-lane", false); got != true {
+		t.Errorf("GetFeatureFlagWithDefault: got %v, want true (explicit value, defaultValue irrelevant)", got)
+	}
+}
+
 // TestSetFeatureFlag_InitializesMap verifies that SetFeatureFlag works when FeatureFlags is nil,
 // initializing the map and persisting the flag to disk.
 func TestSetFeatureFlag_InitializesMap(t *testing.T) {

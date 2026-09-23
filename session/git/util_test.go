@@ -5,8 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 func TestSanitizeBranchName(t *testing.T) {
@@ -312,5 +315,292 @@ func TestPreviewWorktreePath_RejectsTraversal(t *testing.T) {
 					repoDir, input, path, worktreeDir, rel)
 			}
 		})
+	}
+}
+
+// commitRealFile creates repoDir/name with content and commits it, returning the
+// commit hash. Used to give a test repo genuine, distinguishable history (as
+// opposed to createInitialCommit's own ".gitignore" content, which would make a
+// test unable to tell "untouched" from "recreated identically" apart).
+func commitRealFile(t *testing.T, repoDir, name, content, message string) string {
+	t.Helper()
+	repo, err := OpenRepo(repoDir)
+	if err != nil {
+		t.Fatalf("failed to open repo at %s: %v", repoDir, err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write %s: %v", name, err)
+	}
+	if _, err := worktree.Add(name); err != nil {
+		t.Fatalf("failed to add %s: %v", name, err)
+	}
+	hash, err := worktree.Commit(message, &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@localhost", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("failed to commit: %v", err)
+	}
+	return hash.String()
+}
+
+// breakHeadReference rewrites repoDir/.git/HEAD to point at a branch that does
+// not exist, reproducing the go-git failure this bug hinged on: repo.Head()
+// fails to resolve even though repo.References() still enumerates the repo's
+// real refs — exactly what findGitRepoRoot previously misdiagnosed as unborn.
+func breakHeadReference(t *testing.T, repoDir string) {
+	t.Helper()
+	headPath := filepath.Join(repoDir, ".git", "HEAD")
+	if err := os.WriteFile(headPath, []byte("ref: refs/heads/does-not-exist\n"), 0o644); err != nil {
+		t.Fatalf("failed to corrupt HEAD: %v", err)
+	}
+}
+
+func TestRepoHasAnyRef(t *testing.T) {
+	t.Run("fresh repo has no refs", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := git.PlainInit(dir, false); err != nil {
+			t.Fatalf("failed to init repo: %v", err)
+		}
+		hasRef, err := repoHasAnyRef(dir)
+		if err != nil {
+			t.Fatalf("repoHasAnyRef() error = %v", err)
+		}
+		if hasRef {
+			t.Errorf("repoHasAnyRef() = true for a freshly-initialized repo, want false")
+		}
+	})
+
+	t.Run("repo with a real commit has a ref", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := git.PlainInit(dir, false); err != nil {
+			t.Fatalf("failed to init repo: %v", err)
+		}
+		commitRealFile(t, dir, "real.txt", "real content\n", "real commit")
+
+		hasRef, err := repoHasAnyRef(dir)
+		if err != nil {
+			t.Fatalf("repoHasAnyRef() error = %v", err)
+		}
+		if !hasRef {
+			t.Errorf("repoHasAnyRef() = false for a repo with a real commit, want true")
+		}
+	})
+
+	t.Run("repo with real history is detected even when HEAD fails to resolve", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := git.PlainInit(dir, false); err != nil {
+			t.Fatalf("failed to init repo: %v", err)
+		}
+		commitRealFile(t, dir, "real.txt", "real content\n", "real commit")
+		breakHeadReference(t, dir)
+
+		hasRef, err := repoHasAnyRef(dir)
+		if err != nil {
+			t.Fatalf("repoHasAnyRef() error = %v", err)
+		}
+		if !hasRef {
+			t.Errorf("repoHasAnyRef() = false despite a real ref existing, want true")
+		}
+	})
+}
+
+// TestCreateInitialCommit_FreshRepo_Succeeds is the first direct test of
+// createInitialCommit: the legitimate case (a freshly git.PlainInit'd repo,
+// zero refs) must still succeed unchanged by the new repoHasAnyRef guard.
+func TestCreateInitialCommit_FreshRepo_Succeeds(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("failed to init repo: %v", err)
+	}
+
+	if err := createInitialCommit(repo, dir); err != nil {
+		t.Fatalf("createInitialCommit() error = %v", err)
+	}
+
+	gitignore, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("failed to read .gitignore: %v", err)
+	}
+	if string(gitignore) != "# Project gitignore\n" {
+		t.Errorf(".gitignore content = %q, want %q", gitignore, "# Project gitignore\n")
+	}
+
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("repo.Head() error = %v", err)
+	}
+	commit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("repo.CommitObject() error = %v", err)
+	}
+	if commit.Message != "Initial commit" {
+		t.Errorf("HEAD commit message = %q, want %q", commit.Message, "Initial commit")
+	}
+}
+
+// TestCreateInitialCommit_RefusesWhenRepoAlreadyHasRefs is the regression test for
+// the self-defending guard: a repo with real, pre-existing history must never
+// have its .gitignore overwritten or a fabricated commit added, regardless of
+// which caller reaches createInitialCommit.
+func TestCreateInitialCommit_RefusesWhenRepoAlreadyHasRefs(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("failed to init repo: %v", err)
+	}
+	commitRealFile(t, dir, "real.txt", "real content\n", "real commit")
+
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
+		t.Fatalf("failed to seed .gitignore: %v", err)
+	}
+
+	err = createInitialCommit(repo, dir)
+	if err == nil {
+		t.Fatalf("createInitialCommit() error = nil, want an error refusing to run against a repo with existing refs")
+	}
+
+	gitignore, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("failed to read .gitignore: %v", err)
+	}
+	if string(gitignore) != "node_modules/\n" {
+		t.Errorf(".gitignore content = %q, want unchanged %q", gitignore, "node_modules/\n")
+	}
+
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("repo.Head() error = %v", err)
+	}
+	commit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("repo.CommitObject() error = %v", err)
+	}
+	if commit.Message != "real commit" {
+		t.Errorf("HEAD commit message = %q, want unchanged %q (no fabricated commit should have been added)", commit.Message, "real commit")
+	}
+	if commit.NumParents() != 0 {
+		t.Errorf("HEAD commit has %d parents, want 0 (no fabricated commit should have been added on top)", commit.NumParents())
+	}
+}
+
+// TestFindGitRepoRoot_FreshRepo_CreatesInitialCommit is the happy-path
+// regression test: a genuinely unborn repo must still get its initial commit.
+func TestFindGitRepoRoot_FreshRepo_CreatesInitialCommit(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := git.PlainInit(dir, false); err != nil {
+		t.Fatalf("failed to init repo: %v", err)
+	}
+
+	root, err := findGitRepoRoot(dir)
+	if err != nil {
+		t.Fatalf("findGitRepoRoot() error = %v", err)
+	}
+	if root != dir {
+		t.Errorf("findGitRepoRoot() = %q, want %q", root, dir)
+	}
+
+	if _, err := os.ReadFile(filepath.Join(dir, ".gitignore")); err != nil {
+		t.Errorf("expected .gitignore to be created for an unborn repo: %v", err)
+	}
+}
+
+// TestFindGitRepoRoot_ExistingRepoWithHeadResolutionFailure_DoesNotCorruptRepo is
+// the direct regression test for this bug: a repo with real history whose
+// repo.Head() transiently/incorrectly fails to resolve must NOT have its
+// .gitignore overwritten or a fabricated "Initial commit" added on top of real
+// history — findGitRepoRoot must instead trust repoHasAnyRef's ref-store check.
+func TestFindGitRepoRoot_ExistingRepoWithHeadResolutionFailure_DoesNotCorruptRepo(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := git.PlainInit(dir, false); err != nil {
+		t.Fatalf("failed to init repo: %v", err)
+	}
+	realCommit := commitRealFile(t, dir, "real.txt", "real content\n", "real commit")
+
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
+		t.Fatalf("failed to seed .gitignore: %v", err)
+	}
+	breakHeadReference(t, dir)
+
+	root, err := findGitRepoRoot(dir)
+	if err != nil {
+		t.Fatalf("findGitRepoRoot() error = %v, want success (repo has real history, should not be touched)", err)
+	}
+	if root != dir {
+		t.Errorf("findGitRepoRoot() = %q, want %q", root, dir)
+	}
+
+	gitignore, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("failed to read .gitignore: %v", err)
+	}
+	if string(gitignore) != "node_modules/\n" {
+		t.Errorf(".gitignore content = %q, want untouched %q", gitignore, "node_modules/\n")
+	}
+
+	repo, err := OpenRepo(dir)
+	if err != nil {
+		t.Fatalf("failed to reopen repo: %v", err)
+	}
+	commit, err := repo.CommitObject(plumbing.NewHash(realCommit))
+	if err != nil {
+		t.Fatalf("original commit %s no longer resolves: %v", realCommit, err)
+	}
+	if commit.Message != "real commit" {
+		t.Errorf("original commit message = %q, want %q", commit.Message, "real commit")
+	}
+}
+
+// TestInitializeProjectDirectory_should_NotOverwriteGitignore_When_CalledTwice
+// locks in InitializeProjectDirectory's existing PlainOpen short-circuit
+// (util.go step 1) so it can't regress alongside the new repoHasAnyRef guard:
+// calling it a second time against an already-initialized project must be a
+// pure no-op, not a second createInitialCommit run.
+func TestInitializeProjectDirectory_should_NotOverwriteGitignore_When_CalledTwice(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := InitializeProjectDirectory(dir); err != nil {
+		t.Fatalf("first InitializeProjectDirectory() error = %v", err)
+	}
+
+	gitignoreBefore, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("failed to read .gitignore after first call: %v", err)
+	}
+	repo, err := OpenRepo(dir)
+	if err != nil {
+		t.Fatalf("failed to open repo after first call: %v", err)
+	}
+	headBefore, err := repo.Head()
+	if err != nil {
+		t.Fatalf("failed to resolve HEAD after first call: %v", err)
+	}
+
+	if err := InitializeProjectDirectory(dir); err != nil {
+		t.Fatalf("second InitializeProjectDirectory() error = %v", err)
+	}
+
+	gitignoreAfter, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("failed to read .gitignore after second call: %v", err)
+	}
+	if string(gitignoreAfter) != string(gitignoreBefore) {
+		t.Errorf(".gitignore content changed after second call: got %q, want unchanged %q", gitignoreAfter, gitignoreBefore)
+	}
+
+	repo2, err := OpenRepo(dir)
+	if err != nil {
+		t.Fatalf("failed to reopen repo after second call: %v", err)
+	}
+	headAfter, err := repo2.Head()
+	if err != nil {
+		t.Fatalf("failed to resolve HEAD after second call: %v", err)
+	}
+	if headAfter.Hash() != headBefore.Hash() {
+		t.Errorf("HEAD changed after second call: got %s, want unchanged %s", headAfter.Hash(), headBefore.Hash())
 	}
 }

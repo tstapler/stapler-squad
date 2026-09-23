@@ -2,10 +2,12 @@ package session
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -49,6 +51,42 @@ func createTestStorage(t *testing.T) (*Storage, func()) {
 	return storage, cleanup
 }
 
+// TestCreateTestStorage_SecondConnectionSeesSameData pins the invariant
+// createTestStorage's shared-cache DSN exists for: a second, independent
+// *sql.DB opened against the same DSN (as forceEmptyBranchNameViaRawSQL does
+// in review_gate_test.go) must see rows written through the first connection.
+// A bare ":memory:" DSN would fail this — each independent sql.Open gets its
+// own private, unmigrated database — so this test would catch a regression
+// that silently reintroduced that DSN shape.
+func TestCreateTestStorage_SecondConnectionSeesSameData(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	er := storage.repo
+
+	// newTestInstance alone (bare directory-mode, no gitManager.worktree) never
+	// produces a worktrees table row -- SaveInstances only persists a worktree
+	// row when the instance actually carries one. A GitWorktree reconstructed
+	// via NewGitWorktreeFromStorage (as forceEmptyBranchNameViaRawSQL's callers
+	// do, review_gate_test.go) is enough to trigger that row without touching
+	// disk, since it returns non-nil whenever any of repoPath/worktreePath/
+	// branchName is non-empty.
+	inst := newTestInstance("shared-cache-visibility-test")
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+		"/tmp/test", "/tmp/test", "shared-cache-visibility-test", "placeholder-branch",
+		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	db, err := sql.Open("sqlite", er.dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM worktrees WHERE session_name = ?", "shared-cache-visibility-test").Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "second connection against the same DSN must see the row written via the first")
+}
+
 // TestStorage_UUID_PersistedThroughAddAndLoad is the primary regression test for
 // "session not found after restart".  It verifies that a UUID written via
 // AddInstance is returned unchanged by LoadInstances, i.e. it survives the
@@ -79,6 +117,38 @@ func TestStorage_UUID_PersistedThroughAddAndLoad(t *testing.T) {
 
 	assert.Equal(t, "my-stable-uuid", loaded[0].GetStableID(),
 		"UUID must survive AddInstance → LoadInstances round-trip")
+}
+
+// TestStorage_Backend_PersistedThroughAddAndLoad is the real-persistence
+// regression test for Epic 5.1: Instance.Backend must survive a round trip
+// through the actual ent-backed repository (EntRepository.Create/Update and
+// sessionToInstanceData), not just the in-process ToInstanceData/
+// FromInstanceData conversion — session/storage.go's SaveInstances/
+// LoadInstances is what a real process restart actually goes through.
+func TestStorage_Backend_PersistedThroughAddAndLoad(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := &Instance{
+		Title:     "backend-roundtrip",
+		Path:      "/tmp/test",
+		Status:    Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Backend:   BackendTymux,
+	}
+	inst.started.Store(true)
+
+	require.NoError(t, storage.AddInstance(inst))
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+
+	assert.Equal(t, BackendTymux, loaded[0].Backend,
+		"Backend must survive AddInstance → LoadInstances round-trip through the ent repository")
 }
 
 // TestStorage_UUID_StableAcrossMultipleLoads verifies that the UUID returned by
@@ -578,6 +648,144 @@ func TestStorage_ListInstanceData(t *testing.T) {
 	assert.True(t, titles["list-session-2"], "list-session-2 should be present")
 }
 
+// TestListSessionRecords_WhenInstanceHasTags_ExpectSessionRecordTagsPopulatedFromRealStorage
+// is the integration regression test for wiring Instance.Tags through to
+// tokens.SessionRecord.Tags: it goes through the real Ent-backed Storage
+// (AddInstance -> ListSessionRecords), not just a SessionRecord fixture
+// literal, so it also catches a broken persistence path for Tags.
+func TestListSessionRecords_WhenInstanceHasTags_ExpectSessionRecordTagsPopulatedFromRealStorage(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("tagged-session")
+	inst.Tags = []string{"backend", "urgent"}
+	require.NoError(t, storage.AddInstance(inst))
+
+	records := storage.ListSessionRecords()
+	require.Len(t, records, 1)
+	assert.ElementsMatch(t, []string{"backend", "urgent"}, records[0].Tags)
+}
+
+// TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDir is
+// the regression test for backlog item 7cfdb43e: SessionRecord.Path must be the
+// resolved worktree dir (InstanceData.ActiveDir()), not the identity Instance.Path
+// — the identity-path version of this lookup must fail this assertion.
+func TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDir(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("worktree-session-records")
+	inst.UUID = "33333333-3333-3333-3333-333333333333"
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+		"/repo", "/repo/../worktrees/worktree-session-records", "worktree-session-records", "backlog/some-item", "abc123def")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	records := storage.ListSessionRecords()
+	require.Len(t, records, 1)
+	assert.Equal(t, "/repo/../worktrees/worktree-session-records", records[0].Path,
+		"SessionRecord.Path must be the resolved worktree dir, not the identity repo path %q", inst.Path)
+}
+
+// TestListSessionRecords_WhenSessionHasNoWorktree_ExpectPathIsIdentityPath covers
+// InstanceData.ActiveDir()'s fallback branch (no worktree recorded): SessionRecord.Path
+// must be the plain Instance.Path.
+func TestListSessionRecords_WhenSessionHasNoWorktree_ExpectPathIsIdentityPath(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("plain-session-records")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	records := storage.ListSessionRecords()
+	require.Len(t, records, 1)
+	assert.Equal(t, inst.Path, records[0].Path)
+}
+
+// TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExistsInStorageOnly
+// is the regression test for the fix in server/services/session_service.go's
+// ArchiveSessionByUUID: a session that is not resident in the live in-memory
+// ReviewQueuePoller.instances list (e.g. after a server restart, before this fix existed)
+// must still be archivable via a direct storage read-modify-write.
+func TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExistsInStorageOnly(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("storage-only-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	archived, err := storage.ArchiveInstanceDataByID("storage-only-session", time.Now())
+	require.NoError(t, err)
+	assert.True(t, archived, "expected the session to be newly archived")
+
+	data, err := storage.FindInstanceDataByID("storage-only-session")
+	require.NoError(t, err)
+	require.NotNil(t, data.ArchivedAt, "ArchivedAt should be set after archiving")
+	assert.Equal(t, Stopped, data.Status, "Status should transition to Stopped")
+}
+
+// TestStorage_ArchiveInstanceDataByID_should_preserveOtherFields_When_Archiving guards the
+// doc comment's claim that this is a read-modify-write on the full row, not a partial
+// struct: a future refactor that built a bare InstanceData{ID, ArchivedAt, Status} instead
+// of mutating a fresh FindInstanceDataByID read would pass every other test here (they only
+// assert ArchivedAt/Status) while silently clobbering every other field via
+// EntRepository.Update's guarded-optional-field pattern (empty/zero fields get cleared).
+func TestStorage_ArchiveInstanceDataByID_should_preserveOtherFields_When_Archiving(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("archive-preserves-fields")
+	inst.Note = "do not clobber me"
+	inst.Category = "preserve-category"
+	require.NoError(t, storage.AddInstance(inst))
+
+	archived, err := storage.ArchiveInstanceDataByID("archive-preserves-fields", time.Now())
+	require.NoError(t, err)
+	require.True(t, archived)
+
+	data, err := storage.FindInstanceDataByID("archive-preserves-fields")
+	require.NoError(t, err)
+	assert.Equal(t, "do not clobber me", data.Note, "archiving must not clobber unrelated fields")
+	assert.Equal(t, "preserve-category", data.Category, "archiving must not clobber unrelated fields")
+}
+
+// TestStorage_ArchiveInstanceDataByID_should_beIdempotent_When_AlreadyArchived matches
+// SetArchivedAtIfNilAndStop's CAS semantics: a second archive call on an already-archived
+// session is a no-op, not an error, and does not clobber the original ArchivedAt.
+func TestStorage_ArchiveInstanceDataByID_should_beIdempotent_When_AlreadyArchived(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("already-archived-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	first, err := storage.ArchiveInstanceDataByID("already-archived-session", time.Now())
+	require.NoError(t, err)
+	require.True(t, first)
+
+	second, err := storage.ArchiveInstanceDataByID("already-archived-session", time.Now())
+	require.NoError(t, err)
+	assert.False(t, second, "a second archive call should be a no-op")
+}
+
+// TestStorage_ArchiveInstanceDataByID_should_returnFalse_When_SessionNotFound matches
+// ArchiveSessionByUUID's existing "unconditional sweep call" contract: archiving an
+// unknown ID is not an error.
+func TestStorage_ArchiveInstanceDataByID_should_returnFalse_When_SessionNotFound(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	archived, err := storage.ArchiveInstanceDataByID("no-such-session", time.Now())
+	require.NoError(t, err)
+	assert.False(t, archived)
+}
+
 // TestStorage_DeleteAllInstances verifies that DeleteAllInstances removes every
 // stored instance, leaving an empty repository.
 func TestStorage_DeleteAllInstances(t *testing.T) {
@@ -624,6 +832,49 @@ func TestStorage_SaveInstancesSync(t *testing.T) {
 	require.Len(t, instances, 1)
 	assert.Equal(t, []string{"sync-tag"}, instances[0].Tags, "Tags should be persisted by SaveInstancesSync")
 	assert.Equal(t, "sync-category", instances[0].Category, "Category should be persisted by SaveInstancesSync")
+}
+
+// TestStorage_should_RoundTripRuleTagProvenance_When_SessionSavedAndReloaded implements
+// plan.md Story 3.1.2's Given-When-Then: RuleTagProvenance/SuppressedRuleTags survive a
+// SaveInstancesSync -> LoadInstances round trip through the Ent SQLite backend.
+func TestStorage_should_RoundTripRuleTagProvenance_When_SessionSavedAndReloaded(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("provenance-round-trip")
+	require.NoError(t, storage.AddInstance(inst))
+
+	inst.Tags = []string{"Bugfix"}
+	inst.RuleTagProvenance = map[string]string{"Bugfix": "seed-bugfix"}
+	inst.SuppressedRuleTags = map[string]bool{"Suppressed": true}
+	require.NoError(t, storage.SaveInstancesSync([]*Instance{inst}))
+
+	instances, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, map[string]string{"Bugfix": "seed-bugfix"}, instances[0].RuleTagProvenance)
+	assert.Equal(t, map[string]bool{"Suppressed": true}, instances[0].SuppressedRuleTags)
+}
+
+// TestStorage_should_DecodeNilProvenance_When_LoadingPreExistingRowWithoutNewColumns
+// mirrors the Category->Tags backward-compat shim: a session saved with no
+// RuleTagProvenance/SuppressedRuleTags ever set decodes cleanly, never an error — the ent
+// schema's Default(map[string]string{})/Default([]string{}) means "never set" reads back
+// as empty rather than nil, which is exactly the same "nothing suppressed/attributed" state.
+func TestStorage_should_DecodeNilProvenance_When_LoadingPreExistingRowWithoutNewColumns(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("no-provenance-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	instances, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Empty(t, instances[0].RuleTagProvenance)
+	assert.Empty(t, instances[0].SuppressedRuleTags)
 }
 
 // TestSaveInstances_WorktreeDataQueryableImmediately is a regression test for the
@@ -836,4 +1087,268 @@ func TestSetBacklogItemPRAndTransition_should_RejectStaleObserved_When_Concurren
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "a stale observed snapshot must never win the CAS")
 	assert.Equal(t, 0, fetched.PrNumber)
+}
+
+// TestUpdateInstanceIfEpoch_should_ApplyWrite_When_EpochMatches covers Task
+// 1.2.4a's happy path: a freshly-added row's creation_epoch defaults to 0, so a
+// caller presenting capturedEpoch=0 wins the conditional UPDATE.
+func TestUpdateInstanceIfEpoch_should_ApplyWrite_When_EpochMatches(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := &Instance{
+		Title:     "epoch-match",
+		UUID:      "uuid-epoch-match",
+		Path:      "/tmp/test",
+		Status:    Creating,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+
+	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-match", 0, Active, "")
+	require.NoError(t, err)
+	assert.True(t, applied)
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	assert.Equal(t, Active, loaded[0].Status, "the persisted row must now read Active")
+}
+
+// TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale covers Task
+// 1.2.4a's fencing guarantee: a captured epoch that no longer matches the
+// persisted row's creation_epoch (already bumped past it by a cancel/retry) is
+// rejected and the row is left unchanged.
+func TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := &Instance{
+		Title:     "epoch-stale",
+		UUID:      "uuid-epoch-stale",
+		Path:      "/tmp/test",
+		Status:    Creating,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+
+	// The persisted row's creation_epoch defaults to 0; present a stale
+	// captured value of 2 (as if a cancel had already bumped it past this
+	// caller's captured value).
+	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-stale", 2, Active, "")
+	require.NoError(t, err)
+	assert.False(t, applied)
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	assert.Equal(t, Creating, loaded[0].Status, "the persisted row must be unchanged when epochs mismatch")
+}
+
+// ── Epic 2.2: TaggingRule Storage CRUD ──────────────────────────────────────
+
+// TestStorage_UpsertTaggingRule_should_PersistRow_When_ValidDataGiven covers
+// Story 2.2.1's first acceptance criterion.
+func TestStorage_UpsertTaggingRule_should_PersistRow_When_ValidDataGiven(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	err := storage.UpsertTaggingRule(context.Background(), TaggingRuleData{
+		RuleID:        "seed-bugfix",
+		Name:          "Bugfix branch",
+		BranchPattern: "^(bugfix|fix)/",
+		OutputTag:     "Bugfix",
+		Priority:      50,
+		Enabled:       true,
+		Source:        "seed",
+	})
+	require.NoError(t, err)
+
+	rules, err := storage.AllTaggingRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, "Bugfix", rules[0].OutputTag)
+}
+
+// TestStorage_DeleteTaggingRule_should_RemoveRow_When_RuleIDExists covers
+// Story 2.2.1's second acceptance criterion.
+func TestStorage_DeleteTaggingRule_should_RemoveRow_When_RuleIDExists(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	require.NoError(t, storage.UpsertTaggingRule(context.Background(), TaggingRuleData{
+		RuleID:        "seed-bugfix",
+		Name:          "Bugfix branch",
+		BranchPattern: "^(bugfix|fix)/",
+		OutputTag:     "Bugfix",
+		Priority:      50,
+		Enabled:       true,
+		Source:        "seed",
+	}))
+
+	require.NoError(t, storage.DeleteTaggingRule(context.Background(), "seed-bugfix"))
+
+	rules, err := storage.AllTaggingRules(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, rules)
+}
+
+// TestStorage_DeleteTaggingRule_should_NoOpWithoutError_When_RuleIDNotFound mirrors
+// DeleteRule's existing convention: deleting a nonexistent rule_id doesn't
+// panic/error the caller.
+func TestStorage_DeleteTaggingRule_should_NoOpWithoutError_When_RuleIDNotFound(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	err := storage.DeleteTaggingRule(context.Background(), "does-not-exist")
+	require.NoError(t, err)
+}
+
+// TestStorage_UpsertTaggingRule_should_NotDuplicateOrCorrupt_When_TwoConcurrentUpsertsTargetSameRuleID
+// pins the pre-mortem.md Failure #2 (P2) concurrent-upsert guarantee: the unique
+// index on rule_id plus the atomic ON CONFLICT DO UPDATE upsert (mirroring
+// ApprovalRule's verified-safe path, see Task 2.1.1c) must hold under two
+// simultaneous writers targeting the same rule_id.
+func TestStorage_UpsertTaggingRule_should_NotDuplicateOrCorrupt_When_TwoConcurrentUpsertsTargetSameRuleID(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	const ruleID = "concurrent-rule"
+	writeA := TaggingRuleData{
+		RuleID:        ruleID,
+		Name:          "Writer A",
+		BranchPattern: "^a/",
+		OutputTag:     "A",
+		Priority:      10,
+		Enabled:       true,
+		Source:        "seed",
+	}
+	writeB := TaggingRuleData{
+		RuleID:        ruleID,
+		Name:          "Writer B",
+		BranchPattern: "^b/",
+		OutputTag:     "B",
+		Priority:      20,
+		Enabled:       true,
+		Source:        "seed",
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		errs[0] = storage.UpsertTaggingRule(context.Background(), writeA)
+	}()
+	go func() {
+		defer wg.Done()
+		errs[1] = storage.UpsertTaggingRule(context.Background(), writeB)
+	}()
+	wg.Wait()
+
+	require.NoError(t, errs[0])
+	require.NoError(t, errs[1])
+
+	rules, err := storage.AllTaggingRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 1, "exactly one row must exist for the shared rule_id — no duplicate row")
+
+	got := rules[0]
+	matchesA := got.Priority == writeA.Priority && got.OutputTag == writeA.OutputTag
+	matchesB := got.Priority == writeB.Priority && got.OutputTag == writeB.OutputTag
+	assert.True(t, matchesA || matchesB, "persisted row must match one write's values entirely, never a corrupted merge of both: got %+v", got)
+}
+
+// TestStorage_DismissFinding_RoundTripsThroughRealEntBackedSQLite exercises
+// the real ent-generated DismissedFinding code path (unlike
+// server/services/insights_service_test.go's fake repository double), so a
+// mistake in the ent schema/generated accessors (wrong field name, missing
+// upsert conflict column, etc.) fails here even if the service-level fake
+// would have papered over it.
+func TestStorage_DismissFinding_RoundTripsThroughRealEntBackedSQLite(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	ids, err := storage.ListDismissedFindingIDs(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+
+	require.NoError(t, storage.DismissFinding(ctx, DismissedFindingData{
+		FindingID:      "finding-abc123",
+		SessionID:      "sess-1",
+		ConversationID: "conv-1",
+		FindingType:    2,
+	}))
+
+	ids, err = storage.ListDismissedFindingIDs(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]bool{"finding-abc123": true}, ids)
+}
+
+// TestStorage_DismissFinding_WhenCalledTwiceWithSameID_ExpectIdempotent covers
+// the OnConflictColumns upsert path: re-dismissing an already-dismissed
+// finding_id (e.g. a duplicate frontend click) must not error and must not
+// create a second row.
+func TestStorage_DismissFinding_WhenCalledTwiceWithSameID_ExpectIdempotent(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	data := DismissedFindingData{FindingID: "finding-dup", SessionID: "sess-1", FindingType: 1}
+	require.NoError(t, storage.DismissFinding(ctx, data))
+	require.NoError(t, storage.DismissFinding(ctx, data))
+
+	ids, err := storage.ListDismissedFindingIDs(ctx)
+	require.NoError(t, err)
+	assert.Len(t, ids, 1)
+}
+
+// TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActiveRoundTrips
+// pins the interaction the ADR-001 backfill depends on: fromInstanceData's
+// archived guard heals an Active+archived row to Stopped *and* sets
+// started=true, and saveInstancesToRepo only writes instances where Started()
+// is true — so the heal actually reaches the database on the next
+// LoadInstances/SaveInstances pair (the 15s health-check tick does exactly
+// this, which is how the incident's rows converge without a restart).
+func TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActiveRoundTrips(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	archivedAt := time.Now()
+	inst := &Instance{
+		Title:      "archived-active-roundtrip",
+		Path:       "/tmp/test",
+		Status:     Active,
+		Program:    "claude",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		ArchivedAt: &archivedAt,
+	}
+	inst.started.Store(true)
+	require.NoError(t, storage.AddInstance(inst))
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	require.NoError(t, storage.SaveInstances(loaded))
+
+	persisted, err := storage.FindInstanceDataByID("archived-active-roundtrip")
+	require.NoError(t, err)
+	assert.Equal(t, Stopped, persisted.Status,
+		"the archived Active row must be self-healed to Stopped and that heal must be persisted")
+	require.NotNil(t, persisted.ArchivedAt, "archival itself must be untouched by the heal")
 }

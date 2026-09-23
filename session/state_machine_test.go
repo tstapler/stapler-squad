@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // allStatuses lists every Status constant in the new 5-state model.
@@ -247,6 +248,62 @@ func TestTransitionTo_ValidTransitions(t *testing.T) {
 	}
 }
 
+// TestTransitionTo_BumpsUpdatedAt verifies a real status transition advances
+// Instance.UpdatedAt -- see touchUpdatedAt's doc comment for why this matters
+// to the frontend.
+func TestTransitionTo_BumpsUpdatedAt(t *testing.T) {
+	ctx := context.Background()
+	before := time.Now().Add(-time.Hour)
+	inst := &Instance{Title: "test", Status: Active, Path: t.TempDir(), UpdatedAt: before}
+	if err := inst.transitionTo(ctx, Stopped); err != nil {
+		t.Fatalf("transitionTo(Stopped): unexpected error %v", err)
+	}
+	if !inst.UpdatedAt.After(before) {
+		t.Errorf("UpdatedAt = %v, want a time after %v (transition must bump it)", inst.UpdatedAt, before)
+	}
+}
+
+// TestTransitionToLocked_BumpsUpdatedAt covers the actor-mailbox path
+// separately from TestTransitionTo_BumpsUpdatedAt: this is the function
+// actually invoked by MarkExitedNormally/MarkCrashed/instanceOnExitCallback --
+// the real trigger for the frontend-staleness bug touchUpdatedAt fixes -- so a
+// regression here would slip past the transitionTo-only test above.
+func TestTransitionToLocked_BumpsUpdatedAt(t *testing.T) {
+	ctx := context.Background()
+	before := time.Now().Add(-time.Hour)
+	inst := &Instance{Title: "test", Status: Active, Path: t.TempDir(), UpdatedAt: before}
+	s := &instanceState{inst: inst}
+	if err := transitionToLocked(s, ctx, Stopped); err != nil {
+		t.Fatalf("transitionToLocked(Stopped): unexpected error %v", err)
+	}
+	if !inst.UpdatedAt.After(before) {
+		t.Errorf("UpdatedAt = %v, want a time after %v (transition must bump it)", inst.UpdatedAt, before)
+	}
+}
+
+// TestForceStatus_BumpsUpdatedAt covers ForceStatus (used by health.go's
+// markStartFailed), a second real bypass-the-state-machine path sharing the
+// same touchUpdatedAt fix.
+func TestForceStatus_BumpsUpdatedAt(t *testing.T) {
+	before := time.Now().Add(-time.Hour)
+	inst := &Instance{Title: "test", Status: Active, UpdatedAt: before}
+	inst.ForceStatus(Stopped)
+	if !inst.UpdatedAt.After(before) {
+		t.Errorf("UpdatedAt = %v, want a time after %v (ForceStatus must bump it)", inst.UpdatedAt, before)
+	}
+}
+
+// TestRecoverFromStopped_BumpsUpdatedAt covers RecoverFromStopped, the third
+// bypass-the-state-machine path sharing the same touchUpdatedAt fix.
+func TestRecoverFromStopped_BumpsUpdatedAt(t *testing.T) {
+	before := time.Now().Add(-time.Hour)
+	inst := &Instance{Title: "test", Status: Stopped, UpdatedAt: before}
+	inst.RecoverFromStopped()
+	if !inst.UpdatedAt.After(before) {
+		t.Errorf("UpdatedAt = %v, want a time after %v (RecoverFromStopped must bump it)", inst.UpdatedAt, before)
+	}
+}
+
 // TestTransitionTo_InvalidTransitions verifies that Instance.transitionTo returns
 // ErrInvalidTransition and leaves Status unchanged for every disallowed transition.
 func TestTransitionTo_InvalidTransitions(t *testing.T) {
@@ -280,6 +337,11 @@ func TestTransitionTo_InvalidTransitions(t *testing.T) {
 
 // TestTransitionTo_ChainedTransitions verifies common multi-hop paths through
 // the state machine work as a sequence of transitionTo calls.
+//
+// This is the original reproduction case for the Instance.Status data race
+// between transitionTo and the (now-removed) untracked hibernate/resume
+// After-hook goroutines -- `go test -race ./session -run 'TestTransitionTo_'
+// -count=50` must stay race-free.
 func TestTransitionTo_ChainedTransitions(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

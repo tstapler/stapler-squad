@@ -3,6 +3,7 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestTmuxTestServer_Creation validates isolated server creation
@@ -131,7 +133,7 @@ func TestTmuxTestServer_KillSession(t *testing.T) {
 	// Verify only one session remains — poll instead of a fixed sleep, since
 	// how long tmux takes to reflect the kill in list-sessions varies under load.
 	var sessionsAfter []string
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		var listErr error
 		sessionsAfter, listErr = server.ListSessions()
 		return listErr == nil && len(sessionsAfter) == 1
@@ -168,7 +170,7 @@ func TestTmuxTestServer_KillAllSessions(t *testing.T) {
 
 	// Verify no sessions remain — poll instead of a fixed sleep, since cleanup
 	// completion time varies under load.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		var listErr error
 		sessions, listErr = server.ListSessions()
 		return listErr == nil && len(sessions) == 0
@@ -207,7 +209,7 @@ func TestTmuxTestServer_AutomaticCleanup(t *testing.T) {
 	// sleep, since t.Cleanup()'s teardown (process kill + socket removal) can
 	// take longer than a fixed 100ms under system load.
 	var lastOutput string
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer listCancel()
 		cmd := safeexec.CommandContext(listCtx, "tmux", "-L", socketName, "list-sessions")
@@ -391,4 +393,19 @@ func TestSanitizeTestName(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+// TestCreateIsolatedTmuxServer_SocketNameEmbedsPID guards the naming
+// convention testutil/tmuxreap.ReapLeakedTestServers relies on to tell a
+// still-running test server apart from one left behind by a killed test
+// binary (see BUG-105): the socket name must contain the owning process's
+// PID as one of its "_"-delimited numeric fields.
+func TestCreateIsolatedTmuxServer_SocketNameEmbedsPID(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not available, skipping test")
+	}
+
+	server := CreateIsolatedTmuxServer(t)
+	want := fmt.Sprintf("_%d_", os.Getpid())
+	assert.Contains(t, server.GetSocketName(), want)
 }

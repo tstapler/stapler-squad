@@ -226,6 +226,35 @@ func TestMaxConcurrentBacklogWorkItemsOrDefault_ClampsInvalidValues(t *testing.T
 	})
 }
 
+func TestAutonomousMaxTurnsOrDefault_ClampsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value int
+		want  int
+	}{
+		{"unset", 0, autonomousMaxTurnsDefault},
+		{"negative", -5, autonomousMaxTurnsDefault},
+		{"valid", 100, 100},
+		{"at ceiling", autonomousMaxTurnsHardCeiling, autonomousMaxTurnsHardCeiling},
+		{"above ceiling", autonomousMaxTurnsHardCeiling + 50, autonomousMaxTurnsHardCeiling},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{AutonomousMaxTurns: tt.value}
+			if got := cfg.AutonomousMaxTurnsOrDefault(); got != tt.want {
+				t.Errorf("AutonomousMaxTurnsOrDefault() with value=%d = %d, want %d", tt.value, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("nil config", func(t *testing.T) {
+		var cfg *Config
+		if got := cfg.AutonomousMaxTurnsOrDefault(); got != autonomousMaxTurnsDefault {
+			t.Errorf("nil config: got %d, want %d", got, autonomousMaxTurnsDefault)
+		}
+	})
+}
+
 // TestAutoSpawnReadyItemsOrDefault_should_DefaultTrue_When_Unset guards the "software
 // factory" default switch: an unset (nil) config value — or a nil *Config entirely —
 // must default to true (auto-spawn "ready" items), not false. A plain bool zero value
@@ -428,5 +457,43 @@ func TestResolveAlias_PropagatesBranchAndLabel_WhenPassedAsArgs(t *testing.T) {
 	}
 	if result.SessionLabel != "working on auth" {
 		t.Errorf("expected SessionLabel 'working on auth', got %q", result.SessionLabel)
+	}
+}
+
+func TestResolveProgramConfig_ResolvesCustomProgramID(t *testing.T) {
+	cfg := &Config{}
+	cfg.SessionDefaults.Programs = []ProgramConfig{
+		{
+			ID:          "claude-250k-proxy",
+			Label:       "Claude Code Proxy",
+			Command:     "claude",
+			CLIFlags:    "--auto-compaction 250000",
+			Description: "Custom program",
+			Env: map[string]string{
+				"HTTP_PROXY": "http://127.0.0.1:47000",
+			},
+		},
+	}
+
+	res := ResolveProgramConfig(cfg, "claude-250k-proxy")
+	if !res.IsCustom {
+		t.Fatal("expected IsCustom to be true")
+	}
+	if res.Command != "claude" {
+		t.Errorf("expected Command 'claude', got %q", res.Command)
+	}
+	if res.CLIFlags != "--auto-compaction 250000" {
+		t.Errorf("expected CLIFlags '--auto-compaction 250000', got %q", res.CLIFlags)
+	}
+	if res.EnvVars["HTTP_PROXY"] != "http://127.0.0.1:47000" {
+		t.Errorf("expected HTTP_PROXY env var, got %v", res.EnvVars)
+	}
+
+	resNonCustom := ResolveProgramConfig(cfg, "aider")
+	if resNonCustom.IsCustom {
+		t.Fatal("expected IsCustom to be false for standard program")
+	}
+	if resNonCustom.Command != "aider" {
+		t.Errorf("expected Command 'aider', got %q", resNonCustom.Command)
 	}
 }

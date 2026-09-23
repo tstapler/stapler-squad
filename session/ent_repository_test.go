@@ -2,16 +2,21 @@ package session
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	ssent "github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/hook"
 )
 
 // TestEntRepository_CreateAndGet tests basic create and get operations
@@ -347,6 +352,53 @@ func TestEntRepository_ListWithOptions_RespectsLoadDiffStats(t *testing.T) {
 	assert.Equal(t, session.DiffStats.Added, full[0].DiffStats.Added)
 	assert.Equal(t, session.DiffStats.Removed, full[0].DiffStats.Removed)
 	assert.Equal(t, session.DiffStats.Content, full[0].DiffStats.Content)
+}
+
+// TestEntRepository_FindByIDWithOptions covers the indexed by-UUID-or-title lookup
+// that replaced Storage.FindInstanceDataByID's previous ListInstanceData()-then-
+// linear-scan implementation (see FindByIDWithOptions's doc comment for the CPU
+// profiling finding that motivated this).
+func TestEntRepository_FindByIDWithOptions(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("find-by-id-title")
+	session.UUID = "find-by-id-uuid-123"
+	require.NoError(t, repo.Create(ctx, session))
+
+	t.Run("matches by title", func(t *testing.T) {
+		t.Parallel()
+		found, err := repo.FindByIDWithOptions(ctx, "find-by-id-title", LoadMinimal)
+		require.NoError(t, err)
+		assert.Equal(t, "find-by-id-title", found.Title)
+	})
+
+	t.Run("matches by UUID", func(t *testing.T) {
+		t.Parallel()
+		found, err := repo.FindByIDWithOptions(ctx, "find-by-id-uuid-123", LoadMinimal)
+		require.NoError(t, err)
+		assert.Equal(t, "find-by-id-title", found.Title)
+	})
+
+	t.Run("returns ErrInstanceDataNotFound when no match", func(t *testing.T) {
+		t.Parallel()
+		found, err := repo.FindByIDWithOptions(ctx, "no-such-session", LoadMinimal)
+		require.ErrorIs(t, err, ErrInstanceDataNotFound)
+		assert.Nil(t, found)
+	})
+
+	// uuid has no uniqueness constraint (Optional().Default("")), so an empty id must
+	// be rejected explicitly rather than falling through to session.UUID("") and
+	// matching an arbitrary row that has never been assigned a UUID.
+	t.Run("returns ErrInstanceDataNotFound for empty id rather than matching an unassigned-UUID row", func(t *testing.T) {
+		t.Parallel()
+		found, err := repo.FindByIDWithOptions(ctx, "", LoadMinimal)
+		require.ErrorIs(t, err, ErrInstanceDataNotFound)
+		assert.Nil(t, found)
+	})
 }
 
 // TestEntRepository_ListWithOptions_RespectsLoadClaudeSession verifies that
@@ -749,6 +801,86 @@ func TestUpdateSessionMetadata_SessionNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "session not found")
 }
 
+// TestTaggingRuleSchema_should_CreateTableWithAllFields_When_SchemaCreateRuns
+// verifies that a fresh ent client's Schema.Create() creates the
+// tagging_rules table with all fields from taggingrule.go, mirroring
+// backlog_stuck_migration_test.go's schema-creation pattern for
+// BacklogStuckState.
+func TestTaggingRuleSchema_should_CreateTableWithAllFields_When_SchemaCreateRuns(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := repo.client.TaggingRule.Create().
+		SetRuleID("schema-test-rule").
+		SetName("Schema test rule").
+		SetBranchPattern("^(bugfix|fix)/").
+		SetRequiredTags([]string{"Reviewed"}).
+		SetOutputTag("Bugfix").
+		SetPriority(50).
+		SetEnabled(true).
+		SetSource("seed").
+		Save(ctx)
+	require.NoError(t, err)
+
+	fetched, err := repo.client.TaggingRule.Get(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "schema-test-rule", fetched.RuleID)
+	assert.Equal(t, "Schema test rule", fetched.Name)
+	assert.Equal(t, "^(bugfix|fix)/", fetched.BranchPattern)
+	assert.Equal(t, []string{"Reviewed"}, fetched.RequiredTags)
+	assert.Equal(t, "Bugfix", fetched.OutputTag)
+	assert.Equal(t, 50, fetched.Priority)
+	assert.True(t, fetched.Enabled)
+	assert.Equal(t, "seed", fetched.Source)
+	assert.False(t, fetched.CreatedAt.IsZero())
+	assert.False(t, fetched.UpdatedAt.IsZero())
+}
+
+// TestTaggingRuleSchema_should_CreateIdempotently_When_SchemaCreateRunsTwice
+// mirrors backlog_stuck_migration_test.go's Test_migration_should_be_reversible:
+// a fresh client's Schema.Create() is idempotent when run twice, and the
+// tagging_rules table coexists cleanly with its sibling tables. This repo's
+// auto-migration approach (no versioned up/down files) makes this the
+// equivalent of a migration-reversibility test — see validation.md's
+// "Migration verification note" for Story 2.1.1.
+func TestTaggingRuleSchema_should_CreateIdempotently_When_SchemaCreateRunsTwice(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test-taggingrule-idempotent.db")
+
+	db, err := sql.Open("sqlite", dbPath+"?_fk=1")
+	require.NoError(t, err)
+	defer db.Close()
+
+	drv := entsql.OpenDB(dialect.SQLite, db)
+	client := ssent.NewClient(ssent.Driver(drv))
+	defer client.Close()
+
+	ctx := context.Background()
+
+	// Serialized via EntSchemaCreateMu — see its doc comment: Atlas has
+	// package-level state that races under t.Parallel() across independent
+	// clients.
+	EntSchemaCreateMu.Lock()
+	require.NoError(t, client.Schema.Create(ctx))
+
+	// Second Schema.Create call must be idempotent — no error, no duplicate index.
+	require.NoError(t, client.Schema.Create(ctx))
+	EntSchemaCreateMu.Unlock()
+
+	// Sibling table remains intact and queryable — the additive table did not
+	// disturb it.
+	itemCount, err := client.BacklogItem.Query().Count(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, itemCount)
+
+	ruleCount, err := client.TaggingRule.Query().Count(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, ruleCount)
+}
+
 // createTestEntRepository is a thin wrapper around NewTestEntRepository
 // (testing.go) kept so the ~90 existing `repo, cleanup := createTestEntRepository(t)`
 // call sites in this package don't need touching. NewTestEntRepository
@@ -763,4 +895,161 @@ func createTestEntRepository(t *testing.T) (*EntRepository, func()) {
 	require.Empty(t, sessions, "Database should be empty but has %d sessions", len(sessions))
 
 	return repo, func() {}
+}
+
+func TestEntRepository_Delete_StampsConversationUUIDOnItemSessions(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	data := createTestSession("stamp-test")
+	data.UUID = "sess-uuid-1"
+	data.ClaudeSession.ConversationUUID = "conv-uuid-1"
+	require.NoError(t, repo.Create(ctx, data))
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "stamp item", Status: string(BacklogStatusInProgress)})
+	require.NoError(t, err)
+	_, err = repo.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "sess-uuid-1", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Delete(ctx, data.Title))
+
+	entries, err := repo.GetAllItemSessionsWithBacklogInfo(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "conv-uuid-1", entries[0].ConversationUUID)
+}
+
+// TestEntRepository_DeleteBacklogItem_PreservesCostInLedger (Story 3) proves
+// DeleteBacklogItem writes a DeletedItemSessionCost ledger row for each of the
+// item's ItemSession rows before hard-deleting them, so the deletion doesn't
+// silently erase their cost attribution.
+func TestEntRepository_DeleteBacklogItem_PreservesCostInLedger(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "ledger item", Status: string(BacklogStatusInProgress)})
+	require.NoError(t, err)
+	is, err := repo.CreateItemSession(ctx, ItemSessionData{
+		ItemID:           item.ID,
+		SessionUUID:      "headless-review-1",
+		SessionRole:      SessionRoleReview,
+		ConversationUUID: "conv-ledger-1",
+		EstimatedCostUsd: 1.23,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.DeleteBacklogItem(ctx, item.ID))
+
+	// The ItemSession row itself is gone.
+	_, err = repo.GetItemSession(ctx, is.ID)
+	require.Error(t, err)
+
+	ledger, err := repo.GetDeletedItemSessionCostLedger(ctx)
+	require.NoError(t, err)
+	require.Len(t, ledger, 1)
+	assert.Equal(t, "conv-ledger-1", ledger[0].ConversationUUID)
+	assert.Equal(t, "headless-review-1", ledger[0].SessionUUID)
+	assert.Equal(t, SessionRoleReview, ledger[0].SessionRole)
+	assert.Equal(t, item.ID, ledger[0].ItemID)
+	assert.Equal(t, "ledger item", ledger[0].ItemTitle)
+	assert.InDelta(t, 1.23, ledger[0].EstimatedCostUsd, 0.001)
+	assert.True(t, ledger[0].CostPriced)
+}
+
+// TestEntRepository_DeleteBacklogItem_RollsBackOnMidSequenceFailure proves the
+// ledger write, review-verdict delete, item-session delete, and backlog-item
+// delete are atomic: a hook forces the final BacklogItem delete to fail after
+// the earlier three writes have already been issued (uncommitted) in the same
+// transaction, and none of them may survive the rollback.
+func TestEntRepository_DeleteBacklogItem_RollsBackOnMidSequenceFailure(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "rollback item", Status: string(BacklogStatusInProgress)})
+	require.NoError(t, err)
+	is, err := repo.CreateItemSession(ctx, ItemSessionData{
+		ItemID:           item.ID,
+		SessionUUID:      "headless-review-rollback",
+		SessionRole:      SessionRoleReview,
+		ConversationUUID: "conv-rollback-1",
+		EstimatedCostUsd: 4.56,
+	})
+	require.NoError(t, err)
+
+	injectedErr := errors.New("simulated failure deleting the backlog item")
+	repo.client.BacklogItem.Use(func(next ssent.Mutator) ssent.Mutator {
+		return hook.BacklogItemFunc(func(ctx context.Context, m *ssent.BacklogItemMutation) (ssent.Value, error) {
+			if m.Op() == ssent.OpDeleteOne {
+				return nil, injectedErr
+			}
+			return next.Mutate(ctx, m)
+		})
+	})
+
+	err = repo.DeleteBacklogItem(ctx, item.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, injectedErr)
+
+	// The earlier ledger write and item-session delete, issued inside the same
+	// now-rolled-back transaction, must not have taken effect.
+	ledger, ledgerErr := repo.GetDeletedItemSessionCostLedger(ctx)
+	require.NoError(t, ledgerErr)
+	assert.Empty(t, ledger, "the ledger row must not survive a rolled-back transaction")
+
+	_, getErr := repo.GetItemSession(ctx, is.ID)
+	assert.NoError(t, getErr, "the item session must still exist after rollback")
+
+	_, getItemErr := repo.GetBacklogItem(ctx, item.ID)
+	assert.NoError(t, getItemErr, "the backlog item itself must still exist after rollback")
+}
+
+// TestEntRepository_DeletedItemSessionCost_SessionUUIDIsUnique proves the
+// ledger's session_uuid unique index: a second row snapshotting the same
+// ItemSession — the shape a retried DeleteBacklogItem would attempt — is
+// rejected as a constraint violation instead of silently duplicating cost.
+func TestEntRepository_DeletedItemSessionCost_SessionUUIDIsUnique(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	create := func() error {
+		return repo.client.DeletedItemSessionCost.Create().
+			SetSessionUUID("dup-session-uuid").
+			SetSessionRole(SessionRoleReview).
+			SetItemID("some-item-id").
+			SetItemTitle("some item").
+			SetEstimatedCostUsd(1).
+			SetCreatedAt(time.Now()).
+			Exec(ctx)
+	}
+	require.NoError(t, create())
+
+	err := create()
+	require.Error(t, err)
+	assert.True(t, ssent.IsConstraintError(err), "a second ledger row with the same session_uuid must violate the unique index, got: %v", err)
+}
+
+func TestEntRepository_UpdateItemSessionConversationUUID_RoundTrips(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "conv item", Status: string(BacklogStatusInProgress)})
+	require.NoError(t, err)
+	is, err := repo.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-x", SessionRole: SessionRoleTriage})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.UpdateItemSessionConversationUUID(ctx, is.ID, "conv-triage-1"))
+
+	entries, err := repo.GetAllItemSessionsWithBacklogInfo(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "conv-triage-1", entries[0].ConversationUUID)
 }

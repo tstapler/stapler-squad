@@ -93,7 +93,7 @@ Rejected alternatives are also recorded in the Pattern Decisions table below, pe
 
 ## Unresolved Questions
 
-- [ ] `context-health-monitoring`'s `ContextHealth` proto fields (`context_health`/`context_health_reason`, fields 72-73 on `Session`) and `Instance.SetContextHealth`/`ContextHealthVerdict` **do not exist yet** — that project is itself fully planned but unimplemented. Phase 4's "auto-suggest Restart-with-Summary on RED" story cannot compile or ship until `context-health-monitoring`'s Phase 1 (signal) and Phase 2 (proto) land. This blocks **Story 4.1** only — every other story in this plan (manual trigger, generation pipeline, RPC, restart-session creation, Info-tab list) has no dependency on that project and can ship independently. Owner: whoever implements this plan next; re-check `context-health-monitoring`'s status before starting Phase 4.
+- [x] `context-health-monitoring`'s `ContextHealth` proto fields (`context_health`/`context_health_reason`, fields 72-73 on `Session`) and `Instance.SetContextHealth`/`ContextHealthVerdict` **do not exist yet** — that project is itself fully planned but unimplemented. Phase 4's "auto-suggest Restart-with-Summary on RED" story cannot compile or ship until `context-health-monitoring`'s Phase 1 (signal) and Phase 2 (proto) land. This blocks **Story 4.1** only — every other story in this plan (manual trigger, generation pipeline, RPC, restart-session creation, Info-tab list) has no dependency on that project and can ship independently. **[Pre-mortem P1 fix, Failure #5 / AC-9]** Tracked as backlog item `8baed611-974e-44e0-8647-5abec7d33684` ("feat: context-health-monitoring (ContextHealth signal + proto) — unblocks context-compression Phase 4"), not left as plan-doc prose only. Owner: whoever picks up that item; re-check its status before starting Phase 4.
 - [ ] Is the Hermes-cited "~12k token" ceiling for `HandoffSummaryConfig.MaxMiddleExcerptTokens` a safe default without local calibration against this codebase's own long-running sessions, or does it need tuning? Blocks nothing structurally (it's a config default, changeable without a code change) but affects out-of-the-box summary quality. Owner: implementer, revisit after first real long-session use (mirrors `context-health-monitoring`'s identical "Phase 6 manual review" deferral for its own heuristic thresholds).
 - [ ] Does `headless.Pool`'s dispatch path (which shells out to the user's own `claude` CLI via `pool.CallBlocking`, not `server/services/anthropic_client.go`'s HTTP client) have the same OAuth-only/no-API-key fail-closed gap `research/pitfalls.md` §3 flagged for `AnthropicAIClient`? If the pool always has a usable session-scoped credential (since it invokes the user's own already-authenticated `claude` CLI), this gap may not apply here at all — unconfirmed. Blocks nothing (the generator already degrades to an `ERROR` row + fallback text on any failure, matching `SessionSummaryGenerator`'s existing `narrativeFallbackLLMFailure` pattern), but affects whether "Restart with Summary" reliably works for every auth configuration. Owner: implementer, verify empirically during Phase 6 by testing under an OAuth-only (no `ANTHROPIC_API_KEY`) session.
 
@@ -357,7 +357,8 @@ external, unimplemented project and is not scheduled by this plan.
 - Interim upsert to `GENERATING` (mirrors lines 329-344, using `HandoffSummary.Create()...OnConflictColumns(handoffsummary.FieldSessionID).Update(...)`).
 - Call `session.NewClaudeSessionHistoryFromClaudeDir()` (`session/history.go:69`), then `.GetMessagesFromConversationFile(sourceSessionID, 0)` (0 = all messages, `session/history.go:571-581`) to get the real transcript content. On error, upsert an `ERROR` row (stage `"transcript"`) and return.
 - `window := buildTranscriptWindow(messages)`; `window.Middle = applySummaryBudget(window.Middle, newSummaryBudget(config.LoadConfig().HandoffSummary))`.
-- `summaryText, err := headless.GenerateHandoffSummary(ctx, g.pool, sourceSessionTitle, window)`. On error, upsert `ERROR` (stage `"generation"`) and return.
+- **[Adversarial-review Blocker #1 fix]** Wrap the summarization call in a deadline: `const handoffSummaryTimeout = 60 * time.Second` (identical shape to `llmNarrativeTimeout`, `session/session_summary_service.go:31`); `genCtx, cancel := context.WithTimeout(ctx, handoffSummaryTimeout); defer cancel()`.
+- `summaryText, err := headless.GenerateHandoffSummary(genCtx, g.pool, sourceSessionTitle, window)`. On error (including `context.DeadlineExceeded`), upsert `ERROR` (stage `"generation"`) and return — this also bounds how long the `tryAcquire` guard (and one of the 5 shared `headless.PoolConfig.MaxConcurrentSessions` slots) can be held.
 - Extract `activeTask` from `summaryText` (substring after the `"## Active Task"` heading, best-effort — empty string if the heading is missing, never an error).
 - Final upsert to `READY` with `SummaryText`, `ActiveTask`, `MiddleMessagesSummarized: len(window.Middle)`, `GeneratedAt: time.Now()`.
 - Files: `session/handoff_summary_service.go`
@@ -420,6 +421,7 @@ external, unimplemented project and is not scheduled by this plan.
 
 ##### Task 2.2.1a: Implement `HandoffSummaryService` (~5 min)
 - New file `server/services/handoff_summary_service.go`, structurally mirroring `server/services/session_summary_service.go:1-90`'s `GetSessionSummary`/`RegenerateSessionSummary` shape: `type HandoffSummaryService struct { generator *session.HandoffSummaryGenerator }`, `NewHandoffSummaryService`, `GetHandoffSummary` (query + `toHandoffSummaryProto`), `TriggerHandoffSummary` (check `config.LoadConfig().HandoffSummary.Enabled` first; if disabled, return `connect.CodeFailedPrecondition`; else `go s.generator.GenerateAndPersist(context.Background(), req.Msg.SessionId, sessionTitle)` — **confirmed**: `RegenerateSessionSummary` uses exactly this pattern, `context.Background()` not the request `ctx`, with the comment "Critical: detached goroutine with context.Background(), never the [request context]" at `server/services/session_summary_service.go:153,157` — mirror it verbatim, do not pass `ctx`).
+- **[Adversarial-review Blocker #3 fix]** `GetHandoffSummary` reconciles a stale `GENERATING` row before returning it, mirroring `SessionSummaryGenerator`'s `staleGenerationTimeout` (5 min, `session/session_summary_service.go`'s equivalent constant/check): if `row.Status == "generating"` and `time.Since(row.GenerationStartedAt) > staleGenerationTimeout`, flip it to `ERROR` (stage `"stale"`, message `"generation did not complete (server restart or hung call)"`) via the same upsert path before mapping to proto — this also gives Story 3.2.1/3.3.1's new `ERROR`-state UI (below) something concrete to render for a row orphaned by a mid-generation server restart, not just a live pool failure.
 - Add `+api: GetHandoffSummary` / `+api: TriggerHandoffSummary` markers per `.claude/rules/feature-registry.md`.
 - Files: `server/services/handoff_summary_service.go`
 
@@ -455,19 +457,27 @@ external, unimplemented project and is not scheduled by this plan.
   - *Given* the same source session but `CreateSessionRequest.Path == "/home/user/other-repo"` explicitly set, *When* `CreateSession` runs, *Then* the created session's `Path == "/home/user/other-repo"` (explicit request value preserved).
 - A `restart_from_session_id` pointing at a session that no longer exists returns a clear error, not a silent fallback.
   - *Given* `RestartFromSessionId: "does-not-exist"`, *When* `CreateSession` runs, *Then* it returns `connect.CodeNotFound` with a message naming the missing source session.
+- **[Pre-mortem P1 fix, Failure #2]** A `restart_from_session_id` naming a source instance that is still live (not stopped/archived) is rejected, not silently allowed to race. `SESSION_TYPE_DIRECTORY` sessions share the literal source path with no worktree isolation (`session/instance_worktree.go:69-77`'s `setupFirstTimeWorktree` default case explicitly skips worktree creation for this type) — two live CLI subprocesses writing to the same `.git` index concurrently is a real corruption risk, not a hypothetical one.
+  - *Given* `RestartFromSessionId` names a source instance that `s.FindLiveInstance` still finds running, *When* `CreateSession` runs without an explicit `confirm_restart_with_live_source: true` field on the request, *Then* it returns `connect.CodeFailedPrecondition` with a message naming the still-live source session and instructing the caller to stop it first or pass the confirmation field.
+  - *Given* the same still-live source, *When* `CreateSession` runs **with** `confirm_restart_with_live_source: true`, *Then* it proceeds normally (the explicit confirmation overrides the guard — this is a warn-and-confirm, not a hard block, since the user may have a legitimate reason to run both concurrently).
 
-**Files**: `server/services/session_service.go`
+**Files**: `server/services/session_service.go`, `proto/session/v1/session.proto`
 
 ##### Task 2.3.1a: Resolve path from `restart_from_session_id` (~4 min)
 - In `server/services/session_service.go`'s `CreateSession` (starts line 1260), immediately before the existing "Resolve GitHub URLs to local paths" block (line ~1327), add: if `req.Msg.RestartFromSessionId != ""` and `resolvedPath == ""`, look up the source instance via `s.FindLiveInstance(req.Msg.RestartFromSessionId)` (falling back to `s.storage.ListInstanceData()` lookup by ID if not live, matching the existing-session-lookup pattern used elsewhere in this file for `fork_source_id`), and set `resolvedPath = source.Path`. Return `connect.CodeNotFound` if no source session is found by either path.
 - Files: `server/services/session_service.go`
+
+##### Task 2.3.1a-2: Still-live-source guard (~4 min, closes pre-mortem P1 Failure #2 / AC-6)
+- Add `bool confirm_restart_with_live_source = 29;` to `CreateSessionRequest` (`proto/session/v1/session.proto`, next free field after `restart_from_session_id = 28` — re-verify via the same grep discipline as Task 2.1.1b), doc-commented "Required to proceed when restart_from_session_id names a still-live source instance; see Story 2.3.1's still-live guard."
+- Immediately after Task 2.3.1a's `FindLiveInstance` lookup succeeds (i.e. the source instance is found *live*, not just persisted), and before path resolution proceeds: if `!req.Msg.ConfirmRestartWithLiveSource`, return `connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("source session %q is still running; stop it first or pass confirm_restart_with_live_source to proceed anyway", req.Msg.RestartFromSessionId))`.
+- Files: `server/services/session_service.go`, `proto/session/v1/session.proto`
 
 ##### Task 2.3.1b: Set `restarted_from_session_id` on the created session (~2 min)
 - Immediately after the new `Instance` is constructed (grep the existing `fork_source_id`-adjacent field-setting block for the exact insertion point — likely near where other lineage-ish request fields are copied onto the new `Instance`), set `inst.RestartedFromSessionID = req.Msg.RestartFromSessionId` and thread it through `InstanceToProto` (`server/adapters/instance_adapter.go`) to populate `Session.restarted_from_session_id`.
 - Files: `server/services/session_service.go`, `session/instance.go` (new field), `server/adapters/instance_adapter.go`
 
 ##### Task 2.3.1c: Tests (~5 min)
-- `TestCreateSession_RestartFromSessionId_DerivesPathFromSource`, `TestCreateSession_RestartFromSessionId_ExplicitPathWins`, `TestCreateSession_RestartFromSessionId_MissingSourceReturnsNotFound`.
+- `TestCreateSession_RestartFromSessionId_DerivesPathFromSource`, `TestCreateSession_RestartFromSessionId_ExplicitPathWins`, `TestCreateSession_RestartFromSessionId_MissingSourceReturnsNotFound`, `TestCreateSession_RestartFromSessionId_RejectsStillLiveSourceWithoutConfirmation`, `TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed` (new, closes pre-mortem P1 Failure #2 / AC-6).
 - Files: `server/services/session_service_test.go`
 
 ---
@@ -520,13 +530,20 @@ external, unimplemented project and is not scheduled by this plan.
 **Files**: `web-app/src/components/sessions/RestartWithSummaryButton.tsx` (new), `RestartWithSummaryButton.css.ts` (new), `RestartWithSummaryButton.test.tsx` (new)
 
 ##### Task 3.2.1a: Implement the button component (~5 min)
-- New file, three-state render (idle → generating → ready-to-restart), using `useHandoffSummary(sessionId)` and `useSessionService().createSession`.
+- New file, **four**-state render (idle → generating → ready-to-restart → **error**, revised from three-state per adversarial-review Blocker #2), using `useHandoffSummary(sessionId)` and `useSessionService().createSession`.
+- Error state: `data.status === "error"` renders `data.errorMessage` (or a generic fallback if empty) plus a "Try again" action that re-calls `trigger()` — the same entry point as the idle state, not a dead end.
 - vanilla-extract styling per `.claude/rules/css-architecture.md` — no `.module.css`, no hardcoded colors, tokens from `theme.css.ts`.
+- **[Architecture-review Blocker fix]** `createSession(...)`'s call-site object literal must include `restartFromSessionId: sessionId` — see the corresponding `useSessionService.ts` fix in Task 3.2.1c below; without that hook-level change this component's call is silently dropped before it reaches the RPC.
 - Files: `web-app/src/components/sessions/RestartWithSummaryButton.tsx`, `RestartWithSummaryButton.css.ts`
 
 ##### Task 3.2.1b: Tests (~5 min)
-- `RestartWithSummaryButton_should_TriggerGeneration_When_ClickedWithNoSummary`, `..._should_CreateSessionWithSummaryAsPrompt_When_ClickedWhileReady`, `..._should_RenderNothing_When_FeatureDisabled`.
+- `RestartWithSummaryButton_should_TriggerGeneration_When_ClickedWithNoSummary`, `..._should_CreateSessionWithSummaryAsPrompt_When_ClickedWhileReady`, `..._should_RenderNothing_When_FeatureDisabled`, `..._should_RenderErrorStateWithRetry_When_StatusError` (new, closes Blocker #2).
 - Files: `web-app/src/components/sessions/RestartWithSummaryButton.test.tsx`
+
+##### Task 3.2.1c: Thread `restartFromSessionId` through `useSessionService.createSession` (~3 min, closes architecture-review Blocker)
+- `web-app/src/lib/hooks/useSessionService.ts`'s `createSession` (lines 256-281) builds an explicit allowlisted object literal for the wire call rather than spreading its argument — any field not named there is silently dropped before reaching ConnectRPC. Add `restartFromSessionId: request.restartFromSessionId` to that literal (per `.claude/docs/session-creation-registry.md` touchpoint 7).
+- Test: assert on the *mocked RPC client's* call args (not just the hook wrapper's), so a regression that re-drops the field fails — a test that only checks the hook was *called* with the right argument would pass even if the hook discards it internally.
+- Files: `web-app/src/lib/hooks/useSessionService.ts`, `web-app/src/lib/hooks/useSessionService.test.ts`
 
 ---
 
@@ -545,6 +562,8 @@ external, unimplemented project and is not scheduled by this plan.
   - *Given* a `READY` row, *When* the section renders, *Then* the container has `role="list"` and the single row has `role="listitem"`, and the row's icon carries `aria-hidden="true"` with a visible text label alongside it (per `research/ux.md` §3).
 - Embeds `RestartWithSummaryButton` on the row itself when `status === READY`.
   - *Given* a `READY` row, *When* the section renders, *Then* the row includes the "Start new session from this summary" action (Epic 3.2), not a separate detached button elsewhere on the page.
+- Renders the row's `ERROR` state with a retry action, not silently as if no row existed (closes adversarial-review Blocker #2).
+  - *Given* a row with `status === "error"`, *When* the section renders, *Then* it shows the error message text and a "Try again" action (delegating to `RestartWithSummaryButton`'s own error-state retry, Task 3.2.1a) rather than falling through to the no-row empty state.
 
 **Files**: `web-app/src/components/sessions/HandoffSummarySection.tsx` (new), `.css.ts` (new), `.test.tsx` (new), `web-app/src/components/sessions/SessionDetailView.tsx`
 
@@ -600,3 +619,5 @@ Per `requirements.md`'s Acceptance Criteria and this research's findings (ADR-00
 | Tool output blobs pruned before summarization | **Carried forward, reframed mechanism** — Epic 1.3's `pruneExcerptText` + `session/history.go`'s existing text-only content filter, not a live-transcript pre-pass |
 | Compression event shown in session detail UI | **Carried forward, reframed surface** — Epic 3.3's `HandoffSummarySection`, an Info-tab list with an actionable restart button, not a passive timeline badge |
 | Unit tests: threshold detection, head/tail protection boundaries, tool output pruning | **Carried forward, reframed target** — `buildTranscriptWindow` (Story 1.3.1), `applySummaryBudget`/`pruneExcerptText` (Story 1.3.2) tests cover the equivalent boundaries for the new mechanism |
+
+**[Pre-mortem P1 fix, Failure #1 / AC-7]** Phases 1-3 (manual "Restart with summary" trigger only) do **not**, by themselves, close the original "no warning to the operator" problem statement — a user still only discovers a degrading session from visible symptoms (confused output, `/compact` firing) unless they think to click the button proactively. The proactive/automatic half of that problem is explicitly deferred to Phase 4 (auto-suggest on `ContextHealth` RED), which is gated on the now-tracked `context-health-monitoring` dependency above. This gap is accepted explicitly rather than closed with an interim signal in this plan: `session/tokens` already computes a usage percentage, but wiring even a passive Info-tab stat is exactly the kind of new surface `context-health-monitoring` is already scoped to own (its own Phase 1 signal computation) — building a second, throwaway version of it here would duplicate work that project already plans to do properly. No task in this plan adds a token-usage-percentage stat.

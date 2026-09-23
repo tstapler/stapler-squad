@@ -398,7 +398,7 @@ export function SlackNotificationSettings() {
         <p id="slack-approval-enabled-hint" className={betaNote}>
           Beta — requires public reachability (stapler-squad must be reachable
           from Slack&apos;s servers); see
-          .claude/docs/slack-phase2-public-reachability.md
+          docs/how-to/expose-slack-interactive-endpoint.md
         </p>
 
         <div className={field}>

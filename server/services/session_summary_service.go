@@ -20,7 +20,7 @@ var _ sessionv1connect.SessionSummaryServiceHandler = (*SessionSummaryService)(n
 // liveInstanceFinder is the narrow interface RegenerateSessionSummary needs to check
 // whether a session is still live, so it can refresh diff/goal data straight from the
 // running Instance rather than stale persisted fields. Defined here, next to its
-// consumer, per .claude/rules/interface-pollution-checklist.md — *SessionService
+// consumer, per the `interface-pollution-checklist` skill — *SessionService
 // satisfies this structurally, and a trivial fake can stand in for tests without
 // constructing a full SessionService.
 type liveInstanceFinder interface {
@@ -186,16 +186,16 @@ func toSessionSummaryProto(row *ent.SessionSummary) *sessionv1.SessionSummaryPro
 		Narrative:             row.Narrative,
 		NarrativeFallbackUsed: row.NarrativeFallbackUsed,
 		Diff: &sessionv1.SessionSummaryProto_Diff{
-			FilesChanged: int32(row.DiffFilesChanged),
-			Added:        int32(row.DiffAdded),
-			Removed:      int32(row.DiffRemoved),
+			FilesChanged: int32(row.DiffFilesChanged), //#nosec G115 -- changed-file count, bounded well under int32 max
+			Added:        int32(row.DiffAdded),        //#nosec G115 -- diff line count, bounded well under int32 max
+			Removed:      int32(row.DiffRemoved),      //#nosec G115 -- diff line count, bounded well under int32 max
 		},
 		Decisions: &sessionv1.SessionSummaryProto_Decisions{
-			AutoApproved:        int32(row.DecisionsAutoApproved),
-			ManuallyApproved:    int32(row.DecisionsManuallyApproved),
-			Denied:              int32(row.DecisionsDenied),
-			ReviewQueueResolved: int32(row.DecisionsReviewQueueResolved),
-			StillOpen:           int32(row.DecisionsStillOpen),
+			AutoApproved:        int32(row.DecisionsAutoApproved),        //#nosec G115 -- per-session decision count, always small
+			ManuallyApproved:    int32(row.DecisionsManuallyApproved),    //#nosec G115 -- per-session decision count, always small
+			Denied:              int32(row.DecisionsDenied),              //#nosec G115 -- per-session decision count, always small
+			ReviewQueueResolved: int32(row.DecisionsReviewQueueResolved), //#nosec G115 -- per-session decision count, always small
+			StillOpen:           int32(row.DecisionsStillOpen),           //#nosec G115 -- per-session decision count, always small
 		},
 		Timeline: &sessionv1.SessionSummaryProto_Timeline{},
 		Cost: &sessionv1.SessionSummaryProto_Cost{

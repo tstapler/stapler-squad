@@ -168,6 +168,13 @@ describe('useVisibilityResync', () => {
     act(() => { jest.advanceTimersByTime(300); });
 
     expect(params.connect).toHaveBeenCalledTimes(1);
+    // Reconnect-backoff-escalation fix (backlog: fix-terminal-reconnect-backoff-
+    // escalation): connect() only skips its default backoff reset when called
+    // with { isAutoRetry: true } from useTerminalStream's own automatic-retry
+    // path. This call site must keep calling connect() with no arguments so it
+    // keeps getting a fresh backoff sequence, not a silent continuation of
+    // whatever attempt count a prior automatic retry left behind.
+    expect(params.connect).toHaveBeenCalledWith();
     expect(params.setShowReconnectButton).toHaveBeenCalledWith(true);
   });
 
@@ -217,6 +224,10 @@ describe('useVisibilityResync', () => {
     // flush the disconnect().then(connect) chain
     await act(async () => { await Promise.resolve(); });
     expect(params.connect).toHaveBeenCalledTimes(1);
+    // Same fresh-backoff-sequence contract as the disconnected-fallback path
+    // above: the 4s stall-watchdog forced reconnect must call connect() with no
+    // arguments, not silently continue a prior escalated attempt count.
+    expect(params.connect).toHaveBeenCalledWith();
   });
 
   it('useVisibilityResync_should_notForceDisconnect_When_resyncCompletesBeforeWatchdogTimeout', () => {

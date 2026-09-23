@@ -8,11 +8,40 @@ export const panelContainer = style({
   marginTop: vars.space["3"],
 });
 
+export const headingRow = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: vars.space["2"],
+  marginBottom: vars.space["2"],
+});
+
 export const heading = style({
   fontSize: vars.fontSize.sm,
   fontWeight: vars.fontWeight.medium,
   color: vars.color.textPrimary,
-  marginBottom: vars.space["2"],
+});
+
+export const dismissButton = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "24px",
+  height: "24px",
+  minWidth: "24px",
+  padding: 0,
+  border: "none",
+  background: "transparent",
+  color: vars.color.textMuted,
+  cursor: "pointer",
+  fontSize: vars.fontSize.xs,
+  borderRadius: vars.radii.sm,
+  selectors: {
+    "&:hover": {
+      color: vars.color.textPrimary,
+      background: vars.color.hoverBackground,
+    },
+  },
 });
 
 export const peerList = style({

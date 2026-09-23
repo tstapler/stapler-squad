@@ -1,0 +1,21 @@
+{
+  "id": "insights-findings-panel",
+  "type": "frontend",
+  "component": "FindingsPanel",
+  "path": "web-app/src/app/insights/FindingsPanel.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "FindingsPanel > FindingsPanel_should_showSkeleton_when_loading",
+    "FindingsPanel > FindingsPanel_should_showComputedEmptyText_when_findingsArrayIsEmpty",
+    "FindingsPanel > FindingsPanel_should_showErrorBoxWithRetry_when_parentErrorStateIsSet",
+    "FindingsPanel > FindingsPanel_should_showUnpricedCount_when_allSessionsUnpricedAndFindingsEmpty",
+    "FindingsPanel > FindingsPanel_should_showCleanText_when_noSessionUnpricedAndFindingsEmpty",
+    "FindingsPanel > FindingsPanel_should_renderFindingCard_when_findingsPresent",
+    "FindingsPanel > FindingsPanel_should_linkToSessionRoute_when_actionRendered",
+    "FindingsPanel > FindingsPanel_should_linkUsingConversationId_when_findingSessionIdIsEmptyOrphan",
+    "FindingsPanel > FindingsPanel_should_exposeActionAsKeyboardFocusableLink_when_findingCardDisplayed",
+    "FindingsPanel > FindingsPanel_should_renderDistinctText_for_computedEmptyVsUnpricedStates"
+  ],
+  "lastModified": "2026-09-03T00:00:00.000Z"
+}

@@ -12,7 +12,7 @@ import (
 // content; here a webhook payload rather than a user-submitted backlog item field).
 // Duplicated rather than imported from the session package: this is a five-line
 // regex+truncate helper, not worth a cross-package dependency for, per
-// .claude/rules/interface-pollution-checklist.md.
+// the `interface-pollution-checklist` skill.
 var triggerPayloadHTMLTagRe = regexp.MustCompile(`<[^>]+>`)
 
 // maxRenderedTriggerPromptLen caps the rendered (post-template, pre-envelope) prompt

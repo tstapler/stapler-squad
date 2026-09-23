@@ -29,8 +29,8 @@ type SessionServiceInterface interface {
 // Epic 1.3 — closes the pre-existing bypass where FireNow called CreateSession directly,
 // skipping the same MaxConcurrentBacklogWorkItems check BacklogService's own spawn path
 // enforces). Defined here (consumer-defined), not in server/services, to avoid a
-// server/workflows → server/services import — per .claude/rules/interface-pollution-
-// checklist.md. Satisfied by *services.BacklogService's Admit method.
+// server/workflows → server/services import — per the `interface-pollution-checklist`
+// skill. Satisfied by *services.BacklogService's Admit method.
 type AdmissionGate interface {
 	// Admit reports whether a new trigger-fired session may be created right now.
 	Admit(ctx context.Context) (bool, error)
@@ -46,8 +46,8 @@ type triggerFireEventRecorder interface {
 // triggerRateLimiterGate is the narrow interface Scheduler needs for per-Workflow rate
 // limiting (webhook-triggers Epic 2.4.2) — satisfied by *services.TriggerRateLimiter's
 // Allow method. Defined here (consumer-defined), not in server/services, to avoid a
-// server/workflows -> server/services import — per .claude/rules/interface-pollution-
-// checklist.md.
+// server/workflows -> server/services import — per the `interface-pollution-checklist`
+// skill.
 type triggerRateLimiterGate interface {
 	// Allow reports whether a fire for workflowID is permitted right now.
 	Allow(workflowID uuid.UUID) bool
@@ -367,25 +367,19 @@ func (s *Scheduler) fireTrigger(ctx context.Context, wf *ent.Workflow, renderedP
 
 	sessionType := sessionTypeToProto(session.SessionType(wf.SessionType))
 
-	// Resolve a family alias (e.g. "family:sonnet") to a concrete model ID.
-	// Fails closed: an unknown/retired alias aborts the fire rather than
-	// passing the broken "family:xxx" string through to the CLI.
+	// Resolve a family alias (e.g. "family:sonnet") to a concrete model ID and
+	// append it to the program via the shared helper (session.ResolveExecutorProgram),
+	// so this and the work-stage/headless spawn paths can't independently drift on
+	// alias resolution or shell-escaping. Fails closed: an unknown/retired alias
+	// aborts the fire rather than passing the broken "family:xxx" string through
+	// to the CLI.
 	s.mu.Lock()
 	families := s.modelFamilies
 	s.mu.Unlock()
-	resolvedModel, modelErr := ResolveModel(families, wf.Model)
+	program, modelErr := session.ResolveExecutorProgram(wf.AgentType, wf.Model, families)
 	if modelErr != nil {
 		log.Error("[WorkflowScheduler] FireNow: model resolution failed", "slug", wf.Slug, "model", wf.Model, "err", modelErr)
 		return "", fmt.Errorf("resolve model for workflow %q: %w", wf.Slug, modelErr)
-	}
-
-	// Append --model flag when a model is specified and the program is claude (or defaulting to claude).
-	program := wf.AgentType
-	if resolvedModel != "" {
-		isClaudeProgram := program == "" || program == "claude"
-		if isClaudeProgram {
-			program = "claude --model " + resolvedModel
-		}
 	}
 
 	// Deliberately mirrors a manually-created CreateSessionRequest field-for-field

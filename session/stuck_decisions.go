@@ -77,17 +77,22 @@ func abandonedReview(lastReviewAt, now time.Time) bool {
 }
 
 // staleWork reports whether an in_progress item's active work session has
-// gone quiet long enough (> maxWorkSessionStaleness, reused unchanged — no
-// new threshold introduced) to be flagged stale_work.
-func staleWork(lastProgress, now time.Time) bool {
-	return now.Sub(lastProgress) > maxWorkSessionStaleness
+// gone quiet longer than maxNoProgress to be flagged stale_work. maxNoProgress
+// is resolved by the caller (session/backlog_lifecycle_stale.go's
+// reconcileStaleWorkSessions) — from LivenessEngine when wired, falling back
+// to maxWorkSessionStaleness otherwise (Epic 1.4, Story 1.4.3).
+func staleWork(lastProgress, now time.Time, maxNoProgress time.Duration) bool {
+	return now.Sub(lastProgress) > maxNoProgress
 }
 
 // isBouncing reports whether cycleCount in_progress->review round trips
 // within the lookback window, with no recorded PASS verdict, constitute a
-// non-converging "bouncing" cycle (>= bounceThreshold and !hasPass).
-func isBouncing(cycleCount int, hasPass bool) bool {
-	return cycleCount >= bounceThreshold && !hasPass
+// non-converging "bouncing" cycle (>= cycleThreshold and !hasPass).
+// cycleThreshold is resolved by the caller (session/backlog_lifecycle.go's
+// reconcileBouncingItems) — from LivenessEngine when wired, falling back to
+// bounceThreshold otherwise (Epic 1.4, Story 1.4.3).
+func isBouncing(cycleCount, cycleThreshold int, hasPass bool) bool {
+	return cycleCount >= cycleThreshold && !hasPass
 }
 
 // isMultiReasonEscalated reports whether openNonEscalationCount — the number
@@ -162,6 +167,80 @@ func IsRepeatedNoVerdictFailure(hadVerdict []bool) bool {
 		}
 	}
 	return true
+}
+
+// RepeatedFailureEscalationThreshold is the streak length (see
+// ReviewFailureStreakLen/NoVerdictStreakLen) at which AutoReopenAfterFailedReview
+// grants ONE escalated retry instead of an identical one — matches
+// IsRepeatedFailure's/IsRepeatedNoVerdictFailure's own "two in a row" trip
+// point (bounceThreshold's "flip twice" precedent, reused here).
+const RepeatedFailureEscalationThreshold = 2
+
+// RepeatedFailureParkThreshold is the streak length at which
+// AutoReopenAfterFailedReview gives up and parks the item for a human instead
+// of granting a further attempt — one past RepeatedFailureEscalationThreshold,
+// so the streak has to survive one escalated, deliberately-different attempt
+// before the breaker fully trips. See docs/tasks/backlog-feature-improvement.md's
+// "no escalation, no awareness that the last N attempts failed the same way"
+// finding: without this second threshold, IsRepeatedFailure/
+// IsRepeatedNoVerdictFailure tripping at streak==2 just parks immediately,
+// with no attempt at all to try something different first.
+//
+// Honesty check, matching TestOnlyReworkMinAttempts' own candor above: the
+// "escalated" retry is only a text nudge (session.BuildSessionInitialPrompt's
+// Escalation Notice) prepended to an otherwise-identical respawn — same
+// agent, same tools, same diff strategy. Nothing persists which work session
+// was "the escalated one," so there is no way to later query how often the
+// nudge actually changes the outcome versus the agent simply repeating
+// itself again. This is a deliberate v1 bet on prompt-following, not a
+// structural difference in remediation; calibrating it is future work.
+const RepeatedFailureParkThreshold = 3
+
+// ReviewFailureStreakLen reports how many of the leading entries in recent
+// (most-recent-first, as returned by Storage.GetRecentReviewVerdictSummaries)
+// share recent[0]'s outcome and summary — i.e. how many consecutive review
+// attempts in a row failed for the identical reason. Generalizes
+// IsRepeatedFailure's fixed exactly-2 check to an arbitrary streak length, so
+// a caller can distinguish "just reached 2" (grant one escalated retry) from
+// "still failing after that escalated retry too" (give up). Returns 0 if
+// recent is empty or its head is a PASS or empty-summary verdict — an empty
+// summary carries no comparable signal, matching IsRepeatedFailure's own
+// requirement that Summary != "".
+func ReviewFailureStreakLen(recent []ReviewVerdictSummary) int {
+	if len(recent) == 0 {
+		return 0
+	}
+	head := recent[0]
+	if head.OverallOutcome == string(ReviewOutcomePass) || head.Summary == "" {
+		return 0
+	}
+	n := 1
+	for _, v := range recent[1:] {
+		if v.OverallOutcome != head.OverallOutcome || v.Summary != head.Summary {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+// NoVerdictStreakLen reports how many of the leading entries in hadVerdict
+// (most-recent-first, one bool per review-role ItemSession — true if that
+// session ever wrote a ReviewVerdict — as built by
+// server/services/backlog_service_triage.go's recentReviewHadVerdict) are
+// false in a row, i.e. how many consecutive review sessions exited without
+// ever calling submit_review_verdict. Generalizes IsRepeatedNoVerdictFailure's
+// fixed threshold check the same way ReviewFailureStreakLen generalizes
+// IsRepeatedFailure.
+func NoVerdictStreakLen(hadVerdict []bool) int {
+	n := 0
+	for _, v := range hadVerdict {
+		if v {
+			break
+		}
+		n++
+	}
+	return n
 }
 
 // IsFlakyVerdictFlipFlop reports whether the two most recent review verdicts

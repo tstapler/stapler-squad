@@ -4,7 +4,7 @@ import { dismissOnboardingIfPresent } from "./OnboardingPage";
 /**
  * Page object for Settings -> Remotes (web-app/src/app/settings/remotes/page.tsx) and its
  * Add Remote form / host-key trust dialog (ssh-remote-workspaces Phase 6 Epic 6.1). Follows
- * .claude/rules/e2e-test-conventions.md: data-testid/ARIA-role locators only, no
+ * the `e2e-test-conventions` skill: data-testid/ARIA-role locators only, no
  * waitForTimeout -- every wait below is an explicit toBeVisible/toHaveText-style expectation.
  */
 export class RemotesSettingsPage {

@@ -59,6 +59,7 @@ func (s *BacklogService) PreviewBackwardSyncImpact(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("preview backward sync impact failed: %w", err))
 	}
 
+	// #nosec G115 -- itemCount is a backlog item count for one local sync source, far below int32 range.
 	return connect.NewResponse(&sessionv1.PreviewBackwardSyncImpactResponse{
 		ItemCount:          int32(itemCount),
 		SampleTitles:       sampleTitles,

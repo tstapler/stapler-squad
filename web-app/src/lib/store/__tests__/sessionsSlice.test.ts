@@ -10,12 +10,14 @@ import sessionsReducer, {
   removeSession,
   setLoading,
   setError,
+  setErrorCode,
   selectAllSessions,
   selectSessionById,
   selectSessionIds,
   selectSessionsTotal,
   selectSessionsLoading,
   selectSessionsError,
+  selectSessionsErrorCode,
   selectDetectedStatusMap,
   removeDetectedStatus,
   selectActiveSessionsSortedByUpdatedAt,
@@ -252,6 +254,22 @@ describe("sessionsSlice", () => {
       expect(selectSessionsError(store.getState())).toBe("stream disconnected");
       store.dispatch(setError(null));
       expect(selectSessionsError(store.getState())).toBeNull();
+    });
+
+    it("sets an error code alongside the message via the sibling setErrorCode reducer", () => {
+      const store = makeStore();
+      store.dispatch(setError("failed precondition"));
+      store.dispatch(setErrorCode(9)); // Code.FailedPrecondition
+      expect(selectSessionsError(store.getState())).toBe("failed precondition");
+      expect(selectSessionsErrorCode(store.getState())).toBe(9);
+    });
+
+    it("clears the previous errorCode when a fresh setError fires without a follow-up setErrorCode", () => {
+      const store = makeStore();
+      store.dispatch(setError("first error"));
+      store.dispatch(setErrorCode(14)); // Code.Unavailable
+      store.dispatch(setError("second, unclassified error"));
+      expect(selectSessionsErrorCode(store.getState())).toBeUndefined();
     });
   });
 

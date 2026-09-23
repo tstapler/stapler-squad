@@ -22,6 +22,47 @@ func TestStuckReason_IsValid_should_returnTrueForKnown_And_FalseForUnknown(t *te
 	}
 }
 
+// TestRequestScope_IsValid_should_ReturnTrue_When_ValueIsBacklogItem confirms
+// the known RequestScope constants validate as true before ever reaching the
+// database (CreateGuidanceRequest's fail-fast validation).
+func TestRequestScope_IsValid_should_ReturnTrue_When_ValueIsBacklogItem(t *testing.T) {
+	t.Parallel()
+	for _, s := range []RequestScope{RequestScopeBacklogItem, RequestScopeSession, RequestScopeStandalone} {
+		if !s.IsValid() {
+			t.Errorf("RequestScope(%q).IsValid() = false, want true", s)
+		}
+	}
+}
+
+// TestRequestScope_IsValid_should_ReturnFalse_When_ValueIsUnknown confirms an
+// arbitrary unknown scope string is rejected.
+func TestRequestScope_IsValid_should_ReturnFalse_When_ValueIsUnknown(t *testing.T) {
+	t.Parallel()
+	if RequestScope("carrier-pigeon").IsValid() {
+		t.Errorf(`RequestScope("carrier-pigeon").IsValid() = true, want false`)
+	}
+}
+
+// TestQuestionType_IsValid_should_ReturnTrue_When_ValueIsKnown mirrors
+// RequestScope's coverage for the sibling QuestionType enum.
+func TestQuestionType_IsValid_should_ReturnTrue_When_ValueIsKnown(t *testing.T) {
+	t.Parallel()
+	for _, qt := range []QuestionType{QuestionTypeYesNo, QuestionTypeMultipleChoice, QuestionTypeShortAnswer} {
+		if !qt.IsValid() {
+			t.Errorf("QuestionType(%q).IsValid() = false, want true", qt)
+		}
+	}
+}
+
+// TestQuestionType_IsValid_should_ReturnFalse_When_ValueIsUnknown confirms an
+// arbitrary unknown question type string is rejected.
+func TestQuestionType_IsValid_should_ReturnFalse_When_ValueIsUnknown(t *testing.T) {
+	t.Parallel()
+	if QuestionType("essay").IsValid() {
+		t.Errorf(`QuestionType("essay").IsValid() = true, want false`)
+	}
+}
+
 // TestStuckReasonReworkBlockedStale_should_beValid_When_Checked confirms the
 // new reason (review-gate-stale-session-rework) round-trips through IsValid
 // exactly like the other 11 established reasons.
@@ -32,14 +73,25 @@ func TestStuckReasonReworkBlockedStale_should_beValid_When_Checked(t *testing.T)
 	}
 }
 
-// TestAllStuckReasons_should_contain18Entries_When_Enumerated is a regression
+// TestAllStuckReasons_should_contain20Entries_When_Enumerated is a regression
 // guard: catches an accidental removal from AllStuckReasons (which would
 // silently exclude a valid reason from every consumer that iterates the full
-// set, e.g. exhaustiveness tests) independent of IsValid's own switch.
-func TestAllStuckReasons_should_contain18Entries_When_Enumerated(t *testing.T) {
+// set, e.g. exhaustiveness tests) independent of IsValid's own switch. Bumped
+// from 19 to 20 by Epic 2.4's StuckReasonGateTimeout addition.
+func TestAllStuckReasons_should_contain20Entries_When_Enumerated(t *testing.T) {
 	t.Parallel()
-	if len(AllStuckReasons) != 18 {
-		t.Errorf("len(AllStuckReasons) = %d, want 18", len(AllStuckReasons))
+	if len(AllStuckReasons) != 20 {
+		t.Errorf("len(AllStuckReasons) = %d, want 20", len(AllStuckReasons))
+	}
+}
+
+// TestStuckReasonSteerFailed_should_beValid_When_Checked confirms the new
+// reason (pr-fix-steering Epic 4.3, ADR-002) round-trips through IsValid
+// exactly like the other established reasons.
+func TestStuckReasonSteerFailed_should_beValid_When_Checked(t *testing.T) {
+	t.Parallel()
+	if !StuckReasonSteerFailed.IsValid() {
+		t.Errorf("StuckReasonSteerFailed.IsValid() = false, want true")
 	}
 }
 

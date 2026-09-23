@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/testutil/wait"
+	"go.uber.org/goleak"
 )
 
 // TestKillOrphanedControlModeClients is a regression test for BUG-042: a fresh process
@@ -136,6 +137,9 @@ func TestControlModeSurvivesRestart_OnlyOneClientRemains(t *testing.T) {
 		t.Skip("tmux not available, skipping real tmux test")
 	}
 
+	baseline := goleak.IgnoreCurrent()
+	t.Cleanup(func() { goleak.VerifyNone(t, baseline) })
+
 	socketName := fmt.Sprintf("test_restart_cm_%d_%d", os.Getpid(), time.Now().UnixNano())
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -162,6 +166,15 @@ func TestControlModeSurvivesRestart_OnlyOneClientRemains(t *testing.T) {
 		if cmd != nil && cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
+		// RestoreWithWorkDir above started a PTY attach-session process and its
+		// diagnostic watcher goroutine (tmux.go's RestoreWithWorkDir, guarded by
+		// waitOnce). Close() synchronously waitOnce.Do(cmd.Wait())'s that process
+		// so the watcher goroutine is guaranteed reaped before goleak.VerifyNone
+		// runs below -- without this, only the kill-server cleanup (which races
+		// asynchronously against goleak.VerifyNone) would eventually kill the
+		// attach process, intermittently leaving the watcher goroutine still in
+		// syscall.Wait4 when goleak's retries ran out under -race contention.
+		_ = sess1.Close()
 	})
 
 	require.NoError(t, wait.WaitForCondition(func() bool {

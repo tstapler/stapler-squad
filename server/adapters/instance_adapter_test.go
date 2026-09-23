@@ -1,14 +1,18 @@
 package adapters
 
 import (
+	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -33,6 +37,45 @@ func TestRateLimitStateToProto_AllStates(t *testing.T) {
 				t.Errorf("rateLimitStateToProto(%v) = %v, want %v", tc.input, got, tc.expected)
 			}
 		})
+	}
+}
+
+func TestReviveOutcomeToProto_AllOutcomes(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    session.ReviveOutcome
+		expected sessionv1.ReviveOutcome
+	}{
+		{"ResumeLive", session.ReviveOutcomeResumeLive, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE},
+		{"ResumeRecovered", session.ReviveOutcomeResumeRecovered, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED},
+		{"FreshExpected", session.ReviveOutcomeFreshExpected, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED},
+		{"FreshLostHistory", session.ReviveOutcomeFreshLostHistory, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY},
+		{"Unspecified", session.ReviveOutcomeUnspecified, sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
+		{"Unknown value defaults to Unspecified", session.ReviveOutcome("bogus"), sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reviveOutcomeToProto(tc.input)
+			if got != tc.expected {
+				t.Errorf("reviveOutcomeToProto(%v) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+// TestInstanceToProto_ReviveOutcome verifies InstanceToProto wires
+// Instance.LastReviveOutcome through to protoSession.ReviveOutcome — the
+// wire-format boundary a swapped reviveOutcomeToProto case would silently
+// corrupt without failing any other test.
+func TestInstanceToProto_ReviveOutcome(t *testing.T) {
+	inst := &session.Instance{LastReviveOutcome: session.ReviveOutcomeFreshLostHistory}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.ReviveOutcome != sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY {
+		t.Errorf("expected ReviveOutcome=FRESH_LOST_HISTORY, got %v", proto.ReviveOutcome)
 	}
 }
 
@@ -253,15 +296,50 @@ func TestStatusToProto_AllStates(t *testing.T) {
 		{"Stopped", session.Stopped, sessionv1.SessionStatus_SESSION_STATUS_STOPPED},
 		{"Hibernated", session.Hibernated, sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED},
 		{"Restoring", session.Restoring, sessionv1.SessionStatus_SESSION_STATUS_RESTORING},
+		{"Crashed", session.Crashed, sessionv1.SessionStatus_SESSION_STATUS_CRASHED},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := StatusToProto(tc.input)
+			got, err := StatusToProto(tc.input)
+			if err != nil {
+				t.Errorf("StatusToProto(%v) returned unexpected error: %v", tc.input, err)
+			}
 			if got != tc.expected {
 				t.Errorf("StatusToProto(%v) = %v, want %v", tc.input, got, tc.expected)
 			}
 		})
+	}
+}
+
+// TestStatusToProto_should_ReturnFailed_When_StatusIsFailed verifies Epic 1.1
+// Story 1.1.3's Failed arm: session.Failed maps to SESSION_STATUS_FAILED, not
+// UNSPECIFIED.
+func TestStatusToProto_should_ReturnFailed_When_StatusIsFailed(t *testing.T) {
+	got, err := StatusToProto(session.Failed)
+	if err != nil {
+		t.Fatalf("StatusToProto(Failed) returned unexpected error: %v", err)
+	}
+	if got != sessionv1.SessionStatus_SESSION_STATUS_FAILED {
+		t.Errorf("StatusToProto(Failed) = %v, want SESSION_STATUS_FAILED", got)
+	}
+}
+
+// TestStatusToProto_should_ReturnExplicitError_When_StatusIsUnrecognized is the
+// Task 1.1.3c exhaustiveness guard: an unmapped session.Status value must fail
+// loudly (a returned error) instead of silently falling back to UNSPECIFIED, so
+// the next new status value added to the FSM but not to this switch is caught
+// instead of repeating the exact gap this story closes.
+func TestStatusToProto_should_ReturnExplicitError_When_StatusIsUnrecognized(t *testing.T) {
+	unrecognized := session.Status(99)
+
+	got, err := StatusToProto(unrecognized)
+
+	if err == nil {
+		t.Fatalf("StatusToProto(%v) = %v, <nil>, want a non-nil error for an unrecognized status", unrecognized, got)
+	}
+	if got != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
+		t.Errorf("StatusToProto(%v) status = %v, want SESSION_STATUS_UNSPECIFIED alongside the error", unrecognized, got)
 	}
 }
 
@@ -300,4 +378,166 @@ func TestInstanceToProto_omitsGoalSummaryWhenNil(t *testing.T) {
 	if proto.Goal != nil {
 		t.Errorf("expected Goal to be nil when inst.SessionGoal is nil, got %+v", proto.Goal)
 	}
+}
+
+// TestInstanceToProto_should_MapChecksAndReviewFeedback_When_Populated verifies
+// GithubChecks/GithubReviewFeedback/GithubMergeable populate field-for-field from
+// Instance.GitHubChecks/GitHubReviewFeedback/GitHubMergeable, matching the existing
+// sibling GitHub-status field GithubCheckConclusion.
+func TestInstanceToProto_should_MapChecksAndReviewFeedback_When_Populated(t *testing.T) {
+	inst := &session.Instance{
+		GitHubCheckConclusion: "success",
+		GitHubChecks: []github.CheckItem{
+			{Name: "build", Context: "ci/build", State: "SUCCESS", Status: "COMPLETED", Conclusion: "SUCCESS"},
+			{Name: "lint", Context: "ci/lint", State: "FAILURE", Status: "COMPLETED", Conclusion: "FAILURE"},
+		},
+		GitHubReviewFeedback: []github.ReviewItem{
+			{Author: "alice", State: "APPROVED", Body: "LGTM"},
+			{Author: "bob", State: "CHANGES_REQUESTED", Body: "please fix X"},
+		},
+		GitHubMergeable: "mergeable",
+	}
+
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+
+	if proto.GithubMergeable != "mergeable" {
+		t.Errorf("GithubMergeable = %q, want %q", proto.GithubMergeable, "mergeable")
+	}
+
+	if len(proto.GithubChecks) != 2 {
+		t.Fatalf("expected 2 GithubChecks, got %d", len(proto.GithubChecks))
+	}
+	wantChecks := []struct{ name, context, state, status, conclusion string }{
+		{"build", "ci/build", "SUCCESS", "COMPLETED", "SUCCESS"},
+		{"lint", "ci/lint", "FAILURE", "COMPLETED", "FAILURE"},
+	}
+	for i, want := range wantChecks {
+		got := proto.GithubChecks[i]
+		if got.Name != want.name || got.Context != want.context || got.State != want.state ||
+			got.Status != want.status || got.Conclusion != want.conclusion {
+			t.Errorf("GithubChecks[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+
+	if len(proto.GithubReviewFeedback) != 2 {
+		t.Fatalf("expected 2 GithubReviewFeedback, got %d", len(proto.GithubReviewFeedback))
+	}
+	wantReviews := []struct{ author, state, body string }{
+		{"alice", "APPROVED", "LGTM"},
+		{"bob", "CHANGES_REQUESTED", "please fix X"},
+	}
+	for i, want := range wantReviews {
+		got := proto.GithubReviewFeedback[i]
+		if got.Author != want.author || got.State != want.state || got.Body != want.body {
+			t.Errorf("GithubReviewFeedback[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+}
+
+// TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackNil verifies
+// the nil/empty case doesn't panic and produces empty (non-nil-required) slices.
+func TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackNil(t *testing.T) {
+	inst := &session.Instance{}
+
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+
+	if len(proto.GithubChecks) != 0 {
+		t.Errorf("expected empty GithubChecks, got %+v", proto.GithubChecks)
+	}
+	if len(proto.GithubReviewFeedback) != 0 {
+		t.Errorf("expected empty GithubReviewFeedback, got %+v", proto.GithubReviewFeedback)
+	}
+	if proto.GithubMergeable != "" {
+		t.Errorf("expected empty GithubMergeable, got %q", proto.GithubMergeable)
+	}
+}
+
+// TestInstanceToProto_should_PopulateRuleTagProvenance_When_TagsHaveRuleProvenance closes
+// the session-classifier-pipeline Phase 6 gap: RuleTagProvenance was added to the wire proto
+// (types.proto field 90) but InstanceToProto never copied Instance.RuleTagProvenance into it,
+// so the frontend provenance tooltip had no data to read. See ADR-002 tag-provenance data
+// model.
+func TestInstanceToProto_should_PopulateRuleTagProvenance_When_TagsHaveRuleProvenance(t *testing.T) {
+	inst := &session.Instance{
+		Tags:              []string{"Bugfix", "Feature"},
+		RuleTagProvenance: map[string]string{"Bugfix": "seed-bugfix", "Feature": "llm"},
+	}
+
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+
+	want := map[string]string{"Bugfix": "seed-bugfix", "Feature": "llm"}
+	if len(proto.RuleTagProvenance) != len(want) {
+		t.Fatalf("RuleTagProvenance = %+v, want %+v", proto.RuleTagProvenance, want)
+	}
+	for tag, ruleID := range want {
+		if got := proto.RuleTagProvenance[tag]; got != ruleID {
+			t.Errorf("RuleTagProvenance[%q] = %q, want %q", tag, got, ruleID)
+		}
+	}
+}
+
+// newWorktreeInstance builds an Instance whose worktree points at worktreePath.
+// A path never created on disk models a session whose worktree pause_session
+// removed while keeping the branch.
+func newWorktreeInstance(repoPath, worktreePath string) *session.Instance {
+	const title = "worktree-session"
+	inst := &session.Instance{Title: title, Path: repoPath, Status: session.Active}
+	inst.SetGitWorktree(git.NewGitWorktreeFromStorage(repoPath, worktreePath, title, "test-branch", "abc123"))
+	return inst
+}
+
+// TestInstanceToProto_PopulatesPathVocabulary covers the four path fields at the
+// adapter boundary, which had no path-field assertions at all before this.
+func TestInstanceToProto_PopulatesPathVocabulary(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(t.TempDir(), "gone-worktree")
+
+	got := InstanceToProto(newWorktreeInstance(repoPath, worktreePath), nil)
+
+	require.Equal(t, repoPath, got.RepoRoot)
+	require.Equal(t, worktreePath, got.WorktreeDir)
+	require.Equal(t, worktreePath, got.ActiveDir)
+	require.Equal(t, repoPath, got.ExistingDir, "worktree is absent from disk, so ExistingDir falls back")
+}
+
+// TestInstanceToProto_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing checks
+// the divergence survives the adapter, not just the domain layer — wiring the
+// wrong one of the two into a field is exactly the mistake that shipped.
+func TestInstanceToProto_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing(t *testing.T) {
+	repoPath := t.TempDir()
+	gone := t.TempDir()
+
+	first := InstanceToProto(newWorktreeInstance(repoPath, filepath.Join(gone, "alpha")), nil)
+	second := InstanceToProto(newWorktreeInstance(repoPath, filepath.Join(gone, "beta")), nil)
+
+	require.Equal(t, first.ExistingDir, second.ExistingDir)
+	require.NotEqual(t, first.ActiveDir, second.ActiveDir,
+		"two isolated worktree sessions must stay distinguishable on the wire")
+}
+
+// TestInstanceToProto_LegacyPathFields_Unchanged is the additive guarantee: the
+// deprecated fields keep the values they carried before the new ones existed, so
+// no current consumer sees a change.
+func TestInstanceToProto_LegacyPathFields_Unchanged(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(t.TempDir(), "gone-worktree")
+
+	got := InstanceToProto(newWorktreeInstance(repoPath, worktreePath), nil)
+
+	// Concrete values, not a re-derivation from Workspace() — asserting against
+	// the implementation under test would still pass if its semantics changed,
+	// which is the one thing this test exists to catch.
+	//nolint:staticcheck // asserting the deprecated fields is the point: they must not change.
+	require.Equal(t, repoPath, got.Path, "path carried the disk-checked value, which falls back here")
+	//nolint:staticcheck // ditto.
+	require.Equal(t, worktreePath, got.WorkingDir, "working_dir carried the disk-agnostic value")
 }

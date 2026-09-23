@@ -20,10 +20,8 @@ package services
 //	go test -v -tags=harness -run TestTriageHarness_RealClaude      ./server/services/ -timeout 5m
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	stdlog "log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,6 +38,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // setupTriageHarness spins up a real BacklogService + ConnectRPC handler
@@ -69,7 +68,7 @@ func preambleTriageJSON() string {
 // pollUntilReady polls GetBacklogItem until status == "ready" or timeout.
 func pollUntilReady(t *testing.T, client sessionv1connect.BacklogServiceClient, itemID string) {
 	t.Helper()
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		resp, err := client.GetBacklogItem(context.Background(),
 			connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
 		return err == nil && resp.Msg.Item.Status == "ready"
@@ -267,7 +266,7 @@ func checkPoolStartAllowed(t *testing.T) {
 // WorkDir with version control context. Without this, claude may exit immediately
 // on some systems that require a git repo for project-context features. Uses
 // go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	initGitRepoForTest(t, dir)
@@ -342,9 +341,10 @@ func TestTriageHarness_RealClaude(t *testing.T) {
 	client, _ := setupTriageHarness(t, &fastTriagePool{pool: realPool})
 
 	// Redirect ssqlog.ErrorLog to a buffer so we can surface service errors in t.Log.
-	var errBuf bytes.Buffer
-	origErrorLog := ssqlog.SetErrorLogForTest(stdlog.New(&errBuf, "ERROR: ", 0))
-	t.Cleanup(func() { ssqlog.SetErrorLogForTest(origErrorLog) })
+	// RedirectLogger's SyncBuffer (not a raw bytes.Buffer) is required here: this
+	// harness's background reconciliation loops keep calling ssqlog.ErrorLog().Printf
+	// after the poll below returns, racing with the errBuf.String() read further down.
+	errBuf := ssqlog.RedirectLogger(t, ssqlog.ErrorLog(), "ERROR: ")
 
 	repoPath := t.TempDir()
 
@@ -365,7 +365,7 @@ func TestTriageHarness_RealClaude(t *testing.T) {
 	require.NoError(t, trigErr)
 
 	// Fast-prompt triage should complete in well under 2 minutes.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		resp, getErr := client.GetBacklogItem(context.Background(),
 			connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
 		if getErr != nil {
