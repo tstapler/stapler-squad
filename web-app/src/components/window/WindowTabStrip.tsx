@@ -3,6 +3,7 @@
 import { forwardRef, memo, useRef, useState } from "react";
 import type { NamedWindow, WindowId } from "@/lib/window/windowTypes";
 import { GESTURE_MOVEMENT_THRESHOLD_PX } from "@/lib/window/windowGestureConstants";
+import { useWindowSwipe } from "@/lib/window/useWindowSwipe";
 import {
   windowTabStrip,
   windowTabWrapper,
@@ -242,8 +243,28 @@ const WindowTabStripInner = forwardRef<HTMLDivElement, WindowTabStripProps>(
     const cancelRename = () => setEditingId(null);
     const longPress = useLongPress(beginEdit);
 
+    // Local ref so useWindowSwipe can attach touch listeners to the same
+    // container the forwardRef exposes to callers (Task 3.1.1b).
+    const containerRef = useRef<HTMLDivElement>(null);
+    const setRefs = (el: HTMLDivElement | null) => {
+      containerRef.current = el;
+      if (typeof ref === "function") {
+        ref(el);
+      } else if (ref) {
+        ref.current = el;
+      }
+    };
+
+    useWindowSwipe(containerRef, {
+      onSwipe: (dir) => {
+        const idx = windows.findIndex((w) => w.id === currentWindowId);
+        const nextIdx = dir === "next" ? (idx + 1) % windows.length : (idx - 1 + windows.length) % windows.length;
+        onSwitch(windows[nextIdx].id);
+      },
+    });
+
     return (
-      <div ref={ref} className={windowTabStrip} role="tablist" aria-label="Window switcher">
+      <div ref={setRefs} className={windowTabStrip} role="tablist" aria-label="Window switcher">
         {windows.map((w) => (
           <WindowTab
             key={w.id}
