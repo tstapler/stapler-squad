@@ -21,6 +21,7 @@ import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
 import type { PaneAction } from "@/lib/pane/paneTypes";
 import { useWindowManager } from "@/lib/window/useWindowManager";
 import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
+import { WindowTabStrip } from "@/components/window/WindowTabStrip";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
 import { useSessionViewMode } from "@/lib/hooks/useSessionViewMode";
@@ -495,6 +496,17 @@ function HomeContent() {
       {/* Unified tiling cockpit — session list and detail panels are both pane views */}
       <CockpitActionsProvider value={cockpitActions}>
         <SessionViewModeProvider value={{ viewMode, setViewMode }}>
+          <WindowTabStrip
+            windows={windows}
+            currentWindowId={currentWindow.id}
+            onSwitch={switchToWindow}
+            onCreate={() => switchToWindow(createWindow())}
+            onClose={(id) => {
+              const next = closeWindow(id);
+              if (id === currentWindow.id && next) switchToWindow(next);
+            }}
+            onRename={renameWindow}
+          />
           <div
             ref={sessionDetailRef}
             className={styles.cockpitContainer}

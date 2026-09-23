@@ -122,9 +122,10 @@ describe("HomeContent handleSteerAutonomousSession", () => {
     mockUpdateSession.mockResolvedValue(null);
     render(<Home />);
 
-    fireEvent.click(screen.getByRole("button"));
+    const steerButton = screen.getByRole("button", { name: /steer:/ });
+    fireEvent.click(steerButton);
 
-    await waitFor(() => expect(screen.getByRole("button")).toHaveTextContent("steer:false"));
+    await waitFor(() => expect(steerButton).toHaveTextContent("steer:false"));
     expect(mockAddNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         notificationType: "error",
@@ -138,9 +139,10 @@ describe("HomeContent handleSteerAutonomousSession", () => {
     mockUpdateSession.mockResolvedValue({ id: "session-1" });
     render(<Home />);
 
-    fireEvent.click(screen.getByRole("button"));
+    const steerButton = screen.getByRole("button", { name: /steer:/ });
+    fireEvent.click(steerButton);
 
-    await waitFor(() => expect(screen.getByRole("button")).toHaveTextContent("steer:true"));
+    await waitFor(() => expect(steerButton).toHaveTextContent("steer:true"));
     expect(mockAddNotification).not.toHaveBeenCalled();
   });
 });
