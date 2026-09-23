@@ -1262,6 +1262,56 @@ func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) 
 	}
 }
 
+// TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits covers
+// backlog item 1cea70ed-3127-48db-8e68-f02eac685510 AC1: Stop() must not
+// return until runStatusChangeLoop has actually exited, not just until ctx
+// is cancelled — the flake this closes came from Stop() returning while the
+// loop was still unwinding into a later test's goleak snapshot.
+func TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits(t *testing.T) {
+	t.Parallel()
+
+	reader, writer, err := mockPTY()
+	if err != nil {
+		t.Fatalf("failed to create mock PTY: %v", err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+
+	inst := &mockInstance{title: "wg-join-test", ptyReader: reader}
+	cc, err := NewClaudeController(inst)
+	if err != nil {
+		t.Fatalf("NewClaudeController() failed: %v", err)
+	}
+	if err := cc.Start(context.Background()); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	// Safety net: if a t.Fatal below exits before the explicit Stop() call runs,
+	// this still tears the controller down so its background goroutines don't
+	// leak into a later test's goleak snapshot — the same bug class this test
+	// exists to catch. A second Stop() call after the explicit one is a
+	// harmless no-op (cc.lifecycle.cancel is already nil by then).
+	defer cc.Stop()
+
+	var statusLoopDone chan struct{}
+	cc.lifecycle.Read(func(l controllerLifecycle) {
+		statusLoopDone = l.statusLoopDone
+	})
+	if statusLoopDone == nil {
+		t.Fatal("statusLoopDone was not set by Start()")
+	}
+
+	if err := cc.Stop(); err != nil {
+		t.Fatalf("Stop() failed: %v", err)
+	}
+
+	select {
+	case <-statusLoopDone:
+		// Expected: runStatusChangeLoop had already closed it by the time Stop() returned.
+	default:
+		t.Fatal("runStatusChangeLoop had not closed statusLoopDone by the time Stop() returned")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // OSC title status override (osc-status-signals)
 // ---------------------------------------------------------------------------

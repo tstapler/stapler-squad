@@ -14,6 +14,8 @@ import {
 import { hasLostContext, RevivedContextBadge } from "./RevivedContextBadge";
 import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
+import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
+import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
 import { isSessionStale } from "@/lib/session-staleness";
 import { staleBadge, hostBadge } from "./SessionCard.css";
@@ -88,6 +90,8 @@ interface SessionRowProps {
   isSelected?: boolean;
   /** Called when the checkbox is clicked; receives the native MouseEvent so the parent can inspect e.shiftKey. */
   onToggleSelect?: (e: React.MouseEvent) => void;
+  /** Backlog item this session was dispatched from (work/review/triage automation), if any. */
+  backlogEntry?: BacklogIndexEntry;
 }
 
 // Module-level constant avoids repeated BigInt(0) allocations in hot render paths.
@@ -202,6 +206,7 @@ function SessionRowInner({
   selectMode = false,
   isSelected = false,
   onToggleSelect,
+  backlogEntry,
 }: SessionRowProps) {
   const overflowRef = useRef<SessionActionsOverflowHandle>(null);
   const sessionActions = useSessionActions(session.id);
@@ -411,6 +416,7 @@ function SessionRowInner({
             checkConclusion={session.githubCheckConclusion}
             compact={true}
           />
+          <BacklogOriginBadge entry={backlogEntry} compact={true} />
           {noteTooltip && (
             <Tooltip label={noteTooltip}>
               <span

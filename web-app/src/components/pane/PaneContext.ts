@@ -3,6 +3,7 @@
 import { createContext, useContext } from "react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import type { PaneState, PaneAction } from "@/lib/pane/paneTypes";
+import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 
 export interface PaneContextValue {
   state: PaneState;
@@ -12,6 +13,8 @@ export interface PaneContextValue {
   triggerPicker: (session: Session, tab?: string) => void;
   triggerPickerForceNew: (session: Session, tab?: string) => void;
   cancelPicker: () => void;
+  /** Session UUID -> backlog-origin index entry, lifted once at the tiling-container level. */
+  backlogIndex: Map<string, BacklogIndexEntry>;
 }
 
 export const PaneContext = createContext<PaneContextValue | null>(null);
