@@ -205,6 +205,9 @@ export class TerminalStreamManager {
   // (research/architecture.md §6).
   private onAppScrollback: ((frame: AppScrollbackFrame) => void) | null = null;
 
+  // Story 3 (Task 3.6 / Bug 3) — set by cleanup(). See cleanup()'s doc comment.
+  private disposed: boolean = false;
+
   constructor(terminal: ITerminal, sendFlowControl: SendFlowControlFn) {
     this.terminal = terminal;
     this.sendFlowControl = sendFlowControl;
@@ -299,7 +302,7 @@ export class TerminalStreamManager {
         });
       }
 
-      return self.originalWrite!(data, callback);
+      return self.originalWrite?.(data, callback);
     };
 
     // Wrap refresh to log all calls (only in debug mode)
@@ -323,7 +326,7 @@ export class TerminalStreamManager {
         self.writeCount = 0;
       }
 
-      return self.originalRefresh!(start, end);
+      return self.originalRefresh?.(start, end);
     };
 
     this.debugMonitorInstalled = true;
@@ -337,6 +340,8 @@ export class TerminalStreamManager {
    * This is the primary entry point for streaming output.
    */
   write(output: string): void {
+    if (this.disposed) return;
+
     // Write-lock: if writeInitialContent or prependScrollbackBatch is in progress,
     // queue live output to avoid interleaving history with live data (Pitfall #1 and #8).
     if (this.isWritingInitialContent) {
@@ -376,6 +381,7 @@ export class TerminalStreamManager {
    * @returns Promise that resolves when the write completes.
    */
   async writeInitialContent(content: string): Promise<void> {
+    if (this.disposed) return;
     this.isWritingInitialContent = true;
     try {
       this.terminal.clear();
@@ -418,6 +424,7 @@ export class TerminalStreamManager {
    * @returns Promise that resolves when the write completes.
    */
   async prependScrollbackBatch(content: string): Promise<void> {
+    if (this.disposed) return;
     this.isWritingInitialContent = true;
     try {
       if (!this.serializeAddon) {
@@ -561,6 +568,15 @@ export class TerminalStreamManager {
     this.isProcessingQueue = true;
 
     while (this.writeQueue.length > 0) {
+      if (this.disposed) {
+        // Drop remaining queued items without writing — cleanup() already
+        // cleared writeQueue, but a chunked item mid-flight below re-checks
+        // this flag between chunks, so this outer guard only matters if
+        // cleanup() ran between two top-level queue items.
+        this.writeQueue.length = 0;
+        break;
+      }
+
       const item = this.writeQueue[0];
       const data = item.data;
 
@@ -595,6 +611,12 @@ export class TerminalStreamManager {
         }
 
         for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+          // Task 3.6 / Bug 3 — re-checked before every chunk (not just once
+          // per queue item): dispose() can land between any two chunks of a
+          // large writeInitialContent/prependScrollbackBatch, and the whole
+          // point is to stop mid-item, not just between items.
+          if (this.disposed) break;
+
           const chunk = data.slice(i, Math.min(i + CHUNK_SIZE, data.length));
           const chunkIndex = Math.floor(i / CHUNK_SIZE) + 1;
 
@@ -710,6 +732,18 @@ export class TerminalStreamManager {
 
     // Clear any pending live writes
     this.pendingLiveWrites.length = 0;
+
+    // Task 3.6 / Bug 3 — stop issuing further terminal.write() calls after
+    // cleanup(). Pooled terminals (TerminalPool.tsx) reuse the underlying
+    // xterm.js Terminal across sessions, so a manager whose owning
+    // TerminalOutput has already unmounted mid-chunked-write must not keep
+    // writing into a Terminal that may now belong to a different session.
+    // Checked in write()/writeInitialContent()/prependScrollbackBatch() and
+    // between chunks in processWriteQueue() — never mid-chunk (an in-flight
+    // terminal.write() call always completes; only the *next* one is
+    // skipped).
+    this.disposed = true;
+    this.writeQueue.length = 0;
   }
 
   // ---- Test/debug accessors ----

@@ -1,7 +1,7 @@
 "use client";
 // +feature: terminal-pre-sizing terminal-dimension-cache terminal-image-upload
 
-import { useEffect, useRef, useCallback, useState, lazy, Suspense } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { createPortal } from "react-dom";
 
 // xterm modifier key sequences (CSI parameter convention: modifier 5=Ctrl, 3=Alt).
@@ -47,9 +47,8 @@ import { useVisibilityResync } from "./useVisibilityResync";
 import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
 import { useHandedness } from "@/lib/hooks/useHandedness";
 import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
-import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
-import type { ForwardRefExoticComponent, RefAttributes } from "react";
-const XtermTerminal = lazy(() => import("./XtermTerminal").then((m) => ({ default: m.XtermTerminal }))) as ForwardRefExoticComponent<XtermTerminalProps & RefAttributes<XtermTerminalHandle>>;
+import { usePooledTerminal, usePooledTerminalCallbacks } from "@/lib/terminal/TerminalPool";
+import * as poolStyles from "@/lib/terminal/TerminalPool.css";
 import { InputDropBadge } from "./InputDropBadge";
 import { ConnectionCountIndicator } from "./ConnectionCountIndicator";
 import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
@@ -133,8 +132,26 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const { track } = useAnalytics();
   const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
   const { leftHanded, toggleHandedness } = useHandedness();
-  const xtermRef = useRef<XtermTerminalHandle | null>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
+  // Story 3 (Task 3.4) — anchor <div> the pooled terminal docks into. A
+  // plain, otherwise-childless node (see TerminalPool.tsx's module doc
+  // comment for why it must never receive JSX children of its own): the
+  // pool imperatively appends/removes its host node here, which would race
+  // with React's own reconciliation if this div had other React-managed
+  // children.
+  const dockRef = useRef<HTMLDivElement | null>(null);
+  // Computed early (needs only props) so it's available to usePooledTerminal
+  // below, which must itself run early -- see that hook's call site comment.
+  const effectiveSessionId = isExternal && tmuxSessionName ? tmuxSessionName : sessionId;
+  // Story 3 (Task 3.4/3.5) — replaces a locally-owned
+  // `useRef<XtermTerminalHandle | null>(null)` + directly-rendered
+  // `<XtermTerminal>`. Returns a stable ref into a pool-owned, possibly
+  // already-warm Terminal instance that survives this component's own
+  // remounts (e.g. a pane's assigned session changing -- see
+  // TerminalPool.tsx's module doc comment for why that matters here).
+  // isVisible defaults to visible (`!== false`) to match this file's other
+  // isVisible-optional call sites (e.g. the loading overlay below).
+  const { xtermRef, warmRef } = usePooledTerminal(effectiveSessionId, dockRef, isVisible !== false);
   // Track actual rendered pane dimensions via ResizeObserver. Fires after CSS layout
   // has constrained the container to its real pane width (not the full browser window).
   // Used to guard connect() and pre-sizing so we never send wrong dimensions in the handshake.
@@ -142,7 +159,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const [connectionAttempts, setConnectionAttempts] = useState(0);
   const [showReconnectButton, setShowReconnectButton] = useState(false);
   const [isWaitingForStableSize, setIsWaitingForStableSize] = useState(true);
-  const [isLoadingInitialContent, setIsLoadingInitialContent] = useState(true);
+  // Story 3 (Task 3.4) — a warm pool entry (already showing content from a
+  // prior mount) skips the loading overlay entirely; only a genuinely cold
+  // entry starts in the loading state. See PoolEntry.warmRef's doc comment.
+  const [isLoadingInitialContent, setIsLoadingInitialContent] = useState(() => !warmRef.current);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const previousConnectionStateRef = useRef(false);
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
@@ -193,9 +213,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     resizeCount: 0,
   });
 
-  // Preload xterm.js chunk eagerly so it is browser-cached before the user opens
-  // the terminal pane, eliminating the lazy-load delay on first interaction.
-  useEffect(() => { void import("./XtermTerminal"); }, []);
+  // xterm.js preload moved to TerminalPoolProvider (Story 3) -- it's now the
+  // sole mount point for <XtermTerminal>, so the preload only needs to run
+  // once app-wide rather than per TerminalOutput mount.
 
   const logTerminalMetrics = useCallback(() => {
     const m = metricsRef.current;
@@ -390,8 +410,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // the app's selectable UI theme. xterm.js must match that fixed palette —
   // deriving it from prefers-color-scheme instead caused the terminal canvas
   // to render solid white whenever the OS/browser preference was light while
-  // the surrounding chrome stayed dark.
-  const theme = "dark" as const;
+  // the surrounding chrome stayed dark. (Story 3: the pooled <XtermTerminal>
+  // itself now hardcodes theme="dark" directly -- see TerminalPool.tsx --
+  // for the same reason; no local `theme` binding is needed here anymore.)
 
   // Paging state for on-demand scrollback loading (Task 2.3.1 / 2.3.2)
   const isFetchingScrollbackRef = useRef(false);
@@ -637,7 +658,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const clearBufferBeforeResize = useCallback(() => {
     xtermRef.current?.clear();
     resetScrollbackPaging();
-  }, [resetScrollbackPaging]);
+  }, [resetScrollbackPaging, xtermRef]);
 
   // Lazily create or get the TerminalStreamManager
   const getOrCreateStreamManager = useCallback((): TerminalStreamManager | null => {
@@ -688,6 +709,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           : totalLoadTime;
         track({ name: "stream_terminal_first_byte", category: "performance", durationMs: connectionDuration, sessionId });
         setIsLoadingInitialContent(false);
+        // Story 3 (Task 3.4) — mark this pool entry warm so a future
+        // TerminalOutput remount for the same session skips the loading
+        // overlay (see isLoadingInitialContent's lazy initializer above).
+        warmRef.current = true;
       }
     });
 
@@ -696,7 +721,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     streamManagerRef.current = manager;
     return manager;
-  }, [logTerminalMetrics, sessionId, track, resetScrollbackPaging]);
+  }, [logTerminalMetrics, sessionId, track, resetScrollbackPaging, xtermRef, warmRef]);
 
   // Story 1.4.3 (Task 1.4.3a/1.4.3c) — outcome handling for a BLOCKED
   // response, keyed on blocked_reason. UNSPECIFIED (a gate failure the client
@@ -849,7 +874,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
 
     setIsLoadingInitialContent(false);
-  }, [getOrCreateStreamManager, clearScrollLoadingState]);
+  }, [getOrCreateStreamManager, clearScrollLoadingState, xtermRef]);
 
   // Ref to access current terminalState inside the handleOutput callback
   // (useCallback can't take terminalState as a dep without recreating on every state change)
@@ -935,13 +960,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     if (manager) {
       manager.write(output);
     }
-  }, [getOrCreateStreamManager, isSelfEchoOfLastForward]);
+  }, [getOrCreateStreamManager, isSelfEchoOfLastForward, xtermRef]);
 
-  // Unified WebSocket streaming
-  const effectiveSessionId = isExternal && tmuxSessionName ? tmuxSessionName : sessionId;
+  // Unified WebSocket streaming (effectiveSessionId computed near the top of
+  // this component -- see usePooledTerminal's call site comment for why).
 
   // Stable callbacks
-  const getTerminal = useCallback(() => xtermRef.current?.terminal || null, []);
+  const getTerminal = useCallback(() => xtermRef.current?.terminal || null, [xtermRef]);
   const handleStreamError = useCallback((err: Error) => {
     console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
     setConnectionAttempts((prev) => prev + 1);
@@ -1289,7 +1314,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
     clearBufferBeforeResize();
     resize(cols, rows);
-  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize]);
+  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize, xtermRef]);
 
   // Monitor connection state changes
   useEffect(() => {
@@ -1364,7 +1389,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         clearTimeout(reconnectTimeoutRef.current);
       }
     };
-  }, [isConnected, resize]);
+    // showReconnectBanner is a pre-existing missing dependency: adding it
+    // would re-run this effect on every banner toggle, and its cleanup
+    // clears reconnectTimeoutRef.current without nulling the ref -- that
+    // would silently cancel the "show reconnect button after 5s" timer
+    // mid-countdown. Left alone rather than fixed as a drive-by.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected, resize, xtermRef]);
 
   // Story 3.2.1 — reconnecting banner: show after 2s of disconnection (if was ever connected)
   useEffect(() => {
@@ -1410,7 +1441,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         setTimeout(() => terminal.scrollToBottom(), 100);
       });
     }
-  }, [isLoadingInitialContent]);
+  }, [isLoadingInitialContent, xtermRef]);
 
   // Task 1.4.5b — every requestScrollback call site (the tmux-native trigger
   // below and Story 1.4.0's alt-screen wheel/touch triggers) funnels through
@@ -1442,6 +1473,17 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // trigger itself doesn't scale by drag magnitude, matching the wheel
   // trigger's deltaY-direction-only behavior.
   const onAltScreenScrollUp = useCallback(() => triggerAltScreenScrollUp(), [triggerAltScreenScrollUp]);
+
+  // Story 3 (Task 3.4) — part 2 of usePooledTerminal (see that hook's call
+  // site near the top of this component and its own doc comment for why
+  // this is a separate call, made here once all four callbacks it needs
+  // exist).
+  usePooledTerminalCallbacks(effectiveSessionId, isVisible !== false, {
+    onData: handleTerminalData,
+    onResize: handleTerminalResize,
+    isAltScreenActive,
+    onAltScreenScrollUp,
+  });
 
   // Task 2.3.1 — DOM scroll listener to detect near-top-of-buffer and trigger paged history load.
   // Uses DOM 'scroll' event on terminal.element (NOT terminal.onScroll, which only fires on buffer
@@ -1490,7 +1532,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       scrollEl?.removeEventListener('scroll', onScroll);
       scrollEl?.removeEventListener('wheel', onWheel);
     };
-  }, [isLoadingInitialContent, isConnected, requestScrollbackWithPill, triggerAltScreenScrollUp]);
+  }, [isLoadingInitialContent, isConnected, requestScrollbackWithPill, triggerAltScreenScrollUp, xtermRef]);
 
   // Auto-reconnect with exponential backoff
   useEffect(() => {
@@ -1586,7 +1628,12 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, containerSize.width]);
 
-  // When terminal becomes visible (e.g. session switch in pool), trigger fit+focus
+  // When terminal becomes visible (e.g. session switch in pool), trigger fit+focus.
+  // Story 3 (Task 3.5) — usePooledTerminal's own docking effect now also
+  // fits+focuses on dock (via requestAnimationFrame), so this is redundant
+  // for the pooled path; left in place as a harmless second attempt (fit/
+  // focus are idempotent) rather than risking removing a timing behavior
+  // some non-pool caller might still depend on.
   useEffect(() => {
     if (isVisible && xtermRef.current) {
       setTimeout(() => {
@@ -1594,7 +1641,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         xtermRef.current?.terminal?.focus();
       }, 50);
     }
-  }, [isVisible]);
+  }, [isVisible, xtermRef]);
 
   // visualViewport resize listener — re-fits terminal when the on-screen keyboard
   // appears/disappears on mobile (visualViewport changes don't fire window resize).
@@ -1615,7 +1662,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     vp.addEventListener('resize', onVpResize);
     return () => vp.removeEventListener('resize', onVpResize);
-  }, [isMobile]);
+  }, [isMobile, xtermRef]);
 
   // Reset loading state when switching sessions and trigger reconnect
   useEffect(() => {
@@ -2126,6 +2173,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               {/* Secondary actions (Copy, Paste, Bottom, Clear, Mouse) — inline on desktop, hidden on mobile */}
               <div className={styles.secondaryGroup} data-testid="toolbar-secondary">
                 {secondaryActions.map((action) => (
+                  // action.handler (defined in secondaryActions above) always calls track() itself
+                  // analytics-exempt
                   <button
                     key={action.key}
                     className={`${styles.toolbarButton}${action.extraClass ? ` ${action.extraClass}` : ''}`}
@@ -2308,6 +2357,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       {mobileOverflowOpen && toolbarExpanded && (
         <div className={styles.mobileOverflowRow} data-testid="toolbar-overflow-row">
           {secondaryActions.map((action) => (
+            // action.handler (defined in secondaryActions above) always calls track() itself
+            // analytics-exempt
             <button
               key={action.key}
               className={`${styles.toolbarButton}${action.extraClass ? ` ${action.extraClass}` : ''}`}
@@ -2399,20 +2450,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             No more history available
           </div>
         )}
-{/* fallback={null}: the loadingOverlay above covers the terminal area while
-    isLoadingInitialContent=true, which spans the entire xterm.js lazy-load period. */}
-<Suspense fallback={null}>
-  <XtermTerminal
-    ref={xtermRef}
-    onData={handleTerminalData}
-    onResize={handleTerminalResize}
-    theme={theme}
-    fontSize={14}
-    scrollback={5000}
-    isAltScreenActive={isAltScreenActive}
-    onAltScreenScrollUp={onAltScreenScrollUp}
-  />
-</Suspense>
+{/* Story 3 (Task 3.4) — the pooled terminal instance docks here; see
+    usePooledTerminal's call site near the top of this component and
+    dockRef's own doc comment for why this must stay a plain, otherwise-
+    childless node. The loadingOverlay above covers this area while
+    isLoadingInitialContent=true (skipped entirely for an already-warm
+    pool entry -- see isLoadingInitialContent's lazy initializer). */}
+<div ref={dockRef} className={poolStyles.dockAnchor} />
       </div>
       {/* Story 2.3 — InputDropBadge is `position: fixed` and portal-rendered
           to document.body (modeled on XtermTerminal's `copiedToast`), unlike
