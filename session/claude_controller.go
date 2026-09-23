@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/spaolacci/murmur3"
+	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -109,6 +110,11 @@ type ClaudeController struct {
 	// in Stop() (goroutine joins, disk I/O) runs outside the lock.
 	lifecycle Locked[controllerLifecycle]
 	_         [64]byte // cache-line padding: prevents lifecycle.mu invalidating adjacent atomic slots (Go #67764)
+
+	// wg tracks runStatusChangeLoop so Stop() can block until it has actually
+	// exited, not just cancelled its context. Add(1) happens synchronously in
+	// Start() immediately before the `go` statement; never inside the goroutine.
+	wg sync.WaitGroup
 
 	// Sub-components initialized atomically in Start(), cleared atomically in Stop().
 	// Callers load via .Load(); nil means the controller is not running.
@@ -362,6 +368,7 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		// Always start unconditionally: for sessions loaded from the database,
 		// wireStatusChangeCallback is called AFTER Start(), so the listener may be
 		// nil here but will be wired later. runStatusChangeLoop handles nil listeners.
+		cc.wg.Add(1)
 		go cc.runStatusChangeLoop(innerCtx)
 
 		// Start command executor
@@ -410,6 +417,11 @@ func (cc *ClaudeController) Stop() error {
 		return fmt.Errorf("controller not started")
 	}
 	cancelFn() // Signal all background goroutines to stop.
+
+	if !syncutil.WaitWithTimeout(&cc.wg, stopJoinTimeout) {
+		log.Error("claude controller stop: runStatusChangeLoop did not exit within timeout",
+			"session", cc.sessionName, "timeout", stopJoinTimeout)
+	}
 
 	// Phase 2: swap out sub-components atomically. New callers see nil immediately;
 	// in-flight callers already hold local references and finish normally.
@@ -1176,6 +1188,7 @@ func (cc *ClaudeController) GetStatusDetector() detection.TerminalDetector {
 // status, and calls registered listeners whenever the status transitions to a new value.
 // Exits when ctx is cancelled (i.e., when Stop() calls cancel()).
 func (cc *ClaudeController) runStatusChangeLoop(ctx context.Context) {
+	defer cc.wg.Done()
 	for {
 		select {
 		case <-ctx.Done():

@@ -1145,7 +1145,10 @@ func TestClaudeController_StatusChangeListener_FiresOnStatusChange(t *testing.T)
 		}
 	})
 
-	// Start the background goroutine.
+	// Start the background goroutine. Add(1) mirrors Start()'s own ordering
+	// requirement (synchronously before the `go` statement) since this test
+	// drives runStatusChangeLoop directly rather than through Start().
+	cc.wg.Add(1)
 	go cc.runStatusChangeLoop(ctx)
 
 	// Signal an output event.
@@ -1174,6 +1177,7 @@ func TestClaudeController_StatusChangeListener_SuppressedOnNoChange(t *testing.T
 		callCount <- struct{}{}
 	})
 
+	cc.wg.Add(1) // mirrors Start()'s Add(1)-before-go ordering; see FiresOnStatusChange above.
 	go cc.runStatusChangeLoop(ctx)
 
 	// Send two signals with the same preview content (same status both times).
@@ -1230,6 +1234,7 @@ func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) 
 	})
 
 	loopDone := make(chan struct{})
+	cc.wg.Add(1) // mirrors Start()'s Add(1)-before-go ordering; see FiresOnStatusChange above.
 	go func() {
 		cc.runStatusChangeLoop(ctx)
 		close(loopDone)
@@ -1260,5 +1265,48 @@ func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) 
 		t.Error("StatusChangeListener called after Stop()")
 	case <-time.After(200 * time.Millisecond):
 		// Expected: silence after stop.
+	}
+}
+
+// TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits covers backlog
+// item 1cea70ed-3127-48db-8e68-f02eac685510 AC1: Stop() must not return until
+// runStatusChangeLoop has actually exited (cc.wg.Done()'d), not just until its
+// context is cancelled — the flake this closes came from Stop() returning
+// while the loop goroutine was still unwinding into a later test's goleak
+// snapshot. Asserted by calling cc.wg.Wait() again immediately after Stop()
+// returns: if the loop hadn't actually joined, this second Wait() would block.
+func TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits(t *testing.T) {
+	t.Parallel()
+
+	reader, writer, err := mockPTY()
+	if err != nil {
+		t.Fatalf("failed to create mock PTY: %v", err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+
+	inst := &mockInstance{title: "wg-join-test", ptyReader: reader}
+	cc, err := NewClaudeController(inst)
+	if err != nil {
+		t.Fatalf("NewClaudeController() failed: %v", err)
+	}
+	if err := cc.Start(context.Background()); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	if err := cc.Stop(); err != nil {
+		t.Fatalf("Stop() failed: %v", err)
+	}
+
+	waitDone := make(chan struct{})
+	go func() {
+		cc.wg.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+		// Expected: the counter was already 0 when Stop() returned.
+	case <-time.After(2 * time.Second):
+		t.Fatal("runStatusChangeLoop had not joined cc.wg by the time Stop() returned")
 	}
 }

@@ -3,6 +3,7 @@ package ratelimit
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 type stubBuffer struct{}
@@ -37,4 +38,42 @@ func TestPTYConsumer_StartStop_Concurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestPTYConsumer_Stop_UnlocksBeforeWaitingOnPollLoop covers backlog item
+// 1cea70ed-3127-48db-8e68-f02eac685510 AC1/AC5: Stop() must release pc.mu
+// before blocking on pc.wg.Wait(), or any future pollLoop change that takes
+// pc.mu would deadlock against Stop() (pre-mortem.md failure #4). Asserted by
+// racing a TryLock against a live Stop() call: it must succeed well before
+// Stop() itself returns, proving the lock isn't held for the whole wait.
+func TestPTYConsumer_Stop_UnlocksBeforeWaitingOnPollLoop(t *testing.T) {
+	t.Parallel()
+
+	pc := NewPTYConsumer(&stubBuffer{}, nil)
+	pc.Start()
+
+	stopDone := make(chan struct{})
+	go func() {
+		pc.Stop()
+		close(stopDone)
+	}()
+
+	locked := false
+	for range 200 {
+		if pc.mu.TryLock() {
+			locked = true
+			pc.mu.Unlock()
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !locked {
+		t.Fatal("pc.mu was never observed unlocked while Stop() was in flight — wg.Wait() may be running under the lock")
+	}
+
+	select {
+	case <-stopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop() did not return")
+	}
 }
