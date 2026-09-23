@@ -1310,7 +1310,6 @@ func TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits(t *testing.T)
 	}
 }
 
-
 // ---------------------------------------------------------------------------
 // OSC title status override (osc-status-signals)
 // ---------------------------------------------------------------------------
