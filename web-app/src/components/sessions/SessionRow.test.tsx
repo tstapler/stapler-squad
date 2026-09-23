@@ -225,7 +225,7 @@ describe("SessionRow — IDLE substatus chip (Epic 3.2.2)", () => {
 });
 
 describe("SessionRow — backlog-origin badge", () => {
-  it("SessionRow_should_RenderBacklogOriginBadge_When_backlogEntryProvided", () => {
+  it("SessionRow_should_RenderBacklogOriginBadge_When_BacklogEntryProvided", () => {
     const session = { ...minimalSession } as unknown as Session;
     render(
       <SessionRow
@@ -236,7 +236,7 @@ describe("SessionRow — backlog-origin badge", () => {
     expect(screen.getByTestId("backlog-origin-badge")).toBeInTheDocument();
   });
 
-  it("SessionRow_should_NotRenderBacklogOriginBadge_When_noBacklogEntry", () => {
+  it("SessionRow_should_NotRenderBacklogOriginBadge_When_NoBacklogEntry", () => {
     const session = { ...minimalSession } as unknown as Session;
     render(<SessionRow session={session} />);
     expect(screen.queryByTestId("backlog-origin-badge")).toBeNull();

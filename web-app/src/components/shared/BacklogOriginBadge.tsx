@@ -1,7 +1,7 @@
 "use client";
 // +feature: backlog-origin-badge
 
-import Link from "next/link";
+import { NavLink } from "@/lib/navigation/NavLink";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { badge, compact as compactClass, icon, text } from "./BacklogOriginBadge.css";
 
@@ -24,9 +24,8 @@ export function BacklogOriginBadge({ entry, compact = false }: BacklogOriginBadg
   const roleLabel = entry.sessionRole && KNOWN_ROLES.has(entry.sessionRole) ? entry.sessionRole : "backlog";
 
   return (
-    <Link
-      href={`/backlog?item=${entry.itemId}`}
-      prefetch={false}
+    <NavLink
+      href={`/backlog?item=${encodeURIComponent(entry.itemId)}`}
       className={`${badge} ${compact ? compactClass : ""}`}
       onClick={(e) => e.stopPropagation()}
       title={`Backlog item: ${entry.itemTitle || entry.itemId}${entry.sessionRole ? ` (${entry.sessionRole})` : ""}`}
@@ -37,6 +36,6 @@ export function BacklogOriginBadge({ entry, compact = false }: BacklogOriginBadg
         <path d="M2 2.75A.75.75 0 0 1 2.75 2h10.5a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75H2.75a.75.75 0 0 1-.75-.75V2.75Zm1.5.75v9h9v-9h-9Zm1.5 1.5h6v1.5h-6V5Zm0 3h6v1.5h-6V8Zm0 3h4v1.5h-4V11Z" />
       </svg>
       <span className={text}>{roleLabel}</span>
-    </Link>
+    </NavLink>
   );
 }

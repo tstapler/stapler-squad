@@ -309,7 +309,7 @@ describe("SessionCard — sub-status chip subagentCount", () => {
 });
 
 describe("SessionCard — backlog-origin badge", () => {
-  it("SessionCard_should_RenderBacklogOriginBadge_When_backlogEntryProvided", () => {
+  it("SessionCard_should_RenderBacklogOriginBadge_When_BacklogEntryProvided", () => {
     const session = { ...minimalSession } as unknown as Session;
     render(
       <SessionCard
@@ -320,7 +320,7 @@ describe("SessionCard — backlog-origin badge", () => {
     expect(screen.getByTestId("backlog-origin-badge")).toBeInTheDocument();
   });
 
-  it("SessionCard_should_NotRenderBacklogOriginBadge_When_noBacklogEntry", () => {
+  it("SessionCard_should_NotRenderBacklogOriginBadge_When_NoBacklogEntry", () => {
     const session = { ...minimalSession } as unknown as Session;
     render(<SessionCard session={session} />);
     expect(screen.queryByTestId("backlog-origin-badge")).toBeNull();
