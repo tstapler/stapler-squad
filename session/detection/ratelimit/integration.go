@@ -9,7 +9,9 @@ import (
 )
 
 // stopJoinTimeout bounds how long PTYConsumer.Stop() waits for pollLoop to exit.
-const stopJoinTimeout = 10 * time.Second
+// A var (not const) so tests can shrink it to exercise the timeout branch
+// without a real 10s wait.
+var stopJoinTimeout = 10 * time.Second
 
 type BufferReader interface {
 	GetRecentOutput(n int) []byte
@@ -128,13 +130,11 @@ func (pc *PTYConsumer) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	pc.cancelFn = cancel
 	pc.running = true
-	// done is local to this Start()/Stop() generation, not just a struct field
-	// read back later: a sync.WaitGroup field here would panic ("WaitGroup is
-	// reused before previous Wait has returned") under
-	// PTYConsumer_StartStop_Concurrent's repeated concurrent Start()/Stop()
-	// cycles, since a new Add() can race an outstanding Stop()'s Wait() from
-	// the previous generation. A fresh channel per generation, closed by
-	// pollLoop and captured locally by Stop(), has no such reuse hazard.
+	// done is local to this generation, not read back from a struct field
+	// later: a shared sync.WaitGroup would panic ("reused before previous
+	// Wait has returned") if a new Start() Add()s while a prior Stop()'s
+	// Wait() is still in flight. A fresh channel per generation has no such
+	// reuse hazard.
 	done := make(chan struct{})
 	pc.doneCh = done
 	go pc.pollLoop(ctx, done)

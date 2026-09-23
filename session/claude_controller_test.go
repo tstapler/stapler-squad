@@ -1262,15 +1262,11 @@ func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) 
 	}
 }
 
-// TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits covers backlog
-// item 1cea70ed-3127-48db-8e68-f02eac685510 AC1: Stop() must not return until
-// runStatusChangeLoop has actually exited (its statusLoopDone channel closed),
-// not just until its context is cancelled — the flake this closes came from
-// Stop() returning while the loop goroutine was still unwinding into a later
-// test's goleak snapshot. Asserted by capturing the loop's done channel before
-// calling Stop(), then checking (non-blocking) that it's already closed
-// immediately after Stop() returns: if Stop() hadn't actually joined it, this
-// read would not see it closed yet.
+// TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits covers
+// backlog item 1cea70ed-3127-48db-8e68-f02eac685510 AC1: Stop() must not
+// return until runStatusChangeLoop has actually exited, not just until ctx
+// is cancelled — the flake this closes came from Stop() returning while the
+// loop was still unwinding into a later test's goleak snapshot.
 func TestClaudeController_Stop_BlocksUntilRunStatusChangeLoopExits(t *testing.T) {
 	t.Parallel()
 
