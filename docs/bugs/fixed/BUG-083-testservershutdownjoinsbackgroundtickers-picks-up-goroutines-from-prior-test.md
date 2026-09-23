@@ -1,6 +1,6 @@
 # BUG-083: `TestServer_Shutdown_JoinsBackgroundTickers` intermittently fails on leaked goroutines from the preceding test's session teardown [SEVERITY: Low]
 
-**Status**: 🐛 Open
+**Status**: Fixed by session-teardown-goleak-fix (backlog `1cea70ed-3127-48db-8e68-f02eac685510`); root cause and fix: `session/claude_controller.go`'s `runStatusChangeLoop` and `session/detection/ratelimit/integration.go`'s `pollLoop` were never joined by a `WaitGroup` before `DeleteSession` teardown returned.
 **Discovered**: 2026-08-21, while verifying `go build ./...` / `go test ./server ...` after merging `main` into `backlog/stapler-squad-dynamic-rule-reload` (PR #538)
 
 ## Problem Description

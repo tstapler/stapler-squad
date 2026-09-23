@@ -1,5 +1,7 @@
 # BUG-083: `TestServer_Shutdown_JoinsBackgroundTickers` goleak flake under full `server` package run
 
+**Status**: Fixed by session-teardown-goleak-fix (backlog `1cea70ed-3127-48db-8e68-f02eac685510`); root cause and fix: `session/claude_controller.go`'s `runStatusChangeLoop` and `session/detection/ratelimit/integration.go`'s `pollLoop` were never joined by a `WaitGroup` before `DeleteSession` teardown returned.
+
 ## Summary
 
 `go test ./server/ -race -tags integration -count=1` intermittently fails
