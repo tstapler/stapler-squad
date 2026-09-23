@@ -327,7 +327,7 @@ func TestControlMode_NilDoneChAtCapture_PostLoopCleanupDoesNotPanic(t *testing.T
 		sanitizedName:          "nil_donech_test",
 		controlModeStdout:      pr,
 		controlModeDone:        nil, // simulates StopControlMode already having closed-and-nilled it
-		controlModeSubscribers: make(map[string]chan []byte),
+		controlModeSubscribers: make(map[string]*controlModeSubscriber),
 	}
 	t.Cleanup(func() { _ = pw.Close() })
 
@@ -340,7 +340,7 @@ func TestControlMode_NilDoneChAtCapture_PostLoopCleanupDoesNotPanic(t *testing.T
 				panicVal <- r
 			}
 		}()
-		sess.readControlModeOutput()
+		sess.readControlModeOutput(nil, pr)
 	}()
 
 	// EOF the pipe immediately so the scan loop falls straight through to
