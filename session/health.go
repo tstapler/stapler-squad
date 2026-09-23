@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -366,6 +367,38 @@ func (h *SessionHealthChecker) recoverMissingSession(instance *Instance, result 
 	}
 }
 
+// lastPaneOutputSnippet returns the last few non-empty lines the dead pane
+// printed before exiting, stripped of tmux's own "Pane is dead (...)"
+// remain-on-exit boilerplate. A bare exit code tells the user nothing
+// actionable (see the incident this fixes: every session killed by the
+// stale-tmux-server-cwd bug surfaced only as "exit code 1", and finding the
+// real cause required manually attaching to a dead pane to read this same
+// text) -- whatever the program itself printed usually does.
+func lastPaneOutputSnippet(instance *Instance) string {
+	ts := instance.GetTmuxSession()
+	if ts == nil {
+		return ""
+	}
+	content, err := ts.CapturePaneContentRaw()
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	var kept []string
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "Pane is dead") {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	const maxSnippetLines = 3
+	if len(kept) > maxSnippetLines {
+		kept = kept[len(kept)-maxSnippetLines:]
+	}
+	return strings.Join(kept, " | ")
+}
+
 // handleDeadPane handles a live tmux session whose pane process has exited:
 // remain-on-exit has left a dead "Pane is dead (signal N, ...)" placeholder
 // because the wrapped program exited (crashed or completed normally).
@@ -385,21 +418,13 @@ func (h *SessionHealthChecker) handleDeadPane(instance *Instance, exitCode int, 
 
 	result.RecoveryAttempted = true
 
-	// Only a session that already existed before this checker started could
-	// have been affected by a restart race; one created afterward was never
-	// "previously alive" from this process's perspective and gets no grace
-	// window. See restartGracePeriod's doc comment.
-	sessionPredatesRestart := instance.CreatedAt.Before(h.startedAt)
-	if sessionPredatesRestart && time.Since(h.startedAt) < restartGracePeriod {
-		respawnWithinGraceWindow(instance, result)
-		return
-	}
-
 	if exitCode == 0 && exitSignal == "" {
 		// Normal completion (e.g. the wrapped program exited cleanly),
 		// not a crash -- must not be mislabeled as Crashed. Transition to
 		// Stopped, matching the status a control-mode-detected exit
-		// already produces (instanceOnExitCallback).
+		// already produces (instanceOnExitCallback). Checked before the
+		// grace-window/auto-respawn logic below, which only applies to
+		// crashes.
 		if err := instance.MarkExitedNormally(); err != nil {
 			result.Issues = append(result.Issues, fmt.Sprintf("failed to mark session stopped: %v", err))
 		} else {
@@ -414,46 +439,80 @@ func (h *SessionHealthChecker) handleDeadPane(instance *Instance, exitCode int, 
 		return
 	}
 
+	// Only a session that already existed before this checker started could
+	// have been affected by a restart race; one created afterward was never
+	// "previously alive" from this process's perspective and gets no grace
+	// window. See restartGracePeriod's doc comment.
+	sessionPredatesRestart := instance.CreatedAt.Before(h.startedAt)
+	if sessionPredatesRestart && time.Since(h.startedAt) < restartGracePeriod {
+		if err := respawnDeadPane(instance); err != nil {
+			recordStartFailure(instance, err, "Failed to respawn dead pane", result)
+			return
+		}
+		markRespawned(instance, result, "Respawned dead pane by recreating tmux session (startup grace window)")
+		return
+	}
+
+	handleCrashedPane(instance, exitCode, exitSignal, result)
+}
+
+// handleCrashedPane is handleDeadPane's post-grace-window branch: a pane that
+// exited abnormally outside the startup grace window. Auto-refresh: attempt
+// the same kill+cold-restore respawn used inside the grace window for every
+// crash, not just ones right after a restart. This is safe unconditionally
+// because Start(false) already runs through checkRestartStorm/trackRestartRate
+// (session/instance_tmux.go) -- a genuine crash loop trips that breaker and
+// refuses to restart, so this can't spin forever forking tmux subprocesses.
+// Only give up and surface a user-visible Crashed banner once the respawn
+// attempt itself fails.
+func handleCrashedPane(instance *Instance, exitCode int, exitSignal string, result *HealthCheckResult) {
 	exitReason := fmt.Sprintf("exit code %d", exitCode)
 	if exitSignal != "" {
 		exitReason = fmt.Sprintf("signal %s (exit code %d)", exitSignal, exitCode)
 	}
-	if err := instance.MarkCrashed(exitReason); err != nil {
-		result.Issues = append(result.Issues, fmt.Sprintf("failed to mark session crashed: %v", err))
-	} else {
-		// See RecoverySuccess comment above -- a successful Crashed transition
-		// is likewise not a recovery failure.
+	if snippet := lastPaneOutputSnippet(instance); snippet != "" {
+		exitReason = fmt.Sprintf("%s: %s", exitReason, snippet)
+	}
+
+	if err := respawnDeadPane(instance); err != nil {
+		exitReason = fmt.Sprintf("%s (auto-recovery failed: %v)", exitReason, err)
+		if markErr := instance.MarkCrashed(exitReason); markErr != nil {
+			result.Issues = append(result.Issues, fmt.Sprintf("failed to mark session crashed: %v", markErr))
+			return
+		}
 		result.RecoverySuccess = true
 		result.Actions = append(result.Actions, fmt.Sprintf("Pane crashed (%s); session marked Crashed, awaiting resume", exitReason))
-	}
-}
-
-// respawnWithinGraceWindow handles a dead pane detected inside the post-startup
-// grace window: fall back to the old silent kill+respawn behavior instead of
-// surfacing a status change, since a dead-pane detection here is more likely a
-// startup-race artifact than a genuine crash (see restartGracePeriod's doc
-// comment). The stale session must be torn down first: Start(false) treats an
-// existing (even dead-paned) tmux session as "already running" and just
-// reattaches via RestoreWithWorkDir, which does NOT relaunch the wrapped
-// program. Killing it first forces Start(false) down the cold-restore path that
-// actually relaunches it (with --resume when a conversation UUID is known).
-func respawnWithinGraceWindow(instance *Instance, result *HealthCheckResult) {
-	if err := instance.KillSession(); err != nil {
-		result.Issues = append(result.Issues, fmt.Sprintf("failed to kill stale dead-pane session: %v", err))
-	}
-	if err := instance.Start(false); err != nil {
-		recordStartFailure(instance, err, "Failed to respawn dead pane", result)
 		return
 	}
 
+	markRespawned(instance, result, fmt.Sprintf("Pane crashed (%s); automatically respawned", exitReason))
+}
+
+// markRespawned records a successful respawn on result and clears any stale
+// "Session failed: ..." creation-progress message, shared by the
+// startup-grace-window and post-grace-window (auto-refresh) respawn paths.
+func markRespawned(instance *Instance, result *HealthCheckResult, action string) {
 	result.RecoverySuccess = true
-	result.Actions = append(result.Actions, "Respawned dead pane by recreating tmux session (startup grace window)")
-	instance.SetCreationProgress("") // clear any stale "Session failed: ..." message
+	result.Actions = append(result.Actions, action)
+	instance.SetCreationProgress("")
 	if instance.TmuxAlive() && !instance.PaneProcessDead() {
 		result.IsHealthy = true
 	} else {
 		result.Issues = append(result.Issues, "Session still unhealthy after recovery attempt")
 	}
+}
+
+// respawnDeadPane kills a dead-paned tmux session and cold-restores it.
+// The stale session must be torn down first: Start(false) treats an existing
+// (even dead-paned) tmux session as "already running" and just reattaches via
+// RestoreWithWorkDir, which does NOT relaunch the wrapped program. Killing it
+// first forces Start(false) down the cold-restore path that actually
+// relaunches it (with --resume when a conversation UUID is known).
+func respawnDeadPane(instance *Instance) error {
+	if err := instance.KillSession(); err != nil {
+		log.Warn("failed to kill stale dead-pane session before respawn", "session", instance.Title, "err", err)
+	}
+	return instance.Start(false)
 }
 
 // checkWorktreeHealth flags a session whose git worktree directory has been

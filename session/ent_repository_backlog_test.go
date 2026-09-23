@@ -1420,5 +1420,4 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 	assert.True(t, startedAt.Equal(*fetchedAfterUpdate.StartedAt), "StartedAt must round-trip through an accessor that never references the new executor fields")
 	assert.True(t, fetchedAfterUpdate.CostPriced, "cost_priced must be undisturbed by an update that never references it")
 	assert.Equal(t, "", fetchedAfterUpdate.ResolvedProgram, "ResolvedProgram must be undisturbed by an update that never references it")
->>>>>>> origin/main
 }
