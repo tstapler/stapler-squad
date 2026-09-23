@@ -1090,15 +1090,84 @@ func TestInstance_BuildExtraEnv_IncludesCustomProgramAndInstanceEnvVars(t *testi
 	}
 	extraEnv := instance.buildExtraEnv()
 
-	for _, want := range []string{"STAPLER_SESSION_UUID=test-uuid-456", "CUSTOM_VAR=custom_val", "PROG_VAR=prog_val"} {
+	for _, want := range []string{"STAPLER_SESSION_UUID=test-uuid-456", "CUSTOM_VAR=custom_val", "PROG_VAR=prog_val", "CLASH=from_instance"} {
 		if !slices.Contains(extraEnv, want) {
 			t.Errorf("expected buildExtraEnv to contain %q, got %v", want, extraEnv)
 		}
 	}
-	// tmux applies -e flags in order, so the instance value must come last to win.
-	prog, inst := slices.Index(extraEnv, "CLASH=from_program"), slices.Index(extraEnv, "CLASH=from_instance")
-	if prog < 0 || inst < 0 || inst < prog {
-		t.Errorf("instance CLASH must follow the program-level one, got %v", extraEnv)
+	// resolveExtraEnvVars merges into one map keyed by name before buildExtraEnv
+	// renders it to KEY=VALUE strings, so the instance-level value replaces the
+	// program-level one outright -- only one CLASH entry should ever appear,
+	// not both relying on tmux's -e flag application order to resolve the clash.
+	if slices.Contains(extraEnv, "CLASH=from_program") {
+		t.Errorf("expected the program-level CLASH to be fully overridden, not just out-ordered, got %v", extraEnv)
+	}
+}
+
+// TestClaudeSettingsEnvOverrideArgs_EmptyWhenNoEnvVars is the "nothing to
+// override" case: a plain claude launch with no custom program/instance env
+// vars must not grow a --settings flag at all.
+func TestClaudeSettingsEnvOverrideArgs_EmptyWhenNoEnvVars(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	inst := &Instance{Program: "claude"}
+	flag, val := inst.claudeSettingsEnvOverrideArgs()
+	if flag != "" || val != "" {
+		t.Errorf("expected no --settings override for a plain launch, got flag=%q val=%q", flag, val)
+	}
+}
+
+// TestClaudeSettingsEnvOverrideArgs_CarriesResolvedEnvVars is the regression
+// test for GitHub issue #852: a custom program's env vars must also be
+// injected via --settings (not just tmux -e), because Claude Code's own
+// user-level ~/.claude/settings.json `env` block otherwise silently
+// overrides a plain inherited process env var of the same name -- confirmed
+// live against a Netflix-wrapper-installed settings.json overriding
+// ANTHROPIC_BASE_URL regardless of what tmux -e set.
+func TestClaudeSettingsEnvOverrideArgs_CarriesResolvedEnvVars(t *testing.T) {
+	seedCustomProgram(t, config.ProgramConfig{
+		ID:      "netflix-model-gateway",
+		Command: "claude",
+		Env:     map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000"},
+	})
+	inst := &Instance{Program: "netflix-model-gateway"}
+
+	flag, val := inst.claudeSettingsEnvOverrideArgs()
+
+	if flag != "--settings" {
+		t.Fatalf("flag = %q, want --settings", flag)
+	}
+	if !strings.HasPrefix(val, "'") || !strings.HasSuffix(val, "'") {
+		t.Fatalf("val should be single-quoted JSON, got %q", val)
+	}
+	var payload struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal([]byte(val[1:len(val)-1]), &payload); err != nil {
+		t.Fatalf("val is not valid JSON: %v\nval=%q", err, val)
+	}
+	if got := payload.Env["ANTHROPIC_BASE_URL"]; got != "http://127.0.0.1:47000" {
+		t.Errorf("env.ANTHROPIC_BASE_URL = %q, want http://127.0.0.1:47000", got)
+	}
+}
+
+// TestBuildClaudeCommand_IncludesSettingsEnvOverride confirms the flag
+// actually lands in the assembled command line buildLaunchCommand produces,
+// not just that the helper function returns it in isolation.
+func TestBuildClaudeCommand_IncludesSettingsEnvOverride(t *testing.T) {
+	seedCustomProgram(t, config.ProgramConfig{
+		ID:      "netflix-model-gateway",
+		Command: "claude",
+		Env:     map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000"},
+	})
+	inst := &Instance{Program: "netflix-model-gateway"}
+
+	cmd := inst.buildLaunchCommand("")
+
+	if !strings.Contains(cmd, "--settings") {
+		t.Errorf("expected buildLaunchCommand to include --settings, got %q", cmd)
+	}
+	if !strings.Contains(cmd, `ANTHROPIC_BASE_URL`) {
+		t.Errorf("expected the settings override to carry ANTHROPIC_BASE_URL, got %q", cmd)
 	}
 }
 
