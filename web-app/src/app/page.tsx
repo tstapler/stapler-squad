@@ -18,6 +18,9 @@ import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
+import type { PaneAction } from "@/lib/pane/paneTypes";
+import { useWindowManager } from "@/lib/window/useWindowManager";
+import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
 import { useSessionViewMode } from "@/lib/hooks/useSessionViewMode";
@@ -99,6 +102,19 @@ function HomeContent() {
     getSession,
   } = useSessionServiceContext();
 
+  // Multi-window layer (Epic 2.2): useWindowManager owns the windows array/persistence;
+  // useWindowUrlSync resolves which window this tab is showing from `?window=`. Neither
+  // hook has a notion of "the active window" on its own (ADR-001) — currentWindow is
+  // derived here by looking up currentWindowId in the windows array.
+  // createWindow/closeWindow/renameWindow have no UI to call them from yet — WindowTabStrip
+  // (Task 2.2.2b) is deferred to Epic 3.1, where it doesn't exist yet.
+  const { windows, dispatchPane, createWindow, closeWindow, renameWindow } = useWindowManager(sessions);
+  const { currentWindowId, switchToWindow } = useWindowUrlSync(windows);
+  const currentWindow = windows.find((w) => w.id === currentWindowId) ?? windows[0];
+  const paneDispatch = useCallback(
+    (action: PaneAction) => dispatchPane(currentWindow.id, action),
+    [dispatchPane, currentWindow.id]
+  );
   // Helper function to find a session by ID with fuzzy matching for external sessions
   const findSessionById = useCallback((sessionId: string): Session | undefined => {
     let session = sessions.find((s) => s.id === sessionId);
@@ -489,6 +505,8 @@ function HomeContent() {
           >
             <PaneTilingContainer
               sessions={sessions}
+              paneState={currentWindow.paneState}
+              dispatch={paneDispatch}
               externalSessionAssign={externalAssignSession ? {
                 ...externalAssignSession,
                 version: externalAssignCounter,
