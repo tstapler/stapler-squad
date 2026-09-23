@@ -4,6 +4,8 @@ import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { SessionDetail } from "./SessionDetail";
+import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
+import { usePaneContext } from "@/components/pane/PaneContext";
 import { backdrop, modal, modalHeader, modalTitle, peekBadge, closeButton, modalBody } from "./SessionPeekModal.css";
 
 interface SessionPeekModalProps {
@@ -13,6 +15,8 @@ interface SessionPeekModalProps {
 
 export function SessionPeekModal({ session, onClose }: SessionPeekModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
+  const { backlogIndex } = usePaneContext();
+  const backlogEntry = backlogIndex.get(session.id);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -46,6 +50,7 @@ export function SessionPeekModal({ session, onClose }: SessionPeekModalProps) {
         <div className={modalHeader}>
           <span id="peek-modal-title" className={modalTitle}>{session.title}</span>
           <span className={peekBadge}>Peek</span>
+          <BacklogOriginBadge entry={backlogEntry} compact />
           <button
             className={closeButton}
             onClick={onClose}
@@ -60,6 +65,8 @@ export function SessionPeekModal({ session, onClose }: SessionPeekModalProps) {
             onClose={onClose}
             embedded={true}
             initialTab="terminal"
+            backlogItemId={backlogEntry?.itemId}
+            backlogEntry={backlogEntry}
           />
         </div>
       </div>

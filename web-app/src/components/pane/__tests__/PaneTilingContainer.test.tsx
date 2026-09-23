@@ -23,6 +23,12 @@ jest.mock("../PaneSplitRenderer", () => ({
 
 // PaneContext is consumed by PaneSplitRenderer (mocked) — no need to mock it.
 
+// Avoid a real RPC call (and its noisy console.error in jsdom) from the
+// backlog-origin-badge index lookup this container now fetches once on mount.
+jest.mock("@/lib/hooks/useBacklogService", () => ({
+  useBacklogSessionIndex: () => ({ index: new Map(), loading: false }),
+}));
+
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 function makeLeaf(

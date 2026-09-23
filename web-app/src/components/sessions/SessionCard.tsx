@@ -11,6 +11,8 @@ import { RevivedContextBadge } from "./RevivedContextBadge";
 import { StatusBadge } from "./StatusBadge";
 import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
+import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
+import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { TagEditor } from "./TagEditor";
 import { useTerminalSnapshot } from "@/lib/hooks/useTerminalSnapshot";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
@@ -235,6 +237,8 @@ export interface SessionCardProps {
   // sites and tests that don't thread it through keep compiling; SessionList passes
   // the resolved value from useStaleSessionConfig().
   staleThresholdMinutes?: number;
+  /** Backlog item this session was dispatched from (work/review/triage automation), if any. */
+  backlogEntry?: BacklogIndexEntry;
 }
 
 function SessionCardInner({
@@ -268,6 +272,7 @@ function SessionCardInner({
   detectedContext,
   suppressApprovalSubStatus = false,
   staleThresholdMinutes = 30,
+  backlogEntry,
 }: SessionCardProps) {
   const sessionActions = useSessionActions(session.id);
   const tagRuleNames = useTaggingRuleNames();
@@ -707,6 +712,7 @@ function SessionCardInner({
               checkConclusion={session.githubCheckConclusion}
               compact={true}
             />
+            <BacklogOriginBadge entry={backlogEntry} compact={true} />
             {reviewItem && (
               <ReviewQueueBadge
                 priority={reviewItem.priority}
