@@ -83,7 +83,7 @@ function registerFollowup(refs: LeaderRefs, id: string, key: string, action: () 
     registry.register(id, {
       key,
       label: `Window leader: ${key}`,
-      context: "cockpit",
+      context: "global",
       action: () => {
         action();
         disarmLeader(refs);
@@ -189,7 +189,7 @@ export function useWindowShortcuts(
     key: "w",
     modifiers: { alt: true },
     label: "Window leader key",
-    context: "cockpit",
+    context: "global",
     action: handleArmLeader,
   });
 }
