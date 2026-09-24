@@ -6,8 +6,25 @@
  * proves. Cross-tab/URL-sync coverage lives in multi-window-cross-tab.spec.ts (REQ-10);
  * these tests are single-tab, single-window-strip interaction checks.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { WindowTabStripPage } from './pages/WindowTabStripPage';
+
+/**
+ * The app always mounts a NotificationPanel (role="dialog", see
+ * NotificationPanel.tsx) and can show a background NotificationToast
+ * (role="alert", data-testid="toast") from unrelated seeded test-server
+ * activity; Next.js itself also always mounts a route-change announcer
+ * (id="__next-route-announcer__", role="alert"). None of these are specific
+ * to window actions, so "no dialog/alert appeared as a result of this
+ * action" must exclude all three rather than assert a literal zero count
+ * page-wide.
+ */
+function nonWindowDialogs(page: Page) {
+  return page.locator('[role="dialog"]:not([aria-label="Notification Panel"])');
+}
+function nonToastAlerts(page: Page) {
+  return page.locator('[role="alert"]:not([data-testid="toast"]):not(#__next-route-announcer__)');
+}
 
 test.describe('multi-window UX acceptance', () => {
   test.beforeEach(async ({ context }) => {
@@ -39,7 +56,7 @@ test.describe('multi-window UX acceptance', () => {
     await expect(page.getByTestId('session-list-scroll')).toBeVisible();
 
     // Zero dialogs render as part of window creation.
-    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(nonWindowDialogs(page)).toHaveCount(0);
   });
 
   test('Alt+W then digit switches window with no mouse interaction', async ({ page }) => {
@@ -77,7 +94,7 @@ test.describe('multi-window UX acceptance', () => {
     // Accessible name/text updates immediately — no confirm dialog anywhere.
     await expect(strip.getTab('Research')).toBeVisible();
     await expect(strip.getTab('Window 1')).toHaveCount(0);
-    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(nonWindowDialogs(page)).toHaveCount(0);
   });
 
   test('close last window auto-recreates blank window with no confirmation dialog', async ({ page }) => {
@@ -87,23 +104,21 @@ test.describe('multi-window UX acceptance', () => {
     await expect(strip.tabs).toHaveCount(1);
     const originalId = WindowTabStripPage.windowIdFromUrl(page.url());
 
-    // With only one window, WindowTabStrip only renders a "×" once 2+ windows
-    // exist (see WindowTabStripPage's header comment) — page.tsx's own
-    // single-window close affordance is exercised via the close button once
-    // it's the *result* of the auto-recreation invariant below, so drive this
-    // directly through the page object's closeTab helper name used by the
-    // component. If no close control renders for a lone window, this reflects
-    // the same "close" action as clicking a window's own tab's × once the app
-    // exposes it — assert on the invariant this test is actually about: at no
-    // point does closing the sole window produce a confirmation dialog, and
-    // the strip always shows exactly one tab, but that tab is a *different*,
-    // blank window afterward.
-    await strip.closeTab('Window 1');
+    // With only one window, WindowTabStrip never renders a "×" (see
+    // WindowTabStripPage's header comment) — close it via the tab's own
+    // Delete-key handler (WindowTabButton's onKeyDown) instead of a button
+    // that doesn't exist yet for a lone window.
+    await strip.getTab('Window 1').focus();
+    await page.keyboard.press('Delete');
 
-    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(nonWindowDialogs(page)).toHaveCount(0);
     await expect(strip.tabs).toHaveCount(1);
-    const newId = WindowTabStripPage.windowIdFromUrl(page.url());
-    expect(newId).not.toBe(originalId);
+    // useWindowUrlSync's router.replace to the replacement window's id lands
+    // in a later effect tick than the click/keydown itself — poll rather
+    // than read page.url() synchronously.
+    await expect
+      .poll(() => WindowTabStripPage.windowIdFromUrl(page.url()))
+      .not.toBe(originalId);
     await expect(page.getByTestId('session-list-scroll')).toBeVisible();
   });
 
@@ -127,15 +142,15 @@ test.describe('multi-window UX acceptance', () => {
 
     // Original name persists; no error/alert renders.
     await expect(strip.getTab('Window 2')).toBeVisible();
-    await expect(page.getByRole('alert')).toHaveCount(0);
-    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(nonToastAlerts(page)).toHaveCount(0);
+    await expect(nonWindowDialogs(page)).toHaveCount(0);
 
     // Renaming "Window 2" to the exact name of "Window 1" is allowed silently.
     await strip.renameTab('Window 2', 'Window 1');
     await expect(strip.tabs).toHaveCount(2);
     await expect(strip.tabs.filter({ hasText: 'Window 1' })).toHaveCount(2);
-    await expect(page.getByRole('alert')).toHaveCount(0);
-    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(nonToastAlerts(page)).toHaveCount(0);
+    await expect(nonWindowDialogs(page)).toHaveCount(0);
   });
 
   test('window tab strip is keyboard navigable via roving tabindex and reaches the new-window button next', async ({
@@ -148,9 +163,12 @@ test.describe('multi-window UX acceptance', () => {
     await strip.createWindow();
     await expect(strip.tabs).toHaveCount(3);
 
-    // Tab into the strip — focus should land on the sole tabindex=0 tab.
-    await page.keyboard.press('Tab');
-    await expect(strip.tabs.filter({ hasText: /^Window 3$/ })).toHaveAttribute('tabindex', '0');
+    // Focus the sole tabindex=0 tab directly — a bare page-level Tab press
+    // would first land on layout.tsx's "Skip to main content" link (and any
+    // other page chrome ahead of the strip in DOM order), which isn't what
+    // this test is about.
+    await strip.getTab('Window 3').focus();
+    await expect(strip.getTab('Window 3')).toHaveAttribute('tabindex', '0');
     const zeroTabIndexTabs = strip.tabList.locator('[role="tab"][tabindex="0"]');
     await expect(zeroTabIndexTabs).toHaveCount(1);
 
@@ -186,6 +204,10 @@ test.describe('multi-window UX acceptance', () => {
     await expect(page.getByTestId('window-onboarding-hint')).toBeVisible();
     await page.getByRole('button', { name: 'Got it' }).click();
     await expect(page.getByTestId('window-onboarding-hint')).toHaveCount(0);
+    // The 2-window layout must actually land in localStorage before reload,
+    // or the reload can observe a stale 1-window snapshot (same debounced-save
+    // race waitForPersistedWindowCount exists for elsewhere in this page object).
+    await strip.waitForPersistedWindowCount(2);
 
     await page.reload();
     await strip.waitForLoaded();

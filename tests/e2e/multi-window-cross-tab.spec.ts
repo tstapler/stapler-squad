@@ -119,7 +119,8 @@ test.describe('multi-window cross-tab (REQ-10)', () => {
 
     // Page 1: create Window 2 and build a non-trivial layout inside it (a
     // vertical split), so "identical window" means more than just the
-    // default single-leaf state every fresh window starts in.
+    // default 2-leaf (session-list/session-detail) state every fresh window
+    // starts in — see initialPaneState() in paneUtils.ts.
     await page.goto('/');
     const stripA = new WindowTabStripPage(page);
     await stripA.waitForLoaded();
@@ -134,7 +135,7 @@ test.describe('multi-window cross-tab (REQ-10)', () => {
     // the URL, for the same reason waitForPersistedWindowCount exists on the
     // first test above: a second real tab reads localStorage independently
     // on mount and would otherwise race a stale, pre-split snapshot.
-    await stripA.waitForPersistedPaneLeafCount(windowId!, 2);
+    await stripA.waitForPersistedPaneLeafCount(windowId!, 3);
     const paneIdsBefore = await stripA.getPaneLeafIds();
     const copiedUrl = page.url();
 
@@ -149,7 +150,7 @@ test.describe('multi-window cross-tab (REQ-10)', () => {
     // same set of panes as page 1's — same splits, same pane identities.
     expect(WindowTabStripPage.windowIdFromUrl(page2.url())).toBe(windowId);
     await expect(stripB.getActiveTab()).toHaveAttribute('title', 'Window 2');
-    await expect(stripB.paneLeaves).toHaveCount(2);
+    await expect(stripB.paneLeaves).toHaveCount(3);
     expect(await stripB.getPaneLeafIds()).toEqual(paneIdsBefore);
 
     await page2.close();

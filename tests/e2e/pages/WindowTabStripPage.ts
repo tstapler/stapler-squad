@@ -106,11 +106,15 @@ export class WindowTabStripPage {
 
   /**
    * Split the first rendered pane side-by-side via its header's "Split pane
-   * side by side" button and wait for the resulting second leaf to render.
+   * side by side" button and wait for the resulting extra leaf to render.
+   * Every window (including a freshly created one) already starts with 2
+   * leaves — initialPaneState()'s default session-list/session-detail split
+   * — so this asserts one more than whatever was there before, not a fixed 2.
    */
   async splitFirstPaneVertically(): Promise<void> {
+    const before = await this.paneLeaves.count();
     await this.page.getByTestId('pane-split-vertical-btn').first().click();
-    await expect(this.paneLeaves).toHaveCount(2);
+    await expect(this.paneLeaves).toHaveCount(before + 1);
   }
 
   /** Click the "×" close button for a window's tab (only present once 2+ windows exist). */
