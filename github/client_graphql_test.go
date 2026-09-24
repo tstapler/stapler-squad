@@ -48,6 +48,43 @@ func TestGetPRInfoGraphQL_should_PopulateFieldsMatchingCLI_When_PRHasApprovalsAn
 	assert.Equal(t, []string{"enhancement", "backend"}, info.Labels)
 }
 
+// TestGetPRInfoGraphQL_should_QueryEnterpriseHost_When_RefIsGHE guards against
+// regressing to the bug where GetPRInfoGraphQL always hit github.com's
+// GraphQL endpoint regardless of ref.Host(), silently breaking every GHE
+// repo (surfaced in production as "Could not resolve to a Repository" for a
+// github.netflix.net repo whose PR poller had the github:graphql-pr-info
+// flag enabled). It points the GHE host's override at one test server and
+// github.com's GhBaseURL at a second, failing server, so the test only
+// passes if the request actually reaches the enterprise host.
+func TestGetPRInfoGraphQL_should_QueryEnterpriseHost_When_RefIsGHE(t *testing.T) {
+	const gheHost = "github.example.com"
+
+	body := loadFixture(t, "approved_passing_checks", "graphql.json")
+	enterprise := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/api/graphql", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer enterprise.Close()
+	SetEnterpriseBaseURLOverride(gheHost, enterprise.URL+"/")
+	defer SetEnterpriseBaseURLOverride(gheHost, "")
+
+	dotcom := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("request must not reach github.com's GraphQL endpoint for a GHE ref")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer dotcom.Close()
+	defer resetGhBaseURLForTest(dotcom)()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+
+	ref, err := NewRepoRefWithHost("corp", "compute-nop", gheHost)
+	require.NoError(t, err)
+	info, err := GetPRInfoGraphQL(context.Background(), ref, 579)
+	require.NoError(t, err)
+	assert.Equal(t, 802, info.Number) // fixture's PR number — proves the enterprise response was decoded
+}
+
 // TestGetPRInfoGraphQL_should_ReturnError_When_GraphQLResponseContainsErrorsArray
 // covers validation.md's REQ-3 error-path row: GitHub's GraphQL {"errors": [...]}
 // envelope (returned with HTTP 200) must surface as a Go error, not a
