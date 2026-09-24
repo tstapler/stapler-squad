@@ -1,13 +1,12 @@
 "use client";
 
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, type Dispatch } from "react";
 import { createPortal } from "react-dom";
 import { Columns2, Rows2, LayoutList, X, Maximize2 } from "lucide-react";
 import type { Session } from "@/gen/session/v1/types_pb";
-import { usePaneReducer } from "@/lib/pane/usePaneReducer";
 import { usePaneShortcuts } from "@/lib/pane/usePaneShortcuts";
 import { getAllLeaves } from "@/lib/pane/paneReducer";
-import type { SplitDirection } from "@/lib/pane/paneTypes";
+import type { PaneState, PaneAction, SplitDirection } from "@/lib/pane/paneTypes";
 import { PaneSplitRenderer } from "./PaneSplitRenderer";
 import { PaneContext } from "./PaneContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
@@ -27,6 +26,8 @@ import {
 
 interface PaneTilingContainerProps {
   sessions: Session[];
+  paneState: PaneState;
+  dispatch: Dispatch<PaneAction>;
   /**
    * When set, the session with this id is assigned to the currently focused pane.
    * The `version` field must change each time an assignment should fire (even for
@@ -48,9 +49,11 @@ interface PaneTilingContainerProps {
  */
 export function PaneTilingContainer({
   sessions,
+  paneState,
+  dispatch,
   externalSessionAssign,
 }: PaneTilingContainerProps) {
-  const [state, dispatch] = usePaneReducer(sessions);
+  const state = paneState;
   const containerRef = useRef<HTMLDivElement>(null);
   const prevVersionRef = useRef<number | null>(null);
 

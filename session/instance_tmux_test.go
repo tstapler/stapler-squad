@@ -929,15 +929,141 @@ func assertStaplerSquadMCPEntry(t *testing.T, val, wantURL, wantUUID string) {
 func TestClaudeMCPConfigArgs_HTTPFormat(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
-		Program:      "claude",
-		MCPServerURL: "http://localhost:8543/mcp",
-		UUID:         "test-uuid-123",
+		Program: "claude",
+		UUID:    "test-uuid-123",
 	}
-	flag, val := inst.claudeMCPConfigArgs()
+	flag, val := inst.claudeMCPConfigArgs("http://localhost:8543/mcp")
 	if flag != "--mcp-config" {
 		t.Errorf("flag = %q, want --mcp-config", flag)
 	}
 	assertStaplerSquadMCPEntry(t, val, "http://localhost:8543/mcp", "test-uuid-123")
+}
+
+// TestBuildClaudeCommand_ReResolvesMCPServerURL_OnRelaunch reproduces the
+// restart-drop bug (backlog e6c2a88e): a session whose static MCPServerURL
+// field was never populated must still get --mcp-config on relaunch, because
+// buildClaudeCommand now resolves through the provider on every call instead
+// of trusting a one-shot-backfilled field.
+func TestBuildClaudeCommand_ReResolvesMCPServerURL_OnRelaunch(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Program: "claude",
+		UUID:    "test-uuid-456",
+		// MCPServerURL deliberately left "" — simulates a session whose field
+		// was empty at the one moment it was ever backfilled.
+	}
+	inst.SetMCPServerURLProvider(func() string { return "http://localhost:9999/mcp" })
+
+	got := inst.buildLaunchCommand("")
+	if !strings.Contains(got, "--mcp-config") {
+		t.Fatalf("buildLaunchCommand() = %q, want it to contain --mcp-config (provider was wired)", got)
+	}
+	if !strings.Contains(got, "localhost:9999") {
+		t.Errorf("buildLaunchCommand() = %q, want it to use the provider's URL, not the empty static field", got)
+	}
+}
+
+// TestBuildClaudeCommand_ReResolvesProvider_AcrossMultipleLaunches proves the
+// PR's headline claim directly: the provider is called fresh on every
+// launch, not memoized after the first call. A regression that cached the
+// first resolveMCPServerURLFrom result on the Instance would pass every
+// other test in this file but fail here.
+func TestBuildClaudeCommand_ReResolvesProvider_AcrossMultipleLaunches(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Program: "claude", UUID: "test-uuid-multi"}
+	urls := []string{"http://localhost:1111/mcp", "http://localhost:2222/mcp"}
+	call := 0
+	inst.SetMCPServerURLProvider(func() string {
+		u := urls[call]
+		call++
+		return u
+	})
+
+	first := inst.buildLaunchCommand("")
+	if !strings.Contains(first, "1111") || strings.Contains(first, "2222") {
+		t.Errorf("first launch = %q, want only the first provider value (1111)", first)
+	}
+
+	second := inst.buildLaunchCommand("")
+	if !strings.Contains(second, "2222") || strings.Contains(second, "1111") {
+		t.Errorf("second launch = %q, want the provider re-resolved to 2222, not a cached 1111", second)
+	}
+}
+
+// TestBuildClaudeCommand_FallsBackToSnapshotWhenNoProvider guards the
+// back-compat path: instances/tests that predate provider wiring (no
+// SetMCPServerURLProvider call) still get --mcp-config from the static
+// MCPServerURL field via the Snapshot()-based GetMCPServerURL fallback.
+func TestBuildClaudeCommand_FallsBackToSnapshotWhenNoProvider(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Program:      "claude",
+		UUID:         "test-uuid-789",
+		MCPServerURL: "http://localhost:8543/mcp",
+	}
+	got := inst.buildLaunchCommand("")
+	if !strings.Contains(got, "--mcp-config") {
+		t.Fatalf("buildLaunchCommand() = %q, want it to contain --mcp-config (static field fallback)", got)
+	}
+	if !strings.Contains(got, "localhost:8543") {
+		t.Errorf("buildLaunchCommand() = %q, want it to use the static field's URL", got)
+	}
+}
+
+// TestBuildClaudeCommand_NoProviderNoLog_DuringBootWindow guards
+// pitfalls.md #7: a provider that was never wired (nil) is an expected
+// transient state during the narrow server-boot window before
+// WireInstanceCallbacks runs, not a failure — no --mcp-config flag and no
+// log line.
+func TestBuildClaudeCommand_NoProviderNoLog_DuringBootWindow(t *testing.T) {
+	buf := captureLogInfo(t)
+	inst := &Instance{Program: "claude", UUID: "test-uuid-boot"}
+
+	got := inst.buildLaunchCommand("")
+
+	if strings.Contains(got, "--mcp-config") {
+		t.Errorf("buildLaunchCommand() = %q, want no --mcp-config with no provider and no static field", got)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no log output when provider was never wired, got %q", buf.String())
+	}
+}
+
+// TestBuildClaudeCommand_LogsWhenBothProviderAndSnapshotEmpty guards AC4: a
+// provider that IS wired but resolves to "" (e.g. a transient server-address
+// race), with no static-field fallback either, must log loudly so a
+// permanently-stranded session is visible instead of silent.
+func TestBuildClaudeCommand_LogsWhenBothProviderAndSnapshotEmpty(t *testing.T) {
+	buf := captureLogInfo(t)
+	inst := &Instance{Program: "claude", UUID: "test-uuid-empty"}
+	inst.SetMCPServerURLProvider(func() string { return "" })
+
+	got := inst.buildLaunchCommand("")
+
+	if strings.Contains(got, "--mcp-config") {
+		t.Errorf("buildLaunchCommand() = %q, want no --mcp-config when provider resolves empty", got)
+	}
+	if !strings.Contains(buf.String(), "MCP server URL unresolved") {
+		t.Errorf("expected a loud log line when provider is wired but resolves empty, got %q", buf.String())
+	}
+}
+
+// TestBuildLaunchCommand_PiProgramSkipsMCPResolution guards pitfalls.md #7's
+// log-spam risk: a non-claude program launch must never attempt MCP URL
+// resolution or emit its log line.
+func TestBuildLaunchCommand_PiProgramSkipsMCPResolution(t *testing.T) {
+	buf := captureLogInfo(t)
+	inst := &Instance{Program: "pi", UUID: "test-uuid-pi"}
+	inst.SetMCPServerURLProvider(func() string { return "" })
+
+	got := inst.buildLaunchCommand("")
+
+	if strings.Contains(got, "--mcp-config") {
+		t.Errorf("buildLaunchCommand() = %q, want no --mcp-config for a pi launch", got)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no log output for a pi (non-claude) launch, got %q", buf.String())
+	}
 }
 
 // fakeHasSessionProcessManager reports HasSession() true (the tmux session

@@ -56,6 +56,7 @@ type ClassificationResult struct {
 // PermissionRequestPayload is the JSON payload from Claude Code's PermissionRequest HTTP hook.
 type PermissionRequestPayload struct {
 	SessionID      string                 `json:"session_id"`
+	ToolUseID      string                 `json:"tool_use_id,omitempty"`
 	TranscriptPath string                 `json:"transcript_path"`
 	Cwd            string                 `json:"cwd"`
 	PermissionMode string                 `json:"permission_mode"`

@@ -18,6 +18,7 @@ const _features = [
  */
 
 import { test, expect, Page } from '@playwright/test';
+import { WindowTabStripPage } from './pages/WindowTabStripPage';
 
 const MIN_PX = 44;
 
@@ -167,6 +168,39 @@ test.describe('Touch targets — session detail (mobile)', () => {
         `Mobile key ${i} height ${box.height}px < ${MIN_PX}px`,
       ).toBeGreaterThanOrEqual(MIN_PX);
     }
+  });
+});
+
+// ─── Window tab strip (mobile) ───────────────────────────────────────────────
+// validation.md row 13 (multi-window feature): WindowTabStrip's tab/+/×
+// controls must meet the same 44x44 minimum this file already enforces for
+// other mobile controls.
+
+test.describe('Touch targets — window tab strip (mobile)', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test.beforeEach(async ({ page, context }) => {
+    // Same onboarding-suppression convention as multi-window.spec.ts — the
+    // generic onboarding modal would otherwise intercept clicks on the strip.
+    await context.addInitScript(() => {
+      localStorage.setItem('stapler-squad:onboarded', 'true');
+    });
+    await page.goto('/');
+  });
+
+  test('WindowTabStrip tab, plus, and close controls meet the 44x44 minimum on mobile viewport', async ({ page }) => {
+    const strip = new WindowTabStripPage(page);
+    await strip.waitForLoaded();
+
+    // A second window is required for the "×" close control to render at
+    // all (WindowTabStrip.tsx only shows it once windows.length > 1).
+    await strip.createWindow();
+    const activeId = WindowTabStripPage.windowIdFromUrl(page.url());
+    expect(activeId, 'Active window id missing from URL after createWindow()').not.toBeNull();
+
+    await assertTouchTarget(page, `window-tab-${activeId}`, 'Active window tab');
+    await assertTouchTarget(page, `window-tab-close-${activeId}`, 'Window tab close button');
+    await assertTouchTarget(page, 'window-add-button', 'New window button');
   });
 });
 

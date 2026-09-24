@@ -837,6 +837,12 @@ func (s *Storage) RecordAnalytics(ctx context.Context, data AnalyticsData) error
 	return s.repo.RecordAnalytics(ctx, data)
 }
 
+// RecordAnalyticsBatch writes one atomic, idempotent analytics batch without
+// widening the broad Repository interface used by unrelated adapters.
+func (s *Storage) RecordAnalyticsBatch(ctx context.Context, batch []AnalyticsData) error {
+	return s.repo.RecordAnalyticsBatch(ctx, batch)
+}
+
 // ListAnalytics retrieves recent classification decisions from the repository.
 func (s *Storage) ListAnalytics(ctx context.Context, limit int) ([]AnalyticsData, error) {
 	return s.repo.ListAnalytics(ctx, limit)

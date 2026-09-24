@@ -391,10 +391,20 @@ type Instance struct {
 	// decision. Guarded by claudeSessionMu, same lock order as HistoryFilePath.
 	LastReviveOutcome ReviveOutcome
 
-	// MCPServerURL is the URL of the stapler-squad HTTP MCP endpoint.
-	// When set, passed as --mcp-config to claude on session start so no
-	// settings-file injection is needed.
+	// MCPServerURL is the URL of the stapler-squad HTTP MCP endpoint, passed
+	// as --mcp-config to claude on session start. A one-shot value resolved
+	// at construction time; buildClaudeCommand prefers mcpServerURLProvider
+	// and only falls back to this field (via GetMCPServerURL) when no
+	// provider is wired or the provider itself resolves empty.
 	MCPServerURL string `json:"mcp_server_url,omitempty"`
+
+	// mcpServerURLProvider re-resolves the MCP URL fresh on every claude
+	// launch (see buildClaudeCommand), fixing the restart-drop gap a
+	// one-shot MCPServerURL leaves open. Not actor-routed like
+	// SetMCPServerURL/claudeSessionIDSavedCallback below: buildClaudeCommand
+	// runs inside the actor's own goroutine, so an actor-routed setter would
+	// deadlock on the mailbox (sendSyncErr) when called from there.
+	mcpServerURLProvider atomic.Pointer[func() string]
 
 	// AppendSystemPrompt, when non-empty and the program is claude, passes
 	// --append-system-prompt to inject extra instructions into the system prompt

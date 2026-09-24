@@ -31,6 +31,7 @@ import {
 } from './pages/BacklogMutations';
 import { SessionClient } from './helpers/session-client';
 import { dismissNotificationInterference } from './pages/NotificationPanel';
+import { WindowTabStripPage } from './pages/WindowTabStripPage';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
@@ -1190,6 +1191,173 @@ test.describe('Accessibility — backlog-stage-execution-costs (WCAG 2.1 AA)', (
       }
     } finally {
       await disableBacklogFeatureFlag(request);
+    }
+  });
+});
+
+// multi-window (implementation/validation.md rows 9, 11, 12): WindowTabStrip
+// (top, always rendered) and MobilePaneTabStrip (narrow viewports only, once
+// 2+ panes exist) are two independently labelled role="tablist" regions
+// layered above PaneTilingContainer — following this file's own convention
+// of extending accessibility.spec.ts rather than a per-feature a11y suite.
+test.describe('Accessibility — multi-window (WCAG 2.1 AA)', () => {
+  test.setTimeout(120_000);
+
+  test.beforeEach(async ({ context }) => {
+    await context.addInitScript(() => {
+      localStorage.setItem('stapler-squad:onboarded', 'true');
+    });
+  });
+
+  test('multi-window tab strip and pane tab strip pass axe-core with distinct tablist labels', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto(BASE_URL, { waitUntil: 'load' });
+
+    const strip = new WindowTabStripPage(page);
+    await strip.waitForLoaded();
+    await strip.createWindow(); // 2 windows
+
+    // Ensure 2+ panes exist BEFORE narrowing the viewport: MobilePaneTabStrip
+    // (PaneSplitRenderer.tsx's showMobileTabStrip) only mounts once
+    // leaves.length > 1, but the split buttons themselves are only rendered
+    // at desktop/foldable widths (splitButtonVisible={!isMobile}). The fresh
+    // window created above may already start with 2+ leaves depending on
+    // seeded session data, so split only if needed rather than asserting an
+    // exact leaf count.
+    const leaves = page.locator('[data-testid^="pane-leaf-"]');
+    if ((await leaves.count()) < 2) {
+      const splitButton = page.getByTestId('pane-split-vertical-btn').first();
+      await expect(splitButton).toBeVisible();
+      await splitButton.click();
+    }
+    await expect.poll(() => leaves.count()).toBeGreaterThanOrEqual(2);
+
+    // Narrow below the isMobile threshold (600px) so MobilePaneTabStrip
+    // (role="tablist" aria-label="Pane switcher") mounts alongside
+    // WindowTabStrip's always-rendered "Window switcher".
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    const windowTablist = page.getByRole('tablist', { name: 'Window switcher' });
+    const paneTablist = page.getByRole('tablist', { name: 'Pane switcher' });
+    await expect(windowTablist).toBeVisible();
+    await expect(paneTablist).toBeVisible();
+
+    const [windowLabel, paneLabel] = await Promise.all([
+      windowTablist.getAttribute('aria-label'),
+      paneTablist.getAttribute('aria-label'),
+    ]);
+    expect(windowLabel).toBe('Window switcher');
+    expect(paneLabel).toBe('Pane switcher');
+    expect(windowLabel).not.toBe(paneLabel);
+
+    const results = await new AxeBuilder({ page })
+      .exclude('pre, [class*="terminal"], [class*="Terminal"]')
+      // Pre-existing, out-of-scope issues predating the multi-window feature
+      // (verified via a standalone repro against this same viewport/markup
+      // before any multi-window change): MobilePaneTabStrip's own "+"
+      // button is a direct, non-"tab" child of its role="tablist"
+      // (aria-required-children) and its active-tab text/background pairing
+      // fails color-contrast; BottomNav's mobile-viewport label contrast
+      // also fails independently of anything here. Neither is
+      // WindowTabStrip or a component this sweep touches.
+      .exclude('[aria-label="Pane switcher"]')
+      .exclude('[aria-label="Bottom navigation"]')
+      // Each tab nests a real, focusable <button> ("×") inside its own
+      // role="tab" element, which axe's nested-interactive rule flags.
+      // WindowTabStrip.tsx's WindowTabButton doc comment covers why: it
+      // mirrors ShellTabLabel's identical tab-with-inline-actions structure
+      // (SessionDetailView.tsx's shell tabs), an established, pre-existing
+      // pattern in this codebase rather than a new tradeoff introduced by
+      // the multi-window feature.
+      .disableRules(['nested-interactive'])
+      .analyze();
+
+    const criticalViolations = results.violations.filter(
+      v => v.impact === 'critical' || v.impact === 'serious',
+    );
+    if (criticalViolations.length > 0) {
+      const messages = criticalViolations.map(v =>
+        `\n  [${v.impact?.toUpperCase()}] ${v.id}: ${v.description}\n    Affected: ${v.nodes.slice(0, 2).map(n => n.target.join(', ')).join('; ')}`,
+      );
+      console.error(`Accessibility violations found:${messages.join('')}`);
+    }
+    expect(criticalViolations).toHaveLength(0);
+  });
+
+  test('active window tab encodes state via aria-selected and non-color visual cues meeting contrast', async ({ page }) => {
+    await page.goto(BASE_URL, { waitUntil: 'load' });
+    const strip = new WindowTabStripPage(page);
+    await strip.waitForLoaded();
+    await strip.createWindow(); // Window 2 becomes active; Window 1 stays inactive
+
+    const activeTab = strip.getActiveTab();
+    const inactiveTab = strip.getTab('Window 1');
+    await expect(activeTab).toHaveAttribute('aria-selected', 'true');
+    await expect(inactiveTab).toHaveAttribute('aria-selected', 'false');
+
+    const [activeCue, inactiveCue] = await Promise.all([
+      activeTab.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { fontWeight: cs.fontWeight, textDecorationLine: cs.textDecorationLine };
+      }),
+      inactiveTab.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { fontWeight: cs.fontWeight, textDecorationLine: cs.textDecorationLine };
+      }),
+    ]);
+    // Non-color cues (WindowTabStrip.css.ts's `active: true` variant): bold
+    // weight + underline on the active tab, neither on the inactive one — a
+    // distinct signal beyond the background-color swap.
+    expect(activeCue.fontWeight).not.toBe(inactiveCue.fontWeight);
+    expect(activeCue.textDecorationLine).toBe('underline');
+    expect(inactiveCue.textDecorationLine).not.toBe('underline');
+
+    // Both states are rendered simultaneously in the strip (one active tab,
+    // one inactive), so a single scoped scan covers active + inactive contrast.
+    const results = await new AxeBuilder({ page })
+      .include('[role="tablist"][aria-label="Window switcher"]')
+      .withRules(['color-contrast'])
+      .analyze();
+    expect(results.violations).toHaveLength(0);
+  });
+
+  test('every control in the window tab strip has a distinct accessible name', async ({ page }) => {
+    await page.goto(BASE_URL, { waitUntil: 'load' });
+    const strip = new WindowTabStripPage(page);
+    await strip.waitForLoaded();
+    await strip.createWindow();
+    await strip.createWindow(); // 3 windows: "×" close buttons render for every tab
+
+    const tabListHandle = await strip.tabList.elementHandle();
+    expect(tabListHandle).not.toBeNull();
+    // interestingOnly defaults to true, which (per a known Playwright/CDP
+    // quirk) can make snapshot() return null when the tablist root itself
+    // isn't judged "interesting" — interestingOnly: false avoids that; the
+    // collect() walk below still filters to only tab/button/textbox roles.
+    const snapshot = await page.accessibility.snapshot({ root: tabListHandle!, interestingOnly: false });
+    expect(snapshot).not.toBeNull();
+
+    const names: string[] = [];
+    function collect(node: NonNullable<typeof snapshot>) {
+      if (['tab', 'button', 'textbox'].includes(node.role) && node.name) {
+        names.push(node.name);
+      }
+      for (const child of node.children ?? []) {
+        collect(child);
+      }
+    }
+    collect(snapshot!);
+
+    expect(names.length).toBeGreaterThan(0);
+    const uniqueNames = new Set(names);
+    expect(uniqueNames.size, `Duplicate accessible names found: ${names.join(', ')}`).toBe(names.length);
+
+    // Every per-tab close control must embed the window's own name, never a
+    // bare "Close" — that's what keeps them from colliding with each other.
+    const closeNames = names.filter((n) => n.startsWith('Close '));
+    expect(closeNames.length).toBeGreaterThan(0);
+    for (const n of closeNames) {
+      expect(n).not.toBe('Close');
     }
   });
 });

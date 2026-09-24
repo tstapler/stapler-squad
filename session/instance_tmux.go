@@ -369,9 +369,23 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 		// shell-quoting as the other interpolated flag values.
 		parts = append(parts, "--resume", shellQuote(claudeSessionID))
 	}
-	if i.MCPServerURL != "" {
-		flag, val := i.claudeMCPConfigArgs()
+	// Load the provider once and reuse it below -- calling resolveMCPServerURL()
+	// then separately re-Load()ing would race against a concurrent
+	// SetMCPServerURLProvider call (deliberately not actor-routed, see that
+	// setter's doc comment) and could log a misleading "provider is wired"
+	// message for a launch where it briefly wasn't.
+	provider := i.mcpServerURLProvider.Load()
+	mcpURL := i.resolveMCPServerURLFrom(provider)
+	if mcpURL != "" {
+		flag, val := i.claudeMCPConfigArgs(mcpURL)
 		parts = append(parts, flag, val)
+	} else if provider != nil {
+		// Provider is wired but resolved empty (and so did the Snapshot()
+		// fallback) -- every session-scoped MCP tool call will hard-fail
+		// until a later relaunch re-resolves a non-empty URL. A nil provider
+		// (not yet wired, e.g. the narrow server-boot window before
+		// WireInstanceCallbacks runs) is not logged: expected, not a failure.
+		log.Error("claude launch: MCP server URL unresolved, session will not be able to call session-scoped MCP tools", "session", i.Title, "program", i.Program)
 	}
 	if flag, val := i.claudeSettingsEnvOverrideArgs(); flag != "" {
 		parts = append(parts, flag, val)
@@ -528,16 +542,38 @@ func (i *Instance) cleanupPromptFile() {
 }
 
 // claudeMCPConfigArgs returns the --mcp-config flag and its shell-quoted JSON value.
-// Uses the Streamable HTTP transport (type "http") pointing at MCPServerURL, with the
+// Uses the Streamable HTTP transport (type "http") pointing at mcpURL, with the
 // session UUID passed as a request header. The server middleware at /mcp extracts
 // X-Stapler-Session-UUID and injects it into the request context for tool handlers.
 // Both "http" and "streamable-http" are accepted by the Claude CLI for --mcp-config.
-func (i *Instance) claudeMCPConfigArgs() (string, string) {
+func (i *Instance) claudeMCPConfigArgs(mcpURL string) (string, string) {
 	cfg := fmt.Sprintf(
 		`{"mcpServers":{"stapler-squad":{"type":"http","url":%q,"headers":{"X-Stapler-Session-UUID":%q}}}}`,
-		i.MCPServerURL, i.UUID,
+		mcpURL, i.UUID,
 	)
 	return "--mcp-config", shellQuote(cfg)
+}
+
+// resolveMCPServerURLFrom returns the MCP server URL to pass to claude for
+// this launch, given an already-Load()ed provider (so callers needing the
+// provider's presence for another decision don't race a second Load() --
+// see buildClaudeCommand). Falls back to GetMCPServerURL() when provider is
+// nil or resolves empty.
+func (i *Instance) resolveMCPServerURLFrom(provider *func() string) string {
+	if provider != nil {
+		if url := (*provider)(); url != "" {
+			return url
+		}
+	}
+	return i.GetMCPServerURL()
+}
+
+// GetMCPServerURL returns the instance's last known-good MCP server URL via
+// the lock-free published Snapshot() rather than the bare MCPServerURL
+// field. Used only as resolveMCPServerURL's fallback when no provider is
+// wired.
+func (i *Instance) GetMCPServerURL() string {
+	return i.Snapshot().MCPServerURL
 }
 
 // resolveExtraEnvVars returns the custom-program and instance-level env vars
