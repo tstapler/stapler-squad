@@ -129,7 +129,7 @@ function keyMatches(event: KeyboardEvent, shortcut: Shortcut): boolean {
   return true;
 }
 
-function isInputElement(target: EventTarget | null): boolean {
+export function isInputElement(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   const el = target;
   const tag = el.tagName.toLowerCase();

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { RefObject } from "react";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
-import { registry } from "@/lib/shortcuts/shortcutRegistry";
+import { registry, isInputElement } from "@/lib/shortcuts/shortcutRegistry";
 import type { NamedWindow, WindowId } from "./windowTypes";
 
 /**
@@ -117,7 +117,15 @@ function armCatchAllListener(refs: LeaderRefs): void {
   // it never calls preventDefault -- the keystroke is left unconsumed for
   // whatever else (e.g. a terminal pane) would normally receive it.
   const onAnyKeyWhileArmed = (e: KeyboardEvent) => {
-    if (!FOLLOWUP_KEYS.has(e.key)) {
+    // A followup-shaped keystroke (e.g. "1" or "n") typed into a focused
+    // input/textarea/contenteditable never reaches a followup action —
+    // ShortcutRegistry.dispatch's own isInputElement guard no-ops it — but
+    // without this check it also wouldn't disarm here, leaving the leader
+    // (and its registry entries for every digit/n/p/,/Escape) armed for up
+    // to LEADER_TIMEOUT_MS after the user has moved on to typing elsewhere.
+    const hasModifier = e.metaKey || e.ctrlKey || e.altKey;
+    const typedIntoInput = !hasModifier && isInputElement(e.target);
+    if (typedIntoInput || !FOLLOWUP_KEYS.has(e.key)) {
       disarmLeader(refs);
     }
   };

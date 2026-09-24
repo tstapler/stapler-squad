@@ -5,14 +5,37 @@ import type { NamedWindow, PersistedWindowLayoutV2, WindowRevision } from "./win
 const WINDOW_LAYOUT_KEY = "cockpit.windowLayout";
 const LAST_FOCUSED_WINDOW_KEY = "cockpit.lastFocusedWindowId";
 
-/** Shape-validate a parsed v2 payload before trusting it. */
-function isValidV2Layout(value: unknown): value is PersistedWindowLayoutV2 {
+function isValidNamedWindow(value: unknown): value is NamedWindow {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<NamedWindow>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.name === "string" &&
+    !!candidate.paneState &&
+    typeof candidate.paneState === "object"
+  );
+}
+
+/**
+ * Shape-validate a parsed v2 payload before trusting it — checked identically
+ * on both load (loadWindowLayout) and cross-tab adoption (the `storage`
+ * listener in useWindowManager.ts), so a malformed write from either source
+ * can't reach the reducer/PaneTilingContainer, which assume every window has
+ * a real id/name/paneState.
+ */
+export function isValidV2Layout(value: unknown): value is PersistedWindowLayoutV2 {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<PersistedWindowLayoutV2>;
   return (
     candidate.version === 2 &&
     typeof candidate.revision === "number" &&
-    Array.isArray(candidate.windows)
+    Array.isArray(candidate.windows) &&
+    // An empty windows array is unrepresentable in this app (windowReducer.ts
+    // never produces one — every CLOSE_WINDOW carries a replacement) and
+    // page.tsx's `windows.find(...) ?? windows[0]` fallback assumes at least
+    // one exists, so trusting one here would crash every render.
+    candidate.windows.length > 0 &&
+    candidate.windows.every(isValidNamedWindow)
   );
 }
 
@@ -94,8 +117,13 @@ export function loadWindowLayout(): PersistedWindowLayoutV2 | null {
 
 /**
  * Optimistic Offline Lock: re-reads the current stored value fresh and only
- * writes if `lastKnownRevision` still matches, so a concurrent tab's write
- * can never be silently clobbered (ADR-002).
+ * writes if `lastKnownRevision` still matches (ADR-002). This is a
+ * read-check-write, not an atomic compare-and-swap: it detects a conflict
+ * whenever the other tab's write has already landed by the time this tab
+ * re-reads, but two saves whose reads both happen to land before either
+ * write commits can still race past the check undetected — an accepted,
+ * narrow gap given the alternative (a pessimistic lock) was ruled out of
+ * scope in ADR-002's Alternatives Considered.
  */
 export function saveWindowLayout(
   windows: NamedWindow[],
