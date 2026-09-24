@@ -84,6 +84,36 @@ func TestFromProtoStuckReason_should_ReturnBounceCapExhausted_When_ProtoBounceCa
 	assert.Equal(t, domain.StuckReasonBounceCapExhausted, got)
 }
 
+// reasonsWithoutProtoMapping lists domain.StuckReason values with no
+// STUCK_REASON_* proto enum value yet, so toProtoStuckReason falls through to
+// STUCK_REASON_UNSPECIFIED for them. domain.StuckReasonGateTimeout is a
+// pre-existing, separately-tracked gap — do not add an entry here for a
+// newly-introduced StuckReason; wire it into toProtoStuckReason instead.
+var reasonsWithoutProtoMapping = map[domain.StuckReason]bool{
+	domain.StuckReasonGateTimeout: true,
+}
+
+// TestToProtoStuckReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded
+// guards against a StuckReason existing in the domain enum with no proto
+// mapping: every domain.AllStuckReasons entry must map to a non-UNSPECIFIED
+// proto value unless listed in reasonsWithoutProtoMapping.
+func TestToProtoStuckReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded(t *testing.T) {
+	t.Parallel()
+	for _, reason := range domain.AllStuckReasons {
+		t.Run(string(reason), func(t *testing.T) {
+			t.Parallel()
+			got := toProtoStuckReason(reason)
+			if reasonsWithoutProtoMapping[reason] {
+				assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED, got,
+					"StuckReason %q is listed in reasonsWithoutProtoMapping as expected-unmapped but now maps to %v — remove it from that map", reason, got)
+				return
+			}
+			assert.NotEqual(t, sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED, got,
+				"StuckReason %q has no case in toProtoStuckReason (falls through to STUCK_REASON_UNSPECIFIED) — add a proto enum value and wire it in, or add it to reasonsWithoutProtoMapping with a documented reason", reason)
+		})
+	}
+}
+
 // seedOpenStuckRow creates a backlog item and inserts an open BacklogStuckState
 // row directly via the ent client (bypassing MarkStuck/its status precondition,
 // since these RPC-level tests only need a row to exist, not the reconciler's
