@@ -965,6 +965,27 @@ func TestResolveFinding_should_NotSuppressRepairNotification_When_SameSessionAnd
 	assert.Equal(t, notificationTypeInfo, notifier.calls[1].NotificationType)
 }
 
+// TestNotifyBackoff_should_PruneStaleEntry_When_WindowElapsed covers the leak fix: a
+// key whose recorded time is already past worktreeConsistencyBackoffWindow must be
+// removed by shouldNotify's own test-and-set, not merely overwritten in place, so seen
+// never accumulates one permanent entry per session ever flagged.
+func TestNotifyBackoff_should_PruneStaleEntry_When_WindowElapsed(t *testing.T) {
+	t.Parallel()
+	backoff := newNotifyBackoff()
+	key := notifyBackoffKey{SessionID: "sess-prune", IssueKind: IssueMissingWorktreeRow}
+
+	backoff.mu.Lock()
+	backoff.seen[key] = time.Now().Add(-worktreeConsistencyBackoffWindow - time.Minute)
+	backoff.mu.Unlock()
+
+	assert.True(t, backoff.shouldNotify(key), "a stale entry past the backoff window must allow a fresh notification")
+
+	backoff.mu.Lock()
+	entryCount := len(backoff.seen)
+	backoff.mu.Unlock()
+	assert.Equal(t, 1, entryCount, "the stale entry must be pruned and replaced, not retained alongside a fresh one")
+}
+
 // TestNotifySession_should_RecordCall_When_FakeNotifierInvoked is a small direct test of
 // Task 1.2.3a-prep's fakeNotifier.NotifySession addition itself.
 func TestNotifySession_should_RecordCall_When_FakeNotifierInvoked(t *testing.T) {
@@ -976,6 +997,61 @@ func TestNotifySession_should_RecordCall_When_FakeNotifierInvoked(t *testing.T) 
 	assert.Equal(t, "NotifySession", notifier.calls[0].Method)
 	assert.Equal(t, "sess-123", notifier.calls[0].RecipientID)
 	assert.Equal(t, notificationTypeWarning, notifier.calls[0].NotificationType)
+}
+
+// ---------------------------------------------------------------------------
+// Epic 1.3: worktreeEntryCache
+// ---------------------------------------------------------------------------
+
+// TestWorktreeEntryCache_EntriesFor_should_MemoizeListing_When_CalledTwiceForSameRepo
+// proves entriesFor lists a repo's live worktrees at most once per cache instance: a
+// second live worktree registered between the two entriesFor calls must not appear in
+// the second call's result, since a fresh git.ListWorktrees call would have picked it
+// up — only a memoized result would still report just the first.
+func TestWorktreeEntryCache_EntriesFor_should_MemoizeListing_When_CalledTwiceForSameRepo(t *testing.T) {
+	t.Parallel()
+	repoPath := setupTestGitRepo(t)
+	setupLinkedWorktree(t, repoPath, "cache-memo-a")
+
+	cache := newWorktreeEntryCache()
+	entries1, ok1 := cache.entriesFor(repoPath)
+	require.True(t, ok1)
+	require.Len(t, entries1, 1)
+
+	setupLinkedWorktree(t, repoPath, "cache-memo-b")
+
+	entries2, ok2 := cache.entriesFor(repoPath)
+	require.True(t, ok2)
+	assert.Equal(t, entries1, entries2, "second call must return the memoized entries, not a fresh listing")
+	assert.Len(t, entries2, 1, "a fresh git.ListWorktrees call would have picked up the worktree registered after the cache was primed")
+}
+
+// TestWorktreeEntryCache_EntriesFor_should_RememberFailure_When_ListingFailsOnFirstCall
+// covers the negative-caching half of entriesFor's contract: a repo whose listing fails
+// this tick is remembered as failed rather than re-attempted. Permissions are restored
+// before the second call — if entriesFor re-attempted instead of using the sticky
+// failure, that second call would now succeed, so a still-false ok2 is direct proof it
+// didn't re-attempt.
+func TestWorktreeEntryCache_EntriesFor_should_RememberFailure_When_ListingFailsOnFirstCall(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permission checks, cannot exercise this failure mode")
+	}
+	t.Parallel()
+	repoPath := t.TempDir()
+	worktreesDir := filepath.Join(repoPath, ".git", "worktrees")
+	require.NoError(t, os.MkdirAll(worktreesDir, 0o755))
+	require.NoError(t, os.Chmod(worktreesDir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(worktreesDir, 0o755) })
+
+	cache := newWorktreeEntryCache()
+
+	_, ok1 := cache.entriesFor(repoPath)
+	assert.False(t, ok1, "an unreadable .git/worktrees dir must fail the first listing")
+
+	require.NoError(t, os.Chmod(worktreesDir, 0o755))
+
+	_, ok2 := cache.entriesFor(repoPath)
+	assert.False(t, ok2, "a repo remembered as failed this tick must not be re-attempted")
 }
 
 // ---------------------------------------------------------------------------

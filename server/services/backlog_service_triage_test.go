@@ -3030,10 +3030,13 @@ func TestCleanupItemWorktreesExcept_should_ContinueSilently_When_SessionDoesNotE
 
 	svc.cleanupItemWorktreesExcept(ctx, sessions, "")
 
+	// cleanupItemWorktreesExcept is synchronous and EventBus.Publish sends synchronously
+	// into the subscriber channel, so any would-be event is already queued by the time
+	// the call above returns — no wait needed to prove none fired.
 	select {
 	case ev := <-ch:
 		t.Fatalf("expected no notification for a legitimately non-worktree session, got %+v", ev)
-	case <-time.After(300 * time.Millisecond):
+	default:
 		// expected: no notification fired — unchanged silent continue.
 	}
 }

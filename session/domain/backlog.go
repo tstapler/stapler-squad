@@ -228,14 +228,9 @@ const (
 	// (session/backlog_lifecycle_gates.go), mirroring
 	// reconcileOrphanedTriageItems' LivenessEngine-consulting sweep pattern.
 	StuckReasonGateTimeout StuckReason = "gate_timeout"
-	// StuckReasonWorktreeInconsistent: session/worktree_consistency_sweep.go's periodic
-	// reconciliation sweep flagged (declined to auto-repair) a session's worktree
-	// state — an ambiguous or zero live-git-worktree match for a missing Worktree row,
-	// an unresolvable repo_path, or an unresolvable base_commit_sha. Best-effort
-	// dual-write alongside the sweep's notification, only when the session has a live
-	// (non-terminal-status) linked BacklogItem
-	// (project_plans/session-worktree-reconciliation/implementation/plan.md,
-	// Architecture-A2).
+	// StuckReasonWorktreeInconsistent: the worktree consistency sweep flagged an
+	// inconsistency it declined to auto-repair. Dual-written alongside its
+	// notification when the session has a live linked BacklogItem.
 	StuckReasonWorktreeInconsistent StuckReason = "worktree_inconsistent"
 )
 

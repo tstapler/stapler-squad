@@ -1244,12 +1244,9 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 			continue
 		}
 		if wt.WorktreePath == "" {
-			// Epic 2.1: a missing WorktreePath used to silently continue here with no
-			// record at all, even for a session that should have had a worktree row —
-			// the confirmed gap this branch closes (plan.md's Epic B). ItemSessionSummary
-			// carries no SessionType/Branch/IsWorktree of its own, so ExpectsWorktree
-			// needs one extra lookup; a lookup failure means we can't tell, so it falls
-			// back to the pre-existing silent continue rather than false-alarming.
+			// Epic 2.1: previously silently skipped here even when a worktree row was
+			// expected. Extra lookup needed since ItemSessionSummary lacks
+			// SessionType/Branch; a lookup failure falls back to silent skip.
 			if sessionData, lookupErr := s.storage.FindInstanceDataByID(is.SessionUUID); lookupErr == nil && session.ExpectsWorktree(*sessionData) {
 				log.Warn("[cleanupItemWorktreesExcept] worktree row missing but expected",
 					"session_id", is.SessionUUID, "item_id", is.BacklogItemID)

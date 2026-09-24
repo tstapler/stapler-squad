@@ -1,6 +1,8 @@
 package git
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,7 +65,7 @@ func TestListWorktrees_should_ReturnError_When_WorktreesDirUnreadable(t *testing
 
 	_, err := ListWorktrees(repoPath)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "nativeListWorktrees")
+	assert.True(t, errors.Is(err, fs.ErrPermission), "expected a permission-denied error (wrapped), got: %v", err)
 }
 
 // TestNativeFindExistingWorktreeForBranch_FindsLiveWorktree_ReportsNotFoundForOtherBranch

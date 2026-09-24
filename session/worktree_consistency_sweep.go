@@ -380,10 +380,17 @@ func (b *notifyBackoff) shouldNotify(key notifyBackoffKey) bool {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if last, ok := b.seen[key]; ok && time.Since(last) < worktreeConsistencyBackoffWindow {
-		return false
+	now := time.Now()
+	if last, ok := b.seen[key]; ok {
+		if now.Sub(last) < worktreeConsistencyBackoffWindow {
+			return false
+		}
+		// Stale — prune rather than overwrite in place, so seen never grows past the
+		// set of keys currently inside their backoff window (it would otherwise retain
+		// one entry per session ever flagged for the life of the process).
+		delete(b.seen, key)
 	}
-	b.seen[key] = time.Now()
+	b.seen[key] = now
 	return true
 }
 
