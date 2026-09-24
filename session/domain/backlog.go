@@ -228,6 +228,15 @@ const (
 	// (session/backlog_lifecycle_gates.go), mirroring
 	// reconcileOrphanedTriageItems' LivenessEngine-consulting sweep pattern.
 	StuckReasonGateTimeout StuckReason = "gate_timeout"
+	// StuckReasonWorktreeInconsistent: session/worktree_consistency_sweep.go's periodic
+	// reconciliation sweep flagged (declined to auto-repair) a session's worktree
+	// state — an ambiguous or zero live-git-worktree match for a missing Worktree row,
+	// an unresolvable repo_path, or an unresolvable base_commit_sha. Best-effort
+	// dual-write alongside the sweep's notification, only when the session has a live
+	// (non-terminal-status) linked BacklogItem
+	// (project_plans/session-worktree-reconciliation/implementation/plan.md,
+	// Architecture-A2).
+	StuckReasonWorktreeInconsistent StuckReason = "worktree_inconsistent"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -252,6 +261,7 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonBounceCapExhausted,
 	StuckReasonSteerFailed,
 	StuckReasonGateTimeout,
+	StuckReasonWorktreeInconsistent,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -263,7 +273,7 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
 		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
 		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed,
-		StuckReasonGateTimeout:
+		StuckReasonGateTimeout, StuckReasonWorktreeInconsistent:
 		return true
 	}
 	return false

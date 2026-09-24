@@ -38,6 +38,18 @@ import (
 // push-gate redesign PR for the classification behind each site.
 type Notifier interface {
 	Notify(itemID, title, message string, notificationType int32, urgent, important bool)
+
+	// NotifySession publishes a notification scoped to a bare session that has no
+	// linked BacklogItem — sessionID is threaded through as the event's own
+	// SessionID. Implementations must NOT write it into metadata["item_id"]: that
+	// key means "this notification is about backlog item <value>," and a session
+	// UUID there would corrupt every consumer keyed on it (NotificationItem.tsx's
+	// deep link, NotificationsPage.tsx's categorization). Use Notify instead
+	// whenever a real BacklogItemID is available — Notify's itemID parameter
+	// always lands in metadata["item_id"], which is exactly wrong for a bare
+	// session ID (session/worktree_consistency_sweep.go's FlagSessionForOperator
+	// is the first caller that needs this distinction).
+	NotifySession(sessionID, title, message string, notificationType int32, urgent, important bool)
 }
 
 // QueueDequeuer claims and spawns as many queued (and, by default, "ready" —
