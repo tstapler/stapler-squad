@@ -33,7 +33,7 @@ describe("useWindowUrlSync", () => {
     const windows = [makeWindow("win-1", "Window 1"), makeWindow("win-2", "Window 2")];
     mockSearchParams = new URLSearchParams("window=win-2");
 
-    const { result } = renderHook(() => useWindowUrlSync(windows));
+    const { result } = renderHook(() => useWindowUrlSync(windows, true));
 
     expect(result.current.currentWindowId).toBe("win-2");
     expect(mockReplace).not.toHaveBeenCalled();
@@ -44,7 +44,7 @@ describe("useWindowUrlSync", () => {
     localStorage.setItem(LAST_FOCUSED_KEY, "win-2");
     mockSearchParams = new URLSearchParams();
 
-    const { result } = renderHook(() => useWindowUrlSync(windows));
+    const { result } = renderHook(() => useWindowUrlSync(windows, true));
 
     expect(result.current.currentWindowId).toBe("win-2");
     expect(mockReplace).toHaveBeenCalledTimes(1);
@@ -55,7 +55,7 @@ describe("useWindowUrlSync", () => {
     const windows = [makeWindow("win-1", "Window 1")];
     mockSearchParams = new URLSearchParams("window=win-2");
 
-    const { result } = renderHook(() => useWindowUrlSync(windows));
+    const { result } = renderHook(() => useWindowUrlSync(windows, true));
 
     expect(result.current.currentWindowId).toBe("win-1");
     expect(mockReplace).toHaveBeenCalledTimes(1);
@@ -67,7 +67,7 @@ describe("useWindowUrlSync", () => {
     mockSearchParams = new URLSearchParams("window=win-1&session=abc");
     const dispatchSpy = jest.fn();
 
-    const { result } = renderHook(() => useWindowUrlSync(windows));
+    const { result } = renderHook(() => useWindowUrlSync(windows, true));
     mockReplace.mockClear();
 
     result.current.switchToWindow("win-2");
@@ -79,5 +79,36 @@ describe("useWindowUrlSync", () => {
     expect(opts).toEqual({ scroll: false });
     expect(localStorage.getItem(LAST_FOCUSED_KEY)).toBe("win-2");
     expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it("useWindowUrlSync_should_notCorrectUrl_When_notYetRestored", () => {
+    // Before useWindowManager's restore effect completes, `windows` is a
+    // throwaway placeholder (a single window with a freshly generated random
+    // id) — a real `?window=<id>` param naming an actual persisted window
+    // will legitimately not match it. Without the `isRestored` guard, this
+    // hook would "self-heal" by overwriting that valid param before the real
+    // data even loads, permanently losing the window the URL originally named.
+    const placeholder = [makeWindow("placeholder-1", "Window 1")];
+    mockSearchParams = new URLSearchParams("window=win-real");
+
+    const { result, rerender } = renderHook(
+      ({ windows, isRestored }: { windows: NamedWindow[]; isRestored: boolean }) =>
+        useWindowUrlSync(windows, isRestored),
+      { initialProps: { windows: placeholder, isRestored: false } }
+    );
+
+    // Resolution still falls back for rendering purposes (nothing to show
+    // otherwise), but the URL itself must be left alone.
+    expect(result.current.currentWindowId).toBe("placeholder-1");
+    expect(mockReplace).not.toHaveBeenCalled();
+
+    // Once restoration completes with the real windows list (including the
+    // window the URL always named), it must resolve correctly — no lingering
+    // "correction" from the placeholder phase should have clobbered the URL.
+    const real = [makeWindow("win-real", "Window 1"), makeWindow("win-other", "Window 2")];
+    rerender({ windows: real, isRestored: true });
+
+    expect(result.current.currentWindowId).toBe("win-real");
+    expect(mockReplace).not.toHaveBeenCalled();
   });
 });

@@ -29,8 +29,22 @@ function resolveCurrentWindowId(
  * window is per-tab and derived from `?window=`, never a shared reducer
  * field), self-healing the URL when the param is missing or names a window
  * closed by another tab.
+ *
+ * `isRestored` must reflect `useWindowManager`'s own restore-completion flag,
+ * not just "some windows array exists" — before restore, `windows` is a
+ * throwaway placeholder (`initialWindowsState()`, a single window with a
+ * freshly generated random id) that a real `?window=<id>` param will
+ * legitimately never match. Without this guard, the self-heal effect below
+ * would "correct" that placeholder mismatch by overwriting a perfectly valid
+ * incoming URL param before the real windows list has even loaded — and once
+ * it later loads, this tab is left resolved onto whatever `lastFocusedWindowId`
+ * happens to be (e.g. another tab's most recent selection), not the window the
+ * URL originally named.
  */
-export function useWindowUrlSync(windows: NamedWindow[]): {
+export function useWindowUrlSync(
+  windows: NamedWindow[],
+  isRestored: boolean
+): {
   currentWindowId: WindowId;
   switchToWindow: (id: WindowId) => void;
 } {
@@ -41,6 +55,7 @@ export function useWindowUrlSync(windows: NamedWindow[]): {
   const currentWindowId = resolveCurrentWindowId(paramWindowId, windows);
 
   useEffect(() => {
+    if (!isRestored) return;
     if (paramWindowId === currentWindowId) return;
     const params = new URLSearchParams(searchParams.toString());
     if (currentWindowId) {
@@ -51,7 +66,7 @@ export function useWindowUrlSync(windows: NamedWindow[]): {
     const query = params.toString();
     router.replace(query ? `/?${query}` : "/", { scroll: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- searchParams identity changes every render; comparing paramWindowId/currentWindowId values is sufficient to avoid redundant replace calls
-  }, [paramWindowId, currentWindowId]);
+  }, [paramWindowId, currentWindowId, isRestored]);
 
   const switchToWindow = useCallback(
     (id: WindowId) => {

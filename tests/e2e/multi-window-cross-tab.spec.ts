@@ -19,6 +19,16 @@ import { WindowTabStripPage } from './pages/WindowTabStripPage';
 
 test.describe('multi-window cross-tab (REQ-10)', () => {
   test("switching windows in one tab does not affect the other tab's window", async ({ page, context }) => {
+    // Suppress the onboarding modal (useOnboarding.ts shows it 800ms after a
+    // fresh load with no `stapler-squad:onboarded` key) — applied at the
+    // context level so it also covers page2, opened later via
+    // context.newPage(). Without this, its Dialog.Overlay intercepts clicks
+    // on the tab strip once a test's interactions run past 800ms, matching
+    // this repo's existing e2e convention (see launcher-presets.spec.ts).
+    await context.addInitScript(() => {
+      localStorage.setItem('stapler-squad:onboarded', 'true');
+    });
+
     // Page 1: a fresh app load creates a single default window ("Window 1").
     await page.goto('/');
     const stripA = new WindowTabStripPage(page);
@@ -34,6 +44,12 @@ test.describe('multi-window cross-tab (REQ-10)', () => {
     const idB = WindowTabStripPage.windowIdFromUrl(page.url());
     expect(idB).toBeTruthy();
     expect(idB).not.toBe(idA);
+
+    // Wait for the debounced (~300ms) windows-array save to actually land in
+    // localStorage before opening a second real tab — otherwise page 2 can
+    // read a stale single-window snapshot on mount (see WindowTabStripPage's
+    // waitForPersistedWindowCount doc comment).
+    await stripA.waitForPersistedWindowCount(2);
 
     // Page 2: a second real tab in the SAME browser context, independently navigated to win-A.
     const page2 = await context.newPage();
@@ -61,6 +77,11 @@ test.describe('multi-window cross-tab (REQ-10)', () => {
     page,
     context,
   }) => {
+    // Suppress the onboarding modal (see the other test's comment above for why).
+    await context.addInitScript(() => {
+      localStorage.setItem('stapler-squad:onboarded', 'true');
+    });
+
     // Page 1: create a second window so both windows exist in the shared layout.
     await page.goto('/');
     const stripA = new WindowTabStripPage(page);
@@ -68,6 +89,7 @@ test.describe('multi-window cross-tab (REQ-10)', () => {
     await expect(stripA.getTab('Window 1')).toBeVisible();
     await stripA.createWindow();
     await expect(stripA.tabs).toHaveCount(2);
+    await stripA.waitForPersistedWindowCount(2);
 
     // Page 2: same browser context, independently loads the persisted 2-window layout.
     const page2 = await context.newPage();

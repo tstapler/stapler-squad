@@ -1,6 +1,6 @@
 "use client";
 
-import { useReducer, useEffect, useRef, useCallback } from "react";
+import { useReducer, useEffect, useRef, useCallback, useState } from "react";
 import type { PaneAction } from "@/lib/pane/paneTypes";
 import { validateAndRepair } from "@/lib/pane/usePaneLayout";
 import { getAllLeaves } from "@/lib/pane/paneReducer";
@@ -66,10 +66,43 @@ function revalidateWindows(
  */
 export function useWindowManager(sessions: SessionLike[] | null) {
   const [state, dispatch] = useReducer(windowReducer, undefined, initialWindowsState);
+  // Reactive counterpart to restoredRef below — consumers (useWindowUrlSync)
+  // need to *re-render* once restoration completes, which a ref alone can't
+  // trigger. `state.windows` before this flips true is a throwaway
+  // placeholder from initialWindowsState(), not real persisted data.
+  const [isRestored, setIsRestored] = useState(false);
   const restoredRef = useRef(false);
   const sessionsLoadedRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastKnownRevisionRef = useRef(0);
+  // `saveWindowLayout` unconditionally bumps the revision on every call, even
+  // when `windows` is byte-for-byte what's already stored — it has no "is this
+  // actually a change" check. Every RESTORE_WINDOWS dispatch below (initial
+  // load, cross-tab storage-event sync, conflict recovery) changes `state`'s
+  // object identity, which would otherwise re-trigger the debounced-save
+  // effect and vacuously re-save an echo of data that's already persisted.
+  // Two tabs each doing this on mount race to bump the same revision counter,
+  // and whichever save loses that race gets its *real* edit (e.g. a rename)
+  // rejected as a stale write and silently discarded via RESTORE_WINDOWS.
+  //
+  // This holds the exact `windows` array reference passed into the next
+  // RESTORE_WINDOWS dispatch, set immediately before that dispatch. It is
+  // NOT a "skip the next save" boolean — a boolean is consumed by the save
+  // effect's run against the *current* (pre-dispatch) state in the same
+  // commit, before the dispatched state actually lands, so by the time the
+  // restored state arrives the flag is already spent and the echo save
+  // fires anyway. Comparing against the actual array reference instead
+  // ties the skip decision to the state that needs skipping — the reducer's
+  // RESTORE_WINDOWS case passes `action.windows` straight through, so
+  // `state.windows` is reference-equal to this exact array once it lands,
+  // regardless of how many effect passes happen in between.
+  const skipWindowsRef = useRef<NamedWindow[] | null>(null);
+  // web-app/next.config.ts sets reactStrictMode: true, so dev builds run every
+  // effect twice per commit (mount → cleanup → mount again) to surface missing
+  // cleanup logic. Both invocations share the exact same `state` reference —
+  // guarding on `state` identity is idempotent across the duplicate
+  // invocation, since `state` doesn't change between them.
+  const lastHandledStateRef = useRef<typeof state | null>(null);
 
   // Track the first moment sessions arrive from the server (mirrors usePaneReducer.ts).
   useEffect(() => {
@@ -87,18 +120,29 @@ export function useWindowManager(sessions: SessionLike[] | null) {
     const layout = loadWindowLayout();
     if (layout) {
       lastKnownRevisionRef.current = layout.revision;
+      skipWindowsRef.current = layout.windows;
       dispatch({ type: "RESTORE_WINDOWS", windows: layout.windows });
     } else {
       lastKnownRevisionRef.current = 0;
-      dispatch({ type: "RESTORE_WINDOWS", windows: initialWindowsState().windows });
+      const windows = initialWindowsState().windows;
+      skipWindowsRef.current = windows;
+      dispatch({ type: "RESTORE_WINDOWS", windows });
     }
+    setIsRestored(true);
   }, [sessions]);
 
   // Debounced save (300ms, matches usePaneReducer.ts) through the revision guard (Task 1.4.1b).
   useEffect(() => {
     if (!restoredRef.current) return;
+    if (lastHandledStateRef.current === state) return;
+    lastHandledStateRef.current = state;
+
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
+    }
+    if (skipWindowsRef.current === state.windows) {
+      skipWindowsRef.current = null;
+      return;
     }
     saveTimerRef.current = setTimeout(() => {
       const result = saveWindowLayout(state.windows, lastKnownRevisionRef.current);
@@ -106,6 +150,7 @@ export function useWindowManager(sessions: SessionLike[] | null) {
         lastKnownRevisionRef.current = result.revision;
       } else if (result.status === "conflict") {
         lastKnownRevisionRef.current = result.latest.revision;
+        skipWindowsRef.current = result.latest.windows;
         dispatch({ type: "RESTORE_WINDOWS", windows: result.latest.windows });
       } else {
         console.error("useWindowManager: saveWindowLayout failed");
@@ -126,7 +171,9 @@ export function useWindowManager(sessions: SessionLike[] | null) {
         if (typeof parsed.revision !== "number" || !Array.isArray(parsed.windows)) return;
         if (parsed.revision <= lastKnownRevisionRef.current) return;
         lastKnownRevisionRef.current = parsed.revision;
-        dispatch({ type: "RESTORE_WINDOWS", windows: parsed.windows as NamedWindow[] });
+        const windows = parsed.windows as NamedWindow[];
+        skipWindowsRef.current = windows;
+        dispatch({ type: "RESTORE_WINDOWS", windows });
       } catch {
         console.error("useWindowManager: failed to parse storage event newValue");
       }
@@ -184,6 +231,7 @@ export function useWindowManager(sessions: SessionLike[] | null) {
 
   return {
     windows: state.windows,
+    isRestored,
     dispatchPane,
     createWindow,
     closeWindow,

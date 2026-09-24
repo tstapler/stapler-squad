@@ -218,4 +218,73 @@ describe("useWindowManager", () => {
       jest.useRealTimers();
     }
   });
+
+  it("useWindowManager_should_notSaveVacuously_When_stateChangesFromRestoreOrStorageSync", () => {
+    // Regression test: saveWindowLayout unconditionally bumps the revision on
+    // every call, even for data that's already persisted byte-for-byte. If
+    // the debounced-save effect fired for the RESTORE_WINDOWS dispatch that
+    // *loads* that same data (on mount, or after a cross-tab storage-event
+    // sync), it would vacuously bump the shared revision counter. Two tabs
+    // each doing this on their own mount race to bump the same counter, and
+    // whichever tab's *real* edit (e.g. a rename) lands after the other
+    // tab's vacuous bump gets rejected as a stale write and silently
+    // discarded via RESTORE_WINDOWS — this is exactly what made the
+    // multi-window-cross-tab.spec.ts e2e rename-propagation case fail.
+    jest.useFakeTimers();
+    try {
+      const w1 = makeWindow("win-1", "Window 1", null);
+      seedLayout(3, [w1]);
+
+      const { result, rerender } = renderHook(
+        ({ sessions }: { sessions: { id: string }[] | null }) => useWindowManager(sessions),
+        { initialProps: { sessions: null as { id: string }[] | null } }
+      );
+
+      const setItemSpy = jest.spyOn(Storage.prototype, "setItem");
+
+      act(() => {
+        rerender({ sessions: [{ id: "s1" }] });
+      });
+      act(() => {
+        jest.advanceTimersByTime(300);
+      });
+
+      // No save from the restore-triggered RESTORE_WINDOWS dispatch alone.
+      expect(setItemSpy.mock.calls.some(([key]) => key === LS_KEY)).toBe(false);
+
+      const w2 = makeWindow("win-2", "From other tab", null);
+      const otherTabLayout = { version: 2 as const, revision: 4, windows: [w1, w2] };
+      act(() => {
+        // Simulates the other tab's own write landing — not something this
+        // hook does, so clear the spy right after it, before checking
+        // whether *this* hook's own effect vacuously re-saves in response.
+        localStorage.setItem(LS_KEY, JSON.stringify(otherTabLayout));
+        setItemSpy.mockClear();
+        window.dispatchEvent(
+          new StorageEvent("storage", { key: LS_KEY, newValue: JSON.stringify(otherTabLayout) })
+        );
+      });
+      act(() => {
+        jest.advanceTimersByTime(300);
+      });
+
+      // No save from the storage-event-triggered RESTORE_WINDOWS dispatch either.
+      expect(setItemSpy.mock.calls.some(([key]) => key === LS_KEY)).toBe(false);
+
+      // A genuine subsequent edit still saves normally, building on revision 4.
+      act(() => {
+        result.current.renameWindow("win-1", "Renamed");
+      });
+      act(() => {
+        jest.advanceTimersByTime(300);
+      });
+
+      const saved = JSON.parse(
+        setItemSpy.mock.calls.find(([key]) => key === LS_KEY)![1] as string
+      );
+      expect(saved.revision).toBe(5);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

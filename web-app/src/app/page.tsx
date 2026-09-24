@@ -23,7 +23,7 @@ import { useWindowManager } from "@/lib/window/useWindowManager";
 import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
 import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
 import type { WindowId } from "@/lib/window/windowTypes";
-import { WindowTabStrip } from "@/components/window/WindowTabStrip";
+import { WindowTabStrip, type WindowTabStripHandle } from "@/components/window/WindowTabStrip";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
 import { useSessionViewMode } from "@/lib/hooks/useSessionViewMode";
@@ -66,6 +66,7 @@ function HomeContent() {
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const lastFocusBeforeDelete = useRef<HTMLElement | null>(null);
   const resumeTriggerRef = useRef<HTMLElement | null>(null);
+  const windowTabStripRef = useRef<WindowTabStripHandle>(null);
 
   // Tracks the last URL params that were routed to a pane. Prevents the URL-watching
   // effect from re-triggering pane assignment on every sessions stream update (which
@@ -111,23 +112,23 @@ function HomeContent() {
   // derived here by looking up currentWindowId in the windows array.
   // createWindow/closeWindow/renameWindow have no UI to call them from yet — WindowTabStrip
   // (Task 2.2.2b) is deferred to Epic 3.1, where it doesn't exist yet.
-  const { windows, dispatchPane, createWindow, closeWindow, renameWindow } = useWindowManager(sessions);
-  const { currentWindowId, switchToWindow } = useWindowUrlSync(windows);
+  const { windows, isRestored: isWindowsRestored, dispatchPane, createWindow, closeWindow, renameWindow } =
+    useWindowManager(sessions);
+  const { currentWindowId, switchToWindow } = useWindowUrlSync(windows, isWindowsRestored);
   const currentWindow = windows.find((w) => w.id === currentWindowId) ?? windows[0];
   const paneDispatch = useCallback(
     (action: PaneAction) => dispatchPane(currentWindow.id, action),
     [dispatchPane, currentWindow.id]
   );
   // Bridges useWindowShortcuts' "," leader follow-up (which only knows a
-  // window id) to renameWindow's (id, name) signature, since WindowTabStrip
-  // doesn't expose an imperative "start editing" method to call into instead.
+  // window id) to WindowTabStrip's imperative beginEdit(id, name) — the same
+  // inline editor double-click/F2 already open, not a separate native prompt.
   const handleWindowRenameRequest = useCallback(
     (id: WindowId) => {
       const target = windows.find((w) => w.id === id);
-      const name = window.prompt("Rename window", target?.name ?? "");
-      if (name && name.trim()) renameWindow(id, name.trim());
+      if (target) windowTabStripRef.current?.beginEdit(id, target.name);
     },
-    [windows, renameWindow]
+    [windows]
   );
   useWindowShortcuts(windows, currentWindow.id, switchToWindow, handleWindowRenameRequest);
   // Helper function to find a session by ID with fuzzy matching for external sessions
@@ -511,6 +512,7 @@ function HomeContent() {
       <CockpitActionsProvider value={cockpitActions}>
         <SessionViewModeProvider value={{ viewMode, setViewMode }}>
           <WindowTabStrip
+            ref={windowTabStripRef}
             windows={windows}
             currentWindowId={currentWindow.id}
             onSwitch={switchToWindow}

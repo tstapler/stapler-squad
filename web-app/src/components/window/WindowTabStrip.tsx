@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, memo, useRef, useState } from "react";
+import { forwardRef, memo, useImperativeHandle, useRef, useState } from "react";
 import type { NamedWindow, WindowId } from "@/lib/window/windowTypes";
 import { GESTURE_MOVEMENT_THRESHOLD_PX } from "@/lib/window/windowGestureConstants";
 import { useWindowSwipe } from "@/lib/window/useWindowSwipe";
@@ -12,6 +12,16 @@ import {
   windowTabInput,
   windowAddButton,
 } from "@/styles/window/windowTabStrip.css";
+
+/**
+ * Imperative handle exposed via `ref` so a caller outside the component
+ * (the leader-key `,` follow-up in useWindowShortcuts) can trigger the same
+ * inline rename editor double-click uses, instead of a separate UI like a
+ * native `window.prompt`.
+ */
+export interface WindowTabStripHandle {
+  beginEdit: (id: WindowId, name: string) => void;
+}
 
 interface WindowTabStripProps {
   windows: NamedWindow[];
@@ -222,7 +232,7 @@ function WindowTab({
   );
 }
 
-const WindowTabStripInner = forwardRef<HTMLDivElement, WindowTabStripProps>(
+const WindowTabStripInner = forwardRef<WindowTabStripHandle, WindowTabStripProps>(
   function WindowTabStrip({ windows, currentWindowId, onSwitch, onCreate, onClose, onRename }, ref) {
     const [editingId, setEditingId] = useState<WindowId | null>(null);
     const [draftName, setDraftName] = useState("");
@@ -243,17 +253,13 @@ const WindowTabStripInner = forwardRef<HTMLDivElement, WindowTabStripProps>(
     const cancelRename = () => setEditingId(null);
     const longPress = useLongPress(beginEdit);
 
-    // Local ref so useWindowSwipe can attach touch listeners to the same
-    // container the forwardRef exposes to callers (Task 3.1.1b).
+    useImperativeHandle(ref, () => ({ beginEdit }), [beginEdit]);
+
+    // Container ref for useWindowSwipe to attach touch listeners to
+    // (Task 3.1.1b) — internal only; the forwarded ref exposes `beginEdit`
+    // instead of this DOM node (nothing outside this component needs the
+    // node directly).
     const containerRef = useRef<HTMLDivElement>(null);
-    const setRefs = (el: HTMLDivElement | null) => {
-      containerRef.current = el;
-      if (typeof ref === "function") {
-        ref(el);
-      } else if (ref) {
-        ref.current = el;
-      }
-    };
 
     useWindowSwipe(containerRef, {
       onSwipe: (dir) => {
@@ -264,7 +270,7 @@ const WindowTabStripInner = forwardRef<HTMLDivElement, WindowTabStripProps>(
     });
 
     return (
-      <div ref={setRefs} className={windowTabStrip} role="tablist" aria-label="Window switcher">
+      <div ref={containerRef} className={windowTabStrip} role="tablist" aria-label="Window switcher">
         {windows.map((w) => (
           <WindowTab
             key={w.id}
