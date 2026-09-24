@@ -2847,6 +2847,24 @@ func TestClassify_CmdSubst_ExplicitEscalation(t *testing.T) {
 }
 
 // TestExpandEnvVars verifies the standalone ExpandEnvVars helper.
+func TestReferencedEnvironment_should_SelectOnlyReferencedValues_When_CommandContainsVariables(t *testing.T) {
+	environment := map[string]string{
+		"RUSTC": "rustc",
+		"HOME":  "/home/user",
+		"TOKEN": "secret",
+	}
+	got := ReferencedEnvironment("$RUSTC --version && ls ${HOME}/src", func(name string) (string, bool) {
+		value, ok := environment[name]
+		return value, ok
+	})
+	if len(got) != 2 || got["RUSTC"] != "rustc" || got["HOME"] != "/home/user" {
+		t.Fatalf("ReferencedEnvironment = %#v", got)
+	}
+	if _, exists := got["TOKEN"]; exists {
+		t.Fatal("unreferenced TOKEN was selected")
+	}
+}
+
 func TestExpandEnvVars(t *testing.T) {
 	env := map[string]string{
 		"BRANCH":      "main",

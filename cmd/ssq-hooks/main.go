@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/internal/claudehooks"
+	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
@@ -95,6 +96,14 @@ func handleCheck() {
 		}
 	}
 
+	// The canonical Claude path is a bounded client of the resident instance.
+	// An explicit --db remains available for compatibility and non-Claude
+	// adapters, but normal PreToolUse requests never open SQLite.
+	if !*geminiMode && !*agyMode && !*opencodeMode && *dbPath == "" {
+		handleClaudeIPCCheck(payload)
+		return
+	}
+
 	storagePath := *dbPath
 	if storagePath == "" {
 		storagePath = getDBPathForCwd(payload.Cwd)
@@ -118,6 +127,45 @@ func handleCheck() {
 		writeOpenCodeHookDecision(result)
 	} else {
 		writeHookDecision(result)
+	}
+}
+
+func handleClaudeIPCCheck(payload classifier.PermissionRequestPayload) {
+	if payload.HookEventName == "" {
+		payload.HookEventName = "PreToolUse"
+	}
+	endpoint, err := hookipc.ResolveEndpoint(payload.Cwd)
+	if err != nil {
+		return
+	}
+	requestID, _, err := hookipc.NewRequestID(payload.SessionID, hookipc.ToolUseID(payload.ToolUseID))
+	if err != nil {
+		return
+	}
+	selectedEnvironment := map[string]string(nil)
+	if command, ok := payload.ToolInput["command"].(string); ok {
+		selectedEnvironment = classifier.ReferencedEnvironment(command, os.LookupEnv)
+	}
+	envelope := hookipc.ClassificationEnvelope{
+		ProtocolVersion:     endpoint.ProtocolVersion,
+		InstanceFingerprint: endpoint.InstanceFingerprint,
+		RequestID:           requestID,
+		Payload:             payload,
+		Context: hookipc.InvocationContext{
+			Cwd: payload.Cwd,
+			Env: selectedEnvironment,
+		},
+	}
+	client, err := hookipc.NewClient(endpoint)
+	if err != nil {
+		return
+	}
+	reply, err := client.Classify(context.Background(), envelope)
+	if err != nil || reply.Output == nil {
+		return
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(reply.Output); err != nil {
+		log.Warn("failed to write hook decision to stdout", "err", err)
 	}
 }
 
