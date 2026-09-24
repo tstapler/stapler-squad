@@ -6,6 +6,7 @@ import { GESTURE_MOVEMENT_THRESHOLD_PX } from "@/lib/window/windowGestureConstan
 import { useWindowSwipe } from "@/lib/window/useWindowSwipe";
 import {
   windowTabStrip,
+  windowTabList,
   windowTabWrapper,
   windowTabButton,
   windowTabCloseButton,
@@ -142,6 +143,7 @@ function WindowTabCloseButton({ id, name, isActive, onClose }: WindowTabCloseBut
   return (
     <button
       className={windowTabCloseButton({ active: isActive })}
+      data-testid={`window-tab-close-${id}`}
       aria-label={`Close ${name}`}
       title={`Close ${name}`}
       onClick={(e) => {
@@ -157,26 +159,49 @@ function WindowTabCloseButton({ id, name, isActive, onClose }: WindowTabCloseBut
 interface WindowTabButtonProps {
   window: NamedWindow;
   isActive: boolean;
+  showClose: boolean;
   onSwitch: (id: WindowId) => void;
   onClose: (id: WindowId) => void;
   onBeginEdit: (id: WindowId, name: string) => void;
   longPress: ReturnType<typeof useLongPress>;
 }
 
-function WindowTabButton({ window: w, isActive, onSwitch, onClose, onBeginEdit, longPress }: WindowTabButtonProps) {
+// A <div role="tab"> rather than a native <button> — the close "×" control
+// must live inside the tab's own DOM subtree (nesting it as a sibling makes
+// it a direct, non-"tab"-role child of the parent role="tablist", which
+// fails axe's aria-required-children rule) and a real <button> cannot be
+// nested inside another <button>. `aria-label={w.name}` keeps this
+// element's own accessible name pinned to just the window name rather than
+// accumulating the nested close button's "Close <name>" text via
+// name-from-content. The nested real <button> still trips axe's separate
+// nested-interactive rule; this mirrors ShellTabLabel's identical
+// tab-with-inline-actions structure (SessionDetailView.tsx's shell tab
+// button), an established, pre-existing pattern in this codebase rather
+// than a new tradeoff introduced here.
+function WindowTabButton({ window: w, isActive, showClose, onSwitch, onClose, onBeginEdit, longPress }: WindowTabButtonProps) {
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Ignore keys that bubbled up from the nested close button — only the
+    // tab itself (not its child) should respond to these.
+    if (e.target !== e.currentTarget) return;
     if (e.key === "F2") {
       onBeginEdit(w.id, w.name);
     } else if (e.key === "Delete") {
       onClose(w.id);
+    } else if (e.key === "Enter" || e.key === " ") {
+      // A native <button> auto-activates on Enter/Space; this element is a
+      // <div> (see doc comment above), so that activation is wired up here.
+      e.preventDefault();
+      onSwitch(w.id);
     }
   };
 
   return (
-    <button
+    <div
       role="tab"
       aria-selected={isActive}
+      aria-label={w.name}
       tabIndex={isActive ? 0 : -1}
+      data-testid={`window-tab-${w.id}`}
       className={windowTabButton({ active: isActive })}
       title={w.name}
       onClick={() => onSwitch(w.id)}
@@ -187,7 +212,8 @@ function WindowTabButton({ window: w, isActive, onSwitch, onClose, onBeginEdit, 
       onTouchEnd={longPress.onTouchEnd}
     >
       {w.name}
-    </button>
+      {showClose && <WindowTabCloseButton id={w.id} name={w.name} isActive={isActive} onClose={onClose} />}
+    </div>
   );
 }
 
@@ -222,12 +248,12 @@ function WindowTab({
       <WindowTabButton
         window={w}
         isActive={isActive}
+        showClose={showClose}
         onSwitch={onSwitch}
         onClose={onClose}
         onBeginEdit={onBeginEdit}
         longPress={longPress}
       />
-      {showClose && <WindowTabCloseButton id={w.id} name={w.name} isActive={isActive} onClose={onClose} />}
     </div>
   );
 }
@@ -270,26 +296,33 @@ const WindowTabStripInner = forwardRef<WindowTabStripHandle, WindowTabStripProps
     });
 
     return (
-      <div ref={containerRef} className={windowTabStrip} role="tablist" aria-label="Window switcher">
-        {windows.map((w) => (
-          <WindowTab
-            key={w.id}
-            window={w}
-            isActive={w.id === currentWindowId}
-            isEditing={editingId === w.id}
-            draftName={draftName}
-            showClose={windows.length > 1}
-            onSwitch={onSwitch}
-            onClose={onClose}
-            onBeginEdit={beginEdit}
-            onDraftChange={setDraftName}
-            onCommit={commitRename}
-            onCancel={cancelRename}
-            longPress={longPress}
-          />
-        ))}
+      <div ref={containerRef} className={windowTabStrip}>
+        {/* role="tablist" wraps ONLY the tabs — the "+" button is a sibling
+            outside this element's DOM subtree, not a tablist child, since
+            aria-required-children mandates role="tab" for every direct
+            (flattened) child of role="tablist". */}
+        <div className={windowTabList} role="tablist" aria-label="Window switcher">
+          {windows.map((w) => (
+            <WindowTab
+              key={w.id}
+              window={w}
+              isActive={w.id === currentWindowId}
+              isEditing={editingId === w.id}
+              draftName={draftName}
+              showClose={windows.length > 1}
+              onSwitch={onSwitch}
+              onClose={onClose}
+              onBeginEdit={beginEdit}
+              onDraftChange={setDraftName}
+              onCommit={commitRename}
+              onCancel={cancelRename}
+              longPress={longPress}
+            />
+          ))}
+        </div>
         <button
           className={windowAddButton}
+          data-testid="window-add-button"
           onClick={onCreate}
           title="New window"
           aria-label="New window"

@@ -110,4 +110,48 @@ test.describe('multi-window cross-tab (REQ-10)', () => {
 
     await page2.close();
   });
+
+  test('opening a copied window URL in a new tab shows the identical window', async ({ page, context }) => {
+    // Suppress the onboarding modal (see the first test's comment above for why).
+    await context.addInitScript(() => {
+      localStorage.setItem('stapler-squad:onboarded', 'true');
+    });
+
+    // Page 1: create Window 2 and build a non-trivial layout inside it (a
+    // vertical split), so "identical window" means more than just the
+    // default single-leaf state every fresh window starts in.
+    await page.goto('/');
+    const stripA = new WindowTabStripPage(page);
+    await stripA.waitForLoaded();
+    await stripA.createWindow();
+    await expect(stripA.getActiveTab()).toHaveAttribute('title', 'Window 2');
+    const windowId = WindowTabStripPage.windowIdFromUrl(page.url());
+    expect(windowId).toBeTruthy();
+
+    await stripA.splitFirstPaneVertically();
+
+    // Wait for the debounced (~300ms) pane-tree save to land before copying
+    // the URL, for the same reason waitForPersistedWindowCount exists on the
+    // first test above: a second real tab reads localStorage independently
+    // on mount and would otherwise race a stale, pre-split snapshot.
+    await stripA.waitForPersistedPaneLeafCount(windowId!, 2);
+    const paneIdsBefore = await stripA.getPaneLeafIds();
+    const copiedUrl = page.url();
+
+    // Page 2: a second real tab in the SAME browser context, opened directly on the copied URL.
+    const page2 = await context.newPage();
+    await page2.goto(copiedUrl);
+    const stripB = new WindowTabStripPage(page2);
+    await stripB.waitForLoaded();
+
+    // Then: page 2 lands on the exact same window, with no extra navigation
+    // (still on `?window=<windowId>`), and its pane tree is byte-for-byte the
+    // same set of panes as page 1's — same splits, same pane identities.
+    expect(WindowTabStripPage.windowIdFromUrl(page2.url())).toBe(windowId);
+    await expect(stripB.getActiveTab()).toHaveAttribute('title', 'Window 2');
+    await expect(stripB.paneLeaves).toHaveCount(2);
+    expect(await stripB.getPaneLeafIds()).toEqual(paneIdsBefore);
+
+    await page2.close();
+  });
 });

@@ -1,6 +1,12 @@
 import { style } from "@vanilla-extract/css";
 import { recipe } from "@vanilla-extract/recipes";
-import { vars } from "@/styles/theme.css";
+import { vars, breakpoints } from "@/styles/theme.css";
+
+// Below this width (matches ViewportProvider's isMobile threshold, <600px),
+// controls grow to the WCAG 2.5.5 / Apple HIG 44x44px touch target minimum —
+// the 28px/16px desktop sizes below are mouse-precision-tuned and too small
+// to tap reliably.
+const touchMediaQuery = `(max-width: ${breakpoints.fold})`;
 
 // Visually distinct from mobilePaneTabStrip.css.ts's container (borderTop +
 // cardBackground) so the two tablists read as separate UI layers when both
@@ -10,12 +16,32 @@ export const windowTabStrip = style({
   display: "flex",
   borderBottom: `1px solid ${vars.color.borderColor}`,
   background: vars.color.background,
-  overflowX: "auto",
   flexShrink: 0,
   height: "36px",
   alignItems: "center",
   gap: vars.space["1"],
   padding: `0 ${vars.space["2"]}`,
+  "@media": {
+    [touchMediaQuery]: {
+      // Tall enough to contain the 44px-tall touch targets below without clipping.
+      height: "44px",
+    },
+  },
+});
+
+// The scrollable row of tabs, separate from windowTabStrip's outer flex
+// container so role="tablist" (below) wraps ONLY the tabs — the "+" button
+// stays a sibling in the outer container, not a tablist child (see
+// WindowTabStrip.tsx's render for why that split matters for
+// aria-required-children).
+export const windowTabList = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  flex: 1,
+  minWidth: 0,
+  height: "100%",
+  overflowX: "auto",
   // Hide scrollbar but allow scrolling
   scrollbarWidth: "none",
   selectors: {
@@ -47,6 +73,12 @@ export const windowAddButton = style({
       color: vars.color.textPrimary,
     },
   },
+  "@media": {
+    [touchMediaQuery]: {
+      height: "44px",
+      width: "44px",
+    },
+  },
 });
 
 export const windowTabWrapper = style({
@@ -75,12 +107,23 @@ export const windowTabButton = recipe({
     maxWidth: "160px",
     flexShrink: 0,
     transition: "background 100ms, color 100ms, border-color 100ms",
+    "@media": {
+      [touchMediaQuery]: {
+        height: "44px",
+        minWidth: "44px",
+      },
+    },
   },
   variants: {
     active: {
       true: {
         background: vars.color.primary,
-        color: vars.color.textInverse,
+        // primaryText, not textInverse — textInverse is tuned against the page
+        // background, not the primary accent; paneSplit.css.ts and
+        // panePickerOverlay.css.ts already hit this same axe color-contrast
+        // failure (3.75-3.84:1) against vars.color.primary and fixed it the
+        // same way.
+        color: vars.color.primaryText,
         borderColor: vars.color.primary,
         fontWeight: "bold",
         textDecoration: "underline",
@@ -120,6 +163,12 @@ export const windowTabCloseButton = recipe({
     selectors: {
       "&:hover": {
         background: vars.color.hoverBackground,
+      },
+    },
+    "@media": {
+      [touchMediaQuery]: {
+        height: "44px",
+        width: "44px",
       },
     },
   },
