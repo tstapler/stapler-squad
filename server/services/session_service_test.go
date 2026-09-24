@@ -2573,6 +2573,62 @@ func TestResumeHibernatedSession_DoesNotTouchOtherSessions(t *testing.T) {
 	}
 }
 
+// TestResumeHibernatedSession_WiresProvider is the regression test for
+// backlog e6c2a88e: ResumeHibernatedSession loads its instance raw from
+// storage, bypassing Registry.Acquire/WireInstanceCallbacks entirely, so
+// without an explicit SetMCPServerURLProvider call the relaunched claude
+// process would permanently omit --mcp-config.
+//
+// The instance ResumeHibernatedSession actually relaunches is a fresh object
+// LoadInstances() constructs internally (Storage.LoadInstances never returns
+// a cached pointer), not the *session.Instance this test constructed and
+// passed to AddInstance -- so this asserts via the log line
+// initTmuxSession() emits (session/instance_tmux.go's "creating session",
+// which includes the full built command) rather than reading a LaunchCommand
+// field this test has no pointer to. Not t.Parallel(): captureLogs swaps the
+// process-wide slog default.
+func TestResumeHibernatedSession_WiresProvider(t *testing.T) {
+	logs := captureLogs(t)
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+	svc.SetMCPServerURL(func() string { return "http://localhost:19191/mcp" })
+
+	const sessionUUID = "eeeeeeee-0000-0000-0000-000000000005"
+	hibernated := &session.Instance{
+		Title:     "hibernated-provider-session",
+		UUID:      sessionUUID,
+		Path:      "/tmp/test",
+		Status:    session.Hibernated,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		// MCPServerURL deliberately left empty -- this instance was loaded
+		// raw from storage, never through WireInstanceCallbacks.
+	}
+	require.NoError(t, storage.AddInstance(hibernated))
+	t.Cleanup(func() {
+		session.JoinHibernation(hibernated)
+		_ = hibernated.KillSession()
+	})
+
+	_, err := svc.ResumeHibernatedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeHibernatedSessionRequest{Id: sessionUUID}))
+	require.NoError(t, err)
+
+	// The relaunch itself runs on a goroutine spawned by a DIFFERENT Instance
+	// object (see doc comment above), so JoinHibernation on our own pointer
+	// won't observe it; poll the shared log stream instead.
+	wait.RequireEventually(t, func() bool {
+		return strings.Contains(logs.String(), "creating session") && strings.Contains(logs.String(), "hibernated-provider-session")
+	}, 15*time.Second, 20*time.Millisecond, "relaunch's initTmuxSession log line must appear")
+
+	assert.Contains(t, logs.String(), "--mcp-config",
+		"relaunch command must carry --mcp-config even though MCPServerURL was empty at load time")
+	assert.Contains(t, logs.String(), "19191",
+		"relaunch command must use the wired provider's URL")
+}
+
 // TestResumeCrashedSession_TransitionsCrashedToActive verifies that resuming a
 // Crashed session (dead pane detected by SessionHealthChecker) transitions it
 // back to Active in the response, giving the frontend a one-tap resume action
@@ -2611,6 +2667,50 @@ func TestResumeCrashedSession_TransitionsCrashedToActive(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.Session)
 	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, resp.Msg.Session.Status)
+}
+
+// TestResumeCrashedSession_WiresProvider mirrors
+// TestResumeHibernatedSession_WiresProvider for the crash-resume path:
+// ResumeCrashedSession also loads its instance raw from storage, bypassing
+// WireInstanceCallbacks, so it needs the same explicit provider wiring. See
+// that test's doc comment for why this asserts against the captured log
+// stream rather than a LaunchCommand field on this test's own pointer. Not
+// t.Parallel(): captureLogs swaps the process-wide slog default.
+func TestResumeCrashedSession_WiresProvider(t *testing.T) {
+	logs := captureLogs(t)
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+	svc.SetMCPServerURL(func() string { return "http://localhost:19192/mcp" })
+
+	const sessionUUID = "ffffffff-0000-0000-0000-000000000006"
+	crashed := &session.Instance{
+		Title:      "crashed-provider-session",
+		UUID:       sessionUUID,
+		Path:       "/tmp/test",
+		Status:     session.Crashed,
+		ExitReason: "signal SIGKILL (exit code 137)",
+		Program:    "claude",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		// MCPServerURL deliberately left empty -- this instance was loaded
+		// raw from storage, never through WireInstanceCallbacks.
+	}
+	require.NoError(t, storage.AddInstance(crashed))
+	t.Cleanup(func() { _ = crashed.KillSession() })
+
+	_, err := svc.ResumeCrashedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeCrashedSessionRequest{Id: sessionUUID}))
+	require.NoError(t, err)
+
+	wait.RequireEventually(t, func() bool {
+		return strings.Contains(logs.String(), "creating session") && strings.Contains(logs.String(), "crashed-provider-session")
+	}, 15*time.Second, 20*time.Millisecond, "relaunch's initTmuxSession log line must appear")
+
+	assert.Contains(t, logs.String(), "--mcp-config",
+		"relaunch command must carry --mcp-config even though MCPServerURL was empty at load time")
+	assert.Contains(t, logs.String(), "19192",
+		"relaunch command must use the wired provider's URL")
 }
 
 // --------------------------------------------------------------------------

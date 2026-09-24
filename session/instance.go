@@ -394,7 +394,25 @@ type Instance struct {
 	// MCPServerURL is the URL of the stapler-squad HTTP MCP endpoint.
 	// When set, passed as --mcp-config to claude on session start so no
 	// settings-file injection is needed.
+	//
+	// This field is only ever backfilled once, at wiring/construction time —
+	// it is NOT re-resolved on relaunch (workspace switch, crash/hibernate
+	// resume, etc.), so a session whose value was ever empty at that one
+	// moment stays permanently unable to identify itself to MCP tools.
+	// buildClaudeCommand resolves via mcpServerURLProvider instead, falling
+	// back to this field (via GetMCPServerURL) only when no provider is wired.
 	MCPServerURL string `json:"mcp_server_url,omitempty"`
+
+	// mcpServerURLProvider re-resolves the MCP server URL fresh on every
+	// claude launch (see buildClaudeCommand), closing the restart-drop gap
+	// that a one-shot MCPServerURL backfill leaves open. Wired once at
+	// construction time (WireInstanceCallbacks), mirroring
+	// claudeSessionIDSavedCallback below. Must NOT be routed through the
+	// actor-locked SetMCPServerURL setter: buildClaudeCommand runs as a
+	// queued command on the instance's own actor mailbox, and SetMCPServerURL
+	// blocks on that same mailbox (sendSyncErr) — calling it re-entrantly
+	// from within the actor's own goroutine deadlocks.
+	mcpServerURLProvider atomic.Pointer[func() string]
 
 	// AppendSystemPrompt, when non-empty and the program is claude, passes
 	// --append-system-prompt to inject extra instructions into the system prompt
