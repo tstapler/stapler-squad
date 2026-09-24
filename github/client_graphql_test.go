@@ -31,7 +31,9 @@ func TestGetPRInfoGraphQL_should_PopulateFieldsMatchingCLI_When_PRHasApprovalsAn
 	defer resetGhBaseURLForTest(ts)()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
-	info, err := GetPRInfoGraphQL(context.Background(), "tstapler", "stapler-squad", 802)
+	ref, err := NewRepoRef("tstapler", "stapler-squad")
+	require.NoError(t, err)
+	info, err := GetPRInfoGraphQL(context.Background(), ref, 802)
 	require.NoError(t, err)
 
 	assert.Equal(t, 802, info.Number)
@@ -60,7 +62,9 @@ func TestGetPRInfoGraphQL_should_ReturnError_When_GraphQLResponseContainsErrorsA
 	defer resetGhBaseURLForTest(ts)()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
-	info, err := GetPRInfoGraphQL(context.Background(), "tstapler", "does-not-exist", 1)
+	ref, err := NewRepoRef("tstapler", "does-not-exist")
+	require.NoError(t, err)
+	info, err := GetPRInfoGraphQL(context.Background(), ref, 1)
 	require.Error(t, err)
 	assert.Nil(t, info)
 	assert.Contains(t, err.Error(), "Could not resolve to a Repository")
