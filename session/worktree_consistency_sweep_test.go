@@ -876,3 +876,139 @@ func TestResolveFinding_should_DowngradeToFlagged_When_IsolatedInstanceAndUnique
 	assert.Equal(t, "repair skipped: running on isolated instance", finding.Detail)
 	require.Len(t, notifier.calls, 1, "the downgrade must still notify — never a silent no-op")
 }
+
+// ---------------------------------------------------------------------------
+// Epic 1.4: regression tests for the PR #625 scenario
+// ---------------------------------------------------------------------------
+
+// withPath sets the Instance's Path field directly. Epic 1.4's regression fixtures
+// below have no Worktree row, so candidateRepoPath (session/worktree_consistency_sweep.go)
+// falls back to Data.MainRepoPath then Data.Path to find a repo to run
+// git.ListWorktrees against — this opt points that fallback at a real git repo instead
+// of seedCandidateInstance's default fake "/tmp/test-<title>" path.
+func withPath(path string) func(*Instance) {
+	return func(i *Instance) { i.Path = path }
+}
+
+// setupLinkedWorktreeWithBranch is setupLinkedWorktree's (session/backlog_commands_test.go)
+// sibling for a caller that needs an exact, unprefixed branch name — PR #625's reported
+// branch, "work/b8ccca59", rather than whatever config.BranchPrefix + sanitizeBranchName
+// would derive from sessionName. Uses git.NewGitWorktreeWithBranch's customBranch
+// parameter, which git.ResolveBranchName passes through verbatim.
+func setupLinkedWorktreeWithBranch(t *testing.T, repoPath, sessionName, branch string) string {
+	t.Helper()
+	worktree, _, err := git.NewGitWorktreeWithBranch(repoPath, sessionName, branch)
+	if err != nil {
+		t.Fatalf("git.NewGitWorktreeWithBranch failed: %v", err)
+	}
+	if err := worktree.Setup(); err != nil {
+		t.Fatalf("worktree.Setup failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := worktree.Cleanup(); err != nil {
+			t.Logf("worktree.Cleanup failed (non-fatal): %v", err)
+		}
+	})
+	return worktree.GetWorktreePath()
+}
+
+// TestSweep_ShouldRepairRegressionPR625_When_WorktreeRowMissingButOnDiskWorktreeStillExists
+// is a regression test for PR #625 (Story 1.4.1): a Session row persisted with
+// SessionType == SessionTypeNewWorktree, Branch == "work/b8ccca59", Status == Active, and
+// no corresponding Worktree ent row — reproducing the exact non-atomic window at
+// session_creation_pipeline.go:277-281 (the storage.UpdateInstance call that would
+// normally create the Worktree row is deliberately never made here) — while a real git
+// worktree for that branch is still present on disk.
+//
+// Detection is driven through sweep's own listConsistencyCandidates/candidateRepoPath
+// building blocks, and resolution through resolveCandidate (also sweep's own per-candidate
+// helper) with IsIsolated explicitly false, rather than through a top-level sweep(ctx, ...)
+// call: sweep unconditionally sets deps.IsIsolated from config.IsIsolatedInstance(), which
+// is always true inside a `go test` binary (config.IsTestMode() detects ".test" in
+// os.Args[0]) — so a sweep(ctx, ...) call here could only ever exercise the Story 1.3.3
+// isolated-instance downgrade to ResolutionFlagged, never a genuine repair, regardless of
+// the fixture (confirmed by running it: repair was downgraded with
+// Detail == "repair skipped: running on isolated instance").
+func TestSweep_ShouldRepairRegressionPR625_When_WorktreeRowMissingButOnDiskWorktreeStillExists(t *testing.T) {
+	t.Parallel()
+	storage, repo := newWorktreeConsistencyTestRepo(t)
+	ctx := context.Background()
+
+	const branch = "work/b8ccca59"
+	sessionUUID := uuid.New().String()
+	repoPath := setupTestGitRepo(t)
+	worktreePath := setupLinkedWorktreeWithBranch(t, repoPath, "pr625-repro", branch)
+
+	seedCandidateInstance(t, storage, "pr625-repro",
+		withUUID(sessionUUID),
+		withSessionType(SessionTypeNewWorktree),
+		withBranch(branch),
+		withStatus(Active),
+		withPath(repoPath),
+	)
+	// No storage.UpdateInstance call here — that's the call PR #625's non-atomic window
+	// skipped, and skipping it here is what reproduces the defect's exact starting state.
+
+	candidates, err := listConsistencyCandidates(ctx, storage)
+	require.NoError(t, err)
+	candidate := findCandidate(t, candidates, "pr625-repro")
+	require.Nil(t, candidate.Worktree, "no Worktree row was persisted for this fixture")
+
+	entries, err := git.ListWorktrees(candidateRepoPath(candidate))
+	require.NoError(t, err)
+
+	notifier := &fakeNotifier{}
+	deps := resolveFindingDeps{Repo: repo, Notifier: notifier, Backoff: newNotifyBackoff(), IsIsolated: false}
+	repaired, flagged := resolveCandidate(ctx, candidate, entries, deps)
+
+	assert.Equal(t, 1, repaired, "exactly one finding, repaired")
+	assert.Equal(t, 0, flagged)
+	require.Len(t, notifier.calls, 1, "repair must always notify — never silent")
+	assert.Equal(t, "NotifySession", notifier.calls[0].Method, "no BacklogItem is linked to this session")
+	assert.Equal(t, notificationTypeInfo, notifier.calls[0].NotificationType)
+	assert.Equal(t, "Worktree row auto-repaired", notifier.calls[0].Title)
+	assert.Contains(t, notifier.calls[0].Message, string(IssueMissingWorktreeRow))
+
+	wt, err := storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
+	require.NoError(t, err)
+	assert.Equal(t, git.CanonicalizeWorktreePath(worktreePath), git.CanonicalizeWorktreePath(wt.WorktreePath))
+	assert.Equal(t, repoPath, wt.RepoPath)
+	assert.Equal(t, branch, wt.BranchName)
+}
+
+// TestSweep_ShouldFlagRegressionPR625_When_WorktreeRowAndOnDiskWorktreeBothMissing is a
+// regression test for PR #625's harder, more historically accurate shape (Story 1.4.2,
+// pre-mortem P1 #2): the Worktree row is missing AND the on-disk git worktree is also
+// already gone by the time the sweep runs, so there is zero live git.ListWorktrees match
+// to repair from. Before pre-mortem P1 #2's fix, classifyMissingWorktreeRow's zero-match
+// case produced no finding at all; this proves it now produces exactly one flagged
+// finding instead of silently doing nothing forever.
+func TestSweep_ShouldFlagRegressionPR625_When_WorktreeRowAndOnDiskWorktreeBothMissing(t *testing.T) {
+	t.Parallel()
+	storage, _ := newWorktreeConsistencyTestRepo(t)
+	ctx := context.Background()
+
+	sessionUUID := uuid.New().String()
+	repoPath := setupTestGitRepo(t) // a real repo, but no worktree is ever registered on it
+
+	seedCandidateInstance(t, storage, "pr625-repro-gone",
+		withUUID(sessionUUID),
+		withSessionType(SessionTypeNewWorktree),
+		withBranch("work/b8ccca59-gone"),
+		withStatus(Active),
+		withPath(repoPath),
+	)
+
+	notifier := &fakeNotifier{}
+	sweep(ctx, storage, notifier, flagCfgFn(true), newNotifyBackoff())
+
+	require.Len(t, notifier.calls, 1, "the double-missing state must still produce exactly one finding, never zero")
+	assert.Equal(t, "NotifySession", notifier.calls[0].Method, "no BacklogItem is linked to this session")
+	assert.Equal(t, notificationTypeWarning, notifier.calls[0].NotificationType, "flagged findings notify at warning, not info")
+	assert.Contains(t, notifier.calls[0].Title, string(IssueMissingWorktreeRow))
+	assert.Contains(t, notifier.calls[0].Message, "nothing to repair from")
+
+	wt, err := storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
+	require.NoError(t, err)
+	assert.Empty(t, wt.WorktreePath, "nothing must have been repaired — the Worktree row must still be missing")
+}
