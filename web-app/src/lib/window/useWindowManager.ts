@@ -4,8 +4,9 @@ import { useReducer, useEffect, useRef, useCallback, useState } from "react";
 import type { PaneAction } from "@/lib/pane/paneTypes";
 import { validateAndRepair } from "@/lib/pane/usePaneLayout";
 import { getAllLeaves } from "@/lib/pane/paneReducer";
+import { findLeaf, initialPaneState } from "@/lib/pane/paneUtils";
 import { windowReducer } from "./windowReducer";
-import { loadWindowLayout, saveWindowLayout } from "./windowPersistence";
+import { loadWindowLayout, saveWindowLayout, isValidV2Layout } from "./windowPersistence";
 import { generateWindowId, initialWindowsState } from "./windowUtils";
 import type { NamedWindow, WindowId } from "./windowTypes";
 
@@ -35,6 +36,37 @@ function hasStaleSessionId(window: NamedWindow, validIds: Set<string>): boolean 
   return getAllLeaves(window.paneState.root).some(
     (l) => l.sessionId !== null && !validIds.has(l.sessionId)
   );
+}
+
+/**
+ * Repair a single restored window's pane tree — the per-window equivalent of
+ * usePaneReducer.ts's old restore-time repair, which this restore path
+ * dropped when the reducer moved up a level (only the separate
+ * sessions-changed effect below re-runs validateAndRepair; nothing repairs
+ * the *restore* path itself). Mirrors that logic exactly:
+ * - session ids are only nulled once sessions have actually loaded, so a
+ *   restore that races the initial (empty) sessions response doesn't wipe
+ *   every saved assignment against an empty validIds set.
+ * - a pre-tiling layout (no session-list leaf — from a v1 migration or
+ *   corrupt localStorage) resets just this window to the default split
+ *   rather than leaving a permanently broken pane tree.
+ * - focusedPaneId/zoomedPaneId are repointed/cleared if they no longer name
+ *   a leaf that exists after repair.
+ */
+function repairWindow(win: NamedWindow, sessionsLoaded: boolean, validIds: Set<string>): NamedWindow {
+  const repairedRoot = sessionsLoaded ? validateAndRepair(win.paneState.root, validIds) : win.paneState.root;
+  const allLeaves = getAllLeaves(repairedRoot);
+  if (!allLeaves.some((l) => l.viewKind === "session-list")) {
+    return { ...win, paneState: initialPaneState() };
+  }
+  const focusedPaneId = allLeaves.some((l) => l.id === win.paneState.focusedPaneId)
+    ? win.paneState.focusedPaneId
+    : (allLeaves[0]?.id ?? win.paneState.focusedPaneId);
+  const zoomedPaneId =
+    win.paneState.zoomedPaneId !== null && findLeaf(repairedRoot, win.paneState.zoomedPaneId)
+      ? win.paneState.zoomedPaneId
+      : null;
+  return { ...win, paneState: { root: repairedRoot, focusedPaneId, zoomedPaneId } };
 }
 
 /**
@@ -119,9 +151,11 @@ export function useWindowManager(sessions: SessionLike[] | null) {
 
     const layout = loadWindowLayout();
     if (layout) {
+      const validIds = new Set(sessions.map((s) => s.id));
+      const repairedWindows = layout.windows.map((w) => repairWindow(w, sessionsLoadedRef.current, validIds));
       lastKnownRevisionRef.current = layout.revision;
-      skipWindowsRef.current = layout.windows;
-      dispatch({ type: "RESTORE_WINDOWS", windows: layout.windows });
+      skipWindowsRef.current = repairedWindows;
+      dispatch({ type: "RESTORE_WINDOWS", windows: repairedWindows });
     } else {
       lastKnownRevisionRef.current = 0;
       const windows = initialWindowsState().windows;
@@ -167,13 +201,23 @@ export function useWindowManager(sessions: SessionLike[] | null) {
       if (event.key !== WINDOW_LAYOUT_KEY) return;
       if (!event.newValue) return;
       try {
-        const parsed = JSON.parse(event.newValue) as { revision?: unknown; windows?: unknown };
-        if (typeof parsed.revision !== "number" || !Array.isArray(parsed.windows)) return;
+        const parsed: unknown = JSON.parse(event.newValue);
+        if (!isValidV2Layout(parsed)) {
+          console.error("useWindowManager: storage event newValue failed shape validation, ignoring");
+          return;
+        }
         if (parsed.revision <= lastKnownRevisionRef.current) return;
+        // A save this tab already scheduled (e.g. a rename not yet 300ms
+        // old) is about to be superseded wholesale by another tab's write —
+        // ADR-002 frames a discarded edit as "known, logged", but only the
+        // saveWindowLayout conflict path actually logged it; this is the
+        // other path that discards an edit (never attempts the save at all).
+        if (saveTimerRef.current) {
+          console.error("useWindowManager: discarding a pending local edit — a newer cross-tab write arrived first");
+        }
         lastKnownRevisionRef.current = parsed.revision;
-        const windows = parsed.windows as NamedWindow[];
-        skipWindowsRef.current = windows;
-        dispatch({ type: "RESTORE_WINDOWS", windows });
+        skipWindowsRef.current = parsed.windows;
+        dispatch({ type: "RESTORE_WINDOWS", windows: parsed.windows });
       } catch {
         console.error("useWindowManager: failed to parse storage event newValue");
       }

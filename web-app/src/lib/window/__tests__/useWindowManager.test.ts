@@ -3,6 +3,7 @@ import { useWindowManager } from "../useWindowManager";
 import * as windowPersistence from "../windowPersistence";
 import type { NamedWindow } from "../windowTypes";
 import type { LeafPane, SplitPane } from "@/lib/pane/paneTypes";
+import { getAllLeaves } from "@/lib/pane/paneReducer";
 
 const LS_KEY = "cockpit.windowLayout";
 
@@ -64,6 +65,55 @@ describe("useWindowManager", () => {
     rerender({ sessions: [{ id: "s1" }] });
     expect(loadSpy).toHaveBeenCalledTimes(1);
     expect(result.current.windows).toEqual([w1, w2]);
+  });
+
+  it("useWindowManager_should_repairStaleSessionIdAndFocusedPaneId_When_restoringWithSessionsAlreadyLoaded", () => {
+    // Regression test: usePaneReducer.ts's restore effect used to run
+    // validateAndRepair (plus focusedPaneId/zoomedPaneId repointing) inline
+    // before dispatching. When the reducer moved up a level into this hook,
+    // only the separate sessions-changed effect kept re-running
+    // validateAndRepair — the restore path itself dispatched the raw,
+    // unrepaired persisted layout. This reproduces the case that gap missed:
+    // sessions are already loaded (non-null, non-empty) on the very first
+    // render, so there is no later "sessions changed" transition to trigger
+    // the other effect at all.
+    const stale = makeWindow("win-1", "Window 1", "deleted-session");
+    seedLayout(1, [stale]);
+    // A stable reference across renders, unlike an inline array literal in
+    // the renderHook callback (which would get a fresh identity on every
+    // internal re-render and inadvertently re-trigger the *other* repair
+    // effect below, masking this exact gap).
+    const stableSessions = [{ id: "s1" }];
+
+    const { result } = renderHook(
+      ({ sessions }: { sessions: { id: string }[] }) => useWindowManager(sessions),
+      { initialProps: { sessions: stableSessions } }
+    );
+
+    const repairedLeaves = getAllLeaves(result.current.windows[0].paneState.root);
+    const detailLeaf = repairedLeaves.find((l) => l.viewKind === "session-detail");
+    expect(detailLeaf?.sessionId).toBeNull();
+  });
+
+  it("useWindowManager_should_resetToDefaultSplit_When_restoredWindowHasNoSessionListLeaf", () => {
+    // Pre-tiling / corrupt layouts have no session-list leaf at all — restore
+    // must reset that window to the default split rather than keeping a
+    // permanently broken pane tree with no way to browse sessions.
+    const noListPane: NamedWindow = {
+      id: "win-1",
+      name: "Window 1",
+      paneState: {
+        root: makeLeaf("only-leaf", "s1"),
+        focusedPaneId: "only-leaf",
+        zoomedPaneId: null,
+      },
+    };
+    seedLayout(1, [noListPane]);
+
+    const { result } = renderHook(() => useWindowManager([{ id: "s1" }]));
+
+    const leaves = getAllLeaves(result.current.windows[0].paneState.root);
+    expect(leaves.some((l) => l.viewKind === "session-list")).toBe(true);
   });
 
   it("useWindowManager_should_saveOnceAfterDebounce_When_multipleDispatchesBurst", () => {
