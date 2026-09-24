@@ -16,17 +16,32 @@ type HookClassifier struct {
 	policy       classifier.Classifier
 	analytics    *AnalyticsStore
 	contextCache *HookContextCache
+	deduper      *HookDeduper
 }
 
 func NewHookClassifier(policy classifier.Classifier, analytics *AnalyticsStore) *HookClassifier {
-	service := &HookClassifier{policy: policy, analytics: analytics}
+	service := &HookClassifier{
+		policy:    policy,
+		analytics: analytics,
+		deduper:   NewHookDeduper(),
+	}
 	if policy != nil {
 		service.contextCache = NewHookContextCache(policy.BuildContext)
 	}
 	return service
 }
 
-func (h *HookClassifier) Classify(_ context.Context, request hookipc.ClassificationEnvelope) (hookipc.ClassificationReply, error) {
+func (h *HookClassifier) Classify(ctx context.Context, request hookipc.ClassificationEnvelope) (hookipc.ClassificationReply, error) {
+	if h == nil {
+		return (&HookClassifier{}).classify(request)
+	}
+	stable := request.Payload.ToolUseID != ""
+	return h.deduper.Do(ctx, request.RequestID, stable, func() (hookipc.ClassificationReply, error) {
+		return h.classify(request)
+	})
+}
+
+func (h *HookClassifier) classify(request hookipc.ClassificationEnvelope) (hookipc.ClassificationReply, error) {
 	reply := hookipc.ClassificationReply{
 		ProtocolVersion:     request.ProtocolVersion,
 		InstanceFingerprint: request.InstanceFingerprint,
