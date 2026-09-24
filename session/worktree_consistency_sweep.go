@@ -503,6 +503,75 @@ func markStuckIfLinkedAndLive(ctx context.Context, repo *EntRepository, itemID s
 	}
 }
 
+// resolveStuckIfLinkedAndLive best-effort clears StuckReasonWorktreeInconsistent — the
+// resolve-side counterpart to markStuckIfLinkedAndLive's dual-write, on the identical
+// linked-and-live guard, called from repairAndNotify's success path. Mirrors
+// reconcileReworkBlockedStaleResolution/reconcileBlockedByDependencyResolution's
+// resolveStuckLogged call shape (session/backlog_lifecycle_stale.go). Before this existed,
+// nothing ever resolved a row markStuckIfLinkedAndLive opened: a session flagged (and
+// MarkStuck'd) on one tick, then successfully repaired on a later tick, left its
+// BacklogItem visibly "stuck" forever — undermining this sweep's own self-healing premise
+// (BLOCKER). A storage error is logged, never propagated.
+func resolveStuckIfLinkedAndLive(ctx context.Context, repo *EntRepository, itemID string, item *BacklogItemData) {
+	if itemID == "" || item == nil || IsTerminalStatus(BacklogStatus(item.Status)) {
+		return
+	}
+	if _, err := repo.ResolveStuck(ctx, itemID, domain.StuckReasonWorktreeInconsistent); err != nil {
+		log.Warn("worktree consistency sweep: ResolveStuck failed", "item_id", itemID, "err", err)
+	}
+}
+
+// notifyGlueDeps bundles finishNotify's repository/notifier/backoff dependencies — mirrors
+// resolveFindingDeps' existing precedent above (golang-development's Concrete-First Design
+// checklist) so finishNotify's own parameter list stays short.
+type notifyGlueDeps struct {
+	Repo     *EntRepository
+	Notifier Notifier
+	Backoff  *notifyBackoff
+}
+
+// notifyGlueSpec bundles finishNotify's per-call notification shape — same rationale as
+// notifyGlueDeps: keeps the parameter list from becoming a same-typed-primitive pile
+// (three same-typed bools) that Fowler's Remove Flag Argument warns against.
+type notifyGlueSpec struct {
+	NotificationType int32
+	Urgent           bool
+	Important        bool
+	// BypassBackoff must be true only for the repair path (BLOCKER: notifyBackoffKey is
+	// keyed on (SessionID, IssueKind) alone, a key shared by both the flag and repair calls
+	// for the same finding — a session flagged on tick N and then repaired on tick N+1
+	// within the 24h backoff window would otherwise have its repair notification silently
+	// swallowed by the flag's own backoff record, directly contradicting
+	// buildRepairMessage's "repair is never silent" contract (Adversarial-D1). A repair
+	// fires at most once per session — the Worktree row exists afterward, so the
+	// missing-row condition can never re-fire — so bypassing the suppression window
+	// entirely on this path is safe, not just convenient. Passing a nil backoff to
+	// notifyLinkageAware always allows the notification, per
+	// notifyBackoff.shouldNotify's own doc comment.
+	BypassBackoff bool
+	BuildMessage  func(WorktreeConsistencyFinding) (string, string)
+}
+
+// finishNotify is the notify-glue shared by flagAndNotify's flag path and repairAndNotify's
+// repair-success path (refactor-candidates review): look up finding's linked BacklogItem,
+// build the title/message via spec.BuildMessage, and fire notifyLinkageAware — returning the
+// looked-up linkage so the caller can also dual-write MarkStuck/ResolveStuck without a second
+// lookup. See notifyGlueSpec.BypassBackoff's doc comment for why the repair path must set it.
+func finishNotify(ctx context.Context, deps notifyGlueDeps, finding *WorktreeConsistencyFinding, spec notifyGlueSpec) (itemID string, item *BacklogItemData) {
+	itemID, item = lookupBacklogLinkage(ctx, deps.Repo, finding.SessionID)
+
+	title, message := spec.BuildMessage(*finding)
+	effectiveBackoff := deps.Backoff
+	if spec.BypassBackoff {
+		effectiveBackoff = nil
+	}
+	notifyLinkageAware(deps.Notifier, effectiveBackoff, notifyRequest{
+		SessionID: finding.SessionID, IssueKind: finding.IssueKind, ItemID: itemID,
+		Title: title, Message: message, NotificationType: spec.NotificationType, Urgent: spec.Urgent, Important: spec.Important,
+	})
+	return itemID, item
+}
+
 // flagAndNotify implements Story 1.2.3's flag branch (Tasks 1.2.3c/1.2.3a-prep): sets
 // finding.Resolution = ResolutionFlagged, always notifies (Notify when a BacklogItem is
 // linked, else NotifySession), and opportunistically dual-writes MarkStuck when the
@@ -517,17 +586,12 @@ func flagAndNotify(ctx context.Context, repo *EntRepository, notifier Notifier, 
 		"session_id", finding.SessionID, "issue", string(finding.IssueKind),
 		"severity", string(finding.Severity), "detail", finding.Detail)
 
-	itemID, item := lookupBacklogLinkage(ctx, repo, finding.SessionID)
-
 	notifType := notificationTypeWarning
 	if finding.Severity == SeverityError {
 		notifType = notificationTypeError
 	}
-	title, message := buildFlagMessage(*finding)
-	notifyLinkageAware(notifier, backoff, notifyRequest{
-		SessionID: finding.SessionID, IssueKind: finding.IssueKind, ItemID: itemID,
-		Title: title, Message: message, NotificationType: notifType, Urgent: true, Important: true,
-	})
+	itemID, item := finishNotify(ctx, notifyGlueDeps{Repo: repo, Notifier: notifier, Backoff: backoff}, finding,
+		notifyGlueSpec{NotificationType: notifType, Urgent: true, Important: true, BuildMessage: buildFlagMessage})
 
 	markStuckIfLinkedAndLive(ctx, repo, itemID, item, finding.Detail)
 }
@@ -666,14 +730,12 @@ func repairAndNotify(ctx context.Context, repo *EntRepository, notifier Notifier
 	log.Info("worktree consistency sweep: repaired missing worktree row",
 		"session_id", finding.SessionID, "after", finding.After)
 
-	// The discarded second value is *BacklogItemData, not an error — lookupBacklogLinkage
-	// never returns one; a failed item lookup is logged internally and folded into nil.
-	itemID, _ := lookupBacklogLinkage(ctx, repo, finding.SessionID)
-	title, message := buildRepairMessage(*finding)
-	notifyLinkageAware(notifier, backoff, notifyRequest{
-		SessionID: finding.SessionID, IssueKind: finding.IssueKind, ItemID: itemID,
-		Title: title, Message: message, NotificationType: notificationTypeInfo, Urgent: false, Important: true,
-	})
+	itemID, item := finishNotify(ctx, notifyGlueDeps{Repo: repo, Notifier: notifier, Backoff: backoff}, finding,
+		notifyGlueSpec{
+			NotificationType: notificationTypeInfo, Urgent: false, Important: true,
+			BypassBackoff: true, BuildMessage: buildRepairMessage,
+		})
+	resolveStuckIfLinkedAndLive(ctx, repo, itemID, item)
 
 	return nil
 }
@@ -768,6 +830,12 @@ func newWorktreeEntryCache() *worktreeEntryCache {
 
 // entriesFor returns repoPath's live worktree entries, listing (and caching) on first
 // request; ok is false when the listing failed this tick (already logged) or previously did.
+// The listing itself runs inside git.WithRepoWorktreeLock: git.ListWorktrees reads
+// .git/worktrees/ admin metadata with no lock of its own, and every other reader/writer of
+// that directory in this codebase (Setup/Remove/Prune, via session/git/worktree_lock.go)
+// already holds this same per-repo lock — this sweep ticks every 15 minutes against repos
+// with live concurrent session creation/teardown, so an unlocked read here would be a
+// genuine torn-read race against a concurrent `git worktree add/remove/prune`.
 func (c *worktreeEntryCache) entriesFor(repoPath string) (entries []git.NativeWorktreeEntry, ok bool) {
 	if c.failed[repoPath] {
 		return nil, false
@@ -775,7 +843,12 @@ func (c *worktreeEntryCache) entriesFor(repoPath string) (entries []git.NativeWo
 	if e, cached := c.entries[repoPath]; cached {
 		return e, true
 	}
-	e, err := git.ListWorktrees(repoPath)
+	var e []git.NativeWorktreeEntry
+	err := git.WithRepoWorktreeLock(repoPath, func() error {
+		var listErr error
+		e, listErr = git.ListWorktrees(repoPath)
+		return listErr
+	})
 	if err != nil {
 		log.Debug("worktree consistency sweep: failed to list live worktrees for repo, skipping its candidates this tick",
 			"repo_path", repoPath, "err", err)

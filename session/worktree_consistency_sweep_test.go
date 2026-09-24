@@ -21,12 +21,12 @@ import (
 // newWorktreeConsistencyTestStorage returns a Storage backed by an isolated in-memory
 // EntRepository, mirroring the pattern other sweeper tests use (e.g.
 // server/services/session_retention_sweeper_test.go's fixture) but scoped to this file's
-// own tests.
+// own tests. Delegates to newWorktreeConsistencyTestRepo (refactor-candidates review: the
+// two constructors were byte-identical) and discards the *EntRepository handle callers that
+// only need *Storage don't use.
 func newWorktreeConsistencyTestStorage(t *testing.T) *Storage {
 	t.Helper()
-	repo := NewTestEntRepository(t)
-	storage, err := NewStorageWithRepository(repo)
-	require.NoError(t, err)
+	storage, _ := newWorktreeConsistencyTestRepo(t)
 	return storage
 }
 
@@ -199,28 +199,49 @@ func TestListConsistencyCandidates_should_ExcludeSession_When_SessionTypeDirecto
 }
 
 // TestSweep_NoRaceWithConcurrentActorWrites is Task 1.1.2d's concurrency race-freedom
-// proof: Story 1.1.2's third acceptance criterion requires this be proven under `go test
-// -race`, not just inferred from the absence of a raw *Instance field read in
-// listConsistencyCandidates' source. A goroutine repeatedly mutates a live *Instance's
-// Path/Branch under i.mu.Lock() via setGitHubResolutionLocked (the exact write path
-// .claude/rules/instance-lock-free-reads.md documents as racing an unguarded raw-field
-// read) while another goroutine concurrently calls listConsistencyCandidates against the
-// same Storage. listConsistencyCandidates only reads via
-// storage.ListInstanceDataWithWorktree() (ent) — it never dereferences the *Instance
-// pointer at all — so no race is possible by construction; this test is what actually
-// proves that under `-race` rather than by inspection alone.
+// proof for Story 1.1.2's third acceptance criterion (AC5), required to be proven under
+// `go test -race`, not just inferred from the absence of a raw *Instance field read in
+// listConsistencyCandidates' source.
+//
+// What this test can and cannot prove: listConsistencyCandidates reads only via
+// storage.ListInstanceDataWithWorktree() (ent) — it never dereferences a *Instance pointer
+// at all. That means the specific race .claude/rules/instance-lock-free-reads.md documents
+// (an unguarded raw-field read racing an actor-lock write to that same field) is structurally
+// impossible inside this function today: there is no raw-field read for it to race. No test
+// can exercise a race that cannot occur, so this test does not — and could not — reproduce
+// that exact shape.
+//
+// What it does exercise instead is the real concurrent I/O path a production race would
+// actually take: an actor goroutine mutating a live *Instance via SetGitHubResolution and
+// then persisting it (storage.UpdateInstance) — mirroring
+// server/services/session_creation_pipeline.go's setPhase, the only production call site of
+// SetGitHubResolution, which does exactly this sequence — running concurrently with
+// listConsistencyCandidates listing that same session's row via the same *Storage. inst is
+// registered via storage.AddInstance so both goroutines operate on one shared row, not two
+// disjoint pieces of memory (the previous version of this test used an orphaned *Instance
+// that storage never saw, so the two goroutines touched no memory in common and the test
+// proved nothing beyond "these two unrelated calls don't crash").
+//
+// A stronger fixture — a live *Instance registered behind a Storage-visible session row such
+// that listConsistencyCandidates itself would read the actor-mutated fields back out through
+// that live registry — was investigated and isn't reasonably available here: the only
+// component that keeps a live *Instance registry synced to storage is
+// server/services (session_creation_pipeline.go's setPhase, SessionManager), and that
+// package imports session — a test inside package session cannot import it back without an
+// import cycle. Storage.AddInstance/UpdateInstance only ever take a one-shot
+// ToInstanceData() snapshot; they hold no live *Instance reference for a later read to
+// observe.
 //
 // Run via: go test -race -run TestSweep_NoRaceWithConcurrentActorWrites ./session/...
 func TestSweep_NoRaceWithConcurrentActorWrites(t *testing.T) {
 	storage := newWorktreeConsistencyTestStorage(t)
-	seedCandidateInstance(t, storage, "race-candidate",
-		withSessionType(SessionTypeNewWorktree),
-		withBranch("work/race"),
-		withStatus(Active),
-	)
 
 	inst := minimalInstance(t)
 	inst.Status = Active
+	inst.Path = "/tmp/test-" + inst.Title
+	inst.SessionType = SessionTypeNewWorktree
+	inst.Branch = "work/race"
+	require.NoError(t, storage.AddInstance(inst))
 
 	const iterations = 200
 	var wg sync.WaitGroup
@@ -233,6 +254,13 @@ func TestSweep_NoRaceWithConcurrentActorWrites(t *testing.T) {
 				Path:   "/tmp/race-path",
 				Branch: "work/race-actor-write",
 			})
+			// Mirrors setPhase's persist-after-mutate sequence: the actor's
+			// background pipeline goroutine rewrites this session's storage row
+			// while the sweep concurrently lists candidates below.
+			if err := storage.UpdateInstance(inst); err != nil {
+				t.Errorf("storage.UpdateInstance: %v", err)
+				return
+			}
 		}
 	}()
 
@@ -660,6 +688,93 @@ func TestResolveFinding_should_NotCallMarkStuck_When_NoBacklogItemLinked(t *test
 	}
 }
 
+// hasOpenStuckState reports whether states contains an open row for (itemID, reason).
+func hasOpenStuckState(states []OpenStuckStateData, itemID string, reason domain.StuckReason) bool {
+	for _, s := range states {
+		if s.ItemID == itemID && s.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
+// TestResolveFinding_should_ResolveStuck_When_FlaggedThenRepaired is BLOCKER #2's
+// regression test: markStuckIfLinkedAndLive has always dual-written
+// StuckReasonWorktreeInconsistent on the flag path, but nothing resolved it once the
+// session was later repaired — a session flagged (and MarkStuck'd) on one tick, then
+// successfully repaired on a later tick, left its BacklogItem visibly "stuck" forever.
+func TestResolveFinding_should_ResolveStuck_When_FlaggedThenRepaired(t *testing.T) {
+	t.Parallel()
+	storage, repo := newWorktreeConsistencyTestRepo(t)
+	ctx := context.Background()
+	sessionUUID := uuid.New().String()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "resolve-stuck-on-repair test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReview),
+		RepoPath:           "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// Tick N: flagged (ambiguous match) — dual-writes MarkStuck.
+	flagFinding := &WorktreeConsistencyFinding{
+		SessionID:  sessionUUID,
+		IssueKind:  IssueMissingWorktreeRow,
+		Resolution: ResolutionFlagged,
+		Detail:     "2 live git worktrees matched this session's branch/path ambiguously",
+		Candidate: SessionWorktreeCandidate{
+			Data: InstanceData{UUID: sessionUUID, Title: "flag-then-repair-stuck"},
+		},
+	}
+	notifier := &fakeNotifier{}
+	deps := resolveFindingDeps{Repo: repo, Notifier: notifier}
+	require.NoError(t, resolveFinding(ctx, deps, flagFinding))
+
+	stuckStates, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.True(t, hasOpenStuckState(stuckStates, item.ID, domain.StuckReasonWorktreeInconsistent),
+		"precondition: MarkStuck must have fired on the flag tick")
+
+	// Tick N+1: the match becomes unique — repair fires for the same session.
+	repoPath := setupTestGitRepo(t)
+	setupLinkedWorktree(t, repoPath, "flag-then-repair-stuck")
+	entries, err := git.ListWorktrees(repoPath)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	realBranch := strings.TrimPrefix(entries[0].BranchRef, "refs/heads/")
+
+	seedCandidateInstance(t, storage, "flag-then-repair-stuck",
+		withUUID(sessionUUID),
+		withSessionType(SessionTypeNewWorktree),
+		withBranch(realBranch),
+		withStatus(Active),
+	)
+
+	repairFinding := &WorktreeConsistencyFinding{
+		SessionID:  sessionUUID,
+		IssueKind:  IssueMissingWorktreeRow,
+		Resolution: ResolutionRepaired,
+		Candidate: SessionWorktreeCandidate{
+			Data: InstanceData{UUID: sessionUUID, Title: "flag-then-repair-stuck", Branch: realBranch, Status: Active},
+		},
+		Match: &entries[0],
+	}
+	require.NoError(t, resolveFinding(ctx, deps, repairFinding))
+
+	stuckStates, err = storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.False(t, hasOpenStuckState(stuckStates, item.ID, domain.StuckReasonWorktreeInconsistent),
+		"a successful repair must resolve the earlier flag's StuckReasonWorktreeInconsistent row")
+}
+
 // TestResolveFinding_should_CallNotifySessionWithoutItemIdMetadata_When_NoBacklogItemLinked
 // is Architecture-A1's required regression guard (Task 1.2.3e): for a session with no
 // linked BacklogItem, both the repair-notify path and the flag-notify path must call
@@ -784,6 +899,70 @@ func TestSweep_should_SuppressDuplicateNotify_When_SameFindingWithinBackoffWindo
 	// Second tick, same still-unresolved pair, well within worktreeConsistencyBackoffWindow.
 	require.NoError(t, resolveFinding(ctx, deps, newFinding()))
 	assert.Len(t, notifier.calls, 1, "a still-unresolved finding must not re-notify within the backoff window")
+}
+
+// TestResolveFinding_should_NotSuppressRepairNotification_When_SameSessionAndIssueWasFlaggedWithinBackoffWindow
+// is BLOCKER #1's regression test (Adversarial-D1 violation): notifyBackoff is keyed only
+// on (SessionID, IssueKind), shared by both flagAndNotify and repairAndNotify. Before the
+// fix, a session flagged on tick N (recording that backoff key) and then repaired on tick
+// N+1 within the 24h window would have its repair notification silently swallowed by the
+// flag's own backoff record — directly contradicting buildRepairMessage's "repair is never
+// silent" contract. The repair path must always notify, regardless of any prior flag on the
+// same (session, issue) pair.
+func TestResolveFinding_should_NotSuppressRepairNotification_When_SameSessionAndIssueWasFlaggedWithinBackoffWindow(t *testing.T) {
+	t.Parallel()
+	storage, repo := newWorktreeConsistencyTestRepo(t)
+	ctx := context.Background()
+	sessionUUID := uuid.New().String()
+	backoff := newNotifyBackoff()
+	notifier := &fakeNotifier{}
+	deps := resolveFindingDeps{Repo: repo, Notifier: notifier, Backoff: backoff}
+
+	// Tick N: flagged (ambiguous match), recording the (sessionUUID, IssueMissingWorktreeRow)
+	// backoff key.
+	flagFinding := &WorktreeConsistencyFinding{
+		SessionID:  sessionUUID,
+		IssueKind:  IssueMissingWorktreeRow,
+		Resolution: ResolutionFlagged,
+		Detail:     "2 live git worktrees matched this session's branch/path ambiguously",
+		Candidate: SessionWorktreeCandidate{
+			Data: InstanceData{UUID: sessionUUID, Title: "flag-then-repair"},
+		},
+	}
+	require.NoError(t, resolveFinding(ctx, deps, flagFinding))
+	require.Len(t, notifier.calls, 1, "flag must notify")
+
+	// Tick N+1: the match becomes unique — repair fires for the same SessionID/IssueKind,
+	// same *notifyBackoff instance, well within worktreeConsistencyBackoffWindow.
+	repoPath := setupTestGitRepo(t)
+	setupLinkedWorktree(t, repoPath, "flag-then-repair")
+	entries, err := git.ListWorktrees(repoPath)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	realBranch := strings.TrimPrefix(entries[0].BranchRef, "refs/heads/")
+
+	seedCandidateInstance(t, storage, "flag-then-repair",
+		withUUID(sessionUUID),
+		withSessionType(SessionTypeNewWorktree),
+		withBranch(realBranch),
+		withStatus(Active),
+	)
+
+	repairFinding := &WorktreeConsistencyFinding{
+		SessionID:  sessionUUID,
+		IssueKind:  IssueMissingWorktreeRow,
+		Resolution: ResolutionRepaired,
+		Candidate: SessionWorktreeCandidate{
+			Data: InstanceData{UUID: sessionUUID, Title: "flag-then-repair", Branch: realBranch, Status: Active},
+		},
+		Match: &entries[0],
+	}
+	require.NoError(t, resolveFinding(ctx, deps, repairFinding))
+
+	require.Len(t, notifier.calls, 2,
+		"repair must still notify even though the flag already recorded this (sessionID, issueKind) backoff key")
+	assert.Equal(t, "Worktree row auto-repaired", notifier.calls[1].Title)
+	assert.Equal(t, notificationTypeInfo, notifier.calls[1].NotificationType)
 }
 
 // TestNotifySession_should_RecordCall_When_FakeNotifierInvoked is a small direct test of
