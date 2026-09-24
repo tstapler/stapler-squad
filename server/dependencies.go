@@ -1357,6 +1357,15 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 	}()
 
+	// Worktree consistency sweeper (session-worktree-reconciliation project): reconciles
+	// missing/incorrect Worktree ent rows against live `git worktree` state. Gated by
+	// FeatureFlagWorktreeConsistencySweep, default off — see that project's plan.md Risk
+	// Control section for the 14-day burn-in flip-on rule. config.LoadConfig is passed
+	// directly (not a closure capturing cfg) so the flag can be flipped live via the
+	// feature-flag RPC with no restart, matching quotaGate's/julesDispatchSvc's identical
+	// accessor pattern above.
+	go session.StartWorktreeConsistencySweeper(context.Background(), storage, &services.EventBusNotifier{Bus: eventBus}, config.LoadConfig)
+
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine, pipelineEngine, pipelineModeRepo)
 	backlogSvc.SetLivenessRepository(livenessRepo)
 	backlogSvc.SetLivenessEngine(livenessEngine)

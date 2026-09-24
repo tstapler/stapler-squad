@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -677,15 +678,201 @@ func repairAndNotify(ctx context.Context, repo *EntRepository, notifier Notifier
 	return nil
 }
 
+// resolveFindingDeps bundles resolveFinding's dependencies — keeps its parameter list from
+// growing into an unreadable same-typed-primitive pile as Story 1.3.3 adds IsIsolated,
+// mirroring notifyRequest's existing precedent above (golang-development's Concrete-First
+// Design checklist).
+type resolveFindingDeps struct {
+	Repo     *EntRepository
+	Notifier Notifier
+	// Backoff may be nil — see notifyBackoff.shouldNotify's doc comment.
+	Backoff *notifyBackoff
+	// IsIsolated hard-restricts the repair branch to non-isolated instances (Story
+	// 1.3.3), mirroring OrphanedTmuxSweeper's config.IsIsolatedInstance() guard
+	// against two instances racing a `git worktree` write on the same shared on-disk
+	// repo. It is threaded through as a field rather than resolveFinding calling
+	// config.IsIsolatedInstance() directly, following config.ResolveClaudeHistoryDir's
+	// established precedent for the identical problem: every test exercising this
+	// function is itself a `go test` binary, where IsIsolatedInstance() is
+	// unconditionally true (config.IsTestMode()), which would make the non-isolated
+	// repair branch permanently untestable. sweep passes the real
+	// config.IsIsolatedInstance() result once per tick.
+	IsIsolated bool
+}
+
 // resolveFinding executes finding's intended Resolution (Story 1.2.3): ResolutionRepaired
 // (only ever set by classifyMissingWorktreeRow on a unique live-git-worktree match) writes
 // the Worktree row and always notifies; every other case is flagged for a human, always
-// notifies, and opportunistically dual-writes MarkStuck. backoff may be nil — see
-// notifyBackoff.shouldNotify's doc comment.
-func resolveFinding(ctx context.Context, repo *EntRepository, notifier Notifier, backoff *notifyBackoff, finding *WorktreeConsistencyFinding) error {
+// notifies, and opportunistically dual-writes MarkStuck.
+func resolveFinding(ctx context.Context, deps resolveFindingDeps, finding *WorktreeConsistencyFinding) error {
 	if finding.Resolution == ResolutionRepaired {
-		return repairAndNotify(ctx, repo, notifier, backoff, finding)
+		if deps.IsIsolated {
+			finding.Resolution = ResolutionFlagged
+			finding.Detail = "repair skipped: running on isolated instance"
+			flagAndNotify(ctx, deps.Repo, deps.Notifier, deps.Backoff, finding)
+			return nil
+		}
+		return repairAndNotify(ctx, deps.Repo, deps.Notifier, deps.Backoff, finding)
 	}
-	flagAndNotify(ctx, repo, notifier, backoff, finding)
+	flagAndNotify(ctx, deps.Repo, deps.Notifier, deps.Backoff, finding)
 	return nil
+}
+
+// FeatureFlagWorktreeConsistencySweep gates StartWorktreeConsistencySweeper's per-tick
+// work (Story 1.3.1). Default false at ship — see plan.md's Risk Control section for the
+// 14-day burn-in flip-on rule that eventually flips this to default-true.
+const FeatureFlagWorktreeConsistencySweep = "worktree_consistency_sweep"
+
+// worktreeConsistencySweepInterval is how often the sweep re-scans every candidate.
+// Tighter than SessionRetentionSweeper's 1h cadence (that sweep's eligibility only
+// changes once a day at the finest) since a missing/broken Worktree row is actively
+// blocking a session right now, not just aging toward cleanup.
+const worktreeConsistencySweepInterval = 15 * time.Minute
+
+// candidateRepoPath returns the repository path to query git.ListWorktrees against for
+// candidate. A candidate with an eager-loaded Worktree row uses its recorded RepoPath;
+// a candidate missing its Worktree row entirely (the IssueMissingWorktreeRow case) has no
+// GitWorktreeData to read a repo path from, so this falls back to InstanceData.MainRepoPath
+// (populated whenever worktree detection ran) and finally InstanceData.Path — the same
+// fallback order Instance.getRepoPath() uses (session/instance_workspace.go) for the
+// live-Instance equivalent of this same question.
+func candidateRepoPath(candidate SessionWorktreeCandidate) string {
+	if candidate.Worktree != nil && candidate.Worktree.RepoPath != "" {
+		return candidate.Worktree.RepoPath
+	}
+	if candidate.Data.MainRepoPath != "" {
+		return candidate.Data.MainRepoPath
+	}
+	return candidate.Data.Path
+}
+
+// worktreeEntryCache memoizes git.ListWorktrees per repo path for one sweep tick — sibling
+// sessions on the same repo share one live worktree list, and a repo whose listing fails
+// this tick (removed repo, permission error, lock contention) is remembered as failed so
+// every candidate pointing at it is skipped without re-attempting the same failing call,
+// logged once rather than once per candidate. Re-evaluated fresh next tick (a new
+// worktreeEntryCache per sweep call), per this project's general "transient error is a
+// race to retry next tick" convention (pitfalls.md §1, mirrored by
+// classifyRepoPathUnresolvable/classifyBaseCommitShaUnresolvable above).
+type worktreeEntryCache struct {
+	entries map[string][]git.NativeWorktreeEntry
+	failed  map[string]bool
+}
+
+func newWorktreeEntryCache() *worktreeEntryCache {
+	return &worktreeEntryCache{
+		entries: make(map[string][]git.NativeWorktreeEntry),
+		failed:  make(map[string]bool),
+	}
+}
+
+// entriesFor returns repoPath's live worktree entries, listing (and caching) on first
+// request; ok is false when the listing failed this tick (already logged) or previously did.
+func (c *worktreeEntryCache) entriesFor(repoPath string) (entries []git.NativeWorktreeEntry, ok bool) {
+	if c.failed[repoPath] {
+		return nil, false
+	}
+	if e, cached := c.entries[repoPath]; cached {
+		return e, true
+	}
+	e, err := git.ListWorktrees(repoPath)
+	if err != nil {
+		log.Debug("worktree consistency sweep: failed to list live worktrees for repo, skipping its candidates this tick",
+			"repo_path", repoPath, "err", err)
+		c.failed[repoPath] = true
+		return nil, false
+	}
+	c.entries[repoPath] = e
+	return e, true
+}
+
+// resolveCandidate classifies and resolves candidate's findings against entries, returning
+// how many were repaired vs. flagged for sweep's per-tick summary.
+func resolveCandidate(ctx context.Context, candidate SessionWorktreeCandidate, entries []git.NativeWorktreeEntry, deps resolveFindingDeps) (repaired, flagged int) {
+	findings := classifyIssues(candidate, entries)
+	for i := range findings {
+		finding := &findings[i]
+		if err := resolveFinding(ctx, deps, finding); err != nil {
+			log.Warn("worktree consistency sweep: resolveFinding failed",
+				"session_id", finding.SessionID, "issue", string(finding.IssueKind), "err", err)
+			continue
+		}
+		if finding.Resolution == ResolutionRepaired {
+			repaired++
+		} else {
+			flagged++
+		}
+	}
+	return repaired, flagged
+}
+
+// sweep runs one tick of the worktree-consistency check end to end:
+// listConsistencyCandidates -> per-repo git.ListWorktrees -> classifyIssues ->
+// resolveFinding (Epic 1.3's wiring of Epics 1.1/1.2's pieces). Gated by
+// FeatureFlagWorktreeConsistencySweep, re-checked on every call (Task 1.3.1b) so the flag
+// can be flipped off mid-run with no restart — when off, this returns before making any
+// storage or git call (Story 1.3.1's AC). storage.repo is read directly (same package)
+// since resolveFinding needs the raw *EntRepository, not the *Storage wrapper.
+func sweep(ctx context.Context, storage *Storage, notifier Notifier, cfgFn func() *config.Config, backoff *notifyBackoff) {
+	if !cfgFn().GetFeatureFlagWithDefault(FeatureFlagWorktreeConsistencySweep, false) {
+		return
+	}
+
+	candidates, err := listConsistencyCandidates(ctx, storage)
+	if err != nil {
+		log.Warn("worktree consistency sweep: failed to list candidates", "err", err)
+		return
+	}
+
+	deps := resolveFindingDeps{Repo: storage.repo, Notifier: notifier, Backoff: backoff, IsIsolated: config.IsIsolatedInstance()}
+	cache := newWorktreeEntryCache()
+
+	var scanned, repaired, flagged int
+	for _, candidate := range candidates {
+		scanned++
+		entries, ok := cache.entriesFor(candidateRepoPath(candidate))
+		if !ok {
+			continue
+		}
+		r, f := resolveCandidate(ctx, candidate, entries, deps)
+		repaired += r
+		flagged += f
+	}
+
+	log.Info("worktree consistency sweep: tick complete",
+		"candidates_scanned", scanned, "issues_found", repaired+flagged, "repaired", repaired, "flagged", flagged)
+}
+
+// StartWorktreeConsistencySweeper runs the periodic worktree-consistency sweep loop,
+// mirroring SessionRetentionSweeper.Start's shape (immediate first run, then
+// ticker-driven) — see ADR-001 for why this is a plain function rather than a
+// Set*-injected server/services struct: this feature's repair actions only need
+// *EntRepository and session/git, both already reachable from inside this package. cfgFn
+// is called fresh on every tick (never a closed-over *config.Config snapshot) so
+// FeatureFlagWorktreeConsistencySweep can be flipped live via the feature-flag RPC with no
+// restart, mirroring quotaGate's and julesDispatchSvc's identical config.LoadConfig
+// accessor pattern in server/dependencies.go. backoff is constructed once here and
+// threaded through every tick's resolveFinding calls, so Story 1.2.4's 24h suppression
+// window persists across ticks within this process (resets on restart, by design — see
+// notifyBackoff's doc comment).
+func StartWorktreeConsistencySweeper(ctx context.Context, storage *Storage, notifier Notifier, cfgFn func() *config.Config) {
+	backoff := newNotifyBackoff()
+
+	log.Info("worktree consistency sweeper started", "check_interval", worktreeConsistencySweepInterval)
+
+	// Run immediately on start rather than waiting for the first tick.
+	sweep(ctx, storage, notifier, cfgFn, backoff)
+
+	ticker := time.NewTicker(worktreeConsistencySweepInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info("worktree consistency sweeper stopped")
+			return
+		case <-ticker.C:
+			sweep(ctx, storage, notifier, cfgFn, backoff)
+		}
+	}
 }

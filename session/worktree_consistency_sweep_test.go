@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -491,7 +492,7 @@ func TestResolveFinding_should_CreateWorktreeRowAndNotify_When_UniqueMatchOnNonI
 	}
 
 	notifier := &fakeNotifier{}
-	err = resolveFinding(ctx, repo, notifier, nil, finding)
+	err = resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding)
 	require.NoError(t, err)
 
 	assert.Equal(t, ResolutionRepaired, finding.Resolution)
@@ -524,7 +525,7 @@ func TestResolveFinding_should_FlagAndNotifyWarning_When_MatchCountIsAmbiguous(t
 	}
 
 	notifier := &fakeNotifier{}
-	err := resolveFinding(ctx, repo, notifier, nil, finding)
+	err := resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding)
 	require.NoError(t, err)
 
 	assert.Equal(t, ResolutionFlagged, finding.Resolution)
@@ -572,7 +573,7 @@ func TestResolveFinding_should_FlagWithErrorSeverity_When_DerivedBaseCommitShaSt
 	}
 
 	notifier := &fakeNotifier{}
-	err = resolveFinding(ctx, repo, notifier, nil, finding)
+	err = resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding)
 	require.NoError(t, err)
 
 	require.Equal(t, SeverityError, finding.Severity,
@@ -614,7 +615,7 @@ func TestResolveFinding_should_CallMarkStuck_When_LiveNonTerminalBacklogItemLink
 	}
 
 	notifier := &fakeNotifier{}
-	err = resolveFinding(ctx, repo, notifier, nil, finding)
+	err = resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding)
 	require.NoError(t, err)
 
 	require.Len(t, notifier.calls, 1)
@@ -649,7 +650,7 @@ func TestResolveFinding_should_NotCallMarkStuck_When_NoBacklogItemLinked(t *test
 	}
 
 	notifier := &fakeNotifier{}
-	err := resolveFinding(ctx, repo, notifier, nil, finding)
+	err := resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding)
 	require.NoError(t, err)
 
 	stuckStates, err := storage.FindOpenStuckStates(ctx)
@@ -692,7 +693,7 @@ func TestResolveFinding_should_CallNotifySessionWithoutItemIdMetadata_When_NoBac
 		}
 
 		notifier := &fakeNotifier{}
-		require.NoError(t, resolveFinding(ctx, repo, notifier, nil, finding))
+		require.NoError(t, resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding))
 
 		require.NotEmpty(t, notifier.calls)
 		assert.Equal(t, "NotifySession", notifier.calls[0].Method)
@@ -716,7 +717,7 @@ func TestResolveFinding_should_CallNotifySessionWithoutItemIdMetadata_When_NoBac
 		}
 
 		notifier := &fakeNotifier{}
-		require.NoError(t, resolveFinding(ctx, repo, notifier, nil, finding))
+		require.NoError(t, resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding))
 
 		require.Len(t, notifier.calls, 1)
 		assert.Equal(t, "NotifySession", notifier.calls[0].Method)
@@ -751,7 +752,7 @@ func TestSweep_should_NotifyOnce_When_FindingFirstDetected(t *testing.T) {
 	}
 
 	notifier := &fakeNotifier{}
-	require.NoError(t, resolveFinding(ctx, repo, notifier, backoff, newFinding()))
+	require.NoError(t, resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier, Backoff: backoff}, newFinding()))
 	assert.Len(t, notifier.calls, 1)
 }
 
@@ -776,11 +777,12 @@ func TestSweep_should_SuppressDuplicateNotify_When_SameFindingWithinBackoffWindo
 	}
 
 	notifier := &fakeNotifier{}
-	require.NoError(t, resolveFinding(ctx, repo, notifier, backoff, newFinding()))
+	deps := resolveFindingDeps{Repo: repo, Notifier: notifier, Backoff: backoff}
+	require.NoError(t, resolveFinding(ctx, deps, newFinding()))
 	require.Len(t, notifier.calls, 1)
 
 	// Second tick, same still-unresolved pair, well within worktreeConsistencyBackoffWindow.
-	require.NoError(t, resolveFinding(ctx, repo, notifier, backoff, newFinding()))
+	require.NoError(t, resolveFinding(ctx, deps, newFinding()))
 	assert.Len(t, notifier.calls, 1, "a still-unresolved finding must not re-notify within the backoff window")
 }
 
@@ -795,4 +797,82 @@ func TestNotifySession_should_RecordCall_When_FakeNotifierInvoked(t *testing.T) 
 	assert.Equal(t, "NotifySession", notifier.calls[0].Method)
 	assert.Equal(t, "sess-123", notifier.calls[0].RecipientID)
 	assert.Equal(t, notificationTypeWarning, notifier.calls[0].NotificationType)
+}
+
+// ---------------------------------------------------------------------------
+// Story 1.3.1: sweep's feature-flag gate
+// ---------------------------------------------------------------------------
+
+// flagCfgFn returns a cfgFn closure reporting a single explicit value for
+// FeatureFlagWorktreeConsistencySweep — the minimal fixture sweep's flag gate needs.
+func flagCfgFn(enabled bool) func() *config.Config {
+	return func() *config.Config {
+		return &config.Config{FeatureFlags: map[string]bool{FeatureFlagWorktreeConsistencySweep: enabled}}
+	}
+}
+
+// TestSweep_should_MakeZeroStorageOrGitCalls_When_FeatureFlagOff covers Task 1.3.1c's
+// flag-off case (Story 1.3.1's AC). storage and notifier are passed as nil rather than a
+// call-counting spy: Storage has no interface seam to spy through, but every one of its
+// methods (e.g. ListInstanceDataWithWorktree) dereferences its unexported repo field with
+// no nil guard, so a nil *Storage panics immediately on first touch — nil is therefore a
+// stronger proof of "zero calls" than a counter would be, not a weaker one.
+func TestSweep_should_MakeZeroStorageOrGitCalls_When_FeatureFlagOff(t *testing.T) {
+	t.Parallel()
+	require.NotPanics(t, func() {
+		sweep(context.Background(), nil, nil, flagCfgFn(false), newNotifyBackoff())
+	}, "sweep must return before touching storage/notifier when the flag is off")
+}
+
+// TestSweep_should_ProceedPastFlagGate_When_FeatureFlagOn covers Task 1.3.1c's
+// complementary case: with the flag on, sweep actually lists candidates and processes
+// them — observed here via the fakeNotifier receiving a call for a seeded candidate that
+// has no live git worktree to match (IssueMissingWorktreeRow, ResolutionFlagged).
+func TestSweep_should_ProceedPastFlagGate_When_FeatureFlagOn(t *testing.T) {
+	t.Parallel()
+	storage := newWorktreeConsistencyTestStorage(t)
+	seedCandidateInstance(t, storage, "flag-on-candidate",
+		withSessionType(SessionTypeNewWorktree),
+		withBranch("work/flag-on"),
+		withStatus(Active),
+	)
+
+	notifier := &fakeNotifier{}
+	sweep(context.Background(), storage, notifier, flagCfgFn(true), newNotifyBackoff())
+
+	assert.NotEmpty(t, notifier.calls, "flag on: sweep must have listed and processed the seeded candidate")
+}
+
+// ---------------------------------------------------------------------------
+// Story 1.3.3: isolated-instance repair guard
+// ---------------------------------------------------------------------------
+
+// TestResolveFinding_should_DowngradeToFlagged_When_IsolatedInstanceAndUniqueMatch covers
+// Task 1.3.3b: an isolated instance must never write a repair, even on an unambiguous
+// live-git-worktree match — it downgrades to ResolutionFlagged with the documented Detail,
+// mirroring OrphanedTmuxSweeper's config.IsIsolatedInstance() guard.
+func TestResolveFinding_should_DowngradeToFlagged_When_IsolatedInstanceAndUniqueMatch(t *testing.T) {
+	t.Parallel()
+	_, repo := newWorktreeConsistencyTestRepo(t)
+	ctx := context.Background()
+	sessionUUID := uuid.New().String()
+
+	finding := &WorktreeConsistencyFinding{
+		SessionID:  sessionUUID,
+		IssueKind:  IssueMissingWorktreeRow,
+		Resolution: ResolutionRepaired,
+		Candidate: SessionWorktreeCandidate{
+			Data: InstanceData{UUID: sessionUUID, Title: "isolated-candidate", Branch: "work/isolated", Status: Active},
+		},
+		Match: &git.NativeWorktreeEntry{BranchRef: "refs/heads/work/isolated", WorktreePath: "/tmp/does-not-matter"},
+	}
+
+	notifier := &fakeNotifier{}
+	deps := resolveFindingDeps{Repo: repo, Notifier: notifier, IsIsolated: true}
+	err := resolveFinding(ctx, deps, finding)
+	require.NoError(t, err)
+
+	assert.Equal(t, ResolutionFlagged, finding.Resolution, "an isolated instance must never write a repair")
+	assert.Equal(t, "repair skipped: running on isolated instance", finding.Detail)
+	require.Len(t, notifier.calls, 1, "the downgrade must still notify — never a silent no-op")
 }
