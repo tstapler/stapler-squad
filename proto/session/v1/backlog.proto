@@ -1896,6 +1896,16 @@ enum StuckReason {
   // delivery itself failed. Distinct from STUCK_REASON_RESPAWN_BLOCKED_ACTIVE,
   // which covers the degrade paths where a steer was never attempted at all.
   STUCK_REASON_STEER_FAILED = 19;
+  // STUCK_REASON_WORKTREE_INCONSISTENT: see domain.StuckReasonWorktreeInconsistent
+  // (session/domain/backlog.go) — the worktree consistency sweep
+  // (session/worktree_consistency_sweep.go) flagged a session's worktree
+  // state as unrepairable (ambiguous/zero live-git-worktree match, an
+  // unresolvable repo_path, or an unresolvable base_commit_sha).
+  //
+  // Note: value 20, not 21 — STUCK_REASON_GATE_TIMEOUT (domain.StuckReasonGateTimeout)
+  // is a pre-existing domain enum value with no proto mapping yet; that gap is
+  // tracked separately and intentionally left unassigned here.
+  STUCK_REASON_WORKTREE_INCONSISTENT = 20;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState
