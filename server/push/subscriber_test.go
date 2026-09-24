@@ -287,14 +287,41 @@ func TestSessionUpdatedStoppedTriggersPush(t *testing.T) {
 
 	inst := &session.Instance{ID: "sess-1", Title: "My Session", Status: session.Stopped}
 	bus.Publish(&events.Event{
-		Type:    events.EventSessionUpdated,
-		Session: inst,
+		Type:          events.EventSessionUpdated,
+		Session:       inst,
+		UpdatedFields: []string{"status"},
 	})
 
 	require.NoError(t, testutil.WaitForCondition(func() bool {
 		return n.CallCount() >= 1
 	}, testutil.FastWaitConfig()))
 	assert.Equal(t, 1, n.CallCount(), "SessionUpdated with Stopped must trigger push")
+}
+
+// IT-4.3 — an unrelated field update on an already-Stopped session must NOT
+// re-trigger a push. Regression test for the notification-flood bug: any
+// EventSessionUpdated whose UpdatedFields doesn't include "status" (a title
+// rename, goal change, checkpoint, autonomous-turn update, PR-status sync,
+// ...) used to pass this gate purely because the session's *current* status
+// happened to be Stopped, producing a duplicate "Session Completed" push per
+// unrelated update.
+func TestSessionUpdatedUnrelatedFieldOnStoppedSessionSuppressesPush(t *testing.T) {
+	bus := events.NewEventBus(10)
+	n := &mockNotifier{name: "test"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	StartDeliverySubscriber(ctx, bus, []Notifier{n})
+
+	inst := &session.Instance{ID: "sess-3", Title: "Completed Session", Status: session.Stopped}
+	bus.Publish(&events.Event{
+		Type:          events.EventSessionUpdated,
+		Session:       inst,
+		UpdatedFields: []string{"goal"},
+	})
+
+	<-ctx.Done()
+	assert.Equal(t, 0, n.CallCount(), "unrelated update on an already-Stopped session must NOT trigger push")
 }
 
 // IT-4.2 — EventSessionUpdated with Status=Active does NOT trigger push
