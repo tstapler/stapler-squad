@@ -20,6 +20,11 @@ const (
 // locally rather than pulling in another package for them.
 const urgentTTL = 1 * time.Hour
 
+// dedupWindow bounds how long dedupTracker suppresses a repeat delivery with
+// the same tag (e.g. two EventBus deliveries describing the same logical
+// change arriving close together).
+const dedupWindow = 2 * time.Second
+
 // Notification type values (mirror sessionv1.NotificationType values).
 const (
 	typeUnspecified = int32(0)

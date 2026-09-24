@@ -30,7 +30,7 @@ func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifier
 	// unneeded here since Subscribe already auto-unsubscribes on ctx cancellation
 	// (see its doc comment), which is this goroutine's own lifetime.
 	ch, _ := bus.Subscribe(ctx)
-	dedup := newDedupTracker(2 * time.Second)
+	dedup := newDedupTracker(dedupWindow)
 
 	go runDeliveryLoop(ctx, ch, dedup, notifiers, done)
 	return done
@@ -123,12 +123,9 @@ func shouldNotify(
 	eventType events.EventType,
 	priority int32,
 	notificationType int32,
-	newStatus session.Status,
 	age time.Duration,
 ) bool {
 	switch eventType {
-	case events.EventSessionUpdated:
-		return newStatus == session.Stopped
 	case events.EventNotification:
 		if priority == priorityUrgent && age < urgentTTL {
 			return true
@@ -138,6 +135,8 @@ func shouldNotify(
 		}
 		return false
 	default:
+		// EventSessionUpdated isn't handled here: buildDeliveryNotification routes
+		// it straight to buildStatusChangeNotification instead (see there).
 		return false
 	}
 }
@@ -161,14 +160,11 @@ func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, b
 		return DeliveryNotification{}, false
 	}
 	// Require "status" in UpdatedFields, not just a Stopped snapshot: without this,
-	// any unrelated update published for an already-completed session (a title
-	// rename, a goal change, a checkpoint, an autonomous-turn field, a PR-status
-	// sync, ...) re-fires this same push every time, because the check below only
-	// looks at the session's *current* status, not whether this event is the
-	// transition that produced it. Confirmed live: a stuck review session cycling
-	// through repeated dead-pane->Stopped transitions was flooding 278 "Session
-	// Completed" pushes in ~10 minutes.
-	if !slices.Contains(event.UpdatedFields, "status") {
+	// any unrelated update to an already-Stopped session (a title rename, goal
+	// change, checkpoint, PR-status sync, ...) re-fires this push, because the
+	// check below only looks at current status, not whether this event is the
+	// transition that produced it.
+	if !slices.Contains(event.UpdatedFields, events.FieldStatus) {
 		return DeliveryNotification{}, false
 	}
 	// Read via the locked accessor, not the raw field: Status is written under
@@ -195,7 +191,7 @@ func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, b
 }
 
 func buildInlineNotification(event *events.Event) (DeliveryNotification, bool) {
-	if !shouldNotify(event.Type, event.NotificationPriority, event.NotificationType, 0, time.Since(event.Timestamp)) {
+	if !shouldNotify(event.Type, event.NotificationPriority, event.NotificationType, time.Since(event.Timestamp)) {
 		return DeliveryNotification{}, false
 	}
 	if event.NotificationTitle == "" || event.NotificationMessage == "" {

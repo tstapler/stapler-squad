@@ -30,6 +30,9 @@ const (
 	// Metadata keys for session-scoped notifications (see SessionScopedMetadata).
 	MetadataKeySessionScoped = pkgevents.MetadataKeySessionScoped
 	MetadataKeyItemID        = pkgevents.MetadataKeyItemID
+
+	// FieldStatus is the UpdatedFields entry marking a session status change.
+	FieldStatus = pkgevents.FieldStatus
 )
 
 // BacklogChangeKind constants (mirrors pkg/events/types.go).
