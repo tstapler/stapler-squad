@@ -21,6 +21,8 @@ import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
 import type { PaneAction } from "@/lib/pane/paneTypes";
 import { useWindowManager } from "@/lib/window/useWindowManager";
 import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
+import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
+import type { WindowId } from "@/lib/window/windowTypes";
 import { WindowTabStrip } from "@/components/window/WindowTabStrip";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
@@ -116,6 +118,18 @@ function HomeContent() {
     (action: PaneAction) => dispatchPane(currentWindow.id, action),
     [dispatchPane, currentWindow.id]
   );
+  // Bridges useWindowShortcuts' "," leader follow-up (which only knows a
+  // window id) to renameWindow's (id, name) signature, since WindowTabStrip
+  // doesn't expose an imperative "start editing" method to call into instead.
+  const handleWindowRenameRequest = useCallback(
+    (id: WindowId) => {
+      const target = windows.find((w) => w.id === id);
+      const name = window.prompt("Rename window", target?.name ?? "");
+      if (name && name.trim()) renameWindow(id, name.trim());
+    },
+    [windows, renameWindow]
+  );
+  useWindowShortcuts(windows, currentWindow.id, switchToWindow, handleWindowRenameRequest);
   // Helper function to find a session by ID with fuzzy matching for external sessions
   const findSessionById = useCallback((sessionId: string): Session | undefined => {
     let session = sessions.find((s) => s.id === sessionId);

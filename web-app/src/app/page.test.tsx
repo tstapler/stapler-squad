@@ -13,6 +13,7 @@ import { useCockpitActions } from "@/lib/contexts/CockpitActionsContext";
 import { initialPaneState } from "@/lib/pane/paneReducer";
 import { useWindowManager } from "@/lib/window/useWindowManager";
 import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
+import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
 
 const mockUpdateSession = jest.fn();
 const mockAddNotification = jest.fn();
@@ -63,6 +64,9 @@ jest.mock("@/lib/window/useWindowManager", () => ({
 }));
 jest.mock("@/lib/window/useWindowUrlSync", () => ({
   useWindowUrlSync: jest.fn(),
+}));
+jest.mock("@/lib/window/useWindowShortcuts", () => ({
+  useWindowShortcuts: jest.fn(),
 }));
 
 // Stand-in for the real pane tree: reads the same CockpitActionsContext the
@@ -171,6 +175,22 @@ describe("HomeContent multi-window wiring", () => {
     mockPaneTilingContainer.mockClear();
     mockDispatchPane.mockClear();
     mockSwitchToWindow.mockClear();
+    (useWindowShortcuts as jest.Mock).mockClear();
+  });
+
+  it("wires useWindowShortcuts with the active window's id and switchToWindow so the Alt+W leader shortcut registers", () => {
+    const windows = [{ id: "win-1", name: "Window 1", paneState: initialPaneState() }];
+    mockWindowManagerReturning(windows);
+    mockUrlSyncResolvingTo("win-1");
+
+    render(<Home />);
+
+    expect(useWindowShortcuts).toHaveBeenCalledWith(
+      windows,
+      "win-1",
+      mockSwitchToWindow,
+      expect.any(Function)
+    );
   });
 
   it("HomeContent_should_renderPaneTilingContainerWithActiveWindowPaneState_When_currentWindowIdChanges", () => {
