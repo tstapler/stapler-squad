@@ -929,9 +929,8 @@ func assertStaplerSquadMCPEntry(t *testing.T, val, wantURL, wantUUID string) {
 func TestClaudeMCPConfigArgs_HTTPFormat(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
-		Program:      "claude",
-		MCPServerURL: "http://localhost:8543/mcp",
-		UUID:         "test-uuid-123",
+		Program: "claude",
+		UUID:    "test-uuid-123",
 	}
 	flag, val := inst.claudeMCPConfigArgs("http://localhost:8543/mcp")
 	if flag != "--mcp-config" {
@@ -961,6 +960,33 @@ func TestBuildClaudeCommand_ReResolvesMCPServerURL_OnRelaunch(t *testing.T) {
 	}
 	if !strings.Contains(got, "localhost:9999") {
 		t.Errorf("buildLaunchCommand() = %q, want it to use the provider's URL, not the empty static field", got)
+	}
+}
+
+// TestBuildClaudeCommand_ReResolvesProvider_AcrossMultipleLaunches proves the
+// PR's headline claim directly: the provider is called fresh on every
+// launch, not memoized after the first call. A regression that cached the
+// first resolveMCPServerURLFrom result on the Instance would pass every
+// other test in this file but fail here.
+func TestBuildClaudeCommand_ReResolvesProvider_AcrossMultipleLaunches(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Program: "claude", UUID: "test-uuid-multi"}
+	urls := []string{"http://localhost:1111/mcp", "http://localhost:2222/mcp"}
+	call := 0
+	inst.SetMCPServerURLProvider(func() string {
+		u := urls[call]
+		call++
+		return u
+	})
+
+	first := inst.buildLaunchCommand("")
+	if !strings.Contains(first, "1111") || strings.Contains(first, "2222") {
+		t.Errorf("first launch = %q, want only the first provider value (1111)", first)
+	}
+
+	second := inst.buildLaunchCommand("")
+	if !strings.Contains(second, "2222") || strings.Contains(second, "1111") {
+		t.Errorf("second launch = %q, want the provider re-resolved to 2222, not a cached 1111", second)
 	}
 }
 

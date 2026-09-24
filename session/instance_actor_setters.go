@@ -58,13 +58,11 @@ func (i *Instance) SetMCPServerURL(url string) {
 	})
 }
 
-// SetMCPServerURLProvider registers a callback that buildClaudeCommand calls
-// to re-resolve the MCP server URL fresh on every claude launch, closing the
-// restart-drop gap left by the one-shot MCPServerURL field above. Wired once
-// at construction time (WireInstanceCallbacks) — deliberately NOT actor-routed
-// like SetMCPServerURL: buildClaudeCommand runs from inside the actor's own
-// goroutine (as part of startLocked), so calling the actor-routed setter
-// re-entrantly from there would deadlock on the same mailbox.
+// SetMCPServerURLProvider registers a callback buildClaudeCommand calls to
+// re-resolve the MCP server URL fresh on every claude launch. Deliberately
+// NOT actor-routed like SetMCPServerURL above: buildClaudeCommand runs
+// inside the actor's own goroutine, so an actor-routed setter would deadlock
+// on the mailbox if called re-entrantly from there.
 func (i *Instance) SetMCPServerURLProvider(fn func() string) {
 	i.mcpServerURLProvider.Store(&fn)
 }

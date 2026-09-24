@@ -2608,8 +2608,11 @@ func TestResumeHibernatedSession_WiresProvider(t *testing.T) {
 		// raw from storage, never through WireInstanceCallbacks.
 	}
 	require.NoError(t, storage.AddInstance(hibernated))
+	// ResumeFromHibernation relaunches on a DIFFERENT Instance object (see
+	// doc comment below), so hibernated.KillSession() here is best-effort at
+	// most, mirroring TestResumeCrashedSession_TransitionsCrashedToActive --
+	// not a guarantee the spawned tmux session gets torn down.
 	t.Cleanup(func() {
-		session.JoinHibernation(hibernated)
 		_ = hibernated.KillSession()
 	})
 
@@ -2617,8 +2620,8 @@ func TestResumeHibernatedSession_WiresProvider(t *testing.T) {
 	require.NoError(t, err)
 
 	// The relaunch itself runs on a goroutine spawned by a DIFFERENT Instance
-	// object (see doc comment above), so JoinHibernation on our own pointer
-	// won't observe it; poll the shared log stream instead.
+	// object than `hibernated`, so nothing on our own pointer observes it;
+	// poll the shared log stream instead.
 	wait.RequireEventually(t, func() bool {
 		return strings.Contains(logs.String(), "creating session") && strings.Contains(logs.String(), "hibernated-provider-session")
 	}, 15*time.Second, 20*time.Millisecond, "relaunch's initTmuxSession log line must appear")
@@ -2698,6 +2701,10 @@ func TestResumeCrashedSession_WiresProvider(t *testing.T) {
 		// raw from storage, never through WireInstanceCallbacks.
 	}
 	require.NoError(t, storage.AddInstance(crashed))
+	// ResumeFromCrash relaunches on a DIFFERENT Instance object than `crashed`
+	// (see doc comment below), so this cleanup is best-effort at most, same
+	// as TestResumeCrashedSession_TransitionsCrashedToActive -- not a
+	// guarantee the spawned tmux session gets torn down.
 	t.Cleanup(func() { _ = crashed.KillSession() })
 
 	_, err := svc.ResumeCrashedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeCrashedSessionRequest{Id: sessionUUID}))
@@ -2711,6 +2718,41 @@ func TestResumeCrashedSession_WiresProvider(t *testing.T) {
 		"relaunch command must carry --mcp-config even though MCPServerURL was empty at load time")
 	assert.Contains(t, logs.String(), "19192",
 		"relaunch command must use the wired provider's URL")
+}
+
+// TestWireCallbacks_WiresMCPServerURLProvider is the regression test for the
+// chokepoint gap found in review: wireCallbacks (not just the 4 raw-load
+// resume/fork paths above) must also wire the MCP provider, since it's the
+// single callback chokepoint CreateSession, CreateDirectorySession, and
+// CreateWorktreeSession all route through -- previously only the one-shot
+// MCPServerURL field was ever set for those paths, so a session created via
+// any of them and later relaunched in-process (without a server restart)
+// could get permanently stuck the same way the raw-load paths did.
+func TestWireCallbacks_WiresMCPServerURLProvider(t *testing.T) {
+	logs := captureLogs(t)
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+	svc.SetMCPServerURL(func() string { return "http://localhost:19194/mcp" })
+
+	inst := &session.Instance{
+		Title:   "wire-callbacks-provider-session",
+		UUID:    "11111111-0000-0000-0000-000000000007",
+		Path:    "/tmp/test",
+		Program: "claude",
+		// MCPServerURL deliberately left empty -- exercises the provider
+		// path, not the one-shot-field fallback.
+	}
+	t.Cleanup(func() { _ = inst.KillSession() })
+
+	svc.wireCallbacks(inst)
+	_ = inst.Start(true) // directory-validation error, if any, is irrelevant -- only the launch command matters here
+
+	assert.Contains(t, logs.String(), "--mcp-config",
+		"a session wired only via wireCallbacks (the CreateSession/CreateDirectorySession/CreateWorktreeSession chokepoint) must still get --mcp-config")
+	assert.Contains(t, logs.String(), "19194",
+		"launch command must use the wired provider's URL")
 }
 
 // --------------------------------------------------------------------------

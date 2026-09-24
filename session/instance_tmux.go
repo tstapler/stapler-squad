@@ -369,15 +369,22 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 		// shell-quoting as the other interpolated flag values.
 		parts = append(parts, "--resume", shellQuote(claudeSessionID))
 	}
-	if mcpURL := i.resolveMCPServerURL(); mcpURL != "" {
+	// Load the provider once and reuse it below -- calling resolveMCPServerURL()
+	// then separately re-Load()ing would race against a concurrent
+	// SetMCPServerURLProvider call (deliberately not actor-routed, see that
+	// setter's doc comment) and could log a misleading "provider is wired"
+	// message for a launch where it briefly wasn't.
+	provider := i.mcpServerURLProvider.Load()
+	mcpURL := i.resolveMCPServerURLFrom(provider)
+	if mcpURL != "" {
 		flag, val := i.claudeMCPConfigArgs(mcpURL)
 		parts = append(parts, flag, val)
-	} else if i.mcpServerURLProvider.Load() != nil {
+	} else if provider != nil {
 		// Provider is wired but resolved empty (and so did the Snapshot()
-		// fallback) — every session-scoped MCP tool call will hard-fail for
-		// this session's lifetime. A nil provider (not yet wired, e.g. the
-		// narrow server-boot window before WireInstanceCallbacks runs) is not
-		// logged here: that's an expected transient state, not a failure.
+		// fallback) -- every session-scoped MCP tool call will hard-fail
+		// until a later relaunch re-resolves a non-empty URL. A nil provider
+		// (not yet wired, e.g. the narrow server-boot window before
+		// WireInstanceCallbacks runs) is not logged: expected, not a failure.
 		log.Error("claude launch: MCP server URL unresolved, session will not be able to call session-scoped MCP tools", "session", i.Title, "program", i.Program)
 	}
 	if flag, val := i.claudeSettingsEnvOverrideArgs(); flag != "" {
@@ -547,18 +554,14 @@ func (i *Instance) claudeMCPConfigArgs(mcpURL string) (string, string) {
 	return "--mcp-config", shellQuote(cfg)
 }
 
-// resolveMCPServerURL returns the MCP server URL to pass to claude for this
-// launch. Unlike reading the MCPServerURL field directly, this re-resolves
-// via the wired provider (SetMCPServerURLProvider) on every call, so a
-// session whose field was ever empty at wiring time is not permanently
-// unable to identify itself to MCP tools after a later relaunch (workspace
-// switch, crash/hibernate resume, etc.) — see .claude/rules/instance-lock-free-reads.md.
-// Falls back to GetMCPServerURL() for instances/tests that predate provider
-// wiring, or when the provider itself resolves empty (e.g. a transient
-// server-address race).
-func (i *Instance) resolveMCPServerURL() string {
-	if p := i.mcpServerURLProvider.Load(); p != nil {
-		if url := (*p)(); url != "" {
+// resolveMCPServerURLFrom returns the MCP server URL to pass to claude for
+// this launch, given an already-Load()ed provider (so callers needing the
+// provider's presence for another decision don't race a second Load() --
+// see buildClaudeCommand). Falls back to GetMCPServerURL() when provider is
+// nil or resolves empty.
+func (i *Instance) resolveMCPServerURLFrom(provider *func() string) string {
+	if provider != nil {
+		if url := (*provider)(); url != "" {
 			return url
 		}
 	}

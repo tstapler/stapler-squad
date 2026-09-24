@@ -925,12 +925,6 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 			inst.SetStatusManager(s.statusManager)
 		}
 		s.wireCallbacks(inst)
-		// Wire the provider (not a one-shot backfill) so buildClaudeCommand
-		// re-resolves the MCP server URL fresh on every claude launch from
-		// this *Instance too — this is a separate object graph from the one
-		// Registry.Acquire/WireInstanceCallbacks wires, so it needs its own
-		// provider wiring rather than relying on that path to cover it.
-		inst.SetMCPServerURLProvider(s.resolveMCPServerURL)
 	}
 
 	return instances, nil
@@ -1867,6 +1861,11 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	if s.historyLinker != nil {
 		s.historyLinker.AddInstance(inst)
 	}
+	// Wired here (not a one-shot MCPServerURL field) so every caller of this
+	// chokepoint -- CreateSession, CreateDirectorySession, CreateWorktreeSession,
+	// loadInstancesWithWiring -- re-resolves the MCP URL fresh on every claude
+	// relaunch instead of staying stuck at whatever it was at construction time.
+	inst.SetMCPServerURLProvider(s.resolveMCPServerURL)
 }
 
 // StopDriverForSession stops the AutonomousDriver registered under sessionTitle.
