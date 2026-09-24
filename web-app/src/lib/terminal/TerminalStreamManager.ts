@@ -9,6 +9,8 @@
  */
 
 import { EscapeSequenceParser } from './EscapeSequenceParser';
+import { RedrawThrottler } from './RedrawThrottler';
+import { TerminalDebugMonitor } from './TerminalDebugMonitor';
 import type { ScrollForwardOutcome, ScrollBlockedReason } from '@/gen/session/v1/events_pb';
 
 /** Minimal terminal interface (subset of xterm.js Terminal) */
@@ -62,88 +64,9 @@ export interface AppScrollbackFrame {
   blockedReason: ScrollBlockedReason;
 }
 
-/**
- * RedrawThrottler - Coalesces rapid full-screen redraws to max 30 FPS.
- *
- * Claude performs complete screen redraws at 12-25 FPS, causing visible flicker.
- * This throttler holds rapid redraws and flushes the latest one at a capped rate.
- */
-class RedrawThrottler {
-  private pendingRedraw: string | null = null;
-  // Cursor-up count (the \d+ in \x1b[\d+A) of the currently pending redraw —
-  // identifies which screen region it repaints, so a same-region redraw can
-  // be coalesced onto it while a different-region one cannot (see below).
-  private pendingRedrawUpCount: number | null = null;
-  private throttleTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly throttleMs = 33; // ~30fps; coalesces burst full-screen redraws
-  private onFlush: (data: string) => void;
-
-  constructor(onFlush: (data: string) => void) {
-    this.onFlush = onFlush;
-  }
-
-  process(chunk: string): string | null {
-    // Detect genuine full-screen redraws: cursor-up followed immediately by an erase sequence.
-    // NOTE: \x1b[H (cursor-home) is intentionally excluded - it is also emitted during
-    // incremental Ink-style renders and must not be classified as a full redraw.
-    // Scoping the check to the first 32 bytes avoids false positives in large output chunks.
-    const match = /^\x1b\[(\d+)A(?:\x1b\[2K|\x1b\[J)/.exec(chunk.substring(0, 32));
-
-    if (!match) {
-      this.flushPending();
-      return chunk;
-    }
-
-    // \x1b[NA\x1b[2K (cursor-up N, erase ONE line) is also exactly how a multi-line
-    // Ink-style TUI redraws a SINGLE targeted line (e.g. a spinner or token counter),
-    // not just how it repaints the whole viewport — the leading bytes alone can't tell
-    // the two apart. Coalescing is only safe when the new candidate targets the SAME
-    // cursor-up region as the one already pending (repeated repaints of one region,
-    // which is the flicker this throttler exists to suppress). A different region
-    // arriving mid-window is flushed immediately instead of silently overwriting the
-    // pending one — otherwise the pending region's update is dropped forever, since
-    // nothing else resends it.
-    const upCount = Number(match[1]);
-    if (this.pendingRedraw !== null && upCount !== this.pendingRedrawUpCount) {
-      this.flushPending();
-    }
-
-    this.pendingRedraw = chunk;
-    this.pendingRedrawUpCount = upCount;
-
-    if (!this.throttleTimer) {
-      this.throttleTimer = setTimeout(() => {
-        this.flushPending();
-      }, this.throttleMs);
-    }
-
-    return null; // Don't output yet
-  }
-
-  private flushPending() {
-    if (this.pendingRedraw) {
-      this.onFlush(this.pendingRedraw);
-      this.pendingRedraw = null;
-      this.pendingRedrawUpCount = null;
-    }
-    if (this.throttleTimer) {
-      clearTimeout(this.throttleTimer);
-      this.throttleTimer = null;
-    }
-  }
-
-  cleanup() {
-    this.flushPending();
-  }
-}
-
 export class TerminalStreamManager {
   private terminal: ITerminal;
   private sendFlowControl: SendFlowControlFn;
-
-  // Write batching
-  private writeBuffer: string = "";
-  private writeScheduled: boolean = false;
 
   // Pending write operations tracking
   private pendingWrites: number = 0;
@@ -164,12 +87,9 @@ export class TerminalStreamManager {
   // Redraw throttler
   private redrawThrottler: RedrawThrottler;
 
-  // Debug instrumentation
-  private debugMonitorInstalled: boolean = false;
-  private originalWrite: ((data: string | Uint8Array, callback?: () => void) => void) | null = null;
-  private originalRefresh: ((start: number, end: number) => void) | null = null;
-  private lastWriteTime: number = 0;
-  private writeCount: number = 0;
+  // Debug instrumentation (write/refresh monkey-patching), gated on the
+  // `debug-terminal` localStorage flag — see installDebugMonitor().
+  private debugMonitor: TerminalDebugMonitor = new TerminalDebugMonitor();
 
   // Write-lock: prevents live output from being written while initial/paged history is loading.
   // Live writes received during the lock are queued and flushed once the history write completes.
@@ -238,17 +158,27 @@ export class TerminalStreamManager {
   }
 
   /**
-   * Directly sets altScreenActive from the server-authoritative
+   * Marks altScreenActive true from the server-authoritative
    * TerminalOutput.alt_screen_active hint (only ever present on an
    * initial-connect/post-resize snapshot — see useTerminalStream.ts's
    * onAltScreenActiveHint doc comment) rather than inferring it from
    * scanning content bytes, which a capture-pane-derived snapshot can never
-   * carry the DECSET 1049h marker for.
+   * carry the DECSET 1049h marker for. Fires onAltScreenChange only on an
+   * actual transition, mirroring the server-side `AltScreenTracker.Observe`'s
+   * `changed` return convention.
    */
-  setAltScreenActiveHint(active: boolean): void {
-    if (active !== this.altScreenActive) {
-      this.altScreenActive = active;
-      this.onAltScreenChange?.(active);
+  setAltScreenActive(): void {
+    if (!this.altScreenActive) {
+      this.altScreenActive = true;
+      this.onAltScreenChange?.(true);
+    }
+  }
+
+  /** See setAltScreenActive()'s doc comment — the inactive counterpart. */
+  setAltScreenInactive(): void {
+    if (this.altScreenActive) {
+      this.altScreenActive = false;
+      this.onAltScreenChange?.(false);
     }
   }
 
@@ -276,63 +206,14 @@ export class TerminalStreamManager {
     this.sendFlowControl = fn;
   }
 
-  /** Install debug instrumentation (write/refresh monkey-patching). */
+  /** Install debug instrumentation (write/refresh monkey-patching). See TerminalDebugMonitor. */
   installDebugMonitor(): void {
-    if (this.debugMonitorInstalled) return;
+    this.debugMonitor.install(this.terminal);
+  }
 
-    this.originalWrite = this.terminal.write.bind(this.terminal);
-    this.originalRefresh = this.terminal.refresh.bind(this.terminal);
-
-    const self = this;
-
-    // Wrap write to track output timing
-    this.terminal.write = function(data: string | Uint8Array, callback?: () => void) {
-      const now = performance.now();
-      const timeSinceLastWrite = now - self.lastWriteTime;
-      self.lastWriteTime = now;
-      self.writeCount++;
-
-      if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
-        console.log('[XtermWrite]', {
-          writeCount: self.writeCount,
-          dataLength: typeof data === 'string' ? data.length : data.byteLength,
-          timeSinceLastWrite: `${timeSinceLastWrite.toFixed(2)}ms`,
-          cursorY: self.terminal.buffer.active.cursorY,
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      return self.originalWrite?.(data, callback);
-    };
-
-    // Wrap refresh to log all calls (only in debug mode)
-    this.terminal.refresh = function(start: number, end: number) {
-      if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
-        const stackTrace = new Error().stack;
-        const caller = stackTrace?.split('\n')[2]?.trim() || 'unknown';
-        const timeSinceLastWrite = performance.now() - self.lastWriteTime;
-
-        console.log('[XtermRefresh] Refresh called', {
-          start,
-          end,
-          rows: self.terminal.rows,
-          timeSinceLastWrite: `${timeSinceLastWrite.toFixed(2)}ms`,
-          recentWrites: self.writeCount,
-          caller: caller.replace(/^at /, ''),
-          possibleRaceCondition: timeSinceLastWrite < 50,
-          timestamp: new Date().toISOString()
-        });
-
-        self.writeCount = 0;
-      }
-
-      return self.originalRefresh?.(start, end);
-    };
-
-    this.debugMonitorInstalled = true;
-    if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
-      console.log('[TerminalStreamManager] Refresh and write monitoring installed');
-    }
+  /** True when verbose terminal debug logging is enabled via localStorage. */
+  private isDebugTerminalEnabled(): boolean {
+    return typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true";
   }
 
   /**
@@ -389,9 +270,10 @@ export class TerminalStreamManager {
       // snapshot, which can never itself carry a DECSET 1049h marker (it's a
       // rendered text snapshot, not a replay of the raw byte stream) — so
       // scanning it for alt-screen transitions would never find anything.
-      // setAltScreenActiveHint(), driven by the server-authoritative
-      // TerminalOutput.alt_screen_active field, is what actually establishes
-      // correct alt-screen state on connect; see its doc comment.
+      // setAltScreenActive()/setAltScreenInactive(), driven by the
+      // server-authoritative TerminalOutput.alt_screen_active field, is what
+      // actually establishes correct alt-screen state on connect; see their
+      // doc comments.
       await this.enqueueWrite(content);
       this.terminal.scrollToBottom();
 
@@ -468,10 +350,10 @@ export class TerminalStreamManager {
     const altExitIdx = Math.max(safeOutput.lastIndexOf('\x1b[?1049l'), safeOutput.lastIndexOf('\x1b[?47l'));
     if (altEnterIdx < 0 && altExitIdx < 0) return;
 
-    const active = altEnterIdx > altExitIdx;
-    if (active !== this.altScreenActive) {
-      this.altScreenActive = active;
-      this.onAltScreenChange?.(active);
+    if (altEnterIdx > altExitIdx) {
+      this.setAltScreenActive();
+    } else {
+      this.setAltScreenInactive();
     }
   }
 
@@ -570,9 +452,10 @@ export class TerminalStreamManager {
     while (this.writeQueue.length > 0) {
       if (this.disposed) {
         // Drop remaining queued items without writing — cleanup() already
-        // cleared writeQueue, but a chunked item mid-flight below re-checks
-        // this flag between chunks, so this outer guard only matters if
-        // cleanup() ran between two top-level queue items.
+        // cleared writeQueue, but a chunked item mid-flight re-checks this
+        // flag between chunks (writeChunkedWithFlowControl), so this outer
+        // guard only matters if cleanup() ran between two top-level queue
+        // items.
         this.writeQueue.length = 0;
         break;
       }
@@ -581,81 +464,9 @@ export class TerminalStreamManager {
       const data = item.data;
 
       if (data.length <= CHUNK_SIZE) {
-        // Small write - direct with flow control
-        await new Promise<void>((resolve) => {
-          this.watermark += data.length;
-
-          if (this.watermark > HIGH_WATERMARK && !this.isPaused) {
-            this.isPaused = true;
-            console.warn(`[FlowControl] HIGH WATERMARK EXCEEDED - Pausing stream (watermark: ${this.watermark} bytes)`);
-            this.sendFlowControl(true, this.watermark);
-          }
-
-          this.terminal.write(data, () => {
-            this.watermark = Math.max(0, this.watermark - data.length);
-
-            if (this.watermark < LOW_WATERMARK && this.isPaused) {
-              this.isPaused = false;
-              console.log(`[FlowControl] LOW WATERMARK REACHED - Resuming stream (watermark: ${this.watermark} bytes)`);
-              this.sendFlowControl(false, this.watermark);
-            }
-            resolve();
-          });
-        });
+        await this.writeWithFlowControl(data);
       } else {
-        // Large write - chunk it with yields to the UI
-        const totalChunks = Math.ceil(data.length / CHUNK_SIZE);
-
-        if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
-          console.log(`[FlowControl] Chunking large write: ${data.length} bytes into ${totalChunks} chunks`);
-        }
-
-        for (let i = 0; i < data.length; i += CHUNK_SIZE) {
-          // Task 3.6 / Bug 3 — re-checked before every chunk (not just once
-          // per queue item): dispose() can land between any two chunks of a
-          // large writeInitialContent/prependScrollbackBatch, and the whole
-          // point is to stop mid-item, not just between items.
-          if (this.disposed) break;
-
-          const chunk = data.slice(i, Math.min(i + CHUNK_SIZE, data.length));
-          const chunkIndex = Math.floor(i / CHUNK_SIZE) + 1;
-
-          await new Promise<void>((resolve) => {
-            this.watermark += chunk.length;
-
-            if (this.watermark > HIGH_WATERMARK && !this.isPaused) {
-              this.isPaused = true;
-              console.warn(`[FlowControl] HIGH WATERMARK EXCEEDED during chunk ${chunkIndex}/${totalChunks} - Pausing stream (watermark: ${this.watermark} bytes)`);
-              this.sendFlowControl(true, this.watermark);
-            }
-
-            this.terminal.write(chunk, () => {
-              this.watermark = Math.max(0, this.watermark - chunk.length);
-
-              if (this.watermark < LOW_WATERMARK && this.isPaused) {
-                this.isPaused = false;
-                console.log(`[FlowControl] LOW WATERMARK REACHED after chunk ${chunkIndex}/${totalChunks} - Resuming stream (watermark: ${this.watermark} bytes)`);
-                this.sendFlowControl(false, this.watermark);
-              }
-              resolve();
-            });
-          });
-
-          // Yield to UI between chunks
-          if (i + CHUNK_SIZE < data.length) {
-            await new Promise<void>((resolve) => {
-              if (CHUNK_DELAY_MS > 0) {
-                setTimeout(resolve, CHUNK_DELAY_MS);
-              } else {
-                requestAnimationFrame(() => resolve());
-              }
-            });
-          }
-        }
-
-        if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
-          console.log(`[FlowControl] Completed chunked write: ${data.length} bytes`);
-        }
+        await this.writeChunkedWithFlowControl(data);
       }
 
       this.writeQueue.shift();
@@ -665,52 +476,84 @@ export class TerminalStreamManager {
     this.isProcessingQueue = false;
   }
 
-  /** Flush pending write buffer (for state/hybrid mode batching via RAF). */
-  flushWriteBuffer(): void {
-    if (this.writeBuffer) {
-      const dataToWrite = this.writeBuffer;
-      const byteLength = dataToWrite.length;
+  /**
+   * Write large data in CHUNK_SIZE pieces via writeWithFlowControl(), yielding
+   * to the UI event loop between chunks. Re-checks `disposed` before every
+   * chunk (Task 3.6 / Bug 3) — dispose() can land between any two chunks of a
+   * large writeInitialContent()/prependScrollbackBatch() write, and the whole
+   * point is to stop mid-item, not just between queue items.
+   */
+  private async writeChunkedWithFlowControl(data: string): Promise<void> {
+    const totalChunks = Math.ceil(data.length / CHUNK_SIZE);
 
-      this.writeBuffer = "";
-
-      if (byteLength > CHUNK_SIZE) {
-        this.enqueueWrite(dataToWrite);
-        this.writeScheduled = false;
-        return;
-      }
-
-      this.writeDirectWithFlowControl(dataToWrite);
+    if (this.isDebugTerminalEnabled()) {
+      console.log(`[FlowControl] Chunking large write: ${data.length} bytes into ${totalChunks} chunks`);
     }
-    this.writeScheduled = false;
+
+    for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+      if (this.disposed) break;
+
+      const chunk = data.slice(i, Math.min(i + CHUNK_SIZE, data.length));
+      const chunkIndex = Math.floor(i / CHUNK_SIZE) + 1;
+
+      await this.writeWithFlowControl(chunk, `chunk ${chunkIndex}/${totalChunks}`);
+
+      // Yield to UI between chunks
+      if (i + CHUNK_SIZE < data.length) {
+        await this.yieldToUI();
+      }
+    }
+
+    if (this.isDebugTerminalEnabled()) {
+      console.log(`[FlowControl] Completed chunked write: ${data.length} bytes`);
+    }
+  }
+
+  /** Yield to the UI event loop between chunks (next rAF, or a fixed delay if configured). */
+  private yieldToUI(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      if (CHUNK_DELAY_MS > 0) {
+        setTimeout(resolve, CHUNK_DELAY_MS);
+      } else {
+        requestAnimationFrame(() => resolve());
+      }
+    });
   }
 
   /**
-   * Write output in state/hybrid mode (batches with RAF).
-   * Used when streaming mode is "state" or "hybrid".
+   * Write one piece of data to the terminal with watermark-based flow-control
+   * pause/resume around it. Shared by processWriteQueue()'s small-direct-write
+   * path and writeChunkedWithFlowControl()'s per-chunk path — both need the
+   * identical pause-before/resume-after shape, previously duplicated inline.
+   *
+   * @param logContext optional context (e.g. "chunk 2/5") interpolated into
+   *   the watermark pause/resume debug log lines.
    */
-  writeStateBatched(safeOutput: string): void {
-    if (safeOutput.length === 0) return;
-    this.writeBuffer += safeOutput;
+  private writeWithFlowControl(piece: string, logContext?: string): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.watermark += piece.length;
 
-    if (!this.writeScheduled) {
-      this.writeScheduled = true;
-      requestAnimationFrame(() => this.flushWriteBuffer());
-    }
+      if (this.watermark > HIGH_WATERMARK && !this.isPaused) {
+        this.isPaused = true;
+        console.warn(`[FlowControl] HIGH WATERMARK EXCEEDED${logContext ? ` during ${logContext}` : ''} - Pausing stream (watermark: ${this.watermark} bytes)`);
+        this.sendFlowControl(true, this.watermark);
+      }
+
+      this.terminal.write(piece, () => {
+        this.watermark = Math.max(0, this.watermark - piece.length);
+
+        if (this.watermark < LOW_WATERMARK && this.isPaused) {
+          this.isPaused = false;
+          console.log(`[FlowControl] LOW WATERMARK REACHED${logContext ? ` after ${logContext}` : ''} - Resuming stream (watermark: ${this.watermark} bytes)`);
+          this.sendFlowControl(false, this.watermark);
+        }
+        resolve();
+      });
+    });
   }
 
   /** Clean up all pending state on unmount. */
   cleanup(): void {
-    // Flush write buffer
-    if (this.writeBuffer) {
-      // Best-effort direct write
-      try {
-        this.terminal.write(this.writeBuffer);
-      } catch {
-        // Terminal may already be disposed
-      }
-      this.writeBuffer = "";
-    }
-
     // Reset escape sequence parser
     this.escapeParser.reset();
 
@@ -718,17 +561,9 @@ export class TerminalStreamManager {
     this.redrawThrottler.cleanup();
 
     // Restore original terminal methods if debug monitoring was installed
-    if (this.debugMonitorInstalled && this.originalWrite && this.originalRefresh) {
-      this.terminal.write = this.originalWrite;
-      this.terminal.refresh = this.originalRefresh;
-      this.debugMonitorInstalled = false;
-    }
-
-    // Null out refs to terminal internals to prevent GC retention (Pitfall #7):
-    // when the terminal is disposed while the manager is still alive, these refs
-    // hold closed terminal objects preventing garbage collection.
-    this.originalWrite = null;
-    this.originalRefresh = null;
+    // (also nulls out the captured refs — see TerminalDebugMonitor.restore's
+    // Pitfall #7 doc comment on GC retention of a disposed terminal).
+    this.debugMonitor.restore(this.terminal);
 
     // Clear any pending live writes
     this.pendingLiveWrites.length = 0;
@@ -739,9 +574,9 @@ export class TerminalStreamManager {
     // TerminalOutput has already unmounted mid-chunked-write must not keep
     // writing into a Terminal that may now belong to a different session.
     // Checked in write()/writeInitialContent()/prependScrollbackBatch() and
-    // between chunks in processWriteQueue() — never mid-chunk (an in-flight
-    // terminal.write() call always completes; only the *next* one is
-    // skipped).
+    // between chunks in writeChunkedWithFlowControl() — never mid-chunk (an
+    // in-flight terminal.write() call always completes; only the *next* one
+    // is skipped).
     this.disposed = true;
     this.writeQueue.length = 0;
   }

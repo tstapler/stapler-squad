@@ -92,7 +92,7 @@ export class ShortcutRegistry {
     // Skip if target is an input/textarea/select/contenteditable
     // (unless the shortcut explicitly uses a modifier)
     const hasModifier = event.metaKey || event.ctrlKey || event.altKey;
-    if (!hasModifier && isInputElement(event.target as Element)) return;
+    if (!hasModifier && isInputElement(event.target)) return;
 
     const activeContext = this.getActiveContext();
 
@@ -129,8 +129,9 @@ function keyMatches(event: KeyboardEvent, shortcut: Shortcut): boolean {
   return true;
 }
 
-function isInputElement(el: Element | null): boolean {
-  if (!el) return false;
+export function isInputElement(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const el = target;
   const tag = el.tagName.toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select") return true;
   if (el instanceof HTMLElement && el.isContentEditable) return true;

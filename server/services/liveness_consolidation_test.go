@@ -308,7 +308,17 @@ func TestOtherLiveSessionInsideWorktree_LiveSiblingInsideWorktree_Blocks(t *test
 	t.Parallel()
 
 	worktree := t.TempDir()
-	sibling := newLiveProbeInstance(t, "live-sibling-"+t.Name(), filepath.Join(worktree, "server", "services"))
+	siblingCWD := filepath.Join(worktree, "server", "services")
+	// CanonicalizeWorktreePath (server/services/session_service.go's
+	// OtherLiveSessionInsideWorktree) resolves symlinks via filepath.EvalSymlinks,
+	// which silently falls back to filepath.Clean on a nonexistent path -- so a
+	// sibling cwd that's never created on disk would skip symlink resolution
+	// while worktree (a real t.TempDir()) gets resolved, breaking the prefix
+	// match on any host with a symlink hop in its temp dir (macOS: /var ->
+	// /private/var). Must exist on disk for this test to actually exercise the
+	// canonicalization path it's guarding.
+	require.NoError(t, os.MkdirAll(siblingCWD, 0o755))
+	sibling := newLiveProbeInstance(t, "live-sibling-"+t.Name(), siblingCWD)
 	poller := newEmptyPoller()
 	poller.SetInstances([]*session.Instance{sibling})
 	svc := &SessionService{reviewQueuePoller: poller}

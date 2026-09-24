@@ -29,6 +29,7 @@ import { selectDetectedStatusMap } from "@/lib/store/sessionsSlice";
 import { ActionBar } from "@/components/ui/ActionBar";
 import { computeRangeIds } from "@/lib/utils/rangeSelect";
 import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
+import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { useFilteredGroupedSessions } from "@/lib/hooks/useFilteredGroupedSessions";
 import {
   container,
@@ -99,6 +100,13 @@ export interface SessionListProps {
   extraHeaderActions?: React.ReactNode;
   /** Display mode: compact single-line rows ("row") or full cards ("card"). Default: "row". */
   viewMode?: "card" | "row";
+  /**
+   * Session UUID -> backlog-origin index entry, for the BacklogOriginBadge shown on
+   * backlog-automation-dispatched sessions. Callers inside PaneContext (the common case)
+   * should pass the already-fetched PaneContextValue.backlogIndex rather than each
+   * SessionList instance re-fetching it via useBacklogSessionIndex.
+   */
+  backlogIndex?: Map<string, BacklogIndexEntry>;
 }
 
 type SortField = 'lastActivity' | 'name' | 'createdAt' | 'updatedAt' | 'tokenCost';
@@ -136,6 +144,7 @@ interface SessionRowWrapperProps extends SessionRowHandlers {
   isSelected: boolean;
   suppressApprovalSubStatus: boolean;
   staleThresholdMinutes: number;
+  backlogEntry?: BacklogIndexEntry;
 }
 
 // Memoized wrapper: turns stable per-action handlers into per-session closures
@@ -168,6 +177,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
   onResumeHibernatedSession,
   onUpdateTags,
   onToggleSession,
+  backlogEntry,
 }: SessionRowWrapperProps) {
   const id = session.id;
   return (
@@ -197,6 +207,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
       selectMode={selectMode}
       isSelected={isSelected}
       onToggleSelect={onToggleSession ? (e) => onToggleSession(id, e) : undefined}
+      backlogEntry={backlogEntry}
     />
   );
 });
@@ -264,6 +275,10 @@ interface SessionListPersistedState {
 const SORT_FIELDS: SortField[] = ['lastActivity', 'name', 'createdAt', 'updatedAt', 'tokenCost'];
 const SORT_DIRS: SortDir[] = ['asc', 'desc'];
 const GROUPING_STRATEGY_VALUES = Object.values(GroupingStrategy);
+
+// Stable empty fallback so callers that don't pass backlogIndex (e.g. tests, SessionBoard's
+// shared prop surface) don't trigger a new Map() identity on every render.
+const EMPTY_BACKLOG_INDEX = new Map<string, BacklogIndexEntry>();
 
 // Builds a PersistedFieldsConfig keyed off BASE_STORAGE_KEYS, prefixed per-instance
 // (e.g. split-pane view) so multiple SessionList instances don't collide in localStorage.
@@ -358,6 +373,7 @@ export function SessionList({
   storageKeyPrefix,
   extraHeaderActions,
   viewMode = "row",
+  backlogIndex = EMPTY_BACKLOG_INDEX,
 }: SessionListProps) {
   // Review queue items indexed by session ID for badge display on session cards
   const { items: reviewItems } = useReviewQueueContext();
@@ -1338,6 +1354,7 @@ export function SessionList({
                     selectMode={selectMode}
                     isSelected={selectedSessions.has(item.session.id)}
                     onToggleSession={handleToggleSession}
+                    backlogEntry={backlogIndex.get(item.session.id)}
                   />
                   </div>
                 )}
@@ -1520,6 +1537,7 @@ export function SessionList({
                   isSelected={selectedSessions.has(session.id)}
                   onToggleSelect={(e) => handleToggleSession(session.id, e)}
                   reviewItem={reviewItemBySessionId.get(session.id)}
+                  backlogEntry={backlogIndex.get(session.id)}
                   staleThresholdMinutes={staleSessionConfig.thresholdMinutes}
                   detectedStatus={detectedStatusMap[session.id]?.detectedStatus}
                   detectedContext={detectedStatusMap[session.id]?.detectedContext}

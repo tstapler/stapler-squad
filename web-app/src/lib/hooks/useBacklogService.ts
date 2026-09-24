@@ -1441,9 +1441,13 @@ export function useBacklogSessionIndex(): UseBacklogSessionIndexReturn {
     try {
       const resp = await client.getSessionBacklogIndex({}, { signal });
       if (signal.aborted) return;
+      // Entries are ordered newest-first (see GetAllItemSessionsWithBacklogInfo's doc
+      // comment in ent_repository_backlog.go) — keep only the first entry seen per
+      // session UUID so a re-parented session (e.g. triage -> work) resolves to its
+      // current role, not a stale one from an earlier row.
       const map = new Map<string, BacklogIndexEntry>();
       for (const e of resp.entries ?? []) {
-        if (e.sessionUuid) {
+        if (e.sessionUuid && !map.has(e.sessionUuid)) {
           map.set(e.sessionUuid, {
             itemId: e.itemId,
             itemTitle: e.itemTitle,

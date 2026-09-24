@@ -351,6 +351,16 @@ var (
 			}
 
 			app := warren.New()
+			// Server.Shutdown's own sequential budget (shutdownHooksTimeout 30s +
+			// backgroundTasksJoinTimeout 10s + http.Server.Shutdown's 10s ctx, see
+			// server/server.go) can legitimately take up to ~50s -- longer than
+			// warren's DefaultShutdownTimeout (30s), which is what bounds how long
+			// the "http-server" goroutine (running Server.Shutdown) is given before
+			// App.Stop reports it as leaked. Left at the default, a shutdown that
+			// merely uses its documented budget gets misreported as a goroutine
+			// leak. Set generously above that worst case, not shrinking the inner
+			// timeouts, which were independently tuned (see their own doc comments).
+			app.ShutdownTimeout = 75 * time.Second
 			var (
 				coreDeps *server.CoreDeps
 				svcDeps  *server.ServiceDeps

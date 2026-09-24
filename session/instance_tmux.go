@@ -5,6 +5,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -368,8 +369,25 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 		// shell-quoting as the other interpolated flag values.
 		parts = append(parts, "--resume", shellQuote(claudeSessionID))
 	}
-	if i.MCPServerURL != "" {
-		flag, val := i.claudeMCPConfigArgs()
+	// Load the provider once and reuse it below -- calling resolveMCPServerURL()
+	// then separately re-Load()ing would race against a concurrent
+	// SetMCPServerURLProvider call (deliberately not actor-routed, see that
+	// setter's doc comment) and could log a misleading "provider is wired"
+	// message for a launch where it briefly wasn't.
+	provider := i.mcpServerURLProvider.Load()
+	mcpURL := i.resolveMCPServerURLFrom(provider)
+	if mcpURL != "" {
+		flag, val := i.claudeMCPConfigArgs(mcpURL)
+		parts = append(parts, flag, val)
+	} else if provider != nil {
+		// Provider is wired but resolved empty (and so did the Snapshot()
+		// fallback) -- every session-scoped MCP tool call will hard-fail
+		// until a later relaunch re-resolves a non-empty URL. A nil provider
+		// (not yet wired, e.g. the narrow server-boot window before
+		// WireInstanceCallbacks runs) is not logged: expected, not a failure.
+		log.Error("claude launch: MCP server URL unresolved, session will not be able to call session-scoped MCP tools", "session", i.Title, "program", i.Program)
+	}
+	if flag, val := i.claudeSettingsEnvOverrideArgs(); flag != "" {
 		parts = append(parts, flag, val)
 	}
 	if i.AppendSystemPrompt != "" {
@@ -524,40 +542,103 @@ func (i *Instance) cleanupPromptFile() {
 }
 
 // claudeMCPConfigArgs returns the --mcp-config flag and its shell-quoted JSON value.
-// Uses the Streamable HTTP transport (type "http") pointing at MCPServerURL, with the
+// Uses the Streamable HTTP transport (type "http") pointing at mcpURL, with the
 // session UUID passed as a request header. The server middleware at /mcp extracts
 // X-Stapler-Session-UUID and injects it into the request context for tool handlers.
 // Both "http" and "streamable-http" are accepted by the Claude CLI for --mcp-config.
-func (i *Instance) claudeMCPConfigArgs() (string, string) {
+func (i *Instance) claudeMCPConfigArgs(mcpURL string) (string, string) {
 	cfg := fmt.Sprintf(
 		`{"mcpServers":{"stapler-squad":{"type":"http","url":%q,"headers":{"X-Stapler-Session-UUID":%q}}}}`,
-		i.MCPServerURL, i.UUID,
+		mcpURL, i.UUID,
 	)
 	return "--mcp-config", shellQuote(cfg)
 }
 
-// buildExtraEnv returns the KEY=VALUE environment variable pairs to inject via
-// tmux new-session -e flags. Combines STAPLER_SESSION_UUID, custom program env vars,
-// and instance-level EnvVars.
-func (i *Instance) buildExtraEnv() []string {
+// resolveMCPServerURLFrom returns the MCP server URL to pass to claude for
+// this launch, given an already-Load()ed provider (so callers needing the
+// provider's presence for another decision don't race a second Load() --
+// see buildClaudeCommand). Falls back to GetMCPServerURL() when provider is
+// nil or resolves empty.
+func (i *Instance) resolveMCPServerURLFrom(provider *func() string) string {
+	if provider != nil {
+		if url := (*provider)(); url != "" {
+			return url
+		}
+	}
+	return i.GetMCPServerURL()
+}
+
+// GetMCPServerURL returns the instance's last known-good MCP server URL via
+// the lock-free published Snapshot() rather than the bare MCPServerURL
+// field. Used only as resolveMCPServerURL's fallback when no provider is
+// wired.
+func (i *Instance) GetMCPServerURL() string {
+	return i.Snapshot().MCPServerURL
+}
+
+// resolveExtraEnvVars returns the custom-program and instance-level env vars
+// that buildExtraEnv() injects via tmux -e flags, keyed by name (instance-level
+// EnvVars win over program-level defaults on key collision). Shared with
+// claudeSettingsEnvOverrideArgs() so both injection paths -- the tmux
+// environment and the claude --settings override -- always agree on the same
+// resolved set.
+func (i *Instance) resolveExtraEnvVars() map[string]string {
 	// Snapshot() also serves pre-publication callers (fromInstanceData): it lazily builds one.
+	snap := i.Snapshot()
+	envVars := make(map[string]string)
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, snap.Program); res.IsCustom {
+		for k, v := range res.EnvVars {
+			envVars[k] = v
+		}
+	}
+	for k, v := range snap.EnvVars {
+		envVars[k] = v
+	}
+	return envVars
+}
+
+// buildExtraEnv returns the KEY=VALUE environment variable pairs to inject via
+// tmux new-session -e flags. Combines STAPLER_SESSION_UUID with
+// resolveExtraEnvVars()'s custom program env vars and instance-level EnvVars.
+func (i *Instance) buildExtraEnv() []string {
 	snap := i.Snapshot()
 	var extraEnv []string
 	if snap.UUID != "" {
 		extraEnv = append(extraEnv, "STAPLER_SESSION_UUID="+snap.UUID)
 	}
-	// Add custom program env vars if applicable
-	cfg := config.LoadConfig()
-	if res := config.ResolveProgramConfig(cfg, snap.Program); res.IsCustom {
-		for k, v := range res.EnvVars {
-			extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", k, v))
-		}
-	}
-	// Instance-level EnvVars take precedence over program-level defaults
-	for k, v := range snap.EnvVars {
+	for k, v := range i.resolveExtraEnvVars() {
 		extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", k, v))
 	}
 	return extraEnv
+}
+
+// claudeSettingsEnvOverrideArgs returns the --settings flag and its
+// shell-quoted JSON value carrying the same env vars buildExtraEnv() injects
+// via tmux -e, so they also win over a global ~/.claude/settings.json's own
+// `env` block. A plain inherited process env var does NOT do this: Claude
+// Code's settings-file `env` block takes precedence over an inherited
+// environment variable of the same name, so a custom program's registered
+// env (e.g. ANTHROPIC_BASE_URL, routing through a local proxy) was silently
+// discarded whenever the user's global settings.json set the same key --
+// e.g. via Netflix's wrapper-installed settings.json (GitHub issue #852).
+// The CLI --settings flag ranks above project/user settings files (though
+// still below org-managed settings), per
+// https://code.claude.com/docs/en/settings.md's precedence order, and merges
+// by key rather than replacing the file wholesale -- only the specific env
+// var keys set here are overridden, everything else in settings.json still
+// applies. Returns ("", "") when there is nothing to override.
+func (i *Instance) claudeSettingsEnvOverrideArgs() (string, string) {
+	envVars := i.resolveExtraEnvVars()
+	if len(envVars) == 0 {
+		return "", ""
+	}
+	payload, err := json.Marshal(map[string]map[string]string{"env": envVars})
+	if err != nil {
+		log.Warn("claudeSettingsEnvOverrideArgs: failed to marshal settings override, custom env vars won't override settings.json", "session", i.Title, "err", err)
+		return "", ""
+	}
+	return "--settings", shellQuote(string(payload))
 }
 
 // wireTmuxSession constructs the tmux.TmuxSession object with full environment configuration

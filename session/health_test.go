@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -295,12 +296,15 @@ func TestHealthCheckerRecovery_BatchMapHit_UsesBatchDataInsteadOfPerInstanceFall
 	}
 }
 
-// TestHealthCheckerRecovery_PaneCrashed_MarksCrashedOutsideGracePeriod pins the
-// AC0/AC1/AC2 behavior: once restartGracePeriod has elapsed, a dead pane with a
-// non-zero exit code/signal transitions the session to Crashed with ExitReason
-// recorded instead of being silently respawned -- so the UI can surface a
-// banner and a resume action rather than the raw "Pane is dead" terminal text.
-func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedOutsideGracePeriod(t *testing.T) {
+// TestHealthCheckerRecovery_PaneCrashed_AutoRespawnsOutsideGracePeriod pins the
+// auto-refresh behavior: once restartGracePeriod has elapsed, a dead pane with
+// a non-zero exit code/signal is auto-respawned (kill+cold-restore) the same
+// way a grace-period crash is, relying on Start(false)'s own
+// checkRestartStorm/trackRestartRate breaker to bound retries rather than
+// requiring a manual "Resume" click for every crash. See
+// TestHealthCheckerRecovery_PaneCrashed_MarksCrashedWhenRespawnFails for the
+// case where the respawn attempt itself fails.
+func TestHealthCheckerRecovery_PaneCrashed_AutoRespawnsOutsideGracePeriod(t *testing.T) {
 	t.Parallel()
 	checker := NewSessionHealthChecker(nil)
 	checker.startedAt = time.Now().Add(-2 * time.Hour) // well outside restartGracePeriod
@@ -323,18 +327,60 @@ func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedOutsideGracePeriod(t *tes
 	if !result.RecoveryAttempted {
 		t.Fatal("expected RecoveryAttempted=true (threshold reached)")
 	}
-	if mock.startCalls != 0 {
-		t.Errorf("expected no auto-respawn (Start not called) once Crashed, got %d Start() calls", mock.startCalls)
-	}
 	if mock.closeCalls == 0 {
-		t.Error("expected the stale dead-pane session to be killed")
+		t.Error("expected the stale dead-pane session to be killed before respawn")
+	}
+	if mock.startCalls == 0 {
+		t.Error("expected auto-respawn to call Start() rather than leaving the session Crashed")
+	}
+	snap := inst.Snapshot()
+	if snap.Status != Active {
+		t.Errorf("expected Status=Active after a successful auto-respawn, got %s", snap.Status)
+	}
+	if !result.RecoverySuccess {
+		t.Error("expected RecoverySuccess=true for a successful auto-respawn")
+	}
+}
+
+// TestHealthCheckerRecovery_PaneCrashed_MarksCrashedWhenRespawnFails covers the
+// fallback: when the post-grace-period auto-respawn attempt itself fails (e.g.
+// the restart-storm breaker refused it, or the working directory is gone),
+// the session surfaces as Crashed with an ExitReason describing both the
+// original crash and why auto-recovery didn't happen -- so the UI can show a
+// banner and a manual "Resume" action instead of silently retrying forever.
+func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedWhenRespawnFails(t *testing.T) {
+	t.Parallel()
+	checker := NewSessionHealthChecker(nil)
+	checker.startedAt = time.Now().Add(-2 * time.Hour) // well outside restartGracePeriod
+
+	inner := &mockTmuxManager{
+		hasSessionReturn: true,
+		isAliveReturn:    true,
+		paneExitCode:     137,
+		paneExitSignal:   "SIGKILL",
+		paneExitDead:     true,
+		startReturn:      errors.New("refusing to start: crash loop"),
+	}
+	mock := &deadPaneMock{mockTmuxManager: inner}
+	inst := &Instance{Title: "crashed-test-respawn-fails", Status: Active}
+	inst.started.Store(true)
+	inst.processManager = NewTmuxBackend(mock)
+
+	checker.checkSingleSession(inst, nil) // first failure: below threshold
+	result := checker.checkSingleSession(inst, nil)
+
+	if !result.RecoveryAttempted {
+		t.Fatal("expected RecoveryAttempted=true (threshold reached)")
+	}
+	if mock.startCalls == 0 {
+		t.Error("expected an auto-respawn attempt (Start called) even though it fails")
 	}
 	snap := inst.Snapshot()
 	if snap.Status != Crashed {
-		t.Errorf("expected Status=Crashed, got %s", snap.Status)
+		t.Errorf("expected Status=Crashed once the respawn attempt itself fails, got %s", snap.Status)
 	}
-	if snap.ExitReason == "" {
-		t.Error("expected ExitReason to be populated")
+	if snap.ExitReason == "" || !strings.Contains(snap.ExitReason, "auto-recovery failed") {
+		t.Errorf("expected ExitReason to explain the failed auto-recovery attempt, got %q", snap.ExitReason)
 	}
 	if !result.RecoverySuccess {
 		t.Error("expected RecoverySuccess=true: a successful Crashed transition is not a recovery failure")

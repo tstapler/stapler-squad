@@ -1,6 +1,6 @@
 # BUG-084: `TestServer_Shutdown_JoinsBackgroundTickers` fails only in the full `server` package suite — goleak catches another test's still-teardown-in-flight tmux/PTY goroutines [SEVERITY: Low]
 
-**Status**: 🐛 Open
+**Status**: Fixed by session-teardown-goleak-fix (backlog `1cea70ed-3127-48db-8e68-f02eac685510`); root cause and fix: `session/claude_controller.go`'s `runStatusChangeLoop` and `session/detection/ratelimit/integration.go`'s `pollLoop` were never joined by a `WaitGroup` before `DeleteSession` teardown returned.
 **Discovered**: 2026-08-21, while verifying `make test` for the `session.Repository`/`session.PipelineModeRepository` interface-pollution cleanup (`session/repository.go`, `session/storage.go`).
 **Impact**: Intermittent CI noise on `go test ./server/...` — the failure is not reproducible on demand (passes reliably in isolation and in most full-package runs), which erodes trust in red CI for this package per `.claude/rules/fix-flaky-tests-dont-defer.md`.
 
