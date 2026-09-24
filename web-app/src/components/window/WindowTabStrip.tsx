@@ -12,7 +12,20 @@ import {
   windowTabCloseButton,
   windowTabInput,
   windowAddButton,
+  windowOnboardingHint,
+  windowOnboardingHintDismiss,
 } from "@/styles/window/windowTabStrip.css";
+
+/** Surface 10 (design/ux.md): permanently dismisses the tmux-vocabulary onboarding hint. */
+const HINT_DISMISSED_KEY = "cockpit.windowHintDismissed";
+
+function readHintDismissed(): boolean {
+  try {
+    return localStorage.getItem(HINT_DISMISSED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Imperative handle exposed via `ref` so a caller outside the component
@@ -73,7 +86,10 @@ function useLongPress(onLongPress: (id: WindowId, name: string) => void) {
     if (!state || !touch) return;
     const dx = Math.abs(touch.clientX - state.startX);
     const dy = Math.abs(touch.clientY - state.startY);
-    if (dx > GESTURE_MOVEMENT_THRESHOLD_PX || dy > GESTURE_MOVEMENT_THRESHOLD_PX) {
+    if (
+      dx > GESTURE_MOVEMENT_THRESHOLD_PX ||
+      dy > GESTURE_MOVEMENT_THRESHOLD_PX
+    ) {
       clear();
     }
   };
@@ -94,6 +110,7 @@ interface WindowTabProps {
   onCommit: (id: WindowId) => void;
   onCancel: () => void;
   longPress: ReturnType<typeof useLongPress>;
+  tabRef: (id: WindowId, el: HTMLDivElement | null) => void;
 }
 
 interface WindowTabEditorProps {
@@ -104,7 +121,13 @@ interface WindowTabEditorProps {
   onCancel: () => void;
 }
 
-function WindowTabEditor({ id, draftName, onDraftChange, onCommit, onCancel }: WindowTabEditorProps) {
+function WindowTabEditor({
+  id,
+  draftName,
+  onDraftChange,
+  onCommit,
+  onCancel,
+}: WindowTabEditorProps) {
   return (
     <div className={windowTabWrapper}>
       <input
@@ -139,11 +162,21 @@ interface WindowTabCloseButtonProps {
   onClose: (id: WindowId) => void;
 }
 
-function WindowTabCloseButton({ id, name, isActive, onClose }: WindowTabCloseButtonProps) {
+function WindowTabCloseButton({
+  id,
+  name,
+  isActive,
+  onClose,
+}: WindowTabCloseButtonProps) {
   return (
     <button
       className={windowTabCloseButton({ active: isActive })}
       data-testid={`window-tab-close-${id}`}
+      // Roving tabindex (WAI-ARIA APG "tabs" pattern) means the tablist is a
+      // single stop in page Tab order; a native button defaults to tabIndex
+      // 0 and would add a second, per-tab stop. Closing is still reachable
+      // via mouse/touch here or via the tab's own Delete key (handleKeyDown).
+      tabIndex={-1}
       aria-label={`Close ${name}`}
       title={`Close ${name}`}
       onClick={(e) => {
@@ -164,6 +197,7 @@ interface WindowTabButtonProps {
   onClose: (id: WindowId) => void;
   onBeginEdit: (id: WindowId, name: string) => void;
   longPress: ReturnType<typeof useLongPress>;
+  tabRef: (id: WindowId, el: HTMLDivElement | null) => void;
 }
 
 // A <div role="tab"> rather than a native <button> — the close "×" control
@@ -178,7 +212,16 @@ interface WindowTabButtonProps {
 // tab-with-inline-actions structure (SessionDetailView.tsx's shell tab
 // button), an established, pre-existing pattern in this codebase rather
 // than a new tradeoff introduced here.
-function WindowTabButton({ window: w, isActive, showClose, onSwitch, onClose, onBeginEdit, longPress }: WindowTabButtonProps) {
+function WindowTabButton({
+  window: w,
+  isActive,
+  showClose,
+  onSwitch,
+  onClose,
+  onBeginEdit,
+  longPress,
+  tabRef,
+}: WindowTabButtonProps) {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Ignore keys that bubbled up from the nested close button — only the
     // tab itself (not its child) should respond to these.
@@ -197,6 +240,7 @@ function WindowTabButton({ window: w, isActive, showClose, onSwitch, onClose, on
 
   return (
     <div
+      ref={(el) => tabRef(w.id, el)}
       role="tab"
       aria-selected={isActive}
       aria-label={w.name}
@@ -212,7 +256,14 @@ function WindowTabButton({ window: w, isActive, showClose, onSwitch, onClose, on
       onTouchEnd={longPress.onTouchEnd}
     >
       {w.name}
-      {showClose && <WindowTabCloseButton id={w.id} name={w.name} isActive={isActive} onClose={onClose} />}
+      {showClose && (
+        <WindowTabCloseButton
+          id={w.id}
+          name={w.name}
+          isActive={isActive}
+          onClose={onClose}
+        />
+      )}
     </div>
   );
 }
@@ -230,6 +281,7 @@ function WindowTab({
   onCommit,
   onCancel,
   longPress,
+  tabRef,
 }: WindowTabProps) {
   if (isEditing) {
     return (
@@ -253,55 +305,115 @@ function WindowTab({
         onClose={onClose}
         onBeginEdit={onBeginEdit}
         longPress={longPress}
+        tabRef={tabRef}
       />
     </div>
   );
 }
 
-const WindowTabStripInner = forwardRef<WindowTabStripHandle, WindowTabStripProps>(
-  function WindowTabStrip({ windows, currentWindowId, onSwitch, onCreate, onClose, onRename }, ref) {
-    const [editingId, setEditingId] = useState<WindowId | null>(null);
-    const [draftName, setDraftName] = useState("");
+const WindowTabStripInner = forwardRef<
+  WindowTabStripHandle,
+  WindowTabStripProps
+>(function WindowTabStrip(
+  { windows, currentWindowId, onSwitch, onCreate, onClose, onRename },
+  ref,
+) {
+  const [editingId, setEditingId] = useState<WindowId | null>(null);
+  const [draftName, setDraftName] = useState("");
 
-    const beginEdit = (id: WindowId, name: string) => {
-      setEditingId(id);
-      setDraftName(name);
-    };
+  const beginEdit = (id: WindowId, name: string) => {
+    setEditingId(id);
+    setDraftName(name);
+  };
 
-    const commitRename = (id: WindowId) => {
-      const trimmed = draftName.trim();
-      if (trimmed.length > 0) {
-        onRename(id, trimmed);
-      }
-      setEditingId(null);
-    };
+  const commitRename = (id: WindowId) => {
+    const trimmed = draftName.trim();
+    if (trimmed.length > 0) {
+      onRename(id, trimmed);
+    }
+    setEditingId(null);
+  };
 
-    const cancelRename = () => setEditingId(null);
-    const longPress = useLongPress(beginEdit);
+  const cancelRename = () => setEditingId(null);
+  const longPress = useLongPress(beginEdit);
 
-    useImperativeHandle(ref, () => ({ beginEdit }), [beginEdit]);
+  const [hintDismissed, setHintDismissed] = useState(readHintDismissed);
+  const dismissHint = () => {
+    setHintDismissed(true);
+    try {
+      localStorage.setItem(HINT_DISMISSED_KEY, "true");
+    } catch {
+      // Degraded but acceptable (design/ux.md Surface 10): the hint may
+      // reappear next session if localStorage is unavailable/full.
+    }
+  };
+  const showHint = windows.length >= 2 && !hintDismissed;
 
-    // Container ref for useWindowSwipe to attach touch listeners to
-    // (Task 3.1.1b) — internal only; the forwarded ref exposes `beginEdit`
-    // instead of this DOM node (nothing outside this component needs the
-    // node directly).
-    const containerRef = useRef<HTMLDivElement>(null);
+  useImperativeHandle(ref, () => ({ beginEdit }), [beginEdit]);
 
-    useWindowSwipe(containerRef, {
-      onSwipe: (dir) => {
-        const idx = windows.findIndex((w) => w.id === currentWindowId);
-        const nextIdx = dir === "next" ? (idx + 1) % windows.length : (idx - 1 + windows.length) % windows.length;
-        onSwitch(windows[nextIdx].id);
-      },
-    });
+  // Container ref for useWindowSwipe to attach touch listeners to
+  // (Task 3.1.1b) — internal only; the forwarded ref exposes `beginEdit`
+  // instead of this DOM node (nothing outside this component needs the
+  // node directly).
+  const containerRef = useRef<HTMLDivElement>(null);
 
-    return (
+  useWindowSwipe(containerRef, {
+    onSwipe: (dir) => {
+      const idx = windows.findIndex((w) => w.id === currentWindowId);
+      const nextIdx =
+        dir === "next"
+          ? (idx + 1) % windows.length
+          : (idx - 1 + windows.length) % windows.length;
+      onSwitch(windows[nextIdx].id);
+    },
+  });
+
+  // Roving-tabindex support (WAI-ARIA APG "tabs" pattern, automatic
+  // activation): tab DOM nodes are keyed by id here so ArrowLeft/Right/
+  // Home/End can move both the switched-to window AND actual keyboard
+  // focus in one keystroke — the nodes themselves persist across a
+  // currentWindowId change (only their tabIndex/aria-selected re-render),
+  // so focusing by id works without waiting on the re-render to land.
+  const tabNodesRef = useRef<Map<WindowId, HTMLDivElement>>(new Map());
+  const setTabRef = (id: WindowId, el: HTMLDivElement | null) => {
+    if (el) tabNodesRef.current.set(id, el);
+    else tabNodesRef.current.delete(id);
+  };
+
+  const handleTabListKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (
+      e.target !== e.currentTarget &&
+      (e.target as HTMLElement).getAttribute("role") !== "tab"
+    )
+      return;
+    const idx = windows.findIndex((w) => w.id === currentWindowId);
+    if (idx === -1) return;
+    let targetIdx: number | null = null;
+    if (e.key === "ArrowRight") targetIdx = (idx + 1) % windows.length;
+    else if (e.key === "ArrowLeft")
+      targetIdx = (idx - 1 + windows.length) % windows.length;
+    else if (e.key === "Home") targetIdx = 0;
+    else if (e.key === "End") targetIdx = windows.length - 1;
+    if (targetIdx === null) return;
+    e.preventDefault();
+    const target = windows[targetIdx];
+    onSwitch(target.id);
+    tabNodesRef.current.get(target.id)?.focus();
+  };
+
+  return (
+    <>
       <div ref={containerRef} className={windowTabStrip}>
         {/* role="tablist" wraps ONLY the tabs — the "+" button is a sibling
             outside this element's DOM subtree, not a tablist child, since
             aria-required-children mandates role="tab" for every direct
             (flattened) child of role="tablist". */}
-        <div className={windowTabList} role="tablist" aria-label="Window switcher">
+        <div
+          className={windowTabList}
+          role="tablist"
+          aria-label="Window switcher"
+          onKeyDown={handleTabListKeyDown}
+        >
           {windows.map((w) => (
             <WindowTab
               key={w.id}
@@ -317,6 +429,7 @@ const WindowTabStripInner = forwardRef<WindowTabStripHandle, WindowTabStripProps
               onCommit={commitRename}
               onCancel={cancelRename}
               longPress={longPress}
+              tabRef={setTabRef}
             />
           ))}
         </div>
@@ -330,9 +443,25 @@ const WindowTabStripInner = forwardRef<WindowTabStripHandle, WindowTabStripProps
           +
         </button>
       </div>
-    );
-  }
-);
+      {showHint && (
+        <div
+          className={windowOnboardingHint}
+          data-testid="window-onboarding-hint"
+          role="note"
+        >
+          <span>
+            ⓘ Windows group your panes into separate workspaces — like a tmux
+            window, but the &quot;sessions&quot; here are your agent panes, not
+            tmux sessions.
+          </span>
+          <button className={windowOnboardingHintDismiss} onClick={dismissHint}>
+            Got it ✕
+          </button>
+        </div>
+      )}
+    </>
+  );
+});
 
 WindowTabStripInner.displayName = "WindowTabStrip";
 
@@ -344,7 +473,10 @@ WindowTabStripInner.displayName = "WindowTabStrip";
 // Callback props (onSwitch/onCreate/onClose/onRename) are deliberately not
 // compared: page.tsx passes fresh inline arrows every render, but each one
 // only forwards to the hook's already-stable functions.
-function arePropsEqual(prev: WindowTabStripProps, next: WindowTabStripProps): boolean {
+function arePropsEqual(
+  prev: WindowTabStripProps,
+  next: WindowTabStripProps,
+): boolean {
   if (prev.currentWindowId !== next.currentWindowId) return false;
   if (prev.windows.length !== next.windows.length) return false;
   for (let i = 0; i < prev.windows.length; i++) {

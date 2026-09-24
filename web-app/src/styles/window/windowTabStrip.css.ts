@@ -181,6 +181,38 @@ export const windowTabCloseButton = recipe({
   defaultVariants: { active: false },
 });
 
+// Surface 10 (design/ux.md): a non-modal, dismiss-once hint anchored below
+// the tab strip, not inside it — so it never affects role="tablist"'s
+// aria-required-children or the roving-tabindex/keyboard-nav flow above.
+export const windowOnboardingHint = style({
+  display: "flex",
+  alignItems: "flex-start",
+  gap: vars.space["2"],
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+  background: vars.color.cardBackground,
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+});
+
+export const windowOnboardingHintDismiss = style({
+  marginLeft: "auto",
+  flexShrink: 0,
+  background: "transparent",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.sm,
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+  cursor: "pointer",
+  selectors: {
+    "&:hover": {
+      background: vars.color.hoverBackground,
+      color: vars.color.textPrimary,
+    },
+  },
+});
+
 export const windowTabInput = style({
   height: "22px",
   width: "100%",
