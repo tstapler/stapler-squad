@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
@@ -1239,7 +1240,30 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 			continue
 		}
 		wt, err := s.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
-		if err != nil || wt.WorktreePath == "" {
+		if err != nil {
+			continue
+		}
+		if wt.WorktreePath == "" {
+			// Epic 2.1: a missing WorktreePath used to silently continue here with no
+			// record at all, even for a session that should have had a worktree row —
+			// the confirmed gap this branch closes (plan.md's Epic B). ItemSessionSummary
+			// carries no SessionType/Branch/IsWorktree of its own, so ExpectsWorktree
+			// needs one extra lookup; a lookup failure means we can't tell, so it falls
+			// back to the pre-existing silent continue rather than false-alarming.
+			if sessionData, lookupErr := s.storage.FindInstanceDataByID(is.SessionUUID); lookupErr == nil && session.ExpectsWorktree(*sessionData) {
+				log.Warn("[cleanupItemWorktreesExcept] worktree row missing but expected",
+					"session_id", is.SessionUUID, "item_id", is.BacklogItemID)
+				if s.eventBus != nil {
+					s.eventBus.Publish(events.NewNotificationEvent(
+						is.BacklogItemID, "", uuid.New().String(),
+						int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+						derivePriority(true, true), // urgent, important — cleanup silently could not find anything to remove
+						"Worktree row missing during item archival",
+						fmt.Sprintf("Session %s expected a git worktree but has no worktree row, so its on-disk directory (if any) could not be cleaned up.", is.SessionUUID),
+						map[string]string{"item_id": is.BacklogItemID},
+					))
+				}
+			}
 			continue
 		}
 		if exceptPath != "" && wt.WorktreePath == exceptPath {
