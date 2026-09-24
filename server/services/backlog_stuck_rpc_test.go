@@ -785,6 +785,14 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// transition today. A future epic wiring an auto-retry action should
 	// remove this entry and add a remediationActionByReason case instead.
 	domain.StuckReasonGateTimeout: true,
+	// StuckReasonWorktreeInconsistent (session-worktree-reconciliation, Epic
+	// 1.2/1.3): no "retry now" action exists because the remediation *is* the
+	// worktree consistency sweep itself — it already re-evaluates every
+	// candidate on its own 15-minute ticker (session.StartWorktreeConsistencySweeper)
+	// and repairs or re-flags automatically; there is nothing a manual
+	// TriggerRemediationNow call could do differently. See
+	// session/worktree_consistency_sweep.go's resolveFinding/sweep.
+	domain.StuckReasonWorktreeInconsistent: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded
