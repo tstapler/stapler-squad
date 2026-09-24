@@ -18,6 +18,12 @@ import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
+import type { PaneAction } from "@/lib/pane/paneTypes";
+import { useWindowManager } from "@/lib/window/useWindowManager";
+import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
+import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
+import type { WindowId } from "@/lib/window/windowTypes";
+import { WindowTabStrip, type WindowTabStripHandle } from "@/components/window/WindowTabStrip";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
 import { useSessionViewMode } from "@/lib/hooks/useSessionViewMode";
@@ -60,6 +66,7 @@ function HomeContent() {
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const lastFocusBeforeDelete = useRef<HTMLElement | null>(null);
   const resumeTriggerRef = useRef<HTMLElement | null>(null);
+  const windowTabStripRef = useRef<WindowTabStripHandle>(null);
 
   // Tracks the last URL params that were routed to a pane. Prevents the URL-watching
   // effect from re-triggering pane assignment on every sessions stream update (which
@@ -99,6 +106,31 @@ function HomeContent() {
     getSession,
   } = useSessionServiceContext();
 
+  // Multi-window layer (Epic 2.2): useWindowManager owns the windows array/persistence;
+  // useWindowUrlSync resolves which window this tab is showing from `?window=`. Neither
+  // hook has a notion of "the active window" on its own (ADR-001) — currentWindow is
+  // derived here by looking up currentWindowId in the windows array.
+  // createWindow/closeWindow/renameWindow have no UI to call them from yet — WindowTabStrip
+  // (Task 2.2.2b) is deferred to Epic 3.1, where it doesn't exist yet.
+  const { windows, isRestored: isWindowsRestored, dispatchPane, createWindow, closeWindow, renameWindow } =
+    useWindowManager(sessions);
+  const { currentWindowId, switchToWindow } = useWindowUrlSync(windows, isWindowsRestored);
+  const currentWindow = windows.find((w) => w.id === currentWindowId) ?? windows[0];
+  const paneDispatch = useCallback(
+    (action: PaneAction) => dispatchPane(currentWindow.id, action),
+    [dispatchPane, currentWindow.id]
+  );
+  // Bridges useWindowShortcuts' "," leader follow-up (which only knows a
+  // window id) to WindowTabStrip's imperative beginEdit(id, name) — the same
+  // inline editor double-click/F2 already open, not a separate native prompt.
+  const handleWindowRenameRequest = useCallback(
+    (id: WindowId) => {
+      const target = windows.find((w) => w.id === id);
+      if (target) windowTabStripRef.current?.beginEdit(id, target.name);
+    },
+    [windows]
+  );
+  useWindowShortcuts(windows, currentWindow.id, switchToWindow, handleWindowRenameRequest);
   // Helper function to find a session by ID with fuzzy matching for external sessions
   const findSessionById = useCallback((sessionId: string): Session | undefined => {
     let session = sessions.find((s) => s.id === sessionId);
@@ -479,6 +511,18 @@ function HomeContent() {
       {/* Unified tiling cockpit — session list and detail panels are both pane views */}
       <CockpitActionsProvider value={cockpitActions}>
         <SessionViewModeProvider value={{ viewMode, setViewMode }}>
+          <WindowTabStrip
+            ref={windowTabStripRef}
+            windows={windows}
+            currentWindowId={currentWindow.id}
+            onSwitch={switchToWindow}
+            onCreate={() => switchToWindow(createWindow())}
+            onClose={(id) => {
+              const next = closeWindow(id);
+              if (id === currentWindow.id && next) switchToWindow(next);
+            }}
+            onRename={renameWindow}
+          />
           <div
             ref={sessionDetailRef}
             className={styles.cockpitContainer}
@@ -489,6 +533,8 @@ function HomeContent() {
           >
             <PaneTilingContainer
               sessions={sessions}
+              paneState={currentWindow.paneState}
+              dispatch={paneDispatch}
               externalSessionAssign={externalAssignSession ? {
                 ...externalAssignSession,
                 version: externalAssignCounter,
