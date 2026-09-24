@@ -1338,8 +1338,25 @@ func (s *SessionService) KillTmuxPaneOnly(ctx context.Context, sessionUUID strin
 // as initTmuxSession (whitespace stripped, "." and ":" replaced with "_", "staplersquad_"
 // prefix). This handles the case where the Instance is no longer tracked in memory
 // but the underlying tmux session is still alive.
-func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title string) error {
+//
+// allowedOwnerUUIDs are the Instance UUID(s) the caller believes it's safe to
+// kill under this title (e.g. the Instance being deleted, or an item's own
+// prior review/work session UUIDs before a re-review respawn). Before
+// killing, the pane's STAPLER_SESSION_UUID marker is read back and compared
+// against this list -- a name match alone isn't enough, since a stale pane
+// left under this exact name can belong to a completely different, unrelated
+// Instance (ce71ad1a). A present-but-unlisted marker refuses the kill with a
+// loud log line instead of silently acting on someone else's pane; an
+// unreadable marker on a session that does exist (e.g. "unknown variable" --
+// a pre-fix session with no marker at all) is treated the same way, not
+// grandfathered in.
+func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title string, allowedOwnerUUIDs ...string) error {
 	name := stapleSquadTmuxName(title)
+
+	if !tmuxSessionKillAllowed(ctx, name, allowedOwnerUUIDs) {
+		return nil
+	}
+
 	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	args := tmux.ResolveSocket("").Args("kill-session", "-t", name)
@@ -1348,6 +1365,7 @@ func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title strin
 	if err != nil {
 		combined := strings.ToLower(string(out))
 		if strings.Contains(combined, "can't find session") ||
+			strings.Contains(combined, "no such session") ||
 			strings.Contains(combined, "no server running") ||
 			strings.Contains(combined, "error connecting to") {
 			return nil // session already gone — not an error
@@ -1355,6 +1373,38 @@ func (s *SessionService) KillTmuxSessionByTitle(ctx context.Context, title strin
 		return fmt.Errorf("tmux kill-session %q: %w (output: %s)", name, err, out)
 	}
 	return nil
+}
+
+// tmuxSessionKillAllowed reports whether the tmux session named `name`
+// either doesn't exist (nothing to protect -- kill-session below will hit
+// its own idempotent "already gone" handling), or its STAPLER_SESSION_UUID
+// marker is in allowedOwnerUUIDs. See KillTmuxSessionByTitle's doc comment
+// for the policy this implements.
+func tmuxSessionKillAllowed(ctx context.Context, name string, allowedOwnerUUIDs []string) bool {
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	marker, err := tmux.ReadSessionOwnerUUID(checkCtx, tmux.ResolveSocket(""), name)
+	if err != nil {
+		errText := strings.ToLower(err.Error())
+		sessionAbsent := strings.Contains(errText, "can't find session") ||
+			strings.Contains(errText, "no such session") ||
+			strings.Contains(errText, "no server running") ||
+			strings.Contains(errText, "error connecting to")
+		if sessionAbsent {
+			return true
+		}
+		log.Warn("KillTmuxSessionByTitle: refusing to kill tmux session, could not verify owner",
+			"session", name, "err", err)
+		return false
+	}
+	for _, want := range allowedOwnerUUIDs {
+		if want != "" && marker == want {
+			return true
+		}
+	}
+	log.Warn("KillTmuxSessionByTitle: refusing to kill tmux session, owner marker mismatch",
+		"session", name, "marker", marker, "allowed", allowedOwnerUUIDs)
+	return false
 }
 
 // stapleSquadTmuxName computes the sanitized tmux session name for a given title,
@@ -3959,7 +4009,7 @@ func (s *SessionService) DeleteSession(
 		// its deterministic name so the Claude process inside it doesn't survive as
 		// an orphan after the DB record is gone.
 		s.trackCleanup(func() {
-			if err := s.KillTmuxSessionByTitle(context.Background(), sessionTitle); err != nil {
+			if err := s.KillTmuxSessionByTitle(context.Background(), sessionTitle, sessionUUID); err != nil {
 				log.Warn("failed to kill tmux session for non-live instance", "session", req.Msg.Id, "err", err)
 			}
 			// See the liveInst-present branch's comment above: release any
