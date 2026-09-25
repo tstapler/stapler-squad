@@ -148,7 +148,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const refreshCountRef = useRef(0);
   const isMountedRef = useRef(true);
-  const isFittingRef = useRef(false);
   const sizeStabilityTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasInitiatedConnectionRef = useRef(false);
   const hasCachedDimensionsRef = useRef(false);
@@ -1596,26 +1595,17 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   }, [isVisible]);
 
-  // visualViewport resize listener — re-fits terminal when the on-screen keyboard
-  // appears/disappears on mobile (visualViewport changes don't fire window resize).
-  // isFittingRef guard prevents resize loops on iOS where fit() triggers another resize event.
-  useEffect(() => {
-    const vp = window.visualViewport;
-    if (!vp) return;
-
-    const onVpResize = () => {
-      if (isFittingRef.current) return;
-      isFittingRef.current = true;
-      // Increase debounce on mobile (400ms) to wait for keyboard animation to finish
-      setTimeout(() => {
-        xtermRef.current?.fit();
-        requestAnimationFrame(() => { isFittingRef.current = false; });
-      }, isMobile ? 400 : 300);
-    };
-
-    vp.addEventListener('resize', onVpResize);
-    return () => vp.removeEventListener('resize', onVpResize);
-  }, [isMobile]);
+  // Deliberately no visualViewport resize listener here (ADR-002,
+  // project_plans/mobile-ux-improvements): ViewportProvider already mirrors
+  // visualViewport into the --viewport-height CSS var, which cascades through
+  // this component's flex layout to shrink/grow the terminal's container on
+  // keyboard open/close. XtermTerminal's own ResizeObserver (with its debounce
+  // + convergence sampler, see project_plans/terminal-resize-fit-loop) picks
+  // that up and calls fit() once the resize settles. A second, independent
+  // fit() triggered directly off visualViewport here raced that sampler —
+  // every resize clears the xterm buffer first (clearBufferBeforeResize), so
+  // an extra premature fit() mid-keyboard-animation could blank the terminal
+  // and send a stale-size resize RPC before the container finished settling.
 
   // Reset loading state when switching sessions and trigger reconnect
   useEffect(() => {
