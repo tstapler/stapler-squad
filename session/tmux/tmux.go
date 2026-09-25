@@ -798,7 +798,17 @@ func KillOrphanedControlModeClients(serverSocket string) (int, error) {
 	defer cancel()
 	out, err := (LocalRunner{}).Run(ctx, "", ResolveClientForSocket(serverSocket), args...)
 	if err != nil {
-		// No server running yet, or no clients at all -- nothing to clean up.
+		// A brand-new server (no clients yet, or not started at all) fails
+		// list-clients identically to a genuinely degraded server refusing new
+		// connections (BUG-042's chicken-and-egg failure: enough leaked clients
+		// eventually make the server refuse the very list-clients call this
+		// cleanup needs to find them). The two cases are indistinguishable from
+		// this error alone, so this can't safely retry or escalate to a hard
+		// failure -- but it must be visible, not silent, since the second case
+		// means this cleanup did NOT run and orphans are accumulating
+		// unreconciled. See killUntrackedControlModeClients's periodic
+		// counterpart, which catches that case before it reaches this point.
+		log.Warn("[tmux] KillOrphanedControlModeClients: list-clients failed (no server yet, or server too degraded to enumerate clients)", "err", err)
 		return 0, nil
 	}
 

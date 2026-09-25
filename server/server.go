@@ -1176,6 +1176,20 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		go orphanSweeper.Start(serverCtx)
 	}
 
+	// Start leaked-control-mode-client sweeper (periodic counterpart to the
+	// one-time startup cleanup in main.go's runtime phase — see
+	// StartLeakedControlModeSweeper's doc comment and BUG-042's 2026-09-25
+	// recurrence for why the startup-only cleanup isn't sufficient on its own).
+	// Gated on config.IsIsolatedInstance() exactly like OrphanedTmuxSweeper:
+	// a named instance (STAPLER_SQUAD_INSTANCE set) shares the real default
+	// tmux socket with the production instance without getting its own socket
+	// (see IsNamedInstance's doc comment) — this sweeper's own-spawn-registry
+	// check would see the *production* process's legitimate control-mode
+	// clients as untracked and kill them, so it must not run there.
+	if !config.IsIsolatedInstance() {
+		go tmux.StartLeakedControlModeSweeper(serverCtx, "")
+	}
+
 	// Start session retention sweeper (deletes archived sessions past the retention
 	// window once they pass safety checks — see SessionRetentionSweeper doc comment).
 	if cfg.SessionRetention.EnabledOrDefault() {
