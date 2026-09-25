@@ -14,8 +14,8 @@ export interface ColumnDef {
 }
 
 export const COLUMN_DEFS: ColumnDef[] = [
-  { key: "agent",   label: "Agent",       gridWidth: "20px", defaultVisible: true  },
-  { key: "memory",  label: "Memory",      gridWidth: "auto", defaultVisible: true  },
+  { key: "agent",   label: "Agent",       gridWidth: "20px", defaultVisible: false },
+  { key: "memory",  label: "Memory",      gridWidth: "auto", defaultVisible: false },
   { key: "elapsed", label: "Last active", gridWidth: "auto", defaultVisible: true  },
   { key: "diff",    label: "Diff",        gridWidth: "auto", defaultVisible: false },
   { key: "branch",  label: "Branch",      gridWidth: "auto", defaultVisible: false },
@@ -31,6 +31,7 @@ export function buildRowGridTemplate(visible: ColumnKey[], options?: { reserveCh
   if (options?.reserveCheckbox) cols.push("24px"); // checkbox column
   cols.push("8px", "1fr"); // dot + name always present
   for (const def of COLUMN_DEFS) {
+    if (def.key === "elapsed") continue;
     if (visible.includes(def.key)) cols.push(def.gridWidth);
   }
   cols.push("auto"); // actions always present

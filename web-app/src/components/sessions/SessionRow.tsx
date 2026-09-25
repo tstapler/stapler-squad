@@ -12,6 +12,7 @@ import {
   SessionActionsOverflowHandle,
 } from "./SessionActionsOverflow";
 import { hasLostContext, RevivedContextBadge } from "./RevivedContextBadge";
+import { truncateWorkspacePath } from "@/lib/utils/truncateWorkspacePath";
 import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
 import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
@@ -32,6 +33,7 @@ import {
   pathLine as pathLineStyle,
   elapsed as elapsedStyle,
   elapsedIcon as elapsedIconStyle,
+  elapsedSecondLine as elapsedSecondLineStyle,
   actions as actionsStyle,
   primaryActionWrapper,
   inlineActionButton,
@@ -96,6 +98,11 @@ interface SessionRowProps {
 
 // Module-level constant avoids repeated BigInt(0) allocations in hot render paths.
 const BIGINT_ZERO = BigInt(0);
+
+// Single truncation budget used at every container width (Story 2.1.2's
+// Resolution Note): the narrow (<200px) container-query breakpoint drives
+// purely visual CSS tweaks only, never a second, narrower truncation budget.
+const ROW_PATH_MAX_LEN = 72;
 
 function getStatusDotValue(status: SessionStatus): string {
   switch (status) {
@@ -163,10 +170,6 @@ function getAgentEmoji(program: string): string {
   if (p.includes("gemini")) return "◆";
   if (p.includes("agy") || p.includes("antigravity")) return "◆";
   return "◇";
-}
-
-function abbreviatePath(p: string): string {
-  return p.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/Users\/[^/]+\//, "~/");
 }
 
 function getLastActivity(
@@ -303,7 +306,7 @@ function SessionRowInner({
       onContextMenu={handleContextMenu}
       onKeyDown={handleKeyDown}
       tabIndex={0}
-      aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}, program: ${session.program}${session.existingDir ? `, path: ${abbreviatePath(session.existingDir)}` : ""}${hasLostContext(session) ? ", context: lost" : ""}`}
+      aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}${session.existingDir ? `, path: ${session.existingDir}` : ""}${session.program ? `, agent: ${session.program}` : ""}${memMB > 0 ? `, memory: ${memMB} MB` : ""}${hasLostContext(session) ? ", context: lost" : ""}`}
     >
       {/* Checkbox cell — always in DOM to keep the reserved grid column occupied */}
       <div
@@ -347,7 +350,7 @@ function SessionRowInner({
                 role="img"
                 aria-label={`Path: ${session.existingDir}`}
               >
-                {abbreviatePath(session.existingDir)}
+                {truncateWorkspacePath(session.existingDir, ROW_PATH_MAX_LEN)}
               </span>
             </Tooltip>
           )}
@@ -444,18 +447,51 @@ function SessionRowInner({
             <span data-testid="failure-message">{failureMessage}</span>
           </span>
         )}
+        {visibleColumns.includes("elapsed") && (
+          <span className={elapsedSecondLineStyle}>
+            <time
+              className={elapsedStyle}
+              dateTime={
+                lastActivity
+                  ? new Date(Number(lastActivity.seconds) * 1000).toISOString()
+                  : undefined
+              }
+              title={
+                lastActivity
+                  ? new Date(Number(lastActivity.seconds) * 1000).toLocaleString()
+                  : undefined
+              }
+              aria-label={
+                elapsedText ? `Last active: ${elapsedText}` : "No recent activity"
+              }
+            >
+              {elapsedText ? (
+                <>
+                  <span className={elapsedIconStyle} aria-hidden="true">
+                    ⏱
+                  </span>
+                  {elapsedText}
+                </>
+              ) : (
+                <span style={{ opacity: 0.3 }}>—</span>
+              )}
+            </time>
+          </span>
+        )}
       </span>
 
-      {/* Agent icon — optional column */}
-      {visibleColumns.includes("agent") && (
-        <span
-          className={agentIconStyle}
-          role="img"
-          title={session.program}
-          aria-label={`Agent: ${session.program}`}
-        >
-          {getAgentEmoji(session.program)}
-        </span>
+      {/* Agent icon — optional column, only when there's a program to show */}
+      {visibleColumns.includes("agent") && session.program && (
+        <Tooltip label={session.program}>
+          <span
+            className={agentIconStyle}
+            role="img"
+            tabIndex={0}
+            aria-label={`Agent: ${session.program}`}
+          >
+            {getAgentEmoji(session.program)}
+          </span>
+        </Tooltip>
       )}
 
       {/* Diff stats — optional column */}
@@ -497,26 +533,20 @@ function SessionRowInner({
         </span>
       )}
 
-      {/* Memory usage — optional column, colored by severity */}
-      {visibleColumns.includes("memory") && (
-        <span
-          className={[memoryBadge, memorySeverityClass]
-            .filter(Boolean)
-            .join(" ")}
-          role="img"
-          title={memMB > 0 ? `Process RSS: ${memMB} MB` : undefined}
-          aria-label={memMB > 0 ? `${memMB} MB RAM` : "No memory data"}
-        >
-          {memMB > 0 ? (
-            memMB >= 1024 ? (
-              `${(memMB / 1024).toFixed(1)} GB`
-            ) : (
-              `${memMB} MB`
-            )
-          ) : (
-            <span style={{ opacity: 0.3 }}>—</span>
-          )}
-        </span>
+      {/* Memory usage — optional column, colored by severity, only when there's real RSS data */}
+      {visibleColumns.includes("memory") && memMB > 0 && (
+        <Tooltip label={`Process RSS: ${memMB} MB`}>
+          <span
+            className={[memoryBadge, memorySeverityClass]
+              .filter(Boolean)
+              .join(" ")}
+            role="img"
+            tabIndex={0}
+            aria-label={`${memMB} MB RAM`}
+          >
+            {memMB >= 1024 ? `${(memMB / 1024).toFixed(1)} GB` : `${memMB} MB`}
+          </span>
+        </Tooltip>
       )}
 
       {/* Branch — optional column */}
@@ -531,37 +561,6 @@ function SessionRowInner({
         >
           {session.branch || <span style={{ opacity: 0.3 }}>—</span>}
         </span>
-      )}
-
-      {/* Elapsed time — optional column */}
-      {visibleColumns.includes("elapsed") && (
-        <time
-          className={elapsedStyle}
-          dateTime={
-            lastActivity
-              ? new Date(Number(lastActivity.seconds) * 1000).toISOString()
-              : undefined
-          }
-          title={
-            lastActivity
-              ? new Date(Number(lastActivity.seconds) * 1000).toLocaleString()
-              : undefined
-          }
-          aria-label={
-            elapsedText ? `Last active: ${elapsedText}` : "No recent activity"
-          }
-        >
-          {elapsedText ? (
-            <>
-              <span className={elapsedIconStyle} aria-hidden="true">
-                ⏱
-              </span>
-              {elapsedText}
-            </>
-          ) : (
-            <span style={{ opacity: 0.3 }}>—</span>
-          )}
-        </time>
       )}
 
       {/* Actions: primary (hover-only unless needs attention) + overflow (always visible) */}

@@ -27,6 +27,8 @@ import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
 import { PI_SUPPORT_FLAG_NAME } from "@/lib/constants/programs";
 import { useTaggingRuleNames } from "@/lib/hooks/useTaggingRuleNames";
 import { UNCLASSIFIED_TAG, tagProvenanceTitle, tagProvenanceAriaLabel } from "@/lib/sessions/tagProvenance";
+import { truncateWorkspacePath } from "@/lib/utils/truncateWorkspacePath";
+import { ColumnKey, DEFAULT_VISIBLE_COLUMNS } from "./session-columns";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -200,6 +202,11 @@ const IS_DEBUG_MODE =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("debug") === "1";
 
+// Cards have more horizontal room than sidebar rows (see SessionRow's
+// ROW_PATH_MAX_LEN=72), so opaque path segments can survive further before
+// collapsing.
+const CARD_PATH_MAX_LEN = 96;
+
 // Exported so BoardCard (SessionBoard.tsx's per-card wrapper) can declare an identical
 // callback surface without duplicating this list.
 export interface SessionCardProps {
@@ -239,6 +246,8 @@ export interface SessionCardProps {
   staleThresholdMinutes?: number;
   /** Backlog item this session was dispatched from (work/review/triage automation), if any. */
   backlogEntry?: BacklogIndexEntry;
+  /** Which optional columns to render (Program row, memory badge). Defaults to DEFAULT_VISIBLE_COLUMNS. */
+  visibleColumns?: ColumnKey[];
 }
 
 function SessionCardInner({
@@ -273,7 +282,9 @@ function SessionCardInner({
   suppressApprovalSubStatus = false,
   staleThresholdMinutes = 30,
   backlogEntry,
+  visibleColumns,
 }: SessionCardProps) {
+  const effectiveColumns = visibleColumns ?? DEFAULT_VISIBLE_COLUMNS;
   const sessionActions = useSessionActions(session.id);
   const tagRuleNames = useTaggingRuleNames();
   const [isTagEditorOpen, setIsTagEditorOpen] = useState(false);
@@ -818,6 +829,7 @@ function SessionCardInner({
             {(() => {
               const mb = Number(session.memoryRssMb ?? 0n);
               if (mb <= 0) return null;
+              if (!effectiveColumns.includes("memory")) return null;
               const severityClass =
                 mb > 500 ? memoryBadgeHigh :
                 mb > 300 ? memoryBadgeWarning : "";
@@ -1030,10 +1042,12 @@ function SessionCardInner({
 
       <div className={body}>
         <div className={info}>
-          <div className={infoRow}>
-            <span className={label}>Program:</span>
-            <span className={value}>{session.program}</span>
-          </div>
+          {effectiveColumns.includes("agent") && (
+            <div className={infoRow}>
+              <span className={label}>Program:</span>
+              <span className={value}>{session.program}</span>
+            </div>
+          )}
           {session.branch && !isRedundantWithTitle(session.branch, session.title) && (
             <div className={infoRow}>
               <span className={label}>Branch:</span>
@@ -1044,14 +1058,16 @@ function SessionCardInner({
             <div className={infoRow}>
               <span className={label}>Path:</span>
               <span className={value} title={session.existingDir}>
-                {session.existingDir}
+                {truncateWorkspacePath(session.existingDir, CARD_PATH_MAX_LEN)}
               </span>
             </div>
           )}
           {session.activeDir && !isPathRedundantWithTitle(session.activeDir, session.title) && (
             <div className={infoRow}>
               <span className={label}>Working Dir:</span>
-              <span className={value}>{session.activeDir}</span>
+              <span className={value} title={session.activeDir}>
+                {truncateWorkspacePath(session.activeDir, CARD_PATH_MAX_LEN)}
+              </span>
             </div>
           )}
           {session.githubOwner && session.githubRepo && (
@@ -1092,7 +1108,7 @@ function SessionCardInner({
             <div className={infoRow}>
               <span className={label}>Cloned To:</span>
               <span className={value} title={session.clonedRepoPath}>
-                {session.clonedRepoPath}
+                {truncateWorkspacePath(session.clonedRepoPath, CARD_PATH_MAX_LEN)}
               </span>
             </div>
           )}

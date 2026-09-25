@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { SessionRow } from "./SessionRow";
 import { ReviveOutcome, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
@@ -240,5 +240,201 @@ describe("SessionRow — backlog-origin badge", () => {
     const session = { ...minimalSession } as unknown as Session;
     render(<SessionRow session={session} />);
     expect(screen.queryByTestId("backlog-origin-badge")).toBeNull();
+  });
+});
+
+// session-list-density Epic 1.2 Story 1.2.1: agent/memory demoted to
+// defaultVisible: false in session-columns.ts.
+describe("SessionRow — agent/memory columns demoted to hidden by default", () => {
+  it("SessionRow_should_NotRenderAgentOrMemorySpans_When_UsingDefaultVisibleColumns", () => {
+    const session = { ...minimalSession } as unknown as Session;
+    render(<SessionRow session={session} />);
+    expect(
+      screen.queryByRole("img", { name: `Agent: ${session.program}` })
+    ).toBeNull();
+    expect(screen.queryByRole("img", { name: "No memory data" })).toBeNull();
+  });
+});
+
+// session-list-density Epic 1.2 Story 1.2.2: elapsed moved out of the grid
+// loop onto a hardcoded second line inside nameCell.
+describe("SessionRow — elapsed renders as a second line, not a grid cell", () => {
+  it("SessionRow_should_RenderElapsedAsSecondLine_When_ElapsedColumnVisible", () => {
+    const session = {
+      ...minimalSession,
+      existingDir: "/tmp/session",
+    } as unknown as Session;
+    const { container } = render(<SessionRow session={session} />);
+
+    const rowEl = screen.getByTestId("session-row");
+    const timeEl = container.querySelector("time");
+    expect(timeEl).not.toBeNull();
+
+    // Not a direct grid-cell child of the row's own display:grid element.
+    expect(timeEl?.parentElement).not.toBe(rowEl);
+
+    // Same nameCell ancestor as pathLine (path's grandparent, since path is
+    // itself wrapped by the pathLine span) — i.e. a descendant of nameCell.
+    const pathEl = screen.getByRole("img", { name: `Path: ${session.existingDir}` });
+    expect(timeEl?.parentElement?.parentElement).toBe(
+      pathEl.parentElement?.parentElement
+    );
+  });
+
+  it("SessionRow_should_NotRenderElapsedSecondLine_When_ElapsedNotInVisibleColumns", () => {
+    const session = { ...minimalSession } as unknown as Session;
+    const { container } = render(
+      <SessionRow session={session} visibleColumns={[]} />
+    );
+    expect(container.querySelector("time")).toBeNull();
+  });
+});
+
+// session-list-density Epic 2.1 Story 2.1.1: wrap instead of ellipsis, apply
+// truncateWorkspacePath at every container width.
+const CANONICAL_WORKSPACE_PATH =
+  "/Users/tstapler/.stapler-squad/workspaces/6eb0b580fa0331d5/worktrees/stapler-squad-wasted-space_18d807dfb97a2b28";
+const WORKSPACE_HASH = "6eb0b580fa0331d5";
+const WORKTREE_UUID_SUFFIX = "18d807dfb97a2b28";
+
+describe("SessionRow — path truncation via truncateWorkspacePath (Epic 2.1 Story 2.1.1)", () => {
+  it("SessionRow_should_HideOpaqueSegments_When_PathExceeds72Chars", () => {
+    const session = {
+      ...minimalSession,
+      existingDir: CANONICAL_WORKSPACE_PATH,
+    } as unknown as Session;
+    render(<SessionRow session={session} />);
+
+    const pathEl = screen.getByRole("img", {
+      name: `Path: ${CANONICAL_WORKSPACE_PATH}`,
+    });
+    expect(pathEl.textContent).not.toContain(WORKSPACE_HASH);
+    expect(pathEl.textContent).not.toContain(WORKTREE_UUID_SUFFIX);
+
+    // Full-value companion (Tooltip label / aria-label) still carries the
+    // untruncated path unchanged.
+    expect(pathEl.getAttribute("aria-label")).toBe(
+      `Path: ${CANONICAL_WORKSPACE_PATH}`
+    );
+  });
+
+  it("SessionRow_should_KeepSamePathText_When_RenderedAtNarrowContainerWidth", () => {
+    // The narrow (<200px) container-query breakpoint is CSS-only (font size,
+    // chip wrapping) and never switches the truncation budget (Story 2.1.2's
+    // Resolution Note) — there's no separate narrow-width render path to
+    // simulate here, so this asserts there is exactly one path <span>, i.e.
+    // no dual-render leftover from the dropped Task 2.1.2c approach.
+    const session = {
+      ...minimalSession,
+      existingDir: CANONICAL_WORKSPACE_PATH,
+    } as unknown as Session;
+    render(<SessionRow session={session} />);
+
+    const pathEls = screen.getAllByRole("img", {
+      name: `Path: ${CANONICAL_WORKSPACE_PATH}`,
+    });
+    expect(pathEls).toHaveLength(1);
+  });
+
+  // Story 3.1.1 / Task 3.1.1b: the row's own aria-label must carry the full
+  // path, not the visually-truncated string shown in the path <span>.
+  it("SessionRow_should_ExposeFullPathInAriaLabel_When_QueriedByRole", () => {
+    const session = {
+      ...minimalSession,
+      existingDir: CANONICAL_WORKSPACE_PATH,
+    } as unknown as Session;
+    render(<SessionRow session={session} />);
+
+    const row = screen.getByTestId("session-row");
+    const ariaLabel = row.getAttribute("aria-label");
+    expect(ariaLabel).toContain(CANONICAL_WORKSPACE_PATH);
+    expect(ariaLabel).toContain(WORKSPACE_HASH);
+    expect(ariaLabel).toContain(WORKTREE_UUID_SUFFIX);
+  });
+});
+
+// session-list-density Epic 3.2 Story 3.2.1 (ADR-001): agent icon / memory
+// badge gain focusable Tooltip wrappers, and their data is folded into the
+// row's aria-label so it's reachable even when the columns are hidden by
+// default (Epic 1.2's demotion).
+describe("SessionRow — agent/memory accessible disclosure (Epic 3.2 Story 3.2.1)", () => {
+  it("SessionRow_should_ShowTooltip_When_AgentIconReceivesKeyboardFocus", async () => {
+    const session = { ...minimalSession, program: "claude" } as unknown as Session;
+    render(<SessionRow session={session} visibleColumns={["agent"]} />);
+
+    const agentIcon = screen.getByRole("img", { name: "Agent: claude" });
+    expect(agentIcon).toHaveAttribute("tabIndex", "0");
+
+    fireEvent.focus(agentIcon);
+
+    await waitFor(() => {
+      expect(screen.getByRole("tooltip")).toHaveTextContent("claude");
+    });
+  });
+
+  it("SessionRow_should_ShowProcessRssTooltip_When_MemoryBadgeReceivesKeyboardFocus", async () => {
+    const session = {
+      ...minimalSession,
+      memoryRssMb: 512n,
+    } as unknown as Session;
+    render(<SessionRow session={session} visibleColumns={["memory"]} />);
+
+    const memoryBadge = screen.getByRole("img", { name: "512 MB RAM" });
+    expect(memoryBadge).toHaveAttribute("tabIndex", "0");
+
+    fireEvent.focus(memoryBadge);
+
+    await waitFor(() => {
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Process RSS: 512 MB");
+    });
+  });
+
+  it("SessionRow_should_IncludeAgentAndMemoryInAriaLabel_When_ColumnsNotInVisibleColumns", () => {
+    const session = {
+      ...minimalSession,
+      program: "claude",
+      memoryRssMb: 200n,
+    } as unknown as Session;
+    // Default visibleColumns (agent/memory demoted, Epic 1.2) — neither
+    // column renders as a grid cell, but the row aria-label still carries
+    // the data (ADR-001's "zero extra interaction" guarantee).
+    render(<SessionRow session={session} />);
+
+    expect(screen.queryByRole("img", { name: "Agent: claude" })).toBeNull();
+    expect(screen.queryByRole("img", { name: "200 MB RAM" })).toBeNull();
+
+    const ariaLabel = screen.getByTestId("session-row").getAttribute("aria-label");
+    expect(ariaLabel).toContain("agent: claude");
+    expect(ariaLabel).toContain("memory: 200 MB");
+  });
+
+  it("SessionRow_should_OmitMemoryFragmentFromAriaLabel_When_MemMBIsZero", () => {
+    const session = { ...minimalSession, program: "claude" } as unknown as Session;
+    render(<SessionRow session={session} />);
+
+    const ariaLabel = screen.getByTestId("session-row").getAttribute("aria-label");
+    expect(ariaLabel).toContain("agent: claude");
+    expect(ariaLabel).not.toContain("memory:");
+  });
+
+  // validation.md UX Criterion 7: missing agent/memory data renders nothing
+  // (omitted), not a placeholder error string -- even when the columns are
+  // explicitly made visible, proving the omission is data-driven, not just
+  // the column being hidden by default (Epic 1.2's demotion, covered by
+  // SessionRow_should_NotRenderAgentOrMemorySpans_When_UsingDefaultVisibleColumns above).
+  it("SessionRow_should_OmitAgentAndMemoryUI_When_ProgramAndMemMBAreAbsent", () => {
+    const session = {
+      ...minimalSession,
+      program: "",
+      memoryRssMb: 0n,
+    } as unknown as Session;
+    render(<SessionRow session={session} visibleColumns={["agent", "memory"]} />);
+
+    expect(screen.queryByRole("img", { name: /^Agent:/ })).toBeNull();
+    expect(screen.queryByRole("img", { name: "No memory data" })).toBeNull();
+
+    const ariaLabel = screen.getByTestId("session-row").getAttribute("aria-label");
+    expect(ariaLabel).not.toContain(", agent:");
+    expect(ariaLabel).not.toContain("memory:");
   });
 });
