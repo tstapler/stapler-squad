@@ -69,17 +69,27 @@ func TestKillOrphanedControlModeClients(t *testing.T) {
 		}
 	})
 
-	listClients := func() string {
-		out, err := safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "list-clients").Output()
+	// Poll #{client_control_mode} directly, the same field KillOrphanedControlModeClients
+	// itself checks (see tmux.go's list-clients format), rather than just counting
+	// attached-client lines -- a client can be attached before tmux has flagged it as
+	// control-mode, so counting raw lines races against that flag settling.
+	countControlModeClients := func() int {
+		out, err := safeexec.CommandContext(context.Background(), Binary(), "-L", socketName,
+			"list-clients", "-F", "#{client_pid} #{client_control_mode}").Output()
 		if err != nil {
-			return ""
+			return 0
 		}
-		return strings.TrimSpace(string(out))
+		count := 0
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if strings.HasSuffix(line, " 1") {
+				count++
+			}
+		}
+		return count
 	}
 
 	require.NoError(t, wait.WaitForCondition(func() bool {
-		out := listClients()
-		return out != "" && len(strings.Split(out, "\n")) >= 2
+		return countControlModeClients() >= 2
 	}, wait.WaitConfig{Timeout: 5 * time.Second, PollInterval: 100 * time.Millisecond, Description: "control-mode clients attach"}))
 
 	killed, err := KillOrphanedControlModeClients(socketName)
@@ -87,7 +97,7 @@ func TestKillOrphanedControlModeClients(t *testing.T) {
 	require.Equal(t, 2, killed, "should have killed exactly the two orphaned control-mode clients")
 
 	require.NoError(t, wait.WaitForCondition(func() bool {
-		return listClients() == ""
+		return countControlModeClients() == 0
 	}, wait.WaitConfig{Timeout: 5 * time.Second, PollInterval: 100 * time.Millisecond, Description: "clients disappear"}))
 
 	// The session itself must survive -- only its clients were killed, not the session.
