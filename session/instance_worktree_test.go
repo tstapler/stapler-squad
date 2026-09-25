@@ -133,7 +133,10 @@ func TestWorkspace_UsesWorktreePath_WhenPresentOnDisk(t *testing.T) {
 	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: Running}
 	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
 
+	resolvedWorktreePath, err := filepath.EvalSymlinks(worktreePath)
+	require.NoError(t, err)
+
 	ws := inst.Workspace()
-	require.Equal(t, worktreePath, ws.EffectivePath)
+	require.Equal(t, resolvedWorktreePath, ws.EffectivePath)
 	require.Equal(t, repoPath, ws.RepoRoot)
 }
