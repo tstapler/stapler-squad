@@ -3,32 +3,50 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"net/http/httptest"
 	"testing"
+
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-func TestRunHandshakeUsesFreshContextForEveryStep(t *testing.T) {
+func TestNewProxyCoreUsesFreshContextForEveryHandshakeRequest(t *testing.T) {
 	t.Parallel()
 
+	remote := mcpserver.NewMCPServer("test", "1.0.0")
+	remote.AddTool(mcpgo.NewTool("echo"), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return mcpgo.NewToolResultText("ok"), nil
+	})
+	server := httptest.NewServer(mcpserver.NewStreamableHTTPServer(remote, mcpserver.WithStateLess(true)))
+	t.Cleanup(server.Close)
+
 	var contexts []context.Context
-	var sequence int
 	newContext := func(parent context.Context) (context.Context, context.CancelFunc) {
-		sequence++
-		return context.WithValue(parent, handshakeTestContextKey{}, sequence), func() {}
-	}
-	step := func(ctx context.Context) error {
+		ctx, cancel := context.WithCancel(parent)
 		contexts = append(contexts, ctx)
-		return nil
+		return ctx, cancel
 	}
 
-	if err := runHandshake(context.Background(), newContext, step, step, step); err != nil {
-		t.Fatalf("run handshake: %v", err)
+	local, client, err := newProxyCoreWithContextFactory(context.Background(), server.URL, nil, newContext)
+	if err != nil {
+		t.Fatalf("new proxy core: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	if got := len(local.ListTools()); got != 1 {
+		t.Errorf("forwarded tool count = %d, want 1", got)
 	}
 	if len(contexts) != 3 {
-		t.Fatalf("step contexts = %d, want 3", len(contexts))
+		t.Fatalf("handshake contexts = %d, want 3", len(contexts))
 	}
 	for index, ctx := range contexts {
-		if got := ctx.Value(handshakeTestContextKey{}); got != index+1 {
-			t.Errorf("step %d context marker = %v, want %d", index, got, index+1)
+		if ctx.Err() == nil {
+			t.Errorf("handshake context %d was not cancelled", index)
+		}
+		for priorIndex, prior := range contexts[:index] {
+			if prior == ctx {
+				t.Errorf("handshake context %d reuses context %d", index, priorIndex)
+			}
 		}
 	}
 }
@@ -51,5 +69,3 @@ func TestRunHandshakeStopsAtFirstFailedStep(t *testing.T) {
 		t.Errorf("steps called = %d, want 1", calls)
 	}
 }
-
-type handshakeTestContextKey struct{}

@@ -80,6 +80,12 @@ func NewProxyCore(ctx context.Context, httpURL string, headers map[string]string
 }
 
 func newProxyCore(ctx context.Context, httpURL string, headers map[string]string, timeout time.Duration) (*mcpserver.MCPServer, *mcpclient.Client, error) {
+	return newProxyCoreWithContextFactory(ctx, httpURL, headers, func(parent context.Context) (context.Context, context.CancelFunc) {
+		return context.WithTimeout(parent, timeout)
+	})
+}
+
+func newProxyCoreWithContextFactory(ctx context.Context, httpURL string, headers map[string]string, newContext handshakeContextFactory) (*mcpserver.MCPServer, *mcpclient.Client, error) {
 	remote, err := mcpclient.NewStreamableHttpClient(httpURL, transport.WithHTTPHeaders(headers))
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: create http client: %v", ErrProxyUnavailable, err)
@@ -90,9 +96,6 @@ func newProxyCore(ctx context.Context, httpURL string, headers map[string]string
 	initReq.Params.ClientInfo = mcpgo.Implementation{Name: "stapler-squad-mcp-proxy", Version: "1.0.0"}
 
 	var toolsResult *mcpgo.ListToolsResult
-	newContext := func(parent context.Context) (context.Context, context.CancelFunc) {
-		return context.WithTimeout(parent, timeout)
-	}
 	err = runHandshake(ctx, newContext,
 		func(stepCtx context.Context) error {
 			if err := remote.Start(stepCtx); err != nil {
