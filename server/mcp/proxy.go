@@ -32,15 +32,29 @@ import (
 
 // ErrProxyUnavailable wraps any failure to connect to the running HTTP MCP
 // server during the initial handshake (transport start, initialize, or
-// tools/list). Callers should treat this as non-fatal and fall back to a
-// fully local MCP core.
+// tools/list). Each operation has an independent timeout; callers should treat
+// failures as non-fatal and fall back to a fully local MCP core.
 var ErrProxyUnavailable = errors.New("mcp proxy: remote server unavailable")
 
-// connectTimeout bounds the initial handshake only (transport start,
-// initialize, tools/list). It is intentionally NOT applied to the HTTP
-// client used for the lifetime of the connection, since individual tool
-// calls (e.g. wait_for_output, run_command) may legitimately run long.
-const connectTimeout = 3 * time.Second
+// handshakeTimeout bounds each initial handshake operation independently. It is
+// intentionally not applied to the HTTP client used for the lifetime of the
+// connection, since individual tool calls (for example, wait_for_output and
+// run_command) may legitimately run long.
+const handshakeTimeout = 3 * time.Second
+
+type handshakeContextFactory func(context.Context) (context.Context, context.CancelFunc)
+
+func runHandshake(ctx context.Context, newContext handshakeContextFactory, steps ...func(context.Context) error) error {
+	for _, step := range steps {
+		stepCtx, cancel := newContext(ctx)
+		err := step(stepCtx)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // ProxyHeaders builds the HTTP headers forwarded on every request to the
 // remote MCP endpoint. Mirrors the X-Stapler-Session-UUID header injected by
@@ -62,30 +76,48 @@ func ProxyHeaders() map[string]string {
 // The returned *mcpclient.Client must be closed by the caller once the local
 // server is done serving (e.g. via defer).
 func NewProxyCore(ctx context.Context, httpURL string, headers map[string]string) (*mcpserver.MCPServer, *mcpclient.Client, error) {
+	return newProxyCore(ctx, httpURL, headers, handshakeTimeout)
+}
+
+func newProxyCore(ctx context.Context, httpURL string, headers map[string]string, timeout time.Duration) (*mcpserver.MCPServer, *mcpclient.Client, error) {
 	remote, err := mcpclient.NewStreamableHttpClient(httpURL, transport.WithHTTPHeaders(headers))
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: create http client: %v", ErrProxyUnavailable, err)
 	}
 
-	handshakeCtx, cancel := context.WithTimeout(ctx, connectTimeout)
-	defer cancel()
-
-	if err := remote.Start(handshakeCtx); err != nil {
-		return nil, nil, fmt.Errorf("%w: start transport: %v", ErrProxyUnavailable, err)
-	}
-
 	initReq := mcpgo.InitializeRequest{}
 	initReq.Params.ProtocolVersion = mcpgo.LATEST_PROTOCOL_VERSION
 	initReq.Params.ClientInfo = mcpgo.Implementation{Name: "stapler-squad-mcp-proxy", Version: "1.0.0"}
-	if _, err := remote.Initialize(handshakeCtx, initReq); err != nil {
-		_ = remote.Close()
-		return nil, nil, fmt.Errorf("%w: initialize: %v", ErrProxyUnavailable, err)
-	}
 
-	toolsResult, err := remote.ListTools(handshakeCtx, mcpgo.ListToolsRequest{})
+	var toolsResult *mcpgo.ListToolsResult
+	newContext := func(parent context.Context) (context.Context, context.CancelFunc) {
+		return context.WithTimeout(parent, timeout)
+	}
+	err = runHandshake(ctx, newContext,
+		func(stepCtx context.Context) error {
+			if err := remote.Start(stepCtx); err != nil {
+				return fmt.Errorf("%w: start transport: %v", ErrProxyUnavailable, err)
+			}
+			return nil
+		},
+		func(stepCtx context.Context) error {
+			if _, err := remote.Initialize(stepCtx, initReq); err != nil {
+				return fmt.Errorf("%w: initialize: %v", ErrProxyUnavailable, err)
+			}
+			return nil
+		},
+		func(stepCtx context.Context) error {
+			var err error
+			toolsResult, err = remote.ListTools(stepCtx, mcpgo.ListToolsRequest{})
+			if err != nil {
+				return fmt.Errorf("%w: list tools: %v", ErrProxyUnavailable, err)
+			}
+			return nil
+		},
+	)
 	if err != nil {
 		_ = remote.Close()
-		return nil, nil, fmt.Errorf("%w: list tools: %v", ErrProxyUnavailable, err)
+		return nil, nil, err
 	}
 
 	local := mcpserver.NewMCPServer(
