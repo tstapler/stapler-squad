@@ -235,18 +235,42 @@ func hasUsage(input, output, cacheCreation, cacheRead int64) bool {
 	return input != 0 || output != 0 || cacheCreation != 0 || cacheRead != 0
 }
 
-// EstimateCost computes USD cost for a ParseResult using the PricingTable.
-// Returns 0.0 for the cost of any model family not found in the table, and
-// reports those skipped families in unpriced (sorted) so the caller can
-// distinguish "genuinely zero usage" from "usage present but unpriced" —
-// see ADR-001-unpriced-signal-return-shape.md. A family with zero usage
-// across every counter (e.g. Claude Code's internal "<synthetic>" turns,
-// which the parser already filters out of TurnTimeline in production — see
-// parser.go's syntheticModelSentinel) is never flagged unpriced, since there
-// is nothing to price and nothing to warn about.
+// CategoryCosts is a session's estimated cost split by token category. Input +
+// Output + CacheCreation + CacheRead equals the EstimateCost total for a
+// fully-priced session; an unpriced model family contributes 0 to every field.
+type CategoryCosts struct {
+	Input         float64
+	Output        float64
+	CacheCreation float64
+	CacheRead     float64
+}
+
+// Total sums the four category costs, equivalent to EstimateCost's return value.
+func (c CategoryCosts) Total() float64 {
+	return c.Input + c.Output + c.CacheCreation + c.CacheRead
+}
+
+// EstimateCost computes USD cost for a ParseResult using the PricingTable —
+// the sum of EstimateCostByCategory's four category costs. See that function's
+// doc comment for the unpriced/zero-usage semantics both share.
 func (pt *PricingTable) EstimateCost(r *ParseResult) (cost float64, unpriced []string) {
+	costs, unpriced := pt.EstimateCostByCategory(r)
+	return costs.Total(), unpriced
+}
+
+// EstimateCostByCategory computes USD cost for a ParseResult using the
+// PricingTable, split by token category (see CategoryCosts) instead of summed
+// into one total. Returns 0.0 for the cost of any model family not found in
+// the table, and reports those skipped families in unpriced (sorted) so the
+// caller can distinguish "genuinely zero usage" from "usage present but
+// unpriced" — see ADR-001-unpriced-signal-return-shape.md. A family with zero
+// usage across every counter (e.g. Claude Code's internal "<synthetic>"
+// turns, which the parser already filters out of TurnTimeline in
+// production — see parser.go's syntheticModelSentinel) is never flagged
+// unpriced, since there is nothing to price and nothing to warn about.
+func (pt *PricingTable) EstimateCostByCategory(r *ParseResult) (costs CategoryCosts, unpriced []string) {
 	if r == nil || pt == nil {
-		return 0.0, nil
+		return CategoryCosts{}, nil
 	}
 
 	// Build per-model token counts from turn timeline.
@@ -274,7 +298,6 @@ func (pt *PricingTable) EstimateCost(r *ParseResult) (cost float64, unpriced []s
 
 	unpricedSet := make(map[string]bool)
 
-	var total float64
 	for family, inputTok := range modelInputs {
 		pricing, ok := pt.Prices[family]
 		if !ok {
@@ -283,10 +306,10 @@ func (pt *PricingTable) EstimateCost(r *ParseResult) (cost float64, unpriced []s
 			}
 			continue
 		}
-		total += float64(inputTok) / 1_000_000.0 * pricing.InputPricePerMTok
-		total += float64(modelOutputs[family]) / 1_000_000.0 * pricing.OutputPricePerMTok
-		total += float64(modelCacheCreation[family]) / 1_000_000.0 * pricing.CacheWritePerMTok
-		total += float64(modelCacheRead[family]) / 1_000_000.0 * pricing.CacheReadPerMTok
+		costs.Input += float64(inputTok) / 1_000_000.0 * pricing.InputPricePerMTok
+		costs.Output += float64(modelOutputs[family]) / 1_000_000.0 * pricing.OutputPricePerMTok
+		costs.CacheCreation += float64(modelCacheCreation[family]) / 1_000_000.0 * pricing.CacheWritePerMTok
+		costs.CacheRead += float64(modelCacheRead[family]) / 1_000_000.0 * pricing.CacheReadPerMTok
 	}
 
 	unpriced = make([]string, 0, len(unpricedSet))
@@ -295,7 +318,7 @@ func (pt *PricingTable) EstimateCost(r *ParseResult) (cost float64, unpriced []s
 	}
 	sort.Strings(unpriced)
 
-	return total, unpriced
+	return costs, unpriced
 }
 
 // IsStale returns true when any entry in the table has an EffectiveDate older

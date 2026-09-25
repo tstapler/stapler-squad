@@ -105,6 +105,10 @@ export function SessionDetailContent({ session, backlogEntry, turns }: Props) {
           output={session.totalOutputTokens}
           cacheCreation={session.cacheCreationTokens}
           cacheRead={session.cacheReadTokens}
+          inputCostUsd={session.inputCostUsd}
+          outputCostUsd={session.outputCostUsd}
+          cacheCreationCostUsd={session.cacheCreationCostUsd}
+          cacheReadCostUsd={session.cacheReadCostUsd}
         />
       </div>
 

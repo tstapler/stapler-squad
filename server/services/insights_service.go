@@ -293,7 +293,8 @@ func buildSessionSummary(
 	// would filter SessionsTable by a role value no session ever reports.
 	attributed = groupUnattributed(attributed, r.ProjectPath)
 
-	costUSD, unpriced := pt.EstimateCost(r)
+	categoryCosts, unpriced := pt.EstimateCostByCategory(r)
+	costUSD := categoryCosts.Total()
 	cacheHitRate := tokens.ComputeCacheHitRate(r.TotalInput, r.CacheRead)
 	activityType := tokens.ClassifyActivity(r)
 	topTools := sessionTopTools(r, pt)
@@ -304,16 +305,20 @@ func buildSessionSummary(
 	}
 
 	summary := &sessionv1.SessionTokenSummary{
-		SessionId:           sessionID,
-		ConversationId:      r.SessionUUID,
-		ProjectPath:         r.ProjectPath,
-		PrimaryModel:        r.PrimaryModel,
-		TotalInputTokens:    r.TotalInput,
-		TotalOutputTokens:   r.TotalOutput,
-		CacheCreationTokens: r.CacheCreation,
-		CacheReadTokens:     r.CacheRead,
-		EstimatedCostUsd:    costUSD,
-		CacheHitRate:        cacheHitRate,
+		SessionId:            sessionID,
+		ConversationId:       r.SessionUUID,
+		ProjectPath:          r.ProjectPath,
+		PrimaryModel:         r.PrimaryModel,
+		TotalInputTokens:     r.TotalInput,
+		TotalOutputTokens:    r.TotalOutput,
+		CacheCreationTokens:  r.CacheCreation,
+		CacheReadTokens:      r.CacheRead,
+		EstimatedCostUsd:     costUSD,
+		InputCostUsd:         categoryCosts.Input,
+		OutputCostUsd:        categoryCosts.Output,
+		CacheCreationCostUsd: categoryCosts.CacheCreation,
+		CacheReadCostUsd:     categoryCosts.CacheRead,
+		CacheHitRate:         cacheHitRate,
 		// #nosec G115 -- r.MessageCount is a per-session Claude message count, far below int32 range.
 		MessageCount:     int32(r.MessageCount),
 		IsOrphan:         isOrphan,

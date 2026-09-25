@@ -6,6 +6,8 @@ export const main = style({
   maxWidth: 900,
   margin: "0 auto",
   padding: vars.space[4],
+  height: "100%",
+  overflowY: "auto",
 });
 
 export const backLink = style({
