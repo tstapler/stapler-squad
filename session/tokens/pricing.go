@@ -250,6 +250,18 @@ func (c CategoryCosts) Total() float64 {
 	return c.Input + c.Output + c.CacheCreation + c.CacheRead
 }
 
+// priceUsage multiplies token counts by pricing's per-Mtok rates, returning the
+// per-category cost split. Shared by every EstimateCost* variant to keep a future
+// pricing-formula change (rate tiers, rounding) a single edit instead of four.
+func priceUsage(pricing ModelPricing, input, output, cacheCreation, cacheRead int64) CategoryCosts {
+	return CategoryCosts{
+		Input:         float64(input) / 1_000_000.0 * pricing.InputPricePerMTok,
+		Output:        float64(output) / 1_000_000.0 * pricing.OutputPricePerMTok,
+		CacheCreation: float64(cacheCreation) / 1_000_000.0 * pricing.CacheWritePerMTok,
+		CacheRead:     float64(cacheRead) / 1_000_000.0 * pricing.CacheReadPerMTok,
+	}
+}
+
 // EstimateCost computes USD cost for a ParseResult using the PricingTable —
 // the sum of EstimateCostByCategory's four category costs. See that function's
 // doc comment for the unpriced/zero-usage semantics both share.
@@ -306,10 +318,11 @@ func (pt *PricingTable) EstimateCostByCategory(r *ParseResult) (costs CategoryCo
 			}
 			continue
 		}
-		costs.Input += float64(inputTok) / 1_000_000.0 * pricing.InputPricePerMTok
-		costs.Output += float64(modelOutputs[family]) / 1_000_000.0 * pricing.OutputPricePerMTok
-		costs.CacheCreation += float64(modelCacheCreation[family]) / 1_000_000.0 * pricing.CacheWritePerMTok
-		costs.CacheRead += float64(modelCacheRead[family]) / 1_000_000.0 * pricing.CacheReadPerMTok
+		familyCosts := priceUsage(pricing, inputTok, modelOutputs[family], modelCacheCreation[family], modelCacheRead[family])
+		costs.Input += familyCosts.Input
+		costs.Output += familyCosts.Output
+		costs.CacheCreation += familyCosts.CacheCreation
+		costs.CacheRead += familyCosts.CacheRead
 	}
 
 	unpriced = make([]string, 0, len(unpricedSet))
@@ -362,10 +375,7 @@ func (pt *PricingTable) ModelFamilyCost(r *ParseResult) (costs map[string]float6
 			}
 			continue
 		}
-		cost := float64(turn.Input)/1_000_000.0*pricing.InputPricePerMTok +
-			float64(turn.Output)/1_000_000.0*pricing.OutputPricePerMTok +
-			float64(turn.CacheCreation)/1_000_000.0*pricing.CacheWritePerMTok +
-			float64(turn.CacheRead)/1_000_000.0*pricing.CacheReadPerMTok
+		cost := priceUsage(pricing, turn.Input, turn.Output, turn.CacheCreation, turn.CacheRead).Total()
 		result[family] += cost
 	}
 
@@ -374,10 +384,7 @@ func (pt *PricingTable) ModelFamilyCost(r *ParseResult) (costs map[string]float6
 		family := NormalizeModelFamily(r.PrimaryModel)
 		pricing, ok := pt.Prices[family]
 		if ok {
-			cost := float64(r.TotalInput)/1_000_000.0*pricing.InputPricePerMTok +
-				float64(r.TotalOutput)/1_000_000.0*pricing.OutputPricePerMTok +
-				float64(r.CacheCreation)/1_000_000.0*pricing.CacheWritePerMTok +
-				float64(r.CacheRead)/1_000_000.0*pricing.CacheReadPerMTok
+			cost := priceUsage(pricing, r.TotalInput, r.TotalOutput, r.CacheCreation, r.CacheRead).Total()
 			result[family] = cost
 		} else if hasUsage(r.TotalInput, r.TotalOutput, r.CacheCreation, r.CacheRead) {
 			unpriced[family] = true
@@ -401,10 +408,7 @@ func (pt *PricingTable) EstimateTurnCost(turn TurnStats) (cost float64, priced b
 	if !ok {
 		return 0, false
 	}
-	cost = float64(turn.Input)/1_000_000.0*pricing.InputPricePerMTok +
-		float64(turn.Output)/1_000_000.0*pricing.OutputPricePerMTok +
-		float64(turn.CacheCreation)/1_000_000.0*pricing.CacheWritePerMTok +
-		float64(turn.CacheRead)/1_000_000.0*pricing.CacheReadPerMTok
+	cost = priceUsage(pricing, turn.Input, turn.Output, turn.CacheCreation, turn.CacheRead).Total()
 	return cost, true
 }
 
