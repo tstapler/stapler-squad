@@ -25,6 +25,17 @@ export const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = COLUMN_DEFS
   .filter((c) => c.defaultVisible)
   .map((c) => c.key);
 
+// Card/Board views have no ColumnPicker UI (it only renders for row view — see
+// SessionList.tsx), so they can't opt back into a hidden column. Pre-PR, Card/Board
+// always rendered the Program row and memory badge unconditionally; this default
+// preserves that behavior as SessionCard's fallback when no `visibleColumns` prop is
+// passed, independent of row view's user-configurable DEFAULT_VISIBLE_COLUMNS.
+export const CARD_DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = [
+  "agent",
+  "memory",
+  ...DEFAULT_VISIBLE_COLUMNS,
+];
+
 /** Build a CSS gridTemplateColumns value from the current visible set. */
 export function buildRowGridTemplate(visible: ColumnKey[], options?: { reserveCheckbox?: boolean }): string {
   const cols: string[] = [];

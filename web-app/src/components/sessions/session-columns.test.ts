@@ -1,4 +1,4 @@
-import { COLUMN_DEFS, buildRowGridTemplate } from "./session-columns";
+import { COLUMN_DEFS, CARD_DEFAULT_VISIBLE_COLUMNS, buildRowGridTemplate } from "./session-columns";
 
 describe("COLUMN_DEFS", () => {
   it("COLUMN_DEFS_should_HaveAgentAndMemoryDefaultVisibleFalse_When_Loaded", () => {
@@ -15,6 +15,17 @@ describe("COLUMN_DEFS", () => {
     expect(elapsed?.defaultVisible).toBe(true);
     expect(diff?.defaultVisible).toBe(false);
     expect(branch?.defaultVisible).toBe(false);
+  });
+});
+
+describe("CARD_DEFAULT_VISIBLE_COLUMNS", () => {
+  // Card/Board views have no ColumnPicker to opt back into a hidden column, so
+  // their fallback must keep agent+memory visible despite COLUMN_DEFS demoting
+  // both to defaultVisible: false for row view's DEFAULT_VISIBLE_COLUMNS.
+  it("CARD_DEFAULT_VISIBLE_COLUMNS_should_IncludeAgentAndMemory_When_RowDefaultsExcludeThem", () => {
+    expect(CARD_DEFAULT_VISIBLE_COLUMNS).toContain("agent");
+    expect(CARD_DEFAULT_VISIBLE_COLUMNS).toContain("memory");
+    expect(CARD_DEFAULT_VISIBLE_COLUMNS).toContain("elapsed");
   });
 });
 

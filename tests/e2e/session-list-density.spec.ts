@@ -129,11 +129,10 @@ test.describe('session-list-density', () => {
     // clicks either way).
     await expect(row).toHaveAttribute('aria-label', new RegExp(longPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 
-    const pathSpan = row.getByTitle(longPath).or(row.locator('span', { hasText: longPath.slice(0, 12) }));
-    if (await pathSpan.count() > 0) {
-      await pathSpan.first().hover();
-      await expect(page.getByRole('tooltip')).toContainText(longPath.slice(-12));
-    }
+    const pathSpan = row.getByTestId('session-row-path');
+    await expect(pathSpan).toBeVisible();
+    await pathSpan.hover();
+    await expect(page.getByRole('tooltip')).toContainText(longPath.slice(-12));
   });
 
   // ── Criterion 4: keyboard reaches agent/memory in <=1 Tab stop (visible), or via aria-label (hidden) ──

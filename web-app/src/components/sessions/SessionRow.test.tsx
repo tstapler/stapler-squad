@@ -273,12 +273,9 @@ describe("SessionRow — elapsed renders as a second line, not a grid cell", () 
     // Not a direct grid-cell child of the row's own display:grid element.
     expect(timeEl?.parentElement).not.toBe(rowEl);
 
-    // Same nameCell ancestor as pathLine (path's grandparent, since path is
-    // itself wrapped by the pathLine span) — i.e. a descendant of nameCell.
-    const pathEl = screen.getByRole("img", { name: `Path: ${session.existingDir}` });
-    expect(timeEl?.parentElement?.parentElement).toBe(
-      pathEl.parentElement?.parentElement
-    );
+    // Lives inside nameCell (same container as the path line), not as a
+    // grid-cell sibling of it.
+    expect(timeEl?.closest('[data-testid="session-row-name-cell"]')).toBeTruthy();
   });
 
   it("SessionRow_should_NotRenderElapsedSecondLine_When_ElapsedNotInVisibleColumns", () => {

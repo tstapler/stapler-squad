@@ -389,9 +389,13 @@ describe("SessionCard — path truncation (Story 2.2.1)", () => {
   });
 });
 
-// Story 2.2.3: Program row / memory badge gated behind visibleColumns.
+// Story 2.2.3: Program row / memory badge gated behind visibleColumns. Card/Board
+// views have no ColumnPicker UI to opt back into a hidden column (see
+// session-columns.ts's CARD_DEFAULT_VISIBLE_COLUMNS doc comment), so SessionCard's
+// own default (no `visibleColumns` prop) must keep pre-PR behavior: agent + memory
+// always shown, unlike row view's user-configurable DEFAULT_VISIBLE_COLUMNS.
 describe("SessionCard — visibleColumns gating (Story 2.2.3)", () => {
-  it("SessionCard_should_NotRenderProgramRowOrMemoryBadge_When_UsingDefaultVisibleColumns", () => {
+  it("SessionCard_should_RenderProgramRowAndMemoryBadge_When_NoVisibleColumnsPropGiven", () => {
     const session = {
       ...minimalSession,
       program: "claude",
@@ -399,8 +403,8 @@ describe("SessionCard — visibleColumns gating (Story 2.2.3)", () => {
     } as unknown as Session;
     render(<SessionCard session={session} />);
 
-    expect(screen.queryByText("Program:")).toBeNull();
-    expect(screen.queryByText(/MB RAM/)).toBeNull();
+    expect(screen.getByText("Program:")).toBeInTheDocument();
+    expect(screen.getByText(/MB RAM/)).toBeInTheDocument();
   });
 
   it("SessionCard_should_RenderProgramRowAndMemoryBadge_When_AgentAndMemoryInVisibleColumns", () => {
@@ -413,5 +417,17 @@ describe("SessionCard — visibleColumns gating (Story 2.2.3)", () => {
 
     expect(screen.getByText("Program:")).toBeInTheDocument();
     expect(screen.getByText(/MB RAM/)).toBeInTheDocument();
+  });
+
+  it("SessionCard_should_NotRenderProgramRowOrMemoryBadge_When_VisibleColumnsExplicitlyExcludesThem", () => {
+    const session = {
+      ...minimalSession,
+      program: "claude",
+      memoryRssMb: 400n,
+    } as unknown as Session;
+    render(<SessionCard session={session} visibleColumns={[]} />);
+
+    expect(screen.queryByText("Program:")).toBeNull();
+    expect(screen.queryByText(/MB RAM/)).toBeNull();
   });
 });

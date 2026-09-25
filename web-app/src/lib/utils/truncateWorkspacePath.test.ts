@@ -70,6 +70,22 @@ describe("truncateWorkspacePath", () => {
     expect(truncateWorkspacePath("", 30)).toBe("");
   });
 
+  // Regression pin: a dotted mid-path segment (e.g. "github.com") is not a
+  // filename extension. truncateMiddle used to treat the last "." anywhere in
+  // the string as an extension boundary, so ".com/some-org/<repo>" got
+  // preserved as "suffix" wholesale, starving the head/tail budget negative
+  // and forcing a right-truncation fallback that dropped the repo name
+  // entirely — the most identifying trailing segment. This hits this repo's
+  // own `~/code/<host>/<owner>/<repo>` convention (see CLAUDE.md) via
+  // WorkspaceSwitcher.tsx's live `truncateWorkspacePath(db.cwd, 36)` call.
+  it("truncateWorkspacePath_should_KeepRepoNameSegment_When_PathHasDottedHostSegment", () => {
+    const path =
+      "/Users/tstapler/code/github.com/some-org/a-very-long-repository-name-for-testing";
+    const result = truncateWorkspacePath(path, 36);
+    expect(result).toContain("a-very-long-repository-name-for-testing".slice(-6));
+    expect(result).toContain("…");
+  });
+
   // Regression pin (adversarial-review.md, 2026-09-24 re-review): after
   // home-dir + opaque-segment collapse the canonical fixture is exactly 67
   // chars, which fits under maxLen=72 without ever hitting the

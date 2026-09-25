@@ -183,6 +183,23 @@ function getLastActivity(
     : session.lastTerminalUpdate;
 }
 
+// Builds the row's full-context aria-label (status + optional path/agent/memory/context
+// fields) as a single string so it stays screen-reader-accessible regardless of which
+// optional columns are visible in the grid — see instance-lock-free-reads-style
+// "name assumptions" note: relies on getStatusDotLabel already handling unknown statuses.
+function buildSessionRowAriaLabel(
+  session: Session,
+  dotStatus: string,
+  memMB: number,
+): string {
+  const parts = [`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}`];
+  if (session.existingDir) parts.push(`, path: ${session.existingDir}`);
+  if (session.program) parts.push(`, agent: ${session.program}`);
+  if (memMB > 0) parts.push(`, memory: ${memMB} MB`);
+  if (hasLostContext(session)) parts.push(", context: lost");
+  return parts.join("");
+}
+
 function SessionRowInner({
   session,
   onClick,
@@ -306,7 +323,7 @@ function SessionRowInner({
       onContextMenu={handleContextMenu}
       onKeyDown={handleKeyDown}
       tabIndex={0}
-      aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}${session.existingDir ? `, path: ${session.existingDir}` : ""}${session.program ? `, agent: ${session.program}` : ""}${memMB > 0 ? `, memory: ${memMB} MB` : ""}${hasLostContext(session) ? ", context: lost" : ""}`}
+      aria-label={buildSessionRowAriaLabel(session, dotStatus, memMB)}
     >
       {/* Checkbox cell — always in DOM to keep the reserved grid column occupied */}
       <div
@@ -338,7 +355,7 @@ function SessionRowInner({
       </Tooltip>
 
       {/* Name + path stacked — always visible */}
-      <span className={nameCellStyle}>
+      <span className={nameCellStyle} data-testid="session-row-name-cell">
         <span className={nameStyle} title={displayName}>
           {displayName}
         </span>
@@ -349,6 +366,7 @@ function SessionRowInner({
                 className={pathStyle}
                 role="img"
                 aria-label={`Path: ${session.existingDir}`}
+                data-testid="session-row-path"
               >
                 {truncateWorkspacePath(session.existingDir, ROW_PATH_MAX_LEN)}
               </span>

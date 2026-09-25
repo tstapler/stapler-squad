@@ -28,7 +28,7 @@ import { PI_SUPPORT_FLAG_NAME } from "@/lib/constants/programs";
 import { useTaggingRuleNames } from "@/lib/hooks/useTaggingRuleNames";
 import { UNCLASSIFIED_TAG, tagProvenanceTitle, tagProvenanceAriaLabel } from "@/lib/sessions/tagProvenance";
 import { truncateWorkspacePath } from "@/lib/utils/truncateWorkspacePath";
-import { ColumnKey, DEFAULT_VISIBLE_COLUMNS } from "./session-columns";
+import { ColumnKey, CARD_DEFAULT_VISIBLE_COLUMNS } from "./session-columns";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -246,7 +246,7 @@ export interface SessionCardProps {
   staleThresholdMinutes?: number;
   /** Backlog item this session was dispatched from (work/review/triage automation), if any. */
   backlogEntry?: BacklogIndexEntry;
-  /** Which optional columns to render (Program row, memory badge). Defaults to DEFAULT_VISIBLE_COLUMNS. */
+  /** Which optional columns to render (Program row, memory badge). Defaults to CARD_DEFAULT_VISIBLE_COLUMNS (Card/Board's pre-PR always-on behavior — row view passes its own user-configurable set explicitly). */
   visibleColumns?: ColumnKey[];
 }
 
@@ -284,7 +284,7 @@ function SessionCardInner({
   backlogEntry,
   visibleColumns,
 }: SessionCardProps) {
-  const effectiveColumns = visibleColumns ?? DEFAULT_VISIBLE_COLUMNS;
+  const effectiveColumns = visibleColumns ?? CARD_DEFAULT_VISIBLE_COLUMNS;
   const sessionActions = useSessionActions(session.id);
   const tagRuleNames = useTaggingRuleNames();
   const [isTagEditorOpen, setIsTagEditorOpen] = useState(false);
