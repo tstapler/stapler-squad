@@ -281,6 +281,41 @@ func TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly(t *testing.T) {
 	})
 }
 
+// TestStartupScanner_Scan_SkipsArchivedInstance verifies AC: a soft-archived
+// session (ArchivedAt set, e.g. by archiveItemWorkSessions superseding a prior
+// round) with a long-dead pane is never re-added to the review queue on server
+// restart — regression for the stale "No activity for Xh Ym" notification
+// pileup on archived work sessions.
+func TestStartupScanner_Scan_SkipsArchivedInstance(t *testing.T) {
+	t.Parallel()
+	inst := makeStartedInstance("archived-session")
+	archivedAt := time.Now().Add(-201 * time.Hour)
+	inst.ArchivedAt = &archivedAt
+	// Old timestamps simulate a pane that's been dead since well past the
+	// staleness threshold, the exact shape that used to trigger ReasonStale.
+	inst.UpdatedAt = archivedAt
+	inst.LastMeaningfulOutput = archivedAt
+	inst.SyncAtomicTimestamps()
+
+	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{
+		inst.Title: {IsControllerActive: false},
+	})
+	contentProvider := newFakeContentProvider(map[string]string{
+		inst.Title: "",
+	})
+
+	queue := NewReviewQueue()
+	scanner := NewStartupScanner(statusProvider, contentProvider)
+	added := scanner.Scan([]*Instance{inst}, queue)
+
+	if added != 0 {
+		t.Errorf("expected 0 sessions added for archived instance, got %d", added)
+	}
+	if _, exists := queue.Get(inst.Title); exists {
+		t.Error("archived instance must not appear in review queue")
+	}
+}
+
 // TestStartupScanner_Scan_EmptyInstanceList verifies graceful handling of an empty list.
 func TestStartupScanner_Scan_EmptyInstanceList(t *testing.T) {
 	t.Parallel()

@@ -34,3 +34,20 @@ func (n *EventBusNotifier) Notify(itemID, title, message string, notificationTyp
 		map[string]string{"item_id": itemID},
 	))
 }
+
+// NotifySession implements session.Notifier for a session with no linked BacklogItem —
+// see that interface method's doc comment (session/backlog_lifecycle.go) for why this
+// must not reuse Notify. Metadata is deliberately left empty (no "item_id" key):
+// NotificationItem.tsx's "View Session" link renders exactly when metadata["item_id"] is
+// absent and sessionId is set.
+func (n *EventBusNotifier) NotifySession(sessionID, title, message string, notificationType int32, urgent, important bool) {
+	if n == nil || n.Bus == nil {
+		return
+	}
+	n.Bus.Publish(events.NewNotificationEvent(
+		sessionID, "", uuid.New().String(),
+		notificationType, derivePriority(urgent, important),
+		title, message,
+		map[string]string{},
+	))
+}

@@ -925,13 +925,6 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 			inst.SetStatusManager(s.statusManager)
 		}
 		s.wireCallbacks(inst)
-		// Backfill MCP server URL for sessions created before MCP integration was
-		// wired up. Without this, buildLaunchCommand omits --mcp-config entirely and
-		// the Claude process restarts without a session UUID or MCP connection.
-		// Only applied in-memory; the DB value is updated lazily via SaveInstances.
-		if mcpURL := s.resolveMCPServerURL(); inst.MCPServerURL == "" && mcpURL != "" {
-			inst.SetMCPServerURL(mcpURL)
-		}
 	}
 
 	return instances, nil
@@ -1128,6 +1121,7 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 					return fmt.Errorf("failed to re-save resumed session %s after storage fallback race: %w", sessionUUID, err)
 				}
 			}
+			s.eventBus.Publish(events.NewSessionArchivedEvent(sessionUUID))
 		}
 		return nil
 	}
@@ -1139,6 +1133,10 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return fmt.Errorf("failed to save archived session %s: %w", sessionUUID, err)
 	}
+	// Notifies event-driven cleanup (ReactiveQueueManager evicting any stale
+	// review-queue entry) that this session left the live/visible set, mirroring
+	// DeleteSession's EventSessionDeleted publish below.
+	s.eventBus.Publish(events.NewSessionArchivedEvent(sessionUUID))
 	return nil
 }
 
@@ -1243,6 +1241,14 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 	if err != nil {
 		return "", false
 	}
+	// CanonicalizeWorktreePath resolves symlinks (e.g. macOS's /var ->
+	// /private/var) so this comparison isn't fooled by the same directory
+	// having two spellings -- one from a target worktree path already
+	// canonicalized when loaded from storage (git.NewGitWorktreeFromStorage),
+	// the other from a sibling's live pane cwd that may not be. See the /var
+	// vs /private/var path-inconsistency bug class already documented in
+	// backlog_service_test.go.
+	cleanTarget = git.CanonicalizeWorktreePath(cleanTarget)
 	for _, inst := range s.reviewQueuePoller.GetInstances() {
 		if inst == nil || inst.UUID == excludeUUID || !inst.IsBackendProcessAlive() {
 			continue
@@ -1255,6 +1261,7 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 		if absErr != nil {
 			continue
 		}
+		cleanCwd = git.CanonicalizeWorktreePath(cleanCwd)
 		if cleanCwd == cleanTarget || strings.HasPrefix(cleanCwd, cleanTarget+string(os.PathSeparator)) {
 			return inst.UUID, true
 		}
@@ -1592,9 +1599,12 @@ func (s *SessionService) WireInstanceCallbacks(inst *session.LiveInstance) {
 	s.wireClaudeSessionIDCallback(inst.Instance)
 	s.wireAutoArchiveCallback(inst.Instance)
 	s.wireSessionExitedPublisher(inst.Instance)
-	if mcpURL := s.resolveMCPServerURL(); inst.MCPServerURL == "" && mcpURL != "" {
-		inst.SetMCPServerURL(mcpURL)
-	}
+	// A provider, not a one-shot backfill: buildClaudeCommand re-resolves this
+	// on every claude launch (session/instance_tmux.go), so a relaunch
+	// (workspace switch, crash/hibernate resume) always observes the current
+	// server address instead of staying permanently stuck at whatever
+	// MCPServerURL happened to be at construction time.
+	inst.SetMCPServerURLProvider(s.resolveMCPServerURL)
 }
 
 // SetBacklogLifecycleListener wires the listener to all sessions created via
@@ -1851,6 +1861,11 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	if s.historyLinker != nil {
 		s.historyLinker.AddInstance(inst)
 	}
+	// Wired here (not a one-shot MCPServerURL field) so every caller of this
+	// chokepoint -- CreateSession, CreateDirectorySession, CreateWorktreeSession,
+	// loadInstancesWithWiring -- re-resolves the MCP URL fresh on every claude
+	// relaunch instead of staying stuck at whatever it was at construction time.
+	inst.SetMCPServerURLProvider(s.resolveMCPServerURL)
 }
 
 // StopDriverForSession stops the AutonomousDriver registered under sessionTitle.
@@ -2710,15 +2725,7 @@ func (s *SessionService) CreateSession(
 			if baseSHA != "" {
 				branchArgs = append(branchArgs, baseSHA)
 				if diverged, ambientBranch := git.RemoteAmbientHEADDivergesFromBase(ctx, runner, resolvedPath, baseSHA); diverged {
-					if ambientBranch != "" {
-						remoteCreationWarning = fmt.Sprintf(
-							"branched from %s's default branch %q instead of %q, which %s was checked out to and has diverged from it",
-							resolvedPath, defaultBranch, ambientBranch, resolvedPath)
-					} else {
-						remoteCreationWarning = fmt.Sprintf(
-							"branched from %s's default branch %q instead of its ambient checked-out HEAD, which has diverged from it",
-							resolvedPath, defaultBranch)
-					}
+					remoteCreationWarning = git.FormatAmbientDivergenceWarning(resolvedPath, defaultBranch, ambientBranch)
 				}
 			}
 
@@ -3673,6 +3680,13 @@ func (s *SessionService) ResumeHibernatedSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// This instance was loaded raw from storage above, bypassing
+	// Registry.Acquire/WireInstanceCallbacks entirely, so it has no
+	// MCPServerURL provider wired yet — without this, the relaunch below
+	// would omit --mcp-config and the resumed session could never call
+	// session-scoped MCP tools again.
+	instance.SetMCPServerURLProvider(s.resolveMCPServerURL)
+
 	if err := instance.ResumeFromHibernation(ctx); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
@@ -3717,6 +3731,11 @@ func (s *SessionService) ResumeCrashedSession(
 	if instance == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
+
+	// See the matching comment in ResumeHibernatedSession: this instance was
+	// loaded raw from storage above and needs its MCPServerURL provider
+	// wired explicitly before relaunch.
+	instance.SetMCPServerURLProvider(s.resolveMCPServerURL)
 
 	if err := instance.ResumeFromCrash(ctx); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
@@ -5013,6 +5032,12 @@ func (s *SessionService) ForkSession(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
+	// ForkFromCheckpoint builds newInst via NewInstance, which never sets
+	// MCPServerURL or a provider (unlike CreateWorktreeSession/CreateDirectorySession,
+	// which pass MCPServerURL in InstanceOptions) -- without this, a forked
+	// session would launch with no --mcp-config at all, same failure class as
+	// backlog e6c2a88e.
+	newInst.SetMCPServerURLProvider(s.resolveMCPServerURL)
 
 	if err := s.storage.AddInstance(newInst); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("persist forked session: %w", err))
@@ -6272,6 +6297,8 @@ func (s *SessionService) ArchiveSession(
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
+	// Notifies event-driven cleanup (ReactiveQueueManager evicting any stale review-queue entry), mirroring ArchiveSessionByUUID.
+	s.eventBus.Publish(events.NewSessionArchivedEvent(inst.UUID))
 	return connect.NewResponse(&sessionv1.ArchiveSessionResponse{}), nil
 }
 

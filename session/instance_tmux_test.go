@@ -929,15 +929,141 @@ func assertStaplerSquadMCPEntry(t *testing.T, val, wantURL, wantUUID string) {
 func TestClaudeMCPConfigArgs_HTTPFormat(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
-		Program:      "claude",
-		MCPServerURL: "http://localhost:8543/mcp",
-		UUID:         "test-uuid-123",
+		Program: "claude",
+		UUID:    "test-uuid-123",
 	}
-	flag, val := inst.claudeMCPConfigArgs()
+	flag, val := inst.claudeMCPConfigArgs("http://localhost:8543/mcp")
 	if flag != "--mcp-config" {
 		t.Errorf("flag = %q, want --mcp-config", flag)
 	}
 	assertStaplerSquadMCPEntry(t, val, "http://localhost:8543/mcp", "test-uuid-123")
+}
+
+// TestBuildClaudeCommand_ReResolvesMCPServerURL_OnRelaunch reproduces the
+// restart-drop bug (backlog e6c2a88e): a session whose static MCPServerURL
+// field was never populated must still get --mcp-config on relaunch, because
+// buildClaudeCommand now resolves through the provider on every call instead
+// of trusting a one-shot-backfilled field.
+func TestBuildClaudeCommand_ReResolvesMCPServerURL_OnRelaunch(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Program: "claude",
+		UUID:    "test-uuid-456",
+		// MCPServerURL deliberately left "" — simulates a session whose field
+		// was empty at the one moment it was ever backfilled.
+	}
+	inst.SetMCPServerURLProvider(func() string { return "http://localhost:9999/mcp" })
+
+	got := inst.buildLaunchCommand("")
+	if !strings.Contains(got, "--mcp-config") {
+		t.Fatalf("buildLaunchCommand() = %q, want it to contain --mcp-config (provider was wired)", got)
+	}
+	if !strings.Contains(got, "localhost:9999") {
+		t.Errorf("buildLaunchCommand() = %q, want it to use the provider's URL, not the empty static field", got)
+	}
+}
+
+// TestBuildClaudeCommand_ReResolvesProvider_AcrossMultipleLaunches proves the
+// PR's headline claim directly: the provider is called fresh on every
+// launch, not memoized after the first call. A regression that cached the
+// first resolveMCPServerURLFrom result on the Instance would pass every
+// other test in this file but fail here.
+func TestBuildClaudeCommand_ReResolvesProvider_AcrossMultipleLaunches(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Program: "claude", UUID: "test-uuid-multi"}
+	urls := []string{"http://localhost:1111/mcp", "http://localhost:2222/mcp"}
+	call := 0
+	inst.SetMCPServerURLProvider(func() string {
+		u := urls[call]
+		call++
+		return u
+	})
+
+	first := inst.buildLaunchCommand("")
+	if !strings.Contains(first, "1111") || strings.Contains(first, "2222") {
+		t.Errorf("first launch = %q, want only the first provider value (1111)", first)
+	}
+
+	second := inst.buildLaunchCommand("")
+	if !strings.Contains(second, "2222") || strings.Contains(second, "1111") {
+		t.Errorf("second launch = %q, want the provider re-resolved to 2222, not a cached 1111", second)
+	}
+}
+
+// TestBuildClaudeCommand_FallsBackToSnapshotWhenNoProvider guards the
+// back-compat path: instances/tests that predate provider wiring (no
+// SetMCPServerURLProvider call) still get --mcp-config from the static
+// MCPServerURL field via the Snapshot()-based GetMCPServerURL fallback.
+func TestBuildClaudeCommand_FallsBackToSnapshotWhenNoProvider(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Program:      "claude",
+		UUID:         "test-uuid-789",
+		MCPServerURL: "http://localhost:8543/mcp",
+	}
+	got := inst.buildLaunchCommand("")
+	if !strings.Contains(got, "--mcp-config") {
+		t.Fatalf("buildLaunchCommand() = %q, want it to contain --mcp-config (static field fallback)", got)
+	}
+	if !strings.Contains(got, "localhost:8543") {
+		t.Errorf("buildLaunchCommand() = %q, want it to use the static field's URL", got)
+	}
+}
+
+// TestBuildClaudeCommand_NoProviderNoLog_DuringBootWindow guards
+// pitfalls.md #7: a provider that was never wired (nil) is an expected
+// transient state during the narrow server-boot window before
+// WireInstanceCallbacks runs, not a failure — no --mcp-config flag and no
+// log line.
+func TestBuildClaudeCommand_NoProviderNoLog_DuringBootWindow(t *testing.T) {
+	buf := captureLogInfo(t)
+	inst := &Instance{Program: "claude", UUID: "test-uuid-boot"}
+
+	got := inst.buildLaunchCommand("")
+
+	if strings.Contains(got, "--mcp-config") {
+		t.Errorf("buildLaunchCommand() = %q, want no --mcp-config with no provider and no static field", got)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no log output when provider was never wired, got %q", buf.String())
+	}
+}
+
+// TestBuildClaudeCommand_LogsWhenBothProviderAndSnapshotEmpty guards AC4: a
+// provider that IS wired but resolves to "" (e.g. a transient server-address
+// race), with no static-field fallback either, must log loudly so a
+// permanently-stranded session is visible instead of silent.
+func TestBuildClaudeCommand_LogsWhenBothProviderAndSnapshotEmpty(t *testing.T) {
+	buf := captureLogInfo(t)
+	inst := &Instance{Program: "claude", UUID: "test-uuid-empty"}
+	inst.SetMCPServerURLProvider(func() string { return "" })
+
+	got := inst.buildLaunchCommand("")
+
+	if strings.Contains(got, "--mcp-config") {
+		t.Errorf("buildLaunchCommand() = %q, want no --mcp-config when provider resolves empty", got)
+	}
+	if !strings.Contains(buf.String(), "MCP server URL unresolved") {
+		t.Errorf("expected a loud log line when provider is wired but resolves empty, got %q", buf.String())
+	}
+}
+
+// TestBuildLaunchCommand_PiProgramSkipsMCPResolution guards pitfalls.md #7's
+// log-spam risk: a non-claude program launch must never attempt MCP URL
+// resolution or emit its log line.
+func TestBuildLaunchCommand_PiProgramSkipsMCPResolution(t *testing.T) {
+	buf := captureLogInfo(t)
+	inst := &Instance{Program: "pi", UUID: "test-uuid-pi"}
+	inst.SetMCPServerURLProvider(func() string { return "" })
+
+	got := inst.buildLaunchCommand("")
+
+	if strings.Contains(got, "--mcp-config") {
+		t.Errorf("buildLaunchCommand() = %q, want no --mcp-config for a pi launch", got)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no log output for a pi (non-claude) launch, got %q", buf.String())
+	}
 }
 
 // fakeHasSessionProcessManager reports HasSession() true (the tmux session
@@ -999,6 +1125,73 @@ func TestInstance_SetWindowSize_should_Delegate_When_Started(t *testing.T) {
 	}
 }
 
+// TestCheckRestartStorm_AllowsUnderThreshold confirms the breaker stays
+// silent for a normal handful of restarts.
+func TestCheckRestartStorm_AllowsUnderThreshold(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t"}
+	for i := 0; i < restartStormThreshold-1; i++ {
+		if err := inst.checkRestartStorm(); err != nil {
+			t.Fatalf("checkRestartStorm() attempt %d: unexpected error %v", i, err)
+		}
+		inst.trackRestartRate()
+	}
+	if err := inst.checkRestartStorm(); err != nil {
+		t.Fatalf("checkRestartStorm() after %d restarts: unexpected error %v", restartStormThreshold-1, err)
+	}
+}
+
+// TestCheckRestartStorm_BlocksAtThreshold is the regression test for the bug
+// this breaker fixes: previously trackRestartRate only logged a warning on a
+// crash loop, so a session whose Start() kept failing retried forever,
+// forking real tmux subprocesses every time (titus-soaktest-followup hit 89+
+// restarts in under 90 minutes in production, compounding a memory leak —
+// see attachStatusEventsForPublish's cap for the other half of that
+// incident). checkRestartStorm must now refuse once trackRestartRate has
+// recorded restartStormThreshold restarts within restartStormWindow.
+func TestCheckRestartStorm_BlocksAtThreshold(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t"}
+	for i := 0; i < restartStormThreshold; i++ {
+		if err := inst.checkRestartStorm(); err != nil {
+			t.Fatalf("checkRestartStorm() attempt %d: unexpected error %v", i, err)
+		}
+		inst.trackRestartRate()
+	}
+	if err := inst.checkRestartStorm(); err == nil {
+		t.Fatal("checkRestartStorm() = nil, want an error once the crash-loop threshold is reached")
+	}
+}
+
+// TestCheckRestartStorm_ClearsAfterCooldown confirms the breaker is a
+// self-healing rate limiter, not a permanent kill switch: once
+// restartStormCooldown has elapsed, both the cooldown and the aged-out
+// restart timestamps clear, so a session that recovers can restart normally
+// again.
+func TestCheckRestartStorm_ClearsAfterCooldown(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t"}
+	for i := 0; i < restartStormThreshold; i++ {
+		inst.trackRestartRate()
+	}
+	if err := inst.checkRestartStorm(); err == nil {
+		t.Fatal("checkRestartStorm() = nil, want an error immediately after tripping the breaker")
+	}
+
+	// Simulate the cooldown having already elapsed, and the restart
+	// timestamps having aged out of the window along with it (restartStormCooldown
+	// == restartStormWindow, so both always clear together — see the const's
+	// doc comment).
+	inst.restartMu.Lock()
+	inst.restartStormUntil = time.Now().Add(-time.Second)
+	inst.recentRestartTimes = nil
+	inst.restartMu.Unlock()
+
+	if err := inst.checkRestartStorm(); err != nil {
+		t.Fatalf("checkRestartStorm() after cooldown expired: unexpected error %v", err)
+	}
+}
+
 // seedCustomProgram registers a custom program in an isolated config dir.
 func seedCustomProgram(t *testing.T, prog config.ProgramConfig) {
 	t.Helper()
@@ -1023,15 +1216,84 @@ func TestInstance_BuildExtraEnv_IncludesCustomProgramAndInstanceEnvVars(t *testi
 	}
 	extraEnv := instance.buildExtraEnv()
 
-	for _, want := range []string{"STAPLER_SESSION_UUID=test-uuid-456", "CUSTOM_VAR=custom_val", "PROG_VAR=prog_val"} {
+	for _, want := range []string{"STAPLER_SESSION_UUID=test-uuid-456", "CUSTOM_VAR=custom_val", "PROG_VAR=prog_val", "CLASH=from_instance"} {
 		if !slices.Contains(extraEnv, want) {
 			t.Errorf("expected buildExtraEnv to contain %q, got %v", want, extraEnv)
 		}
 	}
-	// tmux applies -e flags in order, so the instance value must come last to win.
-	prog, inst := slices.Index(extraEnv, "CLASH=from_program"), slices.Index(extraEnv, "CLASH=from_instance")
-	if prog < 0 || inst < 0 || inst < prog {
-		t.Errorf("instance CLASH must follow the program-level one, got %v", extraEnv)
+	// resolveExtraEnvVars merges into one map keyed by name before buildExtraEnv
+	// renders it to KEY=VALUE strings, so the instance-level value replaces the
+	// program-level one outright -- only one CLASH entry should ever appear,
+	// not both relying on tmux's -e flag application order to resolve the clash.
+	if slices.Contains(extraEnv, "CLASH=from_program") {
+		t.Errorf("expected the program-level CLASH to be fully overridden, not just out-ordered, got %v", extraEnv)
+	}
+}
+
+// TestClaudeSettingsEnvOverrideArgs_EmptyWhenNoEnvVars is the "nothing to
+// override" case: a plain claude launch with no custom program/instance env
+// vars must not grow a --settings flag at all.
+func TestClaudeSettingsEnvOverrideArgs_EmptyWhenNoEnvVars(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	inst := &Instance{Program: "claude"}
+	flag, val := inst.claudeSettingsEnvOverrideArgs()
+	if flag != "" || val != "" {
+		t.Errorf("expected no --settings override for a plain launch, got flag=%q val=%q", flag, val)
+	}
+}
+
+// TestClaudeSettingsEnvOverrideArgs_CarriesResolvedEnvVars is the regression
+// test for GitHub issue #852: a custom program's env vars must also be
+// injected via --settings (not just tmux -e), because Claude Code's own
+// user-level ~/.claude/settings.json `env` block otherwise silently
+// overrides a plain inherited process env var of the same name -- confirmed
+// live against a Netflix-wrapper-installed settings.json overriding
+// ANTHROPIC_BASE_URL regardless of what tmux -e set.
+func TestClaudeSettingsEnvOverrideArgs_CarriesResolvedEnvVars(t *testing.T) {
+	seedCustomProgram(t, config.ProgramConfig{
+		ID:      "netflix-model-gateway",
+		Command: "claude",
+		Env:     map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000"},
+	})
+	inst := &Instance{Program: "netflix-model-gateway"}
+
+	flag, val := inst.claudeSettingsEnvOverrideArgs()
+
+	if flag != "--settings" {
+		t.Fatalf("flag = %q, want --settings", flag)
+	}
+	if !strings.HasPrefix(val, "'") || !strings.HasSuffix(val, "'") {
+		t.Fatalf("val should be single-quoted JSON, got %q", val)
+	}
+	var payload struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal([]byte(val[1:len(val)-1]), &payload); err != nil {
+		t.Fatalf("val is not valid JSON: %v\nval=%q", err, val)
+	}
+	if got := payload.Env["ANTHROPIC_BASE_URL"]; got != "http://127.0.0.1:47000" {
+		t.Errorf("env.ANTHROPIC_BASE_URL = %q, want http://127.0.0.1:47000", got)
+	}
+}
+
+// TestBuildClaudeCommand_IncludesSettingsEnvOverride confirms the flag
+// actually lands in the assembled command line buildLaunchCommand produces,
+// not just that the helper function returns it in isolation.
+func TestBuildClaudeCommand_IncludesSettingsEnvOverride(t *testing.T) {
+	seedCustomProgram(t, config.ProgramConfig{
+		ID:      "netflix-model-gateway",
+		Command: "claude",
+		Env:     map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000"},
+	})
+	inst := &Instance{Program: "netflix-model-gateway"}
+
+	cmd := inst.buildLaunchCommand("")
+
+	if !strings.Contains(cmd, "--settings") {
+		t.Errorf("expected buildLaunchCommand to include --settings, got %q", cmd)
+	}
+	if !strings.Contains(cmd, `ANTHROPIC_BASE_URL`) {
+		t.Errorf("expected the settings override to carry ANTHROPIC_BASE_URL, got %q", cmd)
 	}
 }
 

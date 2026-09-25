@@ -515,16 +515,39 @@ type BacklogItemSummary struct {
 // ItemSessionBacklogEntry is a lightweight join record linking a tmux session UUID
 // to its parent backlog item's metadata. Returned by GetAllItemSessionsWithBacklogInfo.
 type ItemSessionBacklogEntry struct {
-	SessionUUID string
-	SessionRole string
-	ItemID      string
-	ItemTitle   string
-	ItemStatus  string
+	ItemSessionID string // the item_sessions row's own ID
+	SessionUUID   string
+	// ConversationUUID is the Claude transcript UUID ("" if never recorded);
+	// it survives the session row's deletion, unlike SessionUUID's join target.
+	ConversationUUID string
+	SessionRole      string
+	ItemID           string
+	ItemTitle        string
+	ItemStatus       string
 	// EstimatedCostUsd, CostPriced, and CreatedAt mirror the underlying
 	// ItemSession row's own fields (session/ent/schema/item_session.go).
 	EstimatedCostUsd float64
 	CostPriced       bool
 	CreatedAt        time.Time
+}
+
+// DeletedItemSessionCostEntry is a ledger row preserving one deleted
+// ItemSession's cost attribution — written by DeleteBacklogItem just before
+// the item's ItemSession rows are hard-deleted. Returned by
+// GetDeletedItemSessionCostLedger. Field names mirror ItemSessionBacklogEntry
+// so callers can fold both shapes through the same SessionMeta path.
+type DeletedItemSessionCostEntry struct {
+	ConversationUUID string
+	SessionUUID      string
+	SessionRole      string
+	ItemID           string
+	ItemTitle        string
+	EstimatedCostUsd float64
+	CostPriced       bool
+	// CreatedAt is the original ItemSession's created_at (not this ledger
+	// row's deleted_at) — Insights' time-range filter needs the work's
+	// original timestamp.
+	CreatedAt time.Time
 }
 
 // BacklogItemFilter controls which items ListBacklogItems returns.

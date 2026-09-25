@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 
@@ -25,49 +26,76 @@ func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifier
 		return done
 	}
 
+	// Subscribe's second return is a subscriber ID for manual early unsubscribe;
+	// unneeded here since Subscribe already auto-unsubscribes on ctx cancellation
+	// (see its doc comment), which is this goroutine's own lifetime.
 	ch, _ := bus.Subscribe(ctx)
+	dedup := newDedupTracker(dedupWindow)
 
-	go func() {
-		defer close(done)
-		log.Info("DeliverySubscriber started", "notifiers", len(notifiers))
-		defer log.Info("DeliverySubscriber stopped")
+	go runDeliveryLoop(ctx, ch, dedup, notifiers, done)
+	return done
+}
 
-		var mu sync.Mutex
-		lastSent := make(map[string]time.Time)
-		const dedupWindow = 2 * time.Second
+// runDeliveryLoop drains ch until it closes or ctx is cancelled, delivering
+// each event via deliverEvent, then closes done. Run as its own goroutine by
+// StartDeliverySubscriber.
+func runDeliveryLoop(ctx context.Context, ch <-chan *events.Event, dedup *dedupTracker, notifiers []Notifier, done chan<- struct{}) {
+	defer close(done)
+	log.Info("DeliverySubscriber started", "notifiers", len(notifiers))
+	defer log.Info("DeliverySubscriber stopped")
 
-		for {
-			select {
-			case event, ok := <-ch:
-				if !ok {
-					return
-				}
-				if event == nil {
-					continue
-				}
-
-				dn, ok := buildDeliveryNotification(event)
-				if !ok {
-					continue
-				}
-
-				// Dedup: skip if the same tag was sent within the dedup window.
-				mu.Lock()
-				if last, seen := lastSent[dn.Tag]; seen && time.Since(last) < dedupWindow {
-					mu.Unlock()
-					continue
-				}
-				lastSent[dn.Tag] = time.Now()
-				mu.Unlock()
-
-				fanout(ctx, notifiers, dn)
-
-			case <-ctx.Done():
+	for {
+		select {
+		case event, ok := <-ch:
+			if !ok {
 				return
 			}
+			deliverEvent(ctx, event, dedup, notifiers)
+		case <-ctx.Done():
+			return
 		}
-	}()
-	return done
+	}
+}
+
+// deliverEvent converts event into a DeliveryNotification and fans it out to
+// notifiers, dropping the event entirely if it doesn't warrant a notification
+// or if dedup has already seen its tag within its window.
+func deliverEvent(ctx context.Context, event *events.Event, dedup *dedupTracker, notifiers []Notifier) {
+	if event == nil {
+		return
+	}
+	dn, ok := buildDeliveryNotification(event)
+	if !ok {
+		return
+	}
+	if !dedup.allow(dn.Tag) {
+		return
+	}
+	fanout(ctx, notifiers, dn)
+}
+
+// dedupTracker suppresses re-delivering a notification with the same tag
+// within a short window of a prior delivery (e.g. two EventBus deliveries
+// describing the same logical change arriving close together).
+type dedupTracker struct {
+	mu       sync.Mutex
+	lastSent map[string]time.Time
+	window   time.Duration
+}
+
+func newDedupTracker(window time.Duration) *dedupTracker {
+	return &dedupTracker{lastSent: make(map[string]time.Time), window: window}
+}
+
+// allow reports whether tag may be sent now, recording the send time if so.
+func (d *dedupTracker) allow(tag string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if last, seen := d.lastSent[tag]; seen && time.Since(last) < d.window {
+		return false
+	}
+	d.lastSent[tag] = time.Now()
+	return true
 }
 
 // StartPushSubscriber is the legacy entry-point. New code should use
@@ -95,12 +123,9 @@ func shouldNotify(
 	eventType events.EventType,
 	priority int32,
 	notificationType int32,
-	newStatus session.Status,
 	age time.Duration,
 ) bool {
 	switch eventType {
-	case events.EventSessionUpdated:
-		return newStatus == session.Stopped
 	case events.EventNotification:
 		if priority == priorityUrgent && age < urgentTTL {
 			return true
@@ -110,6 +135,8 @@ func shouldNotify(
 		}
 		return false
 	default:
+		// EventSessionUpdated isn't handled here: buildDeliveryNotification routes
+		// it straight to buildStatusChangeNotification instead (see there).
 		return false
 	}
 }
@@ -132,6 +159,14 @@ func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, b
 	if sess == nil {
 		return DeliveryNotification{}, false
 	}
+	// Require "status" in UpdatedFields, not just a Stopped snapshot: without this,
+	// any unrelated update to an already-Stopped session (a title rename, goal
+	// change, checkpoint, PR-status sync, ...) re-fires this push, because the
+	// check below only looks at current status, not whether this event is the
+	// transition that produced it.
+	if !slices.Contains(event.UpdatedFields, events.FieldStatus) {
+		return DeliveryNotification{}, false
+	}
 	// Read via the locked accessor, not the raw field: Status is written under
 	// Instance.stateMutex (see transitionTo), and this runs on the EventBus
 	// subscriber goroutine, concurrently with the instance's own goroutine.
@@ -142,7 +177,7 @@ func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, b
 	title := "Session Completed"
 	body := fmt.Sprintf("Session '%s' has completed", sess.GetTitle())
 	tag := "session-completed-" + stableID(sess)
-	data := buildDataMap(sess, "SESSION_COMPLETE", false)
+	data := buildDataMap(sess, "SESSION_COMPLETE")
 
 	return DeliveryNotification{
 		Title:              title,
@@ -156,7 +191,7 @@ func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, b
 }
 
 func buildInlineNotification(event *events.Event) (DeliveryNotification, bool) {
-	if !shouldNotify(event.Type, event.NotificationPriority, event.NotificationType, 0, time.Since(event.Timestamp)) {
+	if !shouldNotify(event.Type, event.NotificationPriority, event.NotificationType, time.Since(event.Timestamp)) {
 		return DeliveryNotification{}, false
 	}
 	if event.NotificationTitle == "" || event.NotificationMessage == "" {
@@ -206,7 +241,7 @@ func buildApprovalNotification(sess *session.Instance) DeliveryNotification {
 		Body:               fmt.Sprintf("Session '%s' requires approval", sess.GetTitle()),
 		Icon:               "/icons/icon-192.png",
 		Tag:                "approval-required-" + stableID(sess),
-		Data:               buildDataMap(sess, "APPROVAL_NEEDED", true),
+		Data:               buildApprovalDataMap(sess),
 		RequireInteraction: true,
 		Renotify:           true,
 	}
@@ -219,7 +254,7 @@ func buildCompletedNotification(sess *session.Instance) DeliveryNotification {
 		Body:               fmt.Sprintf("Session '%s' has completed", sess.GetTitle()),
 		Icon:               "/icons/icon-192.png",
 		Tag:                "session-completed-" + stableID(sess),
-		Data:               buildDataMap(sess, "SESSION_COMPLETE", false),
+		Data:               buildDataMap(sess, "SESSION_COMPLETE"),
 		RequireInteraction: false,
 		Renotify:           false,
 	}
@@ -235,23 +270,32 @@ func stableID(sess *session.Instance) string {
 	return sess.GetTitle()
 }
 
-// buildDataMap builds the FCM-compatible data map for a notification.
-func buildDataMap(sess *session.Instance, notifType string, isApproval bool) map[string]interface{} {
+// buildDataMap builds the FCM-compatible data map for a non-approval notification.
+func buildDataMap(sess *session.Instance, notifType string) map[string]interface{} {
+	return baseDataMap(sess, notifType)
+}
+
+// buildApprovalDataMap builds the FCM-compatible data map for an
+// approval-required notification, adding the actionable review/later buttons
+// a plain buildDataMap notification doesn't need.
+func buildApprovalDataMap(sess *session.Instance) map[string]interface{} {
+	data := baseDataMap(sess, "APPROVAL_NEEDED")
+	data["actions"] = []map[string]string{
+		{"action": "review", "title": "Review"},
+		{"action": "later", "title": "Later"},
+	}
+	return data
+}
+
+func baseDataMap(sess *session.Instance, notifType string) map[string]interface{} {
 	id := stableID(sess)
-	data := map[string]interface{}{
+	return map[string]interface{}{
 		"sessionId":        id,
 		"sessionTitle":     sess.GetTitle(),
 		"notificationType": notifType,
 		"timestamp":        time.Now().Unix(),
 		"url":              buildSessionURL(id),
 	}
-	if isApproval {
-		data["actions"] = []map[string]string{
-			{"action": "review", "title": "Review"},
-			{"action": "later", "title": "Later"},
-		}
-	}
-	return data
 }
 
 // buildSessionURL returns the deep-link URL for a session, using the stable ID.

@@ -18,6 +18,14 @@ const (
 	EventSessionUpdated EventType = "session.updated"
 	// EventSessionDeleted is emitted when a session is deleted
 	EventSessionDeleted EventType = "session.deleted"
+	// EventSessionArchived is emitted when a session is soft-archived (ArchivedAt
+	// set) rather than deleted outright — e.g. archiveItemWorkSessions superseding
+	// a backlog item's prior work/review sessions. The session row still exists
+	// in storage, so listeners that need "gone for good" semantics (frontend
+	// tombstoning, analytics) should keep using EventSessionDeleted; this event
+	// exists for cleanup that must react to a session leaving the *live/visible*
+	// set, such as ReactiveQueueManager evicting stale review-queue entries.
+	EventSessionArchived EventType = "session.archived"
 	// EventUserInteraction is emitted when user interacts with a session
 	EventUserInteraction EventType = "session.user_interaction"
 	// EventSessionAcknowledged is emitted when user acknowledges a session
@@ -153,6 +161,10 @@ type RemoteHealthEventPayload struct {
 	PreviousState sshremote.RemoteConnectionState
 }
 
+// FieldStatus is the UpdatedFields entry marking a session status change —
+// use this instead of the bare "status" string literal.
+const FieldStatus = "status"
+
 // Event represents a session state change event.
 // This is the internal Go representation that will be converted to protobuf events.
 type Event struct {
@@ -166,7 +178,8 @@ type Event struct {
 	Session *session.Instance
 	// SessionID for delete events when Session is nil
 	SessionID string
-	// UpdatedFields tracks which fields were modified (for update events)
+	// UpdatedFields tracks which fields were modified (for update events).
+	// See FieldStatus for the well-known "status" entry.
 	UpdatedFields []string
 	// OldStatus for status change events
 	OldStatus session.Status
@@ -247,6 +260,15 @@ func NewSessionUpdatedEventWithDetection(
 func NewSessionDeletedEvent(sessionID string) *Event {
 	return &Event{
 		Type:      EventSessionDeleted,
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+	}
+}
+
+// NewSessionArchivedEvent creates an event for session soft-archival.
+func NewSessionArchivedEvent(sessionID string) *Event {
+	return &Event{
+		Type:      EventSessionArchived,
 		Timestamp: time.Now(),
 		SessionID: sessionID,
 	}

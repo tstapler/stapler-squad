@@ -2833,6 +2833,214 @@ func TestCleanupItemWorktreesExcept_should_notTellScannerToStopWatching_When_Pat
 	assert.NoError(t, statErr, "sanity: the exempted worktree directory must still exist")
 }
 
+// TestCleanupItemWorktreesExcept_should_RemoveBacklogScaffolding_When_WorktreeCleanupSucceeds
+// is the call-site regression test for cleanupItemWorktreesExcept's own
+// CleanupSlashCommands/CleanupBacklogContextFile calls (archive/reopen/tombstone
+// paths) — mirroring session/backlog_lifecycle_test.go's
+// TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged for the other call
+// site. The worktree removal itself already deletes these files as a side effect;
+// this pins that the explicit calls also run, not just that the directory disappears.
+func TestCleanupItemWorktreesExcept_should_RemoveBacklogScaffolding_When_WorktreeCleanupSucceeds(t *testing.T) {
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	const workBranch = "backlog/scaffolding-cleanup-test"
+	workWT := filepath.Join(t.TempDir(), "work-wt")
+	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+
+	cmdDir := filepath.Join(workWT, ".claude", "commands", "backlog")
+	require.NoError(t, os.MkdirAll(cmdDir, 0o755))
+	statusPath := filepath.Join(cmdDir, "status.md")
+	require.NoError(t, os.WriteFile(statusPath, []byte("stale status"), 0o644))
+	contextPath := filepath.Join(workWT, ".backlog-context.md")
+	require.NoError(t, os.WriteFile(contextPath, []byte("stale context"), 0o644))
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	svc.SetRepoWatchRemover(&fakeRepoWatchRemover{})
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Scaffolding cleanup test item",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	attachPRFixWorkSession(t, storage, repo, item, "scaffolding-cleanup-work-uuid", repoPath, workWT, workBranch)
+
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(context.Background(), sessions, "")
+
+	_, statErr := os.Stat(statusPath)
+	assert.True(t, os.IsNotExist(statErr), "slash command scaffolding must be cleaned up")
+	_, statErr = os.Stat(contextPath)
+	assert.True(t, os.IsNotExist(statErr), ".backlog-context.md must be cleaned up")
+}
+
+// TestCleanupItemWorktreesExcept_should_KeepBacklogScaffolding_When_PathIsExempted
+// proves the exempted (still-in-use, reused across a rework round) worktree keeps its
+// scaffolding — cleanupItemWorktreesExcept must not reach into a worktree a brand-new
+// session is actively using.
+func TestCleanupItemWorktreesExcept_should_KeepBacklogScaffolding_When_PathIsExempted(t *testing.T) {
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	const workBranch = "backlog/scaffolding-except-test"
+	workWT := filepath.Join(t.TempDir(), "work-wt")
+	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+
+	cmdDir := filepath.Join(workWT, ".claude", "commands", "backlog")
+	require.NoError(t, os.MkdirAll(cmdDir, 0o755))
+	shipPath := filepath.Join(cmdDir, "ship.md")
+	require.NoError(t, os.WriteFile(shipPath, []byte("ship instructions"), 0o644))
+	contextPath := filepath.Join(workWT, ".backlog-context.md")
+	require.NoError(t, os.WriteFile(contextPath, []byte("live context"), 0o644))
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	svc.SetRepoWatchRemover(&fakeRepoWatchRemover{})
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Scaffolding except-path test item",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	attachPRFixWorkSession(t, storage, repo, item, "scaffolding-except-work-uuid", repoPath, workWT, workBranch)
+
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(context.Background(), sessions, workWT)
+
+	_, statErr := os.Stat(shipPath)
+	assert.NoError(t, statErr, "ship.md must survive on the exempted, still-in-use worktree")
+	_, statErr = os.Stat(contextPath)
+	assert.NoError(t, statErr, ".backlog-context.md must survive on the exempted, still-in-use worktree")
+}
+
+// TestCleanupItemWorktreesExcept_should_NotifyAndLogWarning_When_WorktreeRowMissingButExpected
+// is Epic 2.1's regression test for the confirmed gap in cleanupItemWorktreesExcept
+// (plan.md's Epic B): a work session that should have a Worktree row
+// (SessionTypeNewWorktree with a Branch) but doesn't used to vanish with a silent
+// continue — no log, no notify, nothing for an operator to act on. It must now notify
+// with the real linked item ID (never the session UUID) in the itemID slot.
+func TestCleanupItemWorktreesExcept_should_NotifyAndLogWarning_When_WorktreeRowMissingButExpected(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	ctx := context.Background()
+
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Missing worktree row test item",
+		Status: string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	const sessionUUID = "missing-row-work-uuid"
+	now := time.Now()
+	require.NoError(t, storage.CreateInstanceData(ctx, session.InstanceData{
+		Title:       sessionUUID,
+		UUID:        sessionUUID,
+		Path:        t.TempDir(),
+		Branch:      "work/missing-row",
+		Status:      session.Paused,
+		Program:     "claude",
+		SessionType: session.SessionTypeNewWorktree,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		// Deliberately no Worktree field — reproduces the missing-row gap: a session
+		// that ExpectsWorktree but has no Worktree ent row at all.
+	}))
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(ctx, sessions, "")
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+		assert.Equal(t, item.ID, ev.SessionID, "the real backlog item ID must land in the itemID slot, never the session UUID")
+		assert.Equal(t, item.ID, ev.NotificationMetadata["item_id"])
+		assert.Contains(t, ev.NotificationMessage, sessionUUID, "message must name the session so an operator knows what's missing")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a notification for the missing-but-expected worktree row")
+	}
+}
+
+// TestCleanupItemWorktreesExcept_should_ContinueSilently_When_SessionDoesNotExpectWorktree
+// is the regression guard for Epic 2.1's healthy path: a SessionTypeDirectory session
+// (no branch, ExpectsWorktree == false) has no Worktree row by design, and must keep
+// the pre-existing silent continue — no notify, no log, no behavior change.
+func TestCleanupItemWorktreesExcept_should_ContinueSilently_When_SessionDoesNotExpectWorktree(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	ctx := context.Background()
+
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Directory session regression test item",
+		Status: string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	const sessionUUID = "directory-session-uuid"
+	now := time.Now()
+	require.NoError(t, storage.CreateInstanceData(ctx, session.InstanceData{
+		Title:       sessionUUID,
+		UUID:        sessionUUID,
+		Path:        t.TempDir(),
+		Status:      session.Paused,
+		Program:     "claude",
+		SessionType: session.SessionTypeDirectory,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}))
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(ctx, sessions, "")
+
+	// cleanupItemWorktreesExcept is synchronous and EventBus.Publish sends synchronously
+	// into the subscriber channel, so any would-be event is already queued by the time
+	// the call above returns — no wait needed to prove none fired.
+	select {
+	case ev := <-ch:
+		t.Fatalf("expected no notification for a legitimately non-worktree session, got %+v", ev)
+	default:
+		// expected: no notification fired — unchanged silent continue.
+	}
+}
+
 // TestAutoReopenForPRFix_should_MergeAndPushMain_When_BranchIsStaleButMergesCleanly
 // verifies the preventive-sync path: a fix landed on main after the PR's branch was
 // created (drift unrelated to the PR's own diff). AutoReopenForPRFix must merge main
@@ -5684,7 +5892,7 @@ func TestShouldSkipWorkTombstoneForRestartGrace_should_OnlySkipPreBootSessionsWi
 // Two items whose titles differ only in characters slugify() strips (punctuation)
 // collide on the exact same branch name, and — confirmed here — CreateBacklogWorktree
 // then hands the second item the exact same worktree directory as the first, via
-// findExistingWorktreeForBranch's (session/git/worktree.go) "branch already checked
+// nativeFindExistingWorktreeForBranch's (session/git/worktree.go) "branch already checked
 // out, reuse its worktree" path.
 //
 // This is a known limitation, not something this bug fix addresses (no tracked

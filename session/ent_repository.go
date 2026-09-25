@@ -828,6 +828,12 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 		return fmt.Errorf("failed to delete diff stats: %w", err)
 	}
 
+	// Stamp the conversation UUID onto the session's item_sessions before the claude_sessions
+	// row is deleted, so Insights can still attribute the transcript afterward.
+	if err := stampItemSessionConversationUUID(ctx, tx, sess); err != nil {
+		return err
+	}
+
 	// Delete claude session and its metadata if exists
 	// Delete all claude metadata associated with claude sessions for this session
 	if _, err := tx.ClaudeMetadata.Delete().Where(claudemetadata.HasClaudeSessionWith(claudesession.HasSessionWith(session.ID(sess.ID)))).Exec(ctx); err != nil {
@@ -1776,6 +1782,27 @@ func (r *EntRepository) ListDismissedFindingIDs(ctx context.Context) (map[string
 }
 
 func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData) error {
+	return r.analyticsCreate(data).Exec(ctx)
+}
+
+// RecordAnalyticsBatch persists the batch in one SQLite statement/transaction.
+// Exact duplicate analytics IDs are idempotent while every other validation or
+// persistence error rejects the whole statement.
+func (r *EntRepository) RecordAnalyticsBatch(ctx context.Context, batch []AnalyticsData) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	builders := make([]*ent.ClassificationAnalyticsCreate, 0, len(batch))
+	for _, data := range batch {
+		builders = append(builders, r.analyticsCreate(data))
+	}
+	return r.client.ClassificationAnalytics.CreateBulk(builders...).
+		OnConflictColumns(classificationanalytics.FieldAnalyticsID).
+		DoNothing().
+		Exec(ctx)
+}
+
+func (r *EntRepository) analyticsCreate(data AnalyticsData) *ent.ClassificationAnalyticsCreate {
 	return r.client.ClassificationAnalytics.Create().
 		SetAnalyticsID(data.ID).
 		SetSessionID(data.SessionID).
@@ -1795,8 +1822,7 @@ func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData)
 		SetCommandSubcategory(data.CommandSubcategory).
 		SetPythonImports(data.PythonImports).
 		SetSource(data.Source).
-		SetCreatedAt(data.CreatedAt).
-		Exec(ctx)
+		SetCreatedAt(data.CreatedAt)
 }
 
 func (r *EntRepository) ListAnalytics(ctx context.Context, limit int) ([]AnalyticsData, error) {

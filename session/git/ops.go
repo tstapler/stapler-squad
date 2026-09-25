@@ -77,8 +77,8 @@ func ResolveDefaultBranchSHA(repoPath string) (branch, sha string, err error) {
 // repoPath's own checkout, this always fetches first, so the returned SHA reflects
 // origin's true current tip rather than whatever repoPath happened to have checked
 // out last — the gap that let a new backlog work session's worktree branch from a
-// days-stale local checkout instead of the real main tip (see legacySetupNewWorktree's
-// "branch from current HEAD" comment, and CreateBacklogWorktree's use of this func).
+// days-stale local checkout instead of the real main tip (see CreateBacklogWorktree's
+// use of this func).
 func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
 	if err := FetchBranch(repoPath, mainBranch); err != nil {
 		return "", fmt.Errorf("failed to fetch %s: %w", mainBranch, err)
@@ -153,15 +153,10 @@ func ResolveWorktreeBaseCommit(repoPath string) (defaultBranch, baseSHA string, 
 	return "", "", fmt.Errorf("resolve default branch (origin fetch failed: %w, local lookup failed: %v)", fetchErr, localErr)
 }
 
-// AmbientHEADDivergesFromBase reports whether repoPath's currently checked-out
-// branch differs from baseSHA (the commit a new worktree is about to branch
-// from, per ResolveWorktreeBaseCommit) — i.e. whether a caller who instead
-// branched from ambient HEAD, as new_worktree sessions used to
-// (session/instance_worktree.go), would have silently forked from unrelated
-// in-progress work. ambientBranch is "" when it can't be determined (detached
-// HEAD, unborn repo) — diverged is still meaningful in that case. Best-effort:
-// any lookup failure reports no divergence, since this only gates an
-// informational warning, not the branch resolution itself.
+// AmbientHEADDivergesFromBase reports whether repoPath's ambient checked-out
+// branch differs from baseSHA, the commit a new worktree is about to branch
+// from — best-effort, since this only gates an informational warning, not
+// the branch resolution itself.
 func AmbientHEADDivergesFromBase(repoPath, baseSHA string) (diverged bool, ambientBranch string) {
 	headSHA, err := GetHeadCommitSHA(repoPath)
 	if err != nil || headSHA == baseSHA {
@@ -171,14 +166,24 @@ func AmbientHEADDivergesFromBase(repoPath, baseSHA string) (diverged bool, ambie
 	return true, branch
 }
 
-// ResolveRemoteWorktreeBaseCommit is ResolveWorktreeBaseCommit's remote-host
-// counterpart (ssh-remote-workspaces): resolves the same default-branch/
-// origin-tip/unborn-repo contract, but through runner.Run against repoPath on
-// the remote host instead of go-git against the local filesystem, since a
-// remote SessionTypeNewWorktree (server/services/session_service.go's
-// CreateSession mode-specific block) can only run git via the dialed SSH
-// runner. Mirrors ResolveWorktreeBaseCommit's exact fallback order and
-// baseSHA == "" (err == nil) unborn-repo convention -- see its doc comment.
+// FormatAmbientDivergenceWarning builds the CreationWarning message shared by
+// the local (Instance.newWorktreeFromResolvedBase) and remote
+// (session_service.go's CreateSession) new_worktree paths for an
+// ambient-HEAD-diverges-from-base signal.
+func FormatAmbientDivergenceWarning(repoPath, defaultBranch, ambientBranch string) string {
+	if ambientBranch != "" {
+		return fmt.Sprintf(
+			"branched from %s's default branch %q instead of %q, which %s was checked out to and has diverged from it",
+			repoPath, defaultBranch, ambientBranch, repoPath)
+	}
+	return fmt.Sprintf(
+		"branched from %s's default branch %q instead of its ambient checked-out HEAD, which has diverged from it",
+		repoPath, defaultBranch)
+}
+
+// ResolveRemoteWorktreeBaseCommit mirrors ResolveWorktreeBaseCommit's fallback
+// order and baseSHA == "" (err == nil) unborn-repo convention, but through
+// runner.Run over SSH instead of go-git against the local filesystem.
 func ResolveRemoteWorktreeBaseCommit(ctx context.Context, runner tmux.CommandRunner, repoPath string) (defaultBranch, baseSHA string, err error) {
 	var errs []error
 	for _, candidate := range CandidateDefaultBranches {
@@ -203,23 +208,12 @@ func ResolveRemoteWorktreeBaseCommit(ctx context.Context, runner tmux.CommandRun
 			}
 		}
 	}
-	// Unborn-repo detection must not just be "rev-parse HEAD failed" -- that's
-	// also exactly what a connection drop or resource-shortage rejection on
-	// this same runner looks like (both return a non-nil error with no way to
-	// tell them apart from the error alone), which would silently misroute a
-	// broken connection into "no commits, ambient HEAD is safe" instead of a
-	// loud error. `git symbolic-ref -q HEAD` succeeds even on a genuinely
-	// unborn repo (HEAD is a valid symbolic ref to an as-yet-commitless
-	// branch) but fails the same way rev-parse HEAD would on a connection
-	// problem -- so only treat it as unborn when the symbolic ref resolves
-	// but the commit it points to does not.
+	// "rev-parse HEAD failed" alone is ambiguous between an unborn repo and a
+	// dropped connection; symbolic-ref resolving while rev-parse still fails
+	// disambiguates the true unborn case, which is safe to fall back to
+	// ambient HEAD for (no other branch to misattribute to).
 	if _, symErr := runner.Run(ctx, repoPath, "git", "symbolic-ref", "-q", "HEAD"); symErr == nil {
 		if _, headErr := runner.Run(ctx, repoPath, "git", "rev-parse", "HEAD"); headErr != nil {
-			// No candidate default branch and HEAD is a valid ref pointing to
-			// no commit yet: an unborn repo (freshly `git init`'d on the
-			// remote host), the one case ResolveWorktreeBaseCommit also lets
-			// a caller fall back to ambient HEAD for, since no other branch
-			// exists to misattribute to.
 			return "", "", nil
 		}
 	}
@@ -944,33 +938,26 @@ type MergeMainResult struct {
 // conflicting paths, so the caller can hand that context to whoever resolves it rather
 // than leaving a half-merged working tree behind for the next thing that touches it.
 //
-// Dispatches to nativeMergeMainIntoWorktree (Epic 3.4) or legacyMergeMainIntoWorktree
-// (the original subprocess-based implementation below) based on useNativeMerge, keyed by
-// worktreePath per ADR-002 — every real call site (drift.go's EnsureBranchSyncedWithMain,
-// backlog_service_triage.go's syncPRBranchWithMain, session/backlog_lifecycle.go's
-// branchReconciler, which is assigned this exact function value) gets flag coverage with
-// no changes of its own.
+// Dispatches to nativeMergeMainIntoWorktreeLocked (Epic 3.4) — every real call site
+// (drift.go's EnsureBranchSyncedWithMain, backlog_service_triage.go's
+// syncPRBranchWithMain, session/backlog_lifecycle.go's branchReconciler, which is
+// assigned this exact function value) needs no change of its own.
 func MergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
 	var result *MergeMainResult
 	ctx := withOperationAttrs(context.Background(), attribute.String("worktree_path", worktreePath))
 	err := withOperationSpan(ctx, "git.merge.main", func() (string, string, error) {
-		native := useNativeMerge(worktreePath)
 		var mergeErr error
-		if native {
-			result, mergeErr = nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch)
-		} else {
-			result, mergeErr = legacyMergeMainIntoWorktree(worktreePath, mainBranch)
-		}
-		return implementationLabel(native), mergeOutcomeLabel(result, mergeErr), mergeErr
+		result, mergeErr = nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch)
+		return implementationNative, mergeOutcomeLabel(result, mergeErr), mergeErr
 	})
 	return result, err
 }
 
 // mergeOutcomeLabel is MergeMainIntoWorktree's outer-span outcome value: a coarser
-// up_to_date/merged/conflicted breakdown than git_merge_outcome_total's native-only
-// four-way UpToDate/FastForward/CleanMerge/Conflicted split (native_merge.go), since
-// MergeMainResult itself (shared by both the native and legacy implementations) doesn't
-// distinguish a fast-forward from a three-way clean merge — both just set Merged: true.
+// up_to_date/merged/conflicted breakdown than git_merge_outcome_total's four-way
+// UpToDate/FastForward/CleanMerge/Conflicted split (native_merge.go), since
+// MergeMainResult doesn't distinguish a fast-forward from a three-way clean merge — both
+// just set Merged: true.
 func mergeOutcomeLabel(result *MergeMainResult, err error) string {
 	if err != nil || result == nil {
 		return outcomeError
@@ -985,74 +972,4 @@ func mergeOutcomeLabel(result *MergeMainResult, err error) string {
 	default:
 		return outcomeSuccess
 	}
-}
-
-// legacyMergeMainIntoWorktree is MergeMainIntoWorktree's original subprocess-based
-// implementation (`git fetch` + `git merge` + `git merge --abort` on conflict), unchanged
-// by Epic 3.4's dispatch seam.
-func legacyMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
-	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer fetchCancel()
-	fetchCmd := safeexec.CommandContext(fetchCtx, "git", "-C", worktreePath, "fetch", "origin", mainBranch)
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("failed to fetch %s: %s (%w)", mainBranch, out, err)
-	}
-
-	// Capture HEAD before the merge so up-to-date can be detected by comparing SHAs
-	// rather than parsing merge output text ("Already up to date." is locale- and
-	// git-version-dependent, e.g. older git prints "Already up-to-date.").
-	beforeSHA, headErr := getHeadCommitSHA(worktreePath)
-	if headErr != nil {
-		return nil, fmt.Errorf("failed to resolve HEAD before merge: %w", headErr)
-	}
-
-	mergeCtx, mergeCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer mergeCancel()
-	mergeCmd := safeexec.CommandContext(mergeCtx, "git", "-C", worktreePath, "merge", "--no-edit", "origin/"+mainBranch)
-	mergeOut, mergeErr := mergeCmd.CombinedOutput()
-	if mergeErr == nil {
-		afterSHA, headErr := getHeadCommitSHA(worktreePath)
-		if headErr != nil {
-			return nil, fmt.Errorf("failed to resolve HEAD after merge: %w", headErr)
-		}
-		if afterSHA == beforeSHA {
-			return &MergeMainResult{UpToDate: true}, nil
-		}
-		return &MergeMainResult{Merged: true}, nil
-	}
-
-	// The merge failed. Distinguish real conflicts (recoverable — abort and report)
-	// from any other git failure (propagate as-is; aborting a non-conflict failure
-	// could mask the real problem).
-	conflictFiles, conflictErr := conflictedFiles(worktreePath)
-	if conflictErr != nil || len(conflictFiles) == 0 {
-		return nil, fmt.Errorf("failed to merge %s: %s (%w)", mainBranch, mergeOut, mergeErr)
-	}
-
-	abortCtx, abortCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer abortCancel()
-	abortCmd := safeexec.CommandContext(abortCtx, "git", "-C", worktreePath, "merge", "--abort")
-	if abortOut, abortErr := abortCmd.CombinedOutput(); abortErr != nil {
-		return nil, fmt.Errorf("merge of %s conflicted in %v, and merge --abort failed: %s (%w)", mainBranch, conflictFiles, abortOut, abortErr)
-	}
-
-	return &MergeMainResult{Conflicted: true, ConflictedFiles: conflictFiles}, nil
-}
-
-// conflictedFiles returns the paths with unresolved merge conflicts in worktreePath.
-func conflictedFiles(worktreePath string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "-C", worktreePath, "diff", "--name-only", "--diff-filter=U")
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			files = append(files, line)
-		}
-	}
-	return files, nil
 }

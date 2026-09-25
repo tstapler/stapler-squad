@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,6 +15,8 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -353,6 +356,38 @@ func TestReconcileTicker_should_KeepRunningReconcileStuck_When_QuotaGateReconcil
 
 	if !backlogReconcileRan {
 		t.Error("backlog reconcile did not run after a panic in the sibling quota-gate reconcile call — the ticker goroutine must survive")
+	}
+}
+
+// TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_When_DependenciesBuiltNarrow
+// is Task 1.3.2b's wiring smoke test for the session.StartWorktreeConsistencySweeper call
+// added alongside the 60s reconcile ticker above (server/dependencies.go): confirms the
+// sweeper goroutine starts and returns cleanly on ctx cancellation. Deliberately builds a
+// narrow session/events/config dependency set rather than calling server.BuildDependencies()
+// or NewServerWithDeps, which wire ~30 real production subsystems and make real outbound
+// network calls even under test isolation (instinct_ci_hermetic_testing_gotchas.md) —
+// mirroring server/services/session_service_test.go's createTestStorage pattern.
+func TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_When_DependenciesBuiltNarrow(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	repo := session.NewTestEntRepository(t)
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+
+	notifier := &services.EventBusNotifier{Bus: events.NewEventBus(100)}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		session.StartWorktreeConsistencySweeper(ctx, storage, notifier, config.LoadConfig)
+		close(done)
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartWorktreeConsistencySweeper did not return after ctx cancellation")
 	}
 }
 

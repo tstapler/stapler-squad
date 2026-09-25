@@ -1472,36 +1472,78 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 	result := backlogItemToData(existing)
 	r.attachItemSessionsForPublish(ctx, &result)
 
-	// Resolve item_session IDs first so we can delete their review_verdicts.
-	itemSessionIDs, err := r.client.ItemSession.Query().
+	// Resolve full item_session rows (not just IDs) so their cost fields can be
+	// preserved in the deleted-cost ledger below before they're hard-deleted.
+	itemSessions, err := r.client.ItemSession.Query().
 		Where(itemsession.HasBacklogItemWith(backlogitem.ID(parsedID))).
-		IDs(ctx)
+		All(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to query item sessions for backlog item %s: %w", id, err)
 	}
 
-	if len(itemSessionIDs) > 0 {
-		_, err = r.client.ReviewVerdict.Delete().
+	// The ledger write and the three deletes below must commit atomically: a
+	// partial failure between the ledger CreateBulk and BacklogItem.DeleteOneID
+	// would otherwise leave a retry racing a live ItemSession that a fresh
+	// DeleteBacklogItem call would ledger AGAIN — a permanent duplicate cost
+	// row (the ledger has no other retry-idempotency guard, only the
+	// session_uuid unique index added alongside this transaction to make a
+	// same-key retry fail loudly instead of double-counting). Follows the
+	// same r.client.Tx(ctx) pattern as MarkStuck/AddBacklogItemDependency
+	// above.
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("delete backlog item: begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if len(itemSessions) > 0 {
+		// Story 3: preserve each ItemSession's cost attribution in a durable
+		// ledger before it's hard-deleted below — see
+		// session/ent/schema/deleted_item_session_cost.go's doc comment for why
+		// this is additive-ledger rather than soft-delete.
+		ledgerBuilders := make([]*ent.DeletedItemSessionCostCreate, 0, len(itemSessions))
+		itemSessionIDs := make([]uuid.UUID, 0, len(itemSessions))
+		for _, is := range itemSessions {
+			itemSessionIDs = append(itemSessionIDs, is.ID)
+			ledgerBuilders = append(ledgerBuilders, tx.DeletedItemSessionCost.Create().
+				SetConversationUUID(is.ConversationUUID).
+				SetSessionUUID(is.SessionUUID).
+				SetSessionRole(is.SessionRole).
+				SetItemID(parsedID.String()).
+				SetItemTitle(existing.Title).
+				SetEstimatedCostUsd(is.EstimatedCostUsd).
+				SetCostPriced(is.CostPriced).
+				SetCreatedAt(is.CreatedAt))
+		}
+		if _, err := tx.DeletedItemSessionCost.CreateBulk(ledgerBuilders...).Save(ctx); err != nil {
+			return fmt.Errorf("delete backlog item: write deleted-cost ledger for %s: %w", id, err)
+		}
+
+		_, err = tx.ReviewVerdict.Delete().
 			Where(reviewverdict.HasItemSessionWith(itemsession.IDIn(itemSessionIDs...))).
 			Exec(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to delete review verdicts for backlog item %s: %w", id, err)
+			return fmt.Errorf("delete backlog item: delete review verdicts for %s: %w", id, err)
 		}
 
-		_, err = r.client.ItemSession.Delete().
+		_, err = tx.ItemSession.Delete().
 			Where(itemsession.IDIn(itemSessionIDs...)).
 			Exec(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to delete item sessions for backlog item %s: %w", id, err)
+			return fmt.Errorf("delete backlog item: delete item sessions for %s: %w", id, err)
 		}
 	}
 
-	err = r.client.BacklogItem.DeleteOneID(parsedID).Exec(ctx)
+	err = tx.BacklogItem.DeleteOneID(parsedID).Exec(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
 		}
-		return fmt.Errorf("failed to delete backlog item %s: %w", id, err)
+		return fmt.Errorf("delete backlog item: delete %s: %w", id, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete backlog item: commit: %w", err)
 	}
 
 	// Best-effort publish: never blocks or fails the delete itself. result was
@@ -1993,8 +2035,22 @@ func (r *EntRepository) attachItemSessionsForPublish(ctx context.Context, data *
 	data.ItemSessions = sessions
 }
 
+// maxPublishedStatusEvents caps how many status-transition rows a single
+// attachStatusEventsForPublish call loads and re-broadcasts. Without this,
+// an item stuck in a transition crash-loop (each retry appends one more
+// BacklogStatusEvent row) makes every subsequent publish reload and
+// re-broadcast the item's *entire*, ever-growing history — an O(N) cost per
+// transition that compounds into unbounded live-heap growth under a fast
+// retry loop (confirmed via pprof: this call path was 93% of a 7.6GB live
+// heap after ~80 minutes of a stuck session's retry storm). Same cap/pattern
+// as maxSourceSyncEventsHistory above; 200 is far more than any legitimate
+// transition history needs for the live-update UI merge this exists for
+// (see doc comment below) while bounding the pathological case.
+const maxPublishedStatusEvents = 200
+
 // attachStatusEventsForPublish best-effort loads and attaches this item's
-// status-transition audit trail onto data before it's handed to
+// most recent status-transition audit trail (capped at
+// maxPublishedStatusEvents) onto data before it's handed to
 // publishItemChanged, mirroring attachItemSessionsForPublish above.
 //
 // Every publish-hook call site builds its BacklogItemData from a plain
@@ -2018,9 +2074,12 @@ func (r *EntRepository) attachStatusEventsForPublish(ctx context.Context, data *
 		log.WarningLog().Printf("[EntRepository] attachStatusEventsForPublish: invalid item id %s: %v", data.ID, err)
 		return
 	}
+	// Fetch most-recent-first (capped) then reverse, so the attached slice
+	// keeps its existing ascending (oldest-first) contract for consumers.
 	events, err := r.client.BacklogStatusEvent.Query().
 		Where(backlogstatusevent.ItemID(parsedID)).
-		Order(ent.Asc(backlogstatusevent.FieldCreatedAt)).
+		Order(ent.Desc(backlogstatusevent.FieldCreatedAt)).
+		Limit(maxPublishedStatusEvents).
 		All(ctx)
 	if err != nil {
 		log.WarningLog().Printf("[EntRepository] attachStatusEventsForPublish: failed to load status events for item %s: %v", data.ID, err)
@@ -2028,7 +2087,7 @@ func (r *EntRepository) attachStatusEventsForPublish(ctx context.Context, data *
 	}
 	data.StatusEvents = make([]BacklogStatusEventData, len(events))
 	for i, ev := range events {
-		data.StatusEvents[i] = backlogStatusEventToData(ev)
+		data.StatusEvents[len(events)-1-i] = backlogStatusEventToData(ev)
 	}
 }
 
@@ -2812,7 +2871,9 @@ func (r *EntRepository) GetAllItemSessionsWithBacklogInfo(ctx context.Context) (
 			continue
 		}
 		results = append(results, ItemSessionBacklogEntry{
+			ItemSessionID:    is.ID.String(),
 			SessionUUID:      is.SessionUUID,
+			ConversationUUID: is.ConversationUUID,
 			SessionRole:      is.SessionRole,
 			ItemID:           is.Edges.BacklogItem.ID.String(),
 			ItemTitle:        is.Edges.BacklogItem.Title,
@@ -2820,6 +2881,33 @@ func (r *EntRepository) GetAllItemSessionsWithBacklogInfo(ctx context.Context) (
 			EstimatedCostUsd: is.EstimatedCostUsd,
 			CostPriced:       is.CostPriced,
 			CreatedAt:        is.CreatedAt,
+		})
+	}
+	return results, nil
+}
+
+// GetDeletedItemSessionCostLedger returns every DeletedItemSessionCost row —
+// the durable cost-attribution ledger DeleteBacklogItem writes before
+// hard-deleting an item's ItemSession rows (Story 3). Used by Insights to
+// keep a deleted item's cost attributed by conversation UUID after the item
+// itself is gone.
+func (r *EntRepository) GetDeletedItemSessionCostLedger(ctx context.Context) ([]DeletedItemSessionCostEntry, error) {
+	//nolint:entfullscan feeds the Insights dashboard, which needs the full ledger.
+	rows, err := r.client.DeletedItemSessionCost.Query().All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query deleted item session cost ledger: %w", err)
+	}
+	results := make([]DeletedItemSessionCostEntry, 0, len(rows))
+	for _, row := range rows {
+		results = append(results, DeletedItemSessionCostEntry{
+			ConversationUUID: row.ConversationUUID,
+			SessionUUID:      row.SessionUUID,
+			SessionRole:      row.SessionRole,
+			ItemID:           row.ItemID,
+			ItemTitle:        row.ItemTitle,
+			EstimatedCostUsd: row.EstimatedCostUsd,
+			CostPriced:       row.CostPriced,
+			CreatedAt:        row.CreatedAt,
 		})
 	}
 	return results, nil

@@ -337,6 +337,11 @@ func TestTransitionTo_InvalidTransitions(t *testing.T) {
 
 // TestTransitionTo_ChainedTransitions verifies common multi-hop paths through
 // the state machine work as a sequence of transitionTo calls.
+//
+// This is the original reproduction case for the Instance.Status data race
+// between transitionTo and the (now-removed) untracked hibernate/resume
+// After-hook goroutines -- `go test -race ./session -run 'TestTransitionTo_'
+// -count=50` must stay race-free.
 func TestTransitionTo_ChainedTransitions(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

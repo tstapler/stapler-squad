@@ -184,14 +184,9 @@ func ExtractAllCommands(cmd string) []ParsedCommand {
 // Group 1 captures the name from ${VAR}; group 2 captures the name from $VAR.
 var envVarRefPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
 
-// ExpandEnvVars replaces $VAR and ${VAR} references in cmd, mirroring Python's
-// os.path.expandvars behaviour:
-//  1. env map (caller overrides) — checked first.
-//  2. OS environment (os.LookupEnv) — fallback, so real env vars work without
-//     having to enumerate them in the map.
-//  3. Unknown variables are left verbatim (original $VAR / ${VAR} form preserved).
-//
-// Command substitutions ($(...)) are not expanded — only simple variable references.
+// ExpandEnvVars replaces $VAR and ${VAR} references using only env. Callers
+// that want process values must provide them explicitly (BuildContext does).
+// Unknown variables are left verbatim. Command substitutions are not expanded.
 func ExpandEnvVars(cmd string, env map[string]string) string {
 	return envVarRefPattern.ReplaceAllStringFunc(cmd, func(m string) string {
 		var name string
@@ -203,11 +198,45 @@ func ExpandEnvVars(cmd string, env map[string]string) string {
 		if val, ok := env[name]; ok {
 			return val
 		}
-		if val, ok := os.LookupEnv(name); ok {
-			return val
-		}
 		return m // leave unexpanded, preserving original $VAR / ${VAR} form
 	})
+}
+
+const (
+	maxReferencedEnvironmentVariables = 64
+	maxReferencedEnvironmentValueSize = 8 << 10
+)
+
+// ReferencedEnvironment returns only process environment values explicitly
+// referenced by command. Caps bound protocol size and prevent a command from
+// exfiltrating the caller's complete environment to the resident process.
+func ReferencedEnvironment(command string, lookup func(string) (string, bool)) map[string]string {
+	if lookup == nil || command == "" {
+		return nil
+	}
+	matches := envVarRefPattern.FindAllStringSubmatch(command, -1)
+	selected := make(map[string]string)
+	for _, match := range matches {
+		name := match[1]
+		if name == "" {
+			name = match[2]
+		}
+		if _, exists := selected[name]; exists {
+			continue
+		}
+		if len(selected) >= maxReferencedEnvironmentVariables {
+			break
+		}
+		value, ok := lookup(name)
+		if !ok || len(value) > maxReferencedEnvironmentValueSize {
+			continue
+		}
+		selected[name] = value
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+	return selected
 }
 
 // stripOuterQuotes removes a single layer of surrounding single or double quotes.

@@ -73,13 +73,21 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			return fmt.Errorf("failed to create git worktree: %w", err)
 		}
 		i.gitManager.SetWorktree(gitWorktree)
+		// i.mu guards this write and the buildSnapshot() read below against
+		// legacy setters (MarkViewed, ForceStatus, etc. -- see ForceStatus's
+		// doc comment) that bypass the actor and run on arbitrary caller
+		// goroutines; an unguarded write+read here raced with them under
+		// -race the same way ForceStatus's fix describes.
+		i.mu.Lock()
 		i.Branch = branchName
-		log.Info("git worktree created", "session", i.Title, "branch", i.Branch)
 		// Republish the snapshot so GetCreationWarning() (Snapshot()-backed, per
 		// instance-lock-free-reads.md) observes the CreationWarning set above by
 		// newWorktreeFromResolvedBase -- the initial snapshot published at
 		// construction predates this and is never otherwise refreshed.
-		i.snapshot.Store(buildSnapshot(i))
+		snap := buildSnapshot(i)
+		i.mu.Unlock()
+		i.snapshot.Store(snap)
+		log.Info("git worktree created", "session", i.Title, "branch", branchName)
 	case SessionTypeExistingWorktree:
 		if i.ExistingWorktree == "" {
 			return fmt.Errorf("existing worktree path required for SessionTypeExistingWorktree")
@@ -204,20 +212,10 @@ func (i *Instance) setupFirstTimeWorktree() error {
 }
 
 // newWorktreeFromResolvedBase constructs the *git.GitWorktree for a
-// SessionTypeNewWorktree session, branching from the repo's real default
-// branch (origin's freshly-fetched tip, falling back to a local candidate —
-// see git.ResolveWorktreeBaseCommit) instead of i.Path's ambient checked-out
-// HEAD. Mirrors CreateBacklogWorktree's identical resolve-then-construct
-// pattern (see its doc comment for the misattribution bug this avoids); unlike
-// that queue-driven spawn, there is no baseBranch override here since
-// create_session accepts no such parameter yet.
-//
-// Only ever falls back to ambient HEAD for a genuinely unborn repo (baseSHA
-// == "", err == nil) — the one case with no other branch to accidentally
-// fork from. Any other resolution failure is a hard error, never a silent
-// ambient-HEAD fallback. When ambient HEAD is a real, different commit from
-// the resolved base, records i.CreationWarning so the MCP caller sees a
-// divergence signal instead of silent success (see instanceToDetail).
+// SessionTypeNewWorktree session, branching from the repo's resolved default
+// branch (git.ResolveWorktreeBaseCommit) instead of i.Path's ambient
+// checked-out HEAD, and records a divergence warning when they differ. Mirrors
+// CreateBacklogWorktree's resolve-then-construct pattern.
 func (i *Instance) newWorktreeFromResolvedBase() (*git.GitWorktree, string, error) {
 	branchName := git.ResolveBranchName(i.Branch, i.Title)
 	runner := i.executionTarget().Runner()
@@ -237,15 +235,7 @@ func (i *Instance) newWorktreeFromResolvedBase() (*git.GitWorktree, string, erro
 		return git.NewGitWorktreeWithBranch(i.Path, i.Title, branchName, git.WithCommandRunner(runner))
 	}
 	if diverged, ambientBranch := git.AmbientHEADDivergesFromBase(resolvedRepo, baseSHA); diverged {
-		if ambientBranch != "" {
-			i.CreationWarning = fmt.Sprintf(
-				"branched from %s's default branch %q instead of %q, which %s was checked out to and has diverged from it",
-				resolvedRepo, defaultBranch, ambientBranch, resolvedRepo)
-		} else {
-			i.CreationWarning = fmt.Sprintf(
-				"branched from %s's default branch %q instead of its ambient checked-out HEAD, which has diverged from it",
-				resolvedRepo, defaultBranch)
-		}
+		i.CreationWarning = git.FormatAmbientDivergenceWarning(resolvedRepo, defaultBranch, ambientBranch)
 		log.Warn("new_worktree: ambient HEAD diverges from resolved default branch", "repoPath", resolvedRepo, "defaultBranch", defaultBranch, "ambientBranch", ambientBranch)
 	}
 	return git.NewGitWorktreeFromCommitSHA(i.Path, i.Title, branchName, baseSHA, git.WithCommandRunner(runner))

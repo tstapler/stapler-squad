@@ -446,7 +446,12 @@ func (cc *ClaudeController) Stop() error {
 	}
 	cancelFn() // Signal all background goroutines to stop.
 	if statusLoopDone != nil {
-		<-statusLoopDone // Join runStatusChangeLoop before returning.
+		select {
+		case <-statusLoopDone: // Join runStatusChangeLoop before returning.
+		case <-time.After(stopJoinTimeout):
+			log.Error("claude controller stop: runStatusChangeLoop did not exit within timeout",
+				"session", cc.sessionName, "timeout", stopJoinTimeout)
+		}
 	}
 
 	// Phase 2: swap out sub-components atomically. New callers see nil immediately;

@@ -3,8 +3,11 @@ package services
 import (
 	"context"
 	"fmt"
+	"path"
+	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +32,14 @@ var _ sessionv1connect.InsightsServiceHandler = (*InsightsService)(nil)
 // persisted session_role at summary-build time (ADR-029). Satisfied by *session.Storage.
 type insightsBacklogReader interface {
 	GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]session.ItemSessionBacklogEntry, error)
+}
+
+// insightsDeletedCostLedgerReader is the narrow interface InsightsService uses
+// to source the durable deleted-item cost ledger (session/ent/schema/deleted_item_session_cost.go).
+// A separate seam from insightsBacklogReader so a backlogReader test double
+// that doesn't implement it is just treated as having no ledger (nil-safe).
+type insightsDeletedCostLedgerReader interface {
+	GetDeletedItemSessionCostLedger(ctx context.Context) ([]session.DeletedItemSessionCostEntry, error)
 }
 
 // DismissedFindingsRepository is the seam for finding-dismissal persistence.
@@ -62,6 +73,10 @@ type InsightsService struct {
 	// bounded in practice by the number of distinct model families ever seen —
 	// safe to leave unbounded (see pre-mortem's minor note).
 	loggedUnpricedFamilies map[string]bool
+	// backfillOnce runs BackfillConversationUUIDs once per process, on the first
+	// summary request. If the token store is still empty then, nothing is stamped
+	// and the next process start retries.
+	backfillOnce sync.Once
 }
 
 // NewInsightsService creates a new InsightsService.
@@ -80,6 +95,50 @@ func NewInsightsService(
 	}
 }
 
+// untrackedItemIDPrefix marks a role_breakdown item entry synthesized by
+// sessionDisplayTitle rather than sourced from a real backlog item — see
+// groupUnattributed's doc comment.
+const untrackedItemIDPrefix = "untracked:"
+
+// worktreeTitlePattern extracts a stapler-squad worktree's session title from a
+// Claude transcript's decoded project path (".../worktrees/<title>/<16-hex id>").
+// Mirrors web-app/src/app/insights/insightsFormatters.ts's WORKTREE_PATH regex —
+// keep the two in sync.
+var worktreeTitlePattern = regexp.MustCompile(`/worktrees/(.+?)/[0-9a-f]{16}(?:/|$)`)
+
+// sessionDisplayTitle returns a human-readable label for projectPath: the
+// worktree's session title if the path is a stapler-squad worktree, else the
+// path's final segment. "" in, "" out.
+func sessionDisplayTitle(projectPath string) string {
+	if m := worktreeTitlePattern.FindStringSubmatch(projectPath); m != nil {
+		return strings.ReplaceAll(m[1], "/", "-")
+	}
+	return path.Base(strings.TrimRight(projectPath, "/"))
+}
+
+// groupUnattributed returns meta unchanged unless it carries no backlog
+// attribution (Role == ""), in which case it groups it under a synthetic
+// per-title item keyed by sessionDisplayTitle(projectPath) — untrackedItemIDPrefix
+// keeps that ID unambiguous from a real backlog-item UUID (BacklogItemDetail
+// relies on this). Role is further set to "external" when projectPath isn't a
+// stapler-squad worktree path; a raw `claude` run inside the main checkout
+// itself is indistinguishable from this and accepted as unsolved.
+func groupUnattributed(meta SessionMeta, projectPath string) SessionMeta {
+	if meta.Role != "" {
+		return meta
+	}
+	title := sessionDisplayTitle(projectPath)
+	if title == "" {
+		return meta
+	}
+	if !worktreeTitlePattern.MatchString(projectPath) {
+		meta.Role = session.SessionRoleExternal
+	}
+	meta.ItemID = untrackedItemIDPrefix + title
+	meta.ItemTitle = title
+	return meta
+}
+
 // SessionMeta is the per-session backlog attribution sessionMetaForSessions
 // looks up by tmux session ID: its SessionRole plus the backlog item it
 // belongs to (Epic 4.1's item-drilldown data).
@@ -87,27 +146,89 @@ type SessionMeta struct {
 	Role      string
 	ItemID    string
 	ItemTitle string
+	// ItemSessionUUID is the ItemSession's session_uuid, so a conversation-matched
+	// transcript can mark that row covered for the fold-in dedupe.
+	ItemSessionUUID string
+}
+
+// metaFor resolves r's attribution: by live session ID first, else by Claude
+// conversation UUID (survives the session row's deletion). ok reports a match.
+func metaFor(meta map[string]SessionMeta, sessionID string, r *tokens.ParseResult) (SessionMeta, bool) {
+	if m, ok := meta[sessionID]; ok && sessionID != "" {
+		return m, true
+	}
+	if r != nil && r.SessionUUID != "" {
+		m, ok := meta[conversationKey(r.SessionUUID)]
+		return m, ok
+	}
+	return SessionMeta{}, false
+}
+
+// conversationKey namespaces conversation UUIDs inside the shared SessionMeta map.
+func conversationKey(conversationUUID string) string { return "conv:" + conversationUUID }
+
+// sessionMetaResult is sessionMetaForSessions' return value: the built
+// sessionID→SessionMeta map, plus the raw rows it was built from. A caller
+// that also needs to fold the same backlog entries/ledger rows into a
+// separate aggregate (GetInsightsSummary's transcript-less fold-in passes)
+// reuses entries/ledgerEntries instead of re-querying
+// GetAllItemSessionsWithBacklogInfo/GetDeletedItemSessionCostLedger a second
+// time per request.
+type sessionMetaResult struct {
+	meta          map[string]SessionMeta
+	entries       []session.ItemSessionBacklogEntry
+	ledgerEntries []session.DeletedItemSessionCostEntry
 }
 
 // sessionMetaForSessions builds a sessionUUID→SessionMeta map from one unfiltered
 // GetAllItemSessionsWithBacklogInfo scan, keeping the first (most-recently-created,
 // per that query's explicit Order(Desc(CreatedAt))) entry seen per UUID (ADR-029).
-func (s *InsightsService) sessionMetaForSessions(ctx context.Context) map[string]SessionMeta {
+func (s *InsightsService) sessionMetaForSessions(ctx context.Context) sessionMetaResult {
 	if s.backlogReader == nil {
-		return nil
+		return sessionMetaResult{}
 	}
 	entries, err := s.backlogReader.GetAllItemSessionsWithBacklogInfo(ctx)
 	if err != nil {
 		log.Warn("failed to fetch session roles for insights", "err", err)
-		return nil
+		return sessionMetaResult{}
 	}
 	meta := make(map[string]SessionMeta, len(entries))
 	for _, e := range entries {
+		m := SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle, ItemSessionUUID: e.SessionUUID}
 		if _, exists := meta[e.SessionUUID]; !exists {
-			meta[e.SessionUUID] = SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle}
+			meta[e.SessionUUID] = m
+		}
+		if e.ConversationUUID != "" {
+			if _, exists := meta[conversationKey(e.ConversationUUID)]; !exists {
+				meta[conversationKey(e.ConversationUUID)] = m
+			}
 		}
 	}
-	return meta
+
+	// Story 3: fold in the deleted-item cost ledger, keyed by conversation UUID
+	// only — a ledger row's snapshotted session_uuid belongs to a session row
+	// that was already gone before the item was even deleted, so it can never
+	// resolve a live association; only metaFor's conversation-UUID fallback can
+	// ever reach these rows.
+	var ledgerEntries []session.DeletedItemSessionCostEntry
+	if ledgerReader, ok := s.backlogReader.(insightsDeletedCostLedgerReader); ok {
+		le, err := ledgerReader.GetDeletedItemSessionCostLedger(ctx)
+		if err != nil {
+			log.Warn("failed to fetch deleted item session cost ledger for insights", "err", err)
+		} else {
+			ledgerEntries = le
+			for _, e := range ledgerEntries {
+				if e.ConversationUUID == "" {
+					continue
+				}
+				key := conversationKey(e.ConversationUUID)
+				if _, exists := meta[key]; !exists {
+					meta[key] = SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle}
+				}
+			}
+		}
+	}
+	return sessionMetaResult{meta: meta, entries: entries, ledgerEntries: ledgerEntries}
 }
 
 // SetDismissedFindingsStore wires dismissal persistence (nil disables it —
@@ -140,13 +261,19 @@ func (s *InsightsService) warnNewUnpricedFamilies(families map[string]bool) {
 // are a separate, non-summable response-level list (see
 // ADR-002-findings-non-summable-dollar-impact.md), not a SessionTokenSummary
 // field.
+//
+// Also returns the grouped SessionMeta (post-groupUnattributed) it computed
+// for this session, so a caller that also feeds accumulateRoleCost — the
+// proto's SessionRole field alone doesn't carry ItemID/ItemTitle — reuses
+// this value instead of recomputing metaFor+groupUnattributed a second time
+// and risking the two falling out of sync (see 0107988f9).
 func buildSessionSummary(
 	r *tokens.ParseResult,
 	pt *tokens.PricingTable,
 	associator *tokens.Associator,
 	snapshot []tokens.SessionRecord,
 	sessionMeta map[string]SessionMeta,
-) *sessionv1.SessionTokenSummary {
+) (*sessionv1.SessionTokenSummary, SessionMeta) {
 	firstTs, lastTs := sessionTimestamps(r)
 
 	sessionID, isOrphan := "", true
@@ -156,6 +283,15 @@ func buildSessionSummary(
 		rec, isOrphan = associator.AssociateRecordWithSnapshot(r, snapshot)
 		sessionID, tags = rec.SessionID, rec.Tags
 	}
+	attributed, byConversation := metaFor(sessionMeta, sessionID, r)
+	if byConversation {
+		isOrphan = false
+	}
+	// Reclassify "" -> "external" the same way accumulateRoleCost's caller does
+	// (groupUnattributed), so SessionRole matches the role_breakdown bucket this
+	// session is actually counted under — otherwise a click on the "external" bar
+	// would filter SessionsTable by a role value no session ever reports.
+	attributed = groupUnattributed(attributed, r.ProjectPath)
 
 	costUSD, unpriced := pt.EstimateCost(r)
 	cacheHitRate := tokens.ComputeCacheHitRate(r.TotalInput, r.CacheRead)
@@ -186,7 +322,7 @@ func buildSessionSummary(
 		UnpricedModels:   unpriced,
 		ActivityType:     activityType,
 		Tags:             tags,
-		SessionRole:      sessionMeta[sessionID].Role,
+		SessionRole:      attributed.Role,
 	}
 	if !firstTs.IsZero() {
 		summary.FirstMessageAt = timestamppb.New(firstTs)
@@ -200,7 +336,7 @@ func buildSessionSummary(
 	if roi, ok := tokens.ComputeCacheROI(r, pt); ok {
 		summary.CacheRoiUsd = roi
 	}
-	return summary
+	return summary, attributed
 }
 
 // GetInsightsSummary returns aggregated token and cost data for a time range.
@@ -208,6 +344,15 @@ func (s *InsightsService) GetInsightsSummary(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetInsightsSummaryRequest],
 ) (*connect.Response[sessionv1.GetInsightsSummaryResponse], error) {
+	s.backfillOnce.Do(func() {
+		go func() {
+			bctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			if _, err := s.BackfillConversationUUIDs(bctx); err != nil {
+				log.Warn("insights backfill failed", "err", err)
+			}
+		}()
+	})
 	results := s.store.GetAll()
 	msg := req.Msg
 
@@ -244,6 +389,11 @@ func (s *InsightsService) GetInsightsSummary(
 		// ItemSession row already counted here, so it never double-counts a
 		// Claude-backed session that has both a transcript and an ItemSession row.
 		transcriptCoveredSessionIDs = make(map[string]bool)
+		// transcriptCoveredConversationUUIDs is every transcript's own conversation
+		// UUID seen in this loop — Story 3's ledger fold-in pass skips any ledger
+		// row already counted here, so a deleted item's transcript (still on disk)
+		// is never double-counted against its own ledger row.
+		transcriptCoveredConversationUUIDs = make(map[string]bool)
 	)
 
 	sessions := make([]*sessionv1.SessionTokenSummary, 0, len(results))
@@ -253,7 +403,8 @@ func (s *InsightsService) GetInsightsSummary(
 	if s.associator != nil {
 		sessionSnapshot = s.associator.Snapshot()
 	}
-	sessionMeta := s.sessionMetaForSessions(ctx)
+	smr := s.sessionMetaForSessions(ctx)
+	sessionMeta := smr.meta
 
 	// Fetched once per request (not per-finding) — see AllRules's identical
 	// small-table-full-scan rationale.
@@ -294,11 +445,24 @@ func (s *InsightsService) GetInsightsSummary(
 		if s.associator != nil {
 			sessionID, isOrphan = s.associator.AssociateWithSnapshot(r, sessionSnapshot)
 		}
+		attributed, byConversation := metaFor(sessionMeta, sessionID, r)
+		if byConversation {
+			isOrphan = false // a deleted session's transcript, still attributable by conversation UUID
+			if attributed.ItemSessionUUID != "" {
+				transcriptCoveredSessionIDs[attributed.ItemSessionUUID] = true
+			}
+		}
 		if sessionID != "" {
 			// Recorded before the orphan/session-id filters below so Story
 			// 4.1.4's fold-in pass still recognizes this session as
 			// transcript-covered even if this particular response excludes it.
 			transcriptCoveredSessionIDs[sessionID] = true
+		}
+		if r != nil && r.SessionUUID != "" {
+			// Recorded unconditionally, mirroring sessionID above, so Story 3's
+			// ledger fold-in pass below still recognizes this transcript as
+			// covered even if this particular response excludes it.
+			transcriptCoveredConversationUUIDs[r.SessionUUID] = true
 		}
 
 		// Apply orphan filter.
@@ -322,7 +486,7 @@ func (s *InsightsService) GetInsightsSummary(
 			}
 		}
 
-		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot, sessionMeta)
+		summary, groupedMeta := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot, sessionMeta)
 		costUSD, unpriced := summary.EstimatedCostUsd, summary.UnpricedModels
 		sessionUnpriced := len(unpriced) > 0
 		for _, f := range unpriced {
@@ -373,7 +537,7 @@ func (s *InsightsService) GetInsightsSummary(
 		if !sessionUnpriced {
 			totalCostUSD += costUSD
 		}
-		accumulateRoleCost(roleAccums, sessionMeta[sessionID], costUSD, sessionUnpriced)
+		accumulateRoleCost(roleAccums, groupedMeta, costUSD, sessionUnpriced)
 		totalInputTokens += r.TotalInput
 		totalOutputTokens += r.TotalOutput
 		totalCacheReadTokens += r.CacheRead
@@ -481,29 +645,47 @@ func (s *InsightsService) GetInsightsSummary(
 	// s.store.GetAll() to ever see) into total_cost_usd/role_breakdown, so a
 	// transcript-less session's cost isn't silently invisible. Deliberately
 	// scoped to those two surfaces only — daily/model/activity breakdowns stay
-	// transcript-only in v1 (see plan.md's Story 4.1.4 design note).
-	if s.backlogReader != nil {
-		entries, err := s.backlogReader.GetAllItemSessionsWithBacklogInfo(ctx)
-		if err != nil {
-			log.Warn("insights: failed to fetch item sessions for transcript-less cost fold-in", "err", err)
-		} else {
-			for _, e := range entries {
-				if e.SessionUUID == "" || transcriptCoveredSessionIDs[e.SessionUUID] {
-					continue // no real session, or already counted via its transcript above
-				}
-				if !fromTime.IsZero() && !e.CreatedAt.IsZero() && e.CreatedAt.Before(fromTime) {
-					continue
-				}
-				if !toTime.IsZero() && !e.CreatedAt.IsZero() && e.CreatedAt.After(toTime) {
-					continue
-				}
-				entryUnpriced := !e.CostPriced
-				if !entryUnpriced {
-					totalCostUSD += e.EstimatedCostUsd
-				}
-				accumulateRoleCost(roleAccums, SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle}, e.EstimatedCostUsd, entryUnpriced)
-			}
+	// transcript-only in v1 (see plan.md's Story 4.1.4 design note). Reuses
+	// smr.entries (already fetched above by sessionMetaForSessions) rather
+	// than re-querying GetAllItemSessionsWithBacklogInfo a second time.
+	for _, e := range smr.entries {
+		if e.SessionUUID == "" || transcriptCoveredSessionIDs[e.SessionUUID] {
+			continue // no real session, or already counted via its transcript above
 		}
+		if !fromTime.IsZero() && !e.CreatedAt.IsZero() && e.CreatedAt.Before(fromTime) {
+			continue
+		}
+		if !toTime.IsZero() && !e.CreatedAt.IsZero() && e.CreatedAt.After(toTime) {
+			continue
+		}
+		entryUnpriced := !e.CostPriced
+		if !entryUnpriced {
+			totalCostUSD += e.EstimatedCostUsd
+		}
+		accumulateRoleCost(roleAccums, SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle}, e.EstimatedCostUsd, entryUnpriced)
+	}
+
+	// Fold in the deleted-item cost ledger the same way the loop above folds in
+	// transcript-less ItemSession rows: once an item (and its ItemSession row)
+	// is deleted, the ledger is the only surviving cost record. Deduped
+	// against transcriptCoveredConversationUUIDs so a ledger row whose
+	// transcript is still on disk isn't counted twice. Reuses smr.ledgerEntries
+	// rather than re-querying GetDeletedItemSessionCostLedger.
+	for _, e := range smr.ledgerEntries {
+		if e.ConversationUUID == "" || transcriptCoveredConversationUUIDs[e.ConversationUUID] {
+			continue // no transcript to ever find, or already counted via its transcript above
+		}
+		if !fromTime.IsZero() && !e.CreatedAt.IsZero() && e.CreatedAt.Before(fromTime) {
+			continue
+		}
+		if !toTime.IsZero() && !e.CreatedAt.IsZero() && e.CreatedAt.After(toTime) {
+			continue
+		}
+		entryUnpriced := !e.CostPriced
+		if !entryUnpriced {
+			totalCostUSD += e.EstimatedCostUsd
+		}
+		accumulateRoleCost(roleAccums, SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle}, e.EstimatedCostUsd, entryUnpriced)
 	}
 
 	// Build sorted role-breakdown slice (Epic 4.1), sorted by cost desc — same
@@ -606,7 +788,7 @@ func (s *InsightsService) ListSessionTokens(
 	if s.associator != nil {
 		sessionSnapshot = s.associator.Snapshot()
 	}
-	sessionMeta := s.sessionMetaForSessions(ctx)
+	sessionMeta := s.sessionMetaForSessions(ctx).meta
 	for _, r := range results {
 		if r == nil {
 			continue
@@ -619,7 +801,7 @@ func (s *InsightsService) ListSessionTokens(
 			continue
 		}
 
-		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot, sessionMeta)
+		summary, _ := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot, sessionMeta)
 		for _, f := range summary.UnpricedModels {
 			allUnpricedFamilies[f] = true
 		}
@@ -758,10 +940,11 @@ func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEven
 				if s.associator != nil {
 					snapshot = s.associator.Snapshot()
 				}
-				sessionMeta := s.sessionMetaForSessions(ctx)
+				sessionMeta := s.sessionMetaForSessions(ctx).meta
+				summary, _ := buildSessionSummary(result, s.pricing, s.associator, snapshot, sessionMeta)
 				evt = &sessionv1.InsightsEvent{
 					EventType: "update",
-					Session:   buildSessionSummary(result, s.pricing, s.associator, snapshot, sessionMeta),
+					Session:   summary,
 					AllParsed: !s.store.IsLoading(),
 				}
 			} else {
