@@ -35,6 +35,10 @@ type InstanceData struct {
 	AutoApprove   bool      `json:"auto_approve"`
 	Prompt        string    `json:"prompt"`
 	InitialPrompt string    `json:"initial_prompt,omitempty"`
+	// InitialPromptSentAt records when InitialPrompt was actually typed into the
+	// terminal, persisted so a service restart's fresh driver goroutine doesn't
+	// have to re-derive (and potentially get wrong) whether it was already sent.
+	InitialPromptSentAt time.Time `json:"initial_prompt_sent_at,omitempty"`
 
 	Program          string          `json:"program"`
 	ExistingWorktree string          `json:"existing_worktree,omitempty"`
@@ -355,6 +359,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 		}
 		// Inject shell repository so shell operations can persist to the DB.
 		inst.SetShellRepository(s.repo)
+		inst.SetInitialPromptRepository(s.repo)
 		instances = append(instances, inst)
 	}
 
@@ -594,6 +599,7 @@ func (s *Storage) AddInstance(instance *Instance) error {
 	}
 	// Inject shell repository so shell operations can persist to the DB.
 	instance.SetShellRepository(s.repo)
+	instance.SetInitialPromptRepository(s.repo)
 	return nil
 }
 
@@ -656,6 +662,13 @@ func (s *Storage) UpdateInstanceTimestampsOnly(title string, lastTerminalUpdate,
 // UpdateInstanceLastAddedToQueue updates ONLY the LastAddedToQueue field for a specific instance.
 func (s *Storage) UpdateInstanceLastAddedToQueue(title string, lastAddedToQueue time.Time) error {
 	return s.repo.UpdateLastAddedToQueue(context.Background(), title, lastAddedToQueue)
+}
+
+// UpdateInstanceInitialPromptSentAt persists when InitialPrompt was actually typed
+// into the terminal, so a service restart doesn't have to re-derive (and risk
+// getting wrong) whether it was already sent -- see Instance.InitialPromptSentAt.
+func (s *Storage) UpdateInstanceInitialPromptSentAt(title string, t time.Time) error {
+	return s.repo.UpdateInitialPromptSentAt(context.Background(), title, t)
 }
 
 // UpdateInstanceLastUserResponse persists the LastUserResponse timestamp for a session.

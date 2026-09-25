@@ -91,6 +91,10 @@ func (Session) Fields() []ent.Field {
 		field.String("initial_prompt").
 			Optional().
 			Comment("Prompt typed into the session terminal once the session reaches Ready state."),
+		field.Time("initial_prompt_sent_at").
+			Optional().
+			Nillable().
+			Comment("When InitialPrompt was actually typed into the terminal. Persisted so a service restart's fresh driver goroutine doesn't re-derive (and get wrong) whether it was already sent via fragile terminal-output/JSONL heuristics -- see outputShowsConversationStarted's doc comment."),
 		field.Bool("one_shot").
 			Default(false).
 			Comment("When true, runs claude in -p mode; session exits after task completes."),

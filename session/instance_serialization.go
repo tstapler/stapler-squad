@@ -82,25 +82,26 @@ func (i *Instance) ToInstanceData() InstanceData {
 	})
 
 	data := InstanceData{
-		Title:         snap.Title,
-		UUID:          snap.UUID,
-		Path:          snap.Path,
-		WorkingDir:    snap.WorkingDir,
-		Branch:        snap.Branch,
-		Status:        snap.Status,
-		Height:        snap.Height,
-		Width:         snap.Width,
-		CreatedAt:     snap.CreatedAt,
-		UpdatedAt:     time.Now(),
-		Program:       snap.Program,
-		AutoYes:       snap.AutoYes,
-		AutoApprove:   snap.AutoApprove,
-		Prompt:        snap.Prompt,
-		InitialPrompt: snap.InitialPrompt,
-		Category:      snap.Category,
-		Note:          snap.Note,
-		IsExpanded:    snap.IsExpanded,
-		Tags:          snap.Tags, // Include tags in serialization
+		Title:               snap.Title,
+		UUID:                snap.UUID,
+		Path:                snap.Path,
+		WorkingDir:          snap.WorkingDir,
+		Branch:              snap.Branch,
+		Status:              snap.Status,
+		Height:              snap.Height,
+		Width:               snap.Width,
+		CreatedAt:           snap.CreatedAt,
+		UpdatedAt:           time.Now(),
+		Program:             snap.Program,
+		AutoYes:             snap.AutoYes,
+		AutoApprove:         snap.AutoApprove,
+		Prompt:              snap.Prompt,
+		InitialPrompt:       snap.InitialPrompt,
+		InitialPromptSentAt: snap.InitialPromptSentAt,
+		Category:            snap.Category,
+		Note:                snap.Note,
+		IsExpanded:          snap.IsExpanded,
+		Tags:                snap.Tags, // Include tags in serialization
 		// ADR-002 tag provenance — see Instance.RuleTagProvenance/SuppressedRuleTags.
 		RuleTagProvenance:  snap.RuleTagProvenance,
 		SuppressedRuleTags: snap.SuppressedRuleTags,
@@ -274,25 +275,26 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	}
 
 	instance := &Instance{
-		Title:         data.Title,
-		UUID:          data.UUID,
-		Path:          migratedPath, // Use migrated path
-		WorkingDir:    data.WorkingDir,
-		Branch:        data.Branch,
-		Status:        data.Status,
-		Height:        data.Height,
-		Width:         data.Width,
-		CreatedAt:     data.CreatedAt,
-		UpdatedAt:     data.UpdatedAt,
-		Program:       data.Program,
-		AutoYes:       data.AutoYes, // pre-existing bug: was never restored on load, losing auto_yes across every restart
-		AutoApprove:   data.AutoApprove,
-		Prompt:        data.Prompt,
-		InitialPrompt: data.InitialPrompt,
-		Category:      data.Category,
-		Note:          data.Note,
-		IsExpanded:    data.IsExpanded,
-		Tags:          tags, // Use migrated tags (includes category if needed)
+		Title:               data.Title,
+		UUID:                data.UUID,
+		Path:                migratedPath, // Use migrated path
+		WorkingDir:          data.WorkingDir,
+		Branch:              data.Branch,
+		Status:              data.Status,
+		Height:              data.Height,
+		Width:               data.Width,
+		CreatedAt:           data.CreatedAt,
+		UpdatedAt:           data.UpdatedAt,
+		Program:             data.Program,
+		AutoYes:             data.AutoYes, // pre-existing bug: was never restored on load, losing auto_yes across every restart
+		AutoApprove:         data.AutoApprove,
+		Prompt:              data.Prompt,
+		InitialPrompt:       data.InitialPrompt,
+		InitialPromptSentAt: data.InitialPromptSentAt,
+		Category:            data.Category,
+		Note:                data.Note,
+		IsExpanded:          data.IsExpanded,
+		Tags:                tags, // Use migrated tags (includes category if needed)
 		// ADR-002 tag provenance — see Instance.RuleTagProvenance/SuppressedRuleTags.
 		RuleTagProvenance:  data.RuleTagProvenance,
 		SuppressedRuleTags: data.SuppressedRuleTags,

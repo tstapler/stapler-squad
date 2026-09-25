@@ -628,6 +628,104 @@ func TestRunSessionDriver_fallsBackToStaticPromptWhenWhitespace(t *testing.T) {
 	}
 }
 
+// fakeInitialPromptRepo records UpdateInitialPromptSentAt calls for assertions,
+// without needing a real EntRepository/DB.
+type fakeInitialPromptRepo struct {
+	title string
+	sent  time.Time
+	calls int
+}
+
+func (f *fakeInitialPromptRepo) UpdateInitialPromptSentAt(_ context.Context, title string, t time.Time) error {
+	f.title = title
+	f.sent = t
+	f.calls++
+	return nil
+}
+
+// Bug: after a service restart, a fresh driver goroutine's local `sentInitial`
+// always starts false, so without a persisted record it would re-type
+// InitialPrompt into an already-completed session. SetInitialPromptSentAt is
+// the fix's persistence primitive: it must update both the in-memory
+// Instance/Snapshot (so this process's own driver can see it immediately) and
+// the injected repo (so the NEXT process's driver can see it after a restart).
+func TestSetInitialPromptSentAt_persistsAndIsReadableViaSnapshot(t *testing.T) {
+	t.Parallel()
+	inst, err := NewInstance(InstanceOptions{
+		Title:         "test-initial-prompt-sent-at",
+		Path:          t.TempDir(),
+		Program:       "echo",
+		InitialPrompt: "review this PR",
+	})
+	if err != nil {
+		t.Fatalf("NewInstance: %v", err)
+	}
+
+	if got := inst.GetInitialPromptSentAt(); !got.IsZero() {
+		t.Fatalf("GetInitialPromptSentAt() before any send = %v, want zero", got)
+	}
+
+	repo := &fakeInitialPromptRepo{}
+	inst.SetInitialPromptRepository(repo)
+
+	sentAt := time.Now()
+	inst.SetInitialPromptSentAt(sentAt)
+
+	if got := inst.GetInitialPromptSentAt(); !got.Equal(sentAt) {
+		t.Errorf("GetInitialPromptSentAt() = %v, want %v", got, sentAt)
+	}
+	if repo.calls != 1 {
+		t.Errorf("repo.calls = %d, want 1", repo.calls)
+	}
+	if repo.title != inst.Title {
+		t.Errorf("repo persisted title = %q, want %q", repo.title, inst.Title)
+	}
+	if !repo.sent.Equal(sentAt) {
+		t.Errorf("repo persisted time = %v, want %v", repo.sent, sentAt)
+	}
+}
+
+// Bug regression: runSessionDriverWithPrompt's startup selection logic must
+// treat a persisted InitialPromptSentAt as authoritative and skip re-sending
+// -- this is the exact restart scenario from the bug report (a completed
+// workflow session getting its prompt retyped after `make install-service`).
+func TestRunSessionDriver_persistedInitialPromptSentAt_skipsResend(t *testing.T) {
+	t.Parallel()
+	inst, err := NewInstance(InstanceOptions{
+		Title:         "test-persisted-sent-at",
+		Path:          t.TempDir(),
+		Program:       "echo",
+		InitialPrompt: "review this PR",
+	})
+	if err != nil {
+		t.Fatalf("NewInstance: %v", err)
+	}
+
+	sentAt := time.Now().Add(-45 * time.Minute) // e.g. sent 45m ago, before a restart
+	inst.SetInitialPromptSentAt(sentAt)
+
+	// Mirrors runSessionDriverWithPrompt's own startup selection logic
+	// (session_driver.go) -- a fresh driver goroutine's local sentInitial
+	// always starts false for a non-empty InitialPrompt, so it must fall
+	// through to GetInitialPromptSentAt() rather than re-deriving via the
+	// output/JSONL heuristics.
+	sentInitial := inst.InitialPrompt == ""
+	var initialPromptSentAt time.Time
+	if !sentInitial {
+		if persisted := inst.GetInitialPromptSentAt(); !persisted.IsZero() {
+			sentInitial = true
+			initialPromptSentAt = persisted
+		}
+	}
+
+	if !sentInitial {
+		t.Fatal("sentInitial = false, want true (persisted InitialPromptSentAt should short-circuit the heuristics)")
+	}
+	if !initialPromptSentAt.Equal(sentAt) {
+		t.Errorf("initialPromptSentAt = %v, want the persisted %v", initialPromptSentAt, sentAt)
+	}
+}
+
 // ─── U-GO-08: TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit ───────────
 
 func TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit(t *testing.T) {

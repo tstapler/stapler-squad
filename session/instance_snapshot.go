@@ -102,6 +102,7 @@ type InstanceSnapshot struct {
 	IsExpanded            bool
 	Prompt                string
 	InitialPrompt         string
+	InitialPromptSentAt   time.Time
 	Category              string
 	Note                  string
 	SessionType           SessionType
@@ -188,6 +189,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		IsExpanded:                i.IsExpanded,
 		Prompt:                    i.Prompt,
 		InitialPrompt:             i.InitialPrompt,
+		InitialPromptSentAt:       i.InitialPromptSentAt,
 		Category:                  i.Category,
 		Note:                      i.Note,
 		SessionType:               i.SessionType,
