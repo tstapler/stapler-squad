@@ -27,6 +27,11 @@ export const card = style({
   transition: "border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.3s ease, transform 0.3s ease, max-height 0.3s ease",
   position: "relative",
   WebkitTapHighlightColor: "transparent",
+  // Container query basis for the narrow-layout overrides below (e.g.
+  // `infoRow`/`value`) — sized against the card's own width, not the
+  // browser viewport, since a Board column can be narrow inside a wide window.
+  containerType: "inline-size",
+  containerName: "sessionCard",
   animationName: cardFadeSlideIn,
   animationDuration: "0.35s",
   animationTimingFunction: "ease",
@@ -398,10 +403,21 @@ export const info = style({
   gap: "6px",
 });
 
+// Narrow-card breakpoint. Uses a container query against `card`'s
+// containerName above, so this activates based on the card's own width
+// (e.g. a narrow Board column), not the browser viewport.
+const CARD_NARROW = "(max-width: 260px)";
+
 export const infoRow = style({
   display: "flex",
   gap: vars.space["2"],
   fontSize: "0.875rem",
+  "@container": {
+    [`sessionCard ${CARD_NARROW}`]: {
+      flexDirection: "column",
+      gap: "2px",
+    },
+  },
 });
 
 export const label = style({
@@ -415,6 +431,13 @@ export const value = style({
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
+  "@container": {
+    [`sessionCard ${CARD_NARROW}`]: {
+      whiteSpace: "normal",
+      overflowWrap: "anywhere",
+      textOverflow: "clip",
+    },
+  },
 });
 
 export const githubLink = style({
@@ -507,6 +530,7 @@ export const overflowButton = style({
   letterSpacing: "2px",
   lineHeight: 1,
   minHeight: "44px",
+  minWidth: "44px",
   transition: "background 0.2s ease",
   selectors: {
     "&:hover": { background: vars.color.hoverBackground },

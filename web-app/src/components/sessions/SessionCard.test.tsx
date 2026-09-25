@@ -326,3 +326,108 @@ describe("SessionCard — backlog-origin badge", () => {
     expect(screen.queryByTestId("backlog-origin-badge")).toBeNull();
   });
 });
+
+// Story 2.2.1: truncateWorkspacePath applied to SessionCard's path fields.
+describe("SessionCard — path truncation (Story 2.2.1)", () => {
+  // Canonical fixture from Story 2.1.1/1.1.1: opaque hash + opaque-suffixed segment.
+  const longPath =
+    "/Users/tstapler/.stapler-squad/workspaces/6eb0b580fa0331d5/worktrees/stapler-squad-wasted-space_18d807dfb97a2b28";
+
+  it("SessionCard_should_HideOpaqueSegments_When_ExistingDirActiveDirOrClonedRepoPathExceed96Chars", () => {
+    const session = {
+      ...minimalSession,
+      title: "Test Session",
+      existingDir: longPath,
+      activeDir: longPath,
+      clonedRepoPath: longPath,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    const pathLabel = screen.getByText("Path:");
+    const pathValue = pathLabel.nextElementSibling as HTMLElement;
+    expect(pathValue.textContent).not.toContain("6eb0b580fa0331d5");
+    expect(pathValue.textContent).not.toContain("18d807dfb97a2b28");
+
+    const workingDirLabel = screen.getByText("Working Dir:");
+    const workingDirValue = workingDirLabel.nextElementSibling as HTMLElement;
+    expect(workingDirValue.textContent).not.toContain("6eb0b580fa0331d5");
+
+    const clonedLabel = screen.getByText("Cloned To:");
+    const clonedValue = clonedLabel.nextElementSibling as HTMLElement;
+    expect(clonedValue.textContent).not.toContain("6eb0b580fa0331d5");
+  });
+
+  it("SessionCard_should_KeepFullPathInTitleAttribute_When_VisibleTextIsTruncated", () => {
+    const session = {
+      ...minimalSession,
+      title: "Test Session",
+      existingDir: longPath,
+      clonedRepoPath: longPath,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    const pathLabel = screen.getByText("Path:");
+    const pathValue = pathLabel.nextElementSibling as HTMLElement;
+    expect(pathValue).toHaveAttribute("title", longPath);
+
+    const clonedLabel = screen.getByText("Cloned To:");
+    const clonedValue = clonedLabel.nextElementSibling as HTMLElement;
+    expect(clonedValue).toHaveAttribute("title", longPath);
+  });
+
+  it("SessionCard_should_RenderTitleOnActiveDir_When_ActiveDirPresent", () => {
+    const session = {
+      ...minimalSession,
+      title: "Test Session",
+      activeDir: longPath,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    const workingDirLabel = screen.getByText("Working Dir:");
+    const workingDirValue = workingDirLabel.nextElementSibling as HTMLElement;
+    expect(workingDirValue).toHaveAttribute("title", longPath);
+  });
+});
+
+// Story 2.2.3: Program row / memory badge gated behind visibleColumns. Card/Board
+// views have no ColumnPicker UI to opt back into a hidden column (see
+// session-columns.ts's CARD_DEFAULT_VISIBLE_COLUMNS doc comment), so SessionCard's
+// own default (no `visibleColumns` prop) must keep pre-PR behavior: agent + memory
+// always shown, unlike row view's user-configurable DEFAULT_VISIBLE_COLUMNS.
+describe("SessionCard — visibleColumns gating (Story 2.2.3)", () => {
+  it("SessionCard_should_RenderProgramRowAndMemoryBadge_When_NoVisibleColumnsPropGiven", () => {
+    const session = {
+      ...minimalSession,
+      program: "claude",
+      memoryRssMb: 400n,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    expect(screen.getByText("Program:")).toBeInTheDocument();
+    expect(screen.getByText(/MB RAM/)).toBeInTheDocument();
+  });
+
+  it("SessionCard_should_RenderProgramRowAndMemoryBadge_When_AgentAndMemoryInVisibleColumns", () => {
+    const session = {
+      ...minimalSession,
+      program: "claude",
+      memoryRssMb: 400n,
+    } as unknown as Session;
+    render(<SessionCard session={session} visibleColumns={["agent", "memory"]} />);
+
+    expect(screen.getByText("Program:")).toBeInTheDocument();
+    expect(screen.getByText(/MB RAM/)).toBeInTheDocument();
+  });
+
+  it("SessionCard_should_NotRenderProgramRowOrMemoryBadge_When_VisibleColumnsExplicitlyExcludesThem", () => {
+    const session = {
+      ...minimalSession,
+      program: "claude",
+      memoryRssMb: 400n,
+    } as unknown as Session;
+    render(<SessionCard session={session} visibleColumns={[]} />);
+
+    expect(screen.queryByText("Program:")).toBeNull();
+    expect(screen.queryByText(/MB RAM/)).toBeNull();
+  });
+});

@@ -11,16 +11,25 @@ const pulseOpacity = keyframes({
 export const row = style({
   display: "grid",
   // gridTemplateColumns is set via inline style in SessionRow based on visibleColumns.
-  // Default fallback (no JS): dot | name+path | agent | memory | elapsed | actions.
-  gridTemplateColumns: "24px 8px 1fr 20px auto 32px auto",
+  // Default fallback (no JS): checkbox | dot | name+path | agent | memory | actions.
+  // elapsed is no longer a grid column — it renders as a second line inside nameCell (Epic 1.2).
+  gridTemplateColumns: "24px 8px 1fr 20px auto auto",
   alignItems: "center",
   gap: vars.space["2"],
   padding: "6px 12px",
+  // Floor, not a cap (Epic 2.1 Story 2.1.1): wrapped 2-3 line name/path
+  // content is allowed to grow the row taller than this; this style sets
+  // no fixed or capped block-size property.
   minHeight: "38px",
   cursor: "pointer",
   borderRadius: vars.radii.sm,
   listStyle: "none",
   position: "relative",
+  // Story 2.1.2: query against the row's own width (not an ancestor scroll/
+  // virtualizer wrapper — pitfalls.md §2) so the NARROW breakpoint below
+  // reacts to a collapsed sidebar/narrow pane, not the browser viewport.
+  containerType: "inline-size",
+  containerName: "sessionRow",
   "@media": {
     "(prefers-reduced-motion: no-preference)": {
       transition: vars.transition.fast,
@@ -30,6 +39,14 @@ export const row = style({
     background: vars.color.hoverBackground,
   },
 });
+
+// Genuinely narrower than the sidebar's fixed ~280px default width, so this
+// only matches a collapsed/mobile-narrow layout — never the everyday case.
+// Per Story 2.1.2's Resolution Note, this drives purely visual tweaks only
+// (font size, chip wrapping); the single truncation-budget constant used at
+// every width lives in SessionRow.tsx, not here, and this breakpoint never
+// touches it.
+const NARROW = "(max-width: 200px)";
 
 export const nameCell = style({
   minWidth: 0,
@@ -46,6 +63,14 @@ export const pathLine = style({
   gap: "4px",
   minWidth: 0,
   overflow: "hidden",
+  // Story 2.1.2: below NARROW, let the substatus/host/GitHub chips wrap onto
+  // their own line instead of forcing horizontal overflow — CSS-only tweak,
+  // no truncation-budget decision involved (see this file's NARROW comment).
+  "@container": {
+    [`sessionRow ${NARROW}`]: {
+      flexWrap: "wrap",
+    },
+  },
 });
 
 export const statusDot = style({
@@ -111,9 +136,16 @@ export const name = style({
   fontSize: vars.fontSize.sm,
   fontWeight: vars.fontWeight.semibold,
   color: vars.color.textPrimary,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
+  // Story 2.1.1: wrap instead of ellipsis-clipping; overflowWrap is the
+  // safety net for a single unbroken token that's still too long to fit.
+  overflowWrap: "anywhere",
+  // Story 2.1.2: below NARROW, shrink slightly — visual-only, no truncation
+  // budget change (see this file's NARROW comment).
+  "@container": {
+    [`sessionRow ${NARROW}`]: {
+      fontSize: vars.fontSize.xs,
+    },
+  },
 });
 
 export const agentIcon = style({
@@ -128,9 +160,10 @@ export const path = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
   minWidth: 0,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
+  // Story 2.1.1: wrap instead of ellipsis-clipping; the visible text is
+  // already pre-truncated by truncateWorkspacePath, so this is a safety net
+  // for the rare unbroken-token case, not the primary truncation mechanism.
+  overflowWrap: "anywhere",
 });
 
 export const elapsed = style({
@@ -139,6 +172,16 @@ export const elapsed = style({
   fontVariantNumeric: "tabular-nums",
   minWidth: "32px",
   textAlign: "right",
+});
+
+/** Second line beneath name/path holding the elapsed time — no longer a grid cell (Epic 1.2). */
+export const elapsedSecondLine = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "4px",
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  marginTop: "2px",
 });
 
 export const actions = style({
@@ -210,6 +253,14 @@ export const rowOverflowButton = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+  "@media": {
+    // Ensure 44px minimum touch target on coarse-pointer devices (WCAG 2.5.5)
+    "(pointer: coarse)": {
+      minHeight: 44,
+      minWidth: 44,
+      padding: "10px",
+    },
+  },
   ":hover": {
     color: vars.color.textPrimary,
     background: vars.color.hoverBackground,

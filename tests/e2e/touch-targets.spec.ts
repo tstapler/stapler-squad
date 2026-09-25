@@ -41,7 +41,13 @@ async function assertTouchTarget(page: Page, testId: string, label: string) {
 // ─── Mobile viewport (iPhone 14) ─────────────────────────────────────────────
 
 test.describe('Touch targets — sessions list page (mobile)', () => {
-  test.use({ viewport: { width: 390, height: 844 } });
+  // hasTouch is required, not cosmetic: the row/card overflow buttons' 44px
+  // minimum is gated behind a `(pointer: coarse)` CSS media query (matching
+  // the existing inlineActionButton precedent), which Chromium only reports
+  // when hasTouch emulation is enabled — a plain viewport resize alone still
+  // reports `(pointer: fine)`, so those two assertions wouldn't exercise the
+  // enlarged-size code path without this.
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
@@ -92,6 +98,48 @@ test.describe('Touch targets — sessions list page (mobile)', () => {
     expect(box, 'Category collapse toggle not found in DOM').not.toBeNull();
     expect(box!.width, `Category collapse toggle width ${box!.width}px < ${MIN_PX}px`).toBeGreaterThanOrEqual(MIN_PX);
     expect(box!.height, `Category collapse toggle height ${box!.height}px < ${MIN_PX}px`).toBeGreaterThanOrEqual(MIN_PX);
+  });
+
+  test('session row overflow ("More session actions") button is ≥44×44px', async ({ page }) => {
+    const btn = page.getByRole('button', { name: /More session actions/i }).first();
+    const visible = await btn.isVisible().catch(() => false);
+    if (!visible) {
+      test.skip(true, 'No session row visible — no sessions rendered');
+      return;
+    }
+    const box = await btn.boundingBox();
+    expect(box, 'Row overflow button not found in DOM').not.toBeNull();
+    expect(
+      box!.width,
+      `Row overflow button width ${box!.width}px < ${MIN_PX}px`,
+    ).toBeGreaterThanOrEqual(MIN_PX);
+    expect(
+      box!.height,
+      `Row overflow button height ${box!.height}px < ${MIN_PX}px`,
+    ).toBeGreaterThanOrEqual(MIN_PX);
+  });
+
+  test('session card overflow ("More session actions") button is ≥44×44px', async ({ page }) => {
+    await page.getByTestId('session-view-mode-board').click();
+    const btn = page
+      .getByTestId('session-card')
+      .getByRole('button', { name: /More session actions/i })
+      .first();
+    const visible = await btn.isVisible().catch(() => false);
+    if (!visible) {
+      test.skip(true, 'No session card visible — no sessions rendered in board view');
+      return;
+    }
+    const box = await btn.boundingBox();
+    expect(box, 'Card overflow button not found in DOM').not.toBeNull();
+    expect(
+      box!.width,
+      `Card overflow button width ${box!.width}px < ${MIN_PX}px`,
+    ).toBeGreaterThanOrEqual(MIN_PX);
+    expect(
+      box!.height,
+      `Card overflow button height ${box!.height}px < ${MIN_PX}px`,
+    ).toBeGreaterThanOrEqual(MIN_PX);
   });
 });
 
