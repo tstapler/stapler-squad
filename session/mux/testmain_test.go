@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/tstapler/stapler-squad/testutil/tmuxreap"
 )
@@ -16,27 +15,15 @@ func TestMain(m *testing.M) {
 	tmuxreap.ReapLeakedTestServers()
 	tmuxreap.StartTestServerWatchdog(os.Getpid())
 
-	// Periodic goroutine dump so hangs produce visible output rather than silence.
-	// all=false (current goroutine's stack only) -- the stop-the-world all=true dump
-	// briefly pauses every goroutine in the process, which perturbs the subprocess
-	// timing that tests like TestWriteReadUserOptions and
-	// TestScanFromUserOptions_RegistersSession depend on.
-	stop := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				dumpGoroutines("periodic", false)
-			case <-stop:
-				return
-			}
-		}
-	}()
-
-	// Also dump on interrupt so manual Ctrl-C reveals the hang site. This is the
-	// stop-the-world hang-diagnostic path, so it keeps all=true.
+	// A periodic stop-the-world (all=true) dump used to run here so hangs produce
+	// visible output rather than silence, but it briefly paused every goroutine in
+	// the process every 30s, perturbing the subprocess timing that tests like
+	// TestWriteReadUserOptions and TestScanFromUserOptions_RegistersSession depend
+	// on. Dropped rather than switched to all=false: a single-goroutine dump would
+	// only ever show this idle ticker's own stack, never the actual hang site,
+	// which is actively misleading (looks like a diagnostic that's silently
+	// useless). go test's own -timeout already stops the world and dumps every
+	// goroutine when the whole binary hangs, so that case is still covered.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
@@ -45,7 +32,6 @@ func TestMain(m *testing.M) {
 	}()
 
 	code := m.Run()
-	close(stop)
 	os.Exit(code)
 }
 
