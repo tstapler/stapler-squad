@@ -287,15 +287,18 @@ describe("SessionRow — elapsed renders as a second line, not a grid cell", () 
   });
 });
 
-// session-list-density Epic 2.1 Story 2.1.1: wrap instead of ellipsis, apply
-// truncateWorkspacePath at every container width.
+// session-list-wasted-space follow-up: the user explicitly asked for no
+// truncation on names or paths at any width (chips/actions density were the
+// actual complaint, not the wrapped text) — Epic 2.1 Story 2.1.1's
+// opaque-segment collapsing at 72 chars is gone; the full path always
+// renders, wrapping via CSS instead.
 const CANONICAL_WORKSPACE_PATH =
   "/Users/tstapler/.stapler-squad/workspaces/6eb0b580fa0331d5/worktrees/stapler-squad-wasted-space_18d807dfb97a2b28";
 const WORKSPACE_HASH = "6eb0b580fa0331d5";
 const WORKTREE_UUID_SUFFIX = "18d807dfb97a2b28";
 
-describe("SessionRow — path truncation via truncateWorkspacePath (Epic 2.1 Story 2.1.1)", () => {
-  it("SessionRow_should_HideOpaqueSegments_When_PathExceeds72Chars", () => {
+describe("SessionRow — full, untruncated path text", () => {
+  it("SessionRow_should_ShowFullPath_When_PathExceeds72Chars", () => {
     const session = {
       ...minimalSession,
       existingDir: CANONICAL_WORKSPACE_PATH,
@@ -305,8 +308,12 @@ describe("SessionRow — path truncation via truncateWorkspacePath (Epic 2.1 Sto
     const pathEl = screen.getByRole("img", {
       name: `Path: ${CANONICAL_WORKSPACE_PATH}`,
     });
-    expect(pathEl.textContent).not.toContain(WORKSPACE_HASH);
-    expect(pathEl.textContent).not.toContain(WORKTREE_UUID_SUFFIX);
+    // Only the home-dir prefix is shortened to "~" (a substitution, not lossy
+    // truncation) — every other segment, including opaque hash/UUID ones,
+    // renders in full.
+    expect(pathEl.textContent).toContain(WORKSPACE_HASH);
+    expect(pathEl.textContent).toContain(WORKTREE_UUID_SUFFIX);
+    expect(pathEl.textContent).toContain("~/");
 
     // Full-value companion (Tooltip label / aria-label) still carries the
     // untruncated path unchanged.
@@ -317,10 +324,9 @@ describe("SessionRow — path truncation via truncateWorkspacePath (Epic 2.1 Sto
 
   it("SessionRow_should_KeepSamePathText_When_RenderedAtNarrowContainerWidth", () => {
     // The narrow (<200px) container-query breakpoint is CSS-only (font size,
-    // chip wrapping) and never switches the truncation budget (Story 2.1.2's
-    // Resolution Note) — there's no separate narrow-width render path to
-    // simulate here, so this asserts there is exactly one path <span>, i.e.
-    // no dual-render leftover from the dropped Task 2.1.2c approach.
+    // chip wrapping) and never switches to a truncated render — there's no
+    // separate narrow-width render path to simulate here, so this asserts
+    // there is exactly one path <span>, i.e. no dual-render leftover.
     const session = {
       ...minimalSession,
       existingDir: CANONICAL_WORKSPACE_PATH,

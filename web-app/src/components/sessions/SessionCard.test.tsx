@@ -327,13 +327,16 @@ describe("SessionCard — backlog-origin badge", () => {
   });
 });
 
-// Story 2.2.1: truncateWorkspacePath applied to SessionCard's path fields.
-describe("SessionCard — path truncation (Story 2.2.1)", () => {
+// session-list-wasted-space follow-up: no truncation on paths at any width
+// (see SessionRow.test.tsx's identically-updated describe block) — only the
+// home-dir "~" substitution shortens the text; opaque hash/UUID segments
+// always render in full.
+describe("SessionCard — full, untruncated path text", () => {
   // Canonical fixture from Story 2.1.1/1.1.1: opaque hash + opaque-suffixed segment.
   const longPath =
     "/Users/tstapler/.stapler-squad/workspaces/6eb0b580fa0331d5/worktrees/stapler-squad-wasted-space_18d807dfb97a2b28";
 
-  it("SessionCard_should_HideOpaqueSegments_When_ExistingDirActiveDirOrClonedRepoPathExceed96Chars", () => {
+  it("SessionCard_should_ShowFullPath_When_ExistingDirActiveDirOrClonedRepoPathExceed96Chars", () => {
     const session = {
       ...minimalSession,
       title: "Test Session",
@@ -345,16 +348,16 @@ describe("SessionCard — path truncation (Story 2.2.1)", () => {
 
     const pathLabel = screen.getByText("Path:");
     const pathValue = pathLabel.nextElementSibling as HTMLElement;
-    expect(pathValue.textContent).not.toContain("6eb0b580fa0331d5");
-    expect(pathValue.textContent).not.toContain("18d807dfb97a2b28");
+    expect(pathValue.textContent).toContain("6eb0b580fa0331d5");
+    expect(pathValue.textContent).toContain("18d807dfb97a2b28");
 
     const workingDirLabel = screen.getByText("Working Dir:");
     const workingDirValue = workingDirLabel.nextElementSibling as HTMLElement;
-    expect(workingDirValue.textContent).not.toContain("6eb0b580fa0331d5");
+    expect(workingDirValue.textContent).toContain("6eb0b580fa0331d5");
 
     const clonedLabel = screen.getByText("Cloned To:");
     const clonedValue = clonedLabel.nextElementSibling as HTMLElement;
-    expect(clonedValue.textContent).not.toContain("6eb0b580fa0331d5");
+    expect(clonedValue.textContent).toContain("6eb0b580fa0331d5");
   });
 
   it("SessionCard_should_KeepFullPathInTitleAttribute_When_VisibleTextIsTruncated", () => {
