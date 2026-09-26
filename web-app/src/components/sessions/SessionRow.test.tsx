@@ -298,7 +298,7 @@ const WORKSPACE_HASH = "6eb0b580fa0331d5";
 const WORKTREE_UUID_SUFFIX = "18d807dfb97a2b28";
 
 describe("SessionRow — full, untruncated path text", () => {
-  it("SessionRow_should_ShowFullPath_When_PathExceeds72Chars", () => {
+  it("SessionRow_should_ShowFullPath_When_PathIsLong", () => {
     const session = {
       ...minimalSession,
       existingDir: CANONICAL_WORKSPACE_PATH,
@@ -439,5 +439,64 @@ describe("SessionRow — agent/memory accessible disclosure (Epic 3.2 Story 3.2.
     const ariaLabel = screen.getByTestId("session-row").getAttribute("aria-label");
     expect(ariaLabel).not.toContain(", agent:");
     expect(ariaLabel).not.toContain("memory:");
+  });
+});
+
+describe("SessionRow — chips render outside the path line", () => {
+  it("SessionRow_should_RenderChipsOutsidePathLine_When_SessionHasANote", () => {
+    const session = {
+      ...minimalSession,
+      note: "waiting on CI",
+      existingDir: "/tmp/session",
+    } as unknown as Session;
+    render(<SessionRow session={session} />);
+
+    const chipsLine = screen.getByTestId("session-row-chips-line");
+    const noteBadge = screen.getByTestId("badge-has-note");
+    // Regression guard: a re-nesting bug (chips back inside pathLine) would
+    // still render the badge, but not as a child of chipsLine.
+    expect(chipsLine).toContainElement(noteBadge);
+    expect(chipsLine.contains(screen.getByTestId("session-row-path"))).toBe(false);
+  });
+});
+
+describe("SessionRow — checkbox cell click delegation", () => {
+  it("SessionRow_should_ToggleSelectOnce_When_CheckboxButtonClicked", () => {
+    const onToggleSelect = jest.fn();
+    const session = { ...minimalSession } as unknown as Session;
+    render(
+      <SessionRow
+        session={session}
+        selectMode
+        onToggleSelect={onToggleSelect}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("session-row-checkbox"));
+    expect(onToggleSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("SessionRow_should_ToggleSelectOnce_When_CheckboxCellPaddingClicked", () => {
+    const onToggleSelect = jest.fn();
+    const onClick = jest.fn();
+    const session = { ...minimalSession } as unknown as Session;
+    render(
+      <SessionRow
+        session={session}
+        selectMode
+        onClick={onClick}
+        onToggleSelect={onToggleSelect}
+      />
+    );
+
+    // Click the cell itself (not the inner button) — the padding area a
+    // mouse click would land on without the enlarged hit target.
+    const cell = screen.getByTestId("session-row-checkbox").parentElement;
+    expect(cell).not.toBeNull();
+    fireEvent.click(cell as HTMLElement);
+    expect(onToggleSelect).toHaveBeenCalledTimes(1);
+    // Confirms the click didn't fall through to the row's own onClick
+    // (which would open the session instead of selecting it).
+    expect(onClick).not.toHaveBeenCalled();
   });
 });

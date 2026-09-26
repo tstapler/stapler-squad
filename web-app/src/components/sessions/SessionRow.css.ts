@@ -73,8 +73,9 @@ export const pathLine = style({
  * Third row inside nameCell: status/GitHub/backlog chips, separate from the
  * path text so a long (unbounded, wrapping) path doesn't vertically center
  * these short chips against its full height and leave a large empty gap
- * around them. Wraps and shrinks below NARROW; smaller font size always,
- * since these are secondary/glanceable info, not primary content.
+ * around them. Smaller font size always, since these are secondary/
+ * glanceable info, not primary content — but never below vars.fontSize.xs,
+ * the theme's documented WCAG-minimum legible size (see theme.css.ts).
  */
 export const chipsLine = style({
   display: "flex",
@@ -83,11 +84,6 @@ export const chipsLine = style({
   gap: "4px",
   minWidth: 0,
   fontSize: vars.fontSize.xs,
-  "@container": {
-    [`sessionRow ${NARROW}`]: {
-      fontSize: "10px",
-    },
-  },
 });
 
 export const statusDot = style({
@@ -184,9 +180,9 @@ export const path = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
   minWidth: 0,
-  // Story 2.1.1: wrap instead of ellipsis-clipping; the visible text is
-  // already pre-truncated by truncateWorkspacePath, so this is a safety net
-  // for the rare unbroken-token case, not the primary truncation mechanism.
+  // Path is never length-truncated (session-list-wasted-space); this is the
+  // only thing preventing a single unbroken opaque segment (hash/UUID) from
+  // overflowing the row instead of wrapping.
   overflowWrap: "anywhere",
 });
 
@@ -421,7 +417,7 @@ export const groupHeader = style({
 
 /**
  * Checkbox cell — always occupies the reserved 24px column; visibility is
- * CSS-driven. `alignSelf: stretch` overrides the row's `alignItems: center`
+ * CSS-driven. `alignSelf: stretch` overrides the row's `alignItems: flex-start`
  * so this cell (and its click handler, see SessionRow.tsx) spans the full
  * row height instead of just the 16px button — a mouse click landing in the
  * cell's padding, not exactly on the button, would otherwise fall through to

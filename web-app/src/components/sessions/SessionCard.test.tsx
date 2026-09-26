@@ -336,7 +336,7 @@ describe("SessionCard — full, untruncated path text", () => {
   const longPath =
     "/Users/tstapler/.stapler-squad/workspaces/6eb0b580fa0331d5/worktrees/stapler-squad-wasted-space_18d807dfb97a2b28";
 
-  it("SessionCard_should_ShowFullPath_When_ExistingDirActiveDirOrClonedRepoPathExceed96Chars", () => {
+  it("SessionCard_should_ShowFullPath_When_ExistingDirActiveDirOrClonedRepoPathIsLong", () => {
     const session = {
       ...minimalSession,
       title: "Test Session",
@@ -360,7 +360,7 @@ describe("SessionCard — full, untruncated path text", () => {
     expect(clonedValue.textContent).toContain("6eb0b580fa0331d5");
   });
 
-  it("SessionCard_should_KeepFullPathInTitleAttribute_When_VisibleTextIsTruncated", () => {
+  it("SessionCard_should_KeepFullPathInTitleAttribute_When_PathIsLong", () => {
     const session = {
       ...minimalSession,
       title: "Test Session",

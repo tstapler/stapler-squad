@@ -392,7 +392,7 @@ function SessionRowInner({
           short chips against a possibly multi-line-tall path, leaving large
           empty gaps around them.
         */}
-        <span className={chipsLineStyle}>
+        <span className={chipsLineStyle} data-testid="session-row-chips-line">
           {session.status === SessionStatus.ACTIVE &&
             session.subStatus !== SubStatus.UNSPECIFIED &&
             session.subStatus !== SubStatus.READY &&

@@ -89,13 +89,15 @@ export const cardPaused = style({
 // Hit target is intentionally bigger than the visible 20px checkbox (padding,
 // not a larger box) so the checkbox is easy to click without landing on the
 // card behind it — 20px alone was too small to hit reliably. `left` is offset
-// by the same amount as the padding so the visible checkbox doesn't shift.
+// by the same amount as CHECKBOX_HIT_PADDING so the visible checkbox doesn't
+// shift; both must stay in sync, hence the shared constant.
+const CHECKBOX_HIT_PADDING = "8px";
 export const checkbox = style({
   position: "absolute",
-  left: `calc(${vars.space["4"]} - 8px)`,
+  left: `calc(${vars.space["4"]} - ${CHECKBOX_HIT_PADDING})`,
   top: "50%",
   transform: "translateY(-50%)",
-  padding: "8px",
+  padding: CHECKBOX_HIT_PADDING,
   cursor: "pointer",
 });
 
