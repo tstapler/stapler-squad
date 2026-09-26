@@ -202,10 +202,11 @@ const IS_DEBUG_MODE =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("debug") === "1";
 
-// Cards have more horizontal room than sidebar rows (see SessionRow's
-// ROW_PATH_MAX_LEN=72), so opaque path segments can survive further before
-// collapsing.
-const CARD_PATH_MAX_LEN = 96;
+// Names/paths are never length-truncated — full text always renders. See
+// SessionRow's identically-named constant: `Infinity` keeps
+// `truncateWorkspacePath`'s home-dir "~" collapsing (not lossy) while
+// skipping its length-based truncation entirely.
+const CARD_PATH_MAX_LEN = Infinity;
 
 // Exported so BoardCard (SessionBoard.tsx's per-card wrapper) can declare an identical
 // callback surface without duplicating this list.
