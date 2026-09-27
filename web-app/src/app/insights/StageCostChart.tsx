@@ -24,7 +24,7 @@ import {
   unpricedLabel,
 } from "./ModelBreakdownChart.css";
 import { legendButton, legendButtonActive } from "./StageCostChart.css";
-import { fmtCost } from "./insightsFormatters";
+import { fmtCost, roleDisplayLabel } from "./insightsFormatters";
 
 interface Props {
   roles: RoleCostBreakdown[];
@@ -49,6 +49,11 @@ const PALETTE = [
 ];
 
 interface DataPoint {
+  // role is the raw SessionRole value ("" for no-backlog-attribution) — the
+  // same value SessionTokenSummary.sessionRole reports, so a bar click's
+  // cross-filter (InsightsDashboard's roleFilter, compared against
+  // SessionsTable's s.sessionRole) actually matches something. Never
+  // substitute a display placeholder here; use roleDisplayLabel for text.
   role: string;
   cost: number;
   color: string;
@@ -59,7 +64,7 @@ function toDataPoints(roles: RoleCostBreakdown[]): DataPoint[] {
   return [...roles]
     .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd)
     .map((r, i) => ({
-      role: r.sessionRole || "unattributed",
+      role: r.sessionRole,
       cost: r.estimatedCostUsd,
       color: PALETTE[i % PALETTE.length],
       unpricedSessionCount: r.unpricedSessionCount,
@@ -70,7 +75,7 @@ function toDataPoints(roles: RoleCostBreakdown[]): DataPoint[] {
 function buildChartAriaLabel(data: DataPoint[]): string {
   const parts = data.map((d) => {
     const unpriced = d.unpricedSessionCount > 0 ? ` (${d.unpricedSessionCount} unpriced)` : "";
-    return `${d.role} ${fmtCost(d.cost)}${unpriced}`;
+    return `${roleDisplayLabel(d.role)} ${fmtCost(d.cost)}${unpriced}`;
   });
   return `Cost by stage: ${parts.join(", ")}`;
 }
@@ -100,6 +105,7 @@ export function StageCostChart({ roles, activeRole, onRoleClick }: Props) {
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.15)" vertical={false} />
             <XAxis
               dataKey="role"
+              tickFormatter={roleDisplayLabel}
               tick={{ fontSize: 11 }}
               tickLine={false}
               axisLine={false}
@@ -134,7 +140,8 @@ export function StageCostChart({ roles, activeRole, onRoleClick }: Props) {
       <div className={legendRow}>
         {data.map((d) => {
           const isActive = activeRole === d.role;
-          const label = `${d.role}${d.unpricedSessionCount > 0 ? `, ${d.unpricedSessionCount} unpriced session${d.unpricedSessionCount === 1 ? "" : "s"}` : ""}`;
+          const displayRole = roleDisplayLabel(d.role);
+          const label = `${displayRole}${d.unpricedSessionCount > 0 ? `, ${d.unpricedSessionCount} unpriced session${d.unpricedSessionCount === 1 ? "" : "s"}` : ""}`;
           return (
             <button
               key={d.role}
@@ -151,10 +158,10 @@ export function StageCostChart({ roles, activeRole, onRoleClick }: Props) {
               }}
               aria-pressed={onRoleClick ? isActive : undefined}
               aria-label={label}
-              data-testid={`stage-cost-legend-${d.role}`}
+              data-testid={`stage-cost-legend-${displayRole}`}
             >
               <div className={legendDot} style={{ background: d.color }} />
-              {d.role}
+              {displayRole}
               {d.unpricedSessionCount > 0 && (
                 <span className={unpricedLabel}> ({d.unpricedSessionCount} unpriced)</span>
               )}

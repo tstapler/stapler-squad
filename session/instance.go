@@ -202,6 +202,15 @@ type Instance struct {
 	WorkingDir string
 	// Branch is the branch of the instance.
 	Branch string
+	// CreationWarning is a one-time, non-fatal signal set during
+	// setupFirstTimeWorktree (SessionTypeNewWorktree) when the source repo's
+	// ambient checked-out HEAD diverged from the resolved default branch the
+	// new worktree actually branched from — see newWorktreeFromResolvedBase.
+	// Surfaced to MCP callers via instanceToDetail rather than logged only,
+	// per this bug's AC1. Never cleared or updated again after creation, so
+	// no actor setter is needed for it the way GetPath()'s doc comment
+	// requires for fields background goroutines can mutate later.
+	CreationWarning string
 	// Status is the status of the instance.
 	Status Status
 	// Program is the program to run in the instance.
@@ -245,6 +254,12 @@ type Instance struct {
 	// resuming/attaching to an already-running pane, where a CLI arg can't be injected after the
 	// fact. Replaces the static driverInitialPrompt when non-empty.
 	InitialPrompt string
+	// InitialPromptSentAt records when InitialPrompt was actually typed into the tmux pane, set
+	// via SetInitialPromptSentAt and persisted to storage. runSessionDriverWithPrompt checks this
+	// FIRST (before the output/JSONL heuristics in outputShowsConversationStarted) so a service
+	// restart's fresh driver goroutine doesn't re-derive -- and risk getting wrong -- whether the
+	// prompt was already sent, which used to re-type it into an already-completed session.
+	InitialPromptSentAt time.Time
 	// ExistingWorktree is an optional path to an existing worktree to reuse
 	ExistingWorktree string
 	// Category is used for organizing sessions into groups
@@ -382,10 +397,20 @@ type Instance struct {
 	// decision. Guarded by claudeSessionMu, same lock order as HistoryFilePath.
 	LastReviveOutcome ReviveOutcome
 
-	// MCPServerURL is the URL of the stapler-squad HTTP MCP endpoint.
-	// When set, passed as --mcp-config to claude on session start so no
-	// settings-file injection is needed.
+	// MCPServerURL is the URL of the stapler-squad HTTP MCP endpoint, passed
+	// as --mcp-config to claude on session start. A one-shot value resolved
+	// at construction time; buildClaudeCommand prefers mcpServerURLProvider
+	// and only falls back to this field (via GetMCPServerURL) when no
+	// provider is wired or the provider itself resolves empty.
 	MCPServerURL string `json:"mcp_server_url,omitempty"`
+
+	// mcpServerURLProvider re-resolves the MCP URL fresh on every claude
+	// launch (see buildClaudeCommand), fixing the restart-drop gap a
+	// one-shot MCPServerURL leaves open. Not actor-routed like
+	// SetMCPServerURL/claudeSessionIDSavedCallback below: buildClaudeCommand
+	// runs inside the actor's own goroutine, so an actor-routed setter would
+	// deadlock on the mailbox (sendSyncErr) when called from there.
+	mcpServerURLProvider atomic.Pointer[func() string]
 
 	// AppendSystemPrompt, when non-empty and the program is claude, passes
 	// --append-system-prompt to inject extra instructions into the system prompt
@@ -461,6 +486,10 @@ type Instance struct {
 	// shellRepo is the persistence backend for shell operations. Injected by Storage
 	// after instance creation/loading; nil disables persistence (tests, external instances).
 	shellRepo ShellRepository
+
+	// initialPromptRepo persists InitialPromptSentAt. Injected by Storage after
+	// instance creation/loading, same as shellRepo; nil disables persistence.
+	initialPromptRepo InitialPromptRepository
 
 	// shellRegistryEmbed holds in-memory shell state via a concurrent ShellRegistry.
 	// Initialized by initShellRegistry(); shell operations go through instance_shells.go.
@@ -702,6 +731,10 @@ type Instance struct {
 	restartCount       int64
 	recentRestartTimes []time.Time
 	restartMu          deadlock.Mutex
+	// restartStormUntil blocks further Start() attempts until this time once
+	// trackRestartRate observes a crash loop (see its doc comment) — zero
+	// means no active cooldown.
+	restartStormUntil time.Time
 
 	// restartTriggerMu serializes every setter that can trigger a restart on an
 	// Active instance (SwitchProgram, SetAutoApprove) so a manual program-switch
@@ -897,6 +930,13 @@ type InstanceOptions struct {
 	// Branch is the git branch name to use when creating a new worktree.
 	// If empty and SessionType is SessionTypeNewWorktree, a branch name is derived from the title.
 	Branch string
+	// CreationWarning seeds Instance.CreationWarning up front for a remote
+	// SessionTypeNewWorktree, whose base-branch resolution (and any ambient-
+	// HEAD-divergence detection) already ran synchronously in CreateSession's
+	// remote mode-specific block, before this Instance exists. The local
+	// path's equivalent (newWorktreeFromResolvedBase) instead sets the field
+	// directly during setupFirstTimeWorktree, since it runs after construction.
+	CreationWarning string
 	// Program is the program to run in the instance (e.g. "claude", "aider --model ollama_chat/gemma3:1b")
 	Program string
 	// If AutoYes is true, automatically accept prompts
@@ -1059,6 +1099,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		Status:           Creating,
 		Path:             absPath,
 		Branch:           opts.Branch,
+		CreationWarning:  opts.CreationWarning,
 		Program:          opts.Program,
 		Height:           0,
 		Width:            0,
@@ -1200,6 +1241,13 @@ func finishInstanceConstruction(i *Instance) {
 // loading or creating an instance. Pass nil to disable persistence (e.g., in tests).
 func (i *Instance) SetShellRepository(repo ShellRepository) {
 	i.shellRepo = repo
+}
+
+// SetInitialPromptRepository injects the InitialPromptSentAt persistence backend.
+// Called by Storage after instance creation/loading; pass nil to disable
+// persistence (e.g., tests).
+func (i *Instance) SetInitialPromptRepository(repo InitialPromptRepository) {
+	i.initialPromptRepo = repo
 }
 
 // SetTagFireRecorder injects the tagging-rule fire-count recorder. Pass nil to disable
@@ -1439,6 +1487,9 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	log.Info("starting instance", "session", i.Title, "path", i.Path, "program", i.Program, "first_time_setup", firstTimeSetup)
 
 	if !firstTimeSetup {
+		if err := i.checkRestartStorm(); err != nil {
+			return err
+		}
 		i.trackRestartRate()
 	}
 
@@ -1689,6 +1740,9 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	log.Info("starting instance", "session", i.Title, "path", i.Path, "program", i.Program, "first_time_setup", firstTimeSetup)
 
 	if !firstTimeSetup {
+		if err := i.checkRestartStorm(); err != nil {
+			return err
+		}
 		i.trackRestartRate()
 	}
 
@@ -2211,19 +2265,8 @@ func (i *Instance) Resume() error {
 		}
 		program := i.buildLaunchCommand(claudeSessionID)
 		i.LaunchCommand = program
-		tmuxPrefix := i.TmuxPrefix
-		if tmuxPrefix == "" {
-			tmuxPrefix = "staplersquad_"
-		}
-		if tb, ok := i.processManager.(*TmuxBackend); ok {
-			if i.TmuxServerSocket != "" {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil)))
-			} else {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(i.Title, program, tmuxPrefix))
-			}
-			if i.UUID != "" {
-				tb.TmuxManager().Session().SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
-			}
+		if _, ok := i.processManager.(*TmuxBackend); ok {
+			i.wireTmuxSession(program)
 			if claudeSessionID != "" {
 				log.Info("resume: reinitializing tmux session with --resume", "session", i.Title, "uuid", claudeSessionID)
 			}
@@ -2422,24 +2465,9 @@ func (i *Instance) Restart(preserveOutput bool) error {
 	i.piSession = restorePiSession
 	i.piSessionMu.Unlock()
 
-	// Create a new tmux session
-	// Use configurable prefix or default
-	tmuxPrefix := i.TmuxPrefix
-	if tmuxPrefix == "" {
-		tmuxPrefix = "staplersquad_" // Default fallback
-	}
-
-	// Record the full launch command for diagnostics (MCP injection verification, etc.)
 	i.LaunchCommand = program
-
-	// Use server socket isolation if specified, otherwise use prefix-only isolation
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		if i.TmuxServerSocket != "" {
-			tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil)))
-		} else {
-			tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(i.Title, program, tmuxPrefix))
-		}
-	}
+	// Create and wire a new tmux session with full environment configuration
+	i.wireTmuxSession(program)
 
 	// Start the new session
 	if err := i.pm().Start(worktreePath); err != nil {

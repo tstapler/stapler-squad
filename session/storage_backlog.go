@@ -195,7 +195,11 @@ type ItemSessionData struct {
 	ItemID      string // BacklogItem UUID
 	SessionUUID string
 	SessionRole string
-	AcSnapshot  AcCriteriaJSON
+	// ConversationUUID is the Claude transcript UUID when already known at creation
+	// (a headless call that has finished); "" otherwise — see EntRepository.Delete
+	// and UpdateItemSessionConversationUUID for the other ways it gets recorded.
+	ConversationUUID string
+	AcSnapshot       AcCriteriaJSON
 	// PipelineModeSnapshot/PipelineModeSnapshotHash freeze the resolved
 	// PipelineMode slug and its content hash at the moment this session
 	// first starts — see ItemSessionSummary.PipelineModeSnapshot(Hash).
@@ -252,6 +256,7 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 	q := r.client.ItemSession.Create().
 		SetSessionUUID(data.SessionUUID).
 		SetSessionRole(data.SessionRole).
+		SetConversationUUID(data.ConversationUUID).
 		SetBacklogItemID(parsedItemID).
 		SetNillableAcSnapshot(nilIfEmpty(string(data.AcSnapshot))).
 		SetPipelineModeSnapshot(data.PipelineModeSnapshot).
@@ -508,6 +513,20 @@ func (r *EntRepository) UpdateItemSessionFailureCapture(ctx context.Context, id 
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to set failure_capture_path on item session %s: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateItemSessionConversationUUID records the Claude transcript UUID of a headless
+// call on an ItemSession created before the call ran (triage), so its transcript stays
+// attributable to the item/role in Insights.
+func (r *EntRepository) UpdateItemSessionConversationUUID(ctx context.Context, id string, conversationUUID string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+	if err := r.client.ItemSession.UpdateOneID(parsedID).SetConversationUUID(conversationUUID).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to set conversation_uuid on item session %s: %w", id, err)
 	}
 	return nil
 }
@@ -823,6 +842,7 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 	isq := tx.ItemSession.Create().
 		SetSessionUUID(isData.SessionUUID).
 		SetSessionRole(isData.SessionRole).
+		SetConversationUUID(isData.ConversationUUID).
 		SetBacklogItemID(parsedItemID).
 		SetNillableAcSnapshot(nilIfEmptyJSON(isData.AcSnapshot)).
 		SetPipelineModeSnapshot(isData.PipelineModeSnapshot).

@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/session/detection"
 )
 
 // TestTransitionTo_should_AllowCreatingToFailed_When_PipelineFails verifies the
@@ -237,4 +239,17 @@ func TestInstance_IsArchived_should_SeeTheWrite_When_SetViaActorSetter(t *testin
 	assert.True(t, inst.IsArchived(), "IsArchived() must see an actor-routed archive")
 
 	assert.False(t, inst.SetArchivedAtIfNil(time.Now()), "second archive is a no-op (CAS)")
+}
+
+// TestGetDetectedStatusInfo_should_ReturnUnknownAndFalse_When_NoStatusManagerSet
+// covers the mgr == nil early return -- no other scroll_gate_test.go instance
+// hits it, since newScrollGateTestInstance always calls SetStatusManager.
+func TestGetDetectedStatusInfo_should_ReturnUnknownAndFalse_When_NoStatusManagerSet(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{}
+
+	status, controllerActive := inst.GetDetectedStatusInfo()
+
+	assert.Equal(t, detection.StatusUnknown, status)
+	assert.False(t, controllerActive)
 }

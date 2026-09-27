@@ -9,6 +9,7 @@ import { prefetchVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { getApiBaseUrl } from "@/lib/config";
 import { useAppSelector } from "@/lib/store";
 import { selectAllSessions } from "@/lib/store/sessionsSlice";
+import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 
 // Dynamically import SessionDetailView (and its heavy transitive deps: CodeMirror,
 // XtermTerminal, syntax-highlight packs, WASM) so they are NOT in the initial bundle.
@@ -52,6 +53,8 @@ interface SessionDetailProps {
   canGoBack?: boolean;
   /** Backlog item ID to display in right-side panel. If provided, shows BacklogItemPanel. */
   backlogItemId?: string;
+  /** Resolved backlog-origin index entry for this session, if dispatched by backlog automation. Drives the header badge. */
+  backlogEntry?: BacklogIndexEntry;
   /** Whether this session's pane currently has focus — forwarded to SessionVcsProvider. Defaults to true. */
   isActive?: boolean;
 }
@@ -75,6 +78,7 @@ export function SessionDetail({
   onBack,
   canGoBack,
   backlogItemId,
+  backlogEntry,
   isActive,
 }: SessionDetailProps) {
   const actions = useSessionActions(session.id);
@@ -109,6 +113,7 @@ export function SessionDetail({
         onBack={onBack}
         canGoBack={canGoBack}
         backlogItemId={backlogItemId}
+        backlogEntry={backlogEntry}
       />
     </SessionVcsProvider>
   );

@@ -459,3 +459,41 @@ func TestResolveAlias_PropagatesBranchAndLabel_WhenPassedAsArgs(t *testing.T) {
 		t.Errorf("expected SessionLabel 'working on auth', got %q", result.SessionLabel)
 	}
 }
+
+func TestResolveProgramConfig_ResolvesCustomProgramID(t *testing.T) {
+	cfg := &Config{}
+	cfg.SessionDefaults.Programs = []ProgramConfig{
+		{
+			ID:          "claude-250k-proxy",
+			Label:       "Claude Code Proxy",
+			Command:     "claude",
+			CLIFlags:    "--auto-compaction 250000",
+			Description: "Custom program",
+			Env: map[string]string{
+				"HTTP_PROXY": "http://127.0.0.1:47000",
+			},
+		},
+	}
+
+	res := ResolveProgramConfig(cfg, "claude-250k-proxy")
+	if !res.IsCustom {
+		t.Fatal("expected IsCustom to be true")
+	}
+	if res.Command != "claude" {
+		t.Errorf("expected Command 'claude', got %q", res.Command)
+	}
+	if res.CLIFlags != "--auto-compaction 250000" {
+		t.Errorf("expected CLIFlags '--auto-compaction 250000', got %q", res.CLIFlags)
+	}
+	if res.EnvVars["HTTP_PROXY"] != "http://127.0.0.1:47000" {
+		t.Errorf("expected HTTP_PROXY env var, got %v", res.EnvVars)
+	}
+
+	resNonCustom := ResolveProgramConfig(cfg, "aider")
+	if resNonCustom.IsCustom {
+		t.Fatal("expected IsCustom to be false for standard program")
+	}
+	if resNonCustom.Command != "aider" {
+		t.Errorf("expected Command 'aider', got %q", resNonCustom.Command)
+	}
+}

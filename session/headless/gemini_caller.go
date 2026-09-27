@@ -132,11 +132,15 @@ func combinedGeminiPrompt(systemPrompt, userPrompt string) string {
 
 // warnIgnoredClaudeOnlyOptions logs a Warn naming any Claude-CLI-flag-shaped
 // CallOptions field that GeminiCaller cannot honor (`gemini -p` has no
-// --allowedTools/--permission-mode/--disallowedTools equivalent) — resolves
-// architecture-review Concern (Liskov/ISP mismatch). The call still proceeds
-// using only WorkDir/Model: dropping an unenforceable restriction is a
-// visible, logged degradation, never a silent one, and never an error (the
-// call still has a valid, if less-restricted, shape without it).
+// --allowedTools/--permission-mode/--disallowedTools/conversation-UUID
+// equivalent) — resolves architecture-review Concern (Liskov/ISP mismatch).
+// The call still proceeds using only WorkDir/Model: dropping an unenforceable
+// restriction is a visible, logged degradation, never a silent one, and never
+// an error (the call still has a valid, if less-restricted, shape without
+// it). OnConversationID is never invoked below (CallBlocking has no
+// conversation ID to report — see its own doc comment on v1 having no
+// session/history reuse), so it must be listed here or a caller relying on
+// it for cost-attribution stamping fails with no log signal at all.
 func warnIgnoredClaudeOnlyOptions(opts CallOptions) {
 	var ignored []string
 	if opts.AllowedTools != "" {
@@ -147,6 +151,9 @@ func warnIgnoredClaudeOnlyOptions(opts CallOptions) {
 	}
 	if opts.DisallowedTools != "" {
 		ignored = append(ignored, "DisallowedTools")
+	}
+	if opts.OnConversationID != nil {
+		ignored = append(ignored, "OnConversationID")
 	}
 	if len(ignored) > 0 {
 		log.Warn("gemini caller: ignoring claude-only CallOptions fields", "fields", ignored)

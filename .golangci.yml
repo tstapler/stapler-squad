@@ -95,6 +95,7 @@ linters:
             - "**/server/services/**"
             # Temporarily excluded — session/ent still imported; removed-in: refactor/storage-interface-cleanup (P6)
             - "!**/server/services/error_registry.go"
+            - "!**/server/services/error_registry_test.go"
             - "!**/server/services/analytics_escape_service.go"
             - "!**/server/services/analytics_escape_service_test.go"
             - "!**/server/services/workflow_service_test.go"

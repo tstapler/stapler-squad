@@ -1,15 +1,29 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
 )
+
+// runGitOutput is runGit's (backlog_review_test.go) sibling for callers that
+// need the command's stdout, e.g. rev-parse.
+func runGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := safeexec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "git %v failed: %s", args, out)
+	return string(out)
+}
 
 // TestEnsureDirectorySessionPath_CreatesAndGitInitsMissingDirectory verifies that
 // a not-yet-existing path is created and git-initialized, matching the same
@@ -118,6 +132,79 @@ func TestSetupFirstTimeWorktree_NewWorktree_AlwaysFailsOnMissingPath(t *testing.
 			require.False(t, inst.gitManager.HasWorktree())
 		})
 	}
+}
+
+// TestSetupFirstTimeWorktree_NewWorktree_BranchesFromOriginDefault_NotAmbientHEAD
+// reproduces this bug's exact report: the source repo's ambient checked-out
+// HEAD is a divergent, unrelated in-progress branch, and the new_worktree
+// session must still branch from origin's default branch tip, not that
+// ambient HEAD — with the divergence surfaced via Instance.CreationWarning
+// rather than silently proceeding.
+func TestSetupFirstTimeWorktree_NewWorktree_BranchesFromOriginDefault_NotAmbientHEAD(t *testing.T) {
+	t.Parallel()
+	origin := t.TempDir()
+	runGit(t, origin, "init", "-b", "main")
+	runGit(t, origin, "config", "user.email", "test@localhost")
+	runGit(t, origin, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("origin\n"), 0o644))
+	runGit(t, origin, "add", "README.md")
+	runGit(t, origin, "commit", "-m", "initial commit")
+	mainSHA := strings.TrimSpace(runGitOutput(t, origin, "rev-parse", "main"))
+
+	work := t.TempDir()
+	runGit(t, work, "clone", origin, ".")
+	runGit(t, work, "checkout", "-b", "unrelated-in-progress-work")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "unrelated.txt"), []byte("unrelated\n"), 0o644))
+	runGit(t, work, "add", "unrelated.txt")
+	runGit(t, work, "commit", "-m", "unrelated in-progress commit")
+
+	inst, err := NewInstance(InstanceOptions{
+		Title:       "divergence-check",
+		Path:        work,
+		Program:     "claude",
+		SessionType: SessionTypeNewWorktree,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, inst.setupFirstTimeWorktree())
+
+	require.True(t, inst.gitManager.HasWorktree())
+	// setupFirstTimeWorktree only records the resolved GitWorktree (the actual
+	// `git worktree add` runs later, during the instance's Start() lifecycle) —
+	// so assert on the recorded base commit rather than disk state.
+	require.Equal(t, mainSHA, inst.gitManager.GetWorktree().GetBaseCommitSHA(),
+		"new worktree must branch from origin's default branch, not the ambient checked-out divergent branch")
+	require.NotEmpty(t, inst.GetCreationWarning(), "ambient HEAD divergence must surface a warning, not silent success")
+}
+
+// TestSetupFirstTimeWorktree_NewWorktree_NoWarning_When_AmbientHEADMatchesBase
+// verifies the common case — a source repo already checked out on its
+// default branch — produces no spurious divergence warning.
+func TestSetupFirstTimeWorktree_NewWorktree_NoWarning_When_AmbientHEADMatchesBase(t *testing.T) {
+	t.Parallel()
+	origin := t.TempDir()
+	runGit(t, origin, "init", "-b", "main")
+	runGit(t, origin, "config", "user.email", "test@localhost")
+	runGit(t, origin, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("origin\n"), 0o644))
+	runGit(t, origin, "add", "README.md")
+	runGit(t, origin, "commit", "-m", "initial commit")
+
+	work := t.TempDir()
+	runGit(t, work, "clone", origin, ".")
+
+	inst, err := NewInstance(InstanceOptions{
+		Title:       "no-divergence-check",
+		Path:        work,
+		Program:     "claude",
+		SessionType: SessionTypeNewWorktree,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, inst.setupFirstTimeWorktree())
+
+	require.True(t, inst.gitManager.HasWorktree())
+	require.Empty(t, inst.GetCreationWarning(), "no divergence expected when ambient HEAD already matches the resolved base")
 }
 
 // TestSetupFirstTimeWorktree_NewProject_CreatesWorktree_When_BranchSet covers

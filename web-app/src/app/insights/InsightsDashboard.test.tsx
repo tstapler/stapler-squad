@@ -65,6 +65,9 @@ describe("InsightsDashboard bar-click cross-filter (Story 5.2.2)", () => {
     });
   });
 
+  // First it() in the file pays the cold next/dynamic import() of StageCostChart
+  // (module registry is shared across tests in a file) — slow enough under CI's
+  // constrained runners to exceed the default 5000ms timeout.
   it("InsightsDashboard_should_FilterSessionsTableToWorkRole_When_WorkBarClicked", async () => {
     render(<InsightsDashboard />);
 
@@ -78,7 +81,7 @@ describe("InsightsDashboard bar-click cross-filter (Story 5.2.2)", () => {
     expect(screen.getByText("sess-work-1")).toBeInTheDocument();
     expect(screen.queryByText("sess-triage-1")).not.toBeInTheDocument();
     expect(screen.queryByText("sess-review-1")).not.toBeInTheDocument();
-  });
+  }, 15000);
 
   it("InsightsDashboard_should_ClearRoleFilter_When_ActiveBarClickedAgain", async () => {
     render(<InsightsDashboard />);
@@ -93,5 +96,73 @@ describe("InsightsDashboard bar-click cross-filter (Story 5.2.2)", () => {
       expect(screen.queryByTestId("role-filter-chip")).not.toBeInTheDocument();
     });
     expect(screen.getByText("sess-triage-1")).toBeInTheDocument();
+  });
+
+  // Regression: the "" (unattributed) and "external" role_breakdown buckets
+  // previously couldn't cross-filter at all — StageCostChart emitted the
+  // display placeholder "unattributed" as the click/filter value instead of
+  // the real "" SessionRole, so SessionsTable's `s.sessionRole === roleFilter`
+  // comparison could never match. See insightsFormatters.roleDisplayLabel's
+  // doc comment for the fix.
+  it("InsightsDashboard_should_FilterSessionsTableToUnattributed_When_UnattributedBarClicked", async () => {
+    (useInsightsSummary as jest.Mock).mockReturnValue({
+      summary: create(GetInsightsSummaryResponseSchema, {
+        sessions: [
+          makeSession("sess-work-1", "work"),
+          makeSession("sess-unattributed-1", ""),
+          makeSession("sess-external-1", "external"),
+        ],
+        roleBreakdown: [
+          create(RoleCostBreakdownSchema, { sessionRole: "work", estimatedCostUsd: 14.3, sessionCount: 1 }),
+          create(RoleCostBreakdownSchema, { sessionRole: "", estimatedCostUsd: 2.1, sessionCount: 1 }),
+          create(RoleCostBreakdownSchema, { sessionRole: "external", estimatedCostUsd: 0.9, sessionCount: 1 }),
+        ],
+      }),
+      loading: false,
+      isLiveUpdating: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+    render(<InsightsDashboard />);
+
+    fireEvent.click(await screen.findByTestId("stage-cost-legend-unattributed"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("role-filter-chip")).toHaveTextContent("Filtered to: unattributed");
+    });
+    expect(screen.getByText("sess-unattributed-1")).toBeInTheDocument();
+    expect(screen.queryByText("sess-work-1")).not.toBeInTheDocument();
+    expect(screen.queryByText("sess-external-1")).not.toBeInTheDocument();
+  });
+
+  it("InsightsDashboard_should_FilterSessionsTableToExternal_When_ExternalBarClicked", async () => {
+    (useInsightsSummary as jest.Mock).mockReturnValue({
+      summary: create(GetInsightsSummaryResponseSchema, {
+        sessions: [
+          makeSession("sess-work-1", "work"),
+          makeSession("sess-unattributed-1", ""),
+          makeSession("sess-external-1", "external"),
+        ],
+        roleBreakdown: [
+          create(RoleCostBreakdownSchema, { sessionRole: "work", estimatedCostUsd: 14.3, sessionCount: 1 }),
+          create(RoleCostBreakdownSchema, { sessionRole: "", estimatedCostUsd: 2.1, sessionCount: 1 }),
+          create(RoleCostBreakdownSchema, { sessionRole: "external", estimatedCostUsd: 0.9, sessionCount: 1 }),
+        ],
+      }),
+      loading: false,
+      isLiveUpdating: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+    render(<InsightsDashboard />);
+
+    fireEvent.click(await screen.findByTestId("stage-cost-legend-external"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("role-filter-chip")).toHaveTextContent("Filtered to: external");
+    });
+    expect(screen.getByText("sess-external-1")).toBeInTheDocument();
+    expect(screen.queryByText("sess-work-1")).not.toBeInTheDocument();
+    expect(screen.queryByText("sess-unattributed-1")).not.toBeInTheDocument();
   });
 });

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -88,7 +89,15 @@ func newWorktreeTargetInstance(uuid, worktreePath string) *session.Instance {
 // behavior, which had no guard at all and let the worktree be removed.
 func TestRefuseIfWorktreeSharedWithOtherLiveSession_BlocksWhenSiblingStillRunning(t *testing.T) {
 	worktree := t.TempDir()
-	sibling := newLiveOccupant(t, "guard-sibling-"+t.Name(), filepath.Join(worktree, "web-app"))
+	// A real tmux pane's cwd always exists on disk; the production symlink-
+	// canonical comparison in OtherLiveSessionInsideWorktree (filepath.EvalSymlinks)
+	// silently falls back to the unresolved path when it doesn't, which would
+	// make this pass for the wrong reason on some hosts and fail outright on
+	// others (e.g. macOS, where t.TempDir()'s real path has a symlink hop:
+	// /var -> /private/var).
+	siblingCwd := filepath.Join(worktree, "web-app")
+	require.NoError(t, os.MkdirAll(siblingCwd, 0755))
+	sibling := newLiveOccupant(t, "guard-sibling-"+t.Name(), siblingCwd)
 	lh := newWorktreeGuardHandlers(t, sibling)
 
 	target := newWorktreeTargetInstance("uuid-guard-target", worktree)

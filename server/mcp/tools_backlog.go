@@ -438,9 +438,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 
 	// Description.
 	if item.Description != "" {
-		sb.WriteString("## Description\n")
-		sb.WriteString(session.SanitizeForAgentContext(item.Description, 2000))
-		sb.WriteString("\n\n")
+		session.WriteDescriptionSection(&sb, item.Description, 2000)
 	}
 
 	// Latest review verdict, if one has been submitted. This is the primary way a

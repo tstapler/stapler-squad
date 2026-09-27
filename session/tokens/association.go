@@ -122,8 +122,12 @@ func associateRecord(result *ParseResult, sessions []SessionRecord) (SessionReco
 	return SessionRecord{}, true
 }
 
-// isPathPrefixMatch returns true if resultPath is a path-component prefix of sessionPath,
-// or if sessionPath is a path-component prefix of resultPath.
+// isPathPrefixMatch returns true if resultPath is sessionPath itself or a
+// path-component subdirectory of it. Deliberately one-directional: matching
+// the reverse (sessionPath under resultPath) let a short, generic decoded
+// path like "/home/tstapler" match any session under $HOME, misattributing
+// ~290 unrelated transcripts onto one session in a live-data check
+// (project_plans/cost-attribution/plan.md, Story 4).
 func isPathPrefixMatch(resultPath, sessionPath string) bool {
 	if resultPath == sessionPath {
 		return true
@@ -131,10 +135,6 @@ func isPathPrefixMatch(resultPath, sessionPath string) bool {
 	// Ensure we match on path component boundaries.
 	if strings.HasPrefix(resultPath, sessionPath) {
 		rest := resultPath[len(sessionPath):]
-		return rest == "" || strings.HasPrefix(rest, "/")
-	}
-	if strings.HasPrefix(sessionPath, resultPath) {
-		rest := sessionPath[len(resultPath):]
 		return rest == "" || strings.HasPrefix(rest, "/")
 	}
 	return false

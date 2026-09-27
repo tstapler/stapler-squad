@@ -380,4 +380,36 @@ describe("SessionsTable", () => {
       expect(onSearchTextChange).toHaveBeenCalledWith("x");
     });
   });
+
+  describe("tags, role badge, waste tooltip", () => {
+    const tagged = [
+      makeSession({ sessionId: "a", conversationId: "ca", projectPath: "/x/alpha", tags: ["backend"] }),
+      makeSession({ sessionId: "b", conversationId: "cb", projectPath: "/x/beta", tags: ["frontend"] }),
+    ];
+
+    it("matches search text against tags", async () => {
+      render(<SessionsTable sessions={tagged} />);
+      await userEvent.type(screen.getByLabelText("Search sessions by project path"), "frontend");
+      expect(screen.getByText("Sessions (1 of 2)")).toBeInTheDocument();
+    });
+
+    it("narrows by tag filter and clears", async () => {
+      render(<SessionsTable sessions={tagged} />);
+      await userEvent.selectOptions(screen.getByLabelText("Filter by tag"), "backend");
+      expect(screen.getByText("Sessions (1 of 2)")).toBeInTheDocument();
+      await userEvent.click(screen.getByText("Clear filters"));
+      expect(screen.getByText("Sessions (2)")).toBeInTheDocument();
+    });
+
+    it("shows role badge from summary.sessionRole with an empty backlog index", () => {
+      render(<SessionsTable sessions={[makeSession({ sessionRole: "triage" })]} backlogIndex={new Map()} />);
+      expect(screen.getByTestId("role-badge")).toHaveTextContent("triage");
+    });
+
+    it("explains Waste Score in a header tooltip", () => {
+      render(<SessionsTable sessions={tagged} />);
+      const th = screen.getByText(/Waste Score/).closest("th");
+      expect(th?.getAttribute("title")).toMatch(/not dollars.*Higher is worse.*Not evaluated/);
+    });
+  });
 });

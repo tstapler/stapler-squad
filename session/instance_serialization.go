@@ -18,7 +18,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
-	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // loggedMissingWorktree suppresses repeat "worktree directory missing"
@@ -83,25 +82,26 @@ func (i *Instance) ToInstanceData() InstanceData {
 	})
 
 	data := InstanceData{
-		Title:         snap.Title,
-		UUID:          snap.UUID,
-		Path:          snap.Path,
-		WorkingDir:    snap.WorkingDir,
-		Branch:        snap.Branch,
-		Status:        snap.Status,
-		Height:        snap.Height,
-		Width:         snap.Width,
-		CreatedAt:     snap.CreatedAt,
-		UpdatedAt:     time.Now(),
-		Program:       snap.Program,
-		AutoYes:       snap.AutoYes,
-		AutoApprove:   snap.AutoApprove,
-		Prompt:        snap.Prompt,
-		InitialPrompt: snap.InitialPrompt,
-		Category:      snap.Category,
-		Note:          snap.Note,
-		IsExpanded:    snap.IsExpanded,
-		Tags:          snap.Tags, // Include tags in serialization
+		Title:               snap.Title,
+		UUID:                snap.UUID,
+		Path:                snap.Path,
+		WorkingDir:          snap.WorkingDir,
+		Branch:              snap.Branch,
+		Status:              snap.Status,
+		Height:              snap.Height,
+		Width:               snap.Width,
+		CreatedAt:           snap.CreatedAt,
+		UpdatedAt:           time.Now(),
+		Program:             snap.Program,
+		AutoYes:             snap.AutoYes,
+		AutoApprove:         snap.AutoApprove,
+		Prompt:              snap.Prompt,
+		InitialPrompt:       snap.InitialPrompt,
+		InitialPromptSentAt: snap.InitialPromptSentAt,
+		Category:            snap.Category,
+		Note:                snap.Note,
+		IsExpanded:          snap.IsExpanded,
+		Tags:                snap.Tags, // Include tags in serialization
 		// ADR-002 tag provenance — see Instance.RuleTagProvenance/SuppressedRuleTags.
 		RuleTagProvenance:  snap.RuleTagProvenance,
 		SuppressedRuleTags: snap.SuppressedRuleTags,
@@ -275,25 +275,26 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	}
 
 	instance := &Instance{
-		Title:         data.Title,
-		UUID:          data.UUID,
-		Path:          migratedPath, // Use migrated path
-		WorkingDir:    data.WorkingDir,
-		Branch:        data.Branch,
-		Status:        data.Status,
-		Height:        data.Height,
-		Width:         data.Width,
-		CreatedAt:     data.CreatedAt,
-		UpdatedAt:     data.UpdatedAt,
-		Program:       data.Program,
-		AutoYes:       data.AutoYes, // pre-existing bug: was never restored on load, losing auto_yes across every restart
-		AutoApprove:   data.AutoApprove,
-		Prompt:        data.Prompt,
-		InitialPrompt: data.InitialPrompt,
-		Category:      data.Category,
-		Note:          data.Note,
-		IsExpanded:    data.IsExpanded,
-		Tags:          tags, // Use migrated tags (includes category if needed)
+		Title:               data.Title,
+		UUID:                data.UUID,
+		Path:                migratedPath, // Use migrated path
+		WorkingDir:          data.WorkingDir,
+		Branch:              data.Branch,
+		Status:              data.Status,
+		Height:              data.Height,
+		Width:               data.Width,
+		CreatedAt:           data.CreatedAt,
+		UpdatedAt:           data.UpdatedAt,
+		Program:             data.Program,
+		AutoYes:             data.AutoYes, // pre-existing bug: was never restored on load, losing auto_yes across every restart
+		AutoApprove:         data.AutoApprove,
+		Prompt:              data.Prompt,
+		InitialPrompt:       data.InitialPrompt,
+		InitialPromptSentAt: data.InitialPromptSentAt,
+		Category:            data.Category,
+		Note:                data.Note,
+		IsExpanded:          data.IsExpanded,
+		Tags:                tags, // Use migrated tags (includes category if needed)
 		// ADR-002 tag provenance — see Instance.RuleTagProvenance/SuppressedRuleTags.
 		RuleTagProvenance:  data.RuleTagProvenance,
 		SuppressedRuleTags: data.SuppressedRuleTags,
@@ -460,34 +461,13 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 
 	if instance.Paused() {
 		instance.started.Store(true)
-		tmuxPrefix := instance.TmuxPrefix
-		if tmuxPrefix == "" {
-			tmuxPrefix = "staplersquad_"
-		}
-
-		// Use server socket isolation if specified, otherwise use prefix-only isolation.
-		// WithRegistry(nil) prevents a background reconnect loop on isolated sockets —
-		// the loop tries attach-session on a keepalive that doesn't exist there, causing
-		// intermittent exit status 1 from concurrent new-session calls.
-		if tb, ok := instance.processManager.(*TmuxBackend); ok {
-			if instance.TmuxServerSocket != "" {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(instance.Title, instance.Program, tmuxPrefix, instance.TmuxServerSocket, tmux.WithRegistry(nil)))
-			} else {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(instance.Title, instance.Program, tmuxPrefix))
-			}
+		if _, ok := instance.processManager.(*TmuxBackend); ok {
+			instance.wireTmuxSession(instance.Program)
 		}
 	} else if instance.Status == Stopped {
 		// Wire the tmux session object so IsAlive() can be called.
-		tmuxPrefix := instance.TmuxPrefix
-		if tmuxPrefix == "" {
-			tmuxPrefix = "staplersquad_"
-		}
-		if tb, ok := instance.processManager.(*TmuxBackend); ok {
-			if instance.TmuxServerSocket != "" {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(instance.Title, instance.Program, tmuxPrefix, instance.TmuxServerSocket, tmux.WithRegistry(nil)))
-			} else {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(instance.Title, instance.Program, tmuxPrefix))
-			}
+		if _, ok := instance.processManager.(*TmuxBackend); ok {
+			instance.wireTmuxSession(instance.Program)
 		}
 		// If the underlying tmux session is still alive (e.g. server crashed mid-write
 		// or exit callback fired falsely), recover it rather than leave it stuck as
@@ -539,19 +519,8 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	} else if instance.Status == Hibernated {
 		// Wire the tmux session object (for IsAlive checks at resume time)
 		// but do NOT call Start — hibernated sessions resume only on explicit request.
-		tmuxPrefix := instance.TmuxPrefix
-		if tmuxPrefix == "" {
-			tmuxPrefix = "staplersquad_"
-		}
-		if tb, ok := instance.processManager.(*TmuxBackend); ok {
-			if instance.TmuxServerSocket != "" {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(
-					instance.Title, instance.Program, tmuxPrefix,
-					instance.TmuxServerSocket, tmux.WithRegistry(nil)))
-			} else {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(
-					instance.Title, instance.Program, tmuxPrefix))
-			}
+		if _, ok := instance.processManager.(*TmuxBackend); ok {
+			instance.wireTmuxSession(instance.Program)
 		}
 		instance.started.Store(true)
 	} else if instance.Status == Crashed {
@@ -564,19 +533,8 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// silently auto-resuming every Crashed session on the very next server
 		// restart, exactly what the new Crashed status is designed to prevent
 		// (see session/health.go's "must not be silently respawned" comment).
-		tmuxPrefix := instance.TmuxPrefix
-		if tmuxPrefix == "" {
-			tmuxPrefix = "staplersquad_"
-		}
-		if tb, ok := instance.processManager.(*TmuxBackend); ok {
-			if instance.TmuxServerSocket != "" {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(
-					instance.Title, instance.Program, tmuxPrefix,
-					instance.TmuxServerSocket, tmux.WithRegistry(nil)))
-			} else {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(
-					instance.Title, instance.Program, tmuxPrefix))
-			}
+		if _, ok := instance.processManager.(*TmuxBackend); ok {
+			instance.wireTmuxSession(instance.Program)
 		}
 		instance.started.Store(true)
 	} else {
@@ -588,16 +546,8 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// is alive, so every LoadInstances() call (health checks, MCP tool handlers,
 		// etc.) logs a spurious "creating session" and re-runs launch bookkeeping
 		// for every Active session, even ones that were never actually down.
-		tmuxPrefix := instance.TmuxPrefix
-		if tmuxPrefix == "" {
-			tmuxPrefix = "staplersquad_"
-		}
-		if tb, ok := instance.processManager.(*TmuxBackend); ok {
-			if instance.TmuxServerSocket != "" {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(instance.Title, instance.Program, tmuxPrefix, instance.TmuxServerSocket, tmux.WithRegistry(nil)))
-			} else {
-				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(instance.Title, instance.Program, tmuxPrefix))
-			}
+		if _, ok := instance.processManager.(*TmuxBackend); ok {
+			instance.wireTmuxSession(instance.Program)
 		}
 		// Raw ArchivedAt read, not IsArchived(): this runs before
 		// finishInstanceConstruction publishes the first snapshot, so

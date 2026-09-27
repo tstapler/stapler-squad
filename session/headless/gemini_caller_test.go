@@ -3,14 +3,29 @@ package headless
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
+
+// captureWarnLog swaps log.Warn's injectable slog seam (log.SetSlogDefaultForTest)
+// to a buffer for the duration of the calling test, restoring the original on
+// cleanup. Mirrors server/services/session_service_client_log_test.go's
+// captureInfoLog. Not safe to combine with t.Parallel() — the seam is process-wide.
+func captureWarnLog(t *testing.T) *ssqlog.SyncBuffer {
+	t.Helper()
+	buf := &ssqlog.SyncBuffer{}
+	h := slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	original := ssqlog.SetSlogDefaultForTest(slog.New(h))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(original) })
+	return buf
+}
 
 // fakeGeminiRunner is a test double for geminiRunner: returns scripted
 // responses/errors in order and records the args/workDir passed to Run, and
@@ -186,6 +201,29 @@ func TestGeminiCaller_CallBlocking_should_WarnAndSucceed_When_ClaudeOnlyCallOpti
 		CallOptions{PermissionMode: "acceptEdits", AllowedTools: "Read,Grep"}, DiscardCost)
 	require.NoError(t, err)
 	assert.Equal(t, "ok", text)
+}
+
+// TestGeminiCaller_CallBlocking_should_WarnAndNeverInvoke_When_OnConversationIDSet
+// guards the fix: CallBlocking never invokes OnConversationID (v1 has no
+// Gemini conversation/session ID to report), so it must appear in
+// warnIgnoredClaudeOnlyOptions' ignored-fields log line the same way
+// AllowedTools/PermissionMode/DisallowedTools do — otherwise a caller relying
+// on it for cost-attribution stamping silently gets nothing, with no signal.
+func TestGeminiCaller_CallBlocking_should_WarnAndNeverInvoke_When_OnConversationIDSet(t *testing.T) {
+	// Not t.Parallel(): captureWarnLog swaps the log package's process-wide
+	// injectable slog seam.
+	buf := captureWarnLog(t)
+	runner := &fakeGeminiRunner{responses: []string{`{"response":"ok","stats":{"models":{}}}`}}
+	gc := newTestGeminiCaller(runner, 5)
+
+	invoked := false
+	opts := CallOptions{OnConversationID: func(string) { invoked = true }}
+
+	text, err := gc.CallBlocking(context.Background(), "key", "sys", "user", opts, DiscardCost)
+	require.NoError(t, err)
+	assert.Equal(t, "ok", text)
+	assert.False(t, invoked, "GeminiCaller has no conversation ID to report and must never invoke OnConversationID")
+	assert.Contains(t, buf.String(), "OnConversationID", "the dropped field must be named in the ignored-fields warning")
 }
 
 // ─── CallBlocking: WorkDir validation (BUG-062 precedent) ──────────────────

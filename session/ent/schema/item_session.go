@@ -24,6 +24,10 @@ func (ItemSession) Fields() []ent.Field {
 			Comment("Loose FK to Session; not an ent edge"),
 		field.String("session_role").
 			Comment("One of: work, triage, review"),
+		field.String("conversation_uuid").
+			Optional().
+			Default("").
+			Comment("Claude conversation UUID (transcript JSONL name). Outlives the session row so Insights can still attribute a deleted session's transcript to this item/role."),
 		field.Time("started_at").
 			Optional().
 			Nillable(),
@@ -128,6 +132,7 @@ func (ItemSession) Indexes() []ent.Index {
 	return []ent.Index{
 		// CRITICAL: O(1) lookup on every EventExited hook
 		index.Fields("session_uuid"),
+		index.Fields("conversation_uuid"),
 		// Composite index for "all sessions for an item ordered by time" queries.
 		index.Fields("created_at").Edges("backlog_item"),
 	}

@@ -322,8 +322,15 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// remote.proto/headless.proto above, caught by TestMethodToIDCompleteness's
 	// glob. Wired fully (map entry + Makefile enumeration) like remote.proto,
 	// not left as a followup like headless.proto, since it was cheap here.
-	"GetHandoffSummary":     "handoff-summary:get",
-	"TriggerHandoffSummary": "handoff-summary:trigger",
+	// Tagging-classifier RPCs (tagging_classifier_service.go).
+	"GetTaggingClassifierConfig":    "tagging-classifier:get-config",
+	"UpdateTaggingClassifierConfig": "tagging-classifier:update-config",
+	"ReclassifySessionTags":         "tagging-classifier:reclassify-session",
+	"ListTaggingRules":              "tagging-rule:list",
+	"UpsertTaggingRule":             "tagging-rule:upsert",
+	"DeleteTaggingRule":             "tagging-rule:delete",
+	"GetHandoffSummary":             "handoff-summary:get",
+	"TriggerHandoffSummary":         "handoff-summary:trigger",
 	// LivenessDefinition CRUD RPCs (Epic 1.3 of backlog-custom-workflow-stages)
 	// -- pre-existing collateral debt found by TestMethodToIDCompleteness
 	// while wiring Epic 2.7's own methodToID entries below: these markers
@@ -360,16 +367,6 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ListTransitionGates":   "backlog:list-transition-gates",
 	"RecordGateApproval":    "backlog:record-gate-approval",
 	"GetPendingGates":       "backlog:get-pending-gates",
-	// Native git rollout RPCs (NativeGitRolloutService in native_git_rollout.proto)
-	// -- pre-existing collateral debt found by TestMethodToIDCompleteness: must
-	// match the "// +api: native-git-rollout:*" markers in
-	// server/services/native_git_rollout_service.go verbatim, same failure mode
-	// as the SearchGitHubRepos comment above.
-	"GetNativeGitRolloutStatus":        "native-git-rollout:get",
-	"SetNativeWorktreeGlobalOverride":  "native-git-rollout:set-worktree-global-override",
-	"SetNativeWorktreeSessionOverride": "native-git-rollout:set-worktree-session-override",
-	"SetNativeMergeGlobalOverride":     "native-git-rollout:set-merge-global-override",
-	"SetNativeMergeWorktreeOverride":   "native-git-rollout:set-merge-worktree-override",
 	// Tmux client/server version mismatch RPCs (session.proto) -- pre-existing
 	// collateral debt found by TestMethodToIDCompleteness: must match the
 	// "// +api: tmux:*" markers in server/services/tmux_version_status_service.go

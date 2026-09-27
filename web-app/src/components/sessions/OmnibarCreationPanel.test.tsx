@@ -5,6 +5,8 @@ import type { OmnibarCreationPanelProps, RemoteOption } from "./OmnibarCreationP
 import type { OmnibarFormState } from "./Omnibar";
 import type { WorktreeEntry } from "@/gen/session/v1/session_pb";
 
+jest.mock("@/lib/hooks/useProbeProgram", () => require("@/lib/hooks/__mocks__/probeProgramMock").hookMockFactory());
+
 const DEFAULT_FORM_STATE: OmnibarFormState = {
   sessionName: "test-session",
   branch: "",
@@ -115,5 +117,17 @@ describe("SESSION_TYPES hint copy", () => {
   it("gives every session type a distinct description", () => {
     const descriptions = SESSION_TYPES.map((t) => t.description);
     expect(new Set(descriptions).size).toBe(descriptions.length);
+  });
+});
+
+describe("ProgramProbeSection wiring", () => {
+  it("OmnibarCreationPanel_should_RenderProgramProbeSectionAndNoOldSpan_When_ProgramSelected", () => {
+    const { resetProbeMocks, setProbeHookState, probeStates } = require("@/lib/hooks/__mocks__/probeProgramMock");
+    resetProbeMocks();
+    setProbeHookState(probeStates.notFound);
+    render(<OmnibarCreationPanel {...buildProps({ showAdvanced: true })} />);
+    expect(screen.getAllByTestId("preset-program-warning")).toHaveLength(1);
+    expect(screen.queryByText(/not found in PATH/)).toBeNull();
+    expect(screen.getByLabelText("Program")).toHaveAttribute("aria-describedby", "omnibar-program-probe-status");
   });
 });

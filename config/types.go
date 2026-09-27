@@ -85,6 +85,19 @@ type SlackConfig struct {
 	DashboardBaseURL string `json:"dashboard_base_url,omitempty"`
 }
 
+// TaggingClassifierConfig holds the LLM model hierarchy for session-tag
+// classification (config.Config.TaggingClassifier). The primary model is tried
+// first; each fallback is tried in order until one succeeds. Model names are
+// passed as --model to the headless CLI; a free local proxy is used by naming
+// its model here (ANTHROPIC_BASE_URL already flows to the subprocess).
+type TaggingClassifierConfig struct {
+	// Model is the primary classification model (e.g. "haiku"). Empty means
+	// the server default ("haiku").
+	Model string `json:"model,omitempty"`
+	// FallbackModels is the ordered fallback hierarchy tried after Model fails.
+	FallbackModels []string `json:"fallback_models,omitempty"`
+}
+
 // JulesConfig holds configuration for the Google Jules dispatch-and-poll
 // integration (config.Config.Jules). The API key is deliberately absent from
 // this struct — it lives in the OS keychain (jules.KeyringTokenSource,

@@ -51,6 +51,12 @@ const (
 	SessionRoleTriage    = "triage"
 	SessionRoleReview    = "review"
 	SessionRoleJulesWork = "jules_work"
+	// SessionRoleExternal is never persisted to ItemSession.session_role — it's
+	// Insights' synthetic label (server/services/insights_service.go's
+	// groupUnattributed) for a session with no backlog attribution at all,
+	// distinct from the empty-string "" (never linked to an item, but still
+	// inside a stapler-squad worktree).
+	SessionRoleExternal = "external"
 )
 
 // IsTmuxBackedSessionRole reports whether role identifies a session that runs as a

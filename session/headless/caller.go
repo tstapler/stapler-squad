@@ -45,6 +45,10 @@ type CallOptions struct {
 	// AllowedTools as belt-and-suspenders — an explicit denylist of destructive
 	// Bash prefixes and write-capable tools on top of a scoped allowlist.
 	DisallowedTools string
+	// OnConversationID, if set, receives the call's Claude conversation (transcript)
+	// UUID once known, so a caller can persist it for later cost attribution. Not
+	// invoked when the call fails before producing a result.
+	OnConversationID func(conversationID string)
 }
 
 // firstCallJSONResult is the JSON schema of the terminal `"type":"result"` line
@@ -550,7 +554,7 @@ func (p *Pool) sendFirstCallSuccess(key FeatureKey, result firstCallJSONResult, 
 			return
 		}
 	}
-	cio.send(StreamChunk{Done: true, CostUSD: result.CostUSD})
+	cio.send(StreamChunk{Done: true, CostUSD: result.CostUSD, ConversationID: result.SessionID})
 }
 
 // finishFirstCall interprets a first call's scan result once the stream has
@@ -748,31 +752,36 @@ func (p *Pool) CallBlocking(ctx context.Context, key FeatureKey, systemPrompt, u
 	if err != nil {
 		return "", err
 	}
-	text, cost, err := drainChannelWithCost(ch)
+	text, cost, conversationID, err := drainChannelWithCost(ch)
 	if sink != nil {
 		sink(cost, true)
+	}
+	if opts.OnConversationID != nil && conversationID != "" {
+		opts.OnConversationID(conversationID)
 	}
 	return text, err
 }
 
 // drainChannelWithCost collects all StreamChunk text from ch until Done=true or
-// Err!=nil, along with the CostUSD reported on the Done chunk.
-func drainChannelWithCost(ch <-chan StreamChunk) (string, float64, error) {
+// Err!=nil, along with the CostUSD and ConversationID reported on the Done chunk.
+func drainChannelWithCost(ch <-chan StreamChunk) (string, float64, string, error) {
 	var sb strings.Builder
 	var costUSD float64
+	var conversationID string
 	for chunk := range ch {
 		if chunk.Err != nil {
-			return sb.String(), costUSD, chunk.Err
+			return sb.String(), costUSD, conversationID, chunk.Err
 		}
 		if chunk.Text != "" {
 			sb.WriteString(chunk.Text)
 		}
 		if chunk.Done {
 			costUSD = chunk.CostUSD
+			conversationID = chunk.ConversationID
 			break
 		}
 	}
 	for range ch {
 	}
-	return sb.String(), costUSD, nil
+	return sb.String(), costUSD, conversationID, nil
 }

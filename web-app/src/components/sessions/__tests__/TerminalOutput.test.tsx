@@ -144,7 +144,15 @@ jest.mock("@/components/providers/ViewportProvider", () =>
 );
 
 import { TerminalOutput } from "../TerminalOutput";
+import { TerminalPoolProvider } from "@/lib/terminal/TerminalPool";
 import { ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/events_pb";
+
+// Story 3 — TerminalOutput now sources its xterm.js instance from
+// TerminalPoolProvider (see TerminalPool.tsx); every render/rerender in this
+// file must be wrapped in one, matching production's app-level provider.
+function withPool(children: React.ReactNode) {
+  return <TerminalPoolProvider>{children}</TerminalPoolProvider>;
+}
 
 const mockXtermState = jest.requireMock("../XtermTerminal").__mockXtermState as {
   onResize: ((cols: number, rows: number) => void) | null;
@@ -200,7 +208,7 @@ function connectStream(rerender: (el: React.ReactElement) => void, base: ReturnT
   const next = makeStreamMock({ ...base, isConnected: true });
   mockUseTerminalStream.mockImplementation(() => next);
   act(() => {
-    rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+    rerender(withPool(<TerminalOutput sessionId="s1" baseUrl="http://x" />));
   });
   return next;
 }
@@ -256,7 +264,7 @@ describe("TerminalOutput resize call sites", () => {
   // Task 4.2.2, AC4: post-connection resync effect passes a literal
   // force:true third argument.
   it("calls resize with a literal force:true third argument from the post-connection resync effect", async () => {
-    const { rerender } = render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+    const { rerender } = render(withPool(<TerminalOutput sessionId="s1" baseUrl="http://x" />));
 
     // XtermTerminal is lazy-loaded (React.lazy + Suspense) in TerminalOutput, so its
     // mock's mount-time onResize(80,24) fires on a later microtask, not synchronously
@@ -275,7 +283,7 @@ describe("TerminalOutput resize call sites", () => {
     streamState = makeStreamMock({ ...streamState, isConnected: true, resize: streamState.resize });
     mockUseTerminalStream.mockImplementation(() => streamState);
     act(() => {
-      rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+      rerender(withPool(<TerminalOutput sessionId="s1" baseUrl="http://x" />));
     });
 
     // The post-connection resize sync is deliberately delayed 250ms so the
@@ -308,7 +316,7 @@ describe("TerminalOutput resize call sites", () => {
   // clear() here (and that it happens strictly before resize()) pins the fix to
   // this call site so a future refactor can't silently drop it again.
   it("clears the local buffer before calling resize with a literal force:true third argument from the manual Fit button handler", () => {
-    const { rerender, getByRole } = render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+    const { rerender, getByRole } = render(withPool(<TerminalOutput sessionId="s1" baseUrl="http://x" />));
 
     streamState = connectStream(rerender, streamState);
     streamState.resize.mockClear();
@@ -338,7 +346,7 @@ describe("TerminalOutput resize call sites", () => {
   // Also a regression test (reflect-and-fix, 2026-08-23) for the stale-buffer
   // overlap bug: see the manual Fit button test above for full context.
   it("clears the local buffer before calling resize without a truthy force argument from the automatic handleTerminalResize path", () => {
-    const { rerender } = render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+    const { rerender } = render(withPool(<TerminalOutput sessionId="s1" baseUrl="http://x" />));
 
     streamState = connectStream(rerender, streamState);
     streamState.resize.mockClear();
@@ -379,7 +387,7 @@ describe("TerminalOutput hardFailedBanner Retry keyboard accessibility", () => {
     // hard-failed so the hardFailedBanner (and its Retry button) renders.
     let streamState = makeStreamMock({ isConnected: true });
     mockUseTerminalStream.mockImplementation(() => streamState);
-    const { rerender } = render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+    const { rerender } = render(withPool(<TerminalOutput sessionId="s1" baseUrl="http://x" />));
 
     streamState = makeStreamMock({
       isConnected: false,
@@ -388,7 +396,7 @@ describe("TerminalOutput hardFailedBanner Retry keyboard accessibility", () => {
     });
     mockUseTerminalStream.mockImplementation(() => streamState);
     act(() => {
-      rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+      rerender(withPool(<TerminalOutput sessionId="s1" baseUrl="http://x" />));
     });
     act(() => {
       jest.advanceTimersByTime(2100);
@@ -438,7 +446,7 @@ describe("TerminalOutput startup state (never-connected content race)", () => {
   it("TerminalOutput_should_showConnectingBadge_When_terminalStateIsConnecting", async () => {
     const streamState = makeStreamMock({ isConnected: false, terminalState: "CONNECTING" });
     mockUseTerminalStream.mockImplementation(() => streamState);
-    render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+    render(withPool(<TerminalOutput sessionId="s1" baseUrl="http://x" />));
     await settleSizeStabilityWait();
 
     expect(screen.getByText("Connecting...")).toBeInTheDocument();
@@ -450,14 +458,14 @@ describe("TerminalOutput startup state (never-connected content race)", () => {
     // never flips true until after that wait resolves.
     let streamState = makeStreamMock({ isConnected: false });
     mockUseTerminalStream.mockImplementation(() => streamState);
-    const { rerender } = render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+    const { rerender } = render(withPool(<TerminalOutput sessionId="s1" baseUrl="http://x" />));
     await settleSizeStabilityWait();
 
     // First connect lands...
     streamState = makeStreamMock({ isConnected: true });
     mockUseTerminalStream.mockImplementation(() => streamState);
     act(() => {
-      rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+      rerender(withPool(<TerminalOutput sessionId="s1" baseUrl="http://x" />));
     });
 
     // ...then drops before the mocked TerminalStreamManager ever calls its
@@ -466,7 +474,7 @@ describe("TerminalOutput startup state (never-connected content race)", () => {
     streamState = makeStreamMock({ isConnected: false, terminalState: "DISCONNECTED" });
     mockUseTerminalStream.mockImplementation(() => streamState);
     act(() => {
-      rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+      rerender(withPool(<TerminalOutput sessionId="s1" baseUrl="http://x" />));
     });
 
     // The startup overlay stays up with its own message instead of falling
@@ -493,7 +501,7 @@ describe("TerminalOutput Epic 1.4 — scroll-forward client rendering", () => {
   async function mountAndLoadInitialContent(overrides: Partial<Record<string, any>> = {}) {
     const streamState = makeStreamMock({ isConnected: true, ...overrides });
     mockUseTerminalStream.mockImplementation(() => streamState);
-    render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+    render(withPool(<TerminalOutput sessionId="s1" baseUrl="http://x" />));
     await settleSizeStabilityWait();
 
     const callArgs = mockUseTerminalStream.mock.calls[mockUseTerminalStream.mock.calls.length - 1][0];

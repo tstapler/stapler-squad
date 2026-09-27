@@ -2,10 +2,16 @@
 
 // analytics-exempt
 // +feature: settings-programs
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { SessionService, type ProgramConfigProto } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
+import { useProbeProgram, type ProbeUiState } from "@/lib/hooks/useProbeProgram";
+import { ProbeStatusBadge } from "@/components/ui/ProbeStatusBadge";
+import { FlagCombobox } from "@/components/ui/FlagCombobox";
+import { UnknownFlagsWarning } from "@/components/ui/UnknownFlagsWarning";
+import { AvailableFlags } from "@/components/ui/AvailableFlags";
+import { validateFlags } from "@/lib/flags/validateFlags";
 import {
   container,
   heading,
@@ -34,7 +40,16 @@ import {
   deleteBtn,
   confirmDeleteBtn,
   fieldError,
+  commandRow,
+  checkButton,
+  hintText,
 } from "./ProgramsManager.css";
+
+// Explains the absence of suggestions; states not listed need no hint.
+const FLAGS_HINTS: Partial<Record<ProbeUiState["kind"], string>> = {
+  idle: "Check the command above to enable flag suggestions",
+  needsConfirm: "Suggestions appear after Check reads the flags.",
+};
 
 const PROGRAM_ID_RE = /^[\w-]+$/;
 
@@ -72,6 +87,30 @@ export function ProgramsManager() {
   const [formData, setFormData] = useState<ProgramFormData>(emptyForm);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const probe = useProbeProgram(formData.command, "program-config");
+  const flagsHint = FLAGS_HINTS[probe.state.kind];
+  // A disabled button drops focus in browsers, so hand it back once the run settles.
+  const checkButtonRef = useRef<HTMLButtonElement>(null);
+  const checkClicked = useRef(false);
+  const wasChecking = useRef(false);
+  useEffect(() => {
+    const checking = probe.state.kind === "checking";
+    if (wasChecking.current && !checking && checkClicked.current && document.activeElement === document.body) {
+      checkButtonRef.current?.focus();
+    }
+    if (!checking) checkClicked.current = false;
+    wasChecking.current = checking;
+  }, [probe.state.kind]);
+  const [flagsFocused, setFlagsFocused] = useState(false);
+  const probedFlags = useMemo(() => (probe.state.kind === "found" ? probe.state.flags : []), [probe.state]);
+  // The token still being typed is not judged until the field blurs or a space follows it.
+  const settledFlags =
+    flagsFocused && !/\s$/.test(formData.cliFlags) ? formData.cliFlags.replace(/\S+$/, "") : formData.cliFlags;
+  const unknownFlags = useMemo(() => validateFlags(settledFlags, probedFlags), [settledFlags, probedFlags]);
+  const flagsDescribedBy =
+    [flagsHint && "prog-flags-hint", unknownFlags.length > 0 && "prog-flags-warning"].filter(Boolean).join(" ") ||
+    undefined;
 
   const getClient = useCallback(() => {
     return createClient(SessionService, getConnectTransport());
@@ -311,28 +350,77 @@ export function ProgramsManager() {
 
             <div className={field}>
               <label className={labelClass} htmlFor="prog-command">Executable Command / Path</label>
-              <input
-                id="prog-command"
-                type="text"
-                className={input}
-                value={formData.command}
-                onChange={(e) => setFormData({ ...formData, command: e.target.value })}
-                placeholder="e.g. /usr/local/bin/my-agent or python -m myagent"
-                data-testid="prog-command-input"
+              <div className={commandRow}>
+                <input
+                  id="prog-command"
+                  type="text"
+                  className={input}
+                  value={formData.command}
+                  onChange={(e) => setFormData({ ...formData, command: e.target.value })}
+                  onBlur={() => probe.check()}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    probe.check({ immediate: true });
+                  }}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  aria-describedby="prog-command-status-text"
+                  placeholder="e.g. /usr/local/bin/my-agent or python -m myagent"
+                  data-testid="prog-command-input"
+                />
+                <button
+                  ref={checkButtonRef}
+                  type="button"
+                  className={checkButton}
+                  onClick={() => {
+                    checkClicked.current = true;
+                    probe.check({ explicit: true });
+                  }}
+                  disabled={probe.state.kind === "checking"}
+                  aria-busy={probe.state.kind === "checking"}
+                  data-testid="prog-command-check"
+                >
+                  Check
+                </button>
+              </div>
+              <ProbeStatusBadge
+                state={probe.state}
+                checkedToken={probe.checkedToken}
+                onRetry={() => probe.check({ immediate: true })}
+                onConfirm={() => probe.check({ explicit: true })}
+                testId="prog-command-status"
+                id="prog-command-status-text"
               />
             </div>
 
             <div className={field}>
               <label className={labelClass} htmlFor="prog-flags">Default CLI Flags (optional)</label>
-              <input
-                id="prog-flags"
-                type="text"
-                className={input}
-                value={formData.cliFlags}
-                onChange={(e) => setFormData({ ...formData, cliFlags: e.target.value })}
-                placeholder="e.g. --verbose --auto"
-                data-testid="prog-flags-input"
+              <div onFocus={() => setFlagsFocused(true)} onBlur={() => setFlagsFocused(false)}>
+                <FlagCombobox
+                  id="prog-flags"
+                  className={input}
+                  value={formData.cliFlags}
+                  onChange={(cliFlags) => setFormData({ ...formData, cliFlags })}
+                  flags={probedFlags}
+                  placeholder="e.g. --verbose --auto"
+                  testId="prog-flags-input"
+                  describedBy={flagsDescribedBy}
+                />
+              </div>
+              {flagsHint && (
+                <span id="prog-flags-hint" className={hintText} data-testid="prog-flags-hint">
+                  {flagsHint}
+                </span>
+              )}
+              <UnknownFlagsWarning
+                id="prog-flags-warning"
+                testId="prog-flags-warning"
+                program={probe.checkedToken}
+                unknown={unknownFlags}
               />
+              <AvailableFlags flags={probedFlags} testId="prog-available-flags" />
             </div>
 
             <div className={field}>

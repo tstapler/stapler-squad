@@ -38,6 +38,13 @@ import (
 // push-gate redesign PR for the classification behind each site.
 type Notifier interface {
 	Notify(itemID, title, message string, notificationType int32, urgent, important bool)
+
+	// NotifySession notifies about a bare session with no linked BacklogItem.
+	// Implementations must not write sessionID into metadata["item_id"] — that
+	// key means "this is about backlog item <value>" to every consumer
+	// (NotificationItem.tsx, NotificationsPage.tsx). Use Notify when a real
+	// BacklogItemID exists.
+	NotifySession(sessionID, title, message string, notificationType int32, urgent, important bool)
 }
 
 // QueueDequeuer claims and spawns as many queued (and, by default, "ready" —

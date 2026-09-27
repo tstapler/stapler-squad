@@ -1657,6 +1657,17 @@ func (h *ConnectRPCWebSocketHandler) forwardOneControlModeFrame(p controlModeOut
 	tapEscapeAnalytics(p.instance, escapeParser, buf)
 	p.instance.ObserveAltScreenTransition(buf)
 
+	// Persist to scrollback before the pooled buf is returned below — this is
+	// the only production write path into ScrollbackManager (previously
+	// AppendOutput was called only from tests, so run_command/read_session_output
+	// always read back empty regardless of what the session actually printed).
+	// Best-effort: a scrollback write failure must not break live streaming.
+	if h.scrollbackManager != nil {
+		if err := h.scrollbackManager.AppendOutput(p.sessionID, buf); err != nil {
+			log.Warn("[streamViaControlMode] scrollback append failed", "session", p.sessionID, "err", err)
+		}
+	}
+
 	sendErr := sendControlModeOutput(p.stream, p.sessionID, buf)
 	*cbp = buf[:0]
 	coalesceBufPool.Put(cbp)
@@ -3198,6 +3209,7 @@ type capturePaneStreamParams struct {
 	errChan             chan error
 	outputChan          chan string
 	paneCaptureSettling *atomic.Bool
+	scrollbackManager   *scrollback.ScrollbackManager
 }
 
 // forwardCapturePaneOutput is streamViaTmuxCapturePane's Goroutine 1: forwards
@@ -3224,6 +3236,15 @@ func forwardCapturePaneOutput(p capturePaneStreamParams) {
 			// xterm.js on every poll tick, producing "messed up" staircased/garbled
 			// rendering for shell tabs.
 			fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(streamhub.RawPaneContent(content)), p.cpt.target)
+
+			// See forwardOneControlModeFrame's identical comment: this is the
+			// legacy (STAPLER_SQUAD_USE_CONTROL_MODE=false) counterpart write
+			// into ScrollbackManager. Best-effort.
+			if p.scrollbackManager != nil {
+				if err := p.scrollbackManager.AppendOutput(p.cpt.sessionID, []byte(fullContent)); err != nil {
+					log.Warn("[streamViaTmuxCapture] scrollback append failed", "session", p.cpt.sessionID, "err", err)
+				}
+			}
 
 			terminalData := terminalDataPool.Get().(*sessionv1.TerminalData)
 			terminalData.SessionId = p.cpt.sessionID
@@ -3465,6 +3486,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 		errChan:             errChan,
 		outputChan:          outputChan,
 		paneCaptureSettling: &paneCaptureSettling,
+		scrollbackManager:   h.scrollbackManager,
 	}
 	go forwardCapturePaneOutput(cps)
 	go runCapturePaneInputReadLoop(cps)

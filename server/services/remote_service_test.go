@@ -204,21 +204,11 @@ func TestTrustRemoteHostKey_RejectsMismatchedFingerprint(t *testing.T) {
 }
 
 // TestTestRemoteConnection_PoolHit_SkipsHostKeyCallback_When_NameReused
-// reproduces the root cause behind the CI flake tracked by backlog item
-// 09e91e3e-e13d-4166-a5f2-447242447f77: tmux.SSHClientPool.GetOrDial's Peek
-// fast path returns whatever *ssh.Client is already pooled for a name
-// WITHOUT re-checking the caller's HostKeyCallback or dialed address at
-// all. If some other caller has already pooled a live (or merely
-// not-yet-evicted) connection under the same remote name against a
-// DIFFERENT server, TestRemoteConnection's own dial against its real
-// target is skipped entirely, and it reports Success:true even though the
-// real target's host key was never verified. This is a property of the
-// pool itself, independent of timing -- svc.sshClientPool() is the
-// isolated per-test pool the fix (RemoteService.testSSHClientPool) gives
-// this service, and simulating "another caller already pooled a
-// connection under this name" against it demonstrates the exact hazard
-// that isolation exists to keep two different RemoteService instances
-// from inflicting on each other via the process-wide default pool.
+// reproduces the root cause of backlog item 09e91e3e-e13d-4166-a5f2-447242447f77:
+// GetOrDial's Peek fast path returns whatever client is already pooled for a
+// name without re-checking HostKeyCallback or address, so a stale entry
+// under a reused name can mask an untrusted real target -- a property of
+// the pool, independent of timing.
 func TestTestRemoteConnection_PoolHit_SkipsHostKeyCallback_When_NameReused(t *testing.T) {
 	remoteName := uniqueRemoteName(t)
 	addrA, _ := startRemoteTestSSHServer(t)
@@ -250,12 +240,9 @@ func TestTestRemoteConnection_PoolHit_SkipsHostKeyCallback_When_NameReused(t *te
 	// this pool is torn down with the test.
 	t.Cleanup(func() { _ = staleClient.Close() })
 
-	// Confirm the precondition explicitly before relying on it: the pool
-	// entry must still be live going into TestRemoteConnection. If it were
-	// ever evicted early (e.g. the connection genuinely died), the
-	// assertion below fails fast with a clear cause instead of the
-	// TestRemoteConnection call below failing with a confusing
-	// Success:false that looks like the fix regressed.
+	// Confirm the pool entry is still live before relying on it, so an
+	// early eviction fails here with a clear cause instead of a confusing
+	// Success:false below.
 	_, ok := svc.sshClientPool().Peek(remoteName)
 	require.True(t, ok, "pool entry for %q was evicted before TestRemoteConnection ran", remoteName)
 
@@ -268,6 +255,45 @@ func TestTestRemoteConnection_PoolHit_SkipsHostKeyCallback_When_NameReused(t *te
 	require.NoError(t, err)
 	require.True(t, resp.Msg.Success, "pool-by-name hit for %q masked the real dial to untrusted addrB", remoteName)
 	require.False(t, resp.Msg.HostKeyUnknown)
+}
+
+// TestTestRemoteConnection_TwoServiceInstances_DoNotShareAPoolEntry is the
+// actual regression test for the CI flake: two RemoteService instances
+// (standing in for two tests in the same process) reuse the same remote
+// name against different servers. Before the testSSHClientPool seam, both
+// shared tmux.DefaultSSHClientPool(), so svc2 could get svc1's pooled
+// client for addrA and report Success against addrB without ever dialing
+// it. With the seam, svc2's dial is untouched by svc1's pool activity.
+func TestTestRemoteConnection_TwoServiceInstances_DoNotShareAPoolEntry(t *testing.T) {
+	remoteName := uniqueRemoteName(t)
+	addrA, _ := startRemoteTestSSHServer(t)
+	addrB, _ := startRemoteTestSSHServer(t)
+
+	svc1, _, _ := newTestRemoteService(t, &config.Config{Remotes: []config.RemoteConfig{
+		{Name: remoteName, Host: addrA, User: "testuser"},
+	}})
+	svc2, _, _ := newTestRemoteService(t, &config.Config{Remotes: []config.RemoteConfig{
+		{Name: remoteName, Host: addrB, User: "testuser"},
+	}})
+	require.NotSame(t, svc1.sshClientPool(), svc2.sshClientPool())
+
+	// svc1 trusts and connects to addrA, pooling a client under remoteName
+	// in svc1's own pool.
+	first, err := svc1.TestRemoteConnection(context.Background(), connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{RemoteName: remoteName}))
+	require.NoError(t, err)
+	require.True(t, first.Msg.HostKeyUnknown)
+	_, err = svc1.TrustRemoteHostKey(context.Background(), connect.NewRequest(&sessionv1.TrustRemoteHostKeyRequest{
+		RemoteName: remoteName, Fingerprint: first.Msg.Fingerprint,
+	}))
+	require.NoError(t, err)
+
+	// svc2 dials the SAME remoteName against addrB. If it shared svc1's
+	// pool it would get svc1's addrA client back and report Success; since
+	// svc2 has never trusted anything, it must instead report
+	// HostKeyUnknown for its own real target.
+	second, err := svc2.TestRemoteConnection(context.Background(), connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{RemoteName: remoteName}))
+	require.NoError(t, err)
+	require.True(t, second.Msg.HostKeyUnknown, "svc2 reported Success for %q -- it reused svc1's pooled connection to addrA instead of dialing its own addrB", remoteName)
 }
 
 func TestTestRemoteConnection_ReportsMismatch_NotHostKeyUnknown_When_TrustedKeyChanged(t *testing.T) {

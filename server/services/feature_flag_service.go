@@ -33,6 +33,20 @@ const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 // where it's read.
 const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
 
+// programCLIFlagProbeFlagName is the kill switch for the ProbeProgram RPC.
+// Default on; read per request via ProgramCLIFlagProbeEnabled.
+const programCLIFlagProbeFlagName = "programs:cli-flag-probe"
+
+// ProgramCLIFlagProbeEnabled reports whether ProbeProgram is allowed. It reads
+// config on every call so a Settings toggle applies with no restart.
+func ProgramCLIFlagProbeEnabled() bool {
+	return config.LoadConfig().GetFeatureFlagWithDefault(
+		programCLIFlagProbeFlagName, featureFlagDefault(programCLIFlagProbeFlagName))
+}
+
+// ProgramCLIFlagProbeGatedMethod is the SessionService method the kill switch gates.
+const ProgramCLIFlagProbeGatedMethod = "ProbeProgram"
+
 // githubPriorityAdmissionFlagName gates github.rateLimitTransport.RoundTrip's
 // AdmitOrigin rejection branch (github/http_client.go). github cannot import
 // this package (server/services already imports github, so the reverse would
@@ -157,6 +171,11 @@ var knownFeatureFlags = []struct {
 	description  string
 	defaultValue bool
 }{
+	{
+		name:         programCLIFlagProbeFlagName,
+		description:  "Check that a program exists on the server and read its --help flags (Program Config and session creation). Turn off to disable the ProbeProgram RPC immediately. Default: on.",
+		defaultValue: true,
+	},
 	{
 		name:        "backlog",
 		description: "Backlog management with external sync sources and AI-driven triage",

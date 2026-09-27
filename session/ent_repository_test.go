@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	ssent "github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/hook"
 )
 
 // TestEntRepository_CreateAndGet tests basic create and get operations
@@ -893,4 +895,161 @@ func createTestEntRepository(t *testing.T) (*EntRepository, func()) {
 	require.Empty(t, sessions, "Database should be empty but has %d sessions", len(sessions))
 
 	return repo, func() {}
+}
+
+func TestEntRepository_Delete_StampsConversationUUIDOnItemSessions(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	data := createTestSession("stamp-test")
+	data.UUID = "sess-uuid-1"
+	data.ClaudeSession.ConversationUUID = "conv-uuid-1"
+	require.NoError(t, repo.Create(ctx, data))
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "stamp item", Status: string(BacklogStatusInProgress)})
+	require.NoError(t, err)
+	_, err = repo.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "sess-uuid-1", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Delete(ctx, data.Title))
+
+	entries, err := repo.GetAllItemSessionsWithBacklogInfo(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "conv-uuid-1", entries[0].ConversationUUID)
+}
+
+// TestEntRepository_DeleteBacklogItem_PreservesCostInLedger (Story 3) proves
+// DeleteBacklogItem writes a DeletedItemSessionCost ledger row for each of the
+// item's ItemSession rows before hard-deleting them, so the deletion doesn't
+// silently erase their cost attribution.
+func TestEntRepository_DeleteBacklogItem_PreservesCostInLedger(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "ledger item", Status: string(BacklogStatusInProgress)})
+	require.NoError(t, err)
+	is, err := repo.CreateItemSession(ctx, ItemSessionData{
+		ItemID:           item.ID,
+		SessionUUID:      "headless-review-1",
+		SessionRole:      SessionRoleReview,
+		ConversationUUID: "conv-ledger-1",
+		EstimatedCostUsd: 1.23,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.DeleteBacklogItem(ctx, item.ID))
+
+	// The ItemSession row itself is gone.
+	_, err = repo.GetItemSession(ctx, is.ID)
+	require.Error(t, err)
+
+	ledger, err := repo.GetDeletedItemSessionCostLedger(ctx)
+	require.NoError(t, err)
+	require.Len(t, ledger, 1)
+	assert.Equal(t, "conv-ledger-1", ledger[0].ConversationUUID)
+	assert.Equal(t, "headless-review-1", ledger[0].SessionUUID)
+	assert.Equal(t, SessionRoleReview, ledger[0].SessionRole)
+	assert.Equal(t, item.ID, ledger[0].ItemID)
+	assert.Equal(t, "ledger item", ledger[0].ItemTitle)
+	assert.InDelta(t, 1.23, ledger[0].EstimatedCostUsd, 0.001)
+	assert.True(t, ledger[0].CostPriced)
+}
+
+// TestEntRepository_DeleteBacklogItem_RollsBackOnMidSequenceFailure proves the
+// ledger write, review-verdict delete, item-session delete, and backlog-item
+// delete are atomic: a hook forces the final BacklogItem delete to fail after
+// the earlier three writes have already been issued (uncommitted) in the same
+// transaction, and none of them may survive the rollback.
+func TestEntRepository_DeleteBacklogItem_RollsBackOnMidSequenceFailure(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "rollback item", Status: string(BacklogStatusInProgress)})
+	require.NoError(t, err)
+	is, err := repo.CreateItemSession(ctx, ItemSessionData{
+		ItemID:           item.ID,
+		SessionUUID:      "headless-review-rollback",
+		SessionRole:      SessionRoleReview,
+		ConversationUUID: "conv-rollback-1",
+		EstimatedCostUsd: 4.56,
+	})
+	require.NoError(t, err)
+
+	injectedErr := errors.New("simulated failure deleting the backlog item")
+	repo.client.BacklogItem.Use(func(next ssent.Mutator) ssent.Mutator {
+		return hook.BacklogItemFunc(func(ctx context.Context, m *ssent.BacklogItemMutation) (ssent.Value, error) {
+			if m.Op() == ssent.OpDeleteOne {
+				return nil, injectedErr
+			}
+			return next.Mutate(ctx, m)
+		})
+	})
+
+	err = repo.DeleteBacklogItem(ctx, item.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, injectedErr)
+
+	// The earlier ledger write and item-session delete, issued inside the same
+	// now-rolled-back transaction, must not have taken effect.
+	ledger, ledgerErr := repo.GetDeletedItemSessionCostLedger(ctx)
+	require.NoError(t, ledgerErr)
+	assert.Empty(t, ledger, "the ledger row must not survive a rolled-back transaction")
+
+	_, getErr := repo.GetItemSession(ctx, is.ID)
+	assert.NoError(t, getErr, "the item session must still exist after rollback")
+
+	_, getItemErr := repo.GetBacklogItem(ctx, item.ID)
+	assert.NoError(t, getItemErr, "the backlog item itself must still exist after rollback")
+}
+
+// TestEntRepository_DeletedItemSessionCost_SessionUUIDIsUnique proves the
+// ledger's session_uuid unique index: a second row snapshotting the same
+// ItemSession — the shape a retried DeleteBacklogItem would attempt — is
+// rejected as a constraint violation instead of silently duplicating cost.
+func TestEntRepository_DeletedItemSessionCost_SessionUUIDIsUnique(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	create := func() error {
+		return repo.client.DeletedItemSessionCost.Create().
+			SetSessionUUID("dup-session-uuid").
+			SetSessionRole(SessionRoleReview).
+			SetItemID("some-item-id").
+			SetItemTitle("some item").
+			SetEstimatedCostUsd(1).
+			SetCreatedAt(time.Now()).
+			Exec(ctx)
+	}
+	require.NoError(t, create())
+
+	err := create()
+	require.Error(t, err)
+	assert.True(t, ssent.IsConstraintError(err), "a second ledger row with the same session_uuid must violate the unique index, got: %v", err)
+}
+
+func TestEntRepository_UpdateItemSessionConversationUUID_RoundTrips(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "conv item", Status: string(BacklogStatusInProgress)})
+	require.NoError(t, err)
+	is, err := repo.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-x", SessionRole: SessionRoleTriage})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.UpdateItemSessionConversationUUID(ctx, is.ID, "conv-triage-1"))
+
+	entries, err := repo.GetAllItemSessionsWithBacklogInfo(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "conv-triage-1", entries[0].ConversationUUID)
 }

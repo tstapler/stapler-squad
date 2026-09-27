@@ -5,6 +5,8 @@ import type { Session } from "@/gen/session/v1/types_pb";
 import type { LeafPane, PaneViewKind } from "@/lib/pane/paneTypes";
 import { useCockpitActions } from "@/lib/contexts/CockpitActionsContext";
 import { SessionActionsOverflow } from "@/components/sessions/SessionActionsOverflow";
+import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
+import { usePaneContext } from "./PaneContext";
 import {
   paneHeader,
   paneTitle,
@@ -39,6 +41,7 @@ export function PaneHeader({
   onSplitHorizontal,
 }: PaneHeaderProps) {
   const cockpit = useCockpitActions();
+  const { backlogIndex } = usePaneContext();
   const isListPane = pane.viewKind === "session-list";
   const session = !isListPane && pane.sessionId
     ? sessions.find((s) => s.id === pane.sessionId) ?? null
@@ -54,6 +57,7 @@ export function PaneHeader({
       <span className={paneTitle} title={titleText}>
         {titleText}
       </span>
+      {session && <BacklogOriginBadge entry={backlogIndex.get(session.id)} compact />}
 
       <div className={paneHeaderActions}>
         {/* Session actions overflow menu */}

@@ -62,6 +62,14 @@ func nativeListWorktrees(repoPath string) ([]NativeWorktreeEntry, error) {
 	return entries, nil
 }
 
+// ListWorktrees is the exported wrapper around nativeListWorktrees for callers outside
+// this package (e.g. the worktree consistency sweep, session/worktree_consistency_sweep.go)
+// that need on-disk git-worktree truth without a second parsing implementation
+// (plan.md's Domain Glossary, project_plans/session-worktree-reconciliation).
+func ListWorktrees(repoPath string) ([]NativeWorktreeEntry, error) {
+	return nativeListWorktrees(repoPath)
+}
+
 // buildNativeWorktreeEntry reads adminDir's GitdirFile, HEAD, and LockedMarker to build
 // one NativeWorktreeEntry (Task 2.3.1a), then classifies it per Task 2.3.1b's rule:
 // Prunable = (WorktreePath missing) && !Locked.

@@ -5,13 +5,13 @@
 class StaplerSquad < Formula
   desc "Manage multiple AI terminal agents like Claude Code, Aider, Codex, OpenCode, and Amp."
   homepage "https://github.com/tstapler/stapler-squad"
-  version "1.54.0"
+  version "1.55.0"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.intel?
-      url "https://github.com/tstapler/stapler-squad/releases/download/v1.54.0/stapler-squad_1.54.0_darwin_amd64.tar.gz"
-      sha256 "4b5445776b13f7db7f30b20b82d7e0ed0cf4d4eac8106f7359591d787f6651dc"
+      url "https://github.com/tstapler/stapler-squad/releases/download/v1.55.0/stapler-squad_1.55.0_darwin_amd64.tar.gz"
+      sha256 "c54bdcce5f5c7ab53112d612fb545ae8b2dea80face9191d66b347ea50001e01"
 
       define_method(:install) do
         bin.install "stapler-squad"
@@ -19,8 +19,8 @@ class StaplerSquad < Formula
       end
     end
     if Hardware::CPU.arm?
-      url "https://github.com/tstapler/stapler-squad/releases/download/v1.54.0/stapler-squad_1.54.0_darwin_arm64.tar.gz"
-      sha256 "7aab0d598c21423e586160bd71b65a9a1b726bf8e89df2a365997ae98a4475fa"
+      url "https://github.com/tstapler/stapler-squad/releases/download/v1.55.0/stapler-squad_1.55.0_darwin_arm64.tar.gz"
+      sha256 "413ce986ac53c93425471c4e48ef25c34e5b3b8e20afb94b7ee82bc0aad57c09"
 
       define_method(:install) do
         bin.install "stapler-squad"
@@ -31,16 +31,16 @@ class StaplerSquad < Formula
 
   on_linux do
     if Hardware::CPU.intel? && Hardware::CPU.is_64_bit?
-      url "https://github.com/tstapler/stapler-squad/releases/download/v1.54.0/stapler-squad_1.54.0_linux_amd64.tar.gz"
-      sha256 "328299a2f306d9435d8bea4ffa1ff52e0781e6e3daeab2549a01589de744287c"
+      url "https://github.com/tstapler/stapler-squad/releases/download/v1.55.0/stapler-squad_1.55.0_linux_amd64.tar.gz"
+      sha256 "eaf9d7a3cdcd5fb8af7599a6dc32400b46e4039302a86a334a77f462c37be626"
       define_method(:install) do
         bin.install "stapler-squad"
         bin.install_symlink bin/"stapler-squad" => "ssq"
       end
     end
     if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
-      url "https://github.com/tstapler/stapler-squad/releases/download/v1.54.0/stapler-squad_1.54.0_linux_arm64.tar.gz"
-      sha256 "efccf7f5e5dee4980939814cdac61485b931364d594e47b185675082939860e8"
+      url "https://github.com/tstapler/stapler-squad/releases/download/v1.55.0/stapler-squad_1.55.0_linux_arm64.tar.gz"
+      sha256 "ead67713b740cbf462628802842b2322dd5d639a12e3e4bbff42a14feeacf45d"
       define_method(:install) do
         bin.install "stapler-squad"
         bin.install_symlink bin/"stapler-squad" => "ssq"
