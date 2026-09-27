@@ -22,38 +22,7 @@ func RulesToAntigravityPermissions(rules []session.ApprovalRuleData) []string {
 			continue
 		}
 
-		var entries []string
-		if len(r.Programs) > 0 {
-			for _, prog := range r.Programs {
-				prog = strings.TrimSpace(prog)
-				if prog == "" {
-					continue
-				}
-				if len(r.Subcommands) > 0 {
-					for _, sub := range r.Subcommands {
-						sub = strings.TrimSpace(sub)
-						if sub == "" {
-							continue
-						}
-						entries = append(entries, fmt.Sprintf("command(%s %s)", prog, sub))
-					}
-				} else {
-					entries = append(entries, fmt.Sprintf("command(%s)", prog))
-				}
-			}
-		} else if r.CommandPattern != "" {
-			clean := r.CommandPattern
-			clean = strings.TrimPrefix(clean, "^")
-			clean = strings.TrimSuffix(clean, "$")
-			clean = strings.TrimSuffix(clean, ".*")
-			clean = strings.TrimSpace(clean)
-			if clean != "" && !strings.ContainsAny(clean, "[]{}()\\+?|") {
-				entries = append(entries, fmt.Sprintf("command(%s)", clean))
-			}
-		} else if r.ToolName != "" && r.ToolName != "Bash" {
-			entries = append(entries, fmt.Sprintf("command(%s)", r.ToolName))
-		}
-
+		entries := ruleToPermissionEntries(r)
 		for _, e := range entries {
 			if !seen[e] {
 				seen[e] = true
@@ -62,6 +31,39 @@ func RulesToAntigravityPermissions(rules []session.ApprovalRuleData) []string {
 		}
 	}
 	return result
+}
+
+func ruleToPermissionEntries(r session.ApprovalRuleData) []string {
+	if len(r.Programs) == 0 {
+		if r.CommandPattern != "" {
+			clean := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(r.CommandPattern, "^"), "$"), ".*"))
+			if clean != "" && !strings.ContainsAny(clean, "[]{}()\\+?|") {
+				return []string{fmt.Sprintf("command(%s)", clean)}
+			}
+		} else if r.ToolName != "" && r.ToolName != "Bash" {
+			return []string{fmt.Sprintf("command(%s)", r.ToolName)}
+		}
+		return nil
+	}
+
+	var entries []string
+	for _, prog := range r.Programs {
+		prog = strings.TrimSpace(prog)
+		if prog == "" {
+			continue
+		}
+		if len(r.Subcommands) == 0 {
+			entries = append(entries, fmt.Sprintf("command(%s)", prog))
+			continue
+		}
+		for _, sub := range r.Subcommands {
+			sub = strings.TrimSpace(sub)
+			if sub != "" {
+				entries = append(entries, fmt.Sprintf("command(%s %s)", prog, sub))
+			}
+		}
+	}
+	return entries
 }
 
 // ExportRulesToAntigravitySettings updates the specified settingsPath with the exported permissions.
@@ -126,14 +128,17 @@ func ExportRulesToAntigravitySettings(settingsPath string, rules []session.Appro
 	}
 
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0700); err != nil {
-		return err
+		return fmt.Errorf("create settings dir %s: %w", filepath.Dir(settingsPath), err)
 	}
 
 	tmpPath := settingsPath + ".tmp"
 	if err := os.WriteFile(tmpPath, append(out, '\n'), 0600); err != nil {
-		return err
+		return fmt.Errorf("write temp settings %s: %w", tmpPath, err)
 	}
-	return os.Rename(tmpPath, settingsPath)
+	if err := os.Rename(tmpPath, settingsPath); err != nil {
+		return fmt.Errorf("atomic rename settings %s: %w", settingsPath, err)
+	}
+	return nil
 }
 
 // ExportAntigravityRulesFromDB exports rules from storage to all candidate Antigravity settings paths.
@@ -145,7 +150,7 @@ func ExportAntigravityRulesFromDB(ctx context.Context, storage *session.Storage)
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve home dir for export: %w", err)
 	}
 
 	candidates := []string{
