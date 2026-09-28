@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -64,9 +63,8 @@ type CreateSessionForPRResult struct {
 	// Background Resolution Pipeline reached a terminal status — see
 	// CreateSessionResult.StillCreating's doc comment in tools_lifecycle.go.
 	StillCreating bool `json:"still_creating,omitempty"`
-	// ProgramWarning is set (non-fatally) when program didn't match
-	// programSchemaOptions' registration-time snapshot — see
-	// createSessionForPRWithAwaitTimeout's soft check.
+	// ProgramWarning is set (non-fatally) when program isn't among the
+	// programs currently registered — see programWarningFor.
 	ProgramWarning string `json:"program_warning,omitempty"`
 }
 
@@ -80,7 +78,7 @@ func registerGitHubTools(s *mcpserver.MCPServer, gh *githubHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("create_session_for_pr",
-			mcpgo.WithDescription("Create a new Stapler Squad worktree session for a GitHub pull request. Checks out the PR's branch in a git worktree so work is isolated. If an existing session is already associated with the PR, returns that session's ID instead of creating a duplicate. Auto-detects the local repo path from existing sessions if not provided. Waits up to 150s for the session to finish starting up; if it's still resolving after that, returns a still_creating result (session_id present, safe to poll with get_session) rather than an error or an open-ended hang.\n\nIf the result includes program_warning, the session was still created but the program value didn't match any program known at server start — check for a typo before assuming the session is running normally."),
+			mcpgo.WithDescription("Create a new Stapler Squad worktree session for a GitHub pull request. Checks out the PR's branch in a git worktree so work is isolated. If an existing session is already associated with the PR, returns that session's ID instead of creating a duplicate. Auto-detects the local repo path from existing sessions if not provided. Waits up to 150s for the session to finish starting up; if it's still resolving after that, returns a still_creating result (session_id present, safe to poll with get_session) rather than an error or an open-ended hang.\n\nIf the result includes program_warning, the session was still created but the program value isn't among the programs currently registered — check for a typo before assuming the session is running normally."),
 			mcpgo.WithString("owner",
 				mcpgo.Description("GitHub owner (user or org) of the repository"),
 				mcpgo.Required(),
@@ -219,18 +217,10 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 		program = defaultProgramID
 	}
 
-	// Soft (non-fatal) check against the registration-time snapshot — same
-	// reasoning as create_session's identical check in tools_lifecycle.go: a
-	// custom program registered after this process started must still be
-	// allowed to launch.
-	var programWarning string
-	if gh.svc != nil {
-		if known := programIDs(gh.svc); len(known) > 0 && !slices.Contains(known, program) {
-			programWarning = fmt.Sprintf(
-				"program %q was not in the list of programs known at server start (%s) — the session will still be created, but if this is a typo it will fail silently as shell output in the session's tmux pane. Check the Program Configurations UI, or ask whether list_programs is available in this deployment for a live list.",
-				program, strings.Join(known, ", "))
-		}
-	}
+	// Soft (non-fatal) check: same reasoning as create_session's identical
+	// check in tools_lifecycle.go — a custom program registered after this
+	// process started must still be allowed to launch.
+	programWarning := programWarningFor(ctx, gh.svc, program)
 
 	// Check for title collision. Fast, agent-friendly pre-check in addition to
 	// CreateSession's own synchronous title-uniqueness check below -- see

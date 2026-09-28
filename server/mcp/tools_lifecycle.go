@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -48,16 +47,15 @@ type CreateSessionResult struct {
 	// successfully created and is genuinely still resolving, not failed or
 	// broken. Use get_session to check on it.
 	StillCreating bool `json:"still_creating,omitempty"`
-	// ProgramWarning is set (non-fatally) when program didn't match
-	// programSchemaOptions' registration-time snapshot — see
-	// createSessionWithAwaitTimeout's soft check.
+	// ProgramWarning is set (non-fatally) when program isn't among the
+	// programs currently registered — see programWarningFor.
 	ProgramWarning string `json:"program_warning,omitempty"`
 }
 
 func registerLifecycleTools(s *mcpserver.MCPServer, lh *lifecycleHandlers) {
 	s.AddTool(
 		mcpgo.NewTool("create_session",
-			mcpgo.WithDescription("Create and start a new Stapler Squad session (tmux + optional git worktree). The new session is launched with this MCP server already wired in via a --mcp-config command-line flag, so it can use all Stapler Squad tools with no extra setup. Waits up to 150s for the session to finish starting up; if it's still resolving after that, returns a still_creating result (session_id present, safe to poll with get_session) rather than an error or an open-ended hang. Rate-limited to 3 per minute.\n\nNOTE: Do not use this tool just to run commands or execute tasks — spawn an Agent subagent instead. Reserve create_session for cases where a USER INTERACTABLE, persistent tmux session is genuinely needed (e.g. long-running background work, multi-turn Claude Code sessions the user will actively monitor or control).\n\nIf the result includes program_warning, the session was still created but the program value didn't match any program known at server start — check for a typo before assuming the session is running normally."),
+			mcpgo.WithDescription("Create and start a new Stapler Squad session (tmux + optional git worktree). The new session is launched with this MCP server already wired in via a --mcp-config command-line flag, so it can use all Stapler Squad tools with no extra setup. Waits up to 150s for the session to finish starting up; if it's still resolving after that, returns a still_creating result (session_id present, safe to poll with get_session) rather than an error or an open-ended hang. Rate-limited to 3 per minute.\n\nNOTE: Do not use this tool just to run commands or execute tasks — spawn an Agent subagent instead. Reserve create_session for cases where a USER INTERACTABLE, persistent tmux session is genuinely needed (e.g. long-running background work, multi-turn Claude Code sessions the user will actively monitor or control).\n\nIf the result includes program_warning, the session was still created but the program value isn't among the programs currently registered — check for a typo before assuming the session is running normally."),
 			mcpgo.WithString("title", mcpgo.Description("Unique name for the session"), mcpgo.Required()),
 			mcpgo.WithString("path", mcpgo.Description("Absolute path to the repository root"), mcpgo.Required()),
 			mcpgo.WithString("branch", mcpgo.Description("Git branch name (creates if missing; required for new_worktree session type)")),
@@ -156,18 +154,10 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 		program = defaultProgramID
 	}
 
-	// Soft (non-fatal) check against the registration-time snapshot: a custom
-	// program registered via UpsertProgramConfig after this process started
-	// must still be allowed to launch, so an unrecognized program warns
-	// rather than rejects.
-	var programWarning string
-	if lh.svc != nil {
-		if known := programIDs(lh.svc); len(known) > 0 && !slices.Contains(known, program) {
-			programWarning = fmt.Sprintf(
-				"program %q was not in the list of programs known at server start (%s) — the session will still be created, but if this is a typo it will fail silently as shell output in the session's tmux pane. Check the Program Configurations UI, or ask whether list_programs is available in this deployment for a live list.",
-				program, strings.Join(known, ", "))
-		}
-	}
+	// Soft (non-fatal) check: a custom program registered via
+	// UpsertProgramConfig after this process started must still be allowed
+	// to launch, so an unrecognized program warns rather than rejects.
+	programWarning := programWarningFor(ctx, lh.svc, program)
 
 	protoSessionType, typeErr := mcpSessionTypeToProto(sessionTypeStr)
 	if typeErr != nil {
