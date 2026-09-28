@@ -25,6 +25,11 @@ describe("classifySessionKind", () => {
     expect(classifySessionKind(session)).toBe("headless_diagnostic");
   });
 
+  it("classifies a headless-diagnose- prefixed session (role: diagnose, not triage) as headless_diagnostic via the existing startsWith(\"headless-\") branch — Epic 8.3, zero new classification code", () => {
+    const session = makeSession({ role: "diagnose", sessionId: "headless-diagnose-e6c2a88e-abcd1234" });
+    expect(classifySessionKind(session)).toBe("headless_diagnostic");
+  });
+
   it("classifies a review-blocked- prefixed session as blocked_guardrail", () => {
     const session = makeSession({ role: "review", sessionId: "review-blocked-a1b2c3d4" });
     expect(classifySessionKind(session)).toBe("blocked_guardrail");
