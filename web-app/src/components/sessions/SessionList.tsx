@@ -643,7 +643,10 @@ export function SessionList({
   const rowVirtualizer = useVirtualizer({
     count: viewMode === "row" ? flatItems.length : 0,
     getScrollElement: () => containerRef.current,
-    estimateSize: (i) => (flatItems[i]?.kind === "header" ? 40 : 50),
+    // 64, up from 50 (Epic 2.1 Story 2.1.3): reflects the new typical 2-line
+    // wrapped-row height (Story 2.1.1's wrap + Epic 1.2's elapsed second
+    // line); measureElement still corrects the real height post-render.
+    estimateSize: (i) => (flatItems[i]?.kind === "header" ? 40 : 64),
     overscan: 8,
     measureElement: (el) => el.getBoundingClientRect().height,
   });
