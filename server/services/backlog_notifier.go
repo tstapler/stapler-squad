@@ -1,8 +1,12 @@
 package services
 
 import (
+	"fmt"
+
 	"github.com/google/uuid"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session/diagnose"
 )
 
 // EventBusNotifier adapts an *events.EventBus to session.Notifier. The session
@@ -33,4 +37,78 @@ func (n *EventBusNotifier) Notify(itemID, title, message string, notificationTyp
 		title, message,
 		map[string]string{"item_id": itemID},
 	))
+}
+
+// DiagnoseEventNotification derives the live-toast title/message/
+// notificationType/urgent/important fields for a completed diagnose dispatch
+// outcome (Story 5.2.2, Task 5.2.2a), keyed off diagnose.DiagnoseOutcomeKind.
+// Callers pass the result straight into (*EventBusNotifier).Notify, mirroring
+// notifyReworkCapHit's inline title/message construction
+// (backlog_service_triage.go) but as a reusable sibling function rather than
+// duplicated per call site, since notifyDiagnoseEvent (diagnose_dispatcher.go)
+// isn't the only place a diagnose outcome will eventually be reported from
+// (see that function's doc comment).
+func DiagnoseEventNotification(itemTitle string, outcome diagnose.DiagnoseOutcome) (title, message string, notificationType int32, urgent, important bool) {
+	switch outcome.Kind {
+	case diagnose.DiagnoseOutcomeKindNudged:
+		return nudgedNotification(itemTitle)
+	case diagnose.DiagnoseOutcomeKindBugFiled:
+		return bugFiledNotification(itemTitle, outcome)
+	case diagnose.DiagnoseOutcomeKindInconclusiveNoteFiled:
+		return inconclusiveNotification(itemTitle, outcome)
+	case diagnose.DiagnoseOutcomeKindSkippedSafetyGate:
+		return skippedSafetyGateNotification(itemTitle, outcome)
+	case diagnose.DiagnoseOutcomeKindDispatchFailed:
+		return dispatchFailedNotification(itemTitle, outcome)
+	default:
+		return "Diagnose: outcome recorded",
+			fmt.Sprintf("%s — diagnose dispatch completed with outcome %q.", itemTitle, outcome.Kind),
+			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO), false, false
+	}
+}
+
+func nudgedNotification(itemTitle string) (title, message string, notificationType int32, urgent, important bool) {
+	return "Diagnose: nudged stuck session",
+		fmt.Sprintf("%s — the diagnostic agent nudged the stuck session.", itemTitle),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO), false, true
+}
+
+func bugFiledNotification(itemTitle string, outcome diagnose.DiagnoseOutcome) (title, message string, notificationType int32, urgent, important bool) {
+	bugItemID := ""
+	if outcome.BugItemID != nil {
+		bugItemID = *outcome.BugItemID
+	}
+	return "Diagnose: bug filed",
+		fmt.Sprintf("%s — the diagnostic agent filed bug %s.", itemTitle, bugItemID),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING), false, true
+}
+
+func inconclusiveNotification(itemTitle string, outcome diagnose.DiagnoseOutcome) (title, message string, notificationType int32, urgent, important bool) {
+	note := ""
+	if outcome.NoteText != nil {
+		note = *outcome.NoteText
+	}
+	return "Diagnose: inconclusive",
+		fmt.Sprintf("%s — the diagnostic agent couldn't reach a confident conclusion: %s", itemTitle, note),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO), false, false
+}
+
+func skippedSafetyGateNotification(itemTitle string, outcome diagnose.DiagnoseOutcome) (title, message string, notificationType int32, urgent, important bool) {
+	reason := ""
+	if outcome.GateReason != nil {
+		reason = outcome.GateReason.String()
+	}
+	return "Diagnose: nudge skipped (safety gate)",
+		fmt.Sprintf("%s — a nudge was withheld: %s.", itemTitle, reason),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING), true, true
+}
+
+func dispatchFailedNotification(itemTitle string, outcome diagnose.DiagnoseOutcome) (title, message string, notificationType int32, urgent, important bool) {
+	reason := ""
+	if outcome.FailureReason != nil {
+		reason = *outcome.FailureReason
+	}
+	return "Diagnose: dispatch failed",
+		fmt.Sprintf("%s — could not dispatch a diagnostic session: %s. Left for manual review.", itemTitle, reason),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR), true, true
 }
