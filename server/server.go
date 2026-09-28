@@ -640,6 +640,44 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		}
 	}
 
+	// Register DiagnoseService handler (Phase 7, Epic 7.1). Requires a
+	// headless pool to actually dispatch a diagnostic session -- same
+	// "disable by not registering" guard HeadlessService uses just below --
+	// plus Storage/SessionService for DiagnoseDispatcher's data source and
+	// live-Instance lookup.
+	//
+	// dispatchStore is this process's THIRD DiagnoseDispatchStore
+	// construction, alongside this same function's sweeperDeps.DispatchStore
+	// (below) and server/mcp/server.go's dispatchWriteGuard wiring -- all
+	// three are stateless wrappers over the same ent table, so this is safe
+	// (Phase 6's report), and consolidating across the mcp package's separate
+	// construction path isn't a small change, so it's left as-is.
+	if deps.HeadlessPool != nil && deps.Storage != nil && deps.SessionService != nil {
+		dispatchStore := services.NewDiagnoseDispatchStore(deps.Storage)
+		diagnoseDeps := services.DiagnoseDispatcherDeps{
+			DispatchStore:     dispatchStore,
+			Notifier:          &services.EventBusNotifier{Bus: deps.EventBus},
+			DataSource:        deps.Storage,
+			Instances:         services.NewSessionServiceInstanceLookup(deps.SessionService),
+			SessionCreator:    services.NewDiagnoseDispatchSessionCreator(deps.HeadlessPool, deps.Storage),
+			BundleTokenBudget: config.LoadConfig().DiagnoseNudge.BundleTokenBudgetOrDefault(),
+		}
+		// Same typed-nil guard as sweeperDeps.HandoffGenerator below: only
+		// assign when genuinely non-nil, since deps.HandoffSummaryGenerator is
+		// a concrete *session.HandoffSummaryGenerator and boxing a nil one
+		// directly into the interface field would wrap a non-nil interface
+		// around a nil pointer.
+		if deps.HandoffSummaryGenerator != nil {
+			diagnoseDeps.Transcripts = services.NewHandoffSummaryTranscriptGenerator(deps.HandoffSummaryGenerator)
+		}
+		diagnoseDispatcher := services.NewDiagnoseDispatcher(diagnoseDeps)
+		diagnoseSvc := services.NewDiagnoseService(diagnoseDispatcher, dispatchStore)
+		dgPath, dgHandler := sessionv1connect.NewDiagnoseServiceHandler(diagnoseSvc, ConnectOptions(deps.ErrorRegistry)...)
+		dgAPIPath := "/api" + dgPath
+		srv.RegisterConnectHandler(dgAPIPath, http.StripPrefix("/api", dgHandler))
+		log.Info("Registered DiagnoseService handler", "path", dgAPIPath)
+	}
+
 	// Register HeadlessService handler (nil guard: pool may be absent if claude not found).
 	if deps.HeadlessPool != nil {
 		hlSvc := services.NewHeadlessService(deps.HeadlessPool)

@@ -1,0 +1,16 @@
+{
+  "id": "backlog:list-diagnose-dispatches",
+  "type": "backend",
+  "service": "DiagnoseService",
+  "method": "ListDiagnoseDispatches",
+  "protoFile": "proto/session/v1/diagnose.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/diagnose_service.go",
+  "tested": true,
+  "testIds": [
+    "TestDiagnoseService_ListDiagnoseDispatches_ShouldReturnEmptyList_WhenItemHasNoDispatches",
+    "TestListDiagnoseDispatches_ShouldReturnSamePendingRowAcrossRepeatedCalls_WhenDispatchStillInFlight",
+    "TestDiagnoseService_ListDiagnoseDispatches_ShouldRoundTripStalledStatusWithOutcomeKindUnset_WhenDispatchMarkedStalled"
+  ],
+  "lastModified": "2026-09-28T05:07:19.706573256-07:00"
+}

@@ -51,6 +51,11 @@ const (
 	SessionRoleTriage    = "triage"
 	SessionRoleReview    = "review"
 	SessionRoleJulesWork = "jules_work"
+	// SessionRoleDiagnose marks a headless-diagnose-* dispatch session
+	// (server/services/diagnose_dispatcher.go's HeadlessDiagnosticSessionIDPrefix)
+	// -- a bounded one-shot headless subprocess call, not tmux-backed, same as
+	// SessionRoleTriage. See IsTmuxBackedSessionRole's doc comment.
+	SessionRoleDiagnose = "diagnose"
 	// SessionRoleExternal is never persisted to ItemSession.session_role — it's
 	// Insights' synthetic label (server/services/insights_service.go's
 	// groupUnattributed) for a session with no backlog attribution at all,

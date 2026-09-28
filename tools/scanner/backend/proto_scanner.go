@@ -331,6 +331,18 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"DeleteTaggingRule":             "tagging-rule:delete",
 	"GetHandoffSummary":             "handoff-summary:get",
 	"TriggerHandoffSummary":         "handoff-summary:trigger",
+	// Diagnose dispatch RPCs (DiagnoseService in diagnose.proto,
+	// backlog-diagnose-and-nudge Phase 7 Epic 7.1) -- must match the
+	// "// +api: backlog:*" markers in server/services/diagnose_service.go
+	// verbatim. Two distinct ids (not one shared "backlog:diagnose" for both
+	// methods, despite the plan's Story 7.1.2 wording): ScanProto/main.go
+	// write one file per id, keyed only by id, so a shared id across two RPCs
+	// would have the second one silently overwrite the first's Service/Method
+	// fields in the same file -- the same failure mode as the SearchGitHubRepos
+	// comment above documents for a mismatched id, just triggered by a
+	// collision instead of a miss.
+	"DiagnoseBacklogItem":    "backlog:diagnose",
+	"ListDiagnoseDispatches": "backlog:list-diagnose-dispatches",
 	// LivenessDefinition CRUD RPCs (Epic 1.3 of backlog-custom-workflow-stages)
 	// -- pre-existing collateral debt found by TestMethodToIDCompleteness
 	// while wiring Epic 2.7's own methodToID entries below: these markers

@@ -1,0 +1,15 @@
+{
+  "id": "backlog:diagnose",
+  "type": "backend",
+  "service": "DiagnoseService",
+  "method": "DiagnoseBacklogItem",
+  "protoFile": "proto/session/v1/diagnose.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/diagnose_service.go",
+  "tested": true,
+  "testIds": [
+    "TestDiagnoseService_DiagnoseBacklogItem_ShouldReturnDispatchIDAndSessionID_WhenNoInFlightDispatchExists",
+    "TestDiagnoseService_DiagnoseBacklogItem_ShouldReturnFailedPrecondition_WhenAlreadyInFlight"
+  ],
+  "lastModified": "2026-09-28T05:07:19.706573256-07:00"
+}

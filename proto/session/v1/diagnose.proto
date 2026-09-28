@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// DiagnoseService exposes the backlog "diagnose stuck item" dispatch flow
+// (project_plans/backlog-diagnose-and-nudge): requesting a headless
+// diagnostic session for a backlog item, and listing that item's dispatch
+// history.
+service DiagnoseService {
+  // DiagnoseBacklogItem requests a new diagnose dispatch for a backlog item.
+  // Returns a gRPC error (FailedPrecondition) when a dispatch is already in
+  // flight for this item -- it does not return an AlreadyInFlight field.
+  rpc DiagnoseBacklogItem(DiagnoseBacklogItemRequest) returns (DiagnoseBacklogItemResponse) {}
+
+  // ListDiagnoseDispatches returns item_id's diagnose dispatch history,
+  // chronological oldest-first. A Pending dispatch (still in flight) or a
+  // Stalled one (Story 6.1.5's reconciler) is returned unchanged across
+  // repeated calls until it completes.
+  rpc ListDiagnoseDispatches(ListDiagnoseDispatchesRequest) returns (ListDiagnoseDispatchesResponse) {}
+}
+
+// DiagnoseDispatchStatus is the lifecycle state of a DiagnoseDispatch row --
+// distinct from, and orthogonal to, outcome_kind on DiagnoseDispatchProto. A
+// Pending or Stalled row always has outcome_kind unset.
+enum DiagnoseDispatchStatus {
+  DIAGNOSE_DISPATCH_STATUS_UNSPECIFIED = 0;
+  DIAGNOSE_DISPATCH_STATUS_PENDING = 1;
+  DIAGNOSE_DISPATCH_STATUS_COMPLETED = 2;
+  DIAGNOSE_DISPATCH_STATUS_STALLED = 3;
+}
+
+// DiagnoseDispatchProto is one DiagnoseDispatch row: a single dispatched
+// diagnostic session for a backlog item, plus its outcome once completed.
+message DiagnoseDispatchProto {
+  string id = 1;
+  string item_id = 2;
+  string target_session_uuid = 3;
+  string diagnostic_session_id = 4;
+  DiagnoseDispatchStatus status = 5;
+
+  // outcome_kind mirrors session/diagnose.DiagnoseOutcomeKind's raw string
+  // values ("nudged", "bug_filed", "inconclusive_note_filed",
+  // "skipped_safety_gate", "dispatch_failed") -- unset while status is
+  // PENDING or STALLED.
+  optional string outcome_kind = 6;
+  // safety_gate_reason is set only when outcome_kind is
+  // "skipped_safety_gate" -- mirrors session/diagnose.SafetyGateReason's raw
+  // string values.
+  optional string safety_gate_reason = 7;
+  // bug_item_id is set only when outcome_kind is "bug_filed".
+  optional string bug_item_id = 8;
+  // note_text is set only when outcome_kind is "inconclusive_note_filed".
+  optional string note_text = 9;
+  // failure_reason is set only when outcome_kind is "dispatch_failed".
+  optional string failure_reason = 10;
+
+  google.protobuf.Timestamp created_at = 11;
+  // completed_at is unset while status is PENDING.
+  optional google.protobuf.Timestamp completed_at = 12;
+}
+
+message DiagnoseBacklogItemRequest {
+  string item_id = 1;
+}
+
+message DiagnoseBacklogItemResponse {
+  string dispatch_id = 1;
+  string diagnostic_session_id = 2;
+}
+
+message ListDiagnoseDispatchesRequest {
+  string item_id = 1;
+}
+
+message ListDiagnoseDispatchesResponse {
+  // dispatches is chronological, oldest first.
+  repeated DiagnoseDispatchProto dispatches = 1;
+}
