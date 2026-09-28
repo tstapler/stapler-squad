@@ -1230,6 +1230,22 @@ func (s *SessionService) TimeSinceLastMeaningfulOutput(sessionUUID string) (time
 	return inst.GetTimeSinceLastMeaningfulOutput(), true
 }
 
+// canonicalizeAbsPath resolves path to an absolute, symlink-canonicalized form
+// (e.g. macOS's /var -> /private/var), so a caller comparing two paths isn't
+// fooled by the same directory having two spellings -- one already
+// canonicalized when loaded from storage (git.NewGitWorktreeFromStorage), the
+// other from a live pane's raw cwd that may not be. Shared by
+// OtherLiveSessionInsideWorktree, ConversationOwnedByOtherLiveSession, and
+// wireCallbacks' worktree-spawn-reservation closure -- all three independently
+// needed this exact two-step before worktree-envvars-hijack consolidated it.
+func canonicalizeAbsPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return git.CanonicalizeWorktreePath(abs), nil
+}
+
 // OtherLiveSessionInsideWorktree reports whether some OTHER currently-live
 // session (any UUID besides excludeUUID) has its actual runtime working
 // directory — Instance.GetCurrentWorkingDirectory(), a live pane/process
@@ -1246,18 +1262,10 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 	if s.reviewQueuePoller == nil || worktreePath == "" {
 		return "", false
 	}
-	cleanTarget, err := filepath.Abs(worktreePath)
+	cleanTarget, err := canonicalizeAbsPath(worktreePath)
 	if err != nil {
 		return "", false
 	}
-	// CanonicalizeWorktreePath resolves symlinks (e.g. macOS's /var ->
-	// /private/var) so this comparison isn't fooled by the same directory
-	// having two spellings -- one from a target worktree path already
-	// canonicalized when loaded from storage (git.NewGitWorktreeFromStorage),
-	// the other from a sibling's live pane cwd that may not be. See the /var
-	// vs /private/var path-inconsistency bug class already documented in
-	// backlog_service_test.go.
-	cleanTarget = git.CanonicalizeWorktreePath(cleanTarget)
 	for _, inst := range s.reviewQueuePoller.GetInstances() {
 		if inst == nil || inst.UUID == excludeUUID || !inst.IsBackendProcessAlive() {
 			continue
@@ -1266,11 +1274,10 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 		if cwdErr != nil || cwd == "" {
 			continue
 		}
-		cleanCwd, absErr := filepath.Abs(cwd)
+		cleanCwd, absErr := canonicalizeAbsPath(cwd)
 		if absErr != nil {
 			continue
 		}
-		cleanCwd = git.CanonicalizeWorktreePath(cleanCwd)
 		if cleanCwd == cleanTarget || strings.HasPrefix(cleanCwd, cleanTarget+string(os.PathSeparator)) {
 			return inst.UUID, true
 		}
@@ -1291,11 +1298,10 @@ func (s *SessionService) ConversationOwnedByOtherLiveSession(selfUUID, conversat
 	if s.reviewQueuePoller == nil || conversationUUID == "" || path == "" {
 		return "", false
 	}
-	cleanTarget, err := filepath.Abs(path)
+	cleanTarget, err := canonicalizeAbsPath(path)
 	if err != nil {
 		return "", false
 	}
-	cleanTarget = git.CanonicalizeWorktreePath(cleanTarget)
 	for _, inst := range s.reviewQueuePoller.GetInstances() {
 		if inst == nil || inst.UUID == selfUUID || !inst.IsBackendProcessAlive() {
 			continue
@@ -1307,11 +1313,11 @@ func (s *SessionService) ConversationOwnedByOtherLiveSession(selfUUID, conversat
 		if cwdErr != nil || cwd == "" {
 			continue
 		}
-		cleanCwd, absErr := filepath.Abs(cwd)
+		cleanCwd, absErr := canonicalizeAbsPath(cwd)
 		if absErr != nil {
 			continue
 		}
-		if git.CanonicalizeWorktreePath(cleanCwd) == cleanTarget {
+		if cleanCwd == cleanTarget {
 			return inst.UUID, true
 		}
 	}
@@ -1891,11 +1897,19 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	// another live session already owns, and two concurrent CreateSession calls
 	// resolving the same worktree path can't both win the race.
 	inst.SetWorktreeSpawnReservation(func(worktreePath string) (func(), error) {
-		cleanTarget, err := filepath.Abs(worktreePath)
+		cleanTarget, err := canonicalizeAbsPath(worktreePath)
 		if err != nil {
-			return nil, nil
+			// filepath.Abs only fails if os.Getwd() fails -- vanishingly rare, but
+			// silently skipping here would leave the TOCTOU-closing reservation
+			// this closure exists to provide entirely unclaimed, with no trace.
+			// Warn, matching SetPreSpawnCollisionGuard's own nil-poller fallback
+			// below, rather than staying silent about a disabled guard. Returns a
+			// no-op release (not nil, nil) so success always carries a real,
+			// callable release value -- nothing was claimed, so there's nothing
+			// to release, but the pairing stays unambiguous.
+			log.Warn("SetWorktreeSpawnReservation: failed to resolve worktree path, spawn reservation skipped", "session", inst.Title, "path", worktreePath, "err", err)
+			return func() {}, nil
 		}
-		cleanTarget = git.CanonicalizeWorktreePath(cleanTarget)
 		if _, loaded := s.inFlightWorktreeSpawns.LoadOrStore(cleanTarget, inst.UUID); loaded {
 			return nil, fmt.Errorf("%w: claimed by an in-flight spawn", session.ErrDirectoryCollision)
 		}

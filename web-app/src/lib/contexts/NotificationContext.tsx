@@ -46,7 +46,7 @@ export function getFailureReasonToastMessage(failureReason: string): string {
     case "WorktreeResolutionFailed":
       return "Couldn't set up an isolated workspace for this session. It was not started.";
     case "DirectoryCollision":
-      return "Blocked: another session is already active in that directory.";
+      return "Another session is already running in that directory, so this one wasn't started.";
     default:
       return "Session creation failed.";
   }

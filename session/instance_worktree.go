@@ -131,15 +131,21 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			// the same as a lookup failure -- it's a real string but not a
 			// meaningful branch name to persist or display.
 			if i.Branch == "" {
-				i.mu.Lock()
-				i.Branch = "unknown"
+				// Resolve into a local var BEFORE taking i.mu -- runner.Run is a
+				// blocking remote git subprocess bounded only by the 10s ctx timeout
+				// above; holding the actor lock across it would stall every other
+				// i.mu.Lock()/RLock() caller (including the legacy-writer setters
+				// documented in instance_actor_setters.go) for up to that long.
+				branch := "unknown"
 				if out, brErr := runner.Run(ctx, i.ExistingWorktree, "git", "rev-parse", "--abbrev-ref", "HEAD"); brErr == nil {
 					if br := strings.TrimSpace(string(out)); br != "" && br != "HEAD" {
-						i.Branch = br
+						branch = br
 					}
 				} else {
 					log.Warn("failed to resolve remote worktree branch name", "session", i.Title, "path", i.ExistingWorktree, "err", brErr)
 				}
+				i.mu.Lock()
+				i.Branch = branch
 				i.mu.Unlock()
 			}
 			cancel()

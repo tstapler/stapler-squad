@@ -32,9 +32,9 @@ export function getFailureMessage(failureReason: string): string {
     case "Stale":
       return "This session creation appears to have stalled.";
     case "WorktreeResolutionFailed":
-      return "Couldn't create an isolated worktree — refusing to start.";
+      return "Failed to create an isolated worktree.";
     case "DirectoryCollision":
-      return "Refused: another active session is already using this directory.";
+      return "Another session is already active in this directory.";
     default:
       return "Session creation failed.";
   }

@@ -2014,6 +2014,20 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	} else {
 		// firstTimeSetup: a brand new instance can never have prior history to lose.
 		reviveOutcome = ReviveOutcomeFreshExpected
+		// KNOWN GAP (worktree-envvars-hijack, unaddressed here — see startLocked's
+		// own doc comment on the Epic 7 cleanup expected to reconcile the two
+		// start-path implementations): unlike startLocked's firstTimeSetup branch,
+		// this legacy path does NOT run Story 3.3.1's structural "no real worktree"
+		// guard, Story 3.3.2's cross-session collision guard, or Story 3.3.2c's
+		// TOCTOU spawn reservation before initTmuxSession()/pm().Start() below.
+		// Currently inert in production: every StartWithCleanup call site is in a
+		// _test.go file (grepped repo-wide) — production code always goes through
+		// Instance.Start() -> startLocked, which is fully guarded. If a future
+		// caller reaches this path from production code, none of this plan's
+		// isolation-safety checks apply here. Mirrors the exact
+		// two-implementations-can-drift risk recoverConversationBeforeLaunch was
+		// extracted to close for a different field (see its own doc comment) —
+		// not yet done for these three guards.
 		basePath := i.Path
 		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
