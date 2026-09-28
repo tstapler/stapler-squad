@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import { useDiagnoseService } from "@/lib/hooks/useDiagnoseService";
 import { getStuckReasonLabel } from "./stuckReason";
 import { StuckItem } from "./StuckItem";
 import * as styles from "./StuckItemsSection.css";
@@ -108,6 +109,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
   } = useStuckBacklogItems();
   const { updateBacklogItem, transitionStatus, spawnSessionFromItem, approvePlan, getBacklogItem } =
     useBacklogService();
+  const { diagnose } = useDiagnoseService();
   const [filter, setFilter] = useState<FilterValue>("all");
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const [resolvedGhosts, setResolvedGhosts] = useState<Map<string, ResolvedGhost>>(new Map());
@@ -612,6 +614,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                       reworkCapOverrideLoaded={reworkCapOverrides.has(item.itemId)}
                       onTriggerRemediationNow={triggerRemediationNow}
                       onApprovePlan={handleApprovePlan}
+                      onDiagnose={diagnose}
                       focusItemId={focusItemId}
                     />
                   );

@@ -6,6 +6,19 @@ import userEvent from "@testing-library/user-event";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { StuckItemDetail } from "./StuckItemDetail";
 
+// DiagnoseOutcomeDisplay/DiagnoseHistoryList (rendered alongside the Diagnose
+// button, Epic 8.2) pull in useDiagnoseDispatches, which polls the real
+// ConnectRPC transport on mount — already covered by their own dedicated
+// test suites (DiagnoseOutcomeDisplay.test.tsx / DiagnoseHistoryList.test.tsx).
+// Stub both here so this suite's Diagnose tests exercise only
+// StuckItemDetail's own onDiagnose wiring.
+jest.mock("@/components/backlog/detail/DiagnoseOutcomeDisplay", () => ({
+  DiagnoseOutcomeDisplay: () => null,
+}));
+jest.mock("@/components/backlog/detail/DiagnoseHistoryList", () => ({
+  DiagnoseHistoryList: () => null,
+}));
+
 function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {
   return {
     itemId: "f9fcef32-c27e-434d-b23f-c873c18afa92",

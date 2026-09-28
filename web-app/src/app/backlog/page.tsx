@@ -27,6 +27,7 @@ import {
   type GitHubIssue,
 } from "@/lib/hooks/useBacklogService";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { useDiagnoseService } from "@/lib/hooks/useDiagnoseService";
 import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
 import { useAppDispatch } from "@/lib/store";
 import { upsertItem } from "@/lib/store/backlogItemsSlice";
@@ -223,6 +224,7 @@ function BacklogPageInner() {
   usePageView();
   const { track } = useAnalytics();
   const { createBacklogItem, importGitHubIssue, triggerTriage } = useBacklogService();
+  const { diagnose } = useDiagnoseService();
   const router = useRouter();
   const searchParams = useSearchParams();
   const dispatch = useAppDispatch();
@@ -815,6 +817,7 @@ function BacklogPageInner() {
                 key={selectedItemId}
                 itemId={selectedItemId}
                 onClose={handleDetailClose}
+                onDiagnose={diagnose}
               />
             </aside>
           </>

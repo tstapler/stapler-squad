@@ -65,6 +65,13 @@ interface StuckItemProps {
    */
   onApprovePlan?: (itemId: string) => Promise<void>;
   /**
+   * Requests a diagnostic dispatch for this item (DiagnoseBacklogItem RPC) —
+   * omitted disables the Diagnose control entirely. Forwarded straight
+   * through to StuckItemDetail — see that component's identically-named prop
+   * doc comment.
+   */
+  onDiagnose?: (itemId: string) => Promise<void>;
+  /**
    * itemId from the `/unfinished?item=<itemId>` deep link (routes.unfinishedItem) —
    * when it matches this card's item.itemId, scrolls the card into view. Expansion
    * is driven by the parent (StuckItemsSection) via isExpanded, not by this prop.
@@ -138,6 +145,7 @@ export function StuckItem({
   reworkCapOverrideLoaded = false,
   onTriggerRemediationNow,
   onApprovePlan,
+  onDiagnose,
   focusItemId,
 }: StuckItemProps) {
   const cardRef = useRef<HTMLDivElement>(null);
@@ -426,6 +434,7 @@ export function StuckItem({
           currentReworkCapOverride={currentReworkCapOverride}
           reworkCapOverrideLoaded={reworkCapOverrideLoaded}
           onApprovePlan={onApprovePlan}
+          onDiagnose={onDiagnose}
         />
       )}
     </div>

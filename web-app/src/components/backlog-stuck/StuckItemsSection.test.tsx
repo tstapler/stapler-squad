@@ -23,6 +23,22 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
   }),
 }));
 
+jest.mock("@/lib/hooks/useDiagnoseService", () => ({
+  useDiagnoseService: () => ({ diagnose: jest.fn() }),
+}));
+
+// DiagnoseOutcomeDisplay/DiagnoseHistoryList (rendered inside StuckItemDetail
+// alongside the Diagnose button, Epic 8.2) pull in useDiagnoseDispatches,
+// which polls the real ConnectRPC transport on mount — already covered by
+// their own dedicated test suites. Stub both here so expanding a card in
+// this suite never attempts a real network call.
+jest.mock("@/components/backlog/detail/DiagnoseOutcomeDisplay", () => ({
+  DiagnoseOutcomeDisplay: () => null,
+}));
+jest.mock("@/components/backlog/detail/DiagnoseHistoryList", () => ({
+  DiagnoseHistoryList: () => null,
+}));
+
 import { StuckItemsSection } from "./StuckItemsSection";
 
 function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {

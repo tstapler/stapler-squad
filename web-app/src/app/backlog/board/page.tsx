@@ -9,6 +9,7 @@ import { BacklogFilterBar } from "@/components/backlog/BacklogFilterBar";
 import { BacklogItemDetail } from "@/components/backlog/BacklogItemDetail";
 import { useBacklogFilters } from "@/lib/hooks/useBacklogFilters";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import { useDiagnoseService } from "@/lib/hooks/useDiagnoseService";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
 import * as styles from "./board.css";
@@ -22,6 +23,7 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
 
 function BacklogBoardPageInner() {
   const { transitionStatus, triggerTriage, spawnSessionFromItem, cancelTriage } = useBacklogService();
+  const { diagnose } = useDiagnoseService();
   const { showActionToast } = useNotifications();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -144,7 +146,12 @@ function BacklogBoardPageInner() {
         />
         {selectedItemId && (
           <aside className={styles.detailPane} aria-label="Item detail">
-            <BacklogItemDetail key={selectedItemId} itemId={selectedItemId} onClose={handleDetailClose} />
+            <BacklogItemDetail
+              key={selectedItemId}
+              itemId={selectedItemId}
+              onClose={handleDetailClose}
+              onDiagnose={diagnose}
+            />
           </aside>
         )}
       </div>

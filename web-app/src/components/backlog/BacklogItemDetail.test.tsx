@@ -61,6 +61,20 @@ jest.mock("./BacklogFileBrowserModal", () => ({
   BacklogFileBrowserModal: () => <div data-testid="file-browser-modal-stub" />,
 }));
 
+// DiagnoseOutcomeDisplay/DiagnoseHistoryList (rendered alongside the Diagnose
+// button, Epic 8.2) pull in useDiagnoseDispatches, which polls the real
+// ConnectRPC transport on mount — already covered by their own dedicated
+// test suites (DiagnoseOutcomeDisplay.test.tsx / DiagnoseHistoryList.test.tsx).
+// Stub both here so this suite's Diagnose tests exercise only
+// BacklogItemDetail's own onDiagnose wiring, mirroring the ReviewChangesModal/
+// BacklogFileBrowserModal precedent above.
+jest.mock("./detail/DiagnoseOutcomeDisplay", () => ({
+  DiagnoseOutcomeDisplay: () => null,
+}));
+jest.mock("./detail/DiagnoseHistoryList", () => ({
+  DiagnoseHistoryList: () => null,
+}));
+
 const useVcsStatusMock = jest.fn();
 jest.mock("@/lib/hooks/useVcsStatus", () => ({
   useVcsStatus: (...args: unknown[]) => useVcsStatusMock(...args),

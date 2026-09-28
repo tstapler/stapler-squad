@@ -32,6 +32,8 @@ import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { useDiagnoseAction } from "@/hooks/useDiagnoseAction";
+import { DiagnoseOutcomeDisplay } from "./detail/DiagnoseOutcomeDisplay";
+import { DiagnoseHistoryList } from "./detail/DiagnoseHistoryList";
 import { SendBackError } from "./detail/SendBackError";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
@@ -1736,6 +1738,8 @@ export function BacklogItemDetail({ itemId, onClose, onDiagnose }: BacklogItemDe
                 {diagnoseError}
               </span>
             )}
+            <DiagnoseOutcomeDisplay itemId={item.id} onDiagnose={diagnose} />
+            <DiagnoseHistoryList itemId={item.id} />
           </div>
         )}
 

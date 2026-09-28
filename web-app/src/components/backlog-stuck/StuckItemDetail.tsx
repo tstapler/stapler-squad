@@ -6,6 +6,8 @@ import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb"
 import { routes } from "@/lib/routes";
 import { resolveReworkCapOverride } from "@/lib/backlog/formatReworkCapOverride";
 import { useDiagnoseAction } from "@/hooks/useDiagnoseAction";
+import { DiagnoseOutcomeDisplay } from "@/components/backlog/detail/DiagnoseOutcomeDisplay";
+import { DiagnoseHistoryList } from "@/components/backlog/detail/DiagnoseHistoryList";
 import { formatAgo, formatSinceUTC, isPrStatusUnknown } from "./stuckReason";
 import * as styles from "./StuckItemDetail.css";
 
@@ -303,6 +305,8 @@ export function StuckItemDetail({
               {diagnoseError}
             </span>
           )}
+          <DiagnoseOutcomeDisplay itemId={item.itemId} onDiagnose={diagnose} />
+          <DiagnoseHistoryList itemId={item.itemId} />
         </div>
       )}
 
