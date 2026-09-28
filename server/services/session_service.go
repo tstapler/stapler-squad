@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/diagnose"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -1041,20 +1042,28 @@ func (s *SessionService) SessionProgram(sessionUUID string) (string, bool) {
 // silently disabling the gate. insert_mode is deliberately excluded: its
 // regex/description aren't distinguishable from a real vim INSERT-mode
 // status line.
-var safeIdleStatusContexts = map[string]bool{
-	"Claude Code readline input prompt":                                                              true, // claude_readline_prompt
-	"Claude Code idle prompt showing ? for shortcuts":                                                true, // claude_shortcuts_prompt
-	"Claude Code 'accept edits' review mode — session completed turn, user reviews proposed changes": true, // claude_accept_edits
-}
+//
+// The canonical values live in session/diagnose.SafeIdleStatusContexts, not
+// here: session/diagnose's idle-settle-window gate (Story 3.2.1) needs this
+// exact check, but session/diagnose cannot import this package back --
+// session/tmux (session/tmux/write_gate_ownership.go) already imports
+// session/diagnose, and this package imports session, which imports
+// session/tmux, so a session/diagnose -> server/services import would be a
+// cycle (confirmed via `go build ./...`). server/services -> session/diagnose
+// has no such problem, so this package aliases the diagnose-package original
+// instead of duplicating it.
+var safeIdleStatusContexts = diagnose.SafeIdleStatusContexts
 
 // isSafeSteerStatus reports whether a detection result is safe for an
 // unattended PTY write: StatusIdle with a description on the Claude-specific
 // safeIdleStatusContexts allowlist. StatusIdle alone is NOT sufficient —
 // command_prompt/vim_normal_mode/bracket_insert_mode share the same
 // DetectedStatus value but mean a raw shell or editor prompt, exactly the
-// state where injected text would be misread as a literal command.
+// state where injected text would be misread as a literal command. Delegates
+// to session/diagnose.IsSafeSteerStatus -- see safeIdleStatusContexts' doc
+// comment for why the canonical logic lives there instead of here.
 func isSafeSteerStatus(status detection.DetectedStatus, statusContext string) bool {
-	return status == detection.StatusIdle && safeIdleStatusContexts[statusContext]
+	return diagnose.IsSafeSteerStatus(status, statusContext)
 }
 
 // IsReadyForSteer implements SessionSteerer. It gates an unattended PTY
