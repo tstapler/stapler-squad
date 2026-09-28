@@ -1373,6 +1373,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 	backlogSvc.SetEventBus(eventBus)
 	backlogSvc.SetSessionStopper(sessionService)
+	// handoffSummaryGenerator (constructed above, Story 2.2.1) also backs
+	// Story 6.1.4's handoffSummaryBlockFor -- same instance, no separate
+	// construction. A concrete *session.HandoffSummaryGenerator field (not an
+	// interface), so passing a nil one here is safe -- unlike
+	// stageConfigEngine above, there's no typed-nil-wrapped-in-interface
+	// pitfall to guard against.
+	backlogSvc.SetHandoffSummaryGenerator(handoffSummaryGenerator)
 	backlogSvc.SetSessionSteerer(sessionService)
 	backlogSvc.SetAutonomousDriverStarter(sessionService)
 	if unfinishedScanner != nil {

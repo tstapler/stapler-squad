@@ -6094,6 +6094,120 @@ func TestFindSupersededSessions_should_KeepOnlyLatestPerRole_When_MultipleRounds
 	}
 }
 
+// --- Story 6.1.4: handoffSummaryBlockFor ---
+
+// seedReadyHandoffSummary writes a Ready HandoffSummary row for sessionUUID
+// directly via storage's ent client, mirroring
+// handoff_summary_service_test.go's seeding convention.
+func seedReadyHandoffSummary(t *testing.T, storage *session.Storage, sessionUUID, summaryText string) {
+	t.Helper()
+	entClient := storage.GetEntClient()
+	require.NotNil(t, entClient, "test storage must be ent-backed")
+	_, err := entClient.HandoffSummary.Create().
+		SetID(sessionUUID + "-summary").
+		SetSessionID(sessionUUID).
+		SetSessionTitle("stale session").
+		SetStatus(string(session.HandoffSummaryStatusReady)).
+		SetSummaryText(summaryText).
+		Save(context.Background())
+	require.NoError(t, err)
+}
+
+// TestHandoffSummaryBlockFor_should_PrependBlock_When_ReadyRowExists covers
+// Story 6.1.4's core AC: the most recent prior session's Ready HandoffSummary
+// row is prepended under its own heading, ahead of the rest of the prompt.
+func TestHandoffSummaryBlockFor_should_PrependBlock_When_ReadyRowExists(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	seedReadyHandoffSummary(t, storage, "prior-session-uuid", "Root cause identified, blocked on...")
+
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHandoffSummaryGenerator(session.NewHandoffSummaryGenerator(storage.GetEntClient(), nil))
+
+	priorSessions := []session.ItemSessionSummary{{SessionUUID: "prior-session-uuid", Role: session.SessionRoleWork}}
+	block := svc.handoffSummaryBlockFor(t.Context(), priorSessions)
+
+	assert.Contains(t, block, "Handoff From A Stalled Prior Session")
+	assert.Contains(t, block, "Root cause identified, blocked on...")
+
+	item := &session.BacklogItemData{ID: "item-1", Title: "item", AcceptanceCriteria: "[]"}
+	prompt := svc.initialPromptFor(t.Context(), item, priorSessions)
+	assert.True(t, strings.Index(prompt, "Handoff From A Stalled Prior Session") < strings.Index(prompt, item.Title),
+		"the handoff block must precede the rest of the prompt")
+}
+
+// TestHandoffSummaryBlockFor_should_ReturnEmpty_When_NoRowExists covers the
+// common case: most sessions end normally, leaving no HandoffSummary row.
+func TestHandoffSummaryBlockFor_should_ReturnEmpty_When_NoRowExists(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHandoffSummaryGenerator(session.NewHandoffSummaryGenerator(storage.GetEntClient(), nil))
+
+	priorSessions := []session.ItemSessionSummary{{SessionUUID: "no-such-session", Role: session.SessionRoleWork}}
+	assert.Empty(t, svc.handoffSummaryBlockFor(t.Context(), priorSessions))
+}
+
+// TestHandoffSummaryBlockFor_should_ReturnEmpty_When_GeneratorNil covers the
+// nil-generator degrade (storage isn't ent-backed, or wiring hasn't run yet)
+// -- never a panic, never a blocking error.
+func TestHandoffSummaryBlockFor_should_ReturnEmpty_When_GeneratorNil(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	priorSessions := []session.ItemSessionSummary{{SessionUUID: "some-session", Role: session.SessionRoleWork}}
+	assert.Empty(t, svc.handoffSummaryBlockFor(t.Context(), priorSessions))
+}
+
+// TestHandoffSummaryBlockFor_should_ReturnEmpty_When_NoPriorSessions covers
+// the first-ever round for an item+role: nothing to look up.
+func TestHandoffSummaryBlockFor_should_ReturnEmpty_When_NoPriorSessions(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHandoffSummaryGenerator(session.NewHandoffSummaryGenerator(storage.GetEntClient(), nil))
+
+	assert.Empty(t, svc.handoffSummaryBlockFor(t.Context(), nil))
+}
+
+// TestHandoffSummaryBlockFor_should_ReturnEmpty_When_RowNotReady covers a
+// pending/error row: only a Ready row's summary is ever surfaced.
+func TestHandoffSummaryBlockFor_should_ReturnEmpty_When_RowNotReady(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	entClient := storage.GetEntClient()
+	_, err := entClient.HandoffSummary.Create().
+		SetID("pending-session-summary").
+		SetSessionID("pending-session-uuid").
+		SetSessionTitle("stale session").
+		SetStatus(string(session.HandoffSummaryStatusError)).
+		Save(context.Background())
+	require.NoError(t, err)
+
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHandoffSummaryGenerator(session.NewHandoffSummaryGenerator(entClient, nil))
+
+	priorSessions := []session.ItemSessionSummary{{SessionUUID: "pending-session-uuid", Role: session.SessionRoleWork}}
+	assert.Empty(t, svc.handoffSummaryBlockFor(t.Context(), priorSessions))
+}
+
+// TestInitialPromptFor_should_BeByteForByteUnchanged_When_NoHandoffSummaryRow
+// covers Story 6.1.4's compatibility AC directly on initialPromptFor: with no
+// handoff generator wired (today's default in most tests), the prompt is
+// identical to before this story existed.
+func TestInitialPromptFor_should_BeByteForByteUnchanged_When_NoHandoffSummaryRow(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item := &session.BacklogItemData{ID: "item-1", Title: "item", AcceptanceCriteria: "[]"}
+	priorSessions := []session.ItemSessionSummary{{SessionUUID: "prior", Role: session.SessionRoleWork}}
+
+	withoutHandoff := svc.initialPromptFor(t.Context(), item, priorSessions)
+	assert.Equal(t, session.BuildTokenBudgetedPrompt(item, priorSessions), withoutHandoff)
+}
+
 // TestTriggerReReview_should_ArchivePriorReviewSession_When_SpawningTmuxBacked
 // is AC1's regression test: the tmux-backed re-review spawn path (no
 // headlessPool wired) previously never archived the prior review round's

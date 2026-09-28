@@ -367,6 +367,21 @@ type BacklogService struct {
 	// duck-typed no-op-if-unwired shape for pipelineEngine).
 	livenessEngine session.LivenessEngine
 
+	// handoffSummaryGenerator backs Story 6.1.4's handoffSummaryBlockFor
+	// (backlog_service_triage.go): looks up whether the most recent prior
+	// session for an item+role has a ready HandoffSummary row (written by
+	// Story 6.1.2's handoffThenCleanup before archiving a stale session) to
+	// prepend into the next round's initial prompt. Wired post-construction
+	// via SetHandoffSummaryGenerator — not a NewBacklogService constructor
+	// parameter, same rationale as livenessRepo above: this struct already
+	// has 25+ existing NewBacklogService test call sites outside Phase 6's
+	// own file list, and a constructor param would force touching every one
+	// of them for a dependency only one new method needs. May be nil (storage
+	// isn't ent-backed, or wiring hasn't happened yet); handoffSummaryBlockFor
+	// degrades to "" — the same best-effort-nudge shape
+	// workspacePeersBlockFor already established in the same function.
+	handoffSummaryGenerator *session.HandoffSummaryGenerator
+
 	// stageCRUDRepo backs the Stage/StageTransition/TransitionGate CRUD RPCs
 	// (Epic 2.7 of backlog-custom-workflow-stages):
 	// CreateStage/UpdateStage/DeleteStage/GetStage/ListStages and their
@@ -560,6 +575,13 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		capabilityCheck:      headless.DefaultCapabilitySelfCheck,
 		modelFamilies:        workflows.DefaultModelFamilies(),
 	}
+}
+
+// SetHandoffSummaryGenerator wires the generator handoffSummaryBlockFor
+// consults (Story 6.1.4). See the handoffSummaryGenerator field's doc
+// comment for why this is a setter, not a constructor parameter.
+func (s *BacklogService) SetHandoffSummaryGenerator(generator *session.HandoffSummaryGenerator) {
+	s.handoffSummaryGenerator = generator
 }
 
 // SetModelFamilies replaces the family alias -> concrete model ID map used to

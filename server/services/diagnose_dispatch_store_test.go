@@ -291,6 +291,66 @@ func TestDiagnoseDispatchStore_CheckAndSetWriteAttempted_ShouldReturnTrueWithout
 	assert.True(t, third, "a third attempt must still be rejected, not reset")
 }
 
+// --- Story 6.1.5: cross-item stalled-dispatch sweep ---
+
+// TestDiagnoseDispatchStore_ListAllPending_ShouldReturnOnlyPendingRows_AcrossItems
+// covers Task 6.1.5b: a cross-item query, and the "already Completed/Stalled
+// rows are never reconsidered" AC -- ListAllPending itself is what enforces
+// that, by only ever selecting Pending rows.
+func TestDiagnoseDispatchStore_ListAllPending_ShouldReturnOnlyPendingRows_AcrossItems(t *testing.T) {
+	t.Parallel()
+	store := NewDiagnoseDispatchStore(newTestDiagnoseDispatchStorage(t))
+	ctx := context.Background()
+
+	pendingA, err := store.Record(ctx, DiagnoseDispatchRequest{ItemID: "item-pending-a", TargetSessionUUID: "t", DiagnosticSessionUUID: "diag-a"})
+	require.NoError(t, err)
+	pendingB, err := store.Record(ctx, DiagnoseDispatchRequest{ItemID: "item-pending-b", TargetSessionUUID: "t", DiagnosticSessionUUID: "diag-b"})
+	require.NoError(t, err)
+	completed, err := store.Record(ctx, DiagnoseDispatchRequest{ItemID: "item-completed", TargetSessionUUID: "t", DiagnosticSessionUUID: "diag-c"})
+	require.NoError(t, err)
+	require.NoError(t, store.MarkCompleted(ctx, completed, diagnose.DiagnoseOutcome{Kind: diagnose.DiagnoseOutcomeKindNudged}))
+	stalled, err := store.Record(ctx, DiagnoseDispatchRequest{ItemID: "item-stalled", TargetSessionUUID: "t", DiagnosticSessionUUID: "diag-d"})
+	require.NoError(t, err)
+	require.NoError(t, store.MarkStalled(ctx, stalled))
+
+	rows, err := store.ListAllPending(ctx)
+	require.NoError(t, err)
+	gotIDs := make([]string, len(rows))
+	for i, r := range rows {
+		gotIDs[i] = r.ID
+	}
+	assert.ElementsMatch(t, []string{pendingA, pendingB}, gotIDs)
+}
+
+// TestDiagnoseDispatchStore_MarkStalled_ShouldUpdateSameRow_LeavingOutcomeNull
+// covers Task 6.1.5c's AC: Status flips to Stalled, CompletedAt is set,
+// OutcomeKind stays null -- never a second row.
+func TestDiagnoseDispatchStore_MarkStalled_ShouldUpdateSameRow_LeavingOutcomeNull(t *testing.T) {
+	t.Parallel()
+	store := NewDiagnoseDispatchStore(newTestDiagnoseDispatchStorage(t))
+	ctx := context.Background()
+	itemID := "item-stall-1"
+
+	dispatchID, err := store.Record(ctx, DiagnoseDispatchRequest{ItemID: itemID, TargetSessionUUID: "t", DiagnosticSessionUUID: "diag-1"})
+	require.NoError(t, err)
+
+	before, err := store.ListByItem(ctx, itemID)
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	createdAt := before[0].CreatedAt
+
+	require.NoError(t, store.MarkStalled(ctx, dispatchID))
+
+	after, err := store.ListByItem(ctx, itemID)
+	require.NoError(t, err)
+	require.Len(t, after, 1, "MarkStalled must update the existing row, not insert a second one")
+	assert.Equal(t, dispatchID, after[0].ID)
+	assert.Equal(t, createdAt, after[0].CreatedAt)
+	assert.Equal(t, diagnose.DiagnoseDispatchStatusStalled, after[0].Status)
+	assert.Nil(t, after[0].Outcome)
+	require.NotNil(t, after[0].CompletedAt)
+}
+
 // TestDiagnoseDispatchStore_CheckAndSetWriteAttempted_ShouldAllowExactlyOneOfTwoConcurrentCalls_WhenRaceTestedForSameDispatchID
 // is the validation.md-named `-race` test, mirroring
 // TestNudgeCapStore_CheckAndReserve_ShouldAllowExactlyOneSuccess_WhenTwoGoroutinesRaceForSameItemAtCapOne's

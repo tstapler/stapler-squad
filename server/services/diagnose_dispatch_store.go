@@ -33,6 +33,10 @@ type diagnoseDispatchPersistence interface {
 	FindDiagnoseDispatchByDiagnosticSessionUUID(ctx context.Context, diagnosticSessionUUID string) (session.DiagnoseDispatchData, bool, error)
 	GetDiagnoseDispatchWriteAttemptedAt(ctx context.Context, dispatchID string) (*time.Time, error)
 	SetDiagnoseDispatchWriteAttemptedAt(ctx context.Context, dispatchID string, at time.Time) error
+	// ListAllPendingDiagnoseDispatches and MarkDiagnoseDispatchStalled back
+	// Story 6.1.5's cross-item stalled-dispatch sweep (server/services/superseded_session_sweeper.go).
+	ListAllPendingDiagnoseDispatches(ctx context.Context) ([]session.DiagnoseDispatchData, error)
+	MarkDiagnoseDispatchStalled(ctx context.Context, dispatchID string) error
 }
 
 // DiagnoseDispatchRequest describes a new dispatch to record.
@@ -79,6 +83,15 @@ type DiagnoseDispatchStore interface {
 	// Serialized through diagnoseNudgeGuardMu (nudge_cap_store.go), reused
 	// here keyed by dispatchID instead of itemID.
 	CheckAndSetWriteAttempted(ctx context.Context, dispatchID string) (alreadyAttempted bool, err error)
+	// ListAllPending returns every Pending-status dispatch across all items --
+	// Story 6.1.5's cross-item stalled-dispatch sweep, distinct from
+	// ListByItem's item-scoped query.
+	ListAllPending(ctx context.Context) ([]DiagnoseDispatchRecord, error)
+	// MarkStalled updates dispatchID's row to Status Stalled with CompletedAt
+	// set, leaving OutcomeKind null -- sibling to MarkCompleted, for a
+	// dispatch whose diagnostic session ended without ever calling a
+	// terminal tool (Story 6.1.5).
+	MarkStalled(ctx context.Context, dispatchID string) error
 }
 
 // entDiagnoseDispatchStore is the ent-backed DiagnoseDispatchStore
@@ -169,6 +182,29 @@ func (s *entDiagnoseDispatchStore) CheckAndSetWriteAttempted(ctx context.Context
 		return false, fmt.Errorf("diagnose dispatch store: set write attempted for dispatch %s: %w", dispatchID, err)
 	}
 	return false, nil
+}
+
+// ListAllPending implements Story 6.1.5's cross-item query. See
+// DiagnoseDispatchStore.ListAllPending.
+func (s *entDiagnoseDispatchStore) ListAllPending(ctx context.Context) ([]DiagnoseDispatchRecord, error) {
+	rows, err := s.persistence.ListAllPendingDiagnoseDispatches(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("diagnose dispatch store: list all pending: %w", err)
+	}
+	records := make([]DiagnoseDispatchRecord, len(rows))
+	for i, row := range rows {
+		records[i] = dataToRecord(row)
+	}
+	return records, nil
+}
+
+// MarkStalled implements Story 6.1.5's AC: updates the same row in place,
+// never a second row.
+func (s *entDiagnoseDispatchStore) MarkStalled(ctx context.Context, dispatchID string) error {
+	if err := s.persistence.MarkDiagnoseDispatchStalled(ctx, dispatchID); err != nil {
+		return fmt.Errorf("diagnose dispatch store: mark stalled for dispatch %s: %w", dispatchID, err)
+	}
+	return nil
 }
 
 // outcomeToData converts a validated diagnose.DiagnoseOutcome into the

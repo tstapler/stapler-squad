@@ -112,3 +112,16 @@ func dispatchFailedNotification(itemTitle string, outcome diagnose.DiagnoseOutco
 		fmt.Sprintf("%s — could not dispatch a diagnostic session: %s. Left for manual review.", itemTitle, reason),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR), true, true
 }
+
+// DiagnoseStalledNotification derives the live-toast title/message/
+// notificationType/urgent/important fields for Story 6.1.5's dispatch-stalled
+// transition (server/services/superseded_session_sweeper.go's
+// sweepStalledDiagnoseDispatches) -- a sibling to DiagnoseEventNotification,
+// not a branch of it, since "stalled" is a DiagnoseDispatchStatus, not a
+// DiagnoseOutcomeKind (session/diagnose/outcome.go's doc comment: the two are
+// distinct, orthogonal enums; a Stalled row carries no outcome at all).
+func DiagnoseStalledNotification(itemTitle string) (title, message string, notificationType int32, urgent, important bool) {
+	return "Diagnose: stopped without a completion signal",
+		fmt.Sprintf("%s — the diagnostic session ended without recording an outcome. It may have crashed or hit its own turn/time limit.", itemTitle),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING), true, true
+}

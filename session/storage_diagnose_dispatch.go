@@ -161,6 +161,43 @@ func (r *EntRepository) FindDiagnoseDispatchByDiagnosticSessionUUID(ctx context.
 	return dataFromEntDiagnoseDispatch(row), true, nil
 }
 
+// ListAllPendingDiagnoseDispatches returns every DiagnoseDispatch row with
+// status "pending", across all items -- Story 6.1.5's cross-item
+// stalled-dispatch sweep, distinct from ListDiagnoseDispatchesByItem's
+// item-scoped query.
+func (r *EntRepository) ListAllPendingDiagnoseDispatches(ctx context.Context) ([]DiagnoseDispatchData, error) {
+	rows, err := r.client.DiagnoseDispatch.Query().
+		Where(diagnosedispatch.Status("pending")).
+		Order(ent.Asc(diagnosedispatch.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list all pending diagnose dispatches: %w", err)
+	}
+	result := make([]DiagnoseDispatchData, len(rows))
+	for i, row := range rows {
+		result[i] = dataFromEntDiagnoseDispatch(row)
+	}
+	return result, nil
+}
+
+// MarkDiagnoseDispatchStalled updates dispatchID's existing row to status
+// "stalled" with CompletedAt set, leaving OutcomeKind untouched (nil) -- the
+// same "no outcome" shape as "pending", distinguished only by
+// Status/CompletedAt (Story 6.1.5 AC) -- never a second row.
+func (r *EntRepository) MarkDiagnoseDispatchStalled(ctx context.Context, dispatchID string) error {
+	_, err := r.client.DiagnoseDispatch.UpdateOneID(dispatchID).
+		SetStatus("stalled").
+		SetCompletedAt(time.Now().UTC()).
+		Save(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return fmt.Errorf("diagnose dispatch %s not found: %w", dispatchID, err)
+		}
+		return fmt.Errorf("mark diagnose dispatch %s stalled: %w", dispatchID, err)
+	}
+	return nil
+}
+
 // GetDiagnoseDispatchWriteAttemptedAt returns dispatchID's WriteAttemptedAt
 // timestamp, nil if a write has never been attempted for this dispatch yet.
 func (r *EntRepository) GetDiagnoseDispatchWriteAttemptedAt(ctx context.Context, dispatchID string) (*time.Time, error) {
@@ -217,6 +254,18 @@ func (s *Storage) ListDiagnoseDispatchesByItem(ctx context.Context, itemID strin
 // See EntRepository.FindDiagnoseDispatchByDiagnosticSessionUUID.
 func (s *Storage) FindDiagnoseDispatchByDiagnosticSessionUUID(ctx context.Context, diagnosticSessionUUID string) (DiagnoseDispatchData, bool, error) {
 	return s.repo.FindDiagnoseDispatchByDiagnosticSessionUUID(ctx, diagnosticSessionUUID)
+}
+
+// ListAllPendingDiagnoseDispatches returns every pending DiagnoseDispatch row
+// across all items. See EntRepository.ListAllPendingDiagnoseDispatches.
+func (s *Storage) ListAllPendingDiagnoseDispatches(ctx context.Context) ([]DiagnoseDispatchData, error) {
+	return s.repo.ListAllPendingDiagnoseDispatches(ctx)
+}
+
+// MarkDiagnoseDispatchStalled marks dispatchID's row Stalled. See
+// EntRepository.MarkDiagnoseDispatchStalled.
+func (s *Storage) MarkDiagnoseDispatchStalled(ctx context.Context, dispatchID string) error {
+	return s.repo.MarkDiagnoseDispatchStalled(ctx, dispatchID)
 }
 
 // GetDiagnoseDispatchWriteAttemptedAt returns dispatchID's WriteAttemptedAt

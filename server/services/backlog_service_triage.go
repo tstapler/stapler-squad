@@ -46,7 +46,37 @@ func (s *BacklogService) initialPromptFor(ctx context.Context, item *session.Bac
 	} else {
 		prompt = s.pipelineEngine.InitialPromptFor(item, priorSessions)
 	}
-	return prompt + s.workspacePeersBlockFor(ctx, item.RepoPath)
+	return s.handoffSummaryBlockFor(ctx, priorSessions) + prompt + s.workspacePeersBlockFor(ctx, item.RepoPath)
+}
+
+// handoffSummaryBlockFor implements Story 6.1.4: when the most recent prior
+// session for this item+role (the last entry in priorSessions, already
+// ordered oldest-first) has a ready HandoffSummary row -- written by Story
+// 6.1.2's handoffThenCleanup before archiving a stale session -- returns that
+// summary rendered under a "Handoff From A Stalled Prior Session" heading, to
+// be prepended ahead of the rest of the prompt (requirements.md's
+// stale-retry-cleanup step 2: hand the summary to whatever picks the item+role
+// back up). Best-effort, mirroring workspacePeersBlockFor's exact shape: a
+// nil generator, no prior sessions, a missing row, or a non-ready row all
+// return "" rather than blocking session creation -- the common case (most
+// sessions end normally, not via stale-cleanup) leaves the prompt
+// byte-for-byte unchanged.
+func (s *BacklogService) handoffSummaryBlockFor(ctx context.Context, priorSessions []session.ItemSessionSummary) string {
+	if s.handoffSummaryGenerator == nil || len(priorSessions) == 0 {
+		return ""
+	}
+	last := priorSessions[len(priorSessions)-1]
+	row, err := s.handoffSummaryGenerator.FindRowBySessionID(ctx, last.SessionUUID)
+	if err != nil || row == nil || row.Status != string(session.HandoffSummaryStatusReady) {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Handoff From A Stalled Prior Session\n")
+	sb.WriteString("The prior session for this item+role was cleaned up before finishing. Here is its handoff summary:\n\n")
+	sb.WriteString(row.SummaryText)
+	sb.WriteString("\n\n")
+	return sb.String()
 }
 
 // workspacePeersBlockFor returns the rendered workspace-peers nudge for repoPath, or ""

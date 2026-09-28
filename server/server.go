@@ -1203,10 +1203,26 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 
 	// Start superseded-rework-round sweeper (archives a work/review session
-	// once a newer round for the same backlog item exists -- see
-	// SupersededSessionSweeper doc comment).
+	// once a newer round for the same backlog item exists; Phase 6 also
+	// reuses this same ticker for idle-stale-session cleanup and
+	// stalled-diagnose-dispatch detection -- see SupersededSessionSweeper doc
+	// comment).
 	if deps.Storage != nil && deps.SessionService != nil {
-		supersededSessionSweeper := services.NewSupersededSessionSweeper(deps.Storage, deps.SessionService)
+		sweeperDeps := services.SupersededSessionSweeperDeps{
+			Instances:     services.NewSessionServiceInstanceLookup(deps.SessionService),
+			DispatchStore: services.NewDiagnoseDispatchStore(deps.Storage),
+			Notifier:      &services.EventBusNotifier{Bus: deps.EventBus},
+		}
+		// deps.HandoffSummaryGenerator is a concrete *session.HandoffSummaryGenerator;
+		// boxing a nil one straight into the HandoffGenerator interface field
+		// would wrap a non-nil interface around a nil pointer (same typed-nil
+		// pitfall BuildRuntimeDeps' stageConfigEngine wiring guards against) --
+		// only assign it when actually non-nil, so the sweeper's own
+		// s.handoffGenerator == nil check stays meaningful.
+		if deps.HandoffSummaryGenerator != nil {
+			sweeperDeps.HandoffGenerator = deps.HandoffSummaryGenerator
+		}
+		supersededSessionSweeper := services.NewSupersededSessionSweeper(deps.Storage, deps.SessionService, sweeperDeps)
 		go supersededSessionSweeper.Start(serverCtx)
 		log.Info("Superseded session sweeper started")
 	}
