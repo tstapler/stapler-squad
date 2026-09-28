@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -147,6 +148,43 @@ func TestIdleGate_Evaluate_ShouldNotLog_WhenResetOccursWithNoPriorAccruedProgres
 	gate.Evaluate(base, "claude", detection.StatusIdle, commandPromptContext)
 
 	assert.NotContains(t, buf.String(), "diagnose.idle.settle_reset", "a reset with zero prior progress must not log")
+}
+
+// TestIdleGate_Evaluate_ShouldNotRace_WhenCalledConcurrentlyForSameSession
+// regression-tests the fix for the unsynchronized read-modify-write of
+// settleStart: idleGateRegistry (server/mcp/diagnose_gate_wiring.go) hands
+// the SAME *IdleGate pointer to steer_session/write_to_session/resume_session
+// for the same target session UUID, and those MCP handlers can invoke
+// Evaluate concurrently. Must be run with -race to be meaningful.
+func TestIdleGate_Evaluate_ShouldNotRace_WhenCalledConcurrentlyForSameSession(t *testing.T) {
+	gate := newTestIdleGate(t, 30)
+	base := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+
+	const goroutines = 20
+	const iterationsPerGoroutine = 50
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < iterationsPerGoroutine; i++ {
+				now := base.Add(time.Duration(g*iterationsPerGoroutine+i) * time.Second)
+				gate.Evaluate(now, "claude", detection.StatusIdle, concurrentPollContext(i))
+			}
+		}(g)
+	}
+	wg.Wait()
+}
+
+// concurrentPollContext alternates between an allowlisted and a
+// non-allowlisted status context, so the concurrency test above exercises
+// both Evaluate's settle-accrual path and its reset path under contention.
+func concurrentPollContext(i int) string {
+	if i%2 == 0 {
+		return claudeReadlinePromptContext
+	}
+	return commandPromptContext
 }
 
 // TestIsClaudeCodeProgram_ExactMatchOnEmptyOrClaude regression-tests this

@@ -442,11 +442,13 @@ func (lh *lifecycleHandlers) resumeSession(ctx context.Context, req mcpgo.CallTo
 	}
 
 	inst.PauseReason = ""
-	if verifyErr := verifyNudgeIdentity(ctx, lh.nudgeGate, inst, expectedUUID, lh.diagnoseOutcomes); verifyErr != nil {
-		return verifyErr, nil
-	}
+	// checkDuplicateWriteGuard before verifyNudgeIdentity: see writeToSession's
+	// identical ordering comment (server/mcp/tools_terminal.go).
 	if guardErr := checkDuplicateWriteGuard(ctx, lh.dispatchWriteGuard, lh.diagnoseOutcomes); guardErr != nil {
 		return guardErr, nil
+	}
+	if verifyErr := verifyNudgeIdentity(ctx, lh.nudgeGate, inst, expectedUUID, lh.diagnoseOutcomes); verifyErr != nil {
+		return verifyErr, nil
 	}
 	if err := inst.Resume(); err != nil {
 		if isConnectionOrTimeoutShapedWriteError(err) {

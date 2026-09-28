@@ -348,19 +348,6 @@ func verifyNudgeIdentity(ctx context.Context, gate nudgeGateEvaluator, inst *ses
 	return verifyBeforeWrite(ctx, inst, expectedUUID, hooks)
 }
 
-// checkNudgeGate combines evaluateNudgeGate and verifyNudgeIdentity for a
-// handler with a single write call site immediately following (writeToSession,
-// resumeSession) -- steerSession has two write call sites gated by different
-// branches, so it calls evaluateNudgeGate and verifyNudgeIdentity separately
-// instead (see its own gate-insertion points).
-func checkNudgeGate(ctx context.Context, gate nudgeGateEvaluator, inst *session.Instance, hooks diagnoseOutcomeHooks) *mcpgo.CallToolResult {
-	expectedUUID, errRes := evaluateNudgeGate(ctx, gate, inst, hooks)
-	if errRes != nil {
-		return errRes
-	}
-	return verifyNudgeIdentity(ctx, gate, inst, expectedUUID, hooks)
-}
-
 // diagnoseDispatchWriteGuard is the narrow interface Story 4.1.4g's
 // dispatch-level duplicate-write guard needs -- satisfied by
 // services.DiagnoseDispatchStore. A seam so tests can inject a scripted

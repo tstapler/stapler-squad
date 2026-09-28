@@ -325,11 +325,18 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 		return errResult_, nil
 	}
 
-	if gateErr := checkNudgeGate(ctx, th.nudgeGate, inst, th.diagnoseOutcomes); gateErr != nil {
+	expectedUUID, gateErr := evaluateNudgeGate(ctx, th.nudgeGate, inst, th.diagnoseOutcomes)
+	if gateErr != nil {
 		return gateErr, nil
 	}
+	// checkDuplicateWriteGuard's DB round-trips run BEFORE the final identity
+	// re-check below, so verifyNudgeIdentity is the literal last statement
+	// before the write, per verifyBeforeWrite's doc comment contract.
 	if guardErr := checkDuplicateWriteGuard(ctx, th.dispatchWriteGuard, th.diagnoseOutcomes); guardErr != nil {
 		return guardErr, nil
+	}
+	if verifyErr := verifyNudgeIdentity(ctx, th.nudgeGate, inst, expectedUUID, th.diagnoseOutcomes); verifyErr != nil {
+		return verifyErr, nil
 	}
 
 	// BUG-047: must use session.EnterKeySequence ('\r'), not a bare '\n' —
@@ -798,11 +805,13 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 	if inst.OneShot && uuid != "" && inst.GetEffectiveStatus() == session.Stopped {
 		resumeCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
-		if verifyErr := verifyNudgeIdentity(resumeCtx, th.nudgeGate, inst, expectedUUID, th.diagnoseOutcomes); verifyErr != nil {
-			return verifyErr, nil
-		}
+		// checkDuplicateWriteGuard before verifyNudgeIdentity: see writeToSession's
+		// identical ordering comment.
 		if guardErr := checkDuplicateWriteGuard(resumeCtx, th.dispatchWriteGuard, th.diagnoseOutcomes); guardErr != nil {
 			return guardErr, nil
+		}
+		if verifyErr := verifyNudgeIdentity(resumeCtx, th.nudgeGate, inst, expectedUUID, th.diagnoseOutcomes); verifyErr != nil {
+			return verifyErr, nil
 		}
 		result, err := inst.RunWithResume(resumeCtx, message)
 		if err != nil {
@@ -826,11 +835,11 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 	// Fallback: send via PTY send-keys (interactive sessions or sessions
 	// without UUID), via session.SubmitContentWithEnter (BUG-031) so content
 	// and the submit keystroke travel as two separate SendKeys writes.
-	if verifyErr := verifyNudgeIdentity(ctx, th.nudgeGate, inst, expectedUUID, th.diagnoseOutcomes); verifyErr != nil {
-		return verifyErr, nil
-	}
 	if guardErr := checkDuplicateWriteGuard(ctx, th.dispatchWriteGuard, th.diagnoseOutcomes); guardErr != nil {
 		return guardErr, nil
+	}
+	if verifyErr := verifyNudgeIdentity(ctx, th.nudgeGate, inst, expectedUUID, th.diagnoseOutcomes); verifyErr != nil {
+		return verifyErr, nil
 	}
 	if err := session.SubmitContentWithEnter(ctx, inst, message); err != nil {
 		return classifyWriteResult(err, "message"), nil

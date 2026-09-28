@@ -289,3 +289,40 @@ func TestResumeSession_ShouldNotApplyDuplicateWriteGuard_WhenCallerHasNoMatching
 	require.NotEqual(t, string(diagnose.SafetyGateReasonDuplicateWriteAttemptForDispatch), code,
 		"the guard must be skipped entirely when the caller has no matching DiagnoseDispatch row")
 }
+
+// TestResumeSession_ShouldRunDuplicateWriteGuardBeforeFinalIdentityRecheck
+// mirrors TestSteerSession_ShouldRunDuplicateWriteGuardBeforeFinalIdentityRecheck
+// (tools_terminal_test.go) for resume_session: checkDuplicateWriteGuard must
+// run BEFORE verifyNudgeIdentity's final pre-write identity re-check. The
+// FIRST call uses a matching tmux identity so it passes both checks and marks
+// the dispatch's write attempted (inst.Resume() itself still fails generically
+// here -- no real tmux server -- which keeps Status Paused for the second
+// call, same precondition TestResumeSession_ShouldRejectSecondWriteAttempt...
+// relies on). The SECOND call switches to a MISMATCHED tmux identity: if the
+// guard genuinely runs first, it rejects before the identity re-check is ever
+// reached. If the buggy ordering ever regresses, this test would instead
+// observe an identity-mismatch code.
+func TestResumeSession_ShouldRunDuplicateWriteGuardBeforeFinalIdentityRecheck(t *testing.T) {
+	inst := newGatedTestInstance(t, "resume-guard-before-identity-session", "claude")
+	inst.Status = session.Paused
+
+	itemID := inst.Snapshot().UUID
+	callerUUID := "diagnostic-session-uuid-for-resume-order-test"
+	lh, capStore, dispatchStore := newResumeDispatchGuardTestSetup(t, inst)
+	seedDispatchGuardPrecondition(t, capStore, dispatchStore, itemID, callerUUID)
+
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	req := makeToolReq(map[string]interface{}{"session_id": inst.Title})
+
+	matchingTmux := newFakeTmuxShowEnvironment(t, "STAPLER_SESSION_UUID="+inst.Snapshot().UUID, 0)
+	t.Setenv("TMUX_BIN", matchingTmux)
+	_, err := lh.resumeSession(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, session.Paused, inst.Status, "test precondition: Resume() must not have succeeded, so the second call still finds a Paused session")
+
+	mismatchedTmux := newFakeTmuxShowEnvironment(t, "STAPLER_SESSION_UUID=someone-else", 0)
+	t.Setenv("TMUX_BIN", mismatchedTmux)
+	result, err := lh.resumeSession(ctx, req)
+	require.NoError(t, err)
+	assertDuplicateWriteGuardRejected(t, result)
+}

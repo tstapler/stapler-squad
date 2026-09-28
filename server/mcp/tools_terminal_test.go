@@ -1035,3 +1035,63 @@ func TestSteerSession_ShouldNotApplyDuplicateWriteGuard_WhenCallerHasNoMatchingD
 	require.NotEqual(t, string(diagnose.SafetyGateReasonDuplicateWriteAttemptForDispatch), code,
 		"the guard must be skipped entirely when the caller has no matching DiagnoseDispatch row")
 }
+
+// TestSteerSession_ShouldRunDuplicateWriteGuardBeforeFinalIdentityRecheck is a
+// regression test: checkDuplicateWriteGuard's DB round-trips must run BEFORE
+// verifyNudgeIdentity's final pre-write identity re-check, so the identity
+// re-check is the literal last statement before the write (see
+// verifyBeforeWrite's doc comment contract in diagnose_gate_wiring.go). The
+// FIRST call uses a matching tmux identity so it passes both checks and marks
+// the dispatch's write attempted (the underlying write itself may still fail
+// -- no real PTY in this unit test -- which is not what this test asserts).
+// The SECOND call switches to a MISMATCHED tmux identity: if the guard
+// genuinely runs first, it rejects before the identity re-check is ever
+// reached, so the mismatch is never observed. If the buggy ordering ever
+// regresses (identity re-check running first), this test would instead
+// observe an identity-mismatch code.
+func TestSteerSession_ShouldRunDuplicateWriteGuardBeforeFinalIdentityRecheck(t *testing.T) {
+	inst := newGatedTestInstance(t, "guard-before-identity-session", "claude")
+	itemID := inst.Snapshot().UUID
+	callerUUID := "diagnostic-session-uuid-for-order-test"
+	th, capStore, dispatchStore := newDispatchGuardTestSetup(t, inst)
+	seedDispatchGuardPrecondition(t, capStore, dispatchStore, itemID, callerUUID)
+
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	req := makeToolReq(map[string]interface{}{"session_id": inst.Title, "message": "focus on the authentication module"})
+
+	matchingTmux := newFakeTmuxShowEnvironment(t, "STAPLER_SESSION_UUID="+inst.Snapshot().UUID, 0)
+	t.Setenv("TMUX_BIN", matchingTmux)
+	_, err := th.steerSession(ctx, req)
+	require.NoError(t, err)
+
+	mismatchedTmux := newFakeTmuxShowEnvironment(t, "STAPLER_SESSION_UUID=someone-else", 0)
+	t.Setenv("TMUX_BIN", mismatchedTmux)
+	result, err := th.steerSession(ctx, req)
+	require.NoError(t, err)
+	assertDuplicateWriteGuardRejected(t, result)
+}
+
+// TestWriteToSession_ShouldRunDuplicateWriteGuardBeforeFinalIdentityRecheck
+// mirrors TestSteerSession_ShouldRunDuplicateWriteGuardBeforeFinalIdentityRecheck
+// for write_to_session.
+func TestWriteToSession_ShouldRunDuplicateWriteGuardBeforeFinalIdentityRecheck(t *testing.T) {
+	inst := newGatedTestInstance(t, "write-guard-before-identity-session", "claude")
+	itemID := inst.Snapshot().UUID
+	callerUUID := "diagnostic-session-uuid-for-write-order-test"
+	th, capStore, dispatchStore := newDispatchGuardTestSetup(t, inst)
+	seedDispatchGuardPrecondition(t, capStore, dispatchStore, itemID, callerUUID)
+
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	req := makeToolReq(map[string]interface{}{"session_id": inst.Title, "input": "echo hello"})
+
+	matchingTmux := newFakeTmuxShowEnvironment(t, "STAPLER_SESSION_UUID="+inst.Snapshot().UUID, 0)
+	t.Setenv("TMUX_BIN", matchingTmux)
+	_, err := th.writeToSession(ctx, req)
+	require.NoError(t, err)
+
+	mismatchedTmux := newFakeTmuxShowEnvironment(t, "STAPLER_SESSION_UUID=someone-else", 0)
+	t.Setenv("TMUX_BIN", mismatchedTmux)
+	result, err := th.writeToSession(ctx, req)
+	require.NoError(t, err)
+	assertDuplicateWriteGuardRejected(t, result)
+}

@@ -177,6 +177,46 @@ func TestHeadlessDiagnosticSessionCreator_CreateHeadlessDiagnosticSession_Should
 	require.Equal(t, "item-session-1", storage.endCalls[0].id)
 }
 
+// TestHeadlessDiagnosticSessionCreator_CreateHeadlessDiagnosticSession_ShouldRestrictToolSurface_ExcludingRunCommand
+// is a regression test: the dispatched diagnostic agent must never run with
+// an unrestricted tool surface. Previously, CallOptions carried no
+// AllowedTools/DisallowedTools at all, so the agent had access to
+// run_command (server/mcp/tools_terminal.go) -- a write-capable MCP tool with
+// no NudgeGate check, no identity reverification, and no cap/cooldown,
+// completely bypassing ADR-002/ADR-003. AllowedTools must now name exactly
+// the tool surface session/diagnose/prompt.go's instructionBlock() documents,
+// and must never contain "run_command" in any form.
+func TestHeadlessDiagnosticSessionCreator_CreateHeadlessDiagnosticSession_ShouldRestrictToolSurface_ExcludingRunCommand(t *testing.T) {
+	t.Parallel()
+	pool := &fakeDiagnoseHeadlessCaller{}
+	storage := newFakeDiagnoseSessionPersistence()
+	creator := NewDiagnoseDispatchSessionCreator(pool, storage)
+
+	req := sampleHeadlessDiagnosticSessionRequest()
+	require.NoError(t, creator.CreateHeadlessDiagnosticSession(context.Background(), req))
+
+	select {
+	case <-storage.ended:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the diagnostic call's goroutine to end the item session")
+	}
+
+	require.Len(t, pool.calls, 1)
+	allowed := pool.calls[0].AllowedTools
+	require.NotEmpty(t, allowed, "the dispatched diagnostic agent must have an explicit AllowedTools scope, not an unrestricted tool surface")
+	require.NotContains(t, allowed, "run_command", "run_command must never be reachable by the dispatched diagnostic agent")
+
+	for _, want := range []string{
+		"mcp__stapler-squad__create_backlog_item",
+		"mcp__stapler-squad__post_backlog_update",
+		"mcp__stapler-squad__resume_session",
+		"mcp__stapler-squad__steer_session",
+		"mcp__stapler-squad__write_to_session",
+	} {
+		require.Contains(t, allowed, want)
+	}
+}
+
 // TestHeadlessDiagnosticSessionCreator_CreateHeadlessDiagnosticSession_ShouldEndItemSessionWithFailureReason_WhenCallErrors
 // covers the detached goroutine's failure path: a CallBlocking error still
 // ends the ItemSession row (never leaves it open forever), with a

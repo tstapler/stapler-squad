@@ -22,6 +22,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -52,6 +53,50 @@ type diagnoseSessionPersistence interface {
 // (backlog_service_trigger_triage.go), sized generously since diagnosis
 // includes reading a whole bundle plus MCP tool calls.
 const diagnoseDispatchCallBudget = 15 * time.Minute
+
+// diagnoseDispatchMCPServerName is this project's own MCP server name, as
+// registered by session.InstanceOptions.MCPServerURL's --mcp-config key
+// (session/instance.go: `--mcp-config '{"stapler-squad":...}'`) -- the
+// diagnostic agent's MCP tools are exposed to the model as
+// "mcp__<name>__<tool>" (session/tokens/doc.go documents this naming).
+const diagnoseDispatchMCPServerName = "stapler-squad"
+
+// diagnoseDispatchAllowedTools restricts the dispatched diagnostic agent
+// (runDiagnosticCall) to exactly the tool surface session/diagnose/prompt.go's
+// instructionBlock() documents to the model: file a bug, post a note, or
+// nudge the target session. Nothing else -- notably NOT run_command
+// (server/mcp/tools_terminal.go), which writes directly into a session's tmux
+// pane via session.SubmitContentWithEnter with NO NudgeGate check, NO
+// identity reverification, and NO cap/cooldown, completely bypassing
+// ADR-002/ADR-003. Before this allowlist, an unrestricted headless call
+// granted the dispatched agent every registered MCP tool, including that one.
+//
+// TODO(backlog): this is a client-side (--allowedTools) mitigation only.
+// CLI-level tool restriction is not a hard security boundary under
+// bypassPermissions-style permission modes -- see
+// headless.CodebaseReadAllowedTools's doc comment and the ADR-001 addendum it
+// cites, which empirically proved an unlisted Bash command still executes
+// under that mode. The stronger, still-needed follow-up is SERVER-side
+// enforcement: route run_command (server/mcp/tools_terminal.go) through the
+// same evaluateNudgeGate/checkDuplicateWriteGuard/verifyNudgeIdentity
+// pipeline steer_session/write_to_session/resume_session already use, or
+// reject it outright when the calling session is a headless-diagnose
+// dispatch.
+var diagnoseDispatchAllowedTools = strings.Join([]string{
+	mcpToolName("create_backlog_item"),
+	mcpToolName("post_backlog_update"),
+	mcpToolName("resume_session"),
+	mcpToolName("steer_session"),
+	mcpToolName("write_to_session"),
+}, ",")
+
+// mcpToolName renders name as this server's own MCP tool identifier, in the
+// "mcp__<server>__<tool>" form the claude CLI's --allowedTools/--disallowedTools
+// flags expect for MCP-exposed tools (as opposed to a built-in tool like
+// "Read").
+func mcpToolName(name string) string {
+	return "mcp__" + diagnoseDispatchMCPServerName + "__" + name
+}
 
 // DiagnoseDispatchSessionCreator is the production
 // HeadlessDiagnosticSessionCreator implementation: records a synthetic,
@@ -115,7 +160,8 @@ func (c *DiagnoseDispatchSessionCreator) runDiagnosticCall(ctx context.Context, 
 	defer cancel()
 
 	endReason := "completed"
-	if _, err := c.pool.CallBlocking(callCtx, headless.FeatureKeyCustom, "", req.Prompt, headless.CallOptions{WorkDir: req.RepoPath}, headless.DiscardCost); err != nil {
+	opts := headless.CallOptions{WorkDir: req.RepoPath, AllowedTools: diagnoseDispatchAllowedTools}
+	if _, err := c.pool.CallBlocking(callCtx, headless.FeatureKeyCustom, "", req.Prompt, opts, headless.DiscardCost); err != nil {
 		log.Warn("[DiagnoseDispatchSessionCreator] diagnostic call failed", "item", req.ItemID, "session", req.DiagnosticSessionUUID, "error", err)
 		endReason = "diagnostic_call_failed"
 	}

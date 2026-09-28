@@ -2,6 +2,7 @@ package diagnose
 
 import (
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -63,10 +64,17 @@ func isClaudeCodeProgram(program string) bool {
 // One IdleGate instance tracks the settle window for exactly one target
 // session; it is not safe to share across sessions or to reuse after the
 // session it tracks ends.
+//
+// idleGateRegistry (server/mcp/diagnose_gate_wiring.go) caches and returns
+// this SAME *IdleGate pointer per session UUID across repeated calls, and
+// steer_session/write_to_session/resume_session can each invoke Evaluate
+// concurrently against the same target session -- so settleStart must be
+// mutex-guarded, not merely single-goroutine-safe.
 type IdleGate struct {
 	windowSeconds int
 	logger        *slog.Logger
 
+	mu          sync.Mutex
 	settleStart time.Time // zero value: not currently within a settle window
 }
 
@@ -90,9 +98,12 @@ func NewIdleGate(windowSeconds int, logger *slog.Logger) *IdleGate {
 // regardless of status -- isClaudeCodeProgram is checked alongside, and with
 // equal weight to, the status/context allowlist, not as an afterthought.
 func (g *IdleGate) Evaluate(now time.Time, program string, status detection.DetectedStatus, statusContext string) (bool, *SafetyGateReason) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
 	safe := isClaudeCodeProgram(program) && IsSafeSteerStatus(status, statusContext)
 	if !safe {
-		g.reset(now, statusContext)
+		g.resetLocked(now, statusContext)
 		reason := SafetyGateReasonNotIdle
 		return false, &reason
 	}
@@ -109,15 +120,15 @@ func (g *IdleGate) Evaluate(now time.Time, program string, status detection.Dete
 	return true, nil
 }
 
-// reset clears the settle timer. When the gate had already accrued
-// sustained-idle progress (settleStart was running), it logs
-// diagnose.idle.settle_reset naming the disqualifying status context and how
-// many seconds of progress were lost (pre-mortem.md P1 #1) -- the data
+// resetLocked clears the settle timer; callers must hold g.mu. When the gate
+// had already accrued sustained-idle progress (settleStart was running), it
+// logs diagnose.idle.settle_reset naming the disqualifying status context and
+// how many seconds of progress were lost (pre-mortem.md P1 #1) -- the data
 // source for measuring, before DiagnoseNudgeExecutionFeatureFlag is ever
 // flipped on, whether the settle window realistically completes against real
 // sessions. A reset from an already-idle (zero) settleStart logs nothing --
 // there was no progress to lose.
-func (g *IdleGate) reset(now time.Time, statusContext string) {
+func (g *IdleGate) resetLocked(now time.Time, statusContext string) {
 	if !g.settleStart.IsZero() {
 		secondsLost := int(now.Sub(g.settleStart).Seconds())
 		g.logger.Info("diagnose.idle.settle_reset",

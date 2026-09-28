@@ -105,6 +105,21 @@ func parseResult(t *testing.T, res *mcpgo.CallToolResult) map[string]interface{}
 	return m
 }
 
+// assertDuplicateWriteGuardRejected asserts result is a failure carrying the
+// SafetyGateReasonDuplicateWriteAttemptForDispatch error code. Shared by the
+// steer_session/write_to_session/resume_session
+// "guard runs before the final identity re-check" ordering regression tests
+// (tools_terminal_test.go, tools_lifecycle_test.go).
+func assertDuplicateWriteGuardRejected(t *testing.T, result *mcpgo.CallToolResult) {
+	t.Helper()
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, _ := m["error"].(map[string]interface{})
+	require.NotNil(t, errObj)
+	require.Equal(t, string(diagnose.SafetyGateReasonDuplicateWriteAttemptForDispatch), errObj["code"],
+		"the duplicate-write guard must be reached (and reject) before the identity re-check ever runs")
+}
+
 // fakeNudgeGateEvaluator is a scripted nudgeGateEvaluator for handler-level
 // Epic 4.1 tests that want to exercise the steer/write/resume handlers'
 // plumbing (does it call Evaluate, map a failure to the right MCP error, and
