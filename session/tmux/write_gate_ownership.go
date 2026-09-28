@@ -172,3 +172,15 @@ func verifyIdentityImmediatelyBeforeWrite(ctx context.Context, inst InstanceIden
 	}
 	return identity, nil
 }
+
+// VerifyIdentityImmediatelyBeforeWrite is the exported entry point for
+// verifyIdentityImmediatelyBeforeWrite (Phase 4 wiring, server/mcp): a thin,
+// no-I/O passthrough, so the fail-closed, single-function-body contract
+// documented on the unexported function above still holds -- there is
+// nothing for a future edit to insert between this wrapper and the real
+// check. Call sites are server/mcp/diagnose_gate_wiring.go (the NudgeGate
+// pipeline's own identity check) and the steer_session/write_to_session/
+// resume_session handlers' final pre-write re-check (ADR-002).
+func VerifyIdentityImmediatelyBeforeWrite(ctx context.Context, inst InstanceIdentitySnapshot, socket, paneName, expectedSessionUUID string) (SessionIdentity, error) {
+	return verifyIdentityImmediatelyBeforeWrite(ctx, inst, socket, paneName, expectedSessionUUID)
+}

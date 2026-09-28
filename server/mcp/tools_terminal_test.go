@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/diagnose"
 	"github.com/tstapler/stapler-squad/session/sendkeysguard"
 )
 
@@ -606,5 +608,190 @@ func TestFindInstance_should_fallBackToStore_When_LiveFinderNil(t *testing.T) {
 	}
 	if got != staleInst {
 		t.Error("expected the LoadInstances()-sourced instance when th.live is nil")
+	}
+}
+
+// --- Epic 4.1: NudgeGate insertion in steerSession/writeToSession ---
+
+// newGatedTerminalHandlers builds a terminalHandlers wired to store and gate,
+// with the scrollback/rate-limiter dependencies every Epic 4.1 test below
+// needs but doesn't otherwise vary.
+func newGatedTerminalHandlers(t *testing.T, store session.InstanceStore, gate nudgeGateEvaluator) *terminalHandlers {
+	t.Helper()
+	return &terminalHandlers{
+		store:      store,
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
+		nudgeGate:  gate,
+	}
+}
+
+// TestSteerSession_ShouldAbortWriteAndReturnSafetyGateReason_WhenNudgeExecutionFlagDisabled
+// is REQ-5's named integration test (validation.md): steerSession wired to a
+// REAL *diagnose.NudgeGate (not a fake) with the flag off must abort before
+// any write is attempted, naming the reason literally.
+func TestSteerSession_ShouldAbortWriteAndReturnSafetyGateReason_WhenNudgeExecutionFlagDisabled(t *testing.T) {
+	inst := newGatedTestInstance(t, "flag-off-session", "claude")
+	store := &stubStore{instances: []*session.Instance{inst}}
+	cfgFn := func() *config.Config { return &config.Config{} } // flag defaults false
+	th := &terminalHandlers{
+		store:      store,
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
+		nudgeGate:  NewDiagnoseNudgeGate(cfgFn, nil, newIdleGateRegistry()),
+	}
+
+	req := makeToolReq(map[string]interface{}{
+		"session_id": inst.Title,
+		"message":    "focus on the authentication module",
+	})
+	result, err := th.steerSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("steerSession returned unexpected Go error: %v", err)
+	}
+
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); success {
+		t.Fatal("expected success=false while the nudge-execution flag is disabled")
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object in result")
+	}
+	if code, _ := errObj["code"].(string); code != string(diagnose.SafetyGateReasonNudgeExecutionDisabled) {
+		t.Errorf("expected error code %q, got %q", diagnose.SafetyGateReasonNudgeExecutionDisabled, code)
+	}
+}
+
+// TestWriteToSession_ShouldAbortWriteAndReturnSafetyGateReason_WhenNudgeExecutionFlagDisabled
+// mirrors the steerSession test above for write_to_session (Story 4.1.2).
+func TestWriteToSession_ShouldAbortWriteAndReturnSafetyGateReason_WhenNudgeExecutionFlagDisabled(t *testing.T) {
+	inst := newGatedTestInstance(t, "flag-off-write-session", "claude")
+	store := &stubStore{instances: []*session.Instance{inst}}
+	cfgFn := func() *config.Config { return &config.Config{} }
+	th := newGatedTerminalHandlers(t, store, NewDiagnoseNudgeGate(cfgFn, nil, newIdleGateRegistry()))
+
+	req := makeToolReq(map[string]interface{}{
+		"session_id": inst.Title,
+		"input":      "echo hello",
+	})
+	result, err := th.writeToSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("writeToSession returned unexpected Go error: %v", err)
+	}
+
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); success {
+		t.Fatal("expected success=false while the nudge-execution flag is disabled")
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	code, _ := errObj["code"].(string)
+	if code != string(diagnose.SafetyGateReasonNudgeExecutionDisabled) {
+		t.Errorf("expected error code %q, got %q", diagnose.SafetyGateReasonNudgeExecutionDisabled, code)
+	}
+}
+
+// TestSteerSession_ShouldAbortWriteAndReturnSafetyGateReason_WhenPipelineReportsNotIdle
+// uses a scripted nudgeGateEvaluator to test the handler's plumbing for a
+// non-flag gate failure (idle-fail abort) without standing up real idle
+// infrastructure -- the real IdleGate/NudgeGate wiring is covered directly
+// in diagnose_gate_wiring_test.go.
+func TestSteerSession_ShouldAbortWriteAndReturnSafetyGateReason_WhenPipelineReportsNotIdle(t *testing.T) {
+	inst := newGatedTestInstance(t, "idle-fail-session", "claude")
+	store := &stubStore{instances: []*session.Instance{inst}}
+	th := newGatedTerminalHandlers(t, store, fakeNudgeGateEvaluator{ok: false, reason: diagnose.SafetyGateReasonNotIdle})
+
+	req := makeToolReq(map[string]interface{}{
+		"session_id": inst.Title,
+		"message":    "focus on the authentication module",
+	})
+	result, err := th.steerSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("steerSession returned unexpected Go error: %v", err)
+	}
+
+	m := parseResult(t, result)
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object in result")
+	}
+	if code, _ := errObj["code"].(string); code != string(diagnose.SafetyGateReasonNotIdle) {
+		t.Errorf("expected error code %q, got %q", diagnose.SafetyGateReasonNotIdle, code)
+	}
+}
+
+// TestSteerSession_ShouldAbortWrite_WhenFinalIdentityRecheckFindsTmuxMarkerMismatch
+// exercises the REAL tmux.VerifyIdentityImmediatelyBeforeWrite facade (via a
+// fake TMUX_BIN backend) for the final pre-write re-check: the pipeline
+// itself passes (scripted true), but the pane's actual owner marker
+// disagrees with the session's own UUID.
+func TestSteerSession_ShouldAbortWrite_WhenFinalIdentityRecheckFindsTmuxMarkerMismatch(t *testing.T) {
+	inst := newGatedTestInstance(t, "identity-mismatch-session", "claude")
+	fakeTmux := newFakeTmuxShowEnvironment(t, "STAPLER_SESSION_UUID=someone-else", 0)
+	t.Setenv("TMUX_BIN", fakeTmux)
+
+	store := &stubStore{instances: []*session.Instance{inst}}
+	th := newGatedTerminalHandlers(t, store, fakeNudgeGateEvaluator{ok: true})
+
+	req := makeToolReq(map[string]interface{}{
+		"session_id": inst.Title,
+		"message":    "focus on the authentication module",
+	})
+	result, err := th.steerSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("steerSession returned unexpected Go error: %v", err)
+	}
+
+	m := parseResult(t, result)
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object in result")
+	}
+	if code, _ := errObj["code"].(string); code != string(diagnose.SafetyGateReasonIdentityMismatchTmuxMarker) {
+		t.Errorf("expected error code %q, got %q", diagnose.SafetyGateReasonIdentityMismatchTmuxMarker, code)
+	}
+}
+
+// TestSteerSession_ShouldReachSendKeys_WhenGateAndFinalIdentityRecheckBothPass
+// is the "all-pass" scenario: pipeline passes (scripted true) and the real
+// final identity re-check's fake tmux backend reports a matching marker, so
+// the handler must proceed past the gate to the real SendKeys/
+// SubmitContentWithEnter call -- proven the same way
+// TestSteerSessionMCP_passesValidationAndReachesSendKeys proves it (no live
+// PTY in this unit test, so the write itself fails, but with an
+// INTERNAL_ERROR/PTY_WRITE_TIMEOUT shape, never a gate-reason code).
+func TestSteerSession_ShouldReachSendKeys_WhenGateAndFinalIdentityRecheckBothPass(t *testing.T) {
+	inst := newGatedTestInstance(t, "all-pass-session", "claude")
+	fakeTmux := newFakeTmuxShowEnvironment(t, "STAPLER_SESSION_UUID="+inst.Snapshot().UUID, 0)
+	t.Setenv("TMUX_BIN", fakeTmux)
+
+	store := &stubStore{instances: []*session.Instance{inst}}
+	th := newGatedTerminalHandlers(t, store, fakeNudgeGateEvaluator{ok: true})
+
+	req := makeToolReq(map[string]interface{}{
+		"session_id": inst.Title,
+		"message":    "focus on the authentication module",
+	})
+	result, err := th.steerSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("steerSession returned unexpected Go error: %v", err)
+	}
+
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); success {
+		return // a real PTY would make this the true happy path
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	code, _ := errObj["code"].(string)
+	for _, gateCode := range []string{
+		string(diagnose.SafetyGateReasonNudgeExecutionDisabled),
+		string(diagnose.SafetyGateReasonNotIdle),
+		string(diagnose.SafetyGateReasonIdentityMismatchInstance),
+		string(diagnose.SafetyGateReasonIdentityMismatchTmuxMarker),
+		string(diagnose.SafetyGateReasonNudgeCapReached),
+	} {
+		if code == gateCode {
+			t.Fatalf("steerSession returned gate-failure code %q after an all-pass gate; expected SendKeys to be reached", code)
+		}
 	}
 }

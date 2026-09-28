@@ -8,6 +8,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
@@ -49,8 +50,17 @@ func NewCore(
 		mcpserver.WithToolCapabilities(false),
 	)
 
+	// Epic 4.1: one NudgeGate (and its backing idleGateRegistry) shared by
+	// every steer_session/write_to_session/resume_session call, regardless of
+	// which handler struct it's invoked through -- so a session's idle-settle
+	// window state persists across tools, not just across calls to the same
+	// tool. cfgFn reads config.json fresh on every check
+	// (feedback_rollout_flags_live_settable_no_env_vars); storage may be nil
+	// (see NewDiagnoseNudgeGate's doc comment).
+	nudgeGate := NewDiagnoseNudgeGate(config.LoadConfig, storage, newIdleGateRegistry())
+
 	registerDiscoveryTools(s, &discoveryHandlers{store: store})
-	registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc})
+	registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, nudgeGate: nudgeGate})
 	// Wrapping a nil *services.SessionService directly in the liveInstanceFinder
 	// interface would produce a non-nil interface value around a nil pointer —
 	// th.live != nil would then be true, and calling FindLiveInstance on it
@@ -65,6 +75,7 @@ func NewCore(
 		live:       liveFinder,
 		scrollback: sbMgr,
 		writeLim:   newTokenBucket(writeRateLimitPerSec, writeRateLimitPerSec),
+		nudgeGate:  nudgeGate,
 	})
 	registerVCSTools(s, &vcsHandlers{store: store})
 	if svc != nil {

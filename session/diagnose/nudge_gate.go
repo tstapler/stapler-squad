@@ -1,13 +1,18 @@
 package diagnose
 
-import "context"
+import (
+	"context"
+	"time"
 
-// GateInput carries the minimal per-attempt context a NudgeGateCheck needs to
-// decide whether one nudge write may proceed. It is deliberately minimal --
-// Story 3.4.1 only composes the pipeline shape using stub/spy checks, so the
-// real flag/idle/identity/cap checks' exact field needs aren't all known yet.
-// Phase 4 wiring (the package that constructs NewNudgeGate with real checks)
-// may extend this struct as needed; existing fields must not be repurposed.
+	"github.com/tstapler/stapler-squad/session/detection"
+)
+
+// GateInput carries the per-attempt context a NudgeGateCheck needs to decide
+// whether one nudge write may proceed. Story 3.4.1 started this minimal (only
+// ItemID/SessionUUID, exercised by stub/spy checks); Phase 4 wiring
+// (server/mcp/diagnose_gate_wiring.go, the package that constructs
+// NewNudgeGate with real checks) extended it below with the fields the real
+// idle/identity checks need. Existing fields must not be repurposed.
 type GateInput struct {
 	// ItemID is the backlog item being considered for a nudge. Consumed by
 	// the cap check (server/services.NewNudgeCapGateCheck's itemID param).
@@ -17,6 +22,24 @@ type GateInput struct {
 	// verifyIdentityImmediatelyBeforeWrite's expectedSessionUUID parameter
 	// (session/tmux/write_gate_ownership.go).
 	SessionUUID string
+
+	// --- Phase 4 additions: consumed by the idle and identity checks ---
+
+	// Now is the observation time for the idle-settle-window check
+	// (IdleGate.Evaluate). Passed explicitly, not read via time.Now() inside
+	// the check itself, so the check stays deterministic under test --
+	// mirrors IdleGate.Evaluate's own convention.
+	Now time.Time
+	// Program, Status, and StatusContext are the target session's currently
+	// detected program/status/status-context triple, forwarded verbatim to
+	// IdleGate.Evaluate's identically-named parameters.
+	Program       string
+	Status        detection.DetectedStatus
+	StatusContext string
+	// Socket and PaneName identify the target session's tmux pane, forwarded
+	// to verifyIdentityImmediatelyBeforeWrite's identically-named parameters.
+	Socket   string
+	PaneName string
 }
 
 // NudgeGateCheck is one link in the NudgeGate pipeline: it decides whether a

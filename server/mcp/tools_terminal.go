@@ -47,6 +47,13 @@ type terminalHandlers struct {
 	live       liveInstanceFinder // may be nil; see findInstance
 	scrollback *scrollback.ScrollbackManager
 	writeLim   *tokenBucket // per-session rate limiter for write_to_session
+	// nudgeGate is the Epic 4.1 safety gate for writeToSession/steerSession
+	// (server/mcp/diagnose_gate_wiring.go). Optional: nil preserves pre-Epic-
+	// 4.1 behavior (direct write, no safety gate) -- production wiring
+	// (NewCore, server.go) always sets a real *diagnose.NudgeGate; tests that
+	// don't care about the gate simply omit this field, matching every other
+	// optional dependency on this struct.
+	nudgeGate nudgeGateEvaluator
 }
 
 // ReadSessionOutputResult is the response type for read_session_output.
@@ -301,6 +308,10 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 	inst, errResult_ := th.findInstance(sessionID)
 	if errResult_ != nil {
 		return errResult_, nil
+	}
+
+	if gateErr := checkNudgeGate(ctx, th.nudgeGate, inst); gateErr != nil {
+		return gateErr, nil
 	}
 
 	// BUG-047: must use session.EnterKeySequence ('\r'), not a bare '\n' —
@@ -687,12 +698,20 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 		return errResult_, nil
 	}
 
+	expectedUUID, gateErr := evaluateNudgeGate(ctx, th.nudgeGate, inst)
+	if gateErr != nil {
+		return gateErr, nil
+	}
+
 	// For OneShot sessions that have completed (Stopped) and have a conversation UUID,
 	// use claude --resume subprocess instead of PTY send-keys.
 	uuid := inst.GetClaudeConversationUUID()
 	if inst.OneShot && uuid != "" && inst.GetEffectiveStatus() == session.Stopped {
 		resumeCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
+		if verifyErr := verifyNudgeIdentity(resumeCtx, th.nudgeGate, inst, expectedUUID); verifyErr != nil {
+			return verifyErr, nil
+		}
 		result, err := inst.RunWithResume(resumeCtx, message)
 		if err != nil {
 			return errResult(ErrInternalError, fmt.Sprintf("resume subprocess failed: %v", err), "Ensure claude CLI is available and session_id is valid"), nil
@@ -709,6 +728,9 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 	// Fallback: send via PTY send-keys (interactive sessions or sessions
 	// without UUID), via session.SubmitContentWithEnter (BUG-031) so content
 	// and the submit keystroke travel as two separate SendKeys writes.
+	if verifyErr := verifyNudgeIdentity(ctx, th.nudgeGate, inst, expectedUUID); verifyErr != nil {
+		return verifyErr, nil
+	}
 	if err := session.SubmitContentWithEnter(ctx, inst, message); err != nil {
 		return submitErrResult(err, "message"), nil
 	}
@@ -731,6 +753,13 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 // caller relying on LoadInstances()'s broader "every session in storage"
 // coverage; it just stops being the *first* and only path for a session that
 // IS live.
+//
+// TODO(backlog): findInstance, resolveItemLink's callerUUID lookup, and two
+// other near-duplicate session-ID-to-*Instance lookups exist independently
+// across server/mcp (Story 4.1.1's Task 4.1.1e) -- file a follow-on backlog
+// item to consolidate them once create_backlog_item is reachable from this
+// context; not done inline here to keep this story's diff scoped to the
+// gate insertion.
 func (th *terminalHandlers) findInstance(sessionID string) (*session.Instance, *mcpgo.CallToolResult) {
 	if th.live != nil {
 		if inst := th.live.FindLiveInstance(sessionID); inst != nil {

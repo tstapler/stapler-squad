@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/diagnose"
 )
 
 // mcpAwaitTerminalTimeout bounds create_session/create_session_for_pr's wait
@@ -35,6 +36,11 @@ const mcpAwaitTerminalTimeout = 150 * time.Second
 type lifecycleHandlers struct {
 	store session.InstanceStore
 	svc   *services.SessionService
+	// nudgeGate is the Epic 4.1 safety gate for resumeSession
+	// (server/mcp/diagnose_gate_wiring.go). Optional: nil preserves pre-Epic-
+	// 4.1 behavior -- see terminalHandlers.nudgeGate's doc comment for the
+	// full rationale (mirrored here so the two handler structs can't diverge).
+	nudgeGate nudgeGateEvaluator
 }
 
 // CreateSessionResult is returned by create_session.
@@ -408,13 +414,29 @@ func (lh *lifecycleHandlers) resumeSession(ctx context.Context, req mcpgo.CallTo
 		return findErr, nil
 	}
 
+	// Story 4.1.3 AC: an archived session (deliberately retired -- see
+	// Instance.IsArchived's doc comment and ADR-001) is never resumed by this
+	// path, even if it happens to still be Paused. Checked before the
+	// existing Paused check and before any worktree/tmux state is recreated.
+	if inst.IsArchived() {
+		return gateFailureResult(diagnose.SafetyGateReasonIdentityMismatchInstance), nil
+	}
+
 	if inst.Status != session.Paused {
 		return errResult(ErrInvalidStatusTrans,
 			fmt.Sprintf("session %q is not paused (current status: %s)", sessionID, inst.Status),
 			"Only paused sessions can be resumed."), nil
 	}
 
+	expectedUUID, gateErr := evaluateNudgeGate(ctx, lh.nudgeGate, inst)
+	if gateErr != nil {
+		return gateErr, nil
+	}
+
 	inst.PauseReason = ""
+	if verifyErr := verifyNudgeIdentity(ctx, lh.nudgeGate, inst, expectedUUID); verifyErr != nil {
+		return verifyErr, nil
+	}
 	if err := inst.Resume(); err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("resume session: %v", err), ""), nil
 	}

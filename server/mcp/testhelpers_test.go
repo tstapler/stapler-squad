@@ -1,13 +1,20 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/diagnose"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // stubStore implements session.InstanceStore for tests.
@@ -96,6 +103,61 @@ func parseResult(t *testing.T, res *mcpgo.CallToolResult) map[string]interface{}
 		t.Fatalf("parseResult: unmarshal JSON: %v\nJSON: %s", err, tc.Text)
 	}
 	return m
+}
+
+// fakeNudgeGateEvaluator is a scripted nudgeGateEvaluator for handler-level
+// Epic 4.1 tests that want to exercise the steer/write/resume handlers'
+// plumbing (does it call Evaluate, map a failure to the right MCP error, and
+// proceed to the final identity re-check + write on success) without
+// standing up real flag/idle/cap infrastructure. The real pipeline's own
+// flag/idle/identity/cap logic is covered directly in
+// diagnose_gate_wiring_test.go against a real *diagnose.NudgeGate.
+type fakeNudgeGateEvaluator struct {
+	ok     bool
+	reason diagnose.SafetyGateReason
+}
+
+func (f fakeNudgeGateEvaluator) Evaluate(context.Context, diagnose.GateInput) (bool, *diagnose.SafetyGateReason) {
+	if f.ok {
+		return true, nil
+	}
+	reason := f.reason
+	return false, &reason
+}
+
+// newFakeTmuxShowEnvironment writes a fake tmux script answering any
+// `show-environment` call with outputLine/exitCode, for driving
+// tmux.VerifyIdentityImmediatelyBeforeWrite's real facade under TMUX_BIN —
+// mirrors session/tmux/write_gate_ownership_test.go's helper of the same
+// name (duplicated rather than imported: that helper is unexported to its
+// own package's test binary).
+func newFakeTmuxShowEnvironment(t *testing.T, outputLine string, exitCode int) string {
+	t.Helper()
+	dir := t.TempDir()
+	fakeTmux := filepath.Join(dir, "tmux")
+	script := fmt.Sprintf(`#!/bin/sh
+case "$*" in
+  *show-environment*) echo '%s'; exit %d ;;
+esac
+exit 1
+`, outputLine, exitCode)
+	require.NoError(t, os.WriteFile(fakeTmux, []byte(script), 0o755))
+	return fakeTmux
+}
+
+// newGatedTestInstance builds a *session.Instance suitable for exercising the
+// Epic 4.1 gate insertion points: a real tmux session name (via
+// SetTmuxSession, so GetTmuxSessionName() is deterministic and non-empty,
+// with no real tmux server involved -- mirrors
+// tools_lifecycle_worktree_guard_test.go's newLiveOccupant precedent) and a
+// generated UUID readable via Snapshot().UUID.
+func newGatedTestInstance(t *testing.T, title, program string) *session.Instance {
+	t.Helper()
+	inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: t.TempDir(), Program: program})
+	require.NoError(t, err)
+	inst.SetTmuxSession(tmux.NewTmuxSessionWithDeps(title, "true", nil, nil))
+	inst.Status = session.Active
+	return inst
 }
 
 // requireToolTextResult asserts res is a plain-text success result (the shape

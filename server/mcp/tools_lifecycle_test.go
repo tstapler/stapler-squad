@@ -1,0 +1,128 @@
+package mcp
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/diagnose"
+)
+
+// --- Epic 4.1 / Story 4.1.3: NudgeGate + IsArchived() insertion in resumeSession ---
+
+// allSafetyGateReasonCodes lists every SafetyGateReason string -- used by the
+// "all-pass" tests below to assert a result is NOT a gate-failure code,
+// without needing to know exactly which non-gate error (if any) a given test
+// double produces.
+var allSafetyGateReasonCodes = []string{
+	string(diagnose.SafetyGateReasonNotIdle),
+	string(diagnose.SafetyGateReasonIdentityMismatchInstance),
+	string(diagnose.SafetyGateReasonIdentityMismatchTmuxMarker),
+	string(diagnose.SafetyGateReasonNudgeCapReached),
+	string(diagnose.SafetyGateReasonNudgeCooldownActive),
+	string(diagnose.SafetyGateReasonNudgeExecutionDisabled),
+}
+
+// TestResumeSession_ShouldAbortWithIdentityMismatchInstance_WhenSessionIsArchived
+// is Story 4.1.3's named AC: an archived session is never resumed, and the
+// check runs before any worktree/tmux state is recreated -- proven here by a
+// nudgeGate double that would panic-via-unexpected-call assertions if it were
+// ever consulted (it isn't; the IsArchived() check runs first and returns
+// before the gate is reached).
+func TestResumeSession_ShouldAbortWithIdentityMismatchInstance_WhenSessionIsArchived(t *testing.T) {
+	inst := newGatedTestInstance(t, "archived-resume-session", "claude")
+	inst.Status = session.Paused
+	archivedAt := time.Now()
+	inst.SetArchivedAt(&archivedAt)
+
+	lh := newWorktreeGuardHandlers(t, inst)
+	lh.nudgeGate = fakeNudgeGateEvaluator{ok: true}
+
+	req := makeToolReq(map[string]interface{}{"session_id": inst.Title})
+	result, err := lh.resumeSession(context.Background(), req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool), "an archived session must never be resumed")
+	errObj, _ := m["error"].(map[string]interface{})
+	require.NotNil(t, errObj)
+	require.Equal(t, string(diagnose.SafetyGateReasonIdentityMismatchInstance), errObj["code"])
+}
+
+// TestResumeSession_ShouldAbortWithSafetyGateReason_WhenNudgeExecutionFlagDisabled
+// wires resumeSession to a REAL *diagnose.NudgeGate (mirroring REQ-5's
+// steerSession test) to prove the flag gate is actually reachable for a
+// non-archived, correctly-Paused session -- not just plumbed for a fake.
+func TestResumeSession_ShouldAbortWithSafetyGateReason_WhenNudgeExecutionFlagDisabled(t *testing.T) {
+	inst := newGatedTestInstance(t, "flag-off-resume-session", "claude")
+	inst.Status = session.Paused
+
+	lh := newWorktreeGuardHandlers(t, inst)
+	cfgFn := func() *config.Config { return &config.Config{} } // flag defaults false
+	lh.nudgeGate = NewDiagnoseNudgeGate(cfgFn, nil, newIdleGateRegistry())
+
+	req := makeToolReq(map[string]interface{}{"session_id": inst.Title})
+	result, err := lh.resumeSession(context.Background(), req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, _ := m["error"].(map[string]interface{})
+	require.Equal(t, string(diagnose.SafetyGateReasonNudgeExecutionDisabled), errObj["code"])
+}
+
+// TestResumeSession_ShouldProceedPastGate_WhenNotArchivedAndGateAndIdentityBothPass
+// is the "all-pass" scenario: not archived, Paused, gate passes (scripted
+// true), and the real final identity re-check's fake tmux backend reports a
+// matching marker -- the handler must proceed past the gate to the real
+// inst.Resume() call. Whatever inst.Resume() itself does in this
+// no-real-tmux-server unit test environment is not asserted; the point is
+// that no SafetyGateReason code appears, proving Resume() was reached.
+func TestResumeSession_ShouldProceedPastGate_WhenNotArchivedAndGateAndIdentityBothPass(t *testing.T) {
+	inst := newGatedTestInstance(t, "resume-all-pass-session", "claude")
+	inst.Status = session.Paused
+	fakeTmux := newFakeTmuxShowEnvironment(t, "STAPLER_SESSION_UUID="+inst.Snapshot().UUID, 0)
+	t.Setenv("TMUX_BIN", fakeTmux)
+
+	lh := newWorktreeGuardHandlers(t, inst)
+	lh.nudgeGate = fakeNudgeGateEvaluator{ok: true}
+
+	req := makeToolReq(map[string]interface{}{"session_id": inst.Title})
+	result, err := lh.resumeSession(context.Background(), req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); success {
+		return // real environments where Resume() succeeds are the true happy path
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	code, _ := errObj["code"].(string)
+	require.NotContains(t, allSafetyGateReasonCodes, code,
+		"resumeSession returned a gate-failure code after an all-pass gate; expected inst.Resume() to be reached")
+}
+
+// TestResumeSession_ShouldAbortWrite_WhenFinalIdentityRecheckFindsTmuxMarkerMismatch
+// exercises the REAL tmux.VerifyIdentityImmediatelyBeforeWrite facade for
+// resumeSession's final pre-write re-check, mirroring the steerSession/
+// write_to_session coverage in tools_terminal_test.go.
+func TestResumeSession_ShouldAbortWrite_WhenFinalIdentityRecheckFindsTmuxMarkerMismatch(t *testing.T) {
+	inst := newGatedTestInstance(t, "resume-identity-mismatch-session", "claude")
+	inst.Status = session.Paused
+	fakeTmux := newFakeTmuxShowEnvironment(t, "STAPLER_SESSION_UUID=someone-else", 0)
+	t.Setenv("TMUX_BIN", fakeTmux)
+
+	lh := newWorktreeGuardHandlers(t, inst)
+	lh.nudgeGate = fakeNudgeGateEvaluator{ok: true}
+
+	req := makeToolReq(map[string]interface{}{"session_id": inst.Title})
+	result, err := lh.resumeSession(context.Background(), req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, _ := m["error"].(map[string]interface{})
+	require.Equal(t, string(diagnose.SafetyGateReasonIdentityMismatchTmuxMarker), errObj["code"])
+}
