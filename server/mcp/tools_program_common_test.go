@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,4 +47,31 @@ func TestProgramSchemaOptions_should_OmitEnum_When_SvcIsNil(t *testing.T) {
 	assert.False(t, ok, "schema[\"enum\"] must be absent when svc is nil, got %#v", schema["enum"])
 	desc, _ := schema["description"].(string)
 	assert.NotEmpty(t, desc, "schema[\"description\"] must still be set when svc is nil")
+}
+
+// TestProgramWarningFor covers programWarningFor's three branches directly
+// (a fast unit test, rather than only exercising them indirectly through a
+// full create_session/create_session_for_pr round-trip): a recognized
+// program warns not at all, an unrecognized one warns and names itself, and
+// a nil svc -- the actual shape create_session/create_session_for_pr's
+// request-path call sites pass when unwired, not just programSchemaOptions'
+// registration-time nil case -- never warns either (no known list to check
+// against).
+func TestProgramWarningFor(t *testing.T) {
+	lh := newWorktreeGuardHandlers(t)
+	upsertTestCustomProgram(t, lh.svc)
+	ctx := context.Background()
+
+	t.Run("recognized program produces no warning", func(t *testing.T) {
+		assert.Empty(t, programWarningFor(ctx, lh.svc, testCustomProgramID))
+	})
+
+	t.Run("unrecognized program names itself in the warning", func(t *testing.T) {
+		warning := programWarningFor(ctx, lh.svc, "clade")
+		assert.Contains(t, warning, "clade")
+	})
+
+	t.Run("nil svc never warns", func(t *testing.T) {
+		assert.Empty(t, programWarningFor(ctx, nil, "clade"))
+	})
 }
