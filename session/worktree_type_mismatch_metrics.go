@@ -9,15 +9,11 @@ import (
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
-// sessionCreationWorktreeTypeMismatchTotal is the pre-mortem P1 remediation counter
-// (worktree-envvars-hijack Epic 1.5, Story 1.5.1): research/architecture.md's Q1/Q2
-// re-verification already establishes that no code path upstream of startLocked can
-// resolve a non-remote SESSION_TYPE_NEW_WORKTREE request to anything other than
-// SessionTypeNewWorktree, so this should be structurally impossible -- a nonzero
-// count in production is itself the signal that an unanticipated third trigger
-// exists. Registered once, package-level, via telemetry.GetMeter() -- the same
-// idiom session/scroll_forward_metrics.go and
-// server/services/session_creation_metrics.go already use.
+// sessionCreationWorktreeTypeMismatchTotal counts an invariant violation: no code
+// path upstream of startLocked should resolve a non-remote SESSION_TYPE_NEW_WORKTREE
+// request to anything other than SessionTypeNewWorktree, so a nonzero count in
+// production is itself the signal an unanticipated trigger exists. Registered once,
+// package-level, via telemetry.GetMeter() (same idiom as the package's other metrics).
 var sessionCreationWorktreeTypeMismatchTotal = mustInt64CounterWorktreeTypeMismatch(telemetry.GetMeter(),
 	"session_creation_worktree_type_mismatch_total",
 	metric.WithDescription("Count of non-remote SESSION_TYPE_NEW_WORKTREE requests whose Instance resolved to a SessionType other than SessionTypeNewWorktree by the time startLocked runs -- should never be nonzero"))

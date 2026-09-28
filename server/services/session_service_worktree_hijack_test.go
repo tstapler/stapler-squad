@@ -17,28 +17,13 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
-// TestCreateSession_MainCheckoutBranchCollision is Epic 1.1 Story 1.1.1's
-// controlled repro for Hypothesis #2 (project_plans/worktree-envvars-hijack/
-// research/architecture.md, its Q3 section): a branch already checked out in
-// a repo's MAIN checkout (not a linked worktree) is invisible to
-// findLiveWorktreeForBranch's self-heal (session/git/worktree_ops.go), which
-// only scans .git/worktrees/ admin dirs -- never the main checkout. The
-// static trace predicts this makes `git worktree add` fail and propagate a
-// real error, not silently succeed against the bare repo path. This test
-// exercises the real CreateSession -> Background Resolution Pipeline ->
-// Instance.Start() -> setupFirstTimeWorktree chain to confirm or refute that
-// prediction empirically instead of by static reading alone.
-//
-// Given a bare repo at repoDir with a live, non-terminal instance whose
-// actual git HEAD is "collide-branch" (checked out in the repo's own working
-// tree, not a linked worktree), When CreateSession is called with
-// SessionType: SESSION_TYPE_NEW_WORKTREE, Branch: "collide-branch" against
-// the same repoDir, Then the resulting session must reach either:
-//   - Failed, with a FailureReason and a captured creation-progress phase
-//     naming the worktree/branch conflict (Hypothesis #2 REFUTED -- matches
-//     the static prediction), or
-//   - Active, with inst.Workspace().ActiveDir == repoDir (Hypothesis #2
-//     CONFIRMED -- a real, previously-unknown silent-swallow gap).
+// TestCreateSession_MainCheckoutBranchCollision confirms a branch already
+// checked out in a repo's MAIN checkout (not a linked worktree) is invisible
+// to findLiveWorktreeForBranch's self-heal (session/git/worktree_ops.go),
+// which only scans .git/worktrees/ admin dirs -- never the main checkout --
+// so `git worktree add` fails loudly instead of silently succeeding against
+// the bare repo path. Exercises the real CreateSession -> Background
+// Resolution Pipeline -> Instance.Start() -> setupFirstTimeWorktree chain.
 func TestCreateSession_MainCheckoutBranchCollision(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
@@ -111,36 +96,17 @@ func TestCreateSession_MainCheckoutBranchCollision(t *testing.T) {
 	capturedPhases := append([]string(nil), phases...)
 	mu.Unlock()
 
-	switch outcome.Status {
-	case session.Failed:
-		// Hypothesis #2 REFUTED (for its "silent success" half): the
-		// collision propagates loudly, matching architecture.md's static
-		// prediction.
-		t.Logf("Hypothesis #2 REFUTED: session reached Failed, FailureReason=%q, phases=%v", outcome.FailureReason, capturedPhases)
-		assert.Equal(t, "StartupError", outcome.FailureReason)
+	require.Equal(t, session.Failed, outcome.Status,
+		"main-checkout branch collision must fail loudly, not silently succeed against the bare repo path (phases=%v)", capturedPhases)
+	assert.Equal(t, "StartupError", outcome.FailureReason)
 
-		foundConflictPhase := false
-		for _, p := range capturedPhases {
-			if strings.Contains(p, "worktree") || strings.Contains(p, "collide-branch") {
-				foundConflictPhase = true
-				break
-			}
+	foundConflictPhase := false
+	for _, p := range capturedPhases {
+		if strings.Contains(p, "worktree") || strings.Contains(p, "collide-branch") {
+			foundConflictPhase = true
+			break
 		}
-		assert.True(t, foundConflictPhase,
-			"expected a captured creation-progress phase naming the worktree/branch conflict, got phases=%v", capturedPhases)
-	case session.Active:
-		// Hypothesis #2 CONFIRMED: a real, previously-unknown silent-swallow
-		// gap -- the new session's worktree setup silently landed in the
-		// bare repo path instead of failing or creating a genuinely isolated
-		// worktree.
-		inst := fix.svc.FindLiveInstance(id)
-		require.NotNil(t, inst, "an Active session must be resolvable via FindLiveInstance")
-		ws := inst.Workspace()
-		t.Logf("Hypothesis #2 CONFIRMED: session reached Active with ActiveDir=%q (repoDir=%q)", ws.ActiveDir, repoDir)
-		assert.Equal(t, repoDir, ws.ActiveDir,
-			"Hypothesis #2 predicts the silently-swallowed session's ActiveDir collapses to the bare repo path")
-	default:
-		t.Fatalf("session reached unexpected non-terminal-for-this-test status %v (failure_reason=%q, phases=%v)",
-			outcome.Status, outcome.FailureReason, capturedPhases)
 	}
+	assert.True(t, foundConflictPhase,
+		"expected a captured creation-progress phase naming the worktree/branch conflict, got phases=%v", capturedPhases)
 }

@@ -38,20 +38,18 @@ func logPTYUnavailableIfUnexpected(msg, sessionTitle string, ptyErr error) {
 	log.Error(msg, "session", sessionTitle, "err", ptyErr)
 }
 
-// ErrWorktreeResolutionFailed is wrapped by startLocked's pre-spawn structural
-// guard (worktree-envvars-hijack Story 3.3.1) when a worktree-bearing
-// first-time session's resolved basePath is still the bare repo root -- i.e.
-// no real worktree was actually created. Task 3.3.3a's pipeline-level error
-// classification matches on this sentinel via errors.Is, never on the
-// detailed message text.
+// ErrWorktreeResolutionFailed is wrapped by startLocked's pre-spawn guard
+// when a worktree-bearing first-time session's resolved basePath is still
+// the bare repo root -- i.e. no real worktree was actually created.
+// Pipeline-level error classification matches on this sentinel via
+// errors.Is, never on the detailed message text.
 var ErrWorktreeResolutionFailed = errors.New("resolved to no real worktree")
 
 // ErrDirectoryCollision is wrapped by startLocked's pre-spawn cross-session
-// collision guard and per-path spawn reservation (worktree-envvars-hijack
-// Story 3.3.2/3.3.2c) when a worktree-bearing first-time session's resolved
-// worktree path is already another live session's active directory (or is
-// claimed by another in-flight spawn racing to the same path). Task 3.3.3a's
-// pipeline-level error classification matches on this sentinel via errors.Is.
+// collision guard and per-path spawn reservation when a worktree-bearing
+// first-time session's resolved worktree path is already another live
+// session's active directory (or claimed by a racing in-flight spawn).
+// Pipeline-level error classification matches on this sentinel via errors.Is.
 var ErrDirectoryCollision = errors.New("worktree already in use by another live session")
 
 type Status int
@@ -287,11 +285,9 @@ type Instance struct {
 	// RequestedNewWorktree records whether the ORIGINAL wire-level CreateSession
 	// request asked explicitly for SESSION_TYPE_NEW_WORKTREE, captured before any
 	// legitimate remap (alias fallback, deferred-GitHub-URL, resume-forced-directory,
-	// remote-target remap) runs. Feeds startLocked's invariant check
-	// (worktree-envvars-hijack Story 1.5.1) that a non-remote NEW_WORKTREE request
-	// always resolves to SessionTypeNewWorktree by the time startLocked runs -- not
-	// persisted, only relevant during initial session start, same convention as
-	// CreateIfMissing above.
+	// remote-target remap) runs. Feeds startLocked's invariant check that a
+	// non-remote NEW_WORKTREE request always resolves to SessionTypeNewWorktree
+	// by the time startLocked runs. Not persisted; same convention as CreateIfMissing.
 	RequestedNewWorktree bool `json:"-"`
 	// TmuxPrefix is the prefix to use for tmux session names
 	TmuxPrefix string
@@ -650,30 +646,23 @@ type Instance struct {
 
 	// preSpawnCollisionGuard is called by startLocked's firstTimeSetup branch, after a
 	// real worktree path has resolved and before any tmux/process spawn, with that
-	// resolved worktree path. A non-nil return aborts the spawn (worktree-envvars-hijack
-	// Story 3.3.2). Wired via SetPreSpawnCollisionGuard by SessionService.wireCallbacks,
-	// same pre-Start() lifecycle as SetTaggingEngine/SetMCPServerURLProvider above — nil
-	// is a valid value (e.g. a bare struct-literal test Instance) and means "no collision
-	// check configured," not an error.
+	// resolved worktree path. A non-nil return aborts the spawn. Wired via
+	// SetPreSpawnCollisionGuard by SessionService.wireCallbacks; nil is a valid value
+	// (e.g. a bare struct-literal test Instance) and means "no collision check configured."
 	preSpawnCollisionGuard func(worktreePath string) error
 
 	// worktreeSpawnReservation is called by startLocked immediately before
-	// preSpawnCollisionGuard, claiming worktreePath for the duration of the
-	// check-through-spawn window to close the TOCTOU race between two concurrent
-	// CreateSession calls resolving the same worktree path before either has spawned
-	// (worktree-envvars-hijack Story 3.3.2c). Returns a release func to call once the
-	// window has passed (deferred), or a non-nil error if another in-flight spawn
-	// already claimed the path. nil is a valid value, same convention as
-	// preSpawnCollisionGuard.
+	// preSpawnCollisionGuard, claiming worktreePath to close the TOCTOU race between
+	// two concurrent CreateSession calls resolving the same path before either has
+	// spawned. Returns a release func (deferred), or an error if another in-flight
+	// spawn already claimed the path.
 	worktreeSpawnReservation func(worktreePath string) (release func(), err error)
 
 	// conversationOwnershipGuard is called by tryExtractConversationUUID's DetectByPath
 	// fallback with a detected (conversationUUID, effectivePath) pair, before adopting
 	// that UUID for this instance. A true ownedByOther return means some OTHER live
-	// instance already owns this conversation, so the fallback must not attribute it to
-	// this instance instead (worktree-envvars-hijack Story 1.4.2). Wired via
-	// SetConversationOwnershipGuard by SessionService.wireCallbacks. nil is a valid
-	// value and means "no ownership check configured."
+	// instance already owns this conversation, so the fallback must not attribute it
+	// to this instance instead. nil is a valid value and means "no ownership check configured."
 	conversationOwnershipGuard func(candidateUUID, path string) (ownerUUID string, ownedByOther bool)
 
 	// snapshot is a lock-free atomic copy of all mutable Instance fields, published
@@ -1569,18 +1558,10 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	hadUUIDBeforeRecovery := i.HasClaudeSession()
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
 
-	// Invariant check (worktree-envvars-hijack Epic 1.5, Story 1.5.1, pre-mortem P1
-	// remediation): research/architecture.md's Q1/Q2 re-verification establishes that
-	// no code path upstream of this point can resolve a non-remote
-	// SESSION_TYPE_NEW_WORKTREE request to anything other than SessionTypeNewWorktree
-	// -- this should be structurally impossible. A remote target is excluded because
-	// CreateSession's own remote mode-specific block deliberately (and correctly)
-	// remaps an explicit NewWorktree request to SessionTypeExistingWorktree (see
-	// setupFirstTimeWorktree's doc comment) -- a known, intentional divergence, not
-	// the unanticipated third trigger this check exists to catch. Only fires for
-	// firstTimeSetup -- a restart's Instance is reconstructed from storage with
-	// RequestedNewWorktree back at its zero value, so it has nothing meaningful to
-	// compare here.
+	// Invariant check: a non-remote SESSION_TYPE_NEW_WORKTREE request must
+	// resolve to SessionTypeNewWorktree by here — a remote target is deliberately
+	// remapped to ExistingWorktree (see setupFirstTimeWorktree), the one known
+	// exception. See research/architecture.md Q1/Q2 for why this is otherwise impossible.
 	if resolvedType := i.Snapshot().SessionType; firstTimeSetup && i.RequestedNewWorktree && !i.executionTarget().IsRemote() && resolvedType != SessionTypeNewWorktree {
 		recordSessionCreationWorktreeTypeMismatch(resolvedType)
 		log.Warn("session_creation_worktree_type_mismatch: SESSION_TYPE_NEW_WORKTREE request resolved to a non-NewWorktree SessionType",
@@ -1700,13 +1681,10 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			basePath = i.gitManager.GetWorktreePath()
 		}
 
-		// Pre-spawn structural guard (worktree-envvars-hijack Story 3.3.1): a
-		// SessionTypeNewWorktree session whose resolved basePath is still the bare
-		// repo root means no real worktree was actually created. Fail loudly and
-		// BEFORE any tmux/process spawn instead of silently running in the shared
-		// repo directory -- checked unconditionally of i.gitManager.HasWorktree()
-		// so it also catches the case where that's false. Routes through this
-		// function's existing setupErr/defer i.Kill() cleanup below.
+		// Pre-spawn structural guard: a SessionTypeNewWorktree session whose
+		// resolved basePath is still the bare repo root means no real worktree was
+		// actually created. Fail loudly and BEFORE any tmux/process spawn instead
+		// of silently running in the shared repo directory.
 		if repoPath := i.GetPath(); i.SessionType == SessionTypeNewWorktree && basePath == repoPath {
 			setupErr = fmt.Errorf("%w: session %q resolved to no real worktree (basePath == repo root %q)",
 				ErrWorktreeResolutionFailed, i.Title, repoPath)
@@ -1728,12 +1706,11 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 					defer release()
 				}
 			}
-			// Cross-session directory-collision guard (Story 3.3.2): refuse to spawn
-			// into a directory another live session already occupies. Unconditional on
-			// i.SessionType -- applies to every worktree-bearing first-time session
-			// (NewWorktree, ExistingWorktree, and NewProject's worktree sub-branch
-			// alike), since the collision risk is a property of "did this session
-			// resolve a worktree," not of which request shape asked for one.
+			// Cross-session directory-collision guard: refuse to spawn into a
+			// directory another live session already occupies. Applies to every
+			// worktree-bearing first-time session, since the collision risk is a
+			// property of "did this session resolve a worktree," not of which
+			// request shape asked for one.
 			if i.preSpawnCollisionGuard != nil {
 				if guardErr := i.preSpawnCollisionGuard(basePath); guardErr != nil {
 					setupErr = fmt.Errorf("worktree collision check failed: %w", guardErr)
@@ -2014,20 +1991,11 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	} else {
 		// firstTimeSetup: a brand new instance can never have prior history to lose.
 		reviveOutcome = ReviveOutcomeFreshExpected
-		// KNOWN GAP (worktree-envvars-hijack, unaddressed here — see startLocked's
-		// own doc comment on the Epic 7 cleanup expected to reconcile the two
-		// start-path implementations): unlike startLocked's firstTimeSetup branch,
-		// this legacy path does NOT run Story 3.3.1's structural "no real worktree"
-		// guard, Story 3.3.2's cross-session collision guard, or Story 3.3.2c's
-		// TOCTOU spawn reservation before initTmuxSession()/pm().Start() below.
-		// Currently inert in production: every StartWithCleanup call site is in a
-		// _test.go file (grepped repo-wide) — production code always goes through
-		// Instance.Start() -> startLocked, which is fully guarded. If a future
-		// caller reaches this path from production code, none of this plan's
-		// isolation-safety checks apply here. Mirrors the exact
-		// two-implementations-can-drift risk recoverConversationBeforeLaunch was
-		// extracted to close for a different field (see its own doc comment) —
-		// not yet done for these three guards.
+		// KNOWN GAP: this legacy path skips the worktree-resolution, collision, and
+		// spawn-reservation guards startLocked's firstTimeSetup branch runs. Currently
+		// inert in production — every StartWithCleanup caller is in a _test.go file
+		// (repo-wide grep) — but a future production caller would bypass isolation
+		// safety entirely. Track consolidation under Epic 7.
 		basePath := i.Path
 		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.

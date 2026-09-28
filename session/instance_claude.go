@@ -439,7 +439,7 @@ func (i *Instance) tryExtractConversationUUID() {
 		// never blocked -- only silently adopting a still-live sibling's UUID is.
 		if info != nil && i.conversationOwnershipGuard != nil {
 			if ownerUUID, ownedByOther := i.conversationOwnershipGuard(info.ConversationUUID, effectivePath); ownedByOther {
-				log.Debug("tryextractconversationuuid: conversation UUID owned by another live session, not adopting",
+				log.Warn("tryextractconversationuuid: conversation UUID owned by another live session, not adopting",
 					"session", i.Title, "path", effectivePath, "owner_uuid", ownerUUID)
 				info = nil
 			}

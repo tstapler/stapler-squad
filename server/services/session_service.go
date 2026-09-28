@@ -1231,13 +1231,10 @@ func (s *SessionService) TimeSinceLastMeaningfulOutput(sessionUUID string) (time
 }
 
 // canonicalizeAbsPath resolves path to an absolute, symlink-canonicalized form
-// (e.g. macOS's /var -> /private/var), so a caller comparing two paths isn't
-// fooled by the same directory having two spellings -- one already
-// canonicalized when loaded from storage (git.NewGitWorktreeFromStorage), the
-// other from a live pane's raw cwd that may not be. Shared by
+// (e.g. macOS's /var -> /private/var) so path comparisons aren't fooled by two
+// spellings of the same directory. Shared by
 // OtherLiveSessionInsideWorktree, ConversationOwnedByOtherLiveSession, and
-// wireCallbacks' worktree-spawn-reservation closure -- all three independently
-// needed this exact two-step before worktree-envvars-hijack consolidated it.
+// wireCallbacks' spawn-reservation closure.
 func canonicalizeAbsPath(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -1289,11 +1286,9 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 // already the ConversationUUID of some OTHER currently-live,
 // backend-process-alive Instance (any UUID besides selfUUID) whose own
 // GetCurrentWorkingDirectory() resolves to path. Unlike
-// OtherLiveSessionInsideWorktree, path overlap alone is not enough to
-// block -- the sibling must also already own this exact UUID -- so the
-// legitimate SessionTypeDirectory path-sharing case is never blocked from a
-// session detecting its OWN first conversation, only from silently adopting
-// a sibling's (worktree-envvars-hijack Story 1.4.2).
+// OtherLiveSessionInsideWorktree, path overlap alone is not enough to block --
+// the sibling must also already own this exact UUID -- so a session detecting
+// its OWN first conversation is never blocked, only silently adopting a sibling's.
 func (s *SessionService) ConversationOwnedByOtherLiveSession(selfUUID, conversationUUID, path string) (ownerUUID string, ownedByOther bool) {
 	if s.reviewQueuePoller == nil || conversationUUID == "" || path == "" {
 		return "", false
@@ -1890,23 +1885,17 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	// instance loaded at startup via loadInstancesWithWiring) already calls, so
 	// reclassifyTagsLocked has a real engine/recorder on every session, not just some paths.
 	inst.SetTaggingEngine(s.taggingEngine)
-	// Pre-spawn worktree-collision guards (worktree-envvars-hijack Story 3.3.2/3.3.2c):
-	// wired here, before every Start()/Start(true) call this codebase makes (the same
-	// chokepoint precondition SetTaggingEngine above relies on), so startLocked's
-	// firstTimeSetup branch never spawns a tmux session/process into a directory
-	// another live session already owns, and two concurrent CreateSession calls
-	// resolving the same worktree path can't both win the race.
+	// Pre-spawn worktree-collision guards: wired here, before every Start() call
+	// this codebase makes, so startLocked's firstTimeSetup branch never spawns
+	// into a directory another live session already owns, and two concurrent
+	// CreateSession calls resolving the same worktree path can't both win the race.
 	inst.SetWorktreeSpawnReservation(func(worktreePath string) (func(), error) {
 		cleanTarget, err := canonicalizeAbsPath(worktreePath)
 		if err != nil {
 			// filepath.Abs only fails if os.Getwd() fails -- vanishingly rare, but
 			// silently skipping here would leave the TOCTOU-closing reservation
-			// this closure exists to provide entirely unclaimed, with no trace.
-			// Warn, matching SetPreSpawnCollisionGuard's own nil-poller fallback
-			// below, rather than staying silent about a disabled guard. Returns a
-			// no-op release (not nil, nil) so success always carries a real,
-			// callable release value -- nothing was claimed, so there's nothing
-			// to release, but the pairing stays unambiguous.
+			// unclaimed with no trace, so warn instead. Returns a no-op release
+			// (not nil, nil) so success always carries a real, callable release value.
 			log.Warn("SetWorktreeSpawnReservation: failed to resolve worktree path, spawn reservation skipped", "session", inst.Title, "path", worktreePath, "err", err)
 			return func() {}, nil
 		}

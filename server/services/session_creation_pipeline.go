@@ -277,10 +277,9 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 
 	// Re-derive instanceRootDir unconditionally now that Start() has completed
 	// worktree creation -- the deferredGitHubURL branch's own refresh above (if it
-	// ran) predates Start() and worktree creation, so it's stale for every plain
-	// SessionTypeNewWorktree session. Without this, InjectHookConfig/StartSessionDriver
-	// below operate against the bare repo path instead of the freshly-created
-	// worktree (worktree-envvars-hijack Epic 2, Story 2.1.1).
+	// ran) predates Start(), so it's stale for every plain SessionTypeNewWorktree
+	// session. Without this, InjectHookConfig/StartSessionDriver below would
+	// operate against the bare repo path instead of the freshly-created worktree.
 	instanceRootDir = p.instance.GetEffectiveRootDir()
 
 	// Clear progress message now that we are about to become Active.
