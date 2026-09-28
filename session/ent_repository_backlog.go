@@ -2301,6 +2301,38 @@ func (r *EntRepository) RecordRemediationAttempt(ctx context.Context, itemID str
 	return n > 0, nil
 }
 
+// RecordDiagnoseNudgeAttempt records that a Diagnose & Nudge nudge attempt
+// was just made for an open (item_id, reason) row: sets diagnose_nudge_count
+// to count and diagnose_next_eligible_at to nextAt. Mirrors
+// RecordRemediationAttempt's shape/scoping (WHERE resolved_at IS NULL) for
+// the sibling counter — see session/diagnose_nudge.go for the calling
+// convention.
+func (r *EntRepository) RecordDiagnoseNudgeAttempt(ctx context.Context, itemID string, reason domain.StuckReason, count int32, nextAt *time.Time) (bool, error) {
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	update := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtIsNil(),
+		).
+		SetDiagnoseNudgeCount(count)
+	if nextAt != nil {
+		update = update.SetDiagnoseNextEligibleAt(*nextAt)
+	} else {
+		update = update.ClearDiagnoseNextEligibleAt()
+	}
+
+	n, err := update.Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("record diagnose nudge attempt %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
 // RecordRemediationRestartGrace records that itemID/reason's open row just
 // consumed its one-per-boot restart-grace pass (see evaluateRemediation):
 // sets grace_boot_time to bootTime WITHOUT touching remediation_attempts or

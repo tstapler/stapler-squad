@@ -85,6 +85,11 @@ export const DEFAULT_TERMINAL_POOL_MAX_SIZE = 8;
 // otherwise request (Task 3.3). Never overridden per-entry.
 const POOLED_SCROLLBACK = 5000;
 
+// Fit-on-show retry cap (Bug 2, see usePooledTerminal's docking effect) --
+// bounds the poll to ~5s at 60fps before giving up and logging a warning,
+// rather than polling forever if a pane genuinely never lays out.
+const FIT_ON_SHOW_MAX_ATTEMPTS = 300;
+
 /** Per-entry state the pool owns for the lifetime of a pooled session's Terminal. */
 interface PoolEntry {
   sessionId: string;
@@ -372,6 +377,53 @@ export interface UsePooledTerminalResult {
 }
 
 /**
+ * Retries `fit()`+`focus()` on `entry` until `anchor` reports a real,
+ * non-zero size AND `entry.handleRef` is populated (see usePooledTerminal's
+ * docking effect for why neither is guaranteed on the frame docking
+ * happens). Returns a cleanup function that cancels any pending retry.
+ */
+function fitOnShow(entry: PoolEntry, anchor: HTMLElement, sessionId: string): () => void {
+  let settled = false;
+  let rafId: number | null = null;
+  let attempts = 0;
+
+  const tryFit = () => {
+    rafId = null;
+    if (settled) return;
+    const handle = entry.handleRef.current;
+    const { width, height } = anchor.getBoundingClientRect();
+    if (handle && width > 0 && height > 0) {
+      settled = true;
+      handle.fit();
+      handle.focus();
+      observer.disconnect();
+      return;
+    }
+    attempts += 1;
+    if (attempts >= FIT_ON_SHOW_MAX_ATTEMPTS) {
+      console.warn(`[TerminalPool] Gave up waiting to fit ${sessionId} after ${attempts} frames (handle ready: ${!!handle}, size: ${width}x${height})`);
+      return;
+    }
+    rafId = requestAnimationFrame(tryFit);
+  };
+
+  // Anchor size changing (including its first real layout, which fires once
+  // even if it never changes again) is exactly the signal that a
+  // previously-failed fit attempt might now succeed.
+  const observer = new ResizeObserver(() => {
+    if (rafId === null) rafId = requestAnimationFrame(tryFit);
+  });
+  observer.observe(anchor);
+  rafId = requestAnimationFrame(tryFit);
+
+  return () => {
+    settled = true;
+    if (rafId !== null) cancelAnimationFrame(rafId);
+    observer.disconnect();
+  };
+}
+
+/**
  * Consumer-facing hook (Task 3.4), part 1 of 2 -- see `usePooledTerminalCallbacks`
  * below for the other half. Split in two because a caller like
  * `TerminalOutput.tsx` needs `xtermRef` available before its own
@@ -417,6 +469,19 @@ export function usePooledTerminal(
   }, [pool, sessionId]);
 
   // Dock/undock + fit-on-show + focus (Task 3.5).
+  //
+  // Bug 2 (docs/tasks/terminal-jank.md "FitAddon on visibility:hidden
+  // Terminals") — this used to fit() inside a single requestAnimationFrame,
+  // assuming both (a) the anchor's CSS layout had already settled to its
+  // final size and (b) the lazily-loaded <XtermTerminal> (see the `lazy(...)`
+  // import above) had already mounted and populated `entry.handleRef`.
+  // Neither is guaranteed on every dock: a window-switch's freshly-mounted
+  // pane can still be mid-layout a frame later, and a cold pool entry's
+  // XtermTerminal chunk may not have resolved yet. When the guess was wrong,
+  // fit() ran against a stale/zero size (or was a no-op on a null ref) and
+  // nothing re-fit it afterward, leaving a blank terminal until the user
+  // clicked the manual "Resize" button. fitOnShow() polls (bounded) instead
+  // of guessing one frame ahead.
   useEffect(() => {
     if (!isVisible) {
       pool.undock(sessionId);
@@ -425,12 +490,9 @@ export function usePooledTerminal(
     const anchor = dockRef.current;
     if (!anchor) return;
     pool.dock(sessionId, anchor);
-    const raf = requestAnimationFrame(() => {
-      entry.handleRef.current?.fit();
-      entry.handleRef.current?.focus();
-    });
+    const cancelFit = fitOnShow(entry, anchor, sessionId);
     return () => {
-      cancelAnimationFrame(raf);
+      cancelFit();
       // Also fires on unmount (not just isVisible->false) -- without this an
       // unmounted consumer leaves its entry stuck `docked: true`, permanently
       // exempt from evictLRU.

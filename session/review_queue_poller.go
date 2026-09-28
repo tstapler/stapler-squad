@@ -678,6 +678,10 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 	copy(instances, rqp.instances)
 	rqp.mu.RUnlock()
 
+	if len(instances) == 0 {
+		return
+	}
+
 	// Fetch pane activity timestamps once for all sessions. This single subprocess call
 	// replaces per-session capture-pane calls when content hasn't changed.
 	paneActivity := batchPaneActivity("")

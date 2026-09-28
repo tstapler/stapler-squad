@@ -228,6 +228,10 @@ const (
 	// (session/backlog_lifecycle_gates.go), mirroring
 	// reconcileOrphanedTriageItems' LivenessEngine-consulting sweep pattern.
 	StuckReasonGateTimeout StuckReason = "gate_timeout"
+	// StuckReasonWorktreeInconsistent: the worktree consistency sweep flagged an
+	// inconsistency it declined to auto-repair. Dual-written alongside its
+	// notification when the session has a live linked BacklogItem.
+	StuckReasonWorktreeInconsistent StuckReason = "worktree_inconsistent"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -252,6 +256,7 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonBounceCapExhausted,
 	StuckReasonSteerFailed,
 	StuckReasonGateTimeout,
+	StuckReasonWorktreeInconsistent,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -263,7 +268,7 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
 		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
 		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed,
-		StuckReasonGateTimeout:
+		StuckReasonGateTimeout, StuckReasonWorktreeInconsistent:
 		return true
 	}
 	return false

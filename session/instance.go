@@ -254,6 +254,12 @@ type Instance struct {
 	// resuming/attaching to an already-running pane, where a CLI arg can't be injected after the
 	// fact. Replaces the static driverInitialPrompt when non-empty.
 	InitialPrompt string
+	// InitialPromptSentAt records when InitialPrompt was actually typed into the tmux pane, set
+	// via SetInitialPromptSentAt and persisted to storage. runSessionDriverWithPrompt checks this
+	// FIRST (before the output/JSONL heuristics in outputShowsConversationStarted) so a service
+	// restart's fresh driver goroutine doesn't re-derive -- and risk getting wrong -- whether the
+	// prompt was already sent, which used to re-type it into an already-completed session.
+	InitialPromptSentAt time.Time
 	// ExistingWorktree is an optional path to an existing worktree to reuse
 	ExistingWorktree string
 	// Category is used for organizing sessions into groups
@@ -480,6 +486,10 @@ type Instance struct {
 	// shellRepo is the persistence backend for shell operations. Injected by Storage
 	// after instance creation/loading; nil disables persistence (tests, external instances).
 	shellRepo ShellRepository
+
+	// initialPromptRepo persists InitialPromptSentAt. Injected by Storage after
+	// instance creation/loading, same as shellRepo; nil disables persistence.
+	initialPromptRepo InitialPromptRepository
 
 	// shellRegistryEmbed holds in-memory shell state via a concurrent ShellRegistry.
 	// Initialized by initShellRegistry(); shell operations go through instance_shells.go.
@@ -1231,6 +1241,13 @@ func finishInstanceConstruction(i *Instance) {
 // loading or creating an instance. Pass nil to disable persistence (e.g., in tests).
 func (i *Instance) SetShellRepository(repo ShellRepository) {
 	i.shellRepo = repo
+}
+
+// SetInitialPromptRepository injects the InitialPromptSentAt persistence backend.
+// Called by Storage after instance creation/loading; pass nil to disable
+// persistence (e.g., tests).
+func (i *Instance) SetInitialPromptRepository(repo InitialPromptRepository) {
+	i.initialPromptRepo = repo
 }
 
 // SetTagFireRecorder injects the tagging-rule fire-count recorder. Pass nil to disable

@@ -82,6 +82,11 @@ func NewCore(
 		// so create_guidance_request can call h.resolveItemLink directly —
 		// see durable-guidance-request plan Epic 2.2.
 		registerGuidanceTools(s, h)
+		// registerDiagnoseTools ("Diagnose & Nudge", backlog item 68964304)
+		// reuses the same liveFinder guard as registerTerminalTools above —
+		// diagnose_nudge_session needs live-instance lookup for the same
+		// reason write_to_session does.
+		registerDiagnoseTools(s, &diagnoseHandlers{storage: storage, live: liveFinder})
 	}
 	if prCache != nil {
 		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc})

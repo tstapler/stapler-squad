@@ -374,6 +374,39 @@ func (i *Instance) SetLastAddedToQueue(t time.Time) {
 	})
 }
 
+// ---- InitialPromptSentAt ---------------------------------------------------------
+
+func setInitialPromptSentAtLocked(s *instanceState, t time.Time) {
+	s.inst.mu.Lock()
+	s.inst.InitialPromptSentAt = t
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
+// SetInitialPromptSentAt records when InitialPrompt was actually typed into the
+// tmux pane, updates the in-memory field/snapshot, and persists it (best-effort,
+// non-fatal on error, same convention as shellRepo -- see instance_shells.go) via
+// the injected initialPromptRepo so a later service restart's driver goroutine
+// can trust it instead of re-deriving via fragile output/JSONL heuristics.
+func (i *Instance) SetInitialPromptSentAt(t time.Time) {
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setInitialPromptSentAtLocked(s, t)
+		return nil
+	})
+	if i.initialPromptRepo != nil {
+		if err := i.initialPromptRepo.UpdateInitialPromptSentAt(context.Background(), i.Title, t); err != nil {
+			log.Warn("SetInitialPromptSentAt: failed to persist", "session", i.Title, "err", err)
+		}
+	}
+}
+
+// GetInitialPromptSentAt reads InitialPromptSentAt via the lock-free published
+// Snapshot() rather than the bare field -- see instance-lock-free-reads.md.
+func (i *Instance) GetInitialPromptSentAt() time.Time {
+	return i.Snapshot().InitialPromptSentAt
+}
+
 // ---- AutoYes --------------------------------------------------------------------
 
 func setAutoYesLocked(s *instanceState, v bool) {

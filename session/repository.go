@@ -757,6 +757,14 @@ type ShellRepository interface {
 	DeleteShell(ctx context.Context, shellID string) error
 }
 
+// InitialPromptRepository is the minimal persistence interface for recording when
+// Instance.InitialPrompt was actually sent. It is implemented by EntRepository;
+// pass nil to disable persistence (e.g., tests).
+type InitialPromptRepository interface {
+	// UpdateInitialPromptSentAt sets the initial_prompt_sent_at field for a session.
+	UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error
+}
+
 // RepositoryOption is a function that configures a repository
 type RepositoryOption func(interface{}) error
 

@@ -113,6 +113,15 @@ message SessionTokenSummary {
   // session/backlog.go), sourced once per request/event (ADR-029). Empty string means the
   // session was never linked to a backlog item, or its ItemSession row was hard-deleted.
   string session_role = 22;
+  // Per-category cost breakdown of estimated_cost_usd (Epic 1.4 follow-up):
+  // sum(input_cost_usd, output_cost_usd, cache_creation_cost_usd, cache_read_cost_usd)
+  // equals estimated_cost_usd for a fully-priced session; a partially-unpriced
+  // session (see unpriced_models) may sum to less, since unpriced usage
+  // contributes 0 to both the total and every category.
+  double input_cost_usd          = 23;
+  double output_cost_usd         = 24;
+  double cache_creation_cost_usd = 25;
+  double cache_read_cost_usd     = 26;
 }
 
 // TopToolEntry records a tool name and its call count in a session.

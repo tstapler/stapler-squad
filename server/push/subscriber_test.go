@@ -25,31 +25,28 @@ func TestShouldNotifyTable(t *testing.T) {
 		eventType        events.EventType
 		priority         int32
 		notificationType int32
-		newStatus        session.Status
 		age              time.Duration
 		wantNotify       bool
 	}{
 		// EventNotification cases
-		{"low priority generic → no push", events.EventNotification, priorityLow, typeUnspecified, 0, 0, false},
-		{"medium priority generic → no push", events.EventNotification, priorityMedium, typeUnspecified, 0, 0, false},
-		{"high priority generic → no push", events.EventNotification, priorityHigh, typeUnspecified, 0, 0, false},                                          // UT-2.1a: HIGH = important-only, must not push
-		{"urgent priority generic, fresh → push", events.EventNotification, priorityUrgent, typeUnspecified, 0, 5 * time.Minute, true},                     // UT-2.1b [BUG-2 fix]
-		{"urgent priority generic, aged past TTL → no push", events.EventNotification, priorityUrgent, typeUnspecified, 0, urgentTTL + time.Minute, false}, // urgency decay
-		{"urgent priority generic, exactly at TTL → no push", events.EventNotification, priorityUrgent, typeUnspecified, 0, urgentTTL, false},              // boundary is exclusive
-		{"low priority APPROVAL → push", events.EventNotification, priorityLow, typeApproval, 0, 0, true},                                                  // UT-2.2 [R5]
-		{"high priority APPROVAL → push", events.EventNotification, priorityHigh, typeApproval, 0, 0, true},                                                // UT-2.3
-		{"urgent priority APPROVAL, aged past TTL → still push", events.EventNotification, priorityUrgent, typeApproval, 0, urgentTTL + time.Minute, true}, // approval override ignores age
-		// EventSessionUpdated cases
-		{"session stopped → push", events.EventSessionUpdated, 0, 0, session.Stopped, 0, true},
-		// NeedsApproval is no longer a lifecycle status (it is a sub-status in Epic 3).
-		// Approval notifications are delivered via EventNotification, not EventSessionUpdated.
-		{"session active → no push", events.EventSessionUpdated, 0, 0, session.Active, 0, false},
-		// Other event types
-		{"unrelated event → no push", events.EventSessionCreated, 0, 0, 0, 0, false},
+		{"low priority generic → no push", events.EventNotification, priorityLow, typeUnspecified, 0, false},
+		{"medium priority generic → no push", events.EventNotification, priorityMedium, typeUnspecified, 0, false},
+		{"high priority generic → no push", events.EventNotification, priorityHigh, typeUnspecified, 0, false},                                          // UT-2.1a: HIGH = important-only, must not push
+		{"urgent priority generic, fresh → push", events.EventNotification, priorityUrgent, typeUnspecified, 5 * time.Minute, true},                     // UT-2.1b [BUG-2 fix]
+		{"urgent priority generic, aged past TTL → no push", events.EventNotification, priorityUrgent, typeUnspecified, urgentTTL + time.Minute, false}, // urgency decay
+		{"urgent priority generic, exactly at TTL → no push", events.EventNotification, priorityUrgent, typeUnspecified, urgentTTL, false},              // boundary is exclusive
+		{"low priority APPROVAL → push", events.EventNotification, priorityLow, typeApproval, 0, true},                                                  // UT-2.2 [R5]
+		{"high priority APPROVAL → push", events.EventNotification, priorityHigh, typeApproval, 0, true},                                                // UT-2.3
+		{"urgent priority APPROVAL, aged past TTL → still push", events.EventNotification, priorityUrgent, typeApproval, urgentTTL + time.Minute, true}, // approval override ignores age
+		// Other event types — EventSessionUpdated is covered separately by
+		// TestSessionUpdatedPushGateTable, since shouldNotify never actually
+		// sees it in production (buildDeliveryNotification routes it to
+		// buildStatusChangeNotification instead).
+		{"unrelated event → no push", events.EventSessionCreated, 0, 0, 0, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := shouldNotify(tt.eventType, tt.priority, tt.notificationType, tt.newStatus, tt.age)
+			got := shouldNotify(tt.eventType, tt.priority, tt.notificationType, tt.age)
 			assert.Equal(t, tt.wantNotify, got, "shouldNotify mismatch for: %s", tt.name)
 		})
 	}
@@ -93,6 +90,17 @@ func TestPayloadDataMapFields(t *testing.T) {
 func TestPayloadDataSessionID(t *testing.T) {
 	notif := buildApprovalNotification(&session.Instance{ID: "abc-123", Title: "Changed Title"})
 	assert.Equal(t, "abc-123", notif.Data["sessionId"])
+}
+
+// "actions" (the review/later buttons) belongs only on approval notifications,
+// not on plain completion ones.
+func TestActionsOnlyOnApprovalDataMap(t *testing.T) {
+	inst := &session.Instance{ID: "s1", Title: "S1"}
+	_, hasActions := buildDataMap(inst, "SESSION_COMPLETE")["actions"]
+	assert.False(t, hasActions, "buildDataMap must not include actions")
+
+	_, hasActions = buildApprovalDataMap(inst)["actions"]
+	assert.True(t, hasActions, "buildApprovalDataMap must include actions")
 }
 
 // UT-5.3 — RequireInteraction=true on approval_needed [R13]
@@ -276,29 +284,37 @@ func TestUrgentPriorityTriggersPush(t *testing.T) {
 	assert.Equal(t, 1, n.CallCount(), "URGENT priority must trigger push")
 }
 
-// IT-4.1 — EventSessionUpdated with Status=Stopped triggers push notification
-func TestSessionUpdatedStoppedTriggersPush(t *testing.T) {
-	bus := events.NewEventBus(10)
-	n := &mockNotifier{name: "test"}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-	StartDeliverySubscriber(ctx, bus, []Notifier{n})
-
-	inst := &session.Instance{ID: "sess-1", Title: "My Session", Status: session.Stopped}
-	bus.Publish(&events.Event{
-		Type:    events.EventSessionUpdated,
-		Session: inst,
-	})
-
-	require.NoError(t, testutil.WaitForCondition(func() bool {
-		return n.CallCount() >= 1
-	}, testutil.FastWaitConfig()))
-	assert.Equal(t, 1, n.CallCount(), "SessionUpdated with Stopped must trigger push")
+// IT-4.x — EventSessionUpdated push gating table: a push fires only when
+// UpdatedFields names "status" AND the session's current status is Stopped.
+// Regression coverage for the notification-flood bug (an unrelated update on
+// an already-Stopped session used to re-fire the push) and for the
+// resume-path shape where "status" is present but the transition is to
+// Active, not Stopped (session_service.go's resume path appends "status" to
+// UpdatedFields on every Active-transition resume).
+func TestSessionUpdatedPushGateTable(t *testing.T) {
+	tests := []struct {
+		name          string
+		status        session.Status
+		updatedFields []string
+		wantCalls     int
+	}{
+		{"Stopped + status field → push", session.Stopped, []string{"status"}, 1},
+		{"Stopped + unrelated field → suppressed", session.Stopped, []string{"goal"}, 0},
+		{"Active + status field → suppressed", session.Active, []string{"status"}, 0},
+		{"Active + no UpdatedFields → suppressed", session.Active, nil, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertPushGateCase(t, tt.status, tt.updatedFields, tt.wantCalls)
+		})
+	}
 }
 
-// IT-4.2 — EventSessionUpdated with Status=Active does NOT trigger push
-func TestSessionUpdatedActiveSuppressesPush(t *testing.T) {
+// assertPushGateCase publishes a single EventSessionUpdated event and asserts
+// the delivered push count matches wantCalls, waiting for delivery when a
+// push is expected and for the context deadline otherwise.
+func assertPushGateCase(t *testing.T, status session.Status, updatedFields []string, wantCalls int) {
+	t.Helper()
 	bus := events.NewEventBus(10)
 	n := &mockNotifier{name: "test"}
 
@@ -306,14 +322,21 @@ func TestSessionUpdatedActiveSuppressesPush(t *testing.T) {
 	defer cancel()
 	StartDeliverySubscriber(ctx, bus, []Notifier{n})
 
-	inst := &session.Instance{ID: "sess-2", Title: "Active Session", Status: session.Active}
+	inst := &session.Instance{ID: "sess-1", Title: "Session", Status: status}
 	bus.Publish(&events.Event{
-		Type:    events.EventSessionUpdated,
-		Session: inst,
+		Type:          events.EventSessionUpdated,
+		Session:       inst,
+		UpdatedFields: updatedFields,
 	})
 
-	<-ctx.Done()
-	assert.Equal(t, 0, n.CallCount(), "SessionUpdated with Active must NOT trigger push")
+	if wantCalls > 0 {
+		require.NoError(t, testutil.WaitForCondition(func() bool {
+			return n.CallCount() >= wantCalls
+		}, testutil.FastWaitConfig()))
+	} else {
+		<-ctx.Done()
+	}
+	assert.Equal(t, wantCalls, n.CallCount(), "unexpected push count")
 }
 
 // ─── test helpers ─────────────────────────────────────────────────────────────

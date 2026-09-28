@@ -1,6 +1,8 @@
 package git
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,6 +27,45 @@ func TestNativeListWorktrees_LiveWorktree(t *testing.T) {
 	assert.False(t, entry.Locked)
 	assert.False(t, entry.Prunable)
 	assert.Equal(t, CanonicalizeWorktreePath(worktreePath), CanonicalizeWorktreePath(entry.WorktreePath))
+}
+
+// TestListWorktrees_should_ReturnSameEntries_When_ComparedToNativeListWorktrees covers
+// Story 1.1.1's acceptance criterion (project_plans/session-worktree-reconciliation): the
+// exported ListWorktrees wrapper must return the same entries the unexported
+// nativeListWorktrees parser returns for the same repo path.
+func TestListWorktrees_should_ReturnSameEntries_When_ComparedToNativeListWorktrees(t *testing.T) {
+	t.Parallel()
+	branchName := "work/b8ccca59"
+	repoPath, _ := newNativeRemoveFixture(t, branchName)
+
+	wrapped, wrappedErr := ListWorktrees(repoPath)
+	direct, directErr := nativeListWorktrees(repoPath)
+
+	require.NoError(t, wrappedErr)
+	require.NoError(t, directErr)
+	assert.Equal(t, direct, wrapped)
+	require.Len(t, wrapped, 1)
+	assert.Equal(t, "refs/heads/"+branchName, wrapped[0].BranchRef)
+}
+
+// TestListWorktrees_should_ReturnError_When_WorktreesDirUnreadable covers
+// validation.md's noted gap for Story 1.1.1 (no error-path test for the exported wrapper):
+// ListWorktrees is a pass-through, so an underlying read failure must propagate unchanged.
+func TestListWorktrees_should_ReturnError_When_WorktreesDirUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permission checks, cannot exercise this failure mode")
+	}
+	t.Parallel()
+	branchName := "feature-wrapper-unreadable"
+	repoPath, _ := newNativeRemoveFixture(t, branchName)
+	worktreesDir := filepath.Join(repoPath, ".git", "worktrees")
+
+	require.NoError(t, os.Chmod(worktreesDir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(worktreesDir, 0o755) })
+
+	_, err := ListWorktrees(repoPath)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, fs.ErrPermission), "expected a permission-denied error (wrapped), got: %v", err)
 }
 
 // TestNativeFindExistingWorktreeForBranch_FindsLiveWorktree_ReportsNotFoundForOtherBranch

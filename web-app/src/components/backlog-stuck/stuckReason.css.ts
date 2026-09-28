@@ -186,6 +186,18 @@ export const chipSteerFailed = style([
   },
 ]);
 
+// worktree_inconsistent: the reconciliation sweep declined to auto-repair a
+// session's worktree state — mirrors chipPushFailed's error styling since it
+// requires manual intervention, not just a wait.
+export const chipWorktreeInconsistent = style([
+  chip,
+  {
+    background: vars.color.errorBg,
+    color: vars.color.errorText,
+    border: `1px solid ${vars.color.error}`,
+  },
+]);
+
 export const chipUnknown = style([
   chip,
   {
