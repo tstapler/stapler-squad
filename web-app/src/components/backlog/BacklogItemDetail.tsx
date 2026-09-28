@@ -1720,7 +1720,7 @@ export function BacklogItemDetail({ itemId, onClose, onDiagnose }: BacklogItemDe
             <button
               type="button"
               className={styles.actionButton}
-              disabled={diagnoseBusy}
+              aria-disabled={diagnoseBusy}
               aria-busy={diagnoseBusy}
               aria-live={diagnoseState === "already-diagnosing" ? "polite" : undefined}
               aria-label="Diagnose this item"

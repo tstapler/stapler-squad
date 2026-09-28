@@ -500,12 +500,12 @@ describe("StuckItemDetail", () => {
       fireEvent.click(button);
 
       expect(onDiagnose).toHaveBeenCalledWith("item-diagnose-1");
-      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("aria-disabled", "true");
       expect(button).toHaveAttribute("aria-busy", "true");
       expect(button).toHaveTextContent("Diagnosing…");
 
       resolveDiagnose();
-      await waitFor(() => expect(button).not.toBeDisabled());
+      await waitFor(() => expect(button).toHaveAttribute("aria-disabled", "false"));
       expect(button).toHaveTextContent("Diagnose");
       expect(button).not.toHaveTextContent("Diagnosing");
     });
@@ -528,7 +528,7 @@ describe("StuckItemDetail", () => {
         )
       );
       expect(screen.getByRole("alert")).toBeInTheDocument();
-      expect(button).not.toBeDisabled();
+      expect(button).toHaveAttribute("aria-disabled", "false");
       expect(button).toHaveTextContent("Diagnose");
     });
 
@@ -544,7 +544,7 @@ describe("StuckItemDetail", () => {
       await waitFor(() =>
         expect(button).toHaveTextContent("Diagnosing… (already in progress)")
       );
-      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("aria-disabled", "true");
       expect(button).toHaveAttribute("aria-busy", "true");
       expect(button).toHaveAttribute("aria-live", "polite");
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();

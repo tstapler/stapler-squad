@@ -287,7 +287,7 @@ export function StuckItemDetail({
           <button
             type="button"
             className={styles.overrideButton}
-            disabled={diagnoseBusy}
+            aria-disabled={diagnoseBusy}
             aria-busy={diagnoseBusy}
             aria-live={diagnoseState === "already-diagnosing" ? "polite" : undefined}
             aria-label="Diagnose this stuck item"

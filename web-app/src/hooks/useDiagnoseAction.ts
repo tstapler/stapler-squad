@@ -28,7 +28,10 @@ export function useDiagnoseAction(
   const [error, setError] = useState<string | null>(null);
 
   async function diagnose(itemId: string) {
-    if (!onDiagnose) return;
+    // aria-disabled (used instead of the disabled attribute so the button stays
+    // focusable) doesn't block clicks by itself, so guard here against a rapid
+    // double Enter/click re-dispatching before the first request settles.
+    if (!onDiagnose || state === "pending" || state === "already-diagnosing") return;
     setState("pending");
     setError(null);
     try {

@@ -288,6 +288,14 @@ export const actionButton = style({
     opacity: 0.4,
     cursor: "not-allowed",
   },
+  selectors: {
+    // Diagnose button uses aria-disabled instead of disabled so it stays
+    // focusable while busy; mirror the same visual treatment here.
+    '&[aria-disabled="true"]': {
+      opacity: 0.4,
+      cursor: "not-allowed",
+    },
+  },
 });
 
 export const actionButtonSecondary = style({

@@ -97,6 +97,14 @@ export const overrideUnlimitedButton = style({
     opacity: 0.6,
     cursor: "not-allowed",
   },
+  selectors: {
+    // Diagnose button uses aria-disabled instead of disabled so it stays
+    // focusable while busy; mirror the same visual treatment here.
+    '&[aria-disabled="true"]': {
+      opacity: 0.6,
+      cursor: "not-allowed",
+    },
+  },
 });
 
 export const overrideStatus = style({

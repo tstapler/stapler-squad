@@ -86,7 +86,10 @@ export const retryButton = style({
 });
 
 export const link = style({
-  color: vars.color.primary,
+  // primary on cardBackground measures 4.32:1, fails WCAG AA (needs >=4.5:1);
+  // accentText is ~9.35:1 on the same background. See theme.css.ts's
+  // accentText comment for the identical prior fix.
+  color: vars.color.accentText,
   textDecoration: "none",
   ":hover": {
     textDecoration: "underline",
