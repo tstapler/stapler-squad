@@ -304,6 +304,12 @@ type Config struct {
 	// (60); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
 	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
 	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`
+	// DiagnoseNudgeMaxAttempts caps how many times the Diagnose & Nudge feature
+	// (BacklogStuckState.DiagnoseNudgeCount) will nudge the same stuck item before
+	// further automatic nudging stops and the dispatched agent's action space is
+	// narrowed to file-a-bug/post-a-note only. 0 = use the default (3); values
+	// above diagnoseNudgeMaxAttemptsHardCeiling are clamped to it.
+	DiagnoseNudgeMaxAttempts int `json:"diagnose_nudge_max_attempts,omitempty"`
 	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
@@ -943,6 +949,28 @@ func (c *Config) AutonomousMaxTurnsOrDefault() int {
 		return autonomousMaxTurnsHardCeiling
 	}
 	return c.AutonomousMaxTurns
+}
+
+// diagnoseNudgeMaxAttemptsDefault is used when the config value is unset (0 or
+// negative). diagnoseNudgeMaxAttemptsHardCeiling guards against a runaway
+// config value letting the Diagnose & Nudge feature nudge a stuck session
+// indefinitely.
+const (
+	diagnoseNudgeMaxAttemptsDefault     = 3
+	diagnoseNudgeMaxAttemptsHardCeiling = 10
+)
+
+// DiagnoseNudgeMaxAttemptsOrDefault returns the configured Diagnose & Nudge
+// attempt cap, clamped to [1, diagnoseNudgeMaxAttemptsHardCeiling]. Falls back
+// to the default (3) if unset (<=0) or c is nil.
+func (c *Config) DiagnoseNudgeMaxAttemptsOrDefault() int {
+	if c == nil || c.DiagnoseNudgeMaxAttempts <= 0 {
+		return diagnoseNudgeMaxAttemptsDefault
+	}
+	if c.DiagnoseNudgeMaxAttempts > diagnoseNudgeMaxAttemptsHardCeiling {
+		return diagnoseNudgeMaxAttemptsHardCeiling
+	}
+	return c.DiagnoseNudgeMaxAttempts
 }
 
 // maxConcurrentBacklogWorkItemsDefault is used when the config value is unset (0

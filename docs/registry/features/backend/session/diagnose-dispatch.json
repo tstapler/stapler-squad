@@ -1,0 +1,18 @@
+{
+  "id": "session:diagnose-dispatch",
+  "type": "backend",
+  "service": "DiagnosticService",
+  "method": "DispatchDiagnose",
+  "protoFile": "proto/session/v1/diagnose.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/diagnostic_service.go",
+  "tested": true,
+  "testIds": [
+    "TestDispatchDiagnose_should_LinkItemSession_When_DispatchSucceeds",
+    "TestDispatchDiagnose_should_Error_When_SpawnerNotConfigured",
+    "TestEvaluateNudgeEligibility_should_DisallowNudge_When_NoTargetSpecified",
+    "TestEvaluateNudgeEligibility_should_DisallowNudge_When_NoStuckReasonSpecified",
+    "TestEvaluateNudgeEligibility_should_DisallowNudge_When_TargetNotLive"
+  ],
+  "lastModified": "2026-09-27T22:47:32.790291049-07:00"
+}

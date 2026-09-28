@@ -1662,6 +1662,20 @@ func (s *SessionService) SpawnReviewSession(ctx context.Context, item *session.B
 	return inst, nil
 }
 
+// SpawnDiagnosticSession creates a hidden, one-shot Diagnose & Nudge session
+// for item, carrying prompt (the assembled context bundle plus dispatch
+// instructions — see server/services/diagnostic_service.go's
+// buildDiagnosePrompt). Mirrors SpawnReviewSession's shape; satisfies
+// services.DiagnosticSpawner.
+func (s *SessionService) SpawnDiagnosticSession(ctx context.Context, item *session.BacklogItemData, prompt string) (*session.Instance, error) {
+	inst, err := s.CreateDirectorySession(ctx, "diagnose:"+item.ID[:8], item.RepoPath, prompt, []string{"backlog:diagnose"}, true, true, "")
+	if err != nil {
+		return nil, err
+	}
+	inst.SetCategory(session.CategoryBacklog)
+	return inst, nil
+}
+
 // CreateDirectorySession satisfies the services.SessionCreator interface so that
 // BacklogService can spawn sessions without importing SessionService directly.
 // It creates a directory-type session with the given title, path, initial prompt,

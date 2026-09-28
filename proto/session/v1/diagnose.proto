@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "session/v1/backlog.proto";
+
+// DiagnosticService backs the "Diagnose & Nudge" backlog action (backlog
+// item 68964304): dispatch a context-bounded agent to investigate a stuck
+// (or any) backlog item, file a bug on a genuine defect, or safely nudge an
+// idle linked session. Read (AssembleDiagnosticBundle) and write
+// (DispatchDiagnose) are split, mirroring GuidanceRequestService's
+// registration shape (proto/session/v1/guidance_request.proto).
+service DiagnosticService {
+  // AssembleDiagnosticBundle builds (or returns a cached, still-fresh) the
+  // context bundle for item_id: description/AC/status/history, review
+  // verdicts, linked-session state, recent logs, and git diff/log — capped
+  // at ~250k estimated tokens via whole-section compaction, never
+  // mid-section truncation (session.BuildDiagnosticBundle).
+  rpc AssembleDiagnosticBundle(AssembleDiagnosticBundleRequest) returns (AssembleDiagnosticBundleResponse) {}
+
+  // DispatchDiagnose spawns a new hidden, one-shot diagnostic agent session
+  // carrying the assembled bundle as its prompt. Whether a nudge is offered
+  // in the dispatched agent's action space depends on the target session
+  // being idle and the item's nudge cap/cooldown not being exhausted
+  // (session.DiagnoseNudgeAllowed) — reflected in nudge_allowed/
+  // nudge_disallowed_reason on the response, not a hard error.
+  rpc DispatchDiagnose(DispatchDiagnoseRequest) returns (DispatchDiagnoseResponse) {}
+}
+
+message AssembleDiagnosticBundleRequest {
+  string item_id = 1;
+}
+
+message AssembleDiagnosticBundleResponse {
+  string item_id = 1;
+  string prompt = 2;
+  bool compacted = 3;
+  int32 estimated_tokens = 4;
+}
+
+message DispatchDiagnoseRequest {
+  string item_id = 1;
+  // nudge_target_session_uuid, when set, is the specific linked session the
+  // caller wants eligible for a nudge (validation.md edge case 2: "multiple
+  // linked sessions" — the caller, e.g. StuckItemDetail.tsx, picks which
+  // one). Empty means diagnose-only, no nudge target considered.
+  string nudge_target_session_uuid = 2;
+  // stuck_reason, when set, is the specific StuckReason this dispatch is
+  // being made for — mapped to domain.StuckReason server-side (see
+  // fromProtoStuckReason, server/services/backlog_service_stuck.go) and used
+  // to key the nudge cap/cooldown gate (session.DiagnoseNudgeAllowed) on the
+  // item's open BacklogStuckState row for that reason. STUCK_REASON_UNSPECIFIED
+  // (the zero value) when dispatched from a non-stuck item
+  // (BacklogItemDetail.tsx) — the nudge action space is then never offered.
+  StuckReason stuck_reason = 3;
+}
+
+message DispatchDiagnoseResponse {
+  string diagnostic_session_uuid = 1;
+  bool nudge_allowed = 2;
+  string nudge_disallowed_reason = 3;
+}
