@@ -1805,3 +1805,110 @@ func TestGetAvailablePrograms_should_OmitAider_When_AiderNotOnPath(t *testing.T)
 
 	assert.Empty(t, programs)
 }
+
+// TestDiagnoseNudgeConfig_MaxNudgesPerItemOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange
+// mirrors TestMaxConcurrentJulesSessionsOrDefault's clamp table for Story
+// 1.1.1's nudge-cap accessor.
+func TestDiagnoseNudgeConfig_MaxNudgesPerItemOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      DiagnoseNudgeConfig
+		expected int
+	}{
+		{"zero value falls back to default", DiagnoseNudgeConfig{}, 2},
+		{"valid value passes through", DiagnoseNudgeConfig{MaxNudgesPerItem: 5}, 5},
+		{"above hard ceiling clamps down", DiagnoseNudgeConfig{MaxNudgesPerItem: 999}, 10},
+		{"negative falls back to default", DiagnoseNudgeConfig{MaxNudgesPerItem: -1}, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.cfg.MaxNudgesPerItemOrDefault())
+		})
+	}
+}
+
+// TestDiagnoseNudgeConfig_CooldownSecondsOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange
+// covers Story 1.1.1's cooldown accessor.
+func TestDiagnoseNudgeConfig_CooldownSecondsOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      DiagnoseNudgeConfig
+		expected int
+	}{
+		{"zero value falls back to default", DiagnoseNudgeConfig{}, 900},
+		{"valid value passes through", DiagnoseNudgeConfig{CooldownSeconds: 1200}, 1200},
+		{"above hard ceiling clamps down", DiagnoseNudgeConfig{CooldownSeconds: 999999}, 86400},
+		{"negative falls back to default", DiagnoseNudgeConfig{CooldownSeconds: -1}, 900},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.cfg.CooldownSecondsOrDefault())
+		})
+	}
+}
+
+// TestDiagnoseNudgeConfig_IdleSettleWindowSecondsOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange
+// covers Story 1.1.1's idle-settle-window accessor. The default (60) mirrors
+// AutonomousDriver's own idleSettleWindow default (session/autonomous_driver.go).
+func TestDiagnoseNudgeConfig_IdleSettleWindowSecondsOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      DiagnoseNudgeConfig
+		expected int
+	}{
+		{"zero value falls back to default", DiagnoseNudgeConfig{}, 60},
+		{"valid value passes through", DiagnoseNudgeConfig{IdleSettleWindowSeconds: 120}, 120},
+		{"above hard ceiling clamps down", DiagnoseNudgeConfig{IdleSettleWindowSeconds: 999999}, 3600},
+		{"negative falls back to default", DiagnoseNudgeConfig{IdleSettleWindowSeconds: -1}, 60},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.cfg.IdleSettleWindowSecondsOrDefault())
+		})
+	}
+}
+
+// TestDiagnoseNudgeConfig_BundleTokenBudgetOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange
+// covers Story 1.1.1's bundle-token-budget accessor.
+func TestDiagnoseNudgeConfig_BundleTokenBudgetOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      DiagnoseNudgeConfig
+		expected int
+	}{
+		{"zero value falls back to default", DiagnoseNudgeConfig{}, 250000},
+		{"valid value passes through", DiagnoseNudgeConfig{BundleTokenBudget: 300000}, 300000},
+		{"above hard ceiling clamps down", DiagnoseNudgeConfig{BundleTokenBudget: 999999999}, 500000},
+		{"negative falls back to default", DiagnoseNudgeConfig{BundleTokenBudget: -1}, 250000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.cfg.BundleTokenBudgetOrDefault())
+		})
+	}
+}
+
+// TestDiagnoseNudgeExecutionFeatureFlag_DefaultOffThenLiveSet covers Story
+// 1.1.2's AC: default-off on a fresh config, then a live SetFeatureFlag round
+// trip reads back true. Mirrors TestGetFeatureFlagWithDefault_MissingKey and
+// TestSetFeatureFlag_UpdatesExistingMap's shapes — no standalone
+// TestTriageGuidanceHaltFeatureFlag test exists in this codebase to mirror
+// verbatim, so this follows the nearest precedent: the generic
+// GetFeatureFlagWithDefault/SetFeatureFlag test suite in feature_flags_test.go,
+// applied to this flag's name.
+func TestDiagnoseNudgeExecutionFeatureFlag_DefaultOffThenLiveSet(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	cfg := &Config{}
+	if got := cfg.GetFeatureFlagWithDefault(DiagnoseNudgeExecutionFeatureFlag, false); got != false {
+		t.Errorf("GetFeatureFlagWithDefault(%s) on fresh config: got %v, want false", DiagnoseNudgeExecutionFeatureFlag, got)
+	}
+
+	if err := cfg.SetFeatureFlag(DiagnoseNudgeExecutionFeatureFlag, true); err != nil {
+		t.Fatalf("SetFeatureFlag returned error: %v", err)
+	}
+
+	if got := cfg.GetFeatureFlagWithDefault(DiagnoseNudgeExecutionFeatureFlag, false); got != true {
+		t.Errorf("GetFeatureFlagWithDefault(%s) after SetFeatureFlag(true): got %v, want true", DiagnoseNudgeExecutionFeatureFlag, got)
+	}
+}

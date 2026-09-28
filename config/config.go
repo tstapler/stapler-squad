@@ -371,6 +371,10 @@ type Config struct {
 	// TaggingClassifier holds the LLM model hierarchy for session-tag
 	// classification (primary model plus ordered fallbacks).
 	TaggingClassifier TaggingClassifierConfig `json:"tagging_classifier,omitempty"`
+	// DiagnoseNudge holds configuration for the backlog-diagnose-and-nudge
+	// feature's tunables: nudge cap/cooldown, idle-settle window, and bundle
+	// token budget. See DiagnoseNudgeConfig's own accessors for defaults/ceilings.
+	DiagnoseNudge DiagnoseNudgeConfig `json:"diagnose_nudge,omitempty"`
 
 	// Escape analytics configuration
 
@@ -467,6 +471,10 @@ const TymuxFeatureFlag = "tymux"
 // rehearsal has vouched for this as the global default yet, same posture as
 // TymuxFeatureFlag.
 const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
+
+// DiagnoseNudgeExecutionFeatureFlag is the config.FeatureFlags key gating the
+// nudge write call itself (not dispatch/diagnosis start), default OFF.
+const DiagnoseNudgeExecutionFeatureFlag = "diagnose_nudge_execution"
 
 // EffectiveTriageGuidanceHaltEnabled reports whether automated triage should
 // halt and create a GuidanceRequest on ambiguity rather than guess. Callers
@@ -943,6 +951,101 @@ func (c *Config) AutonomousMaxTurnsOrDefault() int {
 		return autonomousMaxTurnsHardCeiling
 	}
 	return c.AutonomousMaxTurns
+}
+
+// DiagnoseNudgeConfig holds the tunables for the backlog-diagnose-and-nudge
+// feature: how many nudges a single backlog item may receive, the cooldown
+// between them, how long a target session must sit idle before a nudge is
+// considered safe, and the token budget for the diagnostic bundle assembled
+// for the dispatched diagnostic agent. Each field is unset (0) by default,
+// resolved via its own OrDefault() accessor below.
+type DiagnoseNudgeConfig struct {
+	// MaxNudgesPerItem caps how many nudges a single backlog item may receive
+	// before the nudge-cap safety gate blocks further attempts. 0 = use the
+	// default (2); values above diagnoseNudgeMaxNudgesHardCeiling are clamped.
+	MaxNudgesPerItem int `json:"maxNudgesPerItem,omitempty"`
+	// CooldownSeconds is the minimum time between nudges for the same item.
+	// 0 = use the default (900s / 15m); values above
+	// diagnoseNudgeCooldownSecondsHardCeiling are clamped.
+	CooldownSeconds int `json:"cooldownSeconds,omitempty"`
+	// IdleSettleWindowSeconds is how long a target session must report idle
+	// before a nudge write is considered safe. 0 = use the default, which
+	// mirrors AutonomousDriver's own idleSettleWindow (session/autonomous_driver.go);
+	// values above diagnoseNudgeIdleSettleWindowSecondsHardCeiling are clamped.
+	IdleSettleWindowSeconds int `json:"idleSettleWindowSeconds,omitempty"`
+	// BundleTokenBudget caps the total size (in ~4-bytes-per-token units) of
+	// the DiagnosticBundle assembled for a dispatched diagnostic agent. 0 =
+	// use the default (250000); values above
+	// diagnoseNudgeBundleTokenBudgetHardCeiling are clamped.
+	BundleTokenBudget int `json:"bundleTokenBudget,omitempty"`
+}
+
+// Defaults/ceilings for DiagnoseNudgeConfig's OrDefault() accessors, following
+// AutonomousMaxTurns*'s const-pair shape. diagnoseNudgeIdleSettleWindowSecondsDefault
+// (60s) mirrors AutonomousDriver's own idleSettleWindow default
+// (session/autonomous_driver.go's NewAutonomousDriver, 60*time.Second) so the
+// nudge-safety gate and the driver's own idle detection agree on what "idle" means.
+const (
+	diagnoseNudgeMaxNudgesDefault                   = 2
+	diagnoseNudgeMaxNudgesHardCeiling               = 10
+	diagnoseNudgeCooldownSecondsDefault             = 900
+	diagnoseNudgeCooldownSecondsHardCeiling         = 86400
+	diagnoseNudgeIdleSettleWindowSecondsDefault     = 60
+	diagnoseNudgeIdleSettleWindowSecondsHardCeiling = 3600
+	diagnoseNudgeBundleTokenBudgetDefault           = 250000
+	diagnoseNudgeBundleTokenBudgetHardCeiling       = 500000
+)
+
+// MaxNudgesPerItemOrDefault returns MaxNudgesPerItem, clamped to
+// [1, diagnoseNudgeMaxNudgesHardCeiling]. Falls back to the default (2) if
+// unset (<=0).
+func (d DiagnoseNudgeConfig) MaxNudgesPerItemOrDefault() int {
+	if d.MaxNudgesPerItem <= 0 {
+		return diagnoseNudgeMaxNudgesDefault
+	}
+	if d.MaxNudgesPerItem > diagnoseNudgeMaxNudgesHardCeiling {
+		return diagnoseNudgeMaxNudgesHardCeiling
+	}
+	return d.MaxNudgesPerItem
+}
+
+// CooldownSecondsOrDefault returns CooldownSeconds, clamped to
+// [1, diagnoseNudgeCooldownSecondsHardCeiling]. Falls back to the default
+// (900) if unset (<=0).
+func (d DiagnoseNudgeConfig) CooldownSecondsOrDefault() int {
+	if d.CooldownSeconds <= 0 {
+		return diagnoseNudgeCooldownSecondsDefault
+	}
+	if d.CooldownSeconds > diagnoseNudgeCooldownSecondsHardCeiling {
+		return diagnoseNudgeCooldownSecondsHardCeiling
+	}
+	return d.CooldownSeconds
+}
+
+// IdleSettleWindowSecondsOrDefault returns IdleSettleWindowSeconds, clamped
+// to [1, diagnoseNudgeIdleSettleWindowSecondsHardCeiling]. Falls back to the
+// default (60, mirroring AutonomousDriver's idleSettleWindow) if unset (<=0).
+func (d DiagnoseNudgeConfig) IdleSettleWindowSecondsOrDefault() int {
+	if d.IdleSettleWindowSeconds <= 0 {
+		return diagnoseNudgeIdleSettleWindowSecondsDefault
+	}
+	if d.IdleSettleWindowSeconds > diagnoseNudgeIdleSettleWindowSecondsHardCeiling {
+		return diagnoseNudgeIdleSettleWindowSecondsHardCeiling
+	}
+	return d.IdleSettleWindowSeconds
+}
+
+// BundleTokenBudgetOrDefault returns BundleTokenBudget, clamped to
+// [1, diagnoseNudgeBundleTokenBudgetHardCeiling]. Falls back to the default
+// (250000) if unset (<=0).
+func (d DiagnoseNudgeConfig) BundleTokenBudgetOrDefault() int {
+	if d.BundleTokenBudget <= 0 {
+		return diagnoseNudgeBundleTokenBudgetDefault
+	}
+	if d.BundleTokenBudget > diagnoseNudgeBundleTokenBudgetHardCeiling {
+		return diagnoseNudgeBundleTokenBudgetHardCeiling
+	}
+	return d.BundleTokenBudget
 }
 
 // maxConcurrentBacklogWorkItemsDefault is used when the config value is unset (0
