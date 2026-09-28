@@ -5,7 +5,6 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/schema/field"
-	"entgo.io/ent/schema/index"
 )
 
 // NudgeCapRecord holds the schema definition for the NudgeCapRecord entity:
@@ -33,6 +32,7 @@ func (NudgeCapRecord) Fields() []ent.Field {
 			Comment("Number of nudges reserved for this item within the current window."),
 		field.Time("window_start_at").
 			Optional().
+			Nillable().
 			Comment("When the current nudge-count window started; unset until the first reservation."),
 		field.Time("last_nudge_at").
 			Optional().
@@ -52,9 +52,8 @@ func (NudgeCapRecord) Edges() []ent.Edge {
 	return nil
 }
 
-// Indexes of the NudgeCapRecord.
-func (NudgeCapRecord) Indexes() []ent.Index {
-	return []ent.Index{
-		index.Fields("item_id"),
-	}
-}
+// NudgeCapRecord has no Indexes() method: item_id's Unique() field definition
+// above already makes ent generate a unique index over that column (same
+// precedent as HandoffSummary.session_id, see handoff_summary.go), so an
+// explicit index.Fields("item_id") entry here would be a second, redundant
+// index over the same column.

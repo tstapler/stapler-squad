@@ -12,6 +12,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -319,5 +320,86 @@ func TestDiagnosticBundleAssembler_AssembleDiff_ShouldReflectRealWorktreeChanges
 	}
 	if !strings.Contains(got, "untracked.txt") || !strings.Contains(got, "brand new content") {
 		t.Errorf("expected untracked file's content present, got %q", got)
+	}
+}
+
+// runGitCLI shells out to the git CLI for test setup only -- assembleDiff
+// itself never does (see its doc comment), but building a REAL linked
+// worktree (as opposed to initTestRepoWithCommit's plain top-level repo)
+// requires `git worktree add`, which go-git v5 has no equivalent API for.
+func runGitCLI(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := safeexec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// newLinkedWorktreeWithFeatureCommit creates a main repo with one commit,
+// then a REAL linked worktree (via `git worktree add -b feature`) with one
+// further commit made inside the worktree on its own "feature" branch, and
+// returns the worktree's path. The feature commit is what makes the
+// worktree's real HEAD commit's tree diverge from the main repo's HEAD tree
+// -- see the caller test's doc comment for why that divergence is what
+// distinguishes a correct EnableDotGitCommonDir resolution from the bug it
+// fixes.
+func newLinkedWorktreeWithFeatureCommit(t *testing.T) string {
+	t.Helper()
+	mainDir := t.TempDir()
+	runGitCLI(t, mainDir, "init")
+	runGitCLI(t, mainDir, "config", "user.email", "test@example.com")
+	runGitCLI(t, mainDir, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(mainDir, "tracked.txt"), []byte("main-line1\n"), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	runGitCLI(t, mainDir, "add", "tracked.txt")
+	runGitCLI(t, mainDir, "commit", "-m", "initial commit on main")
+
+	worktreeDir := filepath.Join(t.TempDir(), "feature-worktree")
+	runGitCLI(t, mainDir, "worktree", "add", "-b", "feature", worktreeDir)
+
+	if err := os.WriteFile(filepath.Join(worktreeDir, "tracked.txt"), []byte("feature-line1\n"), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	runGitCLI(t, worktreeDir, "commit", "-am", "feature commit")
+
+	return worktreeDir
+}
+
+// TestDiagnosticBundleAssembler_AssembleDiff_ShouldUseWorktreesOwnHead_WhenRunAgainstLinkedWorktree
+// exercises assembleDiff (and therefore resolveHeadTree) against a REAL
+// linked worktree created via `git worktree add`, not initTestRepoWithCommit's
+// plain top-level repo -- initTestRepoWithCommit can't reproduce the bug this
+// guards against (bare gogit.PlainOpen omits EnableDotGitCommonDir, so it can
+// silently resolve HEAD/objects for a linked worktree against the wrong
+// gitdir; see session/git/util.go's defaultPlainOpenOptions doc comment for
+// the documented "stale SHA" failure mode) because a plain repo has no
+// separate common gitdir to resolve incorrectly against in the first place.
+func TestDiagnosticBundleAssembler_AssembleDiff_ShouldUseWorktreesOwnHead_WhenRunAgainstLinkedWorktree(t *testing.T) {
+	worktreeDir := newLinkedWorktreeWithFeatureCommit(t)
+
+	// Uncommitted modification on top of the feature branch's own HEAD.
+	if err := os.WriteFile(filepath.Join(worktreeDir, "tracked.txt"), []byte("feature-line1\nCHANGED\n"), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	a := NewDiagnosticBundleAssembler(DefaultDiagnosticBundleConfig(46875))
+	got, err := a.assembleDiff(worktreeDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(got, "+CHANGED") {
+		t.Errorf("expected added line 'CHANGED' (uncommitted change on top of the worktree's real HEAD), got %q", got)
+	}
+	// These would only appear if HEAD resolved against main's gitdir instead
+	// of the worktree's own -- the exact bug EnableDotGitCommonDir fixes.
+	if strings.Contains(got, "main-line1") {
+		t.Errorf("diff incorrectly used the main repo's HEAD instead of the linked worktree's own HEAD, got %q", got)
+	}
+	if strings.Contains(got, "+feature-line1") {
+		t.Errorf("diff treated the worktree's own committed content as uncommitted, meaning it diffed against a stale (pre-worktree) HEAD, got %q", got)
 	}
 }

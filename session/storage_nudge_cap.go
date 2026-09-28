@@ -23,7 +23,7 @@ import (
 type NudgeCapRecordData struct {
 	ItemID        string
 	NudgeCount    int
-	WindowStartAt time.Time
+	WindowStartAt *time.Time
 	LastNudgeAt   *time.Time
 }
 

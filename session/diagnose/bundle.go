@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/go-git/go-billy/v5/osfs"
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	gogitdiff "github.com/go-git/go-git/v5/utils/diff"
 	dmp "github.com/sergi/go-diff/diffmatchpatch"
@@ -304,6 +307,66 @@ func logLineInWindow(line string, window LogWindow) bool {
 	return true
 }
 
+// diagnosePlainOpenOptions mirrors session/git.defaultPlainOpenOptions:
+// EnableDotGitCommonDir must be set or go-git silently resolves objects/refs
+// for a linked worktree against the wrong gitdir (see session/git/util.go's
+// doc comment for the verified failure mode). Reimplemented here, rather than
+// imported, because package diagnose can't import session/git -- see
+// assembleDiff's doc comment for the cycle.
+var diagnosePlainOpenOptions = &gogit.PlainOpenOptions{ //nolint:gochecknoglobals shared read-only options, not mutable state
+	DetectDotGit:          true,
+	EnableDotGitCommonDir: true,
+}
+
+// headTreeRetryAttempts and headTreeRetryDelay bound resolveHeadTree's
+// torn-read mitigation -- mirrors session/git.getHeadCommitSHA's retry shape
+// (same constants there), reimplemented locally for the same import-cycle
+// reason as diagnosePlainOpenOptions.
+const (
+	headTreeRetryAttempts = 3
+	headTreeRetryDelay    = 20 * time.Millisecond
+)
+
+// resolveHeadTree opens worktreePath and resolves its HEAD commit's tree,
+// retrying if go-git's unlocked, direct ref-file read races a concurrent git
+// operation and returns a syntactically valid but nonexistent commit hash --
+// verified by requiring repo.CommitObject to succeed before trusting the
+// result, the same torn-read mitigation as session/git.getHeadCommitSHA (see
+// its doc comment for the production failure mode this guards against).
+// Reopens the repo fresh each attempt in case the failure originates in
+// gitdir/ref parsing at open time rather than the later reads. Reimplemented
+// locally (rather than calling getHeadCommitSHA) because package diagnose
+// can't import session/git -- see assembleDiff's doc comment for the cycle.
+func resolveHeadTree(worktreePath string) (*object.Tree, error) {
+	var lastErr error
+	for attempt := 0; attempt < headTreeRetryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(headTreeRetryDelay)
+		}
+		repo, err := gogit.PlainOpenWithOptions(worktreePath, diagnosePlainOpenOptions) //nolint:norawgitopen package diagnose can't import session/git.OpenRepo (import cycle: session/git -> ... -> session/tmux -> session/diagnose); options mirror OpenRepo's exactly.
+		if err != nil {
+			lastErr = fmt.Errorf("open %s: %w", worktreePath, err)
+			continue
+		}
+		head, err := repo.Head()
+		if err != nil {
+			lastErr = fmt.Errorf("resolve HEAD at %s: %w", worktreePath, err)
+			continue
+		}
+		headCommit, err := repo.CommitObject(head.Hash())
+		if err != nil {
+			lastErr = fmt.Errorf("go-git resolved HEAD to %s at %s, which is not a real commit object: %w", head.Hash(), worktreePath, err)
+			continue
+		}
+		headTree, err := headCommit.Tree()
+		if err != nil {
+			return nil, fmt.Errorf("read HEAD tree at %s: %w", worktreePath, err)
+		}
+		return headTree, nil
+	}
+	return nil, lastErr
+}
+
 // assembleDiff builds the Diff bundle section content from worktreePath's
 // current uncommitted changes against its HEAD commit, via go-git directly
 // (github.com/go-git/go-git/v5) rather than a git subshell, per the
@@ -314,59 +377,148 @@ func logLineInWindow(line string, window LogWindow) bool {
 // session/git.GitWorktree.Diff(), for the same reason: package session/git
 // transitively imports session/tmux, which imports this package.
 func (a *DiagnosticBundleAssembler) assembleDiff(worktreePath string) (string, error) {
-	repo, err := gogit.PlainOpen(worktreePath)
+	headTree, err := resolveHeadTree(worktreePath)
 	if err != nil {
-		return "", fmt.Errorf("diagnose: assembleDiff: open %s: %w", worktreePath, err)
+		return "", fmt.Errorf("diagnose: assembleDiff: resolve HEAD tree: %w", err)
 	}
 
-	head, err := repo.Head()
+	paths, err := diffCandidatePaths(worktreePath, headTree)
 	if err != nil {
-		return "", fmt.Errorf("diagnose: assembleDiff: resolve HEAD: %w", err)
-	}
-	headCommit, err := repo.CommitObject(head.Hash())
-	if err != nil {
-		return "", fmt.Errorf("diagnose: assembleDiff: read HEAD commit: %w", err)
-	}
-	headTree, err := headCommit.Tree()
-	if err != nil {
-		return "", fmt.Errorf("diagnose: assembleDiff: read HEAD tree: %w", err)
+		return "", fmt.Errorf("diagnose: assembleDiff: enumerate changed paths: %w", err)
 	}
 
-	worktree, err := repo.Worktree()
-	if err != nil {
-		return "", fmt.Errorf("diagnose: assembleDiff: open worktree: %w", err)
-	}
-	status, err := worktree.Status()
-	if err != nil {
-		return "", fmt.Errorf("diagnose: assembleDiff: status: %w", err)
-	}
-
-	content := renderWorkingTreeDiff(status, headTree, worktreePath)
+	content := renderWorkingTreeDiff(paths, headTree, worktreePath)
 	if content == "" {
 		content = "(no uncommitted changes)"
 	}
 	return enforceBudget(BundleSectionDiff, content, a.cfg), nil
 }
 
+// diffCandidatePaths returns every path that might differ between headTree
+// and worktreePath's on-disk state: every path tracked in headTree (a
+// modification or deletion could touch any of them) plus every untracked,
+// non-gitignored file found by walking worktreePath. Deliberately avoids
+// go-git's Worktree.Status(), which hashes every untracked file's full
+// content just to classify it regardless of .gitignore (go-git issue #181)
+// and is a documented production perf hotspot (see
+// session/git/worktree_dirty_fast.go's doc comment) -- mirrors the
+// gitignore-walk approach session/git/diff.go's untrackedWorktreePaths uses,
+// reimplemented locally since this package can't import session/git (see
+// assembleDiff's doc comment for the cycle). renderWorkingTreeDiff's own
+// content-equality check does the actual unchanged-path filtering, so this
+// only needs to return a superset.
+func diffCandidatePaths(worktreePath string, headTree *object.Tree) ([]string, error) {
+	paths, err := headTreeFilePaths(headTree)
+	if err != nil {
+		return nil, fmt.Errorf("walk HEAD tree: %w", err)
+	}
+
+	untracked, err := untrackedWorktreePaths(worktreePath)
+	if err != nil {
+		return nil, fmt.Errorf("enumerate untracked files: %w", err)
+	}
+	for p := range untracked {
+		paths[p] = struct{}{}
+	}
+
+	sorted := make([]string, 0, len(paths))
+	for p := range paths {
+		sorted = append(sorted, p)
+	}
+	sort.Strings(sorted)
+	return sorted, nil
+}
+
+// headTreeFilePaths returns the set of every file path tracked in headTree.
+func headTreeFilePaths(headTree *object.Tree) (map[string]struct{}, error) {
+	paths := make(map[string]struct{})
+	fileIter := headTree.Files()
+	defer fileIter.Close()
+	err := fileIter.ForEach(func(f *object.File) error {
+		paths[f.Name] = struct{}{}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
+// untrackedWorktreePaths walks worktreePath (skipping .git and anything
+// matched by its .gitignore/.git/info/exclude patterns) and returns the
+// slash-separated relative paths of every regular file or symlink there.
+// Mirrors session/git/diff.go's untrackedWorktreePaths gitignore-walk
+// approach, reimplemented locally -- see diffCandidatePaths's doc comment for
+// the import-cycle reason this package can't just call that one.
+func untrackedWorktreePaths(worktreePath string) (map[string]struct{}, error) {
+	matcher, err := worktreeGitignoreMatcher(worktreePath)
+	if err != nil {
+		return nil, err
+	}
+
+	paths := make(map[string]struct{})
+	if err := filepath.WalkDir(worktreePath, untrackedPathWalkFunc(worktreePath, matcher, paths)); err != nil {
+		return nil, fmt.Errorf("walk worktree: %w", err)
+	}
+	return paths, nil
+}
+
+// worktreeGitignoreMatcher reads worktreePath's gitignore-family patterns
+// (github.com/go-git/go-git/v5/plumbing/format/gitignore.ReadPatterns) into a
+// Matcher for untrackedPathWalkFunc.
+func worktreeGitignoreMatcher(worktreePath string) (gitignore.Matcher, error) {
+	patterns, err := gitignore.ReadPatterns(osfs.New(worktreePath), nil)
+	if err != nil {
+		return nil, fmt.Errorf("read gitignore patterns: %w", err)
+	}
+	return gitignore.NewMatcher(patterns), nil
+}
+
+// untrackedPathWalkFunc returns the fs.WalkDirFunc untrackedWorktreePaths
+// hands to filepath.WalkDir: it records every non-.git, non-gitignored
+// regular file's slash-separated relative path into paths.
+func untrackedPathWalkFunc(worktreePath string, matcher gitignore.Matcher, paths map[string]struct{}) fs.WalkDirFunc {
+	return func(fullPath string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("visit %s: %w", fullPath, err)
+		}
+		rel, relErr := filepath.Rel(worktreePath, fullPath)
+		if relErr != nil {
+			return fmt.Errorf("relativize %s: %w", fullPath, relErr)
+		}
+		if rel == "." {
+			return nil
+		}
+		relSlash := filepath.ToSlash(rel)
+		segments := strings.Split(relSlash, "/")
+
+		if d.IsDir() {
+			if segments[0] == ".git" {
+				return filepath.SkipDir
+			}
+			if matcher.Match(segments, true) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if segments[0] == ".git" || matcher.Match(segments, false) {
+			return nil
+		}
+		paths[relSlash] = struct{}{}
+		return nil
+	}
+}
+
 // renderWorkingTreeDiff builds a simple +/- line-level diff (not a full
 // unified-hunk patch -- that's session/git/diff.go's much larger job, which
 // this package can't import; see assembleDiff's doc comment) between
-// headTree and each changed path's current on-disk content under
-// worktreePath.
-func renderWorkingTreeDiff(status gogit.Status, headTree *object.Tree, worktreePath string) string {
-	paths := make([]string, 0, len(status))
-	for path := range status {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
+// headTree and each candidate path's current on-disk content under
+// worktreePath. paths is expected pre-sorted (diffCandidatePaths's output);
+// a path whose content is unchanged on both sides is skipped.
+func renderWorkingTreeDiff(paths []string, headTree *object.Tree, worktreePath string) string {
 	var sb strings.Builder
 	for _, path := range paths {
-		entry := status[path]
-		if entry.Worktree == gogit.Unmodified && entry.Staging == gogit.Unmodified {
-			continue
-		}
-
 		oldContent := readTreeFileContent(headTree, path)
 		newContent := readWorktreeFileContent(worktreePath, path)
 		if oldContent == newContent {
@@ -407,7 +559,7 @@ func readTreeFileContent(tree *object.Tree, path string) string {
 // readWorktreeFileContent returns path's current on-disk content under root,
 // or "" if it doesn't exist there (a deleted file).
 func readWorktreeFileContent(root, path string) string {
-	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path))) //nolint:gosec // path comes from go-git's own status/tree listing
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path))) //nolint:gosec // path comes from diffCandidatePaths's own tree/gitignore-walk listing
 	if err != nil {
 		return ""
 	}
