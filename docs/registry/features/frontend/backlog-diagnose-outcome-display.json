@@ -1,0 +1,23 @@
+{
+  "id": "backlog:diagnose-outcome-display",
+  "type": "frontend",
+  "component": "DiagnoseOutcomeDisplay",
+  "path": "web-app/src/components/backlog/detail/DiagnoseOutcomeDisplay.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "DiagnoseOutcomeDisplay renders nothing but stays mounted when there is no dispatch yet and the flag is on",
+    "DiagnoseOutcomeDisplay shows the nudging-disabled banner proactively before any dispatch when the flag is off",
+    "DiagnoseOutcomeDisplay shows the Diagnosing… busy state, sourced from ListDiagnoseDispatches' Pending row, not client state",
+    "DiagnoseOutcomeDisplay renders the Nudged outcome with acted styling, a diagnosis link, and never implies resolution",
+    "DiagnoseOutcomeDisplay names the specific SafetyGateReason for a not_idle skip, never a generic 'skipped'",
+    "DiagnoseOutcomeDisplay names the specific SafetyGateReason for an identity-mismatch skip",
+    "DiagnoseOutcomeDisplay names the specific SafetyGateReason for a nudge-cap-reached skip",
+    "DiagnoseOutcomeDisplay links a BugFiled outcome to the filed bug",
+    "DiagnoseOutcomeDisplay links an Inconclusive outcome to the Activity Log note",
+    "DiagnoseOutcomeDisplay renders DispatchFailed as its own role=alert banner with a real Retry button that re-invokes onDiagnose",
+    "DiagnoseOutcomeDisplay renders Stalled distinctly from Pending and DispatchFailed, with no role=alert and a recovery link",
+    "DiagnoseOutcomeDisplay still shows the current outcome alongside the nudging-disabled banner when the flag is off after a dispatch settled"
+  ],
+  "lastModified": "2026-09-28T12:46:39Z"
+}

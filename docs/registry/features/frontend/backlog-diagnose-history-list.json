@@ -1,0 +1,16 @@
+{
+  "id": "backlog:diagnose-history-list",
+  "type": "frontend",
+  "component": "DiagnoseHistoryList",
+  "path": "web-app/src/components/backlog/detail/DiagnoseHistoryList.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "DiagnoseHistoryList renders the empty state, distinct from a fetch error, when the item has never been diagnosed",
+    "DiagnoseHistoryList shows its own inline error with Retry, never a silently empty list, when the fetch fails",
+    "DiagnoseHistoryList renders 3 prior dispatches newest-first with role=list/listitem semantics",
+    "DiagnoseHistoryList renders the identical order across two fresh ListDiagnoseDispatches calls, surviving a simulated refresh",
+    "DiagnoseHistoryList does not re-render an InconclusiveNoteFiled entry's note text inline, only a link into the Activity Log"
+  ],
+  "lastModified": "2026-09-28T12:46:39Z"
+}
