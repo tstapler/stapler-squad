@@ -31,6 +31,7 @@ import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
 import { getErrorMessage } from "@/lib/utils/connectError";
+import { useDiagnoseAction } from "@/hooks/useDiagnoseAction";
 import { SendBackError } from "./detail/SendBackError";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
@@ -75,6 +76,15 @@ import * as styles from "./BacklogItemDetail.css";
 interface BacklogItemDetailProps {
   itemId: string;
   onClose?: () => void;
+  /**
+   * Requests a diagnostic dispatch for this item (DiagnoseBacklogItem RPC) —
+   * omitted disables the Diagnose control entirely, mirroring
+   * `StuckItemDetail`'s `onApprovePlan` optional-prop convention. Rejects
+   * (throws) on failure; a `Code.FailedPrecondition` ("already diagnosing")
+   * rejection renders Surface 3's in-flight busy display instead of an error
+   * (design/ux.md Surface 14) — see useDiagnoseAction.
+   */
+  onDiagnose?: (itemId: string) => Promise<void>;
 }
 
 const PRIORITY_LABELS: Record<number, string> = { 1: "P1", 2: "P2", 3: "P3", 4: "P4", 5: "P5" };
@@ -97,8 +107,10 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   send_back_idea: "Sent back to triage.",
 };
 
-export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
+export function BacklogItemDetail({ itemId, onClose, onDiagnose }: BacklogItemDetailProps) {
   const { track } = useAnalytics();
+  const { state: diagnoseState, error: diagnoseError, diagnose } = useDiagnoseAction(onDiagnose);
+  const diagnoseBusy = diagnoseState === "pending" || diagnoseState === "already-diagnosing";
   const {
     getBacklogItem,
     transitionStatus,
@@ -1697,6 +1709,34 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             onClose={() => setShowJulesDispatch(false)}
             triggerRef={julesDispatchTriggerRef}
           />
+        )}
+
+        {/* Diagnose (Epic 8.1): available on any item, not only stuck ones —
+            mirrors StuckItemDetail's onDiagnose contract exactly. */}
+        {onDiagnose && (
+          <div className={styles.diagnoseForm} data-testid="backlog-detail-diagnose-form">
+            <button
+              type="button"
+              className={styles.actionButton}
+              disabled={diagnoseBusy}
+              aria-busy={diagnoseBusy}
+              aria-live={diagnoseState === "already-diagnosing" ? "polite" : undefined}
+              aria-label="Diagnose this item"
+              onClick={() => void diagnose(item.id)}
+              data-testid="backlog-detail-diagnose"
+            >
+              {diagnoseState === "pending"
+                ? "Diagnosing…"
+                : diagnoseState === "already-diagnosing"
+                  ? "Diagnosing… (already in progress)"
+                  : "Diagnose"}
+            </button>
+            {diagnoseState === "error" && (
+              <span className={styles.diagnoseStatus} role="alert" data-testid="backlog-detail-diagnose-error">
+                {diagnoseError}
+              </span>
+            )}
+          </div>
         )}
 
         {/* Acceptance Criteria */}

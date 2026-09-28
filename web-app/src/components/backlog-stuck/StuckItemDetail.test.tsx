@@ -1,6 +1,8 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
+import { ConnectError, Code } from "@connectrpc/connect";
+import userEvent from "@testing-library/user-event";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { StuckItemDetail } from "./StuckItemDetail";
 
@@ -452,6 +454,103 @@ describe("StuckItemDetail", () => {
         />
       );
       expect(screen.getByTestId("stuck-item-no-action-copy")).toBeInTheDocument();
+    });
+  });
+
+  describe("Diagnose action (Epic 8.1 / Story 8.1.1)", () => {
+    it("does not render the Diagnose control when onDiagnose is not provided", () => {
+      render(<StuckItemDetail item={makeItem()} />);
+      expect(screen.queryByTestId("stuck-item-diagnose")).not.toBeInTheDocument();
+    });
+
+    it("renders a real, Tab-reachable button with the correct aria-label", () => {
+      render(<StuckItemDetail item={makeItem()} onDiagnose={jest.fn()} />);
+      const button = screen.getByRole("button", { name: "Diagnose this stuck item" });
+      expect(button.tagName).toBe("BUTTON");
+      expect(button).not.toHaveAttribute("tabindex", "-1");
+    });
+
+    it("onDiagnose_should_TransitionIdleToPendingToIdle_When_DispatchResolves", async () => {
+      let resolveDiagnose: () => void = () => {};
+      const onDiagnose = jest.fn(
+        () => new Promise<void>((resolve) => { resolveDiagnose = resolve; })
+      );
+      render(
+        <StuckItemDetail
+          item={makeItem({ itemId: "item-diagnose-1" })}
+          onDiagnose={onDiagnose}
+        />
+      );
+      const button = screen.getByTestId("stuck-item-diagnose");
+      expect(button).toHaveTextContent("Diagnose");
+
+      fireEvent.click(button);
+
+      expect(onDiagnose).toHaveBeenCalledWith("item-diagnose-1");
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("aria-busy", "true");
+      expect(button).toHaveTextContent("Diagnosing…");
+
+      resolveDiagnose();
+      await waitFor(() => expect(button).not.toBeDisabled());
+      expect(button).toHaveTextContent("Diagnose");
+      expect(button).not.toHaveTextContent("Diagnosing");
+    });
+
+    // validation.md's REQ-3 description text predates plan.md's later
+    // "already diagnosing" special-casing refinement (Story 8.1.1 AC / Surface
+    // 14) — this test keeps the validation.md test name but exercises a
+    // generic rejection, since a literal "already diagnosing" rejection is
+    // NOT supposed to hit this role="alert" path (see the test below).
+    it("onDiagnose_should_RenderRoleAlertError_When_DispatchRejects", async () => {
+      const onDiagnose = jest.fn().mockRejectedValue(new Error("dispatch failed — no capacity"));
+      render(<StuckItemDetail item={makeItem()} onDiagnose={onDiagnose} />);
+      const button = screen.getByTestId("stuck-item-diagnose");
+
+      fireEvent.click(button);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("stuck-item-diagnose-error").textContent).toBe(
+          "dispatch failed — no capacity"
+        )
+      );
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(button).not.toBeDisabled();
+      expect(button).toHaveTextContent("Diagnose");
+    });
+
+    it("renders Surface 3's in-flight busy display, not an error, when the dispatch rejects with FailedPrecondition (already diagnosing)", async () => {
+      const onDiagnose = jest
+        .fn()
+        .mockRejectedValue(new ConnectError("already diagnosing", Code.FailedPrecondition));
+      render(<StuckItemDetail item={makeItem()} onDiagnose={onDiagnose} />);
+      const button = screen.getByTestId("stuck-item-diagnose");
+
+      fireEvent.click(button);
+
+      await waitFor(() =>
+        expect(button).toHaveTextContent("Diagnosing… (already in progress)")
+      );
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("aria-busy", "true");
+      expect(button).toHaveAttribute("aria-live", "polite");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("stuck-item-diagnose-error")).not.toBeInTheDocument();
+    });
+
+    it("dispatches via keyboard activation (Enter)", async () => {
+      const user = userEvent.setup();
+      const onDiagnose = jest.fn().mockResolvedValue(undefined);
+      render(
+        <StuckItemDetail item={makeItem({ itemId: "item-kbd" })} onDiagnose={onDiagnose} />
+      );
+      const button = screen.getByTestId("stuck-item-diagnose");
+      button.focus();
+      expect(button).toHaveFocus();
+
+      await user.keyboard("{Enter}");
+
+      await waitFor(() => expect(onDiagnose).toHaveBeenCalledWith("item-kbd"));
     });
   });
 });

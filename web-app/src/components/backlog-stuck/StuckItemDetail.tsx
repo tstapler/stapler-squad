@@ -5,6 +5,7 @@ import Link from "next/link";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { routes } from "@/lib/routes";
 import { resolveReworkCapOverride } from "@/lib/backlog/formatReworkCapOverride";
+import { useDiagnoseAction } from "@/hooks/useDiagnoseAction";
 import { formatAgo, formatSinceUTC, isPrStatusUnknown } from "./stuckReason";
 import * as styles from "./StuckItemDetail.css";
 
@@ -35,6 +36,15 @@ interface StuckItemDetailProps {
    * instead of a generic error.
    */
   onApprovePlan?: (itemId: string) => Promise<void>;
+  /**
+   * Requests a diagnostic dispatch for this item (DiagnoseBacklogItem RPC) —
+   * omitted disables the Diagnose control entirely. Rejects (throws) on
+   * failure so this component can surface the actual backend message,
+   * except for a `Code.FailedPrecondition` ("already diagnosing") rejection,
+   * which renders Surface 3's in-flight busy display instead of an error
+   * (design/ux.md Surface 14) — see useDiagnoseAction.
+   */
+  onDiagnose?: (itemId: string) => Promise<void>;
 }
 
 /** Read-only "Repo auto-merge: on/off/unknown" line (Story 4.1.4). `allowAutoMerge` is
@@ -71,6 +81,7 @@ export function StuckItemDetail({
   currentReworkCapOverride,
   reworkCapOverrideLoaded = false,
   onApprovePlan,
+  onDiagnose,
 }: StuckItemDetailProps) {
   const unknown = isPrStatusUnknown(item);
   const isPrReady = item.reason === StuckReason.PR_READY_UNMERGED;
@@ -126,6 +137,8 @@ export function StuckItemDetail({
   const [overrideState, setOverrideState] = useState<"idle" | "pending" | "error">("idle");
   const [approveState, setApproveState] = useState<"idle" | "pending" | "error">("idle");
   const [approveError, setApproveError] = useState<string | null>(null);
+  const { state: diagnoseState, error: diagnoseError, diagnose } = useDiagnoseAction(onDiagnose);
+  const diagnoseBusy = diagnoseState === "pending" || diagnoseState === "already-diagnosing";
 
   async function submitOverride(override: number) {
     if (!onReworkCapOverride) return;
@@ -265,6 +278,32 @@ export function StuckItemDetail({
             </div>
           )}
         </>
+      )}
+
+      {onDiagnose && (
+        <div className={styles.overrideForm} data-testid="stuck-item-diagnose-form">
+          <button
+            type="button"
+            className={styles.overrideButton}
+            disabled={diagnoseBusy}
+            aria-busy={diagnoseBusy}
+            aria-live={diagnoseState === "already-diagnosing" ? "polite" : undefined}
+            aria-label="Diagnose this stuck item"
+            onClick={() => void diagnose(item.itemId)}
+            data-testid="stuck-item-diagnose"
+          >
+            {diagnoseState === "pending"
+              ? "Diagnosing…"
+              : diagnoseState === "already-diagnosing"
+                ? "Diagnosing… (already in progress)"
+                : "Diagnose"}
+          </button>
+          {diagnoseState === "error" && (
+            <span className={styles.overrideStatus} role="alert" data-testid="stuck-item-diagnose-error">
+              {diagnoseError}
+            </span>
+          )}
+        </div>
       )}
 
       <div className={styles.row}>

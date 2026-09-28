@@ -311,6 +311,18 @@ export const actionButtonDanger = style({
   },
 });
 
+export const diagnoseForm = style({
+  display: "flex",
+  gap: vars.space["2"],
+  alignItems: "center",
+  flexWrap: "wrap",
+});
+
+export const diagnoseStatus = style({
+  color: vars.color.textMuted,
+  fontSize: vars.fontSize.xs,
+});
+
 export const sessionList = style({
   display: "flex",
   flexDirection: "column",

@@ -191,6 +191,10 @@ jest.mock("@/lib/store", () => ({
 // connection — set before render() (the stream is opened once, on mount).
 let mockTerminalStreamEvents: Array<{ event: { case: string; value: { itemId: string } } }> = [];
 jest.mock("@connectrpc/connect", () => ({
+  // ConnectError/Code are real (unmocked) named exports — useDiagnoseAction
+  // (Epic 8.1) needs the real Code.FailedPrecondition check to distinguish
+  // "already diagnosing" from a generic error.
+  ...jest.requireActual("@connectrpc/connect"),
   createClient: () => ({
     watchBacklogItems: () =>
       (async function* () {
@@ -1828,5 +1832,87 @@ describe("BacklogItemDetail — Story 5.2.3: per-item cost-by-stage table", () =
 
     expect(screen.getByTestId("item-stage-cost-error")).toHaveTextContent("Couldn't load cost data.");
     expect(screen.queryByTestId("item-stage-cost-table")).not.toBeInTheDocument();
+  });
+});
+
+describe("BacklogItemDetail — Diagnose action (Epic 8.1 / Story 8.1.2)", () => {
+  async function renderWithDiagnose(onDiagnose?: (itemId: string) => Promise<void>) {
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" onDiagnose={onDiagnose} />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("does not render the Diagnose control when onDiagnose is not provided", async () => {
+    await renderWithDiagnose(undefined);
+    expect(screen.queryByTestId("backlog-detail-diagnose")).not.toBeInTheDocument();
+  });
+
+  it("renders a real, Tab-reachable button with the correct aria-label", async () => {
+    await renderWithDiagnose(jest.fn());
+    const button = screen.getByRole("button", { name: "Diagnose this item" });
+    expect(button.tagName).toBe("BUTTON");
+  });
+
+  it("transitions idle -> pending -> idle when the dispatch resolves, identically to StuckItemDetail", async () => {
+    let resolveDiagnose: () => void = () => {};
+    const onDiagnose = jest.fn(
+      () => new Promise<void>((resolve) => { resolveDiagnose = resolve; })
+    );
+    await renderWithDiagnose(onDiagnose);
+    const button = screen.getByTestId("backlog-detail-diagnose");
+    expect(button).toHaveTextContent("Diagnose");
+
+    fireEvent.click(button);
+
+    expect(onDiagnose).toHaveBeenCalledWith("item-1");
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toHaveTextContent("Diagnosing…");
+
+    resolveDiagnose();
+    await waitFor(() => expect(button).not.toBeDisabled());
+    expect(button).toHaveTextContent("Diagnose");
+  });
+
+  it("renders a role=alert inline error on a generic rejection", async () => {
+    const onDiagnose = jest.fn().mockRejectedValue(new Error("dispatch failed — no capacity"));
+    await renderWithDiagnose(onDiagnose);
+    const button = screen.getByTestId("backlog-detail-diagnose");
+
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("backlog-detail-diagnose-error").textContent).toBe(
+        "dispatch failed — no capacity"
+      )
+    );
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(button).not.toBeDisabled();
+  });
+
+  it("renders Surface 3's in-flight busy display, not an error, on a FailedPrecondition (already diagnosing) rejection", async () => {
+    const { ConnectError, Code } = jest.requireActual("@connectrpc/connect");
+    const onDiagnose = jest
+      .fn()
+      .mockRejectedValue(new ConnectError("already diagnosing", Code.FailedPrecondition));
+    await renderWithDiagnose(onDiagnose);
+    const button = screen.getByTestId("backlog-detail-diagnose");
+
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(button).toHaveTextContent("Diagnosing… (already in progress)")
+    );
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toHaveAttribute("aria-live", "polite");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("backlog-detail-diagnose-error")).not.toBeInTheDocument();
   });
 });
