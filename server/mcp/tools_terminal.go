@@ -11,6 +11,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/diagnose"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
@@ -61,6 +62,13 @@ type terminalHandlers struct {
 	// production wiring (NewCore, server.go) always sets a real
 	// services.DiagnoseDispatchStore when storage is non-nil.
 	dispatchWriteGuard diagnoseDispatchWriteGuard
+	// diagnoseOutcomes is Story 5.2.2's outcome-notify wiring for a
+	// successful nudge write (writeToSession/steerSession) and for a
+	// safety-gate rejection of a diagnostic session's write -- see
+	// diagnoseOutcomeHooks's doc comment. Optional: the zero value skips
+	// outcome recording entirely, matching nudgeGate/dispatchWriteGuard's own
+	// optionality.
+	diagnoseOutcomes diagnoseOutcomeHooks
 }
 
 // ReadSessionOutputResult is the response type for read_session_output.
@@ -317,10 +325,10 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 		return errResult_, nil
 	}
 
-	if gateErr := checkNudgeGate(ctx, th.nudgeGate, inst); gateErr != nil {
+	if gateErr := checkNudgeGate(ctx, th.nudgeGate, inst, th.diagnoseOutcomes); gateErr != nil {
 		return gateErr, nil
 	}
-	if guardErr := checkDuplicateWriteGuard(ctx, th.dispatchWriteGuard); guardErr != nil {
+	if guardErr := checkDuplicateWriteGuard(ctx, th.dispatchWriteGuard, th.diagnoseOutcomes); guardErr != nil {
 		return guardErr, nil
 	}
 
@@ -339,6 +347,10 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 	if err != nil {
 		return classifyWriteResult(err, "input"), nil
 	}
+
+	recordDiagnoseOutcomeIfDispatched(ctx, th.diagnoseOutcomes, func() diagnose.DiagnoseOutcome {
+		return diagnose.DiagnoseOutcome{Kind: diagnose.DiagnoseOutcomeKindNudged}
+	})
 
 	return okResult(WriteSessionResult{
 		MCPResult:    MCPResult{Success: true},
@@ -775,7 +787,7 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 		return errResult_, nil
 	}
 
-	expectedUUID, gateErr := evaluateNudgeGate(ctx, th.nudgeGate, inst)
+	expectedUUID, gateErr := evaluateNudgeGate(ctx, th.nudgeGate, inst, th.diagnoseOutcomes)
 	if gateErr != nil {
 		return gateErr, nil
 	}
@@ -786,10 +798,10 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 	if inst.OneShot && uuid != "" && inst.GetEffectiveStatus() == session.Stopped {
 		resumeCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
-		if verifyErr := verifyNudgeIdentity(resumeCtx, th.nudgeGate, inst, expectedUUID); verifyErr != nil {
+		if verifyErr := verifyNudgeIdentity(resumeCtx, th.nudgeGate, inst, expectedUUID, th.diagnoseOutcomes); verifyErr != nil {
 			return verifyErr, nil
 		}
-		if guardErr := checkDuplicateWriteGuard(resumeCtx, th.dispatchWriteGuard); guardErr != nil {
+		if guardErr := checkDuplicateWriteGuard(resumeCtx, th.dispatchWriteGuard, th.diagnoseOutcomes); guardErr != nil {
 			return guardErr, nil
 		}
 		result, err := inst.RunWithResume(resumeCtx, message)
@@ -799,6 +811,9 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 			}
 			return errResult(ErrInternalError, fmt.Sprintf("resume subprocess failed: %v", err), "Ensure claude CLI is available and session_id is valid"), nil
 		}
+		recordDiagnoseOutcomeIfDispatched(resumeCtx, th.diagnoseOutcomes, func() diagnose.DiagnoseOutcome {
+			return diagnose.DiagnoseOutcome{Kind: diagnose.DiagnoseOutcomeKindNudged}
+		})
 		return okResult(SteerSessionResult{
 			MCPResult: MCPResult{Success: true},
 			SessionID: sessionID,
@@ -811,15 +826,19 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 	// Fallback: send via PTY send-keys (interactive sessions or sessions
 	// without UUID), via session.SubmitContentWithEnter (BUG-031) so content
 	// and the submit keystroke travel as two separate SendKeys writes.
-	if verifyErr := verifyNudgeIdentity(ctx, th.nudgeGate, inst, expectedUUID); verifyErr != nil {
+	if verifyErr := verifyNudgeIdentity(ctx, th.nudgeGate, inst, expectedUUID, th.diagnoseOutcomes); verifyErr != nil {
 		return verifyErr, nil
 	}
-	if guardErr := checkDuplicateWriteGuard(ctx, th.dispatchWriteGuard); guardErr != nil {
+	if guardErr := checkDuplicateWriteGuard(ctx, th.dispatchWriteGuard, th.diagnoseOutcomes); guardErr != nil {
 		return guardErr, nil
 	}
 	if err := session.SubmitContentWithEnter(ctx, inst, message); err != nil {
 		return classifyWriteResult(err, "message"), nil
 	}
+
+	recordDiagnoseOutcomeIfDispatched(ctx, th.diagnoseOutcomes, func() diagnose.DiagnoseOutcome {
+		return diagnose.DiagnoseOutcome{Kind: diagnose.DiagnoseOutcomeKindNudged}
+	})
 
 	return okResult(SteerSessionResult{
 		MCPResult: MCPResult{Success: true},

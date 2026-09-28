@@ -77,6 +77,21 @@ type DiagnoseDispatchStore interface {
 	// (e.g. a manual, non-diagnose caller) -- the guard skips entirely in that
 	// case.
 	FindByDiagnosticSessionUUID(ctx context.Context, diagnosticSessionUUID string) (dispatchID string, found bool, err error)
+	// FindPendingByDiagnosticSessionUUID resolves a diagnostic session's own
+	// UUID to its DiagnoseDispatchRecord (including ItemID), but ONLY when
+	// that row is still Pending -- Story 5.2.2's outcome-notify call sites
+	// (create_backlog_item, post_backlog_update, a successful nudge write, a
+	// safety-gate rejection of a diagnostic session's write) need ItemID to
+	// call DiagnoseDispatcher.RecordDiagnoseOutcome, unlike
+	// FindByDiagnosticSessionUUID's dispatchID-only/status-blind lookup,
+	// which exists for the duplicate-write guard alone. found is false, not
+	// an error, both when no DiagnoseDispatch row has this
+	// DiagnosticSessionUUID (e.g. a manual, non-diagnose caller) and when a
+	// matching row has already completed or stalled -- the Pending-only
+	// filter is what makes every outcome-notify call site idempotent: once
+	// any one of them completes the row, every later call for the same
+	// dispatch is a silent no-op instead of a duplicate notification.
+	FindPendingByDiagnosticSessionUUID(ctx context.Context, diagnosticSessionUUID string) (DiagnoseDispatchRecord, bool, error)
 	// CheckAndSetWriteAttempted implements Story 4.1.4f: atomically reads
 	// dispatchID's WriteAttemptedAt; if nil, sets it to now and returns
 	// (false, nil); if already set, returns (true, nil) without modifying it.
@@ -158,6 +173,19 @@ func (s *entDiagnoseDispatchStore) FindByDiagnosticSessionUUID(ctx context.Conte
 		return "", false, nil
 	}
 	return data.ID, true, nil
+}
+
+// FindPendingByDiagnosticSessionUUID implements Story 5.2.2's outcome-notify
+// lookup. See DiagnoseDispatchStore.FindPendingByDiagnosticSessionUUID.
+func (s *entDiagnoseDispatchStore) FindPendingByDiagnosticSessionUUID(ctx context.Context, diagnosticSessionUUID string) (DiagnoseDispatchRecord, bool, error) {
+	data, found, err := s.persistence.FindDiagnoseDispatchByDiagnosticSessionUUID(ctx, diagnosticSessionUUID)
+	if err != nil {
+		return DiagnoseDispatchRecord{}, false, fmt.Errorf("diagnose dispatch store: find pending by diagnostic session %s: %w", diagnosticSessionUUID, err)
+	}
+	if !found || data.Status != string(diagnose.DiagnoseDispatchStatusPending) {
+		return DiagnoseDispatchRecord{}, false, nil
+	}
+	return dataToRecord(data), true, nil
 }
 
 // CheckAndSetWriteAttempted implements Story 4.1.4f's dispatch-level

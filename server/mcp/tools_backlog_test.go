@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/diagnose"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
@@ -2710,6 +2711,85 @@ func TestCreateBacklogItem_should_Succeed_When_NoSessionUUID(t *testing.T) {
 	tc, ok := result.Content[0].(mcpgo.TextContent)
 	require.True(t, ok)
 	assert.Contains(t, tc.Text, "Filed from a manual MCP client")
+}
+
+// newDiagnoseOutcomeTestHooks builds a real diagnoseOutcomeHooks (a real
+// DiagnoseDispatchStore + a real *services.DiagnoseDispatcher, both backed by
+// storage) for Story 5.2.2's outcome-notify tests -- no notifier wired (nil
+// EventBus), matching newTestDiagnoseDispatcher's own convention
+// (server/services/diagnose_dispatcher_test.go) of not requiring a real event
+// bus to observe durable state.
+func newDiagnoseOutcomeTestHooks(storage *session.Storage) (diagnoseOutcomeHooks, services.DiagnoseDispatchStore) {
+	dispatchStore := services.NewDiagnoseDispatchStore(storage)
+	dispatcher := services.NewDiagnoseDispatcher(services.DiagnoseDispatcherDeps{
+		DispatchStore: dispatchStore,
+		DataSource:    storage,
+	})
+	return diagnoseOutcomeHooks{store: dispatchStore, recorder: dispatcher}, dispatchStore
+}
+
+// TestCreateBacklogItem_should_RecordBugFiledOutcome_WhenCallerIsDiagnosticSessionWithPendingDispatch
+// covers Story 5.2.2 gap item 1: create_backlog_item called by a
+// headless-diagnose-* session with an in-flight DiagnoseDispatch row must
+// close it out as BugFiled with the new item's ID.
+func TestCreateBacklogItem_should_RecordBugFiledOutcome_WhenCallerIsDiagnosticSessionWithPendingDispatch(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	diagnoseOutcomes, dispatchStore := newDiagnoseOutcomeTestHooks(storage)
+	handler := &backlogHandlers{storage: storage, diagnoseOutcomes: diagnoseOutcomes}
+
+	stuckItem, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "Stuck item", Status: string(session.BacklogStatusInProgress)})
+	require.NoError(t, err)
+	callerUUID := "headless-diagnose-" + stuckItem.ID + "-abc"
+	dispatchID, err := dispatchStore.Record(context.Background(), services.DiagnoseDispatchRequest{
+		ItemID: stuckItem.ID, TargetSessionUUID: "target-session", DiagnosticSessionUUID: callerUUID,
+	})
+	require.NoError(t, err)
+
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	result, err := handler.createBacklogItem(ctx, makeToolReq(map[string]interface{}{
+		"title": "Filed by the diagnostic agent",
+	}))
+	require.NoError(t, err)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	var newItemID string
+	_, scanErr := fmt.Sscanf(tc.Text, "Created backlog item %s", &newItemID)
+	require.NoError(t, scanErr)
+	newItemID = strings.TrimSuffix(newItemID, ":")
+
+	records, err := dispatchStore.ListByItem(context.Background(), stuckItem.ID)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, dispatchID, records[0].ID)
+	require.Equal(t, diagnose.DiagnoseDispatchStatusCompleted, records[0].Status)
+	require.NotNil(t, records[0].Outcome)
+	require.Equal(t, diagnose.DiagnoseOutcomeKindBugFiled, records[0].Outcome.Kind)
+	require.NotNil(t, records[0].Outcome.BugItemID)
+	require.Equal(t, newItemID, *records[0].Outcome.BugItemID)
+}
+
+// TestCreateBacklogItem_should_NotRecordOutcome_WhenCallerHasNoDispatchRow is
+// the "a Tyler-manual call (no DiagnoseDispatch row) -> completely
+// unaffected, no notification fired" case: a plain caller session UUID
+// (or none at all) with no matching DiagnoseDispatch row must leave the
+// dispatch store completely untouched.
+func TestCreateBacklogItem_should_NotRecordOutcome_WhenCallerHasNoDispatchRow(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	diagnoseOutcomes, dispatchStore := newDiagnoseOutcomeTestHooks(storage)
+	handler := &backlogHandlers{storage: storage, diagnoseOutcomes: diagnoseOutcomes}
+
+	ctx := WithSessionUUID(context.Background(), "tylers-manual-session-uuid")
+	result, err := handler.createBacklogItem(ctx, makeToolReq(map[string]interface{}{
+		"title": "Filed manually by Tyler",
+	}))
+	require.NoError(t, err)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "Filed manually by Tyler")
+
+	pending, err := dispatchStore.ListAllPending(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, pending, "a Tyler-manual call must never create or complete a DiagnoseDispatch row")
 }
 
 // TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds verifies
@@ -6463,6 +6543,111 @@ func TestPostBacklogUpdate_should_Succeed_When_SessionLinkedToItem(t *testing.T)
 	require.Len(t, notes, 1)
 	assert.Equal(t, sessionUUID, notes[0].AuthorSessionUUID)
 	assert.Equal(t, "made progress", notes[0].Message)
+}
+
+// TestPostBacklogUpdate_should_RecordInconclusiveNoteFiledOutcome_WhenCallerIsDiagnosticSessionWithPendingDispatch
+// covers Story 5.2.2 gap item 2: post_backlog_update called by a
+// headless-diagnose-* session with an in-flight DiagnoseDispatch row must
+// close it out as InconclusiveNoteFiled with the posted message as NoteText.
+func TestPostBacklogUpdate_should_RecordInconclusiveNoteFiledOutcome_WhenCallerIsDiagnosticSessionWithPendingDispatch(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	diagnoseOutcomes, dispatchStore := newDiagnoseOutcomeTestHooks(storage)
+	handler := &backlogHandlers{storage: storage, store: &stubStore{}, diagnoseOutcomes: diagnoseOutcomes}
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title: "Stuck item under diagnosis", Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	callerUUID := "headless-diagnose-" + item.ID + "-abc"
+	dispatchID, err := dispatchStore.Record(context.Background(), services.DiagnoseDispatchRequest{
+		ItemID: item.ID, TargetSessionUUID: "target-session", DiagnosticSessionUUID: callerUUID,
+	})
+	require.NoError(t, err)
+
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "session appears genuinely idle-stalled; filing an inconclusive note.",
+	})
+	result, err := handler.postBacklogUpdate(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+
+	records, err := dispatchStore.ListByItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, dispatchID, records[0].ID)
+	require.Equal(t, diagnose.DiagnoseDispatchStatusCompleted, records[0].Status)
+	require.NotNil(t, records[0].Outcome)
+	require.Equal(t, diagnose.DiagnoseOutcomeKindInconclusiveNoteFiled, records[0].Outcome.Kind)
+	require.NotNil(t, records[0].Outcome.NoteText)
+	assert.Equal(t, "session appears genuinely idle-stalled; filing an inconclusive note.", *records[0].Outcome.NoteText)
+	assert.Nil(t, records[0].Outcome.WriteAttempted, "an ordinary note must not set WriteAttempted")
+}
+
+// TestPostBacklogUpdate_should_SetWriteAttempted_WhenMessageContainsAmbiguousWriteMarker
+// covers Task 5.2.2d's heuristic reaching all the way through
+// RecordDiagnoseOutcome -> notifyDiagnoseEvent -> deriveWriteAttempted: this
+// handler deliberately does NOT re-derive the marker itself (see its own
+// comment) -- this test proves that reuse actually works end to end, not
+// just that the shared deriveWriteAttempted unit works in isolation
+// (already covered by TestDeriveWriteAttempted_ShouldSetTrue_WhenNoteTextContainsAmbiguousWriteMarker).
+func TestPostBacklogUpdate_should_SetWriteAttempted_WhenMessageContainsAmbiguousWriteMarker(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	diagnoseOutcomes, dispatchStore := newDiagnoseOutcomeTestHooks(storage)
+	handler := &backlogHandlers{storage: storage, store: &stubStore{}, diagnoseOutcomes: diagnoseOutcomes}
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title: "Stuck item under diagnosis", Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	callerUUID := "headless-diagnose-" + item.ID + "-abc"
+	_, err = dispatchStore.Record(context.Background(), services.DiagnoseDispatchRequest{
+		ItemID: item.ID, TargetSessionUUID: "target-session", DiagnosticSessionUUID: callerUUID,
+	})
+	require.NoError(t, err)
+
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "steer_session returned write_outcome_unknown; filing an inconclusive note per instructions.",
+	})
+	_, err = handler.postBacklogUpdate(ctx, req)
+	require.NoError(t, err)
+
+	records, err := dispatchStore.ListByItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.NotNil(t, records[0].Outcome)
+	require.NotNil(t, records[0].Outcome.WriteAttempted)
+	assert.True(t, *records[0].Outcome.WriteAttempted)
+}
+
+// TestPostBacklogUpdate_should_NotRecordOutcome_WhenCallerHasNoDispatchRow is
+// the "a Tyler-manual call (no DiagnoseDispatch row) -> completely
+// unaffected, no notification fired" case for post_backlog_update.
+func TestPostBacklogUpdate_should_NotRecordOutcome_WhenCallerHasNoDispatchRow(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	diagnoseOutcomes, dispatchStore := newDiagnoseOutcomeTestHooks(storage)
+	handler := &backlogHandlers{storage: storage, store: &stubStore{}, diagnoseOutcomes: diagnoseOutcomes}
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title: "item for manual post_backlog_update test", Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	ctx := WithSessionUUID(context.Background(), "tylers-manual-session-uuid")
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "checking in manually",
+	})
+	result, err := handler.postBacklogUpdate(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+
+	pending, err := dispatchStore.ListAllPending(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, pending, "a Tyler-manual call must never create or complete a DiagnoseDispatch row")
 }
 
 // TestPostBacklogUpdate_should_Succeed_When_SessionNotLinkedToItem is the

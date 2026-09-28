@@ -280,6 +280,66 @@ func TestNotifyDiagnoseEvent_ShouldStillPersistOutcomeDurably_WhenLiveEventBusPu
 	require.Equal(t, diagnose.DiagnoseOutcomeKindDispatchFailed, rows[0].Outcome.Kind)
 }
 
+// TestRecordDiagnoseOutcome_ShouldResolveItemTitleAndPersistOutcome_WhenCalledDirectly
+// covers Story 5.2.2's exported entry point for server/mcp's outcome-notify
+// call sites (create_backlog_item, post_backlog_update, a successful nudge
+// write, a safety-gate rejection): unlike notifyDiagnoseEvent's existing
+// DispatchFailed caller (handleDispatchFailure, which already has the item in
+// scope), these callers pass only itemID -- RecordDiagnoseOutcome must
+// resolve the title itself via d.dataSource before publishing the toast.
+func TestRecordDiagnoseOutcome_ShouldResolveItemTitleAndPersistOutcome_WhenCalledDirectly(t *testing.T) {
+	t.Parallel()
+	dataSource := sampleDiagnosticDataSource()
+	notifier := &fakeDiagnoseNotifier{}
+	dispatcher, store := newTestDiagnoseDispatcher(t, dataSource, &fakeHeadlessDiagnosticSessionCreator{}, notifier)
+
+	dispatchID, err := store.Record(context.Background(), DiagnoseDispatchRequest{
+		ItemID:                "e6c2a88e",
+		TargetSessionUUID:     "target-session-uuid",
+		DiagnosticSessionUUID: "headless-diagnose-e6c2a88e-nudge",
+	})
+	require.NoError(t, err)
+
+	dispatcher.RecordDiagnoseOutcome(context.Background(), dispatchID, "e6c2a88e", diagnose.DiagnoseOutcome{Kind: diagnose.DiagnoseOutcomeKindNudged})
+
+	rows, err := store.ListByItem(context.Background(), "e6c2a88e")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, diagnose.DiagnoseDispatchStatusCompleted, rows[0].Status)
+	require.NotNil(t, rows[0].Outcome)
+	require.Equal(t, diagnose.DiagnoseOutcomeKindNudged, rows[0].Outcome.Kind)
+
+	require.Equal(t, 1, notifier.callCount())
+	require.Contains(t, notifier.calls[0].message, "Stuck item", "must resolve and use the ORIGINAL diagnosed item's title, not itemID")
+}
+
+// TestRecordDiagnoseOutcome_ShouldFallBackToItemID_WhenTitleLookupFails covers
+// the degrade-safely path: a title-fetch error must never block the outcome
+// from being durably recorded.
+func TestRecordDiagnoseOutcome_ShouldFallBackToItemID_WhenTitleLookupFails(t *testing.T) {
+	t.Parallel()
+	dataSource := sampleDiagnosticDataSource()
+	dataSource.getItemErr = errors.New("db unavailable")
+	notifier := &fakeDiagnoseNotifier{}
+	dispatcher, store := newTestDiagnoseDispatcher(t, dataSource, &fakeHeadlessDiagnosticSessionCreator{}, notifier)
+
+	dispatchID, err := store.Record(context.Background(), DiagnoseDispatchRequest{
+		ItemID:                "e6c2a88e",
+		TargetSessionUUID:     "target-session-uuid",
+		DiagnosticSessionUUID: "headless-diagnose-e6c2a88e-title-fail",
+	})
+	require.NoError(t, err)
+
+	dispatcher.RecordDiagnoseOutcome(context.Background(), dispatchID, "e6c2a88e", diagnose.DiagnoseOutcome{Kind: diagnose.DiagnoseOutcomeKindNudged})
+
+	rows, err := store.ListByItem(context.Background(), "e6c2a88e")
+	require.NoError(t, err)
+	require.Equal(t, diagnose.DiagnoseDispatchStatusCompleted, rows[0].Status, "a title-lookup failure must not block the outcome from being durably recorded")
+
+	require.Equal(t, 1, notifier.callCount())
+	require.Contains(t, notifier.calls[0].message, "e6c2a88e", "must fall back to the raw item ID when the title lookup fails")
+}
+
 // TestDeriveWriteAttempted_ShouldSetTrue_WhenNoteTextContainsAmbiguousWriteMarker
 // covers Task 5.2.2d's heuristic: NoteText/FailureReason containing the
 // write_outcome_unknown marker sets WriteAttempted.

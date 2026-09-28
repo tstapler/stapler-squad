@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/diagnose"
 )
 
 // --- Session UUID context injection ---
@@ -379,6 +380,15 @@ type backlogHandlers struct {
 	// 2.3 hasn't landed) falls back to the fixed built-in 9-entry
 	// validBacklogStatuses list (Story 2.1.4).
 	stageEngine stageLister
+
+	// diagnoseOutcomes is Story 5.2.2's outcome-notify wiring for
+	// create_backlog_item (BugFiled) and post_backlog_update
+	// (InconclusiveNoteFiled) when the caller is a headless-diagnose-*
+	// session with an in-flight DiagnoseDispatch row — see
+	// terminalHandlers.diagnoseOutcomes' doc comment (mirrored here so the
+	// handler structs can't diverge). Optional; the zero value skips outcome
+	// recording entirely.
+	diagnoseOutcomes diagnoseOutcomeHooks
 }
 
 // --- get_backlog_item ---
@@ -1938,6 +1948,21 @@ func (h *backlogHandlers) postBacklogUpdate(ctx context.Context, req mcpgo.CallT
 
 	log.InfoLog().Printf("[mcp:post_backlog_update] session=%s item=%s message=%q", authorUUID, itemID, sanitizedMessage)
 
+	// Story 5.2.2: a headless-diagnose-* caller posting an update closes out
+	// its DiagnoseDispatch row as InconclusiveNoteFiled -- see
+	// notifyDiagnoseEvent's doc comment (server/services/diagnose_dispatcher.go)
+	// for the gap this closes. WriteAttempted is deliberately left unset
+	// here, not derived from sanitizedMessage directly: notifyDiagnoseEvent
+	// already runs deriveWriteAttempted (the ambiguousWriteMarker/
+	// writeOutcomeUnknownMarker check) on NoteText itself, so duplicating
+	// that check here would just be a second, driftable copy of the same
+	// logic. No-op for every other caller (recordDiagnoseOutcomeIfDispatched's
+	// own skip contract).
+	noteText := sanitizedMessage
+	recordDiagnoseOutcomeIfDispatched(ctx, h.diagnoseOutcomes, func() diagnose.DiagnoseOutcome {
+		return diagnose.DiagnoseOutcome{Kind: diagnose.DiagnoseOutcomeKindInconclusiveNoteFiled, NoteText: &noteText}
+	})
+
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Posted activity update to backlog item %s.", itemID,
 	)), nil
@@ -2029,6 +2054,16 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 	}
 
 	log.InfoLog().Printf("[mcp:create_backlog_item] session=%s item=%s title=%q", callerUUID, created.ID, created.Title)
+
+	// Story 5.2.2: a headless-diagnose-* caller filing a bug closes out its
+	// DiagnoseDispatch row as BugFiled -- see notifyDiagnoseEvent's doc
+	// comment (server/services/diagnose_dispatcher.go) for the gap this
+	// closes. No-op for every other caller (recordDiagnoseOutcomeIfDispatched's
+	// own skip contract).
+	bugItemID := created.ID
+	recordDiagnoseOutcomeIfDispatched(ctx, h.diagnoseOutcomes, func() diagnose.DiagnoseOutcome {
+		return diagnose.DiagnoseOutcome{Kind: diagnose.DiagnoseOutcomeKindBugFiled, BugItemID: &bugItemID}
+	})
 
 	triageTriggered := false
 	if h.backlogSvc != nil {

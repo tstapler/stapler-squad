@@ -182,12 +182,6 @@ func NewDiagnoseDispatcher(deps DiagnoseDispatcherDeps) *DiagnoseDispatcher {
 	}
 }
 
-// reviewVerdictLimit bounds how many recent review verdicts RequestDiagnosis
-// fetches for the PriorVerdicts bundle section, mirroring
-// DiagnosticBundleAssembler's own priorVerdictsLimit (bundle.go) -- kept as a
-// separate constant since that one is unexported to package diagnose.
-const reviewVerdictLimit = 5
-
 // RequestDiagnosis is Story 5.1.1's entry point: guards against a duplicate
 // concurrent dispatch for itemID, assembles the diagnostic bundle, persists a
 // Pending DiagnoseDispatch row, then dispatches the headless-diagnose-*
@@ -287,6 +281,28 @@ func (d *DiagnoseDispatcher) handleDispatchFailure(ctx context.Context, dispatch
 // precise tool-call inspection, is what Task 5.2.2d settles for.
 const ambiguousWriteMarker = "write_outcome_unknown"
 
+// RecordDiagnoseOutcome is notifyDiagnoseEvent's exported entry point for
+// callers outside this package -- server/mcp's outcome-producing tool
+// handlers (create_backlog_item, post_backlog_update, a successful nudge
+// write, a safety-gate rejection of a diagnostic session's write), which
+// resolve dispatchID/itemID via DiagnoseDispatchStore.FindPendingByDiagnosticSessionUUID
+// and then call this to close the gap notifyDiagnoseEvent's doc comment used
+// to name (only handleDispatchFailure's DispatchFailed branch ever reached
+// it). Resolves itemTitle itself via d.dataSource, since those MCP call
+// sites don't reliably have the ORIGINAL diagnosed item's title in scope
+// (e.g. create_backlog_item's own title argument is the NEW bug's title, not
+// the stuck item's) -- falling back to the raw itemID on a lookup failure so
+// a title-fetch error never blocks the outcome from being durably recorded.
+func (d *DiagnoseDispatcher) RecordDiagnoseOutcome(ctx context.Context, dispatchID, itemID string, outcome diagnose.DiagnoseOutcome) {
+	itemTitle := itemID
+	if item, err := d.dataSource.GetBacklogItem(ctx, itemID); err == nil {
+		itemTitle = item.Title
+	} else {
+		log.Warn("[DiagnoseDispatcher] RecordDiagnoseOutcome: failed to resolve item title, using item ID", "item", itemID, "dispatch", dispatchID, "error", err)
+	}
+	d.notifyDiagnoseEvent(ctx, dispatchID, itemID, itemTitle, outcome)
+}
+
 // notifyDiagnoseEvent implements Story 5.2.2: unconditionally calls
 // DiagnoseDispatchStore.MarkCompleted (updating the Pending row Task 5.1.1d
 // already created to Completed -- never inserting a fresh row) BEFORE the
@@ -294,12 +310,13 @@ const ambiguousWriteMarker = "write_outcome_unknown"
 // or the notifier is unwired -- mirroring notifyReworkCapHit's exact
 // two-part shape (backlog_service_triage.go).
 //
-// Callable from every outcome branch in DiagnoseDispatcher (today, just
-// handleDispatchFailure's DispatchFailed branch -- the Nudged/BugFiled/
-// InconclusiveNoteFiled/SkippedSafetyGate outcomes are produced by the
-// diagnostic agent's own create_backlog_item/post_backlog_update/nudge tool
-// calls, handled elsewhere via DiagnoseDispatchStore.FindByDiagnosticSessionUUID;
-// those call sites should call this same function).
+// Callable from every outcome branch in DiagnoseDispatcher: handleDispatchFailure's
+// DispatchFailed branch calls it directly; every other branch (Nudged/BugFiled/
+// InconclusiveNoteFiled/SkippedSafetyGate), produced by the diagnostic
+// agent's own create_backlog_item/post_backlog_update/nudge/gate-rejected
+// tool calls, reaches it through the exported RecordDiagnoseOutcome wrapper
+// above instead, since those call sites live in server/mcp, outside this
+// package.
 func (d *DiagnoseDispatcher) notifyDiagnoseEvent(ctx context.Context, dispatchID, itemID, itemTitle string, outcome diagnose.DiagnoseOutcome) {
 	if outcome.WriteAttempted == nil {
 		outcome.WriteAttempted = deriveWriteAttempted(outcome)

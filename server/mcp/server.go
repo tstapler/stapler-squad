@@ -72,8 +72,37 @@ func NewCore(
 		dispatchWriteGuard = services.NewDiagnoseDispatchStore(storage)
 	}
 
+	// Story 5.2.2's outcome-notify wiring, shared by every handler struct
+	// below the same way nudgeGate/dispatchWriteGuard are shared: lets
+	// create_backlog_item/post_backlog_update/a successful nudge write/a
+	// safety-gate rejection resolve back to their DiagnoseDispatch row and
+	// close the gap notifyDiagnoseEvent's own doc comment
+	// (server/services/diagnose_dispatcher.go) names -- before this, only
+	// handleDispatchFailure's DispatchFailed branch ever reached it. This is
+	// this process's fourth DiagnoseDispatchStore construction, alongside
+	// dispatchWriteGuard above, server/server.go's dispatchStore, and its
+	// sweeperDeps.DispatchStore -- see server/server.go's "THIRD
+	// DiagnoseDispatchStore construction" comment for why that's safe (all
+	// are stateless wrappers over the same ent table). diagnoseDispatcher is
+	// similarly a second, functionally-independent *services.DiagnoseDispatcher
+	// instance from server.go's dispatch-side one; safe because
+	// RecordDiagnoseOutcome touches no per-instance state (diagnoseInFlight
+	// guards RequestDiagnosis only, which this instance never calls).
+	var diagnoseOutcomes diagnoseOutcomeHooks
+	if storage != nil {
+		outcomeDispatchStore := services.NewDiagnoseDispatchStore(storage)
+		diagnoseOutcomes = diagnoseOutcomeHooks{
+			store: outcomeDispatchStore,
+			recorder: services.NewDiagnoseDispatcher(services.DiagnoseDispatcherDeps{
+				DispatchStore: outcomeDispatchStore,
+				Notifier:      &services.EventBusNotifier{Bus: eventBus},
+				DataSource:    storage,
+			}),
+		}
+	}
+
 	registerDiscoveryTools(s, &discoveryHandlers{store: store})
-	registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, nudgeGate: nudgeGate, dispatchWriteGuard: dispatchWriteGuard})
+	registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, nudgeGate: nudgeGate, dispatchWriteGuard: dispatchWriteGuard, diagnoseOutcomes: diagnoseOutcomes})
 	// Wrapping a nil *services.SessionService directly in the liveInstanceFinder
 	// interface would produce a non-nil interface value around a nil pointer —
 	// th.live != nil would then be true, and calling FindLiveInstance on it
@@ -90,6 +119,7 @@ func NewCore(
 		writeLim:           newTokenBucket(writeRateLimitPerSec, writeRateLimitPerSec),
 		nudgeGate:          nudgeGate,
 		dispatchWriteGuard: dispatchWriteGuard,
+		diagnoseOutcomes:   diagnoseOutcomes,
 	})
 	registerVCSTools(s, &vcsHandlers{store: store})
 	if svc != nil {
@@ -100,7 +130,7 @@ func NewCore(
 		registerHistoryTools(s, &historyHandlers{svc: svc})
 	}
 	if storage != nil && (backlogEnabled == nil || backlogEnabled()) {
-		h := &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener, backlogSvc: backlogSvc, liveCheck: liveCheck}
+		h := &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener, backlogSvc: backlogSvc, liveCheck: liveCheck, diagnoseOutcomes: diagnoseOutcomes}
 		registerBacklogTools(s, h)
 		registerGoalTools(s, &goalHandlers{storage: storage, store: store, eventBus: eventBus, enabledCheck: backlogEnabled})
 		// registerGuidanceTools shares backlogHandlers (not a separate struct)

@@ -45,6 +45,10 @@ type lifecycleHandlers struct {
 	// for resumeSession -- see terminalHandlers.dispatchWriteGuard's doc
 	// comment (mirrored here so the two handler structs can't diverge).
 	dispatchWriteGuard diagnoseDispatchWriteGuard
+	// diagnoseOutcomes is Story 5.2.2's outcome-notify wiring for resumeSession
+	// -- see terminalHandlers.diagnoseOutcomes' doc comment (mirrored here so
+	// the two handler structs can't diverge).
+	diagnoseOutcomes diagnoseOutcomeHooks
 }
 
 // CreateSessionResult is returned by create_session.
@@ -432,16 +436,16 @@ func (lh *lifecycleHandlers) resumeSession(ctx context.Context, req mcpgo.CallTo
 			"Only paused sessions can be resumed."), nil
 	}
 
-	expectedUUID, gateErr := evaluateNudgeGate(ctx, lh.nudgeGate, inst)
+	expectedUUID, gateErr := evaluateNudgeGate(ctx, lh.nudgeGate, inst, lh.diagnoseOutcomes)
 	if gateErr != nil {
 		return gateErr, nil
 	}
 
 	inst.PauseReason = ""
-	if verifyErr := verifyNudgeIdentity(ctx, lh.nudgeGate, inst, expectedUUID); verifyErr != nil {
+	if verifyErr := verifyNudgeIdentity(ctx, lh.nudgeGate, inst, expectedUUID, lh.diagnoseOutcomes); verifyErr != nil {
 		return verifyErr, nil
 	}
-	if guardErr := checkDuplicateWriteGuard(ctx, lh.dispatchWriteGuard); guardErr != nil {
+	if guardErr := checkDuplicateWriteGuard(ctx, lh.dispatchWriteGuard, lh.diagnoseOutcomes); guardErr != nil {
 		return guardErr, nil
 	}
 	if err := inst.Resume(); err != nil {
@@ -450,6 +454,10 @@ func (lh *lifecycleHandlers) resumeSession(ctx context.Context, req mcpgo.CallTo
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("resume session: %v", err), ""), nil
 	}
+
+	recordDiagnoseOutcomeIfDispatched(ctx, lh.diagnoseOutcomes, func() diagnose.DiagnoseOutcome {
+		return diagnose.DiagnoseOutcome{Kind: diagnose.DiagnoseOutcomeKindNudged}
+	})
 
 	if err := lh.store.SaveInstances([]*session.Instance{inst}); err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("save: %v", err), ""), nil

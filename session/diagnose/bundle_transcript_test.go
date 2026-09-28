@@ -80,6 +80,7 @@ func (f *fakeLinkedTranscriptSummaryGenerator) FindRowBySessionID(_ context.Cont
 	defer f.mu.Unlock()
 	row, ok := f.rows[sessionID]
 	if !ok {
+		//nolint:nilnil // mirrors LinkedTranscriptSummaryGenerator's documented not-found contract (nil, nil), see bundle_transcript.go's FindRowBySessionID doc comment.
 		return nil, nil
 	}
 	copyRow := *row

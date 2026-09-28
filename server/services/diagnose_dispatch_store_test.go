@@ -243,6 +243,68 @@ func TestDiagnoseDispatchStore_FindByDiagnosticSessionUUID_ShouldReturnNotFound_
 	assert.Empty(t, gotID)
 }
 
+// TestDiagnoseDispatchStore_FindPendingByDiagnosticSessionUUID_ShouldReturnRecordWithItemID_WhenRowIsPending
+// covers Story 5.2.2's outcome-notify lookup: unlike FindByDiagnosticSessionUUID,
+// this returns the full record (including ItemID, which RecordDiagnoseOutcome
+// needs) when the matching row is still Pending.
+func TestDiagnoseDispatchStore_FindPendingByDiagnosticSessionUUID_ShouldReturnRecordWithItemID_WhenRowIsPending(t *testing.T) {
+	t.Parallel()
+	store := NewDiagnoseDispatchStore(newTestDiagnoseDispatchStorage(t))
+	ctx := context.Background()
+
+	dispatchID, err := store.Record(ctx, DiagnoseDispatchRequest{
+		ItemID:                "item-pending",
+		TargetSessionUUID:     "target-session-uuid",
+		DiagnosticSessionUUID: "diagnostic-session-uuid-pending",
+	})
+	require.NoError(t, err)
+
+	record, found, err := store.FindPendingByDiagnosticSessionUUID(ctx, "diagnostic-session-uuid-pending")
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, dispatchID, record.ID)
+	assert.Equal(t, "item-pending", record.ItemID)
+	assert.Equal(t, diagnose.DiagnoseDispatchStatusPending, record.Status)
+}
+
+// TestDiagnoseDispatchStore_FindPendingByDiagnosticSessionUUID_ShouldReturnNotFound_WhenRowAlreadyCompleted
+// covers the idempotency guarantee this method's doc comment names: once a
+// dispatch row completes, every later outcome-notify call for the same
+// diagnostic session UUID becomes a silent no-op rather than a duplicate
+// notification.
+func TestDiagnoseDispatchStore_FindPendingByDiagnosticSessionUUID_ShouldReturnNotFound_WhenRowAlreadyCompleted(t *testing.T) {
+	t.Parallel()
+	store := NewDiagnoseDispatchStore(newTestDiagnoseDispatchStorage(t))
+	ctx := context.Background()
+
+	dispatchID, err := store.Record(ctx, DiagnoseDispatchRequest{
+		ItemID:                "item-completed",
+		TargetSessionUUID:     "target-session-uuid",
+		DiagnosticSessionUUID: "diagnostic-session-uuid-completed",
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.MarkCompleted(ctx, dispatchID, diagnose.DiagnoseOutcome{Kind: diagnose.DiagnoseOutcomeKindNudged}))
+
+	record, found, err := store.FindPendingByDiagnosticSessionUUID(ctx, "diagnostic-session-uuid-completed")
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Equal(t, DiagnoseDispatchRecord{}, record)
+}
+
+// TestDiagnoseDispatchStore_FindPendingByDiagnosticSessionUUID_ShouldReturnNotFound_WhenNoMatchingRow
+// mirrors FindByDiagnosticSessionUUID's own carve-out: a manual, non-diagnose
+// caller has no row at all.
+func TestDiagnoseDispatchStore_FindPendingByDiagnosticSessionUUID_ShouldReturnNotFound_WhenNoMatchingRow(t *testing.T) {
+	t.Parallel()
+	store := NewDiagnoseDispatchStore(newTestDiagnoseDispatchStorage(t))
+	ctx := context.Background()
+
+	record, found, err := store.FindPendingByDiagnosticSessionUUID(ctx, "no-such-session-uuid")
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Equal(t, DiagnoseDispatchRecord{}, record)
+}
+
 // TestDiagnoseDispatchStore_CheckAndSetWriteAttempted_ShouldReturnFalseAndSetTimestamp_WhenFirstAttemptForDispatch
 // is the validation.md-named test: WriteAttemptedAt nil -> sets to now,
 // returns (false, nil).

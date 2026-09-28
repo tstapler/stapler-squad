@@ -193,6 +193,99 @@ func buildGateInput(inst *session.Instance) diagnose.GateInput {
 	}
 }
 
+// diagnoseOutcomeStore is the narrow surface Story 5.2.2's outcome-notify
+// call sites need from services.DiagnoseDispatchStore -- resolving the
+// CALLING session's own UUID (never the target session being written to,
+// same distinction checkDuplicateWriteGuard's doc comment makes) to an
+// in-flight DiagnoseDispatch row.
+type diagnoseOutcomeStore interface {
+	FindPendingByDiagnosticSessionUUID(ctx context.Context, diagnosticSessionUUID string) (services.DiagnoseDispatchRecord, bool, error)
+}
+
+// diagnoseOutcomeRecorder is the narrow surface Story 5.2.2's outcome-notify
+// call sites need from *services.DiagnoseDispatcher -- satisfied by its
+// RecordDiagnoseOutcome wrapper around the unexported notifyDiagnoseEvent
+// (see that function's doc comment for why the wrapper exists).
+type diagnoseOutcomeRecorder interface {
+	RecordDiagnoseOutcome(ctx context.Context, dispatchID, itemID string, outcome diagnose.DiagnoseOutcome)
+}
+
+// diagnoseOutcomeHooks bundles diagnoseOutcomeStore and diagnoseOutcomeRecorder
+// into one value so evaluateNudgeGate/verifyBeforeWrite/checkDuplicateWriteGuard
+// and the write handlers that call them take one extra parameter, not two --
+// mirroring nudgeGateEvaluator/diagnoseDispatchWriteGuard's existing "one
+// narrow interface per gate concern" shape. The zero value (both fields nil)
+// makes recordDiagnoseOutcomeIfDispatched a no-op, matching nudgeGate/
+// dispatchWriteGuard's own nil-skips-entirely convention for a server
+// configuration with storage == nil (e.g. the stdio fallback transport).
+type diagnoseOutcomeHooks struct {
+	store    diagnoseOutcomeStore
+	recorder diagnoseOutcomeRecorder
+}
+
+// recordDiagnoseOutcomeIfDispatched resolves the CALLING session's own UUID
+// (read from ctx, not the target session being acted upon) to an in-flight
+// DiagnoseDispatch row and, if found, records buildOutcome()'s outcome
+// against it via hooks.recorder -- Story 5.2.2's fix for notifyDiagnoseEvent's
+// documented gap: before this, only handleDispatchFailure's DispatchFailed
+// branch ever reached it. Mirrors checkDuplicateWriteGuard's exact
+// resolve-caller-not-target pattern and three-way skip contract: a no-op (no
+// error, no notification) when hooks.store/hooks.recorder are nil (dispatch
+// store unwired, e.g. the stdio fallback transport with storage == nil),
+// when the caller has no STAPLER_SESSION_UUID in context (manual/external
+// MCP client), or when the caller's session has no PENDING DiagnoseDispatch
+// row at all -- covering both "not a diagnose dispatch" (Tyler manually
+// calling these tools) and "already completed" (idempotency: a second
+// outcome-producing call within the same dispatch must not re-notify -- see
+// FindPendingByDiagnosticSessionUUID's doc comment).
+//
+// A lookup error fails OPEN (skip, log, return) rather than closed, unlike
+// checkDuplicateWriteGuard's fail-closed behavior -- this is a best-effort
+// visibility notification, not a write-safety gate, so a storage hiccup here
+// must never block or corrupt the write/tool-call outcome that already
+// happened.
+//
+// buildOutcome is called lazily, only once a matching Pending row is
+// actually found, so callers needn't construct a DiagnoseOutcome on the
+// (common) no-op path.
+func recordDiagnoseOutcomeIfDispatched(ctx context.Context, hooks diagnoseOutcomeHooks, buildOutcome func() diagnose.DiagnoseOutcome) {
+	if hooks.store == nil || hooks.recorder == nil {
+		return
+	}
+	callerUUID, ok := sessionUUIDFromContext(ctx)
+	if !ok {
+		return
+	}
+	record, found, err := hooks.store.FindPendingByDiagnosticSessionUUID(ctx, callerUUID)
+	if err != nil {
+		log.Error("diagnose outcome recorder: lookup failed", "caller_session_uuid", callerUUID, "error", err)
+		return
+	}
+	if !found {
+		return
+	}
+	hooks.recorder.RecordDiagnoseOutcome(ctx, record.ID, record.ItemID, buildOutcome())
+}
+
+// recordSkippedSafetyGateOutcome records a SkippedSafetyGate outcome for the
+// calling session (Story 5.2.2, gap item 4): the safety-gate rejection
+// itself (flag/idle/identity/cap via evaluateNudgeGate, the final pre-write
+// identity re-check via verifyBeforeWrite, or the dispatch-level
+// duplicate-write guard via checkDuplicateWriteGuard) is the ONE thing worth
+// recording -- these three are the only producers of a gateFailureResult in
+// this file, each called at most once per handler invocation before its
+// write (an earlier rejection short-circuits the handler, so a later gate is
+// never reached), so this can never double-notify for a single call. Across
+// separate calls, FindPendingByDiagnosticSessionUUID's Pending-only filter
+// (recordDiagnoseOutcomeIfDispatched) is what prevents a double-notify: once
+// any outcome-producing call (including this one) completes the dispatch
+// row, every later call for the same dispatch becomes a silent no-op.
+func recordSkippedSafetyGateOutcome(ctx context.Context, hooks diagnoseOutcomeHooks, reason diagnose.SafetyGateReason) {
+	recordDiagnoseOutcomeIfDispatched(ctx, hooks, func() diagnose.DiagnoseOutcome {
+		return diagnose.DiagnoseOutcome{Kind: diagnose.DiagnoseOutcomeKindSkippedSafetyGate, GateReason: &reason}
+	})
+}
+
 // gateFailureResult builds the MCP tool error result for a NudgeGate/final
 // identity-recheck failure. The error code IS the raw SafetyGateReason value
 // (e.g. "nudge_execution_disabled") -- Story 4.1.1's AC requires the reason
@@ -214,13 +307,15 @@ func gateFailureResult(reason diagnose.SafetyGateReason) *mcpgo.CallToolResult {
 // to a different session between resolution and write, which a
 // freshly-re-derived expectation could never observe. Returns a ready-to-
 // return MCP error result on failure, nil on success.
-func verifyBeforeWrite(ctx context.Context, inst *session.Instance, expectedUUID string) *mcpgo.CallToolResult {
+func verifyBeforeWrite(ctx context.Context, inst *session.Instance, expectedUUID string, hooks diagnoseOutcomeHooks) *mcpgo.CallToolResult {
 	snap := inst.Snapshot()
 	_, err := tmux.VerifyIdentityImmediatelyBeforeWrite(ctx, liveInstanceUUIDSnapshot{inst: inst}, snap.TmuxServerSocket, inst.GetTmuxSessionName(), expectedUUID)
 	if err == nil {
 		return nil
 	}
-	return gateFailureResult(identityMismatchReason(err))
+	reason := identityMismatchReason(err)
+	recordSkippedSafetyGateOutcome(ctx, hooks, reason)
+	return gateFailureResult(reason)
 }
 
 // evaluateNudgeGate runs gate.Evaluate (the flag/idle/identity/cap pipeline)
@@ -231,12 +326,13 @@ func verifyBeforeWrite(ctx context.Context, inst *session.Instance, expectedUUID
 // verifyBeforeWrite's doc comment). A nil gate (see terminalHandlers/
 // lifecycleHandlers.nudgeGate's doc comment) skips evaluation entirely,
 // returning ("", nil).
-func evaluateNudgeGate(ctx context.Context, gate nudgeGateEvaluator, inst *session.Instance) (expectedUUID string, errRes *mcpgo.CallToolResult) {
+func evaluateNudgeGate(ctx context.Context, gate nudgeGateEvaluator, inst *session.Instance, hooks diagnoseOutcomeHooks) (expectedUUID string, errRes *mcpgo.CallToolResult) {
 	if gate == nil {
 		return "", nil
 	}
 	expectedUUID = inst.Snapshot().UUID
 	if ok, reason := gate.Evaluate(ctx, buildGateInput(inst)); !ok {
+		recordSkippedSafetyGateOutcome(ctx, hooks, *reason)
 		return "", gateFailureResult(*reason)
 	}
 	return expectedUUID, nil
@@ -245,11 +341,11 @@ func evaluateNudgeGate(ctx context.Context, gate nudgeGateEvaluator, inst *sessi
 // verifyNudgeIdentity is verifyBeforeWrite's nil-gate-safe wrapper -- callers
 // use this (not verifyBeforeWrite directly) so a nil gate consistently skips
 // both halves of the safety gate, matching evaluateNudgeGate's skip.
-func verifyNudgeIdentity(ctx context.Context, gate nudgeGateEvaluator, inst *session.Instance, expectedUUID string) *mcpgo.CallToolResult {
+func verifyNudgeIdentity(ctx context.Context, gate nudgeGateEvaluator, inst *session.Instance, expectedUUID string, hooks diagnoseOutcomeHooks) *mcpgo.CallToolResult {
 	if gate == nil {
 		return nil
 	}
-	return verifyBeforeWrite(ctx, inst, expectedUUID)
+	return verifyBeforeWrite(ctx, inst, expectedUUID, hooks)
 }
 
 // checkNudgeGate combines evaluateNudgeGate and verifyNudgeIdentity for a
@@ -257,12 +353,12 @@ func verifyNudgeIdentity(ctx context.Context, gate nudgeGateEvaluator, inst *ses
 // resumeSession) -- steerSession has two write call sites gated by different
 // branches, so it calls evaluateNudgeGate and verifyNudgeIdentity separately
 // instead (see its own gate-insertion points).
-func checkNudgeGate(ctx context.Context, gate nudgeGateEvaluator, inst *session.Instance) *mcpgo.CallToolResult {
-	expectedUUID, errRes := evaluateNudgeGate(ctx, gate, inst)
+func checkNudgeGate(ctx context.Context, gate nudgeGateEvaluator, inst *session.Instance, hooks diagnoseOutcomeHooks) *mcpgo.CallToolResult {
+	expectedUUID, errRes := evaluateNudgeGate(ctx, gate, inst, hooks)
 	if errRes != nil {
 		return errRes
 	}
-	return verifyNudgeIdentity(ctx, gate, inst, expectedUUID)
+	return verifyNudgeIdentity(ctx, gate, inst, expectedUUID, hooks)
 }
 
 // diagnoseDispatchWriteGuard is the narrow interface Story 4.1.4g's
@@ -298,7 +394,7 @@ type diagnoseDispatchWriteGuard interface {
 // safety-critical check in this file -- ambiguity about whether a duplicate
 // write already happened must resolve to "don't write", not "assume it's
 // fine".
-func checkDuplicateWriteGuard(ctx context.Context, guard diagnoseDispatchWriteGuard) *mcpgo.CallToolResult {
+func checkDuplicateWriteGuard(ctx context.Context, guard diagnoseDispatchWriteGuard, hooks diagnoseOutcomeHooks) *mcpgo.CallToolResult {
 	if guard == nil {
 		return nil
 	}
@@ -322,6 +418,7 @@ func checkDuplicateWriteGuard(ctx context.Context, guard diagnoseDispatchWriteGu
 		return gateFailureResult(diagnose.SafetyGateReasonDuplicateWriteAttemptForDispatch)
 	}
 	if alreadyAttempted {
+		recordSkippedSafetyGateOutcome(ctx, hooks, diagnose.SafetyGateReasonDuplicateWriteAttemptForDispatch)
 		return gateFailureResult(diagnose.SafetyGateReasonDuplicateWriteAttemptForDispatch)
 	}
 	return nil

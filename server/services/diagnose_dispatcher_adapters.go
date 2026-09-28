@@ -78,6 +78,7 @@ func (a handoffSummaryGeneratorAdapter) FindRowBySessionID(ctx context.Context, 
 		return nil, fmt.Errorf("handoff summary generator adapter: find row for session %s: %w", sessionID, err)
 	}
 	if row == nil {
+		//nolint:nilnil // mirrors diagnose.LinkedTranscriptSummaryGenerator's documented not-found contract (nil, nil), see session/diagnose/bundle_transcript.go's FindRowBySessionID doc comment.
 		return nil, nil
 	}
 	return &diagnose.HandoffSummaryRow{Status: row.Status, SummaryText: row.SummaryText}, nil
