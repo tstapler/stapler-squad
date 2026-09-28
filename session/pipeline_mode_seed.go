@@ -241,10 +241,6 @@ to plan your work before implementing, and sdd:6-verify before requesting review
 // headless call with no user present to answer it - the same judgment call
 // project_plans/backlog-configurable-pipeline/requirements.md made for
 // itself, for the same reason.
-//
-// The "check on all of them together" sentence mirrors the same addition to
-// headlessTriageSystemPrompt (session/headless/features.go) — see that
-// constant's doc comment for the #882 incident it responds to.
 const sddTriagePromptTemplate = `# Backlog Item: {{item_title}}
 
 item_id: {{item_id}}
@@ -274,16 +270,12 @@ becomes the final result of the whole triage attempt - there is no follow-up mes
 coming to resume you. sdd:3-plan dispatches subagents that may report they are running
 in the background. You must still wait for each one to actually finish and produce its
 real output before moving on - keep checking within this same call rather than ending
-your turn on the assumption a later message will notify you when it completes. If
-several subagents are running at once, check on all of them together rather than
-re-checking after each individual one's completion notification arrives - each check
-re-reads the whole conversation so far, so checking once per batch instead of once per
-subagent avoids paying that cost repeatedly for no new information. Do not end your
-response with a status update describing work still in progress, such as saying a
-subagent is running in the background and you will wait for it - that sentence would
-become this entire call's output, with none of the research, plan, or validation
-actually written. Only stop once Step 3's JSON object below is the last thing you have
-written.
+your turn on the assumption a later message will notify you when it completes. Do not
+end your response with a status update describing work still in progress, such as
+saying a subagent is running in the background and you will wait for it - that
+sentence would become this entire call's output, with none of the research, plan, or
+validation actually written. Only stop once Step 3's JSON object below is the last
+thing you have written.
 
 ### Step 3 - Output
 After requirements, research, plan, and validation are written, output ONLY a JSON

@@ -222,19 +222,9 @@ const CodebaseReadAllowedTools = "Read,Grep,Glob"
 // guard applies to every pipeline mode's triage content, not just "sdd" — see that
 // file's sddTriagePromptTemplate for the mode-specific reinforcement of the same
 // rule.
-//
-// The "check on all of them together" sentence was added after a second incident
-// (#882): a single triage call stayed open for 65 minutes and cost $106.69 because
-// it re-checked its own background subagents individually as each one's completion
-// notification arrived — roughly one Monitor/ListAgents call per notification —
-// rather than waiting for the whole batch at once. Each of those checks is a full
-// turn that re-reads the entire accumulated conversation from cache, so paying for
-// one turn per subagent instead of one turn per batch compounds fast. There is no
-// way to enforce this in code: Monitor/ListAgents are Claude Code's own tools, not
-// something this repo defines, so the only lever available here is the prompt.
 const headlessTriageSystemPrompt = `You are a senior software architect performing pre-implementation triage. You have full filesystem write access to the artifact directory specified in the user prompt. Work systematically.
 
-This is a single, non-interactive call with no later turn: once you stop producing tool calls, this process exits and whatever text you last wrote becomes the final, and only, result. If any tool or subagent you use reports that it is running in the background, you must still wait for it to actually finish and produce its real output before you continue - poll or re-check within this same call rather than assuming a future message will notify you, because no future message is coming. When several subagents are running in parallel, check on all of them together rather than re-checking after each individual one's completion notification - each check is a full turn that re-reads the whole conversation so far, so checking once per batch instead of once per subagent avoids paying that cost repeatedly for no new information. Never end your response with a status update describing work still in progress (for example "I will wait for its completion" or "running in the background") - that text would become this call's entire final output, with none of the underlying work actually finished.
+This is a single, non-interactive call with no later turn: once you stop producing tool calls, this process exits and whatever text you last wrote becomes the final, and only, result. If any tool or subagent you use reports that it is running in the background, you must still wait for it to actually finish and produce its real output before you continue - poll or re-check within this same call rather than assuming a future message will notify you, because no future message is coming. Never end your response with a status update describing work still in progress (for example "I will wait for its completion" or "running in the background") - that text would become this call's entire final output, with none of the underlying work actually finished.
 
 Rules:
 1. Write all planning files to the artifact directory specified in the user prompt.
