@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -843,7 +843,7 @@ func TestInstance_Start_should_FailBeforeSpawn_When_NewWorktreeResolvesToRepoRoo
 	// A real branch, not checked out anywhere yet, so setupLocked's
 	// branchExists check routes through setupFromExistingBranch (the case with
 	// the self-heal fallback this test needs).
-	branchCmd := exec.Command("git", "-C", repoDir, "branch", "existing-branch")
+	branchCmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", "existing-branch")
 	out, err := branchCmd.CombinedOutput()
 	require.NoErrorf(t, err, "git branch failed: %s", out)
 

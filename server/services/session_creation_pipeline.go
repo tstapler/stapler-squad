@@ -88,7 +88,6 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	defer span.End()
 
 	startedAt := time.Now()
-	instanceRootDir := p.instanceRootDir
 
 	// terminal is the pipeline's one terminal-write call site (Story 2.2.3):
 	// every exit path (success, per-phase failure, timeout, panic recovery)
@@ -196,7 +195,6 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 			PRNumber:       ref.PRNumber,
 			PRURL:          prURL,
 		})
-		instanceRootDir = p.instance.GetEffectiveRootDir()
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(p.instance, []string{"path", "branch", "github_owner", "github_repo"}))
 		log.Info("[session pipeline] resolved deferred GitHub URL", "session", p.instanceTitle, "path", localPath, "branch", branch)
 	}
@@ -275,12 +273,11 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		return
 	}
 
-	// Re-derive instanceRootDir unconditionally now that Start() has completed
-	// worktree creation -- the deferredGitHubURL branch's own refresh above (if it
-	// ran) predates Start(), so it's stale for every plain SessionTypeNewWorktree
-	// session. Without this, InjectHookConfig/StartSessionDriver below would
-	// operate against the bare repo path instead of the freshly-created worktree.
-	instanceRootDir = p.instance.GetEffectiveRootDir()
+	// Derived only here, after Start() has completed worktree creation --
+	// any earlier point is stale for a plain SessionTypeNewWorktree session,
+	// leaving InjectHookConfig/StartSessionDriver below pointed at the bare
+	// repo path instead of the freshly-created worktree.
+	instanceRootDir := p.instance.GetEffectiveRootDir()
 
 	// Clear progress message now that we are about to become Active.
 	p.instance.SetCreationProgress("")

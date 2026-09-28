@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/go-git/go-git/v5"
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 )
 
 // TestCreateSession_MainCheckoutBranchCollision confirms a branch already
@@ -37,13 +38,13 @@ func TestCreateSession_MainCheckoutBranchCollision(t *testing.T) {
 	// real on-disk git-state fact, mirroring what a live SessionTypeDirectory
 	// session's tmux pane would have left behind by running `git checkout -b
 	// collide-branch` there.
-	repo, err := git.PlainOpen(repoDir)
+	repo, err := gitutil.OpenRepo(repoDir)
 	require.NoError(t, err)
 	headRef, err := repo.Head()
 	require.NoError(t, err)
 	wt, err := repo.Worktree()
 	require.NoError(t, err)
-	require.NoError(t, wt.Checkout(&git.CheckoutOptions{
+	require.NoError(t, wt.Checkout(&gogit.CheckoutOptions{
 		Hash:   headRef.Hash(),
 		Branch: plumbing.NewBranchReferenceName("collide-branch"),
 		Create: true,
