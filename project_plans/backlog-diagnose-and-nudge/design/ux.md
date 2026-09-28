@@ -489,6 +489,14 @@ call in a later iteration): the second dispatch's response is treated as
 - No dead end: "Open session" always works (it's a real, if stalled, session
   record); re-clicking Diagnose from the item detail always dispatches anew.
 
+**Backing mechanism** (added by plan-repair, closing a triad-review UX BLOCKER —
+this surface previously had no implementation behind it): detection is
+`plan.md`'s Story 6.1.5, a reconciler check on `SupersededSessionSweeper`'s
+existing ticker that flips a `DiagnoseDispatch` row's `DiagnoseDispatchStatus`
+from `Pending` to `Stalled` once it has sat `Pending` past a timeout with its
+`DiagnosticSessionUUID` confirmed dead. Rendering is `plan.md`'s Story 8.2.1,
+Task 8.2.1f.
+
 ---
 
 ## Surface 16: Result viewed after navigating away and back

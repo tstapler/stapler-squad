@@ -78,7 +78,7 @@ choice, including "Alternative Rejected"/"Reason" for B and C.
 | `NudgeGateCheck` | A function type `func(ctx, GateInput) (bool, SafetyGateReason)` — one link in the `NudgeGate` pipeline. | Named per gate: flag, idle, identity, cap. |
 | `DiagnoseOutcome` | The closed sum type describing what a diagnose dispatch ultimately did: `Nudged`, `BugFiled`, `InconclusiveNoteFiled`, `SkippedSafetyGate`, `DispatchFailed`. Also carries `WriteAttempted *bool`, non-nil only when a write call was attempted but its outcome could not be confirmed (see Story 4.1.4). | Discriminated struct with `DiagnoseOutcomeKind`; see Pattern Decisions. |
 | `DiagnoseOutcomeKind` | The closed enum discriminating `DiagnoseOutcome` variants — 5 values, all *post-completion*. Does **not** represent the pre-completion "Diagnosing…" state (see `DiagnoseDispatchStatus`) or the live, non-persisted "Nudging disabled" state (read directly from `DiagnoseNudgeExecutionFeatureFlag`, never stored). | Exhaustive-switch-checked (Go vet / lint). |
-| `DiagnoseDispatchStatus` | The lifecycle enum on the `DiagnoseDispatch` row itself: `Pending` (dispatch started, no outcome yet) or `Completed` (an outcome has been recorded). Distinct from, and orthogonal to, `DiagnoseOutcomeKind` — a `Pending` row has no `OutcomeKind` yet. Backs the durable "Diagnosing (in-flight)" UI state so it survives navigation/refresh per `research/ux.md`. | Mirrors `HandoffSummaryStatus`'s `pending → generating → {ready, error}` pattern; `session/ent/schema/diagnosedispatch.go`. |
+| `DiagnoseDispatchStatus` | The lifecycle enum on the `DiagnoseDispatch` row itself: `Pending` (dispatch started, no outcome yet), `Completed` (an outcome has been recorded), or `Stalled` (the dispatch's `headless-diagnose-*` session ended — crashed, was killed, or hit its own turn/time limit — without ever calling a terminal tool, detected by the Phase 6 reconciler, not self-reported). Distinct from, and orthogonal to, `DiagnoseOutcomeKind` — a `Pending` or `Stalled` row has no `OutcomeKind`, mirroring `Pending`'s "no outcome yet," not a fourth outcome kind. Backs the durable "Diagnosing (in-flight)" UI state (`Pending`) and Surface 15's distinct "stopped without a completion signal" banner (`Stalled`, design/ux.md) so both survive navigation/refresh per `research/ux.md`. | Mirrors `HandoffSummaryStatus`'s `pending → generating → {ready, error}` pattern — `Stalled` is this enum's `error`-equivalent failure terminal state, distinct from `Completed`'s success terminal state exactly as `HandoffSummaryStatusError` is distinct from `HandoffSummaryStatusReady`. `session/ent/schema/diagnosedispatch.go`. |
 | `SafetyGateReason` | The closed enum naming *which* gate failed: `NotIdle`, `IdentityMismatchInstance`, `IdentityMismatchTmuxMarker`, `NudgeCapReached`, `NudgeCooldownActive`, `NudgeExecutionDisabled`, `DuplicateWriteAttemptForDispatch`. | Drives the UI's "name the specific gate" requirement. |
 | `SessionIdentity` | Immutable value object `{SessionUUID, TmuxOwnerMarker}` used by both reverification checks. | `session/tmux/write_gate_ownership.go`. |
 | `verifyIdentityImmediatelyBeforeWrite` | The facade function performing the `Snapshot()` check and the tmux-pane-marker check back-to-back, with no I/O between, as the literal last step before a nudge write. | See ADR-002. |
@@ -90,7 +90,7 @@ choice, including "Alternative Rejected"/"Reason" for B and C.
 | `RequestDiagnosis` | The entry method (`DiagnoseDispatcher.RequestDiagnosis(ctx, itemID)`) that both the RPC handler and (future) a reconciler call; owns the per-item concurrency guard. | Mirrors `steerInFlight.LoadOrStore` idiom. |
 | `DiagnoseBacklogItem` | The new ConnectRPC RPC exposing `RequestDiagnosis` to the web UI. | `proto/session/v1/session.proto`. |
 | `ListDiagnoseDispatches` | The new ConnectRPC RPC returning an item's diagnose-dispatch history (durable, chronological, survives navigation). | `proto/session/v1/session.proto`. |
-| `DiagnoseDispatch` (ent) | The durable row for one dispatch, persisting both its lifecycle (`Status`: `Pending`/`Completed`) and, once completed, its outcome (kind, gate reason, bug link, note text, `WriteAttempted`, timestamps) for `ListDiagnoseDispatches`. The row is created `Pending` at dispatch start (Story 5.1.1) and updated to `Completed` at outcome time (Story 5.2.2) — never created only after the fact. | New ent schema. |
+| `DiagnoseDispatch` (ent) | The durable row for one dispatch, persisting both its lifecycle (`Status`: `Pending`/`Completed`/`Stalled`) and, once completed, its outcome (kind, gate reason, bug link, note text, `WriteAttempted`, timestamps) for `ListDiagnoseDispatches`. The row is created `Pending` at dispatch start (Story 5.1.1), updated to `Completed` at outcome time (Story 5.2.2), or updated to `Stalled` by the Phase 6 reconciler (Story 6.1.5) if it sits `Pending` past a timeout with its session confirmed dead — never created only after the fact, and never left `Pending` forever. | New ent schema. |
 | `WriteAttemptedAt` | Nullable timestamp field on the `DiagnoseDispatch` row, set the moment *any* write is attempted for that dispatch — checked-and-set atomically immediately before the underlying write call, independent of the `WriteAttempted *bool` outcome-classification field above (which is set once, at completion, by Story 5.2.2d). Added alongside, not in place of, `WriteAttempted`: the two have different timing (pre-write live gate vs. post-completion audit) and different consumers. Backs the dispatch-level duplicate-write guard (Story 4.1.4, closing the adversarial re-review's residual CONCERNS finding). | `session/ent/schema/diagnosedispatch.go`; checked via `DiagnoseDispatchStore.CheckAndSetWriteAttempted`. |
 | `HeadlessDiagnosticSessionIDPrefix` | The constant `"headless-diagnose-"`, a session-ID prefix that slots into `sessionKind.ts`'s existing `startsWith("headless-")` check with zero new classification code. | `session/diagnose/dispatch.go` (Go) mirrored as a literal in `sessionKind.ts` tests only — no new TS logic. |
 | `handoffThenCleanup` | The poll-loop helper: `BeginGeneration` → `GenerateAndPersist` → poll `FindRowBySessionID` until `ready`/`error`/caller-timeout → archive (or the documented `error` fallback). | `server/services/diagnose_stale_session_cleanup.go`. |
@@ -99,7 +99,7 @@ choice, including "Alternative Rejected"/"Reason" for B and C.
 | `config.DiagnoseNudgeConfig` | The config block holding `MaxNudgesPerItem`, `CooldownSeconds`, `IdleSettleWindowSeconds`, `BundleTokenBudget`. | `config/config.go`, following `AutonomousMaxTurns*`'s const-pair + `OrDefault()` shape. |
 | `notifyDiagnoseEvent` | The two-part durable-write-plus-live-publish notifier for every dispatch/nudge/bug-filed/cap-hit event, extending `EventBusNotifier`. | `server/services/backlog_notifier.go` (extended), `backlog_service_triage.go`'s `notifyReworkCapHit` pattern. |
 | `onDiagnose` | The new prop-callback (`(itemId: string) => Promise<void>`) added to `StuckItemDetail.tsx` and `BacklogItemDetail.tsx`, following the `onApprovePlan` convention. | Parent owns the ConnectRPC call. |
-| `DiagnoseOutcomeDisplay` | The new React component rendering one of the seven outcome states, reusing `GateVerdictBox`/`TriageReviewPanel` (`readOnly`). | `web-app/src/components/backlog/detail/DiagnoseOutcomeDisplay.tsx`. |
+| `DiagnoseOutcomeDisplay` | The new React component rendering one of the seven outcome states: the four terminal `DiagnoseOutcomeKind` cases other than `DispatchFailed` reuse `GateVerdictBox`/`TriageReviewPanel` (`readOnly`); `DispatchFailed` gets its own dedicated interactive banner (with a Retry button), since `readOnly` mode structurally cannot render one. | `web-app/src/components/backlog/detail/DiagnoseOutcomeDisplay.tsx`. |
 | `DiagnoseHistoryList` | The new component rendering the chronological dispatch history (not just latest), sourced from `ListDiagnoseDispatches`. | `web-app/src/components/backlog/detail/DiagnoseHistoryList.tsx`. |
 
 Glossary term count: **32**.
@@ -121,6 +121,7 @@ Glossary term count: **32**.
 | Nudge-execution feature flag | Direct reuse of `config.Config.FeatureFlags`/`GetFeatureFlagWithDefault` | `research/stack.md` §4 | New dedicated flag storage/table | Duplicates an existing, already-live-settable mechanism for no benefit; violates the "rollout flags: live-settable, no env vars" project memory by inventing a second mechanism. |
 | Stale-session cleanup | Extend `SupersededSessionSweeper` with a sibling predicate | ADR-001 | New parallel reconciler with its own "which session is current" logic | Reproduces the exact "ninth bypass" shape `research/pitfalls.md` §3 warns against. |
 | Cross-session transcript compaction | Direct reuse of `HandoffSummaryGenerator` for the linked-session transcript sub-piece only | MDD #2, `research/stack.md` §2 | Building a second bespoke compaction engine for the whole bundle | Explicitly rejected by requirements.md's Out of Scope and `research/build-vs-buy.md`; `HandoffSummaryGenerator`'s API is transcript-shaped, not bundle-shaped, so it's correct for only that one sub-piece. |
+| Diagnostic agent's own in-session context growth | Native harness `/compact`, zero new code | requirements.md's Rabbit Holes (warns against conflating this with `HandoffSummaryGenerator`) | Extending the bundle-compaction machinery (Epic 2.2) to also cover the dispatched agent's own turn-by-turn context | The dispatched diagnostic agent (Story 5.1.2) is a real Claude Code session like any other — its own in-session context growth during a multi-step investigation is handled automatically by the harness's native `/compact` mechanism, exactly as for any other session, requiring zero new code from this feature. This is a distinct data flow from `HandoffSummaryGenerator`, which serves only the separate cross-session bundle-assembly compaction (Epic 2.2, the linked *target* session's transcript) — closing the Rabbit Hole's explicit ask rather than silently dropping it. |
 
 ---
 
@@ -147,10 +148,14 @@ Two new ent schemas are required — this is a real schema change, not omittable
    gitignored per this repo's ent policy — only the schema file is committed.
 2. **`DiagnoseDispatch`** (`session/ent/schema/diagnosedispatch.go`): fields `ItemID`
    (string, indexed), `TargetSessionUUID` (string), `DiagnosticSessionUUID` (string),
-   `Status` (string enum: `Pending`/`Completed` — see `DiagnoseDispatchStatus`,
+   `Status` (string enum: `Pending`/`Completed`/`Stalled` — see `DiagnoseDispatchStatus`,
    written `Pending` at dispatch start per Story 5.1.1's Task 5.1.1d, before the
-   diagnostic session even exists, so a mid-dispatch page refresh has a row to read),
-   `OutcomeKind` (string enum, nullable until `Status` is `Completed`),
+   diagnostic session even exists, so a mid-dispatch page refresh has a row to read;
+   moved to `Stalled` by Story 6.1.5's reconciler check if it sits `Pending` past a
+   timeout with its `DiagnosticSessionUUID` confirmed dead — mirroring how
+   `HandoffSummaryStatus` has an `error` terminal state distinct from `ready`),
+   `OutcomeKind` (string enum, nullable until `Status` is `Completed`; remains null for
+   `Stalled`, same as for `Pending` — no outcome, just a different reason for none),
    `SafetyGateReason` (string, nullable), `BugItemID` (string, nullable), `NoteText`
    (string, nullable), `WriteAttempted` (bool, nullable — see Story 4.1.4),
    `WriteAttemptedAt` (time, nullable — added alongside `WriteAttempted`, not
@@ -177,7 +182,25 @@ this explicitly).
   (`outcome_kind`, `item_id`, `diagnostic_session_uuid`), `diagnose.dispatch.failed`
   (`reason` — e.g. MCP ECONNREFUSED), `diagnose.nudge.attempted`,
   `diagnose.nudge.skipped` (`safety_gate_reason`), `diagnose.nudge.cap_hit`,
-  `diagnose.cleanup.handoff_ready`/`diagnose.cleanup.handoff_error_fallback`.
+  `diagnose.cleanup.handoff_ready`/`diagnose.cleanup.handoff_error_fallback`,
+  `diagnose.idle.settle_reset` (`status_context`, `seconds_lost` — Story 3.2.1's Task
+  3.2.1e, added per Pre-mortem P1 #1 so the settle window's real-world completion rate
+  is measurable before the nudge flag ever goes live, not just observed after),
+  `diagnose.dispatch.stalled` (`item_id`, `diagnostic_session_uuid`,
+  `pending_duration` — Story 6.1.5's reconciler check, added to close a triad-review
+  UX blocker: a `DiagnoseDispatch` row confirmed dead without ever reaching a terminal
+  tool call).
+- **Periodic spot-check (Pre-mortem P1 #2)**: every 10th dispatch, or monthly
+  (whichever comes first), manually review the most recent `InconclusiveNoteFiled`
+  outcomes — "would a human have acted differently (filed a bug / nudged) on this
+  evidence?" This is a documented operational practice, not automated code; it exists
+  because the diagnostic agent's own judgment (bug vs. nudge vs. inconclusive) has no
+  other detection mechanism for drift toward the cheap/inconclusive outcome over time,
+  and the feature's stated success metric is otherwise purely Tyler's own subjective
+  qualitative sense. See Story 5.1.2's evidence-citation requirement (Task 5.1.2e),
+  which makes each spot-check concrete: the agent's own note names which
+  `BundleSection`s it used, so a reviewer isn't reconstructing its reasoning from
+  scratch.
 - **Metrics**: none dashboarded per requirements.md's Non-functional Requirements
   ("verified qualitatively, not a dashboarded KPI") — the durable `DiagnoseDispatch`
   table itself is the queryable record (`SELECT outcome_kind, COUNT(*) ...` ad hoc, not
@@ -206,6 +229,16 @@ this explicitly).
   quality and outcome-UI correctness before ever flipping the nudge flag on; then flip
   on for a period with `MaxNudgesPerItem` at its conservative default (2) and observe
   the durable `DiagnoseDispatch` history before considering raising it.
+- **Pre-flag-on idle-settle measurement (Pre-mortem P1 #1)**: as part of the diagnose-
+  only validation above, before `DiagnoseNudgeExecutionFeatureFlag` is ever flipped on,
+  run diagnose-only dispatches against several real, known-stuck sessions and inspect
+  the `diagnose.idle.settle_reset` log lines (Story 3.2.1's Task 3.2.1e) to confirm the
+  idle-settle window actually completes at least sometimes — not just that the gate
+  compiles and has unit-test coverage. If resets are frequent enough that the window
+  rarely or never completes on real sessions, this is a signal to retune before
+  flipping the flag on, not after: a documented fallback for a future iteration (not
+  implemented now) is tolerating brief allowlist departures shorter than one poll
+  interval instead of resetting the settle timer on any single miss.
 
 ## Unresolved Questions
 
@@ -253,10 +286,14 @@ Phase 1 (Config + Domain Types)
 
 Phase 3 (safety gate) and Phase 2 (bundle assembly) can proceed in parallel once
 Phase 1 lands — neither depends on the other. Phase 5 (dispatch orchestration) is the
-integration point requiring both. Phase 6 (cleanup) depends only on Phase 1 (config)
-and the existing `SupersededSessionSweeper` — it does not depend on Phase 5, and could
-in principle ship independently, but is sequenced after Phase 5 here since it shares
-the same review/testing wave. Phase 8 (frontend) depends on Phase 7 (RPC surface)
+integration point requiring both. Phase 6's Stories 6.1.1-6.1.4 depend only on Phase 1
+(config) and the existing `SupersededSessionSweeper` — they do not depend on Phase 5,
+and could in principle ship independently, but are sequenced after Phase 5 here since
+they share the same review/testing wave. Story 6.1.5 (added by the plan-repair pass
+closing the Surface-15 UX blocker) is the one exception: it reads and writes the
+`DiagnoseDispatch` schema/store Phase 5's Story 5.2.1 defines, so it has a genuine
+hard dependency on Phase 5, unlike its sibling stories in this phase. Phase 8
+(frontend) depends on Phase 7 (RPC surface)
 existing, but its component-reuse tasks (Epic 8.2) can be stubbed against a mock RPC
 client earlier if desired.
 
@@ -361,7 +398,14 @@ gate), Bug filed, Inconclusive, Dispatch failed. The 6th state, **Diagnosing
 value cannot represent it because no outcome exists yet at that point. The 7th state,
 **Nudging disabled (flag off)**, is neither an outcome nor a dispatch-lifecycle state
 at all — it's read live from `DiagnoseNudgeExecutionFeatureFlag` and never persisted
-on any row, correctly excluded from both enums.
+on any row, correctly excluded from both enums. An 8th state, **Diagnosis stalled**
+(design/ux.md Surface 15, closing a triad-review UX BLOCKER), is added by this
+plan-repair pass: it is *also* pre-completion-shaped — the dispatch never reached a
+terminal tool call — but is distinct from "Diagnosing (in-flight)" in that the
+underlying session is now confirmed dead. It comes from `DiagnoseDispatchStatus.Stalled`
+(same field as `Pending`, not a new field, and not a `DiagnoseOutcomeKind` value, since
+there is still no outcome to represent), set by the Phase 6 reconciler (Story 6.1.5)
+rather than by `DiagnoseDispatcher` itself.
 **Acceptance Criteria**:
 - `DiagnoseOutcomeKind` has exactly the values `Nudged`, `BugFiled`,
   `InconclusiveNoteFiled`, `SkippedSafetyGate`, `DispatchFailed`; `DiagnoseOutcome` is
@@ -384,9 +428,10 @@ on any row, correctly excluded from both enums.
   existing `HandoffSummaryStatus`-style enum convention) and the discriminated struct,
   including the `WriteAttempted *bool` field (nil unless a write's outcome was
   ambiguous — Story 4.1.4 sets it).
-- Also define `DiagnoseDispatchStatus` (`Pending`, `Completed`) here as the sibling
-  lifecycle enum — it lives on the `DiagnoseDispatch` row (Story 5.2.1's ent schema),
-  not on `DiagnoseOutcome` itself, since a `Pending` row has no outcome yet.
+- Also define `DiagnoseDispatchStatus` (`Pending`, `Completed`, `Stalled`) here as the
+  sibling lifecycle enum — it lives on the `DiagnoseDispatch` row (Story 5.2.1's ent
+  schema), not on `DiagnoseOutcome` itself, since a `Pending` or `Stalled` row has no
+  outcome yet (`Stalled` set by Story 6.1.5's reconciler, not by `DiagnoseDispatcher`).
 - Files: `session/diagnose/outcome.go`
 
 ##### Task 1.2.1b: Define `SafetyGateReason` enum + `String()` (~3 min)
@@ -651,6 +696,16 @@ nudge.
   resolves MDD #5b in favor of the requirements' literal "bare `StatusIdle`" wording,
   narrowed further by `isSafeSteerStatus`'s context allowlist (stricter than either
   bare `StatusIdle` alone or the 3-way `isIdleStatus` union).
+- **(Pre-mortem P1 #1)** Every settle-timer reset emits a structured log line
+  (`diagnose.idle.settle_reset`) naming the disqualifying status/context that caused
+  the reset and how many seconds of sustained-idle progress were lost — this is the
+  data source the Risk Control section's pre-flag-on measurement step (below) reads to
+  decide whether the window realistically ever completes on real sessions, rather than
+  discovering the answer only after the nudge flag is live.
+  - *Given* a session sustained `isSafeSteerStatus`-true for 25 seconds of a 30-second
+    window, then reports `command_prompt` (off the allowlist), *When* the settle timer
+    resets, *Then* a `diagnose.idle.settle_reset` log line is emitted with
+    `status_context: "command_prompt"` and `seconds_lost: 25`.
 **Files**: `session/diagnose/idle_gate.go`, `session/diagnose/idle_gate_test.go`
 
 ##### Task 3.2.1a: Extract/reuse `isSafeSteerStatus` and `safeIdleStatusContexts` (defined at `server/services/session_service.go:1035-1057` — verified by direct grep; corrected from an earlier draft's wrong citation of `backlog_service_pr_fix_steer.go:180`, which is actually `isClaudeCodeProgram`, a different helper referenced correctly in Task 3.2.1c) as an importable helper rather than duplicating it (~4 min)
@@ -666,6 +721,12 @@ nudge.
 - Files: `session/diagnose/idle_gate.go`
 
 ##### Task 3.2.1d: Unit tests: sustained-pass, reset-on-leave, non-Claude-Code-program rejection (~5 min)
+- Files: `session/diagnose/idle_gate_test.go`
+
+##### Task 3.2.1e: Log `diagnose.idle.settle_reset` (status/context + `seconds_lost`) every time the settle timer resets (Pre-mortem P1 #1) (~3 min)
+- Files: `session/diagnose/idle_gate.go`
+
+##### Task 3.2.1f: Unit test: reset emits the log line with the correct disqualifying context and elapsed-seconds value (~3 min)
 - Files: `session/diagnose/idle_gate_test.go`
 
 ### Epic 3.3: Nudge Cap/Cooldown
@@ -1014,7 +1075,11 @@ regress the way the 8 prior bypasses did.
 
 ### Epic 5.1: Dispatcher Service
 **Goal**: Build `DiagnoseDispatcher`, forked in shape from
-`reconcileOrphanedTriageItems`/`retryOrphanedTriageWithBackoffGate`.
+`reconcileOrphanedTriageItems`/`retryOrphanedTriageWithBackoffGate`. The dispatched
+diagnostic agent (Story 5.1.2) is a real Claude Code session, so its own in-session
+context growth across a multi-step investigation is handled by the harness's native
+`/compact` — zero new code in this phase or anywhere else in this plan (see the
+Pattern Decisions table's "Diagnostic agent's own in-session context growth" row).
 
 #### Story 5.1.1: `RequestDiagnosis` entry + per-item concurrency guard
 **As a** Tyler (via the UI), **I want** clicking Diagnose to be safe against a
@@ -1085,6 +1150,19 @@ appear in the Sessions list as a `headless_diagnostic` Synthetic Session for fre
     filing a bug ("same as `ce71ad1a`"), and the never-blindly-retry-on-ambiguous-write
     instruction (Task 4.1.4b, Phase 4 — added to this same prompt, cross-referenced
     here since Story 5.1.2 owns the prompt file).
+- **(Pre-mortem P1 #2)** The instruction block requires that every
+  `create_backlog_item`/`post_backlog_update` call the diagnostic agent makes cite
+  which specific `BundleSection` name(s) it used as evidence for its conclusion — a
+  prompt-instruction change plus a corresponding testable acceptance criterion here,
+  not new code infrastructure. This gives the Observability Plan's periodic spot-check
+  (see plan.md's Observability Plan section) something concrete to review instead of
+  reconstructing the agent's reasoning from scratch, so drift toward cheap/inconclusive
+  outcomes over harder bug-filing has a detection mechanism beyond Tyler's subjective
+  sense of the qualitative success metric.
+  - *Given* the diagnostic agent concludes `SessionSnapshot` and `Logs` show the
+    target session genuinely idle-stalled, *When* it calls `post_backlog_update` to
+    file an inconclusive note, *Then* the note text names `SessionSnapshot` and `Logs`
+    as the evidence it relied on.
 **Files**: `server/services/diagnose_dispatcher.go`, `session/diagnose/prompt.go`, `session/diagnose/prompt_test.go`
 
 ##### Task 5.1.2a: `session/diagnose/prompt.go`: render `DiagnosticBundle` + instructions into the dispatch prompt (~5 min)
@@ -1098,6 +1176,12 @@ appear in the Sessions list as a `headless_diagnostic` Synthetic Session for fre
 
 ##### Task 5.1.2d: Add the never-blindly-retry-on-ambiguous-write instruction (content specified by Phase 4's Task 4.1.4b) to the instruction block: on any `"write_outcome_unknown"` tool result, the agent must not call any write tool again for that session this dispatch, and must instead call `post_backlog_update` (Resolves adversarial-review Blocker 1) (~3 min)
 - Files: `session/diagnose/prompt.go`, `session/diagnose/prompt_test.go`
+
+##### Task 5.1.2e: Add the evidence-citation instruction (Pre-mortem P1 #2): every `create_backlog_item`/`post_backlog_update` call must name which `BundleSection`(s) it relied on as evidence (~3 min)
+- Files: `session/diagnose/prompt.go`, `session/diagnose/prompt_test.go`
+
+##### Task 5.1.2f: Unit test: rendered prompt's instruction block contains the evidence-citation requirement, naming all 8 `BundleSection` values the agent may cite (~3 min)
+- Files: `session/diagnose/prompt_test.go`
 
 #### Story 5.1.3: MCP disconnect / dispatch-failure handling
 **As a** Tyler, **I want** an MCP-unreachable failure during dispatch to surface as a
@@ -1193,7 +1277,9 @@ dig through logs to learn an autonomous action happened (project memory:
 ## Phase 6: Stale-Session Cleanup
 
 ### Epic 6.1: Extend `SupersededSessionSweeper` Family (per ADR-001)
-**Goal**: Add the idle-stale predicate and handoff-then-cleanup poll loop.
+**Goal**: Add the idle-stale predicate and handoff-then-cleanup poll loop, and wire
+the persisted summary into whatever session next picks up the same item+role (Story
+6.1.4 — requirements.md's stale-retry-cleanup step 2).
 
 #### Story 6.1.1: `findIdleStaleSessions` predicate
 **As a** Reconciler, **I want** to identify sessions that are idle-and-stalled with no
@@ -1277,6 +1363,160 @@ Phase 4 lint analyzer (Epic 4.2) covers this file since it lives under
 ##### Task 6.1.3b: Unit test + confirm `make lint-custom`'s new `requirearchivedcheck` analyzer (Epic 4.2) passes on this file (~3 min)
 - Files: `server/services/diagnose_stale_session_cleanup_test.go`
 
+#### Story 6.1.4: Hand the persisted summary to the next round's initial prompt (Resolves requirements.md's stale-retry-cleanup step 2)
+**Investigated first, per plan-repair directive**: does any existing mechanism already
+create a replacement session for a superseded/archived item+role and already read a
+persisted `HandoffSummary` row at that new session's creation time? Checked directly
+by reading code, not assumed:
+- `spawnSessionAfterGates` (`server/services/backlog_service_triage.go:855`) — the
+  function that spawns every next round (`-r2` through `-r9`) for an item+role — builds
+  its prompt via `initialPromptFor` (`backlog_service_triage.go:42`), which calls
+  `session.BuildTokenBudgetedPrompt(item, priorSessions)` (or
+  `pipelineEngine.InitialPromptFor`). Both consume only
+  `priorSessions []session.ItemSessionSummary` (structured AC-snapshot/diff/verdict
+  metadata) — neither calls `HandoffSummaryGenerator.FindRowBySessionID` or anything
+  else that reads a `HandoffSummary` row.
+- `TriggerReReview` (`backlog_service_triage.go:2685`) likewise never touches
+  `HandoffSummaryGenerator`.
+- `RestartWithSummaryButton.tsx`
+  (`web-app/src/components/sessions/RestartWithSummaryButton.tsx`) is the **only**
+  place in the codebase that reads a `HandoffSummary` row and feeds it into a new
+  session's `prompt`/`restartFromSessionId` — but it is a human-clicked, general-
+  purpose "restart any session with its summary" UI control on `SessionDetailView`,
+  entirely decoupled from backlog item+role retry-round spawning. Using it would
+  require Tyler to manually click it per stale session, which defeats this feature's
+  "reduce manual intervention" success metric.
+- **Conclusion: no existing mechanism satisfies step 2 — this is new work**, added
+  below rather than cited.
+**As a** Tyler, **I want** a stale session's persisted handoff summary (generated by
+Story 6.1.2's `handoffThenCleanup` before archiving) to be included in the initial
+prompt of whatever session next picks up the same item+role, **so that** the
+three-step sequence in requirements.md — (1) generate summary, (2) hand it to the
+new/replacement session, (3) tear down the old one — is actually implemented
+end-to-end, not just steps 1 and 3.
+**Acceptance Criteria**:
+- `initialPromptFor` additionally looks up whether the most recent prior session for
+  this item+role (the last entry in the already-available, already-ordered
+  `priorSessions`) has a `ready` `HandoffSummary` row (via
+  `HandoffSummaryGenerator.FindRowBySessionID(ctx, priorSessions[last].SessionUUID)`),
+  and if so, prepends its `SummaryText` under a distinct "Handoff from a stalled prior
+  session" heading, before the rest of the prompt. Best-effort: a nil
+  `handoffSummaryGenerator` (not wired), a missing row, or a non-`ready` row means no
+  block is added — never a blocking error, mirroring `workspacePeersBlockFor`'s
+  existing best-effort-nudge pattern in the same function.
+  - *Given* item `e6c2a88e`'s most recent prior session (archived by Story 6.1.2's
+    `handoffThenCleanup`) has a `ready` `HandoffSummary` row with `SummaryText: "Root
+    cause identified, blocked on..."`, *When* `spawnSessionAfterGates` next spawns a
+    round for this item, *Then* the new session's initial prompt contains that text
+    under a "Handoff from a stalled prior session" heading, ahead of the rest of the
+    item context.
+  - *Given* the most recent prior session has no `HandoffSummary` row (the common
+    case — most sessions end normally, not via stale-cleanup), *When* a new round is
+    spawned, *Then* the prompt is byte-for-byte unchanged from today.
+**Files**: `server/services/backlog_service_triage.go`, `server/services/backlog_service.go`, `server/dependencies.go`, `server/services/backlog_service_triage_test.go`
+
+##### Task 6.1.4a: Add a `handoffSummaryGenerator *session.HandoffSummaryGenerator` field + constructor param to `BacklogService`, wired from the same instance `server/dependencies.go`'s existing `handoffSummaryGenerator` construction already creates (~4 min)
+- Files: `server/services/backlog_service.go`, `server/dependencies.go`
+
+##### Task 6.1.4b: Implement `handoffSummaryBlockFor(ctx, priorSessions)`: returns `""` when the generator is nil, `priorSessions` is empty, no row exists, or the row isn't `ready`; otherwise returns the rendered "Handoff from a stalled prior session" block (~4 min)
+- Files: `server/services/backlog_service_triage.go`
+
+##### Task 6.1.4c: Wire `handoffSummaryBlockFor` into `initialPromptFor` alongside the existing `workspacePeersBlockFor` append (~3 min)
+- Files: `server/services/backlog_service_triage.go`
+
+##### Task 6.1.4d: Unit tests: ready row → block prepended; no row → unchanged; nil generator → unchanged, no panic; non-ready (pending/error) row → unchanged (~5 min)
+- Files: `server/services/backlog_service_triage_test.go`
+
+#### Story 6.1.5: `findStalledDiagnoseDispatches` — detect a diagnostic session that stopped without a completion signal (Closes triad-review UX BLOCKER: design/ux.md Surface 15 / UX Acceptance Criterion 9 had no backing implementation)
+**Investigated first, per plan-repair directive**: does the existing `AUTONOMOUS_STUCK`
+detection mechanism (the UX research's own cited analog for "stopped without a
+completion signal" copy) generalize to this case, or is a new reconciler check needed?
+Checked directly by reading code, not assumed:
+- `AUTONOMOUS_STUCK` is written by `onAutonomousDriverComplete`
+  (`server/services/autonomous_orchestration_service.go:310-322`), a completion
+  *callback* invoked from inside `AutonomousDriver`'s own internal polling loop when
+  that loop itself observes its turn-cap/stop condition. It is not an external
+  liveness sweep — it fires because the driver's own code path reaches that branch,
+  which requires the session to be `AutonomousDriver`-managed in the first place.
+- The `headless-diagnose-*` dispatch (Story 5.1.2) is created directly by
+  `DiagnoseDispatcher.dispatch` as a one-shot headless session — it is not routed
+  through `AutonomousDriver` (the Pattern Decisions table already rejects building
+  this feature's orchestration on `AutonomousDriver` for the nudge-write path, for the
+  same "different loop shape" reason: `AutonomousDriver` drives a session's own
+  internal loop, this feature's dispatch is a one-shot externally-triggered thing).
+  So `onAutonomousDriverComplete` structurally never fires for a diagnostic session —
+  there is no callback to hook into without first routing the dispatch through
+  `AutonomousDriver`, which would be a disproportionately large change for this one
+  gap.
+- **Conclusion: no clean hook exists — this is new reconciler work**, but a small
+  one: `SupersededSessionSweeper` (the same sweeper Phase 6 already extends per
+  ADR-001) already runs on a ticker (Story 6.1.1) and already has the exact liveness
+  primitive this check needs — `s.stopper.IsSessionLive(sessionUUID)`
+  (`server/services/superseded_session_sweeper.go:125`), used today to confirm a
+  backlog item's `ItemSessionSummary` session is dead before archiving it. This story
+  applies that same primitive to `DiagnoseDispatch.DiagnosticSessionUUID` instead,
+  on the same tick, rather than building a second ticker/poller.
+**As a** Tyler, **I want** a `DiagnoseDispatch` row that has been `Pending` too long
+with its diagnostic session confirmed dead to flip to `Stalled` automatically, **so
+that** the UI shows Surface 15's distinct "stopped without a completion signal"
+banner instead of an indefinite "Diagnosing…" for a session that crashed, was killed,
+or hit its own turn/time limit without ever calling a terminal tool.
+**Acceptance Criteria**:
+- `findStalledDiagnoseDispatches(pending []DiagnoseDispatch, isLive func(sessionUUID
+  string) bool, threshold time.Duration, now time.Time)` returns exactly the rows
+  whose `CreatedAt` is older than `threshold` **and** whose `DiagnosticSessionUUID`
+  is not live; a row still within `threshold`, or whose session is still live, is left
+  alone for this tick (a genuinely long-running diagnosis must not be misdiagnosed as
+  stalled just because it's slow).
+  - *Given* a `Pending` `DiagnoseDispatch` row created 45 minutes ago with
+    `diagnoseDispatchStalledThreshold = 30m`, and `isLive(row.DiagnosticSessionUUID)`
+    returns `false`, *When* `findStalledDiagnoseDispatches` runs, *Then* the row is
+    returned.
+  - *Given* the same row but `isLive(...)` returns `true` (the session is still
+    running a long investigation), *When* the sweep runs, *Then* the row is not
+    returned, regardless of age.
+  - *Given* a `Pending` row created 5 minutes ago whose session is already dead
+    (e.g. crashed instantly), *When* the sweep runs, *Then* the row is not returned
+    yet — it's within `threshold`, since a session can legitimately take a short
+    moment between creation and its process actually starting.
+  - *Given* a row already `Completed` or already `Stalled`, *When* the sweep runs,
+    *Then* it is never reconsidered (the sweep only ever queries `Pending` rows).
+- `DiagnoseDispatchStore.MarkStalled(ctx, dispatchID)` updates the row's `Status` to
+  `Stalled`, sets `CompletedAt`, and leaves `OutcomeKind` null — the same "no outcome"
+  shape as `Pending`, distinguished only by `Status` and the now-set `CompletedAt`.
+  - *Given* a `Pending` row, *When* `MarkStalled` is called, *Then* `ListByItem`
+    subsequently returns that same row (same `ID`/`CreatedAt`) with `Status: Stalled`,
+    `OutcomeKind: nil`, `CompletedAt` set — not a second row.
+- The check runs on `SupersededSessionSweeper`'s existing 60s ticker (Story 6.1.1's
+  ticker, reused rather than a second one), and a stalled transition emits both a
+  structured log line (`diagnose.dispatch.stalled`, naming `item_id`/
+  `diagnostic_session_uuid`/`pending_duration`) and a live notification via the same
+  `notifyDiagnoseEvent`-adjacent publish path (Story 5.2.2) used for every other
+  dispatch outcome, so it surfaces as a toast, not only a log line a user must go dig
+  for (project memory: "document AI decisions in edge cases").
+  - *Given* the sweeper's tick identifies a stalled dispatch, *When* it processes it,
+    *Then* a `diagnose.dispatch.stalled` log line is emitted and the event bus
+    publishes a notification keyed by the dispatch's `item_id`.
+**Files**: `server/services/superseded_session_sweeper.go`, `server/services/superseded_session_sweeper_test.go`, `server/services/diagnose_dispatch_store.go`, `server/services/diagnose_dispatch_store_test.go`
+
+##### Task 6.1.5a: Add `diagnoseDispatchStalledThreshold` const (default 30 min — long enough that a genuinely thorough investigation isn't misdiagnosed as stalled, short enough that Tyler isn't staring at "Diagnosing…" for hours; no live-settable config surface is added for this single constant, matching the proportionality of Phase 6's other reconciler thresholds like `triageCallBudget`) (~2 min)
+- Files: `server/services/superseded_session_sweeper.go`
+
+##### Task 6.1.5b: Add `DiagnoseDispatchStore.ListAllPending(ctx) ([]DiagnoseDispatch, error)` — a cross-item query (distinct from Story 5.2.1's item-scoped `ListByItem`), since the sweep scans every in-flight dispatch, not one item's history (~4 min)
+- Files: `server/services/diagnose_dispatch_store.go`
+
+##### Task 6.1.5c: Add `DiagnoseDispatchStore.MarkStalled(ctx, dispatchID) error`, sibling to `MarkCompleted` (Story 5.2.1's Task 5.2.1c), setting `Status: Stalled`, `CompletedAt: now`, `OutcomeKind` left null (~3 min)
+- Files: `server/services/diagnose_dispatch_store.go`
+
+##### Task 6.1.5d: Implement `findStalledDiagnoseDispatches` as a sibling pure predicate to `findSupersededSessions`/`findIdleStaleSessions`, taking an `isLive` function so it's testable without a real tmux backend (~4 min)
+- Files: `server/services/superseded_session_sweeper.go`
+
+##### Task 6.1.5e: Wire the predicate into `SupersededSessionSweeper.sweep`'s existing tick: call `ListAllPending`, filter via `findStalledDiagnoseDispatches` using `s.stopper.IsSessionLive` as `isLive`, call `MarkStalled` + emit the log line + live notification for each match (~5 min)
+- Files: `server/services/superseded_session_sweeper.go`
+
+##### Task 6.1.5f: Unit tests: past-threshold-and-dead → stalled; within-threshold-and-dead → left alone; past-threshold-but-live → left alone; already-`Completed`/already-`Stalled` rows never re-queried (mock `DiagnoseDispatchStore`) (~5 min)
+- Files: `server/services/superseded_session_sweeper_test.go`, `server/services/diagnose_dispatch_store_test.go`
+
 ---
 
 ## Phase 7: RPC + Backend API Surface
@@ -1297,16 +1537,20 @@ through a typed client instead of ad hoc HTTP.
     `{dispatch_id: "<uuid>", diagnostic_session_id: "headless-diagnose-e6c2a88e-<uuid>"}`.
   - *Given* `ListDiagnoseDispatches({item_id: "e6c2a88e"})` is called after 2 prior
     dispatches, *Then* it returns both, chronological, each with `status`
-    (`Pending`/`Completed`), `outcome_kind` (empty/unset when `status` is `Pending`),
-    `safety_gate_reason` (if applicable), `bug_item_id`/`note_text` (if applicable),
-    timestamps.
+    (`Pending`/`Completed`/`Stalled`), `outcome_kind` (empty/unset when `status` is
+    `Pending` or `Stalled`), `safety_gate_reason` (if applicable), `bug_item_id`/
+    `note_text` (if applicable), timestamps.
   - *Given* one of those dispatches is still in flight (`status: Pending`, no
     `outcome_kind` yet), *When* the same RPC is called again (simulating a page
     refresh), *Then* it returns the same `Pending` row unchanged — this is the
     concrete API-level fix for architecture-review Blocker 1.
+  - *Given* one of those dispatches has been marked `Stalled` by Story 6.1.5's
+    reconciler since the last call, *When* `ListDiagnoseDispatches` is called again,
+    *Then* it returns that row with `status: Stalled`, `outcome_kind` still unset —
+    the concrete API-level surface for design/ux.md's Surface 15.
 **Files**: `proto/session/v1/session.proto`, `server/services/backlog_service.go` (or a new `server/services/diagnose_service.go`), `server/services/diagnose_service_test.go`
 
-##### Task 7.1.1a: Add `DiagnoseBacklogItem`/`ListDiagnoseDispatches` RPC + message defs to `session.proto`, including a `status` enum field (`PENDING`/`COMPLETED`) on the dispatch message, distinct from `outcome_kind` (~5 min)
+##### Task 7.1.1a: Add `DiagnoseBacklogItem`/`ListDiagnoseDispatches` RPC + message defs to `session.proto`, including a `status` enum field (`PENDING`/`COMPLETED`/`STALLED`) on the dispatch message, distinct from `outcome_kind` (~5 min)
 - Files: `proto/session/v1/session.proto`
 
 ##### Task 7.1.1b: Run `make proto-gen`, confirm generated stubs compile (~3 min)
@@ -1355,24 +1599,31 @@ that** I can trigger diagnosis without leaving the page.
 - The button is a real `<button>`, Tab-reachable, `aria-label="Diagnose this stuck
   item"`, disabled + `aria-busy="true"` + label "Diagnosing…" while in flight; calling
   `onDiagnose` rejects on failure and surfaces a `role="alert"` inline error,
-  mirroring `onApprovePlan`'s existing error-handling contract exactly.
+  mirroring `onApprovePlan`'s existing error-handling contract exactly — **except**
+  for the specific `"already diagnosing"` rejection, which is special-cased below per
+  design/ux.md's Surface 3/Surface 14 requirement, not treated as an error.
   - *Given* `StuckItemDetail` is rendered for item `e6c2a88e` with `onDiagnose` bound
     to a function that resolves after 200ms, *When* the user activates the Diagnose
     button via Enter, *Then* the button becomes disabled with `aria-busy="true"` and
     text "Diagnosing…" immediately, and reverts to its normal enabled state once the
     promise resolves.
-  - *Given* `onDiagnose` rejects with `"already diagnosing"`, *When* that rejection is
-    caught, *Then* a `role="alert"` element renders the message text, matching
-    `StuckItemDetail.tsx`'s existing `overrideState === "error"` pattern.
+  - *Given* `onDiagnose` rejects with `"already diagnosing"` (a duplicate/racing
+    dispatch — design/ux.md Surface 14), *When* that rejection is caught, *Then* the
+    UI renders the same in-flight busy display as Surface 3 — "Diagnosing… (already in
+    progress)", `aria-busy="true"`, `aria-live="polite"` — **not** `role="alert"` and
+    **not** styled as an error, since declining to start a second dispatch is the gate
+    working correctly, not a failure. This is the one exception to `onApprovePlan`'s
+    generic error-handling contract; every other rejection reason still uses the
+    `role="alert"` `overrideState === "error"` pattern unchanged.
 **Files**: `web-app/src/components/backlog-stuck/StuckItemDetail.tsx`, `web-app/src/components/backlog-stuck/StuckItemDetail.test.tsx`
 
 ##### Task 8.1.1a: Add `onDiagnose?: (itemId: string) => Promise<void>` prop + JSDoc following the `onApprovePlan` doc-comment convention (~3 min)
 - Files: `web-app/src/components/backlog-stuck/StuckItemDetail.tsx`
 
-##### Task 8.1.1b: Add the button + idle/pending/error state machine (mirrors the existing 3-state form pattern) (~5 min)
+##### Task 8.1.1b: Add the button + idle/pending/error state machine (mirrors the existing 3-state form pattern), special-casing an `"already diagnosing"` rejection to render Surface 3's in-flight busy display instead of the `overrideState === "error"` path (~5 min)
 - Files: `web-app/src/components/backlog-stuck/StuckItemDetail.tsx`
 
-##### Task 8.1.1c: Tests: idle→pending→success, idle→pending→error, keyboard activation (~5 min)
+##### Task 8.1.1c: Tests: idle→pending→success, idle→pending→error, idle→pending→already-diagnosing (renders Surface 3's busy display, `aria-live="polite"`, no `role="alert"`), keyboard activation (~5 min)
 - Files: `web-app/src/components/backlog-stuck/StuckItemDetail.test.tsx`
 
 #### Story 8.1.2: `onDiagnose` prop on `BacklogItemDetail.tsx`
@@ -1380,21 +1631,34 @@ that** I can trigger diagnosis without leaving the page.
 view (not just stuck ones), **so that** I can proactively diagnose an item that isn't
 yet flagged stuck.
 **Acceptance Criteria**:
-- Same contract as Story 8.1.1, applied to `BacklogItemDetail.tsx`.
+- Same contract as Story 8.1.1, applied to `BacklogItemDetail.tsx`, including the
+  `"already diagnosing"` special case (renders Surface 3's busy display, not an
+  error).
   - *Given* `BacklogItemDetail` is rendered for a non-stuck item `abc123` with
     `onDiagnose` bound, *When* the user clicks Diagnose, *Then* the same
-    pending/success/error states render identically to `StuckItemDetail`'s.
+    pending/success/error/already-diagnosing states render identically to
+    `StuckItemDetail`'s.
 **Files**: `web-app/src/components/backlog/BacklogItemDetail.tsx`, `web-app/src/components/backlog/BacklogItemDetail.test.tsx`
 
-##### Task 8.1.2a: Add `onDiagnose` prop + button, reusing the same state-machine logic (extract a shared hook if duplication would otherwise exceed the jscpd 20-line/200-token threshold) (~5 min)
+##### Task 8.1.2a: Add `onDiagnose` prop + button, reusing the same state-machine logic including the `"already diagnosing"` special case (extract a shared hook if duplication would otherwise exceed the jscpd 20-line/200-token threshold) (~5 min)
 - Files: `web-app/src/components/backlog/BacklogItemDetail.tsx`, `web-app/src/hooks/useDiagnoseAction.ts` (new, if extraction is warranted)
 
-##### Task 8.1.2b: Tests mirroring Story 8.1.1's (~4 min)
+##### Task 8.1.2b: Tests mirroring Story 8.1.1's, including the already-diagnosing case (~4 min)
 - Files: `web-app/src/components/backlog/BacklogItemDetail.test.tsx`
 
-### Epic 8.2: Outcome Display (Seven States)
-**Goal**: Render all seven outcome states distinctly, reusing
-`GateVerdictBox`/`TriageReviewPanel` (`readOnly`) and `ActivityLogSection`.
+### Epic 8.2: Outcome Display (Seven States, Plus Stalled)
+**Goal**: Render all seven outcome states distinctly. Four `DiagnoseOutcomeKind` cases
+(Nudged/BugFiled/InconclusiveNoteFiled/SkippedSafetyGate) reuse
+`GateVerdictBox`/`TriageReviewPanel` (`readOnly`), and `InconclusiveNoteFiled`
+additionally surfaces its note text via `ActivityLogSection`. `DispatchFailed` gets its
+own dedicated interactive component instead of `readOnly` reuse — the one state
+requiring a real Retry action, per design/ux.md's Surface 9 and its traceability
+table, which explicitly excludes Surface 9 from the readOnly-reuse row (`readOnly`
+mode renders zero action-button/form DOM, per `GateVerdictBoxReadOnlyProps`). A
+separate, `DiagnoseDispatchStatus`-sourced `Stalled` case (design/ux.md Surface 15,
+Story 6.1.5's reconciler) is also rendered here, alongside `Pending`'s "Diagnosing…" —
+not one of the seven `DiagnoseOutcomeKind` states, but read from the same dispatch row
+the same way `Pending` already is.
 
 #### Story 8.2.1: `DiagnoseOutcomeDisplay` component
 **As a** Tyler, **I want** each outcome rendered with its own copy and icon (never
@@ -1432,19 +1696,56 @@ diagnostic session's transcript.
     renders proactively (before any dispatch), *Then* it shows the
     "nudging-disabled(flag-off)" informational state stating diagnosis will only file
     a bug or post a note.
+- `DispatchFailed` renders as its own interactive banner, never via
+  `GateVerdictBox`/`TriageReviewPanel` `readOnly` mode, since `readOnly` renders zero
+  action-button/form DOM and design/ux.md's Surface 9 requires a real Retry button as
+  its required exit path (ux.md's traceability table explicitly excludes Surface 9
+  from the readOnly-reuse row).
+  - *Given* `outcome_kind: "DispatchFailed"`, `failure_reason: "MCP server
+    unreachable"`, *When* `DiagnoseOutcomeDisplay` renders it, *Then* the text reads
+    "Couldn't start diagnosis — MCP server unreachable. Try again.", `role="alert"` is
+    set, and a real, focusable `<button>` labeled "Retry" is present that re-invokes
+    `onDiagnose(itemId)` when activated.
+- **(Closes triad-review UX BLOCKER: design/ux.md Surface 15 / UX Acceptance
+  Criterion 9 had no backing implementation)** When `ListDiagnoseDispatches`' most
+  recent row for the item has `status: "Stalled"` (Story 6.1.5), a distinct banner
+  renders — never the "Diagnosing…" in-flight display, and never one of the four
+  `readOnly`-reused outcome cases (there is no outcome; `outcome_kind` is unset on a
+  `Stalled` row, same as on `Pending`). Copy directly adapts the existing
+  `AUTONOMOUS_STUCK` precedent (`StuckItemDetail.tsx`'s
+  `stuck-item-autonomous-stuck-copy`, `aria-live="polite"`, no `role="alert"` — this is
+  an informational settle with a recovery lever, not an urgent error like
+  `DispatchFailed`), and names the recovery lever as re-clicking Diagnose (no separate
+  Retry button — the existing Diagnose button already does this).
+  - *Given* a `DiagnoseDispatch` with `status: "Stalled"`, *When*
+    `DiagnoseOutcomeDisplay` renders it, *Then* the visible text reads "Diagnosis
+    stopped without a completion signal. Open the session to see what it accomplished,
+    then diagnose again if needed.", with a "View diagnosis session" link (opening the
+    same `headless-diagnose-*` Sessions-list record Surface 4's "View diagnosis" link
+    opens) and `data-testid="diagnose-outcome-stalled"`, `aria-live="polite"`.
+  - *Given* the same row, *When* rendered, *Then* it is visually and textually distinct
+    from `DispatchFailed` (Task 8.2.1e) — `Stalled` never uses `role="alert"` and never
+    renders a `Retry` button, since the Diagnose button itself (still enabled) is
+    the exit path, per design/ux.md Surface 15's "no dead end" requirement.
 **Files**: `web-app/src/components/backlog/detail/DiagnoseOutcomeDisplay.tsx`, `web-app/src/components/backlog/detail/DiagnoseOutcomeDisplay.test.tsx`
 
-##### Task 8.2.1a: Implement the 7-state switch rendering — 5 `DiagnoseOutcomeKind` cases (Nudged/BugFiled/InconclusiveNoteFiled/SkippedSafetyGate/DispatchFailed, reusing `GateVerdictBox`/`TriageReviewPanel` `readOnly` mode) plus the `status: Pending` case ("Diagnosing…", sourced from `ListDiagnoseDispatches`, not client state) — the flag-off case is Task 8.2.1b, kept separate since it's not sourced from any dispatch row at all (~5 min)
+##### Task 8.2.1a: Implement the 4-state switch rendering — 4 `DiagnoseOutcomeKind` cases (Nudged/BugFiled/InconclusiveNoteFiled/SkippedSafetyGate, reusing `GateVerdictBox`/`TriageReviewPanel` `readOnly` mode) plus the `status: Pending` case ("Diagnosing…", sourced from `ListDiagnoseDispatches`, not client state) — `DispatchFailed` is deliberately **not** included in this readOnly-mode switch (see Task 8.2.1e), nor is `status: Stalled` (see Task 8.2.1f, checked before this switch); the flag-off case is Task 8.2.1b, kept separate since it's not sourced from any dispatch row at all (~5 min)
 - Files: `web-app/src/components/backlog/detail/DiagnoseOutcomeDisplay.tsx`
 
 ##### Task 8.2.1b: Implement the flag-off proactive banner (shown before any dispatch, per `research/ux.md` §3 accessibility requirements) (~4 min)
 - Files: `web-app/src/components/backlog/detail/DiagnoseOutcomeDisplay.tsx`
 
-##### Task 8.2.1c: `aria-live="polite"` for routine outcomes, `role="alert"`/`aria-live="assertive"` for `DispatchFailed` only (~3 min)
+##### Task 8.2.1c: `aria-live="polite"` for routine outcomes (Task 8.2.1a's 4 readOnly cases + Pending + Stalled), `role="alert"`/`aria-live="assertive"` for `DispatchFailed` (Task 8.2.1e) only (~3 min)
 - Files: `web-app/src/components/backlog/detail/DiagnoseOutcomeDisplay.tsx`
 
-##### Task 8.2.1d: Tests: all 7 states render distinct copy+icon+testid; cap-reached shows "N/cap"; flag-off banner shown proactively (~5 min)
+##### Task 8.2.1d: Tests: all 7 states render distinct copy+icon+testid; cap-reached shows "N/cap"; flag-off banner shown proactively; `DispatchFailed`'s Retry button re-invokes `onDiagnose`; `Stalled` renders distinctly from both `Pending` and `DispatchFailed` (~5 min)
 - Files: `web-app/src/components/backlog/detail/DiagnoseOutcomeDisplay.test.tsx`
+
+##### Task 8.2.1e: Implement `DispatchFailed` as its own interactive banner — **not** `GateVerdictBox`/`TriageReviewPanel` `readOnly` — matching design/ux.md's Surface 9 exactly: literal copy "Couldn't start diagnosis — \<reason if known\>. Try again.", `role="alert"`, and a real, focusable `<button>` labeled "Retry" that re-invokes `onDiagnose(itemId)` — the one outcome state with a write affordance, since `readOnly` mode renders zero action-button/form DOM (~4 min)
+- Files: `web-app/src/components/backlog/detail/DiagnoseOutcomeDisplay.tsx`
+
+##### Task 8.2.1f: Implement the `status: "Stalled"` case (Closes triad-review UX BLOCKER, design/ux.md Surface 15): a plain `<p data-testid="diagnose-outcome-stalled">` banner adapting the `AUTONOMOUS_STUCK` copy verbatim, `aria-live="polite"` (no `role="alert"`), with a "View diagnosis session" link to the diagnostic session's Sessions-list record — checked before the `Pending`/outcome-kind switch (Task 8.2.1a), since a `Stalled` row also has `outcome_kind` unset and would otherwise be misread as still-in-flight (~4 min)
+- Files: `web-app/src/components/backlog/detail/DiagnoseOutcomeDisplay.tsx`
 
 #### Story 8.2.2: History list via `ActivityLogSection`/new `DiagnoseHistoryList`
 **As a** Tyler, **I want** to see every past diagnose dispatch for an item, not just
