@@ -261,6 +261,69 @@ func TestSetupFirstTimeWorktree_NewProject_NoWorktree_When_BranchEmpty(t *testin
 	require.False(t, inst.gitManager.HasWorktree(), "expected no worktree when no branch was requested")
 }
 
+// TestSetupFirstTimeWorktree_should_ReturnError_When_SessionTypeUnrecognized
+// is worktree-envvars-hijack Task 4.3.1b: an Instance with an off-nominal
+// SessionType (anything outside the switch's five known constants) must fail
+// loudly instead of the pre-Story-3.2.1 behavior of silently sharing the
+// SessionTypeDirectory no-op arm. Constructed as a raw struct literal (not
+// NewInstance, which already rejects an invalid SessionType via
+// SessionType.IsValid() before setupFirstTimeWorktree is ever reached) so
+// this test exercises setupFirstTimeWorktree's own default: arm directly.
+func TestSetupFirstTimeWorktree_should_ReturnError_When_SessionTypeUnrecognized(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:       "bogus-session-type",
+		Path:        t.TempDir(),
+		SessionType: SessionType("bogus"),
+	}
+
+	err := inst.setupFirstTimeWorktree()
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bogus")
+}
+
+// TestSetupFirstTimeWorktree_should_PublishUpdatedSnapshot_When_SessionTypeDirectory
+// is worktree-envvars-hijack Story 3.2.2: every setupFirstTimeWorktree case --
+// not just SessionTypeNewWorktree, which already republished inline -- must
+// publish its i.Branch mutation through the lock-guarded snapshot so a
+// lock-free Snapshot() read never observes a stale pre-call value. Run under
+// go test -race per this repo's instance-lock-free-reads.md rule.
+func TestSetupFirstTimeWorktree_should_PublishUpdatedSnapshot_When_SessionTypeDirectory(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	inst, err := NewInstance(InstanceOptions{
+		Title:       "snapshot-republish-directory",
+		Path:        dir,
+		Program:     "claude",
+		SessionType: SessionTypeDirectory,
+	})
+	require.NoError(t, err)
+
+	// Seed a non-empty Branch directly under i.mu, republishing so the
+	// baseline snapshot carries it -- lets the assertion below distinguish a
+	// stale, pre-call snapshot from the SessionTypeDirectory case's own
+	// clear-Branch-to-empty write, correctly republished.
+	inst.mu.Lock()
+	inst.Branch = "stale-pre-call-branch"
+	staleSnap := buildSnapshot(inst)
+	inst.mu.Unlock()
+	inst.snapshot.Store(staleSnap)
+	require.Equal(t, "stale-pre-call-branch", inst.Snapshot().Branch)
+
+	require.NoError(t, inst.setupFirstTimeWorktree())
+
+	// Read Snapshot() from a separate goroutine, immediately after
+	// setupFirstTimeWorktree() returns, to exercise the lock-free
+	// atomic.Pointer read/write pair under -race rather than just a
+	// same-goroutine sequential read.
+	got := make(chan string, 1)
+	go func() {
+		got <- inst.Snapshot().Branch
+	}()
+	require.Equal(t, "", <-got, "concurrent Snapshot() must observe the post-mutation Branch, never the stale pre-call value")
+}
+
 // TestGetEffectiveRootDir_ReturnsWorktreePath_EvenWhenMissingFromDisk documents
 // that GetEffectiveRootDir must stay disk-existence-agnostic: HistoryLinker
 // correlates sessions by the nominal worktree path string (see
