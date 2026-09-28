@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package session.v1;
 
+import "session/v1/backlog.proto";
+
 // DiagnosticService backs the "Diagnose & Nudge" backlog action (backlog
 // item 68964304): dispatch a context-bounded agent to investigate a stuck
 // (or any) backlog item, file a bug on a genuine defect, or safely nudge an
@@ -43,12 +45,14 @@ message DispatchDiagnoseRequest {
   // linked sessions" — the caller, e.g. StuckItemDetail.tsx, picks which
   // one). Empty means diagnose-only, no nudge target considered.
   string nudge_target_session_uuid = 2;
-  // stuck_reason, when set, is the specific domain.StuckReason this dispatch
-  // is being made for — used to key the nudge cap/cooldown gate
-  // (session.DiagnoseNudgeAllowed) on the item's open BacklogStuckState row
-  // for that reason. Empty when dispatched from a non-stuck item
+  // stuck_reason, when set, is the specific StuckReason this dispatch is
+  // being made for — mapped to domain.StuckReason server-side (see
+  // fromProtoStuckReason, server/services/backlog_service_stuck.go) and used
+  // to key the nudge cap/cooldown gate (session.DiagnoseNudgeAllowed) on the
+  // item's open BacklogStuckState row for that reason. STUCK_REASON_UNSPECIFIED
+  // (the zero value) when dispatched from a non-stuck item
   // (BacklogItemDetail.tsx) — the nudge action space is then never offered.
-  string stuck_reason = 3;
+  StuckReason stuck_reason = 3;
 }
 
 message DispatchDiagnoseResponse {

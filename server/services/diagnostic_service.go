@@ -14,7 +14,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // DiagnosticSpawner is the narrow slice of *SessionService DiagnosticService
@@ -123,7 +122,7 @@ func (d *DiagnosticService) DispatchDiagnose(
 
 	nudgeAllowed, nudgeDisallowedReason := d.evaluateNudgeEligibility(ctx, item.ID, req.Msg.StuckReason, req.Msg.NudgeTargetSessionUuid)
 
-	prompt := buildDiagnosePrompt(bundle, req.Msg.NudgeTargetSessionUuid, nudgeAllowed, nudgeDisallowedReason)
+	prompt := buildDiagnosePrompt(bundle, req.Msg.NudgeTargetSessionUuid, string(fromProtoStuckReason(req.Msg.StuckReason)), nudgeAllowed, nudgeDisallowedReason)
 	inst, spawnErr := d.spawner.SpawnDiagnosticSession(ctx, item, prompt)
 	if spawnErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("dispatch diagnostic session: %w", spawnErr))
@@ -151,14 +150,14 @@ func (d *DiagnosticService) DispatchDiagnose(
 // The write-time pane-ownership re-verification
 // (session.VerifyPaneOwnershipBeforeWrite) happens later, immediately before
 // the actual nudge write — see the diagnose_nudge_session MCP tool.
-func (d *DiagnosticService) evaluateNudgeEligibility(ctx context.Context, itemID, stuckReason, targetSessionUUID string) (allowed bool, disallowedReason string) {
+func (d *DiagnosticService) evaluateNudgeEligibility(ctx context.Context, itemID string, stuckReason sessionv1.StuckReason, targetSessionUUID string) (allowed bool, disallowedReason string) {
 	if targetSessionUUID == "" {
 		return false, "no nudge target specified"
 	}
-	if stuckReason == "" {
+	if stuckReason == sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED {
 		return false, "no stuck reason specified — nudge cap cannot be evaluated"
 	}
-	allowed, disallowedReason, err := d.storage.DiagnoseNudgeAllowed(ctx, itemID, domain.StuckReason(stuckReason))
+	allowed, disallowedReason, err := d.storage.DiagnoseNudgeAllowed(ctx, itemID, fromProtoStuckReason(stuckReason))
 	if err != nil {
 		return false, fmt.Sprintf("could not evaluate nudge eligibility: %v", err)
 	}
@@ -180,14 +179,14 @@ func (d *DiagnosticService) evaluateNudgeEligibility(ctx context.Context, itemID
 // action space right now (AC2/AC4 — action-space narrowing is enforced here
 // in the prompt as well as by the diagnose_nudge_session tool itself
 // refusing a disallowed nudge, defense in depth).
-func buildDiagnosePrompt(bundle session.DiagnosticBundle, nudgeTargetUUID string, nudgeAllowed bool, nudgeDisallowedReason string) string {
+func buildDiagnosePrompt(bundle session.DiagnosticBundle, nudgeTargetUUID, stuckReason string, nudgeAllowed bool, nudgeDisallowedReason string) string {
 	var sb strings.Builder
 	sb.WriteString("You are a diagnostic agent investigating a backlog item. You have been given a context bundle below.\n\n")
 	sb.WriteString("Based on the evidence, decide ONE of:\n")
 	sb.WriteString("1. File a backlog item via create_backlog_item with concrete evidence (log lines, timestamps, session UUIDs) if you find a genuine product/infra defect.\n")
 	sb.WriteString("2. Post a diagnostic note via post_backlog_update if the situation is inconclusive or informational only.\n")
 	if nudgeAllowed {
-		fmt.Fprintf(&sb, "3. Nudge the linked session (%s) via diagnose_nudge_session if it is a simple stall — a session that just needs redirection, not a bug.\n", nudgeTargetUUID)
+		fmt.Fprintf(&sb, "3. Nudge the linked session via diagnose_nudge_session if it is a simple stall — a session that just needs redirection, not a bug. Call it with session_id=%q and stuck_reason=%q.\n", nudgeTargetUUID, stuckReason)
 	} else {
 		fmt.Fprintf(&sb, "3. Nudging is NOT available for this dispatch (%s) — do not attempt resume_session/steer_session/write_to_session/diagnose_nudge_session on it. File a bug or post a note instead.\n", nudgeDisallowedReason)
 	}
