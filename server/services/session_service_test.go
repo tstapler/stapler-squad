@@ -2737,10 +2737,11 @@ func TestWireCallbacks_WiresMCPServerURLProvider(t *testing.T) {
 	svc.SetMCPServerURL(func() string { return "http://localhost:19194/mcp" })
 
 	inst := &session.Instance{
-		Title:   "wire-callbacks-provider-session",
-		UUID:    "11111111-0000-0000-0000-000000000007",
-		Path:    "/tmp/test",
-		Program: "claude",
+		Title:       "wire-callbacks-provider-session",
+		UUID:        "11111111-0000-0000-0000-000000000007",
+		Path:        "/tmp/test",
+		Program:     "claude",
+		SessionType: session.SessionTypeDirectory, // NewInstance() would default this; this raw literal must too, or setupFirstTimeWorktree's stricter default: (worktree-envvars-hijack Story 3.2.1) now errors on the zero value instead of silently treating it as directory
 		// MCPServerURL deliberately left empty -- exercises the provider
 		// path, not the one-shot-field fallback.
 	}

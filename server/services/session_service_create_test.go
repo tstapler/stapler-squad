@@ -726,3 +726,92 @@ func assertNotConnectCode(t *testing.T, err error, notWant connect.Code, msg str
 	}
 	assert.NotEqual(t, notWant, ce.Code(), msg)
 }
+
+// ---------------------------------------------------------------------------
+// worktree-envvars-hijack: wireCallbacks' nil-poller collision-guard fallback,
+// and CreateSession's Story 1.3.1 diagnostic request-shape log
+// ---------------------------------------------------------------------------
+
+// TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil is
+// worktree-envvars-hijack validation.md row 26 (Story 3.3.2's Tech Debt
+// Disposition): a degenerate/misconfigured SessionService with no
+// reviewQueuePoller wired must still let a session spawn (production's
+// wireCallbacks is always called with a real poller — see SetReviewQueuePoller's
+// doc comment — so this is defense-in-depth, not an expected state), but must
+// log a Warn so the misconfiguration is visible instead of silently permissive.
+func TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+	svc.reviewQueuePoller = nil // simulate the degenerate construction this test targets
+
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title:            "wirecallbacks-nil-poller-" + t.Name(),
+		Path:             repoDir,
+		Program:          "sh",
+		SessionType:      session.SessionTypeExistingWorktree,
+		ExistingWorktree: repoDir,
+		TmuxServerSocket: svc.testTmuxServerSocket,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	svc.wireCallbacks(inst)
+
+	logs := captureLogs(t)
+	require.NoError(t, inst.Start(true), "nil reviewQueuePoller must fall back to permissive, not block the spawn")
+	assert.Equal(t, session.Active, inst.Status)
+	assert.Contains(t, logs.String(), "reviewQueuePoller is nil", "the fallback must log a warning, not silently allow")
+}
+
+// TestCreateSession_should_LogRequestShapeAtDebugLevel_When_SessionCreated is
+// worktree-envvars-hijack validation.md row 35 (Story 1.3.1): the diagnostic
+// request-shape log must actually fire with the wire-level fields a future
+// isolation-bug report needs, without a fresh repro.
+func TestCreateSession_should_LogRequestShapeAtDebugLevel_When_SessionCreated(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	logs := captureLogs(t)
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "debug-log-shape-test",
+		Path:        t.TempDir(), // requiresExplicitPath would fail before the log line otherwise
+		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+		Branch:      "test/x",
+		EnvVars:     map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000"},
+		ResumeId:    "not-a-valid-uuid", // fails validation right after the log line -- cheap, no tmux/git needed
+	}))
+	require.Error(t, err, "resume_id validation must still fail after the diagnostic log fires")
+	assert.Nil(t, resp)
+
+	line := logs.String()
+	assert.Contains(t, line, "[CreateSession] request shape")
+	assert.Contains(t, line, "SESSION_TYPE_NEW_WORKTREE")
+	assert.Contains(t, line, "test/x")
+	assert.Contains(t, line, "ANTHROPIC_BASE_URL")
+}
+
+// TestCreateSession_should_NotLogEnvVarValues_When_EnvVarsProvided is
+// worktree-envvars-hijack validation.md row 36: the diagnostic log's
+// env_var_keys must contain only key names, never values -- env vars can
+// carry secrets like API base URLs/tokens.
+func TestCreateSession_should_NotLogEnvVarValues_When_EnvVarsProvided(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	const secretValue = "http://127.0.0.1:47000"
+	logs := captureLogs(t)
+	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "debug-log-no-value-leak-test",
+		Path:        t.TempDir(),
+		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+		EnvVars:     map[string]string{"ANTHROPIC_BASE_URL": secretValue},
+		ResumeId:    "not-a-valid-uuid",
+	}))
+	require.Error(t, err)
+
+	assert.NotContains(t, logs.String(), secretValue, "env var VALUES must never be logged, only key names")
+	assert.Contains(t, logs.String(), "ANTHROPIC_BASE_URL", "env var KEY names must still be logged")
+}
