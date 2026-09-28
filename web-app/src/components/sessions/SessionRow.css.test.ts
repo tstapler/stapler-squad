@@ -90,3 +90,37 @@ describe("SessionRow.css.ts — container-query narrow layout (Epic 2.1 Story 2.
     expect(source).not.toMatch(/display:\s*"none"/);
   });
 });
+
+describe("SessionRow.css.ts — actions collapse to their own row (session-list-wasted-space)", () => {
+  let source: string;
+
+  beforeAll(() => {
+    source = fs.readFileSync(SESSION_ROW_CSS, "utf-8");
+  });
+
+  it("SessionRow_should_SpanFullGridRow_When_ActionsBlockDefinesContainerQuery", () => {
+    const actionsBlock = extractBlock(source, "actions");
+    expect(actionsBlock).toContain('gridColumn: "1 / -1"');
+  });
+
+  it("SessionRow_should_AlwaysShowPrimaryAction_When_ActionsCollapseToOwnRow", () => {
+    // The primary action button is otherwise hover/focus-gated (opacity: 0
+    // by default) — without this override the collapsed row would render
+    // with only the ··· overflow button visible on a non-hovering pointer.
+    const primaryActionBlock = extractBlock(source, "primaryActionWrapper");
+    expect(primaryActionBlock).toContain("ACTIONS_NARROW");
+    expect(primaryActionBlock).toContain("opacity: 1");
+  });
+
+  it("SessionRow_should_DefineActionsNarrowAtOrAboveFixedSidebarWidth_When_Configured", () => {
+    // Unlike NARROW (must stay below the ~280px default sidebar width — see
+    // the test above), this breakpoint is deliberately meant to always be
+    // active in that default sidebar: the bug this fixes (actions squeezing
+    // the name/path column) reproduces at that everyday width, not just in
+    // some narrower-than-usual edge case.
+    const match = source.match(/ACTIONS_NARROW = "\(max-width: (\d+)px\)"/);
+    expect(match).not.toBeNull();
+    const actionsNarrowPx = Number(match?.[1]);
+    expect(actionsNarrowPx).toBeGreaterThanOrEqual(280);
+  });
+});

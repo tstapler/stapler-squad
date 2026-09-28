@@ -206,8 +206,11 @@ export const elapsedSecondLine = style({
 
 // Below this row width, Resume/Pause + the ··· overflow no longer fit
 // alongside the name/path column without squeezing it — see the
-// session-list-wasted-space branch's screenshot. Wider than NARROW (200px)
-// since the actions need real room to render as a legible row of their own.
+// session-list-wasted-space branch's screenshot, taken in the session list's
+// fixed ~280px sidebar column (SessionList.css.ts's `container`). Deliberately
+// wider than that default column width (unlike NARROW's 200px, which only
+// applies below it) so the collapse is always on there, not just in some
+// narrower-than-default edge case.
 const ACTIONS_NARROW = "(max-width: 340px)";
 
 export const actions = style({
@@ -245,6 +248,14 @@ export const primaryActionWrapper = style({
       opacity: 1,
     },
     [`${row}[data-actions-visible="true"] &`]: {
+      opacity: 1,
+    },
+  },
+  // Once actions collapse to their own row (see `actions`' ACTIONS_NARROW),
+  // hover-gating would render that row visually empty on a non-hovering,
+  // non-touch pointer — defeating the point of giving it room. Always show.
+  "@container": {
+    [`sessionRow ${ACTIONS_NARROW}`]: {
       opacity: 1,
     },
   },
