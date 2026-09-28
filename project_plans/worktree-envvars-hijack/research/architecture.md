@@ -99,6 +99,27 @@ or writes `resolvedPath`/`instanceOpts.Path`/`instanceOpts.WorkingDir`.
 cannot carry a path override that diverges the two requests' `resolvedPath` —
 the type doesn't have anywhere to put one.
 
+**Epic 1.5 re-verification (pre-mortem P1 remediation, plan-repair pass):**
+Re-read `config/defaults.go:190-227` (`FindProgramConfig`, `ResolvedProgram`,
+`ResolveProgramConfig`) verbatim and re-traced every write to `resolvedProg`
+in `server/services/session_service.go`'s `CreateSession` body. The only call
+site is `session_service.go:2621-2623`
+(`resolvedProg := config.ResolveProgramConfig(cfg, program)`,
+`resolvedProg.IsCustom`/`resolvedProg.EnvVars`), which writes exclusively
+into `instanceEnvVars`/`instanceCLIFlags`. Confirmed by direct read that
+between that call site and the `instanceOpts := session.InstanceOptions{...}`
+literal (`:2937-2991`), `instanceOpts.Path` is set from `resolvedPath` (never
+`resolvedProg`), `instanceOpts.WorkingDir` from `req.Msg.WorkingDir` (never
+`resolvedProg`), and `instanceOpts.SessionType` from the local `sessionType`
+variable (`resolveSessionType`'s return value, per Q1 above) — `resolvedProg`
+does not appear in any of these three assignments. No code path lets
+`program`/custom-program resolution change `req.Msg.SessionType`/
+`req.Msg.Branch`/`req.Msg.ExistingWorktree` before `resolveSessionType` reads
+them, or `resolvedPath`/`instanceOpts.WorkingDir` afterward, for any program
+value. See `session/instance.go`'s `startLocked` for the accompanying
+`session_creation_worktree_type_mismatch_total` invariant counter that would
+catch an unanticipated future violation of this claim.
+
 ## Q3: `newWorktreeFromResolvedBase()` and the full worktree-creation chain
 
 Read in full, plus everything it calls transitively, looking specifically for a

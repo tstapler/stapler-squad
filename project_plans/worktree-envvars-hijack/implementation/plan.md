@@ -99,7 +99,7 @@ N/A — no schema or data changes. `InstanceSnapshot` already carries every fiel
 
 Also strengthening (Adversarial-review Minor 2): Task 1.1.1b's and Task 1.2.1b's checkbox updates below are a **blocking gate**, not documentation of intent — Epic 3.4/3.5's conditional/dropped status must be resolved and recorded in this file before Epic 4 (regression tests) is considered complete, regardless of how the implementation work is distributed across subagents.
 
-- [ ] Does Hypothesis #2 (branch-name collision with the *main checkout*, hitting `findLiveWorktreeForBranch`'s un-self-healed gap) actually reproduce as a **silent** `Active`, or does it correctly propagate as a `Failed` error as `research/architecture.md`'s own static reading predicts? — blocks **Story 3.4 (conditional)** — owner: whoever executes Story 1.1's repro test; if CONFIRMED silent, Story 3.4 (harden `findLiveWorktreeForBranch`'s main-checkout blindness) must be added to Epic 3 before Epic 3 is considered complete; if REFUTED (propagates loudly as expected), Story 3.4 is dropped entirely — no code change needed there.
+- [x] Does Hypothesis #2 (branch-name collision with the *main checkout*, hitting `findLiveWorktreeForBranch`'s un-self-healed gap) actually reproduce as a **silent** `Active`, or does it correctly propagate as a `Failed` error as `research/architecture.md`'s own static reading predicts? — blocks **Story 3.4 (conditional)** — owner: whoever executes Story 1.1's repro test; if CONFIRMED silent, Story 3.4 (harden `findLiveWorktreeForBranch`'s main-checkout blindness) must be added to Epic 3 before Epic 3 is considered complete; if REFUTED (propagates loudly as expected), Story 3.4 is dropped entirely — no code change needed there. **RESULT (2026-09-27): REFUTED.** `TestCreateSession_MainCheckoutBranchCollision` (`server/services/session_service_worktree_hijack_test.go`) checked out a real branch `collide-branch` in a repo's main working tree, then called `CreateSession` with `SessionType: SESSION_TYPE_NEW_WORKTREE, Branch: "collide-branch"` against that same repo path. The session reached `Failed` (`FailureReason="StartupError"`), with the captured creation-progress phase text confirming the exact predicted mechanism: `git worktree add` failed with `fatal: 'collide-branch' is already used by worktree at '<repoDir>'`, `findLiveWorktreeForBranch`'s self-heal found nothing (it only scans `.git/worktrees/`, never the main checkout), and the resulting error propagated straight through to a terminal `Failed` write — no silent `Active`/bare-repo-path swallow occurred. **Story 3.4 is dropped — no code change needed there.**
 - [x] Does the web-app's envVars/advanced-options request-construction code (or an MCP tool's) actually drop/alter `session_type` or `branch` when populated — confirming Hypothesis #1? — **REFUTED (Task 1.2.1, 2026-09-27).** Stronger finding than "constructed identically regardless of envVars state": neither audited client path can populate `env_vars` on `CreateSessionRequest` at all, so no envVars-conditioned coupling with `session_type`/`branch` is possible in either. (1) Web-app Omnibar: `OmnibarSessionData` (`web-app/src/components/sessions/Omnibar.tsx:195-230`) has no `envVars` field and the creation form has no advanced-options envVars panel; `OmnibarContext.tsx`'s `handleCreateSession` (`web-app/src/lib/contexts/OmnibarContext.tsx:242-283`) computes `sessionType`/`branch` from `data.isNewProject`/`data.sessionType`/`data.branch` only, with no envVars involved; and `useSessionService.ts`'s `createSession` (`web-app/src/lib/hooks/useSessionService.ts:361-396`) builds the ConnectRPC request body from an explicit, enumerated field list that omits `envVars` entirely (would be silently dropped even if a caller passed one) while threading `branch`/`sessionType` straight through unconditionally (`:373`, `:380`). (2) MCP tool: `server/mcp/tools_lifecycle.go`'s `createSessionWithAwaitTimeout` (`:122-201`) re-confirmed directly — its parameter schema (`:56-63`) exposes no env-var argument at all, and the `sessionv1.CreateSessionRequest` it constructs (`:190-201`) sets only `Title`, `Path`, `Branch`, `Program`, `SessionType`, `Tags` — `EnvVars` is never set, so no coupling is possible here either. Story 3.5 is **dropped** — Epic 3's defensive guards (3.1-3.3) are the sole closure for the isolation vector, per the requirements doc's Success Metrics ("either a real isolated worktree is created, or ... surfaces a visible ... error"). Note: since neither audited path can set `env_vars` at all, if the original repro genuinely had a non-empty `envVars` field, its request must have originated from a caller outside this audit's scope (e.g. a different MCP server/orchestration client) — worth flagging to whoever owns the original repro, but out of scope for this plan's file set.
 - [ ] Neither hypothesis may confirm (both refuted, as Epic 1's static research already leans toward) — in that case the true differentiator between Request A and Request B remains formally unknown. This is an acceptable outcome for this plan: requirements.md's Success Metrics are written to be satisfiable either way (root cause identified with a file:line citation OR the "No silent worktree-creation skip"/"No cross-session attach" metrics are structurally satisfied), and Epic 3's guards close the vector structurally regardless of the exact trigger. — owner: plan approver, decide at Epic 1's completion whether to accept "vector closed, exact differentiator unconfirmed" as done, or escalate appetite per requirements.md's own escalation clause.
 
@@ -386,6 +386,58 @@ happened to find.
   collision precondition survives Epic 3.3's guard, per the AC above.
 - Record the verdict in this plan (update this section with the final list).
 - Files: `project_plans/worktree-envvars-hijack/implementation/plan.md`.
+
+**Verdict (implementation pass, 2026-09-27):** `grep -rn
+"tryExtractConversationUUID\|DetectByPath" session/` enumerated every call
+site. Classified:
+- `session/instance_workspace.go:80` (`SwitchWorkspace`) — **reachable**,
+  unconditional whenever `ConversationUUID` is empty. Fixed by Task 1.4.2.
+- `session/claude_adapter.go:60` (`ClaudeAdapter.Import`) — **reachable**
+  whenever `GetClaudeConversationUUID() == ""`. Fixed by Task 1.4.2.
+- `session/agy_adapter.go:59` (`AgyAdapter.Import`) — **reachable**, same
+  class as `ClaudeAdapter.Import` above (same
+  `if uuidStr == "" { inst.tryExtractConversationUUID() }` shape). **Not
+  named in this section's original "already confirmed" list** — found during
+  this implementation pass's own re-grep. Fixed by Task 1.4.2 (same guard
+  call site, since both adapters call through the shared
+  `Instance.tryExtractConversationUUID`).
+- `session/instance.go:1425` (`recoverConversationBeforeLaunch`, called from
+  both `startLocked` and legacy `start()`) — **not reachable for a session's
+  own first-time creation**: no-ops whenever `firstTimeSetup` is true
+  (confirmed by direct read of the guard clause). Only runs for a
+  restart/resume (`firstTimeSetup=false`).
+- `session/instance.go`'s `startLocked` ColdRestore branch (direct
+  `i.tryExtractConversationUUID()` call) and legacy `start()`'s equivalent
+  ColdRestore branch — **not reachable for first-time creation**, only for
+  `firstTimeSetup=false` (restart/cold-restore). Still routed through the
+  same guarded `tryExtractConversationUUID`, so Task 1.4.2's fix applies
+  there too if a restart's cold-restore path ever raced a live sibling —
+  covered incidentally, not by design intent.
+- `session/history_linker.go:292` (`HistoryLinker`'s own polling loop) —
+  calls `hl.detector.DetectByPath` **directly**, not through
+  `Instance.tryExtractConversationUUID` — a structurally separate mechanism
+  this plan's Story 1.4.2 does not touch (out of scope: the AC and the new
+  `SetConversationOwnershipGuard` wiring are specific to
+  `tryExtractConversationUUID`'s call site). Recorded here as a known,
+  related, NOT-yet-closed gap for a future pass, not silently dropped.
+
+**Collision-precondition-survives-Epic-3.3 verdict:** `GetEffectiveRootDir()`
+returns `ActiveDir()` (`session/instance_worktree.go:457-459`), and Epic
+3.3.2's collision guard is unconditional on `i.SessionType`, gated only by
+`i.gitManager.HasWorktree()` — so after Epic 3.3 lands, no two
+worktree-bearing first-time sessions (`SessionTypeNewWorktree`,
+`SessionTypeExistingWorktree`, or `SessionTypeNewProject`'s worktree
+sub-branch) can ever share an `ActiveDir`/`GetEffectiveRootDir()` value. The
+collision precondition for the three reachable `tryExtractConversationUUID`
+call sites above therefore **does not survive** Epic 3.3 for that
+combination — it remains possible only for (a) two legitimate
+`SessionTypeDirectory` sessions sharing a path by design, and (b) a
+worktree-bearing session whose worktree directory has since been deleted
+(pause_session), where `ExistingDir` falls back to `RepoRoot` — both
+explicitly called out as normal, non-bug states by
+`.claude/rules/instance-lock-free-reads.md`. Story 1.4.2's guard is exactly
+the closure needed for that residual, narrower risk (path-shared-by-design,
+not resolution-bug-shared) — confirmed directly rather than assumed.
 
 #### Story 1.4.2: Close any confirmed ownership gap
 **As a** user with multiple concurrent sessions, **I want**

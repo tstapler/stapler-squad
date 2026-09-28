@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -258,9 +259,29 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	if startErr := p.instance.Start(true); startErr != nil {
 		log.Error("[session pipeline] async start failed", "session", p.instanceTitle, "err", startErr)
 		setPhase(fmt.Sprintf("Startup failed: %s", startErr.Error()))
-		terminal(pipelineOutcome{session.Failed, "StartupError", SessionCreationOutcomeFailed})
+		// Classify via errors.Is (sentinel matching, not string parsing) into a fixed,
+		// short failureReason/metricsOutcome distinct from the generic "StartupError"
+		// (worktree-envvars-hijack Task 3.3.3a) -- never interpolate the detailed
+		// title/path/blocking-UUID text from startErr.Error() into these wire-level
+		// values; that text is still logged in full above for debugging.
+		failureReason := "StartupError"
+		switch {
+		case errors.Is(startErr, session.ErrWorktreeResolutionFailed):
+			failureReason = "WorktreeResolutionFailed"
+		case errors.Is(startErr, session.ErrDirectoryCollision):
+			failureReason = "DirectoryCollision"
+		}
+		terminal(pipelineOutcome{session.Failed, failureReason, SessionCreationOutcomeFailed})
 		return
 	}
+
+	// Re-derive instanceRootDir unconditionally now that Start() has completed
+	// worktree creation -- the deferredGitHubURL branch's own refresh above (if it
+	// ran) predates Start() and worktree creation, so it's stale for every plain
+	// SessionTypeNewWorktree session. Without this, InjectHookConfig/StartSessionDriver
+	// below operate against the bare repo path instead of the freshly-created
+	// worktree (worktree-envvars-hijack Epic 2, Story 2.1.1).
+	instanceRootDir = p.instance.GetEffectiveRootDir()
 
 	// Clear progress message now that we are about to become Active.
 	p.instance.SetCreationProgress("")

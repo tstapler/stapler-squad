@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -106,6 +108,13 @@ type SessionService struct {
 	// ListWorkspacePeers) not part of the InstanceStore interface. nil when storage is a
 	// fake InstanceStore (tests) — callers must nil-check.
 	concStorage *session.Storage
+
+	// inFlightWorktreeSpawns claims a canonicalized worktree path (-> claiming session
+	// UUID) for the duration of startLocked's check-through-spawn window, closing the
+	// TOCTOU race between two concurrent CreateSession calls resolving the same
+	// worktree path before either has spawned (worktree-envvars-hijack Story 3.3.2c).
+	// Wired into each Instance via SetWorktreeSpawnReservation in wireCallbacks.
+	inFlightWorktreeSpawns sync.Map
 
 	// Extracted domain services.
 	reviewQueueSvc  *ReviewQueueService
@@ -1269,6 +1278,46 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 	return "", false
 }
 
+// ConversationOwnedByOtherLiveSession reports whether conversationUUID is
+// already the ConversationUUID of some OTHER currently-live,
+// backend-process-alive Instance (any UUID besides selfUUID) whose own
+// GetCurrentWorkingDirectory() resolves to path. Unlike
+// OtherLiveSessionInsideWorktree, path overlap alone is not enough to
+// block -- the sibling must also already own this exact UUID -- so the
+// legitimate SessionTypeDirectory path-sharing case is never blocked from a
+// session detecting its OWN first conversation, only from silently adopting
+// a sibling's (worktree-envvars-hijack Story 1.4.2).
+func (s *SessionService) ConversationOwnedByOtherLiveSession(selfUUID, conversationUUID, path string) (ownerUUID string, ownedByOther bool) {
+	if s.reviewQueuePoller == nil || conversationUUID == "" || path == "" {
+		return "", false
+	}
+	cleanTarget, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	cleanTarget = git.CanonicalizeWorktreePath(cleanTarget)
+	for _, inst := range s.reviewQueuePoller.GetInstances() {
+		if inst == nil || inst.UUID == selfUUID || !inst.IsBackendProcessAlive() {
+			continue
+		}
+		if inst.GetClaudeConversationUUID() != conversationUUID {
+			continue
+		}
+		cwd, cwdErr := inst.GetCurrentWorkingDirectory()
+		if cwdErr != nil || cwd == "" {
+			continue
+		}
+		cleanCwd, absErr := filepath.Abs(cwd)
+		if absErr != nil {
+			continue
+		}
+		if git.CanonicalizeWorktreePath(cleanCwd) == cleanTarget {
+			return inst.UUID, true
+		}
+	}
+	return "", false
+}
+
 // RefuseIfWorktreeSharedWithOtherLiveSession resolves
 // OtherLiveSessionInsideWorktree into a ready-to-return error, shared by
 // every worktree-deleting path: MCP pause/stop, RPC UpdateSession, and
@@ -1835,6 +1884,40 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	// instance loaded at startup via loadInstancesWithWiring) already calls, so
 	// reclassifyTagsLocked has a real engine/recorder on every session, not just some paths.
 	inst.SetTaggingEngine(s.taggingEngine)
+	// Pre-spawn worktree-collision guards (worktree-envvars-hijack Story 3.3.2/3.3.2c):
+	// wired here, before every Start()/Start(true) call this codebase makes (the same
+	// chokepoint precondition SetTaggingEngine above relies on), so startLocked's
+	// firstTimeSetup branch never spawns a tmux session/process into a directory
+	// another live session already owns, and two concurrent CreateSession calls
+	// resolving the same worktree path can't both win the race.
+	inst.SetWorktreeSpawnReservation(func(worktreePath string) (func(), error) {
+		cleanTarget, err := filepath.Abs(worktreePath)
+		if err != nil {
+			return nil, nil
+		}
+		cleanTarget = git.CanonicalizeWorktreePath(cleanTarget)
+		if _, loaded := s.inFlightWorktreeSpawns.LoadOrStore(cleanTarget, inst.UUID); loaded {
+			return nil, fmt.Errorf("%w: claimed by an in-flight spawn", session.ErrDirectoryCollision)
+		}
+		return func() { s.inFlightWorktreeSpawns.Delete(cleanTarget) }, nil
+	})
+	inst.SetPreSpawnCollisionGuard(func(worktreePath string) error {
+		if s.reviewQueuePoller == nil {
+			log.Warn("SetPreSpawnCollisionGuard: reviewQueuePoller is nil, allowing spawn without a collision check", "session", inst.Title)
+			return nil
+		}
+		blockingUUID, blocked := s.OtherLiveSessionInsideWorktree(inst.UUID, worktreePath)
+		if !blocked {
+			return nil
+		}
+		return fmt.Errorf("%w: blocked by session %s", session.ErrDirectoryCollision, blockingUUID)
+	})
+	// Cross-session conversation-ownership guard (worktree-envvars-hijack Story 1.4.2):
+	// prevents tryExtractConversationUUID's DetectByPath fallback from silently
+	// attributing another live session's conversation UUID to this instance.
+	inst.SetConversationOwnershipGuard(func(candidateUUID, path string) (string, bool) {
+		return s.ConversationOwnedByOtherLiveSession(inst.UUID, candidateUUID, path)
+	})
 	if analyticsStore := s.GetAnalyticsStore(); analyticsStore != nil {
 		// Guard against the typed-nil-interface gotcha: passing a nil *AnalyticsStore
 		// straight into the session.TagFireRecorder interface parameter would make
@@ -2316,6 +2399,22 @@ func (s *SessionService) CreateSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is required"))
 	}
 
+	// Diagnostic-only: log the wire-level request shape so a future isolation-bug
+	// report doesn't need a fresh repro to see what the server actually received
+	// (worktree-envvars-hijack Story 1.3.1). env_var_keys logs KEY NAMES ONLY --
+	// never values, since env vars can carry secrets like API base URLs/tokens.
+	log.Debug("[CreateSession] request shape",
+		"session_type", req.Msg.SessionType,
+		"branch", req.Msg.Branch,
+		"working_dir", req.Msg.WorkingDir,
+		"env_var_keys", slices.Collect(maps.Keys(req.Msg.EnvVars)),
+		"profile", req.Msg.Profile,
+		"skip_defaults", req.Msg.SkipDefaults,
+		"restart_from_session_id", req.Msg.RestartFromSessionId,
+		"existing_worktree", req.Msg.ExistingWorktree,
+		"alias_name", req.Msg.AliasName,
+	)
+
 	// Check if session with this title already exists.
 	// Use ListInstanceData (raw DB rows) rather than LoadInstances to avoid
 	// the side-effect of FromInstanceData calling Start() on every session.
@@ -2534,7 +2633,14 @@ func (s *SessionService) CreateSession(
 	// Determine session type - use explicit session_type if provided, otherwise infer from fields.
 	// If the session was created via alias and the alias specifies a session type,
 	// use it as the fallback when the request itself didn't set one.
-	sessionType := resolveSessionType(req.Msg, branch)
+	sessionType, sessionTypeErr := resolveSessionType(req.Msg, branch)
+	if sessionTypeErr != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, sessionTypeErr)
+	}
+	// Captured before any of the remaps below (alias fallback, one-off, deferred-
+	// GitHub-URL, resume-forced-directory, remote-target remap) run, so it names the
+	// wire-level request itself -- feeds startLocked's Epic 1.5 invariant check.
+	requestedNewWorktree := req.Msg.SessionType == sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE
 	if aliasSessionType != config.SessionTypeDefault && req.Msg.SessionType == sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
 		sessionType = aliasSessionType
 	}
@@ -2833,32 +2939,33 @@ func (s *SessionService) CreateSession(
 
 	// Build instance options
 	instanceOpts := session.InstanceOptions{
-		Title:            req.Msg.Title,
-		Path:             resolvedPath,
-		WorkingDir:       req.Msg.WorkingDir,
-		Branch:           branch,
-		Program:          program,
-		AutoYes:          autoYes,
-		AutoApprove:      req.Msg.AutoApprove,
-		Prompt:           req.Msg.Prompt,
-		InitialPrompt:    initialPrompt,
-		ExistingWorktree: existingWorktreeOverride,
-		CreationWarning:  remoteCreationWarning,
-		Category:         req.Msg.Category,
-		SessionType:      sessionType,
-		TmuxPrefix:       "", // Use default from config
-		ResumeId:         req.Msg.ResumeId,
-		OneShot:          req.Msg.OneShot,
-		ProjectID:        req.Msg.ProjectId,
-		MCPServerURL:     s.resolveMCPServerURL(),
-		CreateIfMissing:  req.Msg.CreateIfMissing,
-		AllowedTools:     req.Msg.AllowedTools,
-		PermissionMode:   req.Msg.PermissionMode,
-		AutonomousMode:   req.Msg.AutonomousMode,
-		WorkflowID:       req.Msg.WorkflowId,
-		EnvVars:          instanceEnvVars,
-		CLIFlags:         instanceCLIFlags,
-		TmuxServerSocket: s.testTmuxServerSocket,
+		Title:                req.Msg.Title,
+		Path:                 resolvedPath,
+		WorkingDir:           req.Msg.WorkingDir,
+		Branch:               branch,
+		Program:              program,
+		AutoYes:              autoYes,
+		AutoApprove:          req.Msg.AutoApprove,
+		Prompt:               req.Msg.Prompt,
+		InitialPrompt:        initialPrompt,
+		ExistingWorktree:     existingWorktreeOverride,
+		CreationWarning:      remoteCreationWarning,
+		Category:             req.Msg.Category,
+		SessionType:          sessionType,
+		TmuxPrefix:           "", // Use default from config
+		ResumeId:             req.Msg.ResumeId,
+		OneShot:              req.Msg.OneShot,
+		ProjectID:            req.Msg.ProjectId,
+		MCPServerURL:         s.resolveMCPServerURL(),
+		CreateIfMissing:      req.Msg.CreateIfMissing,
+		AllowedTools:         req.Msg.AllowedTools,
+		PermissionMode:       req.Msg.PermissionMode,
+		AutonomousMode:       req.Msg.AutonomousMode,
+		WorkflowID:           req.Msg.WorkflowId,
+		RequestedNewWorktree: requestedNewWorktree,
+		EnvVars:              instanceEnvVars,
+		CLIFlags:             instanceCLIFlags,
+		TmuxServerSocket:     s.testTmuxServerSocket,
 		// ExtraArgs is a direct passthrough of req.Msg.ExtraArgs — unlike CLIFlags, it has no
 		// defaults-resolution concept to merge with. It composes with instanceCLIFlags at
 		// launch time in buildLaunchCommand: CLIFlags-derived tokens first, ExtraArgs last —
@@ -3105,30 +3212,34 @@ func resolveRemoteTarget(msg *sessionv1.CreateSessionRequest, cfg *config.Config
 // Priority: explicit session_type > inference from branch/existing_worktree.
 // ONE_OFF is returned as SessionTypeOneOff; callers are responsible for converting it to
 // SessionTypeDirectory after the one-off directory has been generated.
-func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) session.SessionType {
+func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) (session.SessionType, error) {
 	if msg.SessionType != sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
 		switch msg.SessionType {
 		case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
-			return session.SessionTypeDirectory
+			return session.SessionTypeDirectory, nil
 		case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
-			return session.SessionTypeNewWorktree
+			return session.SessionTypeNewWorktree, nil
 		case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
-			return session.SessionTypeExistingWorktree
+			return session.SessionTypeExistingWorktree, nil
 		case sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT:
-			return session.SessionTypeNewProject
+			return session.SessionTypeNewProject, nil
 		case sessionv1.SessionType_SESSION_TYPE_ONE_OFF:
-			return session.SessionTypeOneOff
+			return session.SessionTypeOneOff, nil
 		default:
-			return session.SessionTypeDirectory
+			// Fail loudly instead of silently downgrading an unrecognized enum value
+			// to SessionTypeDirectory -- this exact silent-substitution shape has
+			// already caused prior incidents in this repo (see plan's Pattern
+			// Decisions table / research/pitfalls.md §1).
+			return "", fmt.Errorf("unrecognized session_type %v", msg.SessionType)
 		}
 	}
 	if msg.ExistingWorktree != "" {
-		return session.SessionTypeExistingWorktree
+		return session.SessionTypeExistingWorktree, nil
 	}
 	if branch != "" {
-		return session.SessionTypeNewWorktree
+		return session.SessionTypeNewWorktree, nil
 	}
-	return session.SessionTypeDirectory
+	return session.SessionTypeDirectory, nil
 }
 
 // enterpriseHosts unions statically-configured GitHub Enterprise hosts with hosts

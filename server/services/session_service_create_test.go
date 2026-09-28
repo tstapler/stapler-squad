@@ -28,7 +28,9 @@ func TestResolveSessionType_ExplicitDirectory(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
 	}
-	assert.Equal(t, session.SessionTypeDirectory, resolveSessionType(msg, ""))
+	got, err := resolveSessionType(msg, "")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeDirectory, got)
 }
 
 func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
@@ -36,7 +38,9 @@ func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
 	}
-	assert.Equal(t, session.SessionTypeNewWorktree, resolveSessionType(msg, "my-branch"))
+	got, err := resolveSessionType(msg, "my-branch")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeNewWorktree, got)
 }
 
 func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
@@ -45,7 +49,9 @@ func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
 		SessionType:      sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE,
 		ExistingWorktree: "/some/worktree",
 	}
-	assert.Equal(t, session.SessionTypeExistingWorktree, resolveSessionType(msg, ""))
+	got, err := resolveSessionType(msg, "")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeExistingWorktree, got)
 }
 
 func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
@@ -53,7 +59,9 @@ func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
 	}
-	assert.Equal(t, session.SessionTypeDirectory, resolveSessionType(msg, ""))
+	got, err := resolveSessionType(msg, "")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeDirectory, got)
 }
 
 func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
@@ -62,7 +70,9 @@ func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
 	}
-	assert.Equal(t, session.SessionTypeNewWorktree, resolveSessionType(msg, "feat/my-feature"))
+	got, err := resolveSessionType(msg, "feat/my-feature")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeNewWorktree, got)
 }
 
 func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t *testing.T) {
@@ -72,7 +82,9 @@ func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t 
 		SessionType:      sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
 		ExistingWorktree: "/path/to/worktree",
 	}
-	assert.Equal(t, session.SessionTypeExistingWorktree, resolveSessionType(msg, "feat/branch"))
+	got, err := resolveSessionType(msg, "feat/branch")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeExistingWorktree, got)
 }
 
 func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
@@ -81,16 +93,21 @@ func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
 	}
-	assert.Equal(t, session.SessionTypeOneOff, resolveSessionType(msg, "some-branch"))
+	got, err := resolveSessionType(msg, "some-branch")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeOneOff, got)
 }
 
-func TestResolveSessionType_UnknownExplicitTypeDefaultsToDirectory(t *testing.T) {
+func TestResolveSessionType_should_ReturnError_When_SessionTypeUnrecognized(t *testing.T) {
 	t.Parallel()
-	// A proto enum value we don't recognise yet should degrade gracefully.
+	// An unrecognized proto enum value must fail loudly instead of silently
+	// downgrading to SessionTypeDirectory (worktree-envvars-hijack Epic 3.1).
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType(999),
 	}
-	assert.Equal(t, session.SessionTypeDirectory, resolveSessionType(msg, ""))
+	got, err := resolveSessionType(msg, "")
+	require.Error(t, err)
+	assert.Equal(t, session.SessionType(""), got)
 }
 
 // ---------------------------------------------------------------------------
