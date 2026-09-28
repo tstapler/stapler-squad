@@ -152,8 +152,9 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			gitWorktree := git.NewGitWorktreeFromStorage(i.Path, i.ExistingWorktree, i.Title, i.Branch, baseCommitSHA, git.WithCommandRunner(runner))
 			i.mu.Lock()
 			i.gitManager.SetWorktree(gitWorktree)
+			attachedBranch := i.Branch
 			i.mu.Unlock()
-			log.Info("attached to remote git worktree", "session", i.Title, "path", i.ExistingWorktree, "branch", i.Branch)
+			log.Info("attached to remote git worktree", "session", i.Title, "path", i.ExistingWorktree, "branch", attachedBranch)
 			break
 		}
 		log.Info("connecting to existing worktree", "session", i.Title, "path", i.ExistingWorktree)
@@ -163,9 +164,10 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		}
 		i.mu.Lock()
 		i.gitManager.SetWorktree(gitWorktree)
-		i.Branch = gitWorktree.GetBranchName()
+		connectedBranch := gitWorktree.GetBranchName()
+		i.Branch = connectedBranch
 		i.mu.Unlock()
-		log.Info("connected to existing worktree", "session", i.Title, "branch", i.Branch)
+		log.Info("connected to existing worktree", "session", i.Title, "branch", connectedBranch)
 	case SessionTypeNewProject:
 		log.Info("new project session, initializing git repo", "session", i.Title, "path", i.Path)
 		// A remote instance's project directory was already git-initialized on the
@@ -199,7 +201,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			i.gitManager.SetWorktree(gitWorktree)
 			i.Branch = branchName
 			i.mu.Unlock()
-			log.Info("new project initialized with worktree", "path", i.Path, "branch", i.Branch)
+			log.Info("new project initialized with worktree", "path", i.Path, "branch", branchName)
 		} else {
 			i.mu.Lock()
 			i.gitManager.SetWorktree(nil)

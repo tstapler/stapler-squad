@@ -1581,10 +1581,10 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	// firstTimeSetup -- a restart's Instance is reconstructed from storage with
 	// RequestedNewWorktree back at its zero value, so it has nothing meaningful to
 	// compare here.
-	if firstTimeSetup && i.RequestedNewWorktree && !i.executionTarget().IsRemote() && i.SessionType != SessionTypeNewWorktree {
-		recordSessionCreationWorktreeTypeMismatch(i.SessionType)
+	if resolvedType := i.Snapshot().SessionType; firstTimeSetup && i.RequestedNewWorktree && !i.executionTarget().IsRemote() && resolvedType != SessionTypeNewWorktree {
+		recordSessionCreationWorktreeTypeMismatch(resolvedType)
 		log.Warn("session_creation_worktree_type_mismatch: SESSION_TYPE_NEW_WORKTREE request resolved to a non-NewWorktree SessionType",
-			"session", i.Title, "uuid", i.UUID, "resolved_session_type", i.SessionType)
+			"session", i.Title, "uuid", i.UUID, "resolved_session_type", resolvedType)
 	}
 
 	// Set in every branch below (ColdRestore, HotRestore, firstTimeSetup) so
@@ -1707,9 +1707,9 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		// repo directory -- checked unconditionally of i.gitManager.HasWorktree()
 		// so it also catches the case where that's false. Routes through this
 		// function's existing setupErr/defer i.Kill() cleanup below.
-		if i.SessionType == SessionTypeNewWorktree && basePath == i.Path {
+		if repoPath := i.GetPath(); i.SessionType == SessionTypeNewWorktree && basePath == repoPath {
 			setupErr = fmt.Errorf("%w: session %q resolved to no real worktree (basePath == repo root %q)",
-				ErrWorktreeResolutionFailed, i.Title, i.Path)
+				ErrWorktreeResolutionFailed, i.Title, repoPath)
 			return setupErr
 		}
 
