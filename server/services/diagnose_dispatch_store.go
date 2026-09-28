@@ -27,6 +27,12 @@ type diagnoseDispatchPersistence interface {
 	CreateDiagnoseDispatch(ctx context.Context, in session.DiagnoseDispatchCreateInput) (string, error)
 	CompleteDiagnoseDispatch(ctx context.Context, dispatchID string, outcome session.DiagnoseDispatchOutcomeData) error
 	ListDiagnoseDispatchesByItem(ctx context.Context, itemID string) ([]session.DiagnoseDispatchData, error)
+	// FindDiagnoseDispatchByDiagnosticSessionUUID, GetDiagnoseDispatchWriteAttemptedAt,
+	// and SetDiagnoseDispatchWriteAttemptedAt back Story 4.1.4's dispatch-level
+	// duplicate-write guard (Tasks 4.1.4f/4.1.4g).
+	FindDiagnoseDispatchByDiagnosticSessionUUID(ctx context.Context, diagnosticSessionUUID string) (session.DiagnoseDispatchData, bool, error)
+	GetDiagnoseDispatchWriteAttemptedAt(ctx context.Context, dispatchID string) (*time.Time, error)
+	SetDiagnoseDispatchWriteAttemptedAt(ctx context.Context, dispatchID string, at time.Time) error
 }
 
 // DiagnoseDispatchRequest describes a new dispatch to record.
@@ -60,6 +66,19 @@ type DiagnoseDispatchStore interface {
 	MarkCompleted(ctx context.Context, dispatchID string, outcome diagnose.DiagnoseOutcome) error
 	// ListByItem returns all dispatches for itemID, chronological oldest-first.
 	ListByItem(ctx context.Context, itemID string) ([]DiagnoseDispatchRecord, error)
+	// FindByDiagnosticSessionUUID resolves a diagnostic (headless-diagnose-*)
+	// session's own UUID to its DiagnoseDispatch row's ID -- Story 4.1.4g's
+	// lookup for the dispatch-level duplicate-write guard. found is false, not
+	// an error, when no DiagnoseDispatch row has this DiagnosticSessionUUID
+	// (e.g. a manual, non-diagnose caller) -- the guard skips entirely in that
+	// case.
+	FindByDiagnosticSessionUUID(ctx context.Context, diagnosticSessionUUID string) (dispatchID string, found bool, err error)
+	// CheckAndSetWriteAttempted implements Story 4.1.4f: atomically reads
+	// dispatchID's WriteAttemptedAt; if nil, sets it to now and returns
+	// (false, nil); if already set, returns (true, nil) without modifying it.
+	// Serialized through diagnoseNudgeGuardMu (nudge_cap_store.go), reused
+	// here keyed by dispatchID instead of itemID.
+	CheckAndSetWriteAttempted(ctx context.Context, dispatchID string) (alreadyAttempted bool, err error)
 }
 
 // entDiagnoseDispatchStore is the ent-backed DiagnoseDispatchStore
@@ -113,6 +132,43 @@ func (s *entDiagnoseDispatchStore) ListByItem(ctx context.Context, itemID string
 		records[i] = dataToRecord(row)
 	}
 	return records, nil
+}
+
+// FindByDiagnosticSessionUUID implements Story 4.1.4g's lookup. See
+// DiagnoseDispatchStore.FindByDiagnosticSessionUUID.
+func (s *entDiagnoseDispatchStore) FindByDiagnosticSessionUUID(ctx context.Context, diagnosticSessionUUID string) (string, bool, error) {
+	data, found, err := s.persistence.FindDiagnoseDispatchByDiagnosticSessionUUID(ctx, diagnosticSessionUUID)
+	if err != nil {
+		return "", false, fmt.Errorf("diagnose dispatch store: find by diagnostic session %s: %w", diagnosticSessionUUID, err)
+	}
+	if !found {
+		return "", false, nil
+	}
+	return data.ID, true, nil
+}
+
+// CheckAndSetWriteAttempted implements Story 4.1.4f's dispatch-level
+// check-and-set, serialized through diagnoseNudgeGuardMu (the same
+// package-level mutex Story 3.3.2 uses for the nudge cap's check-then-reserve
+// race) -- one guard for every nudge-adjacent check-and-reserve race rather
+// than a second mutex for a structurally identical problem, per the plan's
+// explicit instruction (Task 4.1.4f).
+func (s *entDiagnoseDispatchStore) CheckAndSetWriteAttempted(ctx context.Context, dispatchID string) (bool, error) {
+	diagnoseNudgeGuardMu.Lock()
+	defer diagnoseNudgeGuardMu.Unlock()
+
+	existing, err := s.persistence.GetDiagnoseDispatchWriteAttemptedAt(ctx, dispatchID)
+	if err != nil {
+		return false, fmt.Errorf("diagnose dispatch store: check write attempted for dispatch %s: %w", dispatchID, err)
+	}
+	if existing != nil {
+		return true, nil
+	}
+
+	if err := s.persistence.SetDiagnoseDispatchWriteAttemptedAt(ctx, dispatchID, time.Now().UTC()); err != nil {
+		return false, fmt.Errorf("diagnose dispatch store: set write attempted for dispatch %s: %w", dispatchID, err)
+	}
+	return false, nil
 }
 
 // outcomeToData converts a validated diagnose.DiagnoseOutcome into the

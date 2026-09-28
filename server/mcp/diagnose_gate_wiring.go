@@ -17,6 +17,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/diagnose"
@@ -262,4 +263,66 @@ func checkNudgeGate(ctx context.Context, gate nudgeGateEvaluator, inst *session.
 		return errRes
 	}
 	return verifyNudgeIdentity(ctx, gate, inst, expectedUUID)
+}
+
+// diagnoseDispatchWriteGuard is the narrow interface Story 4.1.4g's
+// dispatch-level duplicate-write guard needs -- satisfied by
+// services.DiagnoseDispatchStore. A seam so tests can inject a scripted
+// result without a real ent-backed store; production wiring (NewCore,
+// server.go) sets a real *services.entDiagnoseDispatchStore (via
+// services.NewDiagnoseDispatchStore) when storage is non-nil.
+type diagnoseDispatchWriteGuard interface {
+	FindByDiagnosticSessionUUID(ctx context.Context, diagnosticSessionUUID string) (dispatchID string, found bool, err error)
+	CheckAndSetWriteAttempted(ctx context.Context, dispatchID string) (alreadyAttempted bool, err error)
+}
+
+// checkDuplicateWriteGuard implements Task 4.1.4g: a SEPARATE, additive guard
+// from NudgeGate.Evaluate's flag/idle/identity/cap pipeline -- it has no
+// dispatchID in GateInput and does not consult or consume the nudge cap.
+// Resolves the CALLING session's own UUID (the diagnostic agent's own
+// session, read from context -- NOT inst, the target session being written
+// to) to its DiagnoseDispatch row via DiagnosticSessionUUID, then rejects a
+// second write attempt for that dispatch outright, regardless of remaining
+// cap headroom. This is the structural backstop the adversarial re-review's
+// residual CONCERNS finding asked for (adversarial-review.md's Concern 1
+// "RESOLVED by Story 4.1.4" update): the nudge cap alone permits a second
+// write within the same dispatch whenever cap > 1, but this guard does not.
+//
+// Skips entirely (returns nil, not an error) in three cases, all deliberate
+// per Task 4.1.4g's carve-out: guard is nil (dispatch store unwired, e.g. the
+// stdio fallback transport with storage == nil); the caller has no
+// STAPLER_SESSION_UUID in context (e.g. a manual/external MCP client); or the
+// caller's session UUID has no matching DiagnoseDispatch row at all (e.g.
+// Tyler manually steering a session -- not a diagnose dispatch, nothing to
+// guard). An unexpected store error fails closed, like every other
+// safety-critical check in this file -- ambiguity about whether a duplicate
+// write already happened must resolve to "don't write", not "assume it's
+// fine".
+func checkDuplicateWriteGuard(ctx context.Context, guard diagnoseDispatchWriteGuard) *mcpgo.CallToolResult {
+	if guard == nil {
+		return nil
+	}
+	callerUUID, ok := sessionUUIDFromContext(ctx)
+	if !ok {
+		return nil
+	}
+
+	dispatchID, found, err := guard.FindByDiagnosticSessionUUID(ctx, callerUUID)
+	if err != nil {
+		log.Error("diagnose dispatch write guard: lookup failed, failing closed", "caller_session_uuid", callerUUID, "error", err)
+		return gateFailureResult(diagnose.SafetyGateReasonDuplicateWriteAttemptForDispatch)
+	}
+	if !found {
+		return nil
+	}
+
+	alreadyAttempted, err := guard.CheckAndSetWriteAttempted(ctx, dispatchID)
+	if err != nil {
+		log.Error("diagnose dispatch write guard: check-and-set failed, failing closed", "dispatch_id", dispatchID, "error", err)
+		return gateFailureResult(diagnose.SafetyGateReasonDuplicateWriteAttemptForDispatch)
+	}
+	if alreadyAttempted {
+		return gateFailureResult(diagnose.SafetyGateReasonDuplicateWriteAttemptForDispatch)
+	}
+	return nil
 }

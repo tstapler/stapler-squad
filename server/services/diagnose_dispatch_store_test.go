@@ -8,6 +8,8 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -201,4 +203,131 @@ func TestDiagnoseDispatchStore_ListByItem_ShouldReturnMixedPendingAndCompletedRo
 	assert.Equal(t, secondID, rows[1].ID)
 	assert.Equal(t, diagnose.DiagnoseDispatchStatusPending, rows[1].Status)
 	assert.Nil(t, rows[1].Outcome)
+}
+
+// --- Story 4.1.4: dispatch-level duplicate-write guard ---
+
+// TestDiagnoseDispatchStore_FindByDiagnosticSessionUUID_ShouldReturnDispatchID_WhenRowExists
+// covers Task 4.1.4g's lookup: a dispatch recorded with a diagnostic session
+// UUID is resolvable back to its dispatch ID.
+func TestDiagnoseDispatchStore_FindByDiagnosticSessionUUID_ShouldReturnDispatchID_WhenRowExists(t *testing.T) {
+	t.Parallel()
+	store := NewDiagnoseDispatchStore(newTestDiagnoseDispatchStorage(t))
+	ctx := context.Background()
+
+	dispatchID, err := store.Record(ctx, DiagnoseDispatchRequest{
+		ItemID:                "item-7",
+		TargetSessionUUID:     "target-session-uuid",
+		DiagnosticSessionUUID: "diagnostic-session-uuid-7",
+	})
+	require.NoError(t, err)
+
+	gotID, found, err := store.FindByDiagnosticSessionUUID(ctx, "diagnostic-session-uuid-7")
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, dispatchID, gotID)
+}
+
+// TestDiagnoseDispatchStore_FindByDiagnosticSessionUUID_ShouldReturnNotFound_WhenNoMatchingRow
+// covers Task 4.1.4g's explicit carve-out: no matching row is not an error --
+// a caller acting on behalf of a real diagnose dispatch is the only one with
+// a row at all (e.g. Tyler manually steering a session has none).
+func TestDiagnoseDispatchStore_FindByDiagnosticSessionUUID_ShouldReturnNotFound_WhenNoMatchingRow(t *testing.T) {
+	t.Parallel()
+	store := NewDiagnoseDispatchStore(newTestDiagnoseDispatchStorage(t))
+	ctx := context.Background()
+
+	gotID, found, err := store.FindByDiagnosticSessionUUID(ctx, "no-such-session-uuid")
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Empty(t, gotID)
+}
+
+// TestDiagnoseDispatchStore_CheckAndSetWriteAttempted_ShouldReturnFalseAndSetTimestamp_WhenFirstAttemptForDispatch
+// is the validation.md-named test: WriteAttemptedAt nil -> sets to now,
+// returns (false, nil).
+func TestDiagnoseDispatchStore_CheckAndSetWriteAttempted_ShouldReturnFalseAndSetTimestamp_WhenFirstAttemptForDispatch(t *testing.T) {
+	t.Parallel()
+	store := NewDiagnoseDispatchStore(newTestDiagnoseDispatchStorage(t))
+	ctx := context.Background()
+
+	dispatchID, err := store.Record(ctx, DiagnoseDispatchRequest{
+		ItemID:                "item-8",
+		TargetSessionUUID:     "target-session-uuid",
+		DiagnosticSessionUUID: "diagnostic-session-uuid-8",
+	})
+	require.NoError(t, err)
+
+	alreadyAttempted, err := store.CheckAndSetWriteAttempted(ctx, dispatchID)
+	require.NoError(t, err)
+	assert.False(t, alreadyAttempted)
+}
+
+// TestDiagnoseDispatchStore_CheckAndSetWriteAttempted_ShouldReturnTrueWithoutModifying_WhenSecondAttemptForSameDispatch
+// is the validation.md-named test: WriteAttemptedAt already set -> returns
+// (true, nil), timestamp unchanged.
+func TestDiagnoseDispatchStore_CheckAndSetWriteAttempted_ShouldReturnTrueWithoutModifying_WhenSecondAttemptForSameDispatch(t *testing.T) {
+	t.Parallel()
+	store := NewDiagnoseDispatchStore(newTestDiagnoseDispatchStorage(t))
+	ctx := context.Background()
+
+	dispatchID, err := store.Record(ctx, DiagnoseDispatchRequest{
+		ItemID:                "item-9",
+		TargetSessionUUID:     "target-session-uuid",
+		DiagnosticSessionUUID: "diagnostic-session-uuid-9",
+	})
+	require.NoError(t, err)
+
+	first, err := store.CheckAndSetWriteAttempted(ctx, dispatchID)
+	require.NoError(t, err)
+	require.False(t, first)
+
+	second, err := store.CheckAndSetWriteAttempted(ctx, dispatchID)
+	require.NoError(t, err)
+	assert.True(t, second, "a second attempt for the same dispatch must be rejected")
+
+	third, err := store.CheckAndSetWriteAttempted(ctx, dispatchID)
+	require.NoError(t, err)
+	assert.True(t, third, "a third attempt must still be rejected, not reset")
+}
+
+// TestDiagnoseDispatchStore_CheckAndSetWriteAttempted_ShouldAllowExactlyOneOfTwoConcurrentCalls_WhenRaceTestedForSameDispatchID
+// is the validation.md-named `-race` test, mirroring
+// TestNudgeCapStore_CheckAndReserve_ShouldAllowExactlyOneSuccess_WhenTwoGoroutinesRaceForSameItemAtCapOne's
+// pattern: run with `go test -race`.
+func TestDiagnoseDispatchStore_CheckAndSetWriteAttempted_ShouldAllowExactlyOneOfTwoConcurrentCalls_WhenRaceTestedForSameDispatchID(t *testing.T) {
+	store := NewDiagnoseDispatchStore(newTestDiagnoseDispatchStorage(t))
+	ctx := context.Background()
+
+	for i := range 100 {
+		dispatchID, err := store.Record(ctx, DiagnoseDispatchRequest{
+			ItemID:                fmt.Sprintf("race-item-%d", i),
+			TargetSessionUUID:     "target-session-uuid",
+			DiagnosticSessionUUID: fmt.Sprintf("race-diagnostic-session-%d", i),
+		})
+		require.NoError(t, err)
+
+		var wg sync.WaitGroup
+		alreadyAttempted := make([]bool, 2)
+		errs := make([]error, 2)
+		for g := range 2 {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				alreadyAttempted[idx], errs[idx] = store.CheckAndSetWriteAttempted(ctx, dispatchID)
+			}(g)
+		}
+		wg.Wait()
+
+		for _, err := range errs {
+			require.NoError(t, err)
+		}
+		firstAttemptCount := 0
+		for _, already := range alreadyAttempted {
+			if !already {
+				firstAttemptCount++
+			}
+		}
+		assert.Equalf(t, 1, firstAttemptCount, "iteration %d: expected exactly one call to see (false, nil), got %d", i, firstAttemptCount)
+	}
 }

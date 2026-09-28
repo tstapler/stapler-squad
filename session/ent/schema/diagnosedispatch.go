@@ -25,8 +25,14 @@ import (
 // this schema package does not import session/diagnose to avoid coupling the
 // storage layer's literal wire values to that package's Go identifiers.
 //
-// WriteAttemptedAt is deliberately NOT added yet -- Story 4.1.4's own worker
-// adds it alongside WriteAttempted with its own ent-generate run.
+// write_attempted_at (added by Story 4.1.4's Task 4.1.4e, alongside -- not
+// replacing -- write_attempted above) is a separate, dispatch-scoped guard
+// timestamp: set the moment any write is attempted for this dispatch, before
+// the underlying write call, so a second attempt for the same dispatchID can
+// be rejected outright regardless of nudge-cap headroom (see
+// server/services/diagnose_dispatch_store.go's CheckAndSetWriteAttempted).
+// write_attempted remains the separate, post-completion audit flag Task
+// 5.2.2d sets when interpreting the dispatch's final outcome.
 //
 // failure_reason is NOT in the plan's Migration Plan field list, but is added
 // here anyway: session/diagnose.DiagnoseOutcome.FailureReason is required
@@ -77,6 +83,10 @@ func (DiagnoseDispatch) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Set only when a write call was attempted but its outcome could not be confirmed (Story 4.1.4); orthogonal to outcome_kind."),
+		field.Time("write_attempted_at").
+			Optional().
+			Nillable().
+			Comment("Set the moment any write is attempted for this dispatch, before the underlying write call (Story 4.1.4's dispatch-level duplicate-write guard); null until then. Distinct from write_attempted above."),
 		field.Text("failure_reason").
 			Optional().
 			Nillable().

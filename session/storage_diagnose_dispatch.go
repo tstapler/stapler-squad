@@ -47,6 +47,7 @@ type DiagnoseDispatchData struct {
 	BugItemID             *string
 	NoteText              *string
 	WriteAttempted        *bool
+	WriteAttemptedAt      *time.Time
 	FailureReason         *string
 	CreatedAt             time.Time
 	CompletedAt           *time.Time
@@ -133,10 +134,64 @@ func dataFromEntDiagnoseDispatch(row *ent.DiagnoseDispatch) DiagnoseDispatchData
 		BugItemID:             row.BugItemID,
 		NoteText:              row.NoteText,
 		WriteAttempted:        row.WriteAttempted,
+		WriteAttemptedAt:      row.WriteAttemptedAt,
 		FailureReason:         row.FailureReason,
 		CreatedAt:             row.CreatedAt,
 		CompletedAt:           row.CompletedAt,
 	}
+}
+
+// FindDiagnoseDispatchByDiagnosticSessionUUID returns the DiagnoseDispatch row
+// whose DiagnosticSessionUUID matches diagnosticSessionUUID and (data, true,
+// nil), or (zero-value, false, nil) if none exists -- "no matching row" is
+// not an error condition (Task 4.1.4g's explicit carve-out for a caller
+// that isn't a diagnose dispatch at all, e.g. Tyler manually steering a
+// session). A bool-flagged zero value, not a nil *DiagnoseDispatchData,
+// distinguishes "not found" from "found" without a nilnil return.
+func (r *EntRepository) FindDiagnoseDispatchByDiagnosticSessionUUID(ctx context.Context, diagnosticSessionUUID string) (DiagnoseDispatchData, bool, error) {
+	row, err := r.client.DiagnoseDispatch.Query().
+		Where(diagnosedispatch.DiagnosticSessionUUID(diagnosticSessionUUID)).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return DiagnoseDispatchData{}, false, nil
+		}
+		return DiagnoseDispatchData{}, false, fmt.Errorf("find diagnose dispatch for diagnostic session %s: %w", diagnosticSessionUUID, err)
+	}
+	return dataFromEntDiagnoseDispatch(row), true, nil
+}
+
+// GetDiagnoseDispatchWriteAttemptedAt returns dispatchID's WriteAttemptedAt
+// timestamp, nil if a write has never been attempted for this dispatch yet.
+func (r *EntRepository) GetDiagnoseDispatchWriteAttemptedAt(ctx context.Context, dispatchID string) (*time.Time, error) {
+	row, err := r.client.DiagnoseDispatch.Get(ctx, dispatchID)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("diagnose dispatch %s not found: %w", dispatchID, err)
+		}
+		return nil, fmt.Errorf("get write attempted at for dispatch %s: %w", dispatchID, err)
+	}
+	return row.WriteAttemptedAt, nil
+}
+
+// SetDiagnoseDispatchWriteAttemptedAt unconditionally stamps dispatchID's
+// WriteAttemptedAt to at. The check-then-set decision belongs to the caller --
+// mirrors ReserveNudgeCapRecord's doc comment: the sole intended caller is
+// server/services' diagnoseNudgeGuardMu-guarded
+// DiagnoseDispatchStore.CheckAndSetWriteAttempted (Task 4.1.4f); calling this
+// directly without holding that mutex reopens the same check-then-set race
+// ADR-003 closed for the nudge cap.
+func (r *EntRepository) SetDiagnoseDispatchWriteAttemptedAt(ctx context.Context, dispatchID string, at time.Time) error {
+	_, err := r.client.DiagnoseDispatch.UpdateOneID(dispatchID).
+		SetWriteAttemptedAt(at).
+		Save(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return fmt.Errorf("diagnose dispatch %s not found: %w", dispatchID, err)
+		}
+		return fmt.Errorf("set write attempted at for dispatch %s: %w", dispatchID, err)
+	}
+	return nil
 }
 
 // CreateDiagnoseDispatch persists a new DiagnoseDispatch row. See
@@ -155,4 +210,23 @@ func (s *Storage) CompleteDiagnoseDispatch(ctx context.Context, dispatchID strin
 // See EntRepository.ListDiagnoseDispatchesByItem.
 func (s *Storage) ListDiagnoseDispatchesByItem(ctx context.Context, itemID string) ([]DiagnoseDispatchData, error) {
 	return s.repo.ListDiagnoseDispatchesByItem(ctx, itemID)
+}
+
+// FindDiagnoseDispatchByDiagnosticSessionUUID returns the DiagnoseDispatch row
+// for diagnosticSessionUUID and true, or (zero-value, false) if none exists.
+// See EntRepository.FindDiagnoseDispatchByDiagnosticSessionUUID.
+func (s *Storage) FindDiagnoseDispatchByDiagnosticSessionUUID(ctx context.Context, diagnosticSessionUUID string) (DiagnoseDispatchData, bool, error) {
+	return s.repo.FindDiagnoseDispatchByDiagnosticSessionUUID(ctx, diagnosticSessionUUID)
+}
+
+// GetDiagnoseDispatchWriteAttemptedAt returns dispatchID's WriteAttemptedAt
+// timestamp. See EntRepository.GetDiagnoseDispatchWriteAttemptedAt.
+func (s *Storage) GetDiagnoseDispatchWriteAttemptedAt(ctx context.Context, dispatchID string) (*time.Time, error) {
+	return s.repo.GetDiagnoseDispatchWriteAttemptedAt(ctx, dispatchID)
+}
+
+// SetDiagnoseDispatchWriteAttemptedAt stamps dispatchID's WriteAttemptedAt to
+// at. See EntRepository.SetDiagnoseDispatchWriteAttemptedAt.
+func (s *Storage) SetDiagnoseDispatchWriteAttemptedAt(ctx context.Context, dispatchID string, at time.Time) error {
+	return s.repo.SetDiagnoseDispatchWriteAttemptedAt(ctx, dispatchID, at)
 }

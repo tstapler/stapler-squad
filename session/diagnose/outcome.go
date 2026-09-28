@@ -100,17 +100,20 @@ func (o DiagnoseOutcome) Validate() error {
 // SafetyGateReason names which nudge-write safety gate failed. Typed-string
 // enum, mirroring HandoffSummaryStatus's convention.
 //
-// DuplicateWriteAttemptForDispatch (a 7th value) is added later by Story
-// 4.1.4/Task 4.1.4g -- deliberately not present here.
+// DuplicateWriteAttemptForDispatch (Story 4.1.4/Task 4.1.4g) is a separate,
+// additive guard keyed by DiagnoseDispatch's dispatchID -- it runs outside
+// NudgeGate.Evaluate and does not consult or consume the nudge cap; see
+// server/mcp/diagnose_gate_wiring.go's checkDuplicateWriteGuard.
 type SafetyGateReason string
 
 const (
-	SafetyGateReasonNotIdle                    SafetyGateReason = "not_idle"
-	SafetyGateReasonIdentityMismatchInstance   SafetyGateReason = "identity_mismatch_instance"
-	SafetyGateReasonIdentityMismatchTmuxMarker SafetyGateReason = "identity_mismatch_tmux_marker"
-	SafetyGateReasonNudgeCapReached            SafetyGateReason = "nudge_cap_reached"
-	SafetyGateReasonNudgeCooldownActive        SafetyGateReason = "nudge_cooldown_active"
-	SafetyGateReasonNudgeExecutionDisabled     SafetyGateReason = "nudge_execution_disabled"
+	SafetyGateReasonNotIdle                          SafetyGateReason = "not_idle"
+	SafetyGateReasonIdentityMismatchInstance         SafetyGateReason = "identity_mismatch_instance"
+	SafetyGateReasonIdentityMismatchTmuxMarker       SafetyGateReason = "identity_mismatch_tmux_marker"
+	SafetyGateReasonNudgeCapReached                  SafetyGateReason = "nudge_cap_reached"
+	SafetyGateReasonNudgeCooldownActive              SafetyGateReason = "nudge_cooldown_active"
+	SafetyGateReasonNudgeExecutionDisabled           SafetyGateReason = "nudge_execution_disabled"
+	SafetyGateReasonDuplicateWriteAttemptForDispatch SafetyGateReason = "duplicate_write_attempt_for_dispatch"
 )
 
 // String returns a human-readable label for log-line formatting.
@@ -128,6 +131,8 @@ func (r SafetyGateReason) String() string {
 		return "nudge cooldown active"
 	case SafetyGateReasonNudgeExecutionDisabled:
 		return "nudge execution disabled"
+	case SafetyGateReasonDuplicateWriteAttemptForDispatch:
+		return "duplicate write attempt for this dispatch"
 	default:
 		return string(r)
 	}

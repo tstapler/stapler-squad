@@ -59,8 +59,21 @@ func NewCore(
 	// (see NewDiagnoseNudgeGate's doc comment).
 	nudgeGate := NewDiagnoseNudgeGate(config.LoadConfig, storage, newIdleGateRegistry())
 
+	// Story 4.1.4g's dispatch-level duplicate-write guard, shared by every
+	// steer_session/write_to_session/resume_session call for the same reason
+	// nudgeGate is shared above. storage may be nil (see NewDiagnoseNudgeGate's
+	// doc comment); dispatchWriteGuard then stays a nil interface, and
+	// checkDuplicateWriteGuard's nil check makes every handler skip the guard
+	// entirely -- the same degrade-safely behavior newNudgeCapCheck's own
+	// nil-storage branch chooses, except this guard has no cap to fail closed
+	// into, so "skip" (not "fail closed") is correct here.
+	var dispatchWriteGuard diagnoseDispatchWriteGuard
+	if storage != nil {
+		dispatchWriteGuard = services.NewDiagnoseDispatchStore(storage)
+	}
+
 	registerDiscoveryTools(s, &discoveryHandlers{store: store})
-	registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, nudgeGate: nudgeGate})
+	registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, nudgeGate: nudgeGate, dispatchWriteGuard: dispatchWriteGuard})
 	// Wrapping a nil *services.SessionService directly in the liveInstanceFinder
 	// interface would produce a non-nil interface value around a nil pointer —
 	// th.live != nil would then be true, and calling FindLiveInstance on it
@@ -71,11 +84,12 @@ func NewCore(
 		liveFinder = svc
 	}
 	registerTerminalTools(s, &terminalHandlers{
-		store:      store,
-		live:       liveFinder,
-		scrollback: sbMgr,
-		writeLim:   newTokenBucket(writeRateLimitPerSec, writeRateLimitPerSec),
-		nudgeGate:  nudgeGate,
+		store:              store,
+		live:               liveFinder,
+		scrollback:         sbMgr,
+		writeLim:           newTokenBucket(writeRateLimitPerSec, writeRateLimitPerSec),
+		nudgeGate:          nudgeGate,
+		dispatchWriteGuard: dispatchWriteGuard,
 	})
 	registerVCSTools(s, &vcsHandlers{store: store})
 	if svc != nil {

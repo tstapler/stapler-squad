@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/diagnose"
 	"github.com/tstapler/stapler-squad/session/sendkeysguard"
@@ -794,4 +796,242 @@ func TestSteerSession_ShouldReachSendKeys_WhenGateAndFinalIdentityRecheckBothPas
 			t.Fatalf("steerSession returned gate-failure code %q after an all-pass gate; expected SendKeys to be reached", code)
 		}
 	}
+}
+
+// --- Story 4.1.4: ambiguous write-outcome classification ---
+
+// TestIsConnectionOrTimeoutShapedWriteError covers the classifier all three
+// NudgeGate-gated handlers (steerSession, writeToSession, resumeSession)
+// share: a table across the exact error shapes Task 4.1.4a's AC names
+// (deadline/timeout, connection-refused, no-such-socket) plus a generic,
+// unrelated error that must NOT be misclassified as ambiguous.
+func TestIsConnectionOrTimeoutShapedWriteError(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"context.DeadlineExceeded directly", context.DeadlineExceeded, true},
+		{"context.DeadlineExceeded wrapped", fmt.Errorf("submit cancelled: %w", context.DeadlineExceeded), true},
+		{"connection refused text", fmt.Errorf("dial unix /tmp/tmux.sock: connect: connection refused"), true},
+		{"no such file or directory text", fmt.Errorf("fork/exec /nonexistent/tmux: no such file or directory"), true},
+		{"no such socket text", fmt.Errorf("tmux: no such socket"), true},
+		{"unrelated error", fmt.Errorf("cannot send keys to instance that has not been started or is paused"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isConnectionOrTimeoutShapedWriteError(tc.err))
+		})
+	}
+}
+
+// TestSteerSession_ShouldReturnWriteOutcomeUnknown_WhenUnderlyingWriteTimesOutAfterGatePasses
+// covers Task 4.1.4a/4.1.4d for steerSession's PTY fallback branch: an
+// already-expired context makes SubmitContentWithEnter's internal timeout
+// fire immediately (context.DeadlineExceeded), which must classify as
+// write_outcome_unknown, never a bare/generic error. th.nudgeGate is nil here
+// (skips evaluateNudgeGate/verifyNudgeIdentity) so this test isolates the
+// post-gate write-outcome classification -- gate plumbing itself is covered
+// by the "all-pass" tests above.
+func TestSteerSession_ShouldReturnWriteOutcomeUnknown_WhenUnderlyingWriteTimesOutAfterGatePasses(t *testing.T) {
+	inst := newGatedTestInstance(t, "steer-timeout-session", "claude")
+	store := &stubStore{instances: []*session.Instance{inst}}
+	th := newGatedTerminalHandlers(t, store, nil)
+
+	expiredCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+	defer cancel()
+
+	req := makeToolReq(map[string]interface{}{
+		"session_id": inst.Title,
+		"message":    "focus on the authentication module",
+	})
+	result, err := th.steerSession(expiredCtx, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, _ := m["error"].(map[string]interface{})
+	require.NotNil(t, errObj)
+	require.Equal(t, writeOutcomeUnknownMarker, errObj["code"],
+		"a timeout-shaped write error must classify as write_outcome_unknown, not a bare/generic error")
+}
+
+// TestWriteToSession_ShouldReturnWriteOutcomeUnknown_WhenUnderlyingWriteTimesOutAfterGatePasses
+// mirrors the steerSession test above for write_to_session.
+func TestWriteToSession_ShouldReturnWriteOutcomeUnknown_WhenUnderlyingWriteTimesOutAfterGatePasses(t *testing.T) {
+	inst := newGatedTestInstance(t, "write-timeout-session", "claude")
+	store := &stubStore{instances: []*session.Instance{inst}}
+	th := newGatedTerminalHandlers(t, store, nil)
+
+	expiredCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+	defer cancel()
+
+	req := makeToolReq(map[string]interface{}{
+		"session_id": inst.Title,
+		"input":      "echo hello",
+	})
+	result, err := th.writeToSession(expiredCtx, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, _ := m["error"].(map[string]interface{})
+	require.NotNil(t, errObj)
+	require.Equal(t, writeOutcomeUnknownMarker, errObj["code"])
+}
+
+// No internal retry is a structural property (each handler calls its write
+// function exactly once, no loop) rather than something the two tests above
+// runtime-assert -- same class of invariant as verifyBeforeWrite's own doc
+// comment ("Go cannot enforce ... automatically"), checked at code review.
+
+// TestSteerSession_ShouldLeaveCapSlotConsumed_NotRefunded_WhenUnderlyingWriteReturnsWriteOutcomeUnknown
+// covers Task 4.1.4d's cap-non-refund AC. Scope, stated explicitly: this
+// proves no code path in steerSession touches NudgeCapStore based on the
+// write's outcome (a cap slot reserved directly via NudgeCapStore before the
+// call is still there, unchanged, after a write_outcome_unknown result) --
+// it does not additionally re-prove that the real NudgeGate pipeline's own
+// cap-check-and-reserve step works, which
+// TestNewDiagnoseNudgeGate_ShouldPassAllFourChecks_WhenFlagOnIdleSustainedIdentityMatchesAndCapAvailable
+// (diagnose_gate_wiring_test.go) already covers. th.nudgeGate is nil here for
+// the same isolation reason as the classification tests above.
+func TestSteerSession_ShouldLeaveCapSlotConsumed_NotRefunded_WhenUnderlyingWriteReturnsWriteOutcomeUnknown(t *testing.T) {
+	inst := newGatedTestInstance(t, "cap-not-refunded-session", "claude")
+	store := &stubStore{instances: []*session.Instance{inst}}
+	th := newGatedTerminalHandlers(t, store, nil)
+
+	storage := newTestBacklogStorage(t)
+	capStore := services.NewNudgeCapStore(storage)
+	itemID := inst.Snapshot().UUID
+	ok, err := capStore.CheckAndReserve(context.Background(), itemID, 2, 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	expiredCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+	defer cancel()
+
+	req := makeToolReq(map[string]interface{}{
+		"session_id": inst.Title,
+		"message":    "focus on the authentication module",
+	})
+	result, err := th.steerSession(expiredCtx, req)
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, _ := m["error"].(map[string]interface{})
+	require.Equal(t, writeOutcomeUnknownMarker, errObj["code"])
+
+	rec, err := capStore.Get(context.Background(), itemID)
+	require.NoError(t, err)
+	require.Equal(t, 1, rec.NudgeCount, "a write_outcome_unknown result must not refund the already-reserved cap slot")
+}
+
+// --- Story 4.1.4g/h: dispatch-level duplicate-write guard ---
+
+// newDispatchGuardTestSetup builds a terminalHandlers wired to a real
+// NudgeCapStore + DiagnoseDispatchStore backed by fresh in-memory storage,
+// shared by Story 4.1.4g/h's dispatch-level-guard integration tests below.
+// th.nudgeGate is scripted {ok: true} deliberately: these tests isolate the
+// dispatch guard's own behavior (it runs independently of, and does not
+// consult, the cap -- see checkDuplicateWriteGuard's doc comment); the real
+// gate's own cap enforcement is covered separately in
+// diagnose_gate_wiring_test.go.
+func newDispatchGuardTestSetup(t *testing.T, inst *session.Instance) (*terminalHandlers, services.NudgeCapStore, services.DiagnoseDispatchStore) {
+	t.Helper()
+	store := &stubStore{instances: []*session.Instance{inst}}
+	storage := newTestBacklogStorage(t)
+	dispatchStore := services.NewDiagnoseDispatchStore(storage)
+	th := newGatedTerminalHandlers(t, store, fakeNudgeGateEvaluator{ok: true})
+	th.dispatchWriteGuard = dispatchStore
+	return th, services.NewNudgeCapStore(storage), dispatchStore
+}
+
+// seedDispatchGuardPrecondition reserves one nudge-cap slot for itemID
+// (leaving headroom under a cap of 2) and records a DiagnoseDispatch row
+// whose diagnostic session UUID is callerUUID -- the "cap headroom remains,
+// but a write was already attempted for this dispatch" precondition the
+// guard rejection test below needs.
+func seedDispatchGuardPrecondition(t *testing.T, capStore services.NudgeCapStore, dispatchStore services.DiagnoseDispatchStore, itemID, callerUUID string) {
+	t.Helper()
+	ok, err := capStore.CheckAndReserve(context.Background(), itemID, 2, 0)
+	require.NoError(t, err)
+	require.True(t, ok, "precondition: NudgeCount=1 < cap=2, i.e. cap headroom remains")
+
+	_, err = dispatchStore.Record(context.Background(), services.DiagnoseDispatchRequest{
+		ItemID: itemID, TargetSessionUUID: itemID, DiagnosticSessionUUID: callerUUID,
+	})
+	require.NoError(t, err)
+}
+
+// TestSteerSession_ShouldRejectSecondWriteAttempt_WhenDispatchAlreadyRecordedAWriteAttempt_EvenWithCapHeadroomRemaining
+// is the validation.md-named integration test: the specific scenario the
+// adversarial re-review flagged as the residual gap -- cap headroom alone
+// (NudgeCount=1 < cap=2) would permit a second write, but the dispatch's
+// WriteAttemptedAt guard rejects it anyway.
+func TestSteerSession_ShouldRejectSecondWriteAttempt_WhenDispatchAlreadyRecordedAWriteAttempt_EvenWithCapHeadroomRemaining(t *testing.T) {
+	inst := newGatedTestInstance(t, "dispatch-guard-session", "claude")
+	fakeTmux := newFakeTmuxShowEnvironment(t, "STAPLER_SESSION_UUID="+inst.Snapshot().UUID, 0)
+	t.Setenv("TMUX_BIN", fakeTmux)
+	itemID := inst.Snapshot().UUID
+	callerUUID := "diagnostic-session-uuid-for-guard-test"
+
+	th, capStore, dispatchStore := newDispatchGuardTestSetup(t, inst)
+	seedDispatchGuardPrecondition(t, capStore, dispatchStore, itemID, callerUUID)
+
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	req := makeToolReq(map[string]interface{}{"session_id": inst.Title, "message": "focus on the authentication module"})
+
+	// First attempt: guard sees no prior WriteAttemptedAt, records one, and
+	// proceeds past the guard (the write itself may still fail for unrelated
+	// reasons -- no live PTY in this unit test -- which is not what this test
+	// asserts).
+	first, err := th.steerSession(ctx, req)
+	require.NoError(t, err)
+	if errObj, _ := parseResult(t, first)["error"].(map[string]interface{}); errObj != nil {
+		require.NotEqual(t, string(diagnose.SafetyGateReasonDuplicateWriteAttemptForDispatch), errObj["code"])
+	}
+
+	// Second attempt for the SAME dispatch (same callerUUID) must be rejected,
+	// even though cap headroom remains.
+	second, err := th.steerSession(ctx, req)
+	require.NoError(t, err)
+	secondResult := parseResult(t, second)
+	require.False(t, secondResult["success"].(bool))
+	errObj, _ := secondResult["error"].(map[string]interface{})
+	require.NotNil(t, errObj)
+	require.Equal(t, string(diagnose.SafetyGateReasonDuplicateWriteAttemptForDispatch), errObj["code"])
+
+	rec, err := capStore.Get(context.Background(), itemID)
+	require.NoError(t, err)
+	require.Equal(t, 1, rec.NudgeCount, "the dispatch-level guard's rejection must not consult or consume the nudge cap")
+}
+
+// TestSteerSession_ShouldNotApplyDuplicateWriteGuard_WhenCallerHasNoMatchingDiagnoseDispatchRow
+// is the validation.md-named integration test: a manual (non-diagnose)
+// steer_session call -- STAPLER_SESSION_UUID set, but no DiagnoseDispatch row
+// has that UUID as its DiagnosticSessionUUID -- must skip the guard entirely,
+// per Task 4.1.4g's explicit carve-out.
+func TestSteerSession_ShouldNotApplyDuplicateWriteGuard_WhenCallerHasNoMatchingDiagnoseDispatchRow(t *testing.T) {
+	inst := newGatedTestInstance(t, "no-dispatch-row-session", "claude")
+	fakeTmux := newFakeTmuxShowEnvironment(t, "STAPLER_SESSION_UUID="+inst.Snapshot().UUID, 0)
+	t.Setenv("TMUX_BIN", fakeTmux)
+
+	th, _, _ := newDispatchGuardTestSetup(t, inst) // no dispatch rows recorded
+
+	ctx := WithSessionUUID(context.Background(), "manual-caller-with-no-dispatch-row")
+	req := makeToolReq(map[string]interface{}{"session_id": inst.Title, "message": "focus on the authentication module"})
+
+	result, err := th.steerSession(ctx, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); success {
+		return // a real environment where the write succeeds is fine too
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	code, _ := errObj["code"].(string)
+	require.NotEqual(t, string(diagnose.SafetyGateReasonDuplicateWriteAttemptForDispatch), code,
+		"the guard must be skipped entirely when the caller has no matching DiagnoseDispatch row")
 }

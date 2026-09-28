@@ -41,6 +41,10 @@ type lifecycleHandlers struct {
 	// 4.1 behavior -- see terminalHandlers.nudgeGate's doc comment for the
 	// full rationale (mirrored here so the two handler structs can't diverge).
 	nudgeGate nudgeGateEvaluator
+	// dispatchWriteGuard is Story 4.1.4's dispatch-level duplicate-write guard
+	// for resumeSession -- see terminalHandlers.dispatchWriteGuard's doc
+	// comment (mirrored here so the two handler structs can't diverge).
+	dispatchWriteGuard diagnoseDispatchWriteGuard
 }
 
 // CreateSessionResult is returned by create_session.
@@ -437,7 +441,13 @@ func (lh *lifecycleHandlers) resumeSession(ctx context.Context, req mcpgo.CallTo
 	if verifyErr := verifyNudgeIdentity(ctx, lh.nudgeGate, inst, expectedUUID); verifyErr != nil {
 		return verifyErr, nil
 	}
+	if guardErr := checkDuplicateWriteGuard(ctx, lh.dispatchWriteGuard); guardErr != nil {
+		return guardErr, nil
+	}
 	if err := inst.Resume(); err != nil {
+		if isConnectionOrTimeoutShapedWriteError(err) {
+			return writeOutcomeUnknownResult(err, "resume"), nil
+		}
 		return errResult(ErrInternalError, fmt.Sprintf("resume session: %v", err), ""), nil
 	}
 

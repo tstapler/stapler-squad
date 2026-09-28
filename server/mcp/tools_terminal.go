@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -54,6 +55,12 @@ type terminalHandlers struct {
 	// don't care about the gate simply omit this field, matching every other
 	// optional dependency on this struct.
 	nudgeGate nudgeGateEvaluator
+	// dispatchWriteGuard is Story 4.1.4's dispatch-level duplicate-write guard
+	// (server/mcp/diagnose_gate_wiring.go's checkDuplicateWriteGuard). Optional:
+	// nil skips the guard entirely, matching nudgeGate's optionality above --
+	// production wiring (NewCore, server.go) always sets a real
+	// services.DiagnoseDispatchStore when storage is non-nil.
+	dispatchWriteGuard diagnoseDispatchWriteGuard
 }
 
 // ReadSessionOutputResult is the response type for read_session_output.
@@ -313,6 +320,9 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 	if gateErr := checkNudgeGate(ctx, th.nudgeGate, inst); gateErr != nil {
 		return gateErr, nil
 	}
+	if guardErr := checkDuplicateWriteGuard(ctx, th.dispatchWriteGuard); guardErr != nil {
+		return guardErr, nil
+	}
 
 	// BUG-047: must use session.EnterKeySequence ('\r'), not a bare '\n' —
 	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit.
@@ -327,13 +337,80 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 		err = session.SendKeysWithTimeout(ctx, inst, input, session.DefaultSendKeysTimeout)
 	}
 	if err != nil {
-		return submitErrResult(err, "input"), nil
+		return classifyWriteResult(err, "input"), nil
 	}
 
 	return okResult(WriteSessionResult{
 		MCPResult:    MCPResult{Success: true},
 		BytesWritten: len(input),
 	}), nil
+}
+
+// writeOutcomeUnknownMarker is the distinct MCP tool result error code Story
+// 4.1.4 (adversarial-review.md's Blocker 1) requires when a nudge-safety-gated
+// write's underlying tmux call -- AFTER the NudgeGate has already passed and
+// the nudge cap already reserved -- returns a connection-shaped or timeout
+// error: the write may or may not have reached the target session, so this
+// case must never be surfaced as a plain, generically-retryable error. See
+// classifyWriteResult and Task 4.1.4b's writeOutcomeUnknownInstruction below.
+const writeOutcomeUnknownMarker = "write_outcome_unknown"
+
+// writeOutcomeUnknownInstruction is Task 4.1.4b's required never-retry
+// instruction content: the unambiguous source of truth Story 5.1.2's Task
+// 5.1.2d embeds verbatim into the diagnostic agent's dispatch prompt, rather
+// than that later worker re-deriving the wording. Not itself wired into any
+// prompt here -- prompt.go doesn't exist until Phase 5.
+const writeOutcomeUnknownInstruction = `If steer_session, write_to_session, or resume_session returns a "write_outcome_unknown" result, the write's effect on the target session could not be confirmed -- it may have been delivered, or it may not have been. Do not call steer_session, write_to_session, or resume_session again for that same target session within this dispatch. Instead, call post_backlog_update to record an inconclusive note that references the ambiguous write.`
+
+// isConnectionOrTimeoutShapedWriteError reports whether err, returned from the
+// underlying tmux write call (SendKeysWithTimeout/SubmitContentWithEnter/
+// RunWithResume/Instance.Resume) a nudge-safety-gated handler makes, describes
+// an ambiguous, possibly-already-delivered write attempt: a deadline/timeout
+// (the request may have reached tmux before the deadline fired) or a
+// connection-refused/no-such-socket condition (the tmux server or its socket
+// is gone). Deliberately narrow, typed checks (net.Error.Timeout(),
+// errors.Is(context.DeadlineExceeded)) plus the same connection-refused
+// substring set session's unexported isConnectionRefused uses (duplicated
+// here at the mcp package boundary, since that helper isn't exported) --
+// no broad fallback that could misclassify an unrelated error as ambiguous.
+func isConnectionOrTimeoutShapedWriteError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "no such file or directory") ||
+		strings.Contains(msg, "no such socket")
+}
+
+// writeOutcomeUnknownResult builds the MCP tool result for an ambiguous write
+// attempt: the writeOutcomeUnknownMarker error code, never a bare/generically-
+// retryable error, and no internal retry is performed by the handler that
+// calls this (Task 4.1.4a).
+func writeOutcomeUnknownResult(err error, noun string) *mcpgo.CallToolResult {
+	return errResult(writeOutcomeUnknownMarker,
+		fmt.Sprintf("could not confirm whether the %s reached the session: %v", noun, err),
+		"Do not retry this write for the same session. "+writeOutcomeUnknownInstruction)
+}
+
+// classifyWriteResult wraps submitErrResult with Story 4.1.4's ambiguous-
+// write classification, for the write call sites steerSession and
+// writeToSession make immediately after their NudgeGate check has already
+// passed. run_command's submitErrResult call sites are deliberately
+// untouched -- run_command is not one of the three NudgeGate-gated handlers
+// this story covers.
+func classifyWriteResult(err error, noun string) *mcpgo.CallToolResult {
+	if isConnectionOrTimeoutShapedWriteError(err) {
+		return writeOutcomeUnknownResult(err, noun)
+	}
+	return submitErrResult(err, noun)
 }
 
 // submitErrResult maps an error from session.SubmitContentWithEnter/
@@ -712,8 +789,14 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 		if verifyErr := verifyNudgeIdentity(resumeCtx, th.nudgeGate, inst, expectedUUID); verifyErr != nil {
 			return verifyErr, nil
 		}
+		if guardErr := checkDuplicateWriteGuard(resumeCtx, th.dispatchWriteGuard); guardErr != nil {
+			return guardErr, nil
+		}
 		result, err := inst.RunWithResume(resumeCtx, message)
 		if err != nil {
+			if isConnectionOrTimeoutShapedWriteError(err) {
+				return writeOutcomeUnknownResult(err, "message"), nil
+			}
 			return errResult(ErrInternalError, fmt.Sprintf("resume subprocess failed: %v", err), "Ensure claude CLI is available and session_id is valid"), nil
 		}
 		return okResult(SteerSessionResult{
@@ -731,8 +814,11 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 	if verifyErr := verifyNudgeIdentity(ctx, th.nudgeGate, inst, expectedUUID); verifyErr != nil {
 		return verifyErr, nil
 	}
+	if guardErr := checkDuplicateWriteGuard(ctx, th.dispatchWriteGuard); guardErr != nil {
+		return guardErr, nil
+	}
 	if err := session.SubmitContentWithEnter(ctx, inst, message); err != nil {
-		return submitErrResult(err, "message"), nil
+		return classifyWriteResult(err, "message"), nil
 	}
 
 	return okResult(SteerSessionResult{
