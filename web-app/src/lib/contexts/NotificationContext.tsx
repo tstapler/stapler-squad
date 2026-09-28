@@ -21,7 +21,8 @@ export type { NotificationData, NotificationHistoryItem };
  * SESSION_STATUS_FAILED (async-session-creation Epic 5.3, Surface 4). Mirrors
  * the FailureReason taxonomy set server-side by the Background Resolution
  * Pipeline (session.Instance.FailureReason) — "GitHubResolutionError",
- * "StartupError", "Stale", or "Cancelled". A reasonable default per
+ * "StartupError", "Stale", "Cancelled", "WorktreeResolutionFailed", or
+ * "DirectoryCollision". A reasonable default per
  * plan.md's Unresolved Questions (exact copy is a pending product decision).
  *
  * Deliberately different wording than SessionCard.tsx/SessionRow.tsx's
@@ -42,6 +43,10 @@ export function getFailureReasonToastMessage(failureReason: string): string {
       return "Session creation timed out and was marked as failed.";
     case "Cancelled":
       return "Session creation was cancelled.";
+    case "WorktreeResolutionFailed":
+      return "Couldn't set up an isolated workspace for this session. It was not started.";
+    case "DirectoryCollision":
+      return "Blocked: another session is already active in that directory.";
     default:
       return "Session creation failed.";
   }
