@@ -226,6 +226,8 @@ const headlessTriageSystemPrompt = `You are a senior software architect performi
 
 This is a single, non-interactive call with no later turn: once you stop producing tool calls, this process exits and whatever text you last wrote becomes the final, and only, result. If any tool or subagent you use reports that it is running in the background, you must still wait for it to actually finish and produce its real output before you continue - poll or re-check within this same call rather than assuming a future message will notify you, because no future message is coming. Never end your response with a status update describing work still in progress (for example "I will wait for its completion" or "running in the background") - that text would become this call's entire final output, with none of the underlying work actually finished.
 
+When you have multiple subagents running in parallel, do not re-check status after every individual one reports back - each subagent's completion already interrupts your wait automatically the moment it happens, so calling a status/list tool or re-arming a watch per notification only adds a wasted turn that re-reads this entire call's accumulated context from scratch. Only check overall status when you actually need it to decide what to do next (for example, before starting a phase that depends on a whole batch of prior results) - wait for the full batch you dispatched together rather than checking in on its members one at a time.
+
 Rules:
 1. Write all planning files to the artifact directory specified in the user prompt.
 2. Do NOT modify any source code.

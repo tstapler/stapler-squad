@@ -28,7 +28,9 @@ func TestResolveSessionType_ExplicitDirectory(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
 	}
-	assert.Equal(t, session.SessionTypeDirectory, resolveSessionType(msg, ""))
+	got, err := resolveSessionType(msg, "")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeDirectory, got)
 }
 
 func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
@@ -36,7 +38,9 @@ func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
 	}
-	assert.Equal(t, session.SessionTypeNewWorktree, resolveSessionType(msg, "my-branch"))
+	got, err := resolveSessionType(msg, "my-branch")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeNewWorktree, got)
 }
 
 func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
@@ -45,7 +49,9 @@ func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
 		SessionType:      sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE,
 		ExistingWorktree: "/some/worktree",
 	}
-	assert.Equal(t, session.SessionTypeExistingWorktree, resolveSessionType(msg, ""))
+	got, err := resolveSessionType(msg, "")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeExistingWorktree, got)
 }
 
 func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
@@ -53,7 +59,9 @@ func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
 	}
-	assert.Equal(t, session.SessionTypeDirectory, resolveSessionType(msg, ""))
+	got, err := resolveSessionType(msg, "")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeDirectory, got)
 }
 
 func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
@@ -62,7 +70,9 @@ func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
 	}
-	assert.Equal(t, session.SessionTypeNewWorktree, resolveSessionType(msg, "feat/my-feature"))
+	got, err := resolveSessionType(msg, "feat/my-feature")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeNewWorktree, got)
 }
 
 func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t *testing.T) {
@@ -72,7 +82,9 @@ func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t 
 		SessionType:      sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED,
 		ExistingWorktree: "/path/to/worktree",
 	}
-	assert.Equal(t, session.SessionTypeExistingWorktree, resolveSessionType(msg, "feat/branch"))
+	got, err := resolveSessionType(msg, "feat/branch")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeExistingWorktree, got)
 }
 
 func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
@@ -81,16 +93,21 @@ func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
 	}
-	assert.Equal(t, session.SessionTypeOneOff, resolveSessionType(msg, "some-branch"))
+	got, err := resolveSessionType(msg, "some-branch")
+	require.NoError(t, err)
+	assert.Equal(t, session.SessionTypeOneOff, got)
 }
 
-func TestResolveSessionType_UnknownExplicitTypeDefaultsToDirectory(t *testing.T) {
+func TestResolveSessionType_should_ReturnError_When_SessionTypeUnrecognized(t *testing.T) {
 	t.Parallel()
-	// A proto enum value we don't recognise yet should degrade gracefully.
+	// An unrecognized proto enum value must fail loudly instead of silently
+	// downgrading to SessionTypeDirectory (worktree-envvars-hijack Epic 3.1).
 	msg := &sessionv1.CreateSessionRequest{
 		SessionType: sessionv1.SessionType(999),
 	}
-	assert.Equal(t, session.SessionTypeDirectory, resolveSessionType(msg, ""))
+	got, err := resolveSessionType(msg, "")
+	require.Error(t, err)
+	assert.Equal(t, session.SessionType(""), got)
 }
 
 // ---------------------------------------------------------------------------
@@ -708,4 +725,93 @@ func assertNotConnectCode(t *testing.T, err error, notWant connect.Code, msg str
 		return
 	}
 	assert.NotEqual(t, notWant, ce.Code(), msg)
+}
+
+// ---------------------------------------------------------------------------
+// worktree-envvars-hijack: wireCallbacks' nil-poller collision-guard fallback,
+// and CreateSession's Story 1.3.1 diagnostic request-shape log
+// ---------------------------------------------------------------------------
+
+// TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil is
+// worktree-envvars-hijack validation.md row 26 (Story 3.3.2's Tech Debt
+// Disposition): a degenerate/misconfigured SessionService with no
+// reviewQueuePoller wired must still let a session spawn (production's
+// wireCallbacks is always called with a real poller — see SetReviewQueuePoller's
+// doc comment — so this is defense-in-depth, not an expected state), but must
+// log a Warn so the misconfiguration is visible instead of silently permissive.
+func TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+	svc.reviewQueuePoller = nil // simulate the degenerate construction this test targets
+
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title:            "wirecallbacks-nil-poller-" + t.Name(),
+		Path:             repoDir,
+		Program:          "sh",
+		SessionType:      session.SessionTypeExistingWorktree,
+		ExistingWorktree: repoDir,
+		TmuxServerSocket: svc.testTmuxServerSocket,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	svc.wireCallbacks(inst)
+
+	logs := captureLogs(t)
+	require.NoError(t, inst.Start(true), "nil reviewQueuePoller must fall back to permissive, not block the spawn")
+	assert.Equal(t, session.Active, inst.Status)
+	assert.Contains(t, logs.String(), "reviewQueuePoller is nil", "the fallback must log a warning, not silently allow")
+}
+
+// TestCreateSession_should_LogRequestShapeAtDebugLevel_When_SessionCreated is
+// worktree-envvars-hijack validation.md row 35 (Story 1.3.1): the diagnostic
+// request-shape log must actually fire with the wire-level fields a future
+// isolation-bug report needs, without a fresh repro.
+func TestCreateSession_should_LogRequestShapeAtDebugLevel_When_SessionCreated(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	logs := captureLogs(t)
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "debug-log-shape-test",
+		Path:        t.TempDir(), // requiresExplicitPath would fail before the log line otherwise
+		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+		Branch:      "test/x",
+		EnvVars:     map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000"},
+		ResumeId:    "not-a-valid-uuid", // fails validation right after the log line -- cheap, no tmux/git needed
+	}))
+	require.Error(t, err, "resume_id validation must still fail after the diagnostic log fires")
+	assert.Nil(t, resp)
+
+	line := logs.String()
+	assert.Contains(t, line, "[CreateSession] request shape")
+	assert.Contains(t, line, "SESSION_TYPE_NEW_WORKTREE")
+	assert.Contains(t, line, "test/x")
+	assert.Contains(t, line, "ANTHROPIC_BASE_URL")
+}
+
+// TestCreateSession_should_NotLogEnvVarValues_When_EnvVarsProvided is
+// worktree-envvars-hijack validation.md row 36: the diagnostic log's
+// env_var_keys must contain only key names, never values -- env vars can
+// carry secrets like API base URLs/tokens.
+func TestCreateSession_should_NotLogEnvVarValues_When_EnvVarsProvided(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	const secretValue = "http://127.0.0.1:47000"
+	logs := captureLogs(t)
+	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:       "debug-log-no-value-leak-test",
+		Path:        t.TempDir(),
+		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+		EnvVars:     map[string]string{"ANTHROPIC_BASE_URL": secretValue},
+		ResumeId:    "not-a-valid-uuid",
+	}))
+	require.Error(t, err)
+
+	assert.NotContains(t, logs.String(), secretValue, "env var VALUES must never be logged, only key names")
+	assert.Contains(t, logs.String(), "ANTHROPIC_BASE_URL", "env var KEY names must still be logged")
 }

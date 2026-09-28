@@ -12,7 +12,9 @@ export type FailureReason =
   | "GitHubResolutionError"
   | "StartupError"
   | "Stale"
-  | "Cancelled";
+  | "Cancelled"
+  | "WorktreeResolutionFailed"
+  | "DirectoryCollision";
 
 /**
  * Reason-specific copy for the persistent Failed-state card/row message
@@ -29,6 +31,10 @@ export function getFailureMessage(failureReason: string): string {
       return "Failed to start session.";
     case "Stale":
       return "This session creation appears to have stalled.";
+    case "WorktreeResolutionFailed":
+      return "Failed to create an isolated worktree.";
+    case "DirectoryCollision":
+      return "Another session is already active in this directory.";
     default:
       return "Session creation failed.";
   }

@@ -255,6 +255,35 @@ func TestAutonomousMaxTurnsOrDefault_ClampsInvalidValues(t *testing.T) {
 	})
 }
 
+func TestDiagnoseNudgeMaxAttemptsOrDefault_ClampsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value int
+		want  int
+	}{
+		{"unset", 0, diagnoseNudgeMaxAttemptsDefault},
+		{"negative", -5, diagnoseNudgeMaxAttemptsDefault},
+		{"valid", 5, 5},
+		{"at ceiling", diagnoseNudgeMaxAttemptsHardCeiling, diagnoseNudgeMaxAttemptsHardCeiling},
+		{"above ceiling", diagnoseNudgeMaxAttemptsHardCeiling + 50, diagnoseNudgeMaxAttemptsHardCeiling},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{DiagnoseNudgeMaxAttempts: tt.value}
+			if got := cfg.DiagnoseNudgeMaxAttemptsOrDefault(); got != tt.want {
+				t.Errorf("DiagnoseNudgeMaxAttemptsOrDefault() with value=%d = %d, want %d", tt.value, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("nil config", func(t *testing.T) {
+		var cfg *Config
+		if got := cfg.DiagnoseNudgeMaxAttemptsOrDefault(); got != diagnoseNudgeMaxAttemptsDefault {
+			t.Errorf("nil config: got %d, want %d", got, diagnoseNudgeMaxAttemptsDefault)
+		}
+	})
+}
+
 // TestAutoSpawnReadyItemsOrDefault_should_DefaultTrue_When_Unset guards the "software
 // factory" default switch: an unset (nil) config value — or a nil *Config entirely —
 // must default to true (auto-spawn "ready" items), not false. A plain bool zero value

@@ -2,6 +2,9 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
+
 import { StuckItemDetail } from "./StuckItemDetail";
 
 function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {
@@ -452,6 +455,41 @@ describe("StuckItemDetail", () => {
         />
       );
       expect(screen.getByTestId("stuck-item-no-action-copy")).toBeInTheDocument();
+    });
+  });
+
+  describe("StuckItemDetail_should_offerDiagnoseControl_When_HandlerProvided", () => {
+    it("does not render the Diagnose button when no handler is provided", () => {
+      render(<StuckItemDetail item={makeItem()} />);
+      expect(screen.queryByTestId("stuck-item-diagnose-form")).not.toBeInTheDocument();
+    });
+
+    it("calls onDiagnose with the item id and reason when 'Diagnose & Nudge' is clicked", async () => {
+      const onDiagnose = jest.fn().mockResolvedValue(undefined);
+      render(
+        <StuckItemDetail
+          item={makeItem({ itemId: "item-diag-1", reason: StuckReason.BOUNCING })}
+          onDiagnose={onDiagnose}
+        />
+      );
+      fireEvent.click(screen.getByTestId("stuck-item-diagnose"));
+
+      await waitFor(() =>
+        expect(onDiagnose).toHaveBeenCalledWith("item-diag-1", StuckReason.BOUNCING)
+      );
+      expect(screen.getByTestId("stuck-item-diagnose").textContent).toBe(
+        "Diagnostic session dispatched"
+      );
+    });
+
+    it("shows an error message when the dispatch call rejects", async () => {
+      const onDiagnose = jest.fn().mockRejectedValue(new Error("dispatch failed"));
+      render(<StuckItemDetail item={makeItem()} onDiagnose={onDiagnose} />);
+      fireEvent.click(screen.getByTestId("stuck-item-diagnose"));
+
+      await waitFor(() =>
+        expect(screen.getByTestId("stuck-item-diagnose-error").textContent).toBe("dispatch failed")
+      );
     });
   });
 });

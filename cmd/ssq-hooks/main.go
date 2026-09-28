@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"gopkg.in/yaml.v3"
 )
@@ -42,6 +43,8 @@ func main() {
 		handleProxy()
 	case "install":
 		handleInstall()
+	case "export-rules":
+		handleExportRules()
 	case "version":
 		fmt.Println("ssq-hooks version 0.2.0 (SQLite enabled)")
 	default:
@@ -55,12 +58,13 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage: ssq-hooks <subcommand> [flags]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Subcommands:")
-	fmt.Fprintln(os.Stderr, "  check   - Classify a single request from JSON on stdin")
-	fmt.Fprintln(os.Stderr, "  serve   - Start an HTTP server for remote classification")
-	fmt.Fprintln(os.Stderr, "  proxy   - Check permissions before executing a command")
-	fmt.Fprintln(os.Stderr, "  install - Install binary and register hooks (targets: claude, gemini, agy, open-code, pi, service)")
-	fmt.Fprintln(os.Stderr, "            'install pi --uninstall' and 'install service --uninstall' remove what was installed instead")
-	fmt.Fprintln(os.Stderr, "  version - Print version information")
+	fmt.Fprintln(os.Stderr, "  check        - Classify a single request from JSON on stdin")
+	fmt.Fprintln(os.Stderr, "  serve        - Start an HTTP server for remote classification")
+	fmt.Fprintln(os.Stderr, "  proxy        - Check permissions before executing a command")
+	fmt.Fprintln(os.Stderr, "  install      - Install binary and register hooks (targets: claude, gemini, agy, open-code, pi, service)")
+	fmt.Fprintln(os.Stderr, "                 'install pi --uninstall' and 'install service --uninstall' remove what was installed instead")
+	fmt.Fprintln(os.Stderr, "  export-rules - Export AutoAllow approval rules into target permissions file (target: agy)")
+	fmt.Fprintln(os.Stderr, "  version      - Print version information")
 }
 
 func handleCheck() {
@@ -72,9 +76,13 @@ func handleCheck() {
 	_ = checkCmd.Parse(os.Args[2:]) // flag.ExitOnError already exits the process on a parse failure
 
 	var payload classifier.PermissionRequestPayload
-	if *geminiMode || *agyMode {
-		payload = parseGeminiPayload()
-		// Gemini/agy payload typically lacks cwd; fall back to process working directory.
+	if *geminiMode {
+		payload = parseGeminiPayload("gemini")
+		if payload.Cwd == "" {
+			payload.Cwd, _ = os.Getwd()
+		}
+	} else if *agyMode {
+		payload = parseGeminiPayload("antigravity")
 		if payload.Cwd == "" {
 			payload.Cwd, _ = os.Getwd()
 		}
@@ -87,6 +95,9 @@ func handleCheck() {
 		if err := json.NewDecoder(os.Stdin).Decode(&payload); err != nil {
 			fmt.Fprintf(os.Stderr, "Error parsing JSON: %v\n", err)
 			os.Exit(1)
+		}
+		if payload.Source == "" {
+			payload.Source = "claude"
 		}
 		// AskUserQuestion is not a permission gate — Claude is asking the user a question.
 		// Return no output (empty stdout) so the hook defers to Claude Code's native terminal dialog.
@@ -342,7 +353,7 @@ func parseOpenCodePayload() classifier.PermissionRequestPayload {
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "SSQ-Hooks: error reading stdin: %v\n", err)
-		return classifier.PermissionRequestPayload{ToolName: "Unknown"}
+		return classifier.PermissionRequestPayload{ToolName: "Unknown", Source: "opencode"}
 	}
 	if os.Getenv("STAPLER_DEBUG") == "1" {
 		fmt.Fprintf(os.Stderr, "SSQ-Hooks [debug] raw OpenCode payload: %s\n", string(raw))
@@ -350,10 +361,10 @@ func parseOpenCodePayload() classifier.PermissionRequestPayload {
 	var p openCodePayload
 	if err := json.Unmarshal(raw, &p); err != nil {
 		fmt.Fprintf(os.Stderr, "SSQ-Hooks: failed to parse OpenCode payload: %v\n", err)
-		return classifier.PermissionRequestPayload{ToolName: "Unknown"}
+		return classifier.PermissionRequestPayload{ToolName: "Unknown", Source: "opencode"}
 	}
 	if p.ToolName == "" {
-		return classifier.PermissionRequestPayload{ToolName: "Unknown"}
+		return classifier.PermissionRequestPayload{ToolName: "Unknown", Source: "opencode"}
 	}
 	normalizeOpenCodeToolInput(p.ToolInput)
 	return classifier.PermissionRequestPayload{
@@ -361,6 +372,7 @@ func parseOpenCodePayload() classifier.PermissionRequestPayload {
 		Cwd:       p.Cwd,
 		ToolName:  p.ToolName,
 		ToolInput: p.ToolInput,
+		Source:    "opencode",
 	}
 }
 
@@ -410,11 +422,11 @@ func normalizeOpenCodeToolInput(toolInput map[string]interface{}) {
 //
 // Falls back gracefully to PermissionRequestPayload{ToolName: "Unknown"} on any
 // parse error or unrecognized schema — results in Escalate (not crash, not false-allow).
-func parseGeminiPayload() classifier.PermissionRequestPayload {
+func parseGeminiPayload(defaultSource string) classifier.PermissionRequestPayload {
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "SSQ-Hooks: error reading stdin: %v\n", err)
-		return classifier.PermissionRequestPayload{ToolName: "Unknown"}
+		return classifier.PermissionRequestPayload{ToolName: "Unknown", Source: defaultSource}
 	}
 	// Debug: dump raw payload when STAPLER_DEBUG=1 (P-1: field capture on first real run)
 	if os.Getenv("STAPLER_DEBUG") == "1" {
@@ -443,7 +455,7 @@ func parseGeminiPayload() classifier.PermissionRequestPayload {
 	var p GeminiToolPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
 		fmt.Fprintf(os.Stderr, "SSQ-Hooks: failed to parse Gemini/Antigravity payload: %v\n", err)
-		return classifier.PermissionRequestPayload{ToolName: "Unknown"}
+		return classifier.PermissionRequestPayload{ToolName: "Unknown", Source: defaultSource}
 	}
 
 	var toolName string
@@ -462,7 +474,7 @@ func parseGeminiPayload() classifier.PermissionRequestPayload {
 
 	if toolName == "" {
 		fmt.Fprintf(os.Stderr, "SSQ-Hooks: unrecognized Gemini/Antigravity payload schema (no tool name field)\n")
-		return classifier.PermissionRequestPayload{ToolName: "Unknown"}
+		return classifier.PermissionRequestPayload{ToolName: "Unknown", Source: defaultSource}
 	}
 
 	// P-7: pass-through user-input tool (equivalent of AskUserQuestion guard)
@@ -506,6 +518,7 @@ func parseGeminiPayload() classifier.PermissionRequestPayload {
 		ToolName:  toolName,
 		ToolInput: toolInput,
 		Cwd:       cwd,
+		Source:    defaultSource,
 	}
 }
 
@@ -639,12 +652,15 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 	for _, r := range rules {
 		// Convert domain model to classifier rule
 		cr := classifier.Rule{
-			ToolName:    r.ToolName,
-			Decision:    classifier.ClassificationDecision(r.Decision),
-			RiskLevel:   classifier.RiskLevel(r.RiskLevel),
-			Reason:      r.Reason,
-			Alternative: r.Alternative,
-			RuleMeta:    classifier.RuleMeta{ID: r.ID, Name: r.Name, Priority: r.Priority, Enabled: r.Enabled, Source: r.Source},
+			ToolName:              r.ToolName,
+			ToolCategory:          r.ToolCategory,
+			Decision:              classifier.ClassificationDecision(r.Decision),
+			RiskLevel:             classifier.RiskLevel(r.RiskLevel),
+			Reason:                r.Reason,
+			Alternative:           r.Alternative,
+			RequireCIPassing:      r.RequireCIPassing,
+			MinSessionIdleMinutes: int32(r.MinSessionIdleMinutes),
+			RuleMeta:              classifier.RuleMeta{ID: r.ID, Name: r.Name, Priority: r.Priority, Enabled: r.Enabled, Source: r.Source},
 		}
 		// Pattern compilation happens in AddRules if we use strings,
 		// but here we might need to compile them if we use the Rule struct directly.
@@ -1117,7 +1133,46 @@ func installAgy() {
 			_ = removeAntigravityHookEntry(c)
 		}
 	}
+	// 5. Export rules into Antigravity settings.json permissions.allow
+	dbPath := getDefaultDBPath()
+	if repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath)); err == nil {
+		if st, err := session.NewStorageWithRepository(repo); err == nil {
+			if err := services.ExportAntigravityRulesFromDB(context.Background(), st); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: exporting rules to Antigravity settings: %v\n", err)
+			} else {
+				fmt.Println("Exported auto-approval rules to Antigravity permissions.allow.")
+			}
+			st.Close()
+		}
+	}
 	fmt.Println("Done. Restart agy for the hook to take effect.")
+}
+
+func handleExportRules() {
+	exportCmd := flag.NewFlagSet("export-rules", flag.ExitOnError)
+	dbPath := exportCmd.String("db", "", "Path to SQLite database")
+	target := exportCmd.String("target", "agy", "Export target (agy/antigravity)")
+	_ = exportCmd.Parse(os.Args[2:])
+
+	path := *dbPath
+	if path == "" {
+		path = getDefaultDBPath()
+	}
+
+	storage := loadStorage(path)
+	defer storage.Close()
+
+	switch strings.ToLower(*target) {
+	case "agy", "antigravity":
+		if err := services.ExportAntigravityRulesFromDB(context.Background(), storage); err != nil {
+			fmt.Fprintf(os.Stderr, "Error exporting rules to Antigravity: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Successfully exported approval rules to Antigravity settings.json permissions.allow.")
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown export target: %s (supported: agy)\n", *target)
+		os.Exit(1)
+	}
 }
 
 // removeAntigravityHookEntry removes the "stapler-squad" key from hooksPath if it

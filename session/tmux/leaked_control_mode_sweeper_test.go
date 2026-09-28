@@ -16,13 +16,11 @@ import (
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
-// TestKillUntrackedControlModeClients_OnlyUntrackedKilled is a regression test for
-// the 2026-09-25 recurrence of BUG-042: KillOrphanedControlModeClients is only safe
-// to call at startup, when nothing this process spawned exists yet. During live
-// operation, most attached control-mode clients are the process's own legitimate
-// connections, so a periodic sweeper must distinguish "not mine" from "mine" rather
-// than killing everything attached -- this test asserts killUntrackedControlModeClients
-// does exactly that via the spawn registry (TrackChildPID/LookupChildPID).
+// TestKillUntrackedControlModeClients_OnlyUntrackedKilled asserts
+// killUntrackedControlModeClients kills only an untracked (leaked) control-mode
+// client and leaves a spawn-registry-tracked (owned) one alone — the property
+// that makes it safe to run periodically, unlike the startup-only
+// KillOrphanedControlModeClients, which assumes everything attached is a leftover.
 func TestKillUntrackedControlModeClients_OnlyUntrackedKilled(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not available, skipping real tmux test")

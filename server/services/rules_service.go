@@ -580,6 +580,11 @@ func (rs *RulesService) rebuildClassifier() {
 		nonUser := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceClaudeSettings)
 		rs.classifier.ReplaceRules(append(nonUser, userRules...))
 	}()
+	if rs.rulesStore != nil && rs.rulesStore.storage != nil {
+		if err := ExportAntigravityRulesFromDB(context.Background(), rs.rulesStore.storage); err != nil {
+			log.Warn("[RulesService] failed to export rules to Antigravity", "err", err)
+		}
+	}
 	// Per ADR-004: reconciliation runs asynchronously, after rebuildMu releases, so the
 	// RPC that triggered this rebuild (UpsertApprovalRule/DeleteApprovalRule) returns
 	// before a large pending backlog finishes reconciling. Always the panic-recovering
