@@ -38,13 +38,16 @@ enum Severity {
 }
 
 // FindingType identifies which waste-pattern heuristic produced a WasteFinding.
-// Exactly 4 non-zero values ship in v1 — see plan.md's "Detector scope cut" note.
+// 4 non-zero values shipped in v1 — see plan.md's "Detector scope cut" note.
+// FINDING_TYPE_LOW_CACHE_ROI (5) shipped later, promoting ComputeCacheROI from
+// a tooltip-only metric to a first-class finding — see tstapler/stapler-squad#879.
 enum FindingType {
   FINDING_TYPE_UNSPECIFIED              = 0;
   FINDING_TYPE_CACHE_HIT_FLOOR_BREACH   = 1;
   FINDING_TYPE_SESSION_TOKEN_CEILING    = 2;
   FINDING_TYPE_MODEL_SWITCH_CACHE_BUST  = 3;
   FINDING_TYPE_OVERSIZED_START_CONTEXT  = 4;
+  FINDING_TYPE_LOW_CACHE_ROI            = 5;
 }
 
 // ActivityType classifies the kind of work a session performed. Defined now

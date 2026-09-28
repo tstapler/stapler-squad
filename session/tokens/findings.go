@@ -48,6 +48,21 @@ const sessionTokenCeilingCriticalCostUSD = 20
 // SeverityCritical.
 const oversizedContextCriticalFloor = 80_000
 
+// minCacheCreationForROI guards detectLowCacheROI against noise: a session
+// that barely used caching at all has a near-zero ROI by construction, which
+// isn't a meaningful waste signal — only sessions that actually wrote a
+// non-trivial amount to cache can have a *meaningfully* bad ROI. Not
+// empirically calibrated against the real corpus (unlike cacheHitFloor/
+// oversizedContextFloor, which cite validation.md derivations) — this is a
+// first-pass estimate at the same order of magnitude as
+// oversizedContextFloor; revisit once real data shows the false-positive rate.
+const minCacheCreationForROI = 50_000
+
+// lowCacheROICriticalUSD is the net-loss dollar line below which a low-ROI
+// finding escalates from SeverityWarn to SeverityCritical. Same
+// not-yet-empirically-calibrated caveat as minCacheCreationForROI.
+const lowCacheROICriticalUSD = -1.00
+
 // detectCacheHitFloorBreach flags a session whose cache-hit rate is below
 // cacheHitFloor. Abstains (returns nil) rather than firing a misleading
 // $0.00 finding when the session is too short to have a warmed-up cache, or
@@ -216,10 +231,48 @@ func detectOversizedStartContext(r *ParseResult, pt *PricingTable) *Finding {
 	}
 }
 
+// detectLowCacheROI flags a session where prompt caching had a net negative
+// dollar ROI — the cache-write cost exceeded what was saved by later reading
+// those entries back (ComputeCacheROI's doc comment: "cache written but never
+// read back is a real outcome, not an error"). This catches what
+// detectCacheHitFloorBreach cannot: a session can show a high cache-hit rate
+// (most of its input tokens WERE served from cache) while still losing money
+// overall, if a large fraction of what it wrote to cache was never read back
+// before those specific entries fell out of the cache window. Abstains when
+// cache-write volume is below minCacheCreationForROI (a near-zero write means
+// a near-zero ROI by construction, not a meaningful signal) or when the
+// session's model has no PricingTable entry (ComputeCacheROI's own "abstain
+// rather than guess" rule).
+func detectLowCacheROI(r *ParseResult, pt *PricingTable) *Finding {
+	if r == nil || pt == nil || r.CacheCreation < minCacheCreationForROI {
+		return nil
+	}
+
+	roi, ok := ComputeCacheROI(r, pt)
+	if !ok || roi >= 0 {
+		return nil
+	}
+
+	severity := SeverityWarn
+	if roi < lowCacheROICriticalUSD {
+		severity = SeverityCritical
+	}
+
+	return &Finding{
+		Type:         FindingLowCacheROI,
+		Severity:     severity,
+		DollarImpact: DollarImpact(-roi),
+		Message: fmt.Sprintf(
+			"Cache writes cost more than they saved: $%.2f net loss on %s tokens written to cache — most of it was never read back before falling out of the cache window.",
+			-roi, formatInt(r.CacheCreation),
+		),
+	}
+}
+
 // detectorFunc is the uniform signature every v1 detector shares.
 type detectorFunc func(r *ParseResult, pt *PricingTable) *Finding
 
-// ComputeFindings runs all 4 shipped detectors against r and returns whatever
+// ComputeFindings runs all 5 shipped detectors against r and returns whatever
 // fires, in detector-declaration order (the caller, insights_service.go,
 // sorts the request-wide accumulation by dollar impact separately). Each
 // detector call is isolated with a recover() so one detector panicking on a
@@ -227,7 +280,7 @@ type detectorFunc func(r *ParseResult, pt *PricingTable) *Finding
 // caller's other sessions — matching the Observability Requirement that a
 // computation error shows up as an empty/error state, not a page.
 func ComputeFindings(r *ParseResult, pt *PricingTable) []Finding {
-	findings := make([]Finding, 0, 4)
+	findings := make([]Finding, 0, 5)
 
 	detectors := []struct {
 		name string
@@ -237,6 +290,7 @@ func ComputeFindings(r *ParseResult, pt *PricingTable) []Finding {
 		{"detectSessionTokenCeiling", detectSessionTokenCeiling},
 		{"detectModelSwitchCacheBust", detectModelSwitchCacheBust},
 		{"detectOversizedStartContext", detectOversizedStartContext},
+		{"detectLowCacheROI", detectLowCacheROI},
 	}
 
 	for _, d := range detectors {
