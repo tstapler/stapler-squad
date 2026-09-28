@@ -24,6 +24,10 @@
 //   - nolegacylog: forbids log.<Level>Log().Printf(...) (the legacy,
 //     non-JSON logging API) in files already migrated to the structured
 //     log.Info/Warn/Error/Debug API
+//   - requirearchivedcheck: in server/services/diagnose_*.go and
+//     session/diagnose/*.go only, detects an ArchiveSessionByUUID/
+//     KillTmuxPaneOnly/ResumeSession call with no preceding same-function
+//     IsArchived() check on the same session
 package main
 
 import (
@@ -37,6 +41,7 @@ import (
 	"github.com/tstapler/stapler-squad/tools/lint/norawexec"
 	"github.com/tstapler/stapler-squad/tools/lint/norawghrequest"
 	"github.com/tstapler/stapler-squad/tools/lint/norawgitopen"
+	"github.com/tstapler/stapler-squad/tools/lint/requirearchivedcheck"
 	"github.com/tstapler/stapler-squad/tools/lint/silenttransition"
 	"github.com/tstapler/stapler-squad/tools/lint/tmuxsocketscope"
 )
@@ -51,6 +56,7 @@ func main() {
 		norawexec.Analyzer,
 		norawghrequest.Analyzer,
 		norawgitopen.Analyzer,
+		requirearchivedcheck.Analyzer,
 		silenttransition.Analyzer,
 		tmuxsocketscope.Analyzer,
 	)
