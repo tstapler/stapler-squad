@@ -14,7 +14,12 @@ export const row = style({
   // Default fallback (no JS): checkbox | dot | name+path | agent | memory | actions.
   // elapsed is no longer a grid column — it renders as a second line inside nameCell (Epic 1.2).
   gridTemplateColumns: "24px 8px 1fr 20px auto auto",
-  alignItems: "center",
+  // flex-start (not center): name/path/chips are never truncated and can
+  // wrap to several lines, so a short sibling column (agent icon, actions)
+  // centered against that height would float in a large empty gap — see
+  // the session-list-wasted-space branch's screenshot. Top-aligning keeps
+  // those columns flush with the first line instead.
+  alignItems: "flex-start",
   gap: vars.space["2"],
   padding: "6px 12px",
   // Floor, not a cap (Epic 2.1 Story 2.1.1): wrapped 2-3 line name/path
@@ -56,21 +61,29 @@ export const nameCell = style({
   gap: "2px",
 });
 
-/** Second row inside nameCell: path + substatus chip inline */
+/** Second row inside nameCell: the path text, on its own — see `chipsLine` for the status/GitHub/backlog chips. */
 export const pathLine = style({
   display: "flex",
   alignItems: "center",
   gap: "4px",
   minWidth: 0,
-  overflow: "hidden",
-  // Story 2.1.2: below NARROW, let the substatus/host/GitHub chips wrap onto
-  // their own line instead of forcing horizontal overflow — CSS-only tweak,
-  // no truncation-budget decision involved (see this file's NARROW comment).
-  "@container": {
-    [`sessionRow ${NARROW}`]: {
-      flexWrap: "wrap",
-    },
-  },
+});
+
+/**
+ * Third row inside nameCell: status/GitHub/backlog chips, separate from the
+ * path text so a long (unbounded, wrapping) path doesn't vertically center
+ * these short chips against its full height and leave a large empty gap
+ * around them. Smaller font size always, since these are secondary/
+ * glanceable info, not primary content — but never below vars.fontSize.xs,
+ * the theme's documented WCAG-minimum legible size (see theme.css.ts).
+ */
+export const chipsLine = style({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: "4px",
+  minWidth: 0,
+  fontSize: vars.fontSize.xs,
 });
 
 export const statusDot = style({
@@ -78,6 +91,11 @@ export const statusDot = style({
   height: "8px",
   borderRadius: vars.radii.full,
   flexShrink: 0,
+  // Row is `alignItems: flex-start` (see row's comment) so a tall wrapped
+  // name/path doesn't drag this down into a centered-in-a-huge-gap look;
+  // this nudges the dot down to sit level with the name text's first line
+  // instead of the row's bare top edge.
+  marginTop: "6px",
   selectors: {
     '&[data-status="running"]': {
       background: vars.color.statusDot.running,
@@ -153,6 +171,8 @@ export const agentIcon = style({
   flexShrink: 0,
   display: "flex",
   alignItems: "center",
+  // See statusDot's comment — row is alignItems: flex-start.
+  marginTop: "4px",
 });
 
 export const path = style({
@@ -160,9 +180,9 @@ export const path = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
   minWidth: 0,
-  // Story 2.1.1: wrap instead of ellipsis-clipping; the visible text is
-  // already pre-truncated by truncateWorkspacePath, so this is a safety net
-  // for the rare unbroken-token case, not the primary truncation mechanism.
+  // Path is never length-truncated (session-list-wasted-space); this is the
+  // only thing preventing a single unbroken opaque segment (hash/UUID) from
+  // overflowing the row instead of wrapping.
   overflowWrap: "anywhere",
 });
 
@@ -395,11 +415,20 @@ export const groupHeader = style({
   listStyle: "none",
 });
 
-/** Checkbox cell — always occupies the reserved 24px column; visibility is CSS-driven. */
+/**
+ * Checkbox cell — always occupies the reserved 24px column; visibility is
+ * CSS-driven. `alignSelf: stretch` overrides the row's `alignItems: flex-start`
+ * so this cell (and its click handler, see SessionRow.tsx) spans the full
+ * row height instead of just the 16px button — a mouse click landing in the
+ * cell's padding, not exactly on the button, would otherwise fall through to
+ * the row's own onClick (opening the session instead of selecting it).
+ */
 export const checkboxCell = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+  alignSelf: "stretch",
+  cursor: "pointer",
   visibility: "hidden",
   pointerEvents: "none",
   selectors: {

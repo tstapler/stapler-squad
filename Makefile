@@ -264,6 +264,10 @@ install-hooks: ## Build and install ssq-hooks + ssq-hook-handler to ~/.local/bin
 	@# Stable path for the notification hook handler so the server can register
 	@# it during onboarding (InstallHooks RPC). See internal/claudehooks.
 	install -m 0755 scripts/ssq-hook-handler ~/.local/bin/ssq-hook-handler
+	@# ssq-hook-handler looks for ssq-notify in its own directory (scripts/ssq-hook-handler:51)
+	@# — without this, every Stop/Notification hook silently no-ops (exit 0, "don't block Claude
+	@# on hook errors") and no notification is ever sent.
+	install -m 0755 scripts/ssq-notify ~/.local/bin/ssq-notify
 
 build-mux: ensure-tools ## Build the claude-mux PTY multiplexer binary
 	@echo "Building claude-mux..."

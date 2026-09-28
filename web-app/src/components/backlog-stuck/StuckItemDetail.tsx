@@ -1,9 +1,11 @@
+// +feature: backlog-diagnose-nudge
 "use client";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { routes } from "@/lib/routes";
+import { useAnalytics } from "@/lib/analytics";
 import { resolveReworkCapOverride } from "@/lib/backlog/formatReworkCapOverride";
 import { formatAgo, formatSinceUTC, isPrStatusUnknown } from "./stuckReason";
 import * as styles from "./StuckItemDetail.css";
@@ -35,6 +37,14 @@ interface StuckItemDetailProps {
    * instead of a generic error.
    */
   onApprovePlan?: (itemId: string) => Promise<void>;
+  /**
+   * Dispatches a "Diagnose & Nudge" agent for this item (backlog item
+   * 68964304), scoped to this card's own StuckReason so the nudge
+   * cap/cooldown gate (AC4) and the dispatched agent's action space key off
+   * the right BacklogStuckState row. Omitted disables the control entirely.
+   * Rejects (throws) on failure, mirroring onApprovePlan above.
+   */
+  onDiagnose?: (itemId: string, reason: StuckReason) => Promise<void>;
 }
 
 /** Read-only "Repo auto-merge: on/off/unknown" line (Story 4.1.4). `allowAutoMerge` is
@@ -71,7 +81,9 @@ export function StuckItemDetail({
   currentReworkCapOverride,
   reworkCapOverrideLoaded = false,
   onApprovePlan,
+  onDiagnose,
 }: StuckItemDetailProps) {
+  const { track } = useAnalytics();
   const unknown = isPrStatusUnknown(item);
   const isPrReady = item.reason === StuckReason.PR_READY_UNMERGED;
   const isReworkCap = item.reason === StuckReason.REWORK_CAP;
@@ -126,6 +138,10 @@ export function StuckItemDetail({
   const [overrideState, setOverrideState] = useState<"idle" | "pending" | "error">("idle");
   const [approveState, setApproveState] = useState<"idle" | "pending" | "error">("idle");
   const [approveError, setApproveError] = useState<string | null>(null);
+  const [diagnoseState, setDiagnoseState] = useState<"idle" | "pending" | "dispatched" | "error">(
+    "idle"
+  );
+  const [diagnoseError, setDiagnoseError] = useState<string | null>(null);
 
   async function submitOverride(override: number) {
     if (!onReworkCapOverride) return;
@@ -144,6 +160,19 @@ export function StuckItemDetail({
     } catch (err) {
       setApproveState("error");
       setApproveError(err instanceof Error ? err.message : "Failed to approve — try again.");
+    }
+  }
+
+  async function submitDiagnose() {
+    if (!onDiagnose) return;
+    setDiagnoseState("pending");
+    setDiagnoseError(null);
+    try {
+      await onDiagnose(item.itemId, item.reason);
+      setDiagnoseState("dispatched");
+    } catch (err) {
+      setDiagnoseState("error");
+      setDiagnoseError(err instanceof Error ? err.message : "Failed to dispatch — try again.");
     }
   }
 
@@ -200,7 +229,15 @@ export function StuckItemDetail({
                 type="button"
                 className={styles.overrideButton}
                 disabled={overrideState === "pending" || !Number(moreRounds) || Number(moreRounds) <= 0}
-                onClick={() => void submitOverride(Number(moreRounds))}
+                onClick={() => {
+                  track({
+                    name: "stuck_item_rework_cap_override",
+                    category: "user_action",
+                    component: "StuckItemDetail",
+                    labels: { unlimited: "false" },
+                  });
+                  void submitOverride(Number(moreRounds));
+                }}
                 data-testid="stuck-item-rework-cap-allow-rounds"
               >
                 Set this item&apos;s cap to {moreRounds || 0} &amp; resume
@@ -209,7 +246,15 @@ export function StuckItemDetail({
                 type="button"
                 className={styles.overrideUnlimitedButton}
                 disabled={overrideState === "pending"}
-                onClick={() => void submitOverride(0)}
+                onClick={() => {
+                  track({
+                    name: "stuck_item_rework_cap_override",
+                    category: "user_action",
+                    component: "StuckItemDetail",
+                    labels: { unlimited: "true" },
+                  });
+                  void submitOverride(0);
+                }}
                 data-testid="stuck-item-rework-cap-unlimited"
               >
                 Remove cap for this item &amp; resume
@@ -252,7 +297,10 @@ export function StuckItemDetail({
                 type="button"
                 className={styles.overrideButton}
                 disabled={approveState === "pending"}
-                onClick={() => void submitApprovePlan()}
+                onClick={() => {
+                  track({ name: "stuck_item_approve_plan", category: "user_action", component: "StuckItemDetail" });
+                  void submitApprovePlan();
+                }}
                 data-testid="stuck-item-approve-plan"
               >
                 {approveState === "pending" ? "Approving…" : "Approve Plan"}
@@ -303,6 +351,37 @@ export function StuckItemDetail({
           >
             🔗 View PR #{item.prNumber} on GitHub
           </a>
+        </div>
+      )}
+
+      {onDiagnose && (
+        <div className={styles.overrideForm} data-testid="stuck-item-diagnose-form">
+          <button
+            type="button"
+            className={styles.overrideButton}
+            disabled={diagnoseState === "pending" || diagnoseState === "dispatched"}
+            onClick={() => {
+              track({
+                name: "stuck_item_diagnose",
+                category: "user_action",
+                component: "StuckItemDetail",
+                labels: { reason: String(item.reason) },
+              });
+              void submitDiagnose();
+            }}
+            data-testid="stuck-item-diagnose"
+          >
+            {diagnoseState === "pending"
+              ? "Dispatching…"
+              : diagnoseState === "dispatched"
+                ? "Diagnostic session dispatched"
+                : "Diagnose & Nudge"}
+          </button>
+          {diagnoseState === "error" && (
+            <span className={styles.overrideStatus} role="alert" data-testid="stuck-item-diagnose-error">
+              {diagnoseError}
+            </span>
+          )}
         </div>
       )}
 

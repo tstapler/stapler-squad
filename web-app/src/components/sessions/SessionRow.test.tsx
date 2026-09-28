@@ -287,15 +287,18 @@ describe("SessionRow — elapsed renders as a second line, not a grid cell", () 
   });
 });
 
-// session-list-density Epic 2.1 Story 2.1.1: wrap instead of ellipsis, apply
-// truncateWorkspacePath at every container width.
+// session-list-wasted-space follow-up: the user explicitly asked for no
+// truncation on names or paths at any width (chips/actions density were the
+// actual complaint, not the wrapped text) — Epic 2.1 Story 2.1.1's
+// opaque-segment collapsing at 72 chars is gone; the full path always
+// renders, wrapping via CSS instead.
 const CANONICAL_WORKSPACE_PATH =
   "/Users/tstapler/.stapler-squad/workspaces/6eb0b580fa0331d5/worktrees/stapler-squad-wasted-space_18d807dfb97a2b28";
 const WORKSPACE_HASH = "6eb0b580fa0331d5";
 const WORKTREE_UUID_SUFFIX = "18d807dfb97a2b28";
 
-describe("SessionRow — path truncation via truncateWorkspacePath (Epic 2.1 Story 2.1.1)", () => {
-  it("SessionRow_should_HideOpaqueSegments_When_PathExceeds72Chars", () => {
+describe("SessionRow — full, untruncated path text", () => {
+  it("SessionRow_should_ShowFullPath_When_PathIsLong", () => {
     const session = {
       ...minimalSession,
       existingDir: CANONICAL_WORKSPACE_PATH,
@@ -305,8 +308,12 @@ describe("SessionRow — path truncation via truncateWorkspacePath (Epic 2.1 Sto
     const pathEl = screen.getByRole("img", {
       name: `Path: ${CANONICAL_WORKSPACE_PATH}`,
     });
-    expect(pathEl.textContent).not.toContain(WORKSPACE_HASH);
-    expect(pathEl.textContent).not.toContain(WORKTREE_UUID_SUFFIX);
+    // Only the home-dir prefix is shortened to "~" (a substitution, not lossy
+    // truncation) — every other segment, including opaque hash/UUID ones,
+    // renders in full.
+    expect(pathEl.textContent).toContain(WORKSPACE_HASH);
+    expect(pathEl.textContent).toContain(WORKTREE_UUID_SUFFIX);
+    expect(pathEl.textContent).toContain("~/");
 
     // Full-value companion (Tooltip label / aria-label) still carries the
     // untruncated path unchanged.
@@ -317,10 +324,9 @@ describe("SessionRow — path truncation via truncateWorkspacePath (Epic 2.1 Sto
 
   it("SessionRow_should_KeepSamePathText_When_RenderedAtNarrowContainerWidth", () => {
     // The narrow (<200px) container-query breakpoint is CSS-only (font size,
-    // chip wrapping) and never switches the truncation budget (Story 2.1.2's
-    // Resolution Note) — there's no separate narrow-width render path to
-    // simulate here, so this asserts there is exactly one path <span>, i.e.
-    // no dual-render leftover from the dropped Task 2.1.2c approach.
+    // chip wrapping) and never switches to a truncated render — there's no
+    // separate narrow-width render path to simulate here, so this asserts
+    // there is exactly one path <span>, i.e. no dual-render leftover.
     const session = {
       ...minimalSession,
       existingDir: CANONICAL_WORKSPACE_PATH,
@@ -433,5 +439,64 @@ describe("SessionRow — agent/memory accessible disclosure (Epic 3.2 Story 3.2.
     const ariaLabel = screen.getByTestId("session-row").getAttribute("aria-label");
     expect(ariaLabel).not.toContain(", agent:");
     expect(ariaLabel).not.toContain("memory:");
+  });
+});
+
+describe("SessionRow — chips render outside the path line", () => {
+  it("SessionRow_should_RenderChipsOutsidePathLine_When_SessionHasANote", () => {
+    const session = {
+      ...minimalSession,
+      note: "waiting on CI",
+      existingDir: "/tmp/session",
+    } as unknown as Session;
+    render(<SessionRow session={session} />);
+
+    const chipsLine = screen.getByTestId("session-row-chips-line");
+    const noteBadge = screen.getByTestId("badge-has-note");
+    // Regression guard: a re-nesting bug (chips back inside pathLine) would
+    // still render the badge, but not as a child of chipsLine.
+    expect(chipsLine).toContainElement(noteBadge);
+    expect(chipsLine.contains(screen.getByTestId("session-row-path"))).toBe(false);
+  });
+});
+
+describe("SessionRow — checkbox cell click delegation", () => {
+  it("SessionRow_should_ToggleSelectOnce_When_CheckboxButtonClicked", () => {
+    const onToggleSelect = jest.fn();
+    const session = { ...minimalSession } as unknown as Session;
+    render(
+      <SessionRow
+        session={session}
+        selectMode
+        onToggleSelect={onToggleSelect}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("session-row-checkbox"));
+    expect(onToggleSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("SessionRow_should_ToggleSelectOnce_When_CheckboxCellPaddingClicked", () => {
+    const onToggleSelect = jest.fn();
+    const onClick = jest.fn();
+    const session = { ...minimalSession } as unknown as Session;
+    render(
+      <SessionRow
+        session={session}
+        selectMode
+        onClick={onClick}
+        onToggleSelect={onToggleSelect}
+      />
+    );
+
+    // Click the cell itself (not the inner button) — the padding area a
+    // mouse click would land on without the enlarged hit target.
+    const cell = screen.getByTestId("session-row-checkbox").parentElement;
+    expect(cell).not.toBeNull();
+    fireEvent.click(cell as HTMLElement);
+    expect(onToggleSelect).toHaveBeenCalledTimes(1);
+    // Confirms the click didn't fall through to the row's own onClick
+    // (which would open the session instead of selecting it).
+    expect(onClick).not.toHaveBeenCalled();
   });
 });

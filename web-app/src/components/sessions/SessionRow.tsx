@@ -31,6 +31,7 @@ import {
   agentIcon as agentIconStyle,
   path as pathStyle,
   pathLine as pathLineStyle,
+  chipsLine as chipsLineStyle,
   elapsed as elapsedStyle,
   elapsedIcon as elapsedIconStyle,
   elapsedSecondLine as elapsedSecondLineStyle,
@@ -99,10 +100,11 @@ interface SessionRowProps {
 // Module-level constant avoids repeated BigInt(0) allocations in hot render paths.
 const BIGINT_ZERO = BigInt(0);
 
-// Single truncation budget used at every container width (Story 2.1.2's
-// Resolution Note): the narrow (<200px) container-query breakpoint drives
-// purely visual CSS tweaks only, never a second, narrower truncation budget.
-const ROW_PATH_MAX_LEN = 72;
+// Name/path are never length-truncated — full text always renders, wrapping
+// via `overflowWrap: anywhere` (SessionRow.css.ts) as needed. `Infinity`
+// keeps `truncateWorkspacePath`'s home-dir "~" collapsing (not lossy) while
+// skipping its length-based truncation entirely.
+const ROW_PATH_MAX_LEN = Infinity;
 
 function getStatusDotValue(status: SessionStatus): string {
   switch (status) {
@@ -325,10 +327,20 @@ function SessionRowInner({
       tabIndex={0}
       aria-label={buildSessionRowAriaLabel(session, dotStatus, memMB)}
     >
-      {/* Checkbox cell — always in DOM to keep the reserved grid column occupied */}
+      {/*
+        Checkbox cell — always in DOM to keep the reserved grid column
+        occupied. The cell itself (not just the 16px button) toggles
+        selection so the full reserved column is clickable; the button's own
+        handler stops propagation first, so a click on the button doesn't
+        double-toggle via this one.
+      */}
       <div
         className={checkboxCell}
         aria-hidden={!selectMode ? "true" : undefined}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleSelect?.(e);
+        }}
       >
         <button
           role="checkbox"
@@ -372,6 +384,15 @@ function SessionRowInner({
               </span>
             </Tooltip>
           )}
+        </span>
+        {/*
+          Status/GitHub/backlog chips — their own row, not sharing a flex
+          line with the path text. Path length is unbounded (wraps fully, no
+          truncation), so mixing chips into that line vertically centered
+          short chips against a possibly multi-line-tall path, leaving large
+          empty gaps around them.
+        */}
+        <span className={chipsLineStyle} data-testid="session-row-chips-line">
           {session.status === SessionStatus.ACTIVE &&
             session.subStatus !== SubStatus.UNSPECIFIED &&
             session.subStatus !== SubStatus.READY &&
