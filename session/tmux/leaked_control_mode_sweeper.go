@@ -18,32 +18,13 @@ const leakedControlModeSweepInterval = 5 * time.Minute
 // clients attached to serverSocket that this process did not itself spawn.
 // Blocks until ctx is cancelled; run it in its own goroutine.
 //
-// KillOrphanedControlModeClients (called once at startup, right before session
-// restore) is only correct at that one moment: a freshly-started process cannot
-// yet have spawned any control-mode client of its own, so anything already
-// attached is provably a leftover from a prior instance. Once the process has
-// been running a while, that assumption no longer holds -- most attached
-// control-mode clients by then are this process's own, legitimate, in-use
-// connections, so blindly killing every attached client (as the startup sweep
-// does) is not safe here.
-//
-// This sweeper instead cross-checks the spawn registry (TrackChildPID /
-// LookupChildPID, see fork_metrics.go): a control-mode client whose PID this
-// process never spawned is unconditionally an orphan, regardless of how long
-// the process has been up, since every control-mode client this process
-// spawns is tracked there at cmd.Start() time (session/tmux/control_mode.go's
-// StartControlMode, and this package's own registry keepalive connection).
-//
-// This closes the gap behind BUG-042's 2026-09-25 recurrence
-// (docs/bugs/fixed/BUG-042-orphaned-control-mode-clients-overload-tmux-server.md):
-// the boot-time-only cleanup left ~50 clients attached to the keepalive
-// sentinel, accumulated across many restarts, because by the time several of
-// those restarts ran their own startup sweep the tmux server was often already
-// too degraded for that sweep's own list-clients call to succeed (see
-// KillOrphanedControlModeClients's doc comment on that failure). A periodic
-// sweep run against an (at that point) still-healthy server prevents the count
-// from ever climbing high enough to reach that degraded state in the first
-// place, rather than trying to recover from it after the fact.
+// Unlike the startup-only KillOrphanedControlModeClients (safe to assume every
+// attached client is a leftover only at the instant a fresh process boots),
+// this cross-checks the spawn registry (TrackChildPID/LookupChildPID) so it
+// can run continuously without killing this process's own live connections.
+// Closes the gap behind BUG-042's 2026-09-25 recurrence: the startup sweep's
+// own list-clients call fails once the server is already too degraded, so a
+// periodic, lower-stakes sweep is needed to stop the count reaching that point.
 func StartLeakedControlModeSweeper(ctx context.Context, serverSocket string) {
 	log.Info("[tmux] leaked control-mode client sweeper started", "interval", leakedControlModeSweepInterval)
 
@@ -69,10 +50,8 @@ func sweepLeakedControlModeClients(serverSocket string) {
 		return
 	}
 	if killed > 0 {
-		// Warn, not Info: a healthy steady state kills zero of these every
-		// tick. Any nonzero count means something outside this sweeper's
-		// normal startup-time cleanup is leaking control-mode clients during
-		// live operation and deserves attention, not just quiet reconciliation.
+		// Warn: a healthy steady state kills zero every tick, so any nonzero
+		// count means something is leaking clients during live operation.
 		log.Warn("[tmux] killed leaked control-mode clients not owned by this process",
 			"killed", killed, "attached", attached)
 	}
