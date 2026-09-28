@@ -312,7 +312,7 @@ func callParseGeminiPayloadWithStdin(t *testing.T, input string) classifier.Perm
 	require.NoError(t, err)
 	w.Close()
 
-	return parseGeminiPayload()
+	return parseGeminiPayload("gemini")
 }
 
 // parseGeminiPayload_should_returnBashTool_When_variantAPayloadProvided
