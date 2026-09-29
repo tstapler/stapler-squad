@@ -10,6 +10,9 @@ import (
 // from the passkey wall (peers have no session), so the caller proves it is an
 // enrolled host instead: an Ed25519 signature over the URL and a timestamp,
 // verified against the key HostRegistry pinned for the claimed host ID.
+// Limit: enrolment (/internal/host-advertisement) is itself open to anyone who
+// can reach the port, so this proves possession of an enrolled key, not
+// operator approval; the claim map is only as private as that port.
 const (
 	ClaimLookupHostHeader      = "X-SSQ-Host-ID"
 	ClaimLookupTimestampHeader = "X-SSQ-Timestamp"

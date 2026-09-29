@@ -53,9 +53,10 @@ func RegisterClaimAdvertisementRoute(mux *http.ServeMux, index *session.ClaimInd
 // registerClaimLookupRoute serves GET /internal/claim-lookup?url=<external URL>:
 // 200 with the local index's signed ClaimRecord, or 404 when none is held. The
 // caller must present a fresh signed-request header set from an enrolled host
-// (session.SignClaimLookup), else 401, so the claim map and deep links are not
-// readable by anyone who can reach the port. The asking peer verifies the
-// returned record's signature itself, so the response is not trusted blindly.
+// (session.SignClaimLookup), else 401. Enrolment is open to anyone who can reach
+// the port, so this limits readers to key holders, not approved hosts. The
+// asking peer verifies the returned record's signature itself, so the response
+// is not trusted blindly.
 func registerClaimLookupRoute(mux *http.ServeMux, index *session.ClaimIndex) {
 	mux.HandleFunc("GET "+session.ClaimLookupEndpointPath, func(w http.ResponseWriter, r *http.Request) {
 		externalURL := r.URL.Query().Get("url")

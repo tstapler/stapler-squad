@@ -1349,3 +1349,17 @@ Deviations from the plan text, recorded so the plan matches the code:
 - **Pre-mortem #3** is covered by `session/claim_two_host_integration_test.go` (record, gossip, check, blocked import, audited override, dispute; live-lookup and peer-down variants).
 
 Not done: Phase 5 (blocked on #475); Playwright specs for the banner, chip and stuck override (see `tests/e2e/` conventions); a `BacklogItemDetail`-level test that mounts the banner (`ItemClaimBanner` is tested as a unit).
+
+## sdd:6-verify outcome (2026-09-28)
+
+Fixed: MCP `import_github_issue` now sets ExternalURL/ExternalID (so the Storage choke point records a claim) and refuses a URL claimed by another host; claim gossip and lookup HTTP clients no longer follow redirects (SSRF via signed-header forwarding); comments no longer overstate lookup privacy.
+
+Accepted, not fixed (each is a follow-up, none blocks a criterion):
+- Trust model: enrolment via `/internal/host-advertisement` is open to anyone who can reach the port, so an enrolled key can (a) backdate `ClaimedAt` to win an earliest-wins conflict (the loser is still flagged Disputed for a human), (b) fill `maxClaimsPerHost`/total caps. Fix would be gated enrolment (pairing secret) or first-seen ordering.
+- The claim/lookup passkey-exemption is not gated by `cross_host_claim_dedup`; flag off still records/gossips claims when remote access is on.
+- An "Import anyway" override is audit-logged only, so the item can be blocked once more at dequeue and needs a second override.
+- NL-create via chat sets no ExternalUrl, so it has no claim to gate on.
+- Claim recording is best-effort after create (no backfill of failures); simultaneous claims inside one gossip window surface as Disputed.
+- Minor: log-volume/truncation of peer-supplied strings, per-`CheckClaim` file re-read, untracked re-gossip goroutines, provenance comment author not verified, primitive-obsession nits (`HostID.String()` compares, `startHostGossip` params).
+
+Test gate: session/server/github/config Go packages pass except `session/scrollback` `TestFileScrollbackStorage_Truncate_AbortsOnCompressorCloseFailure` and `session` `TestSubmitDriverContent_ContextExpiresBeforeRetry_StopsBeforeRetryEnter`, whose files this branch does not touch; web-app backlog jest suites pass (105 suites).

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -2084,6 +2085,17 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInternalError, fmt.Sprintf("fetch GitHub issue: %v", fetchErr), "Retry — this is usually transient. If it names missing credentials, that is not transient; configure GitHub access for this session instead."), nil
 	}
 
+	if h.backlogSvc != nil {
+		// Same live check the web import runs; a disabled flag, an error or an
+		// indeterminate result never blocks (LookupCrossHostClaim reports those
+		// as unclaimed or an error we ignore).
+		if verdict, claimErr := h.backlogSvc.LookupCrossHostClaim(ctx, issue.URL); claimErr == nil && verdict.Kind == services.ClaimHeldByOther {
+			return errResult(ErrInvalidArgument,
+				fmt.Sprintf("issue %s is already claimed by host %s (see %s)", issue.URL, verdict.Record.ClaimingHostID.String(), verdict.Record.ItemDeepLink),
+				"Open that link to see the owning item, or import from the web UI with an override reason."), nil
+		}
+	}
+
 	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:       issue.Title,
 		Description: issue.Body,
@@ -2091,6 +2103,8 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		Status:      string(session.BacklogStatusIdea),
 		RepoPath:    repoPath,
 		Notes:       fmt.Sprintf("Imported from %s", issue.URL),
+		ExternalID:  strconv.Itoa(ref.IssueNumber),
+		ExternalURL: issue.URL, // lets Storage.CreateBacklogItem record the cross-host claim
 	})
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("create backlog item: %v", err), ""), nil

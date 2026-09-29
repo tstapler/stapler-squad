@@ -107,10 +107,14 @@ var (
 // is queried fresh on every CheckClaim so pruned hosts drop out of the fan-out.
 func NewLocalClaimChecker(index *session.ClaimIndex, selfID session.HostID, peers claimPeerLister) *LocalClaimChecker {
 	return &LocalClaimChecker{
-		index:   index,
-		selfID:  selfID,
-		peers:   peers,
-		client:  &http.Client{Transport: peerTLSTransport()},
+		index:  index,
+		selfID: selfID,
+		peers:  peers,
+		client: &http.Client{
+			Transport: peerTLSTransport(),
+			// A peer must not bounce a signed lookup to an internal address.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		timeout: defaultClaimLookupTimeout,
 	}
 }

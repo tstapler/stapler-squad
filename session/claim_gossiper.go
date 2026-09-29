@@ -89,8 +89,10 @@ func NewClaimGossiper(identity HostIdentity, registry *HostRegistry, index *Clai
 		// a locally-minted self-signed CA, and identity is verified at the
 		// application layer (Ed25519 signature + TOFU-pinned key).
 		client: &http.Client{
-			Timeout:   5 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, // #nosec G402 -- TLS is transport-only; identity is Ed25519/TOFU-verified at the application layer
+			Timeout: 5 * time.Second,
+			// A peer must not bounce a gossip POST (with its signed headers) to an internal address.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+			Transport:     &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, // #nosec G402 -- TLS is transport-only; identity is Ed25519/TOFU-verified at the application layer
 		},
 		interval:  interval,
 		delivered: make(map[claimDeliveryKey]struct{}),
