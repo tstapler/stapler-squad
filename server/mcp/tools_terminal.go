@@ -372,7 +372,7 @@ type SendControlResult struct {
 	Sent string `json:"sent"`
 }
 
-func (th *terminalHandlers) sendControl(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (th *terminalHandlers) sendControl(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := req.GetArguments()
 	sessionID, ok := args["session_id"].(string)
 	if !ok || sessionID == "" {
