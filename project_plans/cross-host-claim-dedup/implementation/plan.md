@@ -1333,3 +1333,19 @@ degrade gracefully, **so that** this design doesn't break on the existing backlo
 ##### Task 5.1.2a: Test the absent-field fallback path (~3 min)
 - Files: `session/repository_test.go` or wherever `BacklogItemData`'s existing accessor tests
   live (confirm before adding a new file).
+
+---
+
+## Implementation notes (Phases 3-4 and Phase 2 gaps)
+
+Deviations from the plan text, recorded so the plan matches the code:
+
+- **Phase 3 naming.** `github.PostPRComment` already exists (gh CLI). The native REST writer added under Task 3.1.1b is `github.PostPRCommentREST(ctx, repo, prNumber, body)`; the token is resolved internally rather than passed. `newGHRequestForHostWithTokenAndBody` is on the `norawghrequest` approved list.
+- **Stamp call site.** `report_pr_created` lives in `server/mcp/tools_backlog_pr.go` (the plan's path). No ssq:// builder existed in `session/deeplink` (parse only), so the stamp reuses `BacklogItemDeepLinkPath` plus the recorder's `deepLinkHost`, via `ClaimIndexRecorder.PRProvenanceComment`. Stamping and read-back are both gated by `cross_host_claim_dedup`, so a flag-off host posts no PR comments and reads none.
+- **Webhook read-back** is a fallback inside `handlePRFixEvent`'s loop, only when `TriggerPRFixForEvent` returns no match. It reads comments with `github.GetPRComments` (gh CLI), caches hits and misses for 10 minutes per PR, and logs `github_webhook.pr_provenance_resolved` with the item ID and origin host ID. It does not act on the item: no by-item-ID router exists, and resolution was the acceptance criterion. `github_webhook_handler.go` is unchanged; the reader is a package variable in `github_webhook_provenance.go`.
+- **Phase 4 RPCs.** Added `CheckCrossHostClaim` (live or `local_only`) and `ListForeignClaims` (local index only, one call per board render). The former internal `BacklogService.CheckCrossHostClaim` used by the MCP tool is now `LookupCrossHostClaim`.
+- **Detail-view Override.** An item that has not been dequeued has no server-side block to lift, so Override captures the reason (>= 5 characters, `ClaimOverrideForm`), logs it client-side, and dismisses the banner for that view. Resolve calls `ResolveClaimDispute`.
+- **Phase 2 gap: BLOCKED_BY_CLAIM rows.** `/unfinished` now has an Override control (`OverrideClaimBlock`). `DequeueNextQueuedItems` starts each sweep, before the free-slot early return, by resolving open BLOCKED_BY_CLAIM rows whose claim is gone from the local index, whose item left queued/ready, or whose flag is now off. Limitation: the check is local-only, so a claim that a peer dropped but this host never learned about stays until the local index changes; Override remains the manual exit.
+- **Pre-mortem #3** is covered by `session/claim_two_host_integration_test.go` (record, gossip, check, blocked import, audited override, dispute; live-lookup and peer-down variants).
+
+Not done: Phase 5 (blocked on #475); Playwright specs for the banner, chip and stuck override (see `tests/e2e/` conventions); a `BacklogItemDetail`-level test that mounts the banner (`ItemClaimBanner` is tested as a unit).
