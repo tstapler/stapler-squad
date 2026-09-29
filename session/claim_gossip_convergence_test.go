@@ -20,6 +20,7 @@ type claimNode struct {
 	index    *session.ClaimIndex
 	gossiper *session.ClaimGossiper
 	addr     string
+	srv      *httptest.Server
 }
 
 func newClaimNode(t *testing.T) *claimNode {
@@ -51,8 +52,11 @@ func newClaimNode(t *testing.T) *claimNode {
 		t.Fatalf("NewClaimGossiper: %v", err)
 	}
 	auth.RegisterClaimAdvertisementRoute(mux, index, gossiper)
-	return &claimNode{identity: identity, registry: registry, index: index, gossiper: gossiper, addr: u.Host}
+	return &claimNode{identity: identity, registry: registry, index: index, gossiper: gossiper, addr: u.Host, srv: srv}
 }
+
+// closeServer takes the node's endpoints offline, simulating a down host.
+func (n *claimNode) closeServer() { n.srv.Close() }
 
 func (n *claimNode) learn(t *testing.T, peer *claimNode) {
 	t.Helper()
