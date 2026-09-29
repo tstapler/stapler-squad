@@ -77,6 +77,9 @@ func NewCore(
 	if storage != nil && (backlogEnabled == nil || backlogEnabled()) {
 		h := &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener, backlogSvc: backlogSvc, liveCheck: liveCheck}
 		registerBacklogTools(s, h)
+		if backlogSvc != nil {
+			registerClaimTools(s, &claimHandlers{svc: backlogSvc, enabledCheck: backlogEnabled})
+		}
 		registerGoalTools(s, &goalHandlers{storage: storage, store: store, eventBus: eventBus, enabledCheck: backlogEnabled})
 		// registerGuidanceTools shares backlogHandlers (not a separate struct)
 		// so create_guidance_request can call h.resolveItemLink directly —
