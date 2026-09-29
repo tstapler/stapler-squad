@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 
@@ -10,7 +11,9 @@ import (
 
 // prProvenanceMarker opens every provenance comment so a reader can find it
 // among ordinary PR comments. The comment carries only an opaque HostID and the
-// item's ssq:// deep link, never a LAN IP or advertised address.
+// item's ssq:// deep link. The comment is public on GitHub, so it is only
+// written when the deep link names a hostname, never a bare IP address (see
+// ClaimIndexRecorder.PRProvenanceComment).
 const prProvenanceMarker = "<!-- ssq-provenance:v1 -->"
 
 var (
@@ -58,9 +61,11 @@ type PRProvenanceSource interface {
 }
 
 // PRProvenanceComment implements PRProvenanceSource using the same host name the
-// recorder puts in claim deep links.
+// recorder puts in claim deep links. It declines when that name is an IP
+// literal: claim deep links go only to enrolled peers, but this comment is
+// posted to a public PR, and must not publish a LAN address.
 func (r *ClaimIndexRecorder) PRProvenanceComment(item *BacklogItemData) (string, bool) {
-	if item == nil || r.deepLinkHost == "" {
+	if item == nil || r.deepLinkHost == "" || net.ParseIP(strings.Trim(r.deepLinkHost, "[]")) != nil {
 		return "", false
 	}
 	return FormatPRProvenanceComment(r.identity.ID, "ssq://"+r.deepLinkHost+BacklogItemDeepLinkPath(item)), true

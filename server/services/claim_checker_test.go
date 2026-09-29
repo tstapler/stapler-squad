@@ -19,7 +19,7 @@ const claimTestURL = "https://github.com/o/r/issues/42"
 
 type fakePeerLister struct{ entries []session.RegistryEntry }
 
-func (f fakePeerLister) Snapshot() []session.RegistryEntry { return f.entries }
+func (f fakePeerLister) LiveSnapshot() []session.RegistryEntry { return f.entries }
 
 func newClaimTestIdentity(t *testing.T) session.HostIdentity {
 	t.Helper()
@@ -28,10 +28,17 @@ func newClaimTestIdentity(t *testing.T) session.HostIdentity {
 	return identity
 }
 
-func newClaimTestIndex(t *testing.T) *session.ClaimIndex {
+// newClaimTestIndex builds an index whose registry has enrolled the given hosts:
+// RecordClaim only accepts claims from enrolled hosts.
+func newClaimTestIndex(t *testing.T, enrolled ...session.HostIdentity) *session.ClaimIndex {
 	t.Helper()
 	registry, err := session.NewHostRegistry(t.TempDir(), session.DefaultHostRegistryTTL)
 	require.NoError(t, err)
+	for _, identity := range enrolled {
+		_, accepted, err := registry.Advertise(session.BuildAdvertisement(identity, []string{"peer.example:8444"}, time.Now()))
+		require.NoError(t, err)
+		require.True(t, accepted)
+	}
 	index, err := session.NewClaimIndex(t.TempDir(), registry)
 	require.NoError(t, err)
 	return index
@@ -62,7 +69,12 @@ func hangingHandler(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done
 
 func newTestLocalChecker(t *testing.T, self session.HostIdentity, timeout time.Duration, peers ...session.RegistryEntry) (*LocalClaimChecker, *session.ClaimIndex) {
 	t.Helper()
-	index := newClaimTestIndex(t)
+	return newTestLocalCheckerEnrolled(t, self, timeout, nil, peers...)
+}
+
+func newTestLocalCheckerEnrolled(t *testing.T, self session.HostIdentity, timeout time.Duration, enrolled []session.HostIdentity, peers ...session.RegistryEntry) (*LocalClaimChecker, *session.ClaimIndex) {
+	t.Helper()
+	index := newClaimTestIndex(t, enrolled...)
 	c := NewLocalClaimChecker(index, self.ID, fakePeerLister{entries: peers})
 	c.timeout = timeout
 	return c, index
@@ -81,7 +93,7 @@ func TestUnimplementedClaimChecker_CheckClaim_should_ReturnUnclaimedVerdict_When
 
 func TestLocalClaimChecker_CheckClaim_should_ReturnHeldByOtherVerdict_When_ClaimIndexHasEntryForURL(t *testing.T) {
 	self, other := newClaimTestIdentity(t), newClaimTestIdentity(t)
-	c, index := newTestLocalChecker(t, self, time.Second)
+	c, index := newTestLocalCheckerEnrolled(t, self, time.Second, []session.HostIdentity{other})
 	record := session.NewSignedClaimRecord(other, claimTestURL, "ssq://hostA/backlog/v1/bl_1", time.Now())
 	_, err := index.RecordClaim(record)
 	require.NoError(t, err)
@@ -95,7 +107,7 @@ func TestLocalClaimChecker_CheckClaim_should_ReturnHeldByOtherVerdict_When_Claim
 
 func TestLocalClaimChecker_CheckClaim_should_ReadFromRealClaimIndexOnDisk_When_BackedByTempStateDir(t *testing.T) {
 	self, other := newClaimTestIdentity(t), newClaimTestIdentity(t)
-	c, index := newTestLocalChecker(t, self, time.Second)
+	c, index := newTestLocalCheckerEnrolled(t, self, time.Second, []session.HostIdentity{other})
 
 	verdict, err := c.CheckClaimLocalOnly(context.Background(), claimTestURL)
 	require.NoError(t, err)
@@ -117,7 +129,7 @@ func TestLocalClaimChecker_CheckClaim_should_FindRecentClaimViaLivePeerQuery_Whe
 	self, hostA := newClaimTestIdentity(t), newClaimTestIdentity(t)
 	record := session.NewSignedClaimRecord(hostA, claimTestURL, "ssq://hostA/backlog/v1/bl_1", time.Now())
 	peer, _ := claimPeer(t, hostA, claimingHandler(record))
-	c, index := newTestLocalChecker(t, self, 2*time.Second, peer)
+	c, index := newTestLocalCheckerEnrolled(t, self, 2*time.Second, []session.HostIdentity{hostA}, peer)
 
 	verdict, err := c.CheckClaim(context.Background(), claimTestURL)
 	require.NoError(t, err)
@@ -178,7 +190,7 @@ func TestLocalClaimChecker_CheckClaim_should_ReturnHeldByOtherWithoutWaitingForH
 	record := session.NewSignedClaimRecord(claimant, claimTestURL, "ssq://a/x", time.Now())
 	claimPeerEntry, _ := claimPeer(t, claimant, claimingHandler(record))
 	hungPeer, _ := claimPeer(t, hung, hangingHandler)
-	c, _ := newTestLocalChecker(t, self, timeout, hungPeer, claimPeerEntry)
+	c, _ := newTestLocalCheckerEnrolled(t, self, timeout, []session.HostIdentity{claimant}, hungPeer, claimPeerEntry)
 
 	start := time.Now()
 	verdict, err := c.CheckClaim(context.Background(), claimTestURL)
@@ -219,7 +231,7 @@ func TestLocalClaimChecker_CheckClaim_should_SkipSelfAndNeverQueryLocalOnlyPath(
 
 func TestLocalClaimChecker_ResolveDispute_should_ClearDisputedFlag(t *testing.T) {
 	self, a, b := newClaimTestIdentity(t), newClaimTestIdentity(t), newClaimTestIdentity(t)
-	c, index := newTestLocalChecker(t, self, time.Second)
+	c, index := newTestLocalCheckerEnrolled(t, self, time.Second, []session.HostIdentity{a, b})
 	now := time.Now()
 	_, err := index.RecordClaim(session.NewSignedClaimRecord(a, claimTestURL, "ssq://a/x", now))
 	require.NoError(t, err)

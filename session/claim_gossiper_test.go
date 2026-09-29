@@ -63,6 +63,14 @@ func newClaimPeer(t *testing.T, clock Clock) *claimPeer {
 	return p
 }
 
+// enroll makes the peer's registry pin identity, as it would after that host advertised.
+func (p *claimPeer) enroll(t *testing.T, identity HostIdentity, at time.Time) {
+	t.Helper()
+	if _, accepted, err := p.index.hostRegistry.Advertise(newTestAdvertisement(t, identity, []string{"origin.example:8444"}, at)); err != nil || !accepted {
+		t.Fatalf("Advertise(origin on peer) accepted=%v err=%v", accepted, err)
+	}
+}
+
 // gossipFixture is a sending host with a registry that knows each peer.
 type gossipFixture struct {
 	self     HostIdentity
@@ -99,6 +107,10 @@ func (f *gossipFixture) addPeer(t *testing.T, p *claimPeer) {
 	t.Helper()
 	if _, accepted, err := f.registry.Advertise(newTestAdvertisement(t, p.identity, []string{p.addr}, f.clock.Now())); err != nil || !accepted {
 		t.Fatalf("Advertise(peer) accepted=%v err=%v", accepted, err)
+	}
+	// The peer only accepts claims from hosts it has enrolled.
+	if _, accepted, err := p.index.hostRegistry.Advertise(newTestAdvertisement(t, f.self, []string{"self.example:8444"}, f.clock.Now())); err != nil || !accepted {
+		t.Fatalf("Advertise(self on peer) accepted=%v err=%v", accepted, err)
 	}
 }
 
@@ -152,7 +164,8 @@ func TestClaimGossiper_ReGossip_should_SkipPeerExcludedByPrune_When_PeerRegistry
 	f.addPeer(t, fresh)
 
 	origin := newTestIdentity(t)
-	record := NewSignedClaimRecord(origin, testIssueURL, "ssq://origin/x", f.clock.Now())
+	fresh.enroll(t, origin, f.clock.Now())
+	record := NewSignedClaimRecord(origin, testIssueURL, "ssq://origin/x", time.Now()) // real time: the index bounds ClaimedAt against it
 	if err := f.gossiper.ReGossip(context.Background(), record); err != nil {
 		t.Fatalf("ReGossip() error = %v, want nil", err)
 	}
@@ -176,6 +189,7 @@ func TestClaimGossiper_ReGossip_should_NotSendBackToClaimant(t *testing.T) {
 	claimant, other := newClaimPeer(t, f.clock), newClaimPeer(t, f.clock)
 	f.addPeer(t, claimant)
 	f.addPeer(t, other)
+	other.enroll(t, claimant.identity, f.clock.Now())
 
 	record := NewSignedClaimRecord(claimant.identity, testIssueURL, "ssq://claimant/x", f.clock.Now())
 	if err := f.gossiper.ReGossip(context.Background(), record); err != nil {
@@ -190,8 +204,8 @@ func TestClaimGossiper_BackfillOnce_should_SendOnlyUnsentClaims_When_CalledRepea
 	f := newGossipFixture(t)
 	first := newClaimPeer(t, f.clock)
 	f.addPeer(t, first)
-	if outcome := mustRecord(t, f.index, f.claim(testIssueURL)); !outcome.Accepted {
-		t.Fatalf("local RecordClaim rejected: %+v", outcome)
+	if outcome, err := f.index.recordOwn(f.claim(testIssueURL)); err != nil || !outcome.Accepted {
+		t.Fatalf("local recordOwn = %+v, err %v", outcome, err)
 	}
 
 	ctx := context.Background()

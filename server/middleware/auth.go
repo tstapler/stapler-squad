@@ -54,18 +54,24 @@ var exemptPrefixes = []string{
 
 // exemptPeerPaths are host-to-host gossip endpoints. Peers are other
 // stapler-squad instances with no passkey session, so they can never pass
-// isAuthenticated; each handler authenticates the payload itself (Ed25519
-// signature + TOFU-pinned key). Matched exactly, not by prefix, so nothing
-// else under /internal/ is opened up. Paths must equal
+// isAuthenticated; each handler authenticates the payload itself. Matched
+// exactly, not by prefix, so nothing else under /internal/ is opened up. Paths
+// must equal session.AdvertisementEndpointPath,
 // session.ClaimAdvertisementEndpointPath and session.ClaimLookupEndpointPath
 // (asserted in auth_test.go).
 //
-// The claim-lookup GET carries no signature: it reveals whether a given
-// external URL is claimed, and by whom, to anyone who can reach the remote port.
-//
-// /internal/host-advertisement (session.AdvertisementEndpointPath) is not
-// listed: exempting it is a separate decision from the claim endpoints.
+//   - /internal/host-advertisement is how a peer enrols in HostRegistry
+//     (Ed25519 signature, TOFU-pinned key). Without the exemption no peer can
+//     ever enrol, the registry stays empty and claim gossip cannot work between
+//     hosts. Enrolment is open to anyone who can reach the port (the accepted
+//     same-LAN threat model of ADR-002); the handler bounds body size and the
+//     registry bounds entry count.
+//   - /internal/claim-advertisement accepts only signed claims from enrolled
+//     hosts (ClaimIndex.RecordClaim).
+//   - /internal/claim-lookup requires a signed request from an enrolled host
+//     (ClaimIndex.AuthorizeClaimLookup).
 var exemptPeerPaths = map[string]struct{}{
+	"/internal/host-advertisement":  {},
 	"/internal/claim-advertisement": {},
 	"/internal/claim-lookup":        {},
 }

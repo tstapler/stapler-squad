@@ -10,6 +10,21 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/log"
+)
+
+const (
+	// claimFanOutWorkers bounds concurrent sends of one record to peers.
+	claimFanOutWorkers = 8
+	// maxInFlightReGossips bounds detached re-gossip goroutines started by
+	// received claims; a dropped one is covered by the next Run backfill.
+	maxInFlightReGossips = 16
+	// reGossipTimeout bounds one detached re-gossip.
+	reGossipTimeout = 30 * time.Second
+	// maxDeliveredEntries is the hard cap on the delivered set, a backstop for
+	// the pruning BackfillOnce does.
+	maxDeliveredEntries = 200000
 )
 
 // ClaimAdvertisementEndpointPath is the HTTP path claim gossip is served on,
@@ -39,6 +54,9 @@ type ClaimGossiper struct {
 
 	mu        sync.Mutex
 	delivered map[claimDeliveryKey]struct{}
+
+	reGossipSlots chan struct{}
+	reGossipWG    sync.WaitGroup
 }
 
 // claimDeliveryKey identifies one version of a claim sent to one peer.
@@ -76,6 +94,8 @@ func NewClaimGossiper(identity HostIdentity, registry *HostRegistry, index *Clai
 		},
 		interval:  interval,
 		delivered: make(map[claimDeliveryKey]struct{}),
+
+		reGossipSlots: make(chan struct{}, maxInFlightReGossips),
 	}, nil
 }
 
@@ -85,7 +105,9 @@ func (g *ClaimGossiper) Run(ctx context.Context) {
 	ticker := time.NewTicker(g.interval)
 	defer ticker.Stop()
 	for {
-		_ = g.BackfillOnce(ctx)
+		if err := g.BackfillOnce(ctx); err != nil {
+			log.Debug("claim_gossip.backfill_partial", "err", err)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -95,15 +117,49 @@ func (g *ClaimGossiper) Run(ctx context.Context) {
 }
 
 // BackfillOnce sends every claim in the local index to each live peer that has
-// not yet received that version of it.
+// not yet received that version of it, and forgets delivery records for claims
+// and peers that no longer exist.
 func (g *ClaimGossiper) BackfillOnce(ctx context.Context) error {
+	records := g.index.Snapshot()
+	g.pruneDelivered(records)
 	var errs []error
-	for _, record := range g.index.Snapshot() {
+	for _, record := range records {
 		if err := g.fanOut(ctx, record, ""); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// pruneDelivered drops delivery entries whose claim version is no longer in
+// records or whose peer left the live registry, bounding the map. If it is
+// still over maxDeliveredEntries it is cleared: worst case is a redundant
+// resend, which the receiver treats as a duplicate.
+func (g *ClaimGossiper) pruneDelivered(records []ClaimRecord) {
+	type version struct {
+		externalURL, claimant string
+		claimedAt             time.Time
+	}
+	current := make(map[version]struct{}, len(records))
+	for _, r := range records {
+		current[version{r.ExternalURL, r.ClaimingHostID.String(), r.ClaimedAt}] = struct{}{}
+	}
+	peers := make(map[string]struct{})
+	for _, p := range g.registry.LiveSnapshot() {
+		peers[p.HostID.String()] = struct{}{}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for key := range g.delivered {
+		_, claimLive := current[version{key.externalURL, key.claimant, key.claimedAt}]
+		_, peerLive := peers[key.peer]
+		if !claimLive || !peerLive {
+			delete(g.delivered, key)
+		}
+	}
+	if len(g.delivered) > maxDeliveredEntries {
+		g.delivered = make(map[claimDeliveryKey]struct{})
+	}
 }
 
 // BroadcastOnce sends exactly record to every live peer. It is record-scoped,
@@ -120,18 +176,59 @@ func (g *ClaimGossiper) ReGossip(ctx context.Context, record ClaimRecord) error 
 	return g.fanOut(ctx, record, record.ClaimingHostID.String())
 }
 
+// ReGossipAsync runs ReGossip in a detached goroutine under its own timeout so a
+// receive handler can reply first. At most maxInFlightReGossips run at once; a
+// record dropped for lack of a slot still reaches peers on the next Run backfill
+// because it is already in the local index.
+func (g *ClaimGossiper) ReGossipAsync(record ClaimRecord) {
+	select {
+	case g.reGossipSlots <- struct{}{}:
+	default:
+		log.Debug("claim_gossip.regossip_dropped", "external_url", truncateForLog(record.ExternalURL))
+		return
+	}
+	g.reGossipWG.Add(1)
+	go func() {
+		defer g.reGossipWG.Done()
+		defer func() { <-g.reGossipSlots }()
+		ctx, cancel := context.WithTimeout(context.Background(), reGossipTimeout)
+		defer cancel()
+		if err := g.ReGossip(ctx, record); err != nil {
+			log.Debug("claim_gossip.regossip_partial", "err", err)
+		}
+	}()
+}
+
+// Wait blocks until every detached re-gossip started by ReGossipAsync has finished.
+func (g *ClaimGossiper) Wait() { g.reGossipWG.Wait() }
+
 // fanOut sends record to each live peer except skipHostID and this instance's
-// own addresses, trying a peer's addresses in order until one succeeds.
+// own addresses, trying a peer's addresses in order until one succeeds. At most
+// claimFanOutWorkers sends run at once.
 func (g *ClaimGossiper) fanOut(ctx context.Context, record ClaimRecord, skipHostID string) error {
-	var errs []error
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		errs []error
+	)
+	sem := make(chan struct{}, claimFanOutWorkers)
 	for _, peer := range g.registry.LiveSnapshot() {
 		if peer.HostID.String() == skipHostID || peer.HostID.String() == g.identity.ID.String() {
 			continue
 		}
-		if err := g.sendToPeer(ctx, peer, record); err != nil {
-			errs = append(errs, err)
-		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(peer RegistryEntry) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := g.sendToPeer(ctx, peer, record); err != nil {
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+			}
+		}(peer)
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 

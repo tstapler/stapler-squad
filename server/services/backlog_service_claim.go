@@ -28,8 +28,13 @@ const minClaimOverrideReasonLength = 5
 // SetClaimChecker wires the cross-host claim checker and dispute resolver.
 // Either may be nil.
 func (s *BacklogService) SetClaimChecker(checker CrossHostClaimChecker, resolver ClaimDisputeResolver) {
-	s.claimChecker = checker
-	s.claimDisputeResolver = resolver
+	s.claimWiring.Store(&claimWiring{checker: checker, resolver: resolver})
+}
+
+// claimWiring is the immutable pair SetClaimChecker publishes atomically.
+type claimWiring struct {
+	checker  CrossHostClaimChecker
+	resolver ClaimDisputeResolver
 }
 
 func (s *BacklogService) crossHostClaimDedupEnabled() bool {
@@ -40,10 +45,17 @@ func (s *BacklogService) crossHostClaimDedupEnabled() bool {
 }
 
 func (s *BacklogService) checker() CrossHostClaimChecker {
-	if s.claimChecker == nil {
-		return unimplementedClaimChecker{}
+	if w := s.claimWiring.Load(); w != nil && w.checker != nil {
+		return w.checker
 	}
-	return s.claimChecker
+	return unimplementedClaimChecker{}
+}
+
+func (s *BacklogService) disputeResolver() ClaimDisputeResolver {
+	if w := s.claimWiring.Load(); w != nil {
+		return w.resolver
+	}
+	return nil
 }
 
 func validateClaimOverrideReason(reason string) error {
@@ -162,12 +174,6 @@ func (s *BacklogService) CheckCrossHostClaim(ctx context.Context, req *connect.R
 	return connect.NewResponse(resp), nil
 }
 
-// foreignClaimLister is implemented by checkers that can enumerate the claims
-// other hosts hold in the local index (LocalClaimChecker).
-type foreignClaimLister interface {
-	ListForeignClaims() []session.ClaimRecord
-}
-
 // ListForeignClaims returns the claims other hosts hold, from the local index only.
 // +api: ListForeignClaims
 func (s *BacklogService) ListForeignClaims(_ context.Context, _ *connect.Request[sessionv1.ListForeignClaimsRequest]) (*connect.Response[sessionv1.ListForeignClaimsResponse], error) {
@@ -175,35 +181,50 @@ func (s *BacklogService) ListForeignClaims(_ context.Context, _ *connect.Request
 		return connect.NewResponse(&sessionv1.ListForeignClaimsResponse{}), nil
 	}
 	resp := &sessionv1.ListForeignClaimsResponse{Enabled: true}
-	if lister, ok := s.claimChecker.(foreignClaimLister); ok {
-		for _, record := range lister.ListForeignClaims() {
-			resp.Claims = append(resp.Claims, alreadyClaimedElsewhereProto(record.ExternalURL, record))
-		}
+	for _, record := range s.checker().ListForeignClaims() {
+		resp.Claims = append(resp.Claims, alreadyClaimedElsewhereProto(record.ExternalURL, record))
 	}
 	return connect.NewResponse(resp), nil
 }
 
+// foreignClaimSet is one sweep's view of the claims other hosts hold, keyed by
+// normalized external URL. Reading the index costs a flocked disk read and JSON
+// parse, so a sweep takes it once instead of once per candidate.
+type foreignClaimSet map[string]session.ClaimRecord
+
+// foreignClaimsSnapshot reads the local index once. Local-only, no network.
+func (s *BacklogService) foreignClaimsSnapshot() foreignClaimSet {
+	records := s.checker().ListForeignClaims()
+	set := make(foreignClaimSet, len(records))
+	for _, record := range records {
+		set[session.NormalizeClaimURL(record.ExternalURL)] = record
+	}
+	return set
+}
+
+func (f foreignClaimSet) heldFor(externalURL string) (session.ClaimRecord, bool) {
+	record, ok := f[session.NormalizeClaimURL(externalURL)]
+	return record, ok
+}
+
 // skipForForeignClaim reports whether DequeueNextQueuedItems must skip item
-// because another host holds its claim, and makes the skip visible as a
-// StuckReasonBlockedByClaim row. Local-only: it runs under dequeueMu, so it must
-// never touch the network. Callers check the feature flag once per sweep.
-func (s *BacklogService) skipForForeignClaim(ctx context.Context, item *session.BacklogItemData) bool {
+// because another host holds its claim (per claims, the sweep's snapshot), and
+// makes the skip visible as a StuckReasonBlockedByClaim row. Local-only: it runs
+// under dequeueMu, so it must never touch the network. Callers check the feature
+// flag once per sweep.
+func (s *BacklogService) skipForForeignClaim(ctx context.Context, item *session.BacklogItemData, claims foreignClaimSet) bool {
 	if item.ExternalURL == "" {
 		return false
 	}
-	verdict, err := s.checker().CheckClaimLocalOnly(ctx, item.ExternalURL)
-	if err != nil {
-		log.Warn("dequeue.claim_check_failed", "item", item.ID, "err", err)
-		return false
-	}
-	if verdict.Kind != ClaimHeldByOther {
+	record, held := claims.heldFor(item.ExternalURL)
+	if !held {
 		return false
 	}
 	log.Info("dequeue.blocked_by_claim",
 		"item", item.ID,
 		"external_url", item.ExternalURL,
-		"claiming_host_id", verdict.Record.ClaimingHostID.String())
-	s.notifyBlockedByClaim(ctx, item, verdict.Record)
+		"claiming_host_id", record.ClaimingHostID.String())
+	s.notifyBlockedByClaim(ctx, item, record)
 	return true
 }
 
@@ -235,7 +256,7 @@ func (s *BacklogService) resolveClaimBlockedLogged(ctx context.Context, itemID s
 // gone from the local index (resolved dispute, abandoned host). Runs at the top
 // of every sweep, before the free-slot early return, so a stale row does not
 // linger while the WIP cap is full. Local-only, like the check that created it.
-func (s *BacklogService) reconcileClaimBlockedStuck(ctx context.Context, claimDedup bool) {
+func (s *BacklogService) reconcileClaimBlockedStuck(ctx context.Context, claimDedup bool, claims foreignClaimSet) {
 	states, err := s.storage.FindOpenStuckStates(ctx)
 	if err != nil {
 		log.Warn("dequeue.claim_reconcile_list_failed", "err", err)
@@ -245,14 +266,14 @@ func (s *BacklogService) reconcileClaimBlockedStuck(ctx context.Context, claimDe
 		if state.Reason != domain.StuckReasonBlockedByClaim {
 			continue
 		}
-		if claimDedup && s.claimBlockStillApplies(ctx, state.ItemID) {
+		if claimDedup && s.claimBlockStillApplies(ctx, state.ItemID, claims) {
 			continue
 		}
 		s.resolveClaimBlockedLogged(ctx, state.ItemID)
 	}
 }
 
-func (s *BacklogService) claimBlockStillApplies(ctx context.Context, itemID string) bool {
+func (s *BacklogService) claimBlockStillApplies(ctx context.Context, itemID string, claims foreignClaimSet) bool {
 	item, err := s.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
 		// Keep the row on a transient read error; drop it only when the item is gone.
@@ -262,8 +283,8 @@ func (s *BacklogService) claimBlockStillApplies(ctx context.Context, itemID stri
 		(status != session.BacklogStatusQueued && status != session.BacklogStatusReady) {
 		return false
 	}
-	verdict, err := s.checker().CheckClaimLocalOnly(ctx, item.ExternalURL)
-	return err != nil || verdict.Kind == ClaimHeldByOther
+	_, held := claims.heldFor(item.ExternalURL)
+	return held
 }
 
 // OverrideClaimBlock dequeues and spawns an item DequeueNextQueuedItems skipped
@@ -335,6 +356,30 @@ func (s *BacklogService) OverrideClaimBlock(ctx context.Context, req *connect.Re
 	}), nil
 }
 
+// RecordClaimOverride writes the audit line for an operator proceeding on an
+// item another host claimed, from the item-detail banner where no server-side
+// block exists to lift. It changes no state; the reason must be at least
+// minClaimOverrideReasonLength non-space characters.
+// +api: RecordClaimOverride
+func (s *BacklogService) RecordClaimOverride(ctx context.Context, req *connect.Request[sessionv1.RecordClaimOverrideRequest]) (*connect.Response[sessionv1.RecordClaimOverrideResponse], error) {
+	externalURL := strings.TrimSpace(req.Msg.ExternalUrl)
+	if externalURL == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("external_url is required"))
+	}
+	if err := validateClaimOverrideReason(req.Msg.Reason); err != nil {
+		return nil, err
+	}
+	claimingHost := ""
+	if verdict, err := s.checker().CheckClaimLocalOnly(ctx, externalURL); err == nil && verdict.Kind == ClaimHeldByOther {
+		claimingHost = verdict.Record.ClaimingHostID.String()
+	}
+	log.Info("banner.claim_override",
+		"external_url", externalURL,
+		"claiming_host_id", claimingHost,
+		"reason", strings.TrimSpace(req.Msg.Reason))
+	return connect.NewResponse(&sessionv1.RecordClaimOverrideResponse{}), nil
+}
+
 // ResolveClaimDispute clears the local Disputed flag for an external URL once a
 // human has looked at it. It never picks a winner.
 // +api: ResolveClaimDispute
@@ -343,10 +388,11 @@ func (s *BacklogService) ResolveClaimDispute(ctx context.Context, req *connect.R
 	if externalURL == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("external_url is required"))
 	}
-	if s.claimDisputeResolver == nil {
+	resolver := s.disputeResolver()
+	if resolver == nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("cross-host claims are not enabled on this host"))
 	}
-	if err := s.claimDisputeResolver.ResolveDispute(ctx, externalURL); err != nil {
+	if err := resolver.ResolveDispute(ctx, externalURL); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resolve claim dispute: %w", err))
 	}
 	log.Info("claim_dispute.resolved", "external_url", externalURL, "reason", strings.TrimSpace(req.Msg.Reason))

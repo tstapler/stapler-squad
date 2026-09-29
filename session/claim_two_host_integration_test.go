@@ -50,7 +50,7 @@ func newTwoHostNode(t *testing.T, name string, withGossip bool) *twoHostNode {
 	storage.SetClaimRecorder(recorder)
 
 	backlog := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
-	checker := services.NewLocalClaimChecker(node.index, node.identity.ID, node.registry)
+	checker := services.NewLocalClaimChecker(node.index, node.identity.ID, node.registry).SignLookupsWith(node.identity)
 	backlog.SetClaimChecker(checker, checker)
 	return &twoHostNode{claimNode: node, storage: storage, backlog: backlog}
 }
@@ -159,6 +159,7 @@ func TestTwoHostClaimLoop_should_FindClaimViaLivePeerLookup_When_GossipHasNotArr
 	a := newTwoHostNode(t, "hostA", false)
 	b := newTwoHostNode(t, "hostB", true)
 	b.learn(t, a.claimNode)
+	a.learn(t, b.claimNode) // A verifies B's signed lookup against its registry
 
 	require.NotNil(t, a.importIssue(t, false, "").Item)
 

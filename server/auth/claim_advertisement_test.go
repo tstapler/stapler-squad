@@ -28,6 +28,14 @@ func newClaimTestMux(t *testing.T) (*http.ServeMux, *session.ClaimIndex, *sessio
 	return mux, index, registry
 }
 
+func enroll(t *testing.T, registry *session.HostRegistry, identity session.HostIdentity) {
+	t.Helper()
+	ad := session.BuildAdvertisement(identity, []string{"peer.example:8444"}, time.Now())
+	if _, accepted, err := registry.Advertise(ad); err != nil || !accepted {
+		t.Fatalf("Advertise(enroll) accepted=%v err=%v", accepted, err)
+	}
+}
+
 func postClaim(t *testing.T, mux *http.ServeMux, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, session.ClaimAdvertisementEndpointPath, bytes.NewReader(body))
@@ -37,11 +45,12 @@ func postClaim(t *testing.T, mux *http.ServeMux, body []byte) *httptest.Response
 }
 
 func TestClaimAdvertisementEndpoint_should_AcceptValidAndReject400OnBadSignature_When_PostedRecordProcessed(t *testing.T) {
-	mux, index, _ := newClaimTestMux(t)
+	mux, index, registry := newClaimTestMux(t)
 	claimant, err := session.LoadOrCreateHostIdentity(t.TempDir())
 	if err != nil {
 		t.Fatalf("LoadOrCreateHostIdentity() error = %v", err)
 	}
+	enroll(t, registry, claimant)
 	valid := session.NewSignedClaimRecord(claimant, claimTestURL, "ssq://claimant/backlog/v1/bl_01J", time.Now())
 
 	body, _ := json.Marshal(valid)
@@ -94,11 +103,12 @@ func TestClaimAdvertisementEndpoint_should_Reject400_When_BodyMalformedOrKeyCont
 }
 
 func TestClaimLookupEndpoint_should_Return200RecordOr404OrBadRequest(t *testing.T) {
-	mux, index, _ := newClaimTestMux(t)
+	mux, index, registry := newClaimTestMux(t)
 	claimant, err := session.LoadOrCreateHostIdentity(t.TempDir())
 	if err != nil {
 		t.Fatalf("LoadOrCreateHostIdentity() error = %v", err)
 	}
+	enroll(t, registry, claimant)
 	record := session.NewSignedClaimRecord(claimant, claimTestURL, "ssq://claimant/backlog/v1/x", time.Now())
 	if _, err := index.RecordClaim(record); err != nil {
 		t.Fatalf("RecordClaim() error = %v", err)
@@ -106,8 +116,16 @@ func TestClaimLookupEndpoint_should_Return200RecordOr404OrBadRequest(t *testing.
 
 	get := func(target string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		session.SignClaimLookup(req.Header, claimant, req.URL.Query().Get("url"), time.Now())
+		mux.ServeHTTP(rec, req)
 		return rec
+	}
+
+	unsigned := httptest.NewRecorder()
+	mux.ServeHTTP(unsigned, httptest.NewRequest(http.MethodGet, session.ClaimLookupEndpointPath+"?url="+claimTestURL, nil))
+	if unsigned.Code != http.StatusUnauthorized {
+		t.Fatalf("unsigned lookup status = %d, want 401", unsigned.Code)
 	}
 
 	rec := get(session.ClaimLookupEndpointPath + "?url=" + claimTestURL)

@@ -16,6 +16,12 @@ import (
 // project_plans/cross-host-claim-dedup/decisions/); mirrors ItemChangePublisher.
 //
 // Storage supplies ExternalURL, ItemDeepLink (host-less, see
+// BacklogItemDeepLinkPath) and ClaimedAt. The implementation owns the local
+// identity, so it stamps ClaimingHostID and signs.
+type ClaimRecorder interface {
+	RecordClaim(ctx context.Context, record ClaimRecord) error
+}
+
 // ForeignClaimLookup is the read-only, local-only port SyncOne consults before
 // creating an item: it reports a claim held by a host other than this one, and
 // never touches the network. Injected via Storage.SetForeignClaimLookup.
@@ -26,12 +32,6 @@ type ForeignClaimLookup interface {
 // ForeignClaim implements ForeignClaimLookup against the local ClaimIndex.
 func (r *ClaimIndexRecorder) ForeignClaim(externalURL string) (ClaimRecord, bool) {
 	return r.index.ForeignClaim(externalURL, r.identity.ID)
-}
-
-// BacklogItemDeepLinkPath) and ClaimedAt. The implementation owns the local
-// identity, so it stamps ClaimingHostID and signs.
-type ClaimRecorder interface {
-	RecordClaim(ctx context.Context, record ClaimRecord) error
 }
 
 // BacklogItemDeepLinkPath is the host-less deep link path for item, using the
@@ -79,12 +79,18 @@ func (r *ClaimIndexRecorder) RecordClaim(ctx context.Context, record ClaimRecord
 		claimedAt = r.clock.Now()
 	}
 	deepLink := record.ItemDeepLink
-	if strings.HasPrefix(deepLink, "/") && r.deepLinkHost != "" {
-		deepLink = "ssq://" + r.deepLinkHost + deepLink
+	if strings.HasPrefix(deepLink, "/") {
+		// Peers reject a deep link without the ssq:// scheme, so fall back to the
+		// opaque host ID when no reachable hostname is configured.
+		host := r.deepLinkHost
+		if host == "" {
+			host = r.identity.ID.String()
+		}
+		deepLink = "ssq://" + host + deepLink
 	}
-	signed := NewSignedClaimRecord(r.identity, record.ExternalURL, deepLink, claimedAt)
+	signed := NewSignedClaimRecord(r.identity, NormalizeClaimURL(record.ExternalURL), deepLink, claimedAt)
 
-	outcome, err := r.index.RecordClaim(signed)
+	outcome, err := r.index.recordOwn(signed)
 	if err != nil {
 		return fmt.Errorf("record claim for %s: %w", record.ExternalURL, err)
 	}

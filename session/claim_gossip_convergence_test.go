@@ -72,15 +72,14 @@ func TestClaimGossip_should_ReachHostBAndReGossipToHostC_When_HostABroadcastsOnc
 	b.learn(t, a)
 	b.learn(t, c)
 	c.learn(t, b)
+	c.learn(t, a) // C must know A to accept A's claim re-gossiped by B
 
 	const issue = "https://github.com/o/r/issues/1"
 	record := session.NewSignedClaimRecord(a.identity, issue, "ssq://hostA/backlog/v1/bl_01J", time.Now())
-	if outcome, err := a.index.RecordClaim(record); err != nil || !outcome.Accepted {
-		t.Fatalf("local RecordClaim outcome=%+v err=%v", outcome, err)
-	}
 	if err := a.gossiper.BroadcastOnce(t.Context(), record); err != nil {
 		t.Fatalf("BroadcastOnce() error = %v, want nil", err)
 	}
+	b.gossiper.Wait() // B re-gossips to C asynchronously
 
 	for name, n := range map[string]*claimNode{"B (direct)": b, "C (one re-gossip hop)": c} {
 		got, ok := n.index.CheckClaim(issue)

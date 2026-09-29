@@ -45,6 +45,15 @@ const DefaultHostAdvertisementInterval = 5 * time.Minute
 // DefaultHostAdvertisementInterval, not one.
 const DefaultHostRegistryTTL = 3 * DefaultHostAdvertisementInterval
 
+// Enrolment bounds. /internal/host-advertisement is reachable without a passkey
+// session, so anyone on the network can try to enrol; these keep that from
+// growing the registry (and the outbound fan-out it drives) without limit.
+const (
+	maxRegistryEntries    = 512
+	maxAdvertisedAddrs    = 16
+	maxAdvertisedAddrSize = 255
+)
+
 // Clock abstracts time.Now for injectable-fake-clock testing (TTL/prune
 // logic must not depend on wall-clock sleep, per
 // the `fix-flaky-tests-dont-defer` skill). Defined locally rather than
@@ -196,7 +205,13 @@ func (r *HostRegistry) Advertise(record AdvertisementRecord) (isNew bool, accept
 	if !record.HostIdentity.IsValid() || len(record.AdvertisedAddress) == 0 {
 		return false, false, fmt.Errorf("advertisement record missing host identity or advertised address")
 	}
+	if len(record.AdvertisedAddress) > maxAdvertisedAddrs {
+		return false, false, nil
+	}
 	for _, addr := range record.AdvertisedAddress {
+		if len(addr) > maxAdvertisedAddrSize {
+			return false, false, nil
+		}
 		if !allowImplausibleAddressesForTest && !isPlausiblePeerAddress(addr) {
 			log.Warn("host_registry.advertisement_rejected",
 				"host_id", record.HostIdentity.String(),
@@ -219,6 +234,11 @@ func (r *HostRegistry) Advertise(record AdvertisementRecord) (isNew bool, accept
 		return false, false, nil
 	}
 	if !record.Verify() {
+		return false, false, nil
+	}
+	if !hadEntry && len(r.entries) >= maxRegistryEntries {
+		log.Warn("host_registry.advertisement_rejected",
+			"host_id", record.HostIdentity.String(), "reason", "registry_full")
 		return false, false, nil
 	}
 

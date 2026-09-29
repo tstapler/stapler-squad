@@ -41,6 +41,14 @@ func (f *fakeClaimChecker) CheckClaimLocalOnly(context.Context, string) (ClaimVe
 	return f.verdict, f.err
 }
 
+func (f *fakeClaimChecker) ListForeignClaims() []session.ClaimRecord {
+	f.localCalls.Add(1)
+	if f.err == nil && f.verdict.Kind == ClaimHeldByOther {
+		return []session.ClaimRecord{f.verdict.Record}
+	}
+	return nil
+}
+
 func heldByHostA(t *testing.T) ClaimVerdict {
 	t.Helper()
 	hostA := newClaimTestIdentity(t)
@@ -59,7 +67,7 @@ func claimEnabledService(t *testing.T, checker CrossHostClaimChecker) *BacklogSe
 	t.Helper()
 	svc := NewBacklogService(createTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	svc.claimDedupFlag = func() bool { return true }
-	svc.claimChecker = checker
+	svc.SetClaimChecker(checker, nil)
 	return svc
 }
 
@@ -290,7 +298,7 @@ func newDequeueClaimService(t *testing.T, checker CrossHostClaimChecker) (*Backl
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(createTestStorage(t), creator, nil, nil, nil, nil)
 	svc.claimDedupFlag = func() bool { return true }
-	svc.claimChecker = checker
+	svc.SetClaimChecker(checker, nil)
 	return svc, creator, repoPath
 }
 
@@ -504,7 +512,7 @@ func TestCheckCrossHostClaim_should_RequireExternalURL(t *testing.T) {
 
 func TestListForeignClaims_should_ReturnOnlyOtherHostsClaims_When_FlagOn(t *testing.T) {
 	self, other := newClaimTestIdentity(t), newClaimTestIdentity(t)
-	index := newClaimTestIndex(t)
+	index := newClaimTestIndex(t, other)
 	for _, c := range []session.ClaimRecord{
 		session.NewSignedClaimRecord(self, "https://github.com/acme/widgets/issues/1", "ssq://self/backlog/v1/a", time.Now()),
 		session.NewSignedClaimRecord(other, "https://github.com/acme/widgets/issues/2", "ssq://other/backlog/v1/b", time.Now()),

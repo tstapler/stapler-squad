@@ -1661,6 +1661,12 @@ service BacklogService {
   // external URL after a human has looked at it. Never auto-arbitrates.
   rpc ResolveClaimDispute(ResolveClaimDisputeRequest) returns (ResolveClaimDisputeResponse) {}
 
+  // RecordClaimOverride writes the audit-log line for an operator choosing to
+  // proceed on an item another host has claimed, when no server-side block exists
+  // to lift (the item-detail banner). reason is required (at least 5 non-space
+  // characters). It changes no state.
+  rpc RecordClaimOverride(RecordClaimOverrideRequest) returns (RecordClaimOverrideResponse) {}
+
   // CheckCrossHostClaim reports whether another host has claimed an external URL,
   // for the item-detail banner. Never an error for "could not confirm": see
   // CheckCrossHostClaimResponse.checked.
@@ -1788,6 +1794,14 @@ message OverrideClaimBlockRequest {
 message OverrideClaimBlockResponse {
   BacklogItem item = 1;
 }
+
+message RecordClaimOverrideRequest {
+  string external_url = 1;
+  // reason is audit-logged; at least 5 non-space characters.
+  string reason = 2;
+}
+
+message RecordClaimOverrideResponse {}
 
 message ResolveClaimDisputeRequest {
   string external_url = 1;

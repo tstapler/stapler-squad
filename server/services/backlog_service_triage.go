@@ -742,7 +742,11 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 
 	// Read once per sweep, not per candidate: it is a config read.
 	claimDedup := s.crossHostClaimDedupEnabled()
-	s.reconcileClaimBlockedStuck(ctx, claimDedup)
+	var claims foreignClaimSet
+	if claimDedup {
+		claims = s.foreignClaimsSnapshot()
+	}
+	s.reconcileClaimBlockedStuck(ctx, claimDedup, claims)
 
 	liveCount, err := s.countLiveBacklogWorkSessions(ctx)
 	if err != nil {
@@ -786,7 +790,7 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		if spawned >= freeSlots {
 			break
 		}
-		if claimDedup && s.skipForForeignClaim(ctx, &item) {
+		if claimDedup && s.skipForForeignClaim(ctx, &item, claims) {
 			continue
 		}
 		if s.claimAndSpawnCandidate(ctx, item, unresolvedBlockers[item.ID]) {

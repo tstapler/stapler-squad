@@ -1495,7 +1495,7 @@ func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, 
 	storage.SetForeignClaimLookup(services.NewFlagGatedForeignClaimLookup(recorder))
 	storage.SetPRProvenanceSource(services.NewFlagGatedPRProvenance(recorder))
 	if backlogSvc != nil {
-		checker := services.NewLocalClaimChecker(claimIndex, hostIdentity.ID, hostRegistry)
+		checker := services.NewLocalClaimChecker(claimIndex, hostIdentity.ID, hostRegistry).SignLookupsWith(hostIdentity)
 		backlogSvc.SetClaimChecker(checker, checker)
 	}
 }

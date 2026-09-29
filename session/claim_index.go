@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,23 @@ const claimIndexFileName = "claim_index.json"
 
 // claimIndexLockFileName is the flock coordination file for claimIndexFileName.
 const claimIndexLockFileName = "claim_index.lock"
+
+// Ingest bounds for claims received from peers. They keep a hostile or buggy
+// enrolled peer from exhausting disk/memory or pinning a fact in the far past
+// or future; see RecordClaim.
+const (
+	maxClaimURLLength = 2048
+	// claimFutureSkew is how far ahead of local time a claim may be dated.
+	claimFutureSkew = 5 * time.Minute
+	// maxClaimIndexEntries and maxClaimsPerHost bound index growth.
+	maxClaimIndexEntries = 50000
+	maxClaimsPerHost     = 10000
+	claimDeepLinkScheme  = "ssq://"
+)
+
+// minClaimTime is the earliest ClaimedAt accepted; anything older is a forgery
+// or a broken clock, not a real claim.
+var minClaimTime = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // ClaimRecord is a signed fact "host X claimed external URL Y, and its item
 // lives at this deep link". It is a sibling of AdvertisementRecord rather than
@@ -110,8 +128,10 @@ type ClaimIndex struct {
 	hostRegistry *HostRegistry
 	lockFile     *flock.Flock
 
+	now func() time.Time // injectable for tests; time.Now in production
+
 	mu      sync.Mutex
-	entries map[string]ClaimRecord // keyed by ExternalURL
+	entries map[string]ClaimRecord // keyed by NormalizeClaimURL(ExternalURL)
 }
 
 // NewClaimIndex opens (loading any persisted claims) the ClaimIndex rooted at
@@ -126,6 +146,7 @@ func NewClaimIndex(stateDir string, hostRegistry *HostRegistry) (*ClaimIndex, er
 		hostRegistry: hostRegistry,
 		lockFile:     flock.New(filepath.Join(stateDir, claimIndexLockFileName)),
 		entries:      make(map[string]ClaimRecord),
+		now:          time.Now,
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -135,28 +156,76 @@ func NewClaimIndex(stateDir string, hostRegistry *HostRegistry) (*ClaimIndex, er
 	return c, nil
 }
 
-// RecordClaim validates record and merges it into the index.
+// RecordClaim validates a claim received from a peer and merges it into the index.
 //
-// A record with an invalid signature, or whose PublicKey differs from the key
-// HostRegistry pinned for ClaimingHostID, is rejected silently (Accepted ==
-// false, nil error), like HostRegistry.Advertise. A host with no pinned key yet
-// is accepted on first sight.
+// A record is rejected silently (Accepted == false, nil error) unless all of:
+// it is well formed and within the size limits, ClaimedAt is between 2020 and
+// five minutes from now, its signature verifies, ClaimingHostID is a host in
+// HostRegistry, and its PublicKey equals the key pinned for that host. An
+// unknown host is rejected: hosts enroll through the host advertisement
+// endpoint first (see the trust model in
+// project_plans/cross-host-claim-dedup/implementation/plan.md). Adding a new
+// URL beyond the total or per-host entry cap is also rejected.
 //
 // When a different host already holds the URL the earlier ClaimedAt wins (ties
 // go to the lexically smaller HostID) and the surviving entry is marked
 // Disputed for a human to look at.
 func (c *ClaimIndex) RecordClaim(record ClaimRecord) (ClaimOutcome, error) {
+	if reason := c.peerRecordRejection(record); reason != "" {
+		log.Warn("claim_index.claim_rejected",
+			"host_id", record.ClaimingHostID.String(),
+			"external_url", truncateForLog(record.ExternalURL),
+			"reason", reason)
+		return ClaimOutcome{}, nil
+	}
+	return c.merge(record, true)
+}
+
+// recordOwn stores a claim this host signed itself. It skips the registry, time
+// and cap checks a peer's claim gets: this host is not in its own HostRegistry
+// and its clock and volume are trusted.
+func (c *ClaimIndex) recordOwn(record ClaimRecord) (ClaimOutcome, error) {
 	if record.ExternalURL == "" || !record.ClaimingHostID.IsValid() || !record.Verify() {
 		return ClaimOutcome{}, nil
 	}
-	if pinned, ok := c.hostRegistry.Lookup(record.ClaimingHostID); ok && !bytes.Equal(pinned.PublicKey, record.PublicKey) {
-		log.Warn("claim_index.claim_rejected",
-			"host_id", record.ClaimingHostID.String(),
-			"external_url", record.ExternalURL,
-			"reason", "public_key_mismatch")
-		return ClaimOutcome{}, nil
+	return c.merge(record, false)
+}
+
+// peerRecordRejection returns why record must not be accepted from a peer, or
+// "" when it may be.
+func (c *ClaimIndex) peerRecordRejection(record ClaimRecord) string {
+	switch {
+	case record.ExternalURL == "" || !record.ClaimingHostID.IsValid():
+		return "missing_fields"
+	case len(record.ExternalURL) > maxClaimURLLength || len(record.ItemDeepLink) > maxClaimURLLength:
+		return "field_too_long"
+	case !strings.HasPrefix(record.ItemDeepLink, claimDeepLinkScheme):
+		return "invalid_item_deep_link"
+	case record.ClaimedAt.Before(minClaimTime) || record.ClaimedAt.After(c.now().Add(claimFutureSkew)):
+		return "claimed_at_out_of_range"
+	case !record.Verify():
+		return "invalid_signature"
 	}
+	pinned, ok := c.hostRegistry.Lookup(record.ClaimingHostID)
+	if !ok {
+		return "unknown_host"
+	}
+	if !bytes.Equal(pinned.PublicKey, record.PublicKey) {
+		return "public_key_mismatch"
+	}
+	return ""
+}
+
+func truncateForLog(s string) string {
+	if len(s) > 200 {
+		return s[:200]
+	}
+	return s
+}
+
+func (c *ClaimIndex) merge(record ClaimRecord, enforceCaps bool) (ClaimOutcome, error) {
 	record.Disputed = false // peers cannot assert a local observation
+	key := NormalizeClaimURL(record.ExternalURL)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -166,7 +235,13 @@ func (c *ClaimIndex) RecordClaim(record ClaimRecord) (ClaimOutcome, error) {
 		if err := c.reloadLocked(); err != nil {
 			return err
 		}
-		existing, had := c.entries[record.ExternalURL]
+		existing, had := c.entries[key]
+		if !had && enforceCaps && c.capReachedLocked(record.ClaimingHostID) {
+			log.Warn("claim_index.claim_rejected",
+				"host_id", record.ClaimingHostID.String(), "reason", "index_cap_reached")
+			outcome = ClaimOutcome{}
+			return nil
+		}
 		next, changed, conflict := mergeClaim(existing, had, record)
 		outcome.IsNew = changed && (!had || !sameClaimFact(existing, next))
 		outcome.Conflict = conflict
@@ -174,18 +249,33 @@ func (c *ClaimIndex) RecordClaim(record ClaimRecord) (ClaimOutcome, error) {
 			log.Warn("claim_index.conflict_detected",
 				"host_a", existing.ClaimingHostID.String(),
 				"host_b", record.ClaimingHostID.String(),
-				"external_url", record.ExternalURL)
+				"external_url", truncateForLog(key))
 		}
 		if !changed {
 			return nil
 		}
-		c.entries[record.ExternalURL] = next
+		c.entries[key] = next
 		return c.writeLocked()
 	})
 	if err != nil {
 		return ClaimOutcome{}, err
 	}
 	return outcome, nil
+}
+
+// capReachedLocked reports whether adding one more entry for host would exceed
+// the total or per-host cap. Callers must hold c.mu with entries freshly loaded.
+func (c *ClaimIndex) capReachedLocked(host HostID) bool {
+	if len(c.entries) >= maxClaimIndexEntries {
+		return true
+	}
+	held := 0
+	for _, record := range c.entries {
+		if record.ClaimingHostID.String() == host.String() {
+			held++
+		}
+	}
+	return held >= maxClaimsPerHost
 }
 
 // mergeClaim decides the stored entry after incoming meets existing. changed
@@ -226,7 +316,7 @@ func (c *ClaimIndex) CheckClaim(externalURL string) (ClaimRecord, bool) {
 	if err := c.withLock(false, c.reloadLocked); err != nil {
 		log.Warn("claim_index.read_failed", "err", err)
 	}
-	record, ok := c.entries[externalURL]
+	record, ok := c.entries[NormalizeClaimURL(externalURL)]
 	return record, ok
 }
 
@@ -266,12 +356,13 @@ func (c *ClaimIndex) ResolveDispute(externalURL string) error {
 		if err := c.reloadLocked(); err != nil {
 			return err
 		}
-		record, ok := c.entries[externalURL]
+		key := NormalizeClaimURL(externalURL)
+		record, ok := c.entries[key]
 		if !ok || !record.Disputed {
 			return nil
 		}
 		record.Disputed = false
-		c.entries[externalURL] = record
+		c.entries[key] = record
 		return c.writeLocked()
 	})
 }
@@ -322,7 +413,7 @@ func (c *ClaimIndex) reloadLocked() error {
 	}
 	c.entries = make(map[string]ClaimRecord, len(file.Entries))
 	for _, record := range file.Entries {
-		c.entries[record.ExternalURL] = record
+		c.entries[NormalizeClaimURL(record.ExternalURL)] = record
 	}
 	return nil
 }
