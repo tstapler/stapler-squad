@@ -481,7 +481,7 @@ var (
 				var remoteAccess *remoteAccessResult
 				if remoteAccessFlag || cfg.PasskeyEnabled {
 					var raErr error
-					remoteAccess, raErr = startRemoteAccess(ctx, srv, address, cfg, remotePortFlag)
+					remoteAccess, raErr = startRemoteAccess(ctx, srv, address, cfg, remotePortFlag, coreDeps.Storage)
 					if raErr != nil {
 						return fmt.Errorf("start remote access: %w", raErr)
 					}
@@ -1427,9 +1427,69 @@ func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins [
 	}, nil
 }
 
+// startHostGossip registers the gossip-style host advertisement endpoint
+// (docs/adr/ADR-002-workspace-host-registry-gossip.md) and the cross-host claim
+// gossip endpoint on mux -- the same shared --remote-port mux, see
+// host_advertisement.go's doc comment -- and starts their background loops.
+// It also wires the resulting ClaimRecorder into storage, so every backlog
+// item created with an ExternalURL records a claim (ADR-002 of
+// project_plans/cross-host-claim-dedup/decisions/). Failures disable gossip
+// with a warning rather than aborting remote access.
+func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, hostnames, lanIPs []string, remotePort int, storage *session.Storage) {
+	hostIdentity, err := session.LoadOrCreateHostIdentity(configDir)
+	if err != nil {
+		log.Warn("failed to load/create host identity, host advertisement disabled", "err", err)
+		return
+	}
+	hostRegistry, err := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
+	if err != nil {
+		log.Warn("failed to open host registry, host advertisement disabled", "err", err)
+		return
+	}
+	selfAddresses := make([]string, 0, len(hostnames)+len(lanIPs))
+	for _, hn := range hostnames {
+		selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", hn, remotePort))
+	}
+	for _, ip := range lanIPs {
+		selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", ip, remotePort))
+	}
+	advertiser := session.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, session.DefaultHostAdvertisementInterval)
+	serverauth.RegisterHostAdvertisementRoute(mux, hostIdentity, hostRegistry, advertiser, selfAddresses)
+	go advertiser.Run(ctx)
+	pruneTicker := time.NewTicker(session.DefaultHostAdvertisementInterval)
+	go func() {
+		defer pruneTicker.Stop()
+		hostRegistry.RunPruneLoop(ctx, pruneTicker.C)
+	}()
+
+	claimIndex, err := session.NewClaimIndex(configDir, hostRegistry)
+	if err != nil {
+		log.Warn("failed to open claim index, cross-host claim gossip disabled", "err", err)
+		return
+	}
+	claimGossiper, err := session.NewClaimGossiper(hostIdentity, hostRegistry, claimIndex, selfAddresses, session.DefaultHostAdvertisementInterval)
+	if err != nil {
+		log.Warn("failed to build claim gossiper, cross-host claim gossip disabled", "err", err)
+		return
+	}
+	serverauth.RegisterClaimAdvertisementRoute(mux, claimIndex, claimGossiper)
+	go claimGossiper.Run(ctx)
+
+	deepLinkHost := ""
+	if len(selfAddresses) > 0 {
+		deepLinkHost, _, _ = net.SplitHostPort(selfAddresses[0])
+	}
+	recorder, err := session.NewClaimIndexRecorder(hostIdentity, claimIndex, claimGossiper, deepLinkHost, nil)
+	if err != nil {
+		log.Warn("failed to build claim recorder, claims will not be recorded", "err", err)
+		return
+	}
+	storage.SetClaimRecorder(recorder)
+}
+
 // startRemoteAccess starts a second HTTPS server on all interfaces with passkey
 // authentication, while the local server on localhost stays unchanged.
-func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int) (*remoteAccessResult, error) {
+func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int, storage *session.Storage) (*remoteAccessResult, error) {
 	// Detect every LAN IP (not just the OS-preferred outbound one, which can
 	// be a VPN tunnel) for QR code URLs and TLS cert SANs.
 	lanIPs := detectLANIPs(ctx)
@@ -1535,34 +1595,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	}
 	configDir, store, sessions, waHandler, setupMgr := auth.ConfigDir, auth.Store, auth.Sessions, auth.WAHandler, auth.SetupMgr
 
-	// Register the gossip-style host advertisement endpoint (ADR-002) on the
-	// same shared mux/remote server -- see host_advertisement.go's doc
-	// comment for why this is the right integration point.
-	hostIdentity, err := session.LoadOrCreateHostIdentity(configDir)
-	if err != nil {
-		log.Warn("failed to load/create host identity, host advertisement disabled", "err", err)
-	} else {
-		hostRegistry, regErr := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
-		if regErr != nil {
-			log.Warn("failed to open host registry, host advertisement disabled", "err", regErr)
-		} else {
-			selfAddresses := make([]string, 0, len(hostnames)+len(lanIPs))
-			for _, hn := range hostnames {
-				selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", hn, remotePort))
-			}
-			for _, ip := range lanIPs {
-				selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", ip, remotePort))
-			}
-			advertiser := session.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, session.DefaultHostAdvertisementInterval)
-			serverauth.RegisterHostAdvertisementRoute(srv.Mux(), hostIdentity, hostRegistry, advertiser, selfAddresses)
-			go advertiser.Run(ctx)
-			pruneTicker := time.NewTicker(session.DefaultHostAdvertisementInterval)
-			go func() {
-				defer pruneTicker.Stop()
-				hostRegistry.RunPruneLoop(ctx, pruneTicker.C)
-			}()
-		}
-	}
+	startHostGossip(ctx, srv.Mux(), configDir, hostnames, lanIPs, remotePort, storage)
 
 	// Start the remote HTTPS server with auth middleware applied.
 	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions)); err != nil {

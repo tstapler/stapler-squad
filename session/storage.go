@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -264,6 +265,10 @@ var _ InstanceStore = (*Storage)(nil)
 // Storage handles saving and loading instances via the repository backend.
 type Storage struct {
 	repo *EntRepository
+
+	// claimRecorder is set once at startup but read from every creation path
+	// (including background sync loops), so it is atomic.
+	claimRecorder atomic.Pointer[ClaimRecorder]
 }
 
 // NewStorageWithRepository creates a Storage backed by an EntRepository.
@@ -284,6 +289,16 @@ func (s *Storage) GetEntClient() *ent.Client {
 // SetItemChangePublisher wires p into the underlying repository.
 func (s *Storage) SetItemChangePublisher(p ItemChangePublisher) {
 	s.repo.SetItemChangePublisher(p)
+}
+
+// SetClaimRecorder wires r as the recorder CreateBacklogItem calls for every
+// item created with a non-empty ExternalURL. Passing nil disables recording.
+func (s *Storage) SetClaimRecorder(r ClaimRecorder) {
+	if r == nil {
+		s.claimRecorder.Store(nil)
+		return
+	}
+	s.claimRecorder.Store(&r)
 }
 
 // SetCallbackDispatcher forwards to the underlying *EntRepository's SetCallbackDispatcher.
@@ -925,7 +940,31 @@ func (s *Storage) CreateBacklogItem(ctx context.Context, data BacklogItemData) (
 			data.RepoPath = resolved
 		}
 	}
-	return s.repo.CreateBacklogItem(ctx, data)
+	created, err := s.repo.CreateBacklogItem(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	s.recordClaim(ctx, created)
+	return created, nil
+}
+
+// recordClaim is the single choke point (ADR-002 of
+// project_plans/cross-host-claim-dedup/decisions/) that records a cross-host
+// claim for every newly created item that has an ExternalURL. Best-effort: a
+// failure is logged and never fails item creation.
+func (s *Storage) recordClaim(ctx context.Context, item *BacklogItemData) {
+	recorder := s.claimRecorder.Load()
+	if recorder == nil || item == nil || item.ExternalURL == "" {
+		return
+	}
+	err := (*recorder).RecordClaim(ctx, ClaimRecord{
+		ExternalURL:  item.ExternalURL,
+		ItemDeepLink: BacklogItemDeepLinkPath(item),
+		ClaimedAt:    item.CreatedAt,
+	})
+	if err != nil {
+		log.Warn("claim_index.record_failed", "external_url", item.ExternalURL, "err", err)
+	}
 }
 
 // GetBacklogItem retrieves a backlog item by UUID string.
