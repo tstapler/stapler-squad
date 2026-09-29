@@ -177,22 +177,8 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 	}
 	tags = append(tags, "source:mcp")
 
-	// Check for title collision before starting. Use ListInstanceData (raw DB read)
-	// rather than LoadInstances to avoid spawning PTY processes as a side effect.
-	// This is a fast, agent-friendly pre-check in addition to CreateSession's own
-	// synchronous title-uniqueness check below -- a TOCTOU race between the two
-	// is not a correctness gap, since CreateSession still authoritatively rejects
-	// a duplicate that slips past this pre-check (async-session-creation Epic
-	// 2.3, Story 2.3.1).
-	existing, err := lh.store.ListInstanceData()
-	if err != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("load sessions: %v", err), ""), nil
-	}
-	for _, data := range existing {
-		if data.Title == title {
-			return errResult(ErrInvalidArgument, fmt.Sprintf("session with title %q already exists", title),
-				"Choose a different title."), nil
-		}
+	if errRes := titleCollisionResult(lh.store, title); errRes != nil {
+		return errRes, nil
 	}
 
 	createResp, createErr := lh.svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -288,6 +274,29 @@ func mcpSessionTypeToProto(sessionTypeStr string) (sessionv1.SessionType, error)
 	default:
 		return 0, fmt.Errorf("invalid session_type %q", sessionTypeStr)
 	}
+}
+
+// titleCollisionResult is the shared fast, agent-friendly pre-check every title-setting
+// MCP tool (create_session, create_session_for_pr, update_session) runs in addition to
+// CreateSession/SetTitleDirect's own authoritative uniqueness enforcement -- session_id
+// is the title, so two live sessions sharing one would make one unaddressable. Returns
+// nil when title is free. A TOCTOU race between this check and the caller's actual write
+// is not a correctness gap: CreateSession's synchronous check still rejects a duplicate
+// that slips past this pre-check (async-session-creation Epic 2.3, Story 2.3.1); a
+// SetTitleDirect caller has no such backstop, so callers of this helper on the rename
+// path must treat it as authoritative, not just a fast-path optimization.
+func titleCollisionResult(store session.InstanceStore, title string) *mcpgo.CallToolResult {
+	existing, err := store.ListInstanceData()
+	if err != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("load sessions: %v", err), "")
+	}
+	for _, data := range existing {
+		if data.Title == title {
+			return errResult(ErrInvalidArgument, fmt.Sprintf("session with title %q already exists", title),
+				"Choose a different title.")
+		}
+	}
+	return nil
 }
 
 // mapCreateSessionRPCError maps a synchronous CreateSession RPC error onto the
@@ -543,8 +552,11 @@ func (lh *lifecycleHandlers) updateSession(ctx context.Context, req mcpgo.CallTo
 			"Use list_sessions or search_sessions to find valid session IDs."), nil
 	}
 
-	if title, ok := args["title"].(string); ok && title != "" {
-		inst.Title = title
+	if title, ok := args["title"].(string); ok && title != "" && title != inst.Title {
+		if errRes := titleCollisionResult(lh.store, title); errRes != nil {
+			return errRes, nil
+		}
+		inst.SetTitleDirect(title)
 	}
 	if rawTags, ok := args["tags"]; ok {
 		var tags []string
@@ -560,7 +572,7 @@ func (lh *lifecycleHandlers) updateSession(ctx context.Context, req mcpgo.CallTo
 		}
 	}
 	if cat, ok := args["category"].(string); ok {
-		inst.Category = cat
+		inst.SetCategory(cat)
 	}
 
 	if err := lh.store.SaveInstances([]*session.Instance{inst}); err != nil {
