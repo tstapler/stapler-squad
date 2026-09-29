@@ -7,6 +7,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -79,6 +81,8 @@ func TestSubmitDiagnosisResult_should_RejectWrongRole_When_CallerIsWorkSession(t
 // regression guard at the MCP tool boundary: even if a caller ignores the
 // dispatch prompt's instructions, the tool itself refuses once the cap is hit.
 func TestNudgeSession_should_Refuse_When_NudgeCapAlreadyReached(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.DiagnoseNudgeFeatureFlag, true))
 	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
@@ -109,7 +113,40 @@ func TestNudgeSession_should_Refuse_When_NudgeCapAlreadyReached(t *testing.T) {
 	assert.Equal(t, ErrPermissionDenied, errObj["code"])
 }
 
+// TestNudgeSession_should_Refuse_When_FeatureFlagDisabled is AC3's direct
+// regression guard at the MCP tool boundary (gap #3, config.DiagnoseNudgeFeatureFlag):
+// with the kill switch left at its default (off), diagnose_nudge_session must
+// refuse the write before it ever reaches the cap/cooldown or live-target
+// checks — proven here by NOT wiring a live target at all (dh.live is nil,
+// which the target-not-live path would also reject with a different code) and
+// asserting on the specific disabled-flag message, not just the shared
+// PERMISSION_DENIED code.
+func TestNudgeSession_should_Refuse_When_FeatureFlagDisabled(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupDiagnoseSession(t, storage)
+
+	dh := &diagnoseHandlers{storage: storage, live: nil}
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+	req := makeToolReq(map[string]interface{}{
+		"item_id":      itemID,
+		"session_id":   uuid.New().String(),
+		"stuck_reason": string(domain.StuckReasonBouncing),
+		"message":      "please continue",
+	})
+
+	result, err := dh.nudgeSession(ctx, req)
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool), "nudge must be refused while diagnose_nudge_enabled is off")
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrPermissionDenied, errObj["code"])
+	assert.Equal(t, diagnoseNudgeDisabledMessage, errObj["message"], "must be refused specifically by the kill switch, not the (also-true) not-live path")
+}
+
 func TestNudgeSession_should_Refuse_When_TargetSessionNotLive(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.DiagnoseNudgeFeatureFlag, true))
 	storage := newTestBacklogStorage(t)
 	itemID, sessUUID := setupDiagnoseSession(t, storage)
 

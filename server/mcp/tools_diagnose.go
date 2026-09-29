@@ -6,6 +6,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -211,7 +212,20 @@ func (dh *diagnoseHandlers) checkNudgeCapForWrite(ctx context.Context, itemID, s
 	return nil
 }
 
+// diagnoseNudgeDisabledMessage is returned when the diagnose_nudge_enabled
+// feature flag is off — see config.EffectiveDiagnoseNudgeEnabled's doc
+// comment for why this is checked here, at the write call site, rather than
+// only at dispatch time.
+const diagnoseNudgeDisabledMessage = "autonomous nudging is currently disabled (diagnose_nudge_enabled feature flag is off)"
+
 func (dh *diagnoseHandlers) performNudge(ctx context.Context, a nudgeSessionArgs) (*mcpgo.CallToolResult, error) {
+	// Kill switch (AC3): read fresh at the write instant, not cached from
+	// dispatch time, so flipping the flag off mid-flight still blocks an
+	// already-dispatched diagnostic agent's write.
+	if !config.EffectiveDiagnoseNudgeEnabled(config.LoadConfig()) {
+		return errResult(ErrPermissionDenied, diagnoseNudgeDisabledMessage, declineToDiagnoseRemediation), nil
+	}
+
 	if errRes := dh.checkNudgeCapForWrite(ctx, a.itemID, a.stuckReason); errRes != nil {
 		return errRes, nil
 	}
