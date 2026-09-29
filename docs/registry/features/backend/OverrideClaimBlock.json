@@ -1,0 +1,12 @@
+{
+  "id": "OverrideClaimBlock",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "OverrideClaimBlock",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_claim.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-28T17:28:26.730003084-07:00"
+}

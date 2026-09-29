@@ -365,6 +365,8 @@ var (
 				coreDeps *server.CoreDeps
 				svcDeps  *server.ServiceDeps
 				srv      *server.Server
+				// backlogSvc is captured from the runtime phase for startRemoteAccess.
+				backlogSvc *services.BacklogService
 			)
 
 			app.Phase("core-deps", func(ctx context.Context, a *warren.App) error {
@@ -453,6 +455,7 @@ var (
 				}
 
 				srv = server.NewServerWithDeps(address, rt.ToServerDeps())
+				backlogSvc = rt.BacklogService
 				srv.SetHostnames(hostnames)
 
 				// Derive the login-shell PATH for ProbeProgram lookups off the request
@@ -481,7 +484,7 @@ var (
 				var remoteAccess *remoteAccessResult
 				if remoteAccessFlag || cfg.PasskeyEnabled {
 					var raErr error
-					remoteAccess, raErr = startRemoteAccess(ctx, srv, address, cfg, remotePortFlag, coreDeps.Storage)
+					remoteAccess, raErr = startRemoteAccess(ctx, srv, address, cfg, remotePortFlag, coreDeps.Storage, backlogSvc)
 					if raErr != nil {
 						return fmt.Errorf("start remote access: %w", raErr)
 					}
@@ -1433,9 +1436,10 @@ func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins [
 // host_advertisement.go's doc comment -- and starts their background loops.
 // It also wires the resulting ClaimRecorder into storage, so every backlog
 // item created with an ExternalURL records a claim (ADR-002 of
-// project_plans/cross-host-claim-dedup/decisions/). Failures disable gossip
+// project_plans/cross-host-claim-dedup/decisions/), and hands backlogSvc and
+// storage the claim checkers. backlogSvc may be nil. Failures disable gossip
 // with a warning rather than aborting remote access.
-func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, hostnames, lanIPs []string, remotePort int, storage *session.Storage) {
+func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, hostnames, lanIPs []string, remotePort int, storage *session.Storage, backlogSvc *services.BacklogService) {
 	hostIdentity, err := session.LoadOrCreateHostIdentity(configDir)
 	if err != nil {
 		log.Warn("failed to load/create host identity, host advertisement disabled", "err", err)
@@ -1485,11 +1489,19 @@ func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, 
 		return
 	}
 	storage.SetClaimRecorder(recorder)
+
+	// The checks below are all gated by the cross_host_claim_dedup feature flag
+	// (off by default), so wiring them here changes nothing until it is enabled.
+	storage.SetForeignClaimLookup(services.NewFlagGatedForeignClaimLookup(recorder))
+	if backlogSvc != nil {
+		checker := services.NewLocalClaimChecker(claimIndex, hostIdentity.ID, hostRegistry)
+		backlogSvc.SetClaimChecker(checker, checker)
+	}
 }
 
 // startRemoteAccess starts a second HTTPS server on all interfaces with passkey
 // authentication, while the local server on localhost stays unchanged.
-func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int, storage *session.Storage) (*remoteAccessResult, error) {
+func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int, storage *session.Storage, backlogSvc *services.BacklogService) (*remoteAccessResult, error) {
 	// Detect every LAN IP (not just the OS-preferred outbound one, which can
 	// be a VPN tunnel) for QR code URLs and TLS cert SANs.
 	lanIPs := detectLANIPs(ctx)
@@ -1595,7 +1607,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	}
 	configDir, store, sessions, waHandler, setupMgr := auth.ConfigDir, auth.Store, auth.Sessions, auth.WAHandler, auth.SetupMgr
 
-	startHostGossip(ctx, srv.Mux(), configDir, hostnames, lanIPs, remotePort, storage)
+	startHostGossip(ctx, srv.Mux(), configDir, hostnames, lanIPs, remotePort, storage, backlogSvc)
 
 	// Start the remote HTTPS server with auth middleware applied.
 	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions)); err != nil {

@@ -172,6 +172,14 @@ type BacklogService struct {
 	// (PR #199 review F2).
 	dequeueMu sync.Mutex
 
+	// claimChecker and claimDisputeResolver back the cross_host_claim_dedup
+	// checks (backlog_service_claim.go). nil means unimplemented: everything
+	// reads as unclaimed. claimDedupFlag overrides the live feature-flag read
+	// (tests only).
+	claimChecker         CrossHostClaimChecker
+	claimDisputeResolver ClaimDisputeResolver
+	claimDedupFlag       func() bool
+
 	// spawnInFlight is a per-backlog-item "at most one work-session spawn in
 	// flight" set, keyed by item ID, storing struct{} — the same LoadOrStore/
 	// Delete atomic check-and-set idiom as review_queue_manager.go's
