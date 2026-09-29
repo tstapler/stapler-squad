@@ -52,7 +52,28 @@ var exemptPrefixes = []string{
 	"/favicon", // browser tab icon
 }
 
+// exemptPeerPaths are host-to-host gossip endpoints. Peers are other
+// stapler-squad instances with no passkey session, so they can never pass
+// isAuthenticated; each handler authenticates the payload itself (Ed25519
+// signature + TOFU-pinned key). Matched exactly, not by prefix, so nothing
+// else under /internal/ is opened up. Paths must equal
+// session.ClaimAdvertisementEndpointPath and session.ClaimLookupEndpointPath
+// (asserted in auth_test.go).
+//
+// The claim-lookup GET carries no signature: it reveals whether a given
+// external URL is claimed, and by whom, to anyone who can reach the remote port.
+//
+// /internal/host-advertisement (session.AdvertisementEndpointPath) is not
+// listed: exempting it is a separate decision from the claim endpoints.
+var exemptPeerPaths = map[string]struct{}{
+	"/internal/claim-advertisement": {},
+	"/internal/claim-lookup":        {},
+}
+
 func isExempt(path string) bool {
+	if _, ok := exemptPeerPaths[path]; ok {
+		return true
+	}
 	for _, prefix := range exemptPrefixes {
 		if strings.HasPrefix(path, prefix) {
 			return true
