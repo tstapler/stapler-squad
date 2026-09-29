@@ -33,6 +33,7 @@ export const STUCK_REASON_LABELS: Record<StuckReason, string> = {
   [StuckReason.MULTIPLE_REASONS]: "Multiple reasons stuck",
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: "Bounce cap exhausted",
   [StuckReason.STEER_FAILED]: "Steer attempt failed",
+  [StuckReason.BLOCKED_BY_CLAIM]: "Blocked: claimed by another host",
 };
 
 /** Decorative icon glyph for every StuckReason (never the sole signal — text label always accompanies it). */
@@ -57,6 +58,7 @@ export const STUCK_REASON_ICONS: Record<StuckReason, string> = {
   [StuckReason.MULTIPLE_REASONS]: "🔺",
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: "🛑",
   [StuckReason.STEER_FAILED]: "⛔",
+  [StuckReason.BLOCKED_BY_CLAIM]: "🟠",
 };
 
 /** vanilla-extract class per StuckReason (design/ux.md Surface 7 chip legend). */
@@ -81,6 +83,7 @@ export const STUCK_REASON_CLASS: Record<StuckReason, string> = {
   [StuckReason.MULTIPLE_REASONS]: styles.chipEscalated,
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: styles.chipEscalated,
   [StuckReason.STEER_FAILED]: styles.chipSteerFailed,
+  [StuckReason.BLOCKED_BY_CLAIM]: styles.chipBlockedByClaim,
 };
 
 /**
@@ -124,6 +127,8 @@ export const STUCK_REASON_PRIORITY: Record<StuckReason, number> = {
   [StuckReason.ORPHANED_TRIAGE]: 11,
   [StuckReason.AUTONOMOUS_STUCK]: 12,
   [StuckReason.BLOCKED_BY_DEPENDENCY]: 13,
+  // Sorts just after BLOCKED_BY_DEPENDENCY: both are by-design dequeue skips.
+  [StuckReason.BLOCKED_BY_CLAIM]: 13.5,
   [StuckReason.PLAN_NOT_APPROVED]: 14,
   [StuckReason.STALE_WORK]: 15,
   [StuckReason.BOUNCING]: 16,

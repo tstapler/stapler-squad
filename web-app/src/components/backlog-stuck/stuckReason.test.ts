@@ -28,6 +28,7 @@ const ALL_REASONS: StuckReason[] = [
   StuckReason.LIKELY_FLAKY,
   StuckReason.BLOCKED_BY_DEPENDENCY,
   StuckReason.STEER_FAILED,
+  StuckReason.BLOCKED_BY_CLAIM,
 ];
 
 describe("stuckReason", () => {
@@ -311,5 +312,13 @@ describe("stuckReason", () => {
     it("returns 'unknown' for an undefined timestamp", () => {
       expect(formatAgo(undefined)).toBe("unknown");
     });
+  });
+});
+
+describe("stuckReason_should_ReturnClaimBlockedIconAndLabel_When_ReasonIsBlockedByClaim", () => {
+  it("gives blocked_by_claim a real label, icon and class, not the Unknown-reason fallback", () => {
+    expect(getStuckReasonLabel(StuckReason.BLOCKED_BY_CLAIM)).toMatch(/claimed/i);
+    expect(getStuckReasonIcon(StuckReason.BLOCKED_BY_CLAIM)).not.toBe(getStuckReasonIcon(StuckReason.UNSPECIFIED));
+    expect(getStuckReasonClass(StuckReason.BLOCKED_BY_CLAIM)).not.toBe(getStuckReasonClass(StuckReason.UNSPECIFIED));
   });
 });

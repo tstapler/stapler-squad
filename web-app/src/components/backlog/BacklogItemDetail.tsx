@@ -235,7 +235,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // than LifecycleSummary standing up its own transport/client and 60s poll
   // on every remount (this component remounts via `key={selectedItemId}` on
   // every backlog item click — see stapler-squad PR #208 review).
-  const { items: stuckItems, triggerRemediationNow } = useStuckBacklogItems();
+  const { items: stuckItems, triggerRemediationNow, overrideClaimBlock } = useStuckBacklogItems();
   // BUG-105: an item can have several simultaneous open StuckBacklogItem rows
   // (e.g. BOUNCING + BOUNCE_CAP_EXHAUSTED + MULTIPLE_REASONS all open at
   // once) — `summarizeStuckItemGroup` resolves the SAME shared-priority
@@ -1535,6 +1535,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           stuckItem={stuckItem}
           otherStuckReasons={stuckSummary?.otherReasons}
           onTriggerRemediationNow={triggerRemediationNow}
+          onOverrideClaimBlock={overrideClaimBlock}
         />
         {/* Epic 5.3 (D2): per-item soft-budget warning — renders null until
             costBudgetThresholdUsd is configured and crossed. Pinned here

@@ -694,6 +694,29 @@ function toProtoAcCriteria(criteria: AcCriterion[]): AcCriterionProto[] {
 // GitHub picker domain types
 // ---------------------------------------------------------------------------
 
+export interface ImportGitHubIssueOptions {
+  repoPath?: string;
+  skipPlanning?: boolean;
+  /**
+   * Set to import even though another host already claimed the issue. The
+   * server rejects a reason under 5 characters and audit-logs it.
+   */
+  overrideReason?: string;
+}
+
+/** Another host already claimed the issue (cross_host_claim_dedup); no item was created. */
+export interface ClaimedElsewhere {
+  externalUrl: string;
+  claimingHostId: string;
+  /** The claiming host's ssq:// deep link to its item. */
+  itemDeepLink: string;
+  disputed: boolean;
+}
+
+export type ImportGitHubIssueResult =
+  | { item: BacklogItem; triageTriggered: boolean; alreadyExisted: boolean; alreadyClaimedElsewhere?: undefined }
+  | { alreadyClaimedElsewhere: ClaimedElsewhere; item?: undefined; triageTriggered?: undefined; alreadyExisted?: undefined };
+
 export interface GitHubRepo {
   owner: string;
   repo: string;
@@ -744,7 +767,7 @@ interface UseBacklogServiceReturn {
    * createBacklogItemFromChat — never throws.
    */
   parseBacklogItemIntent: (message: string) => Promise<ParsedBacklogItemDraft | null>;
-  importGitHubIssue: (issueUrl: string, options?: { repoPath?: string; skipPlanning?: boolean }) => Promise<{ item: BacklogItem; triageTriggered: boolean; alreadyExisted: boolean } | null>;
+  importGitHubIssue: (issueUrl: string, options?: ImportGitHubIssueOptions) => Promise<ImportGitHubIssueResult | null>;
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
   listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number; host?: string }) => Promise<GitHubIssue[]>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
@@ -1281,10 +1304,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
   }, []);
 
   const importGitHubIssue = useCallback(
-    async (
-      issueUrl: string,
-      options?: { repoPath?: string; skipPlanning?: boolean }
-    ): Promise<{ item: BacklogItem; triageTriggered: boolean; alreadyExisted: boolean } | null> => {
+    async (issueUrl: string, options?: ImportGitHubIssueOptions): Promise<ImportGitHubIssueResult | null> => {
       if (!clientRef.current) return null;
       try {
         setLastError(null);
@@ -1292,7 +1312,20 @@ export function useBacklogService(): UseBacklogServiceReturn {
           issueUrl,
           repoPath: options?.repoPath ?? "",
           skipPlanning: options?.skipPlanning ?? false,
+          override: options?.overrideReason !== undefined,
+          overrideReason: options?.overrideReason ?? "",
         });
+        if (resp.alreadyClaimedElsewhere) {
+          const claim = resp.alreadyClaimedElsewhere;
+          return {
+            alreadyClaimedElsewhere: {
+              externalUrl: claim.externalUrl,
+              claimingHostId: claim.claimingHostId,
+              itemDeepLink: claim.itemDeepLink,
+              disputed: claim.disputed,
+            },
+          };
+        }
         return resp.item
           ? {
               item: mapBacklogItem(resp.item),
