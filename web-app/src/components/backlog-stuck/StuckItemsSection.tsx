@@ -106,6 +106,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     snooze,
     bulkResetParkedRemediation,
     triggerRemediationNow,
+    overrideClaimBlock,
   } = useStuckBacklogItems();
   const { updateBacklogItem, transitionStatus, spawnSessionFromItem, approvePlan, getBacklogItem } =
     useBacklogService();
@@ -612,6 +613,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                       currentReworkCapOverride={reworkCapOverrides.get(item.itemId)}
                       reworkCapOverrideLoaded={reworkCapOverrides.has(item.itemId)}
                       onTriggerRemediationNow={triggerRemediationNow}
+                      onOverrideClaimBlock={overrideClaimBlock}
                       onApprovePlan={handleApprovePlan}
                       focusItemId={focusItemId}
                     />
