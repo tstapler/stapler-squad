@@ -1556,6 +1556,11 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 			advertiser := session.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, session.DefaultHostAdvertisementInterval)
 			serverauth.RegisterHostAdvertisementRoute(srv.Mux(), hostIdentity, hostRegistry, advertiser, selfAddresses)
 			go advertiser.Run(ctx)
+			pruneTicker := time.NewTicker(session.DefaultHostAdvertisementInterval)
+			go func() {
+				defer pruneTicker.Stop()
+				hostRegistry.RunPruneLoop(ctx, pruneTicker.C)
+			}()
 		}
 	}
 
