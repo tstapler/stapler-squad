@@ -49,8 +49,20 @@ func NewCore(
 		mcpserver.WithToolCapabilities(false),
 	)
 
+	// diagnoseCheck identifies a dispatched Diagnose & Nudge session so
+	// write_to_session/send_control/run_command/steer_session/resume_session
+	// can refuse it server-side (--allowedTools alone provides no real
+	// enforcement — see server/services/session_service.go's
+	// diagnosticSessionAllowedTools doc comment). nil when storage isn't
+	// wired (e.g. the stdio fallback path), matching every other
+	// storage-gated feature's nil-degrades-to-off convention in this function.
+	var diagnoseCheck diagnoseCallerCheck
+	if storage != nil {
+		diagnoseCheck = storage.IsDiagnoseCaller
+	}
+
 	registerDiscoveryTools(s, &discoveryHandlers{store: store})
-	registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc})
+	registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, diagnoseCheck: diagnoseCheck})
 	// Wrapping a nil *services.SessionService directly in the liveInstanceFinder
 	// interface would produce a non-nil interface value around a nil pointer —
 	// th.live != nil would then be true, and calling FindLiveInstance on it
@@ -61,10 +73,11 @@ func NewCore(
 		liveFinder = svc
 	}
 	registerTerminalTools(s, &terminalHandlers{
-		store:      store,
-		live:       liveFinder,
-		scrollback: sbMgr,
-		writeLim:   newTokenBucket(writeRateLimitPerSec, writeRateLimitPerSec),
+		store:         store,
+		live:          liveFinder,
+		scrollback:    sbMgr,
+		writeLim:      newTokenBucket(writeRateLimitPerSec, writeRateLimitPerSec),
+		diagnoseCheck: diagnoseCheck,
 	})
 	registerVCSTools(s, &vcsHandlers{store: store})
 	if svc != nil {

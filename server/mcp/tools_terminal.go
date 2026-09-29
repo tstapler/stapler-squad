@@ -47,6 +47,11 @@ type terminalHandlers struct {
 	live       liveInstanceFinder // may be nil; see findInstance
 	scrollback *scrollback.ScrollbackManager
 	writeLim   *tokenBucket // per-session rate limiter for write_to_session
+	// diagnoseCheck gates write_to_session/send_control/run_command/
+	// steer_session away from a dispatched Diagnose & Nudge session — see
+	// diagnose_role_gate.go's denyIfDiagnoseCaller. May be nil (no
+	// restriction applied; matches pre-fix behavior).
+	diagnoseCheck diagnoseCallerCheck
 }
 
 // ReadSessionOutputResult is the response type for read_session_output.
@@ -95,7 +100,7 @@ func registerTerminalTools(s *mcpserver.MCPServer, th *terminalHandlers) {
 				mcpgo.DefaultBool(true),
 			),
 		),
-		th.writeToSession,
+		withDiagnoseGate(th.diagnoseCheck, "write_to_session", th.writeToSession),
 	)
 
 	s.AddTool(
@@ -111,7 +116,7 @@ func registerTerminalTools(s *mcpserver.MCPServer, th *terminalHandlers) {
 				mcpgo.Enum("C", "D", "Z", "L"),
 			),
 		),
-		th.sendControl,
+		withDiagnoseGate(th.diagnoseCheck, "send_control", th.sendControl),
 	)
 
 	s.AddTool(
@@ -147,7 +152,7 @@ func registerTerminalTools(s *mcpserver.MCPServer, th *terminalHandlers) {
 				mcpgo.Required(),
 			),
 		),
-		th.steerSession,
+		withDiagnoseGate(th.diagnoseCheck, "steer_session", th.steerSession),
 	)
 
 	s.AddTool(
@@ -174,7 +179,7 @@ func registerTerminalTools(s *mcpserver.MCPServer, th *terminalHandlers) {
 				mcpgo.Max(200),
 			),
 		),
-		th.runCommand,
+		withDiagnoseGate(th.diagnoseCheck, "run_command", th.runCommand),
 	)
 }
 
@@ -367,7 +372,7 @@ type SendControlResult struct {
 	Sent string `json:"sent"`
 }
 
-func (th *terminalHandlers) sendControl(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (th *terminalHandlers) sendControl(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := req.GetArguments()
 	sessionID, ok := args["session_id"].(string)
 	if !ok || sessionID == "" {

@@ -35,6 +35,10 @@ const mcpAwaitTerminalTimeout = 150 * time.Second
 type lifecycleHandlers struct {
 	store session.InstanceStore
 	svc   *services.SessionService
+	// diagnoseCheck gates resume_session away from a dispatched Diagnose &
+	// Nudge session — see diagnose_role_gate.go's denyIfDiagnoseCaller. May
+	// be nil (no restriction applied; matches pre-fix behavior).
+	diagnoseCheck diagnoseCallerCheck
 }
 
 // CreateSessionResult is returned by create_session.
@@ -81,7 +85,7 @@ func registerLifecycleTools(s *mcpserver.MCPServer, lh *lifecycleHandlers) {
 			mcpgo.WithDescription("Resume a paused session. Recreates the git worktree and restarts the tmux session."),
 			mcpgo.WithString("session_id", mcpgo.Description("Session ID (title) to resume"), mcpgo.Required()),
 		),
-		lh.resumeSession,
+		withDiagnoseGate(lh.diagnoseCheck, "resume_session", lh.resumeSession),
 	)
 
 	s.AddTool(
