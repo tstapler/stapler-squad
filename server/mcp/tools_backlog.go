@@ -326,6 +326,9 @@ type backlogHandlers struct {
 	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;
 	// overridable in tests to avoid making real GitHub API calls.
 	verifyPRMatchesBranch func(ctx context.Context, ref githubpkg.RepoRef, prNumber int, expectedBranch string) (PRVerification, error)
+	// postPRComment backs report_pr_created's best-effort provenance stamp.
+	// Defaults to githubpkg.PostPRCommentREST when nil; overridable in tests.
+	postPRComment func(ctx context.Context, ref githubpkg.RepoRef, prNumber int, body string) error
 	// resolveSessionBranch resolves the git branch a session UUID is working
 	// on, used by report_pr_created to determine "this item's own branch"
 	// before trusting a self-reported PR against it. Defaults to

@@ -272,6 +272,8 @@ type Storage struct {
 	// foreignClaims is the local-only claim reader SyncOne consults; nil means
 	// no cross-host claim checking.
 	foreignClaims atomic.Pointer[ForeignClaimLookup]
+	// provenance builds the PR provenance comment; nil means no stamping.
+	provenance atomic.Pointer[PRProvenanceSource]
 }
 
 // NewStorageWithRepository creates a Storage backed by an EntRepository.

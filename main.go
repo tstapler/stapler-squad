@@ -1493,6 +1493,7 @@ func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, 
 	// The checks below are all gated by the cross_host_claim_dedup feature flag
 	// (off by default), so wiring them here changes nothing until it is enabled.
 	storage.SetForeignClaimLookup(services.NewFlagGatedForeignClaimLookup(recorder))
+	storage.SetPRProvenanceSource(services.NewFlagGatedPRProvenance(recorder))
 	if backlogSvc != nil {
 		checker := services.NewLocalClaimChecker(claimIndex, hostIdentity.ID, hostRegistry)
 		backlogSvc.SetClaimChecker(checker, checker)

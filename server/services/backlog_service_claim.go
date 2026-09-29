@@ -371,3 +371,22 @@ func (f flagGatedForeignClaimLookup) ForeignClaim(externalURL string) (session.C
 	}
 	return f.inner.ForeignClaim(externalURL)
 }
+
+// flagGatedPRProvenance makes a session.PRProvenanceSource honor the
+// cross_host_claim_dedup flag, so a flag-off host posts no PR comments.
+type flagGatedPRProvenance struct {
+	inner session.PRProvenanceSource
+}
+
+// NewFlagGatedPRProvenance wraps inner so it stamps nothing while the
+// cross_host_claim_dedup feature flag is off.
+func NewFlagGatedPRProvenance(inner session.PRProvenanceSource) session.PRProvenanceSource {
+	return flagGatedPRProvenance{inner: inner}
+}
+
+func (f flagGatedPRProvenance) PRProvenanceComment(item *session.BacklogItemData) (string, bool) {
+	if !config.LoadConfig().GetFeatureFlag(crossHostClaimDedupFlagName) {
+		return "", false
+	}
+	return f.inner.PRProvenanceComment(item)
+}
