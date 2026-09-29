@@ -740,6 +740,10 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 	s.dequeueMu.Lock()
 	defer s.dequeueMu.Unlock()
 
+	// Read once per sweep, not per candidate: it is a config read.
+	claimDedup := s.crossHostClaimDedupEnabled()
+	s.reconcileClaimBlockedStuck(ctx, claimDedup)
+
 	liveCount, err := s.countLiveBacklogWorkSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("count live work sessions: %w", err)
@@ -777,8 +781,6 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		return fmt.Errorf("check unresolved blockers: %w", err)
 	}
 
-	// Read once per sweep, not per candidate: it is a config read.
-	claimDedup := s.crossHostClaimDedupEnabled()
 	spawned := 0
 	for _, item := range candidates {
 		if spawned >= freeSlots {

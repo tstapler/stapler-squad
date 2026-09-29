@@ -112,17 +112,75 @@ func (s *BacklogService) gateOnClaim(ctx context.Context, c preCreateClaimCheck)
 	return claimGateResult{}, nil
 }
 
-// ErrCrossHostClaimDedupDisabled is returned by CheckCrossHostClaim while the
+// ErrCrossHostClaimDedupDisabled is returned by LookupCrossHostClaim while the
 // cross_host_claim_dedup feature flag is off.
 var ErrCrossHostClaimDedupDisabled = errors.New("cross_host_claim_dedup is disabled")
 
-// CheckCrossHostClaim runs the same live claim check the import and create paths
-// use, for the check_cross_host_claim MCP tool.
-func (s *BacklogService) CheckCrossHostClaim(ctx context.Context, externalURL string) (ClaimVerdict, error) {
+// LookupCrossHostClaim runs the same live claim check the import and create paths
+// use, for the check_cross_host_claim MCP tool and the CheckCrossHostClaim RPC.
+func (s *BacklogService) LookupCrossHostClaim(ctx context.Context, externalURL string) (ClaimVerdict, error) {
 	if !s.crossHostClaimDedupEnabled() {
 		return NewUnclaimedVerdict(), ErrCrossHostClaimDedupDisabled
 	}
 	return s.checker().CheckClaim(ctx, externalURL)
+}
+
+// CheckCrossHostClaim reports whether another host claimed an external URL, for
+// the item-detail banner. Only a flag-off host reports enabled=false; an
+// unconfirmable check is enabled && !checked with no claim, never a clear answer.
+// +api: CheckCrossHostClaim
+func (s *BacklogService) CheckCrossHostClaim(ctx context.Context, req *connect.Request[sessionv1.CheckCrossHostClaimRequest]) (*connect.Response[sessionv1.CheckCrossHostClaimResponse], error) {
+	externalURL := strings.TrimSpace(req.Msg.ExternalUrl)
+	if externalURL == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("external_url is required"))
+	}
+	if !s.crossHostClaimDedupEnabled() {
+		return connect.NewResponse(&sessionv1.CheckCrossHostClaimResponse{}), nil
+	}
+	var verdict ClaimVerdict
+	var err error
+	if req.Msg.LocalOnly {
+		verdict, err = s.checker().CheckClaimLocalOnly(ctx, externalURL)
+	} else {
+		verdict, err = s.checker().CheckClaim(ctx, externalURL)
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("claim check failed: %w", err))
+	}
+	resp := &sessionv1.CheckCrossHostClaimResponse{Enabled: true}
+	switch verdict.Kind {
+	case ClaimHeldByOther:
+		resp.Checked = true
+		resp.Claim = alreadyClaimedElsewhereProto(externalURL, verdict.Record)
+		if !verdict.Record.ClaimedAt.IsZero() {
+			resp.ClaimedAtUnix = verdict.Record.ClaimedAt.Unix()
+		}
+	case ClaimCheckIndeterminate:
+	default:
+		resp.Checked = true
+	}
+	return connect.NewResponse(resp), nil
+}
+
+// foreignClaimLister is implemented by checkers that can enumerate the claims
+// other hosts hold in the local index (LocalClaimChecker).
+type foreignClaimLister interface {
+	ListForeignClaims() []session.ClaimRecord
+}
+
+// ListForeignClaims returns the claims other hosts hold, from the local index only.
+// +api: ListForeignClaims
+func (s *BacklogService) ListForeignClaims(_ context.Context, _ *connect.Request[sessionv1.ListForeignClaimsRequest]) (*connect.Response[sessionv1.ListForeignClaimsResponse], error) {
+	if !s.crossHostClaimDedupEnabled() {
+		return connect.NewResponse(&sessionv1.ListForeignClaimsResponse{}), nil
+	}
+	resp := &sessionv1.ListForeignClaimsResponse{Enabled: true}
+	if lister, ok := s.claimChecker.(foreignClaimLister); ok {
+		for _, record := range lister.ListForeignClaims() {
+			resp.Claims = append(resp.Claims, alreadyClaimedElsewhereProto(record.ExternalURL, record))
+		}
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // skipForForeignClaim reports whether DequeueNextQueuedItems must skip item
@@ -170,6 +228,42 @@ func (s *BacklogService) resolveClaimBlockedLogged(ctx context.Context, itemID s
 	if _, err := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonBlockedByClaim); err != nil {
 		log.Warn("[resolveClaimBlockedLogged] ResolveStuck failed", "item", itemID, "error", err)
 	}
+}
+
+// reconcileClaimBlockedStuck resolves open BLOCKED_BY_CLAIM rows whose block no
+// longer applies: the flag is off, the item left queued/ready, or the claim is
+// gone from the local index (resolved dispute, abandoned host). Runs at the top
+// of every sweep, before the free-slot early return, so a stale row does not
+// linger while the WIP cap is full. Local-only, like the check that created it.
+func (s *BacklogService) reconcileClaimBlockedStuck(ctx context.Context, claimDedup bool) {
+	states, err := s.storage.FindOpenStuckStates(ctx)
+	if err != nil {
+		log.Warn("dequeue.claim_reconcile_list_failed", "err", err)
+		return
+	}
+	for _, state := range states {
+		if state.Reason != domain.StuckReasonBlockedByClaim {
+			continue
+		}
+		if claimDedup && s.claimBlockStillApplies(ctx, state.ItemID) {
+			continue
+		}
+		s.resolveClaimBlockedLogged(ctx, state.ItemID)
+	}
+}
+
+func (s *BacklogService) claimBlockStillApplies(ctx context.Context, itemID string) bool {
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		// Keep the row on a transient read error; drop it only when the item is gone.
+		return !errors.Is(err, session.ErrNotFound)
+	}
+	if status := session.BacklogStatus(item.Status); item.ExternalURL == "" ||
+		(status != session.BacklogStatusQueued && status != session.BacklogStatusReady) {
+		return false
+	}
+	verdict, err := s.checker().CheckClaimLocalOnly(ctx, item.ExternalURL)
+	return err != nil || verdict.Kind == ClaimHeldByOther
 }
 
 // OverrideClaimBlock dequeues and spawns an item DequeueNextQueuedItems skipped

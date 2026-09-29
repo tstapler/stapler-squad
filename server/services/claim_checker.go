@@ -113,6 +113,17 @@ func (c *LocalClaimChecker) CheckClaimLocalOnly(_ context.Context, externalURL s
 	return NewUnclaimedVerdict(), nil
 }
 
+// ListForeignClaims returns every claim in the local index held by another host.
+func (c *LocalClaimChecker) ListForeignClaims() []session.ClaimRecord {
+	var out []session.ClaimRecord
+	for _, record := range c.index.Snapshot() {
+		if record.ClaimingHostID.String() != c.selfID.String() {
+			out = append(out, record)
+		}
+	}
+	return out
+}
+
 // ResolveDispute implements ClaimDisputeResolver.
 func (c *LocalClaimChecker) ResolveDispute(_ context.Context, externalURL string) error {
 	return c.index.ResolveDispute(externalURL)

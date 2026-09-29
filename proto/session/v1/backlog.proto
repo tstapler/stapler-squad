@@ -1661,6 +1661,16 @@ service BacklogService {
   // external URL after a human has looked at it. Never auto-arbitrates.
   rpc ResolveClaimDispute(ResolveClaimDisputeRequest) returns (ResolveClaimDisputeResponse) {}
 
+  // CheckCrossHostClaim reports whether another host has claimed an external URL,
+  // for the item-detail banner. Never an error for "could not confirm": see
+  // CheckCrossHostClaimResponse.checked.
+  rpc CheckCrossHostClaim(CheckCrossHostClaimRequest) returns (CheckCrossHostClaimResponse) {}
+
+  // ListForeignClaims returns every claim this host's local index holds for a URL
+  // another host claimed. Local-only (no peer queries), so the board can call it
+  // once per render for its ClaimChip.
+  rpc ListForeignClaims(ListForeignClaimsRequest) returns (ListForeignClaimsResponse) {}
+
   // SearchGitHubRepos returns GitHub repos accessible to the authenticated user.
   rpc SearchGitHubRepos(SearchGitHubReposRequest) returns (SearchGitHubReposResponse) {}
 
@@ -1786,6 +1796,32 @@ message ResolveClaimDisputeRequest {
 }
 
 message ResolveClaimDisputeResponse {}
+
+message CheckCrossHostClaimRequest {
+  string external_url = 1;
+  // local_only skips the live peer fan-out and reads only this host's claim index.
+  bool local_only = 2;
+}
+
+message CheckCrossHostClaimResponse {
+  // enabled is false while the cross_host_claim_dedup feature flag is off; clients
+  // render nothing.
+  bool enabled = 1;
+  // checked is true when the answer is definitive (claimed or confirmed clear).
+  // enabled && !checked means a known peer was unreachable: unknown, not clear.
+  bool checked = 2;
+  // claim is set when another host holds external_url.
+  AlreadyClaimedElsewhere claim = 3;
+  // claimed_at_unix is the claim's timestamp (seconds), 0 when unknown.
+  int64 claimed_at_unix = 4;
+}
+
+message ListForeignClaimsRequest {}
+
+message ListForeignClaimsResponse {
+  bool enabled = 1;
+  repeated AlreadyClaimedElsewhere claims = 2;
+}
 
 message CancelTriageRequest {
   string item_id = 1;

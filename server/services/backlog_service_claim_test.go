@@ -436,3 +436,129 @@ func TestStuckReasonBlockedByClaim_should_RoundTripProtoEnum_When_Marshaled(t *t
 	assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM, toProtoStuckReason(domain.StuckReasonBlockedByClaim))
 	assert.Equal(t, domain.StuckReasonBlockedByClaim, fromProtoStuckReason(sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM))
 }
+
+func checkClaimRPC(t *testing.T, svc *BacklogService, localOnly bool) *sessionv1.CheckCrossHostClaimResponse {
+	t.Helper()
+	resp, err := svc.CheckCrossHostClaim(context.Background(), connect.NewRequest(&sessionv1.CheckCrossHostClaimRequest{
+		ExternalUrl: claimIssueURL, LocalOnly: localOnly,
+	}))
+	require.NoError(t, err)
+	return resp.Msg
+}
+
+func TestCheckCrossHostClaim_should_ReturnClaimWithHostAndLink_When_HeldByOther(t *testing.T) {
+	checker := &fakeClaimChecker{verdict: heldByHostA(t)}
+	svc := claimEnabledService(t, checker)
+
+	got := checkClaimRPC(t, svc, false)
+
+	assert.True(t, got.Enabled)
+	assert.True(t, got.Checked)
+	require.NotNil(t, got.Claim)
+	assert.Equal(t, "ssq://hostA/backlog/v1/bl_1", got.Claim.ItemDeepLink)
+	assert.NotZero(t, got.ClaimedAtUnix)
+	assert.EqualValues(t, 1, checker.liveCalls.Load())
+}
+
+func TestCheckCrossHostClaim_should_UseOnlyLocalIndex_When_LocalOnlySet(t *testing.T) {
+	checker := &fakeClaimChecker{verdict: NewUnclaimedVerdict()}
+	svc := claimEnabledService(t, checker)
+
+	got := checkClaimRPC(t, svc, true)
+
+	assert.True(t, got.Checked)
+	assert.Nil(t, got.Claim)
+	assert.Zero(t, checker.liveCalls.Load())
+	assert.EqualValues(t, 1, checker.localCalls.Load())
+}
+
+func TestCheckCrossHostClaim_should_ReportUncheckedNeverClear_When_Indeterminate(t *testing.T) {
+	svc := claimEnabledService(t, &fakeClaimChecker{verdict: NewIndeterminateVerdict()})
+
+	got := checkClaimRPC(t, svc, false)
+
+	assert.True(t, got.Enabled)
+	assert.False(t, got.Checked)
+	assert.Nil(t, got.Claim)
+}
+
+func TestCheckCrossHostClaim_should_ReportDisabledAndSkipChecker_When_FeatureFlagOff(t *testing.T) {
+	checker := &fakeClaimChecker{verdict: heldByHostA(t)}
+	svc := claimEnabledService(t, checker)
+	svc.claimDedupFlag = func() bool { return false }
+
+	got := checkClaimRPC(t, svc, false)
+
+	assert.False(t, got.Enabled)
+	assert.Nil(t, got.Claim)
+	assert.Zero(t, checker.liveCalls.Load()+checker.localCalls.Load())
+}
+
+func TestCheckCrossHostClaim_should_RequireExternalURL(t *testing.T) {
+	svc := claimEnabledService(t, &fakeClaimChecker{})
+	_, err := svc.CheckCrossHostClaim(context.Background(), connect.NewRequest(&sessionv1.CheckCrossHostClaimRequest{}))
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}
+
+func TestListForeignClaims_should_ReturnOnlyOtherHostsClaims_When_FlagOn(t *testing.T) {
+	self, other := newClaimTestIdentity(t), newClaimTestIdentity(t)
+	index := newClaimTestIndex(t)
+	for _, c := range []session.ClaimRecord{
+		session.NewSignedClaimRecord(self, "https://github.com/acme/widgets/issues/1", "ssq://self/backlog/v1/a", time.Now()),
+		session.NewSignedClaimRecord(other, "https://github.com/acme/widgets/issues/2", "ssq://other/backlog/v1/b", time.Now()),
+	} {
+		_, err := index.RecordClaim(c)
+		require.NoError(t, err)
+	}
+	svc := claimEnabledService(t, NewLocalClaimChecker(index, self.ID, fakePeerLister{}))
+
+	resp, err := svc.ListForeignClaims(context.Background(), connect.NewRequest(&sessionv1.ListForeignClaimsRequest{}))
+
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Enabled)
+	require.Len(t, resp.Msg.Claims, 1)
+	assert.Equal(t, "https://github.com/acme/widgets/issues/2", resp.Msg.Claims[0].ExternalUrl)
+	assert.Equal(t, other.ID.String(), resp.Msg.Claims[0].ClaimingHostId)
+
+	svc.claimDedupFlag = func() bool { return false }
+	off, err := svc.ListForeignClaims(context.Background(), connect.NewRequest(&sessionv1.ListForeignClaimsRequest{}))
+	require.NoError(t, err)
+	assert.False(t, off.Msg.Enabled)
+	assert.Empty(t, off.Msg.Claims)
+}
+
+func TestDequeueNextQueuedItems_should_ClearBlockedByClaimRow_When_ClaimNoLongerHeld(t *testing.T) {
+	checker := &fakeClaimChecker{verdict: heldByHostA(t)}
+	svc, _, repoPath := newDequeueClaimService(t, checker)
+	itemID := createQueuedItemWithURL(t, svc, repoPath, claimIssueURL)
+	require.NoError(t, svc.DequeueNextQueuedItems(context.Background()))
+	require.Equal(t, 1, openClaimStuckRows(t, svc, itemID))
+
+	checker.verdict = NewUnclaimedVerdict()
+	require.NoError(t, svc.DequeueNextQueuedItems(context.Background()))
+
+	assert.Zero(t, openClaimStuckRows(t, svc, itemID))
+}
+
+func TestDequeueNextQueuedItems_should_ClearBlockedByClaimRow_When_FlagTurnedOff(t *testing.T) {
+	svc, _, repoPath := newDequeueClaimService(t, &fakeClaimChecker{verdict: heldByHostA(t)})
+	itemID := createQueuedItemWithURL(t, svc, repoPath, claimIssueURL)
+	require.NoError(t, svc.DequeueNextQueuedItems(context.Background()))
+	require.Equal(t, 1, openClaimStuckRows(t, svc, itemID))
+
+	svc.claimDedupFlag = func() bool { return false }
+	require.NoError(t, svc.DequeueNextQueuedItems(context.Background()))
+
+	assert.Zero(t, openClaimStuckRows(t, svc, itemID))
+}
+
+func TestDequeueNextQueuedItems_should_KeepBlockedByClaimRow_When_ClaimStillHeld(t *testing.T) {
+	svc, _, repoPath := newDequeueClaimService(t, &fakeClaimChecker{verdict: heldByHostA(t)})
+	itemID := createQueuedItemWithURL(t, svc, repoPath, claimIssueURL)
+	require.NoError(t, svc.DequeueNextQueuedItems(context.Background()))
+	require.NoError(t, svc.DequeueNextQueuedItems(context.Background()))
+
+	assert.Equal(t, 1, openClaimStuckRows(t, svc, itemID))
+}

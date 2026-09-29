@@ -18,7 +18,7 @@ type fakeClaimCheckService struct {
 	err     error
 }
 
-func (f fakeClaimCheckService) CheckCrossHostClaim(context.Context, string) (services.ClaimVerdict, error) {
+func (f fakeClaimCheckService) LookupCrossHostClaim(context.Context, string) (services.ClaimVerdict, error) {
 	return f.verdict, f.err
 }
 

@@ -14,7 +14,7 @@ import (
 // claimCheckService is the slice of *services.BacklogService the
 // check_cross_host_claim tool needs.
 type claimCheckService interface {
-	CheckCrossHostClaim(ctx context.Context, externalURL string) (services.ClaimVerdict, error)
+	LookupCrossHostClaim(ctx context.Context, externalURL string) (services.ClaimVerdict, error)
 }
 
 type claimHandlers struct {
@@ -58,7 +58,7 @@ func (h *claimHandlers) checkCrossHostClaim(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInvalidArgument, "external_url is required", ""), nil
 	}
 
-	verdict, err := h.svc.CheckCrossHostClaim(ctx, externalURL)
+	verdict, err := h.svc.LookupCrossHostClaim(ctx, externalURL)
 	if errors.Is(err, services.ErrCrossHostClaimDedupDisabled) {
 		return okResult(CheckCrossHostClaimResult{MCPResult: MCPResult{Success: true}, Note: "cross_host_claim_dedup is disabled on this host"}), nil
 	}
