@@ -646,6 +646,15 @@ type CapacityConfig struct {
 	PollIntervalSeconds int `json:"poll_interval_seconds,omitempty"`
 	// ProviderPriority lists fallback providers in order of preference.
 	ProviderPriority []ProviderPriority `json:"provider_priority,omitempty"`
+	// IdleWaitTurnCeiling is how many consecutive "still waiting on
+	// background work" turns (see server/services/capacity_monitor.go's
+	// isIdleWaitTurn) trigger an auto-compact, then an escalation if the
+	// pattern continues past a second ceiling's worth of turns after that.
+	// A real incident ran into the hundreds of such turns before anyone
+	// noticed; 15 catches it within a couple of poll cycles at typical wake
+	// cadence while tolerating a normal handful of status check-ins.
+	// Default: 15.
+	IdleWaitTurnCeiling int `json:"idle_wait_turn_ceiling,omitempty"`
 }
 
 // QuotaConfig holds configuration for the account-wide Claude Code session-quota
@@ -767,6 +776,9 @@ func (c CapacityConfig) CapacityConfigOrDefault() CapacityConfig {
 	}
 	if out.PollIntervalSeconds <= 0 {
 		out.PollIntervalSeconds = 60
+	}
+	if out.IdleWaitTurnCeiling <= 0 {
+		out.IdleWaitTurnCeiling = 15
 	}
 	if len(out.ProviderPriority) == 0 {
 		out.ProviderPriority = []ProviderPriority{
