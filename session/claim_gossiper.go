@@ -17,6 +17,10 @@ import (
 // client (this file) and the handler in server/auth/claim_advertisement.go.
 const ClaimAdvertisementEndpointPath = "/internal/claim-advertisement"
 
+// ClaimLookupEndpointPath is the GET endpoint (?url=<external URL>) a peer
+// queries for a claim this host holds that may not have been gossiped yet.
+const ClaimLookupEndpointPath = "/internal/claim-lookup"
+
 // ClaimGossiper pushes ClaimRecords to the peers in HostRegistry. It reuses
 // HostAdvertiser's transport shape but is a separate type on a separate
 // endpoint (ADR-001, project_plans/cross-host-claim-dedup/decisions/).

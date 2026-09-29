@@ -330,3 +330,24 @@ func TestNewClaimIndex_should_ReturnError_When_HostRegistryNil(t *testing.T) {
 		t.Fatalf("NewClaimIndex(nil registry) error = nil, want error")
 	}
 }
+
+func TestClaimIndex_ForeignClaim_should_IgnoreSelfClaimAndReportOtherHostClaim(t *testing.T) {
+	clock := &fakeClock{now: time.Now()}
+	self, other := newTestIdentity(t), newTestIdentity(t)
+	index := newTestClaimIndex(t, t.TempDir(), clock, self, other)
+
+	if _, ok := index.ForeignClaim(testIssueURL, self.ID); ok {
+		t.Fatal("ForeignClaim() on empty index = true, want false")
+	}
+	mustRecord(t, index, NewSignedClaimRecord(self, testIssueURL, "ssq://self/x", clock.Now()))
+	if _, ok := index.ForeignClaim(testIssueURL, self.ID); ok {
+		t.Fatal("ForeignClaim() for own claim = true, want false")
+	}
+
+	const otherURL = "https://github.com/o/r/issues/2"
+	mustRecord(t, index, NewSignedClaimRecord(other, otherURL, "ssq://other/x", clock.Now()))
+	got, ok := index.ForeignClaim(otherURL, self.ID)
+	if !ok || got.ClaimingHostID.String() != other.ID.String() {
+		t.Fatalf("ForeignClaim() = (%+v, %v), want other host's claim", got, ok)
+	}
+}

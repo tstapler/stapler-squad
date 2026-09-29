@@ -15,6 +15,7 @@ import (
 // re-gossiped. gossiper may be nil (tests); when set, a record that changed
 // the index triggers one bounded re-gossip hop.
 func RegisterClaimAdvertisementRoute(mux *http.ServeMux, index *session.ClaimIndex, gossiper *session.ClaimGossiper) {
+	registerClaimLookupRoute(mux, index)
 	mux.HandleFunc("POST "+session.ClaimAdvertisementEndpointPath, func(w http.ResponseWriter, r *http.Request) {
 		var record session.ClaimRecord
 		if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
@@ -43,5 +44,27 @@ func RegisterClaimAdvertisementRoute(mux *http.ServeMux, index *session.ClaimInd
 			}
 		}
 		w.WriteHeader(http.StatusOK)
+	})
+}
+
+// registerClaimLookupRoute serves GET /internal/claim-lookup?url=<external URL>:
+// 200 with the local index's signed ClaimRecord, or 404 when none is held. The
+// asking peer verifies the signature itself, so the response is not trusted blindly.
+func registerClaimLookupRoute(mux *http.ServeMux, index *session.ClaimIndex) {
+	mux.HandleFunc("GET "+session.ClaimLookupEndpointPath, func(w http.ResponseWriter, r *http.Request) {
+		externalURL := r.URL.Query().Get("url")
+		if externalURL == "" {
+			http.Error(w, "url query parameter is required", http.StatusBadRequest)
+			return
+		}
+		record, ok := index.CheckClaim(externalURL)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(record); err != nil {
+			log.Debug("claim_lookup.write_failed", "err", err)
+		}
 	})
 }

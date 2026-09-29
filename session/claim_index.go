@@ -230,6 +230,17 @@ func (c *ClaimIndex) CheckClaim(externalURL string) (ClaimRecord, bool) {
 	return record, ok
 }
 
+// ForeignClaim returns the claim for externalURL when it is held by a host
+// other than self. A claim held by self, or no claim at all, reports false: only
+// a foreign claim can make this host's own import or dequeue a duplicate.
+func (c *ClaimIndex) ForeignClaim(externalURL string, self HostID) (ClaimRecord, bool) {
+	record, ok := c.CheckClaim(externalURL)
+	if !ok || record.ClaimingHostID.String() == self.String() {
+		return ClaimRecord{}, false
+	}
+	return record, true
+}
+
 // Snapshot returns every stored claim, ordered by ExternalURL for stable output.
 func (c *ClaimIndex) Snapshot() []ClaimRecord {
 	c.mu.Lock()

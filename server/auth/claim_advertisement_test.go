@@ -92,3 +92,40 @@ func TestClaimAdvertisementEndpoint_should_Reject400_When_BodyMalformedOrKeyCont
 		t.Fatalf("forged record stored, want rejected")
 	}
 }
+
+func TestClaimLookupEndpoint_should_Return200RecordOr404OrBadRequest(t *testing.T) {
+	mux, index, _ := newClaimTestMux(t)
+	claimant, err := session.LoadOrCreateHostIdentity(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateHostIdentity() error = %v", err)
+	}
+	record := session.NewSignedClaimRecord(claimant, claimTestURL, "ssq://claimant/backlog/v1/x", time.Now())
+	if _, err := index.RecordClaim(record); err != nil {
+		t.Fatalf("RecordClaim() error = %v", err)
+	}
+
+	get := func(target string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		return rec
+	}
+
+	rec := get(session.ClaimLookupEndpointPath + "?url=" + claimTestURL)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("known URL status = %d, want 200", rec.Code)
+	}
+	var got session.ClaimRecord
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ClaimingHostID.String() != claimant.ID.String() || !got.Verify() {
+		t.Fatalf("lookup returned %+v, want the verifiable stored record", got)
+	}
+
+	if rec := get(session.ClaimLookupEndpointPath + "?url=https://github.com/o/r/issues/99"); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown URL status = %d, want 404", rec.Code)
+	}
+	if rec := get(session.ClaimLookupEndpointPath); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing url status = %d, want 400", rec.Code)
+	}
+}

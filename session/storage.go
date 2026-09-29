@@ -269,6 +269,9 @@ type Storage struct {
 	// claimRecorder is set once at startup but read from every creation path
 	// (including background sync loops), so it is atomic.
 	claimRecorder atomic.Pointer[ClaimRecorder]
+	// foreignClaims is the local-only claim reader SyncOne consults; nil means
+	// no cross-host claim checking.
+	foreignClaims atomic.Pointer[ForeignClaimLookup]
 }
 
 // NewStorageWithRepository creates a Storage backed by an EntRepository.
@@ -299,6 +302,26 @@ func (s *Storage) SetClaimRecorder(r ClaimRecorder) {
 		return
 	}
 	s.claimRecorder.Store(&r)
+}
+
+// SetForeignClaimLookup wires l as the local-only claim reader ForeignClaim
+// uses. Passing nil disables cross-host claim checking.
+func (s *Storage) SetForeignClaimLookup(l ForeignClaimLookup) {
+	if l == nil {
+		s.foreignClaims.Store(nil)
+		return
+	}
+	s.foreignClaims.Store(&l)
+}
+
+// ForeignClaim reports a claim on externalURL held by another host, consulting
+// only local state. It reports false when no lookup is wired or externalURL is empty.
+func (s *Storage) ForeignClaim(externalURL string) (ClaimRecord, bool) {
+	lookup := s.foreignClaims.Load()
+	if lookup == nil || externalURL == "" {
+		return ClaimRecord{}, false
+	}
+	return (*lookup).ForeignClaim(externalURL)
 }
 
 // SetCallbackDispatcher forwards to the underlying *EntRepository's SetCallbackDispatcher.

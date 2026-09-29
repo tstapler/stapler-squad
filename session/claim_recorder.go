@@ -16,6 +16,18 @@ import (
 // project_plans/cross-host-claim-dedup/decisions/); mirrors ItemChangePublisher.
 //
 // Storage supplies ExternalURL, ItemDeepLink (host-less, see
+// ForeignClaimLookup is the read-only, local-only port SyncOne consults before
+// creating an item: it reports a claim held by a host other than this one, and
+// never touches the network. Injected via Storage.SetForeignClaimLookup.
+type ForeignClaimLookup interface {
+	ForeignClaim(externalURL string) (ClaimRecord, bool)
+}
+
+// ForeignClaim implements ForeignClaimLookup against the local ClaimIndex.
+func (r *ClaimIndexRecorder) ForeignClaim(externalURL string) (ClaimRecord, bool) {
+	return r.index.ForeignClaim(externalURL, r.identity.ID)
+}
+
 // BacklogItemDeepLinkPath) and ClaimedAt. The implementation owns the local
 // identity, so it stamps ClaimingHostID and signs.
 type ClaimRecorder interface {
