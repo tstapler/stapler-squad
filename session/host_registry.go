@@ -362,6 +362,21 @@ func (r *HostRegistry) Snapshot() []RegistryEntry {
 	return out
 }
 
+// LiveSnapshot is Snapshot minus entries already past the registry TTL that
+// Prune has not yet removed, so callers do not dial peers about to expire.
+func (r *HostRegistry) LiveSnapshot() []RegistryEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cutoff := r.clock.Now().Add(-r.ttl)
+	out := make([]RegistryEntry, 0, len(r.entries))
+	for _, entry := range r.entries {
+		if !entry.LastSeenAt.Before(cutoff) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
 func (r *HostRegistry) path() string {
 	return filepath.Join(r.stateDir, hostRegistryFileName)
 }
