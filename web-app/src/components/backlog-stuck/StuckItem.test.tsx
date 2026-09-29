@@ -428,4 +428,42 @@ describe("StuckItem", () => {
       expect(scrollIntoView).not.toHaveBeenCalled();
     });
   });
+
+  describe("StuckItem_should_offerClaimOverrideWithReasonForm_When_BlockedByClaim", () => {
+    const claimItem = () => makeItem({ reason: StuckReason.BLOCKED_BY_CLAIM, prNumber: 0, prUrl: "" });
+
+    it("hides the control for other reasons or when no handler is given", () => {
+      const { rerender } = render(
+        <StuckItem item={makeItem()} isExpanded={false} onToggleExpand={jest.fn()} onOverrideClaimBlock={jest.fn()} />
+      );
+      expect(screen.queryByTestId("stuck-item-override-claim")).toBeNull();
+      rerender(<StuckItem item={claimItem()} isExpanded={false} onToggleExpand={jest.fn()} />);
+      expect(screen.queryByTestId("stuck-item-override-claim")).toBeNull();
+    });
+
+    it("requires a >=5 character reason and calls the override without toggling the card", async () => {
+      const onOverrideClaimBlock = jest.fn().mockResolvedValue(undefined);
+      const onToggleExpand = jest.fn();
+      const item = claimItem();
+      render(<StuckItem item={item} isExpanded={false} onToggleExpand={onToggleExpand} onOverrideClaimBlock={onOverrideClaimBlock} />);
+      fireEvent.click(screen.getByTestId("stuck-item-override-claim"));
+      const confirm = screen.getByTestId("claim-override-confirm");
+      fireEvent.change(screen.getByTestId("claim-override-reason"), { target: { value: "abc" } });
+      expect(confirm).toBeDisabled();
+      fireEvent.change(screen.getByTestId("claim-override-reason"), { target: { value: "host is retired" } });
+      fireEvent.click(confirm);
+      await waitFor(() => expect(onOverrideClaimBlock).toHaveBeenCalledWith(item.itemId, "host is retired"));
+      expect(onToggleExpand).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByTestId("claim-override-form")).toBeNull());
+    });
+
+    it("shows the server error on the form when the override rejects", async () => {
+      const onOverrideClaimBlock = jest.fn().mockRejectedValue(new Error("no free work slot"));
+      render(<StuckItem item={claimItem()} isExpanded={false} onToggleExpand={jest.fn()} onOverrideClaimBlock={onOverrideClaimBlock} />);
+      fireEvent.click(screen.getByTestId("stuck-item-override-claim"));
+      fireEvent.change(screen.getByTestId("claim-override-reason"), { target: { value: "host is retired" } });
+      fireEvent.click(screen.getByTestId("claim-override-confirm"));
+      await waitFor(() => expect(screen.getByTestId("claim-override-error")).toHaveTextContent("no free work slot"));
+    });
+  });
 });

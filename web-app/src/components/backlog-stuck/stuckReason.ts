@@ -33,6 +33,7 @@ export const STUCK_REASON_LABELS: Record<StuckReason, string> = {
   [StuckReason.MULTIPLE_REASONS]: "Multiple reasons stuck",
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: "Bounce cap exhausted",
   [StuckReason.STEER_FAILED]: "Steer attempt failed",
+  [StuckReason.BLOCKED_BY_CLAIM]: "Blocked: claimed by another host",
   [StuckReason.WORKTREE_INCONSISTENT]: "Worktree state inconsistent",
 };
 
@@ -58,6 +59,7 @@ export const STUCK_REASON_ICONS: Record<StuckReason, string> = {
   [StuckReason.MULTIPLE_REASONS]: "🔺",
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: "🛑",
   [StuckReason.STEER_FAILED]: "⛔",
+  [StuckReason.BLOCKED_BY_CLAIM]: "🟠",
   [StuckReason.WORKTREE_INCONSISTENT]: "⛔",
 };
 
@@ -83,6 +85,7 @@ export const STUCK_REASON_CLASS: Record<StuckReason, string> = {
   [StuckReason.MULTIPLE_REASONS]: styles.chipEscalated,
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: styles.chipEscalated,
   [StuckReason.STEER_FAILED]: styles.chipSteerFailed,
+  [StuckReason.BLOCKED_BY_CLAIM]: styles.chipBlockedByClaim,
   [StuckReason.WORKTREE_INCONSISTENT]: styles.chipWorktreeInconsistent,
 };
 
@@ -128,6 +131,8 @@ export const STUCK_REASON_PRIORITY: Record<StuckReason, number> = {
   [StuckReason.ORPHANED_TRIAGE]: 12,
   [StuckReason.AUTONOMOUS_STUCK]: 13,
   [StuckReason.BLOCKED_BY_DEPENDENCY]: 14,
+  // Sorts just after BLOCKED_BY_DEPENDENCY: both are by-design dequeue skips.
+  [StuckReason.BLOCKED_BY_CLAIM]: 14.5,
   [StuckReason.PLAN_NOT_APPROVED]: 15,
   [StuckReason.STALE_WORK]: 16,
   [StuckReason.BOUNCING]: 17,

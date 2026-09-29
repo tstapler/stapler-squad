@@ -37,11 +37,22 @@ const hostRegistryLockTimeout = 5 * time.Second
 const DefaultHostAdvertisementInterval = 5 * time.Minute
 
 // DefaultHostRegistryTTL is how long a registry entry survives without a
-// refreshing advertisement before Prune removes it. Per ADR-002: "an entry
-// not re-advertised within N missed cycles is dropped, not immediately, to
+// refreshing advertisement before Prune removes it. Per
+// docs/adr/ADR-002-workspace-host-registry-gossip.md (canonical record:
+// project_plans/backlog-deep-linking/decisions/ADR-002-gossip-based-host-registry.md):
+// "an entry not re-advertised within N missed cycles is dropped, not immediately, to
 // tolerate transient network blips" -- this is several multiples of
 // DefaultHostAdvertisementInterval, not one.
 const DefaultHostRegistryTTL = 3 * DefaultHostAdvertisementInterval
+
+// Enrolment bounds. /internal/host-advertisement is reachable without a passkey
+// session, so anyone on the network can try to enrol; these keep that from
+// growing the registry (and the outbound fan-out it drives) without limit.
+const (
+	maxRegistryEntries    = 512
+	maxAdvertisedAddrs    = 16
+	maxAdvertisedAddrSize = 255
+)
 
 // Clock abstracts time.Now for injectable-fake-clock testing (TTL/prune
 // logic must not depend on wall-clock sleep, per
@@ -70,7 +81,7 @@ type RegistryEntry struct {
 }
 
 // AdvertisementRecord is the wire format a host broadcasts to advertise its
-// own identity and reachable address(es) to a peer, per ADR-002.
+// own identity and reachable address(es) to a peer, per docs/adr/ADR-002-workspace-host-registry-gossip.md.
 type AdvertisementRecord struct {
 	HostIdentity      HostID            `json:"host_identity"`
 	AdvertisedAddress []string          `json:"advertised_address"`
@@ -194,7 +205,13 @@ func (r *HostRegistry) Advertise(record AdvertisementRecord) (isNew bool, accept
 	if !record.HostIdentity.IsValid() || len(record.AdvertisedAddress) == 0 {
 		return false, false, fmt.Errorf("advertisement record missing host identity or advertised address")
 	}
+	if len(record.AdvertisedAddress) > maxAdvertisedAddrs {
+		return false, false, nil
+	}
 	for _, addr := range record.AdvertisedAddress {
+		if len(addr) > maxAdvertisedAddrSize {
+			return false, false, nil
+		}
 		if !allowImplausibleAddressesForTest && !isPlausiblePeerAddress(addr) {
 			log.Warn("host_registry.advertisement_rejected",
 				"host_id", record.HostIdentity.String(),
@@ -217,6 +234,11 @@ func (r *HostRegistry) Advertise(record AdvertisementRecord) (isNew bool, accept
 		return false, false, nil
 	}
 	if !record.Verify() {
+		return false, false, nil
+	}
+	if !hadEntry && len(r.entries) >= maxRegistryEntries {
+		log.Warn("host_registry.advertisement_rejected",
+			"host_id", record.HostIdentity.String(), "reason", "registry_full")
 		return false, false, nil
 	}
 
@@ -251,7 +273,7 @@ var allowImplausibleAddressesForTest = false
 // metadata endpoint reachable only from this instance's network position.
 // A TOFU-pinned identity is still trusted to say who it is; this only
 // bounds where "who it is" is allowed to claim to be reachable at. Address
-// content is otherwise unrestricted -- see ADR-002's accepted same-LAN
+// content is otherwise unrestricted -- see docs/adr/ADR-002-workspace-host-registry-gossip.md's accepted same-LAN
 // threat model -- this blocks the specific classes of address that turn a
 // trust decision about identity into an SSRF primitive.
 func isPlausiblePeerAddress(addr string) bool {
@@ -276,7 +298,7 @@ func isPlausiblePeerAddress(addr string) bool {
 
 // Prune removes every entry whose LastSeenAt is more than the registry's
 // ttl behind the current clock time -- an entry survives several missed
-// advertisement cycles (per ADR-002) rather than being dropped after just
+// advertisement cycles (per docs/adr/ADR-002-workspace-host-registry-gossip.md) rather than being dropped after just
 // one, to tolerate transient network blips.
 func (r *HostRegistry) Prune() error {
 	r.mu.Lock()
@@ -300,6 +322,24 @@ func (r *HostRegistry) Prune() error {
 	return r.persistLocked()
 }
 
+// RunPruneLoop calls Prune on every value received from ticks until ctx is
+// cancelled, so stale peers expire in a running server rather than only in
+// unit tests. A Prune error (e.g. a lock-file timeout) is logged and the loop
+// keeps running. Taking the tick channel (instead of an interval) lets tests
+// drive it without wall-clock sleeps; callers pass a time.Ticker's C.
+func (r *HostRegistry) RunPruneLoop(ctx context.Context, ticks <-chan time.Time) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+			if err := r.Prune(); err != nil {
+				log.Warn("host_registry.prune_failed", "err", err)
+			}
+		}
+	}
+}
+
 // Lookup returns the RegistryEntry for id, if known.
 func (r *HostRegistry) Lookup(id HostID) (RegistryEntry, bool) {
 	r.mu.Lock()
@@ -310,7 +350,7 @@ func (r *HostRegistry) Lookup(id HostID) (RegistryEntry, bool) {
 
 // LookupByHostname returns the RegistryEntry whose AdvertisedAddress
 // contains a "host:port" (or bare host) entry whose host part matches
-// hostname, per ADR-002's "resolution looks up hostname (matched against a
+// hostname, per docs/adr/ADR-002-workspace-host-registry-gossip.md's "resolution looks up hostname (matched against a
 // host's advertised addresses...) in this local registry."
 func (r *HostRegistry) LookupByHostname(hostname string) (HostID, RegistryEntry, bool) {
 	r.mu.Lock()
@@ -338,6 +378,21 @@ func (r *HostRegistry) Snapshot() []RegistryEntry {
 	out := make([]RegistryEntry, 0, len(r.entries))
 	for _, entry := range r.entries {
 		out = append(out, entry)
+	}
+	return out
+}
+
+// LiveSnapshot is Snapshot minus entries already past the registry TTL that
+// Prune has not yet removed, so callers do not dial peers about to expire.
+func (r *HostRegistry) LiveSnapshot() []RegistryEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cutoff := r.clock.Now().Add(-r.ttl)
+	out := make([]RegistryEntry, 0, len(r.entries))
+	for _, entry := range r.entries {
+		if !entry.LastSeenAt.Before(cutoff) {
+			out = append(out, entry)
+		}
 	}
 	return out
 }

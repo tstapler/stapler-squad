@@ -35,6 +35,7 @@ import { SendBackError } from "./detail/SendBackError";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
+import { ItemClaimBanner } from "./ItemClaimBanner";
 import { BacklogItemForm } from "./BacklogItemForm";
 import { AcCriteriaList } from "./AcCriteriaList";
 import { InlineError } from "./InlineError";
@@ -235,7 +236,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // than LifecycleSummary standing up its own transport/client and 60s poll
   // on every remount (this component remounts via `key={selectedItemId}` on
   // every backlog item click — see stapler-squad PR #208 review).
-  const { items: stuckItems, triggerRemediationNow } = useStuckBacklogItems();
+  const { items: stuckItems, triggerRemediationNow, overrideClaimBlock } = useStuckBacklogItems();
   // BUG-105: an item can have several simultaneous open StuckBacklogItem rows
   // (e.g. BOUNCING + BOUNCE_CAP_EXHAUSTED + MULTIPLE_REASONS all open at
   // once) — `summarizeStuckItemGroup` resolves the SAME shared-priority
@@ -1499,6 +1500,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 {copiedField === "link" && "Link copied to clipboard"}
               </span>
             </div>
+            {item.externalUrl && <ItemClaimBanner externalUrl={item.externalUrl} />}
           </div>
           <div className={styles.headerActions}>
             <ConnectionIndicator connectionState={connectionState} />
@@ -1535,6 +1537,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           stuckItem={stuckItem}
           otherStuckReasons={stuckSummary?.otherReasons}
           onTriggerRemediationNow={triggerRemediationNow}
+          onOverrideClaimBlock={overrideClaimBlock}
         />
         {/* Epic 5.3 (D2): per-item soft-budget warning — renders null until
             costBudgetThresholdUsd is configured and crossed. Pinned here
