@@ -152,7 +152,7 @@ func (dh *diagnoseHandlers) nudgeSession(ctx context.Context, req mcpgo.CallTool
 	if _, errRes := resolveDiagnoseItemLink(ctx, dh.storage, callerUUID, nudgeArgs.itemID); errRes != nil {
 		return errRes, nil
 	}
-	return dh.performNudge(ctx, nudgeArgs)
+	return dh.performNudge(ctx, callerUUID, nudgeArgs)
 }
 
 // nudgeSessionArgs is submit_diagnosis_result's sibling tool's parsed input —
@@ -218,7 +218,52 @@ func (dh *diagnoseHandlers) checkNudgeCapForWrite(ctx context.Context, itemID, s
 // only at dispatch time.
 const diagnoseNudgeDisabledMessage = "autonomous nudging is currently disabled (diagnose_nudge_enabled feature flag is off)"
 
-func (dh *diagnoseHandlers) performNudge(ctx context.Context, a nudgeSessionArgs) (*mcpgo.CallToolResult, error) {
+// diagnoseNudgeAlreadyAttemptedMessage is returned when this diagnostic
+// dispatch has already claimed its one nudge-write attempt — see
+// session.Storage.ClaimDiagnoseNudgeAttempt's doc comment. Distinct from the
+// item-level cap/cooldown (checkNudgeCapForWrite): that bounds total nudges
+// per item across many dispatches, this stops a SINGLE dispatch from writing
+// twice if its own LLM retries after an ambiguous MCP tool response.
+const diagnoseNudgeAlreadyAttemptedMessage = "this diagnostic session has already attempted a nudge write"
+
+// claimNudgeAttemptForWrite is the duplicate-write guard, extracted from
+// performNudge purely to stay under the funlen gate: claims callerUUID's one
+// nudge attempt atomically, immediately before the write itself. A failed
+// claim means this exact dispatched session already attempted a nudge —
+// refuse regardless of remaining cap headroom, rather than let an ambiguous
+// MCP response make its LLM retry the write.
+func (dh *diagnoseHandlers) claimNudgeAttemptForWrite(ctx context.Context, callerUUID string) *mcpgo.CallToolResult {
+	claimed, claimErr := dh.storage.ClaimDiagnoseNudgeAttempt(ctx, callerUUID)
+	if claimErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("check duplicate-write guard: %v", claimErr), "")
+	}
+	if !claimed {
+		return errResult(ErrPermissionDenied, diagnoseNudgeAlreadyAttemptedMessage, declineToDiagnoseRemediation)
+	}
+	return nil
+}
+
+// resolveNudgeTarget finds and idle/pane-ownership-verifies a's target
+// instance — extracted from performNudge purely to stay under the funlen
+// gate. See session.VerifyNudgeSafeToWrite's doc comment for why the
+// write-time pane-ownership re-verification can't be skipped even though
+// DiagnoseNudgeAllowed/dispatch-time eligibility already looked idle (AC2's
+// two-part write-time gate).
+func (dh *diagnoseHandlers) resolveNudgeTarget(ctx context.Context, a nudgeSessionArgs) (*session.Instance, *mcpgo.CallToolResult) {
+	if dh.live == nil {
+		return nil, errResult(ErrSessionNotFound, "no live session lookup available", "")
+	}
+	target := dh.live.FindLiveInstance(a.targetSessionID)
+	if target == nil {
+		return nil, errResult(ErrSessionNotFound, fmt.Sprintf("session %q not found or not live", a.targetSessionID), "")
+	}
+	if verifyErr := session.VerifyNudgeSafeToWrite(ctx, target); verifyErr != nil {
+		return nil, errResult(ErrPermissionDenied, verifyErr.Error(), declineToDiagnoseRemediation)
+	}
+	return target, nil
+}
+
+func (dh *diagnoseHandlers) performNudge(ctx context.Context, callerUUID string, a nudgeSessionArgs) (*mcpgo.CallToolResult, error) {
 	// Kill switch (AC3): read fresh at the write instant, not cached from
 	// dispatch time, so flipping the flag off mid-flight still blocks an
 	// already-dispatched diagnostic agent's write.
@@ -230,21 +275,13 @@ func (dh *diagnoseHandlers) performNudge(ctx context.Context, a nudgeSessionArgs
 		return errRes, nil
 	}
 
-	if dh.live == nil {
-		return errResult(ErrSessionNotFound, "no live session lookup available", ""), nil
-	}
-	target := dh.live.FindLiveInstance(a.targetSessionID)
-	if target == nil {
-		return errResult(ErrSessionNotFound, fmt.Sprintf("session %q not found or not live", a.targetSessionID), ""), nil
+	target, errRes := dh.resolveNudgeTarget(ctx, a)
+	if errRes != nil {
+		return errRes, nil
 	}
 
-	// AC2's two-part write-time gate: idle-status check, then a fresh
-	// tmux-pane-ownership re-verification immediately before the write — see
-	// session.VerifyNudgeSafeToWrite's doc comment for why the second check
-	// can't be skipped even though DiagnoseNudgeAllowed/dispatch-time
-	// eligibility already looked idle.
-	if verifyErr := session.VerifyNudgeSafeToWrite(ctx, target); verifyErr != nil {
-		return errResult(ErrPermissionDenied, verifyErr.Error(), declineToDiagnoseRemediation), nil
+	if errRes := dh.claimNudgeAttemptForWrite(ctx, callerUUID); errRes != nil {
+		return errRes, nil
 	}
 
 	if submitErr := session.SubmitContentWithEnter(ctx, target, a.message); submitErr != nil {

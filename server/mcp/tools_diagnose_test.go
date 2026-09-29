@@ -144,6 +144,29 @@ func TestNudgeSession_should_Refuse_When_FeatureFlagDisabled(t *testing.T) {
 	assert.Equal(t, diagnoseNudgeDisabledMessage, errObj["message"], "must be refused specifically by the kill switch, not the (also-true) not-live path")
 }
 
+// TestClaimNudgeAttemptForWrite_RefusesSecondAttempt is gap #4's direct
+// regression guard: the duplicate-write guard must refuse a second write
+// attempt from the same dispatched diagnostic session, independent of the
+// item-level cap/cooldown (checkNudgeCapForWrite) — a single dispatch whose
+// LLM retries after an ambiguous MCP response must not get a second write.
+func TestClaimNudgeAttemptForWrite_RefusesSecondAttempt(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	_, sessUUID := setupDiagnoseSession(t, storage)
+	dh := &diagnoseHandlers{storage: storage}
+	ctx := context.Background()
+
+	firstRes := dh.claimNudgeAttemptForWrite(ctx, sessUUID)
+	assert.Nil(t, firstRes, "the first attempt from a fresh dispatch must be allowed through (nil result)")
+
+	secondRes := dh.claimNudgeAttemptForWrite(ctx, sessUUID)
+	require.NotNil(t, secondRes, "a second attempt from the same dispatched session must be refused")
+	m := parseResult(t, secondRes)
+	assert.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrPermissionDenied, errObj["code"])
+	assert.Equal(t, diagnoseNudgeAlreadyAttemptedMessage, errObj["message"])
+}
+
 func TestNudgeSession_should_Refuse_When_TargetSessionNotLive(t *testing.T) {
 	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.DiagnoseNudgeFeatureFlag, true))

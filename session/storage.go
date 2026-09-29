@@ -1286,6 +1286,12 @@ func (s *Storage) IsDiagnoseCaller(ctx context.Context, sessionUUID string) bool
 	return row.Role == SessionRoleDiagnose
 }
 
+// ClaimDiagnoseNudgeAttempt atomically claims sessionUUID's one nudge-write
+// attempt — see EntRepository.ClaimDiagnoseNudgeAttempt's doc comment.
+func (s *Storage) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUUID string) (claimed bool, err error) {
+	return s.repo.ClaimDiagnoseNudgeAttempt(ctx, sessionUUID)
+}
+
 // GetWorktreeDataBySessionUUID returns the git worktree data for the Session with
 // the given UUID. Returns empty GitWorktreeData for directory-mode sessions or if
 // the session is not found.
