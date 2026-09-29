@@ -35,6 +35,7 @@ import { SendBackError } from "./detail/SendBackError";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
+import { ItemClaimBanner } from "./ItemClaimBanner";
 import { BacklogItemForm } from "./BacklogItemForm";
 import { AcCriteriaList } from "./AcCriteriaList";
 import { InlineError } from "./InlineError";
@@ -1499,6 +1500,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 {copiedField === "link" && "Link copied to clipboard"}
               </span>
             </div>
+            {item.externalUrl && <ItemClaimBanner externalUrl={item.externalUrl} />}
           </div>
           <div className={styles.headerActions}>
             <ConnectionIndicator connectionState={connectionState} />

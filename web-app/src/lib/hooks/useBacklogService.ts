@@ -694,6 +694,15 @@ function toProtoAcCriteria(criteria: AcCriterion[]): AcCriterionProto[] {
 // GitHub picker domain types
 // ---------------------------------------------------------------------------
 
+function toClaimedElsewhere(claim: { externalUrl: string; claimingHostId: string; itemDeepLink: string; disputed: boolean }): ClaimedElsewhere {
+  return {
+    externalUrl: claim.externalUrl,
+    claimingHostId: claim.claimingHostId,
+    itemDeepLink: claim.itemDeepLink,
+    disputed: claim.disputed,
+  };
+}
+
 export interface ImportGitHubIssueOptions {
   repoPath?: string;
   skipPlanning?: boolean;
@@ -711,6 +720,17 @@ export interface ClaimedElsewhere {
   /** The claiming host's ssq:// deep link to its item. */
   itemDeepLink: string;
   disputed: boolean;
+}
+
+/** Result of a CheckCrossHostClaim call. `claim` is set only when another host holds the URL. */
+export interface CrossHostClaimStatus {
+  /** False while cross_host_claim_dedup is off: render nothing. */
+  enabled: boolean;
+  /** True when the answer is definitive; enabled && !checked means "could not confirm". */
+  checked: boolean;
+  claim?: ClaimedElsewhere;
+  /** Unix seconds of the claim, 0 when unknown. */
+  claimedAtUnix: number;
 }
 
 export type ImportGitHubIssueResult =
@@ -768,6 +788,12 @@ interface UseBacklogServiceReturn {
    */
   parseBacklogItemIntent: (message: string) => Promise<ParsedBacklogItemDraft | null>;
   importGitHubIssue: (issueUrl: string, options?: ImportGitHubIssueOptions) => Promise<ImportGitHubIssueResult | null>;
+  /** Null on any RPC failure: the claim banner degrades to nothing. */
+  checkCrossHostClaim: (externalUrl: string, options?: { localOnly?: boolean }) => Promise<CrossHostClaimStatus | null>;
+  /** Claims other hosts hold in the local index; empty on failure or when the feature is off. */
+  listForeignClaims: () => Promise<ClaimedElsewhere[]>;
+  /** Clears the disputed flag for externalUrl. Throws on failure so the form can show it. */
+  resolveClaimDispute: (externalUrl: string, reason: string) => Promise<void>;
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
   listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number; host?: string }) => Promise<GitHubIssue[]>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
@@ -1303,6 +1329,45 @@ export function useBacklogService(): UseBacklogServiceReturn {
     }
   }, []);
 
+  const checkCrossHostClaim = useCallback(
+    async (externalUrl: string, options?: { localOnly?: boolean }): Promise<CrossHostClaimStatus | null> => {
+      if (!clientRef.current) return null;
+      try {
+        const resp = await clientRef.current.checkCrossHostClaim({ externalUrl, localOnly: options?.localOnly ?? false });
+        return {
+          enabled: resp.enabled,
+          checked: resp.checked,
+          claim: resp.claim ? toClaimedElsewhere(resp.claim) : undefined,
+          claimedAtUnix: Number(resp.claimedAtUnix),
+        };
+      } catch (err) {
+        console.warn("[useBacklogService] checkCrossHostClaim:", err);
+        return null;
+      }
+    },
+    []
+  );
+
+  const listForeignClaims = useCallback(async (): Promise<ClaimedElsewhere[]> => {
+    if (!clientRef.current) return [];
+    try {
+      const resp = await clientRef.current.listForeignClaims({});
+      return resp.enabled ? resp.claims.map(toClaimedElsewhere) : [];
+    } catch (err) {
+      console.warn("[useBacklogService] listForeignClaims:", err);
+      return [];
+    }
+  }, []);
+
+  const resolveClaimDispute = useCallback(async (externalUrl: string, reason: string): Promise<void> => {
+    if (!clientRef.current) throw new Error("Backlog service unavailable.");
+    try {
+      await clientRef.current.resolveClaimDispute({ externalUrl, reason });
+    } catch (err) {
+      throw new Error(getErrorMessage(err, "Failed to resolve claim dispute."));
+    }
+  }, []);
+
   const importGitHubIssue = useCallback(
     async (issueUrl: string, options?: ImportGitHubIssueOptions): Promise<ImportGitHubIssueResult | null> => {
       if (!clientRef.current) return null;
@@ -1415,6 +1480,9 @@ export function useBacklogService(): UseBacklogServiceReturn {
       createBacklogItemFromChat,
       parseBacklogItemIntent,
       importGitHubIssue,
+      checkCrossHostClaim,
+      listForeignClaims,
+      resolveClaimDispute,
       searchGitHubRepos,
       listGitHubIssues,
       updateBacklogItem,
