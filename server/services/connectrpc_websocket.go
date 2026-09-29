@@ -457,25 +457,26 @@ type escapeAnalyticsStreamSource interface {
 	GetTotalBytesWritten() int64
 }
 
-func escapeAnalyticsHubOptions(controller streamhub.SessionController) []streamhub.HubOption {
+func escapeAnalyticsHubOptions(sessionName string, controller streamhub.SessionController) []streamhub.HubOption {
+	opts := []streamhub.HubOption{streamhub.WithCaptureTap(streamhub.CaptureTapFor(sessionName))}
 	source, ok := controller.(escapeAnalyticsStreamSource)
 	if !ok {
-		return nil
+		return opts
 	}
-	return []streamhub.HubOption{streamhub.WithOutputObserver(func(data []byte) {
+	return append(opts, streamhub.WithOutputObserver(func(data []byte) {
 		parser := source.GetEscapeParser()
 		if parser == nil || !parser.IsEnabled() {
 			return
 		}
 		parser.ParseStage2(data, source.GetTotalBytesWritten()-int64(len(data)))
-	})}
+	}))
 }
 
 func (r *hubRegistry) loadOrCreateHubLocked(sessionName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
 	var hub *streamhub.StreamHub
 	err := streamhub.AcquireOwnershipLock(sessionName).AcquireAndResolveExpecting(true, streamhub.PathHubOwned, func() error {
 		h, loaded := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
-			return streamhub.NewStreamHub(sessionName, controller, escapeAnalyticsHubOptions(controller)...), false
+			return streamhub.NewStreamHub(sessionName, controller, escapeAnalyticsHubOptions(sessionName, controller)...), false
 		})
 		if loaded {
 			log.Debug("[hubRegistry] reusing existing StreamHub", "session", sessionName)
@@ -1340,6 +1341,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		quiescenceCh:    quiescenceCh,
 		forwardingReady: &forwardingReady,
 		resizeSettling:  &resizeSettling,
+		tap:             streamhub.CaptureTapFor(sessionID),
 	})
 
 	h.performInitialResizeNudge(instance, sessionID, streamGeneration, currentPaneReq, quiescenceCh)
@@ -1599,6 +1601,7 @@ type controlModeOutputForwarderParams struct {
 	quiescenceCh    chan struct{}
 	forwardingReady *atomic.Bool
 	resizeSettling  *atomic.Bool
+	tap             *streamhub.CaptureTap // nil unless the capture tap is enabled
 }
 
 // forwardControlModeOutput is streamViaControlMode's Goroutine 1: forwards
@@ -1654,6 +1657,7 @@ func (h *ConnectRPCWebSocketHandler) forwardOneControlModeFrame(p controlModeOut
 	// buf is safe to return to coalesceBufPool after sendData.
 	cbp := coalesceBufPool.Get().(*[]byte)
 	buf := coalesceAvailableFrames(append((*cbp)[:0], data...), p.updateChan)
+	p.tap.Record(streamhub.TapOutput, "", buf)
 	tapEscapeAnalytics(p.instance, escapeParser, buf)
 	p.instance.ObserveAltScreenTransition(buf)
 

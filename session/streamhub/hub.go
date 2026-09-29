@@ -98,6 +98,12 @@ func WithOutputObserver(fn func([]byte)) HubOption {
 	return func(h *StreamHub) { h.outputObserver = fn }
 }
 
+// WithCaptureTap installs a capture tap that records raw output, drops,
+// resizes and snapshots. A nil tap is a no-op.
+func WithCaptureTap(t *CaptureTap) HubOption {
+	return func(h *StreamHub) { h.tap = t }
+}
+
 // StreamHub is the single-owner runtime object for one tmux session's output
 // stream: it fans output out to every attached subscriber over a
 // Transport-agnostic interface, and is the sole caller of that session's
@@ -115,6 +121,7 @@ type StreamHub struct {
 	quiescenceQuietPeriod time.Duration
 	batchMaxWindow        time.Duration
 	outputObserver        func([]byte)
+	tap                   *CaptureTap
 
 	mu sync.Mutex
 	// state only transitions to HubTornDown once ForceTeardown's close/
@@ -681,8 +688,10 @@ func (h *StreamHub) OnRawOutput(data []byte) {
 	resizing := h.resizing
 	h.resizeMu.Unlock()
 	if resizing {
+		h.tap.Record(TapDrop, DropCauseResizeSettling, data)
 		return
 	}
+	h.tap.Record(TapOutput, "", data)
 	h.batchWindow.Add(data)
 }
 
@@ -726,6 +735,7 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	h.resizeMu.Lock()
 	h.resizing = true
 	h.resizeMu.Unlock()
+	h.tap.RecordResize(size)
 	defer func() {
 		h.resizeMu.Lock()
 		h.resizing = false
@@ -793,6 +803,7 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// (Story 2.1.2, research/pitfalls.md §2c/§2d): it must never wait behind
 	// whatever raw output happens to be mid-accumulation, since it is itself
 	// the authoritative resync point every subscriber is waiting on.
+	h.tap.Record(TapSnapshot, "", prepared)
 	h.batchWindow.Bypass(prepared)
 }
 
