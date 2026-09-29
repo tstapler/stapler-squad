@@ -64,24 +64,32 @@ const diagnoseDispatchMCPServerName = "stapler-squad"
 // diagnoseDispatchAllowedTools restricts the dispatched diagnostic agent
 // (runDiagnosticCall) to exactly the tool surface session/diagnose/prompt.go's
 // instructionBlock() documents to the model: file a bug, post a note, or
-// nudge the target session. Nothing else -- notably NOT run_command
-// (server/mcp/tools_terminal.go), which writes directly into a session's tmux
-// pane via session.SubmitContentWithEnter with NO NudgeGate check, NO
-// identity reverification, and NO cap/cooldown, completely bypassing
-// ADR-002/ADR-003. Before this allowlist, an unrestricted headless call
-// granted the dispatched agent every registered MCP tool, including that one.
+// nudge the target session. Nothing else -- notably NOT run_command or
+// send_control (server/mcp/tools_terminal.go), which write directly into a
+// session's tmux pane with NO NudgeGate check, NO identity reverification,
+// and NO cap/cooldown, bypassing ADR-002/ADR-003. Before this allowlist, an
+// unrestricted headless call granted the dispatched agent every registered
+// MCP tool, including those two.
 //
-// TODO(backlog): this is a client-side (--allowedTools) mitigation only.
-// CLI-level tool restriction is not a hard security boundary under
-// bypassPermissions-style permission modes -- see
-// headless.CodebaseReadAllowedTools's doc comment and the ADR-001 addendum it
-// cites, which empirically proved an unlisted Bash command still executes
-// under that mode. The stronger, still-needed follow-up is SERVER-side
-// enforcement: route run_command (server/mcp/tools_terminal.go) through the
-// same evaluateNudgeGate/checkDuplicateWriteGuard/verifyNudgeIdentity
-// pipeline steer_session/write_to_session/resume_session already use, or
-// reject it outright when the calling session is a headless-diagnose
-// dispatch.
+// This is still only a client-side (--allowedTools) mitigation, which is not
+// a hard security boundary under bypassPermissions-style permission modes --
+// see headless.CodebaseReadAllowedTools's doc comment and the ADR-001
+// addendum it cites, which empirically proved an unlisted Bash command still
+// executes under that mode. run_command and send_control additionally have a
+// SERVER-side rejection now (rejectIfDiagnosticDispatchCaller,
+// server/mcp/diagnose_gate_wiring.go): both reject a headless-diagnose-*
+// caller by resolving its own session UUID to a DiagnoseDispatch row,
+// independent of this allowlist or whether the CLI honors it.
+//
+// Residual scope, not yet closed: every OTHER tool left out of this
+// allowlist (pause_session, stop_session, create_session, run_workflow,
+// upsert_approval_rule, etc.) still relies on --allowedTools alone -- the
+// MCP server has no general default-deny caller-identity gate for
+// headless-diagnose-* sessions, only the two PTY-write tools this
+// investigation specifically found and closed. Extending
+// rejectIfDiagnosticDispatchCaller (or a broader allowlist-shaped
+// server-side check) to the rest of that surface is a separate, larger
+// follow-up, not covered here.
 var diagnoseDispatchAllowedTools = strings.Join([]string{
 	mcpToolName("create_backlog_item"),
 	mcpToolName("post_backlog_update"),

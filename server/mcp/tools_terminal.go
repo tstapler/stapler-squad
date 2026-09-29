@@ -474,7 +474,16 @@ type SendControlResult struct {
 	Sent string `json:"sent"`
 }
 
-func (th *terminalHandlers) sendControl(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (th *terminalHandlers) sendControl(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	// SERVER-SIDE enforcement, same rationale as run_command's: send_control
+	// is the other PTY-write tool outside the NudgeGate-gated three and
+	// outside diagnoseDispatchAllowedTools, so it must be rejected for a
+	// headless-diagnose-* caller regardless of --allowedTools. See
+	// rejectIfDiagnosticDispatchCaller's doc comment (diagnose_gate_wiring.go).
+	if r := rejectIfDiagnosticDispatchCaller(ctx, th.dispatchWriteGuard, "send_control"); r != nil {
+		return r, nil
+	}
+
 	args := req.GetArguments()
 	sessionID, ok := args["session_id"].(string)
 	if !ok || sessionID == "" {
@@ -648,6 +657,21 @@ type RunCommandResult struct {
 }
 
 func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	// SERVER-SIDE enforcement of the ADR-002/ADR-003 write-safety boundary:
+	// checked first, before any argument parsing, since this must reject a
+	// headless-diagnose-* caller regardless of what session_id/command it
+	// passes and independent of whether the client CLI's --allowedTools
+	// (diagnoseDispatchAllowedTools, diagnose_dispatch_session_creator.go)
+	// was actually honored. See rejectIfDiagnosticDispatchCaller's doc
+	// comment (diagnose_gate_wiring.go) for why run_command needs its own
+	// caller-identity check instead of reusing evaluateNudgeGate/
+	// checkDuplicateWriteGuard: those gate a WRITE TO A TARGET SESSION;
+	// run_command must be rejected outright, with no target-session concept
+	// involved at all.
+	if r := rejectIfDiagnosticDispatchCaller(ctx, th.dispatchWriteGuard, "run_command"); r != nil {
+		return r, nil
+	}
+
 	args := req.GetArguments()
 	sessionID, ok := args["session_id"].(string)
 	if !ok || sessionID == "" {

@@ -12,6 +12,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -409,4 +410,82 @@ func checkDuplicateWriteGuard(ctx context.Context, guard diagnoseDispatchWriteGu
 		return gateFailureResult(diagnose.SafetyGateReasonDuplicateWriteAttemptForDispatch)
 	}
 	return nil
+}
+
+// diagnoseDispatchCallerLookup is the narrow interface run_command/
+// send_control's server-side dispatch-caller rejection needs -- satisfied by
+// diagnoseDispatchWriteGuard (and hence services.DiagnoseDispatchStore), so
+// terminalHandlers can pass its existing dispatchWriteGuard field straight
+// through with no new wiring. Deliberately narrower than
+// diagnoseDispatchWriteGuard itself (this check has no dispatchID to call
+// CheckAndSetWriteAttempted with) -- one narrow interface per gate concern,
+// per diagnoseOutcomeHooks's doc comment.
+type diagnoseDispatchCallerLookup interface {
+	FindByDiagnosticSessionUUID(ctx context.Context, diagnosticSessionUUID string) (dispatchID string, found bool, err error)
+}
+
+// rejectIfDiagnosticDispatchCaller is the SERVER-SIDE enforcement of the
+// boundary diagnoseDispatchAllowedTools
+// (server/services/diagnose_dispatch_session_creator.go) only enforces
+// client-side via the claude CLI's --allowedTools. That flag depends on the
+// CLI actually honoring it; it does not hold under a bypassPermissions-style
+// session mode or a CLI bug that skips the check (see that file's TODO,
+// which this function resolves). It gates run_command and send_control --
+// the two PTY-write MCP tools NOT among the three NudgeGate-gated handlers
+// (steer_session/write_to_session/resume_session) and NOT in
+// diagnoseDispatchAllowedTools: neither has a target-session identity to
+// re-verify or a nudge cap to consult, so evaluateNudgeGate/
+// checkDuplicateWriteGuard don't apply to them -- they must simply never run
+// for a headless-diagnose-* dispatched caller, full stop.
+//
+// Resolves the CALLING session's own UUID (from context, not the
+// session_id argument the tool targets) to a DiagnoseDispatch row via
+// FindByDiagnosticSessionUUID -- the same status-blind lookup Story
+// 4.1.4g's checkDuplicateWriteGuard already uses for its duplicate-write
+// guard. This is deliberately NOT a string match against the caller's
+// session title/HeadlessDiagnosticSessionIDPrefix: a title is cosmetic
+// (renamable, and no different in kind from any other session's title),
+// whereas a DiagnoseDispatch row only ever exists for a session
+// DiagnoseDispatcher.dispatchAndRecord itself created -- it records the row
+// via dispatchStore.Record BEFORE launching the session (diagnose_dispatcher.go),
+// so by the time any MCP call from that session can be handled, the row is
+// already durably present.
+//
+// Skips (returns nil, allow) when: lookup is nil (dispatch store unwired,
+// e.g. storage == nil on the stdio fallback transport -- in that
+// configuration the diagnose-dispatch feature cannot run at all, so there is
+// no dispatch row to ever match); the caller has no STAPLER_SESSION_UUID in
+// context (manual/external MCP client -- e.g. Tyler's own terminal); or the
+// caller's session has no matching DiagnoseDispatch row (not a diagnose
+// dispatch). A lookup error fails CLOSED (deny), like every other
+// safety-critical check in this file: ambiguity about whether the caller is
+// a diagnose dispatch must resolve to "no shell/control access," not "assume
+// it's fine."
+func rejectIfDiagnosticDispatchCaller(ctx context.Context, lookup diagnoseDispatchCallerLookup, toolName string) *mcpgo.CallToolResult {
+	if lookup == nil {
+		return nil
+	}
+	callerUUID, ok := sessionUUIDFromContext(ctx)
+	if !ok {
+		return nil
+	}
+
+	_, found, err := lookup.FindByDiagnosticSessionUUID(ctx, callerUUID)
+	if err != nil {
+		log.Error("diagnostic dispatch caller check: lookup failed, failing closed", "tool", toolName, "caller_session_uuid", callerUUID, "error", err)
+		return diagnosticDispatchDeniedResult(toolName)
+	}
+	if !found {
+		return nil
+	}
+	return diagnosticDispatchDeniedResult(toolName)
+}
+
+// diagnosticDispatchDeniedResult builds the PERMISSION_DENIED result shared
+// by every rejectIfDiagnosticDispatchCaller call site (matched row, and
+// failed lookup) so they can't drift into different wording.
+func diagnosticDispatchDeniedResult(toolName string) *mcpgo.CallToolResult {
+	return errResult(ErrPermissionDenied,
+		fmt.Sprintf("%s is not available to headless-diagnose-* dispatched sessions", toolName),
+		"Use create_backlog_item, post_backlog_update, steer_session, or write_to_session instead -- those are the tools available to a diagnostic dispatch.")
 }

@@ -1183,6 +1183,22 @@ appear in the Sessions list as a `headless_diagnostic` Synthetic Session for fre
 ##### Task 5.1.2f: Unit test: rendered prompt's instruction block contains the evidence-citation requirement, naming all 8 `BundleSection` values the agent may cite (~3 min)
 - Files: `session/diagnose/prompt_test.go`
 
+**Phase 6 addendum (`run_command`/`send_control` write-path gap)**: Phase 6 review found
+that `run_command` and `send_control` (`server/mcp/tools_terminal.go`) are two more
+PTY-write MCP tools outside the three NudgeGate-gated handlers
+(`steer_session`/`write_to_session`/`resume_session`), with no gate of their own —
+`run_command` in particular could run any shell command on the target session,
+completely bypassing ADR-002/ADR-003. The fix has two layers: a client-side
+`--allowedTools` restriction on the dispatched session's launch `CallOptions`
+(`diagnoseDispatchAllowedTools`, `server/services/diagnose_dispatch_session_creator.go`)
+excluding both tools, plus a SERVER-side rejection
+(`rejectIfDiagnosticDispatchCaller`, `server/mcp/diagnose_gate_wiring.go`) that resolves
+the calling session's own UUID to a `DiagnoseDispatch` row and denies the call outright
+— independent of the client flag, so it holds even under a `bypassPermissions`-style
+session mode or a CLI that ignores `--allowedTools`. See that file's doc comment for the
+residual scope this does *not* cover: every other tool left out of the allowlist
+(`pause_session`, `run_workflow`, etc.) still relies on the client-side flag alone.
+
 #### Story 5.1.3: MCP disconnect / dispatch-failure handling
 **As a** Tyler, **I want** an MCP-unreachable failure during dispatch to surface as a
 distinct `DispatchFailed` outcome, **so that** it's visually distinguishable from a

@@ -1095,3 +1095,163 @@ func TestWriteToSession_ShouldRunDuplicateWriteGuardBeforeFinalIdentityRecheck(t
 	require.NoError(t, err)
 	assertDuplicateWriteGuardRejected(t, result)
 }
+
+// --- Phase 6 residual gap: run_command server-side dispatch-caller rejection ---
+
+// TestRunCommand_ShouldRejectServerSide_WhenCallerIsDiagnosticDispatchSession
+// proves run_command is now rejected purely on server-side caller identity,
+// with no dependency on client-side enforcement: unlike steer_session/
+// write_to_session/resume_session, run_command calls neither evaluateNudgeGate
+// nor checkDuplicateWriteGuard, and the only prior restriction was the
+// diagnostic agent's own --allowedTools launch flag
+// (diagnoseDispatchAllowedTools, server/services/diagnose_dispatch_session_creator.go)
+// -- which depends on the claude CLI honoring it and does not hold under a
+// bypassPermissions-style session mode. This test sets no client-side flag
+// at all: th is a plain terminalHandlers with a real DiagnoseDispatchStore,
+// and the request carries a fully well-formed session_id/command, exactly
+// what a client that ignored --allowedTools would send.
+func TestRunCommand_ShouldRejectServerSide_WhenCallerIsDiagnosticDispatchSession(t *testing.T) {
+	targetInst := newGatedTestInstance(t, "run-command-target-session", "claude")
+	th, _, dispatchStore := newDispatchGuardTestSetup(t, targetInst)
+
+	callerUUID := "diagnostic-session-uuid-for-run-command-test"
+	itemID := targetInst.Snapshot().UUID
+	_, err := dispatchStore.Record(context.Background(), services.DiagnoseDispatchRequest{
+		ItemID: itemID, TargetSessionUUID: itemID, DiagnosticSessionUUID: callerUUID,
+	})
+	require.NoError(t, err)
+
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	req := makeToolReq(map[string]interface{}{
+		"session_id": targetInst.Title,
+		"command":    "rm -rf /",
+	})
+
+	result, err := th.runCommand(ctx, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, _ := m["error"].(map[string]interface{})
+	require.NotNil(t, errObj)
+	require.Equal(t, ErrPermissionDenied, errObj["code"])
+}
+
+// TestRunCommand_ShouldAllow_WhenCallerHasNoMatchingDiagnoseDispatchRow proves
+// the new check doesn't overreach: a normal caller (a real work session, or a
+// manual/external MCP client with no STAPLER_SESSION_UUID linkage to any
+// DiagnoseDispatch row) must still reach run_command's ordinary
+// findInstance/session-lookup handling, not the new PERMISSION_DENIED
+// rejection -- mirroring the "...WhenCallerHasNoMatchingDiagnoseDispatchRow"
+// tests already covering steer_session/write_to_session/resume_session.
+func TestRunCommand_ShouldAllow_WhenCallerHasNoMatchingDiagnoseDispatchRow(t *testing.T) {
+	targetInst := newGatedTestInstance(t, "run-command-target-session-2", "claude")
+	th, _, _ := newDispatchGuardTestSetup(t, targetInst) // no dispatch rows recorded
+
+	ctx := WithSessionUUID(context.Background(), "manual-caller-with-no-dispatch-row")
+	req := makeToolReq(map[string]interface{}{
+		"session_id": "some-nonexistent-session",
+		"command":    "echo hi",
+	})
+
+	result, err := th.runCommand(ctx, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, _ := m["error"].(map[string]interface{})
+	require.NotNil(t, errObj)
+	require.NotEqual(t, ErrPermissionDenied, errObj["code"],
+		"a caller with no DiagnoseDispatch row must not be rejected by the new dispatch-caller check")
+}
+
+// TestRunCommand_ShouldSkipDispatchCallerCheck_WhenGuardNil mirrors every
+// other gate's nil-skips-entirely convention (evaluateNudgeGate,
+// checkDuplicateWriteGuard): th.dispatchWriteGuard unset (e.g. storage == nil
+// on the stdio fallback transport) must not panic and must not reject a call
+// that would otherwise proceed to findInstance's own SESSION_NOT_FOUND.
+func TestRunCommand_ShouldSkipDispatchCallerCheck_WhenGuardNil(t *testing.T) {
+	th := &terminalHandlers{
+		store:      &stubStore{},
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
+	}
+
+	ctx := WithSessionUUID(context.Background(), "diagnostic-session-uuid-for-nil-guard-test")
+	req := makeToolReq(map[string]interface{}{
+		"session_id": "some-nonexistent-session",
+		"command":    "echo hi",
+	})
+
+	result, err := th.runCommand(ctx, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, _ := m["error"].(map[string]interface{})
+	require.NotNil(t, errObj)
+	require.Equal(t, ErrSessionNotFound, errObj["code"],
+		"a nil dispatchWriteGuard must skip the new check entirely and fall through to normal session lookup")
+}
+
+// --- send_control: same server-side dispatch-caller rejection as run_command ---
+//
+// send_control is the OTHER PTY-write tool this investigation found sharing
+// run_command's exact gap: outside the three NudgeGate-gated handlers
+// (steer_session/write_to_session/resume_session) and outside
+// diagnoseDispatchAllowedTools, with no server-side caller check of its own
+// -- only the same client-side --allowedTools restriction.
+
+// TestSendControl_ShouldRejectServerSide_WhenCallerIsDiagnosticDispatchSession
+// mirrors TestRunCommand_ShouldRejectServerSide_WhenCallerIsDiagnosticDispatchSession
+// for send_control.
+func TestSendControl_ShouldRejectServerSide_WhenCallerIsDiagnosticDispatchSession(t *testing.T) {
+	targetInst := newGatedTestInstance(t, "send-control-target-session", "claude")
+	th, _, dispatchStore := newDispatchGuardTestSetup(t, targetInst)
+
+	callerUUID := "diagnostic-session-uuid-for-send-control-test"
+	itemID := targetInst.Snapshot().UUID
+	_, err := dispatchStore.Record(context.Background(), services.DiagnoseDispatchRequest{
+		ItemID: itemID, TargetSessionUUID: itemID, DiagnosticSessionUUID: callerUUID,
+	})
+	require.NoError(t, err)
+
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	req := makeToolReq(map[string]interface{}{
+		"session_id": targetInst.Title,
+		"key":        "C",
+	})
+
+	result, err := th.sendControl(ctx, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, _ := m["error"].(map[string]interface{})
+	require.NotNil(t, errObj)
+	require.Equal(t, ErrPermissionDenied, errObj["code"])
+}
+
+// TestSendControl_ShouldAllow_WhenCallerHasNoMatchingDiagnoseDispatchRow
+// mirrors TestRunCommand_ShouldAllow_WhenCallerHasNoMatchingDiagnoseDispatchRow
+// for send_control.
+func TestSendControl_ShouldAllow_WhenCallerHasNoMatchingDiagnoseDispatchRow(t *testing.T) {
+	targetInst := newGatedTestInstance(t, "send-control-target-session-2", "claude")
+	th, _, _ := newDispatchGuardTestSetup(t, targetInst) // no dispatch rows recorded
+
+	ctx := WithSessionUUID(context.Background(), "manual-caller-with-no-dispatch-row")
+	req := makeToolReq(map[string]interface{}{
+		"session_id": "some-nonexistent-session",
+		"key":        "C",
+	})
+
+	result, err := th.sendControl(ctx, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, _ := m["error"].(map[string]interface{})
+	require.NotNil(t, errObj)
+	require.NotEqual(t, ErrPermissionDenied, errObj["code"],
+		"a caller with no DiagnoseDispatch row must not be rejected by the new dispatch-caller check")
+}
