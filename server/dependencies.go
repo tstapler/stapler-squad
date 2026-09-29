@@ -1027,8 +1027,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// After a service restart, drivers are not automatically restarted for loaded sessions.
 		// Sessions created by the workflow scheduler that never had their prompt injected
 		// (e.g., service restarted within 30 s of session creation) need the driver resumed.
-		// The driver itself checks for an existing JSONL conversation file and skips the send
-		// if the prompt was already delivered in a previous run.
+		// This restarts the driver for every session with a non-empty InitialPrompt, not just
+		// ones from the last 30s — safe because the driver itself checks Instance.InitialPromptSentAt
+		// (persisted; set the moment a send actually happens) before falling back to the
+		// output/JSONL heuristics, and skips re-sending if it's already set.
 		for _, inst := range instances {
 			if inst.InitialPrompt == "" {
 				continue
@@ -1356,6 +1358,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			recoverAndLog("quota gate reconcile ticker", func() { quotaGate.Reconcile(ctx) })
 		}
 	}()
+
+	// Worktree consistency sweeper: reconciles missing/incorrect Worktree ent rows
+	// against live `git worktree` state, gated by FeatureFlagWorktreeConsistencySweep
+	// (default off). config.LoadConfig is passed directly, not a closure over cfg, so
+	// the flag can be flipped live with no restart (matches quotaGate/julesDispatchSvc).
+	go session.StartWorktreeConsistencySweeper(context.Background(), storage, &services.EventBusNotifier{Bus: eventBus}, config.LoadConfig)
 
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine, pipelineEngine, pipelineModeRepo)
 	backlogSvc.SetLivenessRepository(livenessRepo)

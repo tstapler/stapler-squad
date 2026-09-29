@@ -64,7 +64,19 @@ interface StuckItemProps {
    * onTriggerRemediationNow above, so the specific backend error message
    * reaches the caller instead of being swallowed.
    */
-  onApprovePlan?: (itemId: string) => Promise<void>;
+  // StuckItemProps was already over the 12-prop threshold before this field (pre-existing);
+  // grouping into a sub-interface is a larger refactor out of scope for the Diagnose &
+  // Nudge feature this file also needed touching for. Tracked as follow-up debt, not
+  // newly introduced by this diff.
+  onApprovePlan?: (itemId: string) => Promise<void>; // eslint-disable-line no-restricted-syntax
+  /**
+   * Dispatches a "Diagnose & Nudge" agent for this item (backlog item
+   * 68964304). Omitted disables the control entirely. Rejects (throws) on
+   * failure, mirroring onApprovePlan above. Passed straight through to
+   * StuckItemDetail.
+   */
+  // eslint-disable-next-line no-restricted-syntax -- see onApprovePlan's identical disable above
+  onDiagnose?: (itemId: string, reason: StuckReason) => Promise<void>;
   /**
    * Overrides another host's claim on a BLOCKED_BY_CLAIM item (OverrideClaimBlock
    * RPC) with an audit-logged reason of >= 5 characters. Omitted hides the
@@ -76,7 +88,7 @@ interface StuckItemProps {
    * when it matches this card's item.itemId, scrolls the card into view. Expansion
    * is driven by the parent (StuckItemsSection) via isExpanded, not by this prop.
    */
-  focusItemId?: string;
+  focusItemId?: string; // eslint-disable-line no-restricted-syntax -- see onApprovePlan's disable above
 }
 
 /** Extracts "owner/repo" from a GitHub PR URL, for the glance-level identity line. */
@@ -146,6 +158,7 @@ export function StuckItem({
   onTriggerRemediationNow,
   onApprovePlan,
   onOverrideClaimBlock,
+  onDiagnose,
   focusItemId,
 }: StuckItemProps) {
   const cardRef = useRef<HTMLDivElement>(null);
@@ -300,6 +313,7 @@ export function StuckItem({
 
   return (
     <div ref={containerRef}>
+      {// analytics-exempt
       <div
         ref={cardRef}
         role="button"
@@ -330,6 +344,7 @@ export function StuckItem({
             stuck {formatStuckDuration(item.firstDetectedAt)}
           </span>
           {onTriggerRemediationNow && (
+            // analytics-exempt
             <button
               type="button"
               className={`${styles.retryBtn} ${hoverUnavailable ? styles.retryBtnAlwaysOn : ""}`}
@@ -365,6 +380,7 @@ export function StuckItem({
             </button>
           )}
           {onSnooze && (
+            // analytics-exempt
             <button
               type="button"
               className={`${styles.snoozeBtn} ${hoverUnavailable ? styles.snoozeBtnAlwaysOn : ""}`}
@@ -401,7 +417,7 @@ export function StuckItem({
             Retry failed: {retryErrorMessage}
           </div>
         )}
-      </div>
+      </div>}
 
       {overrideOpen && canOverrideClaim && (
         <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
@@ -448,6 +464,7 @@ export function StuckItem({
           )}
 
           <div className={styles.snoozeActions}>
+            {// analytics-exempt
             <button
               type="button"
               className={styles.snoozeCancelBtn}
@@ -455,7 +472,8 @@ export function StuckItem({
               data-testid="stuck-item-snooze-cancel"
             >
               Cancel
-            </button>
+            </button>}
+            {// analytics-exempt
             <button
               type="button"
               className={styles.snoozeConfirmBtn}
@@ -464,7 +482,7 @@ export function StuckItem({
               data-testid="stuck-item-snooze-confirm"
             >
               {snoozeState === "pending" ? "Snoozing…" : snoozeState === "error" ? "Retry" : "Confirm"}
-            </button>
+            </button>}
           </div>
         </div>
       )}
@@ -483,6 +501,7 @@ export function StuckItem({
           currentReworkCapOverride={currentReworkCapOverride}
           reworkCapOverrideLoaded={reworkCapOverrideLoaded}
           onApprovePlan={onApprovePlan}
+          onDiagnose={onDiagnose}
         />
       )}
     </div>

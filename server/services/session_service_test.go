@@ -2737,10 +2737,11 @@ func TestWireCallbacks_WiresMCPServerURLProvider(t *testing.T) {
 	svc.SetMCPServerURL(func() string { return "http://localhost:19194/mcp" })
 
 	inst := &session.Instance{
-		Title:   "wire-callbacks-provider-session",
-		UUID:    "11111111-0000-0000-0000-000000000007",
-		Path:    "/tmp/test",
-		Program: "claude",
+		Title:       "wire-callbacks-provider-session",
+		UUID:        "11111111-0000-0000-0000-000000000007",
+		Path:        "/tmp/test",
+		Program:     "claude",
+		SessionType: session.SessionTypeDirectory, // NewInstance() would default this; this raw literal must too, or setupFirstTimeWorktree's stricter default: (worktree-envvars-hijack Story 3.2.1) now errors on the zero value instead of silently treating it as directory
 		// MCPServerURL deliberately left empty -- exercises the provider
 		// path, not the one-shot-field fallback.
 	}
@@ -4362,6 +4363,90 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 		defer mu.Unlock()
 		assert.GreaterOrEqual(t, len(phases), 2,
 			"creation_progress must be observed transitioning at least once before Active (Story 6.1.1's restart acceptance criterion); observed phases=%v", phases)
+	})
+
+	// ModeIsNewWorktree is worktree-envvars-hijack's Epic 4.1/Story 4.1.1
+	// end-to-end regression test: the exact request shape the original bug
+	// report used (SESSION_TYPE_NEW_WORKTREE + non-empty EnvVars + Program
+	// "claude") against a repo that already hosts a live SessionTypeDirectory
+	// session, asserting both directory-path isolation (a real, distinct
+	// worktree, never the bare repo path) and conversation-content isolation
+	// (the new session's ConversationUUID/HistoryFilePath never adopt the
+	// pre-existing sibling's) in both directions.
+	t.Run("ModeIsNewWorktree", func(t *testing.T) {
+		fix := setupForkTestFixture(t)
+		t.Cleanup(fix.cleanup)
+		wireRegistryForActorSerialization(fix)
+		home := withFakeHome(t) // the pre-existing session's fake JSONL fixture resolves under here
+
+		repoDir := t.TempDir()
+		initGitRepoWithCommit(t, repoDir)
+
+		// Seed the pre-existing sibling's fake conversation JSONL fixture,
+		// following TestHistoryFileDetector_DetectByPath_*'s pattern
+		// (session/history_detector_test.go): ~/.claude/projects/<encoded
+		// repoDir>/<uuid>.jsonl.
+		const preExistingUUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		projDir := filepath.Join(home, ".claude", "projects", session.ClaudeProjectDirName(repoDir))
+		require.NoError(t, os.MkdirAll(projDir, 0o755))
+		preExistingHistoryPath := filepath.Join(projDir, preExistingUUID+".jsonl")
+		require.NoError(t, os.WriteFile(preExistingHistoryPath, []byte(`{"sessionId":"`+preExistingUUID+`"}`+"\n"), 0o644))
+
+		// A real, live SessionTypeDirectory instance already running at
+		// repoDir -- real tmux backend via fix.svc.testTmuxServerSocket, not
+		// a struct-literal double, so IsBackendProcessAlive()/liveness checks
+		// see it as genuinely live. SetHistoryInfo seeds its conversation
+		// state deterministically rather than depending on a HistoryLinker
+		// poll to discover the JSONL fixture above.
+		preExisting, err := session.NewInstance(session.InstanceOptions{
+			Title:            "epic61-preexisting-directory",
+			Path:             repoDir,
+			Program:          "sh",
+			SessionType:      session.SessionTypeDirectory,
+			TmuxServerSocket: fix.svc.testTmuxServerSocket,
+		})
+		require.NoError(t, err)
+		require.NoError(t, preExisting.Start(true))
+		t.Cleanup(func() { _ = preExisting.Destroy() })
+		preExisting.SetHistoryInfo(preExistingUUID, preExistingHistoryPath)
+		require.NoError(t, fix.storage.AddInstance(preExisting))
+
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:       "epic61-new-worktree-session",
+			Path:        repoDir,
+			Program:     "claude",
+			SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+			Branch:      "epic61-new-worktree",
+			EnvVars:     map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000"},
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
+
+		assertReachesActiveViaPipeline(t, fix.svc, resp.Msg.Session, awaitTimeout, awaitPollInterval)
+
+		inst := fix.svc.FindLiveInstance(id)
+		require.NotNil(t, inst)
+
+		ws := inst.Workspace()
+		assert.NotEqual(t, repoDir, ws.ActiveDir,
+			"the new worktree session must resolve to a real, distinct worktree path, never the bare repo path")
+		assert.Equal(t, "http://127.0.0.1:47000", inst.EnvVars["ANTHROPIC_BASE_URL"],
+			"envVars-based program configuration must still work (issue #852's out-of-scope-but-must-not-worsen concern)")
+
+		// Conversation-content isolation half: if the new session has any
+		// conversation UUID/history path at all, it must never be the
+		// pre-existing sibling's -- proving no cross-session attach occurred.
+		assert.NotEqual(t, preExistingUUID, inst.GetClaudeConversationUUID(),
+			"new session must never adopt the pre-existing sibling's conversation UUID")
+		assert.NotEqual(t, preExistingHistoryPath, inst.Snapshot().HistoryFilePath,
+			"new session must never adopt the pre-existing sibling's history file path")
+
+		// The pre-existing sibling's own state must be untouched -- proving
+		// no cross-attach occurred in the OTHER direction either.
+		assert.Equal(t, session.Active, session.Status(preExisting.GetStatus()))
+		assert.Equal(t, repoDir, preExisting.Workspace().ActiveDir)
+		assert.Equal(t, preExistingUUID, preExisting.GetClaudeConversationUUID())
 	})
 
 	t.Run("ModeIsFork", func(t *testing.T) {

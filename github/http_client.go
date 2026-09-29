@@ -309,13 +309,6 @@ func newGHRequestForHostWithTokenAndBody(ctx context.Context, host, method, path
 	return req, nil
 }
 
-// newGHGraphQLRequest creates an authenticated POST request to host's GraphQL
-// endpoint (graphQLURLForHost), body already JSON-encoded by the caller,
-// resolving a token via getGHToken(ctx) — the GraphQL sibling of newGHRequest.
-func newGHGraphQLRequest(ctx context.Context, host string, body []byte) (*http.Request, error) {
-	return newGHGraphQLRequestForHostWithToken(ctx, host, body, getGHToken(ctx))
-}
-
 // newGHGraphQLRequestForHostWithToken creates a POST request to host's
 // GraphQL endpoint authenticated with an explicit token, body already
 // JSON-encoded by the caller. This is the POST+body sibling of

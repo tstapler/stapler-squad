@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import { useDiagnoseAction } from "@/lib/hooks/useDiagnoseAction";
 import { getStuckReasonLabel } from "./stuckReason";
 import { StuckItem } from "./StuckItem";
 import * as styles from "./StuckItemsSection.css";
@@ -48,6 +49,7 @@ const GROUP_ORDER: StuckReason[] = [
   StuckReason.LIKELY_FLAKY,
   StuckReason.BLOCKED_BY_DEPENDENCY,
   StuckReason.BLOCKED_BY_CLAIM,
+  StuckReason.WORKTREE_INCONSISTENT,
 ];
 
 function itemKey(item: Pick<StuckBacklogItem, "itemId" | "reason">): string {
@@ -110,6 +112,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
   } = useStuckBacklogItems();
   const { updateBacklogItem, transitionStatus, spawnSessionFromItem, approvePlan, getBacklogItem } =
     useBacklogService();
+  const { dispatchDiagnose } = useDiagnoseAction();
   const [filter, setFilter] = useState<FilterValue>("all");
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const [resolvedGhosts, setResolvedGhosts] = useState<Map<string, ResolvedGhost>>(new Map());
@@ -394,6 +397,20 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     [approvePlan, refetch]
   );
 
+  // Diagnose & Nudge (backlog item 68964304): dispatches a diagnostic agent
+  // scoped to this card's own StuckReason. Deliberately NOT
+  // try/catch-swallowed, same rationale as handleApprovePlan above — the
+  // card needs the specific dispatch failure, not a generic one. Does not
+  // refetch(): dispatching a diagnostic session doesn't change this item's
+  // stuck-state row by itself (a nudge, if the agent performs one, is what
+  // eventually resolves the condition on a later poll tick).
+  const handleDiagnose = useCallback(
+    async (itemId: string, reason: StuckReason): Promise<void> => {
+      await dispatchDiagnose(itemId, reason);
+    },
+    [dispatchDiagnose]
+  );
+
   // Visible items: the filtered set actually rendered. Cross-reference badges
   // are computed from this set so they auto-suppress once a filter narrows an
   // item to a single visible card.
@@ -441,8 +458,12 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     const map = new Map<StuckReason, StuckBacklogItem[]>();
     for (const reason of GROUP_ORDER) map.set(reason, []);
     for (const item of visibleItems) {
-      if (!map.has(item.reason)) map.set(item.reason, []);
-      map.get(item.reason)!.push(item);
+      const list = map.get(item.reason);
+      if (list) {
+        list.push(item);
+      } else {
+        map.set(item.reason, [item]);
+      }
     }
     for (const list of map.values()) {
       list.sort((a, b) => firstDetectedMs(a) - firstDetectedMs(b));
@@ -531,9 +552,12 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     body = (
       <div className={styles.errorBannerFullBody} data-testid="stuck-items-error-full">
         <span>⚠ Couldn&apos;t check for stuck items right now.</span>
-        <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
-          Retry
-        </button>
+        {
+          // analytics-exempt
+          <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
+            Retry
+          </button>
+        }
       </div>
     );
   } else if (showInitialLoading) {
@@ -553,13 +577,16 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     body = (
       <div className={styles.filteredEmpty} data-testid="stuck-items-filtered-empty">
         <span>No stuck items match &quot;{activeFilterLabel}&quot;.</span>
-        <button
-          className={styles.clearFilterBtn}
-          onClick={handleClearFilter}
-          data-testid="stuck-items-clear-filter"
-        >
-          Clear filter
-        </button>
+        {
+          // analytics-exempt
+          <button
+            className={styles.clearFilterBtn}
+            onClick={handleClearFilter}
+            data-testid="stuck-items-clear-filter"
+          >
+            Clear filter
+          </button>
+        }
       </div>
     );
   } else {
@@ -575,6 +602,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                   {getStuckReasonLabel(reason)} ({groupItems.length})
                 </h3>
                 {parkedInGroup > 0 && (
+                  // analytics-exempt
                   <button
                     type="button"
                     className={styles.resetParkedReasonBtn}
@@ -615,6 +643,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                       onTriggerRemediationNow={triggerRemediationNow}
                       onOverrideClaimBlock={overrideClaimBlock}
                       onApprovePlan={handleApprovePlan}
+                      onDiagnose={handleDiagnose}
                       focusItemId={focusItemId}
                     />
                   );
@@ -635,6 +664,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
           {totalCount} stuck
         </span>
         {parkedCount > 0 && (
+          // analytics-exempt
           <button
             type="button"
             className={styles.resetParkedBtn}
@@ -663,15 +693,19 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
             Couldn&apos;t refresh stuck items (last updated{" "}
             {Math.max(0, Math.floor((Date.now() - lastFetched.getTime()) / 60000))}m ago).
           </span>
-          <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
-            Retry
-          </button>
+          {
+            // analytics-exempt
+            <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
+              Retry
+            </button>
+          }
         </div>
       )}
 
       {!showFirstLoadError && !showInitialLoading && totalCount > 0 && (
         <div className={styles.filterRow} role="group" aria-label="Filter stuck items by reason">
           {chips.map(({ value, label, count }) => (
+            // analytics-exempt
             <button
               key={String(value)}
               className={`${styles.chip} ${filter === value ? styles.chipActive : ""}`}

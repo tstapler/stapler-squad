@@ -69,6 +69,8 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_STEER_FAILED
 	case domain.StuckReasonBlockedByClaim:
 		return sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM
+	case domain.StuckReasonWorktreeInconsistent:
+		return sessionv1.StuckReason_STUCK_REASON_WORKTREE_INCONSISTENT
 	default:
 		return sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED
 	}
@@ -120,6 +122,8 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonSteerFailed
 	case sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM:
 		return domain.StuckReasonBlockedByClaim
+	case sessionv1.StuckReason_STUCK_REASON_WORKTREE_INCONSISTENT:
+		return domain.StuckReasonWorktreeInconsistent
 	default:
 		return ""
 	}

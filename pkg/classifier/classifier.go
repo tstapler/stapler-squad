@@ -731,6 +731,13 @@ const ciConclusionSuccess = "success"
 
 // matchesRule returns true if all non-nil criteria in rule match the payload.
 func (c *RuleBasedClassifier) matchesRule(rule Rule, payload PermissionRequestPayload, ctx ClassificationContext) bool {
+	// A rule with no target fields or criteria at all is empty and matches nothing.
+	if rule.ToolName == "" && rule.ToolPattern == nil && rule.ToolCategory == "" &&
+		rule.CommandPattern == nil && rule.Criteria == nil && rule.FilePattern == nil &&
+		!rule.RequireCIPassing && rule.MinSessionIdleMinutes == 0 {
+		return false
+	}
+
 	// Tool name / pattern / category match.
 	if rule.ToolName != "" {
 		if !strings.EqualFold(payload.ToolName, rule.ToolName) {

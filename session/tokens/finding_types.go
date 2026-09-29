@@ -13,14 +13,17 @@ type FindingType = sessionv1.FindingType
 // Maps to session.v1.Severity enum in Go, same alias pattern as FindingType.
 type Severity = sessionv1.Severity
 
-// FindingType constants — 4 non-zero values ship in v1. Two more heuristics
-// (redundant/large-file-reads, tool-failure-rate) are deferred — see plan.md's
-// "Detector scope cut" note — and are intentionally not aliased here yet.
+// FindingType constants. 4 non-zero values shipped in v1; FindingLowCacheROI
+// shipped later (tstapler/stapler-squad#879), promoting ComputeCacheROI from a
+// tooltip-only metric to a first-class finding. Two more heuristics
+// (redundant/large-file-reads, tool-failure-rate) are still deferred — see
+// plan.md's "Detector scope cut" note — and are intentionally not aliased here yet.
 const (
 	FindingCacheHitFloorBreach   = sessionv1.FindingType_FINDING_TYPE_CACHE_HIT_FLOOR_BREACH
 	FindingSessionTokenCeiling   = sessionv1.FindingType_FINDING_TYPE_SESSION_TOKEN_CEILING
 	FindingModelSwitchCacheBust  = sessionv1.FindingType_FINDING_TYPE_MODEL_SWITCH_CACHE_BUST
 	FindingOversizedStartContext = sessionv1.FindingType_FINDING_TYPE_OVERSIZED_START_CONTEXT
+	FindingLowCacheROI           = sessionv1.FindingType_FINDING_TYPE_LOW_CACHE_ROI
 	// Reserved for future detectors, deferred per plan.md:
 	// FindingRedundantFileReads = sessionv1.FindingType_FINDING_TYPE_REDUNDANT_FILE_READS
 	// FindingToolFailureRate    = sessionv1.FindingType_FINDING_TYPE_TOOL_FAILURE_RATE

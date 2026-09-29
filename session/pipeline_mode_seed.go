@@ -267,15 +267,25 @@ skills normally do.
 Important: this is a single, non-interactive call with no later turn. Once you stop
 producing tool calls, this process exits immediately and whatever text you last wrote
 becomes the final result of the whole triage attempt - there is no follow-up message
-coming to resume you. sdd:3-plan dispatches subagents that may report they are running
-in the background. You must still wait for each one to actually finish and produce its
-real output before moving on - keep checking within this same call rather than ending
-your turn on the assumption a later message will notify you when it completes. Do not
-end your response with a status update describing work still in progress, such as
-saying a subagent is running in the background and you will wait for it - that
-sentence would become this entire call's output, with none of the research, plan, or
-validation actually written. Only stop once Step 3's JSON object below is the last
-thing you have written.
+coming to resume you. sdd:2-research, sdd:3-plan, and sdd:4-validate each dispatch
+several subagents in parallel that may report they are running in the background. You
+must still wait for each one to actually finish and produce its real output before
+moving on - keep checking within this same call rather than ending your turn on the
+assumption a later message will notify you when it completes. Do not end your response
+with a status update describing work still in progress, such as saying a subagent is
+running in the background and you will wait for it - that sentence would become this
+entire call's output, with none of the research, plan, or validation actually written.
+
+This item's four-phase SDD pipeline routinely dispatches dozens of subagents across its
+research/plan/validate phases. Waiting for each one is required, but checking on them
+one at a time is not: each subagent's completion already interrupts your wait
+automatically the instant it happens, so re-checking status after every individual
+notification burns a full turn re-reading this call's entire accumulated context for no
+new information. Wait for an entire phase's whole batch of dispatched subagents to
+report back before you re-check overall status, not for each one individually - this is
+the single biggest cost driver in this pipeline mode when it goes wrong.
+
+Only stop once Step 3's JSON object below is the last thing you have written.
 
 ### Step 3 - Output
 After requirements, research, plan, and validation are written, output ONLY a JSON

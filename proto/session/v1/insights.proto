@@ -38,13 +38,16 @@ enum Severity {
 }
 
 // FindingType identifies which waste-pattern heuristic produced a WasteFinding.
-// Exactly 4 non-zero values ship in v1 — see plan.md's "Detector scope cut" note.
+// 4 non-zero values shipped in v1 — see plan.md's "Detector scope cut" note.
+// FINDING_TYPE_LOW_CACHE_ROI (5) shipped later, promoting ComputeCacheROI from
+// a tooltip-only metric to a first-class finding — see tstapler/stapler-squad#879.
 enum FindingType {
   FINDING_TYPE_UNSPECIFIED              = 0;
   FINDING_TYPE_CACHE_HIT_FLOOR_BREACH   = 1;
   FINDING_TYPE_SESSION_TOKEN_CEILING    = 2;
   FINDING_TYPE_MODEL_SWITCH_CACHE_BUST  = 3;
   FINDING_TYPE_OVERSIZED_START_CONTEXT  = 4;
+  FINDING_TYPE_LOW_CACHE_ROI            = 5;
 }
 
 // ActivityType classifies the kind of work a session performed. Defined now
@@ -113,6 +116,15 @@ message SessionTokenSummary {
   // session/backlog.go), sourced once per request/event (ADR-029). Empty string means the
   // session was never linked to a backlog item, or its ItemSession row was hard-deleted.
   string session_role = 22;
+  // Per-category cost breakdown of estimated_cost_usd (Epic 1.4 follow-up):
+  // sum(input_cost_usd, output_cost_usd, cache_creation_cost_usd, cache_read_cost_usd)
+  // equals estimated_cost_usd for a fully-priced session; a partially-unpriced
+  // session (see unpriced_models) may sum to less, since unpriced usage
+  // contributes 0 to both the total and every category.
+  double input_cost_usd          = 23;
+  double output_cost_usd         = 24;
+  double cache_creation_cost_usd = 25;
+  double cache_read_cost_usd     = 26;
 }
 
 // TopToolEntry records a tool name and its call count in a session.
