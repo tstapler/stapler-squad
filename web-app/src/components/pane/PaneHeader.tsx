@@ -75,6 +75,7 @@ export function PaneHeader({
               onCreateCheckpoint={(id, label) => cockpit.onCreateCheckpoint(id, label)}
               onSetRateLimitEnabled={(id, enabled) => cockpit.onSetRateLimitEnabled(id, enabled)}
               onToggleAutonomousMode={(id, enabled) => cockpit.onToggleAutonomousMode(id, enabled)}
+              onTogglePinned={(id, pinned) => cockpit.onTogglePinned(id, pinned)}
               onToggleAutoApprove={(id, enabled) => cockpit.onToggleAutoApprove(id, enabled)}
               onSteerAutonomousSession={(id, msg) => cockpit.onSteerAutonomousSession(id, msg)}
               onClearConversationState={(id) => cockpit.onClearConversationState(id)}

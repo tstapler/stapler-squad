@@ -402,6 +402,10 @@ type Instance struct {
 	// appear in the user-facing session viewer.
 	Hidden bool
 
+	// Pinned surfaces the session in the dedicated Pinned section of the list.
+	// Cleared automatically on archive (see setArchivedAtLocked).
+	Pinned bool
+
 	// ProjectID is the optional project this session belongs to.
 	ProjectID string
 

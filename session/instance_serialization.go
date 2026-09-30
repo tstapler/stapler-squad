@@ -158,6 +158,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		OneShot: snap.OneShot,
 		// Hidden (system/background) flag
 		Hidden: snap.Hidden,
+		Pinned: snap.Pinned,
 		// Project association
 		ProjectID: snap.ProjectID,
 		// Full launch command for diagnostics (not in snapshot — set once during Start)
@@ -354,6 +355,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		OneShot: data.OneShot,
 		// Hidden (system/background) flag
 		Hidden: data.Hidden,
+		Pinned: data.Pinned,
 		// Project association
 		ProjectID: data.ProjectID,
 		// Launch command for diagnostics

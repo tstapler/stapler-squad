@@ -199,6 +199,12 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"SearchGitHubRepos": "SearchGitHubRepos",
 	"ListGitHubIssues":  "ListGitHubIssues",
 	"ImportGitHubIssue": "ImportGitHubIssue",
+	// Cross-host claim RPCs (#893): identity ids, matching the committed fallback-id registry files.
+	"CheckCrossHostClaim": "CheckCrossHostClaim",
+	"ListForeignClaims":   "ListForeignClaims",
+	"OverrideClaimBlock":  "OverrideClaimBlock",
+	"RecordClaimOverride": "RecordClaimOverride",
+	"ResolveClaimDispute": "ResolveClaimDispute",
 	// Launcher presets RPCs
 	"GetLauncherPresets": "launcher_presets:get",
 	// Program config RPCs
@@ -208,6 +214,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// Session lifecycle RPCs
 	"ArchiveSession":          "session:archive",
 	"UnarchiveSession":        "session:unarchive",
+	"PinSession":              "session:pin",
+	"UnpinSession":            "session:unpin",
 	"HibernateSession":        "session:hibernate",
 	"ResumeHibernatedSession": "session:resume-hibernated",
 	"ResumeCrashedSession":    "session:resume-crashed",
