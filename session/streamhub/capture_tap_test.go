@@ -18,13 +18,14 @@ func steppedTap(buf *bytes.Buffer) *CaptureTap {
 	return tap
 }
 
-func TestCaptureTap_should_WriteNothingAndAllocateNothing_When_EnvVarUnset(t *testing.T) {
-	t.Setenv(CaptureTapDirEnv, "")
-	if tap := CaptureTapFor("corp-compute-nop-pr-534"); tap != nil {
-		t.Fatalf("CaptureTapFor with env unset = %v, want nil", tap)
+func TestCaptureTap_should_WriteNothingAndAllocateNothing_When_TapDisabled(t *testing.T) {
+	reg := NewTapRegistry(TapRegistryOptions{DirFn: func() (string, error) { return t.TempDir(), nil }})
+	handle := reg.Handle("corp-compute-nop-pr-534")
+	if handle == nil {
+		t.Fatal("a handle must be non-nil even while the tap is off")
 	}
 
-	hub := NewStreamHub("corp-compute-nop-pr-534", nil, WithCaptureTap(CaptureTapFor("corp-compute-nop-pr-534").As(TapSourceHub)))
+	hub := NewStreamHub("corp-compute-nop-pr-534", nil, WithCaptureTap(handle.As(TapSourceHub)))
 	hub.resizing = true // drop path never touches the BatchWindow, so only tap cost is measured
 	data := []byte("\x1b[2Kfoo")
 	if allocs := testing.AllocsPerRun(100, func() { hub.OnRawOutput(data) }); allocs != 0 {
@@ -114,14 +115,15 @@ func TestCaptureTap_should_RecordOutputSnapshotAndResize_When_Delivered(t *testi
 	}
 }
 
+// envRegistry is a registry started the way STAPLER_SQUAD_CAPTURE_TAP_DIR=dir starts it.
+func envRegistry(dir string) *TapRegistry {
+	return NewTapRegistry(TapRegistryOptions{EnvDir: dir})
+}
+
 func TestCaptureTap_should_CreateOwnerOnlyDirAndFile_When_EnvVarSet(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "tap")
-	t.Setenv(CaptureTapDirEnv, dir)
 
-	tap := CaptureTapFor("sess")
-	if tap == nil {
-		t.Fatal("expected a tap")
-	}
+	tap := envRegistry(dir).Handle("sess")
 	tap.Record(TapOutput, "", []byte("x"))
 
 	di, err := os.Stat(dir)
@@ -143,11 +145,8 @@ func TestCaptureTap_should_TightenExistingDirAndFileModes_When_TheyAreWorldReada
 	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(CaptureTapDirEnv, dir)
 
-	if CaptureTapFor("sess") == nil {
-		t.Fatal("expected a tap")
-	}
+	envRegistry(dir).Handle("sess").Record(TapOutput, "", []byte("x"))
 	di, derr := os.Stat(dir)
 	fi, ferr := os.Stat(path)
 	if derr != nil || ferr != nil {
@@ -167,10 +166,12 @@ func TestCaptureTap_should_RefuseSymlink_When_TapFilePathIsASymlink(t *testing.T
 	if err := os.Symlink(target, filepath.Join(dir, "sess.jsonl")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	t.Setenv(CaptureTapDirEnv, dir)
 
-	if tap := CaptureTapFor("sess"); tap != nil {
-		t.Fatal("tap must refuse to follow a symlink")
+	reg := envRegistry(dir)
+	tap := reg.Handle("sess")
+	tap.Record(TapOutput, "", []byte("x"))
+	if st := reg.Status(); len(st.Sessions) != 1 || !st.Sessions[0].Failed {
+		t.Fatalf("tap must refuse to follow a symlink and report failure, status = %+v", st)
 	}
 	got, err := os.ReadFile(target)
 	if err != nil || string(got) != "keep" {
@@ -178,23 +179,28 @@ func TestCaptureTap_should_RefuseSymlink_When_TapFilePathIsASymlink(t *testing.T
 	}
 }
 
-func TestCaptureTap_should_ReturnNilAndRetry_When_DirIsUnwritable(t *testing.T) {
+func TestCaptureTap_should_ReportFailureAndRetryOnReenable_When_DirIsUnwritable(t *testing.T) {
 	parent := t.TempDir()
 	blocker := filepath.Join(parent, "notadir")
 	if err := os.WriteFile(blocker, []byte("file"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(CaptureTapDirEnv, filepath.Join(blocker, "tap")) // MkdirAll fails: parent is a file
-
-	if tap := CaptureTapFor("sess"); tap != nil {
-		t.Fatal("expected nil when the directory cannot be created")
+	reg := envRegistry(filepath.Join(blocker, "tap")) // MkdirAll fails: parent is a file
+	tap := reg.Handle("sess")
+	tap.Record(TapOutput, "", []byte("x"))
+	if st := reg.Status(); len(st.Sessions) != 1 || !st.Sessions[0].Failed {
+		t.Fatalf("status = %+v, want one failed session", st)
 	}
 
 	if err := os.Remove(blocker); err != nil {
 		t.Fatal(err)
 	}
-	if tap := CaptureTapFor("sess"); tap == nil {
-		t.Fatal("a failed open must not be cached: expected a tap once the path is fixed")
+	if _, err := reg.Set(true, []string{"sess"}, 0); err != nil {
+		t.Fatal(err)
+	}
+	tap.Record(TapOutput, "", []byte("y"))
+	if st := reg.Status(); len(st.Sessions) != 1 || st.Sessions[0].Failed || st.Sessions[0].BytesWritten == 0 {
+		t.Fatalf("re-enable after fixing the path must record: %+v", st)
 	}
 }
 
@@ -251,15 +257,17 @@ func TestCaptureTap_should_NotInterleaveLines_When_WrittenConcurrently(t *testin
 
 func TestCaptureTap_should_UseDistinctFiles_When_SanitizedNamesCollide(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv(CaptureTapDirEnv, dir)
+	reg := envRegistry(dir)
 
-	a, b := CaptureTapFor("a/b"), CaptureTapFor("a b")
-	if a == nil || b == nil || a.s == b.s {
+	a, b := reg.Handle("a/b"), reg.Handle("a b")
+	if a.s == b.s {
 		t.Fatal("names that sanitize alike must not share a tap")
 	}
-	if got := CaptureTapFor("a/b"); got.s != a.s {
+	if got := reg.Handle("a/b"); got != a {
 		t.Fatal("the same session name must reuse its tap")
 	}
+	a.Record(TapOutput, "", []byte("1"))
+	b.Record(TapOutput, "", []byte("2"))
 	if sanitizeTapName("plain-name_1.x") != "plain-name_1.x" {
 		t.Fatal("an already-safe name must be left unchanged")
 	}

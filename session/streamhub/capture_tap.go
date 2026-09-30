@@ -12,18 +12,20 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// CaptureTapDirEnv names the env var that enables the capture tap. When unset
-// or empty, CaptureTapFor returns nil and every (*CaptureTap).Record is a
-// no-op, so the tap costs nothing on the hot path.
+// CaptureTapDirEnv is an operator override: it sets the tap directory and
+// enables the tap for every session at startup with no TTL. Otherwise the tap
+// is off until enabled at runtime through TapRegistry (the SetCaptureTap RPC)
+// and writes under <state dir>/tap. See TapRegistry.
 //
 // The tap writes raw terminal bytes, which can include typed passwords and
 // tokens printed by agents. Files are 0600 in a 0700 directory, capped at
-// defaultTapMaxBytes per session, and never rotated: delete them when done.
+// defaultTapMaxBytes per file, and never rotated: delete them when done.
 // See docs/how-to/capture-terminal-stream-tap.md.
 const CaptureTapDirEnv = "STAPLER_SQUAD_CAPTURE_TAP_DIR"
 
@@ -82,30 +84,41 @@ func (r TapRecord) Bytes() []byte {
 	return b
 }
 
-// tapSink is the per-session file shared by every CaptureTap view of it.
+// tapSink is the per-session state shared by every CaptureTap view of it. The
+// file opens lazily on the first write while enabled and closes on disable,
+// cap or error.
 type tapSink struct {
 	mu       sync.Mutex
+	enabled  atomic.Bool  // hot-path gate; written under mu or by the registry
+	deadline atomic.Int64 // unix nanos at which the TTL ends; 0 = none
+	reg      *TapRegistry // nil for in-memory writers
+	name     string
+	path     string
 	w        io.Writer
 	closer   io.Closer // nil for in-memory writers
 	now      func() time.Time
-	failed   bool
+	failed   bool // a write or open error stopped the tap
+	capped   bool // the size cap stopped the tap
 	scratch  []byte
-	written  int64
+	written  int64 // size of the file, including earlier appends
 	maxBytes int64
 }
 
 // CaptureTap appends TapRecords to one session's JSONL file. A nil
-// *CaptureTap is valid and inert. Write errors and the size cap are logged
-// once and then swallowed so the tap can never disturb the output hot path.
-// Writes are synchronous on the calling goroutine, so a slow disk delays live
-// output: use a local directory.
+// *CaptureTap is valid and inert, as is a handle whose tap is currently
+// disabled: Record then costs one atomic load. Write errors and the size cap
+// are logged once and then swallowed so the tap can never disturb the output
+// hot path. Writes are synchronous on the calling goroutine, so a slow disk
+// delays live output: use a local directory.
 type CaptureTap struct {
 	s   *tapSink
 	src TapSource
 }
 
 func newCaptureTapWriter(w io.Writer) *CaptureTap {
-	return &CaptureTap{s: &tapSink{w: w, now: time.Now, maxBytes: defaultTapMaxBytes}}
+	s := &tapSink{w: w, now: time.Now, maxBytes: defaultTapMaxBytes}
+	s.enabled.Store(true)
+	return &CaptureTap{s: s}
 }
 
 // As returns a view of the same file whose records carry src. Safe on nil.
@@ -118,7 +131,7 @@ func (t *CaptureTap) As(src TapSource) *CaptureTap {
 
 // Record appends one record. Safe on a nil receiver.
 func (t *CaptureTap) Record(kind TapKind, cause DropCause, data []byte) {
-	if t == nil {
+	if t == nil || !t.s.enabled.Load() {
 		return
 	}
 	t.write(TapRecord{Kind: kind, Cause: cause, B64: base64.StdEncoding.EncodeToString(data)})
@@ -126,7 +139,7 @@ func (t *CaptureTap) Record(kind TapKind, cause DropCause, data []byte) {
 
 // RecordResize appends a resize record carrying the requested size.
 func (t *CaptureTap) RecordResize(size TerminalSize) {
-	if t == nil {
+	if t == nil || !t.s.enabled.Load() {
 		return
 	}
 	t.write(TapRecord{Kind: TapResize, Cols: size.cols, Rows: size.rows})
@@ -134,17 +147,29 @@ func (t *CaptureTap) RecordResize(size TerminalSize) {
 
 func (t *CaptureTap) write(rec TapRecord) {
 	s := t.s
+	// Checked before taking s.mu: sweep locks the registry and then the sink.
+	if dl := s.deadline.Load(); dl != 0 && s.reg != nil && s.now().UnixNano() >= dl {
+		s.reg.sweep()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.failed {
+	if !s.enabled.Load() {
 		return
+	}
+	if s.w == nil {
+		if err := s.openLocked(); err != nil {
+			s.stopLocked(err, false)
+			return
+		}
 	}
 	rec.TNs = s.now().UnixNano()
 	rec.Src = t.src
 	line, err := json.Marshal(rec)
+	capped := false
 	if err == nil {
 		if s.written+int64(len(line))+1 > s.maxBytes {
 			err = fmt.Errorf("size cap of %d bytes reached", s.maxBytes)
+			capped = true
 		} else {
 			s.scratch = append(append(s.scratch[:0], line...), '\n')
 			var n int
@@ -153,59 +178,70 @@ func (t *CaptureTap) write(rec TapRecord) {
 		}
 	}
 	if err != nil {
-		s.failed = true
-		if s.closer != nil {
-			_ = s.closer.Close()
-		}
-		log.Warn("streamhub capture tap: disabling tap for this session", "error", err)
+		s.stopLocked(err, capped)
 	}
 }
 
-var (
-	tapsMu sync.Mutex
-	taps   = map[string]*CaptureTap{}
-	// tapActiveWarn logs once per process, at Warn, that the tap is enabled.
-	tapActiveWarn sync.Once
-)
-
-// CaptureTapFor returns the shared tap for sessionName, or nil when
-// STAPLER_SQUAD_CAPTURE_TAP_DIR is unset or the file cannot be opened safely.
-// Every stream path for a session shares one file
-// (<dir>/<sanitized-session>[-<hash>].jsonl, append mode). The file stays open
-// until the size cap or a write error closes it, so descriptors grow with the
-// number of distinct sessions seen while the tap is on. A failed open is not
-// cached, so fixing the directory does not need a restart.
-func CaptureTapFor(sessionName string) *CaptureTap {
-	dir := os.Getenv(CaptureTapDirEnv)
-	if dir == "" {
-		return nil
-	}
-	tapActiveWarn.Do(func() {
-		log.Warn("streamhub capture tap ACTIVE: recording raw terminal output, which may include secrets",
-			"dir", dir, "env", CaptureTapDirEnv, "max_bytes_per_session", defaultTapMaxBytes)
-	})
-	path := filepath.Join(dir, sanitizeTapName(sessionName)+".jsonl")
-	tapsMu.Lock()
-	defer tapsMu.Unlock()
-	if t, ok := taps[path]; ok && !t.s.isFailed() {
-		return t
-	}
+// openLocked opens the session's file for appending and seeds written from its
+// current size so the cap holds across disable and re-enable.
+func (s *tapSink) openLocked() error {
+	path := filepath.Join(s.reg.resolveDir(), sanitizeTapName(s.name)+".jsonl")
 	f, err := openTapFile(path)
 	if err != nil {
-		log.Warn("streamhub capture tap: cannot open tap file, tap disabled for this stream", "path", path, "error", err)
-		return nil
+		return fmt.Errorf("cannot open tap file %s: %w", path, err)
 	}
-	t := newCaptureTapWriter(f)
-	t.s.closer = f
-	taps[path] = t
-	log.Info("streamhub capture tap enabled", "session", sessionName, "path", path)
-	return t
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	s.path, s.w, s.closer, s.written = path, f, f, fi.Size()
+	log.Info("streamhub capture tap file opened", "session", s.name, "path", path)
+	return nil
 }
 
-func (s *tapSink) isFailed() bool {
+// closeLocked closes the file; the next enabled write reopens it in append mode.
+func (s *tapSink) closeLocked() {
+	if s.closer != nil {
+		_ = s.closer.Close()
+		s.w, s.closer = nil, nil
+	}
+}
+
+// stopLocked turns the tap off for this session after an error or the cap.
+func (s *tapSink) stopLocked(err error, capped bool) {
+	s.enabled.Store(false)
+	s.failed, s.capped = !capped, capped
+	s.closeLocked()
+	log.Warn("streamhub capture tap: disabling tap for this session", "session", s.name, "error", err)
+}
+
+// apply sets whether the tap is on, and until when. A sink stopped by an error
+// or the cap stays stopped until reset.
+func (s *tapSink) apply(on bool, deadline time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.failed
+	if !on {
+		s.enabled.Store(false)
+		s.deadline.Store(0)
+		s.closeLocked()
+		return
+	}
+	if deadline.IsZero() {
+		s.deadline.Store(0)
+	} else {
+		s.deadline.Store(deadline.UnixNano())
+	}
+	if !s.failed && !s.capped {
+		s.enabled.Store(true)
+	}
+}
+
+// reset clears a stop caused by an error or the cap, on an explicit re-enable.
+func (s *tapSink) reset() {
+	s.mu.Lock()
+	s.failed, s.capped = false, false
+	s.mu.Unlock()
 }
 
 // openTapFile creates dir as 0700 (and tightens an existing one we own), refuses

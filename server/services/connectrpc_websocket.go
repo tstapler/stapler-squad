@@ -458,7 +458,7 @@ type escapeAnalyticsStreamSource interface {
 }
 
 func escapeAnalyticsHubOptions(sessionName string, controller streamhub.SessionController) []streamhub.HubOption {
-	opts := []streamhub.HubOption{streamhub.WithCaptureTap(streamhub.CaptureTapFor(sessionName).As(streamhub.TapSourceHub))}
+	opts := []streamhub.HubOption{streamhub.WithCaptureTap(streamhub.DefaultTapRegistry().Handle(sessionName).As(streamhub.TapSourceHub))}
 	source, ok := controller.(escapeAnalyticsStreamSource)
 	if !ok {
 		return opts
@@ -1341,7 +1341,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		quiescenceCh:    quiescenceCh,
 		forwardingReady: &forwardingReady,
 		resizeSettling:  &resizeSettling,
-		tap:             streamhub.CaptureTapFor(sessionID).As(streamhub.TapSourceLegacy),
+		tap:             streamhub.DefaultTapRegistry().Handle(sessionID).As(streamhub.TapSourceLegacy),
 	})
 
 	h.performInitialResizeNudge(instance, sessionID, streamGeneration, currentPaneReq, quiescenceCh)

@@ -25,7 +25,7 @@ func TestForwardOneControlModeFrame_should_RecordDropCause_When_FrameIsDropped(t
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			t.Setenv(streamhub.CaptureTapDirEnv, dir)
+			reg := streamhub.NewTapRegistry(streamhub.TapRegistryOptions{EnvDir: dir})
 
 			var ready, settling atomic.Bool
 			ready.Store(tc.forwardingReady)
@@ -34,7 +34,7 @@ func TestForwardOneControlModeFrame_should_RecordDropCause_When_FrameIsDropped(t
 				sessionID:       "legacy-drop",
 				forwardingReady: &ready,
 				resizeSettling:  &settling,
-				tap:             streamhub.CaptureTapFor("legacy-drop").As(streamhub.TapSourceLegacy),
+				tap:             reg.Handle("legacy-drop").As(streamhub.TapSourceLegacy),
 			}
 
 			stop := (&ConnectRPCWebSocketHandler{}).forwardOneControlModeFrame(p, nil, []byte("dropped"))
