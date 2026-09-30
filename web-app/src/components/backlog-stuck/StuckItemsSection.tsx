@@ -50,6 +50,7 @@ const GROUP_ORDER: StuckReason[] = [
   StuckReason.BLOCKED_BY_DEPENDENCY,
   StuckReason.BLOCKED_BY_CLAIM,
   StuckReason.WORKTREE_INCONSISTENT,
+  StuckReason.REPEATED_NOOP_DISPATCH,
 ];
 
 function itemKey(item: Pick<StuckBacklogItem, "itemId" | "reason">): string {
