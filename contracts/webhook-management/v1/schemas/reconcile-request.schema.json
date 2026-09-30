@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "POST /registrations/{instance_id}/reconcile request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request_id", "expected_version", "compat", "webhook"],
+  "properties": {
+    "request_id": { "type": "string", "pattern": "^[A-Za-z0-9._-]{8,128}$" },
+    "expected_version": { "type": "integer", "minimum": 0 },
+    "compat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "capability_revision", "manifest_sha256", "signer_key_id", "client_name", "client_version"],
+      "properties": {
+        "contract_version": { "const": "v1" },
+        "capability_revision": { "type": "integer", "minimum": 1 },
+        "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "signer_key_id": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" },
+        "client_name": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" },
+        "client_version": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" }
+      }
+    },
+    "webhook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slug", "name", "command", "target_directory"],
+      "properties": {
+        "slug": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "command": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "target_directory": { "type": "string", "pattern": "^/" },
+        "prompt_template": { "type": "string", "maxLength": 16384 },
+        "event_filter": { "type": "string", "maxLength": 256 },
+        "label_filter": { "type": "string", "maxLength": 256 },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "secret": {
+      "description": "Write-only. Required when expected_version is 0; omit on update to keep the current secret.",
+      "type": "string",
+      "minLength": 32,
+      "maxLength": 512
+    }
+  }
+}

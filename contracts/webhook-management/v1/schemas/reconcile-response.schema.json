@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "POST /registrations/{instance_id}/reconcile response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["outcome", "replayed", "registration"],
+  "properties": {
+    "outcome": { "enum": ["created", "updated", "unchanged"] },
+    "replayed": { "type": "boolean" },
+    "registration": { "$ref": "registration.schema.json" }
+  }
+}

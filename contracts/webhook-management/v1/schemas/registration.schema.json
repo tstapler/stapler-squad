@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Registration (GET /registrations/{instance_id} response; embedded in reconcile responses). Never carries a secret.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instance_id", "registration_id", "workflow_id", "version", "compat_tuple_sha256", "created_at", "updated_at", "endpoint_path", "webhook"],
+  "properties": {
+    "instance_id": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" },
+    "registration_id": { "type": "string", "format": "uuid" },
+    "workflow_id": { "type": "string", "format": "uuid" },
+    "version": { "type": "integer", "minimum": 1 },
+    "compat_tuple_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "endpoint_path": { "type": "string", "pattern": "^/webhooks/[a-z0-9]+(-[a-z0-9]+)*$" },
+    "webhook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slug", "name", "command", "target_directory", "prompt_template", "event_filter", "label_filter", "enabled"],
+      "properties": {
+        "slug": { "type": "string" },
+        "name": { "type": "string" },
+        "command": { "type": "string" },
+        "target_directory": { "type": "string" },
+        "prompt_template": { "type": "string" },
+        "event_filter": { "type": "string" },
+        "label_filter": { "type": "string" },
+        "enabled": { "type": "boolean" }
+      }
+    }
+  }
+}

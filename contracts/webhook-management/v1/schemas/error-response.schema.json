@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Error response (every non-2xx)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error"],
+  "properties": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "enum": [
+            "INVALID_REQUEST", "INTERNAL", "WEAK_SECRET", "UNSUPPORTED_CONTRACT", "UNSUPPORTED_CAPABILITY",
+            "RECEIVER_DISABLED", "FORBIDDEN_DIRECTORY", "VERSION_CONFLICT", "NOT_FOUND", "IDEMPOTENCY_KEY_REUSED",
+            "SLUG_UNAVAILABLE", "COMPAT_TUPLE_MISMATCH", "IMMUTABLE_FIELD", "REGISTRATION_ORPHANED",
+            "UNAUTHENTICATED", "PAYLOAD_TOO_LARGE", "UNSUPPORTED_MEDIA_TYPE"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1 },
+        "current_version": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

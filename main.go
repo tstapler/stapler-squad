@@ -910,6 +910,7 @@ func init() {
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(testPtyCmd)
 	rootCmd.AddCommand(listSessionsCmd)
+	rootCmd.AddCommand(newIntegrationCredentialCmd())
 	rootCmd.AddCommand(printQRCodesCmd)
 	rootCmd.AddCommand(commands.GetSessionCmd)
 	rootCmd.AddCommand(commands.EnsurePortsFreeCmd)

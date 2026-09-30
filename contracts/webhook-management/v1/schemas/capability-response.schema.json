@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GET /capability response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "capability_revision", "receiver_enabled", "operations"],
+  "properties": {
+    "contract_version": { "const": "v1" },
+    "capability_revision": { "type": "integer", "minimum": 1 },
+    "receiver_enabled": { "type": "boolean" },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["capability", "inspect", "reconcile"] }
+    }
+  }
+}
