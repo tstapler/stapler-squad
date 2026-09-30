@@ -6460,3 +6460,38 @@ func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsEr
 	require.NoError(t, err)
 	assert.NotNil(t, updated.EndedAt, "session must still be marked ended despite the stop error, matching best-effort semantics")
 }
+
+// A repeated_noop_dispatch row must stop any further work-session spawn; once
+// the row resolves, dispatch proceeds again.
+func TestSpawnSessionFromItem_should_Refuse_When_RepeatedNoopDispatchRowOpen(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "noop gate item", RepoPath: repoPath, SkipTriage: true, SkipPlanning: true,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{{Index: 0, Text: "test", Status: "pending"}},
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{ItemId: itemID, TargetStatus: "ready"}))
+	require.NoError(t, err)
+
+	applied, err := storage.MarkStuck(ctx, itemID, domain.StuckReasonRepeatedNoopDispatch, session.BacklogStatusReady, "3 no-op sessions")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "repeated_noop_dispatch")
+
+	_, err = storage.ResolveStuck(ctx, itemID, domain.StuckReasonRepeatedNoopDispatch)
+	require.NoError(t, err)
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+}

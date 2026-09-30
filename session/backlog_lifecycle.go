@@ -113,6 +113,10 @@ type BacklogLifecycleListener struct {
 	dashboardBaseURLFnMu sync.RWMutex
 	dashboardBaseURLFn   func() string
 
+	// noopThresholdMu guards noopThresholdFn (see SetNoopDispatchThresholdFn).
+	noopThresholdMu sync.RWMutex
+	noopThresholdFn func() int
+
 	// oneShotShipRunnerMu guards oneShotShipRunner for concurrent Set/get access.
 	oneShotShipRunnerMu sync.RWMutex
 	// oneShotShipRunner runs the agent-driven ship flow (see agentShipPrompt)
@@ -1303,6 +1307,13 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.reconcileBouncingItems(ctx, er)
 	})
 
+	// PASS-verdict items whose last N work sessions all ended with no commits
+	// (the 70+ report_duplicate no-op dispatch loop) — flags them so the
+	// dispatcher gate in BacklogService.spawnSessionAfterGates stops respawning.
+	l.runStuckDetector("repeated_noop_dispatch", &okNames, &panickedNames, func() {
+		l.reconcileRepeatedNoopDispatch(ctx, er)
+	})
+
 	// Retry the push+PR flow for items with an open push_failed row (Phase B
 	// of docs/tasks/backlog-stuck-item-auto-remediation.md). This is the
 	// periodic counterpart to pushAndCreatePR's own event-driven attempt:
@@ -2076,6 +2087,10 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusPRPending
 		case domain.StuckReasonPRNeedsFix:
 			resolve = row.ItemStatus != BacklogStatusPRPending
+		case domain.StuckReasonRepeatedNoopDispatch:
+			// Commit-landed resolution is reconcileRepeatedNoopDispatch's
+			// else-branch (same-status, invisible to this sweep).
+			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		default:
 			// autonomous_stuck, push_failed, rework_cap, multiple_reasons, and
 			// any future reason with no non-terminal anchor: stays open until

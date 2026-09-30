@@ -4775,6 +4775,8 @@ func TestReportDuplicate_NoOpOnExactRetry(t *testing.T) {
 	tc2, ok := result2.Content[0].(mcpgo.TextContent)
 	require.True(t, ok)
 	assert.Contains(t, tc2.Text, "already recorded")
+	assert.Contains(t, tc2.Text, "Confirmation is pending", "no-op must say the claim awaits an operator")
+	assert.Contains(t, tc2.Text, "archive the item", "no-op must say how the operator resolves it")
 	assert.Equal(t, 1, verifyCallCount, "the no-op retry must not call GitHub verification again")
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)

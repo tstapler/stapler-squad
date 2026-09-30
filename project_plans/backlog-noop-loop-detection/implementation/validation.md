@@ -1,0 +1,2 @@
+# Validation
+Each AC maps to a test: detection (stuck_decisions_test table), gate (dispatcher unit test with fake repo), selfHeal enumeration test, MCP idempotent message test (server/mcp), proto/registry diff, jest badge test. Pre-mortem: gate false positives (mitigated by reset-on-change + operator clear); schema change untested on migration (add ent migration test); frontend duplicate-code threshold (jscpd 0.12%) — share badge component.

@@ -957,6 +957,17 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// docs/tasks/backlog-feature-improvement.md).
 	s.tombstoneOrphanWorkSessions(ctx, item.ID, priorSessions)
 
+	// 8a'. No-op loop gate: refuse to dispatch another work session while a
+	// repeated_noop_dispatch row is open (see domain.StuckReasonRepeatedNoopDispatch).
+	// Autonomous respawns pass through here too, so this stops every auto path.
+	if blocked, gateErr := s.storage.HasOpenStuckReason(ctx, item.ID, domain.StuckReasonRepeatedNoopDispatch); gateErr != nil {
+		log.Warn("[spawnSessionAfterGates] no-op gate lookup failed, proceeding", "item", item.ID, "error", gateErr)
+	} else if blocked {
+		log.Warn("[spawnSessionAfterGates] refusing dispatch: repeated no-op sessions on this item", "item", item.ID)
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("item has repeated_noop_dispatch open: consecutive work sessions produced no commits; resolve the duplicate/shipped state (archive or reset the item) before dispatching again"))
+	}
+
 	// 8a2. Close the tmux pane of every already-ended work-session round before
 	// spawning the next one. Each rework round gets its own "-rN" title (see
 	// buildRevisionTitle) so the session list stays readable across rounds, but

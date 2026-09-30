@@ -1230,6 +1230,17 @@ func (s *Storage) FindOpenStuckStates(ctx context.Context) ([]OpenStuckStateData
 	return s.repo.FindOpenStuckStates(ctx)
 }
 
+// HasOpenStuckReason reports whether itemID has an open (unresolved,
+// un-snoozed) stuck row for reason.
+func (s *Storage) HasOpenStuckReason(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
+	rows, err := s.repo.FindOpenStuckStates(ctx)
+	if err != nil {
+		return false, err
+	}
+	_, ok := findOpenStuckStateFor(rows, itemID, reason)
+	return ok, nil
+}
+
 // SnoozeStuckState sets snoozed_until on an open BacklogStuckState row for
 // (itemID, reason). Returns false, nil when the backend does not support
 // stuck-state writes or no matching open row exists — never an error for a

@@ -1089,6 +1089,8 @@ func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEn
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
 		AllowedTransitions: allowedTransitionStrings(engine, session.BacklogStatus(item.Status), session.BuildStageConfigSnapshotFallback(item)),
+		DuplicateRef:       duplicateRefPending(item),
+		DuplicatePending:   duplicateRefPending(item) != "",
 		PublicId:           item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {
@@ -1427,4 +1429,13 @@ func (s *BacklogService) checkWorkStageBudget(itemID string, thresholdUSD *float
 		return
 	}
 	log.WarningLog().Printf("[BudgetWarning] item=%s stage=work threshold=%.2f spent=%.2f", itemID, *thresholdUSD, totalCostUSD)
+}
+
+// duplicateRefPending returns the claimed duplicate_ref while item sits in
+// review awaiting confirmation, "" otherwise. Needs eagerly loaded ItemSessions.
+func duplicateRefPending(item *session.BacklogItemData) string {
+	if item.Status != string(session.BacklogStatusReview) {
+		return ""
+	}
+	return session.PendingDuplicateRef(item.ItemSessions)
 }

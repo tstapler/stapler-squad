@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/diagnose"
 	"github.com/tstapler/stapler-squad/session/sendkeysguard"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
 // TestMCPPackage_NoDirectSendKeysPlusEnterConcatenation is the server/mcp
@@ -175,39 +176,6 @@ func TestReadOutputSessionNotFound(t *testing.T) {
 	}
 }
 
-// TestReadOutputSessionNotReady verifies readSessionOutput returns
-// SESSION_NOT_READY (not an empty-output success) when the session exists but
-// its scrollback sequence hasn't advanced since creation -- i.e. no bytes
-// have ever arrived from the PTY/tmux stream, distinct from a command that
-// legitimately printed nothing (see TestReadOutputSucceeds_When_ReadyWithNoNewBytes).
-func TestReadOutputSessionNotReady(t *testing.T) {
-	sessionID := "not-ready-session"
-	store := &stubStore{instances: []*session.Instance{{Title: sessionID}}}
-	th := &terminalHandlers{
-		store:      store,
-		scrollback: makeScrollbackMgr(t), // no AppendOutput call -- sequence stays 0
-		writeLim:   newTokenBucket(10, 10),
-	}
-
-	req := makeToolReq(map[string]interface{}{"session_id": sessionID})
-	result, err := th.readSessionOutput(context.Background(), req)
-	if err != nil {
-		t.Fatalf("readSessionOutput returned unexpected Go error: %v", err)
-	}
-
-	m := parseResult(t, result)
-	if success, _ := m["success"].(bool); success {
-		t.Error("expected success=false, got true")
-	}
-	errObj, _ := m["error"].(map[string]interface{})
-	if errObj == nil {
-		t.Fatal("expected error object in result")
-	}
-	if code, _ := errObj["code"].(string); code != ErrSessionNotReady {
-		t.Errorf("expected error code %q, got %q", ErrSessionNotReady, code)
-	}
-}
-
 // TestReadOutputSucceeds_When_ReadyWithNoNewBytes verifies a session whose
 // scrollback sequence has already advanced (has emitted at least one byte
 // since creation) is never flagged SESSION_NOT_READY, even when the most
@@ -239,24 +207,128 @@ func TestReadOutputSucceeds_When_ReadyWithNoNewBytes(t *testing.T) {
 	}
 }
 
-// TestSessionNotReadyResult verifies the readiness check shared by
-// readSessionOutput and runCommand (sessionNotReadyResult) directly, so the
-// two call sites cannot silently diverge from each other.
-func TestSessionNotReadyResult(t *testing.T) {
-	mgr := makeScrollbackMgr(t)
-	th := &terminalHandlers{scrollback: mgr}
+// fakePane returns a capturePane seam yielding fixed content, standing in for a
+// live tmux pane so the MCP-only (no stream subscriber) path is testable.
+func fakePane(content string, err error) func(*session.Instance) (string, error) {
+	return func(*session.Instance) (string, error) { return content, err }
+}
 
-	if res := th.sessionNotReadyResult("never-appended"); res == nil {
-		t.Fatal("expected non-nil SESSION_NOT_READY result for a session with no scrollback yet")
-	} else if errObj, _ := parseResult(t, res)["error"].(map[string]interface{}); errObj == nil || errObj["code"] != ErrSessionNotReady {
+// TestReadSessionOutput_NoStreamSubscriber_FallsBackToPane: scrollback is empty
+// (nothing ever called AppendOutput) but the pane has output -> return it.
+func TestReadSessionOutput_NoStreamSubscriber_FallsBackToPane(t *testing.T) {
+	sessionID := "mcp-only"
+	th := &terminalHandlers{
+		store:       &stubStore{instances: []*session.Instance{{Title: sessionID}}},
+		scrollback:  makeScrollbackMgr(t),
+		writeLim:    newTokenBucket(10, 10),
+		capturePane: fakePane("$ echo hi\nRUN_MARKER_9917\n$ ", nil),
+	}
+	result, err := th.readSessionOutput(context.Background(), makeToolReq(map[string]interface{}{"session_id": sessionID}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); !success {
+		t.Fatalf("expected success=true, got %v", m)
+	}
+	if out, _ := m["output"].(string); !strings.Contains(out, "RUN_MARKER_9917") {
+		t.Errorf("expected output to contain marker, got %q", out)
+	}
+}
+
+// TestReadSessionOutput_PrefersScrollbackOverPane: a non-empty scrollback wins.
+func TestReadSessionOutput_PrefersScrollbackOverPane(t *testing.T) {
+	mgr := makeScrollbackMgr(t)
+	sessionID := "has-scrollback"
+	if err := mgr.AppendOutput(sessionID, []byte("FROM_SCROLLBACK\n")); err != nil {
+		t.Fatal(err)
+	}
+	th := &terminalHandlers{
+		store:       &stubStore{instances: []*session.Instance{{Title: sessionID}}},
+		scrollback:  mgr,
+		writeLim:    newTokenBucket(10, 10),
+		capturePane: fakePane("FROM_PANE", nil),
+	}
+	result, _ := th.readSessionOutput(context.Background(), makeToolReq(map[string]interface{}{"session_id": sessionID}))
+	out, _ := parseResult(t, result)["output"].(string)
+	if !strings.Contains(out, "FROM_SCROLLBACK") || strings.Contains(out, "FROM_PANE") {
+		t.Errorf("expected scrollback output only, got %q", out)
+	}
+}
+
+// TestReadOutputSessionNotReady: no scrollback and no capturable pane (paused
+// or not started) still yields a clear SESSION_NOT_READY error, not empty output.
+func TestReadOutputSessionNotReady(t *testing.T) {
+	sessionID := "not-ready-session"
+	th := &terminalHandlers{
+		store:       &stubStore{instances: []*session.Instance{{Title: sessionID}}},
+		scrollback:  makeScrollbackMgr(t),
+		writeLim:    newTokenBucket(10, 10),
+		capturePane: fakePane("", streamhub.ErrSessionNotStarted),
+	}
+	result, err := th.readSessionOutput(context.Background(), makeToolReq(map[string]interface{}{"session_id": sessionID}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); success {
+		t.Error("expected success=false")
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil || errObj["code"] != ErrSessionNotReady {
 		t.Errorf("expected error code %q, got %v", ErrSessionNotReady, errObj)
 	}
+}
 
-	if err := mgr.AppendOutput("has-output", []byte("$ ")); err != nil {
-		t.Fatalf("AppendOutput: %v", err)
+// TestReadOutputSessionNotReady_RealUnstartedInstance exercises the default
+// (non-seam) capture path against a real, never-started Instance.
+func TestReadOutputSessionNotReady_RealUnstartedInstance(t *testing.T) {
+	sessionID := "unstarted"
+	th := &terminalHandlers{
+		store:      &stubStore{instances: []*session.Instance{{Title: sessionID}}},
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
 	}
-	if res := th.sessionNotReadyResult("has-output"); res != nil {
-		t.Errorf("expected nil (ready) once scrollback has advanced, got %v", res)
+	result, _ := th.readSessionOutput(context.Background(), makeToolReq(map[string]interface{}{"session_id": sessionID}))
+	errObj, _ := parseResult(t, result)["error"].(map[string]interface{})
+	if errObj == nil || errObj["code"] != ErrSessionNotReady {
+		t.Errorf("expected error code %q, got %v", ErrSessionNotReady, errObj)
+	}
+}
+
+// TestCollectCommandOutput_NoStreamSubscriber_ReturnsMarker: run_command's
+// post-submit half returns success with the pane's marker despite empty scrollback.
+func TestCollectCommandOutput_NoStreamSubscriber_ReturnsMarker(t *testing.T) {
+	th := &terminalHandlers{
+		scrollback:  makeScrollbackMgr(t),
+		capturePane: fakePane("$ echo RUN_MARKER_9917\nRUN_MARKER_9917\n$ ", nil),
+	}
+	m := parseResult(t, th.collectCommandOutput("mcp-only", &session.Instance{}, 10, 50))
+	if success, _ := m["success"].(bool); !success {
+		t.Fatalf("expected success=true, got %v", m)
+	}
+	if out, _ := m["output"].(string); !strings.Contains(out, "RUN_MARKER_9917") {
+		t.Errorf("expected marker in output, got %q", out)
+	}
+}
+
+// TestCollectCommandOutput_NeverNotReadyAfterSubmit: an unreadable pane or an
+// empty pane after a successful submit is success with empty output.
+func TestCollectCommandOutput_NeverNotReadyAfterSubmit(t *testing.T) {
+	for name, capture := range map[string]func(*session.Instance) (string, error){
+		"empty pane":      fakePane("", nil),
+		"capture failure": fakePane("", streamhub.ErrSessionNotStarted),
+	} {
+		t.Run(name, func(t *testing.T) {
+			th := &terminalHandlers{scrollback: makeScrollbackMgr(t), capturePane: capture}
+			m := parseResult(t, th.collectCommandOutput("s", &session.Instance{}, 10, 50))
+			if success, _ := m["success"].(bool); !success {
+				t.Fatalf("expected success=true, got %v", m)
+			}
+			if out, _ := m["output"].(string); out != "" {
+				t.Errorf("expected empty output, got %q", out)
+			}
+		})
 	}
 }
 
