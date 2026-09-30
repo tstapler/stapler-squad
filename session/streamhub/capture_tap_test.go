@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,7 +14,7 @@ import (
 func steppedTap(buf *bytes.Buffer) *CaptureTap {
 	tap := newCaptureTapWriter(buf)
 	tick := time.Unix(1000, 0)
-	tap.now = func() time.Time { tick = tick.Add(10 * time.Millisecond); return tick }
+	tap.s.now = func() time.Time { tick = tick.Add(10 * time.Millisecond); return tick }
 	return tap
 }
 
@@ -23,7 +24,7 @@ func TestCaptureTap_should_WriteNothingAndAllocateNothing_When_EnvVarUnset(t *te
 		t.Fatalf("CaptureTapFor with env unset = %v, want nil", tap)
 	}
 
-	hub := NewStreamHub("corp-compute-nop-pr-534", nil, WithCaptureTap(CaptureTapFor("corp-compute-nop-pr-534")))
+	hub := NewStreamHub("corp-compute-nop-pr-534", nil, WithCaptureTap(CaptureTapFor("corp-compute-nop-pr-534").As(TapSourceHub)))
 	hub.resizing = true // drop path never touches the BatchWindow, so only tap cost is measured
 	data := []byte("\x1b[2Kfoo")
 	if allocs := testing.AllocsPerRun(100, func() { hub.OnRawOutput(data) }); allocs != 0 {
@@ -39,7 +40,7 @@ func TestCaptureTap_should_RecordDropWithCause_When_ResizingDropsFrame(t *testin
 	hub.OnRawOutput([]byte("\x1b[2Kfoo"))
 
 	got := buf.String()
-	for _, want := range []string{`"kind":"drop"`, `"cause":"resize_settling"`, `"b64":"G1syS2Zvbw=="`} {
+	for _, want := range []string{`"t_ns":`, `"kind":"drop"`, `"cause":"resize_settling"`, `"b64":"G1syS2Zvbw=="`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("record %q missing %s", got, want)
 		}
@@ -50,6 +51,44 @@ func TestCaptureTap_should_RecordDropWithCause_When_ResizingDropsFrame(t *testin
 	}
 	if recs[0].Kind != TapDrop || recs[0].Cause != DropCauseResizeSettling || string(recs[0].Bytes()) != "\x1b[2Kfoo" {
 		t.Fatalf("round trip mismatch: %+v", recs[0])
+	}
+}
+
+func TestCaptureTap_should_RecordUndeliveredDrop_When_SubscriberQueueIsFull(t *testing.T) {
+	var buf bytes.Buffer
+	hub := NewStreamHub("s", nil, WithCaptureTap(steppedTap(&buf)), WithSlowSubscriberGrace(time.Hour))
+	full := newSubscriber(SubscriberID("full"), noopTransport{}, SubscriberCapability{}, 1) // no writer started, so the queue never drains
+	if !full.trySend([]byte("fills the queue")) {
+		t.Fatal("first frame should fit the queue")
+	}
+
+	hub.deliver(full, []byte("lost"), time.Hour)
+
+	recs, err := ReadTap(&buf)
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("ReadTap = %v, %v; want 1 record", recs, err)
+	}
+	if recs[0].Kind != TapDrop || recs[0].Cause != DropCauseSubscriberUndelivered || string(recs[0].Bytes()) != "lost" {
+		t.Fatalf("undelivered record: %+v", recs[0])
+	}
+}
+
+func TestCaptureTap_should_TagRecordsWithSource_When_ViewedAsHubAndLegacy(t *testing.T) {
+	var buf bytes.Buffer
+	base := steppedTap(&buf)
+	base.As(TapSourceHub).Record(TapOutput, "", []byte("h"))
+	base.As(TapSourceLegacy).Record(TapOutput, "", []byte("l"))
+	base.Record(TapOutput, "", []byte("n"))
+
+	recs, err := ReadTap(&buf)
+	if err != nil || len(recs) != 3 {
+		t.Fatalf("ReadTap = %v, %v; want 3 records", recs, err)
+	}
+	if recs[0].Src != TapSourceHub || recs[1].Src != TapSourceLegacy || recs[2].Src != "" {
+		t.Fatalf("sources = %q %q %q", recs[0].Src, recs[1].Src, recs[2].Src)
+	}
+	if (*CaptureTap)(nil).As(TapSourceHub) != nil {
+		t.Fatal("As on a nil tap must stay nil")
 	}
 }
 
@@ -75,35 +114,206 @@ func TestCaptureTap_should_RecordOutputSnapshotAndResize_When_Delivered(t *testi
 	}
 }
 
-func TestCaptureTap_should_WriteSanitizedPerSessionFile_When_EnvVarSet(t *testing.T) {
-	dir := t.TempDir()
+func TestCaptureTap_should_CreateOwnerOnlyDirAndFile_When_EnvVarSet(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tap")
 	t.Setenv(CaptureTapDirEnv, dir)
 
-	tap := CaptureTapFor("a/b c:1")
-	if tap == nil || tap != CaptureTapFor("a/b c:1") {
-		t.Fatal("expected a shared non-nil tap per session")
+	tap := CaptureTapFor("sess")
+	if tap == nil {
+		t.Fatal("expected a tap")
 	}
 	tap.Record(TapOutput, "", []byte("x"))
 
-	data, err := os.ReadFile(filepath.Join(dir, "a_b_c_1.jsonl"))
-	if err != nil || !strings.Contains(string(data), `"kind":"output"`) {
-		t.Fatalf("file = %q, err = %v", data, err)
+	di, err := os.Stat(dir)
+	if err != nil || di.Mode().Perm() != 0o700 {
+		t.Fatalf("dir mode = %v, err = %v; want 0700", di.Mode().Perm(), err)
+	}
+	fi, err := os.Stat(filepath.Join(dir, "sess.jsonl"))
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("file mode = %v, err = %v; want 0600", fi.Mode().Perm(), err)
 	}
 }
 
-func TestPairSettleLatency_should_PairFirstDropWithNextSnapshot_When_SyntheticTapRead(t *testing.T) {
+func TestCaptureTap_should_TightenExistingDirAndFileModes_When_TheyAreWorldReadable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "sess.jsonl")
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(CaptureTapDirEnv, dir)
+
+	if CaptureTapFor("sess") == nil {
+		t.Fatal("expected a tap")
+	}
+	di, derr := os.Stat(dir)
+	fi, ferr := os.Stat(path)
+	if derr != nil || ferr != nil {
+		t.Fatalf("stat errors: dir %v, file %v", derr, ferr)
+	}
+	if di.Mode().Perm() != 0o700 || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("dir = %v, file = %v; want 0700 and 0600", di.Mode().Perm(), fi.Mode().Perm())
+	}
+}
+
+func TestCaptureTap_should_RefuseSymlink_When_TapFilePathIsASymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "sess.jsonl")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv(CaptureTapDirEnv, dir)
+
+	if tap := CaptureTapFor("sess"); tap != nil {
+		t.Fatal("tap must refuse to follow a symlink")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != "keep" {
+		t.Fatalf("symlink target = %q, err = %v; want untouched", got, err)
+	}
+}
+
+func TestCaptureTap_should_ReturnNilAndRetry_When_DirIsUnwritable(t *testing.T) {
+	parent := t.TempDir()
+	blocker := filepath.Join(parent, "notadir")
+	if err := os.WriteFile(blocker, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(CaptureTapDirEnv, filepath.Join(blocker, "tap")) // MkdirAll fails: parent is a file
+
+	if tap := CaptureTapFor("sess"); tap != nil {
+		t.Fatal("expected nil when the directory cannot be created")
+	}
+
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if tap := CaptureTapFor("sess"); tap == nil {
+		t.Fatal("a failed open must not be cached: expected a tap once the path is fixed")
+	}
+}
+
+func TestCaptureTap_should_StopAndCloseFile_When_SizeCapIsReached(t *testing.T) {
+	var buf bytes.Buffer
+	tap := steppedTap(&buf)
+	tap.s.maxBytes = 200
+	closer := &closeSpy{}
+	tap.s.closer = closer
+
+	for i := 0; i < 20; i++ {
+		tap.Record(TapOutput, "", []byte("0123456789"))
+	}
+
+	if int64(buf.Len()) > 200 {
+		t.Fatalf("wrote %d bytes, cap is 200", buf.Len())
+	}
+	if !closer.closed {
+		t.Fatal("file must be closed when the cap is reached")
+	}
+	recs, err := ReadTap(&buf)
+	if err != nil {
+		t.Fatalf("capped file must end on a whole line: %v", err)
+	}
+	if len(recs) == 0 || len(recs) >= 20 {
+		t.Fatalf("records = %d, want some but fewer than 20", len(recs))
+	}
+}
+
+type closeSpy struct{ closed bool }
+
+func (c *closeSpy) Close() error { c.closed = true; return nil }
+
+func TestCaptureTap_should_NotInterleaveLines_When_WrittenConcurrently(t *testing.T) {
+	var buf bytes.Buffer
+	tap := steppedTap(&buf)
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				tap.Record(TapOutput, "", []byte("payload"))
+			}
+		}()
+	}
+	wg.Wait()
+
+	recs, err := ReadTap(&buf)
+	if err != nil || len(recs) != 400 {
+		t.Fatalf("ReadTap = %d records, err = %v; want 400 whole records", len(recs), err)
+	}
+}
+
+func TestCaptureTap_should_UseDistinctFiles_When_SanitizedNamesCollide(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(CaptureTapDirEnv, dir)
+
+	a, b := CaptureTapFor("a/b"), CaptureTapFor("a b")
+	if a == nil || b == nil || a.s == b.s {
+		t.Fatal("names that sanitize alike must not share a tap")
+	}
+	if got := CaptureTapFor("a/b"); got.s != a.s {
+		t.Fatal("the same session name must reuse its tap")
+	}
+	if sanitizeTapName("plain-name_1.x") != "plain-name_1.x" {
+		t.Fatal("an already-safe name must be left unchanged")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("files = %d, want 2", len(entries))
+	}
+}
+
+func TestPairSettleLatency_should_PairResizeWithNextSnapshot_When_SyntheticTapRead(t *testing.T) {
 	const tap = `{"t_ns":1000000000,"kind":"output","b64":"YQ=="}
-{"t_ns":2000000000,"kind":"drop","cause":"resize_settling","b64":"YQ=="}
-{"t_ns":2100000000,"kind":"drop","cause":"resize_settling","b64":"Yg=="}
+{"t_ns":2000000000,"kind":"resize","cols":202,"rows":47}
+{"t_ns":2100000000,"kind":"drop","cause":"resize_settling","b64":"YQ=="}
 {"t_ns":2500000000,"kind":"snapshot","b64":"cw=="}
 {"t_ns":3000000000,"kind":"drop","cause":"forwarding_not_ready","b64":"YQ=="}
-{"t_ns":4000000000,"kind":"drop","cause":"resize_settling","b64":"YQ=="}
+{"t_ns":4000000000,"kind":"resize","cols":202,"rows":48}
 {"t_ns":4750000000,"kind":"snapshot","b64":"cw=="}
-{"t_ns":5000000000,"kind":"drop","cause":"resize_settling","b64":"YQ=="}
+{"t_ns":5000000000,"kind":"resize","cols":202,"rows":40}
 `
 	got := PairSettleLatency(strings.NewReader(tap))
 	want := []time.Duration{500 * time.Millisecond, 750 * time.Millisecond}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("PairSettleLatency = %v, want %v", got, want)
+	}
+}
+
+func TestPairSettleLatency_should_HandleEdgeCases(t *testing.T) {
+	tests := []struct {
+		name string
+		tap  string
+		want []time.Duration
+	}{
+		{"empty input", ``, nil},
+		{"snapshot without a resize is ignored", `{"t_ns":10,"kind":"snapshot"}` + "\n", nil},
+		{"aborted resize is replaced by the next one",
+			`{"t_ns":1000,"kind":"resize"}` + "\n" + `{"t_ns":5000,"kind":"resize"}` + "\n" + `{"t_ns":7000,"kind":"snapshot"}` + "\n",
+			[]time.Duration{2000}},
+		{"clock step yields no negative sample",
+			`{"t_ns":9000,"kind":"resize"}` + "\n" + `{"t_ns":4000,"kind":"snapshot"}` + "\n", nil},
+		{"torn trailing line keeps earlier records",
+			`{"t_ns":1000,"kind":"resize"}` + "\n" + `{"t_ns":3000,"kind":"snapshot"}` + "\n" + `{"t_ns":40`,
+			[]time.Duration{2000}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := PairSettleLatency(strings.NewReader(tc.tap))
+			if len(got) != len(tc.want) {
+				t.Fatalf("PairSettleLatency = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("PairSettleLatency = %v, want %v", got, tc.want)
+				}
+			}
+		})
 	}
 }

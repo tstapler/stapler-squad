@@ -531,6 +531,7 @@ func (h *StreamHub) deliver(sub *subscriber, data []byte, grace time.Duration) {
 	if sub.trySend(data) {
 		return
 	}
+	h.tap.Record(TapDrop, DropCauseSubscriberUndelivered, data)
 
 	if !sub.markSlow() {
 		// Already stalled and a timer is pending for it; this frame is

@@ -458,7 +458,7 @@ type escapeAnalyticsStreamSource interface {
 }
 
 func escapeAnalyticsHubOptions(sessionName string, controller streamhub.SessionController) []streamhub.HubOption {
-	opts := []streamhub.HubOption{streamhub.WithCaptureTap(streamhub.CaptureTapFor(sessionName))}
+	opts := []streamhub.HubOption{streamhub.WithCaptureTap(streamhub.CaptureTapFor(sessionName).As(streamhub.TapSourceHub))}
 	source, ok := controller.(escapeAnalyticsStreamSource)
 	if !ok {
 		return opts
@@ -1341,7 +1341,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		quiescenceCh:    quiescenceCh,
 		forwardingReady: &forwardingReady,
 		resizeSettling:  &resizeSettling,
-		tap:             streamhub.CaptureTapFor(sessionID),
+		tap:             streamhub.CaptureTapFor(sessionID).As(streamhub.TapSourceLegacy),
 	})
 
 	h.performInitialResizeNudge(instance, sessionID, streamGeneration, currentPaneReq, quiescenceCh)
@@ -1645,6 +1645,11 @@ func (h *ConnectRPCWebSocketHandler) forwardOneControlModeFrame(p controlModeOut
 		// noise from before the canonical initial snapshot has been captured),
 		// or a live resize reflow is in flight. Drop it, but still count it
 		// toward quiescence below.
+		cause := streamhub.DropCauseResizeSettling
+		if !p.forwardingReady.Load() {
+			cause = streamhub.DropCauseForwardingNotReady
+		}
+		p.tap.Record(streamhub.TapDrop, cause, data)
 		signalQuiescence(p.quiescenceCh)
 		return false
 	}
