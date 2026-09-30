@@ -815,7 +815,10 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	}
 	credChain := NewDefaultChain(directCfg)
 
-	capacityMonitor := NewCapacityMonitor(capCfg, eventBus, nil, nil, nil)
+	capacityMonitor := NewCapacityMonitor(CapacityMonitorParams{
+		Config:   capCfg,
+		EventBus: eventBus,
+	})
 	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
 	capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
 

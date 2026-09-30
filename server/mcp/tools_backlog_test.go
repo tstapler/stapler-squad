@@ -2753,6 +2753,9 @@ func TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds(t *testing
 	assert.Equal(t, "bug: something is broken", fetched.Title)
 	assert.Equal(t, "Steps to reproduce...", fetched.Description)
 	assert.Contains(t, fetched.Notes, "https://github.com/tstapler/stapler-squad/issues/316")
+	// ExternalURL is what Storage.CreateBacklogItem keys the cross-host claim on.
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/issues/316", fetched.ExternalURL)
+	assert.Equal(t, "316", fetched.ExternalID)
 }
 
 // TestImportGitHubIssue_should_Succeed_When_NoSessionUUID mirrors

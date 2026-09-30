@@ -48,6 +48,7 @@ const GROUP_ORDER: StuckReason[] = [
   StuckReason.RESPAWN_BLOCKED_ACTIVE,
   StuckReason.LIKELY_FLAKY,
   StuckReason.BLOCKED_BY_DEPENDENCY,
+  StuckReason.BLOCKED_BY_CLAIM,
   StuckReason.WORKTREE_INCONSISTENT,
   StuckReason.REPEATED_NOOP_DISPATCH,
 ];
@@ -108,6 +109,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     snooze,
     bulkResetParkedRemediation,
     triggerRemediationNow,
+    overrideClaimBlock,
   } = useStuckBacklogItems();
   const { updateBacklogItem, transitionStatus, spawnSessionFromItem, approvePlan, getBacklogItem } =
     useBacklogService();
@@ -640,6 +642,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                       currentReworkCapOverride={reworkCapOverrides.get(item.itemId)}
                       reworkCapOverrideLoaded={reworkCapOverrides.has(item.itemId)}
                       onTriggerRemediationNow={triggerRemediationNow}
+                      onOverrideClaimBlock={overrideClaimBlock}
                       onApprovePlan={handleApprovePlan}
                       onDiagnose={handleDiagnose}
                       focusItemId={focusItemId}

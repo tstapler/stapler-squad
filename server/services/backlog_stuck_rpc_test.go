@@ -818,6 +818,10 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// transition today. A future epic wiring an auto-retry action should
 	// remove this entry and add a remediationActionByReason case instead.
 	domain.StuckReasonGateTimeout: true,
+	// StuckReasonBlockedByClaim: never auto-retried — retrying while the other
+	// host's claim stands would only re-mark the row. The operator action is the
+	// reason-gated OverrideClaimBlock RPC, not TriggerRemediationNow.
+	domain.StuckReasonBlockedByClaim: true,
 	// StuckReasonWorktreeInconsistent (session-worktree-reconciliation, Epic
 	// 1.2/1.3): no "retry now" action exists because the remediation *is* the
 	// worktree consistency sweep itself — it already re-evaluates every

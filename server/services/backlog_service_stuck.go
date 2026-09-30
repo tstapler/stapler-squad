@@ -67,6 +67,8 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED
 	case domain.StuckReasonSteerFailed:
 		return sessionv1.StuckReason_STUCK_REASON_STEER_FAILED
+	case domain.StuckReasonBlockedByClaim:
+		return sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM
 	case domain.StuckReasonWorktreeInconsistent:
 		return sessionv1.StuckReason_STUCK_REASON_WORKTREE_INCONSISTENT
 	case domain.StuckReasonRepeatedNoopDispatch:
@@ -120,6 +122,8 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonBounceCapExhausted
 	case sessionv1.StuckReason_STUCK_REASON_STEER_FAILED:
 		return domain.StuckReasonSteerFailed
+	case sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM:
+		return domain.StuckReasonBlockedByClaim
 	case sessionv1.StuckReason_STUCK_REASON_WORKTREE_INCONSISTENT:
 		return domain.StuckReasonWorktreeInconsistent
 	case sessionv1.StuckReason_STUCK_REASON_REPEATED_NOOP_DISPATCH:

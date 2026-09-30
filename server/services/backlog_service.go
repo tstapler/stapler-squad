@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -172,6 +173,14 @@ type BacklogService struct {
 	// the WIP cap by each computing freeSlots from their own stale snapshot
 	// (PR #199 review F2).
 	dequeueMu sync.Mutex
+
+	// claimWiring holds the cross_host_claim_dedup checker and dispute resolver
+	// (backlog_service_claim.go). It is atomic because SetClaimChecker runs at
+	// startup while RPCs and the dequeue sweep already read it. nil means
+	// unimplemented: everything reads as unclaimed. claimDedupFlag overrides the
+	// live feature-flag read (tests only).
+	claimWiring    atomic.Pointer[claimWiring]
+	claimDedupFlag func() bool
 
 	// spawnInFlight is a per-backlog-item "at most one work-session spawn in
 	// flight" set, keyed by item ID, storing struct{} — the same LoadOrStore/

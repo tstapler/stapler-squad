@@ -222,19 +222,8 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 	// process started must still be allowed to launch.
 	programWarning := programWarningFor(ctx, gh.svc, program)
 
-	// Check for title collision. Fast, agent-friendly pre-check in addition to
-	// CreateSession's own synchronous title-uniqueness check below -- see
-	// create_session's identical pre-check in tools_lifecycle.go for the
-	// TOCTOU rationale (async-session-creation Epic 2.3, Story 2.3.2).
-	existing, err := gh.store.ListInstanceData()
-	if err != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("load sessions: %v", err), ""), nil
-	}
-	for _, data := range existing {
-		if data.Title == title {
-			return errResult(ErrInvalidArgument, fmt.Sprintf("session with title %q already exists", title),
-				"The PR may already have a session. Check list_github_prs for existing_session_id."), nil
-		}
+	if errRes := titleCollisionResult(gh.store, title); errRes != nil {
+		return errRes, nil
 	}
 
 	if gh.svc == nil {

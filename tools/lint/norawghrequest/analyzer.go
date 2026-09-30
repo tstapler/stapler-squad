@@ -52,6 +52,7 @@ const ghPackagePath = "github.com/tstapler/stapler-squad/github"
 // call sites — one cache-backed, one an explicit opt-out.
 var exemptConstructorNames = map[string]bool{
 	"newGHRequestForHostWithToken":        true,
+	"newGHRequestForHostWithTokenAndBody": true,
 	"NewConditionalRequest":               true,
 	"NewConditionalRequestNoCache":        true,
 	"newGHGraphQLRequestForHostWithToken": true,
