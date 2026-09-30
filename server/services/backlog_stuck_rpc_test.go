@@ -763,6 +763,9 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	domain.StuckReasonPushFailed:      true,
 	domain.StuckReasonSpawnFailed:     true,
 	domain.StuckReasonPlanNotApproved: true,
+	// StuckReasonRepeatedNoopDispatch: retrying is exactly the loop it detects;
+	// an operator must confirm/archive the duplicate or reset the item.
+	domain.StuckReasonRepeatedNoopDispatch: true,
 	// StuckReasonReworkBlockedStale: deliberately notify + durably mark +
 	// resolve-when-recovered only (plan.md Story 2.1.1) — no automated
 	// remediation action, per requirements.md's explicit out-of-scope item C

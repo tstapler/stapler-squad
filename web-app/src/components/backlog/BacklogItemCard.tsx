@@ -12,6 +12,7 @@ import type { StuckBacklogItem, StuckReason } from "@/gen/session/v1/backlog_pb"
 import { getStatusLabel } from "@/lib/backlog/status";
 import { getPrimaryCardAction } from "@/lib/backlog/itemActions";
 import { BlockerChip } from "./BlockerChip";
+import { DuplicatePendingBadge } from "./DuplicatePendingBadge";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import * as styles from "./BacklogItemCard.css";
 
@@ -183,6 +184,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
         <span className={styles.statusLabel} data-testid="backlog-item-card-status">
           {getStatusLabel(item.status)}
         </span>
+        {item.duplicatePending && <DuplicatePendingBadge duplicateRef={item.duplicateRef ?? ""} />}
       </div>
 
       {isTriageRunning && (

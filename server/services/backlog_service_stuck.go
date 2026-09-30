@@ -69,6 +69,8 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_STEER_FAILED
 	case domain.StuckReasonWorktreeInconsistent:
 		return sessionv1.StuckReason_STUCK_REASON_WORKTREE_INCONSISTENT
+	case domain.StuckReasonRepeatedNoopDispatch:
+		return sessionv1.StuckReason_STUCK_REASON_REPEATED_NOOP_DISPATCH
 	default:
 		return sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED
 	}
@@ -120,6 +122,8 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonSteerFailed
 	case sessionv1.StuckReason_STUCK_REASON_WORKTREE_INCONSISTENT:
 		return domain.StuckReasonWorktreeInconsistent
+	case sessionv1.StuckReason_STUCK_REASON_REPEATED_NOOP_DISPATCH:
+		return domain.StuckReasonRepeatedNoopDispatch
 	default:
 		return ""
 	}
@@ -174,6 +178,14 @@ func (s *BacklogService) ListStuckBacklogItems(
 	items := make([]*sessionv1.StuckBacklogItem, len(rows))
 	for i, row := range rows {
 		items[i] = stuckBacklogItemToProto(row)
+		if row.ItemStatus == session.BacklogStatusReview {
+			if sessions, sessErr := s.storage.ListItemSessions(ctx, row.ItemID); sessErr == nil {
+				if ref := session.PendingDuplicateRef(sessions); ref != "" {
+					items[i].DuplicatePending = true
+					items[i].DuplicateRef = ref
+				}
+			}
+		}
 	}
 
 	return connect.NewResponse(&sessionv1.ListStuckBacklogItemsResponse{Items: items}), nil

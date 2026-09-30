@@ -15,6 +15,7 @@ import {
   PR_STATUS_UNKNOWN_LABEL,
 } from "./stuckReason";
 import { StuckItemDetail } from "./StuckItemDetail";
+import { DuplicatePendingBadge } from "../backlog/DuplicatePendingBadge";
 import * as styles from "./StuckItem.css";
 
 interface StuckItemProps {
@@ -307,6 +308,7 @@ export function StuckItem({
             <span aria-hidden="true">{chipIcon}</span>
             {chipLabel}
           </span>
+          {item.duplicatePending && <DuplicatePendingBadge duplicateRef={item.duplicateRef} />}
           <span className={styles.title} title={item.title}>
             {item.title}
           </span>

@@ -34,6 +34,7 @@ export const STUCK_REASON_LABELS: Record<StuckReason, string> = {
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: "Bounce cap exhausted",
   [StuckReason.STEER_FAILED]: "Steer attempt failed",
   [StuckReason.WORKTREE_INCONSISTENT]: "Worktree state inconsistent",
+  [StuckReason.REPEATED_NOOP_DISPATCH]: "Repeated no-op sessions",
 };
 
 /** Decorative icon glyph for every StuckReason (never the sole signal — text label always accompanies it). */
@@ -59,6 +60,7 @@ export const STUCK_REASON_ICONS: Record<StuckReason, string> = {
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: "🛑",
   [StuckReason.STEER_FAILED]: "⛔",
   [StuckReason.WORKTREE_INCONSISTENT]: "⛔",
+  [StuckReason.REPEATED_NOOP_DISPATCH]: "🔁",
 };
 
 /** vanilla-extract class per StuckReason (design/ux.md Surface 7 chip legend). */
@@ -84,6 +86,7 @@ export const STUCK_REASON_CLASS: Record<StuckReason, string> = {
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: styles.chipEscalated,
   [StuckReason.STEER_FAILED]: styles.chipSteerFailed,
   [StuckReason.WORKTREE_INCONSISTENT]: styles.chipWorktreeInconsistent,
+  [StuckReason.REPEATED_NOOP_DISPATCH]: styles.chipWorktreeInconsistent,
 };
 
 /**
@@ -117,23 +120,24 @@ export const STUCK_REASON_PRIORITY: Record<StuckReason, number> = {
   [StuckReason.MULTIPLE_REASONS]: 1,
   [StuckReason.STEER_FAILED]: 2,
   [StuckReason.WORKTREE_INCONSISTENT]: 3,
-  [StuckReason.PUSH_FAILED]: 4,
-  [StuckReason.SPAWN_FAILED]: 5,
-  [StuckReason.PR_PENDING_NO_PR]: 6,
-  [StuckReason.REWORK_BLOCKED_STALE]: 7,
-  [StuckReason.PR_NEEDS_FIX]: 8,
-  [StuckReason.ABANDONED_REVIEW]: 9,
-  [StuckReason.REWORK_CAP]: 10,
-  [StuckReason.RESPAWN_BLOCKED_ACTIVE]: 11,
-  [StuckReason.ORPHANED_TRIAGE]: 12,
-  [StuckReason.AUTONOMOUS_STUCK]: 13,
-  [StuckReason.BLOCKED_BY_DEPENDENCY]: 14,
-  [StuckReason.PLAN_NOT_APPROVED]: 15,
-  [StuckReason.STALE_WORK]: 16,
-  [StuckReason.BOUNCING]: 17,
-  [StuckReason.PR_READY_UNMERGED]: 18,
-  [StuckReason.LIKELY_FLAKY]: 19,
-  [StuckReason.UNSPECIFIED]: 20,
+  [StuckReason.REPEATED_NOOP_DISPATCH]: 4,
+  [StuckReason.PUSH_FAILED]: 5,
+  [StuckReason.SPAWN_FAILED]: 6,
+  [StuckReason.PR_PENDING_NO_PR]: 7,
+  [StuckReason.REWORK_BLOCKED_STALE]: 8,
+  [StuckReason.PR_NEEDS_FIX]: 9,
+  [StuckReason.ABANDONED_REVIEW]: 10,
+  [StuckReason.REWORK_CAP]: 11,
+  [StuckReason.RESPAWN_BLOCKED_ACTIVE]: 12,
+  [StuckReason.ORPHANED_TRIAGE]: 13,
+  [StuckReason.AUTONOMOUS_STUCK]: 14,
+  [StuckReason.BLOCKED_BY_DEPENDENCY]: 15,
+  [StuckReason.PLAN_NOT_APPROVED]: 16,
+  [StuckReason.STALE_WORK]: 17,
+  [StuckReason.BOUNCING]: 18,
+  [StuckReason.PR_READY_UNMERGED]: 19,
+  [StuckReason.LIKELY_FLAKY]: 20,
+  [StuckReason.UNSPECIFIED]: 21,
 };
 
 /**

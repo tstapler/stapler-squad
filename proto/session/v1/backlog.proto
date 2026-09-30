@@ -281,6 +281,13 @@ message BacklogItem {
   // ever fires for this item — 0.0 is a legitimate configured threshold,
   // distinct from unset. See session.EvaluateBudgetThreshold.
   optional double cost_budget_threshold_usd = 39;
+  // duplicate_pending is true when a report_duplicate claim is recorded for
+  // this item and it is still in review awaiting operator confirmation.
+  // Derived from the claim marker in ItemSession.verification_notes; only
+  // populated on reads that eagerly load item sessions.
+  bool duplicate_pending = 40;
+  // duplicate_ref is the claimed duplicate's URL when duplicate_pending.
+  string duplicate_ref = 41;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -1906,6 +1913,9 @@ enum StuckReason {
   // is a pre-existing domain enum value with no proto mapping yet; that gap is
   // tracked separately and intentionally left unassigned here.
   STUCK_REASON_WORKTREE_INCONSISTENT = 20;
+  // STUCK_REASON_REPEATED_NOOP_DISPATCH: see domain.StuckReasonRepeatedNoopDispatch.
+  // Value 22 — 21 stays reserved for STUCK_REASON_GATE_TIMEOUT (see above).
+  STUCK_REASON_REPEATED_NOOP_DISPATCH = 22;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState
@@ -1948,6 +1958,10 @@ message StuckBacklogItem {
   // "Approve Plan" affordance on an actual plan existing, instead of trusting
   // `reason` alone (which only refreshes on the next ReconcileStuck tick).
   string plan_artifacts_path = 14;
+  // duplicate_pending / duplicate_ref: the item carries an unconfirmed
+  // report_duplicate claim (see BacklogItem.duplicate_pending).
+  bool duplicate_pending = 15;
+  string duplicate_ref = 16;
 }
 
 message ListStuckBacklogItemsRequest {}

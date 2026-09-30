@@ -232,6 +232,15 @@ const (
 	// inconsistency it declined to auto-repair. Dual-written alongside its
 	// notification when the session has a live linked BacklogItem.
 	StuckReasonWorktreeInconsistent StuckReason = "worktree_inconsistent"
+	// StuckReasonRepeatedNoopDispatch: an item with a PASS verdict, sitting in
+	// review/in_progress, has had N consecutive work sessions end with no new
+	// commits (session/stuck_decisions.go's isRepeatedNoopDispatch). Set by
+	// reconcileRepeatedNoopDispatch; while open, the dispatcher
+	// (BacklogService.spawnSessionAfterGates) refuses to spawn another work
+	// session so the loop cannot continue unattended. Resolved when the item
+	// leaves review/in_progress, a new commit lands, or the duplicate claim
+	// that usually explains it is confirmed/archived.
+	StuckReasonRepeatedNoopDispatch StuckReason = "repeated_noop_dispatch"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -257,6 +266,7 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonSteerFailed,
 	StuckReasonGateTimeout,
 	StuckReasonWorktreeInconsistent,
+	StuckReasonRepeatedNoopDispatch,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -268,7 +278,7 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
 		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
 		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed,
-		StuckReasonGateTimeout, StuckReasonWorktreeInconsistent:
+		StuckReasonGateTimeout, StuckReasonWorktreeInconsistent, StuckReasonRepeatedNoopDispatch:
 		return true
 	}
 	return false
