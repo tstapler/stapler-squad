@@ -36,9 +36,12 @@ type TapRegistry struct {
 	now       func() time.Time
 	envDir    string
 	dirFn     func() (string, error)
-	afterFunc func(d time.Duration, f func())
+	afterFunc func(d time.Duration, f func()) (stop func() bool)
 
-	mu          sync.Mutex // lock order: mu, then a sink's mu
+	// mu never waits on a sink lock: sink methods called under it are atomics
+	// and TryLock only, so a pump stuck on a hung disk cannot block the registry.
+	mu          sync.Mutex
+	stopTimer   func() bool // stops the single pending sweep timer; nil when none
 	handles     map[string]*CaptureTap
 	allOn       bool
 	allDeadline time.Time // zero = no expiry
@@ -48,10 +51,11 @@ type TapRegistry struct {
 // TapRegistryOptions injects the registry's environment; zero fields use the
 // process defaults.
 type TapRegistryOptions struct {
-	Now       func() time.Time
-	EnvDir    string                          // value of CaptureTapDirEnv
-	DirFn     func() (string, error)          // default: <config dir>/tap
-	AfterFunc func(d time.Duration, f func()) // default: time.AfterFunc
+	Now    func() time.Time
+	EnvDir string                 // value of CaptureTapDirEnv
+	DirFn  func() (string, error) // default: <config dir>/tap
+	// AfterFunc schedules f after d and returns its stop function. Default: time.AfterFunc.
+	AfterFunc func(d time.Duration, f func()) (stop func() bool)
 }
 
 // NewTapRegistry returns a registry that is off unless opts.EnvDir is set.
@@ -71,7 +75,7 @@ func NewTapRegistry(opts TapRegistryOptions) *TapRegistry {
 		r.dirFn = defaultTapDir
 	}
 	if r.afterFunc == nil {
-		r.afterFunc = func(d time.Duration, f func()) { time.AfterFunc(d, f) }
+		r.afterFunc = func(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop }
 	}
 	if r.envDir != "" {
 		r.allOn = true
@@ -95,7 +99,8 @@ var (
 )
 
 // DefaultTapRegistry returns the process-wide registry, created on first use
-// from CaptureTapDirEnv.
+// from CaptureTapDirEnv. The server calls it at startup so the env override's
+// ACTIVE warning is logged then.
 func DefaultTapRegistry() *TapRegistry {
 	defaultRegistryOnce.Do(func() {
 		defaultRegistry = NewTapRegistry(TapRegistryOptions{EnvDir: os.Getenv(CaptureTapDirEnv)})
@@ -103,20 +108,24 @@ func DefaultTapRegistry() *TapRegistry {
 	return defaultRegistry
 }
 
-// Dir returns the directory tap files are written to.
-func (r *TapRegistry) Dir() string { return r.resolveDir() }
+// Dir returns the directory tap files are written to, or "" when it cannot be
+// resolved.
+func (r *TapRegistry) Dir() string {
+	dir, _ := r.resolveDir()
+	return dir
+}
 
-func (r *TapRegistry) resolveDir() string {
+// resolveDir fails rather than falling back to a predictable temp path: without
+// a resolvable state directory the tap is unavailable.
+func (r *TapRegistry) resolveDir() (string, error) {
 	if r.envDir != "" {
-		return r.envDir
+		return r.envDir, nil
 	}
 	dir, err := r.dirFn()
 	if err != nil {
-		// A private per-user temp dir keeps the tap usable when the state dir is unresolvable.
-		log.Warn("streamhub capture tap: cannot resolve state directory", "error", err)
-		return filepath.Join(os.TempDir(), fmt.Sprintf("stapler-squad-tap-%d", os.Getuid()))
+		return "", fmt.Errorf("capture tap unavailable: cannot resolve state directory: %w", err)
 	}
-	return dir
+	return dir, nil
 }
 
 // Handle returns the session's tap handle: never nil, inert while the tap is
@@ -171,23 +180,31 @@ func (r *TapRegistry) reapplyLocked() {
 
 // Set enables or disables the tap. Empty sessionIDs means all sessions; a
 // disable of all sessions also clears every per-session enable. ttl <= 0 uses
-// TapDefaultTTL and is clamped to TapMaxTTL. Enabling clears an earlier cap or
-// error stop for the affected sessions.
+// TapDefaultTTL and is clamped to TapMaxTTL; ttl is ignored when disabling.
+// Enabling clears an earlier cap or error stop for the affected sessions; a
+// capped file is rotated to .old when it next opens. Enabling all sessions
+// replaces the env override's no-expiry with the TTL, and disabling all
+// sessions turns an env-enabled tap off until restart.
 func (r *TapRegistry) Set(enabled bool, sessionIDs []string, ttl time.Duration) (TapStatus, error) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.sweepLocked()
 	if err := r.setLocked(enabled, sessionIDs, ttl); err != nil {
-		r.mu.Unlock()
 		return TapStatus{}, err
 	}
-	st := r.statusLocked()
-	r.mu.Unlock()
-	return st, nil
+	return r.statusLocked(), nil
 }
 
 func (r *TapRegistry) setLocked(enabled bool, ids []string, ttl time.Duration) error {
 	if !enabled {
-		return r.disableLocked(ids)
+		if err := r.disableLocked(ids); err != nil {
+			return err
+		}
+		r.rescheduleLocked()
+		return nil
+	}
+	if _, err := r.resolveDir(); err != nil {
+		return err
 	}
 	switch {
 	case ttl <= 0:
@@ -196,7 +213,7 @@ func (r *TapRegistry) setLocked(enabled bool, ids []string, ttl time.Duration) e
 		ttl = TapMaxTTL
 	}
 	r.enableLocked(ids, r.now().Add(ttl))
-	r.afterFunc(ttl, r.sweep)
+	r.rescheduleLocked()
 	return nil
 }
 
@@ -216,7 +233,7 @@ func (r *TapRegistry) enableLocked(ids []string, deadline time.Time) {
 	}
 	r.reapplyLocked()
 	log.Warn("streamhub capture tap ACTIVE: recording raw terminal output, which may include secrets",
-		"scope", scope, "sessions", ids, "dir", r.resolveDir(), "expires_at", deadline)
+		"scope", scope, "sessions", ids, "dir", r.Dir(), "expires_at", deadline)
 }
 
 func (r *TapRegistry) disableLocked(ids []string) error {
@@ -236,14 +253,40 @@ func (r *TapRegistry) disableLocked(ids []string) error {
 	return nil
 }
 
-// sweep turns off every scope whose TTL has ended.
-func (r *TapRegistry) sweep() {
+// rescheduleLocked keeps exactly one timer, set for the earliest deadline.
+func (r *TapRegistry) rescheduleLocked() {
+	if r.stopTimer != nil {
+		r.stopTimer()
+		r.stopTimer = nil
+	}
+	var earliest time.Time
+	consider := func(d time.Time) {
+		if !d.IsZero() && (earliest.IsZero() || d.Before(earliest)) {
+			earliest = d
+		}
+	}
+	if r.allOn {
+		consider(r.allDeadline)
+	}
+	for _, d := range r.sessions {
+		consider(d)
+	}
+	if earliest.IsZero() {
+		return
+	}
+	r.stopTimer = r.afterFunc(max(earliest.Sub(r.now()), 0), r.onTimer)
+}
+
+// onTimer expires finished scopes and re-arms the timer for the next deadline.
+func (r *TapRegistry) onTimer() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sweepLocked()
+	r.rescheduleLocked()
 }
 
-func (r *TapRegistry) sweepLocked() {
+// sweepLocked turns off every scope whose TTL has ended and reports whether any did.
+func (r *TapRegistry) sweepLocked() bool {
 	now := r.now()
 	expired := func(d time.Time) bool { return !d.IsZero() && !now.Before(d) }
 	changed := false
@@ -261,6 +304,7 @@ func (r *TapRegistry) sweepLocked() {
 	if changed {
 		r.reapplyLocked()
 	}
+	return changed
 }
 
 // TapSessionStatus describes one session's tap file.
@@ -271,7 +315,9 @@ type TapSessionStatus struct {
 	BytesWritten int64 // file size, including earlier appends
 	Capped       bool
 	Failed       bool
-	ExpiresAt    time.Time // zero = no expiry
+	// Rotated reports that the previous, full file was moved to Path+".old".
+	Rotated   bool
+	ExpiresAt time.Time // zero = no expiry
 }
 
 // TapStatus is a snapshot of the registry.
@@ -294,12 +340,14 @@ type TapStatus struct {
 func (r *TapRegistry) Status() TapStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.sweepLocked()
+	if r.sweepLocked() {
+		r.rescheduleLocked()
+	}
 	return r.statusLocked()
 }
 
 func (r *TapRegistry) statusLocked() TapStatus {
-	st := TapStatus{Dir: r.resolveDir(), AllEnabled: r.allOn}
+	st := TapStatus{Dir: r.Dir(), AllEnabled: r.allOn}
 	noExpiry := r.allOn && r.allDeadline.IsZero()
 	if r.allOn {
 		st.ExpiresAt = r.allDeadline
@@ -319,12 +367,14 @@ func (r *TapRegistry) statusLocked() TapStatus {
 	sort.Strings(st.SessionIDs)
 	for name, h := range r.handles {
 		s := h.s
-		s.mu.Lock()
 		ss := TapSessionStatus{
-			Name: name, Path: s.path, Enabled: s.enabled.Load(),
-			BytesWritten: s.written, Capped: s.capped, Failed: s.failed,
+			Name: name, Enabled: s.enabled.Load(), BytesWritten: s.written.Load(),
+			Capped: s.stop.Load() == tapCapped, Failed: s.stop.Load() == tapFailed,
+			Rotated: s.rotated.Load(),
 		}
-		s.mu.Unlock()
+		if p := s.pathv.Load(); p != nil {
+			ss.Path = *p
+		}
 		if dl := s.deadline.Load(); dl != 0 {
 			ss.ExpiresAt = time.Unix(0, dl)
 		}

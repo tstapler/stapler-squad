@@ -1,7 +1,10 @@
 package streamhub
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,7 +139,7 @@ func TestCaptureTap_should_CreateOwnerOnlyDirAndFile_When_EnvVarSet(t *testing.T
 	}
 }
 
-func TestCaptureTap_should_TightenExistingDirAndFileModes_When_TheyAreWorldReadable(t *testing.T) {
+func TestCaptureTap_should_LeaveExistingDirModeAndTightenFile_When_DirIsOwnedAndNotWritableByOthers(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -152,8 +155,93 @@ func TestCaptureTap_should_TightenExistingDirAndFileModes_When_TheyAreWorldReada
 	if derr != nil || ferr != nil {
 		t.Fatalf("stat errors: dir %v, file %v", derr, ferr)
 	}
-	if di.Mode().Perm() != 0o700 || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("dir = %v, file = %v; want 0700 and 0600", di.Mode().Perm(), fi.Mode().Perm())
+	if di.Mode().Perm() != 0o755 || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("dir = %v, file = %v; want dir untouched (0755) and file 0600", di.Mode().Perm(), fi.Mode().Perm())
+	}
+}
+
+func TestEnsureTapDir_should_Refuse_When_DirIsUnsafe(t *testing.T) {
+	writable := t.TempDir()
+	if err := os.Chmod(writable, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		dir  string
+		uid  int
+	}{
+		{"group-writable", writable, os.Getuid()},
+		{"not owned by uid", t.TempDir(), os.Getuid() + 1},
+		{"not a directory", file, os.Getuid()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ensureTapDir(tc.dir, tc.uid); err == nil {
+				t.Fatalf("ensureTapDir(%s) accepted an unsafe directory", tc.dir)
+			}
+		})
+	}
+}
+
+func TestCaptureTap_should_ReportFailed_When_EnvDirIsGroupWritable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	reg := envRegistry(dir)
+	reg.Handle("sess").Record(TapOutput, "", []byte("x"))
+	if st := reg.Status(); len(st.Sessions) != 1 || !st.Sessions[0].Failed {
+		t.Fatalf("status = %+v, want one failed session", st)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("nothing may be written into an unsafe directory, found %d entries", len(entries))
+	}
+}
+
+func TestTapRegistry_should_BeUnavailable_When_StateDirCannotBeResolved(t *testing.T) {
+	reg := NewTapRegistry(TapRegistryOptions{
+		DirFn:     func() (string, error) { return "", errors.New("no home") },
+		AfterFunc: noTimer,
+	})
+	if _, err := reg.Set(true, nil, 0); err == nil {
+		t.Fatal("enabling must fail when the tap directory cannot be resolved")
+	}
+	if reg.Dir() != "" {
+		t.Fatalf("Dir = %q, want empty", reg.Dir())
+	}
+	if st := reg.Status(); st.Enabled {
+		t.Fatalf("status = %+v, want off", st)
+	}
+}
+
+func TestCaptureTap_should_TerminateTornTail_When_FileEndsMidLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sess.jsonl")
+	torn := `{"t_ns":1,"kind":"output","b64":"YQ=="}` + "\n" + `{"t_ns":2,"kind":"out`
+	if err := os.WriteFile(path, []byte(torn), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envRegistry(dir).Handle("sess").Record(TapOutput, "", []byte("new"))
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var got []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		var rec TapRecord
+		if json.Unmarshal(sc.Bytes(), &rec) == nil && rec.Kind == TapOutput {
+			got = append(got, string(rec.Bytes()))
+		}
+	}
+	if len(got) != 2 || got[0] != "a" || got[1] != "new" {
+		t.Fatalf("parsable records = %v, want [a new]: the new record must start its own line", got)
 	}
 }
 

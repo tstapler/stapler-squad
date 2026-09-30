@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,8 @@ import (
 //
 // The tap writes raw terminal bytes, which can include typed passwords and
 // tokens printed by agents. Files are 0600 in a 0700 directory, capped at
-// defaultTapMaxBytes per file, and never rotated: delete them when done.
+// defaultTapMaxBytes per file; a full file is rotated once to .old on re-enable.
+// Delete them when done.
 // See docs/how-to/capture-terminal-stream-tap.md.
 const CaptureTapDirEnv = "STAPLER_SQUAD_CAPTURE_TAP_DIR"
 
@@ -84,23 +86,39 @@ func (r TapRecord) Bytes() []byte {
 	return b
 }
 
+// Values of tapSink.stop.
+const (
+	tapRunning int32 = iota
+	tapFailed        // a write or open error stopped the tap
+	tapCapped        // the size cap stopped the tap
+)
+
 // tapSink is the per-session state shared by every CaptureTap view of it. The
 // file opens lazily on the first write while enabled and closes on disable,
 // cap or error.
+//
+// mu guards the file (w, closer, scratch) and is held across a disk write, so a
+// hung disk can hold it indefinitely. Everything the registry touches (enable,
+// disable, status) is therefore an atomic that never waits on mu.
 type tapSink struct {
 	mu       sync.Mutex
-	enabled  atomic.Bool  // hot-path gate; written under mu or by the registry
+	enabled  atomic.Bool  // hot-path gate
 	deadline atomic.Int64 // unix nanos at which the TTL ends; 0 = none
+	written  atomic.Int64 // size of the file, including earlier appends; changed under mu
+	stop     atomic.Int32 // tapRunning, tapFailed or tapCapped
+	rotate   atomic.Bool  // capped before an explicit re-enable: rotate on next open
+	rotated  atomic.Bool  // the file was rotated to .old by the latest enable
+	// closePending asks the next writer (or a successful TryLock) to close the
+	// file once the tap is off, since the disabler must not wait for mu.
+	closePending atomic.Bool
+	pathv        atomic.Pointer[string]
+
 	reg      *TapRegistry // nil for in-memory writers
 	name     string
-	path     string
 	w        io.Writer
 	closer   io.Closer // nil for in-memory writers
 	now      func() time.Time
-	failed   bool // a write or open error stopped the tap
-	capped   bool // the size cap stopped the tap
 	scratch  []byte
-	written  int64 // size of the file, including earlier appends
 	maxBytes int64
 }
 
@@ -147,13 +165,21 @@ func (t *CaptureTap) RecordResize(size TerminalSize) {
 
 func (t *CaptureTap) write(rec TapRecord) {
 	s := t.s
-	// Checked before taking s.mu: sweep locks the registry and then the sink.
+	// Checked before taking s.mu so the sweep never runs under a sink lock.
 	if dl := s.deadline.Load(); dl != 0 && s.reg != nil && s.now().UnixNano() >= dl {
-		s.reg.sweep()
+		s.reg.onTimer()
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.enabled.Load() {
+	s.appendLocked(rec, t.src)
+	s.closeIfPendingLocked()
+	s.mu.Unlock()
+	// A disable that lost the TryLock race above may have set closePending
+	// after our check; finish the close it could not.
+	s.tryClosePending()
+}
+
+func (s *tapSink) appendLocked(rec TapRecord, src TapSource) {
+	if !s.enabled.Load() || s.stop.Load() != tapRunning {
 		return
 	}
 	if s.w == nil {
@@ -163,30 +189,35 @@ func (t *CaptureTap) write(rec TapRecord) {
 		}
 	}
 	rec.TNs = s.now().UnixNano()
-	rec.Src = t.src
+	rec.Src = src
 	line, err := json.Marshal(rec)
-	capped := false
-	if err == nil {
-		if s.written+int64(len(line))+1 > s.maxBytes {
-			err = fmt.Errorf("size cap of %d bytes reached", s.maxBytes)
-			capped = true
-		} else {
-			s.scratch = append(append(s.scratch[:0], line...), '\n')
-			var n int
-			n, err = s.w.Write(s.scratch)
-			s.written += int64(n)
-		}
-	}
 	if err != nil {
-		s.stopLocked(err, capped)
+		s.stopLocked(err, false)
+		return
+	}
+	if s.written.Load()+int64(len(line))+1 > s.maxBytes {
+		s.stopLocked(fmt.Errorf("size cap of %d bytes reached", s.maxBytes), true)
+		return
+	}
+	s.scratch = append(append(s.scratch[:0], line...), '\n')
+	n, err := s.w.Write(s.scratch)
+	s.written.Add(int64(n))
+	if err != nil {
+		s.stopLocked(err, false)
 	}
 }
 
 // openLocked opens the session's file for appending and seeds written from its
-// current size so the cap holds across disable and re-enable.
+// current size so the cap holds across disable and re-enable. A file at the cap,
+// or one that stopped the tap before an explicit re-enable, is first rotated to
+// <name>.jsonl.old, replacing any earlier .old file.
 func (s *tapSink) openLocked() error {
-	path := filepath.Join(s.reg.resolveDir(), sanitizeTapName(s.name)+".jsonl")
-	f, err := openTapFile(path)
+	dir, err := s.reg.resolveDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, sanitizeTapName(s.name)+".jsonl")
+	f, rotated, err := openTapFile(dir, path, s.maxBytes, s.rotate.Swap(false))
 	if err != nil {
 		return fmt.Errorf("cannot open tap file %s: %w", path, err)
 	}
@@ -195,7 +226,13 @@ func (s *tapSink) openLocked() error {
 		_ = f.Close()
 		return err
 	}
-	s.path, s.w, s.closer, s.written = path, f, f, fi.Size()
+	s.w, s.closer = f, f
+	s.pathv.Store(&path)
+	s.written.Store(fi.Size())
+	if rotated {
+		s.rotated.Store(true)
+		log.Warn("streamhub capture tap: rotated full file", "session", s.name, "old", path+tapRotatedSuffix)
+	}
 	log.Info("streamhub capture tap file opened", "session", s.name, "path", path)
 	return nil
 }
@@ -208,23 +245,42 @@ func (s *tapSink) closeLocked() {
 	}
 }
 
+func (s *tapSink) closeIfPendingLocked() {
+	if s.closePending.Swap(false) && !s.enabled.Load() {
+		s.closeLocked()
+	}
+}
+
+// tryClosePending closes the file if a disable asked for it and no write is in
+// flight. It never blocks: an in-flight writer closes the file itself.
+func (s *tapSink) tryClosePending() {
+	if s.closePending.Load() && s.mu.TryLock() {
+		s.closeIfPendingLocked()
+		s.mu.Unlock()
+	}
+}
+
 // stopLocked turns the tap off for this session after an error or the cap.
 func (s *tapSink) stopLocked(err error, capped bool) {
+	if capped {
+		s.stop.Store(tapCapped)
+	} else {
+		s.stop.Store(tapFailed)
+	}
 	s.enabled.Store(false)
-	s.failed, s.capped = !capped, capped
 	s.closeLocked()
 	log.Warn("streamhub capture tap: disabling tap for this session", "session", s.name, "error", err)
 }
 
-// apply sets whether the tap is on, and until when. A sink stopped by an error
-// or the cap stays stopped until reset.
+// apply sets whether the tap is on, and until when. It never blocks, so the
+// registry can call it while a writer is stuck on a hung disk. A sink stopped
+// by an error or the cap stays stopped until reset.
 func (s *tapSink) apply(on bool, deadline time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if !on {
 		s.enabled.Store(false)
 		s.deadline.Store(0)
-		s.closeLocked()
+		s.closePending.Store(true)
+		s.tryClosePending()
 		return
 	}
 	if deadline.IsZero() {
@@ -232,41 +288,94 @@ func (s *tapSink) apply(on bool, deadline time.Time) {
 	} else {
 		s.deadline.Store(deadline.UnixNano())
 	}
-	if !s.failed && !s.capped {
-		s.enabled.Store(true)
-	}
+	s.enabled.Store(s.stop.Load() == tapRunning)
 }
 
 // reset clears a stop caused by an error or the cap, on an explicit re-enable.
+// A capped file is rotated when it next opens.
 func (s *tapSink) reset() {
-	s.mu.Lock()
-	s.failed, s.capped = false, false
-	s.mu.Unlock()
+	if s.stop.Swap(tapRunning) == tapCapped {
+		s.rotate.Store(true)
+	}
+	s.rotated.Store(false)
 }
 
-// openTapFile creates dir as 0700 (and tightens an existing one we own), refuses
-// a symlink at path, and opens the file 0600 in append mode. With the directory
-// owner-only, no other user can plant a symlink between the check and the open.
-func openTapFile(path string) (*os.File, error) {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
+// tapRotatedSuffix names the previous file after a rotation.
+const tapRotatedSuffix = ".old"
+
+// openTapFile creates dir as 0700 if missing, refuses a symlink at path,
+// rotates a full file to path+".old", and opens the file 0600 in append mode,
+// terminating a torn last line so later records stay readable.
+func openTapFile(dir, path string, maxBytes int64, forceRotate bool) (f *os.File, rotated bool, err error) {
+	if err := ensureTapDir(dir, os.Getuid()); err != nil {
+		return nil, false, err
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("directory %s is not owned by this user: %w", dir, err)
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil, false, fmt.Errorf("refusing to follow symlink at %s", path)
+		}
+		if fi.Size() >= maxBytes || (forceRotate && fi.Size() > 0) {
+			if err := os.Rename(path, path+tapRotatedSuffix); err != nil {
+				return nil, false, fmt.Errorf("rotating full tap file: %w", err)
+			}
+			rotated = true
+		}
 	}
-	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("refusing to follow symlink at %s", path)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err = os.OpenFile(path, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := f.Chmod(0o600); err != nil {
 		_ = f.Close()
-		return nil, err
+		return nil, false, err
 	}
-	return f, nil
+	if err := terminateTornTail(f); err != nil {
+		_ = f.Close()
+		return nil, false, err
+	}
+	return f, rotated, nil
+}
+
+// terminateTornTail appends a newline when the file's last byte is not one, as
+// after a crash mid-write, so the next record starts on its own line.
+func terminateTornTail(f *os.File) error {
+	fi, err := f.Stat()
+	if err != nil || fi.Size() == 0 {
+		return err
+	}
+	var last [1]byte
+	if _, err := f.ReadAt(last[:], fi.Size()-1); err != nil {
+		return err
+	}
+	if last[0] == '\n' {
+		return nil
+	}
+	_, err = f.Write([]byte{'\n'})
+	return err
+}
+
+// ensureTapDir creates dir 0700 when missing. An existing directory is never
+// chmodded (it may be the operator's home or temp dir); it is refused unless it
+// is owned by uid and not group- or world-writable.
+func ensureTapDir(dir string, uid int) error {
+	fi, err := os.Stat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		if err = os.MkdirAll(dir, 0o700); err == nil {
+			fi, err = os.Stat(dir)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	switch {
+	case !fi.IsDir():
+		return fmt.Errorf("%s is not a directory", dir)
+	case fi.Mode().Perm()&0o022 != 0:
+		return fmt.Errorf("refusing tap directory %s: group- or world-writable (%v)", dir, fi.Mode().Perm())
+	case !ownedByUID(fi, uid):
+		return fmt.Errorf("refusing tap directory %s: not owned by uid %d", dir, uid)
+	}
+	return nil
 }
 
 // sanitizeTapName maps name to a safe file stem. A name that needed changes gets
