@@ -3597,6 +3597,10 @@ message WorkflowEvent {
   // "no sequence information" -- used for the synthetic initial-snapshot
   // events, which don't correspond to a single published bus event.
   uint64 seq = 7;
+
+  // Synthetic marker (oneof left unset) sent periodically on an otherwise-
+  // idle connection -- see SessionEvent.heartbeat's identical doc comment.
+  bool heartbeat = 8;
 }
 
 // WorkflowCreatedEvent is emitted when a new workflow is saved.

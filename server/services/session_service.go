@@ -4436,11 +4436,18 @@ func (s *SessionService) WatchSessions(
 	}
 
 	// Stream events until client disconnects or context is canceled
+	heartbeat := time.NewTicker(events.HeartbeatInterval)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			// Client disconnected or context canceled
 			return nil
+		case <-heartbeat.C:
+			if err := stream.Send(&sessionv1.SessionEvent{Timestamp: timestamppb.Now(), Heartbeat: true}); err != nil {
+				return fmt.Errorf("failed to send session heartbeat: %w", err)
+			}
 		case event, ok := <-eventCh:
 			if !ok {
 				// Event channel closed (should not happen with proper cleanup)
