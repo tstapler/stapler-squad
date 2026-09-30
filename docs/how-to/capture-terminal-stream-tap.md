@@ -15,7 +15,7 @@ streams that are already running. Use a manual instance, never the live service
 (see "Manual/interactive testing" in `CLAUDE.md`).
 
 ```bash
-# One session (session_ids are the session names shown in the UI)
+# One session (sessionIds are session titles, as shown in the UI; not tmux names)
 curl -sS -X POST http://localhost:62871/api/session.v1.SessionService/SetCaptureTap \
   -H 'Content-Type: application/json' \
   -d '{"enabled": true, "sessionIds": ["my-session"], "ttlSeconds": 600}'
@@ -32,13 +32,21 @@ curl -sS -X POST http://localhost:62871/api/session.v1.SessionService/GetCapture
 Rules:
 
 - **Loopback only.** Both RPCs are rejected with `PermissionDenied` unless the
-  TCP peer is `127.0.0.1` or `::1`, even with `--remote-access`. A request
-  carrying a proxy header (`X-Forwarded-For`, `Forwarded`, `X-Real-Ip`, `Via`,
-  `X-Forwarded-Host`, `X-Forwarded-Proto`) or a non-loopback `Origin` is
-  rejected too, because a local reverse proxy or tunnel connects from loopback.
+  TCP peer is `127.0.0.1` or `::1`, even with `--remote-access`, and the request
+  `Host` is a loopback name (`localhost`, `127.0.0.1`, `[::1]`). A local reverse
+  proxy or tunnel connects from loopback but forwards its public `Host`, so it
+  is rejected. So is a request carrying a proxy header (`Forwarded`,
+  `X-Forwarded-*`, `X-Original-Forwarded-For`, `X-Real-Ip`, `X-Client-Ip`,
+  `True-Client-Ip`, `CF-Connecting-IP`, `Cdn-Loop`, `Via`, any `Tailscale-*`).
+  A browser `Origin`, when present, must match the `Host` exactly; requests with
+  no `Origin` (curl, scripts) are allowed.
+- **Session ids** are session titles, at most 256 bytes, with no control
+  characters. The hub and legacy stream paths share one file per session because
+  both key on the title.
 - **Every enable expires.** `ttlSeconds` defaults to 1800 (30 minutes) and is
   clamped to 14400 (4 hours). When it ends the tap turns itself off and logs a
-  warning. Enable again to extend it.
+  warning. Enable again to extend it. One timer tracks the earliest deadline.
+  Enabling a named session while all sessions are on keeps the later deadline.
 - **The directory is fixed by the server**, never by the caller: `<state
   dir>/tap` (so `STAPLER_SQUAD_INSTANCE` and workspace isolation apply), or
   `STAPLER_SQUAD_CAPTURE_TAP_DIR` if set.
@@ -53,27 +61,37 @@ curl -sS -X POST http://localhost:62871/api/session.v1.SessionService/SetCapture
 
 With no `sessionIds` this stops every session and closes the files. To stop only
 named sessions, send their `sessionIds`; that is rejected while the tap is on
-for all sessions. Then delete the files. Nothing rotates them, and turning the
-tap back on appends to the same files.
+for all sessions. Disabling never waits on a slow disk: an in-flight write
+finishes, then the file closes. Then delete the files. Turning the tap back on
+appends to the same file, unless it was full (see below).
 
 ## Enable at startup (operator override)
 
 Setting `STAPLER_SQUAD_CAPTURE_TAP_DIR` starts the tap on for all sessions with
 no TTL and writes to that directory. Give each instance its own directory: two
 instances sharing one append to the same files. The server logs a `capture tap
-ACTIVE` warning when it first builds the registry. A runtime `enabled: false`
-still turns it off.
+ACTIVE` warning at startup. At runtime, `enabled: true` for all sessions
+replaces the no-expiry with the TTL, and `enabled: false` for all sessions
+turns the tap off until restart. If the directory already exists it must be
+owned by the server's user and not group- or world-writable; it is never
+chmodded. If it does not exist it is created `0700`.
 
 ## What it writes
 
 - One file per session, opened on the first write after the tap is enabled:
   `<dir>/<session>.jsonl`. A session name that needed
   characters replaced gets a short hash suffix so two names never share a file.
-- The directory is created `0700` and files `0600`. An existing directory is
-  tightened to `0700`. A symlink at the file path is refused.
+- A missing directory is created `0700` and files are `0600`. An existing
+  directory is validated (owned by the server's user, not group- or
+  world-writable), not chmodded; a directory that fails is refused and the tap
+  reports `failed`. If the state directory cannot be resolved the tap is
+  unavailable (there is no temp-dir fallback). A symlink at the file path is
+  refused. On open, a file whose last line was torn (no trailing newline) gets
+  one so later records stay readable.
 - Each file stops at 64 MiB (logged once) and is closed; `GetCaptureTap` reports
-  it as `capped`, and enabling again clears the flag (the cap counts the whole
-  file, so a full file stops again at once). Writes are synchronous
+  it as `capped`. Enabling again rotates the full file to `<name>.jsonl.old`
+  (replacing any earlier `.old`) and records into a fresh file, reported as
+  `rotated`, so a session has at most two files. Writes are synchronous
   on the output path, so use a local disk.
 - Each line is `{"t_ns","kind","src","cause","cols","rows","b64"}`:
   - `kind`: `output`, `drop`, `resize` or `snapshot`.
@@ -94,3 +112,11 @@ still turns it off.
 - The shell-stream forwarder is not tapped.
 - Legacy `output` records are post-coalesce buffers; hub records are pre-batch
   frames, so the two are not byte-for-byte comparable.
+
+## Limits
+
+- The registry keeps one small handle per session title it has seen, until the
+  server restarts. Nothing prunes idle handles, so memory grows with the number
+  of distinct sessions streamed.
+- Only 64 MiB x 2 per session is kept, but there is no total cap across sessions:
+  enabling all sessions on a busy server can fill the disk within the TTL.
