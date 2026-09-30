@@ -53,9 +53,10 @@ export function groupWithPinned(
   sessions: Session[],
   group: (rest: Session[]) => GroupedSessions[]
 ): GroupedSessions[] {
-  const pinned = sessions.filter((s) => s.pinned);
+  const isPinned = (s: Session) => s.pinned && !s.archivedAt;
+  const pinned = sessions.filter(isPinned);
   if (pinned.length === 0) return group(sessions);
-  const rest = sessions.filter((s) => !s.pinned);
+  const rest = sessions.filter((s) => !isPinned(s));
   return [
     { groupKey: PINNED_GROUP_KEY, displayName: "Pinned", sessions: pinned },
     ...group(rest),

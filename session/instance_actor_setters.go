@@ -391,6 +391,10 @@ func setPinnedLocked(s *instanceState, v bool) error {
 		s.inst.mu.Unlock()
 		return ErrCannotPinArchivedSession
 	}
+	if s.inst.Pinned != v {
+		// Bump UpdatedAt: the web store drops upserts whose updatedAt is unchanged.
+		s.inst.touchUpdatedAt()
+	}
 	s.inst.Pinned = v
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()

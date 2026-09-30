@@ -21,6 +21,7 @@ import {
   ListSessionsRequestSchema,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
+import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BackoffState, getWsCloseCode, isNonRetriableConnectError } from "@/lib/utils/backoff";
@@ -209,6 +210,8 @@ export function useSessionService(
   const [systemMemoryPct, setSystemMemoryPct] = useState<number>(0);
   const [reconnectAttemptCount, setReconnectAttemptCount] = useState(0);
   const sessions = useAppSelector(autoWatch ? selectAllSessions : selectNoSessions);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const loading = useAppSelector(selectSessionsLoading);
   const errorStr = useAppSelector(selectSessionsError);
 
@@ -919,8 +922,9 @@ export function useSessionService(
   const setPinned = useCallback(
     async (id: string, pinned: boolean): Promise<boolean> => {
       if (!clientRef.current) return false;
-      const previous = sessions.find((s) => s.id === id);
-      if (previous) dispatch(upsertSession({ ...previous, pinned }));
+      const previous = sessionsRef.current.find((s) => s.id === id);
+      // New updatedAt so the store's unchanged-updatedAt dedup doesn't drop the optimistic write.
+      if (previous) dispatch(upsertSession({ ...previous, pinned, updatedAt: timestampFromDate(new Date()) }));
       try {
         if (pinned) {
           await clientRef.current.pinSession(create(PinSessionRequestSchema, { sessionId: id }));
@@ -934,7 +938,7 @@ export function useSessionService(
         return false;
       }
     },
-    [dispatch, sessions]
+    [dispatch]
   );
   const pinSession = useCallback((id: string) => setPinned(id, true), [setPinned]);
   const unpinSession = useCallback((id: string) => setPinned(id, false), [setPinned]);

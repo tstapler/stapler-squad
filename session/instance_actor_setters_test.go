@@ -459,3 +459,16 @@ func TestSetArchivedAtIfNilCtx_should_ApplyCASOnce_When_ActorIsIdle(t *testing.T
 	require.NoError(t, err)
 	assert.False(t, set, "second archive is a no-op (CAS)")
 }
+
+func TestInstance_SetPinned_should_BumpUpdatedAt_OnlyWhenValueChanges(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	before := inst.Snapshot().UpdatedAt
+
+	require.NoError(t, inst.SetPinned(true))
+	afterPin := inst.Snapshot().UpdatedAt
+	assert.True(t, afterPin.After(before), "pin must bump UpdatedAt so clients don't dedupe it away")
+
+	require.NoError(t, inst.SetPinned(true))
+	assert.Equal(t, afterPin, inst.Snapshot().UpdatedAt, "no-op pin must not bump UpdatedAt")
+}
