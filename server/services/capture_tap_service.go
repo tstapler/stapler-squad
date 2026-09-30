@@ -24,9 +24,9 @@ const maxCaptureTapSessionIDs = 256
 // remote caller from a local one.
 var proxyHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip", "Via"}
 
-// +api: capture-tap:set
 // SetCaptureTap turns the terminal-stream capture tap on or off at runtime.
 // Loopback requests only; the output directory is never caller-supplied.
+// +api: SetCaptureTap
 func (s *SessionService) SetCaptureTap(
 	_ context.Context,
 	req *connect.Request[sessionv1.SetCaptureTapRequest],
@@ -59,8 +59,8 @@ func (s *SessionService) SetCaptureTap(
 	return connect.NewResponse(&sessionv1.SetCaptureTapResponse{State: captureTapState(st)}), nil
 }
 
-// +api: capture-tap:get
 // GetCaptureTap reports the capture tap's state. Loopback requests only.
+// +api: GetCaptureTap
 func (s *SessionService) GetCaptureTap(
 	_ context.Context,
 	req *connect.Request[sessionv1.GetCaptureTapRequest],
