@@ -8,6 +8,7 @@ import (
 	"math"
 	"mime"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -46,6 +47,21 @@ func (h *WebhookRegistrationHandler) RegisterRoutes(mux *http.ServeMux) {
 			return h.svc.Delete(ctx, c, id, r)
 		}))
 	mux.HandleFunc("POST "+webhookManagementBasePath+"/registrations/{instance_id}/emergency-cleanup", h.emergencyCleanup)
+}
+
+// webhookManagementRouteRe matches exactly the routes RegisterRoutes serves, and nothing else
+// under the versioned prefix. It is what lets the passkey middleware step aside for these
+// paths on the remote listener: the exemption covers the real route shapes, not a whole prefix.
+var webhookManagementRouteRe = regexp.MustCompile(
+	`^` + regexp.QuoteMeta(webhookManagementBasePath) +
+		`/(?:capability|registrations/` + webhookInstanceIDPattern + `(?:/(?:reconcile|disable|delete|emergency-cleanup))?)$`)
+
+// IsWebhookManagementPath reports whether path is one of the management API's routes. Those
+// routes authenticate every request themselves, with an integration credential, so the passkey
+// middleware need not (and on the remote listener, cannot) authenticate them. The caller must
+// pass only canonical paths.
+func IsWebhookManagementPath(path string) bool {
+	return webhookManagementRouteRe.MatchString(path)
 }
 
 type lifecycleFunc func(context.Context, *WebhookCaller, string, WebhookLifecycleRequest) (*WebhookReconcileResponse, error)

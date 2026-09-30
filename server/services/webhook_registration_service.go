@@ -37,7 +37,10 @@ const (
 )
 
 var (
-	webhookInstanceIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+	// webhookInstanceIDPattern must start alphanumeric so an ID can never be "." or "..", which are
+	// dot-segments once the ID is placed in a URL path.
+	webhookInstanceIDPattern = `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`
+	webhookInstanceIDRe      = regexp.MustCompile(`^` + webhookInstanceIDPattern + `$`)
 	webhookRequestIDRe  = regexp.MustCompile(`^[A-Za-z0-9._-]{8,128}$`)
 	webhookLabelRe      = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 	webhookSHA256Re     = regexp.MustCompile(`^[0-9a-f]{64}$`)

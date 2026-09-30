@@ -7,6 +7,30 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
+// addSelfAuthenticatedPaths records a matcher for routes that authenticate every request
+// themselves. Only routes that were actually registered may be added: the remote listener's
+// passkey middleware skips exactly these paths, so a matcher for a route that is not mounted
+// (feature off) would needlessly open it to the SPA catch-all.
+func (s *Server) addSelfAuthenticatedPaths(match func(path string) bool) {
+	s.selfAuthMu.Lock()
+	defer s.selfAuthMu.Unlock()
+	s.selfAuthPaths = append(s.selfAuthPaths, match)
+}
+
+// SelfAuthenticatedPath reports whether path is a registered route that authenticates every
+// request itself, and so needs no passkey session. Safe for concurrent use; pass it to
+// middleware.WithSelfAuthenticatedPaths.
+func (s *Server) SelfAuthenticatedPath(path string) bool {
+	s.selfAuthMu.RLock()
+	defer s.selfAuthMu.RUnlock()
+	for _, match := range s.selfAuthPaths {
+		if match(path) {
+			return true
+		}
+	}
+	return false
+}
+
 // registerWebhookManagement mounts the credential-authenticated webhook-registration API.
 // Like the webhook_triggers receivers it is gated at route-registration time, so a
 // disabled feature is indistinguishable from a path that never existed; flipping the flag
@@ -20,7 +44,8 @@ func registerWebhookManagement(srv *Server, deps *ServerDependencies, cfg *confi
 	if deps.Storage == nil {
 		log.Warn("webhook management API not registered: no storage")
 		return
-	}	// Provision the machine key now, on the shared instance: a failure then disables the API
+	}
+	// Provision the machine key now, on the shared instance: a failure then disables the API
 	// at boot instead of surfacing as an opaque error on the first reconcile.
 	if _, err := cfg.GetOrCreateEncryptionKey(); err != nil {
 		log.Warn("webhook management API not registered: cannot provision encryption key", "err", err)
@@ -42,6 +67,7 @@ func registerWebhookManagement(srv *Server, deps *ServerDependencies, cfg *confi
 		session.NewEntRepositoryFromClient(entClient), cfg, services.WebhookWorkspaceID(configDir), receiverEnabled)
 	svc.SetEventBus(deps.EventBus)
 	services.NewWebhookRegistrationHandler(svc).RegisterRoutes(srv.mux)
+	srv.addSelfAuthenticatedPaths(services.IsWebhookManagementPath)
 	log.Info("Registered webhook management API", "base", "/api/integrations/webhooks/v1", "receiver_enabled", receiverEnabled)
 	if !receiverEnabled {
 		log.Warn("webhook_management is enabled but webhook_triggers is not: reconcile will refuse to create registrations until the receiver is enabled and the service restarts")

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"path"
 	"strings"
 )
 
@@ -11,16 +12,48 @@ type AuthValidator interface {
 	ValidateAuthSession(token string) bool
 }
 
+// AuthOption customises Auth.
+type AuthOption func(*authConfig)
+
+type authConfig struct {
+	selfAuthenticated func(path string) bool
+}
+
+// WithSelfAuthenticatedPaths lets paths that authenticate every request themselves (with a
+// credential the passkey session manager knows nothing about) through without a passkey
+// session. match is evaluated per request, so routes registered after the middleware is built
+// are honoured, and it is only ever asked about a canonical path: one that is already clean and
+// carries no special escaping, so "..", "//" and %-encoded tricks can never be made to look like
+// an exempt route. Everything the handler behind such a path does is that handler's
+// responsibility to authenticate; this option grants nothing beyond skipping the passkey check.
+func WithSelfAuthenticatedPaths(match func(path string) bool) AuthOption {
+	return func(c *authConfig) { c.selfAuthenticated = match }
+}
+
+// isCanonicalPath reports whether r's path is in canonical form and so safe to match
+// literally against an exemption list.
+func isCanonicalPath(r *http.Request) bool {
+	return r.URL.RawPath == "" && path.Clean(r.URL.Path) == r.URL.Path
+}
+
+func (c authConfig) skipsPasskey(r *http.Request) bool {
+	return c.selfAuthenticated != nil && isCanonicalPath(r) && c.selfAuthenticated(r.URL.Path)
+}
+
 // Auth returns middleware that enforces authentication on all non-exempt paths.
 // When auth is nil (auth disabled), the middleware is a no-op pass-through.
-func Auth(validator AuthValidator) func(http.Handler) http.Handler {
+func Auth(validator AuthValidator, opts ...AuthOption) func(http.Handler) http.Handler {
+	var cfg authConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	return func(next http.Handler) http.Handler {
 		if validator == nil {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Always allow auth endpoints and static assets needed before login.
-			if isExempt(r.URL.Path) {
+			if isExempt(r.URL.Path) || cfg.skipsPasskey(r) {
 				next.ServeHTTP(w, r)
 				return
 			}

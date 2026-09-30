@@ -5,7 +5,7 @@
   "additionalProperties": false,
   "required": ["instance_id", "registration_id", "workflow_id", "version", "compat_tuple_sha256", "created_at", "updated_at", "endpoint_path", "webhook"],
   "properties": {
-    "instance_id": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" },
+    "instance_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
     "registration_id": { "type": "string", "format": "uuid" },
     "workflow_id": { "type": "string", "format": "uuid" },
     "version": { "type": "integer", "minimum": 1 },
