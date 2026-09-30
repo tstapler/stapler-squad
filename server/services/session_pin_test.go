@@ -3,11 +3,13 @@ package services
 import (
 	"context"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/events"
 )
 
 func TestPinSession_should_PersistPinnedTrue_When_RPCSucceeds(t *testing.T) {
@@ -65,4 +67,23 @@ func TestPinSession_should_ReturnNotFoundOrInvalid_When_IDBad(t *testing.T) {
 	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
 	_, err = fix.svc.UnpinSession(ctx, connect.NewRequest(&sessionv1.UnpinSessionRequest{SessionId: ""}))
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+func TestPinSession_should_PublishSessionUpdatedEvent_When_Pinned(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+	addPausedSession(t, fix, "pin-event")
+	ch, subID := fix.svc.eventBus.Subscribe(context.Background())
+	defer fix.svc.eventBus.Unsubscribe(subID)
+
+	_, err := fix.svc.PinSession(context.Background(), connect.NewRequest(&sessionv1.PinSessionRequest{SessionId: "pin-event"}))
+	require.NoError(t, err)
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventSessionUpdated, ev.Type)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a session_updated event after pinning")
+	}
 }

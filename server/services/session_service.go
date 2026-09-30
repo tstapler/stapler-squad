@@ -6523,6 +6523,8 @@ func (s *SessionService) setPinned(sessionID string, pinned bool) error {
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
+	// Push to other browsers' WatchSessions streams so a pin made in one appears in all.
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"pinned"}))
 	return nil
 }
 
