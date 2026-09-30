@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -20,12 +22,14 @@ const maxWebhookManagementBodyBytes = 64 << 10
 // a bearer integration credential validated here, independent of the passkey middleware,
 // so it is authenticated on whichever listener serves it.
 type WebhookRegistrationHandler struct {
-	svc *WebhookRegistrationService
+	svc     *WebhookRegistrationService
+	limiter *authFailureLimiter
 }
 
-// NewWebhookRegistrationHandler constructs the handler.
+// NewWebhookRegistrationHandler constructs the handler with its own authentication-failure
+// limiter (per handler, so there is no process-global state).
 func NewWebhookRegistrationHandler(svc *WebhookRegistrationService) *WebhookRegistrationHandler {
-	return &WebhookRegistrationHandler{svc: svc}
+	return &WebhookRegistrationHandler{svc: svc, limiter: newAuthFailureLimiter()}
 }
 
 // RegisterRoutes registers the management routes on mux.
@@ -129,13 +133,25 @@ func (h *WebhookRegistrationHandler) reconcile(w http.ResponseWriter, r *http.Re
 
 // authenticate resolves the bearer token. Every failure mode (missing header, malformed,
 // unknown, revoked, wrong workspace) returns the same response so a prober learns nothing.
+//
+// The failure limiter is consulted first, before the token is looked up, so a client that has
+// exhausted its budget is refused with 429 even if it then presents a valid token.
 func (h *WebhookRegistrationHandler) authenticate(w http.ResponseWriter, r *http.Request) (*WebhookCaller, bool) {
+	key := clientLimiterKey(r.RemoteAddr)
+	if retryAfter, blocked := h.limiter.blocked(key); blocked {
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
+		writeWebhookError(w, apiErr(http.StatusTooManyRequests, "RATE_LIMITED", "too many failed authentication attempts"))
+		return nil, false
+	}
 	header := r.Header.Get("Authorization")
 	token, found := strings.CutPrefix(header, "Bearer ")
 	if caller := h.svc.Authenticate(r.Context(), token); found && caller != nil {
 		return caller, true
 	}
-	log.Warn("[WebhookManagement] unauthenticated request", "path", r.URL.Path)
+	if h.limiter.recordFailure(key) {
+		log.Warn("[WebhookManagement] authentication failure limit reached; client blocked for the rest of the window",
+			"client", key, "path", r.URL.Path)
+	}
 	w.Header().Set("WWW-Authenticate", `Bearer realm="stapler-squad-integrations"`)
 	writeWebhookError(w, apiErr(http.StatusUnauthorized, "UNAUTHENTICATED", "authentication required"))
 	return nil, false

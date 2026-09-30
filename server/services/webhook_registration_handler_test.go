@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,11 +27,15 @@ const (
 )
 
 type mgmtHarness struct {
-	infra *webhookTestInfra
-	svc   *WebhookRegistrationService
-	mux   *http.ServeMux
-	root  string
-	token string
+	infra   *webhookTestInfra
+	svc     *WebhookRegistrationService
+	handler *WebhookRegistrationHandler
+	mux     *http.ServeMux
+	root    string
+	token   string
+	// remoteAddr, when set, is the peer address every request appears to come from (the
+	// limiter keys on it); empty keeps httptest's default.
+	remoteAddr string
 }
 
 func newMgmtHarness(t *testing.T) *mgmtHarness {
@@ -38,14 +43,15 @@ func newMgmtHarness(t *testing.T) *mgmtHarness {
 	infra := newWebhookTestInfra(t)
 	svc := NewWebhookRegistrationService(infra.entRepo, infra.cfg, testMgmtWorkspace, true)
 	mux := http.NewServeMux()
-	NewWebhookRegistrationHandler(svc).RegisterRoutes(mux)
+	handler := NewWebhookRegistrationHandler(svc)
+	handler.RegisterRoutes(mux)
 	NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg).RegisterRoutes(mux)
 
 	root := t.TempDir()
 	token, err := infra.entRepo.IssueIntegrationCredential(context.Background(),
 		session.IntegrationCredentialInfo{PrincipalID: "gh-signal", WorkspaceID: testMgmtWorkspace, AllowedDirRoot: root})
 	require.NoError(t, err)
-	return &mgmtHarness{infra: infra, svc: svc, mux: mux, root: root, token: token}
+	return &mgmtHarness{infra: infra, svc: svc, handler: handler, mux: mux, root: root, token: token}
 }
 
 func (h *mgmtHarness) do(t *testing.T, method, path, token string, body any) *httptest.ResponseRecorder {
@@ -62,6 +68,9 @@ func (h *mgmtHarness) do(t *testing.T, method, path, token string, body any) *ht
 		rd = bytes.NewReader(raw)
 	}
 	req := httptest.NewRequest(method, path, rd)
+	if h.remoteAddr != "" {
+		req.RemoteAddr = h.remoteAddr
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -140,8 +149,11 @@ func TestWebhookManagement_should_Return401Uniformly_When_CredentialIsNotValid(t
 		{http.MethodGet, mgmtBase + testInstance},
 		{http.MethodPost, mgmtBase + testInstance + "/reconcile"},
 	}
+	peer := 0
 	for _, token := range []string{"", "not-a-token", h.token /* revoked */, otherWS /* wrong workspace */} {
 		for _, rt := range routes {
+			peer++ // a distinct peer per request keeps this about the 401 shape, not the failure budget
+			h.remoteAddr = fmt.Sprintf("192.0.2.%d:40000", peer)
 			rec := h.do(t, rt.method, rt.path, token, h.reconcileReq("req-00000001", 0, testMgmtSecret))
 			assert.Equal(t, http.StatusUnauthorized, rec.Code, "%s %s token=%q", rt.method, rt.path, token)
 			assert.Equal(t, "UNAUTHENTICATED", errCode(t, rec))
