@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +20,12 @@ type tapFixture struct {
 	client sessionv1connect.SessionServiceClient
 	reg    *streamhub.TapRegistry
 	dir    string
+	now    time.Time
+	url    string
 }
+
+// tapFixtureNow is the fixed clock every fixture registry uses.
+var tapFixtureNow = time.Unix(1_700_000_000, 0)
 
 // newTapFixture serves a SessionService over HTTP. remoteAddr, when set,
 // replaces the request's RemoteAddr to simulate a peer other than loopback.
@@ -27,12 +33,14 @@ func newTapFixture(t *testing.T, remoteAddr string) tapFixture {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "tap")
 	reg := streamhub.NewTapRegistry(streamhub.TapRegistryOptions{
+		Now:       func() time.Time { return tapFixtureNow },
 		DirFn:     func() (string, error) { return dir, nil },
-		AfterFunc: func(time.Duration, func()) {},
+		AfterFunc: func(time.Duration, func()) func() bool { return nil },
 	})
 	svc := &SessionService{tapRegistry: reg}
 	path, h := sessionv1connect.NewSessionServiceHandler(svc)
 	mux := http.NewServeMux()
+	h = WithRequestHost(h)
 	mux.Handle(path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if remoteAddr != "" {
 			r.RemoteAddr = remoteAddr
@@ -41,7 +49,7 @@ func newTapFixture(t *testing.T, remoteAddr string) tapFixture {
 	}))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return tapFixture{client: sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL), reg: reg, dir: dir}
+	return tapFixture{client: sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL), reg: reg, dir: dir, now: tapFixtureNow, url: srv.URL}
 }
 
 func TestSetCaptureTap_should_EnableAndReportState_When_CalledFromLoopback(t *testing.T) {
@@ -75,7 +83,6 @@ func TestSetCaptureTap_should_EnableAndReportState_When_CalledFromLoopback(t *te
 
 func TestSetCaptureTap_should_ClampTTL_When_AboveMax(t *testing.T) {
 	f := newTapFixture(t, "")
-	before := time.Now()
 	resp, err := f.client.SetCaptureTap(context.Background(), connect.NewRequest(&sessionv1.SetCaptureTapRequest{
 		Enabled: true, TtlSeconds: 1_000_000,
 	}))
@@ -83,8 +90,8 @@ func TestSetCaptureTap_should_ClampTTL_When_AboveMax(t *testing.T) {
 		t.Fatal(err)
 	}
 	exp := resp.Msg.GetState().GetTtlExpiresAt().AsTime()
-	if exp.After(before.Add(streamhub.TapMaxTTL+time.Minute)) || exp.Before(before.Add(streamhub.TapMaxTTL-time.Minute)) {
-		t.Fatalf("expires %v, want about now+%v", exp, streamhub.TapMaxTTL)
+	if want := f.now.Add(streamhub.TapMaxTTL); !exp.Equal(want) {
+		t.Fatalf("expires %v, want exactly %v", exp, want)
 	}
 }
 
@@ -97,6 +104,9 @@ func TestSetCaptureTap_should_RejectBadInput(t *testing.T) {
 	}{
 		{"negative ttl", &sessionv1.SetCaptureTapRequest{Enabled: true, TtlSeconds: -1}, connect.CodeInvalidArgument},
 		{"empty session name", &sessionv1.SetCaptureTapRequest{Enabled: true, SessionIds: []string{""}}, connect.CodeInvalidArgument},
+		{"overlong session name", &sessionv1.SetCaptureTapRequest{Enabled: true, SessionIds: []string{strings.Repeat("a", 257)}}, connect.CodeInvalidArgument},
+		{"NUL in session name", &sessionv1.SetCaptureTapRequest{Enabled: true, SessionIds: []string{"a\x00b"}}, connect.CodeInvalidArgument},
+		{"newline in session name", &sessionv1.SetCaptureTapRequest{Enabled: true, SessionIds: []string{"a\nb"}}, connect.CodeInvalidArgument},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -128,7 +138,11 @@ func TestCaptureTap_should_RejectWithPermissionDenied_When_PeerIsNotLoopback(t *
 
 func TestCaptureTap_should_RejectWithPermissionDenied_When_RequestIsProxied(t *testing.T) {
 	f := newTapFixture(t, "127.0.0.1:4242") // a local proxy connects from loopback
-	for _, header := range []string{"X-Forwarded-For", "Forwarded", "X-Real-Ip", "Via", "X-Forwarded-Host"} {
+	for _, header := range []string{
+		"X-Forwarded-For", "Forwarded", "X-Real-Ip", "Via", "X-Forwarded-Host",
+		"Cf-Connecting-Ip", "Cdn-Loop", "True-Client-Ip", "X-Client-Ip", "X-Original-Forwarded-For",
+		"X-Forwarded-Prefix", "Tailscale-User-Login", "Tailscale-Funnel-Request",
+	} {
 		t.Run(header, func(t *testing.T) {
 			req := connect.NewRequest(&sessionv1.SetCaptureTapRequest{Enabled: true})
 			req.Header().Set(header, "203.0.113.5")
@@ -147,18 +161,25 @@ func TestRequireLoopbackCaller(t *testing.T) {
 	tests := []struct {
 		name    string
 		peer    string
+		host    string
 		origin  string
 		wantErr bool
 	}{
-		{"ipv4 loopback", "127.0.0.1:1", "", false},
-		{"ipv6 loopback", "[::1]:1", "", false},
-		{"ipv4-mapped loopback", "[::ffff:127.0.0.1]:1", "", false},
-		{"LAN address", "192.168.1.5:1", "", true},
-		{"unspecified", "0.0.0.0:1", "", true},
-		{"unix socket", "@", "", true},
-		{"empty", "", "", true},
-		{"loopback origin", "127.0.0.1:1", "http://localhost:8543", false},
-		{"foreign origin", "127.0.0.1:1", "https://evil.example", true},
+		{"ipv4 loopback", "127.0.0.1:1", "127.0.0.1:8543", "", false},
+		{"ipv6 loopback", "[::1]:1", "[::1]:8543", "", false},
+		{"ipv4-mapped loopback", "[::ffff:127.0.0.1]:1", "localhost:8543", "", false},
+		{"LAN address", "192.168.1.5:1", "localhost:8543", "", true},
+		{"unspecified", "0.0.0.0:1", "localhost:8543", "", true},
+		{"unix socket", "@", "localhost:8543", "", true},
+		{"empty peer", "", "localhost:8543", "", true},
+		{"public Host through local proxy", "127.0.0.1:1", "squad.example.com", "", true},
+		{"missing Host", "127.0.0.1:1", "", "", true},
+		{"unparseable Host", "127.0.0.1:1", "local host:8543%zz", "", true},
+		{"same-origin browser", "127.0.0.1:1", "localhost:8543", "http://localhost:8543", false},
+		{"other loopback port origin", "127.0.0.1:1", "localhost:8543", "http://localhost:3000", true},
+		{"other loopback name origin", "127.0.0.1:1", "localhost:8543", "http://127.0.0.1:8543", true},
+		{"foreign origin", "127.0.0.1:1", "localhost:8543", "https://evil.example", true},
+		{"null origin", "127.0.0.1:1", "localhost:8543", "null", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -166,7 +187,7 @@ func TestRequireLoopbackCaller(t *testing.T) {
 			if tc.origin != "" {
 				h.Set("Origin", tc.origin)
 			}
-			err := requireLoopbackCaller(tc.peer, h)
+			err := requireLoopbackCaller(tc.peer, tc.host, h)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
 			}
@@ -174,6 +195,36 @@ func TestRequireLoopbackCaller(t *testing.T) {
 				t.Fatalf("code = %v", connect.CodeOf(err))
 			}
 		})
+	}
+}
+
+// A local reverse proxy connects from loopback but forwards the public Host.
+func TestCaptureTap_should_RejectWithPermissionDenied_When_HostIsNotLoopback(t *testing.T) {
+	f := newTapFixture(t, "")
+	req, err := http.NewRequest(http.MethodPost, f.url+sessionv1connect.SessionServiceSetCaptureTapProcedure,
+		strings.NewReader(`{"enabled":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "squad.example.com"
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (connect PermissionDenied)", resp.StatusCode)
+	}
+	if f.reg.Status().Enabled {
+		t.Fatal("a request with a public Host must not enable the tap")
+	}
+}
+
+func TestSetCaptureTap_should_AcceptNegativeTTL_When_Disabling(t *testing.T) {
+	f := newTapFixture(t, "")
+	if _, err := f.client.SetCaptureTap(context.Background(), connect.NewRequest(&sessionv1.SetCaptureTapRequest{Enabled: false, TtlSeconds: -5})); err != nil {
+		t.Fatalf("ttl is ignored when disabling, got %v", err)
 	}
 }
 

@@ -3,9 +3,13 @@ package services
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -16,34 +20,55 @@ import (
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
-// maxCaptureTapSessionIDs bounds one request's session list.
-const maxCaptureTapSessionIDs = 256
+const (
+	// maxCaptureTapSessionIDs bounds one request's session list.
+	maxCaptureTapSessionIDs = 256
+	// maxCaptureTapSessionIDLen bounds one session id, in bytes.
+	maxCaptureTapSessionIDLen = 256
+)
+
+type requestHostKey struct{}
+
+// WithRequestHost makes the request's Host header available to handlers behind
+// ConnectRPC, which does not expose it. Wrap the SessionService handler with it.
+func WithRequestHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestHostKey{}, r.Host)))
+	})
+}
 
 // proxyHeaders mark a request that passed through a reverse proxy or tunnel. A
 // local proxy connects from loopback, so the socket alone cannot tell a proxied
 // remote caller from a local one.
-var proxyHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip", "Via"}
+var proxyHeaders = []string{
+	"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Prefix",
+	"X-Original-Forwarded-For", "X-Real-Ip", "X-Client-Ip", "True-Client-Ip", "Cf-Connecting-Ip",
+	"Cdn-Loop", "Via",
+}
+
+// proxyHeaderPrefixes match whole header families, such as Tailscale Serve's.
+var proxyHeaderPrefixes = []string{"Tailscale-"}
 
 // SetCaptureTap turns the terminal-stream capture tap on or off at runtime.
 // Loopback requests only; the output directory is never caller-supplied.
 // +api: SetCaptureTap
 func (s *SessionService) SetCaptureTap(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[sessionv1.SetCaptureTapRequest],
 ) (*connect.Response[sessionv1.SetCaptureTapResponse], error) {
-	if err := requireLoopbackCaller(req.Peer().Addr, req.Header()); err != nil {
+	if err := requireLoopbackCaller(req.Peer().Addr, requestHost(ctx), req.Header()); err != nil {
 		return nil, err
 	}
 	msg := req.Msg
-	if msg.GetTtlSeconds() < 0 {
+	if msg.GetEnabled() && msg.GetTtlSeconds() < 0 {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("ttl_seconds must not be negative"))
 	}
 	if len(msg.GetSessionIds()) > maxCaptureTapSessionIDs {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("too many session_ids"))
 	}
 	for _, id := range msg.GetSessionIds() {
-		if id == "" {
-			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("session_ids must not contain empty names"))
+		if err := validateCaptureTapSessionID(id); err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
 		}
 	}
 	ttl := time.Duration(msg.GetTtlSeconds()) * time.Second
@@ -62,10 +87,10 @@ func (s *SessionService) SetCaptureTap(
 // GetCaptureTap reports the capture tap's state. Loopback requests only.
 // +api: GetCaptureTap
 func (s *SessionService) GetCaptureTap(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[sessionv1.GetCaptureTapRequest],
 ) (*connect.Response[sessionv1.GetCaptureTapResponse], error) {
-	if err := requireLoopbackCaller(req.Peer().Addr, req.Header()); err != nil {
+	if err := requireLoopbackCaller(req.Peer().Addr, requestHost(ctx), req.Header()); err != nil {
 		return nil, err
 	}
 	return connect.NewResponse(&sessionv1.GetCaptureTapResponse{State: captureTapState(s.captureTapRegistry().Status())}), nil
@@ -78,10 +103,28 @@ func (s *SessionService) captureTapRegistry() *streamhub.TapRegistry {
 	return streamhub.DefaultTapRegistry()
 }
 
-// requireLoopbackCaller fails closed: the socket peer must be a loopback
-// address, no proxy header may be present, and a browser Origin must be
-// loopback too.
-func requireLoopbackCaller(peerAddr string, h interface{ Values(string) []string }) error {
+func requestHost(ctx context.Context) string {
+	host, _ := ctx.Value(requestHostKey{}).(string)
+	return host
+}
+
+func validateCaptureTapSessionID(id string) error {
+	switch {
+	case id == "":
+		return errors.New("session_ids must not contain empty names")
+	case len(id) > maxCaptureTapSessionIDLen:
+		return errors.New("session_ids entries must be at most 256 bytes")
+	case !utf8.ValidString(id) || strings.ContainsFunc(id, unicode.IsControl):
+		return errors.New("session_ids must not contain control characters or invalid UTF-8")
+	}
+	return nil
+}
+
+// requireLoopbackCaller fails closed. The socket peer must be loopback, the
+// Host must be a loopback name (a local reverse proxy or tunnel forwards the
+// public Host), no proxy header may be present, and a browser Origin must be
+// same-origin with the Host. An absent Origin is a non-browser client.
+func requireLoopbackCaller(peerAddr, host string, h http.Header) error {
 	deny := func(reason string) error {
 		log.Warn("[CaptureTap] rejected non-loopback request", "peer", peerAddr, "reason", reason)
 		return connect.NewError(connect.CodePermissionDenied,
@@ -91,18 +134,46 @@ func requireLoopbackCaller(peerAddr string, h interface{ Values(string) []string
 	if err != nil || !ap.Addr().Unmap().IsLoopback() {
 		return deny("peer address is not loopback")
 	}
-	for _, name := range proxyHeaders {
-		if len(h.Values(name)) > 0 {
+	if !hostIsLoopback(host) {
+		return deny("Host is not a loopback name")
+	}
+	for name, values := range h {
+		if len(values) == 0 {
+			continue
+		}
+		if isProxyHeader(name) {
 			return deny("request carries " + name)
 		}
 	}
 	for _, origin := range h.Values("Origin") {
-		u, perr := url.Parse(origin)
-		if perr != nil || !middleware.IsLoopbackHostname(u.Hostname()) {
-			return deny("Origin is not loopback")
+		if u, perr := url.Parse(origin); perr != nil || u.Host == "" || !strings.EqualFold(u.Host, host) {
+			return deny("Origin is not same-origin with Host")
 		}
 	}
 	return nil
+}
+
+func hostIsLoopback(host string) bool {
+	if host == "" {
+		return false
+	}
+	u, err := url.Parse("//" + host)
+	return err == nil && u.Hostname() != "" && middleware.IsLoopbackHostname(u.Hostname())
+}
+
+func isProxyHeader(name string) bool {
+	name = http.CanonicalHeaderKey(name)
+	for _, p := range proxyHeaders {
+		if name == http.CanonicalHeaderKey(p) {
+			return true
+		}
+	}
+	for _, prefix := range proxyHeaderPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func captureTapScope(st streamhub.TapStatus) string {
@@ -129,7 +200,7 @@ func captureTapState(st streamhub.TapStatus) *sessionv1.CaptureTapState {
 	for _, ss := range st.Sessions {
 		out.Sessions = append(out.Sessions, &sessionv1.CaptureTapSessionStatus{
 			Name: ss.Name, Path: ss.Path, Enabled: ss.Enabled,
-			BytesWritten: ss.BytesWritten, Capped: ss.Capped, Failed: ss.Failed,
+			BytesWritten: ss.BytesWritten, Capped: ss.Capped, Failed: ss.Failed, Rotated: ss.Rotated,
 		})
 	}
 	return out
