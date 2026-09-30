@@ -47,6 +47,9 @@ type terminalHandlers struct {
 	live       liveInstanceFinder // may be nil; see findInstance
 	scrollback *scrollback.ScrollbackManager
 	writeLim   *tokenBucket // per-session rate limiter for write_to_session
+	// capturePane reads the live tmux pane; nil means inst.CapturePaneContent.
+	// A seam so tests can supply pane content without a real tmux session.
+	capturePane func(inst *session.Instance) (string, error)
 	// diagnoseCheck gates write_to_session/send_control/run_command/
 	// steer_session away from a dispatched Diagnose & Nudge session — see
 	// diagnose_role_gate.go's denyIfDiagnoseCaller. May be nil (no
@@ -183,19 +186,35 @@ func registerTerminalTools(s *mcpserver.MCPServer, th *terminalHandlers) {
 	)
 }
 
-// sessionNotReadyResult returns a SESSION_NOT_READY error result when
-// sessionID's scrollback sequence hasn't advanced since creation (no bytes
-// ever arrived from the PTY/tmux stream) -- distinct from a command that
-// legitimately printed nothing, which still advances the sequence via the
-// shell's own prompt redraw. Returns nil when the session is ready. Shared by
-// readSessionOutput and runCommand so the two checks cannot silently diverge.
-func (th *terminalHandlers) sessionNotReadyResult(sessionID string) *mcpgo.CallToolResult {
-	if th.scrollback.CurrentSequence(sessionID) != 0 {
-		return nil
-	}
+// notReadyResult is the SESSION_NOT_READY error for a session with neither
+// scrollback nor a capturable live pane (paused, not started, or pane gone).
+func notReadyResult(sessionID string) *mcpgo.CallToolResult {
 	return errResult(ErrSessionNotReady,
 		fmt.Sprintf("session %q hasn't produced any terminal output yet", sessionID),
-		"The session's PTY/tmux stream may still be starting up. Wait a moment and retry.")
+		"The session may be paused, not started, or still starting up. Resume it or wait a moment and retry.")
+}
+
+// readOutputBytes returns the session's recent output. Scrollback is only fed
+// by terminal stream subscribers (e.g. the web UI), so an MCP-only session has
+// an empty scrollback; in that case fall back to capturing the live tmux pane.
+// The error is non-nil only when neither source is available.
+func (th *terminalHandlers) readOutputBytes(sessionID string, inst *session.Instance) ([]byte, error) {
+	if th.scrollback.CurrentSequence(sessionID) != 0 {
+		return th.scrollback.GetRecentBytes(sessionID, maxOutputBytes)
+	}
+	capture := th.capturePane
+	if capture == nil {
+		capture = func(i *session.Instance) (string, error) { return i.CapturePaneContent() }
+	}
+	content, err := capture(inst)
+	if err != nil {
+		return nil, err
+	}
+	raw := []byte(content)
+	if len(raw) > maxOutputBytes {
+		raw = raw[len(raw)-maxOutputBytes:]
+	}
+	return raw, nil
 }
 
 // ---- read_session_output ----
@@ -220,29 +239,14 @@ func (th *terminalHandlers) readSessionOutput(_ context.Context, req mcpgo.CallT
 		stripANSI = v
 	}
 
-	// Verify session exists.
-	instances, err := th.store.LoadInstances()
-	if err != nil {
-		return errResult(ErrInternalError, "failed to load sessions", ""), nil
-	}
-	found := false
-	for _, inst := range instances {
-		if inst.MatchesID(sessionID) {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return errResult(ErrSessionNotFound, fmt.Sprintf("session %q not found", sessionID), "Use list_sessions to find available sessions"), nil
+	inst, errRes := th.findInstance(sessionID)
+	if errRes != nil {
+		return errRes, nil
 	}
 
-	if res := th.sessionNotReadyResult(sessionID); res != nil {
-		return res, nil
-	}
-
-	raw, err := th.scrollback.GetRecentBytes(sessionID, maxOutputBytes)
+	raw, err := th.readOutputBytes(sessionID, inst)
 	if err != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("failed to read scrollback: %v", err), ""), nil
+		return notReadyResult(sessionID), nil
 	}
 
 	if stripANSI {
@@ -588,6 +592,14 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 		return submitErrResult(err, "command"), nil
 	}
 
+	return th.collectCommandOutput(sessionID, inst, timeoutSecs, lines), nil
+}
+
+// collectCommandOutput is run_command's post-submit half: it polls until
+// output stops changing (or the timeout), then returns the result. It never
+// returns an error result -- the command has already been submitted -- so an
+// unreadable pane yields success with empty output.
+func (th *terminalHandlers) collectCommandOutput(sessionID string, inst *session.Instance, timeoutSecs, lines int) *mcpgo.CallToolResult {
 	// Poll until output stops changing for 2 consecutive seconds or timeout expires.
 	deadline := time.Now().Add(time.Duration(timeoutSecs) * time.Second)
 	ticker := time.NewTicker(time.Second)
@@ -600,7 +612,7 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 	for {
 		<-ticker.C
 
-		raw, _ := th.scrollback.GetRecentBytes(sessionID, maxOutputBytes)
+		raw, _ := th.readOutputBytes(sessionID, inst)
 		cs := bytesChecksum(raw)
 
 		if cs == prevChecksum {
@@ -619,12 +631,9 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 		}
 	}
 
-	if res := th.sessionNotReadyResult(sessionID); res != nil {
-		return res, nil
-	}
-
-	// Read final output.
-	raw, _ := th.scrollback.GetRecentBytes(sessionID, maxOutputBytes)
+	// The command was already submitted, so never fail here: an unreadable
+	// pane yields success with empty output.
+	raw, _ := th.readOutputBytes(sessionID, inst)
 	stripped := stripANSI_(raw)
 	allLines := splitLines(stripped)
 	totalLines := len(allLines)
@@ -652,7 +661,7 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 		Truncated:    truncated,
 		TimedOut:     timedOut,
 		LastSequence: lastSeq,
-	}), nil
+	})
 }
 
 // ---- steer_session ----
