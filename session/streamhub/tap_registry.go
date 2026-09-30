@@ -128,12 +128,16 @@ func (r *TapRegistry) resolveDir() (string, error) {
 	return dir, nil
 }
 
+// TapName is the key a session's tap is recorded under: the session title, not
+// the tmux session name. A distinct type so the two cannot be swapped silently.
+type TapName string
+
 // Handle returns the session's tap handle: never nil, inert while the tap is
 // off for that session, and the same pointer on every call.
-func (r *TapRegistry) Handle(sessionName string) *CaptureTap {
+func (r *TapRegistry) Handle(name TapName) *CaptureTap {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.handleLocked(sessionName)
+	return r.handleLocked(string(name))
 }
 
 func (r *TapRegistry) handleLocked(name string) *CaptureTap {

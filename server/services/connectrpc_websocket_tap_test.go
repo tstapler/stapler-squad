@@ -78,7 +78,7 @@ func TestHubRegistry_should_RecordUnderTitle_When_TapEnabledByTitle(t *testing.T
 		t.Fatal(err)
 	}
 
-	hub, err := registry.GetOrCreate(tmuxName, title, &fakeSessionController{})
+	hub, err := registry.GetOrCreate(tmuxName, streamhub.TapName(title), &fakeSessionController{})
 	if err != nil {
 		t.Fatal(err)
 	}

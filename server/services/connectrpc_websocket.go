@@ -441,7 +441,7 @@ var HubRegistry = &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub](
 //
 // tapName is the session title: the capture tap is keyed on it (not on the tmux
 // sessionName) so the hub and legacy paths share one tap file per session.
-func (r *hubRegistry) GetOrCreate(sessionName, tapName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
+func (r *hubRegistry) GetOrCreate(sessionName string, tapName streamhub.TapName, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
 	// Holds the ownership lock for the full LoadOrCompute below (not just the
 	// resolve step), so this genuinely blocks on — rather than races — a
 	// concurrent Instance.StartControlMode call for the same session (Story 3.1.2).
@@ -471,7 +471,7 @@ func (r *hubRegistry) tapRegistryOrDefault() *streamhub.TapRegistry {
 
 // escapeAnalyticsHubOptions builds a hub's options. tapName must be the session
 // title, the same key the legacy forwarder uses.
-func escapeAnalyticsHubOptions(tapRegistry *streamhub.TapRegistry, tapName string, controller streamhub.SessionController) []streamhub.HubOption {
+func escapeAnalyticsHubOptions(tapRegistry *streamhub.TapRegistry, tapName streamhub.TapName, controller streamhub.SessionController) []streamhub.HubOption {
 	opts := make([]streamhub.HubOption, 0, 2)
 	opts = append(opts, streamhub.WithCaptureTap(tapRegistry.Handle(tapName).As(streamhub.TapSourceHub)))
 	source, ok := controller.(escapeAnalyticsStreamSource)
@@ -487,7 +487,7 @@ func escapeAnalyticsHubOptions(tapRegistry *streamhub.TapRegistry, tapName strin
 	}))
 }
 
-func (r *hubRegistry) loadOrCreateHubLocked(sessionName, tapName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
+func (r *hubRegistry) loadOrCreateHubLocked(sessionName string, tapName streamhub.TapName, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
 	var hub *streamhub.StreamHub
 	err := streamhub.AcquireOwnershipLock(sessionName).AcquireAndResolveExpecting(true, streamhub.PathHubOwned, func() error {
 		h, loaded := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
@@ -1356,7 +1356,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		quiescenceCh:    quiescenceCh,
 		forwardingReady: &forwardingReady,
 		resizeSettling:  &resizeSettling,
-		tap:             streamhub.DefaultTapRegistry().Handle(sessionID).As(streamhub.TapSourceLegacy),
+		tap:             streamhub.DefaultTapRegistry().Handle(streamhub.TapName(sessionID)).As(streamhub.TapSourceLegacy),
 	})
 
 	h.performInitialResizeNudge(instance, sessionID, streamGeneration, currentPaneReq, quiescenceCh)
@@ -1908,7 +1908,7 @@ func (h *ConnectRPCWebSocketHandler) ensureHubInstanceStarted(instance *session.
 // too failed). done=false means ownership resolved hub-owned as expected —
 // hub is the created/retrieved *StreamHub and err is always nil.
 func (h *ConnectRPCWebSocketHandler) resolveHubOrJoinLegacy(stream *connectWebSocketStream, instance *session.Instance, sessionID, tmuxSessionName string) (hub *streamhub.StreamHub, done bool, err error) {
-	hub, hubErr := HubRegistry.GetOrCreate(tmuxSessionName, sessionID, instance)
+	hub, hubErr := HubRegistry.GetOrCreate(tmuxSessionName, streamhub.TapName(sessionID), instance)
 	if hubErr == nil {
 		return hub, false, nil
 	}

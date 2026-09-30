@@ -593,7 +593,7 @@ func clearStreamHubOverrideForTest(t *testing.T) {
 // the cleanup on its own.
 func getOrCreateHubForTest(t *testing.T, registry *hubRegistry, sessionName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
 	t.Helper()
-	hub, err := registry.GetOrCreate(sessionName, sessionName, controller)
+	hub, err := registry.GetOrCreate(sessionName, streamhub.TapName(sessionName), controller)
 	if hub != nil {
 		t.Cleanup(func() { _ = hub.ForceTeardown() })
 	}
@@ -721,7 +721,7 @@ func TestHubRegistryAndStreamOwnershipLock_should_NeverProduceTwoOwners_When_Rac
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if h, err := registry.GetOrCreate(sessionName, sessionName, &fakeSessionController{}); err != nil {
+				if h, err := registry.GetOrCreate(sessionName, streamhub.TapName(sessionName), &fakeSessionController{}); err != nil {
 					hubErrs.Add(1)
 				} else {
 					hubWins.Add(1)
