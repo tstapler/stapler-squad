@@ -17,7 +17,10 @@ func registerWebhookManagement(srv *Server, deps *ServerDependencies, cfg *confi
 	if !cfg.GetFeatureFlag(config.FeatureWebhookManagement) {
 		return
 	}
-	// Provision the machine key now, on the shared instance: a failure then disables the API
+	if deps.Storage == nil {
+		log.Warn("webhook management API not registered: no storage")
+		return
+	}	// Provision the machine key now, on the shared instance: a failure then disables the API
 	// at boot instead of surfacing as an opaque error on the first reconcile.
 	if _, err := cfg.GetOrCreateEncryptionKey(); err != nil {
 		log.Warn("webhook management API not registered: cannot provision encryption key", "err", err)

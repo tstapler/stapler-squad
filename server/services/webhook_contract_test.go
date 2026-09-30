@@ -70,6 +70,25 @@ func TestContractFixtures_should_ValidateAgainstTheirSchemas(t *testing.T) {
 	requireValid(t, "reconcile-response.schema.json", readContract(t, "fixtures/reconcile-response.created.json"))
 	requireValid(t, "error-response.schema.json", readContract(t, "fixtures/error.version-conflict.json"))
 	requireValid(t, "error-response.schema.json", readContract(t, "fixtures/error.unauthenticated.json"))
+	requireValid(t, "lifecycle-request.schema.json", readContract(t, "fixtures/lifecycle-request.disable.json"))
+	requireValid(t, "emergency-cleanup-request.schema.json", readContract(t, "fixtures/emergency-cleanup-request.delete.json"))
+}
+
+func TestContractSchemas_should_RejectUnsafeLifecycleRequests(t *testing.T) {
+	clone := func(fixture string, f func(map[string]any)) []byte {
+		m := asMap(t, readContract(t, fixture))
+		f(m)
+		raw, err := json.Marshal(m)
+		require.NoError(t, err)
+		return raw
+	}
+	const lifecycle, emergency = "fixtures/lifecycle-request.disable.json", "fixtures/emergency-cleanup-request.delete.json"
+
+	requireInvalid(t, "lifecycle-request.schema.json", clone(lifecycle, func(m map[string]any) { m["expected_version"] = 0 }))
+	requireInvalid(t, "lifecycle-request.schema.json", clone(lifecycle, func(m map[string]any) { delete(m, "compat") }))
+	requireInvalid(t, "lifecycle-request.schema.json", clone(lifecycle, func(m map[string]any) { m["surprise"] = true }))
+	requireInvalid(t, "emergency-cleanup-request.schema.json", clone(emergency, func(m map[string]any) { m["action"] = "reconcile" }))
+	requireInvalid(t, "emergency-cleanup-request.schema.json", clone(emergency, func(m map[string]any) { delete(m, "action") }))
 }
 
 func TestContractSchemas_should_BeStrict_When_GivenUnsafeOrUnknownInput(t *testing.T) {
@@ -202,7 +221,7 @@ func TestContractBundle_should_SignAndVerify_When_BuiltFromTheCheckedInContract(
 	require.NoError(t, err)
 	assert.Contains(t, got.Files, "schemas/reconcile-request.schema.json")
 	assert.Contains(t, got.Files, "fixtures/capability-response.json")
-	assert.Len(t, got.Files, 10, "every checked-in contract artifact must be in the bundle")
+	assert.Len(t, got.Files, 14, "every checked-in contract artifact must be in the bundle")
 
 	require.NoError(t, os.WriteFile(filepath.Join(staged, "fixtures/capability-response.json"), []byte(`{}`), 0o644))
 	_, err = contractbundle.Verify(staged, root, time.Now())

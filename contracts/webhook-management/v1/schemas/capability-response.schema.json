@@ -12,7 +12,7 @@
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
-      "items": { "enum": ["capability", "inspect", "reconcile"] }
+      "items": { "enum": ["capability", "inspect", "reconcile", "disable", "delete", "emergency_cleanup"] }
     }
   }
 }

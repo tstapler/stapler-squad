@@ -149,13 +149,18 @@ type WebhookRegistrationService struct {
 	workspaceID     string
 	receiverEnabled bool
 	eventBus        *events.EventBus
+
+	supportedRevisions []int
 }
 
 // NewWebhookRegistrationService constructs the service. receiverEnabled must reflect
 // whether the POST /webhooks/{slug} receiver is actually registered in this process:
 // reconcile refuses to create endpoints nothing is listening on.
 func NewWebhookRegistrationService(repo *session.EntRepository, cfg *config.Config, workspaceID string, receiverEnabled bool) *WebhookRegistrationService {
-	return &WebhookRegistrationService{repo: repo, cfg: cfg, workspaceID: workspaceID, receiverEnabled: receiverEnabled}
+	return &WebhookRegistrationService{
+		repo: repo, cfg: cfg, workspaceID: workspaceID, receiverEnabled: receiverEnabled,
+		supportedRevisions: []int{WebhookManagementCapabilityRevision},
+	}
 }
 
 // SetEventBus wires the bus so created/updated workflows appear live in open UIs.
@@ -183,7 +188,7 @@ func (s *WebhookRegistrationService) Capability() WebhookCapabilityResponse {
 		ContractVersion:    WebhookManagementContractVersion,
 		CapabilityRevision: WebhookManagementCapabilityRevision,
 		ReceiverEnabled:    s.receiverEnabled,
-		Operations:         []string{"capability", "inspect", "reconcile"},
+		Operations:         []string{"capability", "inspect", "reconcile", "disable", "delete", "emergency_cleanup"},
 	}
 }
 
@@ -248,7 +253,7 @@ func (s *WebhookRegistrationService) buildReconcileInput(caller *WebhookCaller, 
 	if req.ExpectedVersion < 0 {
 		return nil, apiErr(http.StatusBadRequest, "INVALID_REQUEST", "expected_version must be >= 0")
 	}
-	tuple, tupleSHA, err := canonicalCompat(req.Compat)
+	tuple, tupleSHA, err := s.canonicalCompat(req.Compat, true)
 	if err != nil {
 		return nil, err
 	}
@@ -326,14 +331,36 @@ func requestFingerprint(macKey []byte, in *session.WebhookReconcileInput) (strin
 	return keyedHex(macKey, canonical), nil
 }
 
+// SetSupportedCapabilityRevisions replaces the set of capability revisions ordinary operations
+// accept. Dropping a revision "revokes" it: ordinary reconcile/disable/delete under it are
+// refused, while emergency cleanup of registrations created under it still works.
+func (s *WebhookRegistrationService) SetSupportedCapabilityRevisions(revisions ...int) {
+	s.supportedRevisions = revisions
+}
+
+func (s *WebhookRegistrationService) revisionSupported(rev int) bool {
+	for _, r := range s.supportedRevisions {
+		if r == rev {
+			return true
+		}
+	}
+	return false
+}
+
 // canonicalCompat validates the tuple and returns its canonical JSON (fixed field order)
-// and that JSON's SHA-256: the exact bytes persisted as provenance.
-func canonicalCompat(c WebhookCompat) (canonical, sha string, err error) {
+// and that JSON's SHA-256: the exact bytes persisted as provenance. With enforceCurrent it
+// also requires the tuple to name a contract and capability revision this server currently
+// supports; emergency cleanup passes false, since its whole purpose is to act on a
+// registration whose creation-time revision may since have been revoked. It then only
+// validates the tuple's shape, and the caller proves it equals the persisted one.
+func (s *WebhookRegistrationService) canonicalCompat(c WebhookCompat, enforceCurrent bool) (canonical, sha string, err error) {
 	switch {
-	case c.ContractVersion != WebhookManagementContractVersion:
+	case enforceCurrent && c.ContractVersion != WebhookManagementContractVersion:
 		return "", "", apiErr(http.StatusConflict, "UNSUPPORTED_CONTRACT", "unsupported contract_version")
-	case c.CapabilityRevision != WebhookManagementCapabilityRevision:
+	case enforceCurrent && !s.revisionSupported(c.CapabilityRevision):
 		return "", "", apiErr(http.StatusConflict, "UNSUPPORTED_CAPABILITY", "unsupported capability_revision")
+	case !webhookLabelRe.MatchString(c.ContractVersion), c.CapabilityRevision < 1:
+		return "", "", apiErr(http.StatusBadRequest, "INVALID_REQUEST", "compat contract_version and capability_revision are required")
 	case !webhookSHA256Re.MatchString(c.ManifestSHA256):
 		return "", "", apiErr(http.StatusBadRequest, "INVALID_REQUEST", "manifest_sha256 must be 64 lowercase hex characters")
 	case !webhookLabelRe.MatchString(c.SignerKeyID), !webhookLabelRe.MatchString(c.ClientName), !webhookLabelRe.MatchString(c.ClientVersion):

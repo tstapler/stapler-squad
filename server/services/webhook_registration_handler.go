@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -32,6 +33,56 @@ func (h *WebhookRegistrationHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+webhookManagementBasePath+"/capability", h.capability)
 	mux.HandleFunc("GET "+webhookManagementBasePath+"/registrations/{instance_id}", h.inspect)
 	mux.HandleFunc("POST "+webhookManagementBasePath+"/registrations/{instance_id}/reconcile", h.reconcile)
+	mux.HandleFunc("POST "+webhookManagementBasePath+"/registrations/{instance_id}/disable", h.lifecycle(
+		func(ctx context.Context, c *WebhookCaller, id string, r WebhookLifecycleRequest) (*WebhookReconcileResponse, error) {
+			return h.svc.Disable(ctx, c, id, r)
+		}))
+	mux.HandleFunc("POST "+webhookManagementBasePath+"/registrations/{instance_id}/delete", h.lifecycle(
+		func(ctx context.Context, c *WebhookCaller, id string, r WebhookLifecycleRequest) (*WebhookReconcileResponse, error) {
+			return h.svc.Delete(ctx, c, id, r)
+		}))
+	mux.HandleFunc("POST "+webhookManagementBasePath+"/registrations/{instance_id}/emergency-cleanup", h.emergencyCleanup)
+}
+
+type lifecycleFunc func(context.Context, *WebhookCaller, string, WebhookLifecycleRequest) (*WebhookReconcileResponse, error)
+
+// lifecycle adapts a disable/delete service call to an HTTP handler.
+func (h *WebhookRegistrationHandler) lifecycle(call lifecycleFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		caller, ok := h.authenticate(w, r)
+		if !ok {
+			return
+		}
+		var req WebhookLifecycleRequest
+		if apiError := decodeWebhookBody(w, r, &req); apiError != nil {
+			writeWebhookError(w, apiError)
+			return
+		}
+		resp, err := call(r.Context(), caller, r.PathValue("instance_id"), req)
+		if err != nil {
+			writeWebhookError(w, err)
+			return
+		}
+		writeWebhookJSON(w, http.StatusOK, resp)
+	}
+}
+
+func (h *WebhookRegistrationHandler) emergencyCleanup(w http.ResponseWriter, r *http.Request) {
+	caller, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	var req WebhookEmergencyRequest
+	if apiError := decodeWebhookBody(w, r, &req); apiError != nil {
+		writeWebhookError(w, apiError)
+		return
+	}
+	resp, err := h.svc.EmergencyCleanup(r.Context(), caller, r.PathValue("instance_id"), req)
+	if err != nil {
+		writeWebhookError(w, err)
+		return
+	}
+	writeWebhookJSON(w, http.StatusOK, resp)
 }
 
 func (h *WebhookRegistrationHandler) capability(w http.ResponseWriter, r *http.Request) {

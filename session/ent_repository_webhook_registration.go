@@ -105,7 +105,12 @@ type WebhookReconcileResult struct {
 	ChangedWorkflow *ent.Workflow           `json:"-"`
 }
 
+// workflowSpecOf returns the zero spec for a nil workflow: a registration whose workflow was
+// deleted out-of-band can still be described (and cleaned up).
 func workflowSpecOf(wf *ent.Workflow) WebhookWorkflowSpec {
+	if wf == nil {
+		return WebhookWorkflowSpec{}
+	}
 	return WebhookWorkflowSpec{
 		WebhookSlug:     wf.WebhookSlug,
 		Name:            wf.Name,
@@ -173,7 +178,8 @@ func (r *EntRepository) ReconcileWebhookRegistration(ctx context.Context, in Web
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
 
-	if replay, found, err := ledgerReplay(ctx, tx, in); err != nil {
+	key := ledgerKey{Scope: in.Scope, RequestID: in.RequestID, Fingerprint: in.Fingerprint}
+	if replay, found, err := ledgerReplay(ctx, tx, key); err != nil {
 		return nil, err
 	} else if found {
 		return replay, nil
@@ -201,7 +207,7 @@ func (r *EntRepository) ReconcileWebhookRegistration(ctx context.Context, in Web
 		return nil, err
 	}
 
-	if err := recordLedger(ctx, tx, in, result); err != nil {
+	if err := recordLedger(ctx, tx, key, webhookOperationReconcile, result); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -210,9 +216,18 @@ func (r *EntRepository) ReconcileWebhookRegistration(ctx context.Context, in Web
 	return result, nil
 }
 
-// ledgerReplay reports whether in.RequestID was already applied. found is false (with a nil
+// ledgerKey identifies one request in the ledger: the caller's scope, its request ID, and the
+// fingerprint of what that request asked for.
+type ledgerKey struct {
+	Scope       WebhookScope
+	RequestID   string
+	Fingerprint string
+}
+
+// ledgerReplay reports whether key.RequestID was already applied. found is false (with a nil
 // error) when it was not; a found entry with a different fingerprint is ErrIdempotencyKeyReused.
-func ledgerReplay(ctx context.Context, tx *ent.Tx, in WebhookReconcileInput) (result *WebhookReconcileResult, found bool, err error) {
+func ledgerReplay(ctx context.Context, tx *ent.Tx, key ledgerKey) (result *WebhookReconcileResult, found bool, err error) {
+	in := key
 	row, err := tx.WebhookRequestLedger.Query().Where(
 		webhookrequestledger.PrincipalID(in.Scope.PrincipalID),
 		webhookrequestledger.WorkspaceID(in.Scope.WorkspaceID),
@@ -235,17 +250,17 @@ func ledgerReplay(ctx context.Context, tx *ent.Tx, in WebhookReconcileInput) (re
 	return &stored, true, nil
 }
 
-func recordLedger(ctx context.Context, tx *ent.Tx, in WebhookReconcileInput, result *WebhookReconcileResult) error {
+func recordLedger(ctx context.Context, tx *ent.Tx, key ledgerKey, operation string, result *WebhookReconcileResult) error {
 	body, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("encode ledger result: %w", err)
 	}
 	_, err = tx.WebhookRequestLedger.Create().
-		SetPrincipalID(in.Scope.PrincipalID).
-		SetWorkspaceID(in.Scope.WorkspaceID).
-		SetRequestID(in.RequestID).
-		SetFingerprint(in.Fingerprint).
-		SetOperation(webhookOperationReconcile).
+		SetPrincipalID(key.Scope.PrincipalID).
+		SetWorkspaceID(key.Scope.WorkspaceID).
+		SetRequestID(key.RequestID).
+		SetFingerprint(key.Fingerprint).
+		SetOperation(operation).
 		SetResult(string(body)).
 		Save(ctx)
 	if err != nil {

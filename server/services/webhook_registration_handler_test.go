@@ -159,7 +159,7 @@ func TestWebhookManagement_should_ReportContractAndReceiverState_When_Capability
 	got := decodeBody[WebhookCapabilityResponse](t, rec)
 	assert.Equal(t, WebhookCapabilityResponse{
 		ContractVersion: "v1", CapabilityRevision: 1, ReceiverEnabled: true,
-		Operations: []string{"capability", "inspect", "reconcile"},
+		Operations: []string{"capability", "inspect", "reconcile", "disable", "delete", "emergency_cleanup"},
 	}, got)
 }
 
