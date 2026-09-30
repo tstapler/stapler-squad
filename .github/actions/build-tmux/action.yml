@@ -11,6 +11,8 @@ runs:
     - name: Install tmux build dependencies
       shell: bash
       run: |
+        # Runner image apt indexes go stale; without an update the libevent debs 404.
+        sudo apt-get update
         if [ "${{ inputs.install-socat }}" = "true" ]; then
           sudo apt-get install -y automake libevent-dev libncurses-dev pkg-config socat
         else
