@@ -531,7 +531,7 @@ func TestPruneTickerLoop_should_ContinueRunning_When_PruneReturnsError(t *testin
 	}
 	clock.Advance(DefaultHostRegistryTTL + time.Second)
 
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
 
@@ -549,6 +549,15 @@ func TestPruneTickerLoop_should_ContinueRunning_When_PruneReturnsError(t *testin
 	}()
 
 	ticks <- clock.Now() // fails
+	// The send returns on receipt, not on Prune finishing; wait for the failure log
+	// before restoring the dir or the first Prune could succeed.
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(buf.String(), "host_registry.prune_failed") {
+		if time.Now().After(deadline) {
+			t.Fatalf("first Prune never logged host_registry.prune_failed, got: %s", buf.String())
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
