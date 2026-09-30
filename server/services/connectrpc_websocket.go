@@ -472,7 +472,8 @@ func (r *hubRegistry) tapRegistryOrDefault() *streamhub.TapRegistry {
 // escapeAnalyticsHubOptions builds a hub's options. tapName must be the session
 // title, the same key the legacy forwarder uses.
 func escapeAnalyticsHubOptions(tapRegistry *streamhub.TapRegistry, tapName string, controller streamhub.SessionController) []streamhub.HubOption {
-	opts := []streamhub.HubOption{streamhub.WithCaptureTap(tapRegistry.Handle(tapName).As(streamhub.TapSourceHub))}
+	opts := make([]streamhub.HubOption, 0, 2)
+	opts = append(opts, streamhub.WithCaptureTap(tapRegistry.Handle(tapName).As(streamhub.TapSourceHub)))
 	source, ok := controller.(escapeAnalyticsStreamSource)
 	if !ok {
 		return opts
