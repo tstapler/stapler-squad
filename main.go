@@ -427,11 +427,7 @@ var (
 				// previous process instance (BUG-042). Reconcile before restoring any
 				// session, which is the earliest point a fresh control-mode client could
 				// be spawned.
-				if killed, err := tmux.KillOrphanedControlModeClients(""); err != nil {
-					log.Warn("Failed to clean up orphaned control-mode clients", "err", err)
-				} else if killed > 0 {
-					log.Info("Cleaned up orphaned control-mode clients left over from a prior process instance", "count", killed)
-				}
+				cleanupOrphanedControlModeClients(config.IsIsolatedInstance(), tmux.KillOrphanedControlModeClients)
 				// Create a keepalive session so the tmux server does not exit when all user sessions close.
 				if err := tmux.CreateKeepaliveSession(""); err != nil {
 					if strictStartup {
@@ -1883,4 +1879,19 @@ func formatKnownHosts(out io.Writer, entries []session.RegistryEntry) {
 			entry.LastSeenAt.Local().Format(time.RFC3339))
 	}
 	_ = w.Flush()
+}
+
+// cleanupOrphanedControlModeClients kills leftover control-mode clients on the default
+// tmux socket. Isolated instances share that socket with the live instance and must not
+// touch its clients (BUG-116).
+func cleanupOrphanedControlModeClients(isolated bool, kill func(serverSocket string) (int, error)) {
+	if isolated {
+		log.Info("Skipping orphaned control-mode client cleanup for isolated instance (default tmux socket is shared)")
+		return
+	}
+	if killed, err := kill(""); err != nil {
+		log.Warn("Failed to clean up orphaned control-mode clients", "err", err)
+	} else if killed > 0 {
+		log.Info("Cleaned up orphaned control-mode clients left over from a prior process instance", "count", killed)
+	}
 }
