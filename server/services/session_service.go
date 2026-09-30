@@ -39,6 +39,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 
@@ -97,6 +98,10 @@ type SessionService struct {
 	eventBus          *events.EventBus
 	statusManager     *session.InstanceStatusManager
 	reviewQueuePoller *session.ReviewQueuePoller
+
+	// tapRegistry backs SetCaptureTap/GetCaptureTap. nil means the process-wide
+	// streamhub.DefaultTapRegistry, which is what the terminal streams use.
+	tapRegistry *streamhub.TapRegistry
 
 	// sessionTagPoller drives the Phase 4 LLM fallback tag classification
 	// (session-classifier-pipeline Epic 4.4). nil when HeadlessPool is nil (no
