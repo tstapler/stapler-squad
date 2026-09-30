@@ -128,9 +128,14 @@ separate write, confirms a pane change, retries the `\r` once, else returns
 `ErrSubmitNotConfirmed`. `SubmitContentWithEnter` (`:117`) is the shared wrapper
 used by all three tools (`server/mcp/tools_terminal.go:314,582,712`).
 
-Known remaining gap in the confirmation: it only checks that the pane CHANGED after
-Enter (`waitForPaneUpdate`), not that the input line cleared, so an unrelated redraw can
-read as a confirmed submit. Not changed by this item.
+Known limitation (deliberately not fixed here): the confirmation only checks that the
+pane CHANGED after Enter (`waitForPaneUpdate`), not that the input line cleared, so an
+unrelated redraw can read as a confirmed submit. Checking the input line would mean
+parsing Claude Code's prompt box out of a captured pane: brittle across TUI versions
+and programs (aider, shells), and not unit-testable against the real paste-detector
+timing (BUG-031 says that race cannot be forced deterministically). Not a small,
+testable change, so left as a follow-up if a swallowed submit is ever observed after
+`SubmitDriverContent`'s retry.
 
 ## Baseline
 
