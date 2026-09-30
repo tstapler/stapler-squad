@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -95,20 +96,24 @@ func handleCheck() {
 		}
 	}
 
-	storagePath := *dbPath
-	if storagePath == "" {
-		storagePath = getDBPathForCwd(payload.Cwd)
+	result, ok := tryRemoteClassify(payload, defaultSsqHooksBaseURL)
+	if !ok {
+		storagePath := *dbPath
+		if storagePath == "" {
+			storagePath = getDBPathForCwd(payload.Cwd)
+		}
+
+		storage := loadStorage(storagePath)
+		defer storage.Close()
+
+		c := loadClassifier(storage)
+		ctx := c.BuildContext(payload.Cwd)
+		result = c.Classify(payload, ctx)
+
+		// Record analytics (the remote path records on the server side instead, against its
+		// own warm storage handle — see ApprovalHandler.HandleClassify).
+		recordResult(storage, payload, result, 0)
 	}
-
-	storage := loadStorage(storagePath)
-	defer storage.Close()
-
-	c := loadClassifier(storage)
-	ctx := c.BuildContext(payload.Cwd)
-	result := c.Classify(payload, ctx)
-
-	// Record analytics
-	recordResult(storage, payload, result, 0)
 
 	if *geminiMode {
 		writeGeminiHookDecision(result)
@@ -838,6 +843,51 @@ func handleInstall() {
 // ever run on a non-default port, a user must currently re-run `ssq-hooks install pi` by hand
 // with that in mind; there is no dynamic port-discovery mechanism for this installer today.
 const defaultSsqHooksBaseURL = "http://localhost:8543"
+
+// remoteClassifyTimeout bounds how long handleCheck waits on the server's warm-classifier
+// endpoint before falling back to this process's own cold local classification. Every
+// PreToolUse call on every local Claude Code session pays this cost when the server is down
+// or slow, so it must stay well under the ~tens-of-ms a cold SQLite-open + classifier rebuild
+// already costs today — a loopback HTTP round trip is normally sub-millisecond.
+const remoteClassifyTimeout = 75 * time.Millisecond
+
+// tryRemoteClassify asks the already-running stapler-squad server's warm in-memory classifier
+// (server/services/approval_handler.go's HandleClassify) to classify payload, instead of this
+// process opening its own SQLite handle and rebuilding the classifier from config on every
+// single invocation. Returns ok=false on any failure — connection refused, timeout, non-200,
+// bad JSON — so handleCheck falls back to its existing local path unchanged; the server is not
+// guaranteed to be running (e.g. `make install-service` never ran, or it's mid-restart).
+//
+// baseURL is a parameter (handleCheck always passes defaultSsqHooksBaseURL) rather than a
+// package var, so tests can point this at an httptest.Server directly instead of mutating
+// shared global state.
+func tryRemoteClassify(payload classifier.PermissionRequestPayload, baseURL string) (result classifier.ClassificationResult, ok bool) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return classifier.ClassificationResult{}, false
+	}
+
+	client := http.Client{Timeout: remoteClassifyTimeout}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/hooks/classify", bytes.NewReader(body))
+	if err != nil {
+		return classifier.ClassificationResult{}, false
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return classifier.ClassificationResult{}, false
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return classifier.ClassificationResult{}, false
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return classifier.ClassificationResult{}, false
+	}
+	return result, true
+}
 
 // installClaude copies the ssq-hooks binary to ~/.local/bin and registers it as
 // a PreToolUse hook in ~/.claude/settings.json. Safe to run multiple times.

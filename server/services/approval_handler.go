@@ -688,6 +688,51 @@ func (h *ApprovalHandler) HandlePiExtensionLoaded(w http.ResponseWriter, r *http
 	w.WriteHeader(http.StatusOK)
 }
 
+// HandleClassify serves a stateless, classify-only endpoint for ad hoc Claude Code hook
+// invocations that aren't tied to a stapler-squad-managed session — namely cmd/ssq-hooks's
+// `check` subcommand, registered as a global PreToolUse hook across every local Claude Code
+// session on the machine. That process otherwise pays a cold SQLite-open + classifier-rebuild
+// cost on every single tool call; this reuses the server's already-warm h.classifier instead.
+//
+// Unlike HandlePermissionRequest, this never escalates to the manual review queue or blocks
+// waiting on a human decision — Escalate is returned to the caller as-is (empty
+// PermissionDecision), exactly like cmd/ssq-hooks's local classify path, so the caller falls
+// back to its own native permission prompt instead of hanging on a queue entry no UI is
+// showing for this ad hoc, session-less request.
+//
+// +http: POST /api/hooks/classify hooks:classify
+func (h *ApprovalHandler) HandleClassify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if h.classifier == nil {
+		http.Error(w, "classifier not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var payload classifier.PermissionRequestPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	start := time.Now()
+	classCtx := h.classifier.BuildContext(payload.Cwd)
+	result := h.classifier.Classify(payload, classCtx)
+	durationMs := time.Since(start).Milliseconds()
+
+	if h.analyticsStore != nil {
+		h.analyticsStore.RecordFromResult(payload, result, "", "", durationMs, "ssq-hooks-remote")
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		log.Warn("Failed to write /api/hooks/classify response", "err", err)
+	}
+}
+
 // resolveSessionName returns the human-readable title for sessionID using the
 // in-memory queueChecker (no DB side-effects). Falls back to sessionID itself
 // when the instance cannot be found (e.g. external sessions, race at startup).

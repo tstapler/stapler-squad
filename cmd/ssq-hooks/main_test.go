@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1029,4 +1031,47 @@ func TestWriteOpenCodeHookDecision_Escalate(t *testing.T) {
 	assert.Contains(t, res.Stderr, "requires manual review")
 	assert.Contains(t, res.Stderr, "no ask/dialog fallback")
 	assert.NotContains(t, res.Stderr, "SSQ-Hooks: blocked", "escalate reason should use its own prefix, not AutoDeny's")
+}
+
+// TestTryRemoteClassify_ReturnsResult_OnSuccess proves the happy path: a warm server
+// responding 200 with a JSON ClassificationResult is decoded and returned as ok=true,
+// exercising the fast path handleCheck now prefers over its own cold local classification.
+func TestTryRemoteClassify_ReturnsResult_OnSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/api/hooks/classify", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(classifier.ClassificationResult{
+			Decision: classifier.AutoDeny,
+			RuleID:   "remote-rule",
+		})
+	}))
+	defer srv.Close()
+
+	result, ok := tryRemoteClassify(classifier.PermissionRequestPayload{ToolName: "Bash"}, srv.URL)
+	require.True(t, ok)
+	assert.Equal(t, classifier.AutoDeny, result.Decision)
+	assert.Equal(t, "remote-rule", result.RuleID)
+}
+
+// TestTryRemoteClassify_FallsBack_When_ServerUnreachable proves the failure path: hitting a
+// port nothing is listening on returns ok=false instead of hanging or panicking, so
+// handleCheck's fallback to local classification actually triggers when the server isn't
+// running — the common case on a machine that hasn't run `make install-service`.
+func TestTryRemoteClassify_FallsBack_When_ServerUnreachable(t *testing.T) {
+	_, ok := tryRemoteClassify(classifier.PermissionRequestPayload{ToolName: "Bash"}, "http://127.0.0.1:1") // reserved, nothing listens here
+	require.False(t, ok)
+}
+
+// TestTryRemoteClassify_FallsBack_When_NonOKStatus proves a non-200 response (e.g. the
+// server's classifier isn't wired, HandleClassify's 503 path) is treated as ok=false rather
+// than decoded as a bogus zero-value result.
+func TestTryRemoteClassify_FallsBack_When_NonOKStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "classifier not configured", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	_, ok := tryRemoteClassify(classifier.PermissionRequestPayload{ToolName: "Bash"}, srv.URL)
+	require.False(t, ok)
 }

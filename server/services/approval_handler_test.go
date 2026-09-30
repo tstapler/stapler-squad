@@ -775,3 +775,91 @@ func TestInjectHookConfig_ConcurrentWritesToSameRootDir_NeverProduceCorruptJSON(
 	var parsed map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(data, &parsed), "settings.local.json must be valid JSON after concurrent writes, not torn/corrupt: %s", data)
 }
+
+// stubClassifier is a minimal classifier.Classifier for HandleClassify tests — returns a
+// fixed decision regardless of input so the test isolates HandleClassify's HTTP plumbing
+// (method/JSON validation, response encoding, analytics recording) from real rule matching.
+type stubClassifier struct {
+	result classifier.ClassificationResult
+}
+
+func (s stubClassifier) Classify(classifier.PermissionRequestPayload, classifier.ClassificationContext) classifier.ClassificationResult {
+	return s.result
+}
+
+func (s stubClassifier) BuildContext(cwd string) classifier.ClassificationContext {
+	return classifier.ClassificationContext{Cwd: cwd}
+}
+
+// TestHandleClassify_ReturnsClassifierResult_AsJSON is the happy-path test: a POST with a
+// valid payload gets back exactly the classifier's decision as JSON, and it's recorded to
+// analytics — proving the stateless remote-classify path (cmd/ssq-hooks's tryRemoteClassify)
+// gets a usable response from the server's warm classifier without going through the
+// session-scoped, potentially-blocking HandlePermissionRequest flow.
+func TestHandleClassify_ReturnsClassifierResult_AsJSON(t *testing.T) {
+	t.Parallel()
+	bus := events.NewEventBus(4)
+	defer bus.Close()
+	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h.SetClassifier(stubClassifier{result: classifier.ClassificationResult{
+		Decision: classifier.AutoAllow,
+		Reason:   "test rule matched",
+		RuleID:   "test-rule",
+	}})
+	analytics := NewAnalyticsStore(nil)
+	h.SetAnalyticsStore(analytics)
+
+	payload := classifier.PermissionRequestPayload{
+		Cwd:      "/tmp/example",
+		ToolName: "Bash",
+		ToolInput: map[string]interface{}{
+			"command": "ls",
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/hooks/classify", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.HandleClassify(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var result classifier.ClassificationResult
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+	require.Equal(t, classifier.AutoAllow, result.Decision)
+	require.Equal(t, "test-rule", result.RuleID)
+}
+
+// TestHandleClassify_MethodNotAllowed_OnGet proves the endpoint rejects non-POST requests
+// rather than silently classifying on any method.
+func TestHandleClassify_MethodNotAllowed_OnGet(t *testing.T) {
+	t.Parallel()
+	bus := events.NewEventBus(4)
+	defer bus.Close()
+	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h.SetClassifier(stubClassifier{result: classifier.ClassificationResult{Decision: classifier.AutoAllow}})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/hooks/classify", nil)
+	rec := httptest.NewRecorder()
+	h.HandleClassify(rec, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+// TestHandleClassify_ServiceUnavailable_When_ClassifierNil proves a server with no
+// classifier wired (h.classifier == nil, the zero-value ApprovalHandler) returns 503 instead
+// of panicking — cmd/ssq-hooks's tryRemoteClassify treats any non-200 as "fall back to local
+// classification", so this just needs to not be a 200 with a bogus body.
+func TestHandleClassify_ServiceUnavailable_When_ClassifierNil(t *testing.T) {
+	t.Parallel()
+	bus := events.NewEventBus(4)
+	defer bus.Close()
+	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	// Deliberately never call h.SetClassifier — h.classifier stays nil.
+
+	req := httptest.NewRequest(http.MethodPost, "/api/hooks/classify", bytes.NewReader([]byte(`{}`)))
+	rec := httptest.NewRecorder()
+	h.HandleClassify(rec, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}

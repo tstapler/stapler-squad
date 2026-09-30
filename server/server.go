@@ -780,6 +780,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	approvalHandler.SetLiveInstanceFinder(deps.SessionService)
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
+	srv.mux.HandleFunc("POST /api/hooks/classify", approvalHandler.HandleClassify)
+	log.Info("Registered stateless classify-only hook handler at /api/hooks/classify")
 	srv.approvalHandler = approvalHandler
 
 	// pi approval-extension health tracking (pi-support Epic 4.2). The route
