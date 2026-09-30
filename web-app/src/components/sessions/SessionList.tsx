@@ -1,4 +1,5 @@
 "use client";
+// +feature: session-pinned-section
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
@@ -15,7 +16,7 @@ import { SessionListEmptyState } from "./SessionListEmptyState";
 import { SessionListSkeleton } from "./SessionListSkeleton";
 import { BulkActions } from "./BulkActions";
 import { TagEditor } from "./TagEditor";
-import { GroupingStrategy, GroupingStrategyLabels, groupSessions, cycleGroupingStrategy } from "@/lib/grouping/strategies";
+import { GroupingStrategy, GroupingStrategyLabels, groupSessions, groupWithPinned, PINNED_GROUP_KEY, cycleGroupingStrategy } from "@/lib/grouping/strategies";
 import { ColumnKey, DEFAULT_VISIBLE_COLUMNS } from "./session-columns";
 import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
 import { useStaleSessionConfig } from "@/lib/hooks/useStaleSessionConfig";
@@ -77,6 +78,7 @@ interface SessionListProps {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onTogglePinned?: (sessionId: string, pinned: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
@@ -118,6 +120,7 @@ interface SessionRowHandlers {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (id: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (id: string, enabled: boolean) => void;
+  onTogglePinned?: (id: string, pinned: boolean) => void;
   onToggleAutoApprove?: (id: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (id: string, message: string) => void;
   onClearConversationState?: (id: string) => Promise<boolean>;
@@ -159,6 +162,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
   onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onTogglePinned,
   onToggleAutoApprove,
   onSteerAutonomousSession,
   onClearConversationState,
@@ -183,6 +187,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
       onRunOneShot={onRunOneShot}
       onSetRateLimitEnabled={onSetRateLimitEnabled}
       onToggleAutonomousMode={onToggleAutonomousMode}
+      onTogglePinned={onTogglePinned}
       onToggleAutoApprove={onToggleAutoApprove}
       onSteerAutonomousSession={onSteerAutonomousSession}
       onClearConversationState={onClearConversationState}
@@ -351,6 +356,7 @@ export function SessionList({
   onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onTogglePinned,
   onToggleAutoApprove,
   onSteerAutonomousSession,
   onClearConversationState,
@@ -667,9 +673,11 @@ export function SessionList({
   // with no change to sortedSessions/groupingStrategy, and this is the only way to pick
   // that up without a page refresh.
   const groupedSessions = useMemo(() => {
-    return groupSessions(sortedSessions, groupingStrategy, {
-      thresholdMinutes: staleSessionConfig.thresholdMinutes,
-    });
+    return groupWithPinned(sortedSessions, (rest) =>
+      groupSessions(rest, groupingStrategy, {
+        thresholdMinutes: staleSessionConfig.thresholdMinutes,
+      })
+    );
   }, [sortedSessions, groupingStrategy, staleSessionConfig.thresholdMinutes, staleRecomputeTick]);
 
   // Flat item list for row-mode virtualizer: headers and sessions interleaved.
@@ -1280,6 +1288,7 @@ export function SessionList({
                   <div
                     role="heading"
                     aria-level={3}
+                    data-testid={item.groupKey === PINNED_GROUP_KEY ? "pinned-section-header" : undefined}
                     className={categoryTitle}
                     style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}
                     onClick={(e) => {
@@ -1420,6 +1429,7 @@ export function SessionList({
                     onRunOneShot={onRunOneShot}
                     onSetRateLimitEnabled={onSetRateLimitEnabled}
                     onToggleAutonomousMode={onToggleAutonomousMode}
+                    onTogglePinned={onTogglePinned}
                     onToggleAutoApprove={onToggleAutoApprove}
                     onSteerAutonomousSession={onSteerAutonomousSession}
                     onClearConversationState={onClearConversationState}
@@ -1457,6 +1467,7 @@ export function SessionList({
               <div
                 role="heading"
                 aria-level={3}
+                data-testid={groupKey === PINNED_GROUP_KEY ? "pinned-section-header" : undefined}
                 className={categoryTitle}
                 style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}
                 onClick={(e) => {
@@ -1605,6 +1616,7 @@ export function SessionList({
                   onRunOneShot={onRunOneShot}
                   onSetRateLimitEnabled={onSetRateLimitEnabled}
                   onToggleAutonomousMode={onToggleAutonomousMode}
+                  onTogglePinned={onTogglePinned}
                   onToggleAutoApprove={onToggleAutoApprove}
                   onSteerAutonomousSession={onSteerAutonomousSession}
                   onClearConversationState={onClearConversationState}

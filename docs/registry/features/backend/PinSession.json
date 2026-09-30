@@ -1,0 +1,11 @@
+{
+  "id": "PinSession",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "PinSession",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-30T01:42:32.968473455-07:00"
+}

@@ -119,6 +119,8 @@ type InstanceData struct {
 
 	// Hidden excludes this session from the default session list and review queue.
 	Hidden bool `json:"hidden,omitempty"`
+	// Pinned mirrors Instance.Pinned for JSON snapshot / ent round-trip.
+	Pinned bool `json:"pinned,omitempty"`
 
 	// ProjectID is the optional project this session belongs to.
 	ProjectID string `json:"project_id,omitempty"`

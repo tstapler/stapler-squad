@@ -122,3 +122,41 @@ func TestSetAutoApprove_SerializesWithSwitchProgram_When_ConcurrentCalls(t *test
 		t.Fatal("SwitchProgram never completed after SetAutoApprove released restartTriggerMu")
 	}
 }
+
+func TestInstance_SetPinned_should_SetPinnedTrue_When_ToggledOn(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+
+	require.NoError(t, inst.SetPinned(true))
+	assert.True(t, inst.Snapshot().Pinned)
+
+	require.NoError(t, inst.SetPinned(true), "pinning twice must be idempotent")
+	require.NoError(t, inst.SetPinned(false))
+	require.NoError(t, inst.SetPinned(false), "unpinning twice must be idempotent")
+	assert.False(t, inst.Snapshot().Pinned)
+}
+
+func TestInstance_SetPinned_should_RejectPin_When_SessionIsArchived(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	now := time.Now()
+	inst.SetArchivedAt(&now)
+
+	err := inst.SetPinned(true)
+
+	assert.ErrorIs(t, err, ErrCannotPinArchivedSession)
+	assert.False(t, inst.Snapshot().Pinned)
+}
+
+func TestInstance_SetArchivedAt_should_ClearPinned_When_Archiving(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	require.NoError(t, inst.SetPinned(true))
+
+	now := time.Now()
+	inst.SetArchivedAt(&now)
+	assert.False(t, inst.Snapshot().Pinned)
+
+	inst.SetArchivedAt(nil)
+	assert.False(t, inst.Snapshot().Pinned, "unarchiving must not re-pin")
+}

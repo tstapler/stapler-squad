@@ -16,6 +16,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -202,6 +203,10 @@ func (i *Instance) SetLastPRStatusCheck(t time.Time) {
 func setArchivedAtLocked(s *instanceState, t *time.Time) {
 	s.inst.mu.Lock()
 	s.inst.ArchivedAt = t
+	if t != nil {
+		// Archiving auto-unpins; every archive path funnels through here.
+		s.inst.Pinned = false
+	}
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
@@ -311,6 +316,32 @@ func (i *Instance) SetLastAddedToQueue(t time.Time) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		setLastAddedToQueueLocked(s, t)
 		return nil
+	})
+}
+
+// ---- Pinned --------------------------------------------------------------------
+
+// ErrCannotPinArchivedSession is returned by SetPinned(true) on an archived
+// session. Enforced inside the actor lock so no caller can bypass it.
+var ErrCannotPinArchivedSession = errors.New("cannot pin an archived session")
+
+func setPinnedLocked(s *instanceState, v bool) error {
+	s.inst.mu.Lock()
+	if v && s.inst.ArchivedAt != nil {
+		s.inst.mu.Unlock()
+		return ErrCannotPinArchivedSession
+	}
+	s.inst.Pinned = v
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+	return nil
+}
+
+// SetPinned sets the Pinned flag; pinning an archived session is rejected.
+func (i *Instance) SetPinned(v bool) error {
+	return i.sendSyncErr(func(s *instanceState) error {
+		return setPinnedLocked(s, v)
 	})
 }
 

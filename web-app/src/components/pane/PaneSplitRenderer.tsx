@@ -190,6 +190,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
         onRunOneShot={actions.onRunOneShot}
         onSetRateLimitEnabled={actions.onSetRateLimitEnabled}
         onToggleAutonomousMode={actions.onToggleAutonomousMode}
+        onTogglePinned={actions.onTogglePinned}
         onToggleAutoApprove={actions.onToggleAutoApprove}
         onSteerAutonomousSession={actions.onSteerAutonomousSession}
         onClearConversationState={actions.onClearConversationState}

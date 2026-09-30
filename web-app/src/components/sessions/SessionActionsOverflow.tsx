@@ -1,9 +1,9 @@
 "use client";
-// +feature: session-change-program
+// +feature: session-change-program session-pin-toggle
 
 import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
-import { MoreHorizontal } from "lucide-react";
+import { MoreHorizontal, Pin, PinOff } from "lucide-react";
 import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionStatus } from "@/gen/session/v1/types_pb";
 import { TagEditor } from "./TagEditor";
@@ -16,6 +16,7 @@ import {
   overflowButton,
   overflowMenu,
   overflowMenuItem,
+  overflowMenuItemTouch,
   overflowMenuItemDanger,
   actionButton,
   confirmDialog,
@@ -56,6 +57,7 @@ export interface SessionActionsOverflowProps {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onTogglePinned?: (sessionId: string, pinned: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
@@ -89,6 +91,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onTogglePinned,
   onToggleAutoApprove,
   onSteerAutonomousSession,
   onClearConversationState,
@@ -287,7 +290,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   );
   const hasGroup2 = !!(onRunOneShot || onCreateCheckpoint);
   const hasGroup3 = !!(onRenameRequest || onChangeProgram || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
-  const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode || onToggleAutoApprove);
+  const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode || onToggleAutoApprove || onTogglePinned);
   const hasGroup5 = !!(onClearConversationState || (onRestart && !isCreating) || onDelete);
 
   return (
@@ -760,6 +763,23 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                 >
                   <span aria-hidden="true">{session.rateLimitEnabled ? "⏸" : "▶"}</span>{" "}
                   {session.rateLimitEnabled ? "Disable auto-resume" : "Enable auto-resume"}
+                </button>
+              )}
+              {onTogglePinned && (
+                <button
+                  role="menuitemcheckbox"
+                  aria-checked={session.pinned}
+                  className={`${overflowMenuItem} ${overflowMenuItemTouch}`}
+                  data-testid="session-pin-toggle"
+                  aria-label={session.pinned ? `Unpin ${session.title}` : `Pin ${session.title}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    close();
+                    onTogglePinned(session.id, !session.pinned);
+                  }}
+                >
+                  {session.pinned ? <PinOff aria-hidden="true" size={16} /> : <Pin aria-hidden="true" size={16} />}{" "}
+                  {session.pinned ? "Unpin" : "Pin"}
                 </button>
               )}
               {onToggleAutonomousMode && (

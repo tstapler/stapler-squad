@@ -253,6 +253,7 @@ message Session {
   // Count of active background agents/shells/monitors from the WaitingForAgent detector.
   // Only meaningful when detected_status == DETECTED_STATUS_WAITING_FOR_AGENT; 0 otherwise.
   int32 subagent_count = 75;
+  bool pinned = 76;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's

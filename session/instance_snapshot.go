@@ -115,6 +115,7 @@ type InstanceSnapshot struct {
 	// Misc config
 	OneShot             bool
 	Hidden              bool
+	Pinned              bool
 	ProjectID           string
 	HistoryFilePath     string
 	MCPServerURL        string
@@ -199,6 +200,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		ForkedFromID:       i.ForkedFromID,
 		OneShot:            i.OneShot,
 		Hidden:             i.Hidden,
+		Pinned:             i.Pinned,
 		ProjectID:          i.ProjectID,
 		HistoryFilePath:    i.HistoryFilePath,
 		MCPServerURL:       i.MCPServerURL,

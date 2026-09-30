@@ -328,3 +328,38 @@ describe("SessionActionsOverflow", () => {
     });
   });
 });
+
+describe("SessionActionsOverflow — pin toggle", () => {
+  it("calls onTogglePinned(id, true) when Pin is clicked on an unpinned session", () => {
+    const onTogglePinned = jest.fn();
+    renderOverflow({ onTogglePinned, session: makeSession({ pinned: false }) });
+    openMenu();
+
+    const item = screen.getByTestId("session-pin-toggle");
+    expect(item).toHaveAttribute("role", "menuitemcheckbox");
+    expect(item).toHaveAttribute("aria-checked", "false");
+    expect(item).toHaveAccessibleName("Pin Test Session");
+    fireEvent.click(item);
+
+    expect(onTogglePinned).toHaveBeenCalledWith("session-1", true);
+  });
+
+  it("calls onTogglePinned(id, false) and shows the Unpin label when the session is pinned", () => {
+    const onTogglePinned = jest.fn();
+    renderOverflow({ onTogglePinned, session: makeSession({ pinned: true }) });
+    openMenu();
+
+    const item = screen.getByTestId("session-pin-toggle");
+    expect(item).toHaveAttribute("aria-checked", "true");
+    expect(item).toHaveAccessibleName("Unpin Test Session");
+    fireEvent.click(item);
+
+    expect(onTogglePinned).toHaveBeenCalledWith("session-1", false);
+  });
+
+  it("does not render the pin menu item when onTogglePinned is not provided", () => {
+    renderOverflow();
+    openMenu();
+    expect(screen.queryByTestId("session-pin-toggle")).toBeNull();
+  });
+});

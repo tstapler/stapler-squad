@@ -42,6 +42,26 @@ export interface GroupedSessions {
   sessions: Session[];
 }
 
+export const PINNED_GROUP_KEY = "__pinned__";
+
+/**
+ * Groups sessions by strategy, with pinned sessions lifted into a leading
+ * "Pinned" group (above every strategy) and removed from their normal groups.
+ * Groups left empty by the removal are dropped.
+ */
+export function groupWithPinned(
+  sessions: Session[],
+  group: (rest: Session[]) => GroupedSessions[]
+): GroupedSessions[] {
+  const pinned = sessions.filter((s) => s.pinned);
+  if (pinned.length === 0) return group(sessions);
+  const rest = sessions.filter((s) => !s.pinned);
+  return [
+    { groupKey: PINNED_GROUP_KEY, displayName: "Pinned", sessions: pinned },
+    ...group(rest),
+  ];
+}
+
 /**
  * Group sessions by the selected strategy with multi-membership support.
  * Mirrors the TUI OrganizeByStrategy() method in ui/list.go:959

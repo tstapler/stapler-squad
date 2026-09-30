@@ -4917,6 +4917,51 @@ func (s *SessionService) UnarchiveSession(
 	return connect.NewResponse(&sessionv1.UnarchiveSessionResponse{}), nil
 }
 
+// +api: session:pin
+// PinSession pins a session so it surfaces in the dedicated Pinned section.
+// Idempotent. Archived sessions are rejected (archiving always auto-unpins).
+func (s *SessionService) PinSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.PinSessionRequest],
+) (*connect.Response[sessionv1.PinSessionResponse], error) {
+	if err := s.setPinned(req.Msg.SessionId, true); err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&sessionv1.PinSessionResponse{}), nil
+}
+
+// +api: session:unpin
+// UnpinSession clears the pinned flag, restoring normal grouped position. Idempotent.
+func (s *SessionService) UnpinSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UnpinSessionRequest],
+) (*connect.Response[sessionv1.UnpinSessionResponse], error) {
+	if err := s.setPinned(req.Msg.SessionId, false); err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&sessionv1.UnpinSessionResponse{}), nil
+}
+
+func (s *SessionService) setPinned(sessionID string, pinned bool) error {
+	if sessionID == "" {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
+	}
+	inst := s.FindLiveInstance(sessionID)
+	if inst == nil {
+		return connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", sessionID))
+	}
+	if err := inst.SetPinned(pinned); err != nil {
+		if errors.Is(err, session.ErrCannotPinArchivedSession) {
+			return connect.NewError(connect.CodeFailedPrecondition, err)
+		}
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update pin: %w", err))
+	}
+	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
+	}
+	return nil
+}
+
 // +api: session:archive-workflow-sessions
 // ArchiveWorkflowSessions delegates to WorkflowService.
 func (s *SessionService) ArchiveWorkflowSessions(

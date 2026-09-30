@@ -267,3 +267,12 @@ func TestInstanceToProto_omitsGoalSummaryWhenNil(t *testing.T) {
 		t.Errorf("expected Goal to be nil when inst.SessionGoal is nil, got %+v", proto.Goal)
 	}
 }
+
+func TestInstanceToProto_should_SetPinned_FromInstance(t *testing.T) {
+	if InstanceToProto(&session.Instance{}, nil).Pinned {
+		t.Error("zero-value instance must not be pinned")
+	}
+	if !InstanceToProto(&session.Instance{Pinned: true}, nil).Pinned {
+		t.Error("expected Pinned=true to propagate")
+	}
+}

@@ -163,6 +163,7 @@ interface SessionCardProps {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onTogglePinned?: (sessionId: string, pinned: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
@@ -200,6 +201,7 @@ function SessionCardInner({
   onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onTogglePinned,
   onToggleAutoApprove,
   onSteerAutonomousSession,
   onClearConversationState,
@@ -1021,6 +1023,7 @@ function SessionCardInner({
           onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
+          onTogglePinned={onTogglePinned}
           onToggleAutoApprove={onToggleAutoApprove}
           onSteerAutonomousSession={onSteerAutonomousSession}
           onClearConversationState={onClearConversationState}
