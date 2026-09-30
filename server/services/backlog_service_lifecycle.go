@@ -196,9 +196,27 @@ func (s *BacklogService) CreateBacklogItem(
 		baseBranch = *req.Msg.BaseBranch
 	}
 
+	var externalURL string
+	if req.Msg.ExternalUrl != nil {
+		externalURL = *req.Msg.ExternalUrl
+	}
+	gate, claimErr := s.gateOnClaim(ctx, preCreateClaimCheck{
+		ExternalURL: externalURL,
+		Override:    req.Msg.OverrideClaim,
+		Reason:      req.Msg.OverrideReason,
+		LogPrefix:   "nl_create",
+	})
+	if claimErr != nil {
+		return nil, claimErr
+	}
+	if gate.Claimed != nil {
+		return connect.NewResponse(&sessionv1.CreateBacklogItemResponse{AlreadyClaimedElsewhere: gate.Claimed}), nil
+	}
+
 	data := session.BacklogItemData{
 		Title:                  req.Msg.Title,
 		Description:            req.Msg.Description,
+		ExternalURL:            externalURL,
 		AcceptanceCriteria:     acJSON,
 		Priority:               priority,
 		Status:                 string(session.BacklogStatusIdea),

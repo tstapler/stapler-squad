@@ -691,6 +691,10 @@ func (h *GitHubWebhookHandler) handlePRFixEvent(w http.ResponseWriter, r *http.R
 			outcome = "fired_success"
 		}
 		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{Outcome: outcome, DeliveryID: deliveryID, ErrorMessage: errMsg})
+		if outcome == "no_match" {
+			// Additive fallback: only when the local item lookup missed.
+			h.traceUnmatchedPR(ctx, payload, fullName, prNumber)
+		}
 
 		// Second consumer of the same verified event (Epic 5.3): invalidate the
 		// shared GitHub poller cache for prNumber so poller-observed state doesn't

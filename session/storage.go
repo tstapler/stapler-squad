@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -268,6 +269,15 @@ var _ InstanceStore = (*Storage)(nil)
 // Storage handles saving and loading instances via the repository backend.
 type Storage struct {
 	repo *EntRepository
+
+	// claimRecorder is set once at startup but read from every creation path
+	// (including background sync loops), so it is atomic.
+	claimRecorder atomic.Pointer[ClaimRecorder]
+	// foreignClaims is the local-only claim reader SyncOne consults; nil means
+	// no cross-host claim checking.
+	foreignClaims atomic.Pointer[ForeignClaimLookup]
+	// provenance builds the PR provenance comment; nil means no stamping.
+	provenance atomic.Pointer[PRProvenanceSource]
 }
 
 // NewStorageWithRepository creates a Storage backed by an EntRepository.
@@ -288,6 +298,36 @@ func (s *Storage) GetEntClient() *ent.Client {
 // SetItemChangePublisher wires p into the underlying repository.
 func (s *Storage) SetItemChangePublisher(p ItemChangePublisher) {
 	s.repo.SetItemChangePublisher(p)
+}
+
+// SetClaimRecorder wires r as the recorder CreateBacklogItem calls for every
+// item created with a non-empty ExternalURL. Passing nil disables recording.
+func (s *Storage) SetClaimRecorder(r ClaimRecorder) {
+	if r == nil {
+		s.claimRecorder.Store(nil)
+		return
+	}
+	s.claimRecorder.Store(&r)
+}
+
+// SetForeignClaimLookup wires l as the local-only claim reader ForeignClaim
+// uses. Passing nil disables cross-host claim checking.
+func (s *Storage) SetForeignClaimLookup(l ForeignClaimLookup) {
+	if l == nil {
+		s.foreignClaims.Store(nil)
+		return
+	}
+	s.foreignClaims.Store(&l)
+}
+
+// ForeignClaim reports a claim on externalURL held by another host, consulting
+// only local state. It reports false when no lookup is wired or externalURL is empty.
+func (s *Storage) ForeignClaim(externalURL string) (ClaimRecord, bool) {
+	lookup := s.foreignClaims.Load()
+	if lookup == nil || externalURL == "" {
+		return ClaimRecord{}, false
+	}
+	return (*lookup).ForeignClaim(externalURL)
 }
 
 // SetCallbackDispatcher forwards to the underlying *EntRepository's SetCallbackDispatcher.
@@ -938,7 +978,31 @@ func (s *Storage) CreateBacklogItem(ctx context.Context, data BacklogItemData) (
 			data.RepoPath = resolved
 		}
 	}
-	return s.repo.CreateBacklogItem(ctx, data)
+	created, err := s.repo.CreateBacklogItem(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	s.recordClaim(ctx, created)
+	return created, nil
+}
+
+// recordClaim is the single choke point (ADR-002 of
+// project_plans/cross-host-claim-dedup/decisions/) that records a cross-host
+// claim for every newly created item that has an ExternalURL. Best-effort: a
+// failure is logged and never fails item creation.
+func (s *Storage) recordClaim(ctx context.Context, item *BacklogItemData) {
+	recorder := s.claimRecorder.Load()
+	if recorder == nil || item == nil || item.ExternalURL == "" {
+		return
+	}
+	err := (*recorder).RecordClaim(ctx, ClaimRecord{
+		ExternalURL:  item.ExternalURL,
+		ItemDeepLink: BacklogItemDeepLinkPath(item),
+		ClaimedAt:    item.CreatedAt,
+	})
+	if err != nil {
+		log.Warn("claim_index.record_failed", "external_url", item.ExternalURL, "err", err)
+	}
 }
 
 // GetBacklogItem retrieves a backlog item by UUID string.
@@ -1265,6 +1329,31 @@ func (s *Storage) GetBaseCommitSHAsForSessions(ctx context.Context, uuids []stri
 // GetItemSessionBySessionUUID looks up the ItemSession for a given session UUID (loads BacklogItem edge).
 func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (ItemSessionSummary, error) {
 	return s.repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
+}
+
+// IsDiagnoseCaller reports whether sessionUUID is currently linked to a
+// backlog item with SessionRoleDiagnose — i.e. whether it's a dispatched
+// Diagnose & Nudge investigation session, as opposed to any other role. Used
+// by server/mcp's denyIfDiagnoseCaller to gate the general-purpose
+// terminal-control MCP tools away from that narrow role: --allowedTools
+// provides no real technical enforcement on its own (see
+// session/backlog_review.go's BuildReviewCallOptions doc comment), so this is
+// the actual, server-side gate. Returns false (not diagnose) on any lookup
+// error, including "no link at all" — the check only ever narrows what a
+// positively-identified diagnose session may do, so an unidentifiable caller
+// falls through to the pre-existing unrestricted behavior for every other role.
+func (s *Storage) IsDiagnoseCaller(ctx context.Context, sessionUUID string) bool {
+	row, err := s.repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
+	if err != nil {
+		return false
+	}
+	return row.Role == SessionRoleDiagnose
+}
+
+// ClaimDiagnoseNudgeAttempt atomically claims sessionUUID's one nudge-write
+// attempt — see EntRepository.ClaimDiagnoseNudgeAttempt's doc comment.
+func (s *Storage) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUUID string) (claimed bool, err error) {
+	return s.repo.ClaimDiagnoseNudgeAttempt(ctx, sessionUUID)
 }
 
 // GetWorktreeDataBySessionUUID returns the git worktree data for the Session with

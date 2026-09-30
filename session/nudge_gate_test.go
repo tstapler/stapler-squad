@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -45,7 +46,7 @@ func newRealTmuxInstanceForNudgeTest(t *testing.T, instUUID, envUUID string) *In
 
 	socketArgs := tmux.ResolveSocket("").Args
 	setEnvArgs := socketArgs("set-environment", "-t", tmuxName, "STAPLER_SESSION_UUID", envUUID)
-	out, err := exec.Command(tmux.Binary(), setEnvArgs...).CombinedOutput()
+	out, err := safeexec.CommandContext(context.Background(), tmux.Binary(), setEnvArgs...).CombinedOutput()
 	require.NoErrorf(t, err, "tmux set-environment failed: %s", out)
 
 	return inst

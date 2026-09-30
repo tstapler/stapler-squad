@@ -694,6 +694,49 @@ function toProtoAcCriteria(criteria: AcCriterion[]): AcCriterionProto[] {
 // GitHub picker domain types
 // ---------------------------------------------------------------------------
 
+function toClaimedElsewhere(claim: { externalUrl: string; claimingHostId: string; itemDeepLink: string; disputed: boolean }): ClaimedElsewhere {
+  return {
+    externalUrl: claim.externalUrl,
+    claimingHostId: claim.claimingHostId,
+    itemDeepLink: claim.itemDeepLink,
+    disputed: claim.disputed,
+  };
+}
+
+export interface ImportGitHubIssueOptions {
+  repoPath?: string;
+  skipPlanning?: boolean;
+  /**
+   * Set to import even though another host already claimed the issue. The
+   * server rejects a reason under 5 characters and audit-logs it.
+   */
+  overrideReason?: string;
+}
+
+/** Another host already claimed the issue (cross_host_claim_dedup); no item was created. */
+export interface ClaimedElsewhere {
+  externalUrl: string;
+  claimingHostId: string;
+  /** The claiming host's ssq:// deep link to its item. */
+  itemDeepLink: string;
+  disputed: boolean;
+}
+
+/** Result of a CheckCrossHostClaim call. `claim` is set only when another host holds the URL. */
+export interface CrossHostClaimStatus {
+  /** False while cross_host_claim_dedup is off: render nothing. */
+  enabled: boolean;
+  /** True when the answer is definitive; enabled && !checked means "could not confirm". */
+  checked: boolean;
+  claim?: ClaimedElsewhere;
+  /** Unix seconds of the claim, 0 when unknown. */
+  claimedAtUnix: number;
+}
+
+export type ImportGitHubIssueResult =
+  | { item: BacklogItem; triageTriggered: boolean; alreadyExisted: boolean; alreadyClaimedElsewhere?: undefined }
+  | { alreadyClaimedElsewhere: ClaimedElsewhere; item?: undefined; triageTriggered?: undefined; alreadyExisted?: undefined };
+
 export interface GitHubRepo {
   owner: string;
   repo: string;
@@ -744,7 +787,13 @@ interface UseBacklogServiceReturn {
    * createBacklogItemFromChat — never throws.
    */
   parseBacklogItemIntent: (message: string) => Promise<ParsedBacklogItemDraft | null>;
-  importGitHubIssue: (issueUrl: string, options?: { repoPath?: string; skipPlanning?: boolean }) => Promise<{ item: BacklogItem; triageTriggered: boolean; alreadyExisted: boolean } | null>;
+  importGitHubIssue: (issueUrl: string, options?: ImportGitHubIssueOptions) => Promise<ImportGitHubIssueResult | null>;
+  /** Null on any RPC failure: the claim banner degrades to nothing. */
+  checkCrossHostClaim: (externalUrl: string, options?: { localOnly?: boolean }) => Promise<CrossHostClaimStatus | null>;
+  /** Claims other hosts hold in the local index; empty on failure or when the feature is off. */
+  listForeignClaims: () => Promise<ClaimedElsewhere[]>;
+  /** Clears the disputed flag for externalUrl. Throws on failure so the form can show it. */
+  resolveClaimDispute: (externalUrl: string, reason: string) => Promise<void>;
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
   listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number; host?: string }) => Promise<GitHubIssue[]>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
@@ -1280,11 +1329,47 @@ export function useBacklogService(): UseBacklogServiceReturn {
     }
   }, []);
 
+  const checkCrossHostClaim = useCallback(
+    async (externalUrl: string, options?: { localOnly?: boolean }): Promise<CrossHostClaimStatus | null> => {
+      if (!clientRef.current) return null;
+      try {
+        const resp = await clientRef.current.checkCrossHostClaim({ externalUrl, localOnly: options?.localOnly ?? false });
+        return {
+          enabled: resp.enabled,
+          checked: resp.checked,
+          claim: resp.claim ? toClaimedElsewhere(resp.claim) : undefined,
+          claimedAtUnix: Number(resp.claimedAtUnix),
+        };
+      } catch (err) {
+        console.warn("[useBacklogService] checkCrossHostClaim:", err);
+        return null;
+      }
+    },
+    []
+  );
+
+  const listForeignClaims = useCallback(async (): Promise<ClaimedElsewhere[]> => {
+    if (!clientRef.current) return [];
+    try {
+      const resp = await clientRef.current.listForeignClaims({});
+      return resp.enabled ? resp.claims.map(toClaimedElsewhere) : [];
+    } catch (err) {
+      console.warn("[useBacklogService] listForeignClaims:", err);
+      return [];
+    }
+  }, []);
+
+  const resolveClaimDispute = useCallback(async (externalUrl: string, reason: string): Promise<void> => {
+    if (!clientRef.current) throw new Error("Backlog service unavailable.");
+    try {
+      await clientRef.current.resolveClaimDispute({ externalUrl, reason });
+    } catch (err) {
+      throw new Error(getErrorMessage(err, "Failed to resolve claim dispute."));
+    }
+  }, []);
+
   const importGitHubIssue = useCallback(
-    async (
-      issueUrl: string,
-      options?: { repoPath?: string; skipPlanning?: boolean }
-    ): Promise<{ item: BacklogItem; triageTriggered: boolean; alreadyExisted: boolean } | null> => {
+    async (issueUrl: string, options?: ImportGitHubIssueOptions): Promise<ImportGitHubIssueResult | null> => {
       if (!clientRef.current) return null;
       try {
         setLastError(null);
@@ -1292,7 +1377,20 @@ export function useBacklogService(): UseBacklogServiceReturn {
           issueUrl,
           repoPath: options?.repoPath ?? "",
           skipPlanning: options?.skipPlanning ?? false,
+          override: options?.overrideReason !== undefined,
+          overrideReason: options?.overrideReason ?? "",
         });
+        if (resp.alreadyClaimedElsewhere) {
+          const claim = resp.alreadyClaimedElsewhere;
+          return {
+            alreadyClaimedElsewhere: {
+              externalUrl: claim.externalUrl,
+              claimingHostId: claim.claimingHostId,
+              itemDeepLink: claim.itemDeepLink,
+              disputed: claim.disputed,
+            },
+          };
+        }
         return resp.item
           ? {
               item: mapBacklogItem(resp.item),
@@ -1382,6 +1480,9 @@ export function useBacklogService(): UseBacklogServiceReturn {
       createBacklogItemFromChat,
       parseBacklogItemIntent,
       importGitHubIssue,
+      checkCrossHostClaim,
+      listForeignClaims,
+      resolveClaimDispute,
       searchGitHubRepos,
       listGitHubIssues,
       updateBacklogItem,

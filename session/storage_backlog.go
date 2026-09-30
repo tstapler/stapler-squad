@@ -390,6 +390,30 @@ func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, session
 	return itemSessionToSummary(is), nil
 }
 
+// ClaimDiagnoseNudgeAttempt atomically marks the diagnose-role ItemSession
+// identified by sessionUUID as having attempted its one nudge write —
+// a single UPDATE ... WHERE diagnose_nudge_attempted_at IS NULL statement, so
+// the read-and-check-then-write a caller would otherwise do in Go can't race
+// against the caller's own retry. Returns claimed=false (not an error) when
+// no such row exists (not a diagnose-role session, or storage.CreateItemSession
+// hasn't landed yet) or the row already has a claim — the caller must refuse
+// the write in either case. See session/diagnose_nudge.go for why this is a
+// separate concept from the item-level diagnose_nudge_count cap.
+func (r *EntRepository) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUUID string) (claimed bool, err error) {
+	n, err := r.client.ItemSession.Update().
+		Where(
+			itemsession.SessionUUID(sessionUUID),
+			itemsession.SessionRoleEQ(SessionRoleDiagnose),
+			itemsession.DiagnoseNudgeAttemptedAtIsNil(),
+		).
+		SetDiagnoseNudgeAttemptedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("claim diagnose nudge attempt for session %s: %w", sessionUUID, err)
+	}
+	return n > 0, nil
+}
+
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
 func (r *EntRepository) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (ItemSessionSummary, error) {
 	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)

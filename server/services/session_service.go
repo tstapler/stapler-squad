@@ -815,7 +815,10 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	}
 	credChain := NewDefaultChain(directCfg)
 
-	capacityMonitor := NewCapacityMonitor(capCfg, eventBus, nil, nil, nil)
+	capacityMonitor := NewCapacityMonitor(CapacityMonitorParams{
+		Config:   capCfg,
+		EventBus: eventBus,
+	})
 	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
 	capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
 
@@ -1034,29 +1037,20 @@ func (s *SessionService) SessionProgram(sessionUUID string) (string, bool) {
 	return inst.Program, true
 }
 
-// safeIdleStatusContexts allowlists the exact detection.StatusIdle pattern
-// descriptions (session/detection/binaries/claude.go's Idle group) that are
-// unambiguously Claude Code's own idle prompt, as opposed to a raw shell/vim/
-// editor prompt that also reports StatusIdle. Pinned verbatim against the
-// actual pattern set by TestSafeIdleStatusContexts_MatchClaudeIdlePatternDescriptions
-// so a future wording change in claude.go fails this test loudly instead of
-// silently disabling the gate. insert_mode is deliberately excluded: its
-// regex/description aren't distinguishable from a real vim INSERT-mode
-// status line.
-var safeIdleStatusContexts = map[string]bool{
-	"Claude Code readline input prompt":                                                              true, // claude_readline_prompt
-	"Claude Code idle prompt showing ? for shortcuts":                                                true, // claude_shortcuts_prompt
-	"Claude Code 'accept edits' review mode — session completed turn, user reviews proposed changes": true, // claude_accept_edits
-}
+// safeIdleStatusContexts re-exports session.SafeIdleStatusContexts under its
+// original package-local name so this file's own
+// TestSafeIdleStatusContexts_MatchClaudeIdlePatternDescriptions (which pins
+// it against claude.go's actual pattern descriptions) needs no change. The
+// allowlist itself now lives in the session package so
+// session/nudge_gate.go's CheckNudgeEligible can share it instead of
+// maintaining a second copy — see session.SafeIdleStatusContexts's doc
+// comment.
+var safeIdleStatusContexts = session.SafeIdleStatusContexts
 
 // isSafeSteerStatus reports whether a detection result is safe for an
-// unattended PTY write: StatusIdle with a description on the Claude-specific
-// safeIdleStatusContexts allowlist. StatusIdle alone is NOT sufficient —
-// command_prompt/vim_normal_mode/bracket_insert_mode share the same
-// DetectedStatus value but mean a raw shell or editor prompt, exactly the
-// state where injected text would be misread as a literal command.
+// unattended PTY write — see session.IsSafeSteerStatus's doc comment.
 func isSafeSteerStatus(status detection.DetectedStatus, statusContext string) bool {
-	return status == detection.StatusIdle && safeIdleStatusContexts[statusContext]
+	return session.IsSafeSteerStatus(status, statusContext)
 }
 
 // IsReadyForSteer implements SessionSteerer. It gates an unattended PTY
@@ -1712,13 +1706,39 @@ func (s *SessionService) SpawnReviewSession(ctx context.Context, item *session.B
 	return inst, nil
 }
 
+// diagnosticSessionAllowedTools restricts a dispatched Diagnose & Nudge
+// session (server/mcp's diagnoseHandlers) to the minimal MCP tool surface its
+// buildDiagnosePrompt action space actually offers: investigate the repo with
+// Claude Code's own read/search tools, then conclude via exactly one of
+// create_backlog_item (file a bug), post_backlog_update (a note),
+// submit_diagnosis_result (always, to close out), or diagnose_nudge_session
+// (redirect a stalled linked session). Deliberately excludes
+// write_to_session/steer_session/send_control/run_command/resume_session —
+// this session has no legitimate reason to touch another session's terminal
+// except through the narrow, gated diagnose_nudge_session path.
+//
+// This is defense-in-depth, not the real enforcement: --allowedTools has been
+// proven to provide no real technical enforcement in this codebase (see
+// session/backlog_review.go's BuildReviewCallOptions doc comment and ADR-001's
+// 2026-07-15 addendum). The actual gate is server-side — see
+// server/mcp/diagnose_role_gate.go's denyIfDiagnoseCaller, which the
+// restricted tools above check independent of what a client honors here.
+const diagnosticSessionAllowedTools = "Read,Grep,Glob,Bash," +
+	"mcp__stapler-squad__create_backlog_item," +
+	"mcp__stapler-squad__post_backlog_update," +
+	"mcp__stapler-squad__get_backlog_item," +
+	"mcp__stapler-squad__submit_diagnosis_result," +
+	"mcp__stapler-squad__diagnose_nudge_session"
+
 // SpawnDiagnosticSession creates a hidden, one-shot Diagnose & Nudge session
 // for item, carrying prompt (the assembled context bundle plus dispatch
 // instructions — see server/services/diagnostic_service.go's
 // buildDiagnosePrompt). Mirrors SpawnReviewSession's shape; satisfies
-// services.DiagnosticSpawner.
+// services.DiagnosticSpawner. Unlike SpawnReviewSession, restricts the
+// session's MCP tool surface via diagnosticSessionAllowedTools — see that
+// constant's doc comment for why this alone isn't the real enforcement.
 func (s *SessionService) SpawnDiagnosticSession(ctx context.Context, item *session.BacklogItemData, prompt string) (*session.Instance, error) {
-	inst, err := s.CreateDirectorySession(ctx, "diagnose:"+item.ID[:8], item.RepoPath, prompt, []string{"backlog:diagnose"}, true, true, "")
+	inst, err := s.createDirectorySessionWithAllowedTools(ctx, "diagnose:"+item.ID[:8], item.RepoPath, prompt, []string{"backlog:diagnose"}, true, true, "", diagnosticSessionAllowedTools)
 	if err != nil {
 		return nil, err
 	}
@@ -1731,6 +1751,16 @@ func (s *SessionService) SpawnDiagnosticSession(ctx context.Context, item *sessi
 // It creates a directory-type session with the given title, path, initial prompt,
 // tags, and oneShot flag, wires it into the live poller, and returns the Instance.
 func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride string) (*session.Instance, error) {
+	return s.createDirectorySessionWithAllowedTools(ctx, title, path, prompt, tags, oneShot, hidden, programOverride, "")
+}
+
+// createDirectorySessionWithAllowedTools is CreateDirectorySession's real
+// implementation, parameterized on an extra allowedTools value (see
+// diagnosticSessionAllowedTools) so SpawnDiagnosticSession can restrict its
+// dispatched session's tool surface without duplicating the wire-up below.
+// allowedTools == "" (CreateDirectorySession's own callers) preserves the
+// pre-existing unrestricted behavior.
+func (s *SessionService) createDirectorySessionWithAllowedTools(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool, programOverride, allowedTools string) (*session.Instance, error) {
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, path, "")
 	program := resolved.Program
@@ -1750,6 +1780,7 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 		MCPServerURL:     s.resolveMCPServerURL(),
 		CreateIfMissing:  true,
 		TmuxServerSocket: s.testTmuxServerSocket,
+		AllowedTools:     allowedTools,
 		// Backend consults the session-name override map (tymux-bundled-integration
 		// Epic 4.4.2) so a canary override applies through this entry point too;
 		// there's no per-request override concept for this internal creator.
