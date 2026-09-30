@@ -1,6 +1,7 @@
 package memory_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,9 +35,9 @@ func TestGopsutilReader_ProcessMemory_should_sumRSS_When_ValidPIDs(t *testing.T)
 	r := &memorytest.FakeReader{
 		RSSBySession: map[string]int64{"my-session": 128},
 	}
-	mb, err := r.SessionRSSMB("my-session")
+	rssByName, err := r.SessionsRSSMB(context.Background(), []string{"my-session"})
 	assert.NoError(t, err)
-	assert.Equal(t, int64(128), mb)
+	assert.Equal(t, int64(128), rssByName["my-session"])
 }
 
 // TestGopsutilReader_ProcessMemory_should_skipDeadPID_When_ProcessNoLongerExists verifies
@@ -44,14 +45,17 @@ func TestGopsutilReader_ProcessMemory_should_sumRSS_When_ValidPIDs(t *testing.T)
 func TestGopsutilReader_ProcessMemory_should_skipDeadPID_When_ProcessNoLongerExists(t *testing.T) {
 	t.Parallel()
 	r := &memorytest.FakeReader{}
-	mb, err := r.SessionRSSMB("nonexistent-session")
+	rssByName, err := r.SessionsRSSMB(context.Background(), []string{"nonexistent-session"})
 	assert.NoError(t, err)
-	assert.Equal(t, int64(0), mb)
+	assert.Equal(t, int64(0), rssByName["nonexistent-session"])
 }
 
-// TestGopsutilReader_ProcessMemory_should_capAt50PIDs_When_DeepProcessTree verifies
-// FakeReader call counting works correctly.
-func TestGopsutilReader_ProcessMemory_should_capAt50PIDs_When_DeepProcessTree(t *testing.T) {
+// TestGopsutilReader_ProcessMemory_should_batchMultipleSessions_When_CalledOnce verifies
+// SessionsRSSMB returns every requested session's RSS from a single call, and that
+// FakeReader records exactly one call regardless of how many sessions were requested —
+// this is the behavior warmRSSCache depends on to avoid one process-table enumeration
+// per session (see processSnapshot in reader.go).
+func TestGopsutilReader_ProcessMemory_should_batchMultipleSessions_When_CalledOnce(t *testing.T) {
 	t.Parallel()
 	r := &memorytest.FakeReader{
 		RSSBySession: map[string]int64{
@@ -60,11 +64,13 @@ func TestGopsutilReader_ProcessMemory_should_capAt50PIDs_When_DeepProcessTree(t 
 		},
 	}
 
-	_, _ = r.SessionRSSMB("session-a")
-	_, _ = r.SessionRSSMB("session-b")
-	_, _ = r.SessionRSSMB("session-a")
+	rssByName, err := r.SessionsRSSMB(context.Background(), []string{"session-a", "session-b"})
 
-	assert.Equal(t, 3, r.GetSessionRSSCalls())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(64), rssByName["session-a"])
+	assert.Equal(t, int64(96), rssByName["session-b"])
+	assert.Equal(t, 1, r.GetSessionRSSCalls())
+	assert.ElementsMatch(t, []string{"session-a", "session-b"}, r.LastRSSNames())
 }
 
 // TestTmuxPIDResolver_should_returnPIDs_When_TmuxSucceeds verifies
@@ -72,19 +78,19 @@ func TestGopsutilReader_ProcessMemory_should_capAt50PIDs_When_DeepProcessTree(t 
 func TestTmuxPIDResolver_should_returnPIDs_When_TmuxSucceeds(t *testing.T) {
 	t.Parallel()
 	r := &memorytest.FakeReader{RSSBySession: map[string]int64{"sess": 512}}
-	mb, err := r.SessionRSSMB("sess")
+	rssByName, err := r.SessionsRSSMB(context.Background(), []string{"sess"})
 	assert.NoError(t, err)
-	assert.Equal(t, int64(512), mb)
+	assert.Equal(t, int64(512), rssByName["sess"])
 }
 
 // TestTmuxPIDResolver_should_returnEmptySlice_When_TmuxSessionNotFound verifies
-// SessionRSSMB returns 0 when the session is not in RSSBySession.
+// SessionsRSSMB returns 0 for a name not in RSSBySession.
 func TestTmuxPIDResolver_should_returnEmptySlice_When_TmuxSessionNotFound(t *testing.T) {
 	t.Parallel()
 	r := &memorytest.FakeReader{RSSBySession: map[string]int64{}}
-	mb, err := r.SessionRSSMB("missing")
+	rssByName, err := r.SessionsRSSMB(context.Background(), []string{"missing"})
 	assert.NoError(t, err)
-	assert.Equal(t, int64(0), mb)
+	assert.Equal(t, int64(0), rssByName["missing"])
 }
 
 // TestFakeReader_CallCounting verifies GetSystemMemoryCalls tracks correctly.

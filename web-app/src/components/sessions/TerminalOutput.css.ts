@@ -1,5 +1,5 @@
 import { style, keyframes, globalStyle } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme.css";
+import { vars, zIndex } from "@/styles/theme.css";
 
 const pulse = keyframes({
   "0%, 100%": { opacity: 1 },
@@ -532,6 +532,118 @@ globalStyle(`${hardFailedBanner} button`, {
 
 globalStyle(`${hardFailedBanner} button:hover`, {
   background: "rgba(255,255,255,0.2)",
+});
+
+// Shared top-centered pill positioning for the Story 1.4.5/1.4.2 surfaces
+// below -- both reuse reconnectingBanner's shape/position, so the repeated
+// position/transform/zIndex block is factored out once here.
+const topCenteredPillPosition = {
+  position: "absolute",
+  top: vars.space["2"],
+  left: "50%",
+  transform: "translateX(-50%)",
+  zIndex: zIndex.terminalOverlayPill,
+} as const;
+
+// Story 1.4.5 — scroll-forward loading pill (design/ux.md Surface 1). Reuses
+// reconnectingBanner's exact shape; flex row + gap accommodates the stalled
+// Cancel button that only renders once the request has been pending 8s.
+export const scrollLoadingPill = style({
+  ...topCenteredPillPosition,
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["2"],
+  padding: `${vars.space["1"]} ${vars.space["4"]}`,
+  borderRadius: "9999px",
+  background: vars.color.modalBackground,
+  color: vars.color.textPrimary,
+  fontSize: "0.8125rem",
+  textAlign: "center",
+  whiteSpace: "nowrap",
+});
+
+export const scrollLoadingPillCancel = style({
+  background: "transparent",
+  border: `1px solid ${vars.color.textPrimary}`,
+  borderRadius: "4px",
+  color: vars.color.textPrimary,
+  padding: "2px 8px",
+  cursor: "pointer",
+  fontSize: "0.75rem",
+  pointerEvents: "auto",
+});
+
+// Story 1.4.2 — ScrollSourceIndicator banner (design/ux.md Surface 2). Same
+// positioning family as scrollLoadingPill but persistent (no auto-dismiss
+// timer) — TerminalOutput.tsx only renders it while a forwarded page of
+// history is showing, never alongside the pill (the pill unconditionally
+// clears before any outcome renders).
+export const scrollSourceIndicator = style({
+  ...topCenteredPillPosition,
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["4"]}`,
+  borderRadius: "9999px",
+  background: vars.color.modalBackground,
+  color: vars.color.textPrimary,
+  fontSize: "0.8125rem",
+  textAlign: "center",
+  whiteSpace: "nowrap",
+  pointerEvents: "none",
+});
+
+// Story 1.4.3 — Blocked-outcome toast (design/ux.md Surface 3). Deliberately
+// warningBg/warningText, not errorDark/textInverse — this is a policy
+// boundary the app is enforcing by design, not a failure state.
+export const blockedToast = style({
+  position: "fixed",
+  bottom: vars.space["6"],
+  left: "50%",
+  transform: "translateX(-50%)",
+  // Same page-level fixed-position layer as InputDropBadge's toast.
+  zIndex: zIndex.floatingTerminalUI,
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["3"],
+  maxWidth: "min(90vw, 420px)",
+  padding: `${vars.space["2"]} ${vars.space["4"]}`,
+  borderRadius: vars.radii.md,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  fontSize: "0.8125rem",
+  lineHeight: 1.4,
+  boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+});
+
+export const blockedToastButton = style({
+  flexShrink: 0,
+  background: "transparent",
+  border: `1px solid ${vars.color.warningText}`,
+  borderRadius: "4px",
+  color: vars.color.warningText,
+  padding: "2px 8px",
+  cursor: "pointer",
+  fontSize: "0.75rem",
+});
+
+// Story 1.4.4 — "No more history available" line (design/ux.md Surface 4,
+// Task 1.4.4b). Uses terminalTextMuted (fixed across every UI theme) rather
+// than the theme-varying textMuted token: this line sits directly on the
+// terminal viewport's own always-dark background (vars.color.terminalBackground,
+// #1e1e1e in every theme — see theme.css.ts's terminalTokens), and
+// textMuted's light-theme value (#6b6b6b) measures only 3.13:1 against it,
+// failing WCAG AA (Task 1.4.4d) — terminalTextMuted (#9ca3af) measures 6.57:1.
+export const noMoreHistoryLine = style({
+  position: "absolute",
+  top: vars.space["2"],
+  left: "50%",
+  transform: "translateX(-50%)",
+  zIndex: zIndex.terminalOverlay,
+  color: vars.color.terminalTextMuted,
+  fontSize: "0.75rem",
+  whiteSpace: "nowrap",
+  pointerEvents: "none",
 });
 
 // Global styles for xterm.js selectors within the terminal class

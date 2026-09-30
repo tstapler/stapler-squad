@@ -1,15 +1,18 @@
 "use client";
 // +feature: session-change-program session-pin-toggle
 
-import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
+import { useState, useRef, useContext, useEffect, useLayoutEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
 import { MoreHorizontal, Pin, PinOff } from "lucide-react";
 import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionStatus } from "@/gen/session/v1/types_pb";
 import { TagEditor } from "./TagEditor";
+import { CreatePullRequestModal } from "./CreatePullRequestModal";
+import { AnalyticsContext } from "@/lib/contexts/AnalyticsContext";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
 import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
+import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import {
   desktopActions,
   overflowContainer,
@@ -50,16 +53,18 @@ export interface SessionActionsOverflowProps {
   onResumeFromHibernation?: () => void;
   onDelete?: () => Promise<void> | void;
   onRestart?: (sessionId: string) => Promise<boolean | void>;
+  /** Immediately restart a session's retry policy, bypassing any pending backoff
+   *  delay — including from PERMANENTLY_FAILED (session-retry-backoff, AC6). */
+  onRetryNow?: (sessionId: string) => Promise<boolean | void>;
   onClone?: () => void;
   onOpenInNewPane?: () => void;
   onNewWorkspace?: () => void;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onTogglePinned?: (sessionId: string, pinned: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
-  onSteerAutonomousSession?: (sessionId: string, message: string) => void;
+  onSteerAutonomousSession?: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   /** Trigger rename flow in parent (e.g. SessionDetail opens its rename modal) */
@@ -68,6 +73,47 @@ export interface SessionActionsOverflowProps {
   onWorkspaceSwitchRequest?: () => void;
   /** Save a new program for the session. Empty string = system default. */
   onChangeProgram?: (sessionId: string, program: string) => Promise<void> | void;
+}
+
+const VIEWPORT_MARGIN = 8;
+
+/** Top for a fixed menu: below the anchor if it fits, else flipped above it, clamped on-screen. */
+export function fitMenuTop(top: number, anchorTop: number, height: number, viewportHeight: number): number {
+  if (top + height <= viewportHeight - VIEWPORT_MARGIN) return top;
+  return Math.max(VIEWPORT_MARGIN, anchorTop - height);
+}
+
+/** Collapsible group inside the overflow menu; one section open at a time keeps the menu short. */
+function MenuSection({ id, label, openId, onToggle, children }: {
+  id: string; label: string; openId: string | null; onToggle: (id: string) => void; children: React.ReactNode;
+}) {
+  const open = openId === id;
+  return (
+    <>
+      <button
+        role="menuitem"
+        className={overflowMenuItem}
+        aria-expanded={open}
+        aria-controls={`overflow-section-${id}`}
+        onClick={(e) => { e.stopPropagation(); onToggle(id); }}
+        style={{ justifyContent: "space-between" }}
+      >
+        <span>{label}</span>
+        <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && <div id={`overflow-section-${id}`} role="group" aria-label={label} style={{ paddingLeft: 8 }}>{children}</div>}
+    </>
+  );
+}
+
+/** Stable action label from a menu item's visible text: "🔀 Create PR" -> "create-pr", "View PR #12" -> "view-pr". */
+export function menuActionLabel(text: string): string {
+  return text
+    .replace(/#\d+/g, "")
+    .replace(/[^\p{L}\p{N}\s-]/gu, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-");
 }
 
 const menuSeparator = (
@@ -84,11 +130,11 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onResumeFromHibernation,
   onDelete,
   onRestart,
+  onRetryNow,
   onClone,
   onOpenInNewPane,
   onNewWorkspace,
   onCreateCheckpoint,
-  onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
   onTogglePinned,
@@ -106,12 +152,34 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const isHibernated = session.status === SessionStatus.HIBERNATED;
   const isCreating = session.status === SessionStatus.CREATING;
   const isStopped = session.status === SessionStatus.STOPPED;
+  // session-retry-backoff: a terminal give-up state distinct from STOPPED —
+  // never eligible for Resume/Restart, only "Retry now" (AC6).
+  const isPermanentlyFailed = session.status === SessionStatus.PERMANENTLY_FAILED;
+  // A session mid-automated-backoff-wait (scheduled retry pending, not yet
+  // exhausted) — "Retry now" here skips the wait rather than reviving a
+  // terminal state.
+  const isMidBackoffWait = !isPermanentlyFailed && !!session.nextRetryAt;
+
+  // Optional (not useAnalytics) so the menu still renders outside an AnalyticsContextProvider.
+  const track = useContext(AnalyticsContext)?.track;
+  const trackMenu = useCallback((name: string, action?: string) => {
+    track?.({
+      name, category: "user_action", component: "SessionActionsOverflow", sessionId: session.id,
+      ...(action ? { labels: { action } } : {}),
+    });
+  }, [track, session.id]);
 
   const [showOverflow, setShowOverflow] = useState(false);
-  const [menuPos, setMenuPos] = useState({ top: 0, right: 0 });
+  const [menuPos, setMenuPos] = useState({ top: 0, right: 0, anchorTop: 0 });
+  const [openSection, setOpenSection] = useState<string | null>(null);
+  const toggleSection = useCallback((id: string) => setOpenSection((cur) => (cur === id ? null : id)), []);
+  const [fitTop, setFitTop] = useState<number | null>(null);
   const [isRestartConfirmOpen, setIsRestartConfirmOpen] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
   const [restartError, setRestartError] = useState("");
+  const [isRetryConfirmOpen, setIsRetryConfirmOpen] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [retryError, setRetryError] = useState("");
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
@@ -120,8 +188,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [isCreatingCheckpoint, setIsCreatingCheckpoint] = useState(false);
   const [checkpointError, setCheckpointError] = useState("");
   const [isTagEditorOpen, setIsTagEditorOpen] = useState(false);
-  const [isRunningOneShot, setIsRunningOneShot] = useState(false);
-  const [oneShotResult, setOneShotResult] = useState<string | null>(null);
+  const [isCreatePrOpen, setIsCreatePrOpen] = useState(false);
   const [isAutonomousConfirmOpen, setIsAutonomousConfirmOpen] = useState(false);
   // Auto-approve toggle restart notice. SetAutoApprove (session/instance_actor_setters.go)
   // restarts an Active session unconditionally in EITHER direction (the flag is baked into
@@ -131,6 +198,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [pendingAutoApproveValue, setPendingAutoApproveValue] = useState(false);
   const [isSteerOpen, setIsSteerOpen] = useState(false);
   const [steerMessage, setSteerMessage] = useState("");
+  const [isSteering, setIsSteering] = useState(false);
   const [isClearConversationConfirmOpen, setIsClearConversationConfirmOpen] = useState(false);
   const [isProgramPickerOpen, setIsProgramPickerOpen] = useState(false);
   const [programPickerValue, setProgramPickerValue] = useState(session.program || "");
@@ -139,6 +207,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [isProgramRestartConfirmOpen, setIsProgramRestartConfirmOpen] = useState(false);
   const [pendingProgramValue, setPendingProgramValue] = useState("");
   const availablePrograms = useAvailablePrograms();
+  const { draftPullRequest, createPullRequest } = useSessionServiceContext();
 
   // Keep the picker's selected value in sync with the session while the dialog is
   // open — otherwise a concurrent server-side change (e.g. the capacity-monitor
@@ -152,14 +221,20 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const overflowButtonRef = useRef<HTMLButtonElement>(null);
   const overflowMenuRef = useRef<HTMLDivElement>(null);
   const restartDialogRef = useRef<HTMLDivElement>(null);
+  const retryDialogRef = useRef<HTMLDivElement>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const checkpointDialogRef = useRef<HTMLDivElement>(null);
   const autonomousConfirmDialogRef = useRef<HTMLDivElement>(null);
   const autoApproveConfirmDialogRef = useRef<HTMLDivElement>(null);
   const steerDialogRef = useRef<HTMLDivElement>(null);
+  // Focus target while a steer RPC is in flight — see the onKeyDown/onClick
+  // handlers below for why focus is moved here explicitly rather than left
+  // to the browser's implicit auto-blur when the input becomes disabled.
+  const steerCancelButtonRef = useRef<HTMLButtonElement>(null);
   const clearConversationDialogRef = useRef<HTMLDivElement>(null);
   const programPickerDialogRef = useRef<HTMLDivElement>(null);
   const programConfirmDialogRef = useRef<HTMLDivElement>(null);
+  const createPrTriggerRef = useRef<HTMLButtonElement>(null);
 
   // All dialogs/menus spawned from this component return focus to overflowButtonRef
   // ("···") rather than the menu-item button that opened them — menu items unmount
@@ -169,6 +244,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   // for the component's whole lifetime.
   useFocusTrap(overflowMenuRef, showOverflow, overflowButtonRef);
   useFocusTrap(restartDialogRef, isRestartConfirmOpen, overflowButtonRef);
+  useFocusTrap(retryDialogRef, isRetryConfirmOpen, overflowButtonRef);
   useFocusTrap(deleteDialogRef, isDeleteConfirmOpen, overflowButtonRef);
   useFocusTrap(checkpointDialogRef, isCheckpointOpen, overflowButtonRef);
   useFocusTrap(autonomousConfirmDialogRef, isAutonomousConfirmOpen, overflowButtonRef);
@@ -177,6 +253,12 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   useFocusTrap(clearConversationDialogRef, isClearConversationConfirmOpen, overflowButtonRef);
   useFocusTrap(programPickerDialogRef, isProgramPickerOpen, overflowButtonRef);
   useFocusTrap(programConfirmDialogRef, isProgramRestartConfirmOpen, overflowButtonRef);
+
+  useLayoutEffect(() => {
+    if (!showOverflow || !overflowMenuRef.current) return;
+    const { height } = overflowMenuRef.current.getBoundingClientRect();
+    setFitTop(fitMenuTop(menuPos.top, menuPos.anchorTop, height, window.innerHeight));
+  }, [showOverflow, menuPos, openSection]);
 
   useEffect(() => {
     if (showOverflow && overflowMenuRef.current) {
@@ -201,38 +283,61 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
 
   useImperativeHandle(ref, () => ({
     openAt(x: number, y: number) {
-      setMenuPos({ top: y, right: window.innerWidth - x });
+      setOpenSection(null);
+      trackMenu("session_menu_open");
+      setMenuPos({ top: y, right: window.innerWidth - x, anchorTop: y });
       setShowOverflow(true);
     },
-  }), []);
+  }), [trackMenu]);
 
   const openMenu = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (!overflowButtonRef.current) return;
     const rect = overflowButtonRef.current.getBoundingClientRect();
+    setOpenSection(null);
+    trackMenu("session_menu_open");
     setMenuPos({
       top: rect.bottom + 4,
       right: window.innerWidth - rect.right,
+      anchorTop: rect.top - 4,
     });
     setShowOverflow((o) => !o);
-  }, []);
+  }, [trackMenu]);
+
+  // sendSteerMessage is the steer dialog's single submit path, shared by the
+  // input's Enter-key handler and the Send button's onClick — both need the
+  // identical sequence (disable input, move focus off it before the browser
+  // auto-blurs it, deliver, then close/clear only on success). The try/catch
+  // (in addition to the existing finally) treats a rejected promise the same
+  // as an onSteerAutonomousSession that resolves to false — without it, a
+  // caller that rejects rather than resolving false would surface as an
+  // unhandled promise rejection from inside a DOM event handler.
+  const sendSteerMessage = useCallback(async () => {
+    const message = steerMessage.trim();
+    if (!message || isSteering) return;
+    setIsSteering(true);
+    // Move focus to Cancel *before* the input's disabled prop takes effect,
+    // so focus stays inside the dialog instead of the browser auto-blurring
+    // it to document.body — that auto-blur would break both the Escape
+    // handler and useFocusTrap's Tab-cycling (its focusable-elements
+    // snapshot isn't re-evaluated when the input drops out of the tab
+    // order).
+    steerCancelButtonRef.current?.focus();
+    try {
+      const ok = await onSteerAutonomousSession?.(session.id, message);
+      if (ok !== false) {
+        setIsSteerOpen(false);
+        setSteerMessage("");
+      }
+    } catch {
+      // Treat a rejected promise the same as a resolved `false` — the steer
+      // failed, so leave the dialog open with the message intact.
+    } finally {
+      setIsSteering(false);
+    }
+  }, [steerMessage, isSteering, onSteerAutonomousSession, session.id]);
 
   const close = () => setShowOverflow(false);
-
-  const handleRunOneShot = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!onRunOneShot) return;
-    setIsRunningOneShot(true);
-    setOneShotResult(null);
-    try {
-      await onRunOneShot(session.id);
-      setOneShotResult("done");
-    } catch {
-      setOneShotResult("error");
-    } finally {
-      setIsRunningOneShot(false);
-    }
-  };
 
   const handleRestartConfirm = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -245,6 +350,34 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
       setRestartError(err instanceof Error ? err.message : "Failed to restart session.");
     } finally {
       setIsRestarting(false);
+    }
+  };
+
+  const handleRetryConfirm = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsRetrying(true);
+    setRetryError("");
+    try {
+      const success = await onRetryNow?.(session.id);
+      // onRetryNow (useSessionService's retrySession) catches all errors
+      // internally and resolves to false on failure rather than throwing, so
+      // the result must be checked explicitly — only close the dialog on
+      // success, otherwise surface an error instead of silently dismissing it.
+      if (success === false) {
+        setRetryError("Failed to retry session.");
+      } else {
+        setIsRetryConfirmOpen(false);
+      }
+    } catch (err) {
+      // A concurrent retry already in flight (backend CAS guard) is not a
+      // failure — the automated path already has this covered.
+      if (err instanceof Error && /already in progress|failed_precondition/i.test(err.message)) {
+        setIsRetryConfirmOpen(false);
+      } else {
+        setRetryError(err instanceof Error ? err.message : "Failed to retry session.");
+      }
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -281,17 +414,13 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     }
   };
 
-  // Group visibility booleans — used to decide whether to render separators.
-  const hasGroup1 = !!(
-    (!(isPaused || isReady) && !isStopped && onResume) ||
-    (isRunning && !isCreating && onPause) ||
-    (isRunning && onHibernate) ||
-    (isHibernated && onResumeFromHibernation)
-  );
-  const hasGroup2 = !!(onRunOneShot || onCreateCheckpoint);
-  const hasGroup3 = !!(onRenameRequest || onChangeProgram || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
-  const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode || onToggleAutoApprove || onTogglePinned);
-  const hasGroup5 = !!(onClearConversationState || (onRestart && !isCreating) || onDelete);
+  // Accordion section visibility. Resume/Pause/Hibernate, Change Program and Delete stay top-level.
+  // Create/View PR item is now always rendered (no longer gated on a
+  // caller-supplied callback prop — see Task 2.3.1a).
+  const hasGroup2 = true;
+  const hasOrganize = !!(onRenameRequest || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
+  const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode || onToggleAutoApprove || (onSteerAutonomousSession && session.autonomousMode));
+  const hasMore = !!(onClearConversationState || (onRestart && !isCreating) || (onRetryNow && (isPermanentlyFailed || isMidBackoffWait)));
 
   return (
     <>
@@ -325,6 +454,37 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                 {isRestarting ? "Restarting..." : "Restart"}
               </button>
               <button onClick={(e) => { e.stopPropagation(); setIsRestartConfirmOpen(false); setRestartError(""); }} disabled={isRestarting} className={cancelButton}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {isRetryConfirmOpen && createPortal(
+        <div className={confirmDialog} onClick={(e) => { e.stopPropagation(); setIsRetryConfirmOpen(false); }}>
+          <div
+            ref={retryDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="retryDialogTitle"
+            className={dialogContent}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key === "Escape") setIsRetryConfirmOpen(false); }}
+          >
+            <h3 id="retryDialogTitle">Retry Session</h3>
+            <p>
+              {isPermanentlyFailed
+                ? `This session gave up after ${session.retryMaxAttempts} attempt${session.retryMaxAttempts === 1 ? "" : "s"} — retry anyway?`
+                : "Skip the wait and retry now?"}
+            </p>
+            {retryError && <p className={errorMessage}>{retryError}</p>}
+            <div className={dialogActions}>
+              <button onClick={handleRetryConfirm} disabled={isRetrying} className={submitButton}>
+                {isRetrying ? "Retrying..." : "Retry now"}
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); setIsRetryConfirmOpen(false); setRetryError(""); }} disabled={isRetrying} className={cancelButton}>
                 Cancel
               </button>
             </div>
@@ -507,6 +667,13 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
             aria-labelledby="steerDialogTitle"
             className={dialogContent}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              // Escape lives on the dialog wrapper (not just the input) so it
+              // keeps working while isSteering disables the input — a disabled
+              // element stops receiving keydown in most browsers, which would
+              // otherwise make the dialog unclosable by keyboard mid-flight.
+              if (e.key === "Escape") { setIsSteerOpen(false); setSteerMessage(""); }
+            }}
           >
             <h3 id="steerDialogTitle">Give Direction</h3>
             <p>Send a steering instruction to &quot;{session.title}&quot;:</p>
@@ -515,33 +682,40 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               value={steerMessage}
               onChange={(e) => setSteerMessage(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && steerMessage.trim()) {
-                  onSteerAutonomousSession?.(session.id, steerMessage.trim());
-                  setIsSteerOpen(false);
-                  setSteerMessage("");
+                if (e.key === "Enter" && steerMessage.trim() && !isSteering) {
+                  // Without preventDefault + sendSteerMessage's own focus
+                  // move to Cancel, the browser's default Enter-key handling
+                  // re-targets the now-focused Cancel button and synthesizes
+                  // a click on it once this handler returns — closing the
+                  // dialog immediately instead of sending. Confirmed via a
+                  // real-browser Playwright repro: Cancel's onClick fired
+                  // right after setIsSteering(true), before
+                  // onSteerAutonomousSession had even resolved.
+                  e.preventDefault();
+                  void sendSteerMessage();
                 }
-                if (e.key === "Escape") { setIsSteerOpen(false); setSteerMessage(""); }
               }}
               placeholder="e.g. Focus on the UI tests first"
               className={renameInput}
               autoFocus
+              disabled={isSteering}
             />
             <div className={dialogActions}>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (steerMessage.trim()) {
-                    onSteerAutonomousSession?.(session.id, steerMessage.trim());
-                    setIsSteerOpen(false);
-                    setSteerMessage("");
-                  }
+                  void sendSteerMessage();
                 }}
-                disabled={!steerMessage.trim()}
+                disabled={!steerMessage.trim() || isSteering}
                 className={submitButton}
               >
-                Send
+                {isSteering ? "Sending…" : "Send"}
               </button>
-              <button onClick={(e) => { e.stopPropagation(); setIsSteerOpen(false); setSteerMessage(""); }} className={cancelButton}>
+              <button
+                ref={steerCancelButtonRef}
+                onClick={(e) => { e.stopPropagation(); setIsSteerOpen(false); setSteerMessage(""); }}
+                className={cancelButton}
+              >
                 Cancel
               </button>
             </div>
@@ -580,6 +754,15 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
         document.body
       )}
 
+      <CreatePullRequestModal
+        session={session}
+        isOpen={isCreatePrOpen}
+        onClose={() => setIsCreatePrOpen(false)}
+        draftPullRequest={draftPullRequest}
+        createPullRequest={createPullRequest}
+        triggerRef={createPrTriggerRef}
+      />
+
       <div className={desktopActions}>
         {showPrimaryAction && (isPaused || isReady) && (
           <button
@@ -612,6 +795,18 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
             <span aria-hidden="true">🔄</span> Restart
           </button>
         )}
+        {/* session-retry-backoff AC6: primary Retry now button for PERMANENTLY_FAILED,
+            same slot the Restart button uses for isStopped above. */}
+        {showPrimaryAction && isPermanentlyFailed && onRetryNow && (
+          <button
+            className={actionButton}
+            onClick={(e) => { e.stopPropagation(); setIsRetryConfirmOpen(true); }}
+            aria-label={`Retry permanently-failed session ${session.title}`}
+            title="Session gave up after repeated failures — retry now"
+          >
+            <span aria-hidden="true">🔁</span> Retry now
+          </button>
+        )}
 
         <div ref={overflowContainerRef} className={overflowContainer}>
           <button
@@ -631,14 +826,19 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               ref={overflowMenuRef}
               id={`overflow-menu-${session.id}`}
               className={overflowMenu}
-              style={{ top: menuPos.top, right: menuPos.right }}
+              style={{ top: fitTop ?? menuPos.top, right: menuPos.right }}
               role="menu"
               aria-labelledby={`overflow-btn-${session.id}`}
+              // Capture phase: each item's own onClick calls stopPropagation, so a bubbling handler never sees the click.
+              onClickCapture={(e) => {
+                const item = (e.target as HTMLElement).closest('[role^="menuitem"]');
+                if (item) trackMenu("session_menu_click", menuActionLabel(item.textContent ?? ""));
+              }}
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => { if (e.key === "Escape") setShowOverflow(false); }}
             >
               {/* Group 1: Session control */}
-              {!(isPaused || isReady) && !isStopped && onResume && (
+              {!(isPaused || isReady) && !isStopped && !isPermanentlyFailed && onResume && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onResume(); }}
                   aria-label={`Resume session ${session.title}`}
@@ -672,16 +872,69 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                 </button>
               )}
 
-              {/* Group 2: Workflow */}
-              {hasGroup1 && hasGroup2 && menuSeparator}
-              {onRunOneShot && (
-                <button role="menuitem" className={overflowMenuItem}
-                  onClick={(e) => { close(); handleRunOneShot(e); }}
-                  disabled={isRunningOneShot}
-                  aria-label={`Create PR for session ${session.title}`}
+              {onTogglePinned && (
+                <button
+                  role="menuitemcheckbox"
+                  aria-checked={session.pinned}
+                  className={`${overflowMenuItem} ${overflowMenuItemTouch}`}
+                  data-testid="session-pin-toggle"
+                  aria-label={session.pinned ? `Unpin ${session.title}` : `Pin ${session.title}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    close();
+                    onTogglePinned(session.id, !session.pinned);
+                  }}
                 >
-                  <span aria-hidden="true">🚀</span>{" "}
-                  {isRunningOneShot ? "Creating PR…" : oneShotResult === "done" ? "✅ PR Created" : oneShotResult === "error" ? "❌ Retry?" : "Create PR"}
+                  {session.pinned ? <PinOff aria-hidden="true" size={16} /> : <Pin aria-hidden="true" size={16} />}{" "}
+                  {session.pinned ? "Unpin" : "Pin"}
+                </button>
+              )}
+              {onChangeProgram && (
+                <button role="menuitem" className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); setProgramPickerValue(session.program || ""); setProgramError(""); setIsProgramPickerOpen(true); }}
+                  aria-label={`Change program for session ${session.title}`}
+                >
+                  <span aria-hidden="true">⚙️</span> Change Program
+                </button>
+              )}
+              {onDelete && (
+                <button role="menuitem" className={`${overflowMenuItem} ${overflowMenuItemDanger}`}
+                  onClick={(e) => { e.stopPropagation(); close(); setIsDeleteConfirmOpen(true); }}
+                  disabled={isDeleting}
+                  aria-label={`Delete session ${session.title}`}
+                >
+                  {isDeleting ? "Deleting..." : <><span aria-hidden="true">🗑️</span> Delete</>}
+                </button>
+              )}
+
+              {(hasGroup2 || hasOrganize || hasGroup4 || hasMore) && menuSeparator}
+              {hasGroup2 && (
+                <MenuSection id="workflow" label="Workflow" openId={openSection} onToggle={toggleSection}>
+              {session.githubPrUrl ? (
+                <a
+                  href={session.githubPrUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  role="menuitem"
+                  className={overflowMenuItem}
+                  aria-label={`PR #${session.githubPrNumber}: ${session.title}`}
+                  data-testid="github-pr-link"
+                  onClick={(e) => { e.stopPropagation(); close(); }}
+                >
+                  <span aria-hidden="true">✅</span> View PR #{session.githubPrNumber}
+                </a>
+              ) : (
+                <button
+                  ref={createPrTriggerRef}
+                  role="menuitem"
+                  className={overflowMenuItem}
+                  disabled={!session.hasCommitsAhead}
+                  title={session.hasCommitsAhead ? undefined : "No commits ahead of main yet"}
+                  onClick={(e) => { e.stopPropagation(); close(); setIsCreatePrOpen(true); }}
+                  aria-label={`Create PR for session ${session.title}`}
+                  data-testid={`create-pr-trigger-${session.id}`}
+                >
+                  <span aria-hidden="true">🔀</span> Create PR
                 </button>
               )}
               {onCreateCheckpoint && (
@@ -694,23 +947,16 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">📍</span> Checkpoint
                 </button>
               )}
-
-              {/* Group 3: Organization */}
-              {(hasGroup1 || hasGroup2) && hasGroup3 && menuSeparator}
+                </MenuSection>
+              )}
+              {hasOrganize && (
+                <MenuSection id="organize" label="Organize" openId={openSection} onToggle={toggleSection}>
               {onRenameRequest && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onRenameRequest(); }}
                   aria-label={`Rename session ${session.title}`}
                 >
                   <span aria-hidden="true">✏️</span> Rename
-                </button>
-              )}
-              {onChangeProgram && (
-                <button role="menuitem" className={overflowMenuItem}
-                  onClick={(e) => { e.stopPropagation(); setProgramPickerValue(session.program || ""); setProgramError(""); setIsProgramPickerOpen(true); }}
-                  aria-label={`Change program for session ${session.title}`}
-                >
-                  <span aria-hidden="true">⚙️</span> Change Program
                 </button>
               )}
               {onClone && (
@@ -753,9 +999,10 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">⎇</span> Switch Workspace
                 </button>
               )}
-
-              {/* Group 4: Mode toggles — auto-resume and autonomous mode */}
-              {(hasGroup1 || hasGroup2 || hasGroup3) && hasGroup4 && menuSeparator}
+                </MenuSection>
+              )}
+              {hasGroup4 && (
+                <MenuSection id="modes" label="Modes" openId={openSection} onToggle={toggleSection}>
               {onSetRateLimitEnabled && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onSetRateLimitEnabled(session.id, !session.rateLimitEnabled); }}
@@ -763,23 +1010,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                 >
                   <span aria-hidden="true">{session.rateLimitEnabled ? "⏸" : "▶"}</span>{" "}
                   {session.rateLimitEnabled ? "Disable auto-resume" : "Enable auto-resume"}
-                </button>
-              )}
-              {onTogglePinned && (
-                <button
-                  role="menuitemcheckbox"
-                  aria-checked={session.pinned}
-                  className={`${overflowMenuItem} ${overflowMenuItemTouch}`}
-                  data-testid="session-pin-toggle"
-                  aria-label={session.pinned ? `Unpin ${session.title}` : `Pin ${session.title}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    close();
-                    onTogglePinned(session.id, !session.pinned);
-                  }}
-                >
-                  {session.pinned ? <PinOff aria-hidden="true" size={16} /> : <Pin aria-hidden="true" size={16} />}{" "}
-                  {session.pinned ? "Unpin" : "Pin"}
                 </button>
               )}
               {onToggleAutonomousMode && (
@@ -843,9 +1073,10 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   {session.autoApprove ? "Disable auto-approve" : "Enable auto-approve"}
                 </button>
               )}
-
-              {/* Group 5: Destructive */}
-              {(hasGroup1 || hasGroup2 || hasGroup3 || hasGroup4) && hasGroup5 && menuSeparator}
+                </MenuSection>
+              )}
+              {hasMore && (
+                <MenuSection id="more" label="More" openId={openSection} onToggle={toggleSection}>
               {/* UX-003: Clear Conversation — calls handler directly without confirmation dialog */}
               {onClearConversationState && (
                 <button
@@ -868,14 +1099,17 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">🔄</span> Restart
                 </button>
               )}
-              {onDelete && (
-                <button role="menuitem" className={`${overflowMenuItem} ${overflowMenuItemDanger}`}
-                  onClick={(e) => { e.stopPropagation(); close(); setIsDeleteConfirmOpen(true); }}
-                  disabled={isDeleting}
-                  aria-label={`Delete session ${session.title}`}
+              {onRetryNow && (isPermanentlyFailed || isMidBackoffWait) && (
+                <button
+                  role="menuitem"
+                  className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); close(); setIsRetryConfirmOpen(true); }}
+                  aria-label={`Retry session ${session.title} now`}
                 >
-                  {isDeleting ? "Deleting..." : <><span aria-hidden="true">🗑️</span> Delete</>}
+                  <span aria-hidden="true">🔁</span> Retry now
                 </button>
+              )}
+                </MenuSection>
               )}
             </div>,
             document.body

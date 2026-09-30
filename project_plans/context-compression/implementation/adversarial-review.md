@@ -1,7 +1,24 @@
 # Adversarial Review: context-compression
 
 **Date**: 2026-08-06
-**Verdict**: BLOCKED
+**Verdict**: BLOCKED (superseded — see Resolution below)
+
+## Resolution (2026-08-16 triage pass)
+
+Re-reading `implementation/plan.md` against this review during a 2026-08-16 pre-implementation
+triage found the field-number blocker (originally reported as "28 and 72") already reads `28`
+and `74` in the current file — apparently patched after this review ran but before the review
+doc was updated. The remaining three Blockers were fixed directly in `plan.md` this pass:
+LLM-call timeout (Task 1.5.1c), stale-`GENERATING` reconciliation (Task 2.2.1a), and an
+`ERROR`-state UI path (Tasks 3.2.1a/3.3.1). The architecture-review's `useSessionService.ts`
+threading Blocker was also fixed (new Task 3.2.1c). **However, field 74 (`Session`) and field
+28 (`CreateSessionRequest`) are themselves now stale** — `proto/session/v1/types.proto`'s
+`Session` message has grown to field `75` and `session.proto`'s `CreateSessionRequest` to field
+`30` as of this triage (confirmed via `grep`, 2026-08-16), i.e. real proto drift in the 10 days
+since this plan was written. The plan's own Migration Plan note already instructs re-verifying
+the next-free field number at implementation time rather than trusting a hardcoded value — that
+instruction now needs to be followed for real, not read as a hedge. See `validation.md` for the
+full currency check. Remaining Concerns/Minors below are unchanged and non-blocking.
 
 ## Blockers
 

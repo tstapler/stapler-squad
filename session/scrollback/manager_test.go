@@ -2,6 +2,7 @@ package scrollback
 
 import (
 	"fmt"
+	"math"
 	"testing"
 )
 
@@ -156,5 +157,32 @@ func TestGetScrollbackBefore_LimitLargerThanAvailable(t *testing.T) {
 	}
 	if len(entries) != 3 {
 		t.Fatalf("expected 3 entries (all), got %d", len(entries))
+	}
+}
+
+// TestGetScrollbackBefore_BeforeSeqNearMaxUint64 is the regression test for
+// the gosec G115 fix: beforeSeq is a client-supplied pagination cursor
+// (uint64) used directly as GetScrollback's `limit` int argument, so a
+// value near math.MaxUint64 must be clamped to math.MaxInt before the
+// narrowing conversion instead of wrapping into a negative int limit (which
+// would either panic downstream or silently return zero entries instead of
+// the expected "everything before this cursor" result).
+func TestGetScrollbackBefore_BeforeSeqNearMaxUint64(t *testing.T) {
+	t.Parallel()
+	m := newTestManager(t)
+	appendN(t, m, "sess1", 5)
+
+	entries, err := m.GetScrollbackBefore("sess1", math.MaxUint64, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 5 {
+		t.Fatalf("expected all 5 entries for a beforeSeq near math.MaxUint64, got %d", len(entries))
+	}
+	for i, e := range entries {
+		expectedSeq := uint64(i + 1)
+		if e.Sequence != expectedSeq {
+			t.Errorf("entry[%d].Sequence: want %d, got %d", i, expectedSeq, e.Sequence)
+		}
 	}
 }

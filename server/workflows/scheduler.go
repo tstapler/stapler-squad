@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -29,8 +30,8 @@ type SessionServiceInterface interface {
 // Epic 1.3 — closes the pre-existing bypass where FireNow called CreateSession directly,
 // skipping the same MaxConcurrentBacklogWorkItems check BacklogService's own spawn path
 // enforces). Defined here (consumer-defined), not in server/services, to avoid a
-// server/workflows → server/services import — per .claude/rules/interface-pollution-
-// checklist.md. Satisfied by *services.BacklogService's Admit method.
+// server/workflows → server/services import — per the `interface-pollution-checklist`
+// skill. Satisfied by *services.BacklogService's Admit method.
 type AdmissionGate interface {
 	// Admit reports whether a new trigger-fired session may be created right now.
 	Admit(ctx context.Context) (bool, error)
@@ -46,8 +47,8 @@ type triggerFireEventRecorder interface {
 // triggerRateLimiterGate is the narrow interface Scheduler needs for per-Workflow rate
 // limiting (webhook-triggers Epic 2.4.2) — satisfied by *services.TriggerRateLimiter's
 // Allow method. Defined here (consumer-defined), not in server/services, to avoid a
-// server/workflows -> server/services import — per .claude/rules/interface-pollution-
-// checklist.md.
+// server/workflows -> server/services import — per the `interface-pollution-checklist`
+// skill.
 type triggerRateLimiterGate interface {
 	// Allow reports whether a fire for workflowID is permitted right now.
 	Allow(workflowID uuid.UUID) bool
@@ -252,25 +253,82 @@ func (s *Scheduler) Remove(workflowID string) error {
 // admission/rate-limit/CreateSession/audit logic to FireTrigger with deliveryID=""
 // (FireNow's manual/cron callers have no webhook delivery to attribute the fire to).
 func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (string, error) {
-	prompt := buildTemplatedPrompt(wf, arg)
-	return s.FireTrigger(ctx, wf, prompt, "")
+	title := deriveWorkflowSessionTitle(wf, arg)
+	prompt := buildTemplatedPrompt(wf, arg, title)
+	return s.fireTrigger(ctx, wf, fireParams{renderedPrompt: prompt, title: title})
+}
+
+// defaultWorkflowSessionTitle is the timestamp-based title every workflow fire
+// used unconditionally before deriveWorkflowSessionTitle: still the fallback
+// when arg is empty or isn't a recognizable GitHub reference.
+func defaultWorkflowSessionTitle(wf *ent.Workflow) string {
+	return fmt.Sprintf("%s — %s", wf.Name, time.Now().Format("2006-01-02 15:04"))
+}
+
+// deriveWorkflowSessionTitle picks the initial title for a workflow-fired
+// session. When arg is a GitHub PR/branch/repo reference, the title becomes
+// "owner/repo#N" (or "owner/repo:branch" / "owner/repo") — the same
+// owner/repo#number convention create_session_for_pr already uses (see
+// server/mcp/tools_github.go) — so a session like a manually-run @pr-review
+// fire is identifiable in the session list immediately, before the agent has
+// had a chance to discover and set a richer title itself via update_session
+// (see the {{session_id}} substitution in buildTemplatedPrompt). Deliberately
+// does not call the GitHub API for the PR's actual title: that would add a
+// network round-trip (and a new failure mode — auth/rate-limit/network) to
+// session creation just for a label the in-session agent can fetch itself,
+// since it already has gh/GitHub tool access once it starts.
+// enterpriseHostnames extracts bare hostnames from config's GitHub Enterprise
+// host entries, mirroring BacklogService.enterpriseHosts
+// (server/services/backlog_service_sync.go) for the same
+// ParseGitHubURLWithHosts call shape.
+func enterpriseHostnames(hosts []config.GitHubEnterpriseHost) []string {
+	names := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		names = append(names, h.Host)
+	}
+	return names
+}
+
+func deriveWorkflowSessionTitle(wf *ent.Workflow, arg string) string {
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" {
+		return defaultWorkflowSessionTitle(wf)
+	}
+	ref, err := session.ParseGitHubURLWithHosts(trimmed, enterpriseHostnames(config.LoadConfig().GetGitHubEnterpriseHosts()))
+	if err != nil {
+		return defaultWorkflowSessionTitle(wf)
+	}
+	switch ref.Type {
+	case session.GitHubRefTypePR:
+		return fmt.Sprintf("%s/%s#%d", ref.Owner, ref.Repo, ref.PRNumber)
+	case session.GitHubRefTypeBranch:
+		return fmt.Sprintf("%s/%s:%s", ref.Owner, ref.Repo, ref.Branch)
+	default:
+		return fmt.Sprintf("%s/%s", ref.Owner, ref.Repo)
+	}
 }
 
 // buildTemplatedPrompt renders wf.Command/wf.InputTemplate with arg substituted
-// for {{input}}, the same interpolation FireNow has always used: command is the
-// primary instruction (required), inputTemplate is appended after interpolation
-// if set, and if only arg is present with no {{input}} placeholder anywhere it's
-// appended as additional context. Factored out of FireNow so
-// FireTriggerChained (webhook-triggers Phase 6) can reuse it for chain-fire's
-// "arg" (the completed prior item's summary) without duplicating the
-// {{input}} substitution rules.
-func buildTemplatedPrompt(wf *ent.Workflow, arg string) string {
+// for {{input}} and sessionTitle substituted for {{session_id}}, the same
+// interpolation FireNow has always used: command is the primary instruction
+// (required), inputTemplate is appended after interpolation if set, and if
+// only arg is present with no {{input}} placeholder anywhere it's appended as
+// additional context. {{session_id}} lets a workflow's command tell the agent
+// its own starting title (the value update_session's session_id/title args
+// need) so it can rename itself once it has better information — e.g. a
+// pr-review workflow whose command ends with "once you've read the PR, call
+// update_session(session_id=\"{{session_id}}\", title=...) with its real
+// title." Factored out of FireNow so FireTriggerChained (webhook-triggers
+// Phase 6) can reuse it for chain-fire's "arg" (the completed prior item's
+// summary) without duplicating the substitution rules.
+func buildTemplatedPrompt(wf *ent.Workflow, arg string, sessionTitle string) string {
 	var parts []string
 	if wf.Command != "" {
 		cmdPart := wf.Command
 		if arg != "" && strings.Contains(cmdPart, "{{input}}") {
 			cmdPart = strings.ReplaceAll(cmdPart, "{{input}}", arg)
 		}
+		cmdPart = strings.ReplaceAll(cmdPart, "{{session_id}}", sessionTitle)
 		parts = append(parts, cmdPart)
 	}
 	argInjectedIntoCommand := wf.Command != "" && strings.Contains(wf.Command, "{{input}}")
@@ -279,6 +337,7 @@ func buildTemplatedPrompt(wf *ent.Workflow, arg string) string {
 		if arg != "" {
 			tmplPart = strings.ReplaceAll(tmplPart, "{{input}}", arg)
 		}
+		tmplPart = strings.ReplaceAll(tmplPart, "{{session_id}}", sessionTitle)
 		parts = append(parts, tmplPart)
 	} else if arg != "" && !argInjectedIntoCommand {
 		parts = append(parts, arg)
@@ -304,7 +363,11 @@ func buildTemplatedPrompt(wf *ent.Workflow, arg string) string {
 // only place a rate-limit/admission-gate rejection ever gets an audit trail — preserved
 // unchanged from FireNow's pre-Phase-3 behavior.
 func (s *Scheduler) FireTrigger(ctx context.Context, wf *ent.Workflow, renderedPrompt string, deliveryID string) (string, error) {
-	return s.fireTrigger(ctx, wf, renderedPrompt, deliveryID, 0)
+	return s.fireTrigger(ctx, wf, fireParams{
+		renderedPrompt: renderedPrompt,
+		deliveryID:     deliveryID,
+		title:          defaultWorkflowSessionTitle(wf),
+	})
 }
 
 // FireTriggerChained fires wf as the next hop in a pipeline chain (webhook-
@@ -317,14 +380,33 @@ func (s *Scheduler) FireTrigger(ctx context.Context, wf *ent.Workflow, renderedP
 // rate-limit/admission-gate rejection still gets its own audit row via
 // fireTrigger's recordGateRejection.
 func (s *Scheduler) FireTriggerChained(ctx context.Context, wf *ent.Workflow, priorItemSummary string, chainDepth int32) (string, error) {
-	prompt := buildTemplatedPrompt(wf, priorItemSummary)
-	return s.fireTrigger(ctx, wf, prompt, "", chainDepth)
+	title := deriveWorkflowSessionTitle(wf, priorItemSummary)
+	prompt := buildTemplatedPrompt(wf, priorItemSummary, title)
+	return s.fireTrigger(ctx, wf, fireParams{
+		renderedPrompt: prompt,
+		chainDepth:     chainDepth,
+		title:          title,
+	})
+}
+
+// fireParams groups fireTrigger's per-fire inputs — grouped into one struct
+// rather than a same-typed-string parameter pile (see
+// .claude/rules/primitive-obsession-checklist.md), mirroring GitHubResolution
+// in session/instance_actor_setters.go.
+type fireParams struct {
+	renderedPrompt string
+	deliveryID     string
+	chainDepth     int32
+	// title is the session's starting title (see
+	// deriveWorkflowSessionTitle/defaultWorkflowSessionTitle).
+	title string
 }
 
 // fireTrigger is FireTrigger/FireTriggerChained's shared implementation —
 // chainDepth is 0 for every non-chained caller (FireTrigger/FireNow) and
 // item.TriggeredByChainDepth+1 for FireTriggerChained.
-func (s *Scheduler) fireTrigger(ctx context.Context, wf *ent.Workflow, renderedPrompt string, deliveryID string, chainDepth int32) (string, error) {
+func (s *Scheduler) fireTrigger(ctx context.Context, wf *ent.Workflow, p fireParams) (string, error) {
+	renderedPrompt, deliveryID, chainDepth, title := p.renderedPrompt, p.deliveryID, p.chainDepth, p.title
 	if s.sessionSvc == nil {
 		return "", fmt.Errorf("session service not available")
 	}
@@ -363,29 +445,21 @@ func (s *Scheduler) fireTrigger(ctx context.Context, wf *ent.Workflow, renderedP
 		}
 	}
 
-	title := fmt.Sprintf("%s — %s", wf.Name, time.Now().Format("2006-01-02 15:04"))
-
 	sessionType := sessionTypeToProto(session.SessionType(wf.SessionType))
 
-	// Resolve a family alias (e.g. "family:sonnet") to a concrete model ID.
-	// Fails closed: an unknown/retired alias aborts the fire rather than
-	// passing the broken "family:xxx" string through to the CLI.
+	// Resolve a family alias (e.g. "family:sonnet") to a concrete model ID and
+	// append it to the program via the shared helper (session.ResolveExecutorProgram),
+	// so this and the work-stage/headless spawn paths can't independently drift on
+	// alias resolution or shell-escaping. Fails closed: an unknown/retired alias
+	// aborts the fire rather than passing the broken "family:xxx" string through
+	// to the CLI.
 	s.mu.Lock()
 	families := s.modelFamilies
 	s.mu.Unlock()
-	resolvedModel, modelErr := ResolveModel(families, wf.Model)
+	program, modelErr := session.ResolveExecutorProgram(wf.AgentType, wf.Model, families)
 	if modelErr != nil {
 		log.Error("[WorkflowScheduler] FireNow: model resolution failed", "slug", wf.Slug, "model", wf.Model, "err", modelErr)
 		return "", fmt.Errorf("resolve model for workflow %q: %w", wf.Slug, modelErr)
-	}
-
-	// Append --model flag when a model is specified and the program is claude (or defaulting to claude).
-	program := wf.AgentType
-	if resolvedModel != "" {
-		isClaudeProgram := program == "" || program == "claude"
-		if isClaudeProgram {
-			program = "claude --model " + resolvedModel
-		}
 	}
 
 	// Deliberately mirrors a manually-created CreateSessionRequest field-for-field

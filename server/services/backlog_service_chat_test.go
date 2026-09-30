@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 func TestDeriveChatItemTitle(t *testing.T) {
@@ -92,7 +93,7 @@ func TestCreateBacklogItemFromChat_should_DelegateToTriggerTriageWithFeedback_Wh
 	// triage.go:2585.
 	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
 	require.NoError(t, trigErr)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5e9, 5e7, "initial triage must complete before refinement")
@@ -105,7 +106,7 @@ func TestCreateBacklogItemFromChat_should_DelegateToTriggerTriageWithFeedback_Wh
 	require.NotNil(t, resp.Msg.Item)
 	assert.True(t, resp.Msg.TriageTriggered)
 
-	require.Eventually(t, func() bool { return pool.callCount() == 2 }, 5e9, 5e7, "refinement turn must trigger a second headless call")
+	wait.RequireEventually(t, func() bool { return pool.callCount() == 2 }, 5e9, 5e7, "refinement turn must trigger a second headless call")
 }
 
 // TestCreateBacklogItemFromChat_should_UseChatModeRetriagePrompt_When_RefiningExistingItem
@@ -131,7 +132,7 @@ func TestCreateBacklogItemFromChat_should_UseChatModeRetriagePrompt_When_Refinin
 
 	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
 	require.NoError(t, trigErr)
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5e9, 5e7, "initial triage must complete before refinement")
@@ -142,7 +143,7 @@ func TestCreateBacklogItemFromChat_should_UseChatModeRetriagePrompt_When_Refinin
 	}))
 	require.NoError(t, chatErr)
 
-	require.Eventually(t, func() bool { return pool.callCount() == 2 }, 5e9, 5e7, "refinement turn must trigger a second headless call")
+	wait.RequireEventually(t, func() bool { return pool.callCount() == 2 }, 5e9, 5e7, "refinement turn must trigger a second headless call")
 	gotPrompt := pool.callAt(1).userPrompt
 	assert.Contains(t, gotPrompt, "AT MOST ONE",
 		"chat-originated refinement must use the tightened one-question-per-turn prompt, got: %s", gotPrompt)

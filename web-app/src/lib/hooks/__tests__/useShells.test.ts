@@ -21,7 +21,7 @@ jest.mock("@connectrpc/connect", () => ({
 
 // Mock the watch transport so no WebSocket is opened
 jest.mock("@/lib/transport/watch-ws-transport", () => ({
-  createWatchTransport: jest.fn(() => ({})),
+  createSessionWatchTransport: jest.fn(() => ({})),
 }));
 
 jest.mock("@/lib/config", () => ({

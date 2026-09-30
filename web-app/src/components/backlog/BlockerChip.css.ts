@@ -26,3 +26,20 @@ export const errorText = style({
   color: vars.color.errorText,
   fontSize: vars.fontSize.sm,
 });
+
+// "+N more" indicator for a multi-reason item (BUG-105) — deliberately
+// neutral/muted rather than reusing a per-reason color, since it doesn't
+// represent any single reason. The full list is available via the
+// element's `title` tooltip (see BlockerChip.tsx's MoreReasonsBadge).
+export const moreCount = style({
+  display: "inline-flex",
+  alignItems: "center",
+  marginLeft: vars.space["1"],
+  padding: `1px ${vars.space["1"]}`,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.normal,
+  color: vars.color.textMuted,
+  background: vars.color.surfaceMuted,
+  cursor: "help",
+});

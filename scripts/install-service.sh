@@ -25,6 +25,17 @@
 #   PROFILE_PORT               Override profiling port (default: 6060)
 #   STAPLER_SQUAD_HEALTH_TIMEOUT  Seconds to wait for /health after (re)start (default: 300)
 #
+# Durable service env vars:
+#   Both install_linux and install_macos below regenerate the unit/plist from
+#   scratch on every run, so anything hand-edited into it (e.g. `launchctl`/
+#   `systemctl` env overrides applied directly to the generated file) is
+#   silently wiped on the next install/redeploy. An operator-set var meant to
+#   persist across redeploys (e.g. STAPLER_SQUAD_USE_STREAM_HUB after
+#   completing the streamhub rollback rehearsal) goes in
+#   ~/.stapler-squad/service.env instead — one KEY=value per line, '#'
+#   comments and blank lines ignored. See service_env_plist_xml/
+#   service_env_systemd_lines below.
+#
 
 set -e
 
@@ -75,6 +86,80 @@ dedup_path() {
     printf '%s' "$1" | awk -v RS=':' '{ if (!seen[$0]++) { if (out != "") out = out ":" $0; else out = $0 } } END { printf "%s", out }'
 }
 
+# ── Durable extra environment variables ──────────────────────────────────────
+# See the "Durable service env vars" header comment above for why this file
+# exists rather than hand-editing the generated unit/plist directly.
+SERVICE_ENV_FILE="$HOME/.stapler-squad/service.env"
+
+# Reads SERVICE_ENV_FILE and, for each valid KEY=value line, calls
+# `"$1" "$key" "$value"` (the emitter callback each caller below supplies).
+# Shared by service_env_plist_xml/service_env_systemd_lines so the parsing
+# fixes here (line-ending, trailing-line, comment, and key-validation
+# handling) only need to exist once.
+#
+# - `read ... || [ -n "$key" ]` also processes a final line that has no
+#   trailing newline — bash's `read` still populates the variables but
+#   returns non-zero for it, which would otherwise silently drop that line.
+# - `tr -d '\r'` strips a CRLF file's trailing carriage return from value
+#   (key can't contain one and still pass the validation below).
+# - Comment/blank detection runs on the whitespace-trimmed key so an indented
+#   `  # comment` line is skipped like a column-0 one instead of being
+#   spliced in as a bogus key with an empty value.
+# - The key is validated against a strict identifier shape (and rejected
+#   with a warning, not silently dropped) rather than XML/shell-escaped,
+#   because an env var name isn't a place XML metacharacters or embedded
+#   whitespace could ever legitimately belong — validating closes off plist/
+#   unit injection via a crafted key instead of just neutralizing it.
+service_env_read() {
+    emit="$1"
+    [ -f "$SERVICE_ENV_FILE" ] || return 0
+    while IFS='=' read -r key value || [ -n "$key" ]; do
+        key=$(printf '%s' "$key" | tr -d '\r')
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        [ -n "$key" ] || continue
+        case "$key" in \#*) continue ;; esac
+        if ! printf '%s' "$key" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$'; then
+            log_warning "Skipping invalid key in $SERVICE_ENV_FILE: '$key' (must be letters/digits/underscore only)" >&2
+            continue
+        fi
+        value=$(printf '%s' "$value" | tr -d '\r')
+        log_info "Applying durable env var from $SERVICE_ENV_FILE: $key" >&2
+        "$emit" "$key" "$value"
+    done < "$SERVICE_ENV_FILE"
+}
+
+# Emitter for the launchd plist's EnvironmentVariables dict: <key>/<string>
+# pairs, with value XML-escaped (order matters: & first, so it doesn't
+# double-escape the entities just inserted for < and >). key is not
+# escaped — service_env_read already restricts it to [A-Za-z_][A-Za-z0-9_]*.
+_service_env_emit_plist() {
+    esc_value=$(printf '%s' "$2" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+    printf '\n        <key>%s</key>\n        <string>%s</string>' "$1" "$esc_value"
+}
+
+# Emitter for a systemd Environment="KEY=value" line, with value's backslashes
+# and double-quotes escaped per systemd.syntax(7) quoting rules (backslash
+# first, so it doesn't double-escape the one just inserted for the quote).
+_service_env_emit_systemd() {
+    esc_value=$(printf '%s' "$2" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+    printf 'Environment="%s=%s"\n' "$1" "$esc_value"
+}
+
+# Prints XML <key>/<string> pairs (one per SERVICE_ENV_FILE line) for splicing
+# into the launchd plist's EnvironmentVariables dict. No-op if the file is
+# absent. Logs each key it applies so a durable override is never silent.
+service_env_plist_xml() {
+    service_env_read _service_env_emit_plist
+}
+
+# Prints systemd Environment="KEY=value" lines (one per SERVICE_ENV_FILE line)
+# for splicing into the [Service] block. No-op if the file is absent. Logs
+# each key it applies so a durable override is never silent.
+service_env_systemd_lines() {
+    service_env_read _service_env_emit_systemd
+}
+
 # ── OS Detection ──────────────────────────────────────────────────────────────
 detect_os() {
     case "$(uname -s)" in
@@ -113,6 +198,58 @@ resolve_binary() {
     log_info  "  2. Run 'make install' to install to GOPATH/bin, then re-run"
     log_info  "  3. Set STAPLER_SQUAD_BIN=/path/to/binary and re-run"
     exit 1
+}
+
+# print_binary_provenance: shows which branch/commit the binary about to
+# become the persistent service was built from, and warns (doesn't block —
+# installing a feature-branch build to test it is legitimate) when that's
+# not 'main'. Without this, 'make install-service' run from a worktree (or
+# resolve_binary()'s which/local-artifact fallback picking up some other
+# build entirely) silently replaces the live service with no record of what
+# it actually is — this is the exact question a human asks after the fact
+# ("wait, what commit is my daemon actually running?") with no answer
+# available short of `strings`-ing the binary. Reads it from the binary
+# itself (`stapler-squad version`, populated by the Makefile's LDFLAGS)
+# rather than re-deriving git state from the script's own $PWD, since the
+# script's cwd has no guaranteed relationship to which checkout bin_path was
+# actually built from.
+print_binary_provenance() {
+    pbp_bin="$1"
+    pbp_ver_output="$("$pbp_bin" version 2>/dev/null)" || {
+        log_warning "Could not run '$pbp_bin version' — provenance unknown (older build without branch/commit support?)"
+        return
+    }
+    printf '%s\n' "$pbp_ver_output" | sed 's/^/    /'
+
+    pbp_branch="$(printf '%s\n' "$pbp_ver_output" | sed -n 's/^ *branch: *\([^ ]*\).*/\1/p')"
+    case "$pbp_branch" in
+        ""|main|unknown) ;;
+        *)
+            log_warning "Installing a build from branch '$pbp_branch', not 'main' — this is about to become the persistent service."
+            ;;
+    esac
+}
+
+# post_grafana_deploy_annotation: marks a successful (re)deploy on the
+# machine-shared Grafana instance (~/dotfiles/stapler-scripts/observability,
+# localhost:48300 by default — see the observability-grafana-dashboards
+# skill) so it shows up as a vertical marker on the stapler-squad dashboards.
+# Best-effort only: that stack is frequently down (laptop with the compose
+# stack stopped, CI, a machine that's never run it) and a deploy must never
+# fail or hang on it — short timeout, backgrounded, all output discarded.
+post_grafana_deploy_annotation() {
+    pgda_bin="$1"
+    pgda_url="${GRAFANA_URL:-http://localhost:48300}"
+    pgda_auth="${GRAFANA_AUTH:-admin:admin}"
+    pgda_ver_output="$("$pgda_bin" version 2>/dev/null)"
+    pgda_branch="$(printf '%s\n' "$pgda_ver_output" | sed -n 's/.*branch: *\([^ ]*\).*/\1/p')"
+    pgda_commit="$(printf '%s\n' "$pgda_ver_output" | sed -n 's/.*commit: *\([^ ]*\).*/\1/p')"
+    pgda_text="stapler-squad redeployed on $(hostname -s 2>/dev/null || hostname) (${pgda_branch:-unknown}@${pgda_commit:-unknown})"
+    pgda_text_escaped="$(printf '%s' "$pgda_text" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    pgda_payload="{\"text\":\"$pgda_text_escaped\",\"tags\":[\"deploy\",\"stapler-squad\"]}"
+    (curl -sf -m 2 -u "$pgda_auth" -X POST "$pgda_url/api/annotations" \
+        -H "Content-Type: application/json" \
+        -d "$pgda_payload" >/dev/null 2>&1 &)
 }
 
 # ── Linux / systemd user service ──────────────────────────────────────────────
@@ -156,15 +293,28 @@ install_linux() {
     # (the 2026-07-12 OOM incident: 57/61GB used, swap exhausted) from taking down
     # the whole box — the kernel's cgroup-aware OOM killer instead picks a victim
     # from within this budget, leaving unrelated system processes alone.
-    # MemoryHigh (soft: throttle/reclaim, no kill) at 60% and MemoryMax (hard kill
-    # boundary) at 80% of total RAM, both computed from this machine's actual
+    # MemoryHigh (soft: throttle/reclaim, no kill) at 80% and MemoryMax (hard kill
+    # boundary) at 90% of total RAM, both computed from this machine's actual
     # /proc/meminfo rather than a hardcoded value so the same script is safe on a
     # small VM or a large workstation alike. Skipped entirely if detection fails.
+    #
+    # Raised from the original 60%/80% on 2026-08-25: telemetry/cgroup_linux.go's
+    # new cgroup_memory_* OTel metrics (see docs/how-to/enable-opentelemetry.md) showed
+    # usage chronically pinned at the 60% MemoryHigh ceiling — memory.events'
+    # "high" counter climbing continuously, PSI full avg10 nonzero (real task
+    # stalls, not just theoretical) — while `free -h` showed >20GiB genuinely
+    # free system-wide. The cap was throttling this service well before the host
+    # was actually under memory pressure, plausibly causing the intermittent
+    # terminal-input unresponsiveness this investigation started from (any
+    # subprocess/allocation landing over the ceiling gets forced into synchronous
+    # reclaim). Watch cgroup_memory_pressure_*_avg10/cgroup_memory_events_oom_kill
+    # in Grafana after this change — if OOM kills start happening instead of just
+    # throttling, that's the signal these percentages need to come back down.
     mem_total_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || true)
     memory_limit_lines=""
     if [ -n "$mem_total_kb" ]; then
-        mem_high_mb=$((mem_total_kb * 60 / 100 / 1024))
-        mem_max_mb=$((mem_total_kb * 80 / 100 / 1024))
+        mem_high_mb=$((mem_total_kb * 80 / 100 / 1024))
+        mem_max_mb=$((mem_total_kb * 90 / 100 / 1024))
         memory_limit_lines="MemoryHigh=${mem_high_mb}M
 MemoryMax=${mem_max_mb}M"
     else
@@ -186,6 +336,10 @@ StartLimitBurst=10
 
 [Service]
 Type=simple
+# tymuxd's equivalent flag, --tymuxd-keep-server, also defaults to true.
+# Do NOT add --tymuxd-keep-server=false here — that's the same class of
+# drift that made this line originally omit --tmux-keep-server and kill
+# every live tmux session on restart (docs/explanation/tmux-keep-server-on-restart.md).
 ExecStart=$bin_path --remote-access --tmux-keep-server$extra_flags
 WorkingDirectory=$HOME
 Restart=on-failure
@@ -203,6 +357,7 @@ StandardOutput=append:$log_dir/service.log
 StandardError=append:$log_dir/service.log
 Environment="HOME=$HOME"
 Environment="PATH=$service_path"
+$(service_env_systemd_lines)
 
 [Install]
 WantedBy=default.target
@@ -300,30 +455,14 @@ fda_is_granted() {
     return 1
 }
 
-# Polls (up to 10s) until none of the given TCP ports have a LISTENer, so the
-# incoming process doesn't race the outgoing one's socket teardown. Ports that
-# are empty/unset (e.g. profiling disabled) are skipped. Proceeds with a
-# warning on timeout rather than blocking forever — a genuinely stuck old
-# process needs a human, not a longer sleep.
-wait_for_port_release() {
-    max_ticks=20  # 20 * 0.5s = 10s
-    tick=0
-    while [ "$tick" -lt "$max_ticks" ]; do
-        busy=0
-        for port in "$@"; do
-            [ -n "$port" ] || continue
-            if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-                busy=1
-                break
-            fi
-        done
-        [ "$busy" = "0" ] && return 0
-        sleep 0.5
-        tick=$((tick + 1))
-    done
-    log_warning "Old process still holding a port after $((max_ticks / 2))s — starting anyway."
-    return 1
-}
+# wait_for_port_release: polls (up to 10s) until none of the given TCP ports
+# have a LISTENer. Used only as macos_stop_service's fallback for a bin_path
+# that predates the 'ensure-ports-free' subcommand (see that function's doc
+# comment) — the normal path no longer needs this. Shared with
+# scripts/dev-restart-guard.sh (see that file's and lib/wait_for_port_release.sh's
+# doc comments for why this must not be a second, drifted reimplementation).
+# shellcheck source=scripts/lib/wait_for_port_release.sh
+. "$(dirname "$0")/lib/wait_for_port_release.sh"
 
 # ── macOS launchd start/stop helpers ─────────────────────────────────────────
 # Shared by install_macos (fresh install/redeploy) and health_check_and_rollback
@@ -347,17 +486,75 @@ wait_for_port_release() {
 # on 0.0.0.0:8444: ... address already in use" crash-loop entries). Poll for
 # the ports to actually clear instead of guessing a sleep duration. Fall back
 # to 'launchctl unload' on older macOS that lacks bootout support.
+#
+# wait_for_port_release only *waits* — it deliberately gives up and proceeds
+# after 10s (see its own doc comment) rather than blocking forever, on the
+# theory that a still-stuck process "needs a human, not a longer sleep". In
+# practice that just deferred the problem: a real incident (2026-09-08) had
+# the old process still holding :8444 past that grace period, so the new one
+# started anyway, hit EADDRINUSE, and crash-looped fast enough that launchd's
+# own throttling gave up retrying it — the service was fully down until
+# someone noticed and ran 'launchctl kickstart -k' by hand.
+#
+# This is the third incident this exact precondition ("is the old process
+# actually gone") has caused (see also: fa2926e8d's pkill widened to hit the
+# live service, and 88e819f14's bootstrap/load domain mismatch breaking
+# rollback) — each fixed with another ad hoc shell patch that itself had a
+# gap, because shell has no practical way to write a test that spawns a real
+# stuck process and asserts the reap logic actually clears it. That
+# invariant now lives in one tested place — pkg/portguard, exercised by
+# pkg/portguard/portguard_test.go — instead of being reimplemented here and
+# in dev-restart-guard.sh. bootout above already unregistered the job from
+# launchd, so any stapler-squad process still alive at this point is an
+# orphan by definition (docs/explanation/service-restart-orphan-process.md);
+# ensure-ports-free (SIGTERM, then SIGKILL if that doesn't clear it) reaps it
+# directly instead of just hoping it exits before a fixed timeout.
+#
+# bin_path is NOT always a binary built from this change: install_macos's
+# call is on the freshly built binary (fine), but health_check_and_rollback
+# overwrites bin_path with prev_bin's *old* content before calling this
+# function again (`cp -f "$prev_bin" "$bin_path"`, scripts/install-
+# service.sh:722) to restart the last-known-good build — and that .prev
+# binary can predate this feature entirely (anyone's first rollback after
+# this ships, or a stale local build run directly without 'make build'
+# first, per resolve_binary's STAPLER_SQUAD_BIN/which/local-artifact
+# fallback order). Probe for the subcommand before relying on it, so a
+# binary that predates 'ensure-ports-free' degrades to the old best-effort
+# wait instead of hard-failing the whole install/rollback over a missing
+# feature in an old build.
 macos_stop_service() {
     plist_file="$1"
     log_info "Stopping existing service (if running)..."
     if ! launchctl bootout "gui/$(id -u)/com.stapler-squad" 2>/dev/null; then
         launchctl unload "$plist_file" 2>/dev/null || true
     fi
+
     if [ "$ENABLE_PROFILE" = "1" ]; then
-        wait_for_port_release 8543 8444 "$PROFILE_PORT"
+        mssv_ports="8543 8444 $PROFILE_PORT"
     else
-        wait_for_port_release 8543 8444
+        mssv_ports="8543 8444"
     fi
+
+    if "$bin_path" ensure-ports-free --help >/dev/null 2>&1; then
+        # shellcheck disable=SC2086 # mssv_ports is an intentionally unquoted word list of ports
+        if ! "$bin_path" ensure-ports-free $mssv_ports; then
+            log_error "Old stapler-squad process would not release its port(s) — aborting."
+            log_error "Check for a stuck process: ps aux | grep stapler-squad"
+            exit 1
+        fi
+        return 0
+    fi
+
+    log_warning "This build of stapler-squad predates 'ensure-ports-free' — falling back to a best-effort port wait"
+    for mssv_pid in $(pgrep -f '(^|/)stapler-squad([[:space:]]|$)' 2>/dev/null || true); do
+        kill "$mssv_pid" 2>/dev/null || true
+    done
+    # shellcheck disable=SC2086
+    wait_for_port_release $mssv_ports
+    for mssv_pid in $(pgrep -f '(^|/)stapler-squad([[:space:]]|$)' 2>/dev/null || true); do
+        log_warning "Forcing exit of orphaned stapler-squad process (PID $mssv_pid) still running after graceful stop"
+        kill -9 "$mssv_pid" 2>/dev/null || true
+    done
 }
 
 # Registers and starts the job from plist_file via 'launchctl bootstrap',
@@ -377,13 +574,82 @@ macos_stop_service() {
 # hand. Always go through this same function to (re)start, on both the
 # forward-deploy and rollback paths, so there's only one code path that can
 # have this class of bug.
+#
+# Root-caused empirically this session (three reproductions, 2026-09-08):
+# 'launchctl bootstrap' called immediately after macos_stop_service's
+# 'launchctl bootout' of the SAME label reliably fails (falls through to the
+# legacy 'load' branch below) even though ports are already confirmed free
+# by ensure-ports-free — bootout's async cleanup apparently covers the
+# listening sockets faster than it covers launchd's own job-table entry for
+# the label, so re-registering the same label too soon loses the race. A
+# standalone 'launchctl bootstrap' run a couple of seconds later, outside
+# the script, consistently succeeded.
+#
+# Reproduced a FOURTH time on 2026-09-09 (under heavy concurrent load — many
+# other processes/agents competing for CPU on this machine): the retry loop
+# below exhausted all 5 attempts (5s total), fell through to 'load', hit the
+# same domain-mismatch failure mode the 2026-08-18 incident above describes,
+# and the deploy timed out and rolled back. Load-dependent timing means a
+# fixed retry BUDGET can always be beaten by a slow-enough machine. Fix:
+# wait_for_launchd_job_clear below polls the actual precondition
+# ('launchctl print' for this label returns nonzero, i.e. the job-table entry
+# is actually gone) instead of guessing how many retries cover it — this
+# addresses the root cause directly rather than further padding the retry
+# count, which is the same category of "another ad hoc patch with its own
+# gap" this function's history already warns about. The bootstrap retry loop
+# stays as defense in depth (job-table-clear is necessary but this session
+# didn't prove it's sufficient), now with more headroom (8 attempts,
+# incremental backoff, ~20s total instead of 5s) for whatever residual race
+# remains.
+#
+# Separately (also confirmed this session): even a successful bootstrap
+# doesn't reliably self-start via RunAtLoad in this environment — 'launchctl
+# print' reported "state = not running" seconds after a clean bootstrap
+# with no process ever spawned, until an explicit 'launchctl kickstart -k'
+# was issued. Rather than trust RunAtLoad's timing, always kickstart right
+# after a successful bootstrap so this function's contract is "the process
+# is actually running", not just "the job is registered and might start
+# eventually".
+
+# Polls (up to 10s) until 'launchctl print' reports the com.stapler-squad
+# label as gone from the bootstrap domain's job table — the actual
+# precondition 'launchctl bootstrap' needs to succeed right after a bootout
+# of the same label (see macos_start_service's doc comment above). Unlike
+# wait_for_port_release (which watches sockets, already confirmed clear by
+# ensure-ports-free before this runs), this watches launchd's own bookkeeping
+# for the label, which the 2026-09-08/09 incidents showed clears on a
+# separate, sometimes-slower timeline than the sockets do. Gives up and
+# proceeds after 10s on the same "needs a human, not a longer wait" theory as
+# wait_for_port_release — the bootstrap retry loop below is the backstop if
+# this timeout was too short.
+wait_for_launchd_job_clear() {
+    wfljc_waited=0
+    while [ "$wfljc_waited" -lt 10 ]; do
+        if ! launchctl print "gui/$(id -u)/com.stapler-squad" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+        wfljc_waited=$((wfljc_waited + 1))
+    done
+    return 1
+}
+
 macos_start_service() {
     plist_file="$1"
     log_info "Starting service..."
-    if launchctl bootstrap "gui/$(id -u)" "$plist_file" 2>/dev/null; then
-        log_success "Service started via launchctl bootstrap."
-        return 0
+    if ! wait_for_launchd_job_clear; then
+        log_warning "com.stapler-squad still in launchd's job table >10s after bootout — proceeding anyway, the retry loop below is the backstop"
     fi
+    mss_attempt=1
+    while [ "$mss_attempt" -le 8 ]; do
+        if launchctl bootstrap "gui/$(id -u)" "$plist_file" 2>/dev/null; then
+            launchctl kickstart -k "gui/$(id -u)/com.stapler-squad" 2>/dev/null || true
+            log_success "Service started via launchctl bootstrap (attempt $mss_attempt)."
+            return 0
+        fi
+        sleep "$mss_attempt"
+        mss_attempt=$((mss_attempt + 1))
+    done
     if launchctl load "$plist_file" 2>/dev/null; then
         log_success "Service started via launchctl load (bootstrap fallback)."
         return 0
@@ -412,6 +678,10 @@ install_macos() {
 
     # Build XML <string> entries for any extra flags (e.g. --profile --profile-port 6060).
     # We rely on the EnvironmentVariables PATH key above, so no shell wrapper is needed.
+    # tymuxd's equivalent flag, --tymuxd-keep-server, also defaults to true.
+    # Do NOT add --tymuxd-keep-server=false to ProgramArguments below — that's
+    # the same class of drift that once left this platform's tmux flag out of
+    # sync with the other's (docs/explanation/tmux-keep-server-on-restart.md).
     extra_args_xml=""
     for arg in $extra_flags; do
         extra_args_xml="$extra_args_xml
@@ -454,7 +724,7 @@ install_macos() {
         <key>HOME</key>
         <string>$HOME</string>
         <key>PATH</key>
-        <string>$plist_path</string>
+        <string>$plist_path</string>$(service_env_plist_xml)
     </dict>
 
     <key>StandardOutPath</key>
@@ -724,13 +994,18 @@ main() {
 
     bin_path=$(resolve_binary)
     log_info "Using binary: $bin_path"
+    print_binary_provenance "$bin_path"
 
     case "$os" in
         linux) install_linux "$bin_path" ;;
         macos) install_macos "$bin_path" ;;
     esac
 
-    health_check_and_rollback "$bin_path"
+    if health_check_and_rollback "$bin_path"; then
+        post_grafana_deploy_annotation "$bin_path"
+        return 0
+    fi
+    return 1
 }
 
 main "$@"

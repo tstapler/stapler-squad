@@ -4,10 +4,13 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, us
 import { useRouter } from "next/navigation";
 import { Omnibar, OmnibarSessionData } from "@/components/sessions/Omnibar";
 import { useSessionService } from "@/lib/hooks/useSessionService";
-import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { useAuth } from "@/lib/contexts/AuthContext";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import { SessionType } from "@/gen/session/v1/types_pb";
+import { RemoteTargetSchema } from "@/gen/session/v1/session_pb";
+import { create } from "@bufbuild/protobuf";
 import { getDefaultRegistry } from "@/lib/omnibar/detector";
 import { WorkflowDetector, type WorkflowEntry } from "@/lib/omnibar/detectors/WorkflowDetector";
 import { useAliases } from "@/lib/hooks/useAliases";
@@ -16,6 +19,7 @@ import { useLauncherPresets } from "@/lib/hooks/useLauncherPresets";
 import { PresetDetector } from "@/lib/omnibar/detectors/PresetDetector";
 import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { GitHubEnterpriseURLDetector } from "@/lib/omnibar/detectors/GitHubEnterpriseURLDetector";
+import { useConfiguredRemotes } from "@/lib/hooks/useConfiguredRemotes";
 
 const sessionTypeMap: Record<string, SessionType> = {
   directory: SessionType.DIRECTORY,
@@ -59,8 +63,8 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   const { createSession, runWorkflow: runWorkflowRPC } = useSessionService({
     enabled: !authLoading && (!authEnabled || authenticated),
   });
-  const { createBacklogItemFromChat } = useBacklogService();
   const { workflows } = useWorkflows();
+  const { showActionToast } = useNotifications();
 
   // Lean WorkflowEntry[] for the detector and @ autocomplete dropdown.
   const workflowEntries = useMemo<WorkflowEntry[]>(
@@ -118,6 +122,11 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   // OmnibarCreationPanel would fetch redundantly and — worse — this effect's refetch-on-open
   // would never reach it, since each hook call owns disconnected state.
   const { presets: launcherPresets, loading: launcherPresetsLoading, loadError: launcherPresetsLoadError, refetch: refetchLauncherPresets } = useLauncherPresets();
+
+  // Configured remotes for the Omnibar's "Remote host" selector (ADR-001:
+  // remote-as-orthogonal-flag) -- see useConfiguredRemotes' doc comment for why this wiring
+  // was missing until ssh-remote-workspaces Phase 6 Epic 6.3.
+  const { remotes: configuredRemotes } = useConfiguredRemotes();
 
   // Dynamically register/unregister PresetDetector whenever the preset list changes.
   const presetDetectorRef = useRef<PresetDetector | null>(null);
@@ -232,15 +241,17 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   // Handle session creation
   const handleCreateSession = useCallback(
     async (data: OmnibarSessionData) => {
-      // Determine effective session type.
-      // For new_project + "open as new_worktree": use NEW_WORKTREE — findGitRepoRoot already
-      // handles mkdir + git init + initial commit for non-existent paths, so no special type needed.
-      // For new_project + "open as directory": use NEW_PROJECT so the backend initialises the repo
-      // and opens the session without a worktree.
+      // Determine effective session type. Every new_project variant — "open as
+      // new_worktree" and "open as directory" alike — uses NEW_PROJECT: the
+      // backend's SessionTypeNewProject case always bootstraps a missing path
+      // (mkdir + git init + initial commit), then additionally creates a
+      // worktree on it when a branch is present (Omnibar.tsx sets `branch` only
+      // for "open as new_worktree"), or leaves it as a plain directory session
+      // otherwise (see session/instance_worktree.go's setupFirstTimeWorktree).
+      // NEW_WORKTREE is deliberately never used for new_project — it requires
+      // an already-existing repo unconditionally, with no bootstrap exception.
       const effectiveSessionType = data.isNewProject
-        ? data.sessionType === "new_worktree"
-          ? sessionTypeMap["new_worktree"]
-          : SessionType.NEW_PROJECT
+        ? SessionType.NEW_PROJECT
         : data.sessionType
         ? sessionTypeMap[data.sessionType]
         : undefined;
@@ -261,6 +272,10 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         createIfMissing: data.createIfMissing ?? false,
         initialPrompt: data.initialPrompt,
         autonomousMode: data.autonomousMode ?? false,
+        // Remote target composes with sessionType (ADR-001: remote-as-orthogonal-flag) —
+        // omitted entirely (not just an empty remote_name) when no remote is selected, so a
+        // local session's CreateSessionRequest stays byte-identical to pre-change behavior.
+        remote: data.remoteName ? create(RemoteTargetSchema, { remoteName: data.remoteName }) : undefined,
         permissionMode: data.permissionMode ?? "",
         aliasName: data.aliasName ?? "",
         cliFlags: data.extraCliFlags ?? "",
@@ -279,34 +294,33 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   // then navigates to the newly created session so the user can see it running.
   const handleRunWorkflow = useCallback(
     async (slug: string, arg: string) => {
+      const toastKey = `run-workflow:${slug}`;
       const wf = workflows.find((w) => w.slug === slug);
       if (!wf) {
+        // Slug matched at detection time but is gone from the (possibly stale) local
+        // workflow list by the time Enter is pressed -- surface it rather than
+        // swallowing the input silently. Root cause (list going stale) is tracked
+        // separately via the in-flight WatchWorkflows streaming RPC.
         console.error("Unknown workflow slug:", slug);
+        showActionToast(`Workflow '@${slug}' not found — try reloading`, "error", toastKey);
         return;
       }
       try {
+        // runWorkflowRPC (useSessionService.runWorkflow) never throws -- it catches
+        // internally and returns null on failure -- so a falsy sessionId is the
+        // actual failure signal, not just an absent-navigation no-op.
         const sessionId = await runWorkflowRPC({ id: wf.id, arg });
         if (sessionId) {
           router.push(`/?session=${sessionId}`);
+        } else {
+          showActionToast(`Failed to run workflow '@${slug}' — try again`, "error", toastKey);
         }
       } catch (err) {
         console.error("Failed to run workflow:", err);
+        showActionToast(getErrorMessage(err, `Failed to run workflow '@${slug}'`), "error", toastKey);
       }
     },
-    [runWorkflowRPC, workflows, router]
-  );
-
-  // Handle chat_backlog_item: create a backlog item from a free-text message with no
-  // structured form fields — title/description both come from the raw message, and the
-  // normal auto-triage pipeline (skipTriage defaults to false) takes it from there.
-  const handleCreateBacklogItemFromChat = useCallback(
-    async (text: string) => {
-      const result = await createBacklogItemFromChat(text);
-      if (result) {
-        router.push(`/backlog?item=${result.item.id}`);
-      }
-    },
-    [createBacklogItemFromChat, router]
+    [runWorkflowRPC, workflows, router, showActionToast]
   );
 
   const value: OmnibarContextValue = {
@@ -328,7 +342,6 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         onNavigateToSession={handleNavigateToSession}
         onNavigateToSessionInNewPane={handleNavigateToSessionInNewPane}
         onRunWorkflow={handleRunWorkflow}
-        onCreateBacklogItemFromChat={handleCreateBacklogItemFromChat}
         initialMode={initialMode}
         initialInput={initialInput}
         initialTitle={initialTitle}
@@ -336,6 +349,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         launcherPresets={launcherPresets}
         launcherPresetsLoading={launcherPresetsLoading}
         launcherPresetsLoadError={launcherPresetsLoadError}
+        remotes={configuredRemotes}
       />
     </OmnibarContext.Provider>
   );

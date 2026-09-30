@@ -196,3 +196,29 @@ Frontend: a "Retry now" button next to each open stuck item in the `/unfinished`
 alongside the reset-related UI, calling this RPC with the same loading/error/success
 feedback pattern as the other stuck-item actions on that page. Disabled (with a reason
 shown) when the row is already parked, pointing at the reset action instead.
+
+## Update — 2026-08-21: parking is no longer permanent — cold-retry heartbeat (BUG-083)
+
+This design's original decision ("park: stop attempting... require a manual reopen/override
+... to try again") turned out to have a real, live gap: nothing ever automatically un-parks a
+row. Confirmed live — PR #535 fixed the bug (`classifyHeadlessCallError` misclassification)
+that had been parking `orphaned_triage` items, but the 20 items it had already parked sat
+stuck for up to 2 weeks until the 2026-08-21 `backlog-feature-improvement` audit noticed the
+correlation and manually called `BulkResetStuckRemediation`. Sixth recorded instance of "a fix
+closes the write side of a gap but not the recovery side" (`docs/tasks/backlog-feature-improvement.md`,
+tracked since 2026-07-27).
+
+**Fix**: `session/backlog_remediation.go` adds `remediationColdRetryInterval` (7 days). Once a
+row parks (`remediation_attempts >= MaxRemediationAttempts`), `next_remediation_at` is
+repurposed to hold a cold-retry deadline instead of going unused — `evaluateRemediation` grants
+one retry (`remediationGrantedColdRetry`) whenever that deadline has passed, pins
+`remediation_attempts` at the cap (so the row stays eligible for the next cold retry too,
+indefinitely), and does not re-fire the one-time "auto-remediation exhausted" notification.
+This lives in the one shared gate (`RemediationDue`), so it applies to every `StuckReason` that
+goes through it (`orphaned_triage`, `bouncing`, `push_failed`, `stale_work`,
+`abandoned_review`, ...), not just the reason from the live incident. See
+`docs/bugs/fixed/BUG-083-*.md` for the full writeup.
+
+`ResetStuckRemediation`/`BulkResetStuckRemediation` are unchanged and still useful for an
+operator who wants a row's full fast 5-attempt budget back immediately rather than waiting for
+the next weekly heartbeat.

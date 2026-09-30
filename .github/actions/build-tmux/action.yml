@@ -1,0 +1,28 @@
+name: 'Build pinned tmux 3.4'
+description: 'Installs build deps, restores/builds the pinned tmux 3.4 binary at bin/tmux'
+inputs:
+  install-socat:
+    description: 'Also install socat (needed by real-shell approval-relay tests)'
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Install tmux build dependencies
+      shell: bash
+      run: |
+        if [ "${{ inputs.install-socat }}" = "true" ]; then
+          sudo apt-get install -y automake libevent-dev libncurses-dev pkg-config socat
+        else
+          sudo apt-get install -y automake libevent-dev libncurses-dev pkg-config
+        fi
+    - name: Cache pinned tmux binary
+      uses: actions/cache@v4
+      id: tmux-cache
+      with:
+        path: bin/tmux
+        key: tmux-3.4-${{ runner.os }}-v1
+    - name: Build pinned tmux 3.4
+      if: steps.tmux-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: ./scripts/build-tmux.sh

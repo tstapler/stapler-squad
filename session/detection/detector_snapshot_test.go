@@ -194,7 +194,7 @@ func TestDetectorProvenance_should_returnBuiltinsOnlyMap_When_noPluginsLoaded(t 
 	t.Parallel()
 	prov := DetectorProvenance()
 
-	wantNames := []string{"claude", "gemini", "aider", "opencode", "agy"}
+	wantNames := []string{"claude", "gemini", "aider", "opencode", "agy", "pi"}
 	if len(prov) != len(wantNames) {
 		t.Fatalf("DetectorProvenance() returned %d entries, want %d: %v", len(prov), len(wantNames), prov)
 	}
@@ -227,13 +227,35 @@ func TestDetectorProvenance_should_returnBuiltinsOnlyMap_When_noPluginsLoaded(t 
 // old package-level built-in-detectors map index.
 func TestLookupBinaryDetector_should_findBuiltins_When_noPluginsLoaded(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"claude", "gemini", "aider", "opencode", "agy"} {
+	for _, name := range []string{"claude", "gemini", "aider", "opencode", "agy", "pi"} {
 		if _, ok := lookupBinaryDetector(name); !ok {
 			t.Errorf("lookupBinaryDetector(%q) = _, false; want true", name)
 		}
 	}
 	if _, ok := lookupBinaryDetector("not-a-real-binary"); ok {
 		t.Errorf("lookupBinaryDetector(%q) = _, true; want false", "not-a-real-binary")
+	}
+}
+
+// TestLookupBinaryDetector_should_resolveAntigravityAlias verifies the
+// "antigravity" long-form program name resolves to the same detector as
+// "agy" (AgyAdapter.CanHandle accepts both, so detection must too —
+// otherwise an "antigravity" session silently falls back to the generic
+// detector and misses every agy_* prompt pattern).
+func TestLookupBinaryDetector_should_resolveAntigravityAlias(t *testing.T) {
+	t.Parallel()
+	agySD, ok := lookupBinaryDetector("agy")
+	if !ok {
+		t.Fatal(`lookupBinaryDetector("agy") = _, false; want true`)
+	}
+	aliasSD, ok := lookupBinaryDetector("antigravity")
+	if !ok {
+		t.Fatal(`lookupBinaryDetector("antigravity") = _, false; want true via agy alias`)
+	}
+	for name, sd := range map[string]*StatusDetector{"agy": agySD, "antigravity": aliasSD} {
+		if status := sd.Detect([]byte("Accept this file edit?")); status != StatusNeedsApproval {
+			t.Errorf(`Detect("Accept this file edit?") via %q = %v, want %v`, name, status, StatusNeedsApproval)
+		}
 	}
 }
 
@@ -403,15 +425,15 @@ func TestClaudeBuiltinDetector_should_matchGetDefaultPatterns_When_resolvedFromS
 // whole snapshot if a name in reg.Names() somehow fails reg.Lookup (can't
 // happen via the public DetectorRegistry API today, but the nil-guard shape
 // in buildSnapshot/lookupBinaryDetector is exactly what NilAway flags as
-// required — see .claude/rules/interface-pollution-checklist.md).
+// required — see the `interface-pollution-checklist` skill).
 func TestBuildSnapshot_should_produceUsableSnapshot_When_givenDefaultRegistry(t *testing.T) {
 	t.Parallel()
 	snap := buildSnapshot(DefaultRegistry(), nil)
-	if len(snap.byBinary) != 5 {
-		t.Errorf("buildSnapshot(DefaultRegistry(), nil) produced %d detectors, want 5", len(snap.byBinary))
+	if len(snap.byBinary) != 6 {
+		t.Errorf("buildSnapshot(DefaultRegistry(), nil) produced %d detectors, want 6", len(snap.byBinary))
 	}
-	if len(snap.provenance) != 5 {
-		t.Errorf("buildSnapshot(DefaultRegistry(), nil) produced %d provenance entries, want 5", len(snap.provenance))
+	if len(snap.provenance) != 6 {
+		t.Errorf("buildSnapshot(DefaultRegistry(), nil) produced %d provenance entries, want 6", len(snap.provenance))
 	}
 	for name, src := range snap.provenance {
 		if src != "" {

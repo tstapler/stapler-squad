@@ -38,6 +38,8 @@ func (PipelineMode) Fields() []ent.Field {
 			Comment("Prompt template used for review under this pipeline mode."),
 		field.String("initial_prompt_template").
 			Comment("Prompt template used to seed the initial session under this pipeline mode."),
+		field.String("stage_executors_json").Optional().Default("{}").
+			Comment("JSON-serialized map[StageRole]PipelineStageExecutor — see session.SerializeStageExecutors/ParseStageExecutors. Empty/\"{}\" means no stage override configured."),
 		field.Time("created_at").Default(time.Now).Immutable(),
 		field.Time("updated_at").Default(time.Now).UpdateDefault(time.Now),
 	}

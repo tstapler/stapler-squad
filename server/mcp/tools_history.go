@@ -80,7 +80,7 @@ func (h *historyHandlers) searchClaudeHistory(ctx context.Context, req mcpgo.Cal
 		Limit:  int32(limit),
 		Offset: int32(offset),
 	}))
-	log.DebugLog.Printf("[mcp:search_claude_history] query=%q duration=%s", query, time.Since(start))
+	log.DebugLog().Printf("[mcp:search_claude_history] query=%q duration=%s", query, time.Since(start))
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("failed to search claude history: %v", err), ""), nil
 	}

@@ -102,6 +102,20 @@ func (c *sessionMemoryCache) Invalidate(uuid string) {
 	c.mu.Unlock()
 }
 
+// SetAll stores freshly-fetched RSS values for a batch of sessions, all
+// timestamped at once. Used by warmRSSCache after a single SessionsRSSMB
+// batch call, so every session's cache entry is refreshed together rather
+// than through a separate GetOrFetch (and separate underlying measurement)
+// per session.
+func (c *sessionMemoryCache) SetAll(rssByUUID map[string]int64) {
+	now := time.Now()
+	c.mu.Lock()
+	for uuid, rss := range rssByUUID {
+		c.entries[uuid] = memoryCacheEntry{rssMB: rss, fetchedAt: now}
+	}
+	c.mu.Unlock()
+}
+
 // HibernationSweeper periodically checks all sessions and hibernates those
 // that have been idle longer than the configured timeout or that are consuming
 // memory while the system is under pressure.
@@ -172,11 +186,15 @@ func (s *HibernationSweeper) SystemMemoryPct() (float64, error) {
 	return pct, nil
 }
 
+// tickerPhaseOffset delays the recurring ticker's start by half the sweep
+// interval, so this sweeper doesn't tick in lock-step forever with
+// unfinished.Scanner's identical 5-minute backstop ticker and stack their
+// CPU cost into one spike every cycle.
+const tickerPhaseOffset = sweepInterval / 2
+
 // Start runs the periodic sweep loop. Blocks until ctx is cancelled.
 func (s *HibernationSweeper) Start(ctx context.Context) {
 	interval := sweepInterval
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
 
 	log.Info("hibernation sweeper started",
 		"idle_timeout_minutes", s.cfg.Hibernation.IdleTimeoutMinutes,
@@ -184,6 +202,19 @@ func (s *HibernationSweeper) Start(ctx context.Context) {
 
 	// Run immediately on start rather than waiting for the first tick.
 	s.sweep(ctx)
+
+	// See tickerPhaseOffset's doc comment: delay the recurring ticker's start
+	// so this sweeper's periodic CPU cost doesn't land in the same window as
+	// unfinished.Scanner's backstop tick on every cycle.
+	select {
+	case <-ctx.Done():
+		log.Info("hibernation sweeper stopped")
+		return
+	case <-time.After(tickerPhaseOffset):
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -258,34 +289,47 @@ func (s *HibernationSweeper) sweep(ctx context.Context) {
 // warmRSSCache reads current RSS for all active sessions and stores results in
 // the cache. Called from sweep() on every tick — not gated on ResourcePressureThreshold
 // — so that memory_rss_mb in the UI is always populated when memReader is configured.
+//
+// All active sessions are measured in a single SessionsRSSMB batch call so
+// the whole sweep pays for one process-table enumeration, not one per
+// session (see processSnapshot in session/memory/reader.go).
 func (s *HibernationSweeper) warmRSSCache(ctx context.Context, instances []*Instance) {
 	if s.memReader == nil {
 		return
 	}
-	deadline := time.Now().Add(rssWarmTimeout)
-	for _, inst := range instances {
-		if !inst.IsActive() {
-			continue
-		}
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		if time.Now().After(deadline) {
-			log.Warn("hibernation sweeper: RSS warming timed out, some sessions skipped")
-			return
-		}
-		capturedName := inst.GetTmuxSessionName()
-		capturedUUID := inst.UUID
-		s.memCache.GetOrFetch(capturedUUID, func() int64 {
-			rss, err := s.memReader.SessionRSSMB(capturedName)
-			if err != nil {
-				return 0
-			}
-			return rss
-		})
+
+	type target struct {
+		uuid, name string
 	}
+	var targets []target
+	for _, inst := range instances {
+		if inst.IsActive() {
+			targets = append(targets, target{uuid: inst.UUID, name: inst.GetTmuxSessionName()})
+		}
+	}
+	if len(targets) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, rssWarmTimeout)
+	defer cancel()
+
+	names := make([]string, len(targets))
+	for i, t := range targets {
+		names[i] = t.name
+	}
+
+	rssByName, err := s.memReader.SessionsRSSMB(ctx, names)
+	if err != nil {
+		log.Warn("hibernation sweeper: RSS warm batch failed", "err", err)
+		return
+	}
+
+	rssByUUID := make(map[string]int64, len(targets))
+	for _, t := range targets {
+		rssByUUID[t.uuid] = rssByName[t.name]
+	}
+	s.memCache.SetAll(rssByUUID)
 }
 
 // sweepResourcePressure hibernates the single longest-idle eligible session when

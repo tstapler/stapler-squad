@@ -82,6 +82,7 @@ export function ReviewChangesModal({ itemId, sessionId, sessionTitle, onClose, t
         role="dialog"
         aria-modal="true"
         aria-labelledby="review-changes-title"
+        data-testid="review-changes-modal"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >

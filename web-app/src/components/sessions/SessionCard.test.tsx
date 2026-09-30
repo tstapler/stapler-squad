@@ -1,71 +1,33 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { SessionCard } from "./SessionCard";
-import { SessionStatus } from "@/gen/session/v1/types_pb";
+import { ReviveOutcome, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
-import { staleBadge } from "./SessionCard.css";
+import { staleBadge, statusCreationFailed } from "./SessionCard.css";
 
-jest.mock("@connectrpc/connect", () => ({
-  createClient: jest.fn(() => ({})),
-}));
+jest.mock("@connectrpc/connect", () => require("./__tests__/sessionCardTestFixtures").mockConnect());
 
-jest.mock("@connectrpc/connect-web", () => ({
-  createConnectTransport: jest.fn(() => ({ unary: jest.fn(), stream: jest.fn() })),
-}));
+jest.mock("@connectrpc/connect-web", () => require("./__tests__/sessionCardTestFixtures").mockConnectWeb());
 
-jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
-  useReviewQueueContext: () => ({ items: [] }),
-}));
+jest.mock("@/lib/contexts/ReviewQueueContext", () => require("./__tests__/sessionCardTestFixtures").mockReviewQueueContext());
 
-jest.mock("@/lib/store", () => ({
-  useAppSelector: jest.fn(() => ({})),
-}));
+jest.mock("@/lib/contexts/SessionServiceContext", () => require("./__tests__/sessionCardTestFixtures").mockSessionServiceContext());
 
-jest.mock("@/lib/store/sessionsSlice", () => ({
-  selectDetectedStatusMap: jest.fn(),
-}));
+jest.mock("@/lib/store", () => require("./__tests__/sessionCardTestFixtures").mockStore());
 
-jest.mock("@/lib/hooks/useTerminalSnapshot", () => ({
-  useTerminalSnapshot: () => ({ snapshot: null, loading: false }),
-}));
+jest.mock("@/lib/store/sessionsSlice", () => require("./__tests__/sessionCardTestFixtures").mockSessionsSlice());
 
-jest.mock("@/lib/hooks/useFocusTrap", () => ({
-  useFocusTrap: () => {},
-}));
+jest.mock("@/lib/hooks/useTerminalSnapshot", () => require("./__tests__/sessionCardTestFixtures").mockUseTerminalSnapshot());
 
-jest.mock("@/components/ui/AppLink", () => ({
-  AppLink: ({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
-    <a href={href} {...rest}>{children}</a>
-  ),
-}));
+jest.mock("@/lib/hooks/useFocusTrap", () => require("./__tests__/sessionCardTestFixtures").mockUseFocusTrap());
 
-jest.mock("@/components/ui/Modal", () => ({
-  Modal: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalTitle: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+jest.mock("@/components/ui/AppLink", () => require("./__tests__/sessionCardTestFixtures").mockAppLink());
 
-// Radix's real Tooltip only reveals its label on hover after a delay via a portal —
-// mock it so the label is assertable synchronously without simulating pointer timing.
-jest.mock("@/components/ui/Tooltip", () => ({
-  Tooltip: ({ children, label }: { children: React.ReactNode; label: string }) => (
-    <div data-testid="tooltip-mock" data-label={label}>{children}</div>
-  ),
-}));
+jest.mock("@/components/ui/Modal", () => require("./__tests__/sessionCardTestFixtures").mockModal());
 
-jest.mock("@/lib/hooks/useSessionActions", () => ({
-  useSessionActions: () => ({
-    pause: jest.fn(),
-    resume: jest.fn(),
-    delete: jest.fn(),
-    rename: jest.fn(),
-    restart: jest.fn(),
-    createCheckpoint: jest.fn(),
-    updateTags: jest.fn(),
-    update: jest.fn(),
-  }),
-}));
+jest.mock("@/components/ui/Tooltip", () => require("./__tests__/sessionCardTestFixtures").mockTooltip());
+
+jest.mock("@/lib/hooks/useSessionActions", () => require("./__tests__/sessionCardTestFixtures").mockUseSessionActions());
 
 const minimalSession: Partial<Session> = {
   id: "s1",
@@ -102,6 +64,39 @@ describe("SessionCard — note badge", () => {
     const badge = screen.getByTestId("badge-has-note");
     const expected = "N".repeat(119) + "…";
     expect(badge.closest('[data-testid="tooltip-mock"]')).toHaveAttribute("data-label", expected);
+  });
+});
+
+describe("SessionCard — revived context badge", () => {
+  it("SessionCard_should_RenderRevivedContextBadge_When_ReviveOutcomeIsFreshLostHistory", () => {
+    const session = { ...minimalSession, reviveOutcome: ReviveOutcome.FRESH_LOST_HISTORY } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.getByTestId("revived-context-badge")).toBeInTheDocument();
+  });
+
+  it("SessionCard_should_NotRenderRevivedContextBadge_When_ReviveOutcomeIsNotFreshLostHistory", () => {
+    const session = { ...minimalSession, reviveOutcome: ReviveOutcome.RESUME_LIVE } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.queryByTestId("revived-context-badge")).toBeNull();
+  });
+});
+
+describe("SessionCard — host badge (ssh-remote-workspaces Epic 6.2, Story 6.2.1)", () => {
+  it("SessionCard_should_RenderHostBadge_When_SessionRemoteNameIsSet", () => {
+    const session = { ...minimalSession, remoteName: "prod-box" } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    const badge = screen.getByTestId("host-badge");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute("role", "img");
+    expect(badge).toHaveAttribute("aria-label", "Running on prod-box");
+  });
+
+  it("SessionCard_should_NotRenderHostBadge_When_SessionIsLocal", () => {
+    const session = { ...minimalSession, remoteName: "" } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    expect(screen.queryByTestId("host-badge")).toBeNull();
   });
 });
 
@@ -154,5 +149,288 @@ describe("SessionCard — stale badge", () => {
     // and the same warning tokens stuckReason.css.ts's chipStaleWork applies via
     // vars.color.warningBg/warningText/warning).
     expect(badge).toHaveClass(String(staleBadge));
+  });
+});
+
+describe("SessionCard — retry badge and permanently-failed status", () => {
+  it("SessionCard_should_NotRenderRetryBadge_When_RetryAttemptIsZero", () => {
+    const session = { ...minimalSession, retryAttempt: 0, retryMaxAttempts: 3 } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.queryByLabelText(/Retry attempt/)).toBeNull();
+  });
+
+  it("SessionCard_should_RenderRetryBadgeAfterReviewQueueBadge_When_RetryAttemptPositive", () => {
+    const session = { ...minimalSession, retryAttempt: 2, retryMaxAttempts: 3 } as unknown as Session;
+    render(<SessionCard session={session} />);
+    const badge = screen.getByLabelText("Retry attempt 2 of 3");
+    expect(badge).toBeInTheDocument();
+  });
+
+  it("SessionCard_should_ExposeFullSentenceAriaLabel_When_StatusIsPermanentlyFailed", () => {
+    const session = {
+      ...minimalSession,
+      status: SessionStatus.PERMANENTLY_FAILED,
+      retryMaxAttempts: 3,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.getByLabelText("Session status: Failed — gave up after 3 attempts")).toBeInTheDocument();
+  });
+
+  it("PermanentlyFailed with the default max_attempts=1 policy still shows both badges (attempt count is non-zero)", () => {
+    const session = {
+      ...minimalSession,
+      status: SessionStatus.PERMANENTLY_FAILED,
+      retryAttempt: 1,
+      retryMaxAttempts: 1,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.getByLabelText("Retry attempt 1 of 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Session status: Failed — gave up after 1 attempt")).toBeInTheDocument();
+  });
+});
+
+// Epic 5.2 (async-session-creation): Failed-state rendering.
+describe("SessionCard — Failed status pill", () => {
+  it("SessionCard_should_RenderFailedLabelAndDistinctToken_When_StatusIsFailed", () => {
+    const session = { ...minimalSession, status: SessionStatus.FAILED } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    const pill = screen.getByTestId("status-pill");
+    expect(pill).toHaveTextContent("Failed");
+    // Distinct token per plan.md's Pattern Decisions table -- not a reuse of
+    // statusCrashed's error-palette token.
+    expect(pill).toHaveClass(String(statusCreationFailed));
+  });
+
+  it("SessionCard_should_RenderAWarningGlyph_When_StatusIsFailed", () => {
+    const session = { ...minimalSession, status: SessionStatus.FAILED } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    const pill = screen.getByTestId("status-pill");
+    expect(pill.textContent).toContain("⚠");
+  });
+});
+
+describe("SessionCard — Failed reason-specific message", () => {
+  it.each([
+    ["GitHubResolutionError", "Failed to resolve GitHub URL."],
+    ["StartupError", "Failed to start session."],
+    ["Stale", "This session creation appears to have stalled."],
+    ["SomeUnrecognizedReason", "Session creation failed."],
+  ])("SessionCard_should_ShowReasonSpecificMessage_When_FailureReasonIs_%s", (failureReason, expected) => {
+    const session = { ...minimalSession, status: SessionStatus.FAILED, failureReason } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    expect(screen.getByTestId("failure-message")).toHaveTextContent(expected);
+  });
+
+  it("SessionCard_should_FallBackToCreationProgress_When_FailureReasonIsAbsent", () => {
+    // Covers today's actual backend wiring: failureReason isn't yet plumbed
+    // onto the wire (proto/session/v1/types.proto has no failure_reason
+    // field), but creation_progress already carries a detailed message for
+    // GitHubResolutionError/StartupError (session_creation_pipeline.go's
+    // setPhase calls before the terminal write).
+    const session = {
+      ...minimalSession,
+      status: SessionStatus.FAILED,
+      creationProgress: "Failed to resolve GitHub URL: connection timed out",
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    expect(screen.getByTestId("failure-message")).toHaveTextContent(
+      "Failed to resolve GitHub URL: connection timed out"
+    );
+  });
+});
+
+describe("SessionCard — Creating/Failed live region (single node, no remount)", () => {
+  it("SessionCard_should_ReuseSameLiveRegionNode_When_TransitioningCreatingToFailed", () => {
+    const creatingSession = {
+      ...minimalSession,
+      status: SessionStatus.CREATING,
+      creationProgress: "Cloning repository...",
+    } as unknown as Session;
+    const { rerender } = render(<SessionCard session={creatingSession} />);
+
+    const liveRegionBefore = screen.getByTestId("creation-live-region");
+    expect(liveRegionBefore).toHaveAttribute("aria-live", "polite");
+    expect(liveRegionBefore.textContent).toBe("Cloning repository...");
+
+    const failedSession = {
+      ...minimalSession,
+      status: SessionStatus.FAILED,
+      failureReason: "GitHubResolutionError",
+    } as unknown as Session;
+    rerender(<SessionCard session={failedSession} />);
+
+    const liveRegionsAfter = screen.getAllByTestId("creation-live-region");
+    expect(liveRegionsAfter).toHaveLength(1);
+    expect(liveRegionsAfter[0]).toBe(liveRegionBefore); // same DOM node, not a remount
+    expect(liveRegionsAfter[0]).toHaveAttribute("aria-live", "assertive");
+    expect(liveRegionsAfter[0].textContent).toBe("Failed to resolve GitHub URL.");
+  });
+
+  it("SessionCard_should_UpdateProgressTextInPlace_When_CreationProgressAdvancesThroughPhases", () => {
+    const session1 = {
+      ...minimalSession,
+      status: SessionStatus.CREATING,
+      creationProgress: "Resolving GitHub URL...",
+    } as unknown as Session;
+    const { rerender } = render(<SessionCard session={session1} />);
+
+    const progressTextBefore = screen.getByTestId("session-progress-text");
+    expect(progressTextBefore.textContent).toBe("Resolving GitHub URL...");
+
+    const session2 = {
+      ...minimalSession,
+      status: SessionStatus.CREATING,
+      creationProgress: "Cloning repository...",
+    } as unknown as Session;
+    rerender(<SessionCard session={session2} />);
+
+    const progressTextAfter = screen.getByTestId("session-progress-text");
+    expect(progressTextAfter).toBe(progressTextBefore); // same node, updated in place
+    expect(progressTextAfter.textContent).toBe("Cloning repository...");
+  });
+});
+
+describe("SessionCard — sub-status chip subagentCount", () => {
+  it("SessionCard_should_PassSubagentCountToSubStatusChip_When_SubStatusIsWaitingForAgent", () => {
+    const session = {
+      ...minimalSession,
+      status: SessionStatus.ACTIVE,
+      subStatus: SubStatus.WAITING_FOR_AGENT,
+      subagentCount: 3,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+    const chip = screen.getByRole("status", { name: "Waiting for agents" });
+    expect(chip.textContent).toContain("3");
+  });
+});
+
+describe("SessionCard — backlog-origin badge", () => {
+  it("SessionCard_should_RenderBacklogOriginBadge_When_BacklogEntryProvided", () => {
+    const session = { ...minimalSession } as unknown as Session;
+    render(
+      <SessionCard
+        session={session}
+        backlogEntry={{ itemId: "item-1", itemTitle: "Fix the thing", itemStatus: "in_progress", sessionRole: "work" }}
+      />
+    );
+    expect(screen.getByTestId("backlog-origin-badge")).toBeInTheDocument();
+  });
+
+  it("SessionCard_should_NotRenderBacklogOriginBadge_When_NoBacklogEntry", () => {
+    const session = { ...minimalSession } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.queryByTestId("backlog-origin-badge")).toBeNull();
+  });
+});
+
+// session-list-wasted-space follow-up: no truncation on paths at any width
+// (see SessionRow.test.tsx's identically-updated describe block) — only the
+// home-dir "~" substitution shortens the text; opaque hash/UUID segments
+// always render in full.
+describe("SessionCard — full, untruncated path text", () => {
+  // Canonical fixture from Story 2.1.1/1.1.1: opaque hash + opaque-suffixed segment.
+  const longPath =
+    "/Users/tstapler/.stapler-squad/workspaces/6eb0b580fa0331d5/worktrees/stapler-squad-wasted-space_18d807dfb97a2b28";
+
+  it("SessionCard_should_ShowFullPath_When_ExistingDirActiveDirOrClonedRepoPathIsLong", () => {
+    const session = {
+      ...minimalSession,
+      title: "Test Session",
+      existingDir: longPath,
+      activeDir: longPath,
+      clonedRepoPath: longPath,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    const pathLabel = screen.getByText("Path:");
+    const pathValue = pathLabel.nextElementSibling as HTMLElement;
+    expect(pathValue.textContent).toContain("6eb0b580fa0331d5");
+    expect(pathValue.textContent).toContain("18d807dfb97a2b28");
+
+    const workingDirLabel = screen.getByText("Working Dir:");
+    const workingDirValue = workingDirLabel.nextElementSibling as HTMLElement;
+    expect(workingDirValue.textContent).toContain("6eb0b580fa0331d5");
+
+    const clonedLabel = screen.getByText("Cloned To:");
+    const clonedValue = clonedLabel.nextElementSibling as HTMLElement;
+    expect(clonedValue.textContent).toContain("6eb0b580fa0331d5");
+  });
+
+  it("SessionCard_should_KeepFullPathInTitleAttribute_When_PathIsLong", () => {
+    const session = {
+      ...minimalSession,
+      title: "Test Session",
+      existingDir: longPath,
+      clonedRepoPath: longPath,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    const pathLabel = screen.getByText("Path:");
+    const pathValue = pathLabel.nextElementSibling as HTMLElement;
+    expect(pathValue).toHaveAttribute("title", longPath);
+
+    const clonedLabel = screen.getByText("Cloned To:");
+    const clonedValue = clonedLabel.nextElementSibling as HTMLElement;
+    expect(clonedValue).toHaveAttribute("title", longPath);
+  });
+
+  it("SessionCard_should_RenderTitleOnActiveDir_When_ActiveDirPresent", () => {
+    const session = {
+      ...minimalSession,
+      title: "Test Session",
+      activeDir: longPath,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    const workingDirLabel = screen.getByText("Working Dir:");
+    const workingDirValue = workingDirLabel.nextElementSibling as HTMLElement;
+    expect(workingDirValue).toHaveAttribute("title", longPath);
+  });
+});
+
+// Story 2.2.3: Program row / memory badge gated behind visibleColumns. Card/Board
+// views have no ColumnPicker UI to opt back into a hidden column (see
+// session-columns.ts's CARD_DEFAULT_VISIBLE_COLUMNS doc comment), so SessionCard's
+// own default (no `visibleColumns` prop) must keep pre-PR behavior: agent + memory
+// always shown, unlike row view's user-configurable DEFAULT_VISIBLE_COLUMNS.
+describe("SessionCard — visibleColumns gating (Story 2.2.3)", () => {
+  it("SessionCard_should_RenderProgramRowAndMemoryBadge_When_NoVisibleColumnsPropGiven", () => {
+    const session = {
+      ...minimalSession,
+      program: "claude",
+      memoryRssMb: 400n,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    expect(screen.getByText("Program:")).toBeInTheDocument();
+    expect(screen.getByText(/MB RAM/)).toBeInTheDocument();
+  });
+
+  it("SessionCard_should_RenderProgramRowAndMemoryBadge_When_AgentAndMemoryInVisibleColumns", () => {
+    const session = {
+      ...minimalSession,
+      program: "claude",
+      memoryRssMb: 400n,
+    } as unknown as Session;
+    render(<SessionCard session={session} visibleColumns={["agent", "memory"]} />);
+
+    expect(screen.getByText("Program:")).toBeInTheDocument();
+    expect(screen.getByText(/MB RAM/)).toBeInTheDocument();
+  });
+
+  it("SessionCard_should_NotRenderProgramRowOrMemoryBadge_When_VisibleColumnsExplicitlyExcludesThem", () => {
+    const session = {
+      ...minimalSession,
+      program: "claude",
+      memoryRssMb: 400n,
+    } as unknown as Session;
+    render(<SessionCard session={session} visibleColumns={[]} />);
+
+    expect(screen.queryByText("Program:")).toBeNull();
+    expect(screen.queryByText(/MB RAM/)).toBeNull();
   });
 });

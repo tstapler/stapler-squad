@@ -30,7 +30,7 @@ type KillOutcome struct {
 
 // AliveChecker is the subset of procinfo.ProcessInspector needed to
 // re-verify a PID's identity immediately before killing it (scoped
-// narrowly per .claude/rules/interface-pollution-checklist.md).
+// narrowly per the `interface-pollution-checklist` skill).
 type AliveChecker interface {
 	IsAlive(pid int32, expectedCreateTimeMs int64) bool
 }

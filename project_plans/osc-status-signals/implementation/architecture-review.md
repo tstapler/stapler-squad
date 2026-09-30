@@ -1,17 +1,50 @@
 # Architecture Review: osc-status-signals
 **Date**: 2026-08-06
-**Verdict**: BLOCKED
+**Verdict**: RESOLVED (2026-08-28) — see resolution note below. Originally BLOCKED.
+
+## Resolution (2026-08-28)
+
+Both blockers are addressed by replacing the sequential
+`DetectStateFromContent` → `ApplyOSCStatus` two-call pattern (Stories 3.1.2,
+4.1.3, 4.1.4 as originally written) with a single new method,
+`IdleDetector.DetectStateFromContentWithOSC(content string, osc dtypes.OSCStatus) IdleState`,
+that computes the text-derived candidate state and the OSC-derived candidate
+state and performs **exactly one** lock-protected write to
+`currentState`/`lastStateChange` per call — closing Blocker 1 (no more two
+methods racing the same clock). `DetectStateFromContent` becomes a thin
+wrapper (`return id.DetectStateFromContentWithOSC(content, dtypes.OSCStatusNone)`),
+so its behavior for the no-OSC case is unchanged by construction (same code
+path), preserving AC7.
+
+Blocker 2 (missing protected-status guard on the `IdleState` side) is closed
+by extracting the promotable-status predicates `applyOSCStatusOverride`
+already computed for `DetectedStatus` into two package-level functions in
+`session/detection` — `IsOSCExecutingPromotable`/`IsOSCIdlePromotable` — and
+having both `applyOSCStatusOverride` (in `session/claude_controller.go`) and
+`DetectStateFromContentWithOSC` (in `session/detection/idle.go`) call the
+same predicates. This also closes the "two overlay mechanisms could
+independently drift" risk flagged in Blocker 2's remediation and the
+"Concerns" note about hardcoded case lists having no shared source of truth.
+
+The standalone `IdleDetector.ApplyOSCStatus(osc dtypes.OSCStatus) IdleState`
+method from the original Story 3.1.2 is dropped — it has no production
+caller once `DetectStateFromContentWithOSC` exists, and keeping it as a
+second, parallel state-transition entry point used only by its own unit
+tests would reintroduce exactly the "two ways to commit a transition" shape
+this resolution removes. Its planned unit tests (Task 3.1.2b) are ported to
+exercise `DetectStateFromContentWithOSC` directly instead — see plan.md's
+updated Phase 3/4.
 
 ## Constitution Violations
 - None — `docs/adr/ADR-000-architecture-constitution.md` does not exist in this repository.
 
-## Blockers
+## Blockers (original — see Resolution above)
 
-- [ ] **Story 4.1.3 (`GetStatusAndIdleInfo` idle branch) / Story 4.1.4 (`GetIdleState`), `session/detection/idle.go`'s `ApplyOSCStatus`** — Calling `id.DetectStateFromContent(filtered)` and then immediately `id.ApplyOSCStatus(osc)` on the same `IdleDetector`, as Task 4.1.3/4.1.4a specify, makes the two calls stomp on the *same* `lastStateChange` clock ADR-002 deliberately shares between them. Whichever call runs second sees an elapsed time of ~0 against that clock, so its own debounce gate (`OSCDebounceDelay`) almost never passes — **except** the "first transition out of `IdleStateUnknown`" bypass, which only fires once: for a freshly-constructed `IdleDetector` (`currentState == IdleStateUnknown`, true for every new session's very first poll), `DetectStateFromContent` consumes that bypass and commits (e.g. to `IdleStateWaiting`), resetting `lastStateChange = now`. The immediately-following `ApplyOSCStatus(OSCStatusExecuting)` then computes `newState = IdleStateActive`, sees `currentState` is no longer `Unknown` and `elapsed ≈ 0 < 150ms`, and silently no-ops, returning the stale `IdleStateWaiting`.
+- [x] **Story 4.1.3 (`GetStatusAndIdleInfo` idle branch) / Story 4.1.4 (`GetIdleState`), `session/detection/idle.go`'s `ApplyOSCStatus`** — Calling `id.DetectStateFromContent(filtered)` and then immediately `id.ApplyOSCStatus(osc)` on the same `IdleDetector`, as Task 4.1.3/4.1.4a specify, makes the two calls stomp on the *same* `lastStateChange` clock ADR-002 deliberately shares between them. Whichever call runs second sees an elapsed time of ~0 against that clock, so its own debounce gate (`OSCDebounceDelay`) almost never passes — **except** the "first transition out of `IdleStateUnknown`" bypass, which only fires once: for a freshly-constructed `IdleDetector` (`currentState == IdleStateUnknown`, true for every new session's very first poll), `DetectStateFromContent` consumes that bypass and commits (e.g. to `IdleStateWaiting`), resetting `lastStateChange = now`. The immediately-following `ApplyOSCStatus(OSCStatusExecuting)` then computes `newState = IdleStateActive`, sees `currentState` is no longer `Unknown` and `elapsed ≈ 0 < 150ms`, and silently no-ops, returning the stale `IdleStateWaiting`.
   Traced directly against the plan's own acceptance test, **Task 4.2.1d `TestGetStatusAndIdleInfo_OSCPromotesIdleState`** (fresh `newControllerWithMock("$ \x1b]0;⠋ working\x07")`, asserting `idleInfo.State == IdleStateActive`): this is exactly the first-poll-from-`Unknown` scenario, so the test as specified would fail against the wiring as specified — not a hypothetical, an internal contradiction between Story 4.1.3/4.1.4's implementation task and Task 4.2.1d's acceptance task. Same defect applies whenever the text path *does* commit a transition on the same poll where OSC also wants to transition (not limited to the `Unknown` case — any two same-tick transitions race the shared clock the same way).
   **Remediation**: don't call two separate state-committing, clock-touching methods sequentially per poll. Compute both candidate states without committing (e.g. a non-mutating `peekStateFromContent`/reuse of `mapStatusToIdleState` for text, and the OSC-target state for OSC), resolve which one wins under the plan's own asymmetric-upgrade policy, and perform exactly one lock-protected write with the correct debounce window (`DebounceDelay` vs `OSCDebounceDelay`) for whichever source is authoritative on that call. This also closes the gap Lens 1.4 (testability) flags: `ApplyOSCStatus` is unit-tested in isolation and passes, but the actual production composition (`DetectStateFromContent` immediately followed by `ApplyOSCStatus`) is never exercised by an isolated unit test — only by the Phase 4 integration test that this defect would fail.
 
-- [ ] **Story 4.1.3 idle branch / Story 4.1.4a, `session/claude_controller.go`** — The `IdleState`-side OSC override has no equivalent of `applyOSCStatusOverride`'s protected-status guard. For `DetectedStatus`, `OSCStatusExecuting` is only allowed to promote `Ready/Unknown/Idle/Processing` — it deliberately never overrides `Error/NeedsApproval/InputRequired/TestsFailing/Success/WaitingForAgent`, precisely so (per the plan's own Pattern Decisions table) "a false OSC-idle title... [never] hides a state needing user attention." The `IdleState` override has no such list: `if osc == dtypes.OSCStatusExecuting { idleState = id.ApplyOSCStatus(osc) }` applies unconditionally, regardless of what the text-derived `idleState` already was — including cases where it came from `StatusNeedsApproval`/`StatusError`/`StatusInputRequired` (all of which `mapStatusToIdleState` maps to `IdleStateWaiting`). A false or stale spinner glyph in the OSC title (the exact nested-tool-spinner scenario `research/pitfalls.md` §4 names as a real risk) can therefore force `IdleState` to `IdleStateActive` even while `DetectedStatus` correctly stays `StatusNeedsApproval` — the two signals now disagree, and `IdleState` is the one consumed independently of `DetectedStatus` by real production readers, e.g. `session/autonomous_driver.go`'s `waitForIdle`/`cc.IsIdle()`. This violates the plan's own stated safety bound ("blast radius bounded to a cosmetically wrong badge, never a functional regression") for the `IdleState` output specifically, since that bound was only actually engineered into `applyOSCStatusOverride`, not into the parallel idle-state path.
+- [x] **Story 4.1.3 idle branch / Story 4.1.4a, `session/claude_controller.go`** — The `IdleState`-side OSC override has no equivalent of `applyOSCStatusOverride`'s protected-status guard. For `DetectedStatus`, `OSCStatusExecuting` is only allowed to promote `Ready/Unknown/Idle/Processing` — it deliberately never overrides `Error/NeedsApproval/InputRequired/TestsFailing/Success/WaitingForAgent`, precisely so (per the plan's own Pattern Decisions table) "a false OSC-idle title... [never] hides a state needing user attention." The `IdleState` override has no such list: `if osc == dtypes.OSCStatusExecuting { idleState = id.ApplyOSCStatus(osc) }` applies unconditionally, regardless of what the text-derived `idleState` already was — including cases where it came from `StatusNeedsApproval`/`StatusError`/`StatusInputRequired` (all of which `mapStatusToIdleState` maps to `IdleStateWaiting`). A false or stale spinner glyph in the OSC title (the exact nested-tool-spinner scenario `research/pitfalls.md` §4 names as a real risk) can therefore force `IdleState` to `IdleStateActive` even while `DetectedStatus` correctly stays `StatusNeedsApproval` — the two signals now disagree, and `IdleState` is the one consumed independently of `DetectedStatus` by real production readers, e.g. `session/autonomous_driver.go`'s `waitForIdle`/`cc.IsIdle()`. This violates the plan's own stated safety bound ("blast radius bounded to a cosmetically wrong badge, never a functional regression") for the `IdleState` output specifically, since that bound was only actually engineered into `applyOSCStatusOverride`, not into the parallel idle-state path.
   **Remediation**: gate the `IdleState` promotion for `OSCStatusExecuting` on the same protected-status check `applyOSCStatusOverride` already computes for `DetectedStatus` on the same call (the `status`/`textStatus` value is already in scope at both call sites) — i.e. only call `id.ApplyOSCStatus(OSCStatusExecuting)` when the text-derived `DetectedStatus` is itself in the promotable set, keeping the two overlay mechanisms provably consistent instead of independently re-deriving (and, here, under-deriving) the same policy.
 
 ## Concerns

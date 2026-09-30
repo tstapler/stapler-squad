@@ -18,7 +18,7 @@ import (
 // HeadlessPoolClient is the narrow interface AutonomousDriver needs from the headless pool.
 // *headless.Pool satisfies this interface directly.
 type HeadlessPoolClient interface {
-	CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions) (string, float64, error)
+	CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions, sink headless.CostSink) (string, error)
 }
 
 // AutonomousDriverOutcome describes how an autonomous driver run concluded.
@@ -39,35 +39,22 @@ type TurnCallback func(turn, maxTurns int, prompt string)
 // DriverOption is a functional option for configuring an AutonomousDriver.
 type DriverOption func(*AutonomousDriver)
 
+// NoopDriverOption changes nothing — a safe DriverOption for callers building an
+// option conditionally (e.g. only when storage is wired) that still need a value
+// to pass, rather than branching on whether to include the option at all.
+func NoopDriverOption(*AutonomousDriver) {}
+
 // WithStartupTimeout overrides the default 60s startup idle-wait timeout.
 // Use a longer timeout for sessions that spawn parallel subagents (e.g. triage).
 func WithStartupTimeout(d time.Duration) DriverOption {
 	return func(a *AutonomousDriver) { a.startupTimeout = d }
 }
 
-// WithIdleSettlePollInterval overrides the default 500ms poll interval used
-// while waiting for the idle-settle window (see idleSettleWindow doc comment
-// on the AutonomousDriver struct). Tests use this to shrink real timers
-// instead of waiting them out.
-func WithIdleSettlePollInterval(d time.Duration) DriverOption {
-	return func(a *AutonomousDriver) { a.idleSettlePollInterval = d }
-}
-
-// WithIdleSettleWindow overrides the default 60s idle-settle debounce window.
-func WithIdleSettleWindow(d time.Duration) DriverOption {
-	return func(a *AutonomousDriver) { a.idleSettleWindow = d }
-}
-
-// WithPaneSettlePollInterval overrides the default 150ms poll interval used
-// by waitForPaneSettle.
-func WithPaneSettlePollInterval(d time.Duration) DriverOption {
-	return func(a *AutonomousDriver) { a.paneSettlePollInterval = d }
-}
-
-// WithPaneSettleMaxWait overrides the default 2s max wait used by
-// waitForPaneSettle.
-func WithPaneSettleMaxWait(d time.Duration) DriverOption {
-	return func(a *AutonomousDriver) { a.paneSettleMaxWait = d }
+// WithCostSink overrides the default headless.DiscardCost sink invoked with the
+// USD cost of each per-turn LLM call. Pass CostSinkForSessionUUID(storage,
+// inst.UUID) to accumulate a running total on the session's ItemSession.
+func WithCostSink(sink headless.CostSink) DriverOption {
+	return func(a *AutonomousDriver) { a.costSink = sink }
 }
 
 // panePreviewer is the narrow interface AutonomousDriver needs to read the
@@ -116,6 +103,10 @@ type AutonomousDriver struct {
 	// be overridden via WithPaneSettlePollInterval/WithPaneSettleMaxWait.
 	paneSettlePollInterval time.Duration
 	paneSettleMaxWait      time.Duration
+
+	// costSink receives the USD cost of each per-turn LLM call. Defaults to
+	// headless.DiscardCost (set in NewAutonomousDriver) — override via WithCostSink.
+	costSink headless.CostSink
 }
 
 // previewPane returns the current pane content, preferring d.previewer when
@@ -159,6 +150,9 @@ func NewAutonomousDriver(inst *Instance, pool HeadlessPoolClient, goal string, m
 	}
 	if d.paneSettleMaxWait == 0 {
 		d.paneSettleMaxWait = 2 * time.Second
+	}
+	if d.costSink == nil {
+		d.costSink = headless.DiscardCost
 	}
 	return d
 }
@@ -287,6 +281,13 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 	if startupTimeout == 0 {
 		startupTimeout = 60 * time.Second
 	}
+	// costSink mirrors startupTimeout's zero-value fallback above: tests across this
+	// file construct &AutonomousDriver{} directly (bypassing NewAutonomousDriver's
+	// defaulting), so this can't assume the constructor ran.
+	costSink := d.costSink
+	if costSink == nil {
+		costSink = headless.DiscardCost
+	}
 	startupCtx, startupCancel := context.WithTimeout(ctx, startupTimeout)
 	// No settle window here: startup only needs to observe the session's
 	// first idle signal after launch, not debounce against a background
@@ -326,7 +327,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			keyLen = len(sessionID)
 		}
 		featureKey := headless.FeatureKey("autonomous_fix-" + sessionID[:keyLen])
-		resp, _, err := d.headlessPool.CallBlocking(ctx, featureKey, autonomousSystemPrompt, userPrompt, headless.CallOptions{})
+		resp, err := d.headlessPool.CallBlocking(ctx, featureKey, autonomousSystemPrompt, userPrompt, headless.CallOptions{}, costSink)
 		if err != nil {
 			log.Warn("AutonomousDriver: LLM call failed", "session", sessionName, "turn", turnCount+1, "err", err)
 			break
@@ -387,20 +388,11 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		// text into the multiline buffer without submitting — identical to steer_session
 		// which uses inst.SendKeys(msg + "\r") directly and is known to work.
 		//
-		// content and "\r" are sent as two SEPARATE writes, not concatenated into one
-		// (BUG-031): a single large write lands its trailing "\r" inside the TUI's
-		// paste-detection window for sufficiently long prompts, folding it into the
-		// pasted block instead of submitting — live-confirmed via a stuck session
-		// showing an unsubmitted "[Pasted text #N +1 lines]" block at the input line.
-		// waitForPaneSettle gives the TUI's paste detector a chance to close before
-		// the submit keystroke arrives as its own write.
-		if sendErr := d.inst.SendKeys(nextMsg); sendErr != nil {
-			log.Warn("AutonomousDriver: SendKeys failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
-			break
-		}
-		waitForPaneSettle(ctx, d.inst, d.paneSettlePollInterval, d.paneSettleMaxWait)
-		if sendErr := d.inst.SendKeys(EnterKeySequence); sendErr != nil {
-			log.Warn("AutonomousDriver: submit keystroke failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
+		// SubmitDriverContent sends content and the submit keystroke as two SEPARATE
+		// writes, not concatenated into one (BUG-031): see its doc comment
+		// (pane_submit.go) for why a single write is unsafe for long content.
+		if sendErr := SubmitDriverContent(ctx, d.inst, nextMsg, d.paneSettlePollInterval, d.paneSettleMaxWait); sendErr != nil {
+			log.Warn("AutonomousDriver: failed to submit turn", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			break
 		}
 		// Re-capture the pane AFTER delivery completes, rather than reusing the
@@ -627,7 +619,7 @@ No other text.`
 // the most recent nudge actually delivered (both SendKeys calls succeeded); a zero
 // lastSent (lastSent.at.IsZero()) means none has been sent yet. Bundled into one
 // struct param (rather than two same-shaped text/time.Time args) per
-// .claude/rules/primitive-obsession-checklist.md — the two values are always read
+// the `primitive-obsession-checklist` skill — the two values are always read
 // and passed together, so a struct removes the chance of them being supplied out of
 // order at a call site. lastSent.text is LLM-generated content from a prior turn, so
 // it's wrapped in its own <last_nudge> tag (same anti-spoofing rationale as
@@ -678,7 +670,7 @@ var orchestrationDirectiveMarker = regexp.MustCompile(`(?i)(DONE|NEXT_MESSAGE|WA
 // orchestrationDirective is the 3-way outcome of parsing an orchestrator reply. A
 // dedicated enum (rather than a second bool alongside nextMsg/reason strings) avoids
 // the same same-typed-parameter ambiguity flagged by
-// .claude/rules/primitive-obsession-checklist.md for function parameters — here applied
+// the `primitive-obsession-checklist` skill for function parameters — here applied
 // to a return value that would otherwise need a second bool to distinguish WAIT from
 // DONE.
 type orchestrationDirective int

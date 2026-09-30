@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getWatchTransport } from "@/lib/api/transport";
 import { GitHubUserService } from "@/gen/session/v1/github_user_pb";
 import {
   WatchUserPRsRequestSchema,
@@ -10,7 +10,6 @@ import {
 } from "@/gen/session/v1/github_user_pb";
 import { type UserPR } from "@/gen/session/v1/types_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 
 export interface UseGitHubPRsReturn {
   prs: UserPR[];
@@ -35,11 +34,7 @@ export function useGitHubPRs(): UseGitHubPRsReturn {
     const abort = new AbortController();
     abortRef.current = abort;
 
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
-    const client = createClient(GitHubUserService, transport);
+    const client = createClient(GitHubUserService, getWatchTransport());
 
     (async () => {
       try {

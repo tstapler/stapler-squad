@@ -7,18 +7,19 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	ssqlog "github.com/tstapler/stapler-squad/log"
 )
 
-// captureLogInfo temporarily redirects the default slog handler to a text
-// handler writing into the returned buffer, restoring the previous handler
+// captureLogInfo temporarily redirects the log package's injectable slog seam to a
+// text handler writing into the returned buffer, restoring the previous handler
 // via t.Cleanup. Mirrors main_test.go's captureLogWarn for this package.
 func captureLogInfo(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() {
-		slog.SetDefault(prev)
+		ssqlog.SetSlogDefaultForTest(prev)
 	})
 	return &buf
 }

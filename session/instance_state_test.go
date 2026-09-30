@@ -1,0 +1,255 @@
+package session
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/session/detection"
+)
+
+// TestTransitionTo_should_AllowCreatingToFailed_When_PipelineFails verifies the
+// FSM edge added for Epic 1.1 Story 1.1.2: an instance in Creating can
+// transition to Failed when the async creation pipeline (Epic 2.2) fails.
+func TestTransitionTo_should_AllowCreatingToFailed_When_PipelineFails(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:  "test-creating-to-failed",
+		Status: Creating,
+	}
+
+	err := inst.transitionTo(context.Background(), Failed)
+
+	require.NoError(t, err, "Creating -> Failed must be a legal transition")
+	assert.Equal(t, Failed, inst.Status)
+}
+
+// TestTransitionTo_should_RejectStoppedToFailed_When_StoppedIsTerminal verifies
+// that Stopped stays terminal — no Stopped->Failed edge was added alongside the
+// Creating<->Failed pair.
+func TestTransitionTo_should_RejectStoppedToFailed_When_StoppedIsTerminal(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:  "test-stopped-to-failed",
+		Status: Stopped,
+	}
+
+	err := inst.transitionTo(context.Background(), Failed)
+
+	require.Error(t, err, "Stopped -> Failed must be rejected: Stopped stays terminal")
+	assert.Equal(t, ErrInvalidTransition{From: Stopped, To: Failed}, err)
+	assert.Equal(t, Stopped, inst.Status, "status must not change on a rejected transition")
+}
+
+// TestTransitionTo_should_AllowFailedToCreating_When_RetryRequested verifies the
+// retry path: a Failed instance can transition back to Creating (Epic 1.2's
+// TryStartRetry builds on this FSM edge).
+func TestTransitionTo_should_AllowFailedToCreating_When_RetryRequested(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:  "test-failed-to-creating",
+		Status: Failed,
+	}
+
+	err := inst.transitionTo(context.Background(), Creating)
+
+	require.NoError(t, err, "Failed -> Creating must be a legal transition (retry path)")
+	assert.Equal(t, Creating, inst.Status)
+}
+
+// TestTransitionTo_should_RejectFailedToActive_When_MustGoThroughCreatingFirst
+// verifies Failed has exactly one outgoing edge (to Creating) — a retry cannot
+// skip straight back to Active.
+func TestTransitionTo_should_RejectFailedToActive_When_MustGoThroughCreatingFirst(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:  "test-failed-to-active",
+		Status: Failed,
+	}
+
+	err := inst.transitionTo(context.Background(), Active)
+
+	require.Error(t, err, "Failed -> Active must be rejected: retry must go through Creating first")
+	assert.Equal(t, ErrInvalidTransition{From: Failed, To: Active}, err)
+}
+
+// TestFailureReason_should_RoundTrip_When_SetViaLockedHelper verifies the
+// unexported failureReason field (Task 1.1.2c) round-trips through the
+// setFailureReasonLocked/FailureReason() accessor pair. There is deliberately
+// no public setter — setFailureReasonLocked is only reachable from within an
+// actor command (Epic 1.2's TryForceStatusIfEpoch), exercised here directly via
+// sendSyncErr the same way that closure will call it.
+func TestFailureReason_should_RoundTrip_When_SetViaLockedHelper(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "test-failure-reason", Status: Failed}
+
+	assert.Empty(t, inst.FailureReason(), "failureReason must be empty before it is ever set")
+
+	err := inst.sendSyncErr(func(s *instanceState) error {
+		setFailureReasonLocked(s, "worktree creation failed: disk full")
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "worktree creation failed: disk full", inst.FailureReason())
+}
+
+// TestStatusAndFailureReason_should_ReturnBothFieldsFromOneActorRoundTrip_When_Called
+// verifies the accessor server/services.AwaitCreationTerminal relies on
+// (async-session-creation Epic 2.3, Story 2.3.3) reads Status and
+// FailureReason together rather than via two independent calls — pinned here
+// by asserting both values come back correctly paired for a Failed instance,
+// and empty/Creating for a fresh one.
+func TestStatusAndFailureReason_should_ReturnBothFieldsFromOneActorRoundTrip_When_Called(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "test-status-and-failure-reason", Status: Creating}
+
+	status, reason := inst.StatusAndFailureReason()
+	assert.Equal(t, Creating, status)
+	assert.Empty(t, reason)
+
+	err := inst.sendSyncErr(func(s *instanceState) error {
+		s.inst.Status = Failed
+		setFailureReasonLocked(s, "StartupError")
+		return nil
+	})
+	require.NoError(t, err)
+
+	status, reason = inst.StatusAndFailureReason()
+	assert.Equal(t, Failed, status)
+	assert.Equal(t, "StartupError", reason)
+}
+
+// TestSetCreationProgress_should_UpdateTimestamp_When_Called verifies Task
+// 1.1.4's acceptance criterion: every SetCreationProgress call bumps
+// CreationProgressUpdatedAt to that call's time, in the same actor command as
+// the progress-text write (not a second mailbox round-trip).
+func TestSetCreationProgress_should_UpdateTimestamp_When_Called(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "test-creation-progress-timestamp", Status: Creating}
+
+	require.True(t, inst.CreationProgressUpdatedAt().IsZero(), "timestamp must be zero before the first call")
+
+	before := time.Now()
+	inst.SetCreationProgress("Cloning repository...")
+	after := time.Now()
+
+	got := inst.CreationProgressUpdatedAt()
+	assert.False(t, got.Before(before), "timestamp must not be earlier than the call")
+	assert.False(t, got.After(after), "timestamp must not be later than the call returned")
+	assert.Equal(t, "Cloning repository...", inst.CreationProgress)
+
+	// A second call bumps the timestamp again.
+	firstTimestamp := got
+	time.Sleep(time.Millisecond)
+	inst.SetCreationProgress("Starting tmux session...")
+	assert.True(t, inst.CreationProgressUpdatedAt().After(firstTimestamp), "second call must advance the timestamp")
+}
+
+// TestIsHotRestoreRecoverable_MatchesRecoverFromStopped is the single test
+// enforcing that IsHotRestoreRecoverable's status set never drifts out of
+// sync with what RecoverFromStopped actually resets. Before IsHotRestoreRecoverable
+// existed, that status list (Stopped/PermanentlyFailed/Failed) was duplicated
+// inline at two independent call sites — server/dependencies.go's boot-time
+// reconcile loop and retry_state.go's restartForRetry — and the boot-time copy
+// silently omitted PermanentlyFailed/Failed. A session that reached one of
+// those statuses before a server restart, with its tmux session still alive,
+// was left permanently stuck: Start(false) rejects the PermanentlyFailed/Failed
+// -> Active transition, and nothing else in the boot path recovered it, so
+// every capture/resync against it failed indefinitely.
+//
+// Iterating every real Status constant and asserting IsHotRestoreRecoverable
+// agrees with RecoverFromStopped's actual before/after effect means any future
+// edit to either one that isn't mirrored in the other fails this test —
+// closing the class rather than just the one instance of it.
+func TestIsHotRestoreRecoverable_MatchesRecoverFromStopped(t *testing.T) {
+	t.Parallel()
+	every := []Status{Creating, Active, Paused, Stopped, Hibernated, Restoring, Crashed, PermanentlyFailed, Failed}
+
+	for _, status := range every {
+		status := status
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			inst := &Instance{Title: "test-hot-restore-recoverable", Status: status}
+
+			predicted := inst.IsHotRestoreRecoverable()
+			inst.RecoverFromStopped()
+			after := inst.GetLifecycleStatus()
+
+			if predicted {
+				assert.Equal(t, Creating, after,
+					"IsHotRestoreRecoverable(%s) = true but RecoverFromStopped() left status = %s, want it reset to Creating",
+					status, after)
+			} else {
+				assert.Equal(t, status, after,
+					"IsHotRestoreRecoverable(%s) = false but RecoverFromStopped() changed status to %s — it should have been a no-op",
+					status, after)
+			}
+		})
+	}
+}
+
+// TestInstance_IsArchived_should_ReadPublishedSnapshot_When_ArchivedAtSet pins
+// that IsArchived() goes through the published snapshot rather than the raw
+// i.ArchivedAt field (.claude/rules/instance-lock-free-reads.md). Every
+// auto-lifecycle guard added for ADR-001 (health checker, poller, session
+// driver, stale-resume recovery) reads this one predicate from a non-actor
+// goroutine, so a raw-field read here would race the actor setters.
+func TestInstance_IsArchived_should_ReadPublishedSnapshot_When_ArchivedAtSet(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+
+	tests := []struct {
+		name       string
+		status     Status
+		archivedAt *time.Time
+		want       bool
+	}{
+		{name: "stopped_not_archived", status: Stopped, archivedAt: nil, want: false},
+		{name: "stopped_archived", status: Stopped, archivedAt: &now, want: true},
+		{name: "permanently_failed_archived", status: PermanentlyFailed, archivedAt: &now, want: true},
+		{name: "active_archived", status: Active, archivedAt: &now, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// ArchivedAt must be set before anything calls Snapshot(): the first
+			// call caches its lazily-built value (see Snapshot's doc comment).
+			inst := &Instance{Title: "archived-predicate-" + tt.name, Status: tt.status, ArchivedAt: tt.archivedAt}
+			assert.Equal(t, tt.want, inst.IsArchived())
+		})
+	}
+}
+
+// TestInstance_IsArchived_should_SeeTheWrite_When_SetViaActorSetter guards the
+// other half of the predicate: an archive written through the actor setter
+// republishes the snapshot, so IsArchived() flips. A raw `inst.ArchivedAt =`
+// write (the defect fixed in server/services/workflow_service.go) leaves this
+// false for the rest of the process lifetime.
+func TestInstance_IsArchived_should_SeeTheWrite_When_SetViaActorSetter(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "archived-via-actor-setter", Status: Stopped}
+	require.False(t, inst.IsArchived(), "precondition: not archived")
+
+	require.True(t, inst.SetArchivedAtIfNil(time.Now()), "first archive should apply (CAS)")
+	assert.True(t, inst.IsArchived(), "IsArchived() must see an actor-routed archive")
+
+	assert.False(t, inst.SetArchivedAtIfNil(time.Now()), "second archive is a no-op (CAS)")
+}
+
+// TestGetDetectedStatusInfo_should_ReturnUnknownAndFalse_When_NoStatusManagerSet
+// covers the mgr == nil early return -- no other scroll_gate_test.go instance
+// hits it, since newScrollGateTestInstance always calls SetStatusManager.
+func TestGetDetectedStatusInfo_should_ReturnUnknownAndFalse_When_NoStatusManagerSet(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{}
+
+	status, controllerActive := inst.GetDetectedStatusInfo()
+
+	assert.Equal(t, detection.StatusUnknown, status)
+	assert.False(t, controllerActive)
+}

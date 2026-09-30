@@ -10,17 +10,24 @@
 #   2 - Error / usage issue
 #
 # Sets RECORD_FEATURES=true in GITHUB_ENV if running in GitHub Actions.
+#
+# If CHANGED_FILES is already set in the environment, it's used as-is
+# instead of computing it via `git diff` -- this repo's .git pack data is
+# ~16GB, so callers that already have the file list (e.g. from GitHub's
+# compare API) can skip the full-history `fetch-depth: 0` clone `git diff
+# "${BASE_REF}...HEAD"` would otherwise require to resolve BASE_REF.
 
 set -euo pipefail
 
 BASE_REF="${1:-origin/main}"
 
-# Get changed files
-if ! CHANGED_FILES="$(git diff --name-only "${BASE_REF}...HEAD" 2>/dev/null)"; then
-  # Try without three-dot notation for shallow clones
-  if ! CHANGED_FILES="$(git diff --name-only "${BASE_REF}" HEAD 2>/dev/null)"; then
-    echo "Warning: Could not determine changed files, assuming no feature changes" >&2
-    exit 1
+if [ -z "${CHANGED_FILES:-}" ]; then
+  if ! CHANGED_FILES="$(git diff --name-only "${BASE_REF}...HEAD" 2>/dev/null)"; then
+    # Try without three-dot notation for shallow clones
+    if ! CHANGED_FILES="$(git diff --name-only "${BASE_REF}" HEAD 2>/dev/null)"; then
+      echo "Warning: Could not determine changed files, assuming no feature changes" >&2
+      exit 1
+    fi
   fi
 fi
 

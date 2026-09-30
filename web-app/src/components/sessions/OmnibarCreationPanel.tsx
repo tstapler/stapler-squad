@@ -1,5 +1,5 @@
 "use client";
-// +feature: session-image-attach
+// +feature: session-image-attach pi-support
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { KeyboardEvent } from "react";
@@ -8,8 +8,10 @@ import { SessionService } from "@/gen/session/v1/session_pb";
 import type { WorktreeEntry } from "@/gen/session/v1/session_pb";
 import type { OmnibarFormState } from "./Omnibar";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
+import { PI_SUPPORT_FLAG_NAME, getPickerPrograms } from "@/lib/constants/programs";
 import { getConnectTransport } from "@/lib/api/transport";
-import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
+import { isAutoApproveSupported, isApprovalExtensionSupported } from "@/lib/sessions/autoApprove";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import {
   body, field, label as labelClass, fieldInput, hint, select as selectClass,
   checkbox as checkboxClass, collapsible, collapsibleHeader, collapsibleTitle, collapsibleIcon, expanded,
@@ -25,7 +27,7 @@ import { useSlashCommands } from "@/lib/hooks/useSlashCommands";
 import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestions";
 import type { LauncherPresetEntry } from "@/lib/hooks/useLauncherPresets";
 import { OmnibarPresetList } from "./OmnibarPresetList";
-import * as presetListStyles from "./OmnibarPresetList.css";
+import { ProgramProbeSection, PROGRAM_PROBE_STATUS_ID } from "./ProgramProbeSection";
 
 // ─── Session Type Radio Group ────────────────────────────────────────────────
 
@@ -79,6 +81,25 @@ const ADVANCED_VALUES = new Set<string>(ADVANCED_TYPES.map((t) => t.value));
 // parameter value would get a new identity every render, retriggering the auto-open effect's
 // dependency array unnecessarily.
 const EMPTY_PRESETS: LauncherPresetEntry[] = [];
+
+// Stable identity for callers that omit remotes — see EMPTY_PRESETS above for why.
+const EMPTY_REMOTES: RemoteOption[] = [];
+
+/**
+ * A configured remote target, shown in the "Remote host" selector (ADR-001:
+ * remote-as-orthogonal-flag; see project_plans/ssh-remote-workspaces/decisions/ADR-001-
+ * remote-as-orthogonal-flag.md). Deliberately minimal — only what this selector needs to
+ * display an option and identify it by name.
+ *
+ * TODO(Phase 6): this list will be sourced from a `remotesSlice` in Redux, populated by a
+ * `ListRemotes` RPC over the full `RemoteConfig` (proto/session/v1/remote.proto — host, port,
+ * username, etc.), and a Settings UI to manage it. Neither exists yet; until then, callers
+ * pass this list in as a prop (defaulting to empty, which hides the selector entirely).
+ */
+export interface RemoteOption {
+  /** RemoteConfig.Name — the identifier threaded through as RemoteTarget.remoteName. */
+  name: string;
+}
 
 // Radio options for the "Open as" sub-selector inside New Project mode.
 const NEW_PROJECT_OPEN_AS = [
@@ -161,6 +182,16 @@ export interface OmnibarCreationPanelProps {
   launcherPresets?: LauncherPresetEntry[];
   launcherPresetsLoading?: boolean;
   launcherPresetsLoadError?: string | null;
+  /** Configured remotes for the "Remote host" selector. Renders only when non-empty — see
+   * RemoteOption's doc comment for why this is a prop rather than a Redux-sourced list. */
+  remotes?: RemoteOption[];
+  /**
+   * Stubbed extension-health signal for Story 3.1.2's capability warning: true means the pi
+   * approval extension is known to have failed to load. Always `false` for now — Phase 4's
+   * Story 4.2.2 will wire this to the real per-session health tracker; this prop exists so the
+   * warning UI itself can ship and be tested now without waiting on that server-side work.
+   */
+  piApprovalExtensionFailed?: boolean;
 }
 
 // Helper: file → base64 string (strips data URL prefix).
@@ -199,12 +230,14 @@ export function OmnibarCreationPanel({
   launcherPresets: presets = EMPTY_PRESETS,
   launcherPresetsLoading: presetsLoading = false,
   launcherPresetsLoadError: presetsLoadError = null,
+  remotes = EMPTY_REMOTES,
+  piApprovalExtensionFailed = false,
 }: OmnibarCreationPanelProps) {
   const {
     sessionName, branch, program, category, autoYes, autoApprove,
     useTitleAsBranch, sessionType, existingWorktree, workingDir,
     parentDir, projectName, newProjectSessionType, createIfMissing, firstPrompt,
-    autonomousMode,
+    autonomousMode, remoteName,
   } = formState;
 
   // If the program changes to an unsupported agent after auto-approve was checked
@@ -288,6 +321,16 @@ export function OmnibarCreationPanel({
   }, [sessionType]);
 
   const availablePrograms = useAvailablePrograms();
+  const piSupportEnabled = useFeatureFlag(PI_SUPPORT_FLAG_NAME);
+  // Story 3.1.1: "pi" is only offered in the rendered picker options when pi-support is on —
+  // opt-in invisibility. availablePrograms (not the raw PROGRAMS constant) is the base list
+  // here since it may also include extra programs detected on the host; getPickerPrograms
+  // takes that list as a parameter so this call site and programs.ts share one filter rule.
+  const pickerPrograms = getPickerPrograms(availablePrograms, piSupportEnabled);
+  // Story 3.1.2: the capability warning is only even eligible to show for a program the pi
+  // approval extension covers, and only while pi-support itself is on.
+  const showPiApprovalWarning =
+    piSupportEnabled && isApprovalExtensionSupported(program) && piApprovalExtensionFailed;
   // Default-expanded once there's something to show — either a loaded preset or a config
   // error. An error must never sit hidden behind a collapsed section: AC requires a malformed
   // config to "fail loudly", and a load_error with zero presets (the RPC's own contract) would
@@ -304,7 +347,6 @@ export function OmnibarCreationPanel({
       setPresetsOpen(true);
     }
   }, [shouldAutoOpenPresets]);
-  const isProgramRecognized = !program || availablePrograms.some((p) => p.value === program);
 
   // ─── File attachment state ────────────────────────────────────────────────
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
@@ -523,6 +565,35 @@ export function OmnibarCreationPanel({
             onChange={(v) => setFormField("sessionType", v)}
           />
         </div>
+
+        {/* "Remote host" selector — an orthogonal control (ADR-001: remote-as-orthogonal-flag)
+            that composes with whichever SESSION_TYPES value is selected above, not a 6th
+            radio option. Renders only once ≥1 remote is configured (research/ux.md §2:
+            "defaulting to This machine"); absent entirely otherwise, not merely disabled. */}
+        {remotes.length > 0 && (
+          <div className={field} data-testid="remote-selector-field">
+            <label className={labelClass} htmlFor="omnibar-remote">
+              <span className={styles.remoteIcon} aria-hidden="true">🌐</span> Remote host
+            </label>
+            <select
+              id="omnibar-remote"
+              data-testid="remote-selector"
+              className={selectClass}
+              value={remoteName ?? ""}
+              onChange={(e) => setFormField("remoteName", e.target.value || undefined)}
+            >
+              <option value="">This machine</option>
+              {remotes.map((r) => (
+                <option key={r.name} value={r.name}>{r.name}</option>
+              ))}
+            </select>
+            <span className={hint}>
+              {remoteName
+                ? `Runs on "${remoteName}" over SSH.`
+                : "Runs locally by default — pick a configured remote to run this session over SSH instead."}
+            </span>
+          </div>
+        )}
 
         {/* Autonomous mode — an orthogonal flag, not a session type: it composes with
             whichever type is selected above instead of forcing a scratch directory. */}
@@ -870,15 +941,21 @@ export function OmnibarCreationPanel({
                   id="omnibar-program"
                   className={selectClass}
                   value={program}
+                  aria-describedby={PROGRAM_PROBE_STATUS_ID}
                   onChange={(e) => setFormField("program", e.target.value)}
                 >
-                  {availablePrograms.map((p) => (
+                  {pickerPrograms.map((p) => (
                     <option key={p.value} value={p.value}>{p.label}</option>
                   ))}
                 </select>
-                {!isProgramRecognized && (
-                  <span className={presetListStyles.programWarning} data-testid="preset-program-warning">
-                    &quot;{program}&quot; not found in PATH — check it&apos;s installed
+                <ProgramProbeSection option={availablePrograms.find((p) => p.value === program)} />
+                {/* Story 3.1.2 / Phase 3: placeholder capability warning. piApprovalExtensionFailed
+                    is a stubbed prop (always false today) — Story 4.2.2 will wire the real
+                    per-session extension-health signal here; the UI/AC (role="alert", exact
+                    wording) ships now so it doesn't block on that server-side work. */}
+                {showPiApprovalWarning && (
+                  <span className={styles.piApprovalWarning} role="alert" data-testid="pi-approval-extension-warning">
+                    Approval extension not loaded for pi — tool calls will run WITHOUT rule enforcement for this session.
                   </span>
                 )}
               </div>
@@ -933,7 +1010,11 @@ export function OmnibarCreationPanel({
       </div>
 
       {/* Error Message */}
-      {error && <div className={errorClass}>{error}</div>}
+      {error && (
+        <div className={errorClass} role="alert" data-testid="omnibar-create-error">
+          {error}
+        </div>
+      )}
 
       {/* Footer */}
       <div className={footer}>

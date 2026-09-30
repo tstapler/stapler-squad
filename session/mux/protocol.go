@@ -67,6 +67,7 @@ func EncodeMessage(msg *Message) ([]byte, error) {
 
 	buf := make([]byte, 5+len(msg.Data))
 	buf[0] = byte(msg.Type)
+	// #nosec G115 -- bounds-checked above: the len(msg.Data) > 0xFFFFFFFF guard guarantees this fits in uint32
 	binary.BigEndian.PutUint32(buf[1:5], uint32(len(msg.Data)))
 	copy(buf[5:], msg.Data)
 

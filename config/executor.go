@@ -49,6 +49,7 @@ func (t *timeoutCommandExecutor) LookPath(file string) (string, error) {
 type lookPathOnlyExecutor struct{}
 
 func (l *lookPathOnlyExecutor) Command(name string, args ...string) *exec.Cmd {
+	// #nosec G204 -- stub: the *exec.Cmd built here is never run, Output() below always returns ErrNotFound before Start()/Run().
 	return exec.Command(name, args...) //nolint:norawexec,forbidigo // stub: Output always returns ErrNotFound; cmd is never executed
 }
 

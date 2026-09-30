@@ -8,7 +8,69 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/sendkeysguard"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 )
+
+// TestMCPPackage_NoDirectSendKeysPlusEnterConcatenation is the server/mcp
+// instance of the BUG-031 structural guard (see sendkeysguard's doc comment
+// and session/pane_submit_test.go's sibling test) — the single-write pattern
+// this guards against was originally reintroduced here, in writeToSession,
+// runCommand, and steerSession, not in the session package.
+func TestMCPPackage_NoDirectSendKeysPlusEnterConcatenation(t *testing.T) {
+	t.Parallel()
+	sendkeysguard.CheckNoSingleWriteEnterConcatenation(t, ".")
+}
+
+// TestSubmitErrResult_MapsErrSubmitNotConfirmedToDistinctErrorCode is the
+// direct AC-5 test: a swallowed submit (session.ErrSubmitNotConfirmed) must
+// surface as an explicit, distinguishable error — not the generic internal
+// error every other SendKeys failure gets, and not success.
+func TestSubmitErrResult_MapsErrSubmitNotConfirmedToDistinctErrorCode(t *testing.T) {
+	res := submitErrResult(session.ErrSubmitNotConfirmed, "message")
+	m := parseResult(t, res)
+
+	if success, _ := m["success"].(bool); success {
+		t.Fatal("expected success=false for a swallowed submit")
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object in result")
+	}
+	if code, _ := errObj["code"].(string); code != "SUBMIT_NOT_CONFIRMED" {
+		t.Errorf("expected code SUBMIT_NOT_CONFIRMED, got %q", code)
+	}
+}
+
+// TestSubmitErrResult_MapsDeadlineExceededToTimeoutCode proves the timeout
+// path is distinguishable from both a swallowed submit and a generic failure.
+func TestSubmitErrResult_MapsDeadlineExceededToTimeoutCode(t *testing.T) {
+	res := submitErrResult(context.DeadlineExceeded, "command")
+	m := parseResult(t, res)
+
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object in result")
+	}
+	if code, _ := errObj["code"].(string); code != "PTY_WRITE_TIMEOUT" {
+		t.Errorf("expected code PTY_WRITE_TIMEOUT, got %q", code)
+	}
+}
+
+// TestSubmitErrResult_MapsOtherErrorsToInternalError verifies the fallback
+// case doesn't silently masquerade as one of the two distinct error codes.
+func TestSubmitErrResult_MapsOtherErrorsToInternalError(t *testing.T) {
+	res := submitErrResult(fmt.Errorf("pty closed"), "input")
+	m := parseResult(t, res)
+
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object in result")
+	}
+	if code, _ := errObj["code"].(string); code != ErrInternalError {
+		t.Errorf("expected code %q, got %q", ErrInternalError, code)
+	}
+}
 
 // TestReadOutputLineCap verifies that readSessionOutput respects the lines cap
 // and sets truncated=true / total_lines correctly when there is more output
@@ -107,6 +169,162 @@ func TestReadOutputSessionNotFound(t *testing.T) {
 	code, _ := errObj["code"].(string)
 	if code != ErrSessionNotFound {
 		t.Errorf("expected error code %q, got %q", ErrSessionNotFound, code)
+	}
+}
+
+// TestReadOutputSucceeds_When_ReadyWithNoNewBytes verifies a session whose
+// scrollback sequence has already advanced (has emitted at least one byte
+// since creation) is never flagged SESSION_NOT_READY, even when the most
+// recent read finds no output -- e.g. a command like `true` that legitimately
+// prints nothing.
+func TestReadOutputSucceeds_When_ReadyWithNoNewBytes(t *testing.T) {
+	mgr := makeScrollbackMgr(t)
+	sessionID := "ready-session"
+	if err := mgr.AppendOutput(sessionID, []byte("$ ")); err != nil {
+		t.Fatalf("AppendOutput: %v", err)
+	}
+
+	store := &stubStore{instances: []*session.Instance{{Title: sessionID}}}
+	th := &terminalHandlers{
+		store:      store,
+		scrollback: mgr,
+		writeLim:   newTokenBucket(10, 10),
+	}
+
+	req := makeToolReq(map[string]interface{}{"session_id": sessionID})
+	result, err := th.readSessionOutput(context.Background(), req)
+	if err != nil {
+		t.Fatalf("readSessionOutput returned unexpected Go error: %v", err)
+	}
+
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); !success {
+		t.Fatalf("expected success=true, got false; result=%v", m)
+	}
+}
+
+// fakePane returns a capturePane seam yielding fixed content, standing in for a
+// live tmux pane so the MCP-only (no stream subscriber) path is testable.
+func fakePane(content string, err error) func(*session.Instance) (string, error) {
+	return func(*session.Instance) (string, error) { return content, err }
+}
+
+// TestReadSessionOutput_NoStreamSubscriber_FallsBackToPane: scrollback is empty
+// (nothing ever called AppendOutput) but the pane has output -> return it.
+func TestReadSessionOutput_NoStreamSubscriber_FallsBackToPane(t *testing.T) {
+	sessionID := "mcp-only"
+	th := &terminalHandlers{
+		store:       &stubStore{instances: []*session.Instance{{Title: sessionID}}},
+		scrollback:  makeScrollbackMgr(t),
+		writeLim:    newTokenBucket(10, 10),
+		capturePane: fakePane("$ echo hi\nRUN_MARKER_9917\n$ ", nil),
+	}
+	result, err := th.readSessionOutput(context.Background(), makeToolReq(map[string]interface{}{"session_id": sessionID}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); !success {
+		t.Fatalf("expected success=true, got %v", m)
+	}
+	if out, _ := m["output"].(string); !strings.Contains(out, "RUN_MARKER_9917") {
+		t.Errorf("expected output to contain marker, got %q", out)
+	}
+}
+
+// TestReadSessionOutput_PrefersScrollbackOverPane: a non-empty scrollback wins.
+func TestReadSessionOutput_PrefersScrollbackOverPane(t *testing.T) {
+	mgr := makeScrollbackMgr(t)
+	sessionID := "has-scrollback"
+	if err := mgr.AppendOutput(sessionID, []byte("FROM_SCROLLBACK\n")); err != nil {
+		t.Fatal(err)
+	}
+	th := &terminalHandlers{
+		store:       &stubStore{instances: []*session.Instance{{Title: sessionID}}},
+		scrollback:  mgr,
+		writeLim:    newTokenBucket(10, 10),
+		capturePane: fakePane("FROM_PANE", nil),
+	}
+	result, _ := th.readSessionOutput(context.Background(), makeToolReq(map[string]interface{}{"session_id": sessionID}))
+	out, _ := parseResult(t, result)["output"].(string)
+	if !strings.Contains(out, "FROM_SCROLLBACK") || strings.Contains(out, "FROM_PANE") {
+		t.Errorf("expected scrollback output only, got %q", out)
+	}
+}
+
+// TestReadOutputSessionNotReady: no scrollback and no capturable pane (paused
+// or not started) still yields a clear SESSION_NOT_READY error, not empty output.
+func TestReadOutputSessionNotReady(t *testing.T) {
+	sessionID := "not-ready-session"
+	th := &terminalHandlers{
+		store:       &stubStore{instances: []*session.Instance{{Title: sessionID}}},
+		scrollback:  makeScrollbackMgr(t),
+		writeLim:    newTokenBucket(10, 10),
+		capturePane: fakePane("", streamhub.ErrSessionNotStarted),
+	}
+	result, err := th.readSessionOutput(context.Background(), makeToolReq(map[string]interface{}{"session_id": sessionID}))
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); success {
+		t.Error("expected success=false")
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil || errObj["code"] != ErrSessionNotReady {
+		t.Errorf("expected error code %q, got %v", ErrSessionNotReady, errObj)
+	}
+}
+
+// TestReadOutputSessionNotReady_RealUnstartedInstance exercises the default
+// (non-seam) capture path against a real, never-started Instance.
+func TestReadOutputSessionNotReady_RealUnstartedInstance(t *testing.T) {
+	sessionID := "unstarted"
+	th := &terminalHandlers{
+		store:      &stubStore{instances: []*session.Instance{{Title: sessionID}}},
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
+	}
+	result, _ := th.readSessionOutput(context.Background(), makeToolReq(map[string]interface{}{"session_id": sessionID}))
+	errObj, _ := parseResult(t, result)["error"].(map[string]interface{})
+	if errObj == nil || errObj["code"] != ErrSessionNotReady {
+		t.Errorf("expected error code %q, got %v", ErrSessionNotReady, errObj)
+	}
+}
+
+// TestCollectCommandOutput_NoStreamSubscriber_ReturnsMarker: run_command's
+// post-submit half returns success with the pane's marker despite empty scrollback.
+func TestCollectCommandOutput_NoStreamSubscriber_ReturnsMarker(t *testing.T) {
+	th := &terminalHandlers{
+		scrollback:  makeScrollbackMgr(t),
+		capturePane: fakePane("$ echo RUN_MARKER_9917\nRUN_MARKER_9917\n$ ", nil),
+	}
+	m := parseResult(t, th.collectCommandOutput("mcp-only", &session.Instance{}, 10, 50))
+	if success, _ := m["success"].(bool); !success {
+		t.Fatalf("expected success=true, got %v", m)
+	}
+	if out, _ := m["output"].(string); !strings.Contains(out, "RUN_MARKER_9917") {
+		t.Errorf("expected marker in output, got %q", out)
+	}
+}
+
+// TestCollectCommandOutput_NeverNotReadyAfterSubmit: an unreadable pane or an
+// empty pane after a successful submit is success with empty output.
+func TestCollectCommandOutput_NeverNotReadyAfterSubmit(t *testing.T) {
+	for name, capture := range map[string]func(*session.Instance) (string, error){
+		"empty pane":      fakePane("", nil),
+		"capture failure": fakePane("", streamhub.ErrSessionNotStarted),
+	} {
+		t.Run(name, func(t *testing.T) {
+			th := &terminalHandlers{scrollback: makeScrollbackMgr(t), capturePane: capture}
+			m := parseResult(t, th.collectCommandOutput("s", &session.Instance{}, 10, 50))
+			if success, _ := m["success"].(bool); !success {
+				t.Fatalf("expected success=true, got %v", m)
+			}
+			if out, _ := m["output"].(string); out != "" {
+				t.Errorf("expected empty output, got %q", out)
+			}
+		})
 	}
 }
 

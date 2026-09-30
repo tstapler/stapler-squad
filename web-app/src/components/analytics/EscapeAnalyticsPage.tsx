@@ -46,6 +46,9 @@ export function EscapeAnalyticsPage() {
     totalSequences,
     totalMangled,
     mangleRate,
+    correlationOutcomes,
+    correlationCoverage,
+    captureHealthy,
     loading: summaryLoading,
     error: summaryError,
   } = useEscapeAnalyticsSummary(selectedSessionId, perSessionActive);
@@ -68,7 +71,12 @@ export function EscapeAnalyticsPage() {
     totalSequences: globalTotalSequences,
     totalMangled: globalTotalMangled,
     mangleRate: globalMangleRate,
+    correlationOutcomes: globalCorrelationOutcomes,
+    correlationCoverage: globalCorrelationCoverage,
+    captureHealthy: globalCaptureHealthy,
+    droppedEvents,
     perSession,
+    perProject,
     loading: globalLoading,
     error: globalError,
   } = useEscapeAnalyticsGlobalSummary(allSessionsActive);
@@ -171,6 +179,11 @@ export function EscapeAnalyticsPage() {
                   Failed to load summary: {summaryError.message}
                 </div>
               )}
+              {!captureHealthy && (
+                <div className={styles.errorBanner} role="alert">
+                  Capture is incomplete ({(correlationCoverage * 100).toFixed(1)}% of source sequences matched). Mangle rates may be unreliable.
+                </div>
+              )}
 
               <div className={styles.grid}>
                 <div className={styles.card}>
@@ -180,7 +193,7 @@ export function EscapeAnalyticsPage() {
                   ) : (
                     <MangleRateIndicator
                       mangleRate={mangleRate}
-                      totalSequences={totalSequences}
+                      totalSequences={correlationOutcomes}
                       totalMangled={totalMangled}
                     />
                   )}
@@ -270,12 +283,17 @@ export function EscapeAnalyticsPage() {
 
           {!globalError && !globalLoading && globalTotalSequences > 0n && (
             <>
+              {(!globalCaptureHealthy || droppedEvents > 0n) && (
+                <div className={styles.errorBanner} role="alert">
+                  Capture health warning: {(globalCorrelationCoverage * 100).toFixed(1)}% correlation coverage; {droppedEvents.toString()} events dropped. Rates use correlated outcomes only.
+                </div>
+              )}
               <div className={styles.grid}>
                 <div className={styles.card}>
                   <h2 className={styles.cardTitle}>Fleet-Wide Mangle Rate</h2>
                   <MangleRateIndicator
                     mangleRate={globalMangleRate}
-                    totalSequences={globalTotalSequences}
+                    totalSequences={globalCorrelationOutcomes}
                     totalMangled={globalTotalMangled}
                   />
                   {showDominantContributor && dominantContributor && (
@@ -290,6 +308,20 @@ export function EscapeAnalyticsPage() {
                   <h2 className={styles.cardTitle}>Sequence Histogram</h2>
                   <SequenceHistogram histogram={globalHistogram} />
                 </div>
+              </div>
+
+              <div className={styles.fullWidthCard}>
+                <h2 className={styles.cardTitle}>Per-Project Breakdown</h2>
+                <table>
+                  <thead><tr><th>Project</th><th>Source</th><th>Outcomes</th><th>Mangled</th><th>Rate</th></tr></thead>
+                  <tbody>{perProject.map((row) => (
+                    <tr key={row.projectPath || "unknown"}>
+                      <td>{row.projectPath || "Unknown"}</td><td>{row.totalSequences.toString()}</td>
+                      <td>{row.correlationOutcomes.toString()}</td><td>{row.totalMangled.toString()}</td>
+                      <td>{(row.mangleRate * 100).toFixed(2)}%</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
               </div>
 
               <div className={styles.fullWidthCard}>

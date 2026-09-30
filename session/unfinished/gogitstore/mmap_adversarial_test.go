@@ -377,7 +377,7 @@ func buildFuzzSeedIdx() (data []byte, ok bool) {
 		// doc comment for the reproduced hang this pattern fixes).
 		ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout(args))
 		defer cancel()
-		cmd := safeexec.CommandContext(ctx, "git", args...)
+		cmd := safeexec.CommandContextPG(ctx, "git", args...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.local",

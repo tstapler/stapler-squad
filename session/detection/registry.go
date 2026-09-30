@@ -13,6 +13,7 @@ func DefaultRegistry() *DetectorRegistry {
 	r.Register(binaries.NewAiderDetector())
 	r.Register(binaries.NewOpencodeDetector())
 	r.Register(binaries.NewAgyDetector())
+	r.Register(binaries.NewPiDetector())
 	return r
 }
 

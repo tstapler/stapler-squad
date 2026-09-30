@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // blockingTriggerFirer is a TriggerFirer whose FireTriggerChained call signals
@@ -155,7 +156,7 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 
 	close(unblock)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		latest, getErr := fx.repo.GetBacklogItem(ctx, item.ID)
 		return getErr == nil && latest.ChainFired
 	}, 2*time.Second, 20*time.Millisecond, "ChainFired must eventually be persisted once the async fire completes")
@@ -331,11 +332,11 @@ func TestTriggerChainReconciler_should_completeInterruptedChain_When_DoneItemHas
 	// happy path.
 	reconciler.ReconcileChains(ctx, fx.repo)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return firer.callCount() == 1
 	}, 2*time.Second, 20*time.Millisecond, "TriggerChainReconciler must fire the interrupted chain")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		latest, getErr := fx.repo.GetBacklogItem(ctx, item.ID)
 		return getErr == nil && latest.ChainFired
 	}, 2*time.Second, 20*time.Millisecond)
@@ -400,7 +401,7 @@ func TestTriggerChainReconciler_should_findPendingChain_When_MoreThan1000DoneIte
 
 	reconciler.ReconcileChains(ctx, fx.repo)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return firer.callCount() == 1
 	}, 5*time.Second, 20*time.Millisecond, "the pending chain item must still be found and fired despite 1000 more-recently-updated done items ranking ahead of it")
 
@@ -456,7 +457,7 @@ func TestChainFirer_should_fireExactlyOnce_When_DispatchAndReconcilerRaceOnSameI
 	}
 	wg.Wait()
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return firer.callCount() >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 

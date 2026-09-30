@@ -147,7 +147,7 @@ func (n *StaleSessionNotifier) notify(inst *session.Instance, idle time.Duration
 	n.eventBus.Publish(events.NewNotificationEvent(
 		sessionID, inst.Title, uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		derivePriority(false, false), // urgent, important — routine self-monitoring telemetry, not actionable on its own
 		"Session went stale",
 		fmt.Sprintf("%s has produced no output for %s.", inst.Title, idle.Round(time.Second)),
 		map[string]string{"session_id": sessionID, "reason": "stale"},

@@ -2,7 +2,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { SessionsSection } from "./SessionsSection";
 import type { SessionsSectionProps } from "./SessionsSection";
-import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
+import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 
 jest.mock("../SessionMonitor", () => ({ SessionMonitor: () => null }));
 
@@ -30,6 +30,7 @@ function makeItem(linkedSessions: LinkedSession[], overrides: Partial<BacklogIte
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions,
@@ -622,5 +623,169 @@ describe("SessionsSection steer control (Story 2.2.2, ADR-002)", () => {
 
     expect(screen.getByText("2 commits")).toBeInTheDocument();
     expect(screen.queryByText(/—/)).not.toBeInTheDocument();
+  });
+});
+
+// ─── Story 5.2.4: executor provenance badges ───────────────────────────────
+
+function makeMode(overrides: Partial<PipelineMode> = {}): PipelineMode {
+  return {
+    id: "mode-1",
+    slug: "custom-mode",
+    name: "Custom Mode",
+    description: "",
+    enabled: true,
+    statusCommandTemplate: "",
+    doneCommandTemplate: "",
+    failCommandTemplate: "",
+    reviewCommandTemplate: "",
+    shipCommandTemplate: "",
+    helpCommandTemplate: "",
+    triagePromptTemplate: "",
+    reviewPromptTemplate: "",
+    initialPromptTemplate: "",
+    contentHash: "hash-a",
+    stageExecutorHashes: {},
+    ...overrides,
+  };
+}
+
+function renderSection(item: BacklogItem, pipelineModes: PipelineMode[] = []) {
+  render(
+    <SessionsSection
+      item={item}
+      pipelineModes={pipelineModes}
+      latestWorkSession={undefined}
+      deletingSessionId={null}
+      defaultExpanded={true}
+      onDeleteSession={jest.fn()}
+      onSteerSession={jest.fn()}
+      steeringSessionId={null}
+    />
+  );
+}
+
+describe("SessionsSection — Story 5.2.4: executor provenance badges", () => {
+  it("SessionsSection_should_ShowFallbackBadgeOnly_When_FallbackReasonSetAndHashesMatch", () => {
+    const session = makeSession({
+      sessionId: "sess-fallback",
+      role: "triage",
+      configuredProgram: "gemini",
+      executorFallbackReason: "gemini_unavailable",
+      executorSnapshotHash: "hash-a",
+    });
+    const mode = makeMode({ slug: "custom-mode", stageExecutorHashes: { triage: "hash-a" } });
+    renderSection(makeItem([session], { pipelineMode: "custom-mode" }), [mode]);
+
+    expect(screen.getByLabelText("Fell back to Claude: gemini_unavailable")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Executor config changed since this session ran")).not.toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_ShowDriftIndicatorOnly_When_HashMismatchAndNoFallbackReason", () => {
+    const session = makeSession({
+      sessionId: "sess-drift",
+      role: "triage",
+      pipelineModeSnapshot: "custom-mode",
+      executorSnapshotHash: "hash-old",
+    });
+    const mode = makeMode({ slug: "custom-mode", stageExecutorHashes: { triage: "hash-new" } });
+    renderSection(makeItem([session], { pipelineMode: "custom-mode" }), [mode]);
+
+    expect(screen.getByLabelText("Executor config changed since this session ran")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Fell back to Claude/)).not.toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_ShowNoBadges_When_HashesMatchAndNoFallback", () => {
+    const session = makeSession({
+      sessionId: "sess-clean",
+      role: "triage",
+      executorSnapshotHash: "hash-a",
+    });
+    const mode = makeMode({ slug: "custom-mode", stageExecutorHashes: { triage: "hash-a" } });
+    renderSection(makeItem([session], { pipelineMode: "custom-mode" }), [mode]);
+
+    expect(screen.queryByLabelText(/Fell back to Claude/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Executor config changed since this session ran")).not.toBeInTheDocument();
+  });
+
+  // Regression test for the dense-hash fix (Task 5.2.4a/5.2.4b): a role with
+  // no configured override on the mode must never read as drifted just
+  // because it was never explicitly configured — both sides hash the same
+  // zero-value ComputeExecutorHash("", "") by construction.
+  it("SessionsSection_should_ShowNoDrift_When_RoleIsUnconfiguredAndBothHashesAreTheDenseDefault", () => {
+    const defaultHash = "default-hash-0000";
+    const session = makeSession({
+      sessionId: "sess-default-review",
+      role: "review",
+      pipelineModeSnapshot: "custom-mode",
+      executorSnapshotHash: defaultHash,
+    });
+    // review has no configured override on this mode — Task 5.2.4a's dense
+    // map still gives it an entry, equal to the session's own default hash.
+    const mode = makeMode({ slug: "custom-mode", stageExecutorHashes: { review: defaultHash, triage: "other-hash" } });
+    renderSection(makeItem([session], { pipelineMode: "custom-mode" }), [mode]);
+
+    expect(screen.queryByLabelText("Executor config changed since this session ran")).not.toBeInTheDocument();
+  });
+
+  // Regression test for the case-priority fix (Task 5.2.4b): both facts must
+  // render simultaneously, with distinct classNames/label text from each
+  // other and from the pre-existing content-drift badge.
+  it("SessionsSection_should_ShowBothFallbackAndDriftBadges_When_BothFactsPresentSimultaneously", () => {
+    const session = makeSession({
+      sessionId: "sess-both",
+      role: "triage",
+      pipelineModeSnapshot: "custom-mode",
+      pipelineModeSnapshotHash: "content-hash-old",
+      configuredProgram: "gemini",
+      executorFallbackReason: "gemini_unavailable",
+      executorSnapshotHash: "exec-hash-old",
+    });
+    const mode = makeMode({
+      slug: "custom-mode",
+      contentHash: "content-hash-new",
+      stageExecutorHashes: { triage: "exec-hash-new" },
+    });
+    renderSection(makeItem([session], { pipelineMode: "custom-mode" }), [mode]);
+
+    const fallbackBadge = screen.getByLabelText("Fell back to Claude: gemini_unavailable");
+    const driftBadge = screen.getByLabelText("Executor config changed since this session ran");
+    const contentDriftBadge = screen.getByText("(content since changed)");
+
+    expect(fallbackBadge).toBeInTheDocument();
+    expect(driftBadge).toBeInTheDocument();
+    expect(contentDriftBadge).toBeInTheDocument();
+
+    // All 3 must be mutually distinguishable at a glance — own icon and own
+    // label text apiece, never sharing a glyph or wording (verified here via
+    // visible text/icon content, since jsdom's className reflection for
+    // vanilla-extract's mocked style objects isn't a reliable test signal —
+    // see "Distinguishable badge treatments" in design/ux.md).
+    expect(fallbackBadge).toHaveTextContent("↩");
+    expect(fallbackBadge).toHaveTextContent("Ran on different program");
+    expect(driftBadge).toHaveTextContent("⚙");
+    expect(driftBadge).toHaveTextContent("(executor config since changed)");
+    expect(contentDriftBadge).toHaveTextContent("(content since changed)");
+    const texts = [fallbackBadge.textContent, driftBadge.textContent, contentDriftBadge.textContent];
+    expect(new Set(texts).size).toBe(3);
+  });
+
+  // Regression test for the family-alias hash fix: a family:opus-configured
+  // review stage must show no drift when unedited, since both sides hash
+  // the same raw pre-resolution string — the comparison here is a plain
+  // opaque string match, unaffected by what the alias resolves to.
+  it("SessionsSection_should_ShowNoDrift_When_FamilyAliasHashUneditedEvenThoughResolvedModelDiffers", () => {
+    const rawAliasHash = "family-opus-raw-hash";
+    const session = makeSession({
+      sessionId: "sess-family-alias",
+      role: "review",
+      pipelineModeSnapshot: "custom-mode",
+      executorSnapshotHash: rawAliasHash,
+      resolvedModel: "claude-opus-4-8",
+    });
+    const mode = makeMode({ slug: "custom-mode", stageExecutorHashes: { review: rawAliasHash } });
+    renderSection(makeItem([session], { pipelineMode: "custom-mode" }), [mode]);
+
+    expect(screen.queryByLabelText("Executor config changed since this session ran")).not.toBeInTheDocument();
   });
 });

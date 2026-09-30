@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
@@ -11,14 +12,19 @@ import (
 
 // RefreshPRInfo fetches the latest PR information from GitHub
 // Returns an error if this is not a PR session or if the GitHub API call fails
-func (i *Instance) RefreshPRInfo() (*github.PRInfo, error) {
-	if !i.IsPRSession() {
+func (i *Instance) RefreshPRInfo(ctx context.Context) (*github.PRInfo, error) {
+	gh := i.GitHub()
+	if !gh.IsPRSession() {
 		return nil, fmt.Errorf("instance '%s' is not a PR session", i.Title)
 	}
 
-	log.Info("refreshing PR info", "session", i.Title, "pr", i.GitHubPRNumber, "owner", i.GitHubOwner, "repo", i.GitHubRepo)
+	log.Info("refreshing PR info", "session", i.Title, "pr", gh.PRNumber, "owner", gh.Owner, "repo", gh.Repo)
 
-	prInfo, err := github.GetPRInfo(i.GitHubOwner, i.GitHubRepo, i.GitHubPRNumber)
+	ref, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
+	if err != nil {
+		return nil, fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+	}
+	prInfo, err := github.GetPRInfoCtx(ctx, ref, gh.PRNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch PR info for instance '%s': %w", i.Title, err)
 	}
@@ -30,14 +36,19 @@ func (i *Instance) RefreshPRInfo() (*github.PRInfo, error) {
 
 // GetPRComments fetches all comments on the PR
 // Returns an error if this is not a PR session or if the GitHub API call fails
-func (i *Instance) GetPRComments() ([]github.PRComment, error) {
-	if !i.IsPRSession() {
+func (i *Instance) GetPRComments(ctx context.Context) ([]github.PRComment, error) {
+	gh := i.GitHub()
+	if !gh.IsPRSession() {
 		return nil, fmt.Errorf("instance '%s' is not a PR session", i.Title)
 	}
 
-	log.Info("fetching PR comments", "session", i.Title, "pr", i.GitHubPRNumber, "owner", i.GitHubOwner, "repo", i.GitHubRepo)
+	log.Info("fetching PR comments", "session", i.Title, "pr", gh.PRNumber, "owner", gh.Owner, "repo", gh.Repo)
 
-	comments, err := github.GetPRComments(i.GitHubOwner, i.GitHubRepo, i.GitHubPRNumber)
+	ref, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
+	if err != nil {
+		return nil, fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+	}
+	comments, err := github.GetPRComments(ctx, ref, gh.PRNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch PR comments for instance '%s': %w", i.Title, err)
 	}
@@ -49,14 +60,19 @@ func (i *Instance) GetPRComments() ([]github.PRComment, error) {
 
 // GetPRDiff fetches the diff for the PR
 // Returns an error if this is not a PR session or if the GitHub API call fails
-func (i *Instance) GetPRDiff() (string, error) {
-	if !i.IsPRSession() {
+func (i *Instance) GetPRDiff(ctx context.Context) (string, error) {
+	gh := i.GitHub()
+	if !gh.IsPRSession() {
 		return "", fmt.Errorf("instance '%s' is not a PR session", i.Title)
 	}
 
-	log.Info("fetching PR diff", "session", i.Title, "pr", i.GitHubPRNumber, "owner", i.GitHubOwner, "repo", i.GitHubRepo)
+	log.Info("fetching PR diff", "session", i.Title, "pr", gh.PRNumber, "owner", gh.Owner, "repo", gh.Repo)
 
-	diff, err := github.GetPRDiff(i.GitHubOwner, i.GitHubRepo, i.GitHubPRNumber)
+	ref, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
+	if err != nil {
+		return "", fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+	}
+	diff, err := github.GetPRDiff(ctx, ref, gh.PRNumber)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch PR diff for instance '%s': %w", i.Title, err)
 	}
@@ -68,8 +84,9 @@ func (i *Instance) GetPRDiff() (string, error) {
 
 // PostComment posts a comment to the PR
 // Returns an error if this is not a PR session or if the GitHub API call fails
-func (i *Instance) PostComment(body string) error {
-	if !i.IsPRSession() {
+func (i *Instance) PostComment(ctx context.Context, body string) error {
+	gh := i.GitHub()
+	if !gh.IsPRSession() {
 		return fmt.Errorf("instance '%s' is not a PR session", i.Title)
 	}
 
@@ -77,13 +94,17 @@ func (i *Instance) PostComment(body string) error {
 		return fmt.Errorf("comment body cannot be empty")
 	}
 
-	log.Info("posting comment to PR", "pr", i.GitHubPRNumber, "session", i.Title)
+	log.Info("posting comment to PR", "pr", gh.PRNumber, "session", i.Title)
 
-	if err := github.PostPRComment(i.GitHubOwner, i.GitHubRepo, i.GitHubPRNumber, body); err != nil {
+	ref, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
+	if err != nil {
+		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+	}
+	if err := github.PostPRComment(ctx, ref, gh.PRNumber, body); err != nil {
 		return fmt.Errorf("failed to post comment to PR for instance '%s': %w", i.Title, err)
 	}
 
-	log.Info("successfully posted comment to PR", "pr", i.GitHubPRNumber, "session", i.Title)
+	log.Info("successfully posted comment to PR", "pr", gh.PRNumber, "session", i.Title)
 
 	return nil
 }
@@ -92,12 +113,16 @@ func (i *Instance) PostComment(body string) error {
 // Statuses API. It re-fetches PR info first so the status always lands on the current
 // HEAD SHA rather than a stale one cached before a force-push or rebase.
 // Returns an error if this is not a PR session or if the GitHub API call fails.
-func (i *Instance) SetCommitStatus(state github.CommitStatusState, statusContext, description string) error {
-	if !i.IsPRSession() {
+//
+// Currently has no non-test callers; an untagged ctx inherits GitHubCallOriginFrom's
+// background default until a caller exists.
+func (i *Instance) SetCommitStatus(ctx context.Context, state github.CommitStatusState, statusContext, description string) error {
+	gh := i.GitHub()
+	if !gh.IsPRSession() {
 		return fmt.Errorf("instance '%s' is not a PR session", i.Title)
 	}
 
-	prInfo, err := i.RefreshPRInfo()
+	prInfo, err := i.RefreshPRInfo(ctx)
 	if err != nil {
 		return err
 	}
@@ -107,18 +132,18 @@ func (i *Instance) SetCommitStatus(state github.CommitStatusState, statusContext
 		return fmt.Errorf("invalid commit status request for instance '%s': %w", i.Title, err)
 	}
 
-	repo, err := github.NewRepoRef(i.GitHubOwner, i.GitHubRepo)
+	repo, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
 	if err != nil {
 		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
 
-	log.Info("setting commit status on PR", "pr", i.GitHubPRNumber, "session", i.Title, "sha", prInfo.HeadSHA, "state", state, "context", statusContext)
+	log.Info("setting commit status on PR", "pr", gh.PRNumber, "session", i.Title, "sha", prInfo.HeadSHA, "state", state, "context", statusContext)
 
 	if err := github.SetCommitStatus(repo, req); err != nil {
 		return fmt.Errorf("failed to set commit status for instance '%s': %w", i.Title, err)
 	}
 
-	log.Info("successfully set commit status on PR", "pr", i.GitHubPRNumber, "session", i.Title, "sha", prInfo.HeadSHA, "state", state)
+	log.Info("successfully set commit status on PR", "pr", gh.PRNumber, "session", i.Title, "sha", prInfo.HeadSHA, "state", state)
 
 	return nil
 }
@@ -126,8 +151,9 @@ func (i *Instance) SetCommitStatus(state github.CommitStatusState, statusContext
 // MergePR merges the PR using the specified merge method
 // method can be: "merge", "squash", or "rebase"
 // Returns an error if this is not a PR session or if the GitHub API call fails
-func (i *Instance) MergePR(method string) error {
-	if !i.IsPRSession() {
+func (i *Instance) MergePR(ctx context.Context, method string) error {
+	gh := i.GitHub()
+	if !gh.IsPRSession() {
 		return fmt.Errorf("instance '%s' is not a PR session", i.Title)
 	}
 
@@ -141,31 +167,40 @@ func (i *Instance) MergePR(method string) error {
 		return fmt.Errorf("invalid merge method '%s': must be 'merge', 'squash', or 'rebase'", method)
 	}
 
-	log.Info("merging PR", "pr", i.GitHubPRNumber, "session", i.Title, "method", method)
+	log.Info("merging PR", "pr", gh.PRNumber, "session", i.Title, "method", method)
 
-	if err := github.MergePR(i.GitHubOwner, i.GitHubRepo, i.GitHubPRNumber, method); err != nil {
+	ref, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
+	if err != nil {
+		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+	}
+	if err := github.MergePR(ctx, ref, gh.PRNumber, method); err != nil {
 		return fmt.Errorf("failed to merge PR for instance '%s': %w", i.Title, err)
 	}
 
-	log.Info("successfully merged PR", "pr", i.GitHubPRNumber, "session", i.Title)
+	log.Info("successfully merged PR", "pr", gh.PRNumber, "session", i.Title)
 
 	return nil
 }
 
 // ClosePR closes the PR without merging
 // Returns an error if this is not a PR session or if the GitHub API call fails
-func (i *Instance) ClosePR() error {
-	if !i.IsPRSession() {
+func (i *Instance) ClosePR(ctx context.Context) error {
+	gh := i.GitHub()
+	if !gh.IsPRSession() {
 		return fmt.Errorf("instance '%s' is not a PR session", i.Title)
 	}
 
-	log.Info("closing PR without merging", "pr", i.GitHubPRNumber, "session", i.Title)
+	log.Info("closing PR without merging", "pr", gh.PRNumber, "session", i.Title)
 
-	if err := github.ClosePR(i.GitHubOwner, i.GitHubRepo, i.GitHubPRNumber); err != nil {
+	ref, err := github.NewRepoRefWithHost(gh.Owner, gh.Repo, gh.Host)
+	if err != nil {
+		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+	}
+	if err := github.ClosePR(ctx, ref, gh.PRNumber); err != nil {
 		return fmt.Errorf("failed to close PR for instance '%s': %w", i.Title, err)
 	}
 
-	log.Info("successfully closed PR", "pr", i.GitHubPRNumber, "session", i.Title)
+	log.Info("successfully closed PR", "pr", gh.PRNumber, "session", i.Title)
 
 	return nil
 }
@@ -173,15 +208,19 @@ func (i *Instance) ClosePR() error {
 // GeneratePRContextPrompt generates a context prompt for Claude based on PR information
 // This can be used to initialize a Claude Code session with comprehensive PR context
 // Returns an error if this is not a PR session or if the GitHub API call fails
-func (i *Instance) GeneratePRContextPrompt() (string, error) {
-	if !i.IsPRSession() {
+//
+// Currently has no non-test callers; an untagged ctx inherits GitHubCallOriginFrom's
+// background default until a caller exists.
+func (i *Instance) GeneratePRContextPrompt(ctx context.Context) (string, error) {
+	gh := i.GitHub()
+	if !gh.IsPRSession() {
 		return "", fmt.Errorf("instance '%s' is not a PR session", i.Title)
 	}
 
-	log.Info("generating PR context prompt", "session", i.Title, "pr", i.GitHubPRNumber, "owner", i.GitHubOwner, "repo", i.GitHubRepo)
+	log.Info("generating PR context prompt", "session", i.Title, "pr", gh.PRNumber, "owner", gh.Owner, "repo", gh.Repo)
 
 	// Fetch PR information
-	prInfo, err := i.RefreshPRInfo()
+	prInfo, err := i.RefreshPRInfo(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch PR info for context prompt: %w", err)
 	}

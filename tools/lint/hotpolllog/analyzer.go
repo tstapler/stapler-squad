@@ -129,9 +129,10 @@ func extractCall(n ast.Node) (*ast.CallExpr, bool) {
 // isHotLogCall returns true when the call's function expression is a selector
 // on a receiver named "DebugLog" or "InfoLog", for example:
 //
-//	log.DebugLog.Printf(...)  → SelectorExpr{X: SelectorExpr{X: "log", Sel: "DebugLog"}, Sel: "Printf"}
-//	log.InfoLog.Printf(...)   → SelectorExpr{X: SelectorExpr{X: "log", Sel: "InfoLog"}, Sel: "Printf"}
-//	DebugLog.Printf(...)      → SelectorExpr{X: Ident("DebugLog"), Sel: "Printf"}
+//	log.DebugLog.Printf(...)   → SelectorExpr{X: SelectorExpr{X: "log", Sel: "DebugLog"}, Sel: "Printf"}
+//	log.InfoLog.Printf(...)    → SelectorExpr{X: SelectorExpr{X: "log", Sel: "InfoLog"}, Sel: "Printf"}
+//	DebugLog.Printf(...)       → SelectorExpr{X: Ident("DebugLog"), Sel: "Printf"}
+//	log.DebugLog().Printf(...) → SelectorExpr{X: CallExpr{Fun: SelectorExpr{...}}, Sel: "Printf"}
 func isHotLogCall(call *ast.CallExpr) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
@@ -140,14 +141,23 @@ func isHotLogCall(call *ast.CallExpr) bool {
 	return receiverIsHotLog(sel.X)
 }
 
-// receiverIsHotLog returns true if the expression resolves to a variable named
-// "DebugLog" or "InfoLog", either directly or via a package qualifier.
+// receiverIsHotLog returns true if the expression resolves to a logger named
+// "DebugLog" or "InfoLog", either directly, via a package qualifier, or via an
+// accessor call.
+//
+// The *ast.CallExpr case covers the accessor form the log package moved to when
+// the package-level logger vars became atomic.Pointer-backed (log.DebugLog() /
+// log.InfoLog()). Without it the receiver is a CallExpr rather than an
+// Ident/SelectorExpr and every hot-log call in the codebase silently stops
+// being reported -- the analyzer keeps passing while detecting nothing.
 func receiverIsHotLog(expr ast.Expr) bool {
 	switch x := expr.(type) {
 	case *ast.Ident:
 		return x.Name == "DebugLog" || x.Name == "InfoLog"
 	case *ast.SelectorExpr:
 		return x.Sel.Name == "DebugLog" || x.Sel.Name == "InfoLog"
+	case *ast.CallExpr:
+		return receiverIsHotLog(x.Fun)
 	}
 	return false
 }

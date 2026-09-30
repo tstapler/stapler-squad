@@ -1,6 +1,6 @@
 # ADR-002: TTL caching for subprocess-heavy polling operations
 
-**Status**: Proposed
+**Status**: Accepted (implemented)
 **Date**: 2026-04-24
 **Project**: tmux-optimization
 
@@ -66,12 +66,29 @@ The singleflight pattern for `CheckGHAuth()` eliminates the mutex bottleneck ent
 - Instrument cache hit rate in logs to verify expected ~50% reduction in `IsDirty()` calls
 - Phase 3 (ADR-003 candidate): wire EventBus into `ReviewQueuePoller` for adaptive interval — 8s when idle, snap to 2s on `EventApprovalResponse` or `EventUserInteraction`
 
+## Implementation Note (2026-08-21)
+
+All three callsites are implemented, though `Preview()` landed via a different
+mechanism than originally specced:
+
+- `IsDirty()`: `isDirtyCache atomic.Value` + `isDirtySF singleflight.Group` in
+  `session/git/worktree.go`, per spec.
+- `CheckGHAuth()`: `ghAuthGroup singleflight.Group` + atomic TTL in
+  `github/client.go`, per spec.
+- `Preview()` (`session/instance_terminal.go:138`): rather than a dedicated
+  500ms cache, it delegates to `TmuxBackend.CapturePaneContent()`, which
+  already carries a 1s TTL cache in `TmuxProcessManager` and (per ADR-001) a
+  CM-first dispatch path. Net effect is the same — no subprocess spawn per
+  poll tick for the common case — at a 1s TTL instead of the specced 500ms;
+  not treated as a gap since the intent (eliminate per-poll `capture-pane`
+  forks) is met.
+
 ## Related
 
 - Research: `project_plans/tmux-optimization/research/findings-review-queue-poller.md`
 - Synthesis: `project_plans/tmux-optimization/research/synthesis.md`
 - Source: `session/git/` (`GitWorktree`, `IsDirty()`)
-- Source: `session/instance.go` (`Preview()`)
+- Source: `session/instance_terminal.go` (`Preview()`)
 - Source: `github/client.go` (`CheckGHAuth()`)
 - Bug: `docs/bugs/open/BUG-021-check-gh-auth-mutex-contention.md`
 - Supersedes: (none)

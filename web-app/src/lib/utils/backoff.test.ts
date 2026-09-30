@@ -4,6 +4,8 @@ import {
   BackoffState,
   isRetriableCloseCode,
   getWsCloseCode,
+  isNonRetriableConnectError,
+  isWorktreeMissingError,
   connectTimeoutMs,
   FOREGROUND_CONNECT_TIMEOUT_MS,
   CONNECT_TIMEOUT_MS,
@@ -120,6 +122,76 @@ describe("getWsCloseCode", () => {
   it("should return null when ConnectError has no ws-close-code header", () => {
     const err = new ConnectError("some error", Code.Unavailable);
     expect(getWsCloseCode(err)).toBeNull();
+  });
+});
+
+describe("isNonRetriableConnectError", () => {
+  it("isNonRetriableConnectError_should_returnTrue_When_wsCloseCodeHeaderIsNonRetriable", () => {
+    const err = new ConnectError(
+      "WebSocket closed",
+      Code.Unavailable,
+      new Headers({ "ws-close-code": "4001" })
+    );
+    expect(isNonRetriableConnectError(err)).toBe(true);
+  });
+
+  it("isNonRetriableConnectError_should_returnFalse_When_wsCloseCodeHeaderIsRetriable", () => {
+    const err = new ConnectError(
+      "WebSocket closed",
+      Code.Unavailable,
+      new Headers({ "ws-close-code": "1006" })
+    );
+    expect(isNonRetriableConnectError(err)).toBe(false);
+  });
+
+  it("isNonRetriableConnectError_should_returnTrue_When_nativeTransportErrorCodeIsUnauthenticated", () => {
+    // createConnectTransport never sets a ws-close-code header — this is the
+    // native-transport equivalent of ws-close-code 4001 (auth failure).
+    const err = new ConnectError("unauthenticated", Code.Unauthenticated);
+    expect(getWsCloseCode(err)).toBeNull();
+    expect(isNonRetriableConnectError(err)).toBe(true);
+  });
+
+  it("isNonRetriableConnectError_should_returnTrue_When_nativeTransportErrorCodeIsNotFound", () => {
+    // Native-transport equivalent of ws-close-code 4004 (session not found).
+    const err = new ConnectError("session not found", Code.NotFound);
+    expect(getWsCloseCode(err)).toBeNull();
+    expect(isNonRetriableConnectError(err)).toBe(true);
+  });
+
+  it("isNonRetriableConnectError_should_returnFalse_When_nativeTransportErrorCodeIsRetriable", () => {
+    const err = new ConnectError("unavailable", Code.Unavailable);
+    expect(isNonRetriableConnectError(err)).toBe(false);
+  });
+
+  it("isNonRetriableConnectError_should_returnFalse_When_errorIsNotAConnectError", () => {
+    expect(isNonRetriableConnectError(new Error("boom"))).toBe(false);
+  });
+
+  it("isNonRetriableConnectError_should_returnFalse_When_codeIsFailedPrecondition", () => {
+    // Deliberately NOT non-retriable here: this helper is shared with the
+    // unrelated session-list watch stream, so FailedPrecondition's
+    // worktree-missing meaning must be checked separately via
+    // isWorktreeMissingError, not folded into this shared function.
+    const err = new ConnectError("working directory missing", Code.FailedPrecondition);
+    expect(getWsCloseCode(err)).toBeNull();
+    expect(isNonRetriableConnectError(err)).toBe(false);
+  });
+});
+
+describe("isWorktreeMissingError", () => {
+  it("isWorktreeMissingError_should_returnTrue_When_codeIsFailedPrecondition", () => {
+    const err = new ConnectError("working directory missing", Code.FailedPrecondition);
+    expect(isWorktreeMissingError(err)).toBe(true);
+  });
+
+  it("isWorktreeMissingError_should_returnFalse_When_codeIsSomethingElse", () => {
+    const err = new ConnectError("unavailable", Code.Unavailable);
+    expect(isWorktreeMissingError(err)).toBe(false);
+  });
+
+  it("isWorktreeMissingError_should_returnFalse_When_errorIsNotAConnectError", () => {
+    expect(isWorktreeMissingError(new Error("boom"))).toBe(false);
   });
 });
 

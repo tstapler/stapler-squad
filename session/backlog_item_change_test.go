@@ -34,8 +34,7 @@ func TestStorageSetItemChangePublisher_should_forwardToConcreteEntRepository_Whe
 	publisher := &recordingItemChangePublisher{}
 	storage.SetItemChangePublisher(publisher)
 
-	er, ok := storage.repo.(*EntRepository)
-	require.True(t, ok, "test setup: storage.repo must be *EntRepository")
+	er := storage.repo
 	assert.Same(t, ItemChangePublisher(publisher), er.itemChangePublisher, "SetItemChangePublisher must forward to the concrete *EntRepository's field")
 }
 

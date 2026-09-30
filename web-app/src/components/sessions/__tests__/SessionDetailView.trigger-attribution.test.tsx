@@ -12,63 +12,33 @@ import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { SessionStatus, InstanceType, SessionType } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 import type { WorkflowProto } from "@/gen/session/v1/session_pb";
+import { installConsoleErrorSilencer } from "./sessionDetailViewTestFixtures";
 
-jest.mock("next/dynamic", () => () => {
-  return function DynamicStub() {
-    return <div data-testid="terminal-output" />;
-  };
-});
+jest.mock("next/dynamic", () => require("./sessionDetailViewTestFixtures").mockNextDynamic());
 
-jest.mock("../DiffViewer", () => ({ DiffViewer: () => <div data-testid="diff-viewer" /> }));
-jest.mock("../VcsPanel", () => ({ VcsPanel: () => <div data-testid="vcs-panel" /> }));
-jest.mock("../SessionLogsTab", () => ({ SessionLogsTab: () => <div data-testid="logs-tab" /> }));
-jest.mock("../FilesTab", () => ({ FilesTab: () => <div data-testid="files-tab" /> }));
-jest.mock("../ArtifactsTab", () => ({ ArtifactsTab: () => <div data-testid="artifacts-tab" /> }));
-jest.mock("../WorkspaceSwitchModal", () => ({ WorkspaceSwitchModal: () => null }));
-jest.mock("../TagEditor", () => ({ TagEditor: () => null }));
-jest.mock("../ResumeSessionModal", () => ({ ResumeSessionModal: () => null }));
-jest.mock("../BrowserTab", () => ({ BrowserTab: () => <div data-testid="browser-tab-stub" /> }));
-jest.mock("../SessionSummaryPanel", () => ({ SessionSummaryPanel: () => null }));
-jest.mock("@/components/ui/ActionBar", () => ({
-  ActionBar: ({ children, className }: { children: React.ReactNode; className?: string }) => (
-    <div className={className}>{children}</div>
-  ),
-}));
-jest.mock("@/components/ui/Modal", () => ({
-  Modal: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalTitle: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
-jest.mock("@/lib/config", () => ({ getApiBaseUrl: () => "http://localhost:8543" }));
-jest.mock("@/lib/constants/programs", () => ({
-  getProgramDisplay: (p: string) => p,
-  isKnownProgram: () => true,
-  PROGRAMS: [],
-}));
-jest.mock("@/lib/store", () => ({ useAppSelector: jest.fn(() => []) }));
-jest.mock("@/lib/store/sessionsSlice", () => ({ selectAllSessions: jest.fn() }));
-jest.mock("@/lib/hooks/useShells", () => ({
-  useShells: () => ({
-    shells: [], isLoading: false, spawnShell: jest.fn(), stopShell: jest.fn(),
-    restartShell: jest.fn(), deleteShell: jest.fn(), updateShellStatus: jest.fn(), refetch: jest.fn(),
-  }),
-}));
+jest.mock("../DiffViewer", () => require("./sessionDetailViewTestFixtures").mockDiffViewer());
+jest.mock("../VcsPanel", () => require("./sessionDetailViewTestFixtures").mockVcsPanel());
+jest.mock("../SessionLogsTab", () => require("./sessionDetailViewTestFixtures").mockSessionLogsTab());
+jest.mock("../FilesTab", () => require("./sessionDetailViewTestFixtures").mockFilesTab());
+jest.mock("../ArtifactsTab", () => require("./sessionDetailViewTestFixtures").mockArtifactsTab());
+jest.mock("../WorkspaceSwitchModal", () => require("./sessionDetailViewTestFixtures").mockWorkspaceSwitchModal());
+jest.mock("../TagEditor", () => require("./sessionDetailViewTestFixtures").mockTagEditor());
+jest.mock("../ResumeSessionModal", () => require("./sessionDetailViewTestFixtures").mockResumeSessionModal());
+jest.mock("../BrowserTab", () => require("./sessionDetailViewTestFixtures").mockBrowserTabSimple());
+jest.mock("../SessionSummaryPanel", () => require("./sessionDetailViewTestFixtures").mockSessionSummaryPanelNull());
+jest.mock("../HandoffSummarySection", () => require("./sessionDetailViewTestFixtures").mockHandoffSummarySection());
+jest.mock("@/components/ui/ActionBar", () => require("./sessionDetailViewTestFixtures").mockActionBar());
+jest.mock("@/components/ui/Modal", () => require("./sessionDetailViewTestFixtures").mockModal());
+jest.mock("@/lib/config", () => require("./sessionDetailViewTestFixtures").mockLibConfig());
+jest.mock("@/lib/constants/programs", () => require("./sessionDetailViewTestFixtures").mockConstantsPrograms());
+jest.mock("@/lib/store", () => require("./sessionDetailViewTestFixtures").mockStore());
+jest.mock("@/lib/store/sessionsSlice", () => require("./sessionDetailViewTestFixtures").mockSessionsSlice());
+jest.mock("@/lib/hooks/useShells", () => require("./sessionDetailViewTestFixtures").mockUseShells());
 
 let mockWorkflows: Partial<WorkflowProto>[] = [];
-jest.mock("@/lib/hooks/useWorkflows", () => ({
-  useWorkflows: () => ({
-    workflows: mockWorkflows,
-    loading: false,
-    error: null,
-    createWorkflow: jest.fn(),
-    updateWorkflow: jest.fn(),
-    deleteWorkflow: jest.fn(),
-    archiveWorkflowSessions: jest.fn(),
-    deleteWorkflowFailedSessions: jest.fn(),
-    refresh: jest.fn(),
-  }),
-}));
+jest.mock("@/lib/hooks/useWorkflows", () =>
+  require("./sessionDetailViewTestFixtures").makeUseWorkflowsFromGetter(() => mockWorkflows)
+);
 
 const makeSession = (workflowId: string): Session =>
   ({
@@ -95,12 +65,7 @@ function renderView(session: Session) {
   );
 }
 
-beforeAll(() => {
-  jest.spyOn(console, "error").mockImplementation(() => {});
-});
-afterAll(() => {
-  jest.restoreAllMocks();
-});
+installConsoleErrorSilencer();
 beforeEach(() => {
   mockWorkflows = [];
 });

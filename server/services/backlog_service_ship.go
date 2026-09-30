@@ -104,7 +104,7 @@ func (s *BacklogService) TriggerShipPR(
 
 	prURL, runErr := s.oneShotRunner.RunOneShotForSession(ctx, workSession.SessionUUID, shipPRPrompt, int32(autoCreatePRRunTimeoutSeconds))
 	if runErr != nil {
-		log.WarningLog.Printf("[TriggerShipPR] item=%s session=%s: %v", item.ID, workSession.SessionUUID, runErr)
+		log.WarningLog().Printf("[TriggerShipPR] item=%s session=%s: %v", item.ID, workSession.SessionUUID, runErr)
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("could not ship a PR — the work session may not be running (try Restart first): %w", runErr))
 	}
@@ -113,7 +113,7 @@ func (s *BacklogService) TriggerShipPR(
 			fmt.Errorf("PR creation ran but no PR URL was found in the output"))
 	}
 
-	log.InfoLog.Printf("[TriggerShipPR] item=%s session=%s PR created: %s", item.ID, workSession.SessionUUID, prURL)
+	log.InfoLog().Printf("[TriggerShipPR] item=%s session=%s PR created: %s", item.ID, workSession.SessionUUID, prURL)
 	return connect.NewResponse(&sessionv1.TriggerShipPRResponse{PrUrl: prURL}), nil
 }
 

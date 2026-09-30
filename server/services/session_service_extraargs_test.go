@@ -7,6 +7,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -79,7 +80,7 @@ func TestCreateSession_should_LeaveInstanceExtraArgsEmpty_When_RequestOmitsExtra
 // composition at launch time (profile flags first, preset args last) is the intended, tested
 // behavior rather than an untested emergent property.
 func TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	envtest.NewIsolatedStateDir(t)
 
 	cfg := config.DefaultConfig()
 	cfg.SessionDefaults.Profiles = map[string]config.ProfileDefaults{
@@ -112,4 +113,37 @@ func TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_B
 	require.NotNil(t, inst)
 	require.Equal(t, "--verbose", inst.CLIFlags, "profile-resolved cli_flags must still reach the instance")
 	require.Equal(t, []string{"-t", "host", "true"}, inst.ExtraArgs, "preset extra_args must still reach the instance")
+}
+
+// TestCreateSession_should_NotPrependCustomProgramCLIFlags_When_ProgramIsCustom guards against
+// doubling: the custom program's flags are resolved once, at launch, from the stored program ID.
+func TestCreateSession_should_NotPrependCustomProgramCLIFlags_When_ProgramIsCustom(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	cfg := config.DefaultConfig()
+	cfg.SessionDefaults.Programs = append(cfg.SessionDefaults.Programs,
+		config.ProgramConfig{ID: "my-custom", Command: "ssh", CLIFlags: "--prog-flag"})
+	require.NoError(t, config.SaveConfig(cfg))
+
+	storage := createTestStorage(t)
+	bus := events.NewEventBus(16)
+	t.Cleanup(bus.Close)
+	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	svc.SetReviewQueuePoller(session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil))
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:    "custom-flags-once-test-session",
+		Path:     t.TempDir(),
+		Program:  "my-custom",
+		CliFlags: "--req-flag",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+	require.Equal(t, "my-custom", inst.Program, "the custom program ID must be stored, not its command")
+	require.Equal(t, "--req-flag", inst.CLIFlags, "program flags are added at launch, not stored")
 }

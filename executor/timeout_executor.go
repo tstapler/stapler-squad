@@ -29,6 +29,8 @@ func (e *TimeoutExecutor) Run(cmd *exec.Cmd) error {
 	ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
 	defer cancel()
 
+	// #nosec G204 -- rebuilds the caller-supplied cmd's own Args under a timeout context; the caller
+	// already carries responsibility for cmd.Args, same as calling exec.CommandContext directly would.
 	ctxCmd := exec.CommandContext(ctx, cmd.Args[0], cmd.Args[1:]...)
 	ctxCmd.Dir = cmd.Dir
 	ctxCmd.Env = cmd.Env
@@ -57,6 +59,8 @@ func (e *TimeoutExecutor) Output(cmd *exec.Cmd) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
 	defer cancel()
 
+	// #nosec G204 -- rebuilds the caller-supplied cmd's own Args under a timeout context; the caller
+	// already carries responsibility for cmd.Args, same as calling exec.CommandContext directly would.
 	ctxCmd := exec.CommandContext(ctx, cmd.Args[0], cmd.Args[1:]...)
 	ctxCmd.Dir = cmd.Dir
 	ctxCmd.Env = cmd.Env
@@ -80,6 +84,8 @@ func (e *TimeoutExecutor) CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
 
 	// Wrap with CommandContext so Go's runtime sends SIGKILL on context expiry
 	// and sets WaitDelay so Wait() doesn't block on orphaned grandchildren.
+	// #nosec G204 -- rebuilds the caller-supplied cmd's own Args under a timeout context; the caller
+	// already carries responsibility for cmd.Args, same as calling exec.CommandContext directly would.
 	ctxCmd := exec.CommandContext(ctx, cmd.Args[0], cmd.Args[1:]...)
 	ctxCmd.Dir = cmd.Dir
 	ctxCmd.Env = cmd.Env

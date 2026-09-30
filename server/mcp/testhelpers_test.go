@@ -1,14 +1,39 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/stretchr/testify/require"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
+
+// testCustomProgramID is the custom program ID registered by
+// upsertTestCustomProgram, shared by every test that needs a
+// UpsertProgramConfig-registered program (as opposed to a built-in).
+const testCustomProgramID = "claude-250k-proxy"
+
+// upsertTestCustomProgram registers a custom program on svc, for tests
+// asserting that create_session/create_session_for_pr accept a program
+// beyond the built-in set.
+func upsertTestCustomProgram(t *testing.T, svc *services.SessionService) {
+	t.Helper()
+	_, err := svc.UpsertProgramConfig(context.Background(), connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+		Program: &sessionv1.ProgramConfigProto{
+			Id:      testCustomProgramID,
+			Label:   "Claude 250k proxy",
+			Command: testCustomProgramID,
+		},
+	}))
+	require.NoError(t, err)
+}
 
 // stubStore implements session.InstanceStore for tests.
 type stubStore struct {
@@ -96,4 +121,29 @@ func parseResult(t *testing.T, res *mcpgo.CallToolResult) map[string]interface{}
 		t.Fatalf("parseResult: unmarshal JSON: %v\nJSON: %s", err, tc.Text)
 	}
 	return m
+}
+
+// requireToolTextResult asserts res is a plain-text success result (the shape
+// every mutating backlog handler returns via mcpgo.NewToolResultText on
+// success — errResult's JSON-shaped errors, parsed by parseResult, are the
+// only other content[0] shape these handlers produce) and returns its text.
+func requireToolTextResult(t *testing.T, res *mcpgo.CallToolResult) string {
+	t.Helper()
+	if res == nil {
+		t.Fatal("requireToolTextResult: result is nil")
+	}
+	if len(res.Content) == 0 {
+		t.Fatal("requireToolTextResult: result has no content")
+	}
+	tc, ok := res.Content[0].(mcpgo.TextContent)
+	if !ok {
+		t.Fatalf("requireToolTextResult: content[0] is not TextContent, got %T", res.Content[0])
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(tc.Text), &m); err == nil {
+		if success, ok := m["success"].(bool); ok && !success {
+			t.Fatalf("requireToolTextResult: expected success, got error result: %s", tc.Text)
+		}
+	}
+	return tc.Text
 }

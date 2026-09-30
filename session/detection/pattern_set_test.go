@@ -75,6 +75,24 @@ func TestPatternSet_MatchLines_should_returnCount_When_shellsStillRunningMatches
 	}
 }
 
+func TestPatternSet_MatchLines_should_returnSummedCount_When_shellsAndMonitorsCommaJoined(t *testing.T) {
+	t.Parallel()
+	ps, err := NewPatternSet(getDefaultPatterns())
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, name, _, count := ps.MatchLines("✻ Cogitated for 1m 6s · done 3:06 PM · 1 shell, 1 monitor still running", nil)
+	if status != StatusWaitingForAgent {
+		t.Errorf("got status %v, want StatusWaitingForAgent", status)
+	}
+	if name != "shells_still_running" {
+		t.Errorf("got pattern name %q, want %q", name, "shells_still_running")
+	}
+	if count != 2 {
+		t.Errorf("got count %d, want 2 (1 shell + 1 monitor)", count)
+	}
+}
+
 func TestPatternSet_MatchLines_should_returnZero_When_noWaitingForAgentPatternMatches(t *testing.T) {
 	t.Parallel()
 	ps, err := NewPatternSet(getDefaultPatterns())

@@ -25,21 +25,44 @@ import (
 // (matches pre-flag behavior, used by tests). When set, it gates registration
 // at startup (belt-and-suspenders) and is threaded into each backlog/goal
 // handler so a live flag flip takes effect without restarting the MCP server.
-// autoReopener is optional — when nil, submit_review_verdict skips its eager
-// review->in_progress transition on FAIL/PARTIAL/UNVERIFIABLE verdicts and
-// falls back to the pre-existing session-exit/sweep paths.
-// backlogSvc is optional — when nil, create_backlog_item/import_github_issue
-// skip the post-create auto-triage trigger (BUG-061) and create the item
-// exactly as before that fix; see BacklogService.MaybeTriggerTriage.
-func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner, backlogSvc *services.BacklogService) *mcpserver.MCPServer {
+// autoReopener is optional — nil skips submit_review_verdict's eager review->in_progress
+// transition, falling back to the pre-existing session-exit/sweep paths.
+// backlogSvc is optional — nil skips auto-triage (BUG-061) and makes link_session_to_item
+// return ErrUnavailable instead of panicking (e.g. the stdio fallback transport, ADR-001).
+// liveCheck is optional — nil treats every EndedAt==nil ItemSession row as live in
+// link_session_to_item's exclusivity check (pre-feature behavior).
+func NewCore(
+	store session.InstanceStore,
+	svc *services.SessionService,
+	sbMgr *scrollback.ScrollbackManager,
+	storage *session.Storage,
+	eventBus *events.EventBus,
+	prCache *githubpkg.UserPRCache,
+	backlogEnabled func() bool,
+	autoReopener session.AutoReopenSpawner,
+	backlogSvc *services.BacklogService,
+	liveCheck func(sessionUUID string) bool,
+) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer(
 		"stapler-squad",
 		"1.0.0",
 		mcpserver.WithToolCapabilities(false),
 	)
 
+	// diagnoseCheck identifies a dispatched Diagnose & Nudge session so
+	// write_to_session/send_control/run_command/steer_session/resume_session
+	// can refuse it server-side (--allowedTools alone provides no real
+	// enforcement — see server/services/session_service.go's
+	// diagnosticSessionAllowedTools doc comment). nil when storage isn't
+	// wired (e.g. the stdio fallback path), matching every other
+	// storage-gated feature's nil-degrades-to-off convention in this function.
+	var diagnoseCheck diagnoseCallerCheck
+	if storage != nil {
+		diagnoseCheck = storage.IsDiagnoseCaller
+	}
+
 	registerDiscoveryTools(s, &discoveryHandlers{store: store})
-	registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc})
+	registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, diagnoseCheck: diagnoseCheck})
 	// Wrapping a nil *services.SessionService directly in the liveInstanceFinder
 	// interface would produce a non-nil interface value around a nil pointer —
 	// th.live != nil would then be true, and calling FindLiveInstance on it
@@ -50,24 +73,39 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 		liveFinder = svc
 	}
 	registerTerminalTools(s, &terminalHandlers{
-		store:      store,
-		live:       liveFinder,
-		scrollback: sbMgr,
-		writeLim:   newTokenBucket(writeRateLimitPerSec, writeRateLimitPerSec),
+		store:         store,
+		live:          liveFinder,
+		scrollback:    sbMgr,
+		writeLim:      newTokenBucket(writeRateLimitPerSec, writeRateLimitPerSec),
+		diagnoseCheck: diagnoseCheck,
 	})
 	registerVCSTools(s, &vcsHandlers{store: store})
 	if svc != nil {
 		registerWorkflowTools(s, &workflowHandlers{svc: svc})
 		registerRulesTools(s, &rulesHandlers{svc: svc})
+		registerTaggingRulesTools(s, &taggingRulesHandlers{svc: svc})
 		registerNotificationTools(s, &notificationHandlers{svc: svc})
 		registerHistoryTools(s, &historyHandlers{svc: svc})
 	}
 	if storage != nil && (backlogEnabled == nil || backlogEnabled()) {
-		registerBacklogTools(s, &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener, backlogSvc: backlogSvc})
+		h := &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener, backlogSvc: backlogSvc, liveCheck: liveCheck}
+		registerBacklogTools(s, h)
+		if backlogSvc != nil {
+			registerClaimTools(s, &claimHandlers{svc: backlogSvc, enabledCheck: backlogEnabled})
+		}
 		registerGoalTools(s, &goalHandlers{storage: storage, store: store, eventBus: eventBus, enabledCheck: backlogEnabled})
+		// registerGuidanceTools shares backlogHandlers (not a separate struct)
+		// so create_guidance_request can call h.resolveItemLink directly —
+		// see durable-guidance-request plan Epic 2.2.
+		registerGuidanceTools(s, h)
+		// registerDiagnoseTools ("Diagnose & Nudge", backlog item 68964304)
+		// reuses the same liveFinder guard as registerTerminalTools above —
+		// diagnose_nudge_session needs live-instance lookup for the same
+		// reason write_to_session does.
+		registerDiagnoseTools(s, &diagnoseHandlers{storage: storage, live: liveFinder})
 	}
 	if prCache != nil {
-		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store})
+		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc})
 	}
 	return s
 }
@@ -79,12 +117,25 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 // eventBus is optional — pass nil to disable triage-complete notifications.
 // prCache is optional — pass nil to disable GitHub PR tools.
 // backlogEnabled is optional — see NewCore.
-// backlogSvc is optional — see NewCore.
-func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner, backlogSvc *services.BacklogService) *mcpserver.StreamableHTTPServer {
+// autoReopener/backlogSvc/liveCheck are optional — see NewCore.
+func NewHTTPHandler(
+	store session.InstanceStore,
+	svc *services.SessionService,
+	sbMgr *scrollback.ScrollbackManager,
+	storage *session.Storage,
+	eventBus *events.EventBus,
+	prCache *githubpkg.UserPRCache,
+	backlogEnabled func() bool,
+	autoReopener session.AutoReopenSpawner,
+	backlogSvc *services.BacklogService,
+	liveCheck func(sessionUUID string) bool,
+) *mcpserver.StreamableHTTPServer {
+	core := NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck)
+	log.InfoLog().Printf("[mcp] link_session_to_item wired: backlogSvc=%v liveCheck=%v", backlogSvc != nil, liveCheck != nil)
 	// Stateless mode: accept any session ID rather than tracking them in memory.
 	// This allows Claude Code sessions to survive server restarts without needing
 	// to re-initialize the MCP connection (which would require restarting the agent).
-	return mcpserver.NewStreamableHTTPServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc), mcpserver.WithStateLess(true))
+	return mcpserver.NewStreamableHTTPServer(core, mcpserver.WithStateLess(true))
 }
 
 // RunServer initializes and starts the MCP stdio server.
@@ -95,25 +146,32 @@ func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, s
 // eventBus is optional — pass nil to disable triage-complete notifications on stdio path.
 // prCache is optional — pass nil to disable GitHub PR tools.
 // backlogEnabled is optional — see NewCore.
-// autoReopener is optional — see NewCore. The stdio fallback path
-// (buildMCPDeps in main.go) only builds Phase 1 (CoreDeps) dependencies,
-// which has no *services.BacklogService, so callers on that path pass nil
-// and submit_review_verdict's eager transition is skipped there — the
-// session-exit/sweep paths still apply.
-// backlogSvc is optional — see NewCore. Same Phase-1-only caveat as
-// autoReopener above: the stdio fallback path has no *services.BacklogService
-// to pass, so create_backlog_item/import_github_issue skip auto-triage there.
-func RunServer(ctx context.Context, store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner, backlogSvc *services.BacklogService) error {
+// autoReopener/backlogSvc/liveCheck are optional — see NewCore. The stdio fallback path
+// (buildMCPDeps in main.go) only builds Phase 1 (CoreDeps) dependencies, so callers on
+// that path pass nil for all three and get NewCore's documented nil-behavior for each.
+func RunServer(
+	ctx context.Context,
+	store session.InstanceStore,
+	svc *services.SessionService,
+	sbMgr *scrollback.ScrollbackManager,
+	storage *session.Storage,
+	eventBus *events.EventBus,
+	prCache *githubpkg.UserPRCache,
+	backlogEnabled func() bool,
+	autoReopener session.AutoReopenSpawner,
+	backlogSvc *services.BacklogService,
+	liveCheck func(sessionUUID string) bool,
+) error {
 	log.Info("mcp server starting on stdio transport")
 
 	// Inject session UUID from environment into the root context so that
 	// backlog tools can identify the calling session.
 	if uuid := os.Getenv("STAPLER_SESSION_UUID"); uuid != "" {
 		ctx = WithSessionUUID(ctx, uuid)
-		log.InfoLog.Printf("[mcp] session UUID injected from environment: %s", uuid)
+		log.InfoLog().Printf("[mcp] session UUID injected from environment: %s", uuid)
 	}
 
-	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc))
+	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck))
 	return stdio.Listen(ctx, os.Stdin, os.Stdout)
 }
 

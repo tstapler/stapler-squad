@@ -63,7 +63,7 @@ func lockForRepo(repoPath string) (*repoWorktreeLock, error) {
 		return nil, fmt.Errorf("worktree lock: failed to get config directory: %w", err)
 	}
 	locksDir := filepath.Join(configDir, "worktree-locks")
-	if err := os.MkdirAll(locksDir, 0755); err != nil {
+	if err := os.MkdirAll(locksDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create worktree locks directory: %w", err)
 	}
 

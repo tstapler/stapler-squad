@@ -26,6 +26,23 @@ func TestIsTestSocketName_StillMatchesUnderscorePrefixes(t *testing.T) {
 	}
 }
 
+// Regression coverage for BUG-105: testutil.CreateIsolatedTmuxServer and
+// session/session_creation_test.go's testTmuxSocket helper both embed an
+// arbitrary Go test name between "test_" and the owning PID
+// ("test_<TestName>_<pid>[_<n>]"), so no fixed literal prefix can name every
+// case — the allowlist must match on the bare "test_" prefix instead.
+func TestIsTestSocketName_MatchesGenericTestNamePrefix(t *testing.T) {
+	cases := []string{
+		"test_TestSessionCreationWithWorktree_67798_1",
+		"test_TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux_67798",
+	}
+	for _, name := range cases {
+		if !isTestSocketName(name) {
+			t.Errorf("isTestSocketName(%q) = false, want true", name)
+		}
+	}
+}
+
 func TestExtractTestSocketPID_HyphenDelimited(t *testing.T) {
 	pid, ok := extractTestSocketPID("test-isolated-239479")
 	if !ok || pid != 239479 {

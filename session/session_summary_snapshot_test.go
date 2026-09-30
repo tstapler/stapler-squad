@@ -131,9 +131,9 @@ func (f *fakeTokenStoreReader) GetAll() []*tokens.ParseResult { return nil }
 func (f *fakeTokenStoreReader) GetByUUID(uuid string) *tokens.ParseResult {
 	return f.byUUID[uuid]
 }
-func (f *fakeTokenStoreReader) IsLoading() bool                { return false }
-func (f *fakeTokenStoreReader) Subscribe() <-chan struct{}     { return nil }
-func (f *fakeTokenStoreReader) Unsubscribe(ch <-chan struct{}) {}
+func (f *fakeTokenStoreReader) IsLoading() bool                           { return false }
+func (f *fakeTokenStoreReader) Subscribe() <-chan *tokens.ParseResult     { return nil }
+func (f *fakeTokenStoreReader) Unsubscribe(ch <-chan *tokens.ParseResult) {}
 
 func TestBuildCostSnapshot_should_ReturnDataUnavailable_When_TokenStoreReturnsNil(t *testing.T) {
 	t.Parallel()

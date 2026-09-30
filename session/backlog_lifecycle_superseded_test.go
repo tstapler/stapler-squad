@@ -124,7 +124,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_LastCommi
 	spawner := &fakePRFixSpawner{}
 	listener.SetPRFixSpawner(spawner)
 
-	listener.ReconcilePRPending(ctx, storage.repo.(*EntRepository))
+	listener.ReconcilePRPending(ctx, storage.repo)
 
 	assert.False(t, checker.closeCalled,
 		"PR #342 carries real unmerged work; it must never be closed as superseded on the strength of the session's own base commit")
@@ -161,7 +161,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_SessionHe
 	overridePRPendingChecker(t, listener, checker)
 	listener.SetPRFixSpawner(&fakePRFixSpawner{})
 
-	listener.ReconcilePRPending(ctx, storage.repo.(*EntRepository))
+	listener.ReconcilePRPending(ctx, storage.repo)
 
 	assert.False(t, checker.closeCalled,
 		"an unresolvable HEAD must not license closing the PR against the session's base commit")
@@ -204,7 +204,7 @@ func TestReconcilePRPending_should_StillCloseSupersededPR_When_SessionsRealTipIs
 	// as verified rather than failing closed.
 	stubMatchingPRByNumberFinder(listener, branch)
 
-	listener.ReconcilePRPending(ctx, storage.repo.(*EntRepository))
+	listener.ReconcilePRPending(ctx, storage.repo)
 
 	assert.True(t, checker.closeCalled,
 		"a PR whose session's real tip commit is already on main is genuinely superseded and must still be closed")
@@ -293,7 +293,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_BaseCommi
 	// below would pass for the wrong reason even without BUG-065's fix.
 	stubMatchingPRByNumberFinder(listener, branch)
 
-	listener.ReconcilePRPending(ctx, storage.repo.(*EntRepository))
+	listener.ReconcilePRPending(ctx, storage.repo)
 
 	assert.False(t, checker.closeCalled,
 		"an empty BaseCommitSha must not let the session's own spawn-time base slip through as if it were real work")
@@ -385,8 +385,8 @@ func TestUpdateItemSessionGitActivity_should_RecordProgressAtObservationTime_Whe
 	require.NotNil(t, sessions[0].LastProgressAt)
 	assert.False(t, sessions[0].LastProgressAt.Before(before.Add(-time.Second)),
 		"last_progress_at must be observation time, not the backdated author time — otherwise a rebase instantly marks a healthy session stale")
-	assert.True(t, staleWork(authoredAt, time.Now()),
+	assert.True(t, staleWork(authoredAt, time.Now(), maxWorkSessionStaleness),
 		"precondition: the author date really is old enough to trip the staleness threshold, so this test would fail if the author date leaked through")
-	assert.False(t, staleWork(*sessions[0].LastProgressAt, time.Now()),
+	assert.False(t, staleWork(*sessions[0].LastProgressAt, time.Now(), maxWorkSessionStaleness),
 		"the session must not be considered stale after just reporting a commit")
 }

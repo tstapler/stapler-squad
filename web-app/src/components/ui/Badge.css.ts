@@ -29,6 +29,10 @@ export const badge = recipe({
         background: vars.color.errorBg,
         color: vars.color.errorText,
       },
+      critical: {
+        background: vars.color.criticalBg,
+        color: vars.color.criticalText,
+      },
       primary: {
         background: vars.color.primary,
         color: vars.color.primaryText,

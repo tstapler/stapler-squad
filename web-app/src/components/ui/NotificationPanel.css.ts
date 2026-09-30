@@ -238,9 +238,8 @@ export const itemTitle = style({
 });
 
 globalStyle(`${itemTitle} strong`, {
-  whiteSpace: "nowrap",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
+  overflowWrap: "break-word",
+  wordBreak: "break-word",
   flex: "0 1 auto",
   minWidth: 0,
 });
@@ -276,9 +275,8 @@ export const itemWorkingDir = style({
   display: "flex",
   alignItems: "center",
   gap: "0.25rem",
-  whiteSpace: "nowrap",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
+  overflowWrap: "break-word",
+  wordBreak: "break-word",
 });
 
 export const itemActions = style({
@@ -400,6 +398,40 @@ export const loadMoreButton = style({
   selectors: {
     "&:hover:not(:disabled)": {
       backgroundColor: vars.color.hoverBackground,
+    },
+    "&:disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
+    },
+  },
+});
+
+export const incompleteSearchNotice = style({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: "0.5rem",
+  padding: "0.5rem 0.75rem",
+  margin: "0 0 0.5rem",
+  fontSize: "0.8rem",
+  color: vars.color.textSecondary,
+  backgroundColor: "rgba(0, 0, 0, 0.04)",
+  borderLeft: `2px solid ${vars.color.warning}`,
+  borderRadius: "0 4px 4px 0",
+});
+
+export const incompleteSearchNoticeButton = style({
+  padding: "0.2rem 0.6rem",
+  fontSize: "0.75rem",
+  fontWeight: 500,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "4px",
+  background: "transparent",
+  color: vars.color.primary,
+  cursor: "pointer",
+  selectors: {
+    "&:hover:not(:disabled)": {
+      borderColor: vars.color.primary,
     },
     "&:disabled": {
       opacity: 0.5,
@@ -557,6 +589,12 @@ export const filterBar = style({
   flexShrink: 0,
 });
 
+export const searchRow = style({
+  display: "flex",
+  gap: "0.5rem",
+  alignItems: "center",
+});
+
 export const searchInput = style({
   width: "100%",
   padding: "0.5rem 0.75rem",
@@ -575,6 +613,35 @@ export const searchInput = style({
     "&:focus": {
       borderColor: vars.color.primary,
       boxShadow: `0 0 0 2px color-mix(in srgb, ${vars.color.primary} 20%, transparent)`,
+    },
+  },
+  "@media": {
+    [`screen and (max-width: ${breakpoints.md})`]: {
+      minHeight: "44px",
+    },
+  },
+});
+
+export const searchClearButton = style({
+  flexShrink: 0,
+  padding: "0.375rem 0.625rem",
+  fontSize: "0.75rem",
+  fontWeight: 500,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "6px",
+  background: "transparent",
+  color: vars.color.textSecondary,
+  cursor: "pointer",
+  selectors: {
+    "&:hover": {
+      borderColor: vars.color.primary,
+      color: vars.color.primary,
+    },
+  },
+  "@media": {
+    [`screen and (max-width: ${breakpoints.md})`]: {
+      minHeight: "44px",
+      minWidth: "44px",
     },
   },
 });
@@ -602,11 +669,26 @@ export const filterPill = style({
       color: vars.color.primary,
     },
   },
+  "@media": {
+    [`screen and (max-width: ${breakpoints.md})`]: {
+      minHeight: "44px",
+      padding: "0.5rem 0.75rem",
+    },
+  },
 });
 
 export const filterPillActive = style({
   backgroundColor: vars.color.primary,
   borderColor: vars.color.primary,
+  color: "white",
+});
+
+// Exclude-style (negative) filter pill — e.g. "hide backlog items" — visually
+// distinct from the inclusion-only filterPillActive so users can tell at a
+// glance which pills are narrowing vs. subtracting from the list.
+export const filterPillExcludeActive = style({
+  backgroundColor: vars.color.error,
+  borderColor: vars.color.error,
   color: "white",
 });
 
@@ -713,9 +795,8 @@ export const autoHandledContent = style({
 export const autoHandledTitle = style({
   fontWeight: 500,
   color: vars.color.textPrimary,
-  whiteSpace: "nowrap",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
+  overflowWrap: "break-word",
+  wordBreak: "break-word",
 });
 
 export const autoHandledMeta = style({
@@ -732,4 +813,93 @@ export const autoHandledTimestamp = style({
   color: vars.color.textMuted,
   flexShrink: 0,
   marginTop: "0.0625rem",
+});
+
+// "Needs a decision" section (Task 3.1.2b) — always-expanded top tier, plus
+// its calm/hidden-by-filter empty states and staleness indicator.
+
+export const needsDecisionSection = style({
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+});
+
+export const needsDecisionHeadingRow = style({
+  display: "flex",
+  alignItems: "baseline",
+  flexWrap: "wrap",
+  gap: "0.5rem",
+  padding: "0.75rem 1.25rem 0.25rem",
+});
+
+export const needsDecisionHeading = style({
+  margin: 0,
+  fontSize: "0.75rem",
+  fontWeight: 700,
+  letterSpacing: "0.4px",
+  textTransform: "uppercase",
+  color: vars.color.textSecondary,
+});
+
+// Mirrors ReviewQueuePanel.css.ts's stalenessIndicator/stalenessRetry (Task
+// 3.2.1d) so the "Last updated <Xm ago> · Retry" affordance reads identically
+// on both surfaces (Task 3.1.2h, AC38).
+export const stalenessIndicator = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textMuted,
+  whiteSpace: "nowrap",
+});
+
+export const stalenessRetry = style({
+  background: "none",
+  border: "none",
+  padding: 0,
+  color: vars.color.primary,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 600,
+  cursor: "pointer",
+  textDecoration: "underline",
+});
+
+export const needsDecisionEmpty = style({
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "1.5rem 1.25rem",
+  textAlign: "center",
+  color: vars.color.textSecondary,
+  gap: "0.25rem",
+});
+
+export const needsDecisionEmptyIcon = style({
+  fontSize: "1.75rem",
+});
+
+export const needsDecisionEmptyText = style({
+  fontSize: "0.9375rem",
+  fontWeight: 600,
+  margin: 0,
+  color: vars.color.textPrimary,
+});
+
+export const needsDecisionEmptySubtext = style({
+  fontSize: "0.8125rem",
+  margin: 0,
+  color: vars.color.textSecondary,
+});
+
+export const needsDecisionClearFilterButton = style({
+  marginTop: "0.25rem",
+  padding: "0.375rem 0.75rem",
+  fontSize: "0.8125rem",
+  fontWeight: 500,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "6px",
+  background: "transparent",
+  color: vars.color.primary,
+  cursor: "pointer",
+  selectors: {
+    "&:hover": {
+      borderColor: vars.color.primary,
+    },
+  },
 });

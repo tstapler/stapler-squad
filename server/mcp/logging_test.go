@@ -10,7 +10,7 @@ import (
 
 func TestMCPLoggerStderrOnly(t *testing.T) {
 	InitMCPLogging()
-	loggers := []*stdlog.Logger{log.InfoLog, log.WarningLog, log.ErrorLog, log.DebugLog}
+	loggers := []*stdlog.Logger{log.InfoLog(), log.WarningLog(), log.ErrorLog(), log.DebugLog()}
 	for _, l := range loggers {
 		if l == nil {
 			continue

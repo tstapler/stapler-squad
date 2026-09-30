@@ -23,6 +23,15 @@ async function globalSetup(config: FullConfig) {
     process.env.TEST_SERVER_TESTDIR = getGlobalTestServer().getTestDir();
     console.log(`Test server data dir exported: ${process.env.TEST_SERVER_TESTDIR}`);
 
+    // Note: remote-workspaces.spec.ts's SSH target (tests/e2e/sshd) is deliberately NOT started
+    // here. A single global sshd shared across every project in this run (chromium AND
+    // chromium-dom both execute this same spec file against the SAME test server) would mean
+    // only the FIRST project to dial it ever sees an unknown host key -- every later
+    // project/retry sees an ALREADY-trusted host key (KnownHostsStore is keyed by host:port,
+    // server-side, for the whole run), skipping the TOFU dialog the test is meant to exercise.
+    // remote-workspaces.spec.ts starts its own dedicated sshd in a file-scoped beforeAll/afterAll
+    // instead, so every project's run of that file gets a fresh port + fresh host key.
+
     // Rewrite storageState fixture files with the actual server origin so
     // Playwright applies localStorage to the correct origin regardless of
     // which dynamic port findFreePort() assigned. These files are gitignored

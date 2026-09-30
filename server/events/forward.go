@@ -9,21 +9,30 @@ type EventBus = pkgevents.EventBus
 type Subscriber = pkgevents.Subscriber
 type BacklogChangeKind = pkgevents.BacklogChangeKind
 type BacklogItemEventPayload = pkgevents.BacklogItemEventPayload
+type RemoteHealthEventPayload = pkgevents.RemoteHealthEventPayload
+type WorkflowChangeKind = pkgevents.WorkflowChangeKind
+type WorkflowEventPayload = pkgevents.WorkflowEventPayload
 
 // Constants
 const (
 	EventSessionCreated      = pkgevents.EventSessionCreated
 	EventSessionUpdated      = pkgevents.EventSessionUpdated
 	EventSessionDeleted      = pkgevents.EventSessionDeleted
+	EventSessionArchived     = pkgevents.EventSessionArchived
 	EventUserInteraction     = pkgevents.EventUserInteraction
 	EventSessionAcknowledged = pkgevents.EventSessionAcknowledged
 	EventApprovalResponse    = pkgevents.EventApprovalResponse
 	EventNotification        = pkgevents.EventNotification
 	EventBacklogItemChanged  = pkgevents.EventBacklogItemChanged
+	EventRemoteHealthChanged = pkgevents.EventRemoteHealthChanged
+	EventWorkflowChanged     = pkgevents.EventWorkflowChanged
 
 	// Metadata keys for session-scoped notifications (see SessionScopedMetadata).
 	MetadataKeySessionScoped = pkgevents.MetadataKeySessionScoped
 	MetadataKeyItemID        = pkgevents.MetadataKeyItemID
+
+	// FieldStatus is the UpdatedFields entry marking a session status change.
+	FieldStatus = pkgevents.FieldStatus
 )
 
 // BacklogChangeKind constants (mirrors pkg/events/types.go).
@@ -38,6 +47,14 @@ const (
 	BacklogChangeActivityNoteAdded     = pkgevents.BacklogChangeActivityNoteAdded
 )
 
+// WorkflowChangeKind constants (mirrors pkg/events/types.go).
+const (
+	WorkflowChangeCreated = pkgevents.WorkflowChangeCreated
+	WorkflowChangeUpdated = pkgevents.WorkflowChangeUpdated
+	WorkflowChangeDeleted = pkgevents.WorkflowChangeDeleted
+	WorkflowChangeRun     = pkgevents.WorkflowChangeRun
+)
+
 // Constructor functions (var allows assignment but is callable with identical syntax)
 var (
 	NewEventBus                         = pkgevents.NewEventBus
@@ -46,10 +63,13 @@ var (
 	NewSessionUpdatedEvent              = pkgevents.NewSessionUpdatedEvent
 	NewSessionUpdatedEventWithDetection = pkgevents.NewSessionUpdatedEventWithDetection
 	NewSessionDeletedEvent              = pkgevents.NewSessionDeletedEvent
+	NewSessionArchivedEvent             = pkgevents.NewSessionArchivedEvent
 	NewUserInteractionEvent             = pkgevents.NewUserInteractionEvent
 	NewSessionAcknowledgedEvent         = pkgevents.NewSessionAcknowledgedEvent
 	NewApprovalResponseEvent            = pkgevents.NewApprovalResponseEvent
 	NewNotificationEvent                = pkgevents.NewNotificationEvent
 	NewBacklogItemChangedEvent          = pkgevents.NewBacklogItemChangedEvent
+	NewRemoteHealthChangedEvent         = pkgevents.NewRemoteHealthChangedEvent
+	NewWorkflowChangedEvent             = pkgevents.NewWorkflowChangedEvent
 	SessionScopedMetadata               = pkgevents.SessionScopedMetadata
 )

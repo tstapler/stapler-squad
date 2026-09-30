@@ -19,6 +19,7 @@ import (
 	"golang.org/x/time/rate"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -156,6 +157,54 @@ func TestFireNow_AdmissionAllowed_CreatesSession(t *testing.T) {
 	require.NoError(t, fireErr)
 	assert.True(t, gate.called)
 	assert.True(t, fakeSess.called, "CreateSession should be called once admission is granted")
+}
+
+// TestDeriveWorkflowSessionTitle covers the arg → title mapping a manual
+// @<slug> omnibar fire (or run_workflow) relies on: a bare GitHub PR/branch/repo
+// reference in arg becomes an identifiable owner/repo-based title instead of
+// the generic timestamp default, matching create_session_for_pr's convention.
+func TestDeriveWorkflowSessionTitle(t *testing.T) {
+	wf := &ent.Workflow{Name: "pr-review"}
+
+	prTitle := deriveWorkflowSessionTitle(wf, "https://github.com/tstapler/stapler-squad/pull/123")
+	assert.Equal(t, "tstapler/stapler-squad#123", prTitle)
+
+	branchTitle := deriveWorkflowSessionTitle(wf, "  https://github.com/tstapler/stapler-squad/tree/my-branch  ")
+	assert.Equal(t, "tstapler/stapler-squad:my-branch", branchTitle)
+
+	repoTitle := deriveWorkflowSessionTitle(wf, "https://github.com/tstapler/stapler-squad")
+	assert.Equal(t, "tstapler/stapler-squad", repoTitle)
+
+	notGitHub := deriveWorkflowSessionTitle(wf, "review this please")
+	assert.Contains(t, notGitHub, "pr-review — ", "non-GitHub arg should fall back to the default timestamp title")
+
+	empty := deriveWorkflowSessionTitle(wf, "")
+	assert.Contains(t, empty, "pr-review — ", "empty arg should fall back to the default timestamp title")
+}
+
+// TestFireNow_PRUrlArg_UsesOwnerRepoTitleAndInjectsSessionID verifies the
+// pr-review workflow story end to end: firing with a PR URL as arg both names
+// the created session "owner/repo#N" and substitutes that same value for
+// {{session_id}} in the rendered prompt, so the workflow's own command can
+// instruct the agent how to rename itself later via update_session.
+func TestFireNow_PRUrlArg_UsesOwnerRepoTitleAndInjectsSessionID(t *testing.T) {
+	fakeSess := &fakeSessionService{}
+	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
+
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug:            "pr-review",
+		Name:            "PR Review",
+		Command:         "Review {{input}}. Your session_id is {{session_id}} -- rename yourself once you know the PR title.",
+		TargetDirectory: "/tmp/test",
+	})
+	require.NoError(t, err)
+
+	_, fireErr := sched.FireNow(context.Background(), wf, "https://github.com/tstapler/stapler-squad/pull/456")
+	require.NoError(t, fireErr)
+
+	require.NotNil(t, fakeSess.lastReq)
+	assert.Equal(t, "tstapler/stapler-squad#456", fakeSess.lastReq.Title)
+	assert.Contains(t, fakeSess.lastReq.InitialPrompt, "session_id is tstapler/stapler-squad#456")
 }
 
 // TestScheduler_Start_DoesNotRegisterMismatchedTriggerAsCron verifies Task 1.1.1f: a
@@ -434,19 +483,38 @@ func TestFireTrigger_NeverSetsAutoApproveFlag(t *testing.T) {
 	assert.Equal(t, wf.ID.String(), req.GetWorkflowId(), "WorkflowId (attribution) is the intentional difference from a manual create")
 }
 
+// warnLogBuffer wraps bytes.Buffer with a mutex, matching the pattern already used in
+// executor/safeexec/safeexec_pg_test.go and server/services/autonomous_orchestration_service_test.go.
+type warnLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *warnLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *warnLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // captureWarnLog temporarily redirects the slog default logger (which log.Warn writes
 // through) to a buffer, mirroring server/services/session_service_client_log_test.go's
-// captureInfoLog. Returns a function that restores the original default logger and
-// returns everything captured.
-func captureWarnLog() func() string {
-	var buf bytes.Buffer
-	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	original := slog.Default()
-	slog.SetDefault(slog.New(h))
-	return func() string {
-		slog.SetDefault(original)
-		return buf.String()
-	}
+// captureInfoLog. Restoration is registered via t.Cleanup rather than a returned closure
+// the caller must remember to invoke — a panic in the code under test would otherwise
+// leave the process-wide seam pointed at this stack-local buffer for the rest of the
+// test binary.
+func captureWarnLog(t *testing.T) *warnLogBuffer {
+	t.Helper()
+	buf := &warnLogBuffer{}
+	h := slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	original := ssqlog.SetSlogDefaultForTest(slog.New(h))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(original) })
+	return buf
 }
 
 // TestCheckMissedCronFire_LogsWarning_When_LastFiredAtIsStale verifies Task 4.1.1c /
@@ -469,9 +537,9 @@ func TestCheckMissedCronFire_LogsWarning_When_LastFiredAtIsStale(t *testing.T) {
 		LastFiredAt:    &staleLastFired,
 	}
 
-	restore := captureWarnLog()
+	buf := captureWarnLog(t)
 	checkMissedCronFire(wf, now)
-	logged := restore()
+	logged := buf.String()
 
 	assert.Contains(t, logged, "missed cron fire")
 	assert.Contains(t, logged, "missed-fire-wf")
@@ -493,9 +561,9 @@ func TestCheckMissedCronFire_LogsWarning_When_LastFiredAtIsNil(t *testing.T) {
 		LastFiredAt:    nil,
 	}
 
-	restore := captureWarnLog()
+	buf := captureWarnLog(t)
 	checkMissedCronFire(wf, now)
-	logged := restore()
+	logged := buf.String()
 
 	assert.Contains(t, logged, "missed cron fire")
 	assert.Contains(t, logged, "never-fired-wf")
@@ -519,9 +587,9 @@ func TestCheckMissedCronFire_DoesNotLog_When_WorkflowIsFreshAndNeverFired(t *tes
 		LastFiredAt:    nil,
 	}
 
-	restore := captureWarnLog()
+	buf := captureWarnLog(t)
 	checkMissedCronFire(wf, now)
-	logged := restore()
+	logged := buf.String()
 
 	assert.NotContains(t, logged, "missed cron fire", "a workflow whose schedule has not come due since creation must not be flagged")
 }
@@ -543,9 +611,9 @@ func TestCheckMissedCronFire_DoesNotLog_When_FiredOnTime(t *testing.T) {
 		LastFiredAt:    &onTimeLastFired,
 	}
 
-	restore := captureWarnLog()
+	buf := captureWarnLog(t)
 	checkMissedCronFire(wf, now)
-	logged := restore()
+	logged := buf.String()
 
 	assert.NotContains(t, logged, "missed cron fire", "a workflow that fired on time must not be flagged")
 }

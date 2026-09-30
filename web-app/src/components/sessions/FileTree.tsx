@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from "react";
 import { Tree } from "react-arborist";
-import type { NodeApi, TreeApi } from "react-arborist";
+import type { NodeApi, TreeApi, RowRendererProps } from "react-arborist";
 import type { FileNode } from "@/gen/session/v1/types_pb";
 import { fetchDirectoryFiles, searchFiles } from "@/lib/hooks/useFileService";
 import { getFileIcon } from "@/lib/utils/fileIcons";
@@ -386,6 +386,25 @@ function NodeRenderer({
   );
 }
 
+// ---- Row renderer ----
+
+// Real roving tabindex: react-arborist's DefaultRow hardcodes tabIndex=-1
+// forever, which breaks useFocusTrap's [tabindex]:not([tabindex="-1"]) query.
+// Exported for unit testing.
+export function TreeRow<T>({ node, innerRef, attrs, children }: RowRendererProps<T>) {
+  return (
+    <div
+      {...attrs}
+      tabIndex={node.isFocused ? 0 : -1}
+      ref={innerRef}
+      onFocus={(e) => e.stopPropagation()}
+      onClick={node.handleClick}
+    >
+      {children}
+    </div>
+  );
+}
+
 // ---- Imperative handle ----
 
 export interface FileTreeHandle {
@@ -725,6 +744,26 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       if (!visible || visible.length === 0) return;
 
       switch (e.key) {
+        case "Tab": {
+          // react-arborist's own DefaultContainer already moved DOM focus via
+          // its document-wide walk (not safely overridable — depends on
+          // unexported internals). Redo the move correctly using the row it
+          // moved focus from: step within the tree like j/k, or at a boundary
+          // hand off to our own container so useFocusTrap resolves the wrap.
+          if (!focusedNode) break;
+          e.preventDefault();
+          const idx = visible.findIndex((n) => n.id === focusedNode.id);
+          if (e.shiftKey) {
+            const prev = idx > 0 ? visible[idx - 1] : undefined;
+            if (prev) tree.focus(prev.id);
+            else containerRef.current?.focus();
+          } else {
+            const next = idx >= 0 && idx < visible.length - 1 ? visible[idx + 1] : undefined;
+            if (next) tree.focus(next.id);
+            else containerRef.current?.focus();
+          }
+          break;
+        }
         case "j": {
           e.preventDefault();
           const idx = focusedNode ? visible.findIndex((n) => n.id === focusedNode.id) : -1;
@@ -892,6 +931,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           }}
           disableDrag={true}
           disableDrop={true}
+          renderRow={TreeRow}
           onActivate={handleActivate}
           onToggle={handleToggle}
           rowHeight={rowHeight}

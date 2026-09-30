@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -46,6 +47,14 @@ type terminalHandlers struct {
 	live       liveInstanceFinder // may be nil; see findInstance
 	scrollback *scrollback.ScrollbackManager
 	writeLim   *tokenBucket // per-session rate limiter for write_to_session
+	// capturePane reads the live tmux pane; nil means inst.CapturePaneContent.
+	// A seam so tests can supply pane content without a real tmux session.
+	capturePane func(inst *session.Instance) (string, error)
+	// diagnoseCheck gates write_to_session/send_control/run_command/
+	// steer_session away from a dispatched Diagnose & Nudge session — see
+	// diagnose_role_gate.go's denyIfDiagnoseCaller. May be nil (no
+	// restriction applied; matches pre-fix behavior).
+	diagnoseCheck diagnoseCallerCheck
 }
 
 // ReadSessionOutputResult is the response type for read_session_output.
@@ -94,7 +103,7 @@ func registerTerminalTools(s *mcpserver.MCPServer, th *terminalHandlers) {
 				mcpgo.DefaultBool(true),
 			),
 		),
-		th.writeToSession,
+		withDiagnoseGate(th.diagnoseCheck, "write_to_session", th.writeToSession),
 	)
 
 	s.AddTool(
@@ -110,7 +119,7 @@ func registerTerminalTools(s *mcpserver.MCPServer, th *terminalHandlers) {
 				mcpgo.Enum("C", "D", "Z", "L"),
 			),
 		),
-		th.sendControl,
+		withDiagnoseGate(th.diagnoseCheck, "send_control", th.sendControl),
 	)
 
 	s.AddTool(
@@ -146,7 +155,7 @@ func registerTerminalTools(s *mcpserver.MCPServer, th *terminalHandlers) {
 				mcpgo.Required(),
 			),
 		),
-		th.steerSession,
+		withDiagnoseGate(th.diagnoseCheck, "steer_session", th.steerSession),
 	)
 
 	s.AddTool(
@@ -173,8 +182,39 @@ func registerTerminalTools(s *mcpserver.MCPServer, th *terminalHandlers) {
 				mcpgo.Max(200),
 			),
 		),
-		th.runCommand,
+		withDiagnoseGate(th.diagnoseCheck, "run_command", th.runCommand),
 	)
+}
+
+// notReadyResult is the SESSION_NOT_READY error for a session with neither
+// scrollback nor a capturable live pane (paused, not started, or pane gone).
+func notReadyResult(sessionID string) *mcpgo.CallToolResult {
+	return errResult(ErrSessionNotReady,
+		fmt.Sprintf("session %q hasn't produced any terminal output yet", sessionID),
+		"The session may be paused, not started, or still starting up. Resume it or wait a moment and retry.")
+}
+
+// readOutputBytes returns the session's recent output. Scrollback is only fed
+// by terminal stream subscribers (e.g. the web UI), so an MCP-only session has
+// an empty scrollback; in that case fall back to capturing the live tmux pane.
+// The error is non-nil only when neither source is available.
+func (th *terminalHandlers) readOutputBytes(sessionID string, inst *session.Instance) ([]byte, error) {
+	if th.scrollback.CurrentSequence(sessionID) != 0 {
+		return th.scrollback.GetRecentBytes(sessionID, maxOutputBytes)
+	}
+	capture := th.capturePane
+	if capture == nil {
+		capture = func(i *session.Instance) (string, error) { return i.CapturePaneContent() }
+	}
+	content, err := capture(inst)
+	if err != nil {
+		return nil, err
+	}
+	raw := []byte(content)
+	if len(raw) > maxOutputBytes {
+		raw = raw[len(raw)-maxOutputBytes:]
+	}
+	return raw, nil
 }
 
 // ---- read_session_output ----
@@ -199,25 +239,14 @@ func (th *terminalHandlers) readSessionOutput(_ context.Context, req mcpgo.CallT
 		stripANSI = v
 	}
 
-	// Verify session exists.
-	instances, err := th.store.LoadInstances()
-	if err != nil {
-		return errResult(ErrInternalError, "failed to load sessions", ""), nil
-	}
-	found := false
-	for _, inst := range instances {
-		if inst.MatchesID(sessionID) {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return errResult(ErrSessionNotFound, fmt.Sprintf("session %q not found", sessionID), "Use list_sessions to find available sessions"), nil
+	inst, errRes := th.findInstance(sessionID)
+	if errRes != nil {
+		return errRes, nil
 	}
 
-	raw, err := th.scrollback.GetRecentBytes(sessionID, maxOutputBytes)
+	raw, err := th.readOutputBytes(sessionID, inst)
 	if err != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("failed to read scrollback: %v", err), ""), nil
+		return notReadyResult(sessionID), nil
 	}
 
 	if stripANSI {
@@ -284,31 +313,45 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 	}
 
 	// BUG-047: must use session.EnterKeySequence ('\r'), not a bare '\n' —
-	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit, so a
-	// trailing '\n' leaves the text sitting unsubmitted in the input buffer.
-	text := session.BuildSubmittableInput(input, pressEnter)
-
-	// Wrap SendKeys in a goroutine with a 5-second timeout to prevent PTY write deadlock.
-	// Use the request context so caller cancellation propagates; add a hard 5s cap.
-	errCh := make(chan error, 1)
-	go func() { errCh <- inst.SendKeys(text) }()
-
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("send keys failed: %v", err), "Check that the session is running and not paused"), nil
-		}
-	case <-ctx.Done():
-		return errResult("PTY_WRITE_TIMEOUT", "timed out writing to session PTY", "The session may be blocked. Use send_control with key=C to interrupt"), nil
+	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit.
+	// BUG-031: content and the submit keystroke must travel as two separate
+	// SendKeys writes (session.SubmitDriverContent), never concatenated into
+	// one. Both branches are timeout-bounded so a wedged PTY write can't hang
+	// this handler indefinitely.
+	var err error
+	if pressEnter {
+		err = session.SubmitContentWithEnter(ctx, inst, input)
+	} else {
+		err = session.SendKeysWithTimeout(ctx, inst, input, session.DefaultSendKeysTimeout)
+	}
+	if err != nil {
+		return submitErrResult(err, "input"), nil
 	}
 
 	return okResult(WriteSessionResult{
 		MCPResult:    MCPResult{Success: true},
-		BytesWritten: len(text),
+		BytesWritten: len(input),
 	}), nil
+}
+
+// submitErrResult maps an error from session.SubmitContentWithEnter/
+// SendKeysWithTimeout to the
+// matching MCP error result, shared by writeToSession, runCommand, and
+// steerSession: ErrSubmitNotConfirmed (BUG-031's swallowed-submit case)
+// becomes SUBMIT_NOT_CONFIRMED, a context deadline becomes PTY_WRITE_TIMEOUT,
+// anything else is a generic internal error. noun names what was being sent
+// ("input", "command", "message") for the returned messages.
+func submitErrResult(err error, noun string) *mcpgo.CallToolResult {
+	if errors.Is(err, session.ErrSubmitNotConfirmed) {
+		return errResult("SUBMIT_NOT_CONFIRMED", err.Error(),
+			fmt.Sprintf("The session's terminal may not have registered the %s. Retry, or check with read_session_output.", noun))
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errResult("PTY_WRITE_TIMEOUT", fmt.Sprintf("timed out writing %s to session PTY", noun),
+			"The session may be blocked. Use send_control with key=C to interrupt")
+	}
+	return errResult(ErrInternalError, fmt.Sprintf("send %s failed: %v", noun, err),
+		"Check that the session is running and not paused")
 }
 
 // ---- send_control ----
@@ -542,25 +585,21 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 		return errResult_, nil
 	}
 
-	// Send the command. BUG-047: must use session.EnterKeySequence ('\r'),
-	// not a bare '\n' — a raw-mode TUI target (e.g. the Claude Code CLI
-	// itself) only recognizes '\r' as submit, so a trailing '\n' leaves the
-	// command sitting unsubmitted in the input buffer.
-	sendErrCh := make(chan error, 1)
-	go func() { sendErrCh <- inst.SendKeys(session.BuildSubmittableInput(command, true)) }()
-
-	sendCtx, sendCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer sendCancel()
-
-	select {
-	case err := <-sendErrCh:
-		if err != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("send command failed: %v", err), "Check that the session is running and not paused"), nil
-		}
-	case <-sendCtx.Done():
-		return errResult("PTY_WRITE_TIMEOUT", "timed out writing command to session PTY", ""), nil
+	// Send the command via session.SubmitContentWithEnter (BUG-031/BUG-047):
+	// content and the submit keystroke must travel as two separate SendKeys
+	// writes, never concatenated into one.
+	if err := session.SubmitContentWithEnter(ctx, inst, command); err != nil {
+		return submitErrResult(err, "command"), nil
 	}
 
+	return th.collectCommandOutput(sessionID, inst, timeoutSecs, lines), nil
+}
+
+// collectCommandOutput is run_command's post-submit half: it polls until
+// output stops changing (or the timeout), then returns the result. It never
+// returns an error result -- the command has already been submitted -- so an
+// unreadable pane yields success with empty output.
+func (th *terminalHandlers) collectCommandOutput(sessionID string, inst *session.Instance, timeoutSecs, lines int) *mcpgo.CallToolResult {
 	// Poll until output stops changing for 2 consecutive seconds or timeout expires.
 	deadline := time.Now().Add(time.Duration(timeoutSecs) * time.Second)
 	ticker := time.NewTicker(time.Second)
@@ -573,7 +612,7 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 	for {
 		<-ticker.C
 
-		raw, _ := th.scrollback.GetRecentBytes(sessionID, maxOutputBytes)
+		raw, _ := th.readOutputBytes(sessionID, inst)
 		cs := bytesChecksum(raw)
 
 		if cs == prevChecksum {
@@ -592,8 +631,9 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 		}
 	}
 
-	// Read final output.
-	raw, _ := th.scrollback.GetRecentBytes(sessionID, maxOutputBytes)
+	// The command was already submitted, so never fail here: an unreadable
+	// pane yields success with empty output.
+	raw, _ := th.readOutputBytes(sessionID, inst)
 	stripped := stripANSI_(raw)
 	allLines := splitLines(stripped)
 	totalLines := len(allLines)
@@ -621,7 +661,7 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 		Truncated:    truncated,
 		TimedOut:     timedOut,
 		LastSequence: lastSeq,
-	}), nil
+	})
 }
 
 // ---- steer_session ----
@@ -680,22 +720,11 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 		}), nil
 	}
 
-	// Fallback: send via PTY send-keys (interactive sessions or sessions without UUID).
-	text := message + "\r"
-
-	sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- inst.SendKeys(text) }()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("send keys failed: %v", err), "Check that the session is running and not paused"), nil
-		}
-	case <-sendCtx.Done():
-		return errResult("PTY_WRITE_TIMEOUT", "timed out writing to session PTY", "The session may be blocked. Use send_control with key=C to interrupt"), nil
+	// Fallback: send via PTY send-keys (interactive sessions or sessions
+	// without UUID), via session.SubmitContentWithEnter (BUG-031) so content
+	// and the submit keystroke travel as two separate SendKeys writes.
+	if err := session.SubmitContentWithEnter(ctx, inst, message); err != nil {
+		return submitErrResult(err, "message"), nil
 	}
 
 	return okResult(SteerSessionResult{

@@ -11,16 +11,30 @@ const pulseOpacity = keyframes({
 export const row = style({
   display: "grid",
   // gridTemplateColumns is set via inline style in SessionRow based on visibleColumns.
-  // Default fallback (no JS): dot | name+path | agent | memory | elapsed | actions.
-  gridTemplateColumns: "24px 8px 1fr 20px auto 32px auto",
-  alignItems: "center",
+  // Default fallback (no JS): checkbox | dot | name+path | agent | memory | actions.
+  // elapsed is no longer a grid column — it renders as a second line inside nameCell (Epic 1.2).
+  gridTemplateColumns: "24px 8px 1fr 20px auto auto",
+  // flex-start (not center): name/path/chips are never truncated and can
+  // wrap to several lines, so a short sibling column (agent icon, actions)
+  // centered against that height would float in a large empty gap — see
+  // the session-list-wasted-space branch's screenshot. Top-aligning keeps
+  // those columns flush with the first line instead.
+  alignItems: "flex-start",
   gap: vars.space["2"],
   padding: "6px 12px",
+  // Floor, not a cap (Epic 2.1 Story 2.1.1): wrapped 2-3 line name/path
+  // content is allowed to grow the row taller than this; this style sets
+  // no fixed or capped block-size property.
   minHeight: "38px",
   cursor: "pointer",
   borderRadius: vars.radii.sm,
   listStyle: "none",
   position: "relative",
+  // Story 2.1.2: query against the row's own width (not an ancestor scroll/
+  // virtualizer wrapper — pitfalls.md §2) so the NARROW breakpoint below
+  // reacts to a collapsed sidebar/narrow pane, not the browser viewport.
+  containerType: "inline-size",
+  containerName: "sessionRow",
   "@media": {
     "(prefers-reduced-motion: no-preference)": {
       transition: vars.transition.fast,
@@ -31,6 +45,14 @@ export const row = style({
   },
 });
 
+// Genuinely narrower than the sidebar's fixed ~280px default width, so this
+// only matches a collapsed/mobile-narrow layout — never the everyday case.
+// Per Story 2.1.2's Resolution Note, this drives purely visual tweaks only
+// (font size, chip wrapping); the single truncation-budget constant used at
+// every width lives in SessionRow.tsx, not here, and this breakpoint never
+// touches it.
+const NARROW = "(max-width: 200px)";
+
 export const nameCell = style({
   minWidth: 0,
   display: "flex",
@@ -39,13 +61,29 @@ export const nameCell = style({
   gap: "2px",
 });
 
-/** Second row inside nameCell: path + substatus chip inline */
+/** Second row inside nameCell: the path text, on its own — see `chipsLine` for the status/GitHub/backlog chips. */
 export const pathLine = style({
   display: "flex",
   alignItems: "center",
   gap: "4px",
   minWidth: 0,
-  overflow: "hidden",
+});
+
+/**
+ * Third row inside nameCell: status/GitHub/backlog chips, separate from the
+ * path text so a long (unbounded, wrapping) path doesn't vertically center
+ * these short chips against its full height and leave a large empty gap
+ * around them. Smaller font size always, since these are secondary/
+ * glanceable info, not primary content — but never below vars.fontSize.xs,
+ * the theme's documented WCAG-minimum legible size (see theme.css.ts).
+ */
+export const chipsLine = style({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: "4px",
+  minWidth: 0,
+  fontSize: vars.fontSize.xs,
 });
 
 export const statusDot = style({
@@ -53,6 +91,11 @@ export const statusDot = style({
   height: "8px",
   borderRadius: vars.radii.full,
   flexShrink: 0,
+  // Row is `alignItems: flex-start` (see row's comment) so a tall wrapped
+  // name/path doesn't drag this down into a centered-in-a-huge-gap look;
+  // this nudges the dot down to sit level with the name text's first line
+  // instead of the row's bare top edge.
+  marginTop: "6px",
   selectors: {
     '&[data-status="running"]': {
       background: vars.color.statusDot.running,
@@ -77,6 +120,14 @@ export const statusDot = style({
     },
     '&[data-status="crashed"]': {
       background: vars.color.error,
+    },
+    // Distinct from "crashed" (vars.color.error) per plan.md's Pattern
+    // Decisions table -- a failed-before-running creation and a
+    // crashed-after-running session are different enough states to warrant
+    // different colors, matching SessionCard.tsx's statusCreationFailed
+    // token (also vars.color.warning-family, not the error palette).
+    '&[data-status="failed"]': {
+      background: vars.color.warning,
     },
   },
   "@media": {
@@ -103,9 +154,16 @@ export const name = style({
   fontSize: vars.fontSize.sm,
   fontWeight: vars.fontWeight.semibold,
   color: vars.color.textPrimary,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
+  // Story 2.1.1: wrap instead of ellipsis-clipping; overflowWrap is the
+  // safety net for a single unbroken token that's still too long to fit.
+  overflowWrap: "anywhere",
+  // Story 2.1.2: below NARROW, shrink slightly — visual-only, no truncation
+  // budget change (see this file's NARROW comment).
+  "@container": {
+    [`sessionRow ${NARROW}`]: {
+      fontSize: vars.fontSize.xs,
+    },
+  },
 });
 
 export const agentIcon = style({
@@ -113,6 +171,8 @@ export const agentIcon = style({
   flexShrink: 0,
   display: "flex",
   alignItems: "center",
+  // See statusDot's comment — row is alignItems: flex-start.
+  marginTop: "4px",
 });
 
 export const path = style({
@@ -120,9 +180,10 @@ export const path = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
   minWidth: 0,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
+  // Path is never length-truncated (session-list-wasted-space); this is the
+  // only thing preventing a single unbroken opaque segment (hash/UUID) from
+  // overflowing the row instead of wrapping.
+  overflowWrap: "anywhere",
 });
 
 export const elapsed = style({
@@ -133,10 +194,34 @@ export const elapsed = style({
   textAlign: "right",
 });
 
+/** Second line beneath name/path holding the elapsed time — no longer a grid cell (Epic 1.2). */
+export const elapsedSecondLine = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "4px",
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  marginTop: "2px",
+});
+
+// Below this row width, Resume/Pause + the ··· overflow no longer fit
+// alongside the name/path column without squeezing it — see the
+// session-list-wasted-space branch's screenshot. Wider than NARROW (200px)
+// since the actions need real room to render as a legible row of their own.
+const ACTIONS_NARROW = "(max-width: 340px)";
+
 export const actions = style({
   display: "flex",
   gap: vars.space["1"],
   alignItems: "center",
+  "@container": {
+    [`sessionRow ${ACTIONS_NARROW}`]: {
+      // Span every column so the grid's auto-placement bumps this item onto
+      // its own implicit row below name/path/chips, right-aligned there.
+      gridColumn: "1 / -1",
+      justifyContent: "flex-end",
+    },
+  },
 });
 
 /** Primary action button (Resume/Pause) — hidden unless hovering or session needs attention */
@@ -202,6 +287,14 @@ export const rowOverflowButton = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+  "@media": {
+    // Ensure 44px minimum touch target on coarse-pointer devices (WCAG 2.5.5)
+    "(pointer: coarse)": {
+      minHeight: 44,
+      minWidth: 44,
+      padding: "10px",
+    },
+  },
   ":hover": {
     color: vars.color.textPrimary,
     background: vars.color.hoverBackground,
@@ -313,14 +406,6 @@ export const rowActive = style({
   },
 });
 
-/** Name + chip row inside nameCell — extracted from inline style in SessionRow.tsx */
-export const nameRow = style({
-  display: "flex",
-  alignItems: "center",
-  gap: "6px",
-  minWidth: 0,
-});
-
 /** Muted clock icon prefix for the elapsed column — makes the column self-labeling */
 export const elapsedIcon = style({
   marginInlineEnd: "3px",
@@ -344,11 +429,20 @@ export const groupHeader = style({
   listStyle: "none",
 });
 
-/** Checkbox cell — always occupies the reserved 24px column; visibility is CSS-driven. */
+/**
+ * Checkbox cell — always occupies the reserved 24px column; visibility is
+ * CSS-driven. `alignSelf: stretch` overrides the row's `alignItems: flex-start`
+ * so this cell (and its click handler, see SessionRow.tsx) spans the full
+ * row height instead of just the 16px button — a mouse click landing in the
+ * cell's padding, not exactly on the button, would otherwise fall through to
+ * the row's own onClick (opening the session instead of selecting it).
+ */
 export const checkboxCell = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+  alignSelf: "stretch",
+  cursor: "pointer",
   visibility: "hidden",
   pointerEvents: "none",
   selectors: {
@@ -407,4 +501,21 @@ export const checkboxButton = style({
 /** Applied to the row when it is in the selected set — background tint distinct from active/paused accents. */
 export const rowSelected = style({
   background: "var(--session-selected-bg)",
+});
+
+/** Persistent Failed-state message — row-layout equivalent of SessionCard.tsx's
+ *  failure-message row (design/ux.md Surface 3: the toast in Epic 5.3 is
+ *  transient, this line is not). Third line in nameCell, only rendered when
+ *  session.status === FAILED. Text color mirrors SessionCard.tsx's message
+ *  wrapper (var(--text-secondary)); the icon itself uses SessionCard.css's
+ *  failureMessageIcon token (imported, not redefined) for the warning color. */
+export const failureMessageLine = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "4px",
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
 });

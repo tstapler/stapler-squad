@@ -67,5 +67,15 @@ func (TriggerFireEvent) Indexes() []ent.Index {
 		// dedup lookups, not for an ordered per-workflow scan. This composite
 		// matches ListByWorkflow's actual query shape (sdd:6-verify finding).
 		index.Fields("workflow_id", "created_at"),
+		// EntTriggerFireEventRepository.ExistsByDeliveryID queries
+		// Where(DeliveryID(...)) with no workflow_id filter (it dedups PR-fix webhook
+		// deliveries, whose rows always carry WorkflowID: nil per the pr-event-webhooks
+		// Migration Plan) — delivery_id is never the leading column of either index
+		// above, so without this index that query is a full table scan. Deliberately
+		// NOT unique: unlike the composite index above, a single delivery can
+		// legitimately produce multiple rows sharing one delivery_id (one per PR number
+		// in a check_run's pull_requests array), so a unique constraint here would
+		// reject the second PR number's row as a false "duplicate."
+		index.Fields("delivery_id"),
 	}
 }

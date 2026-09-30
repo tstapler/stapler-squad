@@ -9,14 +9,14 @@ import { createClient } from "@connectrpc/connect";
 import { SessionService, Project } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
 import { AppLink } from "@/components/ui/AppLink";
-import { Session, SessionStatus, SubStatus, CheckpointProto } from "@/gen/session/v1/types_pb";
+import { Session, SessionStatus, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionCard } from "./SessionCard";
 import { SessionRow } from "./SessionRow";
 import { SessionListEmptyState } from "./SessionListEmptyState";
 import { SessionListSkeleton } from "./SessionListSkeleton";
 import { BulkActions } from "./BulkActions";
 import { TagEditor } from "./TagEditor";
-import { GroupingStrategy, GroupingStrategyLabels, groupSessions, groupWithPinned, PINNED_GROUP_KEY, cycleGroupingStrategy } from "@/lib/grouping/strategies";
+import { GroupingStrategy, GroupingStrategyLabels, PINNED_GROUP_KEY, cycleGroupingStrategy } from "@/lib/grouping/strategies";
 import { ColumnKey, DEFAULT_VISIBLE_COLUMNS } from "./session-columns";
 import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
 import { useStaleSessionConfig } from "@/lib/hooks/useStaleSessionConfig";
@@ -30,7 +30,8 @@ import { selectDetectedStatusMap } from "@/lib/store/sessionsSlice";
 import { ActionBar } from "@/components/ui/ActionBar";
 import { computeRangeIds } from "@/lib/utils/rangeSelect";
 import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
-import { compareSessionsByCost } from "./sessionCostSort";
+import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
+import { useFilteredGroupedSessions } from "@/lib/hooks/useFilteredGroupedSessions";
 import {
   container,
   header,
@@ -57,7 +58,9 @@ import {
   newSessionHeaderButton,
 } from "./SessionList.css";
 
-interface SessionListProps {
+// Exported so SessionBoard.tsx can declare an identical prop surface — a caller (e.g. the
+// future SessionListPaneBody) can then spread the same props object into either component.
+export interface SessionListProps {
   sessions: Session[];
   onSessionClick?: (session: Session) => void;
   onSessionOpenInNewPane?: (session: Session) => void;
@@ -70,17 +73,17 @@ interface SessionListProps {
   onNewWorkspaceSession?: (sessionId: string) => void;
   onRenameSession?: (sessionId: string, newTitle: string) => Promise<boolean>;
   onRestartSession?: (sessionId: string) => Promise<boolean>;
+  onRetryNowSession?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   onNewSession?: () => void;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onListCheckpoints?: (sessionId: string) => Promise<CheckpointProto[]>;
   onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onTogglePinned?: (sessionId: string, pinned: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
-  onSteerAutonomousSession?: (sessionId: string, message: string) => void;
+  onSteerAutonomousSession?: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onHibernateSession?: (sessionId: string) => void;
   onResumeHibernatedSession?: (sessionId: string) => void;
@@ -99,6 +102,13 @@ interface SessionListProps {
   extraHeaderActions?: React.ReactNode;
   /** Display mode: compact single-line rows ("row") or full cards ("card"). Default: "row". */
   viewMode?: "card" | "row";
+  /**
+   * Session UUID -> backlog-origin index entry, for the BacklogOriginBadge shown on
+   * backlog-automation-dispatched sessions. Callers inside PaneContext (the common case)
+   * should pass the already-fetched PaneContextValue.backlogIndex rather than each
+   * SessionList instance re-fetching it via useBacklogSessionIndex.
+   */
+  backlogIndex?: Map<string, BacklogIndexEntry>;
 }
 
 type SortField = 'lastActivity' | 'name' | 'createdAt' | 'updatedAt' | 'tokenCost';
@@ -116,13 +126,13 @@ interface SessionRowHandlers {
   onCloneSession?: (id: string) => void;
   onNewWorkspaceSession?: (id: string) => void;
   onRestartSession?: (id: string) => Promise<boolean | void>;
+  onRetryNowSession?: (id: string) => Promise<boolean | void>;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (id: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (id: string, enabled: boolean) => void;
   onTogglePinned?: (id: string, pinned: boolean) => void;
   onToggleAutoApprove?: (id: string, enabled: boolean) => void;
-  onSteerAutonomousSession?: (id: string, message: string) => void;
+  onSteerAutonomousSession?: (id: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (id: string) => Promise<boolean>;
   onHibernateSession?: (id: string) => void;
   onResumeHibernatedSession?: (id: string) => void;
@@ -137,6 +147,7 @@ interface SessionRowWrapperProps extends SessionRowHandlers {
   isSelected: boolean;
   suppressApprovalSubStatus: boolean;
   staleThresholdMinutes: number;
+  backlogEntry?: BacklogIndexEntry;
 }
 
 // Memoized wrapper: turns stable per-action handlers into per-session closures
@@ -158,8 +169,8 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
   onCloneSession,
   onNewWorkspaceSession,
   onRestartSession,
+  onRetryNowSession,
   onCreateCheckpoint,
-  onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
   onTogglePinned,
@@ -170,6 +181,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
   onResumeHibernatedSession,
   onUpdateTags,
   onToggleSession,
+  backlogEntry,
 }: SessionRowWrapperProps) {
   const id = session.id;
   return (
@@ -183,8 +195,8 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
       onOpenInNewPane={onSessionOpenInNewPane ? () => onSessionOpenInNewPane(session) : undefined}
       onNewWorkspace={onNewWorkspaceSession ? () => onNewWorkspaceSession(id) : undefined}
       onRestart={onRestartSession}
+      onRetryNow={onRetryNowSession}
       onCreateCheckpoint={onCreateCheckpoint}
-      onRunOneShot={onRunOneShot}
       onSetRateLimitEnabled={onSetRateLimitEnabled}
       onToggleAutonomousMode={onToggleAutonomousMode}
       onTogglePinned={onTogglePinned}
@@ -200,6 +212,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
       selectMode={selectMode}
       isSelected={isSelected}
       onToggleSelect={onToggleSession ? (e) => onToggleSession(id, e) : undefined}
+      backlogEntry={backlogEntry}
     />
   );
 });
@@ -268,6 +281,10 @@ const SORT_FIELDS: SortField[] = ['lastActivity', 'name', 'createdAt', 'updatedA
 const SORT_DIRS: SortDir[] = ['asc', 'desc'];
 const GROUPING_STRATEGY_VALUES = Object.values(GroupingStrategy);
 
+// Stable empty fallback so callers that don't pass backlogIndex (e.g. tests, SessionBoard's
+// shared prop surface) don't trigger a new Map() identity on every render.
+const EMPTY_BACKLOG_INDEX = new Map<string, BacklogIndexEntry>();
+
 // Builds a PersistedFieldsConfig keyed off BASE_STORAGE_KEYS, prefixed per-instance
 // (e.g. split-pane view) so multiple SessionList instances don't collide in localStorage.
 function buildPersistedFieldsConfig(prefix = ''): PersistedFieldsConfig<SessionListPersistedState> {
@@ -331,11 +348,6 @@ function buildPersistedFieldsConfig(prefix = ''): PersistedFieldsConfig<SessionL
   };
 }
 
-const getTimestampMs = (ts?: { seconds: bigint; nanos: number }): number => {
-  if (!ts || ts.seconds === BigInt(0)) return 0;
-  return Number(ts.seconds) * 1000;
-};
-
 export function SessionList({
   sessions,
   onSessionClick,
@@ -348,12 +360,12 @@ export function SessionList({
   onNewWorkspaceSession,
   onRenameSession,
   onRestartSession,
+  onRetryNowSession,
   onUpdateTags,
   onNewSession,
   onCreateCheckpoint,
   onListCheckpoints,
   onForkFromCheckpoint,
-  onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
   onTogglePinned,
@@ -367,6 +379,7 @@ export function SessionList({
   storageKeyPrefix,
   extraHeaderActions,
   viewMode = "row",
+  backlogIndex = EMPTY_BACKLOG_INDEX,
 }: SessionListProps) {
   // Review queue items indexed by session ID for badge display on session cards
   const { items: reviewItems } = useReviewQueueContext();
@@ -550,64 +563,6 @@ export function SessionList({
     return Array.from(tagSet).sort();
   }, [sessions]);
 
-  // Filter sessions based on search query and filters
-  const filteredSessions = useMemo(() => {
-    return sessions.filter((session) => {
-      // Exclude sessions that are pending deletion (optimistic removal)
-      if (pendingDeleteIds.has(session.id)) return false;
-
-      // Search filter
-      if (searchQuery) {
-        const query = searchQuery.toLowerCase();
-        const matchesSearch =
-          session.title.toLowerCase().includes(query) ||
-          session.path.toLowerCase().includes(query) ||
-          session.branch.toLowerCase().includes(query) ||
-          (session.category && session.category.toLowerCase().includes(query)) ||
-          (session.tags && session.tags.some(tag => tag.toLowerCase().includes(query))) ||
-          (session.program && session.program.toLowerCase().includes(query));
-
-        if (!matchesSearch) return false;
-      }
-
-      // Status filter
-      if (selectedStatus !== "all" && session.status !== selectedStatus) {
-        return false;
-      }
-
-      // Category filter
-      if (selectedCategory !== "all" && session.category !== selectedCategory) {
-        return false;
-      }
-
-      // Tag filter
-      if (selectedTag !== "all") {
-        if (!session.tags || !session.tags.includes(selectedTag)) {
-          return false;
-        }
-      }
-
-      // Hide paused filter
-      if (hidePaused && session.status === SessionStatus.PAUSED) {
-        return false;
-      }
-
-      // Needs-approval quick filter — show only Active sessions with subStatus === NEEDS_APPROVAL
-      if (filterNeedsApproval && !(session.status === SessionStatus.ACTIVE && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED))) {
-        return false;
-      }
-
-      // Archived filter — hidden by default even if a prior includeArchived fetch
-      // left archived sessions in the Redux store (e.g. toggle turned back off
-      // without a fresh non-archived fetch).
-      if (!showArchived && session.archivedAt) {
-        return false;
-      }
-
-      return true;
-    });
-  }, [sessions, searchQuery, selectedStatus, selectedCategory, selectedTag, hidePaused, filterNeedsApproval, showArchived, pendingDeleteIds]);
-
   // AC-2: per-session cost data, joined by session_id, for the "Sort: Cost" option.
   const { summary: insightsSummary } = useInsightsSummary({ includeOrphans: true });
   const costById = useMemo(() => {
@@ -618,46 +573,23 @@ export function SessionList({
     return m;
   }, [insightsSummary]);
 
-  // Sort filtered sessions
-  const sortedSessions = useMemo(() => {
-    const sorted = [...filteredSessions];
-    sorted.sort((a, b) => {
-      if (sortField === 'tokenCost') {
-        // compareSessionsByCost already applies sortDir internally (to keep
-        // unloaded/unpriced rows last in BOTH directions) — return directly,
-        // skipping the shared sortDir flip below.
-        return compareSessionsByCost(a, b, costById, sortDir);
-      }
-      let cmp = 0;
-      switch (sortField) {
-        case 'name':
-          cmp = a.title.localeCompare(b.title);
-          break;
-        case 'createdAt':
-          cmp = getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt);
-          break;
-        case 'updatedAt':
-          cmp = getTimestampMs(a.updatedAt) - getTimestampMs(b.updatedAt);
-          break;
-        case 'lastActivity': {
-          const act = (s: Session) => Math.max(
-            getTimestampMs(s.lastMeaningfulOutput),
-            getTimestampMs(s.lastTerminalUpdate)
-          );
-          cmp = act(a) - act(b);
-          break;
-        }
-      }
-      return sortDir === 'asc' ? cmp : -cmp;
-    });
-    return sorted;
-  }, [filteredSessions, sortField, sortDir, costById]);
-
-  // Epic 4.1: filteredSessionIds — for intersecting selectedSessions with visible sessions
-  const filteredSessionIds = useMemo(
-    () => new Set(filteredSessions.map(s => s.id)),
-    [filteredSessions]
-  );
+  const { filteredSessions, sortedSessions, groupedSessions, filteredSessionIds } = useFilteredGroupedSessions({
+    sessions,
+    searchQuery,
+    selectedStatus,
+    selectedCategory,
+    selectedTag,
+    hidePaused,
+    showArchived,
+    filterNeedsApproval,
+    pendingDeleteIds,
+    sortField,
+    sortDir,
+    costById,
+    groupingStrategy,
+    staleThresholdMinutes: staleSessionConfig.thresholdMinutes,
+    staleRecomputeTick,
+  });
 
   // Epic 4.1: activeSelection — intersection of selectedSessions with currently filtered sessions
   const activeSelection = useMemo(
@@ -667,18 +599,6 @@ export function SessionList({
 
   // Derived: whether any filter is active (used for empty-state messaging)
   const hasActiveFilters = !!(searchQuery || selectedStatus !== "all" || selectedCategory !== "all" || selectedTag !== "all" || hidePaused || filterNeedsApproval);
-
-  // Group sessions by selected strategy. staleRecomputeTick is a dependency purely to
-  // force recomputation on the 60s tick above — a session can cross the stale threshold
-  // with no change to sortedSessions/groupingStrategy, and this is the only way to pick
-  // that up without a page refresh.
-  const groupedSessions = useMemo(() => {
-    return groupWithPinned(sortedSessions, (rest) =>
-      groupSessions(rest, groupingStrategy, {
-        thresholdMinutes: staleSessionConfig.thresholdMinutes,
-      })
-    );
-  }, [sortedSessions, groupingStrategy, staleSessionConfig.thresholdMinutes, staleRecomputeTick]);
 
   // Flat item list for row-mode virtualizer: headers and sessions interleaved.
   type FlatItem =
@@ -729,7 +649,10 @@ export function SessionList({
   const rowVirtualizer = useVirtualizer({
     count: viewMode === "row" ? flatItems.length : 0,
     getScrollElement: () => containerRef.current,
-    estimateSize: (i) => (flatItems[i]?.kind === "header" ? 40 : 50),
+    // 64, up from 50 (Epic 2.1 Story 2.1.3): reflects the new typical 2-line
+    // wrapped-row height (Story 2.1.1's wrap + Epic 1.2's elapsed second
+    // line); measureElement still corrects the real height post-render.
+    estimateSize: (i) => (flatItems[i]?.kind === "header" ? 40 : 64),
     overscan: 8,
     measureElement: (el) => el.getBoundingClientRect().height,
   });
@@ -1425,8 +1348,8 @@ export function SessionList({
                     onCloneSession={stableOnCloneSession}
                     onNewWorkspaceSession={stableOnNewWorkspaceSession}
                     onRestartSession={onRestartSession}
+                    onRetryNowSession={onRetryNowSession}
                     onCreateCheckpoint={onCreateCheckpoint}
-                    onRunOneShot={onRunOneShot}
                     onSetRateLimitEnabled={onSetRateLimitEnabled}
                     onToggleAutonomousMode={onToggleAutonomousMode}
                     onTogglePinned={onTogglePinned}
@@ -1442,6 +1365,7 @@ export function SessionList({
                     selectMode={selectMode}
                     isSelected={selectedSessions.has(item.session.id)}
                     onToggleSession={handleToggleSession}
+                    backlogEntry={backlogIndex.get(item.session.id)}
                   />
                   </div>
                 )}
@@ -1609,11 +1533,11 @@ export function SessionList({
                   onNewWorkspace={() => onNewWorkspaceSession?.(session.id)}
                   onRename={onRenameSession}
                   onRestart={onRestartSession}
+                  onRetryNow={onRetryNowSession}
                   onUpdateTags={onUpdateTags}
                   onCreateCheckpoint={onCreateCheckpoint}
                   onListCheckpoints={onListCheckpoints}
                   onForkFromCheckpoint={onForkFromCheckpoint}
-                  onRunOneShot={onRunOneShot}
                   onSetRateLimitEnabled={onSetRateLimitEnabled}
                   onToggleAutonomousMode={onToggleAutonomousMode}
                   onTogglePinned={onTogglePinned}
@@ -1626,6 +1550,7 @@ export function SessionList({
                   isSelected={selectedSessions.has(session.id)}
                   onToggleSelect={(e) => handleToggleSession(session.id, e)}
                   reviewItem={reviewItemBySessionId.get(session.id)}
+                  backlogEntry={backlogIndex.get(session.id)}
                   staleThresholdMinutes={staleSessionConfig.thresholdMinutes}
                   detectedStatus={detectedStatusMap[session.id]?.detectedStatus}
                   detectedContext={detectedStatusMap[session.id]?.detectedContext}

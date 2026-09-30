@@ -52,14 +52,14 @@ const backlogItemsSlice = createSlice({
         if (existing && timestampMs(incoming.updatedAt) < timestampMs(existing.updatedAt)) {
           return;
         }
-        // Backstop for a partially-loaded event push (item_sessions/activity_notes
-        // dropped by a publishItemChanged call site or a non-eager-loaded snapshot
-        // query) racing a fully-loaded one: never let an empty itemSessions or
-        // activityNotes clobber data we already have for this item. A genuine
-        // all-sessions-removed (or all-notes-removed) update would still arrive
-        // with a newer updatedAt and populated (even if empty-by-intent) data from
-        // a call site that *did* eager-load, so this only masks the known-bad
-        // partial-load case, not real removals.
+        // Backstop for a partially-loaded event push (item_sessions/activity_notes/
+        // allowed_transitions dropped by a publishItemChanged call site or a
+        // non-eager-loaded snapshot query) racing a fully-loaded one: never let an
+        // empty itemSessions, activityNotes, or allowedTransitions clobber data we
+        // already have for this item. A genuine all-removed update would still
+        // arrive with a newer updatedAt and populated (even if empty-by-intent)
+        // data from a call site that *did* eager-load, so this only masks the
+        // known-bad partial-load case, not real removals.
         //
         // activityNotes specifically: every BacklogChangeKind other than
         // ChangeActivityNoteAdded publishes via publishItemChanged ->
@@ -69,6 +69,22 @@ const backlogItemsSlice = createSlice({
         // this guard, the very next status transition/verdict/session-attach would
         // wipe out any notes accumulated via the dedicated appendActivityNote
         // reducer below (ADR-002, Blocker 1 fix).
+        //
+        // allowedTransitions specifically: a pure function of status, so it's
+        // never legitimately empty for a real item — an empty value is always a
+        // sparse-DTO/resync artifact (e.g. a stale ListBacklogItems shape).
+        //
+        // planArtifactsPath specifically: unlike the three fields above, it CAN
+        // legitimately go from set back to empty (TransitionBacklogItemStatus
+        // resets it when an item moves back to idea/refining, e.g. re-triage) —
+        // so this is gated on the item's status being unchanged. Every real
+        // reset path changes status in the same write (server-side
+        // backlog_service_lifecycle.go), so "same status, plan vanished" is
+        // never a legitimate transition and is always a sparse-DTO artifact
+        // (ListBacklogItems' backlogItemSummaryToProto omitted this field
+        // entirely until the fix alongside this guard — getPrimaryCardAction/
+        // itemActions.ts derives a ready item's card action directly from it,
+        // so a sparse resync could flip "Approve Plan" to "Trigger Triage").
         let nextItem = incoming;
         if (existing) {
           const patch: Partial<BacklogItem> = {};
@@ -77,6 +93,12 @@ const backlogItemsSlice = createSlice({
           }
           if ((existing.activityNotes?.length ?? 0) > 0 && (incoming.activityNotes?.length ?? 0) === 0) {
             patch.activityNotes = existing.activityNotes;
+          }
+          if ((existing.allowedTransitions?.length ?? 0) > 0 && (incoming.allowedTransitions?.length ?? 0) === 0) {
+            patch.allowedTransitions = existing.allowedTransitions;
+          }
+          if (existing.status === incoming.status && existing.planArtifactsPath && !incoming.planArtifactsPath) {
+            patch.planArtifactsPath = existing.planArtifactsPath;
           }
           if (Object.keys(patch).length > 0) {
             nextItem = { ...incoming, ...patch };

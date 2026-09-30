@@ -26,6 +26,12 @@ type mockTmuxManager struct {
 	isAliveReturn bool
 	isAliveCalls  int
 
+	// DoesSessionExistNoCache — deliberately independent of isAliveReturn
+	// (not just an alias for it) so tests can prove a caller reaches for
+	// the no-cache check specifically, e.g. a stale cached "alive" that a
+	// fresh check would report dead.
+	existsNoCacheReturn bool
+
 	// HasSession
 	hasSessionReturn bool
 
@@ -148,9 +154,10 @@ type mockTmuxManager struct {
 	resetExitCalls int
 
 	// PaneExitStatus
-	paneExitCode   int
-	paneExitSignal string
-	paneExitDead   bool
+	paneExitCode        int
+	paneExitSignal      string
+	paneExitDead        bool
+	paneExitStatusCalls int
 }
 
 func (m *mockTmuxManager) IsAlive() bool {
@@ -300,9 +307,11 @@ func (m *mockTmuxManager) ResetExitOnce() {
 func (m *mockTmuxManager) Session() *tmux.TmuxSession     { return nil }
 func (m *mockTmuxManager) SetSession(_ *tmux.TmuxSession) {}
 func (m *mockTmuxManager) DoesSessionExist() bool         { return m.isAliveReturn }
+func (m *mockTmuxManager) DoesSessionExistNoCache() bool  { return m.existsNoCacheReturn }
 
 // PaneExitStatus
 func (m *mockTmuxManager) PaneExitStatus() (code int, signal string, dead bool) {
+	m.paneExitStatusCalls++
 	return m.paneExitCode, m.paneExitSignal, m.paneExitDead
 }
 

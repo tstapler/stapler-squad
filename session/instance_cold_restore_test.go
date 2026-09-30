@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // checkTmuxAvailable skips the test if tmux is not installed.
@@ -111,7 +112,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold restore")
 	// DoesSessionExist slow path has a 3s timeout; deadline must exceed that to guarantee
 	// at least one successful check before the Eventually deadline fires.
-	require.Eventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
+	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
 }
 
 // TestColdRestore_WithoutUUID verifies that when the tmux session is dead and
@@ -157,7 +158,7 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 
 	assert.True(t, inst.Started(), "instance must be marked as started after cold start")
 	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold start")
-	require.Eventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold start")
+	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold start")
 }
 
 // writeJSONLFixture writes a fake conversation JSONL fixture under
@@ -237,7 +238,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 
 	assert.True(t, inst.Started(), "instance must be marked as started after cold restore")
 	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold restore")
-	require.Eventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
+	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
 
 	assert.Contains(t, inst.LaunchCommand, "--resume", "launch command must embed --resume when a same-path JSONL was recoverable")
 	assert.Contains(t, inst.LaunchCommand, fixtureUUID)
@@ -285,7 +286,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 		}
 	}()
 
-	require.Eventually(t, inst1.TmuxAlive, 10*time.Second, 50*time.Millisecond, "inst1 tmux session must be alive before hot restore")
+	wait.RequireEventually(t, inst1.TmuxAlive, 10*time.Second, 50*time.Millisecond, "inst1 tmux session must be alive before hot restore")
 
 	// Second instance: same title/socket — simulates an instance reloaded from storage
 	// while the original tmux session is still alive.
@@ -398,11 +399,11 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 			clearedAt := time.Now()
 
 			inst := &Instance{
-				Title:                 "test-clearedat-guard",
-				Path:                  tmpDir,
-				SessionType:           SessionTypeDirectory,
-				conversationClearedAt: clearedAt,
-				historyDetector:       NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
+				Title:           "test-clearedat-guard",
+				Path:            tmpDir,
+				SessionType:     SessionTypeDirectory,
+				claudeExtension: claudeExtension{conversationClearedAt: clearedAt},
+				historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
 			}
 			writeJSONLFixture(t, fakeHome, tmpDir, fixtureUUID, clearedAt.Add(tt.offset))
 
@@ -415,4 +416,113 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 			assert.Equal(t, tt.wantUUID, gotUUID, tt.wantReason)
 		})
 	}
+}
+
+// simulatedLiveInstance is a minimal stand-in for the (UUID, conversation
+// UUID, path, liveness) tuple server/services.SessionService.
+// ConversationOwnedByOtherLiveSession reads from its reviewQueuePoller.
+// session package tests cannot construct a real SessionService (that type,
+// and its own regression test for ConversationOwnedByOtherLiveSession's own
+// matching logic, live in server/services -- out of this package's scope),
+// so newSimulatedConversationOwnershipGuard below builds a
+// conversationOwnershipGuard closure with the same "skip self, skip dead,
+// require both UUID and path to match" contract the real implementation
+// documents (worktree-envvars-hijack plan.md, Story 1.4.2). These tests exist
+// to prove tryExtractConversationUUID's own calling contract -- that it
+// invokes the guard with the detected candidate UUID and effective path, and
+// correctly no-ops when told the conversation is owned by another live
+// session -- not to re-verify ConversationOwnedByOtherLiveSession's own
+// matching logic a second time.
+type simulatedLiveInstance struct {
+	uuid             string
+	conversationUUID string
+	path             string
+	alive            bool
+}
+
+// newSimulatedConversationOwnershipGuard returns a conversationOwnershipGuard
+// closure over siblings, mirroring ConversationOwnedByOtherLiveSession's own
+// selfUUID exclusion and liveness/UUID/path matching.
+func newSimulatedConversationOwnershipGuard(selfUUID string, siblings ...simulatedLiveInstance) func(candidateUUID, path string) (string, bool) {
+	return func(candidateUUID, path string) (string, bool) {
+		for _, sib := range siblings {
+			if sib.uuid == selfUUID || !sib.alive {
+				continue
+			}
+			if sib.conversationUUID != candidateUUID || sib.path != path {
+				continue
+			}
+			return sib.uuid, true
+		}
+		return "", false
+	}
+}
+
+// TestTryExtractConversationUUID_should_NotAdoptUUID_When_OtherLiveSessionOwnsConversation
+// is worktree-envvars-hijack Task 1.4.2b's cross-session non-adoption
+// regression test. Session A's real, fake JSONL is the only conversation file
+// under the shared directory's encoded ~/.claude/projects/ path -- the
+// legitimate SessionTypeDirectory path-sharing case Story 1.4.1's audit
+// confirmed can still occur even after Epic 3.3's collision guard lands.
+// Without the ownership guard, session B's DetectByPath fallback would find
+// that same JSONL and silently adopt A's still-live conversation UUID; with
+// the guard wired (as production's wireCallbacks does via
+// SetConversationOwnershipGuard), B must find nothing.
+func TestTryExtractConversationUUID_should_NotAdoptUUID_When_OtherLiveSessionOwnsConversation(t *testing.T) {
+	t.Parallel()
+	sharedPath := t.TempDir()
+	fakeHome := t.TempDir()
+	const sessionAUUID = "session-a-uuid"
+	const conversationUUID = "550e8400-e29b-41d4-a716-446655440000"
+
+	writeJSONLFixture(t, fakeHome, sharedPath, conversationUUID, time.Time{})
+
+	instB := &Instance{
+		Title:           "session-b",
+		UUID:            "session-b-uuid",
+		Path:            sharedPath,
+		SessionType:     SessionTypeDirectory,
+		historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
+	}
+	instB.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(instB.UUID,
+		simulatedLiveInstance{uuid: sessionAUUID, conversationUUID: conversationUUID, path: sharedPath, alive: true},
+	))
+
+	instB.tryExtractConversationUUID()
+
+	assert.Nil(t, instB.claudeSession, "B must not silently adopt A's still-live conversation UUID via the path-shared DetectByPath fallback")
+}
+
+// TestTryExtractConversationUUID_should_AdoptOwnUUID_When_ColdRestoreSelfRecovery
+// is worktree-envvars-hijack Task 1.4.2b's ColdRestore self-recovery
+// regression test (pre-mortem Failure #4, P2). A session undergoing
+// ColdRestore reuses its own, already-registered *Instance object to call
+// tryExtractConversationUUID with no ClaudeConversationUUID set yet -- the
+// guard's sibling registry here contains only this same instance's own
+// record, proving the inst.UUID == selfUUID exclusion actually lets it
+// re-adopt its own conversation rather than treating its own record as
+// "owned by another session."
+func TestTryExtractConversationUUID_should_AdoptOwnUUID_When_ColdRestoreSelfRecovery(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	fakeHome := t.TempDir()
+	const fixtureUUID = "550e8400-e29b-41d4-a716-446655440000"
+
+	writeJSONLFixture(t, fakeHome, tmpDir, fixtureUUID, time.Time{})
+
+	inst := &Instance{
+		Title:           "cold-restore-self-recovery",
+		UUID:            "cold-restore-self-uuid",
+		Path:            tmpDir,
+		SessionType:     SessionTypeDirectory,
+		historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
+	}
+	inst.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(inst.UUID,
+		simulatedLiveInstance{uuid: inst.UUID, conversationUUID: fixtureUUID, path: tmpDir, alive: true},
+	))
+
+	inst.tryExtractConversationUUID()
+
+	require.NotNil(t, inst.claudeSession, "ColdRestore self-recovery must not be blocked by the ownership guard")
+	assert.Equal(t, fixtureUUID, inst.claudeSession.ConversationUUID, "must successfully re-adopt its own JSONL's conversation UUID")
 }

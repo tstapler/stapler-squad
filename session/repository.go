@@ -53,213 +53,13 @@ var ErrDependencyCycle = errors.New("backlog item dependency would create a cycl
 
 // BacklogItemDependencyEdge names a blocker/blocked pair explicitly so the
 // two bare ID strings can't be silently swapped at a call site — see
-// .claude/rules/primitive-obsession-checklist.md.
+// the `primitive-obsession-checklist` skill.
 type BacklogItemDependencyEdge struct {
 	// BlockerID is the item that must reach a resolved status (done or
 	// archived) before BlockedID is eligible for dequeue/start.
 	BlockerID string
 	// BlockedID is the dependent item, gated until BlockerID resolves.
 	BlockedID string
-}
-
-// Repository defines the interface for session persistence operations.
-// This abstraction allows multiple storage backends (SQLite, JSON, etc.)
-// while maintaining a consistent API for session management.
-type Repository interface {
-	// Create inserts a new session into storage
-	Create(ctx context.Context, data InstanceData) error
-
-	// Update modifies an existing session in storage
-	Update(ctx context.Context, data InstanceData) error
-
-	// Delete removes a session from storage by title
-	Delete(ctx context.Context, title string) error
-
-	// Get retrieves a single session by title with full child data
-	// For selective loading, use GetWithOptions instead
-	Get(ctx context.Context, title string) (*InstanceData, error)
-
-	// GetWithOptions retrieves a single session with selective child data loading
-	// Use LoadOptions presets (LoadMinimal, LoadSummary, LoadFull) or custom options
-	GetWithOptions(ctx context.Context, title string, options LoadOptions) (*InstanceData, error)
-
-	// List retrieves all sessions with summary child data (no diff content)
-	// For selective loading, use ListWithOptions instead
-	List(ctx context.Context) ([]InstanceData, error)
-
-	// ListWithOptions retrieves all sessions with selective child data loading
-	// Use LoadOptions presets (LoadMinimal, LoadSummary, LoadFull) or custom options
-	ListWithOptions(ctx context.Context, options LoadOptions) ([]InstanceData, error)
-
-	// ListByStatus retrieves sessions filtered by status with summary child data
-	// For selective loading, use ListByStatusWithOptions instead
-	ListByStatus(ctx context.Context, status Status) ([]InstanceData, error)
-
-	// ListByStatusWithOptions retrieves sessions filtered by status with selective loading
-	ListByStatusWithOptions(ctx context.Context, status Status, options LoadOptions) ([]InstanceData, error)
-
-	// ListByTag retrieves sessions with a specific tag with summary child data
-	// For selective loading, use ListByTagWithOptions instead
-	ListByTag(ctx context.Context, tag string) ([]InstanceData, error)
-
-	// ListByTagWithOptions retrieves sessions with a specific tag with selective loading
-	ListByTagWithOptions(ctx context.Context, tag string, options LoadOptions) ([]InstanceData, error)
-
-	// UpdateTimestamps efficiently updates only timestamp fields for a session
-	// This is optimized for frequent updates from WebSocket terminal streaming
-	UpdateTimestamps(ctx context.Context, title string, lastTerminalUpdate, lastMeaningfulOutput time.Time, lastOutputSignature string) error
-
-	// UpdateReviewQueueState efficiently updates the review-queue interaction fields
-	// (LastUserResponse, ProcessingGraceUntil, LastPromptDetected, LastPromptSignature)
-	// without the read-modify-write overhead of a full Get+Update cycle.
-	UpdateReviewQueueState(ctx context.Context, title string, lastUserResponse, processingGraceUntil, lastPromptDetected time.Time, lastPromptSignature string) error
-
-	// UpdateLastAddedToQueue sets only the last_added_to_queue field for a session.
-	// Issues a single UPDATE WHERE title=? without a prior SELECT.
-	UpdateLastAddedToQueue(ctx context.Context, title string, t time.Time) error
-
-	// UpdateLastAcknowledged sets only the last_acknowledged field for a session.
-	// Issues a single UPDATE WHERE title=? without a prior SELECT.
-	UpdateLastAcknowledged(ctx context.Context, title string, t time.Time) error
-
-	// UpdateLastViewed sets only the last_viewed field for a session.
-	// Issues a single UPDATE WHERE title=? without a prior SELECT.
-	UpdateLastViewed(ctx context.Context, title string, t time.Time) error
-
-	// UpdateSessionMetadata efficiently updates only title/category/note/working_dir
-	// fields for a session, issuing a single UPDATE WHERE title=? without a prior SELECT
-	// and without touching worktree/diffstats/tags/claude_session rows (unlike Update).
-	// currentTitle must be the row's title from before any rename applied in this same
-	// call — see the EntRepository implementation for why. A nil field pointer leaves
-	// that field untouched; Note is written whenever non-nil (including "") since an
-	// empty note is a meaningful cleared state, not "unset".
-	UpdateSessionMetadata(ctx context.Context, currentTitle string, newTitle, category, note, workingDir *string) error
-
-	// Close performs cleanup and releases resources
-	Close() error
-
-	// --- New Session-based methods (Phase 2 of schema normalization) ---
-	// These methods use the new domain-driven Session type with optional contexts.
-	// They are preferred over InstanceData methods for new code.
-
-	// GetSession retrieves a session using the new Session domain model.
-	// Use ContextOptions to control which optional contexts are loaded.
-	// Returns nil if session not found.
-	GetSession(ctx context.Context, title string, opts ContextOptions) (*Session, error)
-
-	// ListSessions retrieves all sessions using the new Session domain model.
-	// Use ContextOptions to control which optional contexts are loaded.
-	ListSessions(ctx context.Context, opts ContextOptions) ([]*Session, error)
-
-	// CreateSession creates a new session from the Session domain model.
-	CreateSession(ctx context.Context, session *Session) error
-
-	// UpdateSession updates an existing session using the Session domain model.
-	UpdateSession(ctx context.Context, session *Session) error
-
-	// --- Permissions & Analytics ---
-
-	// AllRules returns all auto-approval rules.
-	AllRules(ctx context.Context) ([]ApprovalRuleData, error)
-	// UpsertRule creates or updates an auto-approval rule.
-	UpsertRule(ctx context.Context, rule ApprovalRuleData) error
-	// DeleteRule removes an auto-approval rule by ID.
-	DeleteRule(ctx context.Context, id string) error
-
-	// RecordAnalytics logs a classification decision.
-	RecordAnalytics(ctx context.Context, data AnalyticsData) error
-	// ListAnalytics retrieves recent classification decisions.
-	ListAnalytics(ctx context.Context, limit int) ([]AnalyticsData, error)
-
-	// ListAnalyticsSince retrieves analytics entries with created_at >= since.
-	// Replaces the in-Go date filter in LoadWindow. Implements AC-1.
-	// Pass limit=0 for no limit.
-	ListAnalyticsSince(ctx context.Context, since time.Time, limit int) ([]AnalyticsData, error)
-
-	// ListAnalyticsByProgramSince retrieves entries for a specific program since a time.
-	// Uses the compound index (command_program, created_at). Implements AC-3.
-	// Pass limit=0 for no limit.
-	ListAnalyticsByProgramSince(ctx context.Context, program string, since time.Time, limit int) ([]AnalyticsData, error)
-
-	// GetSubcommandBreakdown returns per-(subcommand, decision) counts for a program
-	// in the given time window. Uses SQL GROUP BY via ent Aggregate. Implements AC-4.
-	GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]SubcommandDecisionCount, error)
-
-	// ListRecentCommandsByProgram returns the most recent n command_preview strings
-	// for (program, subcommand). Pass subcommand="" to match all subcommands.
-	// Implements AC-5.
-	ListRecentCommandsByProgram(ctx context.Context, program, subcommand string, since time.Time, n int) ([]string, error)
-
-	// GetSubcommandTrend returns raw analytics rows for (program, subcommand) since
-	// a given time. The caller buckets these using ComputeDailyBuckets. Implements AC-6.
-	// Pass subcommand="" to match all subcommands for the program.
-	GetSubcommandTrend(ctx context.Context, program, subcommand string, since time.Time) ([]AnalyticsData, error)
-
-	// --- Projects ---
-
-	// CreateProject inserts a new project.
-	CreateProject(ctx context.Context, data ProjectData) (*ProjectData, error)
-	// ListProjects returns all projects.
-	ListProjects(ctx context.Context) ([]ProjectData, error)
-	// UpdateProject modifies an existing project.
-	UpdateProject(ctx context.Context, data ProjectData) (*ProjectData, error)
-	// DeleteProject removes a project by name; sessions are unassigned.
-	DeleteProject(ctx context.Context, name string) error
-	// AssignSessionsToProject links sessions (by title) to a project (by name).
-	AssignSessionsToProject(ctx context.Context, projectName string, sessionTitles []string) error
-
-	// --- Backlog ---
-
-	// CreateBacklogItem inserts a new backlog item.
-	CreateBacklogItem(ctx context.Context, data BacklogItemData) (*BacklogItemData, error)
-	// GetBacklogItem retrieves a backlog item by UUID string.
-	GetBacklogItem(ctx context.Context, id string) (*BacklogItemData, error)
-	// ListBacklogItems returns backlog items with optional filtering.
-	ListBacklogItems(ctx context.Context, filter BacklogItemFilter) ([]BacklogItemData, error)
-	// UpdateBacklogItem modifies an existing backlog item with optional precondition check.
-	UpdateBacklogItem(ctx context.Context, id string, update BacklogItemUpdate, precondition *BacklogItemPrecondition) (*BacklogItemData, error)
-	// ArchiveBacklogItem sets the archived_at timestamp on a backlog item.
-	ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error)
-	// UnarchiveBacklogItem clears archived_at and restores the item to "idea".
-	UnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error)
-	// DeleteBacklogItem permanently removes an item and all its child records.
-	DeleteBacklogItem(ctx context.Context, id string) error
-	// TransitionBacklogItemStatus changes the status of a backlog item with optional precondition.
-	// triggeredBy records who/what caused the transition (TriggeredByUser or TriggeredBySystem)
-	// in the resulting BacklogStatusEvent audit row.
-	TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error)
-	// GetAllItemSessionsWithBacklogInfo returns all item sessions joined with their parent backlog item metadata.
-	// Used by the Insights dashboard to annotate sessions with backlog context.
-	GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]ItemSessionBacklogEntry, error)
-	// ListBacklogItemSummaries returns lightweight summaries for the list view.
-	// Unlike ListBacklogItems it omits Description/plan fields and eagerly loads
-	// ItemSessions (with ReviewVerdict) without over-fetching status events.
-	ListBacklogItemSummaries(ctx context.Context, filter BacklogItemFilter) ([]BacklogItemSummary, error)
-	// AddBacklogItemDependency records that edge.BlockedID may not be
-	// dequeued/started until edge.BlockerID reaches a resolved status
-	// (done). Upserts against the unique (blocker_id, blocked_id) index —
-	// adding an existing pair is a no-op. Returns an error if the new edge
-	// would create a cycle.
-	AddBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error
-	// UnresolvedBlockerItemIDs returns the subset of itemIDs that have at
-	// least one BacklogItemDependency whose blocker has not reached done.
-	// Batched by blocked_id so callers (DequeueNextQueuedItems,
-	// transitionWithGuard) avoid an N+1 per-candidate query.
-	UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error)
-	// UnresolvedBlockerIDs returns the specific blocker item IDs still
-	// unresolved for a single blocked item, for stuck-reason messaging.
-	UnresolvedBlockerIDs(ctx context.Context, itemID string) ([]string, error)
-
-	// --- ItemSource ---
-
-	// CreateItemSource registers a new external item source.
-	CreateItemSource(ctx context.Context, data ItemSourceData) (*ItemSourceData, error)
-	// ListItemSources returns all registered item sources.
-	ListItemSources(ctx context.Context) ([]ItemSourceData, error)
-	// UpdateItemSource modifies an existing item source.
-	UpdateItemSource(ctx context.Context, id string, update ItemSourceUpdate) (*ItemSourceData, error)
-	// DeleteItemSource removes an item source by UUID string.
-	DeleteItemSource(ctx context.Context, id string) error
 }
 
 // ApprovalRuleData is the domain model for an auto-approval rule.
@@ -294,6 +94,37 @@ type ApprovalRuleData struct {
 	MinSessionIdleMinutes int32
 }
 
+// TaggingRuleData is the domain model for a user-editable tagging rule.
+// Sibling of ApprovalRuleData — same shape convention, same unique-rule_id +
+// atomic-upsert concurrency guarantee.
+type TaggingRuleData struct {
+	RuleID         string
+	Name           string
+	NamePattern    string
+	BranchPattern  string
+	PathPattern    string
+	ProgramPattern string
+	RequiredTags   []string
+	OutputTag      string
+	Priority       int
+	Enabled        bool
+	Source         string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// DismissedFindingData is the domain model for a dismissed WasteFinding
+// record. FindingID is the stable content-addressed dismissal key (see
+// tokens.ComputeFindingID); SessionID/ConversationID/FindingType are kept
+// alongside it only for debuggability, not for lookups.
+type DismissedFindingData struct {
+	FindingID      string
+	SessionID      string
+	ConversationID string
+	FindingType    int32
+	DismissedAt    time.Time
+}
+
 // SubcommandDecisionCount holds a (subcommand, decision) aggregate count.
 // Returned by GetSubcommandBreakdown.
 type SubcommandDecisionCount struct {
@@ -321,7 +152,11 @@ type AnalyticsData struct {
 	CommandCategory    string
 	CommandSubcategory string
 	PythonImports      []string
-	CreatedAt          time.Time
+	// Source identifies which agent's hook produced this request ("claude" or
+	// "pi"). Defaulted to "claude" at the recording boundary when empty — see
+	// pi-support Epic 4.3 / PermissionRequestPayload.Source.
+	Source    string
+	CreatedAt time.Time
 }
 
 // ProjectData is the domain model for a project that groups sessions.
@@ -363,6 +198,16 @@ type ItemSessionSummary struct {
 	AcSnapshot               AcCriteriaJSON
 	PipelineModeSnapshot     string
 	PipelineModeSnapshotHash string
+	// ResolvedProgram/ResolvedModel/ExecutorSnapshotHash/ConfiguredProgram/
+	// ExecutorFallbackReason mirror ItemSession's ent schema fields of the
+	// same name — see their schema comments for the full "what ran"
+	// provenance discipline. Independent of PipelineModeSnapshot(Hash), which
+	// covers only content templates, not execution config.
+	ResolvedProgram        string
+	ResolvedModel          string
+	ExecutorSnapshotHash   string
+	ConfiguredProgram      string
+	ExecutorFallbackReason string
 	// BaseCommitSha is the worktree's pre-work HEAD, captured once at spawn —
 	// the base of the review gate's base..HEAD diff, and by construction always
 	// already an ancestor of main. Never use it as evidence that this session's
@@ -384,11 +229,15 @@ type ItemSessionSummary struct {
 	LastProgressAt        *time.Time
 	CreatedAt             time.Time
 	EstimatedCostUsd      float64
-	TriageResult          string // raw JSON stored in triage_result column
-	TriageResultSummary   string // summary field parsed from TriageResult
-	VerificationNotes     string // freeform verification evidence reported via request_review
-	OverallOutcome        string // from linked review_verdict (empty if none)
-	ReviewVerdict         *ReviewVerdictSummary
+	// CostPriced mirrors ItemSession.cost_priced — false when the most recent
+	// cost-contributing headless call could not produce a trustworthy dollar
+	// figure. See the ent schema field's comment for the full rationale.
+	CostPriced          bool
+	TriageResult        string // raw JSON stored in triage_result column
+	TriageResultSummary string // summary field parsed from TriageResult
+	VerificationNotes   string // freeform verification evidence reported via request_review
+	OverallOutcome      string // from linked review_verdict (empty if none)
+	ReviewVerdict       *ReviewVerdictSummary
 	// ClaimantHostID identifies the physical stapler-squad process/host that claimed or
 	// attached this session. See ItemSession.claimant_host_id's schema comment for the
 	// full disambiguation against STAPLER_SQUAD_INSTANCE and CloudContext.InstanceID.
@@ -402,7 +251,21 @@ type BacklogStatusEventData struct {
 	ToStatus    string
 	TriggeredBy string
 	Note        *string
-	CreatedAt   time.Time
+	// StageNameSnapshot is Epic 2.5's frozen-at-transition-time human-readable
+	// name of the destination BacklogStage, so item-detail history keeps
+	// rendering the original stage name after that stage row is later renamed
+	// or deleted. Nil for a row written before this field existed, or when no
+	// matching BacklogStage row was found at write time.
+	StageNameSnapshot *string
+	// AllowedTransitionsSnapshot is ADR-004's sibling snapshot: the destination
+	// BacklogStage's legal outgoing transition slugs (as BacklogStatus string
+	// values) at the moment of this transition, so CanTransition/
+	// AllowedTransitions/PendingGates can fall back to it when that stage is
+	// later deleted. Nil (not just empty) for a row written before this field
+	// existed, or when no matching BacklogStage row was found at write time —
+	// distinguishing "no snapshot captured" from "captured, zero transitions."
+	AllowedTransitionsSnapshot []string
+	CreatedAt                  time.Time
 }
 
 // ProgressNoteData is the domain DTO replacing *ent.BacklogProgressNote in Storage returns.
@@ -456,9 +319,14 @@ type BacklogItemData struct {
 	Priority           int
 	Status             string
 	RepoPath           string
-	SkipReviewGate     bool
-	SkipPlanning       bool
-	AutoSpawnSession   bool
+	// BaseBranch is an explicit opt-in override for the branch new worktrees
+	// (triage's isolated worktree, and the eventual work session) fork from.
+	// Empty means the default: origin's default branch tip (see
+	// git.ResolveWorktreeBaseCommit), not RepoPath's own ambient HEAD.
+	BaseBranch       string
+	SkipReviewGate   bool
+	SkipPlanning     bool
+	AutoSpawnSession bool
 	// AutoCreatePR, when true, automatically runs the same one-shot PR-creation
 	// prompt the Review Queue's manual "Create PR" button uses, once a work
 	// session for this item reaches TASK_COMPLETE (see
@@ -466,12 +334,24 @@ type BacklogItemData struct {
 	// deliberate opt-in, since it removes the human review-the-prompt
 	// checkpoint before an LLM-authored PR is created.
 	AutoCreatePR bool
+	// AutoApprovePlan, when true, approves a plan TriggerTriage produces
+	// automatically (PlanApproved set true, mirroring a manual "Approve Plan"
+	// click) once its artifacts exist on disk — no human review checkpoint.
+	// Off by default, same opt-in rationale as AutoCreatePR. See the
+	// auto-approve call site in server/services/backlog_service_triage.go's
+	// TriggerTriage.
+	AutoApprovePlan bool
 	// ReworkCapOverride is a per-item override for the auto-rework cap
 	// (config.Config.MaxAutoReworkIterationsOrDefault). Nil = use the global
 	// default. 0 = unlimited retries for this item. >0 = this item's own cap,
 	// replacing (not adding to) the global value. See effectiveReworkCap in
 	// server/services/backlog_service_triage.go.
 	ReworkCapOverride *int
+	// CostBudgetThresholdUsd is a per-item, optional soft-budget-warning
+	// threshold in USD. Nil = no threshold configured, no warning ever fires
+	// for this item. Same single-pointer-presence convention as
+	// ReworkCapOverride. See session.EvaluateBudgetThreshold.
+	CostBudgetThresholdUsd *float64
 	// PipelineMode is the slug of the PipelineMode this item uses to drive
 	// triage/work/review content (see session/pipeline_engine.go). Empty
 	// string (PipelineModeDefault) means the built-in, hardcoded pipeline.
@@ -595,36 +475,79 @@ type BacklogItemData struct {
 }
 
 // BacklogItemSummary is a lightweight projection of BacklogItemData for list views.
-// It omits large text fields (Description, plan artifacts) and status-event history,
-// but eagerly includes ItemSessions (with ReviewVerdict) for cost/status display.
+// It omits large text fields (Description, plan artifact *contents*) and
+// status-event history, but eagerly includes ItemSessions (with ReviewVerdict)
+// for cost/status display. PlanApproved/PlanArtifactsPath/SkipPlanning/
+// PlanRejectionReason ARE included despite the "lightweight" framing — they're
+// short scalar fields (a bool and two strings holding a path/short reason, not
+// file content), and board/list-view card actions gate on them directly (see
+// getAvailableActions in web-app/src/lib/backlog/itemActions.ts). Omitting
+// them here previously left backlogItemSummaryToProto silently zero-valuing
+// all four — the same class of bug fixed once already for AllowedTransitions
+// (#585); see this type's ent_repository_backlog.go and
+// backlog_service.go:backlogItemSummaryToProto call sites, which must keep
+// setting every one of these fields to stay in parity with the full
+// BacklogItemData/backlogItemToProto path.
 type BacklogItemSummary struct {
-	ID                 string               `json:"id"`
-	PublicIDRaw        string               `json:"public_id"`
-	ExternalID         string               `json:"external_id"`
-	ExternalURL        string               `json:"external_url"`
-	Labels             []string             `json:"labels"`
-	Title              string               `json:"title"`
-	Status             BacklogStatus        `json:"status"`
-	Priority           int                  `json:"priority"`
-	RepoPath           string               `json:"repo_path"`
-	AcceptanceCriteria AcCriteriaJSON       `json:"acceptance_criteria"`
-	Notes              string               `json:"notes"`
-	PrURL              string               `json:"pr_url"`
-	PrNumber           int                  `json:"pr_number"`
-	CreatedAt          time.Time            `json:"created_at"`
-	UpdatedAt          time.Time            `json:"updated_at"`
-	ArchivedAt         *time.Time           `json:"archived_at"`
-	ItemSessions       []ItemSessionSummary `json:"-"`
+	ID                  string               `json:"id"`
+	PublicIDRaw         string               `json:"public_id"`
+	ExternalID          string               `json:"external_id"`
+	ExternalURL         string               `json:"external_url"`
+	Labels              []string             `json:"labels"`
+	Title               string               `json:"title"`
+	Status              BacklogStatus        `json:"status"`
+	Priority            int                  `json:"priority"`
+	RepoPath            string               `json:"repo_path"`
+	AcceptanceCriteria  AcCriteriaJSON       `json:"acceptance_criteria"`
+	Notes               string               `json:"notes"`
+	PrURL               string               `json:"pr_url"`
+	PrNumber            int                  `json:"pr_number"`
+	CreatedAt           time.Time            `json:"created_at"`
+	UpdatedAt           time.Time            `json:"updated_at"`
+	ArchivedAt          *time.Time           `json:"archived_at"`
+	ItemSessions        []ItemSessionSummary `json:"-"`
+	SkipPlanning        bool                 `json:"skip_planning"`
+	PlanApproved        bool                 `json:"plan_approved"`
+	PlanArtifactsPath   string               `json:"plan_artifacts_path"`
+	PlanRejectionReason string               `json:"plan_rejection_reason"`
 }
 
 // ItemSessionBacklogEntry is a lightweight join record linking a tmux session UUID
 // to its parent backlog item's metadata. Returned by GetAllItemSessionsWithBacklogInfo.
 type ItemSessionBacklogEntry struct {
-	SessionUUID string
-	SessionRole string
-	ItemID      string
-	ItemTitle   string
-	ItemStatus  string
+	ItemSessionID string // the item_sessions row's own ID
+	SessionUUID   string
+	// ConversationUUID is the Claude transcript UUID ("" if never recorded);
+	// it survives the session row's deletion, unlike SessionUUID's join target.
+	ConversationUUID string
+	SessionRole      string
+	ItemID           string
+	ItemTitle        string
+	ItemStatus       string
+	// EstimatedCostUsd, CostPriced, and CreatedAt mirror the underlying
+	// ItemSession row's own fields (session/ent/schema/item_session.go).
+	EstimatedCostUsd float64
+	CostPriced       bool
+	CreatedAt        time.Time
+}
+
+// DeletedItemSessionCostEntry is a ledger row preserving one deleted
+// ItemSession's cost attribution — written by DeleteBacklogItem just before
+// the item's ItemSession rows are hard-deleted. Returned by
+// GetDeletedItemSessionCostLedger. Field names mirror ItemSessionBacklogEntry
+// so callers can fold both shapes through the same SessionMeta path.
+type DeletedItemSessionCostEntry struct {
+	ConversationUUID string
+	SessionUUID      string
+	SessionRole      string
+	ItemID           string
+	ItemTitle        string
+	EstimatedCostUsd float64
+	CostPriced       bool
+	// CreatedAt is the original ItemSession's created_at (not this ledger
+	// row's deleted_at) — Insights' time-range filter needs the work's
+	// original timestamp.
+	CreatedAt time.Time
 }
 
 // BacklogItemFilter controls which items ListBacklogItems returns.
@@ -672,10 +595,15 @@ type BacklogItemUpdate struct {
 	AcceptanceCriteria *AcCriteriaJSON
 	Priority           *int
 	RepoPath           *string
-	SkipReviewGate     *bool
-	SkipPlanning       *bool
-	AutoSpawnSession   *bool
-	AutoCreatePR       *bool
+	// BaseBranch follows the same partial-update-presence convention as
+	// Category: nil means "leave untouched", a non-nil pointer (including one
+	// pointing at "") explicitly sets/clears it. See BacklogItemData.BaseBranch.
+	BaseBranch       *string
+	SkipReviewGate   *bool
+	SkipPlanning     *bool
+	AutoSpawnSession *bool
+	AutoCreatePR     *bool
+	AutoApprovePlan  *bool
 	// PipelineMode is a pointer for partial-update presence: nil means "leave
 	// the item's stored pipeline_mode untouched", while a non-nil pointer
 	// (including one pointing at "") explicitly sets/resets it. See
@@ -747,6 +675,13 @@ type BacklogItemUpdate struct {
 	// default" via this struct — a deliberate simplification; add a
 	// ClearReworkCapOverride bool alongside this if that's needed later.
 	ReworkCapOverride *int
+	// CostBudgetThresholdUsd follows the same single-pointer presence
+	// convention as ReworkCapOverride: nil means "leave untouched", a
+	// non-nil pointer sets the item's threshold (0.0 is a legitimate
+	// configured threshold, distinct from nil/"unset"). There is currently
+	// no way to explicitly clear a threshold back to "unset" via this
+	// struct — same deliberate simplification as ReworkCapOverride.
+	CostBudgetThresholdUsd *float64
 	// UserModifiedFields follows the same partial-update-presence convention:
 	// nil means "leave untouched", a non-nil pointer sets the stored
 	// JSON-encoded set of user-modified field names (e.g. `["title"]`). Build
@@ -820,6 +755,14 @@ type ShellRepository interface {
 	UpdateShellStatus(ctx context.Context, shellID, status string, exitCode *int) error
 	// DeleteShell removes the shell record with the given ID.
 	DeleteShell(ctx context.Context, shellID string) error
+}
+
+// InitialPromptRepository is the minimal persistence interface for recording when
+// Instance.InitialPrompt was actually sent. It is implemented by EntRepository;
+// pass nil to disable persistence (e.g., tests).
+type InitialPromptRepository interface {
+	// UpdateInitialPromptSentAt sets the initial_prompt_sent_at field for a session.
+	UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error
 }
 
 // RepositoryOption is a function that configures a repository

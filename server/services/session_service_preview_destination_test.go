@@ -22,7 +22,7 @@ import (
 
 // setupTestGitRepoForPreview creates a minimal git repo for PreviewWorktreePath's
 // repo-root validation (mirrors session/git's setupTestRepo helper). Uses go-git
-// directly rather than shelling out — see .claude/rules/prefer-go-git-over-subshells.md.
+// directly rather than shelling out — see the `prefer-go-git-over-subshells` skill.
 func setupTestGitRepoForPreview(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -48,8 +48,7 @@ func TestPreviewDestinationPath_GitHubURL_ReturnsExactPath(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	withFakeHome(t)
 
 	resp, err := svc.PreviewDestinationPath(context.Background(), connect.NewRequest(&sessionv1.PreviewDestinationPathRequest{
 		Input: "https://github.com/tstapler/stapler-squad",
@@ -71,8 +70,8 @@ func TestPreviewDestinationPath_GitHubURL_EnterpriseHostViaCachedAccount_Returns
 	ts := httptest.NewServer(http.HandlerFunc(fakeGitHubEnterpriseHandler))
 	defer ts.Close()
 	const enterpriseHost = "github.netflix.net"
-	gh.EnterpriseBaseURLOverride[enterpriseHost] = ts.URL + "/"
-	defer delete(gh.EnterpriseBaseURLOverride, enterpriseHost)
+	gh.SetEnterpriseBaseURLOverride(enterpriseHost, ts.URL+"/")
+	defer gh.SetEnterpriseBaseURLOverride(enterpriseHost, "")
 
 	keyring.MockInit()
 	cache := gh.NewUserPRCache()
@@ -95,8 +94,7 @@ func TestPreviewDestinationPath_GitHubURL_EnterpriseHostViaCachedAccount_Returns
 	svc := newCreateTestService(t, storage)
 	svc.SetUserPRCache(cache)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	withFakeHome(t)
 
 	resp, err := svc.PreviewDestinationPath(context.Background(), connect.NewRequest(&sessionv1.PreviewDestinationPathRequest{
 		Input: "https://" + enterpriseHost + "/corp/some-repo",
@@ -134,8 +132,7 @@ func TestPreviewDestinationPath_NewWorktree_ReturnsApproximatePrefix(t *testing.
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	withFakeHome(t)
 
 	resp, err := svc.PreviewDestinationPath(context.Background(), connect.NewRequest(&sessionv1.PreviewDestinationPathRequest{
 		Mode:        "new_worktree",

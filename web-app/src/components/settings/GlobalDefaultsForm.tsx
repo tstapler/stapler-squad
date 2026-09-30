@@ -6,6 +6,7 @@ import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { getApiBaseUrl } from "@/lib/config";
 import { PROGRAMS } from "@/lib/constants/programs";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import {
   container,
   heading,
@@ -192,13 +193,11 @@ export function GlobalDefaultsForm() {
           <label className={labelClass} htmlFor="global-one-off-base-dir">
             One-off Session Directory
           </label>
-          <input
+          <RepoPathInput
             id="global-one-off-base-dir"
-            type="text"
-            className={input}
             placeholder="~/oneoff"
             value={oneOffBaseDir}
-            onChange={(e) => setOneOffBaseDir(e.target.value)}
+            onChange={setOneOffBaseDir}
           />
         </div>
 
@@ -207,13 +206,11 @@ export function GlobalDefaultsForm() {
           <label className={labelClass} htmlFor="global-new-project-base-dir">
             New Project Base Directory
           </label>
-          <input
+          <RepoPathInput
             id="global-new-project-base-dir"
-            type="text"
-            className={input}
             placeholder="~/Projects"
             value={newProjectBaseDir}
-            onChange={(e) => setNewProjectBaseDir(e.target.value)}
+            onChange={setNewProjectBaseDir}
           />
         </div>
 

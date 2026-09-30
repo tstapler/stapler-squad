@@ -42,56 +42,43 @@ jest.mock("@/lib/hooks/useTerminalStream", () => ({
 
 // ── Supporting mocks ──────────────────────────────────────────────────────────
 
-jest.mock("@/lib/terminal/TerminalDimensionCache", () => ({
-  getCachedDimensions: jest.fn().mockReturnValue(null),
-  saveDimensions: jest.fn(),
-  validateCellDimensions: jest.fn().mockReturnValue(null),
-}));
+jest.mock("@/lib/terminal/TerminalDimensionCache", () =>
+  require("./terminalOutputTestMocks").terminalDimensionCacheWithValidationMockModule()
+);
 
-jest.mock("@/lib/terminal/TerminalStreamManager", () => ({
-  TerminalStreamManager: jest.fn().mockImplementation(() => ({
-    setOnFirstOutput: jest.fn(),
-    setSerializeAddon: jest.fn(),
-    installDebugMonitor: jest.fn(),
-    writeInitialContent: jest.fn().mockResolvedValue(undefined),
-    write: jest.fn(),
-    cleanup: jest.fn(),
-    updateSendFlowControl: jest.fn(),
-  })),
-}));
+jest.mock("@/lib/terminal/TerminalStreamManager", () =>
+  require("./terminalOutputTestMocks").terminalStreamManagerWithSerializeAddonMockModule()
+);
 
-jest.mock("@/lib/contexts/AnalyticsContext", () => ({
-  useAnalytics: () => ({ track: jest.fn() }),
-}));
+jest.mock("@/lib/contexts/AnalyticsContext", () =>
+  require("./terminalOutputTestMocks").analyticsContextPlainMockModule()
+);
 
-jest.mock("@/lib/contexts/ApprovalsContext", () => ({
-  useApprovalsContext: () => ({
-    clearForSession: jest.fn(),
-    refresh: jest.fn(),
-    pendingCount: 0,
-  }),
-}));
+jest.mock("@/lib/contexts/ApprovalsContext", () =>
+  require("./terminalOutputTestMocks").approvalsContextMockModule()
+);
 
-jest.mock("@/lib/hooks/useHandedness", () => ({
-  useHandedness: () => ({ leftHanded: false, toggleHandedness: jest.fn() }),
-}));
+jest.mock("@/lib/hooks/useHandedness", () =>
+  require("./terminalOutputTestMocks").handednessMockModule()
+);
 
-jest.mock("@/lib/hooks/useSplitContainerSize", () => ({
-  useSplitContainerSize: () => ({ width: 800, height: 600 }),
-}));
+jest.mock("@/lib/hooks/useSplitContainerSize", () =>
+  require("./terminalOutputTestMocks").splitContainerSizeMockModule()
+);
 
-jest.mock("@/lib/hooks/useBrowserLogStream", () => ({
-  useBrowserLogStream: jest.fn(),
-}));
+jest.mock("@/lib/hooks/useBrowserLogStream", () =>
+  require("./terminalOutputTestMocks").browserLogStreamMockModule()
+);
 
-jest.mock("@/components/providers/ViewportProvider", () => ({
-  useViewport: () => ({ isMobile: false }),
-}));
+jest.mock("@/components/providers/ViewportProvider", () =>
+  require("./terminalOutputTestMocks").viewportProviderDesktopMockModule()
+);
 
 // ── Imports after mocks ───────────────────────────────────────────────────────
 
 // eslint-disable-next-line import/first
 import { TerminalOutput } from "../TerminalOutput";
+import { TerminalPoolProvider } from "@/lib/terminal/TerminalPool";
 // eslint-disable-next-line import/first
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 
@@ -123,9 +110,16 @@ function makeStreamMock(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Story 3 — TerminalOutput now sources its xterm.js instance from
+// TerminalPoolProvider (see TerminalPool.tsx); every render/rerender in this
+// file must be wrapped in one, matching production's app-level provider.
+function withPool(children: React.ReactNode) {
+  return <TerminalPoolProvider>{children}</TerminalPoolProvider>;
+}
+
 function renderTerminal(sessionId = "session-abc", baseUrl = "/api") {
   return render(
-    <TerminalOutput sessionId={sessionId} baseUrl={baseUrl} isVisible={false} />
+    withPool(<TerminalOutput sessionId={sessionId} baseUrl={baseUrl} isVisible={false} />)
   );
 }
 
@@ -186,7 +180,7 @@ describe("TerminalOutput reconnect banner", () => {
 
     // Switch to disconnected
     mockFn.mockReturnValue(makeStreamMock({ isConnected: false }));
-    rerender(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />);
+    rerender(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
 
     // Advance < 2s — banner should NOT appear yet
     act(() => { jest.advanceTimersByTime(1500); });
@@ -203,7 +197,7 @@ describe("TerminalOutput reconnect banner", () => {
 
     // Switch to disconnected
     mockFn.mockReturnValue(makeStreamMock({ isConnected: false }));
-    rerender(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />);
+    rerender(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
 
     // Advance ≥ 2s — banner should appear
     act(() => { jest.advanceTimersByTime(2100); });
@@ -219,13 +213,13 @@ describe("TerminalOutput reconnect banner", () => {
     const { rerender } = renderTerminal();
 
     mockFn.mockReturnValue(makeStreamMock({ isConnected: false }));
-    rerender(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />);
+    rerender(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
     act(() => { jest.advanceTimersByTime(2100); });
     expect(screen.getByText(/Reconnecting terminal/)).toBeInTheDocument();
 
     // Reconnect — banner should disappear
     mockFn.mockReturnValue(makeStreamMock({ isConnected: true }));
-    rerender(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />);
+    rerender(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
 
     expect(screen.queryByText(/Reconnecting terminal/)).not.toBeInTheDocument();
   });
@@ -251,12 +245,12 @@ describe("TerminalOutput reconnect banner", () => {
     const { rerender } = renderTerminal();
 
     mockFn.mockReturnValue(makeStreamMock({ isConnected: false }));
-    rerender(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />);
+    rerender(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
     act(() => { jest.advanceTimersByTime(2100); });
 
     // Reconnect
     mockFn.mockReturnValue(makeStreamMock({ isConnected: true }));
-    rerender(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />);
+    rerender(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
 
     // Separator should have been written (or at minimum banner is hidden)
     expect(screen.queryByText(/Reconnecting terminal/)).not.toBeInTheDocument();
@@ -282,7 +276,7 @@ describe("TerminalOutput reconnect banner", () => {
     const { rerender } = renderTerminal();
 
     mockFn.mockReturnValue(makeStreamMock({ isConnected: true }));
-    rerender(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />);
+    rerender(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
 
     // write() may be called for other content, but not with the separator string
     const separatorCalls = mockWriteFn.mock.calls.filter(
@@ -300,7 +294,7 @@ describe("TerminalOutput reconnect banner", () => {
 
     // Disconnect to start the banner timer
     mockFn.mockReturnValue(makeStreamMock({ isConnected: false }));
-    rerender(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />);
+    rerender(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
 
     // Unmount before the timer fires — clearTimeout should have been called
     unmount();
@@ -314,7 +308,7 @@ describe("TerminalOutput reconnect banner", () => {
 
     // isVisible=false means the component doesn't show the loading overlay,
     // but for banner: we check it doesn't show before connection established
-    render(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />);
+    render(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
 
     expect(screen.queryByText(/Reconnecting terminal/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Connection lost/)).not.toBeInTheDocument();
@@ -331,7 +325,7 @@ describe("TerminalOutput reconnect banner", () => {
     mockFn.mockReturnValue(
       makeStreamMock({ isConnected: false, isHardFailed: true })
     );
-    rerender(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />);
+    rerender(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
 
     act(() => { jest.advanceTimersByTime(2100); });
 
@@ -351,7 +345,7 @@ describe("TerminalOutput reconnect banner", () => {
     mockFn.mockReturnValue(
       makeStreamMock({ isConnected: false, isHardFailed: true, handleManualReconnect })
     );
-    rerender(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />);
+    rerender(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
     act(() => { jest.advanceTimersByTime(2100); });
 
     // Click Retry
@@ -367,7 +361,7 @@ describe("TerminalOutput foreground wiring", () => {
     const mockFn = useTerminalStream as jest.Mock;
     mockFn.mockReturnValue(makeStreamMock());
 
-    render(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={true} />);
+    render(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={true} />));
 
     expect(mockFn).toHaveBeenCalledWith(
       expect.objectContaining({ foreground: true })
@@ -378,7 +372,7 @@ describe("TerminalOutput foreground wiring", () => {
     const mockFn = useTerminalStream as jest.Mock;
     mockFn.mockReturnValue(makeStreamMock());
 
-    render(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />);
+    render(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
 
     expect(mockFn).toHaveBeenCalledWith(
       expect.objectContaining({ foreground: false })

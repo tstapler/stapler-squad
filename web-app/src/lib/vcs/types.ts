@@ -27,6 +27,20 @@ export interface CommitSummary {
   authoredAt?: Date;
 }
 
+export interface CheckItemSummary {
+  name: string;
+  context: string;
+  state: string;
+  status: string;
+  conclusion: string;
+}
+
+export interface ReviewFeedbackSummary {
+  author: string;
+  state: string;
+  body: string;
+}
+
 export type PrState = "open" | "closed" | "merged";
 export type CheckConclusion = "success" | "failure" | "pending" | "";
 
@@ -40,6 +54,10 @@ export interface GithubSummary {
   checkConclusion: CheckConclusion;
   approvedCount: number;
   changesReqCount: number;
+  mergeable: string;
+  checks: CheckItemSummary[];
+  reviewFeedback: ReviewFeedbackSummary[];
+  lastCheckedAt?: Date;
 }
 
 export type VcsWidgetMode = "full" | "compact";
@@ -72,6 +90,17 @@ interface VcsWidgetDataCommon {
     additions: number;
     deletions: number;
   };
+  /** Local-git-status freshness — independent of github.lastCheckedAt (PR staleness). */
+  statusAsOf?: Date;
+  /** True when `commits` was capped server-side before reaching the branch's full count. */
+  commitsTruncated?: boolean;
+  /**
+   * True when the backend attempted to fetch the commit list and it failed or timed
+   * out — distinct from `commits` simply being empty because the branch has no
+   * unshipped commits yet. Lets the UI render "couldn't load commits" instead of a
+   * silent empty state.
+   */
+  commitsUnavailable?: boolean;
 }
 
 export type VcsWidgetData =

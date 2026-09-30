@@ -275,3 +275,37 @@ func runCmd(name string, args ...string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+
+// ---- Scan result cache persistence (restart survival) ----------------------
+
+func TestStateScanCachePersistsAcrossReload(t *testing.T) {
+	t.Parallel()
+	store, path := newTestStateStore(t)
+
+	entries := []scanCacheEntry{
+		{
+			Result:   ScanResult{RepoPath: "/repo/a", Branch: "main", WorktreePath: "/repo/a", HasUncommitted: true},
+			ScanTime: time.Now(),
+		},
+	}
+	require.NoError(t, store.SaveScanCache(entries))
+
+	loaded := store.LoadScanCache()
+	require.Len(t, loaded, 1)
+	assert.Equal(t, "/repo/a", loaded[0].Result.WorktreePath)
+	assert.True(t, loaded[0].Result.HasUncommitted)
+
+	// Reload from disk in a fresh StateStore — this is what a restarted
+	// process sees.
+	store2, err := NewStateStore(path)
+	require.NoError(t, err)
+	loaded2 := store2.LoadScanCache()
+	require.Len(t, loaded2, 1, "scan cache should survive a reload from disk")
+	assert.Equal(t, "/repo/a", loaded2[0].Result.WorktreePath)
+}
+
+func TestStateScanCache_EmptyByDefault(t *testing.T) {
+	t.Parallel()
+	store, _ := newTestStateStore(t)
+	assert.Empty(t, store.LoadScanCache())
+}

@@ -79,6 +79,17 @@ written. If the CLI already owns this behavior, the real gap may be
 than reimplementing compression logic against a model API the controller
 doesn't directly call.
 
+## Known gap accepted for this pass
+
+Phases 1-3 of the implementation plan (`implementation/plan.md`) ship only a manual
+"Restart with summary" trigger. That alone does not close this document's Problem
+Statement claim of "no warning to the operator" — a user still has to notice
+degradation and click the button themselves. The proactive half (auto-suggest on a
+`ContextHealth` RED transition) is Phase 4, gated on the separately tracked
+`context-health-monitoring` backlog item (`8baed611-974e-44e0-8647-5abec7d33684`). This
+gap is accepted explicitly rather than patched with a throwaway interim signal — see
+`implementation/plan.md`'s "Closing out the original acceptance criteria" section.
+
 ## Out of scope
 
 - Reimplementing Hermes's `ContextEngine` verbatim in Python — this is a Go

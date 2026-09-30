@@ -28,18 +28,22 @@ jobs:
   guard:
     name: no-backlog-scaffolding-in-diff
     runs-on: ubuntu-latest
+    # Baseline avg 4m / max 10.1m. Backstop only — a timeout here is a real failure.
+    timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+      # No checkout: this repo's .git pack data is ~16GB (see build.yml's
+      # detect-changes job for the root cause), so a `fetch-depth: 0`
+      # full-history clone just to list changed file paths cost minutes here
+      # for no reason -- this guard only ever needed a filename list. The
+      # compare API gives the same info with no clone at all.
       - name: Check PR diff for backlog scaffolding files
         env:
+          GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          CHANGED=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" || true)
+          CHANGED=$(gh api "repos/${{ github.repository }}/compare/$BASE_SHA...$HEAD_SHA" --paginate --jq '.files[].filename')
           if [ -z "$CHANGED" ]; then
             echo "No changed files detected"
             exit 0

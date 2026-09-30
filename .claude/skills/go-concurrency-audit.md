@@ -76,7 +76,7 @@ When two consecutive read-lock acquisitions read the same struct, combine them i
 
 ### 4. Double-Checked Locking — Return Locally-Computed Value
 
-See `.claude/docs/concurrency-patterns.md`. Canonical implementation:
+See `docs/explanation/concurrency-patterns.md`. Canonical implementation:
 - `session/git/worktree_git.go` — `GitWorktree.IsDirtyWithHint()`
 
 Always return the locally-computed value after the write-lock section, not the cache field. Re-reading the cache slot after a lost write race returns a foreign goroutine's result.

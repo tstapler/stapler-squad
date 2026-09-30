@@ -18,7 +18,9 @@ import { HttpAnalyticsProvider } from "@/lib/analytics/HttpAnalyticsProvider";
 import { ConsoleAnalyticsProvider } from "@/lib/analytics/ConsoleAnalyticsProvider";
 import { PageViewTracker } from "@/components/analytics/PageViewTracker";
 import { WebVitalsReporter } from "@/components/telemetry/WebVitalsReporter";
+import { OtelInit } from "@/components/telemetry/OtelInit";
 import { OnboardingProvider } from "@/lib/contexts/OnboardingContext";
+import { TerminalPoolProvider, DEFAULT_TERMINAL_POOL_MAX_SIZE } from "@/lib/terminal/TerminalPool";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   // Create provider once per mount using a ref so the instance is stable.
@@ -32,6 +34,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <AnalyticsContextProvider provider={analyticsProviderRef.current}>
+      <OtelInit />
       <WebVitalsReporter />
       <PageViewTracker />
       <Provider store={store}>
@@ -46,7 +49,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
                     <ReviewQueueProvider>
                       <ApprovalsProvider>
                         <StuckBacklogItemsProvider>
-                          {children}
+                          {/* Story 3 (Task 3.4) — must live above PaneSplitRenderer's
+                              `key={pane.id}-{pane.sessionId}` remount boundary (see
+                              TerminalPool.tsx's module doc comment) so pooled terminal
+                              instances survive a pane's assigned session changing. */}
+                          <TerminalPoolProvider maxSize={DEFAULT_TERMINAL_POOL_MAX_SIZE}>
+                            {children}
+                          </TerminalPoolProvider>
                         </StuckBacklogItemsProvider>
                       </ApprovalsProvider>
                     </ReviewQueueProvider>

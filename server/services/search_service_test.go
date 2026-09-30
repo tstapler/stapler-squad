@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"testing"
@@ -11,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -134,10 +134,15 @@ func TestSearchClaudeHistory_LogsExcludedCountOnlyWhenSessionsActuallyExcluded(t
 	hiddenInst.SetClaudeConversationUUID("hidden-session")
 	svc.SetInstanceProvider(func() []*session.Instance { return []*session.Instance{hiddenInst} })
 
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	defer slog.SetDefault(prev)
+	// slogDefaultMu (declared in autonomous_orchestration_service_test.go) serializes this
+	// swap against every other log.SetSlogDefaultForTest swap in this package.
+	slogDefaultMu.Lock()
+	buf := &syncLogBuffer{}
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(buf, nil)))
+	defer func() {
+		ssqlog.SetSlogDefaultForTest(prev)
+		slogDefaultMu.Unlock()
+	}()
 
 	resp, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
 		Query:                     "dark mode toggle",

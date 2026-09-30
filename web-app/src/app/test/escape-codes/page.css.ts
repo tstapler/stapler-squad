@@ -182,26 +182,6 @@ export const priority = style({
   textTransform: "uppercase",
 });
 
-export const critical = style({
-  background: vars.color.error,
-  color: vars.color.primaryText,
-});
-
-export const high = style({
-  background: vars.color.warning,
-  color: vars.color.primaryText,
-});
-
-export const medium = style({
-  background: vars.color.primary,
-  color: vars.color.primaryText,
-});
-
-export const low = style({
-  background: vars.color.panelBgSecondary,
-  color: vars.color.textSecondary,
-});
-
 export const codeDetails = style({
   display: "flex",
   gap: "0.75rem",

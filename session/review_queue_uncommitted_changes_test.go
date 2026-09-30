@@ -17,7 +17,7 @@ import (
 // uncommitted-changes detection tests below.
 //
 // Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func initTestRepoForReviewQueue(t *testing.T, repoPath string) {
 	t.Helper()
 	repo, err := gogit.PlainInit(repoPath, false)

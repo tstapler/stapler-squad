@@ -93,6 +93,8 @@ func (s *SetupManager) GenerateToFile(path string) (string, error) {
 
 // LoadFromFile reads a token from path and loads it into the manager.
 func (s *SetupManager) LoadFromFile(path string) error {
+	// #nosec G304 -- path is always configDir/SetupTokenDir/SetupTokenFile (see main.go),
+	// built from constants and the internal config dir; never network/RPC input.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read setup token file: %w", err)

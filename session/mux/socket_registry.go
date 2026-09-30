@@ -71,7 +71,7 @@ func (r *SocketRegistry) saveLocked() error {
 		return fmt.Errorf("socket registry marshal: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(r.path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(r.path), 0750); err != nil {
 		return fmt.Errorf("socket registry mkdir: %w", err)
 	}
 

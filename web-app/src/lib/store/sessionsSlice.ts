@@ -10,7 +10,27 @@ export type ConnectionState = "connected" | "stale" | "disconnected";
 
 interface SessionsExtraState {
   loading: boolean;
+  /**
+   * True once setSessions has fired at least once (first WatchSessions/listSessions
+   * snapshot received), and never reset afterward. Distinct from `connectionState`,
+   * which can flap back to "disconnected" on a stream reconnect — this flag lets a
+   * consumer tell "no sessions yet because we haven't loaded" apart from "no sessions
+   * because there truly are none," which matters for callers like the notifications
+   * page that decide whether an absent id means "not loaded yet" vs. "confirmed gone."
+   */
+  hasLoadedOnce: boolean;
   error: string | null;
+  /**
+   * ConnectRPC error code (from the `Code` enum in @connectrpc/connect) for the most recent
+   * `error`, when the failure came from a ConnectError — undefined for a plain Error/string
+   * failure. Lets a consumer (e.g. the board's drag-rejection reconciliation) distinguish a
+   * transport-level failure (Unavailable/DeadlineExceeded/Unknown/Internal) from a
+   * business-rule rejection (FailedPrecondition) without re-parsing the message string.
+   * Sibling to `error` rather than folded into its payload — `setError(string)` has ~30
+   * call sites across the codebase, so changing its signature would touch far more than this
+   * feature's blast radius.
+   */
+  errorCode?: number;
   /** Per-session terminal-detected status synced from Session.detectedStatus proto field. */
   detectedStatusMap: Record<string, { detectedStatus: DetectedStatus; detectedContext: string }>;
   /** WatchSessions stream connection state for UI staleness indicator. */
@@ -25,6 +45,7 @@ interface SessionsExtraState {
 
 const initialState = sessionsAdapter.getInitialState<SessionsExtraState>({
   loading: false,
+  hasLoadedOnce: false,
   error: null,
   detectedStatusMap: {},
   connectionState: "disconnected",
@@ -36,6 +57,7 @@ const sessionsSlice = createSlice({
   initialState,
   reducers: {
     setSessions(state, action: PayloadAction<Session[]>) {
+      state.hasLoadedOnce = true;
       const filtered = action.payload.filter(s => !state.deletedIds[s.id]);
       // Preserve existing entity references when a session's data is unchanged
       // (same updatedAt) so React.memo on SessionRowWrapper can skip re-rendering
@@ -100,6 +122,12 @@ const sessionsSlice = createSlice({
     },
     setError(state, action: PayloadAction<string | null>) {
       state.error = action.payload;
+      // A fresh error/clear always invalidates the previously-classified code — callers that
+      // need a code alongside the message dispatch setErrorCode immediately after setError.
+      state.errorCode = undefined;
+    },
+    setErrorCode(state, action: PayloadAction<number | undefined>) {
+      state.errorCode = action.payload;
     },
     setConnectionState(state, action: PayloadAction<ConnectionState>) {
       state.connectionState = action.payload;
@@ -116,6 +144,7 @@ export const {
   removeSession,
   setLoading,
   setError,
+  setErrorCode,
   setConnectionState,
   removeDetectedStatus,
 } = sessionsSlice.actions;
@@ -146,7 +175,9 @@ export const selectActiveSessionsSortedByUpdatedAt = createSelector(
 export const selectSessionIds = adapterSelectors.selectIds;
 export const selectSessionsTotal = adapterSelectors.selectTotal;
 export const selectSessionsLoading = (state: RootState) => state.sessions.loading;
+export const selectSessionsHasLoadedOnce = (state: RootState) => state.sessions.hasLoadedOnce;
 export const selectSessionsError = (state: RootState) => state.sessions.error;
+export const selectSessionsErrorCode = (state: RootState) => state.sessions.errorCode;
 export const selectDetectedStatusMap = (state: RootState) => state.sessions.detectedStatusMap;
 export const selectConnectionState = (state: RootState) => state.sessions.connectionState;
 

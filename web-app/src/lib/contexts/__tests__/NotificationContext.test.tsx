@@ -25,7 +25,6 @@ const AttentionReason = {
 // ---------------------------------------------------------------------------
 
 const mockMarkAsRead = jest.fn().mockResolvedValue(undefined);
-const mockMarkAllAsRead = jest.fn().mockResolvedValue(undefined);
 const mockClearHistory = jest.fn().mockResolvedValue(undefined);
 
 // Capture the subscribe handler so tests can simulate cross-tab messages.
@@ -54,7 +53,6 @@ jest.mock("@/lib/hooks/useNotificationHistory", () => ({
     error: null,
     hasMore: false,
     markAsRead: mockMarkAsRead,
-    markAllAsRead: mockMarkAllAsRead,
     clearHistory: mockClearHistory,
     loadMore: jest.fn().mockResolvedValue(undefined),
     refresh: jest.fn().mockResolvedValue(undefined),

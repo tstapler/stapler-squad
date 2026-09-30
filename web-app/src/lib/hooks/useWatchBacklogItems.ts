@@ -44,8 +44,7 @@ export type BacklogConnectionState =
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { getWatchTransport } from "@/lib/api/transport";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import type { BacklogItem, BacklogItemEvent, ReviewVerdict } from "@/gen/session/v1/backlog_pb";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
@@ -173,18 +172,13 @@ export function useWatchBacklogItems(
   // needing `connect` in their own dependency arrays.
   const reconnectRef = useRef<(() => void) | null>(null);
 
-  // Initialize ConnectRPC client. Uses plain HTTP (not the WebSocket bridge
-  // transport useSessionService/useReviewQueue use for their Watch* RPCs)
-  // because BacklogService.WatchBacklogItems is not yet registered with
-  // server.go's StreamingWSBridge — standard Connect server-streaming over
-  // HTTP works today without that registration; wiring the WS bridge is a
-  // separate, larger server.go change out of scope for this frontend epic.
+  // Initialize ConnectRPC client via the shared watch-transport singleton
+  // (server.go now registers BacklogService.WatchBacklogItems with
+  // StreamingWSBridge, same as useSessionService/useReviewQueue) — avoids
+  // holding one more long-lived HTTP/1.1 connection against the browser's
+  // 6-connections-per-origin budget.
   useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
-    clientRef.current = createClient(BacklogService, transport);
+    clientRef.current = createClient(BacklogService, getWatchTransport());
   }, []);
 
   // Full REST refetch — used for the initial load, gap-detected resyncs, the

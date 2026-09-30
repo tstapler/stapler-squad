@@ -63,3 +63,19 @@ var reasonToPriority = queue.ReasonToPriority
 type ReviewQueueWriter interface {
 	Add(item *ReviewItem) bool
 }
+
+// RemovalInfo re-export
+type RemovalInfo = queue.RemovalInfo
+
+// UserActionRemoval re-export
+var UserActionRemoval = queue.UserActionRemoval
+
+// AutoResolvedByRuleRemoval re-export
+var AutoResolvedByRuleRemoval = queue.AutoResolvedByRuleRemoval
+
+// ReviewQueueRemover is the removal-side interface for the review queue,
+// matching ReviewQueueWriter's placement/convention above. Satisfied by
+// *ReviewQueue.
+type ReviewQueueRemover interface {
+	RemoveWithInfo(sessionID string, info RemovalInfo) bool
+}

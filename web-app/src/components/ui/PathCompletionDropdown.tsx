@@ -12,6 +12,10 @@ export interface CompletionEntry {
   isDirectory: boolean;
   /** True for entries sourced from local history (not the live filesystem). */
   isHistory?: boolean;
+  /** True when this entry is a git worktree rather than its repo's primary checkout. */
+  isWorktree?: boolean;
+  /** Display label for the repo root this entry is a worktree of (set when isWorktree is true). */
+  rootLabel?: string;
 }
 
 interface PathCompletionDropdownProps {
@@ -59,6 +63,9 @@ function EntryItem({
         {entry.isHistory ? "🕒" : entry.isDirectory ? "📁" : "📄"}
       </span>
       <span className={nameClass}>{entry.name}</span>
+      {entry.isWorktree && entry.rootLabel && (
+        <span className={suffix}>worktree of {entry.rootLabel}</span>
+      )}
       {entry.isDirectory && !entry.isHistory && (
         <span className={suffix} aria-hidden="true">
           /

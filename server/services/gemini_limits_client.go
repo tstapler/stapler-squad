@@ -138,6 +138,8 @@ func (c *GeminiLimitsClient) resolveToken(ctx context.Context, cred Credential) 
 	home, err := os.UserHomeDir()
 	if err == nil {
 		adcPath := filepath.Join(home, ".config", "gcloud", "application_default_credentials.json")
+		// #nosec G304 -- adcPath is home dir plus a literal well-known suffix; never
+		// derived from network/RPC input.
 		data, err := os.ReadFile(adcPath)
 		if err == nil {
 			var adc struct {

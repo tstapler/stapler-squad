@@ -2,12 +2,20 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // captureLogWarn temporarily redirects the default slog handler to a text
@@ -18,10 +26,9 @@ import (
 func captureLogWarn(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	prev := log.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() {
-		slog.SetDefault(prev)
+		log.SetSlogDefaultForTest(prev)
 	})
 	return &buf
 }
@@ -166,5 +173,260 @@ func Test_formatKnownHosts_should_SortEntriesByHostID_When_GivenMultipleEntries(
 	}
 	if idxFirst > idxSecond {
 		t.Errorf("expected %q to appear before %q in sorted output, got: %s", first.String(), second.String(), got)
+	}
+}
+
+// TestBuildLogConfig_DefaultsToInfoNotDebug guards against a bug where an
+// unset ConsoleLevel zero-values to DEBUG (LogLevel's iota starts at
+// DEBUG=0), which initializeWithConfig's min(FileLevel, ConsoleLevel) seeding
+// then used to override an explicit FileLevel — flooding the log with DEBUG
+// output on every server boot regardless of FileLevel's intended value.
+func TestBuildLogConfig_DefaultsToInfoNotDebug(t *testing.T) {
+	cfg := buildLogConfig(true, &config.Config{}, false)
+	if cfg.FileLevel != log.INFO {
+		t.Errorf("FileLevel = %v, want %v", cfg.FileLevel, log.INFO)
+	}
+	if cfg.ConsoleLevel != log.INFO {
+		t.Errorf("ConsoleLevel = %v, want %v", cfg.ConsoleLevel, log.INFO)
+	}
+}
+
+// Test_tymuxNeeded_should_ReturnExpected_When_GivenResolvedBackend covers
+// Epic 2.2 Task 2.2.1a (project_plans/tymux-bundled-integration/implementation/
+// plan.md): tymuxNeeded checks resolvedBackend == BackendTymux, independent
+// of any TymuxSessionOverrides entries (each case here uses an empty cfg).
+func Test_tymuxNeeded_should_ReturnExpected_When_GivenResolvedBackend(t *testing.T) {
+	tests := []struct {
+		name            string
+		resolvedBackend session.ProcessManagerBackend
+		want            bool
+	}{
+		{"tymux backend needs supervision", session.BackendTymux, true},
+		{"tmux backend does not need supervision", session.BackendTmux, false},
+		{"unknown backend does not need supervision", session.ProcessManagerBackend("bogus"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tymuxNeeded(&config.Config{}, tt.resolvedBackend)
+			if got != tt.want {
+				t.Errorf("tymuxNeeded(cfg, %q) = %v, want %v", tt.resolvedBackend, got, tt.want)
+			}
+		})
+	}
+}
+
+// Test_tymuxNeeded_should_ReturnTrue_When_AnyTymuxSessionOverrideIsTrue
+// covers the Phase 4 half of Task 2.2.1a: a per-session override set before
+// this process started (e.g. via SetTymuxSessionOverride) must also trigger
+// startup supervision, even when the resolved global default is BackendTmux.
+func Test_tymuxNeeded_should_ReturnTrue_When_AnyTymuxSessionOverrideIsTrue(t *testing.T) {
+	cfg := &config.Config{
+		TymuxSessionOverrides: map[string]bool{
+			"some-other-session": false,
+			"canary-session":     true,
+		},
+	}
+
+	if !tymuxNeeded(cfg, session.BackendTmux) {
+		t.Fatal("tymuxNeeded() = false, want true: a true TymuxSessionOverrides entry must trigger supervision even when the global default is tmux")
+	}
+}
+
+// Test_tymuxNeeded_should_ReturnFalse_When_AllTymuxSessionOverridesAreFalse
+// confirms a session-name override forcing tmux does NOT itself trigger
+// supervision when nothing else needs it.
+func Test_tymuxNeeded_should_ReturnFalse_When_AllTymuxSessionOverridesAreFalse(t *testing.T) {
+	cfg := &config.Config{
+		TymuxSessionOverrides: map[string]bool{
+			"some-session": false,
+		},
+	}
+
+	if tymuxNeeded(cfg, session.BackendTmux) {
+		t.Fatal("tymuxNeeded() = true, want false: an all-false override map must not trigger supervision on its own")
+	}
+}
+
+// Test_tymuxNeeded_should_ReturnFalse_When_ConfigIsNil confirms the nil-safety
+// guard added alongside the TymuxSessionOverrides check.
+func Test_tymuxNeeded_should_ReturnFalse_When_ConfigIsNil(t *testing.T) {
+	if tymuxNeeded(nil, session.BackendTmux) {
+		t.Fatal("tymuxNeeded(nil, BackendTmux) = true, want false")
+	}
+}
+
+// Test_superviseTymuxd_should_DecideRegisterStopAndError_When_GivenEachCombination
+// covers the CRITICAL gap: main.go's cobra "runtime" phase decided whether to
+// register a shutdown hook that could kill a sibling process's tymuxd
+// entirely inline, with zero test coverage. superviseTymuxd extracts that
+// decision so it's testable via fakes for ensure/registerStop instead of a
+// real tymuxd subprocess or a real *warren.App.
+func Test_superviseTymuxd_should_DecideRegisterStopAndError_When_GivenEachCombination(t *testing.T) {
+	errSample := errors.New("ensure failed")
+
+	testCases := []struct {
+		name             string
+		ensureErr        error
+		spawned          bool
+		keepServer       bool
+		strictStartup    bool
+		wantErr          bool
+		wantRegisterStop bool
+	}{
+		{
+			name:             "ErrorWithStrictStartup_ReturnsError",
+			ensureErr:        errSample,
+			strictStartup:    true,
+			wantErr:          true,
+			wantRegisterStop: false,
+		},
+		{
+			name:             "ErrorWithoutStrictStartup_WarnsAndContinues",
+			ensureErr:        errSample,
+			strictStartup:    false,
+			wantErr:          false,
+			wantRegisterStop: false,
+		},
+		{
+			name:             "ReusedNotSpawned_NeverRegistersStopHook",
+			ensureErr:        nil,
+			spawned:          false,
+			keepServer:       false,
+			wantErr:          false,
+			wantRegisterStop: false,
+		},
+		{
+			name:             "SpawnedAndNotKeepServer_RegistersStopHook",
+			ensureErr:        nil,
+			spawned:          true,
+			keepServer:       false,
+			wantErr:          false,
+			wantRegisterStop: true,
+		},
+		{
+			name:             "SpawnedButKeepServer_NeverRegistersStopHook",
+			ensureErr:        nil,
+			spawned:          true,
+			keepServer:       true,
+			wantErr:          false,
+			wantRegisterStop: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeEnsure := func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
+				return tymux.TymuxdReady{Spawned: tc.spawned}, tc.ensureErr
+			}
+
+			var registerStopCalls int
+			fakeRegisterStop := func(name string, fn func(context.Context) error) {
+				registerStopCalls++
+			}
+
+			err := superviseTymuxd(context.Background(), tymux.DaemonConfig{}, tc.strictStartup, tc.keepServer, fakeEnsure, fakeRegisterStop)
+
+			if tc.wantErr && err == nil {
+				t.Fatal("superviseTymuxd() error = nil, want non-nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("superviseTymuxd() error = %v, want nil", err)
+			}
+
+			gotRegisterStop := registerStopCalls > 0
+			if gotRegisterStop != tc.wantRegisterStop {
+				t.Errorf("registerStop called = %v, want %v (called %d times)", gotRegisterStop, tc.wantRegisterStop, registerStopCalls)
+			}
+		})
+	}
+}
+
+// Test_startHostnameDetector_should_SkipRunAndNetworkChangeSource_When_DisableEnvSet
+// covers the CRITICAL gap: main.go's cobra "runtime" phase built the
+// HostnameDetector, decided whether to start its Run goroutine, and wired the
+// manual-trigger endpoint entirely inline, with zero test coverage on the
+// STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE branch. startHostnameDetector
+// extracts that decision (mirroring the superviseTymuxd extraction above) so
+// it's testable via injected goFn/onStop/newSource instead of a real
+// *warren.App or OS network monitor.
+func Test_startHostnameDetector_should_SkipRunAndNetworkChangeSource_When_DisableEnvSet(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_HOSTNAME_REDETECT_DISABLE", "true")
+
+	var newSourceCalls, goCalls, onStopCalls int
+	fakeNewSource := func() (NetworkChangeSource, error) {
+		newSourceCalls++
+		return nil, errors.New("should never be called when disabled")
+	}
+	fakeGo := func(name string, fn func(context.Context)) { goCalls++ }
+	fakeOnStop := func(name string, fn func(context.Context) error) { onStopCalls++ }
+
+	mux := http.NewServeMux()
+	detector := startHostnameDetector(mux, &server.Server{}, nil, fakeNewSource, fakeGo, fakeOnStop)
+
+	if newSourceCalls != 0 {
+		t.Errorf("newSource called %d times, want 0 (disabled must skip the real OS network monitor entirely)", newSourceCalls)
+	}
+	if goCalls != 0 {
+		t.Errorf("goFn (Run goroutine start) called %d times, want 0", goCalls)
+	}
+	if onStopCalls != 0 {
+		t.Errorf("onStop called %d times, want 0 (no netchange cleanup hook to register when disabled)", onStopCalls)
+	}
+	if detector == nil {
+		t.Fatal("expected a non-nil detector even when disabled (endpoint registration still needs one to check the disabled flag before touching it)")
+	}
+
+	// The manual-trigger endpoint must still be registered, reporting 503
+	// rather than a 404 (registerRedetectHostnamesEndpoint's own disabled
+	// short-circuit) or hanging.
+	req := httptest.NewRequest(http.MethodPost, "/api/debug/redetect-hostnames", nil)
+	req.RemoteAddr = "127.0.0.1:54321"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("endpoint status = %d, want 503 (disabled)", w.Code)
+	}
+}
+
+// Test_startHostnameDetector_should_StartRunAndNetworkChangeSource_When_NotDisabled
+// covers the enabled branch: newSource, the Run goroutine, and the netchange
+// cleanup hook must all be wired up.
+func Test_startHostnameDetector_should_StartRunAndNetworkChangeSource_When_NotDisabled(t *testing.T) {
+	var newSourceCalls, goCalls, onStopCalls int
+	fakeNewSource := func() (NetworkChangeSource, error) {
+		newSourceCalls++
+		return nil, errors.New("no real OS network monitor in this test")
+	}
+	fakeGo := func(name string, fn func(context.Context)) { goCalls++ }
+	fakeOnStop := func(name string, fn func(context.Context) error) { onStopCalls++ }
+
+	mux := http.NewServeMux()
+	detector := startHostnameDetector(mux, &server.Server{}, nil, fakeNewSource, fakeGo, fakeOnStop)
+
+	if newSourceCalls != 1 {
+		t.Errorf("newSource called %d times, want 1", newSourceCalls)
+	}
+	if goCalls != 1 {
+		t.Errorf("goFn (Run goroutine start) called %d times, want 1", goCalls)
+	}
+	if onStopCalls != 1 {
+		t.Errorf("onStop called %d times, want 1 (netchange cleanup hook)", onStopCalls)
+	}
+	if detector == nil {
+		t.Fatal("expected a non-nil detector")
+	}
+}
+
+// TestVerifyHostnameOwnership_RejectsNonMatchingIP asserts the single
+// extracted implementation (shared by startRemoteAccess's hostnameValidator
+// and HostnameDetector's default validateFn) rejects a hostname that does
+// not resolve to one of this host's own IPs. "invalid.invalid" is reserved
+// by RFC 2606 to never resolve on any network, so this is deterministic
+// without needing to fake net.LookupHost/forwardLookupViaKnownNameservers --
+// no real DNS answer for it can ever coincide with listNonLoopbackIPs().
+func TestVerifyHostnameOwnership_RejectsNonMatchingIP(t *testing.T) {
+	if got := verifyHostnameOwnership(context.Background(), "invalid.invalid"); got {
+		t.Errorf("verifyHostnameOwnership(%q) = true, want false (reserved non-resolving hostname)", "invalid.invalid")
 	}
 }

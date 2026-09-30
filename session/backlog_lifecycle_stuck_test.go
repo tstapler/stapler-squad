@@ -13,9 +13,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // backdateStuckFirstDetected sets first_detected_at on the open
@@ -149,7 +151,7 @@ func TestBackfillStuckStates_should_seedDBDerivableRowsWithNotifiedAt_When_Items
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	reviewItem := newStuckReviewTestItem(t, storage, ReviewVerdictUnverifiable, true, false)
 	staleItem := newStaleWorkTestItem(t, storage, er)
@@ -197,7 +199,7 @@ func TestBackfillStuckStates_should_notCallGitHubNorSeedPRReady_When_Run(t *test
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	newPRPendingTestItem(t, storage, 148)
 
@@ -220,7 +222,7 @@ func TestBackfillStuckStates_should_beIdempotent_When_RunTwice(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	newStuckReviewTestItem(t, storage, ReviewVerdictUnverifiable, true, false)
 	newStaleWorkTestItem(t, storage, er)
@@ -275,7 +277,7 @@ func TestReconcilePRPending_should_markStuck_When_PRGreenMergeableUnapproved(t *
 		},
 	})
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	// First tick: opens the row but must not notify yet (within 30m threshold).
 	listener.ReconcilePRPending(ctx, er)
@@ -307,7 +309,7 @@ func TestReconcilePRPending_should_resolvePRReadyRow_When_PRMerged(t *testing.T)
 
 	item := newPRPendingTestItem(t, storage, 148)
 	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/pr-ready-merged", "")
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "PR is green & mergeable")
 	require.NoError(t, err)
 	require.True(t, applied)
@@ -339,7 +341,7 @@ func TestReconcilePRPending_should_resolvePRReadyRow_When_NewCommitClearsReadine
 	ctx := context.Background()
 
 	item := newPRPendingTestItem(t, storage, 148)
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "PR is green & mergeable")
 	require.NoError(t, err)
 	require.True(t, applied)
@@ -385,7 +387,7 @@ func TestReconcileStuckReviewItems_should_markAbandoned_When_OnlyActiveSessionIs
 	listener.SetNotifier(notifier)
 	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // always dead
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.reconcileStuckReviewItems(ctx, er)
 
 	open, err := er.FindOpenStuckStates(ctx)
@@ -412,7 +414,7 @@ func TestReconcileStuckReviewItems_should_tombstoneZombieSession_When_ConfirmedD
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // always dead
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.reconcileStuckReviewItems(ctx, er)
 
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
@@ -435,7 +437,7 @@ func TestReconcileStuckReviewItems_should_notMarkAbandoned_When_ActiveSessionSti
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // always alive
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.reconcileStuckReviewItems(ctx, er)
 
 	open, err := er.FindOpenStuckStates(ctx)
@@ -471,7 +473,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewS
 		return !strings.HasPrefix(sessionUUID, "headless-review-")
 	})
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
@@ -508,7 +510,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStil
 		listener := NewBacklogLifecycleListener(storage)
 		listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive
 
-		er := storage.repo.(*EntRepository)
+		er := storage.repo
 		listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 
 		fetched, err := storage.GetBacklogItem(ctx, item.ID)
@@ -522,7 +524,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStil
 		defer cleanup()
 		ctx := context.Background()
 
-		er := storage.repo.(*EntRepository)
+		er := storage.repo
 		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictFail, reviewVerdictIdleThreshold+time.Hour)
 
 		listener := NewBacklogLifecycleListener(storage)
@@ -555,7 +557,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStil
 		defer cleanup()
 		ctx := context.Background()
 
-		er := storage.repo.(*EntRepository)
+		er := storage.repo
 		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictFail, reviewVerdictIdleThreshold-time.Minute)
 
 		listener := NewBacklogLifecycleListener(storage)
@@ -581,7 +583,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStil
 		defer cleanup()
 		ctx := context.Background()
 
-		er := storage.repo.(*EntRepository)
+		er := storage.repo
 		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictPass, reviewVerdictIdleThreshold+time.Hour)
 
 		// A work session so the PASS verdict has something to ship — mirrors
@@ -636,7 +638,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_skipStaleVerdict_When_ItemRee
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // everything dead
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 	shipped, err := storage.GetBacklogItem(ctx, item.ID)
@@ -706,7 +708,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_invokeAutoReopener_When_Newes
 	reopener := newFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 
 	select {
@@ -726,6 +728,92 @@ func TestReconcileUnprocessedReviewVerdicts_should_invokeAutoReopener_When_Newes
 	}
 }
 
+// TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRepeatedSweepTicksWhileBouncingBlocked
+// is a follow-up BUG-046 regression test: BUG-046 fixed handleReviewSessionExited's
+// own notify+log for a no-verdict exit to check RemediationBlocked(bouncing) first,
+// but this sweep's OWN detection log — fired here, before
+// handleReviewSessionExited is even reached — was never covered by that guard.
+// Live-confirmed 2026-09-11: item 09e91e3e-e13d-4166-a5f2-447242447f77 / session
+// 7ce35db9 logged "exited without ever writing a verdict" once a minute for 20+
+// minutes straight (Story: same dead SessionUUID re-matched every ~60s tick
+// because nothing transitions the item out of "review" while the "bouncing"
+// gate is blocked/parked). Reproduces the realistic timeline: tick 1 fires
+// before any "bouncing" row exists (a genuinely fresh detection — must log),
+// then a "bouncing" row opens mid-backoff between ticks (mirroring
+// reconcileBouncingItems tripping independently, the same live DB shape
+// TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSweepTicks
+// seeds), then tick 2 reprocesses the identical dead SessionUUID with the gate
+// now blocked and must NOT log the detection line a second time.
+func TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRepeatedSweepTicksWhileBouncingBlocked(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// FindReviewItemsWithUnprocessedVerdict's item-level filter requires SOME
+	// review-role session on the item to have a verdict — newStuckReviewTestItem
+	// (older, dead, FAIL-verdicted review session) satisfies that, mirroring
+	// TestReconcileUnprocessedReviewVerdicts_should_invokeAutoReopener_When_NewestReviewSessionHasNoVerdictButIsDead's
+	// identical fixture shape. A newer, dead, verdict-less review session on top
+	// of it is what actually exercises this test's target: the "latest" the
+	// sweep inspects has no verdict of its own.
+	item := newStuckReviewTestItem(t, storage, ReviewVerdictFail, true, false)
+
+	newerReviewUUID := "headless-review-" + uuid.New().String()
+	_, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: newerReviewUUID,
+		SessionRole: SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // everything dead
+	reopener := newFakeAutoReopenSpawner()
+	listener.SetAutoReopener(reopener)
+	er := storage.repo
+
+	const detectionMsg = "exited without ever writing a verdict"
+
+	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
+	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
+
+	// Sweep tick 1: no "bouncing" row exists yet, so RemediationBlocked reports
+	// false (ungated default) — a genuinely fresh detection, must log and reach
+	// the auto-reopener (which is itself ungated for the same reason).
+	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+	select {
+	case <-reopener.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for AutoReopenAfterFailedReview on tick 1 (ungated — no bouncing row yet)")
+	}
+	assert.Equal(t, 1, strings.Count(buf.String(), detectionMsg),
+		"tick 1 is a fresh detection and must log the WARNING once")
+
+	// Between ticks: a "bouncing" stuck row opens mid-backoff — mirrors
+	// reconcileBouncingItems tripping its own bounceThreshold independently.
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusReview, "bounced previously")
+	require.NoError(t, err)
+	future := time.Now().Add(2 * time.Hour)
+	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, 1, &future)
+	require.NoError(t, err)
+
+	// Sweep tick 2: the item never left "review" (nothing transitioned it), so
+	// the SAME dead SessionUUID is reprocessed. The bouncing gate is now
+	// mid-backoff, so the reopen correctly no-ops, and the detection log must
+	// not fire a second time either.
+	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+	select {
+	case gotItemID := <-reopener.called:
+		t.Fatalf("bouncing gate is mid-backoff on tick 2 — AutoReopenAfterFailedReview must not be invoked, got call for item=%s", gotItemID)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	assert.Equal(t, 1, strings.Count(buf.String(), detectionMsg),
+		"must not log the detection WARNING a second time for the same dead session once the bouncing gate is blocking")
+}
+
 // TestReconcileStuckReviewItems_should_resolveAbandonedRow_When_ReviewGateBackInFlightWhileStillReview
 // is the C2 regression test for abandoned_review: when the review gate comes
 // back in flight (a new active session appears) while the item is still
@@ -741,7 +829,7 @@ func TestReconcileStuckReviewItems_should_resolveAbandonedRow_When_ReviewGateBac
 	item := newStuckReviewTestItem(t, storage, ReviewVerdictUnverifiable, true, false)
 
 	listener := NewBacklogLifecycleListener(storage)
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	listener.reconcileStuckReviewItems(ctx, er)
 	open, err := er.FindOpenStuckStates(ctx)
@@ -771,7 +859,7 @@ func TestReconcileStaleWorkSessions_should_writeDurableStaleWorkRow_When_ActiveS
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newStaleWorkTestItem(t, storage, er)
 
@@ -787,6 +875,10 @@ func TestReconcileStaleWorkSessions_should_writeDurableStaleWorkRow_When_ActiveS
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonStaleWork, open[0].Reason)
 	assert.Equal(t, []string{"Work session may be stuck"}, notifier.titles())
+	// Push-gate classification table: neither urgent nor important — a routine
+	// self-monitoring poll, not yet a confirmed dead end.
+	assert.False(t, notifier.calls[0].Urgent, "Work session may be stuck must not be urgent")
+	assert.False(t, notifier.calls[0].Important, "Work session may be stuck must not be important")
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcileStaleWorkSessions(ctx, er)
@@ -802,7 +894,7 @@ func TestReconcileStaleWorkSessions_should_resolveStaleWorkRow_When_SessionResum
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newStaleWorkTestItem(t, storage, er)
 
@@ -866,7 +958,7 @@ func TestReconcileStaleWorkSessions_should_notRemediateOnFirstSighting_When_RowJ
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	newStaleWorkTestItem(t, storage, er)
 
@@ -898,7 +990,7 @@ func TestReconcileStaleWorkSessions_should_dispatchRemediation_When_RowAlreadyOp
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newStaleWorkTestItem(t, storage, er)
 
@@ -914,7 +1006,7 @@ func TestReconcileStaleWorkSessions_should_dispatchRemediation_When_RowAlreadyOp
 	// is already open, so this tick must dispatch remediation.
 	listener.reconcileStaleWorkSessions(ctx, er)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		select {
 		case itemID := <-remediator.calls:
 			return itemID == item.ID
@@ -923,7 +1015,7 @@ func TestReconcileStaleWorkSessions_should_dispatchRemediation_When_RowAlreadyOp
 		}
 	}, time.Second, 10*time.Millisecond, "remediation must be dispatched once the row is already open and still due")
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		rows, findErr := er.FindOpenStuckStates(ctx)
 		return findErr == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
 	}, time.Second, 10*time.Millisecond, "RemediationDue's attempt accounting must advance exactly once")
@@ -939,7 +1031,7 @@ func TestRemediateStaleWorkWithBackoffGate_should_respectBackoffSchedule_When_Ca
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newStaleWorkTestItem(t, storage, er)
 
@@ -955,7 +1047,7 @@ func TestRemediateStaleWorkWithBackoffGate_should_respectBackoffSchedule_When_Ca
 		listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		rows, err := er.FindOpenStuckStates(ctx)
 		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
 	}, time.Second, 10*time.Millisecond, "only the first of 10 back-to-back calls should consume an attempt")
@@ -971,7 +1063,7 @@ func TestReconcileStaleWorkSessions_should_notTouchHealthySession_When_ProgressI
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Healthy in-progress item",
@@ -1026,7 +1118,7 @@ func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_Rewo
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	unlimited := 0
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
@@ -1057,7 +1149,7 @@ func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_Rewo
 
 	for attempt := 1; attempt <= 5; attempt++ {
 		listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			rows, findErr := er.FindOpenStuckStates(ctx)
 			return findErr == nil && len(rows) == 1 && rows[0].RemediationAttempts == int32(attempt)
 		}, time.Second, 10*time.Millisecond, "attempt %d must be recorded", attempt)
@@ -1119,7 +1211,7 @@ func TestReconcileReworkBlockedStaleResolution_should_delegateToResolver_When_Op
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Item blocked by a stale-but-alive session",
@@ -1148,7 +1240,7 @@ func TestReconcileReworkBlockedStaleResolution_should_beNoOp_When_NoOpenRows(t *
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	listener := NewBacklogLifecycleListener(storage)
 	resolver := &fakeReworkBlockStaleResolver{}
@@ -1168,7 +1260,7 @@ func TestReconcileReworkBlockedStaleResolution_should_beNoOp_When_ResolverNotWir
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	listener := NewBacklogLifecycleListener(storage)
 
@@ -1205,7 +1297,7 @@ func TestReconcileRespawnBlockedActiveResolution_should_resolveRow_When_Blocking
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Item stuck abandoned_review, its abandoned_review remediation now parked",
@@ -1250,7 +1342,7 @@ func TestReconcileRespawnBlockedActiveResolution_should_leaveRowOpen_When_Blocki
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Item still genuinely blocked by an active work session",
@@ -1292,7 +1384,7 @@ func TestReconcileRespawnBlockedActiveResolution_should_beNoOp_When_NoOpenRows(t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	listener := NewBacklogLifecycleListener(storage)
 
@@ -1309,9 +1401,9 @@ func TestReconcileOrphanedTriageItems_should_writeDurableRowNotifyOnce_When_Tria
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
-	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour) // beyond maxWorkSessionStaleness (2h)
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
 	notifier := &fakeNotifier{}
@@ -1325,6 +1417,9 @@ func TestReconcileOrphanedTriageItems_should_writeDurableRowNotifyOnce_When_Tria
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
 	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+	// Push-gate classification table: neither urgent nor important.
+	assert.False(t, notifier.calls[0].Urgent, "Triage may be stuck must not be urgent")
+	assert.False(t, notifier.calls[0].Important, "Triage may be stuck must not be important")
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -1342,9 +1437,9 @@ func TestReconcileOrphanedTriageItems_should_tombstoneStaleSession_When_Detected
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
-	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour) // beyond maxWorkSessionStaleness (2h)
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -1355,12 +1450,49 @@ func TestReconcileOrphanedTriageItems_should_tombstoneStaleSession_When_Detected
 	assert.NotNil(t, sessions[0].EndedAt, "a confirmed-stale triage session must be tombstoned, not left open indefinitely")
 }
 
+// TestReconcileOrphanedTriageItems_should_notFlag_When_OpenGuidanceRequestExists
+// covers durable-guidance-request AC2/Story 5.1.3: a triage session that has
+// gone stale (or ended without a plan) but deliberately halted behind an open
+// GuidanceRequest for this item must not be tombstoned/MarkStuck-ed as an
+// anomaly — that would retry-with-backoff-penalize a legitimately-halted item
+// and defeat the halt.
+func TestReconcileOrphanedTriageItems_should_notFlag_When_OpenGuidanceRequestExists(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond staleness, would normally be flagged
+	itemID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	_, err = storage.CreateGuidanceRequest(ctx, CreateGuidanceRequestInput{
+		Scope:        domain.RequestScopeBacklogItem,
+		ItemID:       &itemID,
+		QuestionText: "Should this include the mobile client changes?",
+		QuestionType: domain.QuestionTypeYesNo,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Nil(t, sessions[0].EndedAt, "a triage session halted behind an open GuidanceRequest must not be tombstoned")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "an item halted behind an open GuidanceRequest must not be marked stuck")
+}
+
 func TestReconcileOrphanedTriageItems_should_notFlag_When_TriageSessionRecent(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	// A triage session that just started (well within maxWorkSessionStaleness)
 	// must not be flagged — it is plausibly still running.
@@ -1374,22 +1506,29 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_TriageSessionRecent(t 
 	assert.Empty(t, open, "a recently-started triage session must not be flagged as orphaned")
 }
 
-// TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min is the
-// regression test for closing the "triage session died before submit_triage_result,
-// item silently stuck in idea for up to 2h" gap (GAP-20/21): a headless-triage session
-// (the common execution path) must be flagged well before the general-purpose 2h
-// staleness ceiling, since an open headless row reliably means dead, not slow.
-func TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min(t *testing.T) {
+// TestReconcileOrphanedTriageItems_should_notFlagHeadlessSession_BeforeItsOwnLongerThreshold
+// guards headless triage sessions' dedicated staleness threshold in the OTHER direction
+// from its original 2026-08-01 intent: originally (30m real call budget) the headless
+// threshold was much SHORTER than the general-purpose maxWorkSessionStaleness (2h), so this
+// test proved headless sessions got flagged sooner, not held to the slower general ceiling.
+// 2026-09-08 (this session) raised triageCallBudget to 3h alongside headless.idleTimeout
+// becoming the primary hang defense, which pushed maxHeadlessTriageSessionStaleness (now
+// 3h15m, kept in sync per TestMaxHeadlessTriageSessionStaleness_..._ExceedRealTriageCallBudgetWithMargin
+// below) past the general 2h ceiling — inverting the relationship. This test now guards the
+// inverse regression: a headless session must NOT be flagged merely for outliving the
+// general-purpose 2h threshold; it still gets its own (now longer) dedicated patience.
+func TestReconcileOrphanedTriageItems_should_notFlagHeadlessSession_BeforeItsOwnLongerThreshold(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
-	// 45 minutes: past maxHeadlessTriageSessionStaleness (30m) but nowhere near the
-	// general-purpose maxWorkSessionStaleness (2h) — would NOT have been flagged
-	// before this fix.
-	item := newOrphanedTriageTestItem(t, storage, er, 45*time.Minute)
+	// 2h30m: past the general-purpose maxWorkSessionStaleness (2h) but still short of
+	// maxHeadlessTriageSessionStaleness (3h15m) — must NOT be flagged if the headless
+	// override is still correctly applied instead of silently falling through to the
+	// shorter general threshold.
+	newOrphanedTriageTestItem(t, storage, er, 2*time.Hour+30*time.Minute)
 
 	listener := NewBacklogLifecycleListener(storage)
 	notifier := &fakeNotifier{}
@@ -1399,10 +1538,8 @@ func TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min(t *t
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	require.Len(t, open, 1, "a headless triage session at 45m must be flagged, not held to the 2h general-purpose threshold")
-	assert.Equal(t, item.ID, open[0].ItemID)
-	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
-	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+	assert.Empty(t, open, "a headless session at 2h30m must not be flagged — it hasn't reached its own (longer) dedicated threshold yet")
+	assert.Empty(t, notifier.titles())
 }
 
 // TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionStaleButGenuinelyLive
@@ -1417,11 +1554,11 @@ func TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionSt
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
-	// 45 minutes: past maxHeadlessTriageSessionStaleness (35m) — would have been
-	// tombstoned unconditionally before this fix.
-	item := newOrphanedTriageTestItem(t, storage, er, 45*time.Minute)
+	// 4 hours: past maxHeadlessTriageSessionStaleness (3h15m) — would have been
+	// tombstoned unconditionally before BUG-055's fix.
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour)
 
 	listener := NewBacklogLifecycleListener(storage)
 	notifier := &fakeNotifier{}
@@ -1445,14 +1582,14 @@ func TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionSt
 
 // TestMaxHeadlessTriageSessionStaleness_should_ExceedRealTriageCallBudgetWithMargin guards
 // the exact margin regression named in BUG-055: this constant must stay strictly greater
-// than server/services.triageCallBudget (currently 30m — kept as a literal here rather than
+// than server/services.triageCallBudget (currently 3h — kept as a literal here rather than
 // imported, since session cannot depend on server/services) with real headroom, or every
 // slow-but-legitimate headless triage call races this sweep's staleness gate again,
 // regardless of how good IsTriageLive's liveness check is. If server/services.triageCallBudget
 // ever changes, this literal and the one there must be updated together.
 func TestMaxHeadlessTriageSessionStaleness_should_ExceedRealTriageCallBudgetWithMargin(t *testing.T) {
 	t.Parallel()
-	const knownTriageCallBudget = 30 * time.Minute
+	const knownTriageCallBudget = 3 * time.Hour
 	const minMargin = 2 * time.Minute
 	assert.Greater(t, maxHeadlessTriageSessionStaleness, knownTriageCallBudget+minMargin,
 		"maxHeadlessTriageSessionStaleness must exceed the real triage call budget with real margin, not race it")
@@ -1475,7 +1612,7 @@ func TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionE
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newEndedTriageTestItem(t, storage, er)
 
@@ -1515,7 +1652,7 @@ func TestReconcileOrphanedTriageItems_should_surfaceEndReasonInContext_When_Tria
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:              "Process-error-ended triage test item",
@@ -1558,7 +1695,7 @@ func TestReconcileOrphanedTriageItems_should_fallBackToUnknown_When_EndReasonNev
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newEndedTriageTestItem(t, storage, er) // ends via UpdateItemSessionEnded, no reason recorded
 
@@ -1591,7 +1728,7 @@ func TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_Whe
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:              "Shutdown-orphaned triage test item",
@@ -1642,7 +1779,7 @@ func TestReconcileOrphanedTriageItems_should_preferNewerOpenSession_When_OlderEn
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newEndedTriageTestItem(t, storage, er) // older session: ended, no transition
 
@@ -1672,7 +1809,7 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_NoTriageSessionEverRan
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	_, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Never triaged item",
@@ -1702,7 +1839,7 @@ func TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRo
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newEndedTriageTestItem(t, storage, er)
 
@@ -1767,9 +1904,9 @@ func TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGa
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
-	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour)
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetNotifier(&fakeNotifier{})
@@ -1786,7 +1923,7 @@ func TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGa
 		t.Fatal("expected AutoRespawnTriage to be dispatched for the due row")
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		rows, err := er.FindOpenStuckStates(ctx)
 		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
 	}, time.Second, 10*time.Millisecond, "the dispatched attempt must advance RemediationDue's own accounting")
@@ -1801,7 +1938,7 @@ func TestReconcileOrphanedTriageRemediation_should_skip_When_ItemNoLongerIdea(t 
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Orphaned triage item no longer idea",
@@ -1879,7 +2016,7 @@ func TestReconcileOrphanedTriageItems_should_flagQueuedItem_When_TriageResultUnu
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newQueuedNoTriageResultTestItem(t, storage)
 
@@ -1913,7 +2050,7 @@ func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_TriageResult
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:              "Queued item with a real plan",
@@ -1955,7 +2092,7 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_QueuedItemHasOpenTriag
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:              "Queued item with an unexpected open triage session",
@@ -2003,7 +2140,7 @@ func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_SkipPlanning
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	for _, tc := range []struct {
 		name         string
@@ -2050,7 +2187,7 @@ func TestReconcileOrphanedTriageRemediation_should_retryQueuedRow_When_Due(t *te
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newQueuedNoTriageResultTestItem(t, storage)
 	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusQueued, "no usable triage result")
@@ -2084,7 +2221,7 @@ func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_QueuedItemReachesRea
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newQueuedNoTriageResultTestItem(t, storage)
 	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusQueued, "no usable triage result")
@@ -2122,7 +2259,7 @@ func TestRetryOrphanedTriageWithBackoffGate_should_respectBackoffSchedule_When_C
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Orphaned triage backoff test item",
@@ -2142,7 +2279,7 @@ func TestRetryOrphanedTriageWithBackoffGate_should_respectBackoffSchedule_When_C
 		listener.retryOrphanedTriageWithBackoffGate(ctx, item.ID, item.Title)
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		rows, err := er.FindOpenStuckStates(ctx)
 		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
 	}, time.Second, 10*time.Millisecond, "only the first of 10 back-to-back calls should consume an attempt")
@@ -2153,7 +2290,7 @@ func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_ItemLeavesIdea(t *te
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Orphaned triage item that got re-triggered",
@@ -2301,6 +2438,43 @@ func TestReconcileTerminalItemSessions_should_ArchiveAndKillReviewSession_When_I
 
 	assert.Contains(t, archiver.archivedUUIDs, "leaked-live-review-session")
 	assert.Contains(t, archiver.killedUUIDs, "leaked-live-review-session")
+}
+
+// TestReconcileTerminalItemSessions_should_SkipTmuxKill_When_ItemSessionRoleIsJulesWork
+// guards Story 2.1.1: a Jules session has no local tmux pane (IsTmuxBackedSessionRole
+// excludes SessionRoleJulesWork), so the sweep must not attempt to archive/kill it —
+// only log-and-skip — and the item must stay "done".
+func TestReconcileTerminalItemSessions_should_SkipTmuxKill_When_ItemSessionRoleIsJulesWork(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with one ended jules_work session",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "jules-sessions/ended-jules-session",
+		SessionRole: SessionRoleJulesWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Empty(t, archiver.archivedUUIDs, "jules_work session must never be handed to the tmux archiver")
+	assert.Empty(t, archiver.killedUUIDs, "jules_work session has no tmux pane to kill")
+
+	reloaded, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), reloaded.Status, "item must stay done")
 }
 
 func TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlreadyArchived(t *testing.T) {
@@ -2462,7 +2636,7 @@ func TestCountReviewCyclesSince_should_countInProgressToReviewTransitions_When_W
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bouncing cycle count test item",
@@ -2497,7 +2671,7 @@ func TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCycl
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bouncing item",
@@ -2544,7 +2718,7 @@ func TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bouncing item with failed verdict",
@@ -2598,7 +2772,7 @@ func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	// Below threshold: only 2 cycles.
 	belowThreshold, err := storage.CreateBacklogItem(ctx, BacklogItemData{
@@ -2660,7 +2834,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:    "Bouncing item with merged PR",
@@ -2715,7 +2889,7 @@ func TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingRe
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:    "Bouncing item, capped, with merged PR",
@@ -2782,7 +2956,7 @@ func TestReconcileBouncingItems_should_recordPassVerdictAndUseLegalEdges_When_Li
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:    "Bouncing item with merged PR, verdict gate check",
@@ -2845,7 +3019,7 @@ func TestReconcileBouncingItems_should_recordPassVerdictAndUseLegalEdges_When_Li
 // as BUG-030/040/041/046/048, and this fix's originally-reported findings):
 // reconcileBouncingItems confirms the linked PR is already merged, then its
 // own TransitionBacklogItemStatus(done) call can fail — previously that
-// failure was only log.WarningLog.Printf'd, leaving the item bouncing forever
+// failure was only log.WarningLog().Printf'd, leaving the item bouncing forever
 // with code that had already shipped and nothing else surfacing the mismatch.
 //
 // The precondition failure is forced deterministically (not via a real
@@ -2858,7 +3032,7 @@ func TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitio
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:    "Bouncing item with merged PR, concurrent status race",
@@ -2919,7 +3093,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_LinkedPRNotYetMerged(t *te
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:    "Bouncing item with open PR",
@@ -3001,7 +3175,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR(t 
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	repoPath, mainSHA := setupBounceMainRepo(t)
 
@@ -3068,7 +3242,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_NoPRAndCommitNotOnMain(t *
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	repoPath, _ := setupBounceMainRepo(t)
 	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
@@ -3143,7 +3317,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_LastCommitShaIsStaleBaseSe
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	repoPath, mainSHA := setupBounceMainRepo(t)
 	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
@@ -3223,7 +3397,7 @@ func TestReconcileBouncingItems_should_notTreatFreshBranchBaseAsShipped_When_Zer
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	repoPath, mainSHA := setupBounceMainRepo(t)
 	// A feature branch created from main's tip with zero commits of its own —
@@ -3298,7 +3472,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_WorktreePathWasRecycledToA
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	repoPath, _ := setupBounceMainRepo(t)
 	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
@@ -3380,7 +3554,7 @@ func TestReconcileBouncingItems_should_stillTransitionToDone_When_WorkCommittedD
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	repoPath, mainSHA := setupBounceMainRepo(t)
 
@@ -3445,7 +3619,7 @@ func TestStayInReviewAndNotify_should_markPushFailedRow_When_PushAndCreatePRFail
 
 	assert.Contains(t, notifier.titles(), "PR creation failed", "existing ERROR toast must still fire")
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	require.Len(t, open, 1)
@@ -3515,7 +3689,7 @@ func TestAttemptPushRemediation_should_resolveStuckRow_When_MergeSucceedsAndRetr
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 
@@ -3545,7 +3719,7 @@ func TestAttemptPushRemediation_should_resolveStuckRow_When_MergeSucceedsAndRetr
 		return &git.MergeMainResult{Merged: true}, nil
 	})
 
-	listener.attemptPushRemediation(ctx, item.ID, item.Title)
+	listener.attemptPushRemediation(ctx, item.ID, item.Title, "push failed: push rejected: non-fast-forward")
 
 	assert.True(t, fakeCreator.pushCalled, "the retried push must actually be attempted")
 	assert.True(t, fakeCreator.createCalled, "PR creation should proceed once the push succeeds")
@@ -3570,7 +3744,7 @@ func TestAttemptPushRemediation_should_notifyManualRebaseNeeded_When_BranchRecon
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 
@@ -3588,7 +3762,7 @@ func TestAttemptPushRemediation_should_notifyManualRebaseNeeded_When_BranchRecon
 		return &git.MergeMainResult{Conflicted: true, ConflictedFiles: []string{"src/edit.ts"}}, nil
 	})
 
-	listener.attemptPushRemediation(ctx, item.ID, item.Title)
+	listener.attemptPushRemediation(ctx, item.ID, item.Title, "push failed: push rejected: non-fast-forward")
 
 	assert.False(t, fakeCreator.pushCalled, "a real content conflict must not be mechanically retried")
 	assert.Contains(t, notifier.titles(), "Manual rebase needed")
@@ -3597,6 +3771,95 @@ func TestAttemptPushRemediation_should_notifyManualRebaseNeeded_When_BranchRecon
 	require.NoError(t, err)
 	require.Len(t, open, 1)
 	assert.Equal(t, domain.StuckReasonPushFailed, open[0].Reason, "row stays open — a human needs to resolve the real conflict")
+}
+
+// TestIsNonFastForwardRecoverable_should_returnFalse_When_KnownUnrecoverableSignature
+// and its companion below cover isNonFastForwardRecoverable, the classifier
+// backing docs/tasks/backlog-feature-improvement.md's "attemptPushRemediation
+// only handles non-fast-forward rejections and otherwise reruns the
+// identical failing pushAndCreatePR call" finding: an auth/permission/
+// branch-protection failure cannot be fixed by attemptPushRemediation's only
+// remediation action (fetch+merge+retry), so it must be recognized and
+// skipped rather than blindly retried forever.
+func TestIsNonFastForwardRecoverable_should_returnFalse_When_KnownUnrecoverableSignature(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"push failed: remote: Permission denied to user (403)",
+		"push failed: fatal: Authentication failed for 'https://github.com/x/y.git'",
+		"push failed: remote: error: GH006: Protected branch update failed",
+		"PR creation failed: HTTP 401: Bad credentials",
+	}
+	for _, c := range cases {
+		assert.False(t, isNonFastForwardRecoverable(c), "expected %q to be classified unrecoverable-by-merge", c)
+	}
+}
+
+// TestIsNonFastForwardRecoverable_should_returnTrue_When_FastForwardOrUnknown
+// verifies the fail-open default: a genuine non-fast-forward rejection, and
+// anything this classifier doesn't recognize at all, must still be treated
+// as recoverable (attempt the merge+retry) rather than skipped — see the
+// function's own doc comment on why a false "unrecoverable" is worse than
+// one extra harmless retry.
+func TestIsNonFastForwardRecoverable_should_returnTrue_When_FastForwardOrUnknown(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"push failed: push rejected: non-fast-forward",
+		"push failed: ! [rejected] backlog/foo -> backlog/foo (fetch first)",
+		"",
+		"push failed: some completely unclassified transient network blip",
+	}
+	for _, c := range cases {
+		assert.True(t, isNonFastForwardRecoverable(c), "expected %q to be classified recoverable (fail-open)", c)
+	}
+}
+
+// TestAttemptPushRemediation_should_skipRetryAndNotifyDistinctly_When_FailureLooksUnrecoverable
+// is the integration-level counterpart: attemptPushRemediation must not call
+// the branch reconciler (or push again) at all when the recorded push_failed
+// context matches a known unrecoverable-by-merge signature — it must
+// instead surface a distinct, differently-titled notification explaining
+// why, so an operator isn't shown the same generic "PR creation failed"
+// toast on every backoff tick with no new information.
+func TestAttemptPushRemediation_should_skipRetryAndNotifyDistinctly_When_FailureLooksUnrecoverable(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{pushErr: errors.New("remote: Permission denied (403)")}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	listener.pushAndCreatePR(ctx, item, is)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	require.Equal(t, domain.StuckReasonPushFailed, open[0].Reason)
+
+	reconcilerCalled := false
+	listener.SetBranchReconciler(func(worktreePath, branchName string) (*git.MergeMainResult, error) {
+		reconcilerCalled = true
+		return &git.MergeMainResult{Merged: true}, nil
+	})
+	fakeCreator.pushCalled = false
+
+	listener.attemptPushRemediation(ctx, item.ID, item.Title, open[0].Context)
+
+	assert.False(t, reconcilerCalled, "a permission/auth failure cannot be fixed by fetch+merge — the reconciler must not even be invoked")
+	assert.False(t, fakeCreator.pushCalled, "the push must not be blindly retried against an unrecoverable failure")
+	assert.Contains(t, notifier.titles(), "Automated push retry skipped", "expected a distinct notification, not silence or a repeat of the generic push-failed toast")
+
+	stillOpen, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, stillOpen, 1)
+	assert.Equal(t, domain.StuckReasonPushFailed, stillOpen[0].Reason, "row stays open — a human needs to fix the underlying auth/permission issue")
 }
 
 // TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly
@@ -3608,7 +3871,7 @@ func TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_Calle
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 	listener := NewBacklogLifecycleListener(storage)
@@ -3628,10 +3891,10 @@ func TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_Calle
 	})
 
 	for i := 0; i < 10; i++ {
-		listener.retryPushFailedWithBackoffGate(ctx, item.ID, item.Title)
+		listener.retryPushFailedWithBackoffGate(ctx, item.ID, item.Title, "push failed: push rejected: non-fast-forward")
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		rows, err := er.FindOpenStuckStates(ctx)
 		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
 	}, time.Second, 10*time.Millisecond, "only the first of 10 back-to-back calls should consume an attempt")
@@ -3649,7 +3912,7 @@ func TestReconcilePushFailedItems_should_dispatchRetryThroughBackoffGate_When_Ro
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 	listener := NewBacklogLifecycleListener(storage)
@@ -3667,7 +3930,7 @@ func TestReconcilePushFailedItems_should_dispatchRetryThroughBackoffGate_When_Ro
 
 	listener.reconcilePushFailedItems(ctx, er)
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		fetched, err := storage.GetBacklogItem(ctx, item.ID)
 		return err == nil && fetched.Status == string(BacklogStatusPRPending)
 	}, 2*time.Second, 10*time.Millisecond, "the periodic sweep must dispatch a retry that eventually ships the item")
@@ -3682,7 +3945,7 @@ func TestReconcilePushFailedItems_should_skip_When_ItemNoLongerInReview(t *testi
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 	listener := NewBacklogLifecycleListener(storage)
@@ -3717,7 +3980,7 @@ func TestSelfHealSweep_should_resolveAnchoredRow_When_ItemStatusInconsistentWith
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Phantom stale_work item",
@@ -3745,7 +4008,7 @@ func TestSelfHealSweep_should_notResolveBouncingRow_When_ItemInInProgressHealthy
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bouncing item mid-cycle",
@@ -3772,7 +4035,7 @@ func TestSelfHealSweep_should_resolveBouncingRow_When_ItemReachesDoneOrPass(t *t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bouncing item converged",
@@ -3805,7 +4068,7 @@ func TestSelfHealStuck_should_ResolveBounceCapExhausted_When_ItemStatusLeavesInP
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bounce cap exhausted item now pr_pending",
@@ -3832,7 +4095,7 @@ func TestSelfHealStuck_should_notResolveBounceCapExhaustedRow_When_ItemStillInRe
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bounce cap exhausted item still in review",
@@ -3865,7 +4128,7 @@ func TestSelfHealSweep_should_notResolveEventShapedRows_When_ItemNotYetTerminal(
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Event-shaped rows item",
@@ -3894,7 +4157,7 @@ func TestSelfHealSweep_should_resolvePhantomRow_When_WriteRacedTransitionToDone(
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	// Simulate the race: item is created in_progress, a stale_work row is
 	// marked while the precondition read still shows in_progress, then the
@@ -3965,7 +4228,7 @@ func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
 				storage, cleanup := createTestStorage(t)
 				defer cleanup()
 				ctx := context.Background()
-				er := storage.repo.(*EntRepository)
+				er := storage.repo
 
 				item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 					Title:  "Terminal blanket-rule item: " + tc.name,
@@ -3998,6 +4261,42 @@ func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
 	}
 }
 
+// TestSelfHealSweep_should_ResolveAnyReasonRow_When_ItemReachesConfiguredCustomTerminalStage
+// is the Story 2.1.3 (Task 2.1.3d) regression test for selfHealStuck's
+// re-route to session.IsTerminalStatus: an operator-configured custom stage
+// marked IsTerminal (simulated here via SetTerminalStatusChecker, standing in
+// for Epic 2.3's not-yet-built ConfiguredWorkflowEngine) must trigger the
+// same blanket terminal rule as built-in done/archived.
+func TestSelfHealSweep_should_ResolveAnyReasonRow_When_ItemReachesConfiguredCustomTerminalStage(t *testing.T) {
+	const customTerminal = BacklogStatus("legal-review")
+	SetTerminalStatusChecker(func(s BacklogStatus) bool { return s == customTerminal })
+	t.Cleanup(func() { SetTerminalStatusChecker(nil) })
+
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Terminal blanket-rule item: custom stage",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonStaleWork, BacklogStatusInProgress, "test-marked stuck")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, customTerminal, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "stuck row must resolve once the item reaches a configured custom terminal stage, via the blanket terminal rule")
+}
+
 // TestSelfHealSweep_should_resolveReworkCapRow_When_ItemReachesDone is the
 // direct, narrow regression test for the bug this PR closes: rework_cap was
 // the one StuckReason still sitting in the "event-shaped, continue" trap that
@@ -4011,7 +4310,7 @@ func TestSelfHealSweep_should_resolveReworkCapRow_When_ItemReachesDone(t *testin
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Rework-cap item that finished",
@@ -4048,7 +4347,7 @@ func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemStillInProgr
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Autonomous item still stuck",
@@ -4084,7 +4383,7 @@ func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyI
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Autonomous item mid-cycle",
@@ -4130,7 +4429,7 @@ func TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemStillInReview(t *
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Push-failed item still stuck",
@@ -4162,7 +4461,7 @@ func TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemTransientlyInProg
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Push-failed item mid-cycle",
@@ -4229,8 +4528,8 @@ func TestReconcilers_should_delegateThresholdDecisionsToPureFns_When_Reviewed(t 
 	now := time.Now()
 	assert.True(t, stuckPRReady(now.Add(-prReadyThreshold-time.Minute), now))
 	assert.True(t, abandonedReview(now.Add(-abandonedReviewGrace-time.Minute), now))
-	assert.True(t, staleWork(now.Add(-maxWorkSessionStaleness-time.Minute), now))
-	assert.True(t, isBouncing(bounceThreshold, false))
+	assert.True(t, staleWork(now.Add(-maxWorkSessionStaleness-time.Minute), now, maxWorkSessionStaleness))
+	assert.True(t, isBouncing(bounceThreshold, bounceThreshold, false))
 }
 
 // --- auto_archive_done: sweep that auto-archives backlog items 3+ days
@@ -4273,7 +4572,7 @@ func TestArchiveStaleDoneItems_should_ArchiveItem_When_DoneMoreThan3DaysAgo(t *t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newDoneTestItem(t, storage, er, maxDoneAge+time.Hour)
 
@@ -4290,7 +4589,7 @@ func TestArchiveStaleDoneItems_should_NotArchiveItem_When_DoneLessThan3DaysAgo(t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newDoneTestItem(t, storage, er, maxDoneAge-time.Hour)
 
@@ -4307,7 +4606,7 @@ func TestArchiveStaleDoneItems_should_BeIdempotent_When_RunTwice(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newDoneTestItem(t, storage, er, maxDoneAge+time.Hour)
 
@@ -4356,7 +4655,7 @@ func TestArchiveStaleDoneItems_should_DisappearFromDefaultBacklogView_When_AutoA
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	staleDone := newDoneTestItem(t, storage, er, maxDoneAge+time.Hour)
 	recentDone := newDoneTestItem(t, storage, er, time.Hour)
@@ -4416,7 +4715,7 @@ func TestReconcilePlanNotApprovedItems_should_writeDurableRowNotifyOnce_When_Que
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newQueuedPlanNotApprovedTestItem(t, storage, 10*time.Minute) // beyond planApprovalStaleness (5m)
 
@@ -4446,7 +4745,7 @@ func TestReconcilePlanNotApprovedItems_should_notFlag_When_QueuedRecently(t *tes
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	newQueuedPlanNotApprovedTestItem(t, storage, 1*time.Minute) // within planApprovalStaleness (5m)
 
@@ -4465,7 +4764,7 @@ func TestReconcilePlanNotApprovedItems_should_notFlag_When_SkipPlanningTrue(t *t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	queuedAt := time.Now().Add(-10 * time.Minute)
 	_, err := storage.CreateBacklogItem(ctx, BacklogItemData{
@@ -4499,7 +4798,7 @@ func TestReconcilePlanNotApprovedItems_should_notFlag_When_LatestTriageResultUnu
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newQueuedNoTriageResultTestItem(t, storage)
 	queuedAt := time.Now().Add(-10 * time.Minute)
@@ -4525,7 +4824,7 @@ func TestSelfHealSweep_should_resolvePlanNotApprovedRow_When_ItemLeavesQueued(t 
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newQueuedPlanNotApprovedTestItem(t, storage, 10*time.Minute)
 
@@ -4561,7 +4860,7 @@ func TestReconcilePRPendingWithoutPRItems_should_writeDurableRowNotifyOnce_When_
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:              "PR-pending-no-PR test item",
@@ -4597,7 +4896,7 @@ func TestReconcilePRPendingWithoutPRItems_should_notFlag_When_PrNumberSet(t *tes
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newPRPendingTestItem(t, storage, 152)
 	_ = item
@@ -4618,7 +4917,7 @@ func TestSelfHealSweep_should_resolvePRPendingNoPRRow_When_ItemLeavesPRPending(t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:              "PR-pending-no-PR self-heal test item",
@@ -4664,7 +4963,7 @@ func TestReconcileBlockedByDependencyResolution_should_resolveRow_When_BlockerHa
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	blocker, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker item"})
 	require.NoError(t, err)
@@ -4707,7 +5006,7 @@ func TestReconcileBlockedByDependencyResolution_should_leaveRowOpen_When_Blocker
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	blocker, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker item still in progress"})
 	require.NoError(t, err)
@@ -4751,7 +5050,7 @@ func TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_Th
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Multi-reason item",
@@ -4789,7 +5088,7 @@ func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillO
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Multi-reason item, dwell elapsed",
@@ -4817,6 +5116,9 @@ func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillO
 
 	require.Len(t, notifier.calls, 1)
 	assert.Equal(t, "Multiple stuck reasons open", notifier.calls[0].Title)
+	// Push-gate classification table: urgent and important.
+	assert.True(t, notifier.calls[0].Urgent, "Multiple stuck reasons open must be urgent")
+	assert.True(t, notifier.calls[0].Important, "Multiple stuck reasons open must be important")
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -4838,7 +5140,7 @@ func TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelow
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Multi-reason item, de-escalating",
@@ -4881,7 +5183,7 @@ func TestReconcileMultiReasonEscalation_should_ExcludeEscalationReasonsFromCount
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Self-reinforcement guard item",
@@ -4916,7 +5218,7 @@ func TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyCoupledBounc
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Coupled bouncing+abandoned_review item",
@@ -4953,7 +5255,7 @@ func TestReconcileMultiReasonEscalation_should_Escalate_When_CoupledPairPlusInde
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Coupled pair plus independent reason item",
@@ -4981,4 +5283,305 @@ func TestReconcileMultiReasonEscalation_should_Escalate_When_CoupledPairPlusInde
 	assert.Contains(t, row.Context, "bouncing")
 	assert.Contains(t, row.Context, "push_failed")
 	assert.NotContains(t, row.Context, "abandoned_review", "the coupled abandoned_review row must be excluded from the escalation context")
+}
+
+// --- Epic 1.4 (backlog-custom-workflow-stages): LivenessEngine wired into
+// reconcileOrphanedTriageItems, reconcileStaleWorkSessions, and
+// reconcileBouncingItems. Test names taken verbatim from validation.md's
+// "Story 1.4.1"/"Story 1.4.3" rows. ---
+
+// newOrphanedTriageTestItemWithMode is newOrphanedTriageTestItem plus a
+// pipelineMode, needed for Epic 1.4's per-(stage,mode) override regression
+// tests below — a separate helper rather than adding a parameter to
+// newOrphanedTriageTestItem, which many pre-Epic-1.4 tests already call
+// positionally.
+func newOrphanedTriageTestItemWithMode(t *testing.T, storage *Storage, er *EntRepository, ageAgo time.Duration, pipelineMode string) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Orphaned triage test item (mode=" + pipelineMode + ")",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+		PipelineMode:       pipelineMode,
+	})
+	require.NoError(t, err)
+
+	parsedItemID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	_, err = er.client.ItemSession.Create().
+		SetSessionUUID("headless-triage-" + uuid.New().String()).
+		SetSessionRole(string(SessionRoleTriage)).
+		SetBacklogItemID(parsedItemID).
+		SetCreatedAt(time.Now().Add(-ageAgo)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	return item
+}
+
+// TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_NoOverrideConfiguredAndSessionAgeUnder35Min
+// is Story 1.4.1's zero-regression happy path: with no LivenessEngine override
+// row configured (listener.livenessEngine left nil, matching every pre-Epic-1.4
+// call site), an sdd-mode item's open headless-triage session at 34m — still
+// under the flat 35m constant — is not marked stuck, exactly as before.
+func TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_NoOverrideConfiguredAndSessionAgeUnder35Min(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item := newOrphanedTriageTestItemWithMode(t, storage, er, 34*time.Minute, "sdd")
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
+	assert.False(t, ok, "34m-old session must not be flagged — unchanged from today's 35m constant")
+}
+
+// TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_SddModeOverrideRaisesThresholdPast40Min
+// is the concrete Milestone 1 fix (the 12 parked items this epic exists for): with a
+// ("idea","sdd") CachingLivenessEngine override row of ExpectedDuration=45m,
+// StalenessMargin=10m (StalenessThreshold=55m) configured, an sdd-mode item's session at
+// 40m — past the OLD flat 35m constant, but under the NEW 55m derived threshold — is not
+// marked stuck.
+func TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_SddModeOverrideRaisesThresholdPast40Min(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	repo := NewEntLivenessRepository(storage.GetEntClient())
+	mode := "sdd"
+	_, err := repo.Create(ctx, LivenessCreateInput{
+		StageSlug:    string(BacklogStatusIdea),
+		PipelineMode: &mode,
+		Definition: LivenessDefinition{
+			Kind:             LivenessKindDurationBudget,
+			ExpectedDuration: 45 * time.Minute,
+			StalenessMargin:  10 * time.Minute,
+		},
+	})
+	require.NoError(t, err)
+	engine, err := NewCachingLivenessEngine(repo)
+	require.NoError(t, err)
+
+	item := newOrphanedTriageTestItemWithMode(t, storage, er, 40*time.Minute, "sdd")
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.livenessEngine = engine
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
+	assert.False(t, ok, "40m-old sdd-mode session must not be flagged under the 55m derived threshold — this is the concrete fix for the 12 parked items")
+}
+
+// newStaleWorkTestItemWithAge is newStaleWorkTestItem plus a configurable
+// backdated last_progress_at and pipelineMode, needed for Epic 1.4's
+// per-(stage,mode) override regression tests below.
+func newStaleWorkTestItemWithAge(t *testing.T, storage *Storage, er *EntRepository, progressAgo time.Duration, pipelineMode string) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Stale work test item (mode=" + pipelineMode + ")",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		PipelineMode:       pipelineMode,
+	})
+	require.NoError(t, err)
+
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "work-" + uuid.New().String(),
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	parsedID, err := uuid.Parse(workIS.ID)
+	require.NoError(t, err)
+	stale := time.Now().Add(-progressAgo)
+	_, err = er.client.ItemSession.UpdateOneID(parsedID).SetLastProgressAt(stale).Save(ctx)
+	require.NoError(t, err)
+
+	return item
+}
+
+// TestReconcileStaleWorkSessions_should_NotMarkStuck_When_NoOverrideConfiguredAndProgressAgeUnder2Hours
+// is Story 1.4.3's zero-regression happy path for Shape B (stale_work): with no
+// LivenessEngine override configured, an in_progress item's active work session at
+// 1h59m — still under the flat 2h constant — is not marked stale, exactly as before.
+func TestReconcileStaleWorkSessions_should_NotMarkStuck_When_NoOverrideConfiguredAndProgressAgeUnder2Hours(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item := newStaleWorkTestItemWithAge(t, storage, er, 119*time.Minute, "sdd")
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileStaleWorkSessions(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonStaleWork)
+	assert.False(t, ok, "1h59m-old progress must not be flagged — unchanged from today's 2h constant")
+}
+
+// TestReconcileStaleWorkSessions_should_NotMarkStuckAndInterpolateResolvedDuration_When_SddModeOverrideRaisesThresholdPast2h1m
+// configures an ("in_progress","sdd") override of MaxNoProgressDuration=3h and confirms an
+// sdd-mode item's session at 2h1m — past the OLD flat 2h constant, under the NEW 3h override
+// — is not marked stale. Also proves the notify body interpolates the resolved 3h, not the
+// bare constant, once the item does cross it.
+func TestReconcileStaleWorkSessions_should_NotMarkStuckAndInterpolateResolvedDuration_When_SddModeOverrideRaisesThresholdPast2h1m(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	repo := NewEntLivenessRepository(storage.GetEntClient())
+	mode := "sdd"
+	_, err := repo.Create(ctx, LivenessCreateInput{
+		StageSlug:    string(BacklogStatusInProgress),
+		PipelineMode: &mode,
+		Definition: LivenessDefinition{
+			Kind:                  LivenessKindHeartbeat,
+			MaxNoProgressDuration: 3 * time.Hour,
+		},
+	})
+	require.NoError(t, err)
+	engine, err := NewCachingLivenessEngine(repo)
+	require.NoError(t, err)
+
+	notStale := newStaleWorkTestItemWithAge(t, storage, er, 2*time.Hour+time.Minute, "sdd")
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.livenessEngine = engine
+	listener.reconcileStaleWorkSessions(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, notStale.ID, domain.StuckReasonStaleWork)
+	assert.False(t, ok, "2h1m-old sdd-mode progress must not be flagged under the 3h resolved threshold")
+
+	// Now push a second sdd-mode item past the resolved 3h threshold and confirm the
+	// notify body interpolates "3h0m0s", not the bare maxWorkSessionStaleness ("2h0m0s").
+	pastResolved := newStaleWorkTestItemWithAge(t, storage, er, 3*time.Hour+time.Minute, "sdd")
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	listener.reconcileStaleWorkSessions(ctx, er)
+
+	openAfter, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok = findOpenStuckStateFor(openAfter, pastResolved.ID, domain.StuckReasonStaleWork)
+	require.True(t, ok, "3h1m-old sdd-mode progress must be flagged past the resolved 3h threshold")
+	require.Len(t, notifier.calls, 1, "expected exactly one notify call for the newly-stale item")
+	notifyBody := notifier.calls[0].Message
+	assert.Contains(t, notifyBody, "3h0m0s", "notify body must interpolate the resolved 3h duration")
+	assert.NotContains(t, notifyBody, "2h0m0s", "notify body must not fall back to the bare maxWorkSessionStaleness constant")
+}
+
+// TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThreeCyclesInDefaultLookback
+// is Story 1.4.3's zero-regression happy path for Shape C (bouncing): with no LivenessEngine
+// override configured, an item with bounceThreshold (3) in_progress<->review cycles within
+// bounceLookback (24h) and no PASS verdict is still marked bouncing, exactly as before.
+func TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThreeCyclesInDefaultLookback(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bouncing item, no override",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	for i := 0; i < bounceThreshold; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileBouncingItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonBouncing)
+	assert.True(t, ok, "3 cycles in 24h with no PASS must still be flagged — unchanged from today's bounceThreshold=3/bounceLookback=24h")
+}
+
+// TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDefaultModeSibling_When_PerItemOverrideRaisesCycleThreshold
+// configures a single ("review","sdd") override (CycleThreshold=5, CycleLookback=48h — the
+// corrected key, see this file's Epic 1.4 Story 1.4.3 plan-correction note in
+// project_plans/backlog-custom-workflow-stages/implementation/plan.md) and proves resolution
+// is per-item, not a package-level override: an sdd-mode item with 4 cycles in 30h (past the
+// OLD bounceThreshold=3 but under the NEW CycleThreshold=5) is NOT flagged, while a
+// default-mode item with the IDENTICAL 4-cycles-in-30h shape, in the SAME reconcile tick, IS
+// still flagged via CachingLivenessEngine's fallback to DefaultLivenessEngine's built-in
+// bounceThreshold=3 for the unconfigured ("review", PipelineModeDefault) pair.
+func TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDefaultModeSibling_When_PerItemOverrideRaisesCycleThreshold(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	repo := NewEntLivenessRepository(storage.GetEntClient())
+	mode := "sdd"
+	_, err := repo.Create(ctx, LivenessCreateInput{
+		StageSlug:    string(BacklogStatusReview),
+		PipelineMode: &mode,
+		Definition: LivenessDefinition{
+			Kind:           LivenessKindCycleFrequency,
+			CycleThreshold: 5,
+			CycleLookback:  48 * time.Hour,
+		},
+	})
+	require.NoError(t, err)
+	engine, err := NewCachingLivenessEngine(repo)
+	require.NoError(t, err)
+
+	newFourCycleItem := func(pipelineMode string) *BacklogItemData {
+		item, itemErr := storage.CreateBacklogItem(ctx, BacklogItemData{
+			Title:        "Bouncing per-item override item (mode=" + pipelineMode + ")",
+			Status:       string(BacklogStatusInProgress),
+			PipelineMode: pipelineMode,
+		})
+		require.NoError(t, itemErr)
+		for i := 0; i < 4; i++ {
+			_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+			require.NoError(t, err)
+			_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			require.NoError(t, err)
+		}
+		return item
+	}
+
+	sddItem := newFourCycleItem("sdd")
+	defaultItem := newFourCycleItem("")
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.livenessEngine = engine
+	listener.reconcileBouncingItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, sddFlagged := findOpenStuckStateFor(open, sddItem.ID, domain.StuckReasonBouncing)
+	_, defaultFlagged := findOpenStuckStateFor(open, defaultItem.ID, domain.StuckReasonBouncing)
+	assert.False(t, sddFlagged, "sdd-mode item with 4 cycles must not be flagged under the per-item CycleThreshold=5 override")
+	assert.True(t, defaultFlagged, "default-mode sibling with the identical 4-cycles-in-30h shape must still be flagged via the unconfigured pair's DefaultLivenessEngine fallback (bounceThreshold=3) — proving per-item, not package-level, resolution")
 }

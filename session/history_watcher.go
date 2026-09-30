@@ -51,7 +51,7 @@ func (w *HistoryFileWatcher) Start(ctx context.Context) error {
 	w.watcher = watcher
 
 	if err := watcher.Add(w.watchDir); err != nil {
-		watcher.Close()
+		_ = watcher.Close()
 		close(w.stopped)
 		return err
 	}
@@ -79,7 +79,7 @@ func (w *HistoryFileWatcher) run(ctx context.Context) {
 	defer close(w.stopped)
 	defer func() {
 		if w.watcher != nil {
-			w.watcher.Close()
+			_ = w.watcher.Close()
 		}
 	}()
 
@@ -167,6 +167,6 @@ func (w *HistoryFileWatcher) watchNewDir(dir string) {
 // Stop closes the watcher.
 func (w *HistoryFileWatcher) Stop() {
 	if w.watcher != nil {
-		w.watcher.Close()
+		_ = w.watcher.Close()
 	}
 }

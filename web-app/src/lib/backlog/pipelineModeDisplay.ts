@@ -40,3 +40,65 @@ export function resolvePipelineModeDisplay(
   const drifted = snapshotHash !== "" && snapshotHash !== match.contentHash;
   return { kind: "resolved", name: match.name, drifted };
 }
+
+/** One session's runtime program-fallback fact (Story 2.3.1's resolveHeadlessCaller). */
+export interface FallbackInfo {
+  configuredProgram: string;
+  resolvedProgram: string;
+  resolvedModel: string;
+  reason: string;
+}
+
+/**
+ * The two "what ran" provenance facts for one session, computed
+ * INDEPENDENTLY of each other — never an if/else-if chain that returns early
+ * on the first true condition. A session can be both a fallback AND drifted
+ * simultaneously (e.g. it fell back from gemini to Claude at spawn time, and
+ * the mode's executor config was edited again afterward); both facts must be
+ * reported so the UI can render both badges at once. See plan.md Story
+ * 5.2.4's UX-lens BLOCKER 2 design note.
+ */
+export interface ExecutorProvenance {
+  fallback: FallbackInfo | null;
+  drifted: boolean;
+}
+
+/**
+ * Resolves a session's executor-provenance facts (fallback + drift) against
+ * `mode` — the currently-fetched PipelineMode this session's
+ * pipelineModeSnapshot resolves to (or undefined if unresolved/default,
+ * matching resolvePipelineModeDisplay's own precedent of only comparing
+ * drift when a live mode match exists).
+ *
+ * `drifted` compares session.executorSnapshotHash against
+ * `mode.stageExecutorHashes[session.role]` — Task 5.2.4a's now-DENSE map, so
+ * an unconfigured role's session (whose own hash is
+ * ComputeExecutorHash("", "")) matches the mode's own
+ * ComputeExecutorHash("", "") entry for that role by construction, and never
+ * falsely reads as drifted. An empty snapshotHash (a session predating this
+ * feature) or a missing mode entry is treated as "no signal" — never
+ * drifted.
+ */
+export function resolveExecutorProvenance(
+  session: Pick<
+    LinkedSession,
+    "role" | "configuredProgram" | "resolvedProgram" | "resolvedModel" | "executorFallbackReason" | "executorSnapshotHash"
+  >,
+  mode: Pick<PipelineMode, "stageExecutorHashes"> | undefined
+): ExecutorProvenance {
+  const reason = session.executorFallbackReason ?? "";
+  const fallback: FallbackInfo | null = reason
+    ? {
+        configuredProgram: session.configuredProgram ?? "",
+        resolvedProgram: session.resolvedProgram ?? "",
+        resolvedModel: session.resolvedModel ?? "",
+        reason,
+      }
+    : null;
+
+  const snapshotHash = session.executorSnapshotHash ?? "";
+  const modeHash = mode?.stageExecutorHashes?.[session.role] ?? "";
+  const drifted = snapshotHash !== "" && modeHash !== "" && snapshotHash !== modeHash;
+
+  return { fallback, drifted };
+}

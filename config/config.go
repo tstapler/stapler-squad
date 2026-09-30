@@ -2,11 +2,11 @@ package config
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config/workspacepath"
 	"github.com/tstapler/stapler-squad/log"
 	"io"
 	"os"
@@ -46,27 +46,12 @@ const (
 // ~/.stapler-squad/workspaces/.../worktrees/...) hashes to a workspace distinct from
 // the one normally used from the project/home directory.
 func isWithinStateDir(workDir, baseDir string) bool {
-	if workDir == "" || baseDir == "" {
-		return false
-	}
-	workDir = filepath.Clean(workDir)
-	baseDir = filepath.Clean(baseDir)
-	return workDir == baseDir || strings.HasPrefix(workDir, baseDir+string(filepath.Separator))
+	return workspacepath.IsWithinStateDir(workDir, baseDir)
 }
 
 // IsTestMode detects if the application is running in test/benchmark mode
 func IsTestMode() bool {
-
-	// Check command line arguments for test/benchmark indicators
-	for _, arg := range os.Args {
-		if strings.Contains(arg, ".test") ||
-			strings.Contains(arg, "-test.") ||
-			strings.HasSuffix(arg, ".test.exe") ||
-			strings.Contains(arg, "-bench") {
-			return true
-		}
-	}
-	return false
+	return workspacepath.IsTestMode()
 }
 
 // IsNamedInstance reports whether this process is running as an explicitly
@@ -120,13 +105,25 @@ func GetConfigDir() (string, error) {
 	return GetConfigDirForDir("")
 }
 
+// pruneStaleTestDirsOnce bounds workspacepath.PruneStaleTestDirs to a single
+// run per process. Without it, every LoadConfig() call in test mode (i.e.
+// every tmux subprocess spawn, ~every 2s via SessionDriver polling) re-scans
+// and potentially os.RemoveAll's the entire shared ~/.stapler-squad/test/
+// dir — a scan with no cancellation point, so it can stall a tight polling
+// loop. See docs/bugs/fixed/BUG-099-*.md.
+//
+// Assumes one fixed testBaseDir per process (true for go test binaries
+// today); a second distinct testBaseDir seen later in the same process
+// won't get pruned.
+var pruneStaleTestDirsOnce sync.Once //nolint:gochecknoglobals
+
 // GetConfigDirForDir returns the path to the application's configuration directory
 // using the provided directory for workspace-based isolation.
 func GetConfigDirForDir(dir string) (string, error) {
 	// Priority 1: Test directory override (from --test-mode flag)
 	if testDir := os.Getenv("STAPLER_SQUAD_TEST_DIR"); testDir != "" {
 		// Create the test directory if it doesn't exist
-		if err := os.MkdirAll(testDir, 0755); err != nil {
+		if err := os.MkdirAll(testDir, 0750); err != nil {
 			return "", fmt.Errorf("failed to create test directory: %w", err)
 		}
 		return testDir, nil
@@ -163,8 +160,10 @@ func GetConfigDirForDir(dir string) (string, error) {
 	// preference set by a production instance cannot leak into test runs.
 	if IsTestMode() {
 		// Each test/benchmark process gets its own isolated state
+		testBaseDir := filepath.Join(baseDir, "test")
+		pruneStaleTestDirsOnce.Do(func() { workspacepath.PruneStaleTestDirs(testBaseDir) })
 		pid := os.Getpid()
-		return filepath.Join(baseDir, "test", fmt.Sprintf("test-%d", pid)), nil
+		return filepath.Join(testBaseDir, fmt.Sprintf("test-%d", pid)), nil
 	}
 
 	return resolveDefaultConfigDir(dir, baseDir)
@@ -176,55 +175,21 @@ func GetConfigDirForDir(dir string) (string, error) {
 // (test mode auto-detection) is always true inside a `go test` binary, which
 // would otherwise make this logic unreachable in tests.
 func resolveDefaultConfigDir(dir, baseDir string) (string, error) {
-	// Priority 4: Preferred workspace from preference file
-	// Written by SwitchDatabase RPC; cleared automatically on removal.
-	// Skipped in test mode (above) so tests always get isolated state.
-	if data, err := os.ReadFile(GetPreferredWorkspaceFile(baseDir)); err == nil {
-		prefDir := strings.TrimSpace(string(data))
-		if filepath.IsAbs(prefDir) &&
-			(prefDir == baseDir || strings.HasPrefix(prefDir, baseDir+string(filepath.Separator))) {
-			if _, statErr := os.Stat(prefDir); statErr == nil {
-				return prefDir, nil
-			}
-		}
+	result := workspacepath.ResolveDefaultDir(dir, baseDir)
+	if result.WithinStateDir {
+		// Running with a cwd inside stapler-squad's own state directory (e.g. a
+		// session worktree) hashes to a workspace distinct from the one the user
+		// normally works from, silently landing on an empty database that looks
+		// like all sessions vanished. Almost always means the binary was started
+		// manually from within a worktree instead of via the installed service.
+		log.Warn("cwd is inside stapler-squad state directory; this process will use a different workspace than usual and may appear to have no sessions",
+			"cwd", result.WorkDir, "state_dir", baseDir)
 	}
-
-	// Priority 5: Per-directory workspace isolation — opt-in only.
-	// A single shared workspace is the default; per-cwd auto-isolation must be
-	// explicitly enabled with STAPLER_SQUAD_WORKSPACE_MODE=true. Switching between
-	// workspaces is meant to be an explicit user action (see SwitchDatabase RPC /
-	// the workspace switcher UI), not an automatic side effect of the cwd a process
-	// happens to be started from — the latter is what caused sessions to silently
-	// "disappear" when the binary was started from inside a worktree.
-	if os.Getenv("STAPLER_SQUAD_WORKSPACE_MODE") == "true" {
-		workDir := dir
-		var err error
-		if workDir == "" {
-			workDir, err = os.Getwd()
-		}
-		if err == nil && workDir != "" {
-			if isWithinStateDir(workDir, baseDir) {
-				// Running with a cwd inside stapler-squad's own state directory (e.g. a
-				// session worktree) hashes to a workspace distinct from the one the user
-				// normally works from, silently landing on an empty database that looks
-				// like all sessions vanished. Almost always means the binary was started
-				// manually from within a worktree instead of via the installed service.
-				log.Warn("cwd is inside stapler-squad state directory; this process will use a different workspace than usual and may appear to have no sessions",
-					"cwd", workDir, "state_dir", baseDir)
-			}
-			// Hash the workspace path for a stable, filesystem-safe identifier
-			hash := sha256.Sum256([]byte(workDir))
-			workspaceID := fmt.Sprintf("%x", hash[:8])
-			return filepath.Join(baseDir, "workspaces", workspaceID), nil
-		}
-		if err != nil {
-			// If we can't get working directory, fall through to shared state
-			log.Warn("failed to get working directory for workspace isolation", "err", err)
-		}
+	if result.GetwdErr != nil {
+		// If we can't get working directory, fall through to shared state
+		log.Warn("failed to get working directory for workspace isolation", "err", result.GetwdErr)
 	}
-
-	// Priority 6: Global shared state (default)
-	return baseDir, nil
+	return result.Dir, nil
 }
 
 // Config represents the application configuration
@@ -299,6 +264,11 @@ type Config struct {
 	SessionDefaults SessionDefaults `json:"session_defaults,omitempty"`
 	// Notifications holds the user's notification delivery preferences.
 	Notifications NotificationPrefs `json:"notifications,omitempty"`
+	// Remotes is a named list of SSH-reachable remote hosts sessions can be
+	// created against (ssh-remote-workspaces feature). Holds connection
+	// coordinates only — no SSH key material; see RemoteConfig's doc
+	// comment. Looked up by name via RemoteByName.
+	Remotes []RemoteConfig `json:"remotes,omitempty"`
 	// OneOffBaseDir is the base directory where one-off session directories are created.
 	// Default: "~/oneoff". Tilde is expanded at runtime. Created automatically on first use.
 	OneOffBaseDir string `json:"one_off_base_dir,omitempty"`
@@ -329,6 +299,21 @@ type Config struct {
 	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
 	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
+	// AutonomousMaxTurns caps how many turns a single AutonomousDriver run gets before
+	// stopping without a DONE signal (session/autonomous_driver.go). 0 = use the default
+	// (60); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
+	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
+	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`
+	// DiagnoseNudgeMaxAttempts caps how many times the Diagnose & Nudge feature
+	// (BacklogStuckState.DiagnoseNudgeCount) will nudge the same stuck item before
+	// further automatic nudging stops and the dispatched agent's action space is
+	// narrowed to file-a-bug/post-a-note only. 0 = use the default (3); values
+	// above diagnoseNudgeMaxAttemptsHardCeiling are clamped to it.
+	DiagnoseNudgeMaxAttempts int `json:"diagnose_nudge_max_attempts,omitempty"`
+	// NoopDispatchThreshold is how many consecutive work sessions on one PASS-verdict
+	// item may end with no new commits before it is flagged repeated_noop_dispatch and
+	// further dispatch is blocked. 0 = use the default (3).
+	NoopDispatchThreshold int `json:"noop_dispatch_threshold,omitempty"`
 	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
@@ -361,6 +346,8 @@ type Config struct {
 	Hibernation HibernationConfig `json:"hibernation,omitempty"`
 	// Capacity holds configuration for the provider capacity monitoring and transition feature.
 	Capacity CapacityConfig `json:"capacity,omitempty"`
+	// HandoffSummary holds configuration for the restart-with-handoff-summary feature.
+	HandoffSummary HandoffSummaryConfig `json:"handoff_summary,omitempty"`
 	// Quota holds configuration for the account-wide session-quota gate that
 	// pauses/resumes backlog automation based on inferred quota headroom.
 	Quota QuotaConfig `json:"quota,omitempty"`
@@ -371,6 +358,14 @@ type Config struct {
 	// StaleSession holds configuration for stale-session detection (inactivity threshold
 	// and notify-on-stale toggle).
 	StaleSession StaleSessionConfig `json:"stale_session,omitempty"`
+	// RetryPolicy holds the global default configurable crash/stall retry
+	// policy (attempts, backoff, eligible failure reasons). May be overridden
+	// per-session via session.Instance.RetryPolicyOverride.
+	RetryPolicy RetryPolicyConfig `json:"retry_policy,omitempty"`
+	// CreationStale holds configuration for the Stale-Creation Sweeper (Epic 4.1):
+	// how long a session may sit in Creating status without a progress update
+	// before it's automatically flipped to Failed/Stale.
+	CreationStale CreationStaleConfig `json:"creation_stale,omitempty"`
 	// Callbacks holds the global singleton outbound-callback URLs (webhook-triggers
 	// Phase 5, FR7) fired by CallbackDispatcher on session-complete/session-stale/
 	// queue-item-created lifecycle events.
@@ -378,6 +373,14 @@ type Config struct {
 	// Slack holds configuration for the Slack review-queue notification
 	// feature. Secret fields are ciphertext only — see ADR-001.
 	Slack SlackConfig `json:"slack,omitempty"`
+	// Jules holds configuration for the Google Jules dispatch-and-poll
+	// integration. The API key itself is never stored here — it lives in the
+	// OS keychain (see jules.KeyringTokenSource) — this struct only holds the
+	// opt-in flag, per-repo egress acknowledgements, and spend guard caps.
+	Jules JulesConfig `json:"jules,omitempty"`
+	// TaggingClassifier holds the LLM model hierarchy for session-tag
+	// classification (primary model plus ordered fallbacks).
+	TaggingClassifier TaggingClassifierConfig `json:"tagging_classifier,omitempty"`
 
 	// Escape analytics configuration
 
@@ -414,6 +417,244 @@ type Config struct {
 	// github.com) with their own OAuth App client IDs, enabling device-flow login,
 	// PR polling, and link detection against those hosts. Empty means github.com only.
 	GitHubEnterpriseHosts []GitHubEnterpriseHost `json:"github_enterprise_hosts,omitempty"`
+
+	// StreamHubSessionOverrides forces the terminal-multi-connection-streaming
+	// project's PathHubOwned resolution for specific named tmux sessions,
+	// regardless of the global STAPLER_SQUAD_USE_STREAM_HUB default — the
+	// per-session canary mechanism (Story 3.3.1). Keys are tmux session
+	// names; an absent key means "no override, use the global default".
+	// Consulted via streamhub.SetSessionOverrideLookup, wired at process
+	// startup in server/services so package session/streamhub never imports
+	// package config directly.
+	StreamHubSessionOverrides map[string]bool `json:"stream_hub_session_overrides,omitempty"`
+	// RollbackRehearsalCompletedAt records when Story 3.3.2's rollback
+	// rehearsal (flip the stream-hub path on for a disposable session, use
+	// it briefly, confirm a clean reconnect under the legacy path) was last
+	// completed. Purely a historical record now — the global default no
+	// longer gates on it (see EffectiveStreamHubEnabled; the "stream_hub"
+	// feature flag defaults to true directly). Set via
+	// RecordRollbackRehearsalCompleted.
+	RollbackRehearsalCompletedAt *time.Time `json:"rollback_rehearsal_completed_at,omitempty"`
+	// TymuxRollbackRehearsalCompletedAt records when the tymux backend's own
+	// rollback rehearsal was last completed successfully. This is a distinct
+	// field from RollbackRehearsalCompletedAt above — the two rehearsals
+	// verify different things (ADR-002/ADR-003): streamhub's rollback means
+	// "reconnect cleanly under the legacy path"; tymux's rollback cannot mean
+	// that, since it means "new sessions honor the reverted default while
+	// existing tymux-backed sessions stay pinned to tymux for their
+	// lifetime". nil means "never completed". Purely a historical record now
+	// — the global default no longer gates on it (see EffectiveTymuxEnabled;
+	// SetTymuxGlobalOverride sets the "tymux" feature flag unconditionally).
+	// Set via RecordTymuxRollbackRehearsalCompleted.
+	TymuxRollbackRehearsalCompletedAt *time.Time `json:"tymux_rollback_rehearsal_completed_at,omitempty"`
+	// TymuxSessionOverrides forces the tymux-bundled-integration project's
+	// process-manager backend for specific named tmux sessions, regardless of
+	// the global process-manager-backend default — the per-session override
+	// mechanism (Phase 4, Epic 4.1). Keys are tmux session names; an absent
+	// key means "no override, use the global default". Mirrors
+	// StreamHubSessionOverrides's shape exactly (see that field's doc
+	// comment above); consulted by ResolveSessionBackend
+	// (session/backend_resolution.go).
+	TymuxSessionOverrides map[string]bool `json:"tymux_session_overrides,omitempty"`
+}
+
+// StreamHubFeatureFlag is the config.FeatureFlags key backing
+// EffectiveStreamHubEnabled — the global stream-hub default. Defaults to on
+// (see GetFeatureFlagWithDefault); an explicit false opts back out.
+const StreamHubFeatureFlag = "stream_hub"
+
+// TymuxFeatureFlag is the config.FeatureFlags key backing
+// EffectiveTymuxEnabled — the global tymux process-manager-backend default.
+// Defaults to off (unlike StreamHubFeatureFlag): no rollback rehearsal has
+// vouched for tymux as the global default yet, so an explicit opt-in is
+// still required, same as the STAPLER_SQUAD_USE_TYMUX env var it replaces.
+const TymuxFeatureFlag = "tymux"
+
+// TriageGuidanceHaltFeatureFlag is the config.FeatureFlags key backing
+// EffectiveTriageGuidanceHaltEnabled — gates whether automated triage halts
+// and asks via a durable GuidanceRequest instead of guessing on a genuinely
+// ambiguous item (durable-guidance-request AC2). Defaults to off: no rollback
+// rehearsal has vouched for this as the global default yet, same posture as
+// TymuxFeatureFlag.
+const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
+
+// EffectiveTriageGuidanceHaltEnabled reports whether automated triage should
+// halt and create a GuidanceRequest on ambiguity rather than guess. Callers
+// must read this fresh at the exact halt-decision instant, not cache it at
+// pass start — triage is a long-running background call, not a
+// request/response RPC, so staleness at the decision point is the risk that
+// matters (mirrors EffectiveTymuxEnabled's live-read contract).
+func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, false)
+}
+
+// DiagnoseNudgeFeatureFlag is the config.FeatureFlags key backing
+// EffectiveDiagnoseNudgeEnabled — the kill switch for autonomous
+// diagnose_nudge_session writes (Diagnose & Nudge, backlog item 68964304).
+// Shipped with no way to disable short of a code change/redeploy; this flag
+// closes that gap. Defaults to off, same posture as TymuxFeatureFlag/
+// TriageGuidanceHaltFeatureFlag: no rollback rehearsal has vouched for
+// autonomous nudging as the default yet.
+const DiagnoseNudgeFeatureFlag = "diagnose_nudge_enabled"
+
+// EffectiveDiagnoseNudgeEnabled reports whether a dispatched Diagnose & Nudge
+// agent may actually perform a nudge write. Callers must read this fresh at
+// the exact write instant (diagnose_nudge_session's MCP handler), not cache
+// it at dispatch start — an in-flight diagnostic session that already
+// decided to nudge before the flag flips off must still be blocked at the
+// write call site.
+func EffectiveDiagnoseNudgeEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, false)
+}
+
+// EffectiveTymuxEnabled reports whether the global tymux process-manager
+// backend default is active. Resolved fresh on every call (session.getSelectedBackend)
+// via SetTymuxGlobalOverride — live-settable, no process restart required.
+// main.go's own startup-time read of this (via ResolveSessionBackend) is only
+// for tymuxNeeded's supervision decision, not a cache of this value.
+func EffectiveTymuxEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(TymuxFeatureFlag, false)
+}
+
+// RecordTymuxRollbackRehearsalCompleted persists the current time as
+// TymuxRollbackRehearsalCompletedAt and saves the config — intended to be
+// called exactly once, after manually verifying a tymux rollback rehearsal
+// (new sessions honor the reverted default while existing tymux-backed
+// sessions stay pinned) passed against a real disposable session.
+// TymuxRollbackRehearsalCompletedAt's own doc comment covers why this is a
+// historical record only, not an enforced gate.
+func (c *Config) RecordTymuxRollbackRehearsalCompleted() error {
+	now := time.Now()
+	c.TymuxRollbackRehearsalCompletedAt = &now
+	return SaveConfig(c)
+}
+
+// EffectiveStreamHubEnabled is the single source of truth for whether the
+// stream-hub path is active, so server/services.useStreamHub and
+// session.effectiveStreamHubFlag can't diverge by each re-deriving it.
+func EffectiveStreamHubEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(StreamHubFeatureFlag, true)
+}
+
+// RecordRollbackRehearsalCompleted persists the current time as
+// RollbackRehearsalCompletedAt and saves the config — Story 3.3.2's Task
+// 3.3.2c, intended to be called exactly once, after manually verifying a
+// rollback rehearsal (flip on via the per-session override, use briefly,
+// remove the override, confirm clean legacy reconnect) passed against a
+// real disposable session. Unblocks ResolveGlobalStreamHubDefault from
+// refusing to enable the global default.
+func (c *Config) RecordRollbackRehearsalCompleted() error {
+	now := time.Now()
+	c.RollbackRehearsalCompletedAt = &now
+	return SaveConfig(c)
+}
+
+// GetStreamHubSessionOverride reports whether sessionName has a per-session
+// StreamHubSessionOverrides entry recorded, and if so, what it forces.
+// Mirrors GetFeatureFlag's nil-safe shape: a nil Config or nil map reports
+// (false, false) — no override.
+func (c *Config) GetStreamHubSessionOverride(sessionName string) (forceHub bool, ok bool) {
+	if c == nil || c.StreamHubSessionOverrides == nil {
+		return false, false
+	}
+	forceHub, ok = c.StreamHubSessionOverrides[sessionName]
+	return forceHub, ok
+}
+
+// SetStreamHubSessionOverride sets or clears sessionName's per-session
+// PathHubOwned override and persists the config to disk — Story 3.3.1's
+// canary mechanism. forceHub follows this file's existing *bool convention
+// for a tri-state field (see AutoSpawnReadyItems): nil removes any override
+// for sessionName (falling back to the global default), a non-nil false
+// explicitly pins the session to the legacy path regardless of the global
+// default, and a non-nil true forces PathHubOwned.
+func (c *Config) SetStreamHubSessionOverride(sessionName string, forceHub *bool) error {
+	if forceHub == nil {
+		if c.StreamHubSessionOverrides != nil {
+			delete(c.StreamHubSessionOverrides, sessionName)
+		}
+		return SaveConfig(c)
+	}
+	if c.StreamHubSessionOverrides == nil {
+		c.StreamHubSessionOverrides = make(map[string]bool)
+	}
+	c.StreamHubSessionOverrides[sessionName] = *forceHub
+	return SaveConfig(c)
+}
+
+// SetStreamHubGlobalOverride sets or clears the "stream_hub" feature flag
+// and persists the config to disk. forceHub follows this file's tri-state
+// *bool convention: nil clears the flag (reverting to
+// GetFeatureFlagWithDefault's on-by-default), non-nil sets it explicitly for
+// every session connection resolved from now on.
+func (c *Config) SetStreamHubGlobalOverride(forceHub *bool) error {
+	if forceHub == nil {
+		return c.DeleteFeatureFlag(StreamHubFeatureFlag)
+	}
+	return c.SetFeatureFlag(StreamHubFeatureFlag, *forceHub)
+}
+
+// GetStreamHubGlobalOverride reports the explicitly-persisted "stream_hub"
+// feature flag value, if any — mirrors GetStreamHubSessionOverride's
+// (value, ok) shape. ok is false when the flag has never been explicitly
+// set (i.e. EffectiveStreamHubEnabled is resolving its default).
+func (c *Config) GetStreamHubGlobalOverride() (value bool, ok bool) {
+	return c.GetFeatureFlagOverride(StreamHubFeatureFlag)
+}
+
+// GetTymuxSessionOverride reports whether sessionName has a per-session
+// TymuxSessionOverrides entry recorded, and if so, what it forces. Mirrors
+// GetStreamHubSessionOverride's nil-safe shape: a nil Config or nil map
+// reports (false, false) — no override.
+func (c *Config) GetTymuxSessionOverride(sessionName string) (forceTymux bool, ok bool) {
+	if c == nil || c.TymuxSessionOverrides == nil {
+		return false, false
+	}
+	forceTymux, ok = c.TymuxSessionOverrides[sessionName]
+	return forceTymux, ok
+}
+
+// SetTymuxSessionOverride sets or clears sessionName's per-session
+// process-manager-backend override and persists the config to disk.
+// forceTymux follows this file's existing *bool convention for a tri-state
+// field (see SetStreamHubSessionOverride): nil removes any override for
+// sessionName (falling back to the global default), a non-nil false
+// explicitly pins the session to the tmux backend regardless of the global
+// default, and a non-nil true forces the tymux backend. Unlike
+// streamhub/ownership.go's resolveLocked (see research/features.md (b).5),
+// this accessor is a plain map write with no combinator logic, so it has no
+// directional bias toward either value.
+func (c *Config) SetTymuxSessionOverride(sessionName string, forceTymux *bool) error {
+	if forceTymux == nil {
+		if c.TymuxSessionOverrides != nil {
+			delete(c.TymuxSessionOverrides, sessionName)
+		}
+		return SaveConfig(c)
+	}
+	if c.TymuxSessionOverrides == nil {
+		c.TymuxSessionOverrides = make(map[string]bool)
+	}
+	c.TymuxSessionOverrides[sessionName] = *forceTymux
+	return SaveConfig(c)
+}
+
+// SetTymuxGlobalOverride sets or clears the "tymux" feature flag and
+// persists the config to disk. forceTymux follows this file's tri-state
+// *bool convention: nil clears the flag (reverting to
+// GetFeatureFlagWithDefault's off-by-default), non-nil sets it explicitly
+// for every session created from now on. Mirrors
+// SetStreamHubGlobalOverride exactly.
+func (c *Config) SetTymuxGlobalOverride(forceTymux *bool) error {
+	if forceTymux == nil {
+		return c.DeleteFeatureFlag(TymuxFeatureFlag)
+	}
+	return c.SetFeatureFlag(TymuxFeatureFlag, *forceTymux)
+}
+
+// GetTymuxGlobalOverride reports the explicitly-persisted "tymux" feature
+// flag value, if any. Mirrors GetStreamHubGlobalOverride's (value, ok) shape.
+func (c *Config) GetTymuxGlobalOverride() (value bool, ok bool) {
+	return c.GetFeatureFlagOverride(TymuxFeatureFlag)
 }
 
 // GetGitHubEnterpriseHosts returns the configured GHES hosts, or nil if c is nil.
@@ -422,6 +663,21 @@ func (c *Config) GetGitHubEnterpriseHosts() []GitHubEnterpriseHost {
 		return nil
 	}
 	return c.GitHubEnterpriseHosts
+}
+
+// RemoteByName looks up a configured remote by its exact Name. Returns
+// (nil, false) if c is nil or no remote with that name is registered.
+// Consumed by session creation (Phase 4) and Settings UI validation (Phase 6).
+func (c *Config) RemoteByName(name string) (*RemoteConfig, bool) {
+	if c == nil {
+		return nil, false
+	}
+	for i := range c.Remotes {
+		if c.Remotes[i].Name == name {
+			return &c.Remotes[i], true
+		}
+	}
+	return nil, false
 }
 
 // DefaultConfig returns the default configuration
@@ -498,6 +754,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 		RetentionDays:             30,
 	}
 	cfg.Capacity = CapacityConfig{}.CapacityConfigOrDefault()
+	cfg.HandoffSummary = HandoffSummaryConfig{}.HandoffSummaryConfigOrDefault()
 	cfg.Quota = QuotaConfig{}.QuotaConfigOrDefault()
 	// Initialize SessionDefaults maps so callers never encounter nil maps.
 	// LoadConfigFromPath applies the same guards after JSON decode; DefaultConfig
@@ -507,6 +764,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.SessionDefaults.Tags = []string{}
 	cfg.SessionDefaults.DirectoryRules = []DirectoryRule{}
 	cfg.SessionDefaults.Aliases = []AliasConfig{}
+	cfg.SessionDefaults.Programs = []ProgramConfig{}
 	// Escape analytics defaults. LoadConfigFromPath applies the same defaults
 	// after JSON decode (for fields absent from an existing config.json);
 	// DefaultConfig must mirror them so the two code paths are equivalent.
@@ -554,12 +812,22 @@ func (c *Config) OneOffBaseDirOrDefault() (string, error) {
 }
 
 // HibernationCheckpointDirOrDefault returns the resolved hibernation checkpoint directory.
-// If CheckpointDir is empty, it returns "~/.stapler-squad/checkpoints" with ~ expanded.
-// The directory is NOT created here — the checkpoint writer creates it on first use.
+// If CheckpointDir is empty, it defaults to "checkpoints" under GetConfigDir() (so it
+// inherits the same test/instance/workspace isolation as config.json/sessions.json —
+// see GetConfigDirForDir's priority list — rather than always writing to the real
+// ~/.stapler-squad regardless of STAPLER_SQUAD_TEST_DIR/IsTestMode()). An explicit
+// CheckpointDir override still expands "~" against the real home dir, since a
+// user-configured absolute/tilde path is an intentional override of the state dir,
+// not app state itself. The directory is NOT created here — the checkpoint writer
+// creates it on first use.
 func (c *Config) HibernationCheckpointDirOrDefault() (string, error) {
 	dir := c.Hibernation.CheckpointDir
 	if dir == "" {
-		dir = "~/.stapler-squad/checkpoints"
+		configDir, err := GetConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve config dir: %w", err)
+		}
+		return filepath.Join(configDir, "checkpoints"), nil
 	}
 	if strings.HasPrefix(dir, "~/") {
 		home, err := os.UserHomeDir()
@@ -579,48 +847,62 @@ func (c *Config) HibernationCheckpointDirOrDefault() (string, error) {
 
 // TriageArtifactDirOrDefault returns the resolved triage artifact directory.
 // Triage workers write their planning files here instead of into the item's repo.
-// Always defaults to "~/.stapler-squad/triage-artifacts".
+// "triage-artifacts" under GetConfigDir() — see HibernationCheckpointDirOrDefault's
+// doc comment for why this routes through GetConfigDir() rather than a hardcoded
+// ~/.stapler-squad path.
 func (c *Config) TriageArtifactDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "triage-artifacts"), nil
+	return filepath.Join(configDir, "triage-artifacts"), nil
 }
 
 // HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
 // headless (triage/review claude -p) failure captures — see
-// session.WriteHeadlessFailureCapture. Always defaults to
-// "~/.stapler-squad/headless-failures".
+// session.WriteHeadlessFailureCapture. "headless-failures" under GetConfigDir() —
+// see HibernationCheckpointDirOrDefault's doc comment for why this routes through
+// GetConfigDir() rather than a hardcoded ~/.stapler-squad path. Previously hardcoded
+// to os.UserHomeDir() regardless of test mode: every go test run that exercised a
+// headless-failure capture wrote real files into the developer's actual
+// ~/.stapler-squad/headless-failures (656+ accumulated on this maintainer's machine),
+// and concurrent test processes competed with each other and the live production
+// service for real disk I/O in that one shared directory — see BUG-103 item 2.
 func (c *Config) HeadlessFailureCaptureDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "headless-failures"), nil
+	return filepath.Join(configDir, "headless-failures"), nil
 }
+
+// BacklogAttachmentDirName is the attachments directory's name under GetConfigDir().
+const BacklogAttachmentDirName = "backlog-attachments"
 
 // BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.
 // Uploaded images referenced from backlog item descriptions are stored here,
 // durably (unlike the 24h temp paste dir) since they're linked from persisted
-// markdown text. Always defaults to "~/.stapler-squad/backlog-attachments".
+// markdown text. "backlog-attachments" under GetConfigDir() — see
+// HibernationCheckpointDirOrDefault's doc comment for why this routes through
+// GetConfigDir() rather than a hardcoded ~/.stapler-squad path.
 func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "backlog-attachments"), nil
+	return filepath.Join(configDir, BacklogAttachmentDirName), nil
 }
 
 // PromptCacheDirOrDefault returns the resolved directory for temp-file-backed
-// session launch prompts (see Instance.promptArg). Always defaults to
-// "~/.stapler-squad/prompt-cache".
+// session launch prompts (see Instance.promptArg). "prompt-cache" under
+// GetConfigDir() — see HibernationCheckpointDirOrDefault's doc comment for why
+// this routes through GetConfigDir() rather than a hardcoded ~/.stapler-squad path.
 func (c *Config) PromptCacheDirOrDefault() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot expand home dir: %w", err)
+		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(home, ".stapler-squad", "prompt-cache"), nil
+	return filepath.Join(configDir, "prompt-cache"), nil
 }
 
 // NewProjectBaseDirOrDefault returns the resolved new-project base directory.
@@ -655,6 +937,15 @@ func (c *Config) AnalyticsMaxRowsOrDefault() int {
 	return c.AnalyticsMaxRows
 }
 
+// NoopDispatchThresholdOrDefault returns the configured no-op dispatch threshold, or 3
+// if unset or c is nil.
+func (c *Config) NoopDispatchThresholdOrDefault() int {
+	if c == nil || c.NoopDispatchThreshold <= 0 {
+		return 3
+	}
+	return c.NoopDispatchThreshold
+}
+
 // MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or 20
 // if not set (zero value) or c is nil (BacklogService's cfg is nil in some test setups).
 // Raised from 3 to 20: 3 was tripping routinely on real, ultimately-fixable items
@@ -668,6 +959,50 @@ func (c *Config) MaxAutoReworkIterationsOrDefault() int {
 		return 20
 	}
 	return c.MaxAutoReworkIterations
+}
+
+// autonomousMaxTurnsDefault is used when the config value is unset (0 or negative).
+// Raised from the driver's own historical fallback of 20, which was observed cutting
+// off recoverable multi-round work. autonomousMaxTurnsHardCeiling guards against a
+// runaway config value burning billed turns on a non-converging run.
+const (
+	autonomousMaxTurnsDefault     = 60
+	autonomousMaxTurnsHardCeiling = 200
+)
+
+// AutonomousMaxTurnsOrDefault returns the configured autonomous-driver turn cap,
+// clamped to [1, autonomousMaxTurnsHardCeiling]. Falls back to the default (60)
+// if unset (<=0) or c is nil.
+func (c *Config) AutonomousMaxTurnsOrDefault() int {
+	if c == nil || c.AutonomousMaxTurns <= 0 {
+		return autonomousMaxTurnsDefault
+	}
+	if c.AutonomousMaxTurns > autonomousMaxTurnsHardCeiling {
+		return autonomousMaxTurnsHardCeiling
+	}
+	return c.AutonomousMaxTurns
+}
+
+// diagnoseNudgeMaxAttemptsDefault is used when the config value is unset (0 or
+// negative). diagnoseNudgeMaxAttemptsHardCeiling guards against a runaway
+// config value letting the Diagnose & Nudge feature nudge a stuck session
+// indefinitely.
+const (
+	diagnoseNudgeMaxAttemptsDefault     = 3
+	diagnoseNudgeMaxAttemptsHardCeiling = 10
+)
+
+// DiagnoseNudgeMaxAttemptsOrDefault returns the configured Diagnose & Nudge
+// attempt cap, clamped to [1, diagnoseNudgeMaxAttemptsHardCeiling]. Falls back
+// to the default (3) if unset (<=0) or c is nil.
+func (c *Config) DiagnoseNudgeMaxAttemptsOrDefault() int {
+	if c == nil || c.DiagnoseNudgeMaxAttempts <= 0 {
+		return diagnoseNudgeMaxAttemptsDefault
+	}
+	if c.DiagnoseNudgeMaxAttempts > diagnoseNudgeMaxAttemptsHardCeiling {
+		return diagnoseNudgeMaxAttemptsHardCeiling
+	}
+	return c.DiagnoseNudgeMaxAttempts
 }
 
 // maxConcurrentBacklogWorkItemsDefault is used when the config value is unset (0
@@ -690,6 +1025,85 @@ func (c *Config) MaxConcurrentBacklogWorkItemsOrDefault() int {
 		return maxConcurrentBacklogWorkItemsHardCeiling
 	}
 	return c.MaxConcurrentBacklogWorkItems
+}
+
+// maxConcurrentJulesSessionsDefault is used when JulesConfig.MaxConcurrentJulesSessions
+// is unset (<=0). maxConcurrentJulesSessionsHardCeiling caps how high the setting can
+// go even via a modified frontend request — the blast-radius guard from Risk Control
+// (ADR-004): a retry-loop bug costs at most this many concurrent billed sessions.
+const (
+	maxConcurrentJulesSessionsDefault     = 2
+	maxConcurrentJulesSessionsHardCeiling = 10
+)
+
+// MaxConcurrentJulesSessionsOrDefault returns the configured Jules concurrency
+// cap, clamped to [1, maxConcurrentJulesSessionsHardCeiling]. Falls back to the
+// default (2) if unset (<=0) or c is nil.
+func (c *Config) MaxConcurrentJulesSessionsOrDefault() int {
+	if c == nil || c.Jules.MaxConcurrentJulesSessions <= 0 {
+		return maxConcurrentJulesSessionsDefault
+	}
+	if c.Jules.MaxConcurrentJulesSessions > maxConcurrentJulesSessionsHardCeiling {
+		return maxConcurrentJulesSessionsHardCeiling
+	}
+	return c.Jules.MaxConcurrentJulesSessions
+}
+
+// maxJulesSessionsPerDayDefault is used when JulesConfig.MaxJulesSessionsPerDay is
+// unset (<=0). maxJulesSessionsPerDayHardCeiling is the same blast-radius guard as
+// maxConcurrentJulesSessionsHardCeiling, applied to creation rate instead of
+// concurrency (ADR-004).
+const (
+	maxJulesSessionsPerDayDefault     = 15
+	maxJulesSessionsPerDayHardCeiling = 300
+)
+
+// MaxJulesSessionsPerDayOrDefault returns the configured Jules daily-dispatch
+// cap, clamped to [1, maxJulesSessionsPerDayHardCeiling]. Falls back to the
+// default (15) if unset (<=0) or c is nil.
+func (c *Config) MaxJulesSessionsPerDayOrDefault() int {
+	if c == nil || c.Jules.MaxJulesSessionsPerDay <= 0 {
+		return maxJulesSessionsPerDayDefault
+	}
+	if c.Jules.MaxJulesSessionsPerDay > maxJulesSessionsPerDayHardCeiling {
+		return maxJulesSessionsPerDayHardCeiling
+	}
+	return c.Jules.MaxJulesSessionsPerDay
+}
+
+// taggingClassifierModelDefault is the primary classification model when
+// TaggingClassifierConfig.Model is unset.
+const taggingClassifierModelDefault = "haiku"
+
+// TaggingClassifierModelOrDefault returns the configured primary classification model,
+// falling back to "haiku" when unset or c is nil. Whitespace is trimmed; an empty result
+// also falls back to the default (an all-spaces model name would otherwise reach --model).
+func (c *Config) TaggingClassifierModelOrDefault() string {
+	if c == nil {
+		return taggingClassifierModelDefault
+	}
+	if model := strings.TrimSpace(c.TaggingClassifier.Model); model != "" {
+		return model
+	}
+	return taggingClassifierModelDefault
+}
+
+// TaggingClassifierFallbacks returns the configured fallback model hierarchy with blanks
+// dropped, or nil when none is configured. Never returns a slice containing the primary —
+// a fallback equal to the primary is silently dropped (retrying the identical model twice
+// in a row only doubles cost without new information).
+func (c *Config) TaggingClassifierFallbacks() []string {
+	if c == nil {
+		return nil
+	}
+	primary := c.TaggingClassifierModelOrDefault()
+	var out []string
+	for _, m := range c.TaggingClassifier.FallbackModels {
+		if m = strings.TrimSpace(m); m != "" && m != primary {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // AutoSpawnReadyItemsOrDefault reports whether "ready" items should be automatically
@@ -810,7 +1224,7 @@ func (c *Config) GetAvailablePrograms() []string {
 		shell = "/bin/bash"
 	}
 
-	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy"}
+	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy", "aider"}
 
 	for _, candidate := range candidates {
 		var shellCmd string
@@ -902,7 +1316,7 @@ func loadConfigWithDefaultFallback(configPath string) *Config {
 // JSON that the next LoadConfig call silently falls back to DefaultConfig()
 // over (losing whatever was there). Keyed per path (rather than one global
 // mutex) so concurrent saves to different configPaths — e.g. distinct
-// per-instance state dirs under state-isolation, see .claude/docs/state-isolation.md
+// per-instance state dirs under state-isolation, see docs/reference/state-isolation.md
 // — aren't needlessly serialized against each other.
 var saveConfigMu sync.Map //nolint:gochecknoglobals // per-configPath *sync.Mutex, serializes concurrent saveConfig callers sharing the same tmpPath
 
@@ -925,7 +1339,7 @@ func saveConfig(config *Config, paths ...string) error {
 		if err != nil {
 			return fmt.Errorf("failed to get config directory: %w", err)
 		}
-		if err := os.MkdirAll(configDir, 0755); err != nil {
+		if err := os.MkdirAll(configDir, 0750); err != nil {
 			return fmt.Errorf("failed to create config directory: %w", err)
 		}
 		configPath = filepath.Join(configDir, ConfigFileName)
@@ -993,6 +1407,8 @@ func SaveConfig(config *Config) error {
 // LoadConfigFromPath loads and parses a config file from an explicit path.
 // Returns the config and any error encountered.
 func LoadConfigFromPath(path string) (*Config, error) {
+	// #nosec G304 -- all callers pass paths built from config.GetConfigDir() plus a
+	// fixed "config.json" filename, not caller/user-controlled input.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -1021,6 +1437,9 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	}
 	if cfg.SessionDefaults.Aliases == nil {
 		cfg.SessionDefaults.Aliases = []AliasConfig{}
+	}
+	if cfg.SessionDefaults.Programs == nil {
+		cfg.SessionDefaults.Programs = []ProgramConfig{}
 	}
 	if cfg.ConfigVersion == 0 {
 		cfg.ConfigVersion = 1
@@ -1057,11 +1476,17 @@ func LoadConfigFromPath(path string) (*Config, error) {
 		cfg.EscapeAnalyticsSamplingRate = &one
 	}
 
+	// Normalize RetryPolicy.Backoff at load time: an illegal/typo'd value would
+	// otherwise silently behave identically to "exponential" forever with no
+	// signal that the field doesn't do anything.
+	cfg.RetryPolicy.Backoff = cfg.RetryPolicy.BackoffOrWarn()
+
 	// Unmarshaling produces a zero Config with no executor; initialize it now
 	// so GetClaudeCommand / GetAvailablePrograms don't panic on nil executor.
 	cfg.executor = newTimeoutCommandExecutor(5 * time.Second)
 
 	cfg.Capacity = cfg.Capacity.CapacityConfigOrDefault()
+	cfg.HandoffSummary = cfg.HandoffSummary.HandoffSummaryConfigOrDefault()
 	cfg.Quota = cfg.Quota.QuotaConfigOrDefault()
 
 	// Apply environment variable overrides (never log the value).
@@ -1152,7 +1577,7 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 			return data, nil
 		}
 		// If existing key is invalid, regenerate
-		log.WarningLog.Printf("[Config] existing encryption key is invalid, regenerating")
+		log.WarningLog().Printf("[Config] existing encryption key is invalid, regenerating")
 	}
 
 	// Generate new 32-byte key
@@ -1165,7 +1590,7 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 
 	// Persist to disk; non-fatal if it fails
 	if err := SaveConfig(c); err != nil {
-		log.WarningLog.Printf("[Config] failed to persist encryption key: %v", err)
+		log.WarningLog().Printf("[Config] failed to persist encryption key: %v", err)
 	}
 
 	return key, nil
@@ -1186,7 +1611,7 @@ func (c *Config) GetOrCreateClaimantHostID() (string, error) {
 
 	// Persist to disk; non-fatal if it fails
 	if err := SaveConfig(c); err != nil {
-		log.WarningLog.Printf("[Config] failed to persist claimant host id: %v", err)
+		log.WarningLog().Printf("[Config] failed to persist claimant host id: %v", err)
 	}
 
 	return c.ClaimantHostID, nil
@@ -1208,16 +1633,62 @@ func (c *Config) SlackSigningSecretOverride() string {
 	return c.slackSigningSecretOverride
 }
 
+// FeaturePiSupport gates pi-coding-agent-specific surfaces (program picker entry,
+// resume-flag injection, approval-extension parity) behind an explicit opt-in.
+// See project_plans/pi-support/implementation/plan.md, Epic 2.1.
+const FeaturePiSupport = "pi-support"
+
+// FeatureAppScrollForwardingClaude gates forwarding Claude Code's own PageUp
+// scroll keybinding into its fullscreen conversation view (instead of relying
+// solely on tmux-native scrollback capture) for eligible Claude Code sessions
+// -- eligibility itself is AppScrollGate's job, this flag is the independent
+// kill switch on top of it. Off by default, live-settable, never an env var
+// (Risk Control's "Feature flags" bullet). See
+// project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
+// Scoped per-adapter deliberately: the future pi/agy equivalents
+// (":pi"/":agy") are separate flag keys, not covered by this one.
+const FeatureAppScrollForwardingClaude = "terminal:app-scrollback-forwarding:claude"
+
 // GetFeatureFlag returns the persisted enabled state of the named feature flag.
 // Absent key returns false — all feature flags default to disabled.
 // Currently recognized flags:
 //
 //	"backlog" — enables the Backlog tab and backlog lifecycle controller.
+//	"webhook_triggers" — registers POST /webhooks/github and POST /webhooks/generic/{slug}.
+//	"pr_event_webhooks" — reacts to check_run/workflow_run/pull_request_review/issue_comment
+//	  GitHub deliveries on /webhooks/github by immediately reconciling a matching pr_pending
+//	  item, instead of waiting for PRStatusPoller's next tick. Independently toggleable from
+//	  "webhook_triggers", but has no effect unless "webhook_triggers" is also enabled (that
+//	  flag gates whether the route is registered at all).
+//	"pi-support" (FeaturePiSupport) — pi-coding-agent support, off by default.
+//	"terminal:app-scrollback-forwarding:claude" (FeatureAppScrollForwardingClaude) —
+//	  app-scrollback forwarding for Claude Code sessions, off by default.
 func (c *Config) GetFeatureFlag(name string) bool {
 	if c == nil || c.FeatureFlags == nil {
 		return false
 	}
 	return c.FeatureFlags[name]
+}
+
+// GetFeatureFlagWithDefault returns the persisted enabled state of the named feature
+// flag, or defaultValue if it has never been explicitly set. Unlike GetFeatureFlag
+// (every absent flag defaults to false), this lets one flag graduate to "on by
+// default" — e.g. terminal:resync-exec-gate-fast-lane (2026-08-25: an unset default
+// left resync-triggered resizes contending on the shared 5s-timeout exec-gate pool,
+// which can exceed the client's 4s stall watchdog and force a disconnect+reconnect;
+// the fast lane's dedicated 3s-budget pool exists specifically to avoid this) —
+// while every other flag keeps defaulting to false via GetFeatureFlag. An explicit
+// persisted false still opts back out; only a genuinely absent key falls through to
+// defaultValue.
+func (c *Config) GetFeatureFlagWithDefault(name string, defaultValue bool) bool {
+	if c == nil || c.FeatureFlags == nil {
+		return defaultValue
+	}
+	v, ok := c.FeatureFlags[name]
+	if !ok {
+		return defaultValue
+	}
+	return v
 }
 
 // SetFeatureFlag sets the named feature flag and persists the config to disk.
@@ -1227,6 +1698,27 @@ func (c *Config) SetFeatureFlag(name string, value bool) error {
 	}
 	c.FeatureFlags[name] = value
 	return SaveConfig(c)
+}
+
+// DeleteFeatureFlag removes the named flag entirely — a reader using
+// GetFeatureFlagWithDefault falls back to its default again — and persists
+// the config to disk.
+func (c *Config) DeleteFeatureFlag(name string) error {
+	delete(c.FeatureFlags, name)
+	return SaveConfig(c)
+}
+
+// GetFeatureFlagOverride reports the explicitly-persisted value of the named
+// feature flag: (value, true) when a key exists in FeatureFlags, (false,
+// false) when it's never been set. Distinguishes "explicitly false" from
+// "falling through to a default" for status/UI surfaces — GetFeatureFlag and
+// GetFeatureFlagWithDefault collapse that distinction on purpose.
+func (c *Config) GetFeatureFlagOverride(name string) (value bool, ok bool) {
+	if c == nil || c.FeatureFlags == nil {
+		return false, false
+	}
+	value, ok = c.FeatureFlags[name]
+	return value, ok
 }
 
 // ImportSessionEnabled reports whether the import-external-session feature
@@ -1239,4 +1731,13 @@ func (c *Config) SetFeatureFlag(name string, value bool) error {
 // without a server restart, matching the re-read behavior of GetFeatureFlag.
 func ImportSessionEnabled() bool {
 	return os.Getenv("STAPLER_SQUAD_ENABLE_SESSION_IMPORT") == "true"
+}
+
+// TmuxLifecycleV2Enabled reports whether control_mode.go's consolidated
+// classifyControlModeExit path is enabled. Defaults to false since
+// control_mode.go is the default, systemd-deployed backend every running
+// session uses — this migration ships as an opt-in for one release rather
+// than switching every session's classification path on the next restart.
+func TmuxLifecycleV2Enabled() bool {
+	return os.Getenv("STAPLER_SQUAD_TMUX_LIFECYCLE_V2") == "true"
 }

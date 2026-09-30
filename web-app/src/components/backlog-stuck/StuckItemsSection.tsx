@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import { useDiagnoseAction } from "@/lib/hooks/useDiagnoseAction";
 import { getStuckReasonLabel } from "./stuckReason";
 import { StuckItem } from "./StuckItem";
 import * as styles from "./StuckItemsSection.css";
@@ -40,12 +41,16 @@ const GROUP_ORDER: StuckReason[] = [
   StuckReason.BOUNCE_CAP_EXHAUSTED,
   StuckReason.PUSH_FAILED,
   StuckReason.SPAWN_FAILED,
+  StuckReason.STEER_FAILED,
   StuckReason.PR_PENDING_NO_PR,
   StuckReason.REWORK_BLOCKED_STALE,
   StuckReason.PR_NEEDS_FIX,
   StuckReason.RESPAWN_BLOCKED_ACTIVE,
   StuckReason.LIKELY_FLAKY,
   StuckReason.BLOCKED_BY_DEPENDENCY,
+  StuckReason.BLOCKED_BY_CLAIM,
+  StuckReason.WORKTREE_INCONSISTENT,
+  StuckReason.REPEATED_NOOP_DISPATCH,
 ];
 
 function itemKey(item: Pick<StuckBacklogItem, "itemId" | "reason">): string {
@@ -104,9 +109,11 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     snooze,
     bulkResetParkedRemediation,
     triggerRemediationNow,
+    overrideClaimBlock,
   } = useStuckBacklogItems();
   const { updateBacklogItem, transitionStatus, spawnSessionFromItem, approvePlan, getBacklogItem } =
     useBacklogService();
+  const { dispatchDiagnose } = useDiagnoseAction();
   const [filter, setFilter] = useState<FilterValue>("all");
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const [resolvedGhosts, setResolvedGhosts] = useState<Map<string, ResolvedGhost>>(new Map());
@@ -124,6 +131,12 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
   const reworkCapOverridesRef = useRef<Map<string, number | undefined>>(new Map());
   const [bulkResetState, setBulkResetState] = useState<"idle" | "pending" | "error">("idle");
   const [bulkResetMessage, setBulkResetMessage] = useState<string | null>(null);
+  // Which single reason's "Reset parked (N)" button is mid-flight — kept
+  // separate from bulkResetState (the global "Reset all parked" button's own
+  // pending flag) so each button can show its own label/spinner, but both are
+  // combined below into anyResetPending so the two families still can't fire
+  // overlapping resets that would clobber the single shared bulkResetMessage.
+  const [resettingReason, setResettingReason] = useState<StuckReason | null>(null);
 
   const prevItemsRef = useRef<StuckBacklogItem[]>([]);
   const ghostTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -385,6 +398,20 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     [approvePlan, refetch]
   );
 
+  // Diagnose & Nudge (backlog item 68964304): dispatches a diagnostic agent
+  // scoped to this card's own StuckReason. Deliberately NOT
+  // try/catch-swallowed, same rationale as handleApprovePlan above — the
+  // card needs the specific dispatch failure, not a generic one. Does not
+  // refetch(): dispatching a diagnostic session doesn't change this item's
+  // stuck-state row by itself (a nudge, if the agent performs one, is what
+  // eventually resolves the condition on a later poll tick).
+  const handleDiagnose = useCallback(
+    async (itemId: string, reason: StuckReason): Promise<void> => {
+      await dispatchDiagnose(itemId, reason);
+    },
+    [dispatchDiagnose]
+  );
+
   // Visible items: the filtered set actually rendered. Cross-reference badges
   // are computed from this set so they auto-suppress once a filter narrows an
   // item to a single visible card.
@@ -432,8 +459,12 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     const map = new Map<StuckReason, StuckBacklogItem[]>();
     for (const reason of GROUP_ORDER) map.set(reason, []);
     for (const item of visibleItems) {
-      if (!map.has(item.reason)) map.set(item.reason, []);
-      map.get(item.reason)!.push(item);
+      const list = map.get(item.reason);
+      if (list) {
+        list.push(item);
+      } else {
+        map.set(item.reason, [item]);
+      }
     }
     for (const list of map.values()) {
       list.sort((a, b) => firstDetectedMs(a) - firstDetectedMs(b));
@@ -456,19 +487,53 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     () => items.filter((i) => i.remediationAttempts >= MAX_REMEDIATION_ATTEMPTS).length,
     [items]
   );
-
-  const handleBulkResetParked = useCallback(async () => {
-    setBulkResetState("pending");
-    setBulkResetMessage(null);
-    try {
-      const n = await bulkResetParkedRemediation();
-      setBulkResetState("idle");
-      setBulkResetMessage(n > 0 ? `Reset ${n} parked item${n !== 1 ? "s" : ""}.` : "No parked items to reset.");
-    } catch (err) {
-      setBulkResetState("error");
-      setBulkResetMessage(err instanceof Error ? err.message : "Bulk reset failed");
+  const parkedCountByReason = useMemo(() => {
+    const counts = new Map<StuckReason, number>();
+    for (const item of items) {
+      if (item.remediationAttempts >= MAX_REMEDIATION_ATTEMPTS) {
+        counts.set(item.reason, (counts.get(item.reason) ?? 0) + 1);
+      }
     }
-  }, [bulkResetParkedRemediation]);
+    return counts;
+  }, [items]);
+
+  // True while either the global or a per-reason reset is in flight — gates
+  // both button families so an operator can't fire two overlapping
+  // BulkResetStuckRemediation calls whose resulting toasts would clobber the
+  // single shared bulkResetMessage state.
+  const anyResetPending = bulkResetState === "pending" || resettingReason !== null;
+
+  // Shared by both the global "Reset all parked" button and each
+  // per-reason-group "Reset parked (N)" button — reason omitted resets
+  // across every reason (unchanged existing behavior), reason set scopes
+  // the reset (and the resulting message) to just that bucket.
+  const handleBulkResetParked = useCallback(
+    async (reason?: StuckReason) => {
+      if (anyResetPending) {
+        return;
+      }
+      if (reason !== undefined) {
+        setResettingReason(reason);
+      } else {
+        setBulkResetState("pending");
+      }
+      setBulkResetMessage(null);
+      try {
+        const n = await bulkResetParkedRemediation(reason);
+        setBulkResetState("idle");
+        const scope = reason !== undefined ? ` in ${getStuckReasonLabel(reason)}` : "";
+        setBulkResetMessage(
+          n > 0 ? `Reset ${n} parked item${n !== 1 ? "s" : ""}${scope}.` : "No parked items to reset."
+        );
+      } catch (err) {
+        setBulkResetState("error");
+        setBulkResetMessage(err instanceof Error ? err.message : "Bulk reset failed");
+      } finally {
+        setResettingReason(null);
+      }
+    },
+    [anyResetPending, bulkResetParkedRemediation]
+  );
 
   const chips: { value: FilterValue; label: string; count: number }[] = [
     { value: "all", label: "All", count: totalCount },
@@ -488,9 +553,12 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     body = (
       <div className={styles.errorBannerFullBody} data-testid="stuck-items-error-full">
         <span>⚠ Couldn&apos;t check for stuck items right now.</span>
-        <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
-          Retry
-        </button>
+        {
+          // analytics-exempt
+          <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
+            Retry
+          </button>
+        }
       </div>
     );
   } else if (showInitialLoading) {
@@ -510,13 +578,16 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     body = (
       <div className={styles.filteredEmpty} data-testid="stuck-items-filtered-empty">
         <span>No stuck items match &quot;{activeFilterLabel}&quot;.</span>
-        <button
-          className={styles.clearFilterBtn}
-          onClick={handleClearFilter}
-          data-testid="stuck-items-clear-filter"
-        >
-          Clear filter
-        </button>
+        {
+          // analytics-exempt
+          <button
+            className={styles.clearFilterBtn}
+            onClick={handleClearFilter}
+            data-testid="stuck-items-clear-filter"
+          >
+            Clear filter
+          </button>
+        }
       </div>
     );
   } else {
@@ -524,11 +595,27 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
       <>
         {GROUP_ORDER.filter((reason) => (grouped.get(reason)?.length ?? 0) > 0).map((reason) => {
           const groupItems = grouped.get(reason) ?? [];
+          const parkedInGroup = parkedCountByReason.get(reason) ?? 0;
           return (
             <div className={styles.group} key={reason} data-testid={`stuck-group-${reason}`}>
-              <h3 className={styles.groupHeading}>
-                {getStuckReasonLabel(reason)} ({groupItems.length})
-              </h3>
+              <div className={styles.groupHeadingRow}>
+                <h3 className={styles.groupHeading}>
+                  {getStuckReasonLabel(reason)} ({groupItems.length})
+                </h3>
+                {parkedInGroup > 0 && (
+                  // analytics-exempt
+                  <button
+                    type="button"
+                    className={styles.resetParkedReasonBtn}
+                    onClick={() => handleBulkResetParked(reason)}
+                    disabled={anyResetPending}
+                    title={`Clear the automated-retry counters on every ${getStuckReasonLabel(reason)} item that has exhausted its 5 automated attempts, so they get a fresh shot`}
+                    data-testid={`stuck-group-reset-parked-${reason}`}
+                  >
+                    {resettingReason === reason ? "Resetting…" : `Reset parked (${parkedInGroup})`}
+                  </button>
+                )}
+              </div>
               <div className={styles.itemList}>
                 {groupItems.map((item) => {
                   const key = itemKey(item);
@@ -555,7 +642,9 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                       currentReworkCapOverride={reworkCapOverrides.get(item.itemId)}
                       reworkCapOverrideLoaded={reworkCapOverrides.has(item.itemId)}
                       onTriggerRemediationNow={triggerRemediationNow}
+                      onOverrideClaimBlock={overrideClaimBlock}
                       onApprovePlan={handleApprovePlan}
+                      onDiagnose={handleDiagnose}
                       focusItemId={focusItemId}
                     />
                   );
@@ -576,11 +665,12 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
           {totalCount} stuck
         </span>
         {parkedCount > 0 && (
+          // analytics-exempt
           <button
             type="button"
             className={styles.resetParkedBtn}
-            onClick={handleBulkResetParked}
-            disabled={bulkResetState === "pending"}
+            onClick={() => handleBulkResetParked()}
+            disabled={anyResetPending}
             title="Clear the automated-retry counters on every item that has exhausted its 5 automated attempts, so they get a fresh shot"
             data-testid="stuck-items-reset-parked"
           >
@@ -604,15 +694,19 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
             Couldn&apos;t refresh stuck items (last updated{" "}
             {Math.max(0, Math.floor((Date.now() - lastFetched.getTime()) / 60000))}m ago).
           </span>
-          <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
-            Retry
-          </button>
+          {
+            // analytics-exempt
+            <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
+              Retry
+            </button>
+          }
         </div>
       )}
 
       {!showFirstLoadError && !showInitialLoading && totalCount > 0 && (
         <div className={styles.filterRow} role="group" aria-label="Filter stuck items by reason">
           {chips.map(({ value, label, count }) => (
+            // analytics-exempt
             <button
               key={String(value)}
               className={`${styles.chip} ${filter === value ? styles.chipActive : ""}`}

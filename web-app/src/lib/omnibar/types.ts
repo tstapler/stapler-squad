@@ -149,12 +149,3 @@ export interface ValidationResult {
   expandedPath?: string;
   requiresClone?: boolean;
 }
-
-export interface SessionSource {
-  type: InputType;
-  localPath: string;
-  branch?: string;
-  gitHubRef?: GitHubRef;
-  suggestedName: string;
-  requiresClone: boolean;
-}

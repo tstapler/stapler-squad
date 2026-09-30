@@ -1,0 +1,14 @@
+{
+  "id": "estimated-value",
+  "type": "frontend",
+  "component": "EstimatedValue",
+  "path": "web-app/src/components/ui/EstimatedValue.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "EstimatedValue > EstimatedValue_should_renderTildePrefixedValue_when_childrenProvided",
+    "EstimatedValue > EstimatedValue_should_setTitleAttribute_when_titlePropProvided",
+    "EstimatedValue > EstimatedValue_should_linkAriaDescribedbyToTooltipText_when_rendered"
+  ],
+  "lastModified": "2026-09-03T00:00:00.000Z"
+}

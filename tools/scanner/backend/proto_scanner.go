@@ -25,62 +25,64 @@ type BackendFeature struct {
 }
 
 // methodToID maps proto RPC method names to their canonical feature IDs.
-var methodToID = map[string]string{
-	"CreateSession":            "session:create",
-	"GetSession":               "session:get",
-	"UpdateSession":            "session:update",
-	"DeleteSession":            "session:delete",
-	"ListSessions":             "session:list",
-	"WatchSessions":            "session:watch",
-	"StreamTerminal":           "session:stream-terminal",
-	"GetSessionDiff":           "session:get-diff",
-	"GetVCSStatus":             "session:get-vcs-status",
-	"GetReviewQueue":           "review-queue:get",
-	"AcknowledgeSession":       "session:acknowledge",
-	"GetLogs":                  "logs:get",
-	"WatchReviewQueue":         "review-queue:watch",
-	"LogUserInteraction":       "interaction:log",
-	"GetClaudeConfig":          "claude-config:get",
-	"ListClaudeConfigs":        "claude-config:list",
-	"UpdateClaudeConfig":       "claude-config:update",
-	"ListClaudeHistory":        "history:list",
-	"GetClaudeHistoryDetail":   "history:get-detail",
-	"GetClaudeHistoryMessages": "history:get-messages",
-	"SearchClaudeHistory":      "history:search",
-	"GetPRInfo":                "pr:get-info",
-	"GetPRComments":            "pr:get-comments",
-	"PostPRComment":            "pr:post-comment",
-	"MergePR":                  "pr:merge",
-	"ClosePR":                  "pr:close",
-	"SendNotification":         "notification:send",
-	"FocusWindow":              "window:focus",
-	"RenameSession":            "session:rename",
-	"RestartSession":           "session:restart",
-	"GetWorkspaceInfo":         "workspace:get-info",
-	"ListWorkspaceTargets":     "workspace:list-targets",
-	"SwitchWorkspace":          "workspace:switch",
-	"ResolveApproval":          "approval:resolve",
-	"ListPendingApprovals":     "approval:list-pending",
-	"CreateDebugSnapshot":      "debug:create-snapshot",
-	"GetNotificationHistory":   "notification:get-history",
-	"MarkNotificationRead":     "notification:mark-read",
-	"ClearNotificationHistory": "notification:clear-history",
-	"ListApprovalRules":        "approval:list-rules",
-	"UpsertApprovalRule":       "approval:upsert-rule",
-	"DeleteApprovalRule":       "approval:delete-rule",
-	"GetApprovalAnalytics":     "approval:get-analytics",
-	"ListDatabases":            "database:list",
-	"GetCurrentDatabase":       "database:get-current",
-	"SwitchDatabase":           "database:switch",
-	"MergeDatabase":            "database:merge",
-	"CreateCheckpoint":         "checkpoint:create",
-	"ListCheckpoints":          "checkpoint:list",
-	"ForkSession":              "session:fork",
-	"ListFiles":                "file:list",
-	"GetFileContent":           "file:get-content",
-	"SearchFiles":              "file:search",
-	"ListPathCompletions":      "path:list-completions",
-	"ListWorktrees":            "worktree:list",
+var methodToID = map[string]string{ //nolint:gochecknoglobals
+	"CreateSession":             "session:create",
+	"GetSession":                "session:get",
+	"UpdateSession":             "session:update",
+	"DeleteSession":             "session:delete",
+	"ListSessions":              "session:list",
+	"WatchSessions":             "session:watch",
+	"StreamTerminal":            "session:stream-terminal",
+	"GetSessionDiff":            "session:get-diff",
+	"GetVCSStatus":              "session:get-vcs-status",
+	"GetReviewQueue":            "review-queue:get",
+	"AcknowledgeSession":        "session:acknowledge",
+	"GetLogs":                   "logs:get",
+	"WatchReviewQueue":          "review-queue:watch",
+	"LogUserInteraction":        "interaction:log",
+	"GetClaudeConfig":           "claude-config:get",
+	"ListClaudeConfigs":         "claude-config:list",
+	"UpdateClaudeConfig":        "claude-config:update",
+	"ListClaudeHistory":         "history:list",
+	"GetClaudeHistoryDetail":    "history:get-detail",
+	"GetClaudeHistoryMessages":  "history:get-messages",
+	"SearchClaudeHistory":       "history:search",
+	"GetPRInfo":                 "pr:get-info",
+	"GetPRComments":             "pr:get-comments",
+	"PostPRComment":             "pr:post-comment",
+	"MergePR":                   "pr:merge",
+	"ClosePR":                   "pr:close",
+	"SendNotification":          "notification:send",
+	"FocusWindow":               "window:focus",
+	"RenameSession":             "session:rename",
+	"RestartSession":            "session:restart",
+	"RetrySession":              "session:retry",
+	"GetWorkspaceInfo":          "workspace:get-info",
+	"ListWorkspaceTargets":      "workspace:list-targets",
+	"SwitchWorkspace":           "workspace:switch",
+	"ResolveApproval":           "approval:resolve",
+	"ListPendingApprovals":      "approval:list-pending",
+	"CreateDebugSnapshot":       "debug:create-snapshot",
+	"GetNotificationHistory":    "notification:get-history",
+	"MarkNotificationRead":      "notification:mark-read",
+	"ClearNotificationHistory":  "notification:clear-history",
+	"ListApprovalRules":         "approval:list-rules",
+	"UpsertApprovalRule":        "approval:upsert-rule",
+	"DeleteApprovalRule":        "approval:delete-rule",
+	"ReloadClaudeSettingsRules": "approval:reload-claude-settings-rules",
+	"GetApprovalAnalytics":      "approval:get-analytics",
+	"ListDatabases":             "database:list",
+	"GetCurrentDatabase":        "database:get-current",
+	"SwitchDatabase":            "database:switch",
+	"MergeDatabase":             "database:merge",
+	"CreateCheckpoint":          "checkpoint:create",
+	"ListCheckpoints":           "checkpoint:list",
+	"ForkSession":               "session:fork",
+	"ListFiles":                 "file:list",
+	"GetFileContent":            "file:get-content",
+	"SearchFiles":               "file:search",
+	"ListPathCompletions":       "path:list-completions",
+	"ListWorktrees":             "worktree:list",
 	// Project management RPCs
 	"CreateProject":           "project:create",
 	"ListProjects":            "project:list",
@@ -135,6 +137,7 @@ var methodToID = map[string]string{
 	// Backlog RPCs (BacklogService in backlog.proto)
 	"CreateBacklogItem":           "backlog:create-item",
 	"CreateBacklogItemFromChat":   "backlog:create-item-from-chat",
+	"ParseBacklogItemIntent":      "backlog:parse-item-intent",
 	"GetBacklogItem":              "backlog:get-item",
 	"ListBacklogItems":            "backlog:list-items",
 	"UpdateBacklogItem":           "backlog:update-item",
@@ -174,6 +177,13 @@ var methodToID = map[string]string{
 	"GetPipelineMode":             "backlog:get-pipeline-mode",
 	"ListPipelineModes":           "backlog:list-pipeline-modes",
 	"AddBacklogItemDependency":    "backlog:add-item-dependency",
+	"DispatchToJules":             "backlog:dispatch-to-jules",
+	// Jules config RPCs (google-jules-integration Epic 2.4)
+	"GetJulesConfig":       "jules:get-config",
+	"UpdateJulesConfig":    "jules:update-config",
+	"TestJulesConnection":  "jules:test-connection",
+	"ConfirmEgressConsent": "jules:confirm-egress-consent",
+	"RevokeEgressConsent":  "jules:revoke-egress-consent",
 	// GitHub issue import RPCs (BacklogService) - mapped to the method name
 	// itself, not a kebab-case backlog:* id: origin/main already has
 	// committed registry files under docs/registry/features/backend/{method
@@ -191,6 +201,10 @@ var methodToID = map[string]string{
 	"ImportGitHubIssue": "ImportGitHubIssue",
 	// Launcher presets RPCs
 	"GetLauncherPresets": "launcher_presets:get",
+	// Program config RPCs
+	"ListProgramsConfig":  "program_config:list",
+	"UpsertProgramConfig": "program_config:upsert",
+	"DeleteProgramConfig": "program_config:delete",
 	// Session lifecycle RPCs
 	"ArchiveSession":          "session:archive",
 	"UnarchiveSession":        "session:unarchive",
@@ -198,6 +212,13 @@ var methodToID = map[string]string{
 	"ResumeHibernatedSession": "session:resume-hibernated",
 	"ResumeCrashedSession":    "session:resume-crashed",
 	"WriteToSession":          "session:write",
+	// Async session creation cancel/retry RPCs (async-session-creation Epic 6.3,
+	// Story 6.3.1) -- match the existing "// +api: session:cancel-creation" /
+	// "// +api: session:retry-creation" markers in session_service.go verbatim,
+	// or ScanProto's method-name fallback produces a second, non-marker-matching
+	// id/file (see the SearchGitHubRepos comment above for the failure mode).
+	"CancelSessionCreation": "session:cancel-creation",
+	"RetrySessionCreation":  "session:retry-creation",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",
 	"DeleteShell":  "shell:delete",
@@ -212,11 +233,22 @@ var methodToID = map[string]string{
 	"ListWorkflows":  "workflow:list",
 	"UpdateWorkflow": "workflow:update",
 	"RunWorkflow":    "workflow:run",
+	"WatchWorkflows": "workflow:watch",
 	// Trigger fire audit trail RPC (webhook-triggers Epic 1.2, Task 1.2.1d)
 	"ListTriggerFireEvents": "workflow:list-trigger-fire-events",
 	// Outbound callback config RPCs (webhook-triggers Phase 5, FR7)
 	"GetCallbackConfig":    "callback-config:get",
 	"UpdateCallbackConfig": "callback-config:update",
+	// Stream Hub Rollout RPCs (terminal-multi-connection-streaming Story 3.3)
+	"GetStreamHubRolloutStatus":          "stream-hub-rollout:get",
+	"CompleteStreamHubRollbackRehearsal": "stream-hub-rollout:complete-rehearsal",
+	"SetStreamHubSessionOverride":        "stream-hub-rollout:set-session-override",
+	"SetStreamHubGlobalOverride":         "stream-hub-rollout:set-global-override",
+	// Tymux Rollout RPCs (tymux-bundled-integration Epic 3.3)
+	"GetTymuxRolloutStatus":          "tymux-rollout:get",
+	"CompleteTymuxRollbackRehearsal": "tymux-rollout:complete-rehearsal",
+	"SetTymuxSessionOverride":        "tymux-rollout:set-session-override",
+	"SetTymuxGlobalOverride":         "tymux-rollout:set-global-override",
 	// Approval rules RPCs
 	"BulkUpsertRules":       "approval:bulk-upsert-rules",
 	"ExportRules":           "approval:export-rules",
@@ -258,6 +290,115 @@ var methodToID = map[string]string{
 	"GetSlackConfig":    "slack-config:get",
 	"UpdateSlackConfig": "slack-config:update",
 	"TestSlackWebhook":  "slack-config:test-webhook",
+	// PR creation RPCs
+	"DraftPullRequest":  "session:draft-pull-request",
+	"CreatePullRequest": "session:create-pull-request",
+	// Remote (SSH remote workspaces) RPCs (RemoteService in remote.proto).
+	// remote.proto was omitted from registry-generate-backend's explicit proto
+	// enumeration until this mapping was added (ssh-remote-workspaces Phase 6
+	// Epic 6.3, Story 6.3.1) -- these RPCs' // +api: markers in
+	// remote_service.go already used these exact kebab-case ids, so the ids
+	// here must match verbatim or ScanProto's method-name fallback would
+	// produce a second, non-marker-matching id and file.
+	"TestRemoteConnection":   "remote:test-connection",
+	"TrustRemoteHostKey":     "remote:trust-host-key",
+	"GenerateRemoteIdentity": "remote:generate-identity",
+	"ListRemotes":            "remote:list",
+	"CreateRemote":           "remote:create",
+	"DeleteRemote":           "remote:delete",
+	// Headless call RPC (HeadlessService in headless.proto). Found via
+	// TestMethodToIDCompleteness after that test was switched from a hardcoded proto file
+	// list to globbing proto/session/v1/*.proto -- headless.proto was invisible to every
+	// hardcoded proto enumeration in this repo (Makefile's registry-generate-backend,
+	// prune-stale-backend.sh, validate-registry.sh, AND this test's own old list), the same
+	// bug class ssh-remote-workspaces Phase 6 Epic 6.3 found and fixed for remote.proto.
+	// The other three enumerations now glob proto/session/v1/*.proto via
+	// tools/scanner/list-backend-protos.sh instead of hand-enumerating, so headless.proto
+	// (and any future service-bearing proto) is picked up automatically.
+	"RunHeadlessCall": "headless:run-call",
+	// Handoff summary RPCs (HandoffSummaryService in handoff_summary.proto,
+	// added by #612 without a methodToID entry or a registry-generate-backend
+	// Makefile enumeration — the same hardcoded-proto-list bug class as
+	// remote.proto/headless.proto above, caught by TestMethodToIDCompleteness's
+	// glob. Wired fully (map entry + Makefile enumeration) like remote.proto,
+	// not left as a followup like headless.proto, since it was cheap here.
+	// Tagging-classifier RPCs (tagging_classifier_service.go).
+	"GetTaggingClassifierConfig":    "tagging-classifier:get-config",
+	"UpdateTaggingClassifierConfig": "tagging-classifier:update-config",
+	"ReclassifySessionTags":         "tagging-classifier:reclassify-session",
+	"ListTaggingRules":              "tagging-rule:list",
+	"UpsertTaggingRule":             "tagging-rule:upsert",
+	"DeleteTaggingRule":             "tagging-rule:delete",
+	"GetHandoffSummary":             "handoff-summary:get",
+	"TriggerHandoffSummary":         "handoff-summary:trigger",
+	// LivenessDefinition CRUD RPCs (Epic 1.3 of backlog-custom-workflow-stages)
+	// -- pre-existing collateral debt found by TestMethodToIDCompleteness
+	// while wiring Epic 2.7's own methodToID entries below: these markers
+	// (server/services/backlog_service_liveness.go) existed since Epic 1.3
+	// but were never added here, so ScanProto's method-name fallback had
+	// been producing flat, non-marker-matching files (CreateLivenessDefinition.json
+	// etc.) instead of docs/registry/features/backend/backlog/*.json --
+	// same bug class as the SearchGitHubRepos comment above documents.
+	"CreateLivenessDefinition": "backlog:create-liveness-definition",
+	"UpdateLivenessDefinition": "backlog:update-liveness-definition",
+	"DeleteLivenessDefinition": "backlog:delete-liveness-definition",
+	"GetLivenessDefinition":    "backlog:get-liveness-definition",
+	"ListLivenessDefinitions":  "backlog:list-liveness-definitions",
+	// Stage/StageTransition/TransitionGate CRUD RPCs (Epic 2.7 of
+	// backlog-custom-workflow-stages) -- must match the "// +api:
+	// backlog:*" markers in server/services/backlog_service_stages.go and
+	// backlog_service_transitions.go verbatim, or ScanProto's method-name
+	// fallback produces a second, non-marker-matching id and file (see the
+	// SearchGitHubRepos comment above for the failure mode).
+	"CreateStage":           "backlog:create-stage",
+	"UpdateStage":           "backlog:update-stage",
+	"DeleteStage":           "backlog:delete-stage",
+	"GetStage":              "backlog:get-stage",
+	"ListStages":            "backlog:list-stages",
+	"CreateStageTransition": "backlog:create-stage-transition",
+	"UpdateStageTransition": "backlog:update-stage-transition",
+	"DeleteStageTransition": "backlog:delete-stage-transition",
+	"GetStageTransition":    "backlog:get-stage-transition",
+	"ListStageTransitions":  "backlog:list-stage-transitions",
+	"CreateTransitionGate":  "backlog:create-transition-gate",
+	"UpdateTransitionGate":  "backlog:update-transition-gate",
+	"DeleteTransitionGate":  "backlog:delete-transition-gate",
+	"GetTransitionGate":     "backlog:get-transition-gate",
+	"ListTransitionGates":   "backlog:list-transition-gates",
+	"RecordGateApproval":    "backlog:record-gate-approval",
+	"GetPendingGates":       "backlog:get-pending-gates",
+	// Tmux client/server version mismatch RPCs (session.proto) -- pre-existing
+	// collateral debt found by TestMethodToIDCompleteness: must match the
+	// "// +api: tmux:*" markers in server/services/tmux_version_status_service.go
+	// verbatim, same failure mode as the SearchGitHubRepos comment above.
+	"GetTmuxVersionStatus": "tmux:version-status",
+	"RestartTmuxServer":    "tmux:restart-server",
+	// Durable guidance-request RPCs (GuidanceRequestService in
+	// guidance_request.proto, #809) -- must match the "// +api:
+	// guidance-request:*" markers in server/services/guidance_request_service.go
+	// verbatim, same failure mode as the SearchGitHubRepos comment above.
+	"CreateGuidanceRequest":          "guidance-request:create",
+	"AnswerGuidanceRequest":          "guidance-request:answer",
+	"GetGuidanceRequest":             "guidance-request:get",
+	"ListGuidanceRequests":           "guidance-request:list",
+	"ListAllPendingGuidanceRequests": "guidance-request:list-all-pending",
+	// DismissFinding (InsightsService in insights.proto) -- its
+	// "// +api: DismissFinding" marker in server/services/insights_service.go
+	// already uses the method-name-as-id convention (see the SearchGitHubRepos
+	// comment above), so match it verbatim rather than a kebab-case id.
+	"DismissFinding": "DismissFinding",
+	// Diagnose & Nudge RPCs (DiagnosticService in diagnose.proto, backlog item
+	// 68964304) -- must match the "// +api: session:diagnose-*" markers in
+	// server/services/diagnostic_service.go verbatim, same failure mode as
+	// the SearchGitHubRepos comment above.
+	"AssembleDiagnosticBundle": "session:diagnose-assemble-bundle",
+	"DispatchDiagnose":         "session:diagnose-dispatch",
+	// ProbeProgram (SessionService in session.proto) -- pre-existing gap found
+	// by TestMethodToIDCompleteness while adding the entries above (unrelated
+	// to Diagnose & Nudge). No "// +api:" marker exists on
+	// server/services/session_service.go's ProbeProgram handler, so
+	// markerFound stays false for this entry until one is added separately.
+	"ProbeProgram": "program:probe",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

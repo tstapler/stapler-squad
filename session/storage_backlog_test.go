@@ -220,3 +220,130 @@ func TestBackfillBacklogItemPublicIDs_should_NotDoubleAssign_When_TwoInstancesRa
 	}
 	assert.Len(t, seen, rowCount, "every row must end the race with its own unique public id")
 }
+
+// --- Story 2.1.2: repository queries for open and recent Jules sessions ---
+
+// newTestJulesItemSession creates a backlog item and a single ItemSession on it
+// with the given role/UUID, backdated to createdAgo (created_at is Immutable()
+// in the ent schema, so backdating must go through the raw ent client rather
+// than storage.CreateItemSession, which always uses time.Now() — same pattern
+// as newOrphanedTriageTestItem in backlog_lifecycle_stuck_test.go). Returns the
+// created ItemSession's ID.
+func newTestJulesItemSession(t *testing.T, storage *Storage, role, sessionUUID string, createdAgo time.Duration) (itemID string, sessionID string) {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "jules test item " + sessionUUID})
+	require.NoError(t, err)
+
+	parsedItemID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	is, err := storage.GetEntClient().ItemSession.Create().
+		SetSessionUUID(sessionUUID).
+		SetSessionRole(SessionRoleJulesWork).
+		SetBacklogItemID(parsedItemID).
+		SetCreatedAt(time.Now().Add(-createdAgo)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	return item.ID, is.ID.String()
+}
+
+// TestListOpenJulesItemSessions_should_ReturnOnlyUnfinishedJulesRows_When_MixedRolesPresent
+// guards Story 2.1.2: given an ended jules_work row, an open jules_work row, and an
+// open work row, only the open jules_work row comes back, carrying its BacklogItemID.
+func TestListOpenJulesItemSessions_should_ReturnOnlyUnfinishedJulesRows_When_MixedRolesPresent(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, endedID := newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/ended", 0)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, endedID, time.Now()))
+
+	openItemID, _ := newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/open", 0)
+
+	workItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "unrelated open work item"})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      workItem.ID,
+		SessionUUID: "tmux-work-session",
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	got, err := storage.ListOpenJulesItemSessions(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "only the one open jules_work row must come back")
+	assert.Equal(t, "jules-sessions/open", got[0].SessionUUID)
+	assert.Equal(t, openItemID, got[0].ItemID)
+}
+
+// TestCountJulesItemSessionsSince_should_RespectWindow_When_RowsSpanBoundary guards
+// Story 2.1.2: rows created inside the trailing 24h window are counted, a row created
+// outside it is excluded.
+func TestCountJulesItemSessionsSince_should_RespectWindow_When_RowsSpanBoundary(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/recent-1", 2*time.Hour)
+	newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/recent-2", 2*time.Hour)
+	newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/old", 30*time.Hour)
+
+	got, err := storage.CountJulesItemSessionsSince(ctx, time.Now().Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 2, got, "the 30h-old row must be excluded from the 24h window")
+}
+
+// TestCountJulesItemSessionsSince_should_ExcludePendingReservationsAndDispatchFailedRows_When_MixedOutcomesInWindow
+// guards pre-mortem P2 #5: a still-reserved row (session_uuid carrying
+// julesPendingUUIDPrefix) and a row that ended dispatch_failed were never billed by
+// Jules, so neither should consume the daily dispatch cap — only the confirmed row
+// (session_uuid starting "jules-sessions/") counts.
+func TestCountJulesItemSessionsSince_should_ExcludePendingReservationsAndDispatchFailedRows_When_MixedOutcomesInWindow(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/confirmed", 2*time.Hour)
+	newTestJulesItemSession(t, storage, SessionRoleJulesWork, julesPendingUUIDPrefix+"reservation", 1*time.Hour)
+	_, failedID := newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/failed-attempt", 30*time.Minute)
+	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, failedID, time.Now(), julesDispatchFailedEndReason))
+
+	got, err := storage.CountJulesItemSessionsSince(ctx, time.Now().Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 1, got, "only the confirmed, non-failed row should count toward the daily cap")
+}
+
+// TestTouchItemSessionProgress_should_UpdateOnlyLastProgressAt_When_Called guards
+// Story 2.1.2: touching progress must not disturb git-activity fields it has nothing
+// to do with (last_commit_sha/base_commit_sha/commit_count_since_spawn all stay at
+// their zero values) — the reason this method exists separately from
+// UpdateItemSessionFileTouch.
+func TestTouchItemSessionProgress_should_UpdateOnlyLastProgressAt_When_Called(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, sessionID := newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/progress", 0)
+
+	before, err := storage.GetItemSession(ctx, sessionID)
+	require.NoError(t, err)
+	require.Equal(t, "", before.LastCommitSha)
+	require.Nil(t, before.LastProgressAt)
+
+	ts := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, storage.TouchItemSessionProgress(ctx, sessionID, ts))
+
+	after, err := storage.GetItemSession(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, after.LastProgressAt)
+	assert.True(t, ts.Equal(*after.LastProgressAt), "last_progress_at must be set to ts")
+	assert.Equal(t, "", after.LastCommitSha, "last_commit_sha must stay at its zero value")
+	assert.Equal(t, "", after.BaseCommitSha, "base_commit_sha must stay at its zero value")
+	assert.Equal(t, 0, after.CommitCountSinceSpawn, "commit_count_since_spawn must stay at its zero value")
+}

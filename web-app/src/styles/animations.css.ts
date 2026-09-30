@@ -28,48 +28,10 @@ export const glowTextKeyframes = keyframes({
   },
 });
 
-export const slideInFromRight = keyframes({
-  from: { transform: "translateX(24px)", opacity: 0 },
-  to: { transform: "translateX(0)", opacity: 1 },
-});
-
 export const slideInFromBottom = keyframes({
   from: { transform: "translateY(16px)", opacity: 0 },
   to: { transform: "translateY(0)", opacity: 1 },
 });
 
-export const fadeIn = keyframes({
-  from: { opacity: 0 },
-  to: { opacity: 1 },
-});
-
-export const terminalBlink = keyframes({
-  "0%, 49%": { opacity: 1 },
-  "50%, 100%": { opacity: 0 },
-});
-
 // ── Reusable utility styles ──────────────────────────────────────────────────
 
-/** Applies the theme-aware glow pulse to any element. */
-export const pulseGlow = style({
-  "@media": {
-    "(prefers-reduced-motion: no-preference)": {
-      animationName: pulseGlowKeyframes,
-      animationDuration: "2.5s",
-      animationTimingFunction: "ease-in-out",
-      animationIterationCount: "infinite",
-    },
-  },
-});
-
-/** Applies glow text shadow pulse. */
-export const glowText = style({
-  "@media": {
-    "(prefers-reduced-motion: no-preference)": {
-      animationName: glowTextKeyframes,
-      animationDuration: "3s",
-      animationTimingFunction: "ease-in-out",
-      animationIterationCount: "infinite",
-    },
-  },
-});

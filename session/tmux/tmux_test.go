@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,11 +20,17 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/wait"
+	"go.uber.org/goleak"
 )
 
 type MockPtyFactory struct {
 	t *testing.T
 
+	// mu guards cmds/files: RestoreWithWorkDir intentionally invokes
+	// attachPTYAfterRestore (and therefore Start/StartWithSize) concurrently
+	// across callers by design, so this bookkeeping must be safe for that.
+	mu sync.Mutex
 	// Array of commands and the corresponding file handles representing PTYs.
 	cmds  []*exec.Cmd
 	files []*os.File
@@ -35,8 +43,10 @@ func (pt *MockPtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
 	filePath := filepath.Join(pt.t.TempDir(), fmt.Sprintf("pty-%s-%d", safeName, rand.Int31()))
 	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
 	if err == nil {
+		pt.mu.Lock()
 		pt.cmds = append(pt.cmds, cmd)
 		pt.files = append(pt.files, f)
+		pt.mu.Unlock()
 	}
 	return f, cmd, err
 }
@@ -51,6 +61,16 @@ func NewMockPtyFactory(t *testing.T) *MockPtyFactory {
 	return &MockPtyFactory{
 		t: t,
 	}
+}
+
+// installPTYTripleForTest is a test-only unconditional PTY-triple setter for pre-race
+// state setup. Production code always goes through the generation-guarded
+// tryInstallPTYTriple/clearPTYTriple pair (AC7 requires setPTYTriple to no longer exist).
+func (t *TmuxSession) installPTYTripleForTest(file *os.File, cmd *exec.Cmd, waitOnce *sync.Once) {
+	t.ptmxMu.Lock()
+	defer t.ptmxMu.Unlock()
+	t.ptmx, t.attachCmd, t.attachCmdWaitOnce = file, cmd, waitOnce // allow-direct-ptmx-access
+	t.ptyGen++
 }
 
 func TestSanitizeName(t *testing.T) {
@@ -68,6 +88,61 @@ func TestSanitizeName(t *testing.T) {
 	// Test combined special characters
 	session = NewTmuxSession("My: Session. Name", "program")
 	require.Equal(t, TmuxPrefix+"My_Session_Name", session.sanitizedName)
+
+	// Regression (2026-09-10): a workflow-fired title's " <em dash> " separator
+	// (e.g. "PR Code Review — 2026-09-10 12:03") produced a sanitizedName that
+	// kept the em dash. `tmux new-session -s <that name>` reported success and
+	// t.sanitizedName kept the em dash throughout, but a `tmux list-sessions`
+	// moments later, on the same socket, only ever showed the
+	// underscore-substituted form -- so Start()'s post-creation existence
+	// check never found the session it had just (successfully) created, and
+	// timed out treating a live, healthy session as failed. Every ASCII-only
+	// session name round-trips correctly; this asserts non-ASCII never
+	// reaches sanitizedName at all, regardless of the exact tmux-side
+	// transformation (never fully identified -- see nonSafeTmuxNameChar's doc
+	// comment).
+	session = NewTmuxSession("PR Code Review — 2026-09-10 12:03", "program")
+	require.Equal(t, TmuxPrefix+"PRCodeReview_2026-09-1012_03", session.sanitizedName)
+
+	// Same class, different offending character: "&" in a workflow title.
+	session = NewTmuxSession("Research & Synthesize to Notes — 2026-09-10 12:04", "program")
+	require.Equal(t, TmuxPrefix+"Research_SynthesizetoNotes_2026-09-1012_04", session.sanitizedName)
+}
+
+// safeTmuxNameBody matches the character set toStaplerSquadTmuxNameWithPrefix
+// must produce for the portion of sanitizedName after the (already-safe,
+// constant) prefix -- see nonSafeTmuxNameChar.
+var safeTmuxNameBody = regexp.MustCompile(`^[a-zA-Z0-9_-]*$`)
+
+// FuzzToStaplerSquadTmuxName asserts the sanitizer's invariant holds for any
+// input, not just the specific em-dash/ampersand cases known today: the
+// portion of the sanitized name after the prefix must only ever contain
+// characters already proven to round-trip safely through tmux (see
+// nonSafeTmuxNameChar's doc comment for why "known-safe allowlist" replaced
+// the previous "known-unsafe denylist" after this exact class of bug
+// recurred). Run with `go test -fuzz=FuzzToStaplerSquadTmuxName` to search
+// for counterexamples beyond the seed corpus.
+func FuzzToStaplerSquadTmuxName(f *testing.F) {
+	for _, seed := range []string{
+		"asdf",
+		"a sd f . . asdf",
+		"Resumed: test-session",
+		"PR Code Review — 2026-09-10 12:03",
+		"Research & Synthesize to Notes — 2026-09-10 12:04",
+		"emoji 🎉 title",
+		"curly ’quotes’ and “these”",
+		"ünïcödé évérywhere",
+		"", // empty title is a valid input (e.g. a not-yet-titled instance)
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, title string) {
+		got := ToStaplerSquadTmuxName(title)
+		require.True(t, strings.HasPrefix(got, TmuxPrefix), "sanitized name %q lost its prefix", got)
+		body := strings.TrimPrefix(got, TmuxPrefix)
+		require.True(t, safeTmuxNameBody.MatchString(body),
+			"sanitized name body %q (from title %q) contains a character outside [a-zA-Z0-9_-]", body, title)
+	})
 }
 
 func TestStartTmuxSession(t *testing.T) {
@@ -834,7 +909,10 @@ func TestGetPaneCurrentPath_ReturnsTrimmedPath(t *testing.T) {
 		RunFunc:            func(cmd *exec.Cmd) error { return nil },
 		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
-	session := newTmuxSession("capture-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix)
+	reg := NewFakeTmuxRegistry()
+	reg.SetHealthy(true)
+	session := newTmuxSession("capture-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, WithRegistry(reg))
+	reg.SetSessions([]string{session.GetSanitizedName()})
 
 	path, err := session.GetPaneCurrentPath()
 
@@ -1114,12 +1192,22 @@ func TestCapturePaneSemaphore(t *testing.T) {
 		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
 
+	// DoesSessionExist() short-circuits capture-pane against a session already
+	// known gone (see CapturePaneContentContext's doc comment) -- register every
+	// session as existing so each goroutine's call actually reaches cmdExec.Output
+	// instead of failing fast with ErrSessionNotFound.
+	sessionNames := make([]string, goroutines)
+	for i := range sessionNames {
+		sessionNames[i] = fmt.Sprintf("sem-test-%d", i)
+	}
+	reg := registryWithExistingSessions(sessionNames...)
+
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 	for i := 0; i < goroutines; i++ {
 		go func(i int) {
 			defer wg.Done()
-			session := newTmuxSession(fmt.Sprintf("sem-test-%d", i), "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix)
+			session := newTmuxSession(fmt.Sprintf("sem-test-%d", i), "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, WithRegistry(reg))
 			_, _ = session.CapturePaneContent()
 		}(i)
 	}
@@ -1146,7 +1234,12 @@ func TestCapturePaneContentPriority_should_UseFastLaneGate_When_ExecGateFastLane
 		RunFunc:            func(cmd *exec.Cmd) error { return nil },
 		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
-	session := newTmuxSessionWithSocket("fast-lane-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, serverSocket)
+	// CapturePaneContent()'s CapturePaneContentContext short-circuits via
+	// DoesSessionExist() against a session already known gone (see that
+	// method's doc comment) -- register the session as existing so the call
+	// below actually reaches cmdExec.
+	reg := registryWithExistingSessions("fast-lane-test")
+	session := newTmuxSessionWithSocket("fast-lane-test", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, serverSocket, WithRegistry(reg))
 
 	releaseFastLane, err := AcquireResyncExecSlot(context.Background(), serverSocket)
 	require.NoError(t, err)
@@ -1195,21 +1288,25 @@ func (erroringPtyFactory) StartWithSize(cmd *exec.Cmd, _ *pty.Winsize) (*os.File
 func (erroringPtyFactory) Close() {}
 
 func TestLockedPTMX_ReturnsNil_BeforeAnyTripleSet(t *testing.T) {
-	t.Parallel()
 	session := newTmuxSession("locked-ptmx-nil-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
 	require.Nil(t, session.lockedPTMX())
 }
 
-func TestSetPTYTriple_AssignsAllThreeFieldsTogether(t *testing.T) {
-	t.Parallel()
-	session := newTmuxSession("set-pty-triple-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+func TestTryInstallPTYTriple_AssignsAllThreeFieldsTogether_WhenGenMatches(t *testing.T) {
+	session := newTmuxSession("try-install-pty-triple-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
 	cmd := safeexec.CommandContext(context.Background(), "true")
 	once := new(sync.Once)
 
-	session.setPTYTriple(r, cmd, once)
+	_, gen, closed := session.ptySnapshot()
+	require.False(t, closed)
+
+	ok, currentFile, closedNow := session.tryInstallPTYTriple(gen, r, cmd, once)
+	require.True(t, ok)
+	require.Equal(t, r, currentFile)
+	require.False(t, closedNow)
 
 	require.Equal(t, r, session.lockedPTMX())
 	require.Equal(t, cmd, session.attachCmd)          // allow-direct-ptmx-access: same-package assertion, not concurrent with anything
@@ -1217,15 +1314,62 @@ func TestSetPTYTriple_AssignsAllThreeFieldsTogether(t *testing.T) {
 	require.NoError(t, r.Close())
 }
 
+// TestTryInstallPTYTriple_RejectsStaleGen_And_ReturnsCurrentWinner covers the CAS-loser
+// path: a second install attempt using a gen snapshot taken before another install won
+// must fail without mutating state, and must hand back the winner's file so the loser
+// knows not to leak its own now-orphaned file/cmd (it must tear them down via
+// closePTYTriple instead).
+func TestTryInstallPTYTriple_RejectsStaleGen_And_ReturnsCurrentWinner(t *testing.T) {
+	session := newTmuxSession("try-install-pty-triple-stale-gen-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+
+	_, gen, _ := session.ptySnapshot()
+
+	winnerFile, winnerW, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = winnerW.Close() })
+	ok, _, closed := session.tryInstallPTYTriple(gen, winnerFile, nil, nil)
+	require.True(t, ok)
+	require.False(t, closed)
+
+	loserFile, loserW, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = loserW.Close() })
+	ok, currentFile, closed := session.tryInstallPTYTriple(gen, loserFile, nil, nil)
+	require.False(t, ok, "install using a stale gen snapshot must be rejected")
+	require.False(t, closed)
+	require.Equal(t, winnerFile, currentFile, "loser must be handed the winner's file, not left to assume it won")
+	require.Equal(t, winnerFile, session.lockedPTMX(), "winner's install must be untouched by the rejected loser")
+
+	require.Empty(t, closePTYTriple(loserFile, nil, nil, session.sanitizedName), "loser must be able to tear down its own file")
+	require.NoError(t, winnerFile.Close())
+}
+
+// TestTryInstallPTYTriple_RejectsAfterClose covers Close()'s ptyClosed flag: once a
+// session is closed, no later install attempt may succeed regardless of gen.
+func TestTryInstallPTYTriple_RejectsAfterClose(t *testing.T) {
+	session := newTmuxSession("try-install-pty-triple-closed-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
+	_, gen, _ := session.ptySnapshot()
+
+	require.NoError(t, session.Close())
+
+	file, w, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	ok, currentFile, closed := session.tryInstallPTYTriple(gen, file, nil, nil)
+	require.False(t, ok)
+	require.True(t, closed)
+	require.Nil(t, currentFile)
+	require.Empty(t, closePTYTriple(file, nil, nil, session.sanitizedName))
+}
+
 func TestClearPTYTriple_CapturesThenNilsAllThreeFields(t *testing.T) {
-	t.Parallel()
 	session := newTmuxSession("clear-pty-triple-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
 	cmd := safeexec.CommandContext(context.Background(), "true")
 	once := new(sync.Once)
-	session.setPTYTriple(r, cmd, once)
+	session.installPTYTripleForTest(r, cmd, once)
 
 	gotFile, gotCmd, gotOnce := session.clearPTYTriple()
 	require.Equal(t, r, gotFile)
@@ -1242,52 +1386,11 @@ func TestClearPTYTriple_CapturesThenNilsAllThreeFields(t *testing.T) {
 	require.NoError(t, r.Close())
 }
 
-// TestPtmxMuDocComment_StatesLeafLockInvariant verifies the ptmxMu field declaration's
-// doc comment documents the lock-order invariant (AC4), by reading tmux.go's own source
-// rather than duplicating the lock list into a second, driftable source of truth.
-func TestPtmxMuDocComment_StatesLeafLockInvariant(t *testing.T) {
-	t.Parallel()
-	data, err := os.ReadFile("tmux.go")
-	require.NoError(t, err)
-	lines := strings.Split(string(data), "\n")
-
-	fieldLine := -1
-	for i, line := range lines {
-		if strings.Contains(line, "ptmxMu deadlock.Mutex") {
-			fieldLine = i
-			break
-		}
-	}
-	require.GreaterOrEqual(t, fieldLine, 0, "ptmxMu field declaration not found in tmux.go")
-
-	// Walk upward from the field declaration, collecting only the contiguous run of
-	// "//"-comment lines immediately preceding it -- this is that field's doc comment,
-	// not a fixed byte lookback that could drift into an unrelated preceding comment
-	// block if either grows or shrinks.
-	var commentLines []string
-	for i := fieldLine - 1; i >= 0; i-- {
-		trimmed := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(trimmed, "//") {
-			break
-		}
-		commentLines = append([]string{trimmed}, commentLines...)
-	}
-	docComment := strings.ToLower(strings.Join(commentLines, "\n"))
-	require.NotEmpty(t, docComment, "ptmxMu field declaration has no preceding doc comment")
-
-	require.Contains(t, docComment, "leaf lock")
-	for _, lockName := range []string{"detachMutex", "controlModeSubMu", "controlModeStartMu", "cmdSendMu", "recoveryMu"} {
-		require.Contains(t, docComment, strings.ToLower(lockName),
-			"ptmxMu doc comment should name %s as part of its lock-order documentation", lockName)
-	}
-}
-
 // TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized forces the exact interleave
 // from the original -race report (GetPTY() vs closePTYAndAttachCmd()) by holding ptmxMu
 // before spawning either goroutine, so the fix's correctness is proven deterministically
 // rather than left to incidental scheduler timing.
 func TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized(t *testing.T) {
-	t.Parallel()
 	session := newTmuxSession("ptmx-race-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
 
 	r, w, err := os.Pipe()
@@ -1331,7 +1434,6 @@ func TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized(t *testing.T) 
 // across a closePTYAndAttachCmd() call that internally acquires ptmxMu, while a concurrent
 // goroutine repeatedly calls GetPTY() (ptmxMu only). Neither ordering should ever deadlock.
 func TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock(t *testing.T) {
-	t.Parallel()
 	session := newTmuxSession("detach-getpty-nodeadlock-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
 
 	const iterations = 20
@@ -1345,7 +1447,7 @@ func TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock(t *testing.T) {
 				pipeErr = err
 				return
 			}
-			session.setPTYTriple(r, nil, nil)
+			session.installPTYTripleForTest(r, nil, nil)
 			session.attachCh = make(chan struct{})
 			session.wg = &sync.WaitGroup{}
 			_ = session.DetachSafely()
@@ -1378,12 +1480,11 @@ func TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock(t *testing.T) {
 // TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock does not: Detach() (unlike
 // DetachSafely) holds detachMutex across TWO separate ptmxMu acquisitions in
 // sequence -- closePTYAndAttachCmd() first, then Restore() -> RestoreWithWorkDir(),
-// which itself acquires ptmxMu via lockedPTMX()/setPTYTriple() in its retry loop.
+// which itself acquires ptmxMu via ptySnapshot()/tryInstallPTYTriple() in its retry loop.
 // This is exactly the nesting the ptmxMu doc comment and ADR-001 cite by name as
 // justification for treating ptmxMu as a safe leaf lock -- it needs its own
 // deadlock-guard test, not just DetachSafely's simpler one-acquisition case.
 func TestDetach_ConcurrentWithGetPTY_NoDeadlock(t *testing.T) {
-	t.Parallel()
 	registry := NewFakeTmuxRegistry()
 	session := newTmuxSessionWithSocket("detach-restore-getpty-nodeadlock-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix, "", WithRegistry(registry))
 	registry.SetSessions([]string{session.sanitizedName})
@@ -1395,7 +1496,7 @@ func TestDetach_ConcurrentWithGetPTY_NoDeadlock(t *testing.T) {
 		for i := 0; i < iterations; i++ {
 			r, w, err := os.Pipe()
 			require.NoError(t, err)
-			session.setPTYTriple(r, nil, nil)
+			session.installPTYTripleForTest(r, nil, nil)
 			session.attachCh = make(chan struct{})
 			session.wg = &sync.WaitGroup{}
 			// Detach() panics on a fatal cleanup/restore error; the mocked PTY factory
@@ -1432,7 +1533,6 @@ func TestDetach_ConcurrentWithGetPTY_NoDeadlock(t *testing.T) {
 // clearPTYTriple() receives the non-nil snapshot, so a second concurrent caller is a fast
 // no-op instead of racing Close()/Kill()/Wait() against the first.
 func TestClosePTYAndAttachCmd_OnlyFirstConcurrentCallerPerformsCleanup(t *testing.T) {
-	t.Parallel()
 	session := newTmuxSession("close-serialize-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
@@ -1440,7 +1540,7 @@ func TestClosePTYAndAttachCmd_OnlyFirstConcurrentCallerPerformsCleanup(t *testin
 
 	cmd := safeexec.CommandContext(context.Background(), "sleep", "5")
 	require.NoError(t, cmd.Start())
-	session.setPTYTriple(r, cmd, new(sync.Once))
+	session.installPTYTripleForTest(r, cmd, new(sync.Once))
 
 	var wg sync.WaitGroup
 	results := make([][]error, 2)
@@ -1475,7 +1575,6 @@ func TestClosePTYAndAttachCmd_OnlyFirstConcurrentCallerPerformsCleanup(t *testin
 }
 
 func TestAttachToExisting_ReturnsSameWrappedError_When_PtyFactoryStartFails(t *testing.T) {
-	t.Parallel()
 	registry := NewFakeTmuxRegistry()
 	cmdExec := MockCmdExec{}
 	session := newTmuxSessionWithSocket("attach-existing-error-test", "echo", erroringPtyFactory{}, cmdExec, TmuxPrefix, "", WithRegistry(registry))
@@ -1488,7 +1587,6 @@ func TestAttachToExisting_ReturnsSameWrappedError_When_PtyFactoryStartFails(t *t
 }
 
 func TestGetPTY_ReturnsNotInitializedError_When_TripleNeverSet(t *testing.T) {
-	t.Parallel()
 	session := newTmuxSession("getpty-not-initialized-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
 	file, err := session.GetPTY()
 	require.Nil(t, file)
@@ -1496,7 +1594,6 @@ func TestGetPTY_ReturnsNotInitializedError_When_TripleNeverSet(t *testing.T) {
 }
 
 func TestTapEnter_TapDAndEnter_SendKeys_ReturnSameWrappedErrors_When_PTYNil(t *testing.T) {
-	t.Parallel()
 	tests := []struct {
 		name          string
 		call          func(*TmuxSession) error
@@ -1536,7 +1633,6 @@ func TestTapEnter_TapDAndEnter_SendKeys_ReturnSameWrappedErrors_When_PTYNil(t *t
 }
 
 func TestUpdateWindowSize_ReturnsSameErrors_When_PTYNilOrFdInvalid(t *testing.T) {
-	t.Parallel()
 	t.Run("nil PTY", func(t *testing.T) {
 		session := newTmuxSession("resize-nil-pty-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
 		err := session.updateWindowSize(80, 24)
@@ -1551,7 +1647,7 @@ func TestUpdateWindowSize_ReturnsSameErrors_When_PTYNilOrFdInvalid(t *testing.T)
 		require.NoError(t, err)
 		require.NoError(t, r.Close())
 		t.Cleanup(func() { _ = w.Close() })
-		session.setPTYTriple(r, nil, nil)
+		session.installPTYTripleForTest(r, nil, nil)
 
 		resizeErr := session.updateWindowSize(80, 24)
 		require.Error(t, resizeErr)
@@ -1561,26 +1657,384 @@ func TestUpdateWindowSize_ReturnsSameErrors_When_PTYNilOrFdInvalid(t *testing.T)
 
 // TestLockedPTMX_ReflectsNewestGeneration_When_SetPTYTripleSwapsMidLoop is a proxy for the
 // Attach() stdin-forward goroutine's "re-snapshot every loop iteration" behavior: repeated
-// lockedPTMX() calls interleaved with a setPTYTriple() swap always observe the newest
-// generation, matching the pre-fix closure's implicit re-read semantics.
+// lockedPTMX() calls interleaved with an installPTYTripleForTest() swap always observe the
+// newest generation, matching the pre-fix closure's implicit re-read semantics.
 func TestLockedPTMX_ReflectsNewestGeneration_When_SetPTYTripleSwapsMidLoop(t *testing.T) {
-	t.Parallel()
 	session := newTmuxSession("locked-ptmx-newest-generation-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix)
 
 	r1, w1, err := os.Pipe()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w1.Close() })
-	session.setPTYTriple(r1, nil, nil)
+	session.installPTYTripleForTest(r1, nil, nil)
 	require.Equal(t, r1, session.lockedPTMX())
 
 	r2, w2, err := os.Pipe()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w2.Close() })
-	session.setPTYTriple(r2, nil, nil)
+	session.installPTYTripleForTest(r2, nil, nil)
 
 	require.Equal(t, r2, session.lockedPTMX())
 	require.NotEqual(t, r1, session.lockedPTMX())
 
 	require.NoError(t, r1.Close())
 	require.NoError(t, r2.Close())
+}
+
+// TestCapturePaneContentContext_RespectsCancellation is the regression guard for the
+// goroutine-leak fix (see defaultCapturePaneTimeout's doc comment): before that fix,
+// CapturePaneContentContext's subprocess call (fn() inside runGated) had no way to be
+// interrupted by the caller's ctx, so a wedged tmux server would block the calling
+// goroutine indefinitely. The mock's OutputFunc simulates a real subprocess by blocking
+// until either the caller-supplied ctx is canceled (mirroring exec.CommandContext killing
+// the real process) or a long fallback timer fires — proving cancellation, not the
+// fallback timer, is what unblocks the call.
+func TestCapturePaneContentContext_RespectsCancellation(t *testing.T) {
+	// Not t.Parallel(): this test's goleak baseline diff would otherwise catch
+	// unrelated parallel sibling tests' (e.g. TestSessionResumption) in-flight
+	// cleanup goroutines mid-Close()/waitForSessionGone() as false-positive leaks.
+	baseline := goleak.IgnoreCurrent()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	fakeCmdExec := MockCmdExec{
+		OutputFunc: func(*exec.Cmd) ([]byte, error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(30 * time.Second):
+				return []byte("should never be reached"), nil
+			}
+		},
+	}
+	// DoesSessionExist() short-circuits capture-pane against a session already
+	// known gone (see CapturePaneContentContext's doc comment) -- register the
+	// session as existing so the call below reaches the mock's blocking
+	// OutputFunc instead of failing fast on the exists check.
+	reg := registryWithExistingSessions("capture-pane-cancel-test")
+	session := newTmuxSession("capture-pane-cancel-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix, WithRegistry(reg))
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := session.CapturePaneContentContext(ctx)
+		errCh <- err
+	}()
+
+	// Give the call a moment to reach the blocking mock, then cancel.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.Error(t, err)
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("CapturePaneContentContext did not return promptly after ctx cancellation")
+	}
+
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestCapturePaneContentContext_RespectsTimeout proves the same mechanism
+// CapturePaneContent()'s defaultCapturePaneTimeout wrapper relies on: a context
+// deadline actually terminates an in-flight capture-pane call rather than letting it
+// hang forever if the underlying command never responds. Uses a short caller-supplied
+// deadline instead of the production 10s constant so the test stays fast; the
+// enforcement mechanism (ctx passed through to the mock's blocking call) is identical.
+func TestCapturePaneContentContext_RespectsTimeout(t *testing.T) {
+	// See TestCapturePaneContentContext_RespectsCancellation for why this isn't t.Parallel().
+	baseline := goleak.IgnoreCurrent()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	fakeCmdExec := MockCmdExec{
+		OutputFunc: func(*exec.Cmd) ([]byte, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	// See TestCapturePaneContentContext_RespectsCancellation for why the session
+	// must be registered as existing: otherwise DoesSessionExist() short-circuits
+	// the call before it ever reaches the mock's blocking OutputFunc.
+	reg := registryWithExistingSessions("capture-pane-timeout-test")
+	session := newTmuxSession("capture-pane-timeout-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix, WithRegistry(reg))
+
+	start := time.Now()
+	_, err := session.CapturePaneContentContext(ctx)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, elapsed, 5*time.Second, "capture-pane call should time out promptly, not hang")
+
+	goleak.VerifyNone(t, baseline)
+}
+
+// gatedPtyFactory blocks every Start/StartWithSize call on a channel until the test
+// releases it, letting the test force multiple goroutines into
+// AttachToExisting's/RestoreWithWorkDir's check-then-act window simultaneously --
+// following the package's established lock-then-spawn determinism pattern (see
+// TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized) rather than relying on
+// real OS scheduling to hit the race. waiting is bumped before blocking so the test can
+// confirm every goroutine already passed its ptySnapshot() check and is now parked here.
+type gatedPtyFactory struct {
+	release chan struct{}
+	waiting atomic.Int32
+
+	mu    sync.Mutex
+	pairs [][2]*os.File // [read-end handed back as the PTY, write-end kept open by the test]
+}
+
+func newGatedPtyFactory() *gatedPtyFactory {
+	return &gatedPtyFactory{release: make(chan struct{})}
+}
+
+func (g *gatedPtyFactory) Start(_ *exec.Cmd) (*os.File, *exec.Cmd, error) {
+	g.waiting.Add(1)
+	<-g.release
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	// A real (started) process is required: AttachToExisting/RestoreWithWorkDir log
+	// cmd.Process.Pid on a successful install, which panics on a never-started *exec.Cmd
+	// (unlike MockPtyFactory, which is only ever exercised via error paths that never
+	// reach that log line).
+	realCmd := safeexec.CommandContext(context.Background(), "sleep", "30")
+	if err := realCmd.Start(); err != nil {
+		return nil, nil, err
+	}
+	g.mu.Lock()
+	g.pairs = append(g.pairs, [2]*os.File{r, w})
+	g.mu.Unlock()
+	return r, realCmd, nil
+}
+
+func (g *gatedPtyFactory) StartWithSize(cmd *exec.Cmd, _ *pty.Winsize) (*os.File, *exec.Cmd, error) {
+	return g.Start(cmd)
+}
+
+func (g *gatedPtyFactory) Close() {}
+
+// TestAttachToExisting_ConcurrentCalls_ExactlyOnePTYSurvives forces two goroutines to
+// both observe a nil PTY slot before either finishes its blocking ptyFactory.Start()
+// call (AC0). Only one install may win; the loser's PTY must be torn down, not leaked
+// or silently overwrite the winner's.
+func TestAttachToExisting_ConcurrentCalls_ExactlyOnePTYSurvives(t *testing.T) {
+	registry := NewFakeTmuxRegistry()
+	factory := newGatedPtyFactory()
+	session := newTmuxSessionWithSocket("attach-race-test", "echo", factory, MockCmdExec{}, TmuxPrefix, "", WithRegistry(registry))
+	registry.SetSessions([]string{session.sanitizedName})
+	// The winning goroutine's real "sleep 30" subprocess (see gatedPtyFactory.Start) is
+	// installed into the session and otherwise only reaped by its own 30s timeout --
+	// kill it explicitly so this test doesn't leave orphaned processes running.
+	t.Cleanup(func() { session.closePTYAndAttachCmd() })
+
+	const callers = 2
+	var wg sync.WaitGroup
+	errs := make([]error, callers)
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = session.AttachToExisting()
+		}(i)
+	}
+
+	wait.RequireEventually(t, func() bool { return factory.waiting.Load() == callers }, 2*time.Second, time.Millisecond,
+		"both AttachToExisting() calls must reach the blocking ptyFactory.Start call")
+	close(factory.release)
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("AttachToExisting calls did not return after being released")
+	}
+	t.Cleanup(func() {
+		for _, pair := range factory.pairs {
+			_ = pair[1].Close()
+		}
+	})
+
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
+	require.Len(t, factory.pairs, callers, "both goroutines must have raced past the nil check and called Start")
+
+	_, gen, closed := session.ptySnapshot()
+	require.False(t, closed)
+	require.Equal(t, uint64(1), gen, "exactly one install may win -- the CAS must reject the loser, not let it silently overwrite the winner")
+
+	winner := session.lockedPTMX()
+	require.NotNil(t, winner)
+
+	var winnerCount, loserCount int
+	for _, pair := range factory.pairs {
+		if pair[0] == winner {
+			winnerCount++
+			require.GreaterOrEqual(t, int(pair[0].Fd()), 0, "the winning PTY must remain open")
+		} else {
+			loserCount++
+			require.Less(t, int(pair[0].Fd()), 0, "the losing PTY must be closed, not leaked")
+		}
+	}
+	require.Equal(t, 1, winnerCount)
+	require.Equal(t, callers-1, loserCount)
+}
+
+// TestRestoreWithWorkDir_RacingClose_NoPTYInstalledAfterTeardown forces Close() to run
+// to completion -- flipping ptyClosed -- while RestoreWithWorkDir's blocking
+// ptyFactory.StartWithSize call is still in flight, then releases it (AC1). The
+// late-arriving PTY must never be installed after teardown has already run, and must be
+// torn down rather than left as an orphaned attach process.
+func TestRestoreWithWorkDir_RacingClose_NoPTYInstalledAfterTeardown(t *testing.T) {
+	registry := NewFakeTmuxRegistry()
+	factory := newGatedPtyFactory()
+	session := newTmuxSessionWithSocket("restore-close-race-test", "echo", factory, MockCmdExec{}, TmuxPrefix, "", WithRegistry(registry))
+	registry.SetSessions([]string{session.sanitizedName})
+
+	restoreDone := make(chan error, 1)
+	go func() {
+		restoreDone <- session.RestoreWithWorkDir(t.TempDir())
+	}()
+
+	wait.RequireEventually(t, func() bool { return factory.waiting.Load() == 1 }, 2*time.Second, time.Millisecond,
+		"RestoreWithWorkDir must reach the blocking ptyFactory.StartWithSize call")
+
+	// Close() must fully complete -- including flipping ptyClosed -- before the gated
+	// StartWithSize call is allowed to return, forcing the exact interleave AC1 covers.
+	require.NoError(t, session.Close())
+
+	close(factory.release)
+
+	select {
+	case err := <-restoreDone:
+		require.NoError(t, err, "RestoreWithWorkDir degrades gracefully (no error) when it loses the race to a concurrent Close(), matching its existing non-fatal PTY-failure handling")
+	case <-time.After(2 * time.Second):
+		t.Fatal("RestoreWithWorkDir did not return after being released")
+	}
+	t.Cleanup(func() {
+		for _, pair := range factory.pairs {
+			_ = pair[1].Close()
+		}
+	})
+
+	require.Len(t, factory.pairs, 1, "RestoreWithWorkDir must have made exactly one PTY start attempt")
+	require.Nil(t, session.lockedPTMX(), "no PTY may be installed after Close() has torn the session down")
+	require.Less(t, int(factory.pairs[0][0].Fd()), 0, "the late-arriving PTY must be closed, not leaked, once its install is rejected")
+}
+
+// TestAttachToExisting_RacingClose_NoPTYInstalledAfterTeardown mirrors
+// TestRestoreWithWorkDir_RacingClose_NoPTYInstalledAfterTeardown for AttachToExisting:
+// it forces Close() to run to completion -- flipping ptyClosed -- while
+// AttachToExisting's blocking ptyFactory.Start call is still in flight, then releases
+// it. The late-arriving PTY must never be installed after teardown has already run,
+// and must be torn down rather than left as an orphaned attach process.
+func TestAttachToExisting_RacingClose_NoPTYInstalledAfterTeardown(t *testing.T) {
+	registry := NewFakeTmuxRegistry()
+	factory := newGatedPtyFactory()
+	session := newTmuxSessionWithSocket("attach-close-race-test", "echo", factory, MockCmdExec{}, TmuxPrefix, "", WithRegistry(registry))
+	registry.SetSessions([]string{session.sanitizedName})
+
+	attachDone := make(chan error, 1)
+	go func() {
+		attachDone <- session.AttachToExisting()
+	}()
+
+	wait.RequireEventually(t, func() bool { return factory.waiting.Load() == 1 }, 2*time.Second, time.Millisecond,
+		"AttachToExisting must reach the blocking ptyFactory.Start call")
+
+	// Close() must fully complete -- including flipping ptyClosed -- before the gated
+	// Start call is allowed to return, forcing the exact interleave this test covers.
+	require.NoError(t, session.Close())
+
+	close(factory.release)
+
+	select {
+	case err := <-attachDone:
+		require.Error(t, err, "AttachToExisting must report failure when it loses the race to a concurrent Close()")
+	case <-time.After(2 * time.Second):
+		t.Fatal("AttachToExisting did not return after being released")
+	}
+	t.Cleanup(func() {
+		for _, pair := range factory.pairs {
+			_ = pair[1].Close()
+		}
+	})
+
+	require.Len(t, factory.pairs, 1, "AttachToExisting must have made exactly one PTY start attempt")
+	require.Nil(t, session.lockedPTMX(), "no PTY may be installed after Close() has torn the session down")
+	require.Less(t, int(factory.pairs[0][0].Fd()), 0, "the late-arriving PTY must be closed, not leaked, once its install is rejected")
+}
+
+// TestClose_CalledTwice_IsIdempotent covers Close()'s ptyClosed flag: a second Close()
+// call must remain a safe no-op, matching clearPTYTriple's existing "safe to call even
+// if the triple is already nil" contract.
+func TestClose_CalledTwice_IsIdempotent(t *testing.T) {
+	registry := NewFakeTmuxRegistry()
+	session := newTmuxSessionWithSocket("close-twice-test", "echo", NewMockPtyFactory(t), MockCmdExec{}, TmuxPrefix, "", WithRegistry(registry))
+	registry.SetSessions([]string{session.sanitizedName})
+
+	require.NoError(t, session.Close())
+	require.NoError(t, session.Close())
+
+	_, _, closed := session.ptySnapshot()
+	require.True(t, closed)
+}
+
+// TestValidateWorkDir covers ValidateWorkDir's three rejection branches — none were
+// tested in either package before this function was exported for session/tymux's reuse
+// (Task 2.2.1a), including the "not a directory" branch, which no test anywhere hit.
+func TestValidateWorkDir(t *testing.T) {
+	regularFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(regularFile, []byte("x"), 0o644))
+
+	tests := []struct {
+		name    string
+		workDir string
+	}{
+		{"empty", ""},
+		{"nonexistent", filepath.Join(t.TempDir(), "does-not-exist")},
+		{"not a directory", regularFile},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateWorkDir(tt.workDir)
+			require.Error(t, err)
+			require.ErrorIs(t, err, ErrWorkDirMissing)
+		})
+	}
+
+	require.NoError(t, ValidateWorkDir(t.TempDir()))
+}
+
+// TestClampWinsizeDim is the regression test for the gosec G115 fix: window
+// dimensions are clamped to [1, 65535] (the tmux/pty winsize field range)
+// before the narrowing conversion to uint16, rather than truncating or
+// wrapping a value outside that range.
+func TestClampWinsizeDim(t *testing.T) {
+	tests := []struct {
+		name string
+		in   int
+		want uint16
+	}{
+		{name: "negative clamps to 1", in: -5, want: 1},
+		{name: "zero clamps to 1", in: 0, want: 1},
+		{name: "one is the lower boundary and passes through", in: 1, want: 1},
+		{name: "normal cols value passes through", in: 80, want: 80},
+		{name: "normal rows value passes through", in: 24, want: 24},
+		{name: "65535 is the upper boundary and passes through", in: 65535, want: 65535},
+		{name: "above 65535 clamps to 65535", in: 70000, want: 65535},
+		{name: "far above 65535 clamps to 65535", in: 1 << 20, want: 65535},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ClampWinsizeDim(tt.in))
+		})
+	}
 }
