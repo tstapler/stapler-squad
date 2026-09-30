@@ -16,9 +16,12 @@ import {
   RunWorkflowRequestSchema,
   ArchiveSessionRequestSchema,
   UnarchiveSessionRequestSchema,
+  PinSessionRequestSchema,
+  UnpinSessionRequestSchema,
   ListSessionsRequestSchema,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
+import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BackoffState, getWsCloseCode, isNonRetriableConnectError } from "@/lib/utils/backoff";
@@ -149,6 +152,8 @@ interface UseSessionServiceReturn {
   // Archive methods
   archiveSession: (id: string) => Promise<boolean>;
   unarchiveSession: (id: string) => Promise<boolean>;
+  pinSession: (id: string) => Promise<boolean>;
+  unpinSession: (id: string) => Promise<boolean>;
   listSessionsByWorkflow: (workflowId: string, includeArchived?: boolean) => Promise<Session[]>;
 
   // Workflow methods
@@ -205,6 +210,8 @@ export function useSessionService(
   const [systemMemoryPct, setSystemMemoryPct] = useState<number>(0);
   const [reconnectAttemptCount, setReconnectAttemptCount] = useState(0);
   const sessions = useAppSelector(autoWatch ? selectAllSessions : selectNoSessions);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const loading = useAppSelector(selectSessionsLoading);
   const errorStr = useAppSelector(selectSessionsError);
 
@@ -910,6 +917,32 @@ export function useSessionService(
     [dispatch]
   );
 
+  // Optimistic pin toggle: flips the store immediately, restores the exact
+  // previous session object if the RPC fails.
+  const setPinned = useCallback(
+    async (id: string, pinned: boolean): Promise<boolean> => {
+      if (!clientRef.current) return false;
+      const previous = sessionsRef.current.find((s) => s.id === id);
+      // New updatedAt so the store's unchanged-updatedAt dedup doesn't drop the optimistic write.
+      if (previous) dispatch(upsertSession({ ...previous, pinned, updatedAt: timestampFromDate(new Date()) }));
+      try {
+        if (pinned) {
+          await clientRef.current.pinSession(create(PinSessionRequestSchema, { sessionId: id }));
+        } else {
+          await clientRef.current.unpinSession(create(UnpinSessionRequestSchema, { sessionId: id }));
+        }
+        return true;
+      } catch (err) {
+        if (previous) dispatch(upsertSession(previous));
+        dispatch(setError(err instanceof Error ? err.message : `Failed to ${pinned ? "pin" : "unpin"} session`));
+        return false;
+      }
+    },
+    [dispatch]
+  );
+  const pinSession = useCallback((id: string) => setPinned(id, true), [setPinned]);
+  const unpinSession = useCallback((id: string) => setPinned(id, false), [setPinned]);
+
   const listSessionsByWorkflow = useCallback(
     async (workflowId: string, includeArchived = true): Promise<Session[]> => {
       if (!clientRef.current) return [];
@@ -1440,6 +1473,8 @@ export function useSessionService(
     stopWatching,
     archiveSession,
     unarchiveSession,
+    pinSession,
+    unpinSession,
     listSessionsByWorkflow,
     runWorkflow,
     spawnShell,

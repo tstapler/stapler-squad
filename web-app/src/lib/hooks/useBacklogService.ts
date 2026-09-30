@@ -255,6 +255,9 @@ export interface BacklogItem {
    * ItemBudgetWarning.tsx and session.EvaluateBudgetThreshold.
    */
   costBudgetThresholdUsd?: number;
+  /** A report_duplicate claim awaits operator confirmation (item is in review). */
+  duplicatePending?: boolean;
+  duplicateRef?: string;
   /**
    * Live-update generation counter (Epic 6.1, backlog-event-driven-updates).
    * Populated only by `useWatchBacklogItems` — incremented once per genuine
@@ -670,6 +673,8 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     category: p.category || undefined,
     reworkCapOverride: p.reworkCapOverride,
     costBudgetThresholdUsd: p.costBudgetThresholdUsd,
+    duplicatePending: p.duplicatePending,
+    duplicateRef: p.duplicateRef,
     externalId: p.externalId || undefined,
     externalUrl: p.externalUrl || undefined,
     labels: p.labels ?? [],

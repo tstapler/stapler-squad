@@ -380,6 +380,15 @@ func TestInstanceToProto_omitsGoalSummaryWhenNil(t *testing.T) {
 	}
 }
 
+func TestInstanceToProto_should_SetPinned_FromInstance(t *testing.T) {
+	if InstanceToProto(&session.Instance{}, nil).Pinned {
+		t.Error("zero-value instance must not be pinned")
+	}
+	if !InstanceToProto(&session.Instance{Pinned: true}, nil).Pinned {
+		t.Error("expected Pinned=true to propagate")
+	}
+}
+
 // TestInstanceToProto_should_MapChecksAndReviewFeedback_When_Populated verifies
 // GithubChecks/GithubReviewFeedback/GithubMergeable populate field-for-field from
 // Instance.GitHubChecks/GitHubReviewFeedback/GitHubMergeable, matching the existing

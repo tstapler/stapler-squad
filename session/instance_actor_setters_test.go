@@ -130,6 +130,44 @@ func TestSetAutoApprove_SerializesWithSwitchProgram_When_ConcurrentCalls(t *test
 	}
 }
 
+func TestInstance_SetPinned_should_SetPinnedTrue_When_ToggledOn(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+
+	require.NoError(t, inst.SetPinned(true))
+	assert.True(t, inst.Snapshot().Pinned)
+
+	require.NoError(t, inst.SetPinned(true), "pinning twice must be idempotent")
+	require.NoError(t, inst.SetPinned(false))
+	require.NoError(t, inst.SetPinned(false), "unpinning twice must be idempotent")
+	assert.False(t, inst.Snapshot().Pinned)
+}
+
+func TestInstance_SetPinned_should_RejectPin_When_SessionIsArchived(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	now := time.Now()
+	inst.SetArchivedAt(&now)
+
+	err := inst.SetPinned(true)
+
+	assert.ErrorIs(t, err, ErrCannotPinArchivedSession)
+	assert.False(t, inst.Snapshot().Pinned)
+}
+
+func TestInstance_SetArchivedAt_should_ClearPinned_When_Archiving(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	require.NoError(t, inst.SetPinned(true))
+
+	now := time.Now()
+	inst.SetArchivedAt(&now)
+	assert.False(t, inst.Snapshot().Pinned)
+
+	inst.SetArchivedAt(nil)
+	assert.False(t, inst.Snapshot().Pinned, "unarchiving must not re-pin")
+}
+
 // --- Story 3.3.1: reclassifyTagsLocked fixpoint hook ---
 
 // bugfixSeedRule is a minimal TaggingRule mirroring SeedTaggingRules()' seed-tag-bugfix entry,
@@ -420,4 +458,17 @@ func TestSetArchivedAtIfNilCtx_should_ApplyCASOnce_When_ActorIsIdle(t *testing.T
 	set, err = inst.SetArchivedAtIfNilCtx(ctx, time.Now())
 	require.NoError(t, err)
 	assert.False(t, set, "second archive is a no-op (CAS)")
+}
+
+func TestInstance_SetPinned_should_BumpUpdatedAt_OnlyWhenValueChanges(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	before := inst.Snapshot().UpdatedAt
+
+	require.NoError(t, inst.SetPinned(true))
+	afterPin := inst.Snapshot().UpdatedAt
+	assert.True(t, afterPin.After(before), "pin must bump UpdatedAt so clients don't dedupe it away")
+
+	require.NoError(t, inst.SetPinned(true))
+	assert.Equal(t, afterPin, inst.Snapshot().UpdatedAt, "no-op pin must not bump UpdatedAt")
 }

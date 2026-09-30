@@ -265,6 +265,10 @@ var knownFeatureFlags = []struct {
 		name:        config.TriageGuidanceHaltFeatureFlag,
 		description: "Automated triage halts and asks a durable guidance request instead of guessing when a backlog item is genuinely ambiguous. Default: off — baseline guess-and-proceed triage behavior is unchanged until enabled.",
 	},
+	{
+		name:        config.DiagnoseNudgeFeatureFlag,
+		description: "Diagnose & Nudge: allow a dispatched diagnostic agent to autonomously send a redirect message (diagnose_nudge_session) to a linked stuck session. Read fresh at the write instant, so flipping this off blocks an already-dispatched agent too. Default: off — until enabled, a dispatch can still investigate and file a bug or post a note, but never nudge.",
+	},
 }
 
 // featureFlagDefault looks up name's defaultValue in knownFeatureFlags — the single

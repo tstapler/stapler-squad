@@ -531,7 +531,7 @@ func TestPruneTickerLoop_should_ContinueRunning_When_PruneReturnsError(t *testin
 	}
 	clock.Advance(DefaultHostRegistryTTL + time.Second)
 
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
 
@@ -548,20 +548,21 @@ func TestPruneTickerLoop_should_ContinueRunning_When_PruneReturnsError(t *testin
 		close(done)
 	}()
 
-	// The loop is a single goroutine, so an unbuffered send only completes once
-	// the previous Prune has returned. A send proves the loop *received* a tick,
-	// not that its Prune finished, so never touch stateDir right after one:
-	// MkdirAll would race the in-flight Prune and could let the "failing" tick
-	// succeed, leaving no prune_failed line.
-	ticks <- clock.Now() // Prune 1 starts, stateDir is still missing
-	ticks <- clock.Now() // returns only after Prune 1 has failed; Prune 2 starts
-	// Prune 2 may run before or after this MkdirAll and either result is fine:
-	// Prune 1 has already logged the failure, and Prune 3 below is the retry.
+	ticks <- clock.Now() // fails
+	// The send returns on receipt, not on Prune finishing; wait for the failure log
+	// before restoring the dir or the first Prune could succeed.
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(buf.String(), "host_registry.prune_failed") {
+		if time.Now().After(deadline) {
+			t.Fatalf("first Prune never logged host_registry.prune_failed, got: %s", buf.String())
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	ticks <- clock.Now() // returns after Prune 2; Prune 3 starts with stateDir present
-	ticks <- clock.Now() // returns after Prune 3 finished: the loop survived the error
+	ticks <- clock.Now() // must be received: loop survived the error
+	ticks <- clock.Now() // synchronizes on the second Prune finishing
 	cancel()
 	<-done
 

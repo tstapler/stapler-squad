@@ -2264,7 +2264,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 		for _, line := range strings.Split(itemSession.VerificationNotes, "\n") {
 			if strings.HasPrefix(line, notesMarker+" ") {
 				return mcpgo.NewToolResultText(fmt.Sprintf(
-					"duplicate report for %s already recorded for item %s (status already review) — no changes made.", duplicateRef, itemID,
+					"duplicate report for %s already recorded for item %s (status already review) — no changes made. Confirmation is pending: an operator must confirm the duplicate (archive the item in the backlog UI) or reject it (reset/reopen the item). Do not retry report_duplicate or start more work on this item; end your session.", duplicateRef, itemID,
 				)), nil
 			}
 		}

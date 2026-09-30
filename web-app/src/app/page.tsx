@@ -96,6 +96,8 @@ function HomeContent() {
     resumeSession,
     renameSession,
     restartSession,
+    pinSession,
+    unpinSession,
     retrySession,
     clearConversationState,
     createCheckpoint,
@@ -322,6 +324,11 @@ function HomeContent() {
     }
   }, [updateSession, track]);
 
+  const handleTogglePinned = useCallback(async (sessionId: string, pinned: boolean): Promise<void> => {
+    track({ name: "session_pinned_updated", category: "user_action" });
+    await (pinned ? pinSession(sessionId) : unpinSession(sessionId));
+  }, [pinSession, unpinSession, track]);
+
   const handleToggleAutoApprove = useCallback(async (sessionId: string, enabled: boolean): Promise<void> => {
     track({ name: "session_auto_approve_updated", category: "user_action" });
     try {
@@ -494,6 +501,7 @@ function HomeContent() {
     onForkFromCheckpoint: forkSession,
     onSetRateLimitEnabled: handleSetRateLimitEnabled,
     onToggleAutonomousMode: handleToggleAutonomousMode,
+    onTogglePinned: handleTogglePinned,
     onToggleAutoApprove: handleToggleAutoApprove,
     onSteerAutonomousSession: handleSteerAutonomousSession,
     onClearConversationState: clearConversationState,
@@ -503,7 +511,7 @@ function HomeContent() {
     handleDirectResume, handleCloneSession, handleNewWorkspaceSession, renameSession,
     restartSession, retrySession, handleUpdateTags, handleNewSession, createCheckpoint,
     listCheckpoints, forkSession, handleSetRateLimitEnabled,
-    handleToggleAutonomousMode, handleToggleAutoApprove, handleSteerAutonomousSession, clearConversationState, listSessions,
+    handleToggleAutonomousMode, handleTogglePinned, handleToggleAutoApprove, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);
 
   return (

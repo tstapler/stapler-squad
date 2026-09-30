@@ -1,9 +1,9 @@
 "use client";
-// +feature: session-change-program
+// +feature: session-change-program session-pin-toggle
 
 import { useState, useRef, useContext, useEffect, useLayoutEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
-import { MoreHorizontal } from "lucide-react";
+import { MoreHorizontal, Pin, PinOff } from "lucide-react";
 import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionStatus } from "@/gen/session/v1/types_pb";
 import { TagEditor } from "./TagEditor";
@@ -19,6 +19,7 @@ import {
   overflowButton,
   overflowMenu,
   overflowMenuItem,
+  overflowMenuItemTouch,
   overflowMenuItemDanger,
   actionButton,
   confirmDialog,
@@ -61,6 +62,7 @@ export interface SessionActionsOverflowProps {
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onTogglePinned?: (sessionId: string, pinned: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
@@ -135,6 +137,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onCreateCheckpoint,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onTogglePinned,
   onToggleAutoApprove,
   onSteerAutonomousSession,
   onClearConversationState,
@@ -869,6 +872,23 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                 </button>
               )}
 
+              {onTogglePinned && (
+                <button
+                  role="menuitemcheckbox"
+                  aria-checked={session.pinned}
+                  className={`${overflowMenuItem} ${overflowMenuItemTouch}`}
+                  data-testid="session-pin-toggle"
+                  aria-label={session.pinned ? `Unpin ${session.title}` : `Pin ${session.title}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    close();
+                    onTogglePinned(session.id, !session.pinned);
+                  }}
+                >
+                  {session.pinned ? <PinOff aria-hidden="true" size={16} /> : <Pin aria-hidden="true" size={16} />}{" "}
+                  {session.pinned ? "Unpin" : "Pin"}
+                </button>
+              )}
               {onChangeProgram && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); setProgramPickerValue(session.program || ""); setProgramError(""); setIsProgramPickerOpen(true); }}

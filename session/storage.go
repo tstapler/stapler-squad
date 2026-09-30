@@ -151,6 +151,8 @@ type InstanceData struct {
 
 	// Hidden excludes this session from the default session list and review queue.
 	Hidden bool `json:"hidden,omitempty"`
+	// Pinned mirrors Instance.Pinned for JSON snapshot / ent round-trip.
+	Pinned bool `json:"pinned,omitempty"`
 
 	// ProjectID is the optional project this session belongs to.
 	ProjectID string `json:"project_id,omitempty"`
@@ -1230,6 +1232,17 @@ func (s *Storage) FindOpenStuckStates(ctx context.Context) ([]OpenStuckStateData
 	return s.repo.FindOpenStuckStates(ctx)
 }
 
+// HasOpenStuckReason reports whether itemID has an open (unresolved,
+// un-snoozed) stuck row for reason.
+func (s *Storage) HasOpenStuckReason(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
+	rows, err := s.repo.FindOpenStuckStates(ctx)
+	if err != nil {
+		return false, err
+	}
+	_, ok := findOpenStuckStateFor(rows, itemID, reason)
+	return ok, nil
+}
+
 // SnoozeStuckState sets snoozed_until on an open BacklogStuckState row for
 // (itemID, reason). Returns false, nil when the backend does not support
 // stuck-state writes or no matching open row exists — never an error for a
@@ -1329,6 +1342,31 @@ func (s *Storage) GetBaseCommitSHAsForSessions(ctx context.Context, uuids []stri
 // GetItemSessionBySessionUUID looks up the ItemSession for a given session UUID (loads BacklogItem edge).
 func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (ItemSessionSummary, error) {
 	return s.repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
+}
+
+// IsDiagnoseCaller reports whether sessionUUID is currently linked to a
+// backlog item with SessionRoleDiagnose — i.e. whether it's a dispatched
+// Diagnose & Nudge investigation session, as opposed to any other role. Used
+// by server/mcp's denyIfDiagnoseCaller to gate the general-purpose
+// terminal-control MCP tools away from that narrow role: --allowedTools
+// provides no real technical enforcement on its own (see
+// session/backlog_review.go's BuildReviewCallOptions doc comment), so this is
+// the actual, server-side gate. Returns false (not diagnose) on any lookup
+// error, including "no link at all" — the check only ever narrows what a
+// positively-identified diagnose session may do, so an unidentifiable caller
+// falls through to the pre-existing unrestricted behavior for every other role.
+func (s *Storage) IsDiagnoseCaller(ctx context.Context, sessionUUID string) bool {
+	row, err := s.repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
+	if err != nil {
+		return false
+	}
+	return row.Role == SessionRoleDiagnose
+}
+
+// ClaimDiagnoseNudgeAttempt atomically claims sessionUUID's one nudge-write
+// attempt — see EntRepository.ClaimDiagnoseNudgeAttempt's doc comment.
+func (s *Storage) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUUID string) (claimed bool, err error) {
+	return s.repo.ClaimDiagnoseNudgeAttempt(ctx, sessionUUID)
 }
 
 // GetWorktreeDataBySessionUUID returns the git worktree data for the Session with

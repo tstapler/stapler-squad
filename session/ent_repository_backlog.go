@@ -2333,6 +2333,39 @@ func (r *EntRepository) RecordDiagnoseNudgeAttempt(ctx context.Context, itemID s
 	return n > 0, nil
 }
 
+// RecordDiagnoseNudgeAttemptIfBelowCap atomically increments an open
+// (item_id, reason) row's diagnose_nudge_count by exactly 1 and sets
+// diagnose_next_eligible_at, but only if the row's current count is below
+// maxAttempts — a single UPDATE ... WHERE diagnose_nudge_count < ? statement,
+// so two concurrent nudge attempts for the same (item, reason) can't both
+// read a stale count in Go and both "succeed" (the plain read-then-Set
+// RecordDiagnoseNudgeAttempt above still does that, and remains used only to
+// seed a specific count directly in tests). Returns incremented=false with no
+// error, not an error, when no open row exists or the row was already at/over
+// cap when this UPDATE ran — see Storage.RecordDiagnoseNudgeAttempt's doc
+// comment for the caller-facing semantics this backs.
+func (r *EntRepository) RecordDiagnoseNudgeAttemptIfBelowCap(ctx context.Context, itemID string, reason domain.StuckReason, maxAttempts int32, nextAt time.Time) (incremented bool, err error) {
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	n, err := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtIsNil(),
+			backlogstuckstate.DiagnoseNudgeCountLT(maxAttempts),
+		).
+		AddDiagnoseNudgeCount(1).
+		SetDiagnoseNextEligibleAt(nextAt).
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("record diagnose nudge attempt (atomic) %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
 // RecordRemediationRestartGrace records that itemID/reason's open row just
 // consumed its one-per-boot restart-grace pass (see evaluateRemediation):
 // sets grace_boot_time to bootTime WITHOUT touching remediation_attempts or

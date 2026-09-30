@@ -596,6 +596,13 @@ service SessionService {
   // UnarchiveSession clears archived_at, restoring the session to the default list.
   rpc UnarchiveSession(UnarchiveSessionRequest) returns (UnarchiveSessionResponse) {}
 
+  // PinSession pins a session so it surfaces in the dedicated Pinned section.
+  // Idempotent; rejects an archived session.
+  rpc PinSession(PinSessionRequest) returns (PinSessionResponse) {}
+
+  // UnpinSession clears the pinned flag. Idempotent.
+  rpc UnpinSession(UnpinSessionRequest) returns (UnpinSessionResponse) {}
+
   // ArchiveWorkflowSessions archives all non-active sessions for a given workflow.
   // Active, Creating, and Paused sessions are silently skipped.
   // Returns the count of sessions that were archived.
@@ -3692,6 +3699,16 @@ message UnarchiveSessionRequest {
 }
 
 message UnarchiveSessionResponse {}
+
+message PinSessionRequest {
+  string session_id = 1;
+}
+message PinSessionResponse {}
+
+message UnpinSessionRequest {
+  string session_id = 1;
+}
+message UnpinSessionResponse {}
 
 message ArchiveWorkflowSessionsRequest {
   string workflow_id = 1;

@@ -310,6 +310,10 @@ type Config struct {
 	// narrowed to file-a-bug/post-a-note only. 0 = use the default (3); values
 	// above diagnoseNudgeMaxAttemptsHardCeiling are clamped to it.
 	DiagnoseNudgeMaxAttempts int `json:"diagnose_nudge_max_attempts,omitempty"`
+	// NoopDispatchThreshold is how many consecutive work sessions on one PASS-verdict
+	// item may end with no new commits before it is flagged repeated_noop_dispatch and
+	// further dispatch is blocked. 0 = use the default (3).
+	NoopDispatchThreshold int `json:"noop_dispatch_threshold,omitempty"`
 	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
@@ -482,6 +486,25 @@ const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
 // matters (mirrors EffectiveTymuxEnabled's live-read contract).
 func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, false)
+}
+
+// DiagnoseNudgeFeatureFlag is the config.FeatureFlags key backing
+// EffectiveDiagnoseNudgeEnabled — the kill switch for autonomous
+// diagnose_nudge_session writes (Diagnose & Nudge, backlog item 68964304).
+// Shipped with no way to disable short of a code change/redeploy; this flag
+// closes that gap. Defaults to off, same posture as TymuxFeatureFlag/
+// TriageGuidanceHaltFeatureFlag: no rollback rehearsal has vouched for
+// autonomous nudging as the default yet.
+const DiagnoseNudgeFeatureFlag = "diagnose_nudge_enabled"
+
+// EffectiveDiagnoseNudgeEnabled reports whether a dispatched Diagnose & Nudge
+// agent may actually perform a nudge write. Callers must read this fresh at
+// the exact write instant (diagnose_nudge_session's MCP handler), not cache
+// it at dispatch start — an in-flight diagnostic session that already
+// decided to nudge before the flag flips off must still be blocked at the
+// write call site.
+func EffectiveDiagnoseNudgeEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, false)
 }
 
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
@@ -912,6 +935,15 @@ func (c *Config) AnalyticsMaxRowsOrDefault() int {
 		return 100_000
 	}
 	return c.AnalyticsMaxRows
+}
+
+// NoopDispatchThresholdOrDefault returns the configured no-op dispatch threshold, or 3
+// if unset or c is nil.
+func (c *Config) NoopDispatchThresholdOrDefault() int {
+	if c == nil || c.NoopDispatchThreshold <= 0 {
+		return 3
+	}
+	return c.NoopDispatchThreshold
 }
 
 // MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or 20

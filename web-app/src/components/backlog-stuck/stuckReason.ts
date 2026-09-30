@@ -35,6 +35,7 @@ export const STUCK_REASON_LABELS: Record<StuckReason, string> = {
   [StuckReason.STEER_FAILED]: "Steer attempt failed",
   [StuckReason.BLOCKED_BY_CLAIM]: "Blocked: claimed by another host",
   [StuckReason.WORKTREE_INCONSISTENT]: "Worktree state inconsistent",
+  [StuckReason.REPEATED_NOOP_DISPATCH]: "Repeated no-op sessions",
 };
 
 /** Decorative icon glyph for every StuckReason (never the sole signal — text label always accompanies it). */
@@ -61,6 +62,7 @@ export const STUCK_REASON_ICONS: Record<StuckReason, string> = {
   [StuckReason.STEER_FAILED]: "⛔",
   [StuckReason.BLOCKED_BY_CLAIM]: "🟠",
   [StuckReason.WORKTREE_INCONSISTENT]: "⛔",
+  [StuckReason.REPEATED_NOOP_DISPATCH]: "🔁",
 };
 
 /** vanilla-extract class per StuckReason (design/ux.md Surface 7 chip legend). */
@@ -87,6 +89,7 @@ export const STUCK_REASON_CLASS: Record<StuckReason, string> = {
   [StuckReason.STEER_FAILED]: styles.chipSteerFailed,
   [StuckReason.BLOCKED_BY_CLAIM]: styles.chipBlockedByClaim,
   [StuckReason.WORKTREE_INCONSISTENT]: styles.chipWorktreeInconsistent,
+  [StuckReason.REPEATED_NOOP_DISPATCH]: styles.chipWorktreeInconsistent,
 };
 
 /**
@@ -120,6 +123,7 @@ export const STUCK_REASON_PRIORITY: Record<StuckReason, number> = {
   [StuckReason.MULTIPLE_REASONS]: 1,
   [StuckReason.STEER_FAILED]: 2,
   [StuckReason.WORKTREE_INCONSISTENT]: 3,
+  [StuckReason.REPEATED_NOOP_DISPATCH]: 3.5,
   [StuckReason.PUSH_FAILED]: 4,
   [StuckReason.SPAWN_FAILED]: 5,
   [StuckReason.PR_PENDING_NO_PR]: 6,
