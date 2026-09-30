@@ -548,12 +548,20 @@ func TestPruneTickerLoop_should_ContinueRunning_When_PruneReturnsError(t *testin
 		close(done)
 	}()
 
-	ticks <- clock.Now() // fails
+	// The loop is a single goroutine, so an unbuffered send only completes once
+	// the previous Prune has returned. A send proves the loop *received* a tick,
+	// not that its Prune finished, so never touch stateDir right after one:
+	// MkdirAll would race the in-flight Prune and could let the "failing" tick
+	// succeed, leaving no prune_failed line.
+	ticks <- clock.Now() // Prune 1 starts, stateDir is still missing
+	ticks <- clock.Now() // returns only after Prune 1 has failed; Prune 2 starts
+	// Prune 2 may run before or after this MkdirAll and either result is fine:
+	// Prune 1 has already logged the failure, and Prune 3 below is the retry.
 	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	ticks <- clock.Now() // must be received: loop survived the error
-	ticks <- clock.Now() // synchronizes on the second Prune finishing
+	ticks <- clock.Now() // returns after Prune 2; Prune 3 starts with stateDir present
+	ticks <- clock.Now() // returns after Prune 3 finished: the loop survived the error
 	cancel()
 	<-done
 
