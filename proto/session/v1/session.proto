@@ -642,6 +642,19 @@ service SessionService {
   // obtain explicit user confirmation before calling this.
   // +api: tmux:restart-server
   rpc RestartTmuxServer(RestartTmuxServerRequest) returns (RestartTmuxServerResponse) {}
+
+  // SetCaptureTap turns the terminal-stream capture tap on or off at runtime,
+  // for the named sessions or (empty session_ids) all sessions. Loopback
+  // requests only; the output directory is fixed server-side. Every enable
+  // expires after ttl_seconds. The tap records raw terminal output, which can
+  // include secrets. See docs/how-to/capture-terminal-stream-tap.md.
+  // +api: capture-tap:set
+  rpc SetCaptureTap(SetCaptureTapRequest) returns (SetCaptureTapResponse) {}
+
+  // GetCaptureTap reports the capture tap's current state. Loopback requests
+  // only, because the response names local file paths.
+  // +api: capture-tap:get
+  rpc GetCaptureTap(GetCaptureTapRequest) returns (GetCaptureTapResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -3746,3 +3759,83 @@ message GetProviderLimitsResponse {
   ProviderLimitsProto limits = 1;
 }
 
+// SetCaptureTapRequest enables or disables the terminal-stream capture tap.
+message SetCaptureTapRequest {
+  // true starts recording; false stops it and closes the files.
+  bool enabled = 1;
+
+  // Session titles to apply to (the title shown in the UI, not the tmux
+  // name). Empty means all sessions. Each id is at most 200 bytes with no
+  // control characters. Disabling named sessions while the tap is on for all
+  // sessions is rejected. Enabling all sessions replaces the operator env
+  // override's no-expiry with the TTL; disabling all sessions turns an
+  // env-enabled tap off until restart.
+  repeated string session_ids = 2;
+
+  // Seconds an enable lasts. 0 uses the default (30 minutes); values above
+  // 4 hours are clamped; negative is rejected when enabled is true. Ignored
+  // when enabled is false.
+  int32 ttl_seconds = 3;
+}
+
+// CaptureTapSessionStatus describes one session's capture file.
+message CaptureTapSessionStatus {
+  // Session title, the key used in SetCaptureTapRequest.session_ids.
+  string name = 1;
+
+  // Absolute path of the JSONL file. Empty until the file is first opened.
+  string path = 2;
+
+  // true while this session is recording.
+  bool enabled = 3;
+
+  // Size of the file, including earlier appends.
+  int64 bytes_written = 4;
+
+  // The 64 MiB per-file cap stopped the tap for this session. Enabling again
+  // rotates the full file to "<path>.old" (replacing any earlier .old) and
+  // records into a fresh file.
+  bool capped = 5;
+
+  // A file or write error stopped the tap for this session. Enabling again
+  // retries.
+  bool failed = 6;
+
+  // The full file was rotated to "<path>.old" by the latest enable.
+  bool rotated = 7;
+}
+
+// CaptureTapState is the capture tap's current state.
+message CaptureTapState {
+  // true while any session is recording.
+  bool enabled = 1;
+
+  // "all" (every session), "sessions" (only session_ids) or "off".
+  string scope = 2;
+
+  // Session titles enabled by name.
+  repeated string session_ids = 3;
+
+  // Latest deadline among the enabled scopes. Unset when off or when the
+  // operator enabled the tap at startup (no expiry).
+  google.protobuf.Timestamp ttl_expires_at = 4;
+
+  // Directory the files are written to.
+  string dir = 5;
+
+  // Sessions that are recording or were stopped by the cap or an error.
+  repeated CaptureTapSessionStatus sessions = 6;
+}
+
+// SetCaptureTapResponse carries the state after the change.
+message SetCaptureTapResponse {
+  CaptureTapState state = 1;
+}
+
+// GetCaptureTapRequest has no fields.
+message GetCaptureTapRequest {}
+
+// GetCaptureTapResponse carries the current state.
+message GetCaptureTapResponse {
+  CaptureTapState state = 1;
+}
