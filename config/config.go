@@ -484,6 +484,25 @@ func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, false)
 }
 
+// DiagnoseNudgeFeatureFlag is the config.FeatureFlags key backing
+// EffectiveDiagnoseNudgeEnabled — the kill switch for autonomous
+// diagnose_nudge_session writes (Diagnose & Nudge, backlog item 68964304).
+// Shipped with no way to disable short of a code change/redeploy; this flag
+// closes that gap. Defaults to off, same posture as TymuxFeatureFlag/
+// TriageGuidanceHaltFeatureFlag: no rollback rehearsal has vouched for
+// autonomous nudging as the default yet.
+const DiagnoseNudgeFeatureFlag = "diagnose_nudge_enabled"
+
+// EffectiveDiagnoseNudgeEnabled reports whether a dispatched Diagnose & Nudge
+// agent may actually perform a nudge write. Callers must read this fresh at
+// the exact write instant (diagnose_nudge_session's MCP handler), not cache
+// it at dispatch start — an in-flight diagnostic session that already
+// decided to nudge before the flag flips off must still be blocked at the
+// write call site.
+func EffectiveDiagnoseNudgeEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, false)
+}
+
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
 // backend default is active. Resolved fresh on every call (session.getSelectedBackend)
 // via SetTymuxGlobalOverride — live-settable, no process restart required.

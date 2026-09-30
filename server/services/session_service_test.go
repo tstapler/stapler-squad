@@ -3735,6 +3735,37 @@ func TestSpawnReviewSession_SetsBacklogCategory(t *testing.T) {
 	assert.Equal(t, session.CategoryBacklog, inst.Category)
 }
 
+// TestSpawnDiagnosticSession_RestrictsAllowedTools is gap #1(a)'s
+// defense-in-depth regression guard: a dispatched Diagnose & Nudge session
+// must launch with --allowedTools restricted to diagnosticSessionAllowedTools
+// (client-side layer), unlike SpawnReviewSession's unrestricted default. The
+// real, server-side enforcement is denyIfDiagnoseCaller (server/mcp) — this
+// only proves the client-side restriction is actually wired at dispatch, not
+// that it alone would be sufficient.
+func TestSpawnDiagnosticSession_RestrictsAllowedTools(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts a real tmux session")
+	}
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "bash -c 'sleep 30'"}`), 0o644))
+
+	repoPath := t.TempDir()
+	item := &session.BacklogItemData{ID: uuid.New().String(), RepoPath: repoPath}
+
+	inst, err := fix.svc.SpawnDiagnosticSession(context.Background(), item, "diagnose this")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, session.CategoryBacklog, inst.Category)
+	assert.Equal(t, diagnosticSessionAllowedTools, inst.AllowedTools)
+	assert.NotContains(t, inst.AllowedTools, "write_to_session", "diagnostic sessions must not be allowed the general-purpose terminal-control tools")
+}
+
 // drainNotificationEvents reads every event currently queued on ch (with a short
 // deadline) and returns any events.EventNotification events found. Used to assert
 // on presence/absence of a notification without depending on channel buffering

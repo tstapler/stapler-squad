@@ -71,34 +71,49 @@ func (s *Storage) DiagnoseNudgeAllowed(ctx context.Context, itemID string, reaso
 }
 
 // RecordDiagnoseNudgeAttempt records that a nudge was just successfully sent
-// for (itemID, reason): increments diagnose_nudge_count and pushes
-// diagnose_next_eligible_at diagnoseNudgeCooldown into the future. Call only
-// after the nudge write itself succeeded (see diagnose_nudge_session's MCP
-// tool handler) — a nudge that was refused (not idle, identity mismatch) or
-// failed must not consume the budget. Returns justCapped=true when this
-// attempt is the one that reached the configured cap, so the caller can
-// surface a one-time "nudge budget exhausted" signal.
+// for (itemID, reason): atomically increments diagnose_nudge_count (bounded
+// by the configured cap) and pushes diagnose_next_eligible_at
+// diagnoseNudgeCooldown into the future. Call only after the nudge write
+// itself succeeded (see diagnose_nudge_session's MCP tool handler) — a nudge
+// that was refused (not idle, identity mismatch) or failed must not consume
+// the budget. Returns justCapped=true when this attempt is the one that
+// reached the configured cap, so the caller can surface a one-time "nudge
+// budget exhausted" signal.
 //
-// No-op (false, nil) if no open row exists for (itemID, reason) — this
+// The increment itself is a single UPDATE ... WHERE diagnose_nudge_count < ?
+// statement (EntRepository.RecordDiagnoseNudgeAttemptIfBelowCap) rather than
+// a read-then-Set round trip in Go: two concurrent nudge attempts for the
+// same (item, reason) racing a plain read-then-Set could both read the same
+// stale count and both "succeed", each writing count+1 instead of the second
+// one writing count+2 — silently under-counting attempts and letting the cap
+// be bypassed under concurrency. The atomic WHERE clause makes at most one
+// concurrent attempt able to claim each unit of headroom under the cap.
+//
+// No-op (false, nil) if no open row exists for (itemID, reason), or if the
+// row was already at/over cap when this attempt's UPDATE ran — the former
 // should not happen in practice (DiagnoseNudgeAllowed would have had nothing
 // to check and returned allowed=true without a row, but the nudge target
-// itself is resolved independently of this row's existence), but failing
+// itself is resolved independently of this row's existence); failing
 // silently rather than erroring mirrors RecordRemediationAttempt's own
 // resolved-in-the-meantime tolerance.
 func (s *Storage) RecordDiagnoseNudgeAttempt(ctx context.Context, itemID string, reason domain.StuckReason) (justCapped bool, err error) {
-	row, ok, err := s.findOpenStuckStateForReason(ctx, itemID, reason)
+	maxAttempts := int32(config.LoadConfig().DiagnoseNudgeMaxAttemptsOrDefault())
+	nextEligible := time.Now().Add(diagnoseNudgeCooldown)
+
+	incremented, err := s.repo.RecordDiagnoseNudgeAttemptIfBelowCap(ctx, itemID, reason, maxAttempts, nextEligible)
 	if err != nil {
 		return false, fmt.Errorf("record diagnose nudge attempt %s/%s: %w", itemID, reason, err)
 	}
-	if !ok {
+	if !incremented {
 		return false, nil
 	}
 
-	maxAttempts := int32(config.LoadConfig().DiagnoseNudgeMaxAttemptsOrDefault())
-	nextCount := row.DiagnoseNudgeCount + 1
-	nextEligible := time.Now().Add(diagnoseNudgeCooldown)
-	if _, recErr := s.repo.RecordDiagnoseNudgeAttempt(ctx, itemID, reason, nextCount, &nextEligible); recErr != nil {
-		return false, fmt.Errorf("record diagnose nudge attempt %s/%s: %w", itemID, reason, recErr)
+	// Read back the row purely to report justCapped — informational only; the
+	// cap itself was already enforced atomically above, so a race on this
+	// read cannot let the cap be exceeded.
+	row, ok, findErr := s.findOpenStuckStateForReason(ctx, itemID, reason)
+	if findErr != nil || !ok {
+		return false, nil
 	}
-	return nextCount >= maxAttempts, nil
+	return row.DiagnoseNudgeCount >= maxAttempts, nil
 }
