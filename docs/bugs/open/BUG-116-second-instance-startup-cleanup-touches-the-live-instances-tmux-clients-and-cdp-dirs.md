@@ -9,7 +9,7 @@
 state and "will not see or affect the live deployed instance". Config, DB and the periodic orphan sweeper are
 isolated (`session/orphan_tmux_sweeper.go:65` logs `skipping — isolated instance`), but two startup cleanups are not:
 
-1. `tmux.KillOrphanedControlModeClients("")` (`main.go:427`, impl `session/tmux/tmux.go`) lists every
+1. `tmux.KillOrphanedControlModeClients("")` (`main.go:430`, impl `session/tmux/tmux.go`) lists every
    control-mode client on the tmux server and kills each one. Its premise, "any control-mode client
    already attached is a leftover from a prior process", is false when a second instance shares the tmux
    server, which the recipe does (`--tmux-keep-server`, default socket).
