@@ -11,8 +11,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
@@ -171,6 +173,14 @@ type BacklogService struct {
 	// the WIP cap by each computing freeSlots from their own stale snapshot
 	// (PR #199 review F2).
 	dequeueMu sync.Mutex
+
+	// claimWiring holds the cross_host_claim_dedup checker and dispute resolver
+	// (backlog_service_claim.go). It is atomic because SetClaimChecker runs at
+	// startup while RPCs and the dequeue sweep already read it. nil means
+	// unimplemented: everything reads as unclaimed. claimDedupFlag overrides the
+	// live feature-flag read (tests only).
+	claimWiring    atomic.Pointer[claimWiring]
+	claimDedupFlag func() bool
 
 	// spawnInFlight is a per-backlog-item "at most one work-session spawn in
 	// flight" set, keyed by item ID, storing struct{} — the same LoadOrStore/
@@ -1261,7 +1271,27 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 			continue
 		}
 		wt, err := s.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
-		if err != nil || wt.WorktreePath == "" {
+		if err != nil {
+			continue
+		}
+		if wt.WorktreePath == "" {
+			// Epic 2.1: previously silently skipped here even when a worktree row was
+			// expected. Extra lookup needed since ItemSessionSummary lacks
+			// SessionType/Branch; a lookup failure falls back to silent skip.
+			if sessionData, lookupErr := s.storage.FindInstanceDataByID(is.SessionUUID); lookupErr == nil && session.ExpectsWorktree(*sessionData) {
+				log.Warn("[cleanupItemWorktreesExcept] worktree row missing but expected",
+					"session_id", is.SessionUUID, "item_id", is.BacklogItemID)
+				if s.eventBus != nil {
+					s.eventBus.Publish(events.NewNotificationEvent(
+						is.BacklogItemID, "", uuid.New().String(),
+						int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+						derivePriority(true, true), // urgent, important — cleanup silently could not find anything to remove
+						"Worktree row missing during item archival",
+						fmt.Sprintf("Session %s expected a git worktree but has no worktree row, so its on-disk directory (if any) could not be cleaned up.", is.SessionUUID),
+						map[string]string{"item_id": is.BacklogItemID},
+					))
+				}
+			}
 			continue
 		}
 		if exceptPath != "" && wt.WorktreePath == exceptPath {

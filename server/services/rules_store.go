@@ -287,6 +287,7 @@ func specsToRules(specs []RuleSpec) []classifier.Rule {
 				Source:   spec.Source,
 			},
 			ToolName:              spec.ToolName,
+			ToolCategory:          spec.ToolCategory,
 			Decision:              parseDecision(spec.Decision),
 			RiskLevel:             parseRiskLevel(spec.RiskLevel),
 			Reason:                spec.Reason,

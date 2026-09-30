@@ -399,6 +399,13 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// already uses the method-name-as-id convention (see the SearchGitHubRepos
 	// comment above), so match it verbatim rather than a kebab-case id.
 	"DismissFinding": "DismissFinding",
+	// ProbeProgram (SessionService in session.proto) -- pre-existing gap found
+	// by TestMethodToIDCompleteness while adding the (now superseded)
+	// Diagnose & Nudge DiagnosticService entries during #880's development
+	// (unrelated to Diagnose & Nudge itself). No "// +api:" marker exists on
+	// server/services/session_service.go's ProbeProgram handler, so
+	// markerFound stays false for this entry until one is added separately.
+	"ProbeProgram": "program:probe",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

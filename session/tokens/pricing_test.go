@@ -236,6 +236,62 @@ func TestModelFamilyCost_WhenMixedKnownAndUnknownFamilies_ExpectKnownPricedAndUn
 	assert.False(t, unpriced["claude-sonnet-4"])
 }
 
+// TestEstimateCostByCategory_WhenVariedUsage_ExpectEachCategoryPricedIndependently
+// covers the per-category split EstimateCost's existing tests never assert on
+// directly (they only ever check the summed Total()).
+func TestEstimateCostByCategory_WhenVariedUsage_ExpectEachCategoryPricedIndependently(t *testing.T) {
+	t.Parallel()
+	pt := DefaultPricingTable()
+
+	t.Run("priced family with distinct per-category token counts", func(t *testing.T) {
+		t.Parallel()
+		result := &ParseResult{
+			TurnTimeline: []TurnStats{
+				{
+					Model:         "claude-sonnet-4",
+					Input:         1_000_000,
+					Output:        1_000_000,
+					CacheCreation: 1_000_000,
+					CacheRead:     1_000_000,
+				},
+			},
+		}
+
+		costs, unpriced := pt.EstimateCostByCategory(result)
+
+		// claude-sonnet-4 rates: $3/MTok input, $15/MTok output, $3.75/MTok
+		// cache-write, $0.30/MTok cache-read (DefaultPricingTable()).
+		assert.InDelta(t, 3.0, costs.Input, 0.0001)
+		assert.InDelta(t, 15.0, costs.Output, 0.0001)
+		assert.InDelta(t, 3.75, costs.CacheCreation, 0.0001)
+		assert.InDelta(t, 0.30, costs.CacheRead, 0.0001)
+		assert.Empty(t, unpriced)
+	})
+
+	t.Run("unpriced family reports zero on every category and is flagged", func(t *testing.T) {
+		t.Parallel()
+		result := &ParseResult{
+			TurnTimeline: []TurnStats{
+				{
+					Model:         "gpt-99-turbo",
+					Input:         500_000,
+					Output:        500_000,
+					CacheCreation: 500_000,
+					CacheRead:     500_000,
+				},
+			},
+		}
+
+		costs, unpriced := pt.EstimateCostByCategory(result)
+
+		assert.Zero(t, costs.Input)
+		assert.Zero(t, costs.Output)
+		assert.Zero(t, costs.CacheCreation)
+		assert.Zero(t, costs.CacheRead)
+		assert.Equal(t, []string{"gpt-99-turbo"}, unpriced)
+	})
+}
+
 // knownActiveClaudeFamilies is maintained independently of DefaultPricingTable()'s keys —
 // deliberately a second source of truth, so a maintainer must touch both this list and
 // the pricing table when a new Claude model family becomes active, giving this test a

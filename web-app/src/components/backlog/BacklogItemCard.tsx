@@ -7,11 +7,12 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 // mark and is used here instead (plan.md's snippet assumed `Github` exists;
 // it doesn't in the installed version).
 import { CircleDot } from "lucide-react";
-import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
+import type { BacklogItem, BacklogItemStatus, ClaimedElsewhere } from "@/lib/hooks/useBacklogService";
 import type { StuckBacklogItem, StuckReason } from "@/gen/session/v1/backlog_pb";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { getPrimaryCardAction } from "@/lib/backlog/itemActions";
 import { BlockerChip } from "./BlockerChip";
+import { ClaimChip } from "./ClaimChip";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import * as styles from "./BacklogItemCard.css";
 
@@ -46,6 +47,11 @@ interface BacklogItemCardProps {
    * BUG-105). Threaded straight through to BlockerChip's "+N more" indicator.
    */
   otherStuckReasons?: StuckReason[];
+  /**
+   * Claim another host holds on this item's externalUrl, from the board's single
+   * ListForeignClaims call. Undefined renders no chip.
+   */
+  claim?: ClaimedElsewhere;
 }
 
 function AcSummary({ item }: { item: BacklogItem }) {
@@ -101,6 +107,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
   forceJustChanged = false,
   stuckItem,
   otherStuckReasons,
+  claim,
 }: BacklogItemCardProps) {
   const actionSpec = getPrimaryCardAction(item);
   const isTriageRunning = item.triageStatus === "running";
@@ -213,6 +220,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
             #{item.externalId}
           </a>
         )}
+        {claim && <ClaimChip claim={claim} />}
         <button
           className={`${styles.actionButton} ${actionSpec.isDone ? styles.actionButtonDone : ""}`}
           disabled={actionSpec.disabled || actionSpec.isDone || isTriageRunning || pendingAction !== null}

@@ -39,6 +39,9 @@ jest.mock("@/components/backlog/detail/DiagnoseHistoryList", () => ({
   DiagnoseHistoryList: () => null,
 }));
 
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
+
+
 import { StuckItemsSection } from "./StuckItemsSection";
 
 function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -35,6 +36,10 @@ type InstanceData struct {
 	AutoApprove   bool      `json:"auto_approve"`
 	Prompt        string    `json:"prompt"`
 	InitialPrompt string    `json:"initial_prompt,omitempty"`
+	// InitialPromptSentAt records when InitialPrompt was actually typed into the
+	// terminal, persisted so a service restart's fresh driver goroutine doesn't
+	// have to re-derive (and potentially get wrong) whether it was already sent.
+	InitialPromptSentAt time.Time `json:"initial_prompt_sent_at,omitempty"`
 
 	Program          string          `json:"program"`
 	ExistingWorktree string          `json:"existing_worktree,omitempty"`
@@ -264,6 +269,15 @@ var _ InstanceStore = (*Storage)(nil)
 // Storage handles saving and loading instances via the repository backend.
 type Storage struct {
 	repo *EntRepository
+
+	// claimRecorder is set once at startup but read from every creation path
+	// (including background sync loops), so it is atomic.
+	claimRecorder atomic.Pointer[ClaimRecorder]
+	// foreignClaims is the local-only claim reader SyncOne consults; nil means
+	// no cross-host claim checking.
+	foreignClaims atomic.Pointer[ForeignClaimLookup]
+	// provenance builds the PR provenance comment; nil means no stamping.
+	provenance atomic.Pointer[PRProvenanceSource]
 }
 
 // NewStorageWithRepository creates a Storage backed by an EntRepository.
@@ -284,6 +298,36 @@ func (s *Storage) GetEntClient() *ent.Client {
 // SetItemChangePublisher wires p into the underlying repository.
 func (s *Storage) SetItemChangePublisher(p ItemChangePublisher) {
 	s.repo.SetItemChangePublisher(p)
+}
+
+// SetClaimRecorder wires r as the recorder CreateBacklogItem calls for every
+// item created with a non-empty ExternalURL. Passing nil disables recording.
+func (s *Storage) SetClaimRecorder(r ClaimRecorder) {
+	if r == nil {
+		s.claimRecorder.Store(nil)
+		return
+	}
+	s.claimRecorder.Store(&r)
+}
+
+// SetForeignClaimLookup wires l as the local-only claim reader ForeignClaim
+// uses. Passing nil disables cross-host claim checking.
+func (s *Storage) SetForeignClaimLookup(l ForeignClaimLookup) {
+	if l == nil {
+		s.foreignClaims.Store(nil)
+		return
+	}
+	s.foreignClaims.Store(&l)
+}
+
+// ForeignClaim reports a claim on externalURL held by another host, consulting
+// only local state. It reports false when no lookup is wired or externalURL is empty.
+func (s *Storage) ForeignClaim(externalURL string) (ClaimRecord, bool) {
+	lookup := s.foreignClaims.Load()
+	if lookup == nil || externalURL == "" {
+		return ClaimRecord{}, false
+	}
+	return (*lookup).ForeignClaim(externalURL)
 }
 
 // SetCallbackDispatcher forwards to the underlying *EntRepository's SetCallbackDispatcher.
@@ -355,6 +399,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 		}
 		// Inject shell repository so shell operations can persist to the DB.
 		inst.SetShellRepository(s.repo)
+		inst.SetInitialPromptRepository(s.repo)
 		instances = append(instances, inst)
 	}
 
@@ -594,6 +639,7 @@ func (s *Storage) AddInstance(instance *Instance) error {
 	}
 	// Inject shell repository so shell operations can persist to the DB.
 	instance.SetShellRepository(s.repo)
+	instance.SetInitialPromptRepository(s.repo)
 	return nil
 }
 
@@ -656,6 +702,13 @@ func (s *Storage) UpdateInstanceTimestampsOnly(title string, lastTerminalUpdate,
 // UpdateInstanceLastAddedToQueue updates ONLY the LastAddedToQueue field for a specific instance.
 func (s *Storage) UpdateInstanceLastAddedToQueue(title string, lastAddedToQueue time.Time) error {
 	return s.repo.UpdateLastAddedToQueue(context.Background(), title, lastAddedToQueue)
+}
+
+// UpdateInstanceInitialPromptSentAt persists when InitialPrompt was actually typed
+// into the terminal, so a service restart doesn't have to re-derive (and risk
+// getting wrong) whether it was already sent -- see Instance.InitialPromptSentAt.
+func (s *Storage) UpdateInstanceInitialPromptSentAt(title string, t time.Time) error {
+	return s.repo.UpdateInitialPromptSentAt(context.Background(), title, t)
 }
 
 // UpdateInstanceLastUserResponse persists the LastUserResponse timestamp for a session.
@@ -837,6 +890,12 @@ func (s *Storage) RecordAnalytics(ctx context.Context, data AnalyticsData) error
 	return s.repo.RecordAnalytics(ctx, data)
 }
 
+// RecordAnalyticsBatch writes one atomic, idempotent analytics batch without
+// widening the broad Repository interface used by unrelated adapters.
+func (s *Storage) RecordAnalyticsBatch(ctx context.Context, batch []AnalyticsData) error {
+	return s.repo.RecordAnalyticsBatch(ctx, batch)
+}
+
 // ListAnalytics retrieves recent classification decisions from the repository.
 func (s *Storage) ListAnalytics(ctx context.Context, limit int) ([]AnalyticsData, error) {
 	return s.repo.ListAnalytics(ctx, limit)
@@ -919,7 +978,31 @@ func (s *Storage) CreateBacklogItem(ctx context.Context, data BacklogItemData) (
 			data.RepoPath = resolved
 		}
 	}
-	return s.repo.CreateBacklogItem(ctx, data)
+	created, err := s.repo.CreateBacklogItem(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	s.recordClaim(ctx, created)
+	return created, nil
+}
+
+// recordClaim is the single choke point (ADR-002 of
+// project_plans/cross-host-claim-dedup/decisions/) that records a cross-host
+// claim for every newly created item that has an ExternalURL. Best-effort: a
+// failure is logged and never fails item creation.
+func (s *Storage) recordClaim(ctx context.Context, item *BacklogItemData) {
+	recorder := s.claimRecorder.Load()
+	if recorder == nil || item == nil || item.ExternalURL == "" {
+		return
+	}
+	err := (*recorder).RecordClaim(ctx, ClaimRecord{
+		ExternalURL:  item.ExternalURL,
+		ItemDeepLink: BacklogItemDeepLinkPath(item),
+		ClaimedAt:    item.CreatedAt,
+	})
+	if err != nil {
+		log.Warn("claim_index.record_failed", "external_url", item.ExternalURL, "err", err)
+	}
 }
 
 // GetBacklogItem retrieves a backlog item by UUID string.

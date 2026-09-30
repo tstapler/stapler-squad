@@ -333,10 +333,7 @@ func GetPRInfo(owner, repo string, prNumber int) (*PRInfo, error) {
 // Includes review decisions and CI/check status. ref.Host() "" means github.com.
 func GetPRInfoCtx(ctx context.Context, ref RepoRef, prNumber int) (*PRInfo, error) {
 	if config.LoadConfig().GetFeatureFlagWithDefault(githubGraphQLMigrationFlagName, false) {
-		// GetPRInfoGraphQL is github.com-only today; this flag defaults off,
-		// so a GHE ref silently falling back to github.com's GraphQL API here
-		// is a pre-existing gap, not something introduced by host-awareness.
-		return GetPRInfoGraphQL(ctx, ref.Owner(), ref.Repo(), prNumber)
+		return GetPRInfoGraphQL(ctx, ref, prNumber)
 	}
 
 	if err := CheckGHAuthForHost(ctx, ref.Host()); err != nil {

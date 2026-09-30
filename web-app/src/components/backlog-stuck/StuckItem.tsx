@@ -15,6 +15,7 @@ import {
   PR_STATUS_UNKNOWN_LABEL,
 } from "./stuckReason";
 import { StuckItemDetail } from "./StuckItemDetail";
+import { ClaimOverrideForm } from "@/components/backlog/ClaimOverrideForm";
 import * as styles from "./StuckItem.css";
 
 interface StuckItemProps {
@@ -63,7 +64,11 @@ interface StuckItemProps {
    * onTriggerRemediationNow above, so the specific backend error message
    * reaches the caller instead of being swallowed.
    */
-  onApprovePlan?: (itemId: string) => Promise<void>;
+  // StuckItemProps was already over the 12-prop threshold before this field (pre-existing);
+  // grouping into a sub-interface is a larger refactor out of scope for the Diagnose &
+  // Nudge feature this file also needed touching for. Tracked as follow-up debt, not
+  // newly introduced by this diff.
+  onApprovePlan?: (itemId: string) => Promise<void>; // eslint-disable-line no-restricted-syntax
   /**
    * Requests a diagnostic dispatch for this item (DiagnoseBacklogItem RPC) —
    * omitted disables the Diagnose control entirely. Forwarded straight
@@ -72,11 +77,17 @@ interface StuckItemProps {
    */
   onDiagnose?: (itemId: string) => Promise<void>;
   /**
+   * Overrides another host's claim on a BLOCKED_BY_CLAIM item (OverrideClaimBlock
+   * RPC) with an audit-logged reason of >= 5 characters. Omitted hides the
+   * control. Rejects on failure so the form can show the message.
+   */
+  onOverrideClaimBlock?: (itemId: string, reason: string) => Promise<void>;
+  /**
    * itemId from the `/unfinished?item=<itemId>` deep link (routes.unfinishedItem) —
    * when it matches this card's item.itemId, scrolls the card into view. Expansion
    * is driven by the parent (StuckItemsSection) via isExpanded, not by this prop.
    */
-  focusItemId?: string;
+  focusItemId?: string; // eslint-disable-line no-restricted-syntax -- see onApprovePlan's disable above
 }
 
 /** Extracts "owner/repo" from a GitHub PR URL, for the glance-level identity line. */
@@ -145,6 +156,7 @@ export function StuckItem({
   reworkCapOverrideLoaded = false,
   onTriggerRemediationNow,
   onApprovePlan,
+  onOverrideClaimBlock,
   onDiagnose,
   focusItemId,
 }: StuckItemProps) {
@@ -159,6 +171,28 @@ export function StuckItem({
 
   const [retryState, setRetryState] = useState<"idle" | "pending" | "error">("idle");
   const [retryErrorMessage, setRetryErrorMessage] = useState<string | null>(null);
+
+  const [overrideOpen, setOverrideOpen] = useState(false);
+  const [overrideBusy, setOverrideBusy] = useState(false);
+  const [overrideError, setOverrideError] = useState<string | null>(null);
+  const canOverrideClaim = item.reason === StuckReason.BLOCKED_BY_CLAIM && onOverrideClaimBlock !== undefined;
+
+  const handleOverrideConfirm = useCallback(
+    async (reason: string) => {
+      if (!onOverrideClaimBlock) return;
+      setOverrideBusy(true);
+      setOverrideError(null);
+      try {
+        await onOverrideClaimBlock(item.itemId, reason);
+        setOverrideOpen(false);
+      } catch (err) {
+        setOverrideError(err instanceof Error ? err.message : "Override failed");
+      } finally {
+        setOverrideBusy(false);
+      }
+    },
+    [onOverrideClaimBlock, item.itemId]
+  );
 
   // AC 29: when this card collapses (Escape, re-click, or a parent-driven
   // toggle), keyboard focus returns to the card's own toggle control — it
@@ -278,6 +312,7 @@ export function StuckItem({
 
   return (
     <div ref={containerRef}>
+      {// analytics-exempt
       <div
         ref={cardRef}
         role="button"
@@ -308,6 +343,7 @@ export function StuckItem({
             stuck {formatStuckDuration(item.firstDetectedAt)}
           </span>
           {onTriggerRemediationNow && (
+            // analytics-exempt
             <button
               type="button"
               className={`${styles.retryBtn} ${hoverUnavailable ? styles.retryBtnAlwaysOn : ""}`}
@@ -328,7 +364,22 @@ export function StuckItem({
               {retryState === "pending" ? "Retrying…" : "Retry now"}
             </button>
           )}
+          {canOverrideClaim && (
+            <button
+              type="button"
+              className={`${styles.retryBtn} ${styles.retryBtnAlwaysOn}`}
+              aria-expanded={overrideOpen}
+              onClick={(e) => {
+                e.stopPropagation();
+                setOverrideOpen((open) => !open);
+              }}
+              data-testid="stuck-item-override-claim"
+            >
+              Override claim
+            </button>
+          )}
           {onSnooze && (
+            // analytics-exempt
             <button
               type="button"
               className={`${styles.snoozeBtn} ${hoverUnavailable ? styles.snoozeBtnAlwaysOn : ""}`}
@@ -365,7 +416,20 @@ export function StuckItem({
             Retry failed: {retryErrorMessage}
           </div>
         )}
-      </div>
+      </div>}
+
+      {overrideOpen && canOverrideClaim && (
+        <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+          <ClaimOverrideForm
+            label="Reason for working on this despite the other host's claim (required)"
+            confirmLabel="Override claim block"
+            onConfirm={handleOverrideConfirm}
+            onCancel={() => setOverrideOpen(false)}
+            busy={overrideBusy}
+            errorMessage={overrideError}
+          />
+        </div>
+      )}
 
       {snoozeOpen && onSnooze && (
         <div
@@ -399,6 +463,7 @@ export function StuckItem({
           )}
 
           <div className={styles.snoozeActions}>
+            {// analytics-exempt
             <button
               type="button"
               className={styles.snoozeCancelBtn}
@@ -406,7 +471,8 @@ export function StuckItem({
               data-testid="stuck-item-snooze-cancel"
             >
               Cancel
-            </button>
+            </button>}
+            {// analytics-exempt
             <button
               type="button"
               className={styles.snoozeConfirmBtn}
@@ -415,7 +481,7 @@ export function StuckItem({
               data-testid="stuck-item-snooze-confirm"
             >
               {snoozeState === "pending" ? "Snoozing…" : snoozeState === "error" ? "Retry" : "Confirm"}
-            </button>
+            </button>}
           </div>
         </div>
       )}

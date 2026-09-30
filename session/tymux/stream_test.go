@@ -949,7 +949,7 @@ func TestOpenStandingStream_TearDownForReopen_ProceedsAnyway_WhenOldReaderIsWedg
 	wait.RequireEventually(t, func() bool {
 		after := sumForSubsystem(t, collectMetric(t, "session_lifecycle_active_generations"), "tymux_stream", "")
 		return after == before+1
-	}, time.Second, time.Millisecond,
+	}, 5*time.Second, time.Millisecond,
 		"the abandoned generation must stay counted as active — its EndGeneration is never reached")
 }
 

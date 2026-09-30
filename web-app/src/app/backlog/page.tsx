@@ -16,6 +16,7 @@ import { VaguenessPromptModal } from "@/components/backlog/VaguenessPromptModal"
 import { BacklogTourModal } from "@/components/backlog/BacklogTourModal";
 import { useBacklogTour } from "@/components/backlog/useBacklogTour";
 import { GitHubIssuePicker } from "@/components/backlog/GitHubIssuePicker";
+import { ClaimedElsewhereNotice, type ClaimedElsewhereEntry } from "@/components/backlog/ClaimedElsewhereNotice";
 import { ConnectionIndicator } from "@/components/backlog/ConnectionIndicator";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
@@ -300,6 +301,9 @@ function BacklogPageInner() {
   const [githubImporting, setGithubImporting] = useState(false);
   const [githubImportError, setGithubImportError] = useState<string | null>(null);
   const [githubImportProgress, setGithubImportProgress] = useState<{ done: number; total: number } | null>(null);
+  // Issues another host already claimed (cross_host_claim_dedup) — a third
+  // import outcome, distinct from "already imported" and "failed".
+  const [claimedElsewhere, setClaimedElsewhere] = useState<ClaimedElsewhereEntry[]>([]);
 
   // First-visit walkthrough
   const { showTour, setTourComplete, hideTour, resetTour } = useBacklogTour();
@@ -525,7 +529,9 @@ function BacklogPageInner() {
       setGithubImporting(true);
       try {
         const result = await importGitHubIssue(githubIssueUrl.trim());
-        if (result) {
+        if (result?.alreadyClaimedElsewhere) {
+          setGithubImportError("Another host already claimed this issue.");
+        } else if (result) {
           setShowForm(false);
           setGithubIssueUrl("");
           await hydrateItemIntoStore(result.item.id);
@@ -550,13 +556,16 @@ function BacklogPageInner() {
       setGithubImporting(true);
       setGithubImportProgress({ done: 0, total: issues.length });
       const createdIds: string[] = [];
+      const claimed: ClaimedElsewhereEntry[] = [];
       let failures = 0;
       let duplicates = 0;
       try {
         for (const issue of issues) {
           const url = issue.url || `https://${issue.host || "github.com"}/${owner}/${repo}/issues/${issue.number}`;
           const result = await importGitHubIssue(url.trim());
-          if (result) {
+          if (result?.alreadyClaimedElsewhere) {
+            claimed.push({ issueUrl: url.trim(), claim: result.alreadyClaimedElsewhere });
+          } else if (result) {
             await hydrateItemIntoStore(result.item.id);
             createdIds.push(result.item.id);
             if (result.alreadyExisted) duplicates++;
@@ -569,6 +578,7 @@ function BacklogPageInner() {
         setGithubImporting(false);
         setGithubImportProgress(null);
       }
+      setClaimedElsewhere(claimed);
       if (failures > 0) {
         // Leave the modal open (don't setShowForm(false) below) so this error
         // is actually visible — closing the form first would unmount it
@@ -590,6 +600,9 @@ function BacklogPageInner() {
         );
         return;
       }
+      // Leave the modal open so the claimed-elsewhere notice (Copy link /
+      // Import anyway) stays reachable.
+      if (claimed.length > 0) return;
       setShowForm(false);
       // Only navigate to the item detail when a single issue was imported —
       // with multiple, there's no single item to land on.
@@ -600,6 +613,25 @@ function BacklogPageInner() {
       }
     },
     [importGitHubIssue, hydrateItemIntoStore, router, searchParams]
+  );
+
+  const handleImportAnyway = useCallback(
+    async (entry: ClaimedElsewhereEntry, reason: string) => {
+      const result = await importGitHubIssue(entry.issueUrl, { overrideReason: reason });
+      if (!result || result.alreadyClaimedElsewhere) {
+        throw new Error("Import failed. Check the reason and try again.");
+      }
+      await hydrateItemIntoStore(result.item.id);
+      const remaining = claimedElsewhere.filter((e) => e.issueUrl !== entry.issueUrl);
+      setClaimedElsewhere(remaining);
+      if (remaining.length === 0) {
+        setShowForm(false);
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("item", result.item.id);
+        router.push(`/backlog?${params.toString()}`);
+      }
+    },
+    [importGitHubIssue, hydrateItemIntoStore, claimedElsewhere, router, searchParams]
   );
 
   const sortIndicator = (col: SortColumn) => {
@@ -885,10 +917,11 @@ function BacklogPageInner() {
               <>
                 <GitHubIssuePicker
                   onSelect={handlePickerSelect}
-                  onCancel={() => { setShowForm(false); setGithubIssueUrl(""); setGithubImportError(null); }}
+                  onCancel={() => { setShowForm(false); setGithubIssueUrl(""); setGithubImportError(null); setClaimedElsewhere([]); }}
                   importing={githubImporting}
                   importProgress={githubImportProgress}
                 />
+                <ClaimedElsewhereNotice entries={claimedElsewhere} onImportAnyway={handleImportAnyway} />
                 {githubImportError && (
                   <p style={{ fontSize: "12px", color: "var(--error)", margin: "8px 0 0" }}>
                     {githubImportError}

@@ -67,6 +67,7 @@ type Server struct {
 	slackInteractiveDisabled   bool                            // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
 	backgroundTasksWG          sync.WaitGroup                  // joined by Shutdown() — fork-pressure logger, zombie watcher, zombie reaper
 	backgroundTasksJoinTimeout time.Duration                   // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
+	hookIPC                    *hookIPCState                   // resident instance-scoped PreToolUse classifier; started with the HTTP server
 }
 
 // ServeHTTP makes *Server an http.Handler wrapping s.mux. Beyond delegating,
@@ -170,6 +171,9 @@ const sessionHealthCheckInterval = 15 * time.Second
 // serverCtx (== connCtx from newServerBase) is cancelled by Shutdown() to signal
 // active streaming connections to close.
 func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context.Context) {
+	srv.hookIPC = newHookIPCState(deps)
+	srv.shutdownHooks = append(srv.shutdownHooks, srv.hookIPC.Close)
+
 	// Start background components
 	go deps.ReactiveQueueMgr.Start(serverCtx)
 	log.Info("ReactiveQueueManager started")
@@ -1210,6 +1214,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		go orphanSweeper.Start(serverCtx)
 	}
 
+	// Start leaked-control-mode-client sweeper, the periodic counterpart to
+	// main.go's one-time startup cleanup — see StartLeakedControlModeSweeper's
+	// doc comment. Gated on IsIsolatedInstance like OrphanedTmuxSweeper: a
+	// named instance shares the real default tmux socket without its own, so
+	// this would otherwise kill the production instance's own live clients.
+	if !config.IsIsolatedInstance() {
+		go tmux.StartLeakedControlModeSweeper(serverCtx, "")
+	}
+
 	// Start session retention sweeper (deletes archived sessions past the retention
 	// window once they pass safety checks — see SessionRetentionSweeper doc comment).
 	if cfg.SessionRetention.EnabledOrDefault() {
@@ -1410,6 +1423,12 @@ func (d *dualStackListener) Addr() net.Addr {
 // Start starts the HTTP server with middleware chain.
 // This is a blocking call. Use Start() in a goroutine for concurrent operation.
 func (s *Server) Start(ctx context.Context) error {
+	if err := s.hookIPC.Start(); err != nil {
+		// The main server remains available; hook clients use verified cache/defer
+		// fallback until endpoint health is restored.
+		log.Warn("hook classifier endpoint unavailable", "err", err)
+	}
+
 	// Register health check endpoint
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

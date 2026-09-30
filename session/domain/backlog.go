@@ -228,6 +228,16 @@ const (
 	// (session/backlog_lifecycle_gates.go), mirroring
 	// reconcileOrphanedTriageItems' LivenessEngine-consulting sweep pattern.
 	StuckReasonGateTimeout StuckReason = "gate_timeout"
+	// StuckReasonBlockedByClaim: DequeueNextQueuedItems skipped this item because
+	// a different host holds the cross-host claim for its ExternalURL
+	// (project_plans/cross-host-claim-dedup). Claims never expire, so a stale
+	// claim would otherwise starve the item silently; this makes the skip
+	// visible with an operator override (OverrideClaimBlock).
+	StuckReasonBlockedByClaim StuckReason = "blocked_by_claim"
+	// StuckReasonWorktreeInconsistent: the worktree consistency sweep flagged an
+	// inconsistency it declined to auto-repair. Dual-written alongside its
+	// notification when the session has a live linked BacklogItem.
+	StuckReasonWorktreeInconsistent StuckReason = "worktree_inconsistent"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -252,6 +262,8 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonBounceCapExhausted,
 	StuckReasonSteerFailed,
 	StuckReasonGateTimeout,
+	StuckReasonBlockedByClaim,
+	StuckReasonWorktreeInconsistent,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -263,7 +275,7 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
 		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
 		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed,
-		StuckReasonGateTimeout:
+		StuckReasonGateTimeout, StuckReasonBlockedByClaim, StuckReasonWorktreeInconsistent:
 		return true
 	}
 	return false

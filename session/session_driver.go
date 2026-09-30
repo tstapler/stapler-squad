@@ -324,15 +324,27 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	var initialPromptSentAt time.Time
 	if sentInitial {
 		initialPromptSentAt = time.Now()
+	} else if persisted := inst.GetInitialPromptSentAt(); !persisted.IsZero() {
+		// Persisted record of an actual send in a previous service run --
+		// authoritative, checked before the output/JSONL heuristics below
+		// (which only exist for sessions that predate this field, or for the
+		// rare case a send happened but the persist call itself failed).
+		sentInitial = true
+		initialPromptSentAt = persisted
 	} else {
 		// Check if the prompt was already delivered in a previous service run.
 		// Use live terminal output first (no disk latency), then fall back to JSONL file.
+		// Persist the result via SetInitialPromptSentAt either way, so this
+		// session (predating the persisted field, or hit by an earlier failed
+		// persist call) doesn't have to re-run these heuristics again next restart.
 		if startOutput, err := inst.PreviewContext(ctx); err == nil && outputShowsConversationStarted(startOutput) {
 			sentInitial = true
 			initialPromptSentAt = time.Now()
+			inst.SetInitialPromptSentAt(initialPromptSentAt)
 		} else if _, err := FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
 			sentInitial = true
 			initialPromptSentAt = time.Now()
+			inst.SetInitialPromptSentAt(initialPromptSentAt)
 		}
 	}
 	var sendAttempts int
@@ -617,6 +629,17 @@ func handleStartupDialogTick(inst *Instance, tailed string, startupLatch *dialog
 // already started underneath us, sending the prompt, and read-back
 // verification. The caller always `continue`s the loop after calling this.
 func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt string, output string, detectedSt detection.DetectedStatus, readyDeadline time.Time, sentInitial *bool, initialPromptSentAt *time.Time, sendAttempts *int) {
+	// markSent records every "we're done trying to send" transition below
+	// through the same path so it's always durably persisted (via
+	// Instance.SetInitialPromptSentAt's injected repo) -- not just reflected
+	// in this tick's local pointers, which reset on the next service restart.
+	markSent := func() {
+		now := time.Now()
+		*sentInitial = true
+		*initialPromptSentAt = now
+		inst.SetInitialPromptSentAt(now)
+	}
+
 	// Wait for StatusIdle specifically: the `^>\s*▌?\s*$` pattern confirms
 	// Claude Code's readline is showing the input prompt and is listening.
 	//
@@ -648,8 +671,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		log.Info("SessionDriver: terminal output shows conversation already active, skipping injection",
 			"session", inst.Title,
 		)
-		*sentInitial = true
-		*initialPromptSentAt = time.Now()
+		markSent()
 		return
 	}
 
@@ -657,8 +679,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		log.Info("SessionDriver: conversation file exists, skipping initial prompt injection",
 			"session", inst.Title,
 		)
-		*sentInitial = true
-		*initialPromptSentAt = time.Now()
+		markSent()
 		return
 	}
 
@@ -694,8 +715,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 			log.Error("SessionDriver: giving up on initial prompt after 3 failed attempts",
 				"session", inst.Title,
 			)
-			*sentInitial = true
-			*initialPromptSentAt = time.Now()
+			markSent()
 		}
 		// sentInitial stays false → retry next tick
 		return
@@ -714,8 +734,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 	// cannot reliably verify (Claude may not be at a prompt).
 	if !claudeAtPrompt || *sendAttempts >= 3 {
 		// Timeout-triggered send or max retries: accept without verification.
-		*sentInitial = true
-		*initialPromptSentAt = time.Now()
+		markSent()
 		return
 	}
 
@@ -746,8 +765,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		"session", inst.Title,
 		"attempt", *sendAttempts,
 	)
-	*sentInitial = true
-	*initialPromptSentAt = time.Now()
+	markSent()
 }
 
 // handleInactivityTick checks for driver inactivity once the initial prompt

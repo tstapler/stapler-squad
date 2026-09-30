@@ -2573,6 +2573,65 @@ func TestResumeHibernatedSession_DoesNotTouchOtherSessions(t *testing.T) {
 	}
 }
 
+// TestResumeHibernatedSession_WiresProvider is the regression test for
+// backlog e6c2a88e: ResumeHibernatedSession loads its instance raw from
+// storage, bypassing Registry.Acquire/WireInstanceCallbacks entirely, so
+// without an explicit SetMCPServerURLProvider call the relaunched claude
+// process would permanently omit --mcp-config.
+//
+// The instance ResumeHibernatedSession actually relaunches is a fresh object
+// LoadInstances() constructs internally (Storage.LoadInstances never returns
+// a cached pointer), not the *session.Instance this test constructed and
+// passed to AddInstance -- so this asserts via the log line
+// initTmuxSession() emits (session/instance_tmux.go's "creating session",
+// which includes the full built command) rather than reading a LaunchCommand
+// field this test has no pointer to. Not t.Parallel(): captureLogs swaps the
+// process-wide slog default.
+func TestResumeHibernatedSession_WiresProvider(t *testing.T) {
+	logs := captureLogs(t)
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+	svc.SetMCPServerURL(func() string { return "http://localhost:19191/mcp" })
+
+	const sessionUUID = "eeeeeeee-0000-0000-0000-000000000005"
+	hibernated := &session.Instance{
+		Title:     "hibernated-provider-session",
+		UUID:      sessionUUID,
+		Path:      "/tmp/test",
+		Status:    session.Hibernated,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		// MCPServerURL deliberately left empty -- this instance was loaded
+		// raw from storage, never through WireInstanceCallbacks.
+	}
+	require.NoError(t, storage.AddInstance(hibernated))
+	// ResumeFromHibernation relaunches on a DIFFERENT Instance object (see
+	// doc comment below), so hibernated.KillSession() here is best-effort at
+	// most, mirroring TestResumeCrashedSession_TransitionsCrashedToActive --
+	// not a guarantee the spawned tmux session gets torn down.
+	t.Cleanup(func() {
+		_ = hibernated.KillSession()
+	})
+
+	_, err := svc.ResumeHibernatedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeHibernatedSessionRequest{Id: sessionUUID}))
+	require.NoError(t, err)
+
+	// The relaunch itself runs on a goroutine spawned by a DIFFERENT Instance
+	// object than `hibernated`, so nothing on our own pointer observes it;
+	// poll the shared log stream instead.
+	wait.RequireEventually(t, func() bool {
+		return strings.Contains(logs.String(), "creating session") && strings.Contains(logs.String(), "hibernated-provider-session")
+	}, 15*time.Second, 20*time.Millisecond, "relaunch's initTmuxSession log line must appear")
+
+	assert.Contains(t, logs.String(), "--mcp-config",
+		"relaunch command must carry --mcp-config even though MCPServerURL was empty at load time")
+	assert.Contains(t, logs.String(), "19191",
+		"relaunch command must use the wired provider's URL")
+}
+
 // TestResumeCrashedSession_TransitionsCrashedToActive verifies that resuming a
 // Crashed session (dead pane detected by SessionHealthChecker) transitions it
 // back to Active in the response, giving the frontend a one-tap resume action
@@ -2611,6 +2670,90 @@ func TestResumeCrashedSession_TransitionsCrashedToActive(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.Session)
 	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, resp.Msg.Session.Status)
+}
+
+// TestResumeCrashedSession_WiresProvider mirrors
+// TestResumeHibernatedSession_WiresProvider for the crash-resume path:
+// ResumeCrashedSession also loads its instance raw from storage, bypassing
+// WireInstanceCallbacks, so it needs the same explicit provider wiring. See
+// that test's doc comment for why this asserts against the captured log
+// stream rather than a LaunchCommand field on this test's own pointer. Not
+// t.Parallel(): captureLogs swaps the process-wide slog default.
+func TestResumeCrashedSession_WiresProvider(t *testing.T) {
+	logs := captureLogs(t)
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+	svc.SetMCPServerURL(func() string { return "http://localhost:19192/mcp" })
+
+	const sessionUUID = "ffffffff-0000-0000-0000-000000000006"
+	crashed := &session.Instance{
+		Title:      "crashed-provider-session",
+		UUID:       sessionUUID,
+		Path:       "/tmp/test",
+		Status:     session.Crashed,
+		ExitReason: "signal SIGKILL (exit code 137)",
+		Program:    "claude",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		// MCPServerURL deliberately left empty -- this instance was loaded
+		// raw from storage, never through WireInstanceCallbacks.
+	}
+	require.NoError(t, storage.AddInstance(crashed))
+	// ResumeFromCrash relaunches on a DIFFERENT Instance object than `crashed`
+	// (see doc comment below), so this cleanup is best-effort at most, same
+	// as TestResumeCrashedSession_TransitionsCrashedToActive -- not a
+	// guarantee the spawned tmux session gets torn down.
+	t.Cleanup(func() { _ = crashed.KillSession() })
+
+	_, err := svc.ResumeCrashedSession(context.Background(), connect.NewRequest(&sessionv1.ResumeCrashedSessionRequest{Id: sessionUUID}))
+	require.NoError(t, err)
+
+	wait.RequireEventually(t, func() bool {
+		return strings.Contains(logs.String(), "creating session") && strings.Contains(logs.String(), "crashed-provider-session")
+	}, 15*time.Second, 20*time.Millisecond, "relaunch's initTmuxSession log line must appear")
+
+	assert.Contains(t, logs.String(), "--mcp-config",
+		"relaunch command must carry --mcp-config even though MCPServerURL was empty at load time")
+	assert.Contains(t, logs.String(), "19192",
+		"relaunch command must use the wired provider's URL")
+}
+
+// TestWireCallbacks_WiresMCPServerURLProvider is the regression test for the
+// chokepoint gap found in review: wireCallbacks (not just the 4 raw-load
+// resume/fork paths above) must also wire the MCP provider, since it's the
+// single callback chokepoint CreateSession, CreateDirectorySession, and
+// CreateWorktreeSession all route through -- previously only the one-shot
+// MCPServerURL field was ever set for those paths, so a session created via
+// any of them and later relaunched in-process (without a server restart)
+// could get permanently stuck the same way the raw-load paths did.
+func TestWireCallbacks_WiresMCPServerURLProvider(t *testing.T) {
+	logs := captureLogs(t)
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+	svc.SetMCPServerURL(func() string { return "http://localhost:19194/mcp" })
+
+	inst := &session.Instance{
+		Title:       "wire-callbacks-provider-session",
+		UUID:        "11111111-0000-0000-0000-000000000007",
+		Path:        "/tmp/test",
+		Program:     "claude",
+		SessionType: session.SessionTypeDirectory, // NewInstance() would default this; this raw literal must too, or setupFirstTimeWorktree's stricter default: (worktree-envvars-hijack Story 3.2.1) now errors on the zero value instead of silently treating it as directory
+		// MCPServerURL deliberately left empty -- exercises the provider
+		// path, not the one-shot-field fallback.
+	}
+	t.Cleanup(func() { _ = inst.KillSession() })
+
+	svc.wireCallbacks(inst)
+	_ = inst.Start(true) // directory-validation error, if any, is irrelevant -- only the launch command matters here
+
+	assert.Contains(t, logs.String(), "--mcp-config",
+		"a session wired only via wireCallbacks (the CreateSession/CreateDirectorySession/CreateWorktreeSession chokepoint) must still get --mcp-config")
+	assert.Contains(t, logs.String(), "19194",
+		"launch command must use the wired provider's URL")
 }
 
 // --------------------------------------------------------------------------
@@ -4220,6 +4363,90 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 		defer mu.Unlock()
 		assert.GreaterOrEqual(t, len(phases), 2,
 			"creation_progress must be observed transitioning at least once before Active (Story 6.1.1's restart acceptance criterion); observed phases=%v", phases)
+	})
+
+	// ModeIsNewWorktree is worktree-envvars-hijack's Epic 4.1/Story 4.1.1
+	// end-to-end regression test: the exact request shape the original bug
+	// report used (SESSION_TYPE_NEW_WORKTREE + non-empty EnvVars + Program
+	// "claude") against a repo that already hosts a live SessionTypeDirectory
+	// session, asserting both directory-path isolation (a real, distinct
+	// worktree, never the bare repo path) and conversation-content isolation
+	// (the new session's ConversationUUID/HistoryFilePath never adopt the
+	// pre-existing sibling's) in both directions.
+	t.Run("ModeIsNewWorktree", func(t *testing.T) {
+		fix := setupForkTestFixture(t)
+		t.Cleanup(fix.cleanup)
+		wireRegistryForActorSerialization(fix)
+		home := withFakeHome(t) // the pre-existing session's fake JSONL fixture resolves under here
+
+		repoDir := t.TempDir()
+		initGitRepoWithCommit(t, repoDir)
+
+		// Seed the pre-existing sibling's fake conversation JSONL fixture,
+		// following TestHistoryFileDetector_DetectByPath_*'s pattern
+		// (session/history_detector_test.go): ~/.claude/projects/<encoded
+		// repoDir>/<uuid>.jsonl.
+		const preExistingUUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		projDir := filepath.Join(home, ".claude", "projects", session.ClaudeProjectDirName(repoDir))
+		require.NoError(t, os.MkdirAll(projDir, 0o755))
+		preExistingHistoryPath := filepath.Join(projDir, preExistingUUID+".jsonl")
+		require.NoError(t, os.WriteFile(preExistingHistoryPath, []byte(`{"sessionId":"`+preExistingUUID+`"}`+"\n"), 0o644))
+
+		// A real, live SessionTypeDirectory instance already running at
+		// repoDir -- real tmux backend via fix.svc.testTmuxServerSocket, not
+		// a struct-literal double, so IsBackendProcessAlive()/liveness checks
+		// see it as genuinely live. SetHistoryInfo seeds its conversation
+		// state deterministically rather than depending on a HistoryLinker
+		// poll to discover the JSONL fixture above.
+		preExisting, err := session.NewInstance(session.InstanceOptions{
+			Title:            "epic61-preexisting-directory",
+			Path:             repoDir,
+			Program:          "sh",
+			SessionType:      session.SessionTypeDirectory,
+			TmuxServerSocket: fix.svc.testTmuxServerSocket,
+		})
+		require.NoError(t, err)
+		require.NoError(t, preExisting.Start(true))
+		t.Cleanup(func() { _ = preExisting.Destroy() })
+		preExisting.SetHistoryInfo(preExistingUUID, preExistingHistoryPath)
+		require.NoError(t, fix.storage.AddInstance(preExisting))
+
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:       "epic61-new-worktree-session",
+			Path:        repoDir,
+			Program:     "claude",
+			SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+			Branch:      "epic61-new-worktree",
+			EnvVars:     map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:47000"},
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
+
+		assertReachesActiveViaPipeline(t, fix.svc, resp.Msg.Session, awaitTimeout, awaitPollInterval)
+
+		inst := fix.svc.FindLiveInstance(id)
+		require.NotNil(t, inst)
+
+		ws := inst.Workspace()
+		assert.NotEqual(t, repoDir, ws.ActiveDir,
+			"the new worktree session must resolve to a real, distinct worktree path, never the bare repo path")
+		assert.Equal(t, "http://127.0.0.1:47000", inst.EnvVars["ANTHROPIC_BASE_URL"],
+			"envVars-based program configuration must still work (issue #852's out-of-scope-but-must-not-worsen concern)")
+
+		// Conversation-content isolation half: if the new session has any
+		// conversation UUID/history path at all, it must never be the
+		// pre-existing sibling's -- proving no cross-session attach occurred.
+		assert.NotEqual(t, preExistingUUID, inst.GetClaudeConversationUUID(),
+			"new session must never adopt the pre-existing sibling's conversation UUID")
+		assert.NotEqual(t, preExistingHistoryPath, inst.Snapshot().HistoryFilePath,
+			"new session must never adopt the pre-existing sibling's history file path")
+
+		// The pre-existing sibling's own state must be untouched -- proving
+		// no cross-attach occurred in the OTHER direction either.
+		assert.Equal(t, session.Active, session.Status(preExisting.GetStatus()))
+		assert.Equal(t, repoDir, preExisting.Workspace().ActiveDir)
+		assert.Equal(t, preExistingUUID, preExisting.GetClaudeConversationUUID())
 	})
 
 	t.Run("ModeIsFork", func(t *testing.T) {

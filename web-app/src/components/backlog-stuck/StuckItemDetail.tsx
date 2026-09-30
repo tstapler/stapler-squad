@@ -1,9 +1,11 @@
+// +feature: backlog-diagnose-nudge
 "use client";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { routes } from "@/lib/routes";
+import { useAnalytics } from "@/lib/analytics";
 import { resolveReworkCapOverride } from "@/lib/backlog/formatReworkCapOverride";
 import { useDiagnoseAction } from "@/hooks/useDiagnoseAction";
 import { DiagnoseOutcomeDisplay } from "@/components/backlog/detail/DiagnoseOutcomeDisplay";
@@ -85,6 +87,7 @@ export function StuckItemDetail({
   onApprovePlan,
   onDiagnose,
 }: StuckItemDetailProps) {
+  const { track } = useAnalytics();
   const unknown = isPrStatusUnknown(item);
   const isPrReady = item.reason === StuckReason.PR_READY_UNMERGED;
   const isReworkCap = item.reason === StuckReason.REWORK_CAP;
@@ -215,7 +218,15 @@ export function StuckItemDetail({
                 type="button"
                 className={styles.overrideButton}
                 disabled={overrideState === "pending" || !Number(moreRounds) || Number(moreRounds) <= 0}
-                onClick={() => void submitOverride(Number(moreRounds))}
+                onClick={() => {
+                  track({
+                    name: "stuck_item_rework_cap_override",
+                    category: "user_action",
+                    component: "StuckItemDetail",
+                    labels: { unlimited: "false" },
+                  });
+                  void submitOverride(Number(moreRounds));
+                }}
                 data-testid="stuck-item-rework-cap-allow-rounds"
               >
                 Set this item&apos;s cap to {moreRounds || 0} &amp; resume
@@ -224,7 +235,15 @@ export function StuckItemDetail({
                 type="button"
                 className={styles.overrideUnlimitedButton}
                 disabled={overrideState === "pending"}
-                onClick={() => void submitOverride(0)}
+                onClick={() => {
+                  track({
+                    name: "stuck_item_rework_cap_override",
+                    category: "user_action",
+                    component: "StuckItemDetail",
+                    labels: { unlimited: "true" },
+                  });
+                  void submitOverride(0);
+                }}
                 data-testid="stuck-item-rework-cap-unlimited"
               >
                 Remove cap for this item &amp; resume
@@ -267,7 +286,10 @@ export function StuckItemDetail({
                 type="button"
                 className={styles.overrideButton}
                 disabled={approveState === "pending"}
-                onClick={() => void submitApprovePlan()}
+                onClick={() => {
+                  track({ name: "stuck_item_approve_plan", category: "user_action", component: "StuckItemDetail" });
+                  void submitApprovePlan();
+                }}
                 data-testid="stuck-item-approve-plan"
               >
                 {approveState === "pending" ? "Approving…" : "Approve Plan"}

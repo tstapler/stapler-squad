@@ -8,7 +8,7 @@ import { BacklogBoard } from "@/components/backlog/BacklogBoard";
 import { BacklogFilterBar } from "@/components/backlog/BacklogFilterBar";
 import { BacklogItemDetail } from "@/components/backlog/BacklogItemDetail";
 import { useBacklogFilters } from "@/lib/hooks/useBacklogFilters";
-import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import { useBacklogService, type ClaimedElsewhere } from "@/lib/hooks/useBacklogService";
 import { useDiagnoseService } from "@/lib/hooks/useDiagnoseService";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
@@ -22,8 +22,20 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
 };
 
 function BacklogBoardPageInner() {
-  const { transitionStatus, triggerTriage, spawnSessionFromItem, cancelTriage } = useBacklogService();
+  const { transitionStatus, triggerTriage, spawnSessionFromItem, cancelTriage, listForeignClaims } = useBacklogService();
   const { diagnose } = useDiagnoseService();
+  // One local-only call for the whole board (never per card); claims that have
+  // not gossiped here yet simply show no chip.
+  const [foreignClaims, setForeignClaims] = useState<ClaimedElsewhere[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void listForeignClaims().then((claims) => {
+      if (!cancelled) setForeignClaims(claims);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [listForeignClaims]);
   const { showActionToast } = useNotifications();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -142,6 +154,7 @@ function BacklogBoardPageInner() {
           onItemClick={handleItemClick}
           pending={pending}
           stuckItems={stuckItems}
+          foreignClaims={foreignClaims}
           filters={{ search, statusFilter, priorityFilter, showArchived }}
         />
         {selectedItemId && (

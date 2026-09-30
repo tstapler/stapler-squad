@@ -48,6 +48,8 @@ const GROUP_ORDER: StuckReason[] = [
   StuckReason.RESPAWN_BLOCKED_ACTIVE,
   StuckReason.LIKELY_FLAKY,
   StuckReason.BLOCKED_BY_DEPENDENCY,
+  StuckReason.BLOCKED_BY_CLAIM,
+  StuckReason.WORKTREE_INCONSISTENT,
 ];
 
 function itemKey(item: Pick<StuckBacklogItem, "itemId" | "reason">): string {
@@ -106,6 +108,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     snooze,
     bulkResetParkedRemediation,
     triggerRemediationNow,
+    overrideClaimBlock,
   } = useStuckBacklogItems();
   const { updateBacklogItem, transitionStatus, spawnSessionFromItem, approvePlan, getBacklogItem } =
     useBacklogService();
@@ -441,8 +444,12 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     const map = new Map<StuckReason, StuckBacklogItem[]>();
     for (const reason of GROUP_ORDER) map.set(reason, []);
     for (const item of visibleItems) {
-      if (!map.has(item.reason)) map.set(item.reason, []);
-      map.get(item.reason)!.push(item);
+      const list = map.get(item.reason);
+      if (list) {
+        list.push(item);
+      } else {
+        map.set(item.reason, [item]);
+      }
     }
     for (const list of map.values()) {
       list.sort((a, b) => firstDetectedMs(a) - firstDetectedMs(b));
@@ -531,9 +538,12 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     body = (
       <div className={styles.errorBannerFullBody} data-testid="stuck-items-error-full">
         <span>⚠ Couldn&apos;t check for stuck items right now.</span>
-        <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
-          Retry
-        </button>
+        {
+          // analytics-exempt
+          <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
+            Retry
+          </button>
+        }
       </div>
     );
   } else if (showInitialLoading) {
@@ -553,13 +563,16 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     body = (
       <div className={styles.filteredEmpty} data-testid="stuck-items-filtered-empty">
         <span>No stuck items match &quot;{activeFilterLabel}&quot;.</span>
-        <button
-          className={styles.clearFilterBtn}
-          onClick={handleClearFilter}
-          data-testid="stuck-items-clear-filter"
-        >
-          Clear filter
-        </button>
+        {
+          // analytics-exempt
+          <button
+            className={styles.clearFilterBtn}
+            onClick={handleClearFilter}
+            data-testid="stuck-items-clear-filter"
+          >
+            Clear filter
+          </button>
+        }
       </div>
     );
   } else {
@@ -575,6 +588,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                   {getStuckReasonLabel(reason)} ({groupItems.length})
                 </h3>
                 {parkedInGroup > 0 && (
+                  // analytics-exempt
                   <button
                     type="button"
                     className={styles.resetParkedReasonBtn}
@@ -613,6 +627,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                       currentReworkCapOverride={reworkCapOverrides.get(item.itemId)}
                       reworkCapOverrideLoaded={reworkCapOverrides.has(item.itemId)}
                       onTriggerRemediationNow={triggerRemediationNow}
+                      onOverrideClaimBlock={overrideClaimBlock}
                       onApprovePlan={handleApprovePlan}
                       onDiagnose={diagnose}
                       focusItemId={focusItemId}
@@ -635,6 +650,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
           {totalCount} stuck
         </span>
         {parkedCount > 0 && (
+          // analytics-exempt
           <button
             type="button"
             className={styles.resetParkedBtn}
@@ -663,15 +679,19 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
             Couldn&apos;t refresh stuck items (last updated{" "}
             {Math.max(0, Math.floor((Date.now() - lastFetched.getTime()) / 60000))}m ago).
           </span>
-          <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
-            Retry
-          </button>
+          {
+            // analytics-exempt
+            <button className={styles.retryBtn} onClick={refetch} data-testid="stuck-items-retry">
+              Retry
+            </button>
+          }
         </div>
       )}
 
       {!showFirstLoadError && !showInitialLoading && totalCount > 0 && (
         <div className={styles.filterRow} role="group" aria-label="Filter stuck items by reason">
           {chips.map(({ value, label, count }) => (
+            // analytics-exempt
             <button
               key={String(value)}
               className={`${styles.chip} ${filter === value ? styles.chipActive : ""}`}

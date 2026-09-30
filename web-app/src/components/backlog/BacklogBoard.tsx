@@ -2,7 +2,7 @@
 // +feature: backlog:board
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
+import type { BacklogItem, BacklogItemStatus, ClaimedElsewhere } from "@/lib/hooks/useBacklogService";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { filterBacklogItems, type BacklogFilterState } from "@/lib/hooks/useBacklogFilters";
 import { useBacklogStages, BUILTIN_BACKLOG_STAGES } from "@/lib/hooks/useBacklogStages";
@@ -49,6 +49,11 @@ interface BacklogBoardProps {
    * prior unfiltered behavior.
    */
   filters?: BacklogFilterState;
+  /**
+   * Claims other hosts hold, fetched once by the page (ListForeignClaims is
+   * local-only) and matched to cards by externalUrl. Omitted renders no chips.
+   */
+  foreignClaims?: ClaimedElsewhere[];
 }
 
 const COLUMNS: { status: BacklogItemStatus; label: string }[] = [
@@ -111,6 +116,7 @@ function BoardColumn({
   isLoading,
   pending,
   stuckItemsById,
+  claimsByUrl,
   isEmptyDueToFilter,
 }: {
   column: { status: BacklogItemStatus; label: string };
@@ -127,6 +133,8 @@ function BoardColumn({
    * item can have several at once) — grouped once by the parent via
    * `groupStuckItemsByItemId`, resolved to a primary + "more" count per card below. */
   stuckItemsById: Map<string, StuckBacklogItem[]>;
+  /** externalUrl -> claim held by another host. */
+  claimsByUrl: Map<string, ClaimedElsewhere>;
   /** True when this column has items upstream but the active filter excluded all of them (AC 5). */
   isEmptyDueToFilter: boolean;
 }) {
@@ -181,6 +189,7 @@ function BoardColumn({
                   forceJustChanged={isEntering}
                   stuckItem={stuckSummary?.primary}
                   otherStuckReasons={stuckSummary?.otherReasons}
+                  claim={item.externalUrl ? claimsByUrl.get(item.externalUrl) : undefined}
                 />
               </div>
             );
@@ -197,7 +206,12 @@ export function BacklogBoard({
   pending = {},
   stuckItems = [],
   filters,
+  foreignClaims,
 }: BacklogBoardProps) {
+  const claimsByUrl = useMemo(
+    () => new Map((foreignClaims ?? []).map((claim) => [claim.externalUrl, claim])),
+    [foreignClaims]
+  );
   // Epic 5.2 (backlog-event-driven-updates): the board subscribes to the
   // same live stream/normalized store as the list page (ux.md §2, "no
   // board-specific fetch") rather than receiving items as props — a status-
@@ -429,6 +443,7 @@ export function BacklogBoard({
               isLoading={isLoading}
               pending={pending}
               stuckItemsById={stuckItemsById}
+              claimsByUrl={claimsByUrl}
               isEmptyDueToFilter={isEmptyDueToFilter}
             />
           );
@@ -447,6 +462,7 @@ export function BacklogBoard({
             isLoading={isLoading}
             pending={pending}
             stuckItemsById={stuckItemsById}
+            claimsByUrl={claimsByUrl}
             isEmptyDueToFilter={false}
           />
         )}

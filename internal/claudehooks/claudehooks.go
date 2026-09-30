@@ -71,13 +71,12 @@ func DetectStatus(settingsPath string) (Status, error) {
 	}, nil
 }
 
-// InstallRules registers "<binPath> check" as a PreToolUse hook. Idempotent:
-// it is a no-op if a PreToolUse hook with the rules marker is already present.
+// InstallRules normalizes every Stapler Squad PreToolUse registration to one
+// canonical "<binPath> check" command. It removes both direct and wrapper-based
+// legacy registrations while preserving unrelated groups and commands.
 func InstallRules(settingsPath, binPath string) error {
 	return mutate(settingsPath, func(hooks map[string]interface{}) {
-		if eventHasCommandContaining(hooks, "PreToolUse", rulesMarker) {
-			return
-		}
+		removeCommandsContaining(hooks, "PreToolUse", rulesMarker)
 		prependHook(hooks, "PreToolUse", RulesHookCommand(binPath))
 	})
 }
@@ -192,6 +191,49 @@ func eventHasCommandContaining(hooks map[string]interface{}, event, marker strin
 		}
 	}
 	return false
+}
+
+// removeCommandsContaining removes matching commands without discarding
+// unrelated commands that happen to share a hook group. Malformed entries are
+// preserved: installer normalization must not destroy settings it does not own.
+func removeCommandsContaining(hooks map[string]interface{}, event, marker string) {
+	groups, _ := hooks[event].([]interface{})
+	keptGroups := make([]interface{}, 0, len(groups))
+	for _, group := range groups {
+		groupMap, ok := group.(map[string]interface{})
+		if !ok {
+			keptGroups = append(keptGroups, group)
+			continue
+		}
+		commands, ok := groupMap["hooks"].([]interface{})
+		if !ok {
+			keptGroups = append(keptGroups, group)
+			continue
+		}
+		keptCommands := make([]interface{}, 0, len(commands))
+		for _, command := range commands {
+			commandMap, ok := command.(map[string]interface{})
+			if !ok {
+				keptCommands = append(keptCommands, command)
+				continue
+			}
+			text, _ := commandMap["command"].(string)
+			if strings.Contains(text, marker) {
+				continue
+			}
+			keptCommands = append(keptCommands, command)
+		}
+		if len(keptCommands) == 0 {
+			continue
+		}
+		groupCopy := make(map[string]interface{}, len(groupMap))
+		for key, value := range groupMap {
+			groupCopy[key] = value
+		}
+		groupCopy["hooks"] = keptCommands
+		keptGroups = append(keptGroups, groupCopy)
+	}
+	hooks[event] = keptGroups
 }
 
 // prependHook adds a `.*`-matcher command group to the front of hooks[event] so

@@ -770,6 +770,14 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 	s.dequeueMu.Lock()
 	defer s.dequeueMu.Unlock()
 
+	// Read once per sweep, not per candidate: it is a config read.
+	claimDedup := s.crossHostClaimDedupEnabled()
+	var claims foreignClaimSet
+	if claimDedup {
+		claims = s.foreignClaimsSnapshot()
+	}
+	s.reconcileClaimBlockedStuck(ctx, claimDedup, claims)
+
 	liveCount, err := s.countLiveBacklogWorkSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("count live work sessions: %w", err)
@@ -812,58 +820,73 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		if spawned >= freeSlots {
 			break
 		}
-		fromStatus := session.BacklogStatus(item.Status)
-		claimed, claimErr := s.transitionWithGuard(ctx, &item,
-			session.BacklogStatusInProgress,
-			&session.BacklogItemPrecondition{ExpectedStatus: string(fromStatus), Note: "dequeued: WIP slot freed"},
-			session.TriggeredBySystem,
-			unresolvedBlockers[item.ID])
-		if claimErr != nil {
-			switch {
-			case errors.Is(claimErr, session.ErrPreconditionFailed):
-				// Expected under concurrent claims (another process's dequeue
-				// sweep, or a manual un-queue) — not worth logging.
-			case errors.Is(claimErr, session.ErrUnresolvedBlockers):
-				// Expected steady state: item is legitimately blocked and will be
-				// retried on a later sweep once its blocker reaches done — not a
-				// bug, so not worth a warning-level log every sweep. Still surface
-				// it durably (AC3) so the item detail view can render a BlockerChip
-				// instead of leaving the operator to guess why it's stalled.
-				s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
-			case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
-				// Defense-in-depth (PR #199 review F2/F3): should be unreachable
-				// now that SpawnSessionFromItem's planning gate runs before the
-				// WIP-cap queue gate, but refuse the claim rather than silently
-				// spawning an unapproved item if this is ever hit (e.g. a future
-				// call site regression, or a pre-existing queued/ready row from
-				// before that ordering fix).
-				log.Warn("[DequeueNextQueuedItems] claim blocked by planning gate — leaving as-is", "item", item.ID, "status", fromStatus, "error", claimErr)
-			default:
-				log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
-			}
+		if claimDedup && s.skipForForeignClaim(ctx, &item, claims) {
 			continue
 		}
-
-		resp, spawnErr := s.spawnSessionAfterGates(ctx, claimed, true, item.QueuedAutonomous)
-		if spawnErr != nil {
-			log.Warn("[DequeueNextQueuedItems] spawn failed for dequeued item; rolling back", "item", item.ID, "error", spawnErr, "to", fromStatus)
-			if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, fromStatus,
-				&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"},
-				session.TriggeredBySystem); rbErr != nil {
-				log.Error("[DequeueNextQueuedItems] rollback failed", "to", fromStatus, "item", item.ID, "error", rbErr)
-				// The same silent-stranding shape notifySpawnAndRollbackFailed was
-				// built for (BUG-030) — that fix only wired this helper into
-				// AutoReopenAfterFailedReview's own spawn+rollback path, missing this
-				// sibling one. The item is left claimed (in_progress) with no live
-				// session and no visible error anywhere.
-				s.notifySpawnAndRollbackFailed(ctx, item.ID, item.Title, spawnErr, rbErr)
+		if s.claimAndSpawnCandidate(ctx, item, unresolvedBlockers[item.ID]) {
+			spawned++
+			if claimDedup {
+				s.resolveClaimBlockedLogged(ctx, item.ID)
 			}
-			continue
 		}
-		spawned++
-		log.Info("[DequeueNextQueuedItems] dequeued and spawned", "item", item.ID, "was", fromStatus, "priority", item.Priority, "session", resp.Msg.SessionUuid)
 	}
 	return nil
+}
+
+// claimAndSpawnCandidate claims item (CAS to in_progress via transitionWithGuard)
+// and spawns its work session, rolling back to the pre-claim status if the spawn
+// fails. It reports whether a session was spawned. Callers hold dequeueMu.
+func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item session.BacklogItemData, hasUnresolvedBlockers bool) bool {
+	fromStatus := session.BacklogStatus(item.Status)
+	claimed, claimErr := s.transitionWithGuard(ctx, &item,
+		session.BacklogStatusInProgress,
+		&session.BacklogItemPrecondition{ExpectedStatus: string(fromStatus), Note: "dequeued: WIP slot freed"},
+		session.TriggeredBySystem,
+		hasUnresolvedBlockers)
+	if claimErr != nil {
+		switch {
+		case errors.Is(claimErr, session.ErrPreconditionFailed):
+			// Expected under concurrent claims (another process's dequeue
+			// sweep, or a manual un-queue) — not worth logging.
+		case errors.Is(claimErr, session.ErrUnresolvedBlockers):
+			// Expected steady state: item is legitimately blocked and will be
+			// retried on a later sweep once its blocker reaches done — not a
+			// bug, so not worth a warning-level log every sweep. Still surface
+			// it durably (AC3) so the item detail view can render a BlockerChip
+			// instead of leaving the operator to guess why it's stalled.
+			s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
+		case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
+			// Defense-in-depth (PR #199 review F2/F3): should be unreachable
+			// now that SpawnSessionFromItem's planning gate runs before the
+			// WIP-cap queue gate, but refuse the claim rather than silently
+			// spawning an unapproved item if this is ever hit (e.g. a future
+			// call site regression, or a pre-existing queued/ready row from
+			// before that ordering fix).
+			log.Warn("[DequeueNextQueuedItems] claim blocked by planning gate — leaving as-is", "item", item.ID, "status", fromStatus, "error", claimErr)
+		default:
+			log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
+		}
+		return false
+	}
+
+	resp, spawnErr := s.spawnSessionAfterGates(ctx, claimed, true, item.QueuedAutonomous)
+	if spawnErr != nil {
+		log.Warn("[DequeueNextQueuedItems] spawn failed for dequeued item; rolling back", "item", item.ID, "error", spawnErr, "to", fromStatus)
+		if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, fromStatus,
+			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"},
+			session.TriggeredBySystem); rbErr != nil {
+			log.Error("[DequeueNextQueuedItems] rollback failed", "to", fromStatus, "item", item.ID, "error", rbErr)
+			// The same silent-stranding shape notifySpawnAndRollbackFailed was
+			// built for (BUG-030) — that fix only wired this helper into
+			// AutoReopenAfterFailedReview's own spawn+rollback path, missing this
+			// sibling one. The item is left claimed (in_progress) with no live
+			// session and no visible error anywhere.
+			s.notifySpawnAndRollbackFailed(ctx, item.ID, item.Title, spawnErr, rbErr)
+		}
+		return false
+	}
+	log.Info("[DequeueNextQueuedItems] dequeued and spawned", "item", item.ID, "was", fromStatus, "priority", item.Priority, "session", resp.Msg.SessionUuid)
+	return true
 }
 
 // effectiveQueueTime is the timestamp DequeueNextQueuedItems' priority-tiebreaker sort

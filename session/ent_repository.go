@@ -324,6 +324,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.InitialPrompt != "" {
 		sessionCreate.SetInitialPrompt(data.InitialPrompt)
 	}
+	if !data.InitialPromptSentAt.IsZero() {
+		sessionCreate.SetInitialPromptSentAt(data.InitialPromptSentAt)
+	}
 	if data.OneShot {
 		sessionCreate.SetOneShot(data.OneShot)
 	}
@@ -573,6 +576,9 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 	if data.InitialPrompt != "" {
 		sessionUpdate.SetInitialPrompt(data.InitialPrompt)
+	}
+	if !data.InitialPromptSentAt.IsZero() {
+		sessionUpdate.SetInitialPromptSentAt(data.InitialPromptSentAt)
 	}
 	if data.PauseReason != "" {
 		sessionUpdate.SetPauseReason(data.PauseReason)
@@ -1148,6 +1154,24 @@ func (r *EntRepository) UpdateLastAddedToQueue(ctx context.Context, title string
 	return nil
 }
 
+// UpdateInitialPromptSentAt sets only the initial_prompt_sent_at field for a
+// session, via a direct UPDATE (no read round-trip) -- see Instance.InitialPromptSentAt's
+// doc comment for why this must survive a restart.
+func (r *EntRepository) UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetInitialPromptSentAt(t).
+		SetUpdatedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update initial_prompt_sent_at: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
 // UpdateLastAcknowledged sets only the last_acknowledged field for a session,
 // issuing a single UPDATE WHERE title=? without a prior SELECT.
 func (r *EntRepository) UpdateLastAcknowledged(ctx context.Context, title string, t time.Time) error {
@@ -1333,6 +1357,9 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	}
 	if sess.LastPromptDetected != nil {
 		data.LastPromptDetected = *sess.LastPromptDetected
+	}
+	if sess.InitialPromptSentAt != nil {
+		data.InitialPromptSentAt = *sess.InitialPromptSentAt
 	}
 	data.LastPromptSignature = sess.LastPromptSignature
 	data.PauseReason = sess.PauseReason
@@ -1782,6 +1809,27 @@ func (r *EntRepository) ListDismissedFindingIDs(ctx context.Context) (map[string
 }
 
 func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData) error {
+	return r.analyticsCreate(data).Exec(ctx)
+}
+
+// RecordAnalyticsBatch persists the batch in one SQLite statement/transaction.
+// Exact duplicate analytics IDs are idempotent while every other validation or
+// persistence error rejects the whole statement.
+func (r *EntRepository) RecordAnalyticsBatch(ctx context.Context, batch []AnalyticsData) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	builders := make([]*ent.ClassificationAnalyticsCreate, 0, len(batch))
+	for _, data := range batch {
+		builders = append(builders, r.analyticsCreate(data))
+	}
+	return r.client.ClassificationAnalytics.CreateBulk(builders...).
+		OnConflictColumns(classificationanalytics.FieldAnalyticsID).
+		DoNothing().
+		Exec(ctx)
+}
+
+func (r *EntRepository) analyticsCreate(data AnalyticsData) *ent.ClassificationAnalyticsCreate {
 	return r.client.ClassificationAnalytics.Create().
 		SetAnalyticsID(data.ID).
 		SetSessionID(data.SessionID).
@@ -1801,8 +1849,7 @@ func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData)
 		SetCommandSubcategory(data.CommandSubcategory).
 		SetPythonImports(data.PythonImports).
 		SetSource(data.Source).
-		SetCreatedAt(data.CreatedAt).
-		Exec(ctx)
+		SetCreatedAt(data.CreatedAt)
 }
 
 func (r *EntRepository) ListAnalytics(ctx context.Context, limit int) ([]AnalyticsData, error) {

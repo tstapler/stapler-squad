@@ -1,5 +1,5 @@
 import { style } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme-contract.css";
+import { vars, zIndex } from "@/styles/theme-contract.css";
 
 export const wrapper = style({
   position: "relative",
@@ -31,11 +31,14 @@ export const triggerButtonActive = style({
   borderColor: vars.color.inputFocusBorder,
 });
 
+// Rendered via a React portal to document.body (see ColumnPicker.tsx) so it escapes the
+// session-list pane's overflow:hidden ancestors and the app shell's stacking order — an
+// in-tree `position: absolute` dropdown here rendered partly underneath DrawerNav's sidebar
+// links, which then intercepted pointer events on the checkboxes. top/right are set inline
+// from the trigger's getBoundingClientRect(), matching MoveToMenu.tsx's portal pattern.
 export const dropdown = style({
-  position: "absolute",
-  top: "calc(100% + 4px)",
-  right: 0,
-  zIndex: 200,
+  position: "fixed",
+  zIndex: zIndex.dropdown,
   background: vars.color.cardBackground,
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.md,

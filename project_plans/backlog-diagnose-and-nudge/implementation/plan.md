@@ -1835,3 +1835,24 @@ that** `make registry-diff` shows no drift.
 
 ##### Task 8.4.1c: Run the 7-touchpoint session-creation registry checklist (`docs/reference/session-creation-registry.md`) against the new `headless-diagnose-*` dispatch path and address any missed touchpoint (~5 min)
 - Files: per whichever touchpoints the checklist identifies as incomplete
+
+## Addendum: reconciliation with PR #880 (2026-09-29)
+
+PR #880 (`feat(backlog): add Diagnose & Nudge action for stuck backlog items`,
+merge commit `186699a0a`) independently implemented this same backlog item
+(68964304) and merged to `main` on 2026-09-28, before this PR (#892) merged —
+plus a follow-up, `#894`, which patched safety gaps in #880's implementation
+(kill switch, MCP tool-surface restriction, atomic nudge-cap increment) the day
+after. Tyler decided to keep both PRs' commit history on `main` as-is and make
+this PR's implementation (the one this plan describes) the one that survives
+wherever the two overlap, reconciled via a normal merge of `origin/main` into
+this branch rather than a revert of #880/#894.
+
+That merge removed #880's and #894's diagnose-specific code in favor of this
+plan's equivalents (bundle assembly, nudge gate, dispatch service, MCP wiring,
+UI) and the two orphaned `BacklogStuckState`/`ItemSession` ent fields #880/#894
+added for their own now-removed nudge-cap mechanism, while preserving #880's
+and #894's unrelated collateral fixes (lint warnings, a `TestMethodToIDCompleteness`
+registry gap, a `norawexec` test-helper fix) and every other commit that landed
+on `main` in between. Full file-by-file accounting of what was removed vs.
+preserved is in the PR #892 description and its merge-commit message.

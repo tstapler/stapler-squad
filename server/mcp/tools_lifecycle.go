@@ -61,16 +61,19 @@ type CreateSessionResult struct {
 	// successfully created and is genuinely still resolving, not failed or
 	// broken. Use get_session to check on it.
 	StillCreating bool `json:"still_creating,omitempty"`
+	// ProgramWarning is set (non-fatally) when program isn't among the
+	// programs currently registered — see programWarningFor.
+	ProgramWarning string `json:"program_warning,omitempty"`
 }
 
 func registerLifecycleTools(s *mcpserver.MCPServer, lh *lifecycleHandlers) {
 	s.AddTool(
 		mcpgo.NewTool("create_session",
-			mcpgo.WithDescription("Create and start a new Stapler Squad session (tmux + optional git worktree). The new session is launched with this MCP server already wired in via a --mcp-config command-line flag, so it can use all Stapler Squad tools with no extra setup. Waits up to 150s for the session to finish starting up; if it's still resolving after that, returns a still_creating result (session_id present, safe to poll with get_session) rather than an error or an open-ended hang. Rate-limited to 3 per minute.\n\nNOTE: Do not use this tool just to run commands or execute tasks — spawn an Agent subagent instead. Reserve create_session for cases where a USER INTERACTABLE, persistent tmux session is genuinely needed (e.g. long-running background work, multi-turn Claude Code sessions the user will actively monitor or control)."),
+			mcpgo.WithDescription("Create and start a new Stapler Squad session (tmux + optional git worktree). The new session is launched with this MCP server already wired in via a --mcp-config command-line flag, so it can use all Stapler Squad tools with no extra setup. Waits up to 150s for the session to finish starting up; if it's still resolving after that, returns a still_creating result (session_id present, safe to poll with get_session) rather than an error or an open-ended hang. Rate-limited to 3 per minute.\n\nNOTE: Do not use this tool just to run commands or execute tasks — spawn an Agent subagent instead. Reserve create_session for cases where a USER INTERACTABLE, persistent tmux session is genuinely needed (e.g. long-running background work, multi-turn Claude Code sessions the user will actively monitor or control).\n\nIf the result includes program_warning, the session was still created but the program value isn't among the programs currently registered — check for a typo before assuming the session is running normally."),
 			mcpgo.WithString("title", mcpgo.Description("Unique name for the session"), mcpgo.Required()),
 			mcpgo.WithString("path", mcpgo.Description("Absolute path to the repository root"), mcpgo.Required()),
 			mcpgo.WithString("branch", mcpgo.Description("Git branch name (creates if missing; required for new_worktree session type)")),
-			mcpgo.WithString("program", mcpgo.Description("Program to run: claude or aider (default: claude)"), mcpgo.Enum("claude", "aider")),
+			mcpgo.WithString("program", programSchemaOptions(lh.svc)...),
 			mcpgo.WithString("session_type", mcpgo.Description("Session type: directory, new_worktree, existing_worktree (default: directory)"),
 				mcpgo.Enum("directory", "new_worktree", "existing_worktree")),
 			mcpgo.WithArray("tags", mcpgo.Description("Tags for organizing the session")),
@@ -162,8 +165,13 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 	}
 
 	if program == "" {
-		program = "claude"
+		program = defaultProgramID
 	}
+
+	// Soft (non-fatal) check: a custom program registered via
+	// UpsertProgramConfig after this process started must still be allowed
+	// to launch, so an unrecognized program warns rather than rejects.
+	programWarning := programWarningFor(ctx, lh.svc, program)
 
 	protoSessionType, typeErr := mcpSessionTypeToProto(sessionTypeStr)
 	if typeErr != nil {
@@ -183,22 +191,8 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 	}
 	tags = append(tags, "source:mcp")
 
-	// Check for title collision before starting. Use ListInstanceData (raw DB read)
-	// rather than LoadInstances to avoid spawning PTY processes as a side effect.
-	// This is a fast, agent-friendly pre-check in addition to CreateSession's own
-	// synchronous title-uniqueness check below -- a TOCTOU race between the two
-	// is not a correctness gap, since CreateSession still authoritatively rejects
-	// a duplicate that slips past this pre-check (async-session-creation Epic
-	// 2.3, Story 2.3.1).
-	existing, err := lh.store.ListInstanceData()
-	if err != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("load sessions: %v", err), ""), nil
-	}
-	for _, data := range existing {
-		if data.Title == title {
-			return errResult(ErrInvalidArgument, fmt.Sprintf("session with title %q already exists", title),
-				"Choose a different title."), nil
-		}
+	if errRes := titleCollisionResult(lh.store, title); errRes != nil {
+		return errRes, nil
 	}
 
 	createResp, createErr := lh.svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -227,7 +221,8 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 				Title:  title,
 				Status: session.Creating.String(),
 			}},
-			StillCreating: true,
+			StillCreating:  true,
+			ProgramWarning: programWarning,
 		}), nil
 	}
 	if result := mapCreationOutcome(outcome, awaitErr); result != nil {
@@ -269,8 +264,9 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 
 	detail := instanceToDetail(inst)
 	return okResult(CreateSessionResult{
-		MCPResult: MCPResult{Success: true},
-		Session:   &detail,
+		MCPResult:      MCPResult{Success: true},
+		Session:        &detail,
+		ProgramWarning: programWarning,
 	}), nil
 }
 
@@ -292,6 +288,29 @@ func mcpSessionTypeToProto(sessionTypeStr string) (sessionv1.SessionType, error)
 	default:
 		return 0, fmt.Errorf("invalid session_type %q", sessionTypeStr)
 	}
+}
+
+// titleCollisionResult is the shared fast, agent-friendly pre-check every title-setting
+// MCP tool (create_session, create_session_for_pr, update_session) runs in addition to
+// CreateSession/SetTitleDirect's own authoritative uniqueness enforcement -- session_id
+// is the title, so two live sessions sharing one would make one unaddressable. Returns
+// nil when title is free. A TOCTOU race between this check and the caller's actual write
+// is not a correctness gap: CreateSession's synchronous check still rejects a duplicate
+// that slips past this pre-check (async-session-creation Epic 2.3, Story 2.3.1); a
+// SetTitleDirect caller has no such backstop, so callers of this helper on the rename
+// path must treat it as authoritative, not just a fast-path optimization.
+func titleCollisionResult(store session.InstanceStore, title string) *mcpgo.CallToolResult {
+	existing, err := store.ListInstanceData()
+	if err != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("load sessions: %v", err), "")
+	}
+	for _, data := range existing {
+		if data.Title == title {
+			return errResult(ErrInvalidArgument, fmt.Sprintf("session with title %q already exists", title),
+				"Choose a different title.")
+		}
+	}
+	return nil
 }
 
 // mapCreateSessionRPCError maps a synchronous CreateSession RPC error onto the
@@ -575,8 +594,11 @@ func (lh *lifecycleHandlers) updateSession(ctx context.Context, req mcpgo.CallTo
 			"Use list_sessions or search_sessions to find valid session IDs."), nil
 	}
 
-	if title, ok := args["title"].(string); ok && title != "" {
-		inst.Title = title
+	if title, ok := args["title"].(string); ok && title != "" && title != inst.Title {
+		if errRes := titleCollisionResult(lh.store, title); errRes != nil {
+			return errRes, nil
+		}
+		inst.SetTitleDirect(title)
 	}
 	if rawTags, ok := args["tags"]; ok {
 		var tags []string
@@ -592,7 +614,7 @@ func (lh *lifecycleHandlers) updateSession(ctx context.Context, req mcpgo.CallTo
 		}
 	}
 	if cat, ok := args["category"].(string); ok {
-		inst.Category = cat
+		inst.SetCategory(cat)
 	}
 
 	if err := lh.store.SaveInstances([]*session.Instance{inst}); err != nil {

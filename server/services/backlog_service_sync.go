@@ -284,6 +284,19 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check for existing import: %w", lookupErr))
 	}
 
+	gate, claimErr := s.gateOnClaim(ctx, preCreateClaimCheck{
+		ExternalURL: issue.URL,
+		Override:    req.Msg.Override,
+		Reason:      req.Msg.OverrideReason,
+		LogPrefix:   "import_github_issue",
+	})
+	if claimErr != nil {
+		return nil, claimErr
+	}
+	if gate.Claimed != nil {
+		return connect.NewResponse(&sessionv1.ImportGitHubIssueResponse{AlreadyClaimedElsewhere: gate.Claimed}), nil
+	}
+
 	repoPath := req.Msg.RepoPath
 	if repoPath == "" {
 		var resolveErr error

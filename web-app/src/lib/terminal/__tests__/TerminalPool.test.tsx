@@ -204,6 +204,20 @@ function PooledConsumer({ sessionId, isVisible }: { sessionId: string; isVisible
 }
 
 describe("usePooledTerminal -- docking + fit-on-show + focus (Task 3.5)", () => {
+  // fitOnShow() (Bug 2 fix) only fits once the anchor reports a real,
+  // non-zero size -- jsdom's getBoundingClientRect() always returns all-zero
+  // rects, so every anchor needs a stubbed size for these tests to reach the
+  // fit()/focus() calls at all.
+  let getRectSpy: jest.SpyInstance;
+  beforeEach(() => {
+    getRectSpy = jest.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 800, height: 600, top: 0, left: 0, right: 800, bottom: 600, x: 0, y: 0, toJSON: () => ({}),
+    } as DOMRect);
+  });
+  afterEach(() => {
+    getRectSpy.mockRestore();
+  });
+
   it("docks the pooled terminal's host node under the consumer's anchor when visible", async () => {
     const { getByTestId } = render(
       <TerminalPoolProvider>
@@ -222,6 +236,40 @@ describe("usePooledTerminal -- docking + fit-on-show + focus (Task 3.5)", () => 
         <PooledConsumer sessionId="s1" isVisible />
       </TerminalPoolProvider>
     );
+
+    await waitFor(() => expect(fitSpy).toHaveBeenCalled());
+    expect(focusSpy).toHaveBeenCalled();
+  });
+
+  it("Bug 2 regression: does not fit() while the anchor is still zero-sized, and fits once it reports a real size", async () => {
+    // Anchor starts genuinely unlaid-out (0x0) at dock time -- e.g. a
+    // window-switch's freshly-mounted pane a frame before its ancestor's
+    // flex/grid layout settles. The old single-requestAnimationFrame fit
+    // would have run fit() against this zero size (or against the mock's
+    // default 0x0) and never retried.
+    getRectSpy.mockReturnValue({
+      width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0, x: 0, y: 0, toJSON: () => ({}),
+    } as DOMRect);
+
+    render(
+      <TerminalPoolProvider>
+        <PooledConsumer sessionId="s1" isVisible />
+      </TerminalPoolProvider>
+    );
+
+    // Give the zero-size poll a few frames to (not) fire.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(fitSpy).not.toHaveBeenCalled();
+
+    // Anchor's layout settles to a real size -- the stubbed ResizeObserver
+    // (jest.setup.js) only re-fires on the next observe()/getBoundingClientRect
+    // change it's told about, so flip the mock and let the in-flight
+    // requestAnimationFrame poll pick it up on its next tick.
+    getRectSpy.mockReturnValue({
+      width: 800, height: 600, top: 0, left: 0, right: 800, bottom: 600, x: 0, y: 0, toJSON: () => ({}),
+    } as DOMRect);
 
     await waitFor(() => expect(fitSpy).toHaveBeenCalled());
     expect(focusSpy).toHaveBeenCalled();

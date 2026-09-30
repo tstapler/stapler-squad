@@ -4,6 +4,9 @@ import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { ConnectError, Code } from "@connectrpc/connect";
 import userEvent from "@testing-library/user-event";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
+
 import { StuckItemDetail } from "./StuckItemDetail";
 
 // DiagnoseOutcomeDisplay/DiagnoseHistoryList (rendered alongside the Diagnose

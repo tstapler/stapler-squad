@@ -58,6 +58,15 @@ func (i *Instance) SetMCPServerURL(url string) {
 	})
 }
 
+// SetMCPServerURLProvider registers a callback buildClaudeCommand calls to
+// re-resolve the MCP server URL fresh on every claude launch. Deliberately
+// NOT actor-routed like SetMCPServerURL above: buildClaudeCommand runs
+// inside the actor's own goroutine, so an actor-routed setter would deadlock
+// on the mailbox if called re-entrantly from there.
+func (i *Instance) SetMCPServerURLProvider(fn func() string) {
+	i.mcpServerURLProvider.Store(&fn)
+}
+
 // ---- CreationProgress ------------------------------------------------------------
 
 func setCreationProgressLocked(s *instanceState, msg string) {
@@ -363,6 +372,39 @@ func (i *Instance) SetLastAddedToQueue(t time.Time) {
 		setLastAddedToQueueLocked(s, t)
 		return nil
 	})
+}
+
+// ---- InitialPromptSentAt ---------------------------------------------------------
+
+func setInitialPromptSentAtLocked(s *instanceState, t time.Time) {
+	s.inst.mu.Lock()
+	s.inst.InitialPromptSentAt = t
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
+// SetInitialPromptSentAt records when InitialPrompt was actually typed into the
+// tmux pane, updates the in-memory field/snapshot, and persists it (best-effort,
+// non-fatal on error, same convention as shellRepo -- see instance_shells.go) via
+// the injected initialPromptRepo so a later service restart's driver goroutine
+// can trust it instead of re-deriving via fragile output/JSONL heuristics.
+func (i *Instance) SetInitialPromptSentAt(t time.Time) {
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setInitialPromptSentAtLocked(s, t)
+		return nil
+	})
+	if i.initialPromptRepo != nil {
+		if err := i.initialPromptRepo.UpdateInitialPromptSentAt(context.Background(), i.Title, t); err != nil {
+			log.Warn("SetInitialPromptSentAt: failed to persist", "session", i.Title, "err", err)
+		}
+	}
+}
+
+// GetInitialPromptSentAt reads InitialPromptSentAt via the lock-free published
+// Snapshot() rather than the bare field -- see instance-lock-free-reads.md.
+func (i *Instance) GetInitialPromptSentAt() time.Time {
+	return i.Snapshot().InitialPromptSentAt
 }
 
 // ---- AutoYes --------------------------------------------------------------------
