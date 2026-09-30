@@ -413,6 +413,8 @@ func (h *ConnectRPCWebSocketHandler) recordControlModeStreamStart(sessionID, tmu
 // xsync.Map.LoadOrCompute runs valueFn at most once per key.
 type hubRegistry struct {
 	hubs *xsync.Map[string, *streamhub.StreamHub]
+	// tapRegistry backs each hub's capture tap; nil means streamhub.DefaultTapRegistry.
+	tapRegistry *streamhub.TapRegistry
 }
 
 // HubRegistry is the single process-wide hub registry for the PathHubOwned
@@ -436,11 +438,14 @@ var HubRegistry = &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub](
 // ErrOwnershipResolvedToOtherPath instead, so the caller (streamViaHub) can
 // fall back to joining the legacy path explicitly rather than silently
 // operating as a second, independent owner.
-func (r *hubRegistry) GetOrCreate(sessionName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
+//
+// tapName is the session title: the capture tap is keyed on it (not on the tmux
+// sessionName) so the hub and legacy paths share one tap file per session.
+func (r *hubRegistry) GetOrCreate(sessionName, tapName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
 	// Holds the ownership lock for the full LoadOrCompute below (not just the
 	// resolve step), so this genuinely blocks on — rather than races — a
 	// concurrent Instance.StartControlMode call for the same session (Story 3.1.2).
-	hub, err := r.loadOrCreateHubLocked(sessionName, controller)
+	hub, err := r.loadOrCreateHubLocked(sessionName, tapName, controller)
 	if err != nil {
 		return nil, fmt.Errorf("hubRegistry.GetOrCreate: %w", err)
 	}
@@ -457,8 +462,17 @@ type escapeAnalyticsStreamSource interface {
 	GetTotalBytesWritten() int64
 }
 
-func escapeAnalyticsHubOptions(sessionName string, controller streamhub.SessionController) []streamhub.HubOption {
-	opts := []streamhub.HubOption{streamhub.WithCaptureTap(streamhub.DefaultTapRegistry().Handle(sessionName).As(streamhub.TapSourceHub))}
+func (r *hubRegistry) tapRegistryOrDefault() *streamhub.TapRegistry {
+	if r.tapRegistry != nil {
+		return r.tapRegistry
+	}
+	return streamhub.DefaultTapRegistry()
+}
+
+// escapeAnalyticsHubOptions builds a hub's options. tapName must be the session
+// title, the same key the legacy forwarder uses.
+func escapeAnalyticsHubOptions(tapRegistry *streamhub.TapRegistry, tapName string, controller streamhub.SessionController) []streamhub.HubOption {
+	opts := []streamhub.HubOption{streamhub.WithCaptureTap(tapRegistry.Handle(tapName).As(streamhub.TapSourceHub))}
 	source, ok := controller.(escapeAnalyticsStreamSource)
 	if !ok {
 		return opts
@@ -472,11 +486,11 @@ func escapeAnalyticsHubOptions(sessionName string, controller streamhub.SessionC
 	}))
 }
 
-func (r *hubRegistry) loadOrCreateHubLocked(sessionName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
+func (r *hubRegistry) loadOrCreateHubLocked(sessionName, tapName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
 	var hub *streamhub.StreamHub
 	err := streamhub.AcquireOwnershipLock(sessionName).AcquireAndResolveExpecting(true, streamhub.PathHubOwned, func() error {
 		h, loaded := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
-			return streamhub.NewStreamHub(sessionName, controller, escapeAnalyticsHubOptions(sessionName, controller)...), false
+			return streamhub.NewStreamHub(sessionName, controller, escapeAnalyticsHubOptions(r.tapRegistryOrDefault(), tapName, controller)...), false
 		})
 		if loaded {
 			log.Debug("[hubRegistry] reusing existing StreamHub", "session", sessionName)
@@ -1893,7 +1907,7 @@ func (h *ConnectRPCWebSocketHandler) ensureHubInstanceStarted(instance *session.
 // too failed). done=false means ownership resolved hub-owned as expected —
 // hub is the created/retrieved *StreamHub and err is always nil.
 func (h *ConnectRPCWebSocketHandler) resolveHubOrJoinLegacy(stream *connectWebSocketStream, instance *session.Instance, sessionID, tmuxSessionName string) (hub *streamhub.StreamHub, done bool, err error) {
-	hub, hubErr := HubRegistry.GetOrCreate(tmuxSessionName, instance)
+	hub, hubErr := HubRegistry.GetOrCreate(tmuxSessionName, sessionID, instance)
 	if hubErr == nil {
 		return hub, false, nil
 	}
