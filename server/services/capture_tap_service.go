@@ -23,8 +23,9 @@ import (
 const (
 	// maxCaptureTapSessionIDs bounds one request's session list.
 	maxCaptureTapSessionIDs = 256
-	// maxCaptureTapSessionIDLen bounds one session id, in bytes.
-	maxCaptureTapSessionIDLen = 256
+	// maxCaptureTapSessionIDLen bounds one session id, in bytes. Below the 255-byte
+	// file-name limit so the hash suffix, ".jsonl" and ".old" still fit.
+	maxCaptureTapSessionIDLen = 200
 )
 
 type requestHostKey struct{}
@@ -154,11 +155,13 @@ func requireLoopbackCaller(peerAddr, host string, h http.Header) error {
 }
 
 func hostIsLoopback(host string) bool {
-	if host == "" {
+	// A trailing ':' (empty port) and userinfo are never sent by a real client;
+	// url.Parse would silently accept both, so reject them explicitly.
+	if host == "" || strings.HasSuffix(host, ":") {
 		return false
 	}
 	u, err := url.Parse("//" + host)
-	return err == nil && u.Hostname() != "" && middleware.IsLoopbackHostname(u.Hostname())
+	return err == nil && u.User == nil && u.Hostname() != "" && middleware.IsLoopbackHostname(u.Hostname())
 }
 
 func isProxyHeader(name string) bool {

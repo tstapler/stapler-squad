@@ -3744,7 +3744,7 @@ message SetCaptureTapRequest {
   bool enabled = 1;
 
   // Session titles to apply to (the title shown in the UI, not the tmux
-  // name). Empty means all sessions. Each id is at most 256 bytes with no
+  // name). Empty means all sessions. Each id is at most 200 bytes with no
   // control characters. Disabling named sessions while the tap is on for all
   // sessions is rejected. Enabling all sessions replaces the operator env
   // override's no-expiry with the TTL; disabling all sessions turns an

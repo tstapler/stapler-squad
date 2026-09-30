@@ -40,7 +40,7 @@ Rules:
   `True-Client-Ip`, `CF-Connecting-IP`, `Cdn-Loop`, `Via`, any `Tailscale-*`).
   A browser `Origin`, when present, must match the `Host` exactly; requests with
   no `Origin` (curl, scripts) are allowed.
-- **Session ids** are session titles, at most 256 bytes, with no control
+- **Session ids** are session titles, at most 200 bytes, with no control
   characters. The hub and legacy stream paths share one file per session because
   both key on the title.
 - **Every enable expires.** `ttlSeconds` defaults to 1800 (30 minutes) and is
@@ -120,3 +120,11 @@ chmodded. If it does not exist it is created `0700`.
   of distinct sessions streamed.
 - Only 64 MiB x 2 per session is kept, but there is no total cap across sessions:
   enabling all sessions on a busy server can fill the disk within the TTL.
+- Turning the tap off is not instantaneous for a write already in flight: at
+  most one more record per in-flight writer can land after `enabled: false`
+  returns, then the file closes.
+- Closing a file happens while the registry lock is held, so on a hung network
+  or FUSE mount a slow `Close` can stall the RPCs and the first stream of a new
+  session (never the output path of a stream already running). Use a local disk.
+- On a case-insensitive filesystem (the macOS default) titles that differ only
+  in case, such as `Foo` and `foo`, share one file.

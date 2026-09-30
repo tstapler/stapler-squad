@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -217,12 +218,19 @@ func (s *tapSink) openLocked() error {
 		return err
 	}
 	path := filepath.Join(dir, sanitizeTapName(s.name)+".jsonl")
-	f, rotated, err := openTapFile(dir, path, s.maxBytes, s.rotate.Swap(false))
+	forceRotate := s.rotate.Swap(false)
+	f, rotated, err := openTapFile(dir, path, s.maxBytes, forceRotate)
 	if err != nil {
+		if forceRotate {
+			s.rotate.Store(true) // a failed open must not lose the pending rotation
+		}
 		return fmt.Errorf("cannot open tap file %s: %w", path, err)
 	}
 	fi, err := f.Stat()
 	if err != nil {
+		if forceRotate {
+			s.rotate.Store(true)
+		}
 		_ = f.Close()
 		return err
 	}
@@ -370,7 +378,7 @@ func ensureTapDir(dir string, uid int) error {
 	switch {
 	case !fi.IsDir():
 		return fmt.Errorf("%s is not a directory", dir)
-	case fi.Mode().Perm()&0o022 != 0:
+	case runtime.GOOS != "windows" && fi.Mode().Perm()&0o022 != 0: // Windows reports 0777 for every directory
 		return fmt.Errorf("refusing tap directory %s: group- or world-writable (%v)", dir, fi.Mode().Perm())
 	case !ownedByUID(fi, uid):
 		return fmt.Errorf("refusing tap directory %s: not owned by uid %d", dir, uid)
